@@ -7,7 +7,7 @@
 //   1 credential account (scrypt-hashed password)
 //   1 organization ("Fluxia Dev", default_currency BRL)
 //   1 owner member linking user → org
-//   1 whatsapp_config (disconnected, encrypted dummy token)
+//   1 channel (Meta "WhatsApp Oficial", disconnected, encrypted dummy creds)
 //   1 pipeline with 3 stages · 5 contacts (+5511…) · 2 tags
 //   2 conversations with a few messages each
 //
@@ -29,7 +29,7 @@ const USER_ID = '11111111-1111-4111-8111-111111111111';
 const ACCOUNT_ID = '22222222-2222-4222-8222-222222222222'; // = organization.id
 const CREDENTIAL_ID = '33333333-3333-4333-8333-333333333333';
 const MEMBER_ID = '99999999-9999-4999-8999-000000000001';
-const WHATSAPP_CONFIG_ID = '44444444-4444-4444-8444-444444444444';
+const CHANNEL_ID = '44444444-4444-4444-8444-444444444444';
 const PIPELINE_ID = '55555555-5555-4555-8555-555555555555';
 
 const DEV_EMAIL = 'dev@fluxia.local';
@@ -82,9 +82,10 @@ async function main(): Promise<void> {
     pipelineStages,
     pipelines,
     tags,
-    whatsappConfig,
+    channels,
   } = await import('../src/db');
-  const { encrypt } = await import('../src/lib/whatsapp/encryption');
+  const { encryptCredentials } = await import('../src/lib/channels/channels');
+  const crypto = await import('crypto');
   const { hashPassword } = await import('better-auth/crypto');
 
   // ---- wipe the previous seed run ----
@@ -126,16 +127,23 @@ async function main(): Promise<void> {
     role: 'owner',
   });
 
-  // ---- whatsapp config (disconnected, encrypted dummy token) ----
-  await db.insert(whatsappConfig).values({
-    id: WHATSAPP_CONFIG_ID,
-    userId: USER_ID,
+  // ---- channel (Meta, disconnected, encrypted dummy credentials) ----
+  await db.insert(channels).values({
+    id: CHANNEL_ID,
     accountId: ACCOUNT_ID,
-    phoneNumberId: 'dev-phone-number-id',
-    wabaId: 'dev-waba-id',
-    accessToken: encrypt('dev-dummy-access-token'),
-    verifyToken: 'dev-verify-token',
+    provider: 'meta',
+    name: 'WhatsApp Oficial',
     status: 'disconnected',
+    // Credentials are a single encrypted JSON blob (provider-specific).
+    credentials: encryptCredentials({
+      accessToken: 'dev-dummy',
+      verifyToken: 'dev-verify',
+    }),
+    providerMeta: {
+      phone_number_id: 'dev-phone-number-id',
+      waba_id: 'dev-waba-id',
+    },
+    webhookSecret: crypto.randomBytes(24).toString('hex'),
   });
 
   // ---- pipeline + 3 stages ----
@@ -184,6 +192,7 @@ async function main(): Promise<void> {
       userId: USER_ID,
       accountId: ACCOUNT_ID,
       contactId: CONTACT_IDS[0],
+      channelId: CHANNEL_ID,
       status: 'open',
       lastMessageText: 'Perfeito, obrigado!',
       lastMessageAt: at(5),
@@ -194,6 +203,7 @@ async function main(): Promise<void> {
       userId: USER_ID,
       accountId: ACCOUNT_ID,
       contactId: CONTACT_IDS[1],
+      channelId: CHANNEL_ID,
       status: 'open',
       lastMessageText: 'Pode me enviar o orçamento?',
       lastMessageAt: at(60),
@@ -216,6 +226,7 @@ async function main(): Promise<void> {
   console.log('');
   console.log(`  user:     ${DEV_EMAIL} / ${DEV_PASSWORD}`);
   console.log(`  org:      Fluxia Dev (${ACCOUNT_ID})`);
+  console.log(`  channel:  WhatsApp Oficial / meta (${CHANNEL_ID})`);
   console.log('');
   console.log(`DEV_SEED_USER_ID=${USER_ID}`);
   console.log('');

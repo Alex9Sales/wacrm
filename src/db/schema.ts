@@ -260,11 +260,60 @@ export const contactNotes = pgTable("contact_notes", {
 		}).onDelete("cascade"),
 ]);
 
+// ============================================================
+// CHANNELS — multi-provider WhatsApp (Phase 4). Replaces
+// whatsapp_config. One row per connected WhatsApp channel
+// (Meta / WAHA / Evolution / EvoGo). `credentials` is an
+// AES-256-GCM-encrypted JSON blob whose shape depends on the
+// provider (see docs/fase4-multicanal.md). Non-secret routing
+// info (phone_number_id, waba_id, baseUrl, session/instance)
+// lives in `provider_meta`.
+//
+// Defined before `conversations` so its channel_id FK can
+// reference channels.id (Drizzle resolves FK targets eagerly).
+// ============================================================
+export const channels = pgTable("channels", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	provider: text().notNull(),
+	name: text().notNull(),
+	status: text().default('disconnected').notNull(),
+	phoneNumber: text("phone_number"),
+	// Encrypted JSON — provider-specific tokens/keys/session.
+	credentials: text().notNull(),
+	providerMeta: jsonb("provider_meta").default({}).notNull(),
+	settings: jsonb().default({}).notNull(),
+	// Per-channel token used to validate non-Meta webhook deliveries.
+	webhookSecret: text("webhook_secret").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+}, (table) => [
+	index("idx_channels_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	// Partial unique index for Meta inbound routing — resolve a channel
+	// by provider_meta->>'phone_number_id'. Only meta channels carry one.
+	uniqueIndex("channels_meta_pnid")
+		.using("btree", sql`((provider_meta->>'phone_number_id'))`)
+		.where(sql`(provider = 'meta'::text)`),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "channels_account_id_fkey"
+		}).onDelete("cascade"),
+	unique("channels_account_id_name_key").on(table.accountId, table.name),
+	check("channels_provider_check", sql`provider = ANY (ARRAY['meta'::text, 'waha'::text, 'evolution'::text, 'evogo'::text])`),
+	check("channels_status_check", sql`status = ANY (ARRAY['disconnected'::text, 'qr_pending'::text, 'connected'::text, 'error'::text])`),
+]);
+
 export const conversations = pgTable("conversations", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),
 	accountId: uuid("account_id").notNull(),
 	contactId: uuid("contact_id").notNull(),
+	// Phase 4: the channel this conversation belongs to. Nullable during
+	// the migration window (legacy rows predate multi-channel); the
+	// inbound pipeline always sets it. Uniqueness is one conversation per
+	// (account_id, contact_id, channel_id).
+	channelId: uuid("channel_id"),
 	status: text().default('open').notNull(),
 	assignedAgentId: uuid("assigned_agent_id"),
 	lastMessageText: text("last_message_text"),
@@ -278,6 +327,11 @@ export const conversations = pgTable("conversations", {
 	index("idx_conversations_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	index("idx_conversations_contact_id").using("btree", table.contactId.asc().nullsLast().op("uuid_ops")),
 	index("idx_conversations_user_id").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
+	index("idx_conversations_channel").using("btree", table.channelId.asc().nullsLast().op("uuid_ops")).where(sql`(channel_id IS NOT NULL)`),
+	// One conversation per (account, contact, channel). Partial so legacy
+	// rows with a NULL channel_id don't collide (NULLs are distinct in a
+	// non-partial unique index anyway, but the predicate documents intent).
+	uniqueIndex("conversations_account_contact_channel_key").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops"), table.channelId.asc().nullsLast().op("uuid_ops")).where(sql`(channel_id IS NOT NULL)`),
 	foreignKey({
 			columns: [table.accountId],
 			foreignColumns: [organization.id],
@@ -287,6 +341,11 @@ export const conversations = pgTable("conversations", {
 			columns: [table.contactId],
 			foreignColumns: [contacts.id],
 			name: "conversations_contact_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [channels.id],
+			name: "conversations_channel_id_fkey"
 		}).onDelete("cascade"),
 	check("conversations_status_check", sql`status = ANY (ARRAY['open'::text, 'pending'::text, 'closed'::text])`),
 ]);
@@ -364,38 +423,13 @@ export const pipelines = pgTable("pipelines", {
 		}).onDelete("cascade"),
 ]);
 
-export const whatsappConfig = pgTable("whatsapp_config", {
-	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
-	userId: uuid("user_id").notNull(),
-	accountId: uuid("account_id").notNull(),
-	phoneNumberId: text("phone_number_id").notNull(),
-	wabaId: text("waba_id"),
-	accessToken: text("access_token").notNull(),
-	verifyToken: text("verify_token"),
-	status: text().default('disconnected').notNull(),
-	connectedAt: timestamp("connected_at", { withTimezone: true, mode: 'string' }),
-	registeredAt: timestamp("registered_at", { withTimezone: true, mode: 'string' }),
-	subscribedAppsAt: timestamp("subscribed_apps_at", { withTimezone: true, mode: 'string' }),
-	lastRegistrationError: text("last_registration_error"),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
-}, (table) => [
-	index("idx_whatsapp_config_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
-	index("idx_whatsapp_config_registered_at").using("btree", table.registeredAt.asc().nullsLast().op("timestamptz_ops")).where(sql`(registered_at IS NULL)`),
-	foreignKey({
-			columns: [table.accountId],
-			foreignColumns: [organization.id],
-			name: "whatsapp_config_account_id_fkey"
-		}).onDelete("cascade"),
-	unique("whatsapp_config_account_id_key").on(table.accountId),
-	unique("whatsapp_config_phone_number_id_key").on(table.phoneNumberId),
-	check("whatsapp_config_status_check", sql`status = ANY (ARRAY['connected'::text, 'disconnected'::text])`),
-]);
-
 export const messageTemplates = pgTable("message_templates", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),
 	accountId: uuid("account_id").notNull(),
+	// Phase 4: templates only exist on Meta channels. Nullable during
+	// migration; new templates bind to a meta channel.
+	channelId: uuid("channel_id"),
 	name: text().notNull(),
 	category: text().default('Marketing').notNull(),
 	language: text().default('en_US'),
@@ -423,6 +457,11 @@ export const messageTemplates = pgTable("message_templates", {
 			columns: [table.accountId],
 			foreignColumns: [organization.id],
 			name: "message_templates_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [channels.id],
+			name: "message_templates_channel_id_fkey"
 		}).onDelete("cascade"),
 	check("message_templates_category_check", sql`category = ANY (ARRAY['Marketing'::text, 'Utility'::text, 'Authentication'::text])`),
 	check("message_templates_header_type_check", sql`header_type = ANY (ARRAY['text'::text, 'image'::text, 'video'::text, 'document'::text])`),

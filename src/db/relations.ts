@@ -1,5 +1,5 @@
 import { relations } from "drizzle-orm/relations";
-import { organization, contacts, tags, contactTags, customFields, contactCustomValues, contactNotes, conversations, messages, messageReactions, pipelines, whatsappConfig, messageTemplates, pipelineStages, deals, broadcasts, broadcastRecipients, automations, automationSteps, automationLogs, automationPendingExecutions, flows, apiKeys, flowNodes, flowRuns, flowRunEvents, notifications, webhookEndpoints, aiConfigs, aiKnowledgeDocuments, aiKnowledgeChunks } from "./schema";
+import { organization, contacts, tags, contactTags, customFields, contactCustomValues, contactNotes, conversations, messages, messageReactions, pipelines, channels, messageTemplates, pipelineStages, deals, broadcasts, broadcastRecipients, automations, automationSteps, automationLogs, automationPendingExecutions, flows, apiKeys, flowNodes, flowRuns, flowRunEvents, notifications, webhookEndpoints, aiConfigs, aiKnowledgeDocuments, aiKnowledgeChunks } from "./schema";
 
 // ============================================================
 // Domain relations — the tenant root is now `organization` (Better
@@ -15,7 +15,7 @@ export const organizationRelations = relations(organization, ({many}) => ({
 	contactNotes: many(contactNotes),
 	conversations: many(conversations),
 	pipelines: many(pipelines),
-	whatsappConfigs: many(whatsappConfig),
+	channels: many(channels),
 	messageTemplates: many(messageTemplates),
 	deals: many(deals),
 	broadcasts: many(broadcasts),
@@ -107,6 +107,10 @@ export const conversationsRelations = relations(conversations, ({one, many}) => 
 		fields: [conversations.contactId],
 		references: [contacts.id]
 	}),
+	channel: one(channels, {
+		fields: [conversations.channelId],
+		references: [channels.id]
+	}),
 	messages: many(messages),
 	messageReactions: many(messageReactions),
 	deals: many(deals),
@@ -151,17 +155,23 @@ export const pipelinesRelations = relations(pipelines, ({one, many}) => ({
 	deals: many(deals),
 }));
 
-export const whatsappConfigRelations = relations(whatsappConfig, ({one}) => ({
+export const channelsRelations = relations(channels, ({one, many}) => ({
 	account: one(organization, {
-		fields: [whatsappConfig.accountId],
+		fields: [channels.accountId],
 		references: [organization.id]
 	}),
+	conversations: many(conversations),
+	messageTemplates: many(messageTemplates),
 }));
 
 export const messageTemplatesRelations = relations(messageTemplates, ({one}) => ({
 	account: one(organization, {
 		fields: [messageTemplates.accountId],
 		references: [organization.id]
+	}),
+	channel: one(channels, {
+		fields: [messageTemplates.channelId],
+		references: [channels.id]
 	}),
 }));
 

@@ -222,6 +222,10 @@ CREATE TABLE conversations (
   user_id UUID NOT NULL,
   account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
+  -- Phase 4: the channel this conversation belongs to. The FK is added
+  -- after the channels table is created (see below) to avoid a forward
+  -- reference. One conversation per (account_id, contact_id, channel_id).
+  channel_id UUID,
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'pending', 'closed')),
   assigned_agent_id UUID,
   last_message_text TEXT,
@@ -236,6 +240,13 @@ CREATE TABLE conversations (
 CREATE INDEX idx_conversations_user_id ON conversations(user_id);
 CREATE INDEX idx_conversations_contact_id ON conversations(contact_id);
 CREATE INDEX idx_conversations_account ON conversations(account_id);
+CREATE INDEX idx_conversations_channel ON conversations(channel_id)
+  WHERE channel_id IS NOT NULL;
+-- One conversation per (account, contact, channel). Partial: legacy rows
+-- with a NULL channel_id are exempt.
+CREATE UNIQUE INDEX conversations_account_contact_channel_key
+  ON conversations (account_id, contact_id, channel_id)
+  WHERE channel_id IS NOT NULL;
 
 -- ============================================================
 -- MESSAGES
@@ -284,31 +295,39 @@ CREATE INDEX idx_message_reactions_conversation ON message_reactions(conversatio
 CREATE INDEX idx_message_reactions_message ON message_reactions(message_id);
 
 -- ============================================================
--- WHATSAPP_CONFIG
+-- CHANNELS — multi-provider WhatsApp (Phase 4). Replaces
+-- whatsapp_config. One row per connected channel; `credentials`
+-- is an AES-256-GCM-encrypted provider-specific JSON blob.
 -- ============================================================
-CREATE TABLE whatsapp_config (
+CREATE TABLE channels (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL,
   account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
-  phone_number_id TEXT NOT NULL,
-  waba_id TEXT,
-  access_token TEXT NOT NULL,           -- AES-256-GCM-encrypted at rest
-  verify_token TEXT,
-  status TEXT NOT NULL DEFAULT 'disconnected' CHECK (status IN ('connected', 'disconnected')),
-  connected_at TIMESTAMPTZ,
-  registered_at TIMESTAMPTZ,
-  subscribed_apps_at TIMESTAMPTZ,
-  last_registration_error TEXT,
+  provider TEXT NOT NULL,
+  name TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'disconnected',
+  phone_number TEXT,                    -- E.164 when known
+  credentials TEXT NOT NULL,            -- AES-256-GCM-encrypted JSON
+  provider_meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+  settings JSONB NOT NULL DEFAULT '{}'::jsonb,
+  webhook_secret TEXT NOT NULL,         -- per-channel token for non-Meta webhooks
   created_at TIMESTAMPTZ DEFAULT NOW(),
   updated_at TIMESTAMPTZ DEFAULT NOW(),
-  CONSTRAINT whatsapp_config_account_id_key UNIQUE (account_id),
-  CONSTRAINT whatsapp_config_phone_number_id_key UNIQUE (phone_number_id)
+  CONSTRAINT channels_account_id_name_key UNIQUE (account_id, name),
+  CONSTRAINT channels_provider_check CHECK (provider IN ('meta', 'waha', 'evolution', 'evogo')),
+  CONSTRAINT channels_status_check CHECK (status IN ('disconnected', 'qr_pending', 'connected', 'error'))
 );
 
-CREATE INDEX idx_whatsapp_config_account ON whatsapp_config(account_id);
-CREATE INDEX idx_whatsapp_config_registered_at
-  ON whatsapp_config (registered_at)
-  WHERE registered_at IS NULL;
+CREATE INDEX idx_channels_account ON channels(account_id);
+-- Partial unique index for Meta inbound routing — resolve a channel by
+-- provider_meta->>'phone_number_id'. Only meta channels carry one.
+CREATE UNIQUE INDEX channels_meta_pnid
+  ON channels ((provider_meta->>'phone_number_id'))
+  WHERE provider = 'meta';
+
+-- Deferred FK now that channels exists.
+ALTER TABLE conversations
+  ADD CONSTRAINT conversations_channel_id_fkey
+  FOREIGN KEY (channel_id) REFERENCES channels(id) ON DELETE CASCADE;
 
 -- ============================================================
 -- MESSAGE_TEMPLATES
@@ -317,6 +336,9 @@ CREATE TABLE message_templates (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
   account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  -- Phase 4: templates only exist on Meta channels. Nullable during
+  -- migration; new templates bind to a meta channel.
+  channel_id UUID REFERENCES channels(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   category TEXT NOT NULL DEFAULT 'Marketing' CHECK (category IN ('Marketing', 'Utility', 'Authentication')),
   language TEXT DEFAULT 'en_US',
@@ -1119,7 +1141,7 @@ $$ LANGUAGE plpgsql;
 -- ============================================================
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON contacts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON conversations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER set_updated_at BEFORE UPDATE ON whatsapp_config FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+CREATE TRIGGER set_updated_at BEFORE UPDATE ON channels FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON message_templates FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON deals FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON broadcasts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
