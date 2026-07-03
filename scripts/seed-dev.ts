@@ -1,19 +1,23 @@
 // ============================================================
-// Dev database seed — Phase 1 (Supabase → Drizzle migration).
+// Dev database seed — Phase 2 (Better Auth + organization tenancy).
 //
-// Seeds the dev DB with a fixed, deterministic dataset:
-//   1 account ("Fluxia Dev") · 1 user (fixed UUID) · 1 owner profile
+// Seeds the dev DB with a fixed, deterministic dataset on the new
+// auth model:
+//   1 Better Auth user (dev@fluxia.local / "fluxia-dev-123")
+//   1 credential account (scrypt-hashed password)
+//   1 organization ("Fluxia Dev", default_currency BRL)
+//   1 owner member linking user → org
 //   1 whatsapp_config (disconnected, encrypted dummy token)
 //   1 pipeline with 3 stages · 5 contacts (+5511…) · 2 tags
 //   2 conversations with a few messages each
 //
-// Idempotent: every row uses a fixed UUID and the whole tree hangs
-// off the account, so a `DELETE FROM accounts WHERE id = …` cascade
+// Idempotent: every row uses a fixed UUID and the domain tree hangs
+// off the organization, so deleting the org (cascade) + the user
 // wipes the previous run before re-inserting.
 //
 // Run:  npm run seed:dev   (requires DATABASE_URL + ENCRYPTION_KEY
 // in .env.local). Prints DEV_SEED_USER_ID at the end — add it to
-// .env.local so the Phase 1 session stub authenticates as this user.
+// .env.local so the dev session fallback authenticates as this user.
 // ============================================================
 
 import { config } from 'dotenv';
@@ -22,10 +26,14 @@ config({ path: '.env.local' });
 
 // Fixed UUIDs — the whole point is determinism across runs.
 const USER_ID = '11111111-1111-4111-8111-111111111111';
-const ACCOUNT_ID = '22222222-2222-4222-8222-222222222222';
-const PROFILE_ID = '33333333-3333-4333-8333-333333333333';
+const ACCOUNT_ID = '22222222-2222-4222-8222-222222222222'; // = organization.id
+const CREDENTIAL_ID = '33333333-3333-4333-8333-333333333333';
+const MEMBER_ID = '99999999-9999-4999-8999-000000000001';
 const WHATSAPP_CONFIG_ID = '44444444-4444-4444-8444-444444444444';
 const PIPELINE_ID = '55555555-5555-4555-8555-555555555555';
+
+const DEV_EMAIL = 'dev@fluxia.local';
+const DEV_PASSWORD = 'fluxia-dev-123';
 
 const STAGE_IDS = [
   '55555555-5555-4555-8555-000000000001',
@@ -64,36 +72,58 @@ async function main(): Promise<void> {
   const { eq } = await import('drizzle-orm');
   const {
     db,
-    accounts,
+    user,
+    account,
+    organization,
+    member,
     contacts,
     conversations,
     messages,
     pipelineStages,
     pipelines,
-    profiles,
     tags,
     whatsappConfig,
   } = await import('../src/db');
   const { encrypt } = await import('../src/lib/whatsapp/encryption');
+  const { hashPassword } = await import('better-auth/crypto');
 
-  // ---- wipe the previous seed run (cascade covers the whole tree) ----
-  await db.delete(accounts).where(eq(accounts.id, ACCOUNT_ID));
+  // ---- wipe the previous seed run ----
+  // Deleting the organization cascades the whole domain tree; deleting
+  // the user cascades its account/session/member rows.
+  await db.delete(organization).where(eq(organization.id, ACCOUNT_ID));
+  await db.delete(user).where(eq(user.id, USER_ID));
 
-  // ---- account + profile ----
-  await db.insert(accounts).values({
-    id: ACCOUNT_ID,
+  // ---- Better Auth user + credential account ----
+  await db.insert(user).values({
+    id: USER_ID,
     name: 'Fluxia Dev',
-    ownerUserId: USER_ID,
-    defaultCurrency: 'BRL',
+    email: DEV_EMAIL,
+    emailVerified: true,
   });
 
-  await db.insert(profiles).values({
-    id: PROFILE_ID,
+  await db.insert(account).values({
+    id: CREDENTIAL_ID,
     userId: USER_ID,
-    accountId: ACCOUNT_ID,
-    accountRole: 'owner',
-    fullName: 'Fluxia Dev',
-    email: 'dev@fluxia.local',
+    // For the credential provider Better Auth stores the userId as the
+    // provider account id.
+    accountId: USER_ID,
+    providerId: 'credential',
+    password: await hashPassword(DEV_PASSWORD),
+  });
+
+  // ---- organization (tenant) + owner member ----
+  await db.insert(organization).values({
+    id: ACCOUNT_ID,
+    name: 'Fluxia Dev',
+    slug: 'fluxia-dev',
+    default_currency: 'BRL',
+  });
+
+  await db.insert(member).values({
+    id: MEMBER_ID,
+    userId: USER_ID,
+    organizationId: ACCOUNT_ID,
+    role: 'owner',
   });
 
   // ---- whatsapp config (disconnected, encrypted dummy token) ----
@@ -184,11 +214,14 @@ async function main(): Promise<void> {
 
   console.log('Seed complete.');
   console.log('');
+  console.log(`  user:     ${DEV_EMAIL} / ${DEV_PASSWORD}`);
+  console.log(`  org:      Fluxia Dev (${ACCOUNT_ID})`);
+  console.log('');
   console.log(`DEV_SEED_USER_ID=${USER_ID}`);
   console.log('');
-  console.log('Add the line above to .env.local so the Phase 1 session stub');
+  console.log('Add the line above to .env.local so the dev session fallback');
   console.log('(src/lib/auth/session.ts) authenticates dev requests as the');
-  console.log('seeded owner user.');
+  console.log('seeded owner user when there is no real cookie session.');
 }
 
 main()

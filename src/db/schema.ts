@@ -1,4 +1,4 @@
-import { pgTable, uniqueIndex, check, uuid, text, timestamp, index, foreignKey, unique, jsonb, integer, boolean, numeric, date, vector, pgEnum, customType } from "drizzle-orm/pg-core"
+import { pgTable, uniqueIndex, check, uuid, text, timestamp, index, foreignKey, unique, jsonb, integer, boolean, numeric, date, vector, customType } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 // tsvector is not a built-in drizzle column type; the column is a
@@ -9,41 +9,136 @@ const tsvector = customType<{ data: string }>({
 	},
 })
 
-export const accountRoleEnum = pgEnum("account_role_enum", ['owner', 'admin', 'agent', 'viewer'])
+// ============================================================
+// Better Auth tables (multi-tenancy = organization).
+//
+// Hand-written to mirror Better Auth 1.6.23's expected schema with
+// uuid ids (advanced.database.generateId = "uuid"). Column NAMES use
+// Better Auth's default camelCase-in-TS with snake_case DB names for
+// multi-word columns. `organization` carries the extra
+// `default_currency` additionalField. `member.role` is plain text
+// (owner/admin/agent/viewer) — the app validates it via roles.ts.
+// ============================================================
 
-
-export const accounts = pgTable("accounts", {
-	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+export const user = pgTable("user", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
 	name: text().notNull(),
-	ownerUserId: uuid("owner_user_id").notNull(),
-	defaultCurrency: text("default_currency").default('USD').notNull(),
+	email: text().notNull(),
+	emailVerified: boolean("email_verified").default(false).notNull(),
+	image: text(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
-	uniqueIndex("idx_accounts_one_per_owner").using("btree", table.ownerUserId.asc().nullsLast().op("uuid_ops")),
-	check("accounts_default_currency_format", sql`default_currency ~ '^[A-Z]{3}$'::text`),
+	unique("user_email_key").on(table.email),
 ]);
 
-export const profiles = pgTable("profiles", {
-	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+export const session = pgTable("session", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),
-	accountId: uuid("account_id").notNull(),
-	accountRole: accountRoleEnum("account_role").notNull(),
-	fullName: text("full_name").notNull(),
-	email: text().notNull(),
-	avatarUrl: text("avatar_url"),
-	role: text().default('user'),
-	betaFeatures: text("beta_features").array().default(sql`ARRAY[]::text[]`).notNull(),
-	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
-	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+	token: text().notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
+	ipAddress: text("ip_address"),
+	userAgent: text("user_agent"),
+	activeOrganizationId: uuid("active_organization_id"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
-	index("idx_profiles_account_role").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.accountRole.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
-			columns: [table.accountId],
-			foreignColumns: [accounts.id],
-			name: "profiles_account_id_fkey"
+			columns: [table.userId],
+			foreignColumns: [user.id],
+			name: "session_user_id_fkey"
 		}).onDelete("cascade"),
-	unique("profiles_user_id_key").on(table.userId),
+	unique("session_token_key").on(table.token),
+]);
+
+export const account = pgTable("account", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	userId: uuid("user_id").notNull(),
+	accountId: text("account_id").notNull(),
+	providerId: text("provider_id").notNull(),
+	accessToken: text("access_token"),
+	refreshToken: text("refresh_token"),
+	idToken: text("id_token"),
+	accessTokenExpiresAt: timestamp("access_token_expires_at", { withTimezone: true, mode: 'string' }),
+	refreshTokenExpiresAt: timestamp("refresh_token_expires_at", { withTimezone: true, mode: 'string' }),
+	scope: text(),
+	password: text(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.userId],
+			foreignColumns: [user.id],
+			name: "account_user_id_fkey"
+		}).onDelete("cascade"),
+]);
+
+export const verification = pgTable("verification", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	identifier: text().notNull(),
+	value: text().notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+export const organization = pgTable("organization", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	name: text().notNull(),
+	slug: text(),
+	logo: text(),
+	metadata: text(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	// Property name MUST match the additionalField `fieldName` in
+	// src/lib/auth.ts ("default_currency") — the Better Auth Drizzle
+	// adapter resolves additionalFields by that key on the table object.
+	default_currency: text("default_currency").default('USD').notNull(),
+}, (table) => [
+	unique("organization_slug_key").on(table.slug),
+]);
+
+export const member = pgTable("member", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	userId: uuid("user_id").notNull(),
+	organizationId: uuid("organization_id").notNull(),
+	role: text().default('member').notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_member_organization").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops")),
+	index("idx_member_user").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.userId],
+			foreignColumns: [user.id],
+			name: "member_user_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organization.id],
+			name: "member_organization_id_fkey"
+		}).onDelete("cascade"),
+]);
+
+export const invitation = pgTable("invitation", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	email: text().notNull(),
+	inviterId: uuid("inviter_id").notNull(),
+	organizationId: uuid("organization_id").notNull(),
+	role: text(),
+	status: text().default('pending').notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_invitation_organization").using("btree", table.organizationId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organization.id],
+			name: "invitation_organization_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.inviterId],
+			foreignColumns: [user.id],
+			name: "invitation_inviter_id_fkey"
+		}).onDelete("cascade"),
 ]);
 
 export const contacts = pgTable("contacts", {
@@ -65,7 +160,7 @@ export const contacts = pgTable("contacts", {
 	index("idx_contacts_user_id").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "contacts_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
@@ -81,7 +176,7 @@ export const tags = pgTable("tags", {
 	index("idx_tags_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "tags_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
@@ -119,7 +214,7 @@ export const customFields = pgTable("custom_fields", {
 	index("idx_custom_fields_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "custom_fields_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
@@ -160,7 +255,7 @@ export const contactNotes = pgTable("contact_notes", {
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "contact_notes_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
@@ -185,7 +280,7 @@ export const conversations = pgTable("conversations", {
 	index("idx_conversations_user_id").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "conversations_account_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
@@ -264,7 +359,7 @@ export const pipelines = pgTable("pipelines", {
 	index("idx_pipelines_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "pipelines_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
@@ -289,7 +384,7 @@ export const whatsappConfig = pgTable("whatsapp_config", {
 	index("idx_whatsapp_config_registered_at").using("btree", table.registeredAt.asc().nullsLast().op("timestamptz_ops")).where(sql`(registered_at IS NULL)`),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "whatsapp_config_account_id_fkey"
 		}).onDelete("cascade"),
 	unique("whatsapp_config_account_id_key").on(table.accountId),
@@ -326,7 +421,7 @@ export const messageTemplates = pgTable("message_templates", {
 	uniqueIndex("message_templates_user_name_language_key").using("btree", table.userId.asc().nullsLast().op("uuid_ops"), table.name.asc().nullsLast().op("uuid_ops"), table.language.asc().nullsLast().op("text_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "message_templates_account_id_fkey"
 		}).onDelete("cascade"),
 	check("message_templates_category_check", sql`category = ANY (ARRAY['Marketing'::text, 'Utility'::text, 'Authentication'::text])`),
@@ -376,7 +471,7 @@ export const deals = pgTable("deals", {
 	index("idx_deals_stage").using("btree", table.stageId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "deals_account_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
@@ -401,7 +496,7 @@ export const deals = pgTable("deals", {
 		}),
 	foreignKey({
 			columns: [table.assignedTo],
-			foreignColumns: [profiles.id],
+			foreignColumns: [user.id],
 			name: "deals_assigned_to_fkey"
 		}).onDelete("set null"),
 	check("deals_status_check", sql`status = ANY (ARRAY['open'::text, 'won'::text, 'lost'::text])`),
@@ -430,7 +525,7 @@ export const broadcasts = pgTable("broadcasts", {
 	index("idx_broadcasts_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "broadcasts_account_id_fkey"
 		}).onDelete("cascade"),
 	check("broadcasts_status_check", sql`status = ANY (ARRAY['draft'::text, 'scheduled'::text, 'sending'::text, 'sent'::text, 'failed'::text])`),
@@ -485,7 +580,7 @@ export const automations = pgTable("automations", {
 	index("idx_automations_user_id").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "automations_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
@@ -537,7 +632,7 @@ export const automationLogs = pgTable("automation_logs", {
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "automation_logs_account_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
@@ -572,7 +667,7 @@ export const automationPendingExecutions = pgTable("automation_pending_execution
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "automation_pending_executions_account_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
@@ -615,7 +710,7 @@ export const flows = pgTable("flows", {
 	index("idx_flows_active_trigger").using("btree", table.userId.asc().nullsLast().op("uuid_ops"), table.triggerType.asc().nullsLast().op("uuid_ops")).where(sql`(status = 'active'::text)`),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "flows_account_id_fkey"
 		}).onDelete("cascade"),
 	check("flows_status_check", sql`status = ANY (ARRAY['draft'::text, 'active'::text, 'archived'::text])`),
@@ -639,7 +734,7 @@ export const apiKeys = pgTable("api_keys", {
 	index("api_keys_key_hash_idx").using("btree", table.keyHash.asc().nullsLast().op("text_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "api_keys_account_id_fkey"
 		}).onDelete("cascade"),
 	unique("api_keys_key_hash_key").on(table.keyHash),
@@ -693,7 +788,7 @@ export const flowRuns = pgTable("flow_runs", {
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "flow_runs_account_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
@@ -749,7 +844,7 @@ export const notifications = pgTable("notifications", {
 	index("idx_notifications_user_unread").using("btree", table.userId.asc().nullsLast().op("uuid_ops")).where(sql`(read_at IS NULL)`),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "notifications_account_id_fkey"
 		}).onDelete("cascade"),
 	foreignKey({
@@ -780,7 +875,7 @@ export const webhookEndpoints = pgTable("webhook_endpoints", {
 	index("webhook_endpoints_account_id_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "webhook_endpoints_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
@@ -802,7 +897,7 @@ export const aiConfigs = pgTable("ai_configs", {
 }, (table) => [
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "ai_configs_account_id_fkey"
 		}).onDelete("cascade"),
 	unique("ai_configs_account_id_key").on(table.accountId),
@@ -822,7 +917,7 @@ export const aiKnowledgeDocuments = pgTable("ai_knowledge_documents", {
 	index("ai_knowledge_documents_account_id_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "ai_knowledge_documents_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
@@ -848,7 +943,7 @@ export const aiKnowledgeChunks = pgTable("ai_knowledge_chunks", {
 		}).onDelete("cascade"),
 	foreignKey({
 			columns: [table.accountId],
-			foreignColumns: [accounts.id],
+			foreignColumns: [organization.id],
 			name: "ai_knowledge_chunks_account_id_fkey"
 		}).onDelete("cascade"),
 ]);

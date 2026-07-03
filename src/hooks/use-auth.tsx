@@ -10,6 +10,7 @@ import {
   type ReactNode,
 } from "react";
 import { DEFAULT_CURRENCY } from "@/lib/currency";
+import { authClient } from "@/lib/auth-client";
 
 // Phase 1: the browser Supabase client is gone. Auth state is hydrated
 // from GET /api/me (session → profile + account). `User` collapses to a
@@ -205,7 +206,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [fetchProfile]);
 
   const signOut = useCallback(async () => {
-    // Phase 2 (Better Auth) replaces this with a real session teardown.
+    // Tear down the Better Auth cookie session, then reset local state
+    // and redirect to /login.
+    try {
+      await authClient.signOut();
+    } catch (err) {
+      console.error("[AuthProvider] signOut failed:", err);
+    }
     setUser(null);
     setProfile(null);
     setAccount(null);

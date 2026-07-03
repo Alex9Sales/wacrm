@@ -1,37 +1,34 @@
 // ============================================================
 // Server-side account context — for API routes and server
-// components. Reads the caller's profile + account and verifies
-// role on demand.
+// components. Resolves the caller's user + active organization +
+// role from Better Auth, then loads the organization row.
 //
-// Post-Supabase: queries run through the shared Drizzle client
-// (`@/db`) and the session comes from `@/lib/auth/session`
-// (Phase 1 stub → Better Auth in Phase 2). There is no RLS —
-// every downstream query MUST be scoped by `ctx.accountId`.
+// Tenancy = Better Auth `organization`; membership + role live in
+// `member`. There is no RLS — every downstream query MUST be scoped
+// by `ctx.accountId` (= the active organization id).
 //
 // Calling convention
 // ------------------
 //   try {
 //     const ctx = await requireRole("admin");
 //     // ctx.userId / ctx.accountId / ctx.role / ctx.account
-//     // queries: import { db } from "@/db"
 //   } catch (err) {
 //     return toErrorResponse(err);
 //   }
 // ============================================================
 
 import { NextResponse } from "next/server";
-import { eq } from "drizzle-orm";
+import { headers } from "next/headers";
+import { eq, asc } from "drizzle-orm";
 
-import { db, accounts, profiles } from "@/db";
+import { db, organization, member } from "@/db";
 import { firstOrNull } from "@/db/helpers";
+import { auth } from "@/lib/auth";
 import { getSessionUserId } from "./session";
 import { hasMinRole, isAccountRole, type AccountRole } from "./roles";
 
 // ------------------------------------------------------------
 // Errors
-//
-// Custom classes so API routes can map a single `catch` to the
-// right HTTP status without sprinkling 401/403 strings everywhere.
 // ------------------------------------------------------------
 
 export class UnauthorizedError extends Error {
@@ -70,20 +67,65 @@ export function toErrorResponse(err: unknown): NextResponse {
 export interface AccountContext {
   /** The calling user's id. Always defined when this resolves. */
   userId: string;
-  /** Caller's account_id from their profile row. */
+  /** Active organization id — the tenant scope for every query. */
   accountId: string;
-  /** Caller's role within their account. */
+  /** Caller's role within the active organization. */
   role: AccountRole;
   /** Lightweight account meta — id + name. */
   account: { id: string; name: string };
+  /** Active organization's default deal currency (ISO-4217). */
+  defaultCurrency?: string;
+}
+
+/**
+ * Resolve the caller's active-organization id + role.
+ *
+ * Primary path: the Better Auth session (activeOrganizationId) +
+ * `getActiveMember` for the role. Fallback path (dev): when there's
+ * no real session but `getSessionUserId` yields the seed user, we
+ * resolve the org + role directly from that user's first membership.
+ */
+async function resolveActiveOrg(
+  userId: string,
+): Promise<{ organizationId: string; role: string } | null> {
+  // Primary: read the Better Auth session's active org + active member.
+  try {
+    const reqHeaders = await headers();
+    const session = await auth.api.getSession({ headers: reqHeaders });
+    const activeOrgId = session?.session?.activeOrganizationId ?? null;
+    if (session?.user?.id === userId && activeOrgId) {
+      const activeMember = await auth.api.getActiveMember({
+        headers: reqHeaders,
+      });
+      if (activeMember?.role) {
+        return { organizationId: activeOrgId, role: activeMember.role };
+      }
+    }
+  } catch (err) {
+    console.error("[resolveActiveOrg] session lookup failed:", err);
+  }
+
+  // Fallback (dev seed / no active session): first membership row.
+  const membership = firstOrNull(
+    await db
+      .select({ organizationId: member.organizationId, role: member.role })
+      .from(member)
+      .where(eq(member.userId, userId))
+      .orderBy(asc(member.createdAt))
+      .limit(1),
+  );
+  if (membership) {
+    return { organizationId: membership.organizationId, role: membership.role };
+  }
+  return null;
 }
 
 /**
  * Resolve the caller's user + account + role.
  *
  * Throws `UnauthorizedError` if there's no session.
- * Throws `ForbiddenError` if the profile is missing account fields
- * (defensive guard against rows inserted by hand).
+ * Throws `ForbiddenError` if the user has no active organization /
+ * membership, or the organization row is missing.
  *
  * Use `requireRole(min)` instead when the route also needs a
  * minimum-role check — it's a thin wrapper over this.
@@ -94,47 +136,41 @@ export async function getCurrentAccount(): Promise<AccountContext> {
     throw new UnauthorizedError();
   }
 
-  const profile = firstOrNull(
-    await db
-      .select({
-        accountId: profiles.accountId,
-        accountRole: profiles.accountRole,
-      })
-      .from(profiles)
-      .where(eq(profiles.userId, userId))
-      .limit(1),
-  );
-
-  if (!profile || !profile.accountId || !profile.accountRole) {
-    // Profile missing or never linked to an account — the user is
-    // authenticated but the app has no way to scope their queries.
-    throw new ForbiddenError("Profile is not linked to an account");
+  const active = await resolveActiveOrg(userId);
+  if (!active) {
+    // Authenticated but no organization membership — the app has no
+    // way to scope their queries.
+    throw new ForbiddenError("User is not a member of any organization");
   }
-  if (!isAccountRole(profile.accountRole)) {
-    // The DB enum should make this impossible, but a future migration
-    // that broadens the enum without updating TS would hit this —
-    // surface it rather than silently widening.
-    throw new ForbiddenError(`Unknown account role: ${profile.accountRole}`);
+
+  if (!isAccountRole(active.role)) {
+    // member.role is free-text; guard against a value TS doesn't know.
+    throw new ForbiddenError(`Unknown account role: ${active.role}`);
   }
 
   const account = firstOrNull(
     await db
-      .select({ id: accounts.id, name: accounts.name })
-      .from(accounts)
-      .where(eq(accounts.id, profile.accountId))
+      .select({
+        id: organization.id,
+        name: organization.name,
+        defaultCurrency: organization.default_currency,
+      })
+      .from(organization)
+      .where(eq(organization.id, active.organizationId))
       .limit(1),
   );
 
   if (!account) {
-    // account_id points at no account row — orphaned profile.
-    throw new ForbiddenError("Profile is not linked to an account");
+    // active org points at no organization row — orphaned session.
+    throw new ForbiddenError("Active organization not found");
   }
 
   return {
     userId,
-    accountId: profile.accountId,
-    role: profile.accountRole,
+    accountId: account.id,
+    role: active.role,
     account: { id: account.id, name: account.name },
+    defaultCurrency: account.defaultCurrency,
   };
 }
 
@@ -142,8 +178,8 @@ export async function getCurrentAccount(): Promise<AccountContext> {
  * Resolve the caller's account context and enforce a minimum role.
  *
  * Throws `UnauthorizedError` / `ForbiddenError` as documented on
- * `getCurrentAccount`, plus `ForbiddenError("Insufficient role")`
- * when the caller is below `min`.
+ * `getCurrentAccount`, plus `ForbiddenError` when the caller is
+ * below `min`.
  */
 export async function requireRole(min: AccountRole): Promise<AccountContext> {
   const ctx = await getCurrentAccount();

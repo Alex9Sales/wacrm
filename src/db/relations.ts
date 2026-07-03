@@ -1,16 +1,14 @@
 import { relations } from "drizzle-orm/relations";
-import { accounts, profiles, contacts, tags, contactTags, customFields, contactCustomValues, contactNotes, conversations, messages, messageReactions, pipelines, whatsappConfig, messageTemplates, pipelineStages, deals, broadcasts, broadcastRecipients, automations, automationSteps, automationLogs, automationPendingExecutions, flows, apiKeys, flowNodes, flowRuns, flowRunEvents, notifications, webhookEndpoints, aiConfigs, aiKnowledgeDocuments, aiKnowledgeChunks } from "./schema";
+import { organization, contacts, tags, contactTags, customFields, contactCustomValues, contactNotes, conversations, messages, messageReactions, pipelines, whatsappConfig, messageTemplates, pipelineStages, deals, broadcasts, broadcastRecipients, automations, automationSteps, automationLogs, automationPendingExecutions, flows, apiKeys, flowNodes, flowRuns, flowRunEvents, notifications, webhookEndpoints, aiConfigs, aiKnowledgeDocuments, aiKnowledgeChunks } from "./schema";
 
-export const profilesRelations = relations(profiles, ({one, many}) => ({
-	account: one(accounts, {
-		fields: [profiles.accountId],
-		references: [accounts.id]
-	}),
-	deals: many(deals),
-}));
+// ============================================================
+// Domain relations — the tenant root is now `organization` (Better
+// Auth). Every domain `account_id` FK targets `organization.id`.
+// Better Auth's own tables (user/session/account/member/invitation)
+// carry their FKs in schema.ts and don't need Drizzle relations here.
+// ============================================================
 
-export const accountsRelations = relations(accounts, ({many}) => ({
-	profiles: many(profiles),
+export const organizationRelations = relations(organization, ({many}) => ({
 	contacts: many(contacts),
 	tags: many(tags),
 	customFields: many(customFields),
@@ -35,9 +33,9 @@ export const accountsRelations = relations(accounts, ({many}) => ({
 }));
 
 export const contactsRelations = relations(contacts, ({one, many}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [contacts.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	contactTags: many(contactTags),
 	contactCustomValues: many(contactCustomValues),
@@ -52,9 +50,9 @@ export const contactsRelations = relations(contacts, ({one, many}) => ({
 }));
 
 export const tagsRelations = relations(tags, ({one, many}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [tags.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	contactTags: many(contactTags),
 }));
@@ -71,9 +69,9 @@ export const contactTagsRelations = relations(contactTags, ({one}) => ({
 }));
 
 export const customFieldsRelations = relations(customFields, ({one, many}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [customFields.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	contactCustomValues: many(contactCustomValues),
 }));
@@ -94,16 +92,16 @@ export const contactNotesRelations = relations(contactNotes, ({one}) => ({
 		fields: [contactNotes.contactId],
 		references: [contacts.id]
 	}),
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [contactNotes.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 }));
 
 export const conversationsRelations = relations(conversations, ({one, many}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [conversations.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	contact: one(contacts, {
 		fields: [conversations.contactId],
@@ -145,25 +143,25 @@ export const messageReactionsRelations = relations(messageReactions, ({one}) => 
 }));
 
 export const pipelinesRelations = relations(pipelines, ({one, many}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [pipelines.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	pipelineStages: many(pipelineStages),
 	deals: many(deals),
 }));
 
 export const whatsappConfigRelations = relations(whatsappConfig, ({one}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [whatsappConfig.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 }));
 
 export const messageTemplatesRelations = relations(messageTemplates, ({one}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [messageTemplates.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 }));
 
@@ -176,9 +174,9 @@ export const pipelineStagesRelations = relations(pipelineStages, ({one, many}) =
 }));
 
 export const dealsRelations = relations(deals, ({one}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [deals.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	pipeline: one(pipelines, {
 		fields: [deals.pipelineId],
@@ -196,16 +194,12 @@ export const dealsRelations = relations(deals, ({one}) => ({
 		fields: [deals.conversationId],
 		references: [conversations.id]
 	}),
-	profile: one(profiles, {
-		fields: [deals.assignedTo],
-		references: [profiles.id]
-	}),
 }));
 
 export const broadcastsRelations = relations(broadcasts, ({one, many}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [broadcasts.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	broadcastRecipients: many(broadcastRecipients),
 }));
@@ -222,9 +216,9 @@ export const broadcastRecipientsRelations = relations(broadcastRecipients, ({one
 }));
 
 export const automationsRelations = relations(automations, ({one, many}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [automations.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	automationSteps: many(automationSteps),
 	automationLogs: many(automationLogs),
@@ -252,9 +246,9 @@ export const automationLogsRelations = relations(automationLogs, ({one, many}) =
 		fields: [automationLogs.automationId],
 		references: [automations.id]
 	}),
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [automationLogs.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	contact: one(contacts, {
 		fields: [automationLogs.contactId],
@@ -268,9 +262,9 @@ export const automationPendingExecutionsRelations = relations(automationPendingE
 		fields: [automationPendingExecutions.automationId],
 		references: [automations.id]
 	}),
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [automationPendingExecutions.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	contact: one(contacts, {
 		fields: [automationPendingExecutions.contactId],
@@ -287,18 +281,18 @@ export const automationPendingExecutionsRelations = relations(automationPendingE
 }));
 
 export const flowsRelations = relations(flows, ({one, many}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [flows.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	flowNodes: many(flowNodes),
 	flowRuns: many(flowRuns),
 }));
 
 export const apiKeysRelations = relations(apiKeys, ({one}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [apiKeys.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 }));
 
@@ -314,9 +308,9 @@ export const flowRunsRelations = relations(flowRuns, ({one, many}) => ({
 		fields: [flowRuns.flowId],
 		references: [flows.id]
 	}),
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [flowRuns.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	contact: one(contacts, {
 		fields: [flowRuns.contactId],
@@ -341,9 +335,9 @@ export const flowRunEventsRelations = relations(flowRunEvents, ({one}) => ({
 }));
 
 export const notificationsRelations = relations(notifications, ({one}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [notifications.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	conversation: one(conversations, {
 		fields: [notifications.conversationId],
@@ -356,23 +350,23 @@ export const notificationsRelations = relations(notifications, ({one}) => ({
 }));
 
 export const webhookEndpointsRelations = relations(webhookEndpoints, ({one}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [webhookEndpoints.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 }));
 
 export const aiConfigsRelations = relations(aiConfigs, ({one}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [aiConfigs.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 }));
 
 export const aiKnowledgeDocumentsRelations = relations(aiKnowledgeDocuments, ({one, many}) => ({
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [aiKnowledgeDocuments.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 	aiKnowledgeChunks: many(aiKnowledgeChunks),
 }));
@@ -382,8 +376,8 @@ export const aiKnowledgeChunksRelations = relations(aiKnowledgeChunks, ({one}) =
 		fields: [aiKnowledgeChunks.documentId],
 		references: [aiKnowledgeDocuments.id]
 	}),
-	account: one(accounts, {
+	account: one(organization, {
 		fields: [aiKnowledgeChunks.accountId],
-		references: [accounts.id]
+		references: [organization.id]
 	}),
 }));

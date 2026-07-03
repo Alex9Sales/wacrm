@@ -21,11 +21,6 @@ CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS vector;
 
 -- ============================================================
--- ENUMS
--- ============================================================
-CREATE TYPE account_role_enum AS ENUM ('owner', 'admin', 'agent', 'viewer');
-
--- ============================================================
 -- SHARED TRIGGER FUNCTIONS
 -- ============================================================
 CREATE OR REPLACE FUNCTION update_updated_at_column()
@@ -37,40 +32,94 @@ END;
 $$ LANGUAGE plpgsql;
 
 -- ============================================================
--- ACCOUNTS (tenancy root — id will map to Better Auth org id)
+-- BETTER AUTH TABLES (multi-tenancy root = organization)
+--
+-- Owned by Better Auth 1.6.23 (organization plugin). UUID ids
+-- (advanced.database.generateId = "uuid") so domain account_id FKs
+-- can point at organization(id). Defined BEFORE the domain tables
+-- that reference organization. member.role is plain text; the app
+-- validates it against owner/admin/agent/viewer (src/lib/auth/roles).
 -- ============================================================
-CREATE TABLE accounts (
+CREATE TABLE "user" (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   name TEXT NOT NULL,
-  -- Plain UUID (was FK to auth.users). Denormalised owner pointer.
-  owner_user_id UUID NOT NULL,
-  default_currency TEXT NOT NULL DEFAULT 'USD',
+  email TEXT NOT NULL UNIQUE,
+  email_verified BOOLEAN NOT NULL DEFAULT false,
+  image TEXT,
   created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-  CONSTRAINT accounts_default_currency_format CHECK (default_currency ~ '^[A-Z]{3}$')
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
 );
 
-CREATE UNIQUE INDEX idx_accounts_one_per_owner ON accounts(owner_user_id);
-
--- ============================================================
--- PROFILES
--- ============================================================
-CREATE TABLE profiles (
+CREATE TABLE organization (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
-  account_role account_role_enum NOT NULL,
-  full_name TEXT NOT NULL,
-  email TEXT NOT NULL,
-  avatar_url TEXT,
-  role TEXT DEFAULT 'user',           -- legacy, unused (kept from 001/017)
-  beta_features TEXT[] NOT NULL DEFAULT ARRAY[]::TEXT[],
-  created_at TIMESTAMPTZ DEFAULT NOW(),
-  updated_at TIMESTAMPTZ DEFAULT NOW(),
-  UNIQUE(user_id)
+  name TEXT NOT NULL,
+  slug TEXT UNIQUE,
+  logo TEXT,
+  metadata TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  default_currency TEXT NOT NULL DEFAULT 'USD'
 );
 
-CREATE INDEX idx_profiles_account_role ON profiles(account_id, account_role);
+CREATE TABLE session (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  token TEXT NOT NULL UNIQUE,
+  expires_at TIMESTAMPTZ NOT NULL,
+  ip_address TEXT,
+  user_agent TEXT,
+  active_organization_id UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE account (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  account_id TEXT NOT NULL,
+  provider_id TEXT NOT NULL,
+  access_token TEXT,
+  refresh_token TEXT,
+  id_token TEXT,
+  access_token_expires_at TIMESTAMPTZ,
+  refresh_token_expires_at TIMESTAMPTZ,
+  scope TEXT,
+  password TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE verification (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  identifier TEXT NOT NULL,
+  value TEXT NOT NULL,
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE TABLE member (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  role TEXT NOT NULL DEFAULT 'member',
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_member_organization ON member(organization_id);
+CREATE INDEX idx_member_user ON member(user_id);
+
+CREATE TABLE invitation (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  email TEXT NOT NULL,
+  inviter_id UUID NOT NULL REFERENCES "user"(id) ON DELETE CASCADE,
+  organization_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  role TEXT,
+  status TEXT NOT NULL DEFAULT 'pending',
+  expires_at TIMESTAMPTZ NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_invitation_organization ON invitation(organization_id);
 
 -- ============================================================
 -- CONTACTS
@@ -78,7 +127,7 @@ CREATE INDEX idx_profiles_account_role ON profiles(account_id, account_role);
 CREATE TABLE contacts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   phone TEXT NOT NULL,
   phone_normalized TEXT GENERATED ALWAYS AS (regexp_replace(phone, '\D', '', 'g')) STORED,
   name TEXT,
@@ -102,7 +151,7 @@ CREATE UNIQUE INDEX idx_contacts_account_phone_normalized
 CREATE TABLE tags (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   color TEXT NOT NULL DEFAULT '#3b82f6',
   created_at TIMESTAMPTZ DEFAULT NOW()
@@ -130,7 +179,7 @@ CREATE INDEX idx_contact_tags_tag ON contact_tags(tag_id);
 CREATE TABLE custom_fields (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   field_name TEXT NOT NULL,
   field_type TEXT NOT NULL DEFAULT 'text',
   field_options JSONB,
@@ -158,7 +207,7 @@ CREATE TABLE contact_notes (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   note_text TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -171,7 +220,7 @@ CREATE INDEX idx_contact_notes_account ON contact_notes(account_id);
 CREATE TABLE conversations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   contact_id UUID NOT NULL REFERENCES contacts(id) ON DELETE CASCADE,
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'pending', 'closed')),
   assigned_agent_id UUID,
@@ -240,7 +289,7 @@ CREATE INDEX idx_message_reactions_message ON message_reactions(message_id);
 CREATE TABLE whatsapp_config (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   phone_number_id TEXT NOT NULL,
   waba_id TEXT,
   access_token TEXT NOT NULL,           -- AES-256-GCM-encrypted at rest
@@ -267,7 +316,7 @@ CREATE INDEX idx_whatsapp_config_registered_at
 CREATE TABLE message_templates (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   category TEXT NOT NULL DEFAULT 'Marketing' CHECK (category IN ('Marketing', 'Utility', 'Authentication')),
   language TEXT DEFAULT 'en_US',
@@ -312,7 +361,7 @@ CREATE INDEX idx_message_templates_account ON message_templates(account_id);
 CREATE TABLE pipelines (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   created_at TIMESTAMPTZ DEFAULT NOW()
 );
@@ -339,12 +388,12 @@ CREATE INDEX idx_pipeline_stages_pipeline ON pipeline_stages(pipeline_id);
 CREATE TABLE deals (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   pipeline_id UUID NOT NULL REFERENCES pipelines(id) ON DELETE CASCADE,
   stage_id UUID NOT NULL REFERENCES pipeline_stages(id),
   contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
   conversation_id UUID REFERENCES conversations(id),
-  assigned_to UUID REFERENCES profiles(id) ON DELETE SET NULL,
+  assigned_to UUID REFERENCES "user"(id) ON DELETE SET NULL,
   title TEXT NOT NULL,
   value NUMERIC(12,2) NOT NULL DEFAULT 0,
   currency TEXT DEFAULT 'USD',
@@ -367,7 +416,7 @@ CREATE INDEX idx_deals_account ON deals(account_id);
 CREATE TABLE broadcasts (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   template_name TEXT NOT NULL,
   template_language TEXT NOT NULL DEFAULT 'en_US',
@@ -417,7 +466,7 @@ CREATE INDEX idx_broadcast_recipients_broadcast_status
 CREATE TABLE automations (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
   trigger_type TEXT NOT NULL,
@@ -462,7 +511,7 @@ CREATE TABLE automation_logs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   automation_id UUID NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
   trigger_event TEXT NOT NULL,
   steps_executed JSONB NOT NULL DEFAULT '[]'::jsonb,
@@ -482,7 +531,7 @@ CREATE TABLE automation_pending_executions (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   automation_id UUID NOT NULL REFERENCES automations(id) ON DELETE CASCADE,
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
   log_id UUID REFERENCES automation_logs(id) ON DELETE CASCADE,
   parent_step_id UUID REFERENCES automation_steps(id) ON DELETE SET NULL,
@@ -506,7 +555,7 @@ CREATE INDEX idx_automation_pending_account
 CREATE TABLE flows (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
   description TEXT,
   status TEXT NOT NULL DEFAULT 'draft'
@@ -559,7 +608,7 @@ CREATE TABLE flow_runs (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
   flow_id UUID NOT NULL REFERENCES flows(id) ON DELETE CASCADE,
   user_id UUID NOT NULL,
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
   conversation_id UUID REFERENCES conversations(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'active' CHECK (status IN (
@@ -607,7 +656,7 @@ CREATE INDEX idx_flow_run_events_run_time ON flow_run_events(flow_run_id, create
 -- ============================================================
 CREATE TABLE api_keys (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  account_id   UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id   UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   created_by   UUID,                       -- plain UUID (was FK auth.users, SET NULL)
   name         TEXT NOT NULL,
   key_prefix   TEXT NOT NULL,
@@ -627,7 +676,7 @@ CREATE INDEX api_keys_key_hash_idx ON api_keys (key_hash);
 -- ============================================================
 CREATE TABLE notifications (
   id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
-  account_id UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   user_id UUID NOT NULL,                  -- recipient (plain UUID)
   type TEXT NOT NULL DEFAULT 'conversation_assigned'
     CHECK (type IN ('conversation_assigned')),
@@ -650,7 +699,7 @@ CREATE INDEX idx_notifications_user_unread
 -- ============================================================
 CREATE TABLE webhook_endpoints (
   id               UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  account_id       UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id       UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   created_by       UUID,
   url              TEXT NOT NULL,
   secret           TEXT NOT NULL,          -- AES-256-GCM-encrypted HMAC signing secret
@@ -668,7 +717,7 @@ CREATE INDEX webhook_endpoints_account_id_idx ON webhook_endpoints (account_id);
 -- ============================================================
 CREATE TABLE ai_configs (
   id                                UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  account_id                        UUID NOT NULL UNIQUE REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id                        UUID NOT NULL UNIQUE REFERENCES organization(id) ON DELETE CASCADE,
   created_by                        UUID,
   provider                          TEXT NOT NULL CHECK (provider IN ('openai', 'anthropic')),
   model                             TEXT NOT NULL,
@@ -688,7 +737,7 @@ CREATE TABLE ai_configs (
 -- ============================================================
 CREATE TABLE ai_knowledge_documents (
   id          UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  account_id  UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id  UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   created_by  UUID,
   title       TEXT NOT NULL,
   content     TEXT NOT NULL,
@@ -704,7 +753,7 @@ CREATE INDEX ai_knowledge_documents_account_id_idx ON ai_knowledge_documents (ac
 CREATE TABLE ai_knowledge_chunks (
   id           UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   document_id  UUID NOT NULL REFERENCES ai_knowledge_documents(id) ON DELETE CASCADE,
-  account_id   UUID NOT NULL REFERENCES accounts(id) ON DELETE CASCADE,
+  account_id   UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   chunk_index  INTEGER NOT NULL DEFAULT 0,
   content      TEXT NOT NULL,
   fts          tsvector GENERATED ALWAYS AS (to_tsvector('simple', content)) STORED,
@@ -1068,7 +1117,6 @@ $$ LANGUAGE plpgsql;
 -- ============================================================
 -- TRIGGERS
 -- ============================================================
-CREATE TRIGGER set_updated_at BEFORE UPDATE ON profiles FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON contacts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON conversations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON whatsapp_config FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
@@ -1077,7 +1125,6 @@ CREATE TRIGGER set_updated_at BEFORE UPDATE ON deals FOR EACH ROW EXECUTE FUNCTI
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON broadcasts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON automations FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON flows FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
-CREATE TRIGGER set_updated_at BEFORE UPDATE ON accounts FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
 
 CREATE TRIGGER broadcast_recipients_aggregate
   AFTER INSERT OR UPDATE OR DELETE ON broadcast_recipients
