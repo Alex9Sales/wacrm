@@ -1,40 +1,72 @@
 "use client";
 
 import { useCallback } from "react";
-import type { Message, Conversation } from "@/types";
 
-interface RealtimeEvent<T> {
-  eventType: "INSERT" | "UPDATE" | "DELETE";
-  new: T;
-  old: Partial<T>;
-}
+import { useServerEvents, type ServerEvent } from "./use-server-events";
 
-interface UseRealtimeOptions {
-  channelName: string;
-  onMessageEvent?: (event: RealtimeEvent<Message>) => void;
-  onConversationEvent?: (event: RealtimeEvent<Conversation>) => void;
+/**
+ * Options for the generic realtime subscription.
+ *
+ * Phase 3 (SSE) reshape: the old Supabase-specific
+ * `onMessageEvent(RealtimeEvent<Message>)` / `onConversationEvent(...)`
+ * callbacks carried full postgres_changes payloads (`{ eventType, new,
+ * old }`). SSE events are intentionally TINY — a type plus a
+ * `conversationId` — so consumers refetch/hydrate rather than diffing a
+ * row they were handed. The callbacks below therefore receive the raw
+ * ephemeral event; the inbox reacts by hydrating that conversation and
+ * bumping its resync token.
+ */
+export interface UseRealtimeOptions {
+  /** Kept for call-site compatibility; not used by the SSE transport. */
+  channelName?: string;
+  /** Fired for `message.received` events on the account channel. */
+  onMessageEvent?: (event: { type: "message.received"; conversationId?: string }) => void;
+  /** Fired for `conversation.created` events on the account channel. */
+  onConversationEvent?: (event: {
+    type: "conversation.created";
+    conversationId?: string;
+  }) => void;
+  /** When false, the hook still opens the stream but drops callbacks. */
   enabled?: boolean;
 }
 
 /**
- * Generic realtime channel subscription — NEUTRALIZED in Phase 1.
+ * Generic realtime subscription over SSE.
  *
- * The Supabase Realtime channel (postgres_changes on messages /
- * conversations) is gone. Consumers still call this hook and read
- * `{ isConnected, unsubscribe }`, so the signature is preserved, but
- * the hook now subscribes to nothing: `isConnected` is always false
- * and `unsubscribe` is a no-op. Callers that relied on live events
- * should drive their own initial fetch + manual refetch until SSE
- * lands.
- *
- * TODO(fase-3): realtime via SSE — reintroduce the subscription and
- * flip `isConnected` / fire the onMessageEvent / onConversationEvent
- * callbacks.
+ * Reimplemented on top of `useServerEvents`: it opens the per-account
+ * `/api/events` stream, filters incoming events by type, and invokes
+ * the matching caller callback. `isConnected` mirrors the EventSource
+ * connection so callers can drive a reconnect resync (the inbox bumps
+ * its resyncToken on the false → true transition). `unsubscribe` is
+ * retained for API stability; the EventSource lifecycle is owned by
+ * `useServerEvents` (closed on unmount), so it's a no-op.
  */
-export function useRealtime(_options: UseRealtimeOptions) {
-  // No channel to tear down; kept for API stability.
+export function useRealtime(options: UseRealtimeOptions) {
+  const { onMessageEvent, onConversationEvent, enabled = true } = options;
+
+  const handler = useCallback(
+    (e: ServerEvent) => {
+      if (!enabled) return;
+      if (e.type === "message.received") {
+        onMessageEvent?.({
+          type: "message.received",
+          conversationId:
+            typeof e.conversationId === "string" ? e.conversationId : undefined,
+        });
+      } else if (e.type === "conversation.created") {
+        onConversationEvent?.({
+          type: "conversation.created",
+          conversationId:
+            typeof e.conversationId === "string" ? e.conversationId : undefined,
+        });
+      }
+    },
+    [enabled, onMessageEvent, onConversationEvent],
+  );
+
+  const { isConnected } = useServerEvents(handler);
+
   const unsubscribe = useCallback(() => {}, []);
 
-  // TODO(fase-3): realtime via SSE — nothing is connected in Phase 1.
-  return { isConnected: false, unsubscribe };
+  return { isConnected, unsubscribe };
 }

@@ -165,129 +165,54 @@ export default function InboxPage() {
     checkConnection();
   }, []);
 
-  // Handle realtime message events
+  // Handle realtime message events.
+  //
+  // Phase 3 (SSE): events are ephemeral pings — `{ type, conversationId }`
+  // — not full postgres_changes rows. We can't patch a message into the
+  // thread from the ping alone, so we hydrate the affected conversation
+  // (refreshing its list preview + unread_count with the joined contact)
+  // and, when the ping is for the OPEN thread, bump the resync token so
+  // MessageThread refetches its messages. `hydrateConversation` dedupes
+  // and self-heals convs we've never seen, so a first-message ping for an
+  // unknown conversation surfaces it correctly.
   const handleMessageEvent = useCallback(
-    (event: { eventType: string; new: Message; old: Partial<Message> }) => {
-      const newMsg = event.new;
-
-      if (event.eventType === "INSERT") {
-        // Add to messages if it belongs to active conversation
-        if (
-          activeConversation &&
-          newMsg.conversation_id === activeConversation.id
-        ) {
-          setMessages((prev) => {
-            // Avoid duplicates
-            if (prev.some((m) => m.id === newMsg.id)) return prev;
-            // Replace optimistic message if it exists
-            const withoutOptimistic = prev.filter(
-              (m) => !m.id.startsWith("temp-")
-            );
-            return [...withoutOptimistic, newMsg];
-          });
-        }
-
-        // Update conversation list preview. We need to know *synchronously*
-        // whether the conv is already in state to decide between patching
-        // the preview and triggering a hydrate — see the comment on
-        // knownConvIdsRef for why a closure flag inside the updater would
-        // always read false here.
-        if (knownConvIdsRef.current.has(newMsg.conversation_id)) {
-          setConversations((prev) =>
-            prev.map((c) =>
-              c.id === newMsg.conversation_id
-                ? {
-                    ...c,
-                    last_message_text: newMsg.content_text ?? "",
-                    last_message_at: newMsg.created_at,
-                    unread_count:
-                      activeConversation?.id === newMsg.conversation_id
-                        ? 0
-                        : c.unread_count + 1,
-                  }
-                : c,
-            ),
-          );
-        } else {
-          // First time we're seeing this conv: the conv-INSERT event
-          // hasn't landed yet, or was missed. Hydrate from the DB so
-          // the row surfaces with its `contact` joined; the conv-UPDATE
-          // event the webhook emits right after the message INSERT will
-          // converge state when it arrives.
-          hydrateConversation(newMsg.conversation_id);
-        }
+    (event: { type: "message.received"; conversationId?: string }) => {
+      const convId = event.conversationId;
+      if (!convId) {
+        // No id to target — fall back to a full resync.
+        setResyncToken((n) => n + 1);
+        return;
       }
 
-      if (event.eventType === "UPDATE") {
-        // Update message status
-        setMessages((prev) =>
-          prev.map((m) => (m.id === newMsg.id ? { ...m, ...newMsg } : m))
-        );
+      // Refresh the conversation row (preview text, unread_count, contact).
+      hydrateConversation(convId);
+
+      // If the message is for the thread the user is currently viewing,
+      // pull its messages so the new bubble appears without a manual
+      // refresh. The token also re-fetches the list as a safety net.
+      if (activeConversation?.id === convId) {
+        setResyncToken((n) => n + 1);
       }
     },
-    [activeConversation, hydrateConversation]
+    [activeConversation?.id, hydrateConversation]
   );
 
-  // Handle realtime conversation events
+  // Handle realtime conversation-created events.
+  //
+  // Phase 3 (SSE): a tiny `{ type, conversationId }` ping. Hydrate the
+  // new thread so it surfaces in the list with its joined contact.
   const handleConversationEvent = useCallback(
-    (event: {
-      eventType: string;
-      new: Conversation;
-      old: Partial<Conversation>;
-    }) => {
-      const conv = event.new;
-
-      if (event.eventType === "INSERT") {
-        // Prepend immediately for snappy UX so the new conv shows in the
-        // list right away, then hydrate to fill in the `contact` join
-        // (realtime payloads never include joins). Skip both if we
-        // already have the row — that shouldn't happen normally, but
-        // out-of-order delivery would have us prepending a duplicate.
-        if (!knownConvIdsRef.current.has(conv.id)) {
-          setConversations((prev) => {
-            if (prev.some((c) => c.id === conv.id)) return prev;
-            return [conv, ...prev];
-          });
-          hydrateConversation(conv.id);
-        }
+    (event: { type: "conversation.created"; conversationId?: string }) => {
+      const convId = event.conversationId;
+      if (!convId) {
+        setResyncToken((n) => n + 1);
+        return;
       }
-
-      if (event.eventType === "UPDATE") {
-        if (knownConvIdsRef.current.has(conv.id)) {
-          // If this UPDATE is for the conv the user is currently viewing,
-          // suppress the incoming unread_count — the user is reading it
-          // RIGHT NOW, so any positive value would just flicker the badge
-          // back on for the ~100ms it takes for the reset effect's server
-          // UPDATE to round-trip. Non-active convs take the value as-is.
-          const isActive = activeConversation?.id === conv.id;
-          setConversations((prev) =>
-            prev.map((c) =>
-              c.id === conv.id
-                ? {
-                    ...c,
-                    ...conv,
-                    unread_count: isActive ? 0 : conv.unread_count,
-                  }
-                : c,
-            ),
-          );
-        } else {
-          // UPDATE arrived before the INSERT (or after a missed INSERT)
-          // — fetch the row so it surfaces with its contact joined. The
-          // patch contained in `conv` will already be reflected in what
-          // the hydrate fetch returns.
-          hydrateConversation(conv.id);
-        }
-
-        // Update active conversation if it changed
-        if (activeConversation && conv.id === activeConversation.id) {
-          setActiveConversation((prev) =>
-            prev ? { ...prev, ...conv } : prev
-          );
-        }
+      if (!knownConvIdsRef.current.has(convId)) {
+        hydrateConversation(convId);
       }
     },
-    [activeConversation, hydrateConversation]
+    [hydrateConversation]
   );
 
   // Subscribe to realtime. The `isConnected` flag below feeds the

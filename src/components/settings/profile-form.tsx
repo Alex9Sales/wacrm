@@ -5,7 +5,8 @@ import { toast } from 'sonner';
 import { Loader2, Upload, Trash2, Mail, CircleAlert } from 'lucide-react';
 
 import { useAuth } from '@/hooks/use-auth';
-import { updateProfileName } from './actions';
+import { updateProfileName, updateProfileAvatar } from './actions';
+import { uploadAccountMedia } from '@/lib/storage/upload-media';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -100,18 +101,23 @@ export function ProfileForm() {
 
     setSaving(true);
     try {
-      // TODO(fase-3): avatar upload used supabase.storage('avatars').
-      // Media/storage moves to MinIO in Phase 3; the upload control is
-      // disabled and we don't touch avatar_url here. The staged file
-      // (if any) is ignored until then.
-      //
       // TODO(fase-2): email change went through supabase.auth.updateUser
       // ({ email }), which owned the double-confirmation flow. Auth
       // moves to Better Auth in Phase 2; the email field is read-only
-      // until then, so we only persist the display name.
+      // until then, so we only persist the display name + avatar here.
 
-      // Persist name to profiles (account-scoped server action).
+      // Persist name to the user row (account-scoped server action).
       await updateProfileName(trimmedName);
+
+      // Avatar: upload a newly-picked file to MinIO (bucket 'avatars')
+      // and save its public URL as `user.image`, or clear the image
+      // when the user removed their photo. A no-op when neither changed.
+      if (pendingAvatar) {
+        const { publicUrl } = await uploadAccountMedia('avatars', pendingAvatar);
+        await updateProfileAvatar(publicUrl);
+      } else if (removeAvatar) {
+        await updateProfileAvatar(null);
+      }
 
       setPendingAvatar(null);
       setPreviewUrl(null);
@@ -127,11 +133,13 @@ export function ProfileForm() {
     }
   };
 
-  // Only the display name is editable in Phase 1. Email (Phase 2 auth)
-  // and avatar (Phase 3 storage) are disabled, so they no longer make
-  // the form dirty.
+  // Name (Phase 1) + avatar (Phase 3) are editable. Email is still
+  // read-only (Phase 2 auth), so it never makes the form dirty.
   const dirty =
-    !!profile && fullName.trim() !== (profile.full_name ?? '');
+    !!profile &&
+    (fullName.trim() !== (profile.full_name ?? '') ||
+      pendingAvatar !== null ||
+      removeAvatar);
 
   // TODO(fase-2): the auth user's created_at isn't available from
   // /api/me yet (the Phase 1 User is just { id }). Show a placeholder
@@ -159,8 +167,6 @@ export function ProfileForm() {
             </Avatar>
 
             <div className="flex flex-wrap gap-2">
-              {/* TODO(fase-3): avatar upload used supabase.storage and
-                  is disabled until media moves to MinIO. */}
               <input
                 ref={fileInputRef}
                 type="file"
@@ -171,8 +177,8 @@ export function ProfileForm() {
               <Button
                 type="button"
                 variant="outline"
-                disabled
-                title="Photo uploads return in Phase 3."
+                disabled={saving}
+                onClick={() => fileInputRef.current?.click()}
               >
                 <Upload className="size-4" />
                 {currentAvatar ? 'Change photo' : 'Upload photo'}
@@ -182,7 +188,7 @@ export function ProfileForm() {
                   type="button"
                   variant="ghost"
                   onClick={onRemoveAvatar}
-                  disabled
+                  disabled={saving}
                   className="text-muted-foreground hover:text-foreground"
                 >
                   <Trash2 className="size-4" />
@@ -190,7 +196,7 @@ export function ProfileForm() {
                 </Button>
               )}
               <p className="w-full text-xs text-muted-foreground">
-                Photo uploads return in Phase 3.
+                PNG, JPG, WebP, or GIF — up to 2 MB.
               </p>
             </div>
           </div>

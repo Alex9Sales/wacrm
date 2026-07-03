@@ -233,9 +233,9 @@ export async function setDefaultCurrency(currency: string): Promise<void> {
 // ------------------------------------------------------------
 // Profile (profile-form.tsx)
 //
-// Avatar upload (Supabase Storage) is deferred to Phase 3 (MinIO);
-// this action only persists the display name. `avatar_url` is left
-// untouched so a future upload path can set it independently.
+// The avatar lives on `user.image` (Better Auth). The file itself is
+// uploaded to MinIO by the client via POST /api/media/upload; this
+// action persists the resulting public URL (or clears it on removal).
 // ------------------------------------------------------------
 
 /** Update the current user's display name on their user row. */
@@ -244,5 +244,20 @@ export async function updateProfileName(fullName: string): Promise<void> {
   await db
     .update(user)
     .set({ name: fullName })
+    .where(eq(user.id, ctx.userId))
+}
+
+/**
+ * Persist the current user's avatar URL (`user.image`). Pass a public
+ * URL returned by the media upload route, or `null` to remove the
+ * avatar. Account-scoped auth via getCurrentAccount().
+ */
+export async function updateProfileAvatar(
+  imageUrl: string | null,
+): Promise<void> {
+  const ctx = await getCurrentAccount()
+  await db
+    .update(user)
+    .set({ image: imageUrl })
     .where(eq(user.id, ctx.userId))
 }

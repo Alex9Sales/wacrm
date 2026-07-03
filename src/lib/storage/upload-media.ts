@@ -1,20 +1,22 @@
-import { createClient } from "@/lib/supabase/client";
+// ============================================================
+// Client-importable media-upload helper.
+//
+// Phase 3 moved storage from Supabase Storage to MinIO/S3. The browser
+// can't hold S3 credentials, so uploads now POST a multipart FormData
+// to the server route POST /api/media/upload, which authenticates the
+// caller, builds the account-scoped key, and puts the bytes into MinIO.
+// This module stays importable from client components — it only calls
+// `fetch`; the S3 client + secrets live server-side in lib/storage/s3.
+//
+// Object-key convention (built server-side, unchanged from Supabase):
+//   <bucket>/account-<account_id>/<timestamp>-<basename>.<ext>
+//
+// The `account-<uuid>` first segment scopes every object to an account;
+// the delete route verifies it so a caller can only remove objects
+// under their own account folder (replacing the old bucket RLS guard).
+// ============================================================
 
-/**
- * Shared media-upload helper for Supabase Storage buckets that use the
- * account-scoped path convention introduced in migration 020
- * (`flow-media`) and reused by migration 023 (`chat-media`):
- *
- *   <bucket>/account-<account_id>/<timestamp>-<basename>.<ext>
- *
- * The first path segment (`account-<uuid>`) is what the bucket's RLS
- * write policies match on, so every caller MUST go through here rather
- * than hand-rolling a path — a mismatched segment is silently rejected
- * by RLS. Both the Flows builder (`node-config-form`) and the inbox
- * composer call this so the logic lives in exactly one place.
- */
-
-/** 16 MB — matches the `file_size_limit` on both buckets (migrations 016/020/023). */
+/** 16 MB — the media upload ceiling enforced by the server route. */
 export const MEDIA_MAX_BYTES = 16 * 1024 * 1024;
 
 /**
@@ -33,9 +35,25 @@ export const MEDIA_MAX_BYTES_BY_KIND = {
   document: 16 * 1024 * 1024,
 } as const;
 
+/** Friendly bucket names the upload route accepts. */
+export type FriendlyBucket = "avatars" | "media";
+
+/**
+ * Map a caller's bucket name to a friendly bucket the route accepts.
+ *
+ * Callers still pass their historical Supabase bucket names
+ * ('chat-media', 'flow-media', 'avatars', 'media'); everything that
+ * isn't avatar storage lands in the shared public 'media' bucket. Meta
+ * still fetches by URL, so the single media bucket is fine.
+ */
+function toFriendlyBucket(bucket: string): FriendlyBucket {
+  return bucket === "avatars" ? "avatars" : "media";
+}
+
 /**
  * Build the account-scoped object path for an upload. Pure + exported so
- * it can be unit-tested without a Supabase client.
+ * it can be unit-tested without any network, and reused by the server
+ * upload route to construct the real key.
  *
  * - `basename` is stripped of its extension, lower-cased non-safe chars
  *   are collapsed to `_`, and it's capped at 40 chars (falls back to
@@ -69,69 +87,64 @@ export interface UploadAccountMediaResult {
 }
 
 /**
- * Upload a file to an account-scoped Storage bucket and return its public
- * URL. Throws with a user-facing message on auth / account-resolution /
- * upload failure — callers surface it via a toast.
+ * Upload a file to an account-scoped MinIO bucket via the server route
+ * and return its public URL + object path. Throws with a user-facing
+ * message on failure — callers surface it via a toast.
  *
  * Size validation is the caller's responsibility (limits can differ per
- * feature); `MEDIA_MAX_BYTES` is exported for the common case.
+ * feature); `MEDIA_MAX_BYTES` is exported for the common case, and the
+ * route enforces it as a hard ceiling regardless.
  */
 export async function uploadAccountMedia(
   bucket: string,
   file: File,
 ): Promise<UploadAccountMediaResult> {
-  const supabase = createClient();
+  const form = new FormData();
+  form.append("file", file);
+  form.append("bucket", toFriendlyBucket(bucket));
 
-  const {
-    data: { user },
-    error: userErr,
-  } = await supabase.auth.getUser();
-  if (userErr || !user) {
-    throw new Error("Not signed in.");
+  let res: Response;
+  try {
+    res = await fetch("/api/media/upload", { method: "POST", body: form });
+  } catch {
+    throw new Error("Upload failed — could not reach the server.");
   }
 
-  // Resolve account_id so the path is account-scoped (matches the
-  // bucket's RLS write policy from migration 020/023). User-scoped
-  // paths would be rejected.
-  const { data: profile, error: profileErr } = await supabase
-    .from("profiles")
-    .select("account_id")
-    .eq("user_id", user.id)
-    .maybeSingle();
-  if (profileErr || !profile?.account_id) {
-    throw new Error("Could not resolve your account.");
+  if (!res.ok) {
+    let message = `Upload failed (HTTP ${res.status}).`;
+    try {
+      const data = (await res.json()) as { error?: string };
+      if (data?.error) message = data.error;
+    } catch {
+      // Non-JSON body — keep the generic message.
+    }
+    throw new Error(message);
   }
 
-  const path = buildMediaPath(profile.account_id as string, file.name);
-  const { error: upErr } = await supabase.storage.from(bucket).upload(path, file, {
-    cacheControl: "3600",
-    upsert: false,
-    contentType: file.type,
-  });
-  if (upErr) throw new Error(upErr.message);
-
-  const {
-    data: { publicUrl },
-  } = supabase.storage.from(bucket).getPublicUrl(path);
-
-  return { publicUrl, path };
+  const data = (await res.json()) as UploadAccountMediaResult;
+  return { publicUrl: data.publicUrl, path: data.path };
 }
 
 /**
  * Delete a previously-uploaded object. Used to GC media that was staged
  * (uploaded) but never sent — a cancelled draft or a failed Meta send —
  * so abandoned attachments don't accumulate in the public bucket. The
- * DELETE is gated by the same account-scoped RLS policy as the upload,
- * so a caller can only remove objects under their own account folder.
+ * server route verifies the path is under the caller's own account
+ * folder before deleting (replaces the old account-scoped RLS policy).
  *
- * Best-effort: callers fire-and-forget and swallow errors (a missed
- * delete is a storage nit, not something to surface to the user).
+ * Best-effort: callers fire-and-forget. We still throw on a definite
+ * failure so a caller that wants to log it can.
  */
 export async function deleteAccountMedia(
   bucket: string,
   path: string,
 ): Promise<void> {
-  const supabase = createClient();
-  const { error } = await supabase.storage.from(bucket).remove([path]);
-  if (error) throw new Error(error.message);
+  const res = await fetch("/api/media/delete", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ bucket: toFriendlyBucket(bucket), path }),
+  });
+  if (!res.ok) {
+    throw new Error(`Delete failed (HTTP ${res.status}).`);
+  }
 }

@@ -2,20 +2,21 @@
 
 import { useCallback, useEffect, useState } from "react";
 
+import { useServerEvents } from "./use-server-events";
+
 /**
  * Count of unread notifications for the current user. Used by the
  * sidebar to surface a badge on the Notifications nav entry.
  *
- * Phase 1: the Supabase Realtime channel is gone. The count is fetched
- * once from GET /api/notifications/unread-count and refreshed when the
- * tab regains focus, instead of ticking live off postgres_changes.
+ * Phase 3: initial value comes from GET /api/notifications/unread-count,
+ * then the count is refetched on an SSE `notification` event. As a
+ * pragmatic fallback we also refetch on `message.received` — an inbound
+ * message is the most common trigger for a new notification, and no
+ * server path emits a dedicated `notification` event yet. Window-focus
+ * refresh covers events missed while the socket was down.
  *
  * Returns a bare `number` (unchanged shape) so the sidebar keeps
  * typechecking.
- *
- * TODO(fase-3): live updates via SSE — restore the incremental
- * INSERT/UPDATE/DELETE accounting so the badge moves without a
- * refetch.
  */
 export function useUnreadNotifications(): number {
   const [count, setCount] = useState(0);
@@ -33,10 +34,21 @@ export function useUnreadNotifications(): number {
     }
   }, []);
 
+  useServerEvents(
+    useCallback(
+      (e) => {
+        if (e.type === "notification" || e.type === "message.received") {
+          void refetch();
+        }
+      },
+      [refetch],
+    ),
+  );
+
   useEffect(() => {
     void refetch();
-    // Refresh on focus so the badge isn't permanently stale between
-    // page views while realtime is deferred.
+    // Focus fallback so the badge isn't stale after events missed while
+    // the SSE connection was interrupted.
     const onFocus = () => void refetch();
     window.addEventListener("focus", onFocus);
     return () => window.removeEventListener("focus", onFocus);

@@ -21,6 +21,7 @@ import { runAutomationsForTrigger } from '@/lib/automations/engine'
 import { dispatchInboundToFlows } from '@/lib/flows/engine'
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply'
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver'
+import { publishEvent } from '@/lib/events/publish'
 import {
   handleTemplateWebhookChange,
   isTemplateWebhookField,
@@ -653,6 +654,11 @@ async function processMessage(
       conversation_id: conversation.id,
       contact_id: contactRecord.id,
     })
+    // Ephemeral realtime ping (SSE) — best-effort, never throws.
+    await publishEvent(accountId, {
+      type: 'conversation.created',
+      conversationId: conversation.id,
+    })
   }
 
   // Reactions short-circuit here — they aren't messages. We never insert
@@ -744,6 +750,14 @@ async function processMessage(
     console.error('Error inserting message:', msgError)
     return
   }
+
+  // Ephemeral realtime ping (SSE) — fires as soon as the inbound row is
+  // persisted so sidebar badges + the open inbox refresh promptly.
+  // Best-effort: publishEvent swallows all failures and never throws.
+  await publishEvent(accountId, {
+    type: 'message.received',
+    conversationId: conversation.id,
+  })
 
   // Update conversation
   try {

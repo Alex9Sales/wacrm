@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { listTemplates } from './actions';
+import { uploadAccountMedia } from '@/lib/storage/upload-media';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -139,10 +140,11 @@ export function TemplateManager() {
   const [templateToDelete, setTemplateToDelete] =
     useState<MessageTemplate | null>(null);
   // Header-image upload (issue #230). Uploaded to the account-scoped
-  // chat-media bucket; the submit route turns that into a Meta
-  // Resumable-Upload handle. TODO(fase-3): upload path is disabled
-  // pending MinIO — users paste a public URL for now.
+  // public 'media' bucket on MinIO; the submit route turns the public
+  // URL into a Meta Resumable-Upload handle at submit time. Users can
+  // still paste a public HTTPS URL instead.
   const headerFileRef = useRef<HTMLInputElement>(null);
+  const [uploadingHeader, setUploadingHeader] = useState(false);
 
   // Body variable indices — `[1, 2, 3]` for "{{1}} {{2}} {{3}}". We
   // re-run the extractor on every render to keep the sample-value rows
@@ -446,15 +448,31 @@ export function TemplateManager() {
   const headerNeedsMedia =
     form.header_format !== 'none' && form.header_format !== 'text';
 
-  // TODO(fase-3): header-image upload used supabase.storage via
-  // uploadAccountMedia('chat-media', ...). Media upload moves to MinIO
-  // in Phase 3. Until then the "Upload image" control is disabled and
-  // users paste a public HTTPS link into header_media_url instead.
-  async function handleHeaderImageFile(_file: File) {
-    void _file;
-    toast.error(
-      'Image upload is temporarily unavailable — paste a public HTTPS image link instead.',
-    );
+  // Upload a header image to the account-scoped 'media' bucket and feed
+  // its public URL into header_media_url, which the submit payload
+  // sends to Meta (fetched during review). Users can still paste a
+  // public HTTPS link instead of uploading.
+  async function handleHeaderImageFile(file: File) {
+    // Meta caps template header images at 5 MB.
+    const MAX = 5 * 1024 * 1024;
+    if (!/^image\/(jpeg|png)$/.test(file.type)) {
+      toast.error('Header image must be a JPEG or PNG.');
+      return;
+    }
+    if (file.size > MAX) {
+      toast.error('Header image is too large — max 5 MB.');
+      return;
+    }
+    setUploadingHeader(true);
+    try {
+      const { publicUrl } = await uploadAccountMedia('media', file);
+      setForm((prev) => ({ ...prev, header_media_url: publicUrl }));
+      toast.success('Image uploaded.');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Upload failed.');
+    } finally {
+      setUploadingHeader(false);
+    }
   }
 
   return (
@@ -794,21 +812,23 @@ export function TemplateManager() {
                           e.target.value = '';
                         }}
                       />
-                      {/* TODO(fase-3): re-enable once media upload lands
-                          on MinIO. Disabled for now — use the URL field. */}
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        disabled
-                        title="Image upload returns in Phase 3 — paste a public link below for now."
+                        disabled={uploadingHeader}
+                        title="Upload a JPEG/PNG header image (max 5 MB)"
                         onClick={() => headerFileRef.current?.click()}
                       >
-                        <Upload className="h-3.5 w-3.5" />
-                        Upload image
+                        {uploadingHeader ? (
+                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                        ) : (
+                          <Upload className="h-3.5 w-3.5" />
+                        )}
+                        {uploadingHeader ? 'Uploading…' : 'Upload image'}
                       </Button>
                       <span className="text-[11px] text-muted-foreground">
-                        Upload returns in Phase 3 — paste a public link below
+                        or paste a public link below
                       </span>
                     </div>
                   )}
