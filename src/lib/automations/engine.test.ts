@@ -1,6 +1,6 @@
 import { describe, it, expect, beforeEach, vi } from "vitest";
 
-// Shared mock state for the service-role client. Lives in a hoisted block
+// Shared mock state for the Drizzle client. Lives in a hoisted block
 // so the vi.mock factory below can close over it.
 const h = vi.hoisted(() => ({
   state: {
@@ -8,86 +8,120 @@ const h = vi.hoisted(() => ({
     ownedCustomField: null as { id: string } | null,
     automations: [] as Record<string, unknown>[],
     steps: [] as Record<string, unknown>[],
-    fromCalls: [] as string[],
-    updateCalls: [] as { table: string; filters: [string, string, unknown][] }[],
-    upsertCalls: [] as { table: string; payload: unknown }[],
+    /** Table names hit by SELECTs, in order. */
+    selectCalls: [] as string[],
+    /** UPDATEs, with the WHERE clause rendered to SQL + params. */
+    updateCalls: [] as { table: string; sql: string; params: unknown[] }[],
+    /** INSERTs (including upserts), with the raw values payload. */
+    insertCalls: [] as { table: string; payload: unknown }[],
   },
 }));
 
-vi.mock("./admin-client", () => {
+vi.mock("@/db", async (importOriginal) => {
+  // Keep the real schema exports (table + column objects) so the
+  // engine's `eq(contacts.id, …)` conditions build real SQL we can
+  // render and assert on; only the `db` client itself is mocked.
+  const actual = await importOriginal<typeof import("@/db")>();
+  const { getTableName } = await import("drizzle-orm");
+  const { PgDialect } = await import("drizzle-orm/pg-core");
+  const dialect = new PgDialect();
   const { state } = h;
 
-  function resolve(ops: {
-    table: string;
-    type: string;
-    payload?: unknown;
-    filters: [string, string, unknown][];
-  }) {
-    const { table, type } = ops;
+  type AnyTable = Parameters<typeof getTableName>[0];
+  type AnySql = Parameters<InstanceType<typeof PgDialect>["sqlToQuery"]>[0];
+
+  function selectResult(table: string): unknown[] {
     if (table === "contacts") {
-      if (type === "update") {
-        state.updateCalls.push({ table, filters: ops.filters });
-        return { data: null, error: null };
-      }
       // ownership guard / condition read
-      return { data: state.owned, error: null };
+      return state.owned ? [state.owned] : [];
     }
     if (table === "custom_fields") {
       // account-scoped ownership lookup for a custom field definition
-      return { data: state.ownedCustomField, error: null };
+      return state.ownedCustomField ? [state.ownedCustomField] : [];
     }
-    if (table === "contact_custom_values") {
-      if (type === "upsert") {
-        state.upsertCalls.push({ table, payload: ops.payload });
-        return { data: null, error: null };
-      }
-      return { data: null, error: null };
-    }
-    if (table === "automations") return { data: state.automations, error: null };
+    if (table === "automations") return state.automations;
+    if (table === "automation_steps") return state.steps;
     if (table === "automation_logs") {
-      if (type === "insert") return { data: { id: "log1" }, error: null };
-      if (type === "update") return { data: null, error: null };
-      return { data: { steps_executed: [], status: "success" }, error: null };
+      return [{ steps_executed: [], status: "success" }];
     }
-    if (table === "automation_steps") return { data: state.steps, error: null };
-    return { data: null, error: null };
+    if (table === "contact_tags") return [{ n: 0 }];
+    if (table === "conversations") return [{ id: "conv1" }];
+    if (table === "accounts") return [{ default_currency: "USD" }];
+    return [];
   }
 
-  function builder(table: string) {
-    const ops = {
-      table,
-      type: "select",
-      payload: undefined as unknown,
-      filters: [] as [string, string, unknown][],
-    };
-    const b: Record<string, unknown> = {
-      select: () => b,
-      insert: (p: unknown) => ((ops.type = "insert"), (ops.payload = p), b),
-      update: (p: unknown) => ((ops.type = "update"), (ops.payload = p), b),
-      delete: () => ((ops.type = "delete"), b),
-      upsert: (p: unknown) => ((ops.type = "upsert"), (ops.payload = p), b),
-      eq: (k: string, v: unknown) => (ops.filters.push(["eq", k, v]), b),
-      gte: () => b,
-      is: () => b,
-      order: () => b,
-      limit: () => b,
-      single: () => Promise.resolve(resolve(ops)),
-      maybeSingle: () => Promise.resolve(resolve(ops)),
-      then: (onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) =>
-        Promise.resolve(resolve(ops)).then(onF, onR),
-    };
-    return b;
-  }
-
-  return {
-    supabaseAdmin: () => ({
-      from: (t: string) => {
-        state.fromCalls.push(t);
-        return builder(t);
+  function selectBuilder() {
+    let table = "";
+    const q = {
+      from(t: unknown) {
+        table = getTableName(t as AnyTable);
+        state.selectCalls.push(table);
+        return q;
       },
-      rpc: () => Promise.resolve({ error: null }),
-    }),
+      where: () => q,
+      orderBy: () => q,
+      limit: () => q,
+      then(onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) {
+        return Promise.resolve(selectResult(table)).then(onF, onR);
+      },
+    };
+    return q;
+  }
+
+  function insertBuilder(t: unknown) {
+    const table = getTableName(t as AnyTable);
+    const q = {
+      values(payload: unknown) {
+        state.insertCalls.push({ table, payload });
+        return q;
+      },
+      onConflictDoNothing: () => q,
+      onConflictDoUpdate: () => q,
+      returning: () =>
+        Promise.resolve(table === "automation_logs" ? [{ id: "log1" }] : [{ id: "row1" }]),
+      then(onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) {
+        return Promise.resolve([]).then(onF, onR);
+      },
+    };
+    return q;
+  }
+
+  function updateBuilder(t: unknown) {
+    const table = getTableName(t as AnyTable);
+    const q = {
+      set: () => q,
+      where(cond: unknown) {
+        const rendered = dialect.sqlToQuery(cond as AnySql);
+        state.updateCalls.push({ table, sql: rendered.sql, params: rendered.params });
+        return q;
+      },
+      returning: () => Promise.resolve([{ id: "row1" }]),
+      then(onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) {
+        return Promise.resolve(undefined).then(onF, onR);
+      },
+    };
+    return q;
+  }
+
+  function deleteBuilder() {
+    const q = {
+      where: () => q,
+      then(onF: (v: unknown) => unknown, onR?: (e: unknown) => unknown) {
+        return Promise.resolve(undefined).then(onF, onR);
+      },
+    };
+    return q;
+  }
+
+  const db = {
+    select: () => selectBuilder(),
+    insert: (t: unknown) => insertBuilder(t),
+    update: (t: unknown) => updateBuilder(t),
+    delete: () => deleteBuilder(),
+    execute: () => Promise.resolve({ rows: [] }),
   };
+
+  return { ...actual, db, getDb: () => db };
 });
 
 vi.mock("./meta-send", () => ({
@@ -99,14 +133,18 @@ import { runAutomationsForTrigger } from "./engine";
 
 const ACCOUNT = "acct-1";
 
+const contactUpdates = () => h.state.updateCalls.filter((u) => u.table === "contacts");
+const customValueUpserts = () =>
+  h.state.insertCalls.filter((i) => i.table === "contact_custom_values");
+
 beforeEach(() => {
   h.state.owned = null;
   h.state.ownedCustomField = null;
   h.state.automations = [];
   h.state.steps = [];
-  h.state.fromCalls = [];
+  h.state.selectCalls = [];
   h.state.updateCalls = [];
-  h.state.upsertCalls = [];
+  h.state.insertCalls = [];
 });
 
 describe("runAutomationsForTrigger — tenant isolation", () => {
@@ -125,9 +163,9 @@ describe("runAutomationsForTrigger — tenant isolation", () => {
     });
 
     // Bailed at the guard: never fetched automations, never wrote a contact.
-    expect(h.state.fromCalls).toContain("contacts");
-    expect(h.state.fromCalls).not.toContain("automations");
-    expect(h.state.updateCalls).toHaveLength(0);
+    expect(h.state.selectCalls).toContain("contacts");
+    expect(h.state.selectCalls).not.toContain("automations");
+    expect(contactUpdates()).toHaveLength(0);
   });
 
   it("proceeds past the guard when the contact belongs to the account", async () => {
@@ -141,7 +179,7 @@ describe("runAutomationsForTrigger — tenant isolation", () => {
       context: {},
     });
 
-    expect(h.state.fromCalls).toContain("automations");
+    expect(h.state.selectCalls).toContain("automations");
   });
 
   it("scopes the update_contact_field write to the automation's account", async () => {
@@ -156,10 +194,13 @@ describe("runAutomationsForTrigger — tenant isolation", () => {
       context: {},
     });
 
-    expect(h.state.updateCalls).toHaveLength(1);
-    const filters = h.state.updateCalls[0].filters;
-    expect(filters).toContainEqual(["eq", "id", "c1"]);
-    expect(filters).toContainEqual(["eq", "account_id", ACCOUNT]);
+    const updates = contactUpdates();
+    expect(updates).toHaveLength(1);
+    // The WHERE clause must pin both the contact id AND the tenant.
+    expect(updates[0].sql).toContain('"contacts"."id"');
+    expect(updates[0].sql).toContain('"contacts"."account_id"');
+    expect(updates[0].params).toContain("c1");
+    expect(updates[0].params).toContain(ACCOUNT);
   });
 });
 
@@ -178,11 +219,12 @@ describe("update_contact_field — custom fields", () => {
     });
 
     // No direct contacts column write for a custom field.
-    expect(h.state.updateCalls).toHaveLength(0);
-    expect(h.state.upsertCalls).toHaveLength(1);
-    expect(h.state.upsertCalls[0].payload).toEqual({
-      contact_id: "c1",
-      custom_field_id: "cf1",
+    expect(contactUpdates()).toHaveLength(0);
+    const upserts = customValueUpserts();
+    expect(upserts).toHaveLength(1);
+    expect(upserts[0].payload).toEqual({
+      contactId: "c1",
+      customFieldId: "cf1",
       value: "Premium",
     });
   });
@@ -200,10 +242,9 @@ describe("update_contact_field — custom fields", () => {
       context: { vars: { source: "WhatsApp Ad" } },
     });
 
-    expect(h.state.upsertCalls).toHaveLength(1);
-    expect(
-      (h.state.upsertCalls[0].payload as { value: string }).value,
-    ).toBe("WhatsApp Ad");
+    const upserts = customValueUpserts();
+    expect(upserts).toHaveLength(1);
+    expect((upserts[0].payload as { value: string }).value).toBe("WhatsApp Ad");
   });
 
   it("refuses to write a custom field from another account", async () => {
@@ -219,8 +260,8 @@ describe("update_contact_field — custom fields", () => {
       context: {},
     });
 
-    expect(h.state.upsertCalls).toHaveLength(0);
-    expect(h.state.updateCalls).toHaveLength(0);
+    expect(customValueUpserts()).toHaveLength(0);
+    expect(contactUpdates()).toHaveLength(0);
   });
 });
 

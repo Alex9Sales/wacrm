@@ -1,5 +1,25 @@
-import { describe, expect, it, vi } from 'vitest';
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { beforeEach, describe, expect, it, vi } from 'vitest';
+
+// The global db must never be reached for invalid params — these tests
+// cover the param validation that MUST short-circuit before any query
+// runs. Any select records the touch and explodes with a plain Error
+// (not a SendMessageError), so a validation gap fails the assertions.
+const h = vi.hoisted(() => ({
+  selectCalls: 0,
+}));
+
+vi.mock('@/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/db')>();
+  return {
+    ...actual,
+    db: {
+      select: () => {
+        h.selectCalls++;
+        throw new Error('reached DB');
+      },
+    },
+  };
+});
 
 import {
   sendMessageToConversation,
@@ -7,25 +27,15 @@ import {
   type SendMessageParams,
 } from './send-message';
 
-// A db that explodes if touched — these tests cover the param
-// validation that MUST short-circuit before any query runs.
-function noDb(): SupabaseClient {
-  return {
-    from() {
-      throw new Error('db should not be queried for invalid params');
-    },
-  } as unknown as SupabaseClient;
-}
-
 async function expectSendError(
   params: SendMessageParams,
   status: number,
   messageMatch?: RegExp
 ) {
   await expect(
-    sendMessageToConversation(noDb(), 'acct-1', params)
+    sendMessageToConversation('acct-1', params)
   ).rejects.toBeInstanceOf(SendMessageError);
-  await sendMessageToConversation(noDb(), 'acct-1', params).catch(
+  await sendMessageToConversation('acct-1', params).catch(
     (e: SendMessageError) => {
       expect(e.status).toBe(status);
       if (messageMatch) expect(e.message).toMatch(messageMatch);
@@ -36,9 +46,14 @@ async function expectSendError(
 describe('sendMessageToConversation — param validation (pre-DB)', () => {
   const base = { conversationId: 'cv-1' };
 
+  beforeEach(() => {
+    h.selectCalls = 0;
+  });
+
   it('requires conversation_id and message_type', async () => {
     await expectSendError({ conversationId: '', messageType: 'text' }, 400);
     await expectSendError({ conversationId: 'cv-1', messageType: '' }, 400);
+    expect(h.selectCalls).toBe(0);
   });
 
   it('rejects an unsupported message_type', async () => {
@@ -47,6 +62,7 @@ describe('sendMessageToConversation — param validation (pre-DB)', () => {
       400,
       /Unsupported message_type/
     );
+    expect(h.selectCalls).toBe(0);
   });
 
   it('requires content_text for text messages', async () => {
@@ -55,6 +71,7 @@ describe('sendMessageToConversation — param validation (pre-DB)', () => {
       400,
       /content_text is required/
     );
+    expect(h.selectCalls).toBe(0);
   });
 
   it('requires template_name for template messages', async () => {
@@ -63,6 +80,7 @@ describe('sendMessageToConversation — param validation (pre-DB)', () => {
       400,
       /template_name is required/
     );
+    expect(h.selectCalls).toBe(0);
   });
 
   it('requires media_url for media kinds', async () => {
@@ -73,6 +91,7 @@ describe('sendMessageToConversation — param validation (pre-DB)', () => {
         /media_url is required/
       );
     }
+    expect(h.selectCalls).toBe(0);
   });
 
   it('rejects an over-long media caption (non-audio)', async () => {
@@ -86,24 +105,23 @@ describe('sendMessageToConversation — param validation (pre-DB)', () => {
       400,
       /1024-character limit/
     );
+    expect(h.selectCalls).toBe(0);
   });
 
   it('allows a long "caption" on audio (audio carries none) — so it reaches the DB', async () => {
     // Audio is exempt from the caption cap, so validation passes and we
-    // proceed to the conversation lookup — proven by the stub throwing.
-    const spy = vi.fn(() => {
-      throw new Error('reached DB');
-    });
-    const db = { from: spy } as unknown as SupabaseClient;
+    // proceed to the conversation lookup — proven by the select counter.
+    // (The stub's throw is mapped to the same 404 a PostgREST error
+    // produced, so the surfaced error is "Conversation not found".)
     await expect(
-      sendMessageToConversation(db, 'acct-1', {
+      sendMessageToConversation('acct-1', {
         ...base,
         messageType: 'audio',
         mediaUrl: 'https://x/y.ogg',
         contentText: 'a'.repeat(2000),
       })
-    ).rejects.toThrow('reached DB');
-    expect(spy).toHaveBeenCalledWith('conversations');
+    ).rejects.toThrow('Conversation not found');
+    expect(h.selectCalls).toBe(1);
   });
 });
 

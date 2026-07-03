@@ -18,8 +18,10 @@
 // them to the WhatsApp config owner — a stable account-level default.
 // ============================================================
 
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { and, eq } from 'drizzle-orm';
 
+import { db, contacts, conversations, whatsappConfig } from '@/db';
+import { firstOrNull, firstOrThrow } from '@/db/helpers';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
 import { SendMessageError } from '@/lib/whatsapp/send-message';
@@ -39,7 +41,6 @@ export interface ResolvedConversation {
  * WhatsApp config, or a DB failure.
  */
 export async function resolveConversationByPhone(
-  db: SupabaseClient,
   accountId: string,
   phone: string,
   name?: string | null
@@ -55,11 +56,13 @@ export async function resolveConversationByPhone(
 
   // Fail fast (and create nothing) when the account has no WhatsApp
   // connected — the same error the send would raise anyway.
-  const { data: config } = await db
-    .from('whatsapp_config')
-    .select('id')
-    .eq('account_id', accountId)
-    .maybeSingle();
+  const config = firstOrNull(
+    await db
+      .select({ id: whatsappConfig.id })
+      .from(whatsappConfig)
+      .where(eq(whatsappConfig.accountId, accountId))
+      .limit(1)
+  );
   if (!config) {
     throw new SendMessageError(
       'whatsapp_not_configured',
@@ -76,7 +79,7 @@ export async function resolveConversationByPhone(
   // the callers already handle.
   let ownerUserId: string;
   try {
-    ownerUserId = await resolveAuditUserId(db, accountId);
+    ownerUserId = await resolveAuditUserId(accountId);
   } catch (err) {
     if (err instanceof ContactError) {
       throw new SendMessageError('db_error', err.message, err.status);
@@ -88,32 +91,34 @@ export async function resolveConversationByPhone(
   let contactId: string;
   let contactCreated = false;
 
-  const existing = await findExistingContact(db, accountId, sanitized);
+  const existing = await findExistingContact(accountId, sanitized);
   if (existing) {
     contactId = existing.id;
     if (name && name !== existing.name) {
       await db
-        .from('contacts')
-        .update({ name, updated_at: new Date().toISOString() })
-        .eq('id', existing.id);
+        .update(contacts)
+        .set({ name, updatedAt: new Date().toISOString() })
+        .where(eq(contacts.id, existing.id));
     }
   } else {
-    const { data: created, error: createErr } = await db
-      .from('contacts')
-      .insert({
-        account_id: accountId,
-        user_id: ownerUserId,
-        phone: sanitized,
-        name: name || sanitized,
-      })
-      .select('id')
-      .single();
-
-    if (createErr || !created) {
+    let created: { id: string } | null = null;
+    try {
+      created = firstOrThrow(
+        await db
+          .insert(contacts)
+          .values({
+            accountId,
+            userId: ownerUserId,
+            phone: sanitized,
+            name: name || sanitized,
+          })
+          .returning({ id: contacts.id })
+      );
+    } catch (createErr) {
       // Lost a race against a concurrent inbound/API create — the
       // unique index (migration 022) rejected the duplicate. Re-resolve.
       if (isUniqueViolation(createErr)) {
-        const raced = await findExistingContact(db, accountId, sanitized);
+        const raced = await findExistingContact(accountId, sanitized);
         if (raced) {
           contactId = raced.id;
         } else {
@@ -130,7 +135,8 @@ export async function resolveConversationByPhone(
         );
         throw new SendMessageError('db_error', 'Failed to create contact', 500);
       }
-    } else {
+    }
+    if (created) {
       contactId = created.id;
       contactCreated = true;
     }
@@ -139,28 +145,36 @@ export async function resolveConversationByPhone(
   // ---- conversation -------------------------------------------
   // One conversation per (account, contact) — same convention as the
   // webhook.
-  const { data: conv } = await db
-    .from('conversations')
-    .select('id')
-    .eq('account_id', accountId)
-    .eq('contact_id', contactId)
-    .maybeSingle();
+  const conv = firstOrNull(
+    await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.accountId, accountId),
+          eq(conversations.contactId, contactId!)
+        )
+      )
+      .limit(1)
+  );
 
   if (conv?.id) {
-    return { conversationId: conv.id, contactId, contactCreated };
+    return { conversationId: conv.id, contactId: contactId!, contactCreated };
   }
 
-  const { data: newConv, error: convErr } = await db
-    .from('conversations')
-    .insert({
-      account_id: accountId,
-      user_id: ownerUserId,
-      contact_id: contactId,
-    })
-    .select('id')
-    .single();
-
-  if (convErr || !newConv) {
+  let newConv: { id: string };
+  try {
+    newConv = firstOrThrow(
+      await db
+        .insert(conversations)
+        .values({
+          accountId,
+          userId: ownerUserId,
+          contactId: contactId!,
+        })
+        .returning({ id: conversations.id })
+    );
+  } catch (convErr) {
     console.error('[resolve-conversation] conversation create error:', convErr);
     throw new SendMessageError(
       'db_error',
@@ -169,5 +183,5 @@ export async function resolveConversationByPhone(
     );
   }
 
-  return { conversationId: newConv.id, contactId, contactCreated };
+  return { conversationId: newConv.id, contactId: contactId!, contactCreated };
 }

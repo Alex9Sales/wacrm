@@ -10,17 +10,28 @@
 //   4. persists the message + updates the conversation,
 //   5. pauses any active Flow run for the contact (agent stepped in).
 //
-// It is transport-agnostic: it takes a `SupabaseClient` and an
-// `accountId` and throws `SendMessageError` on failure. The callers
-// own auth, rate-limiting, body parsing, and mapping the error to
-// their respective response shapes (internal `{ error }` vs the v1
+// It is transport-agnostic: it takes an `accountId` (queries run on
+// the shared Drizzle client and are always account-scoped — no RLS)
+// and throws `SendMessageError` on failure. The callers own auth,
+// rate-limiting, body parsing, and mapping the error to their
+// respective response shapes (internal `{ error }` vs the v1
 // envelope). Behaviour is identical to the original inline route —
 // this is a straight extraction so the public endpoint can reuse it
 // without duplicating ~250 lines of Meta plumbing.
 // ============================================================
 
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { and, eq } from 'drizzle-orm';
 
+import {
+  db,
+  contacts,
+  conversations,
+  flowRuns,
+  messages,
+  messageTemplates,
+  whatsappConfig,
+} from '@/db';
+import { firstOrNull, firstOrThrow } from '@/db/helpers';
 import {
   sendTextMessage,
   sendTemplateMessage,
@@ -28,7 +39,6 @@ import {
   type MediaKind,
 } from '@/lib/whatsapp/meta-api';
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
-import { supabaseAdmin } from '@/lib/flows/admin-client';
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -83,13 +93,6 @@ export interface SendMessageResult {
   whatsappMessageId: string;
 }
 
-/**
- * Send a message in an existing conversation and persist it.
- *
- * `db` may be an RLS-scoped user client (dashboard) or the service-
- * role client (public API) — every query is filtered by `accountId`
- * either way, so tenancy holds regardless of which client is passed.
- */
 /**
  * Validate the message-shape params (type, required content, caption
  * cap) independently of any DB state, throwing `SendMessageError` on a
@@ -159,8 +162,13 @@ export function validateSendMessageParams(params: {
   }
 }
 
+/**
+ * Send a message in an existing conversation and persist it.
+ *
+ * Every query is filtered by `accountId` — there is no RLS on the
+ * Drizzle client, so tenancy holds only through explicit scoping.
+ */
 export async function sendMessageToConversation(
-  db: SupabaseClient,
   accountId: string,
   params: SendMessageParams
 ): Promise<SendMessageResult> {
@@ -189,19 +197,38 @@ export async function sendMessageToConversation(
 
   const isMediaKind = (MEDIA_KINDS as readonly string[]).includes(messageType);
 
-  // Conversation + contact, account-scoped.
-  const { data: conversation, error: convError } = await db
-    .from('conversations')
-    .select('*, contact:contacts(*)')
-    .eq('id', conversationId)
-    .eq('account_id', accountId)
-    .single();
+  // Conversation + contact, account-scoped. A malformed UUID makes
+  // Postgres throw where PostgREST used to return an error object —
+  // both collapse to the same 404 the old code raised.
+  let conversation: { id: string; contactId: string } | null = null;
+  try {
+    conversation = firstOrNull(
+      await db
+        .select({ id: conversations.id, contactId: conversations.contactId })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.id, conversationId),
+            eq(conversations.accountId, accountId)
+          )
+        )
+        .limit(1)
+    );
+  } catch {
+    conversation = null;
+  }
 
-  if (convError || !conversation) {
+  if (!conversation) {
     throw new SendMessageError('not_found', 'Conversation not found', 404);
   }
 
-  const contact = conversation.contact;
+  const contact = firstOrNull(
+    await db
+      .select({ id: contacts.id, phone: contacts.phone })
+      .from(contacts)
+      .where(eq(contacts.id, conversation.contactId))
+      .limit(1)
+  );
   if (!contact?.phone) {
     throw new SendMessageError(
       'bad_request',
@@ -220,13 +247,15 @@ export async function sendMessageToConversation(
   }
 
   // WhatsApp config, account-scoped.
-  const { data: config, error: configError } = await db
-    .from('whatsapp_config')
-    .select('*')
-    .eq('account_id', accountId)
-    .single();
+  const config = firstOrNull(
+    await db
+      .select()
+      .from(whatsappConfig)
+      .where(eq(whatsappConfig.accountId, accountId))
+      .limit(1)
+  );
 
-  if (configError || !config) {
+  if (!config) {
     throw new SendMessageError(
       'whatsapp_not_configured',
       'WhatsApp not configured. Please set up your WhatsApp integration first.',
@@ -234,22 +263,23 @@ export async function sendMessageToConversation(
     );
   }
 
-  const accessToken = decrypt(config.access_token);
+  const accessToken = decrypt(config.accessToken);
 
   // Self-heal legacy CBC ciphertexts. Fire-and-forget; idempotent.
-  if (isLegacyFormat(config.access_token)) {
+  if (isLegacyFormat(config.accessToken)) {
     void db
-      .from('whatsapp_config')
-      .update({ access_token: encrypt(accessToken) })
-      .eq('id', config.id)
-      .then(({ error }: { error: { message: string } | null }) => {
-        if (error) {
+      .update(whatsappConfig)
+      .set({ accessToken: encrypt(accessToken) })
+      .where(eq(whatsappConfig.id, config.id))
+      .then(
+        () => {},
+        (error: unknown) => {
           console.warn(
             '[send-message] access_token GCM upgrade failed:',
-            error.message
+            error instanceof Error ? error.message : error
           );
         }
-      });
+      );
   }
 
   // Resolve the reply target to its Meta message_id. The parent must
@@ -257,40 +287,80 @@ export async function sendMessageToConversation(
   // messages they can't see by guessing UUIDs.
   let contextMessageId: string | undefined;
   if (replyToMessageId) {
-    const { data: parent, error: parentError } = await db
-      .from('messages')
-      .select('message_id, conversation_id')
-      .eq('id', replyToMessageId)
-      .eq('conversation_id', conversationId)
-      .maybeSingle();
+    let parent: { messageId: string | null } | null = null;
+    try {
+      parent = firstOrNull(
+        await db
+          .select({ messageId: messages.messageId })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.id, replyToMessageId),
+              eq(messages.conversationId, conversationId)
+            )
+          )
+          .limit(1)
+      );
+    } catch {
+      parent = null;
+    }
 
-    if (parentError || !parent) {
+    if (!parent) {
       throw new SendMessageError(
         'bad_request',
         'reply_to_message_id not found in this conversation',
         400
       );
     }
-    if (!parent.message_id) {
+    if (!parent.messageId) {
       console.warn(
         '[send-message] reply target has no Meta message_id; sending without context'
       );
     } else {
-      contextMessageId = parent.message_id;
+      contextMessageId = parent.messageId;
     }
   }
 
   // Template row (for header + button components). isMessageTemplate
   // guards against a malformed local row crashing the send-builder.
+  // Selected with snake_case aliases so the row matches the public
+  // `MessageTemplate` shape the send-builder expects.
   let templateRow: MessageTemplate | null = null;
   if (messageType === 'template' && templateName) {
-    const { data } = await db
-      .from('message_templates')
-      .select('*')
-      .eq('account_id', accountId)
-      .eq('name', templateName)
-      .eq('language', templateLanguage || 'en_US')
-      .maybeSingle();
+    const data = firstOrNull(
+      await db
+        .select({
+          id: messageTemplates.id,
+          user_id: messageTemplates.userId,
+          name: messageTemplates.name,
+          category: messageTemplates.category,
+          language: messageTemplates.language,
+          header_type: messageTemplates.headerType,
+          header_content: messageTemplates.headerContent,
+          header_handle: messageTemplates.headerHandle,
+          header_media_url: messageTemplates.headerMediaUrl,
+          body_text: messageTemplates.bodyText,
+          footer_text: messageTemplates.footerText,
+          buttons: messageTemplates.buttons,
+          sample_values: messageTemplates.sampleValues,
+          status: messageTemplates.status,
+          meta_template_id: messageTemplates.metaTemplateId,
+          rejection_reason: messageTemplates.rejectionReason,
+          quality_score: messageTemplates.qualityScore,
+          submission_error: messageTemplates.submissionError,
+          last_submitted_at: messageTemplates.lastSubmittedAt,
+          created_at: messageTemplates.createdAt,
+        })
+        .from(messageTemplates)
+        .where(
+          and(
+            eq(messageTemplates.accountId, accountId),
+            eq(messageTemplates.name, templateName),
+            eq(messageTemplates.language, templateLanguage || 'en_US')
+          )
+        )
+        .limit(1)
+    );
     if (data && !isMessageTemplate(data)) {
       throw new SendMessageError(
         'template_malformed',
@@ -298,13 +368,13 @@ export async function sendMessageToConversation(
         500
       );
     }
-    templateRow = data ?? null;
+    templateRow = (data as MessageTemplate | null) ?? null;
   }
 
   const attempt = async (phone: string): Promise<string> => {
     if (messageType === 'template') {
       const result = await sendTemplateMessage({
-        phoneNumberId: config.phone_number_id,
+        phoneNumberId: config.phoneNumberId,
         accessToken,
         to: phone,
         templateName: templateName!,
@@ -318,7 +388,7 @@ export async function sendMessageToConversation(
     }
     if (isMediaKind) {
       const result = await sendMediaMessage({
-        phoneNumberId: config.phone_number_id,
+        phoneNumberId: config.phoneNumberId,
         accessToken,
         to: phone,
         kind: messageType as MediaKind,
@@ -330,7 +400,7 @@ export async function sendMessageToConversation(
       return result.messageId;
     }
     const result = await sendTextMessage({
-      phoneNumberId: config.phone_number_id,
+      phoneNumberId: config.phoneNumberId,
       accessToken,
       to: phone,
       text: contentText!,
@@ -379,66 +449,69 @@ export async function sendMessageToConversation(
       `[send-message] Auto-corrected contact phone: ${sanitizedPhone} → ${workingPhone}`
     );
     await db
-      .from('contacts')
-      .update({ phone: workingPhone })
-      .eq('id', contact.id);
+      .update(contacts)
+      .set({ phone: workingPhone })
+      .where(eq(contacts.id, contact.id));
   }
 
-  // Persist the sent message. Field names MUST match the messages
-  // schema (see 001_initial_schema.sql).
-  const { data: messageRecord, error: msgError } = await db
-    .from('messages')
-    .insert({
-      conversation_id: conversationId,
-      sender_type: 'agent',
-      content_type: messageType,
-      content_text: contentText || null,
-      media_url: mediaUrl || null,
-      template_name: templateName || null,
-      message_id: waMessageId,
-      status: 'sent',
-      reply_to_message_id: replyToMessageId || null,
-    })
-    .select()
-    .single();
-
-  if (msgError) {
-    console.error('[send-message] error inserting sent message:', msgError);
+  // Persist the sent message.
+  let messageRecord: { id: string };
+  try {
+    messageRecord = firstOrThrow(
+      await db
+        .insert(messages)
+        .values({
+          conversationId,
+          senderType: 'agent',
+          contentType: messageType,
+          contentText: contentText || null,
+          mediaUrl: mediaUrl || null,
+          templateName: templateName || null,
+          messageId: waMessageId,
+          status: 'sent',
+          replyToMessageId: replyToMessageId || null,
+        })
+        .returning({ id: messages.id })
+    );
+  } catch (err) {
+    console.error('[send-message] error inserting sent message:', err);
+    const message = err instanceof Error ? err.message : 'unknown error';
     throw new SendMessageError(
       'db_error',
-      `Message sent to Meta but failed to save to DB: ${msgError.message}`,
+      `Message sent to Meta but failed to save to DB: ${message}`,
       500
     );
   }
 
   await db
-    .from('conversations')
-    .update({
-      last_message_text: contentText || `[${messageType}]`,
-      last_message_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+    .update(conversations)
+    .set({
+      lastMessageText: contentText || `[${messageType}]`,
+      lastMessageAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     })
-    .eq('id', conversationId);
+    .where(eq(conversations.id, conversationId));
 
   // Pause any active Flow run for this contact — the agent stepping in
   // is the strongest "yield, human is here" signal. Best-effort.
   try {
-    const { error: pauseErr } = await supabaseAdmin()
-      .from('flow_runs')
-      .update({
+    await db
+      .update(flowRuns)
+      .set({
         status: 'paused_by_agent',
-        ended_at: new Date().toISOString(),
-        end_reason: 'agent_replied',
+        endedAt: new Date().toISOString(),
+        endReason: 'agent_replied',
       })
-      .eq('account_id', accountId)
-      .eq('contact_id', contact.id)
-      .eq('status', 'active');
-    if (pauseErr) {
-      console.error('[flows] pause-on-agent-send failed:', pauseErr.message);
-    }
+      .where(
+        and(
+          eq(flowRuns.accountId, accountId),
+          eq(flowRuns.contactId, contact.id),
+          eq(flowRuns.status, 'active')
+        )
+      );
   } catch (err) {
     console.error(
-      '[flows] pause-on-agent-send threw:',
+      '[flows] pause-on-agent-send failed:',
       err instanceof Error ? err.message : err
     );
   }

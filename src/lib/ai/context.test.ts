@@ -1,29 +1,40 @@
-import { describe, it, expect } from 'vitest'
-import type { SupabaseClient } from '@supabase/supabase-js'
-import { buildConversationContext } from './context'
+import { describe, it, expect, vi } from 'vitest'
 
-/** Minimal fake matching the query chain in buildConversationContext:
- *  from().select().eq().eq().order().limit() → { data, error }. */
-function fakeDb(rows: unknown[]): SupabaseClient {
+/** Minimal fake matching the Drizzle chain in buildConversationContext:
+ *  select().from().where().orderBy().limit() → rows. */
+const h = vi.hoisted(() => ({
+  rows: [] as Record<string, unknown>[],
+}))
+
+vi.mock('@/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/db')>()
   const chain = {
     from: () => chain,
-    select: () => chain,
-    eq: () => chain,
-    order: () => chain,
-    limit: () => Promise.resolve({ data: rows, error: null }),
+    where: () => chain,
+    orderBy: () => chain,
+    limit: () => Promise.resolve(h.rows.map((r) => ({ ...r }))),
   }
-  return chain as unknown as SupabaseClient
+  return {
+    ...actual,
+    db: { select: () => chain },
+  }
+})
+
+import { buildConversationContext } from './context'
+
+function fakeDb(rows: Record<string, unknown>[]): void {
+  h.rows = rows
 }
 
 describe('buildConversationContext', () => {
   it('maps sender_type to role and returns chronological order', async () => {
     // DB returns newest-first (created_at DESC); the fn reverses it.
-    const rows = [
-      { sender_type: 'customer', content_text: 'third' },
-      { sender_type: 'agent', content_text: 'second' },
-      { sender_type: 'customer', content_text: 'first' },
-    ]
-    const out = await buildConversationContext(fakeDb(rows), 'conv-1')
+    fakeDb([
+      { senderType: 'customer', contentText: 'third' },
+      { senderType: 'agent', contentText: 'second' },
+      { senderType: 'customer', contentText: 'first' },
+    ])
+    const out = await buildConversationContext('conv-1')
     expect(out).toEqual([
       { role: 'user', content: 'first' },
       { role: 'assistant', content: 'second' },
@@ -32,22 +43,18 @@ describe('buildConversationContext', () => {
   })
 
   it('treats bot messages as assistant', async () => {
-    const out = await buildConversationContext(
-      fakeDb([{ sender_type: 'bot', content_text: 'auto reply' }]),
-      'conv-1',
-    )
+    fakeDb([{ senderType: 'bot', contentText: 'auto reply' }])
+    const out = await buildConversationContext('conv-1')
     expect(out).toEqual([{ role: 'assistant', content: 'auto reply' }])
   })
 
   it('drops empty / whitespace-only messages', async () => {
-    const out = await buildConversationContext(
-      fakeDb([
-        { sender_type: 'customer', content_text: '   ' },
-        { sender_type: 'customer', content_text: null },
-        { sender_type: 'customer', content_text: 'real' },
-      ]),
-      'conv-1',
-    )
+    fakeDb([
+      { senderType: 'customer', contentText: '   ' },
+      { senderType: 'customer', contentText: null },
+      { senderType: 'customer', contentText: 'real' },
+    ])
+    const out = await buildConversationContext('conv-1')
     expect(out).toEqual([{ role: 'user', content: 'real' }])
   })
 })

@@ -6,17 +6,19 @@ import {
   phoneVariants,
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils'
-import { supabaseAdmin } from './admin-client'
+import { db, contacts, conversations, messages, whatsappConfig } from '@/db'
+import { firstOrNull } from '@/db/helpers'
+import { and, eq } from 'drizzle-orm'
 
 // ------------------------------------------------------------
 // Automation-side Meta sender.
 //
-// Mirrors the logic in src/app/api/whatsapp/send/route.ts but uses
-// the service-role client (engine has no cookies) and accepts the
-// user / conversation / contact identifiers the engine already has
-// on hand. Kept here (rather than refactoring the user-facing send
-// route) to avoid risk to the working manual-send path — they can
-// converge in a later refactor.
+// Mirrors the logic in src/app/api/whatsapp/send/route.ts but runs
+// through the shared Drizzle client (engine has no cookies) and
+// accepts the user / conversation / contact identifiers the engine
+// already has on hand. Kept here (rather than refactoring the
+// user-facing send route) to avoid risk to the working manual-send
+// path — they can converge in a later refactor.
 // ------------------------------------------------------------
 
 interface SendTextArgs {
@@ -58,23 +60,22 @@ type SendInput =
   | (SendTemplateArgs & { kind: 'template' })
 
 async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: string }> {
-  const db = supabaseAdmin()
-
   // Scope the contact + config lookups by account_id, not user_id.
-  // The engine uses the service-role client (bypassing RLS); without
+  // The engine runs on the shared Drizzle client (no RLS); without
   // this filter, an authenticated user could fire their own
   // automations against another tenant's contact UUID and send via
   // their own WhatsApp config to that contact's phone. The 017
   // migration moved both tables to account-scoped tenancy, so the
   // check is the same defense-in-depth as before, just keyed on the
   // new tenancy column.
-  const { data: contact, error: contactErr } = await db
-    .from('contacts')
-    .select('id, phone')
-    .eq('id', input.contactId)
-    .eq('account_id', input.accountId)
-    .maybeSingle()
-  if (contactErr || !contact?.phone) {
+  const contact = firstOrNull(
+    await db
+      .select({ id: contacts.id, phone: contacts.phone })
+      .from(contacts)
+      .where(and(eq(contacts.id, input.contactId), eq(contacts.accountId, input.accountId)))
+      .limit(1),
+  )
+  if (!contact?.phone) {
     throw new Error('contact not found for this account')
   }
 
@@ -83,21 +84,23 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
     throw new Error(`contact phone invalid: ${contact.phone}`)
   }
 
-  const { data: config, error: configErr } = await db
-    .from('whatsapp_config')
-    .select('*')
-    .eq('account_id', input.accountId)
-    .single()
-  if (configErr || !config) {
+  const config = firstOrNull(
+    await db
+      .select()
+      .from(whatsappConfig)
+      .where(eq(whatsappConfig.accountId, input.accountId))
+      .limit(1),
+  )
+  if (!config) {
     throw new Error('WhatsApp not configured for this account')
   }
 
-  const accessToken = decrypt(config.access_token)
+  const accessToken = decrypt(config.accessToken)
 
   const attempt = async (phone: string): Promise<string> => {
     if (input.kind === 'template') {
       const r = await sendTemplateMessage({
-        phoneNumberId: config.phone_number_id,
+        phoneNumberId: config.phoneNumberId,
         accessToken,
         to: phone,
         templateName: input.templateName,
@@ -107,7 +110,7 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
       return r.messageId
     }
     const r = await sendTextMessage({
-      phoneNumberId: config.phone_number_id,
+      phoneNumberId: config.phoneNumberId,
       accessToken,
       to: phone,
       text: input.text,
@@ -137,7 +140,7 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   if (lastError) throw lastError
 
   if (workingPhone !== sanitized) {
-    await db.from('contacts').update({ phone: workingPhone }).eq('id', contact.id)
+    await db.update(contacts).set({ phone: workingPhone }).where(eq(contacts.id, contact.id))
   }
 
   // Persist the sent message so it appears in the inbox with a real
@@ -147,30 +150,32 @@ async function sendViaMeta(input: SendInput): Promise<{ whatsapp_message_id: str
   const content_text = input.kind === 'text' ? input.text : null
   const template_name = input.kind === 'template' ? input.templateName : null
 
-  const { error: msgErr } = await db.from('messages').insert({
-    conversation_id: input.conversationId,
-    sender_type: 'bot',
-    content_type,
-    content_text,
-    template_name,
-    message_id: waMessageId,
-    status: 'sent',
-  })
-  if (msgErr) {
+  try {
+    await db.insert(messages).values({
+      conversationId: input.conversationId,
+      senderType: 'bot',
+      contentType: content_type,
+      contentText: content_text,
+      templateName: template_name,
+      messageId: waMessageId,
+      status: 'sent',
+    })
+  } catch (msgErr) {
     // Meta already has the message; record the DB error but don't pretend
     // the send failed. The engine wraps this in a log line.
-    throw new Error(`sent to Meta but DB insert failed: ${msgErr.message}`)
+    const msg = msgErr instanceof Error ? msgErr.message : String(msgErr)
+    throw new Error(`sent to Meta but DB insert failed: ${msg}`)
   }
 
   await db
-    .from('conversations')
-    .update({
-      last_message_text:
+    .update(conversations)
+    .set({
+      lastMessageText:
         input.kind === 'template' ? `[template:${input.templateName}]` : input.text,
-      last_message_at: new Date().toISOString(),
-      updated_at: new Date().toISOString(),
+      lastMessageAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
     })
-    .eq('id', input.conversationId)
+    .where(eq(conversations.id, input.conversationId))
 
   return { whatsapp_message_id: waMessageId }
 }

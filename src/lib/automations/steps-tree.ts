@@ -1,4 +1,5 @@
-import { supabaseAdmin } from './admin-client'
+import { db, automationSteps } from '@/db'
+import { asc, eq } from 'drizzle-orm'
 
 // ------------------------------------------------------------
 // Builder payload → flat rows for automation_steps.
@@ -20,11 +21,11 @@ export interface BuilderStepInput {
 
 interface InsertRow {
   id: string
-  automation_id: string
-  parent_step_id: string | null
+  automationId: string
+  parentStepId: string | null
   branch: 'yes' | 'no' | null
-  step_type: string
-  step_config: Record<string, unknown>
+  stepType: string
+  stepConfig: Record<string, unknown>
   position: number
 }
 
@@ -37,12 +38,11 @@ export async function replaceSteps(
   automationId: string,
   input: BuilderStepInput[],
 ): Promise<string | null> {
-  const admin = supabaseAdmin()
-  const { error: delErr } = await admin
-    .from('automation_steps')
-    .delete()
-    .eq('automation_id', automationId)
-  if (delErr) return delErr.message
+  try {
+    await db.delete(automationSteps).where(eq(automationSteps.automationId, automationId))
+  } catch (delErr) {
+    return delErr instanceof Error ? delErr.message : String(delErr)
+  }
   return insertSteps(automationId, input)
 }
 
@@ -67,11 +67,11 @@ export async function insertSteps(
       const id = s.id ?? uid()
       rows.push({
         id,
-        automation_id: automationId,
-        parent_step_id: parentId,
+        automationId,
+        parentStepId: parentId,
         branch,
-        step_type: s.step_type,
-        step_config: s.step_config ?? {},
+        stepType: s.step_type,
+        stepConfig: s.step_config ?? {},
         position: idx,
       })
       if (s.step_type === 'condition' && s.branches) {
@@ -83,8 +83,12 @@ export async function insertSteps(
   walk(tree, null, null)
 
   if (rows.length === 0) return null
-  const { error } = await supabaseAdmin().from('automation_steps').insert(rows)
-  return error?.message ?? null
+  try {
+    await db.insert(automationSteps).values(rows)
+  } catch (error) {
+    return error instanceof Error ? error.message : String(error)
+  }
+  return null
 }
 
 function seedsToTree(seeds: BuilderStepInput[]): BuilderStepInput[] {
@@ -116,31 +120,26 @@ export interface BuilderStepNode extends BuilderStepInput {
   branches: { yes: BuilderStepNode[]; no: BuilderStepNode[] }
 }
 
-interface DbStep {
-  id: string
-  parent_step_id: string | null
-  branch: 'yes' | 'no' | null
-  step_type: string
-  step_config: Record<string, unknown>
-  position: number
-}
-
 export async function loadStepsTree(automationId: string): Promise<BuilderStepNode[]> {
-  const { data, error } = await supabaseAdmin()
-    .from('automation_steps')
-    .select('*')
-    .eq('automation_id', automationId)
-    .order('position', { ascending: true })
-
-  if (error) throw new Error(error.message)
-  const rows = (data ?? []) as DbStep[]
+  const rows = await db
+    .select({
+      id: automationSteps.id,
+      parent_step_id: automationSteps.parentStepId,
+      branch: automationSteps.branch,
+      step_type: automationSteps.stepType,
+      step_config: automationSteps.stepConfig,
+      position: automationSteps.position,
+    })
+    .from(automationSteps)
+    .where(eq(automationSteps.automationId, automationId))
+    .orderBy(asc(automationSteps.position))
 
   const byId = new Map<string, BuilderStepNode>()
   for (const row of rows) {
     byId.set(row.id, {
       id: row.id,
       step_type: row.step_type,
-      step_config: row.step_config ?? {},
+      step_config: (row.step_config ?? {}) as Record<string, unknown>,
       branches: { yes: [], no: [] },
     })
   }

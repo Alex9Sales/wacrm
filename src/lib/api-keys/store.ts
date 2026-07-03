@@ -1,17 +1,18 @@
 // ============================================================
 // API key store — the *auth-path* data access for public API keys.
 //
-// Only the read side lives here, and deliberately so: it runs with
-// the service-role client because a public-API caller has no Supabase
-// session, so RLS (which keys off `auth.uid()`) can't scope the
-// lookup. The management side (list / create / revoke) runs in the
-// dashboard under a real cookie session and goes through the RLS
-// client *inline* in the route handlers — same pattern as
-// `/api/account/invitations`. Keeping the RLS-bypassing surface tiny
-// and read-only here makes it easy to audit.
+// Only the read side lives here, and deliberately so: the hash is the
+// only credential, so `findActiveKeyByHash` is the moment that
+// establishes the caller's account. The management side (list /
+// create / revoke) runs in the dashboard route handlers under a real
+// session. Keeping this surface tiny and read-only makes it easy to
+// audit.
 // ============================================================
 
-import { supabaseAdmin } from '@/lib/flows/admin-client';
+import { eq } from 'drizzle-orm';
+
+import { db, accounts, apiKeys } from '@/db';
+import { firstOrNull } from '@/db/helpers';
 
 /** Shape of an `api_keys` row as the auth path consumes it. */
 export interface ApiKeyRow {
@@ -27,21 +28,33 @@ export interface ApiKeyRow {
 /**
  * Look up an *active* key by its SHA-256 hash. Returns null if no
  * row matches, or if the matching row is revoked or expired — so
- * callers never have to re-check liveness. Uses the service-role
- * client (RLS-bypassing); the hash is the only credential, so this
- * is the moment that establishes the caller's account.
+ * callers never have to re-check liveness.
  */
 export async function findActiveKeyByHash(
   hash: string
 ): Promise<ApiKeyRow | null> {
-  const { data, error } = await supabaseAdmin()
-    .from('api_keys')
-    .select('id, account_id, created_by, name, scopes, expires_at, revoked_at')
-    .eq('key_hash', hash)
-    .maybeSingle();
-
-  if (error) {
-    console.error('[api-keys/store] lookup error:', error.message);
+  let data: ApiKeyRow | null;
+  try {
+    data = firstOrNull(
+      await db
+        .select({
+          id: apiKeys.id,
+          account_id: apiKeys.accountId,
+          created_by: apiKeys.createdBy,
+          name: apiKeys.name,
+          scopes: apiKeys.scopes,
+          expires_at: apiKeys.expiresAt,
+          revoked_at: apiKeys.revokedAt,
+        })
+        .from(apiKeys)
+        .where(eq(apiKeys.keyHash, hash))
+        .limit(1)
+    );
+  } catch (err) {
+    console.error(
+      '[api-keys/store] lookup error:',
+      err instanceof Error ? err.message : err
+    );
     return null;
   }
   if (!data) return null;
@@ -53,24 +66,29 @@ export async function findActiveKeyByHash(
     return null;
   }
 
-  return data as ApiKeyRow;
+  return data;
 }
 
 /**
  * Fetch the account name for a resolved key, so `/api/v1/me` and any
  * future endpoint can echo it without a second round trip in the
- * route. Service-role; the key already proved account membership.
+ * route. The key already proved account membership.
  */
 export async function getAccountName(
   accountId: string
 ): Promise<string | null> {
-  const { data, error } = await supabaseAdmin()
-    .from('accounts')
-    .select('name')
-    .eq('id', accountId)
-    .maybeSingle();
-  if (error || !data) return null;
-  return (data.name as string) ?? null;
+  try {
+    const row = firstOrNull(
+      await db
+        .select({ name: accounts.name })
+        .from(accounts)
+        .where(eq(accounts.id, accountId))
+        .limit(1)
+    );
+    return row?.name ?? null;
+  } catch {
+    return null;
+  }
 }
 
 /**
@@ -79,16 +97,14 @@ export async function getAccountName(
  * it must never fail the request the caller is actually making.
  */
 export function touchLastUsed(id: string): void {
-  void supabaseAdmin()
-    .from('api_keys')
-    .update({ last_used_at: new Date().toISOString() })
-    .eq('id', id)
-    .then(({ error }) => {
-      if (error) {
-        console.warn(
-          '[api-keys/store] last_used_at bump failed:',
-          error.message
-        );
-      }
+  void db
+    .update(apiKeys)
+    .set({ lastUsedAt: new Date().toISOString() })
+    .where(eq(apiKeys.id, id))
+    .catch((err: unknown) => {
+      console.warn(
+        '[api-keys/store] last_used_at bump failed:',
+        err instanceof Error ? err.message : err
+      );
     });
 }

@@ -1,11 +1,7 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { and, desc, eq } from 'drizzle-orm'
+import { db, messages } from '@/db'
 import type { ChatMessage } from './types'
 import { aiContextMessageLimit } from './defaults'
-
-interface DbMessage {
-  sender_type: 'customer' | 'agent' | 'bot'
-  content_text: string | null
-}
 
 /**
  * Fetch the last N text messages of a conversation and map them to the
@@ -17,25 +13,29 @@ interface DbMessage {
  * naturally and the most recent customer message lands last.
  */
 export async function buildConversationContext(
-  db: SupabaseClient,
   conversationId: string,
   limit: number = aiContextMessageLimit(),
 ): Promise<ChatMessage[]> {
-  const { data, error } = await db
-    .from('messages')
-    .select('sender_type, content_text')
-    .eq('conversation_id', conversationId)
-    .eq('content_type', 'text')
-    .order('created_at', { ascending: false })
+  const rows = await db
+    .select({
+      senderType: messages.senderType,
+      contentText: messages.contentText,
+    })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.contentType, 'text'),
+      ),
+    )
+    .orderBy(desc(messages.createdAt))
     .limit(limit)
 
-  if (error) throw error
-
-  const rows = ((data ?? []) as DbMessage[]).reverse()
   return rows
-    .filter((m) => m.content_text && m.content_text.trim())
+    .reverse()
+    .filter((m) => m.contentText && m.contentText.trim())
     .map((m) => ({
-      role: m.sender_type === 'customer' ? 'user' : 'assistant',
-      content: m.content_text!.trim(),
+      role: m.senderType === 'customer' ? ('user' as const) : ('assistant' as const),
+      content: m.contentText!.trim(),
     }))
 }

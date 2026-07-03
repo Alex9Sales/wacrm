@@ -3,6 +3,17 @@ import type { AiConfig } from './types'
 
 // Shared, hoisted mock state so the module mocks can close over it.
 const h = vi.hoisted(() => ({
+  // Cycle-safe stringify — drizzle SQL objects can hold circular refs.
+  safeStringify(o: unknown): string {
+    const seen = new WeakSet<object>()
+    return JSON.stringify(o, (_k, v) => {
+      if (typeof v === 'object' && v !== null) {
+        if (seen.has(v)) return undefined
+        seen.add(v)
+      }
+      return v
+    })
+  },
   loadAiConfig: vi.fn(),
   buildConversationContext: vi.fn(),
   retrieveKnowledge: vi.fn(),
@@ -13,7 +24,7 @@ const h = vi.hoisted(() => ({
     autoResponders: [] as { id: string }[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
-    rpcCalls: [] as { name: string; args: unknown }[],
+    sqlCalls: [] as string[],
   },
 }))
 
@@ -22,40 +33,43 @@ vi.mock('./context', () => ({ buildConversationContext: h.buildConversationConte
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
 vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
-vi.mock('./admin-client', () => ({
-  supabaseAdmin: () => ({
-    from: (table: string) => {
-      if (table === 'automations') {
-        // .select().eq().eq().in().limit() → active auto-responders
-        const chain = {
-          select: () => chain,
-          eq: () => chain,
-          in: () => chain,
-          limit: () =>
-            Promise.resolve({ data: h.state.autoResponders, error: null }),
-        }
-        return chain
-      }
-      // conversations
-      return {
-        select: () => ({
-          eq: () => ({
-            maybeSingle: () =>
-              Promise.resolve({ data: h.state.conv, error: null }),
+
+vi.mock('@/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/db')>()
+  return {
+    ...actual,
+    db: {
+      // Two select chains: automations (auto-responder guard) and
+      // conversations (eligibility read). Distinguished by the table
+      // passed to .from() — real table objects survive via importOriginal.
+      select: () => ({
+        from: (table: unknown) => ({
+          where: () => ({
+            limit: () => {
+              if (table === actual.automations) {
+                return Promise.resolve(h.state.autoResponders)
+              }
+              return Promise.resolve(h.state.conv ? [h.state.conv] : [])
+            },
           }),
         }),
-        update: (payload: Record<string, unknown>) => {
-          h.state.updatePayload = payload
-          return { eq: () => Promise.resolve({ error: null }) }
-        },
-      }
+      }),
+      update: () => ({
+        set: (payload: Record<string, unknown>) => ({
+          where: () => {
+            h.state.updatePayload = payload
+            return Promise.resolve()
+          },
+        }),
+      }),
+      // claim_ai_reply_slot — serialized SQL carries the fn name + params.
+      execute: (query: unknown) => {
+        h.state.sqlCalls.push(h.safeStringify(query))
+        return Promise.resolve({ rows: [{ claimed: h.state.claim }] })
+      },
     },
-    rpc: (name: string, args: unknown) => {
-      h.state.rpcCalls.push({ name, args })
-      return Promise.resolve({ data: h.state.claim, error: null })
-    },
-  }),
-}))
+  }
+})
 
 import { dispatchInboundToAiReply } from './auto-reply'
 
@@ -82,14 +96,14 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
 
 beforeEach(() => {
   h.state.conv = {
-    assigned_agent_id: null,
-    ai_autoreply_disabled: false,
-    ai_reply_count: 0,
+    assignedAgentId: null,
+    aiAutoreplyDisabled: false,
+    aiReplyCount: 0,
   }
   h.state.autoResponders = []
   h.state.claim = true
   h.state.updatePayload = null
-  h.state.rpcCalls = []
+  h.state.sqlCalls = []
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])
@@ -100,12 +114,9 @@ beforeEach(() => {
 describe('dispatchInboundToAiReply — eligibility gates', () => {
   it('claims a slot and sends on the happy path', async () => {
     await dispatchInboundToAiReply(ARGS)
-    expect(h.state.rpcCalls).toEqual([
-      {
-        name: 'claim_ai_reply_slot',
-        args: { conversation_id: 'conv-1', max_replies: 3 },
-      },
-    ])
+    expect(h.state.sqlCalls).toHaveLength(1)
+    expect(h.state.sqlCalls[0]).toContain('claim_ai_reply_slot')
+    expect(h.state.sqlCalls[0]).toContain('conv-1') // conversation param
     expect(h.engineSendText).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-1', text: 'Hello!' }),
     )
@@ -130,7 +141,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     h.state.claim = false
     await dispatchInboundToAiReply(ARGS)
     // It still attempts the claim, but the send is skipped.
-    expect(h.state.rpcCalls).toHaveLength(1)
+    expect(h.state.sqlCalls).toHaveLength(1)
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
@@ -149,9 +160,9 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
 
   it('skips when a human agent is assigned', async () => {
     h.state.conv = {
-      assigned_agent_id: 'agent-9',
-      ai_autoreply_disabled: false,
-      ai_reply_count: 0,
+      assignedAgentId: 'agent-9',
+      aiAutoreplyDisabled: false,
+      aiReplyCount: 0,
     }
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
@@ -159,9 +170,9 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
 
   it('skips when auto-reply was disabled on this conversation', async () => {
     h.state.conv = {
-      assigned_agent_id: null,
-      ai_autoreply_disabled: true,
-      ai_reply_count: 0,
+      assignedAgentId: null,
+      aiAutoreplyDisabled: true,
+      aiReplyCount: 0,
     }
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
@@ -169,9 +180,9 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
 
   it('skips when the per-conversation cap is reached', async () => {
     h.state.conv = {
-      assigned_agent_id: null,
-      ai_autoreply_disabled: false,
-      ai_reply_count: 3,
+      assignedAgentId: null,
+      aiAutoreplyDisabled: false,
+      aiReplyCount: 3,
     }
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
@@ -190,7 +201,7 @@ describe('dispatchInboundToAiReply — handoff', () => {
     h.generateReply.mockResolvedValue({ text: '', handoff: true })
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
-    expect(h.state.updatePayload).toEqual({ ai_autoreply_disabled: true })
-    expect(h.state.rpcCalls).toHaveLength(0)
+    expect(h.state.updatePayload).toEqual({ aiAutoreplyDisabled: true })
+    expect(h.state.sqlCalls).toHaveLength(0)
   })
 })

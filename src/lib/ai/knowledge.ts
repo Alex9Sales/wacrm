@@ -1,4 +1,6 @@
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { count, eq, sql } from 'drizzle-orm'
+import { db, aiKnowledgeChunks } from '@/db'
+import { firstOrNull } from '@/db/helpers'
 import type { AiConfig } from './types'
 import { chunkText } from './chunk'
 import { embedTexts, toVectorLiteral } from './embeddings'
@@ -17,15 +19,13 @@ interface MatchRow {
 /**
  * (Re)build the chunks for one document. Deletes the document's
  * existing chunks, re-chunks the content, and — when the account has an
- * embeddings key — embeds each chunk. Runs under whatever client the
- * caller passes (service-role for ingest routes).
+ * embeddings key — embeds each chunk.
  *
  * Throws on embedding failure so the ingest route can report it; the
  * chunks are only written once embedding (if attempted) succeeds, so a
  * failed embed never leaves half-indexed rows.
  */
 export async function ingestDocument(
-  db: SupabaseClient,
   accountId: string,
   config: Pick<AiConfig, 'embeddingsApiKey'>,
   documentId: string,
@@ -34,11 +34,9 @@ export async function ingestDocument(
   const chunks = chunkText(content)
 
   // Replace, don't append — re-ingest must be idempotent.
-  const { error: delErr } = await db
-    .from('ai_knowledge_chunks')
-    .delete()
-    .eq('document_id', documentId)
-  if (delErr) throw delErr
+  await db
+    .delete(aiKnowledgeChunks)
+    .where(eq(aiKnowledgeChunks.documentId, documentId))
 
   if (chunks.length === 0) return
 
@@ -59,15 +57,14 @@ export async function ingestDocument(
   }
 
   const rows = chunks.map((content, i) => ({
-    document_id: documentId,
-    account_id: accountId,
-    chunk_index: i,
+    documentId,
+    accountId,
+    chunkIndex: i,
     content,
-    embedding: embeddings ? toVectorLiteral(embeddings[i]) : null,
+    embedding: embeddings ? embeddings[i] : null,
   }))
 
-  const { error: insErr } = await db.from('ai_knowledge_chunks').insert(rows)
-  if (insErr) throw insErr
+  await db.insert(aiKnowledgeChunks).values(rows)
 
   if (embedError) throw embedError
 }
@@ -78,11 +75,10 @@ export async function ingestDocument(
  * Semantic-primary when an embeddings key is configured (embed the
  * query → cosine-nearest chunks), then topped up with lexical full-text
  * matches to fill `k`. Lexical-only when there's no key. Best-effort:
- * any failure (no KB, embedding error, RPC error) degrades to fewer or
+ * any failure (no KB, embedding error, SQL error) degrades to fewer or
  * zero results and never throws into the draft / auto-reply path.
  */
 export async function retrieveKnowledge(
-  db: SupabaseClient,
   accountId: string,
   config: Pick<AiConfig, 'embeddingsApiKey'>,
   queryText: string,
@@ -92,33 +88,34 @@ export async function retrieveKnowledge(
   if (!query || k <= 0) return []
 
   // Skip everything when the account has no knowledge base — otherwise
-  // every draft / auto-reply would pay for a query embedding + two RPCs
-  // just to get []. One cheap indexed COUNT (head, no rows) instead of a
-  // paid embeddings call on the hot path.
+  // every draft / auto-reply would pay for a query embedding + two SQL
+  // calls just to get []. One cheap indexed COUNT instead of a paid
+  // embeddings call on the hot path.
   try {
-    const { count, error } = await db
-      .from('ai_knowledge_chunks')
-      .select('id', { count: 'exact', head: true })
-      .eq('account_id', accountId)
-    if (error || !count) return []
+    const row = firstOrNull(
+      await db
+        .select({ n: count() })
+        .from(aiKnowledgeChunks)
+        .where(eq(aiKnowledgeChunks.accountId, accountId)),
+    )
+    if (!row || row.n === 0) return []
   } catch {
     return []
   }
 
   const picked = new Map<string, string>() // id → content, preserves order
 
-  // Semantic path.
+  // Semantic path (deprioritized feature, kept compiling & functional —
+  // the DB function still exists in the baseline).
   if (config.embeddingsApiKey) {
     try {
       const [queryEmbedding] = await embedTexts(config.embeddingsApiKey, [query])
       if (queryEmbedding) {
-        const { data, error } = await db.rpc('match_ai_knowledge_semantic', {
-          p_account_id: accountId,
-          p_query_embedding: toVectorLiteral(queryEmbedding),
-          p_match_count: k,
-        })
-        if (!error && Array.isArray(data)) {
-          for (const row of data as MatchRow[]) picked.set(row.id, row.content)
+        const res = await db.execute(
+          sql`SELECT * FROM match_ai_knowledge_semantic(${accountId}, ${toVectorLiteral(queryEmbedding)}, ${k})`,
+        )
+        for (const row of res.rows as unknown as MatchRow[]) {
+          picked.set(row.id, row.content)
         }
       }
     } catch (err) {
@@ -129,16 +126,12 @@ export async function retrieveKnowledge(
   // Lexical top-up (also the sole path when there's no embeddings key).
   if (picked.size < k) {
     try {
-      const { data, error } = await db.rpc('match_ai_knowledge_fts', {
-        p_account_id: accountId,
-        p_query: query,
-        p_match_count: k,
-      })
-      if (!error && Array.isArray(data)) {
-        for (const row of data as MatchRow[]) {
-          if (picked.size >= k) break
-          if (!picked.has(row.id)) picked.set(row.id, row.content)
-        }
+      const res = await db.execute(
+        sql`SELECT * FROM match_ai_knowledge_fts(${accountId}, ${query}, ${k})`,
+      )
+      for (const row of res.rows as unknown as MatchRow[]) {
+        if (picked.size >= k) break
+        if (!picked.has(row.id)) picked.set(row.id, row.content)
       }
     } catch (err) {
       console.error('[ai knowledge] lexical retrieval failed:', err)

@@ -1,51 +1,62 @@
 import { describe, it, expect, vi } from 'vitest'
-import type { SupabaseClient } from '@supabase/supabase-js'
 
 // decrypt is identity in tests so we don't depend on real ciphertext.
 vi.mock('@/lib/whatsapp/encryption', () => ({
   decrypt: (v: string) => `plain:${v}`,
 }))
 
-import { loadAiConfig } from './config'
+// Mock only the `db` client; keep the real table objects so `eq()` and
+// column references in the module under test keep working.
+const h = vi.hoisted(() => ({
+  rows: [] as Record<string, unknown>[],
+}))
 
-function dbReturning(row: Record<string, unknown> | null): SupabaseClient {
+vi.mock('@/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/db')>()
   const chain = {
     from: () => chain,
-    select: () => chain,
-    eq: () => chain,
-    maybeSingle: () => Promise.resolve({ data: row, error: null }),
+    where: () => chain,
+    limit: () => Promise.resolve(h.rows),
   }
-  return chain as unknown as SupabaseClient
+  return {
+    ...actual,
+    db: { select: () => chain },
+  }
+})
+
+import { loadAiConfig } from './config'
+
+function dbReturning(row: Record<string, unknown> | null): void {
+  h.rows = row ? [row] : []
 }
 
 const ROW = {
   provider: 'openai',
   model: 'gpt-x',
-  api_key: 'enc-key',
-  system_prompt: null,
-  is_active: false,
-  auto_reply_enabled: false,
-  auto_reply_max_per_conversation: 3,
-  embeddings_api_key: null,
+  apiKey: 'enc-key',
+  systemPrompt: null,
+  isActive: false,
+  autoReplyEnabled: false,
+  autoReplyMaxPerConversation: 3,
+  embeddingsApiKey: null,
 }
 
 describe('loadAiConfig requireActive', () => {
   it('returns null for an inactive config by default', async () => {
-    expect(await loadAiConfig(dbReturning(ROW), 'acct')).toBeNull()
+    dbReturning(ROW)
+    expect(await loadAiConfig('acct')).toBeNull()
   })
 
   it('returns the config when requireActive is false (Playground path)', async () => {
-    const config = await loadAiConfig(dbReturning(ROW), 'acct', {
-      requireActive: false,
-    })
+    dbReturning(ROW)
+    const config = await loadAiConfig('acct', { requireActive: false })
     expect(config).not.toBeNull()
     expect(config!.provider).toBe('openai')
     expect(config!.apiKey).toBe('plain:enc-key')
   })
 
   it('returns null when there is no row', async () => {
-    expect(
-      await loadAiConfig(dbReturning(null), 'acct', { requireActive: false }),
-    ).toBeNull()
+    dbReturning(null)
+    expect(await loadAiConfig('acct', { requireActive: false })).toBeNull()
   })
 })

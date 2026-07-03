@@ -27,7 +27,9 @@
  * warning so operators can investigate.
  */
 
-import type { SupabaseClient } from '@supabase/supabase-js'
+import { eq } from 'drizzle-orm'
+
+import { db, messageTemplates } from '@/db'
 import { normalizeStatus } from './template-status-normalize'
 
 const TEMPLATE_WEBHOOK_FIELDS = new Set([
@@ -75,23 +77,13 @@ export interface TemplateWebhookChange {
  */
 export async function handleTemplateWebhookChange(
   change: TemplateWebhookChange,
-  // SupabaseClient typed loosely — the webhook route lazy-initialises
-  // the admin client and exposes it as `any`. Type as the generic
-  // SupabaseClient here so this module is testable in isolation.
-  supabase: SupabaseClient,
 ): Promise<void> {
   switch (change.field) {
     case 'message_template_status_update':
-      await handleStatusUpdate(
-        change.value as TemplateStatusUpdateValue,
-        supabase,
-      )
+      await handleStatusUpdate(change.value as TemplateStatusUpdateValue)
       return
     case 'message_template_quality_update':
-      await handleQualityUpdate(
-        change.value as TemplateQualityUpdateValue,
-        supabase,
-      )
+      await handleQualityUpdate(change.value as TemplateQualityUpdateValue)
       return
     case 'message_template_components_update':
       handleComponentsUpdate(
@@ -103,7 +95,6 @@ export async function handleTemplateWebhookChange(
 
 async function handleStatusUpdate(
   value: TemplateStatusUpdateValue,
-  supabase: SupabaseClient,
 ): Promise<void> {
   const metaTemplateId =
     value.message_template_id !== undefined
@@ -123,28 +114,28 @@ async function handleStatusUpdate(
   // where Meta sends a human-readable explanation. Clear it on any
   // other status flip so the UI doesn't show a stale REJECTED banner
   // after Meta re-approves a resubmitted template.
-  const update: Record<string, unknown> = {
-    status,
-    rejection_reason:
-      status === 'REJECTED' ? value.reason ?? 'Rejected by Meta' : null,
-    submission_error: null,
-  }
-
-  const { data, error } = await supabase
-    .from('message_templates')
-    .update(update)
-    .eq('meta_template_id', metaTemplateId)
-    .select('id')
-
-  if (error) {
+  let rows: { id: string }[]
+  try {
+    rows = await db
+      .update(messageTemplates)
+      .set({
+        status,
+        rejectionReason:
+          status === 'REJECTED' ? value.reason ?? 'Rejected by Meta' : null,
+        submissionError: null,
+      })
+      .where(eq(messageTemplates.metaTemplateId, metaTemplateId))
+      .returning({ id: messageTemplates.id })
+  } catch (error) {
     console.error(
       '[template-webhook] status update failed for meta_template_id',
       metaTemplateId,
-      error.message,
+      error instanceof Error ? error.message : error,
     )
     return
   }
-  if (!data || data.length === 0) {
+
+  if (rows.length === 0) {
     console.warn(
       '[template-webhook] status update received for unknown template:',
       metaTemplateId,
@@ -152,16 +143,15 @@ async function handleStatusUpdate(
     )
     return
   }
-  if (data.length > 1) {
+  if (rows.length > 1) {
     console.warn(
-      `[template-webhook] status update matched ${data.length} rows for meta_template_id ${metaTemplateId} — investigate.`,
+      `[template-webhook] status update matched ${rows.length} rows for meta_template_id ${metaTemplateId} — investigate.`,
     )
   }
 }
 
 async function handleQualityUpdate(
   value: TemplateQualityUpdateValue,
-  supabase: SupabaseClient,
 ): Promise<void> {
   const metaTemplateId =
     value.message_template_id !== undefined
@@ -181,16 +171,16 @@ async function handleQualityUpdate(
       ? (raw.toUpperCase() as 'GREEN' | 'YELLOW' | 'RED')
       : null
 
-  const { error } = await supabase
-    .from('message_templates')
-    .update({ quality_score: score })
-    .eq('meta_template_id', metaTemplateId)
-
-  if (error) {
+  try {
+    await db
+      .update(messageTemplates)
+      .set({ qualityScore: score })
+      .where(eq(messageTemplates.metaTemplateId, metaTemplateId))
+  } catch (error) {
     console.error(
       '[template-webhook] quality update failed for meta_template_id',
       metaTemplateId,
-      error.message,
+      error instanceof Error ? error.message : error,
     )
   }
 }

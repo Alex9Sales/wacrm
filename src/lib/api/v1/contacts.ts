@@ -7,14 +7,13 @@
 // webhook and send path use), and one tag-sync routine.
 // ============================================================
 
-import type { SupabaseClient } from '@supabase/supabase-js';
+import { and, eq, inArray } from 'drizzle-orm';
 
+import { db, accounts, contactTags, contacts, tags, whatsappConfig } from '@/db';
+import { firstOrNull } from '@/db/helpers';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { resolveImportTagIds } from '@/lib/contacts/resolve-import-tags';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
-
-/** Row select that embeds the contact's tags for serialization. */
-export const CONTACT_SELECT = '*, contact_tags(tags(*))';
 
 export interface ApiContact {
   id: string;
@@ -40,7 +39,7 @@ export class ContactError extends Error {
 
 type RawTagJoin = { tags: { id: string; name: string; color: string } | null };
 
-/** Flatten a `CONTACT_SELECT` row into the public contact shape. */
+/** Flatten a contact row + embedded tag joins into the public shape. */
 export function serializeContact(row: Record<string, unknown>): ApiContact {
   const joins = (row.contact_tags as RawTagJoin[] | undefined) ?? [];
   return {
@@ -60,6 +59,36 @@ export function serializeContact(row: Record<string, unknown>): ApiContact {
 }
 
 /**
+ * Fetch the tags of `contactIds` in one query, grouped per contact.
+ * Replaces the old PostgREST `contact_tags(tags(*))` embed for the v1
+ * contact routes.
+ */
+export async function loadTagsByContact(
+  contactIds: string[]
+): Promise<Map<string, { id: string; name: string; color: string }[]>> {
+  const byContact = new Map<string, { id: string; name: string; color: string }[]>();
+  if (contactIds.length === 0) return byContact;
+
+  const rows = await db
+    .select({
+      contactId: contactTags.contactId,
+      id: tags.id,
+      name: tags.name,
+      color: tags.color,
+    })
+    .from(contactTags)
+    .innerJoin(tags, eq(contactTags.tagId, tags.id))
+    .where(inArray(contactTags.contactId, contactIds));
+
+  for (const row of rows) {
+    const list = byContact.get(row.contactId) ?? [];
+    list.push({ id: row.id, name: row.name, color: row.color });
+    byContact.set(row.contactId, list);
+  }
+  return byContact;
+}
+
+/**
  * Resolve the audit `user_id` for API-created rows — the SINGLE source
  * of truth used by every public-API write (contacts, messages,
  * broadcasts, resolve-conversation), so the same key's writes are
@@ -69,28 +98,27 @@ export function serializeContact(row: Record<string, unknown>): ApiContact {
  * can be created before WhatsApp is connected, so we fall back to the
  * account owner when there's no config yet.
  */
-export async function resolveAuditUserId(
-  db: SupabaseClient,
-  accountId: string
-): Promise<string> {
-  const { data: config } = await db
-    .from('whatsapp_config')
-    .select('user_id')
-    .eq('account_id', accountId)
-    .maybeSingle();
-  const configOwner = config?.user_id as string | undefined;
-  if (configOwner) return configOwner;
+export async function resolveAuditUserId(accountId: string): Promise<string> {
+  const config = firstOrNull(
+    await db
+      .select({ userId: whatsappConfig.userId })
+      .from(whatsappConfig)
+      .where(eq(whatsappConfig.accountId, accountId))
+      .limit(1)
+  );
+  if (config?.userId) return config.userId;
 
-  const { data: account } = await db
-    .from('accounts')
-    .select('owner_user_id')
-    .eq('id', accountId)
-    .maybeSingle();
-  const owner = account?.owner_user_id as string | undefined;
-  if (!owner) {
+  const account = firstOrNull(
+    await db
+      .select({ ownerUserId: accounts.ownerUserId })
+      .from(accounts)
+      .where(eq(accounts.id, accountId))
+      .limit(1)
+  );
+  if (!account?.ownerUserId) {
     throw new ContactError('Account owner could not be resolved', 500);
   }
-  return owner;
+  return account.ownerUserId;
 }
 
 export interface ContactInput {
@@ -107,7 +135,6 @@ export interface ContactInput {
  * API-created contact is indistinguishable from a webhook-created one.
  */
 export async function findOrCreateContact(
-  db: SupabaseClient,
   accountId: string,
   auditUserId: string,
   input: ContactInput
@@ -120,34 +147,38 @@ export async function findOrCreateContact(
     );
   }
 
-  const existing = await findExistingContact(db, accountId, sanitized);
+  const existing = await findExistingContact(accountId, sanitized);
   if (existing) return { id: existing.id, created: false };
 
-  const { data: created, error } = await db
-    .from('contacts')
-    .insert({
-      account_id: accountId,
-      user_id: auditUserId,
-      phone: sanitized,
-      name: input.name ?? sanitized,
-      email: input.email ?? null,
-      company: input.company ?? null,
-    })
-    .select('id')
-    .single();
-
-  if (error || !created) {
+  try {
+    const created = firstOrNull(
+      await db
+        .insert(contacts)
+        .values({
+          accountId,
+          userId: auditUserId,
+          phone: sanitized,
+          name: input.name ?? sanitized,
+          email: input.email ?? null,
+          company: input.company ?? null,
+        })
+        .returning({ id: contacts.id })
+    );
+    if (!created) {
+      throw new ContactError('Failed to create contact', 500);
+    }
+    return { id: created.id, created: true };
+  } catch (error) {
     // Lost a race against a concurrent create — the unique index
     // rejected the duplicate. Re-resolve to the winner.
     if (isUniqueViolation(error)) {
-      const raced = await findExistingContact(db, accountId, sanitized);
+      const raced = await findExistingContact(accountId, sanitized);
       if (raced) return { id: raced.id, created: false };
     }
+    if (error instanceof ContactError) throw error;
     console.error('[api/v1/contacts] create error:', error);
     throw new ContactError('Failed to create contact', 500);
   }
-
-  return { id: created.id, created: true };
 }
 
 /**
@@ -157,13 +188,12 @@ export async function findOrCreateContact(
  * so API and CSV-import tag handling stay consistent.
  */
 export async function setContactTags(
-  db: SupabaseClient,
   accountId: string,
   auditUserId: string,
   contactId: string,
   tagNames: string[]
 ): Promise<void> {
-  const { tagIdByKey } = await resolveImportTagIds(db, {
+  const { tagIdByKey } = await resolveImportTagIds({
     accountId,
     userId: auditUserId,
     tagNames,
@@ -176,48 +206,66 @@ export async function setContactTags(
   // failure can never wipe tags that were meant to stay. Every write
   // is error-checked and surfaced as a ContactError (→ 500) instead of
   // being swallowed behind a misleading 200.
-  const { data: current, error: readErr } = await db
-    .from('contact_tags')
-    .select('tag_id')
-    .eq('contact_id', contactId);
-  if (readErr) {
+  let existing: Set<string>;
+  try {
+    const current = await db
+      .select({ tagId: contactTags.tagId })
+      .from(contactTags)
+      .where(eq(contactTags.contactId, contactId));
+    existing = new Set(current.map((r) => r.tagId));
+  } catch {
     throw new ContactError('Failed to read contact tags', 500);
   }
-  const existing = new Set(
-    (current ?? []).map((r) => r.tag_id as string)
-  );
 
   const toAdd = [...desired].filter((id) => !existing.has(id));
   const toRemove = [...existing].filter((id) => !desired.has(id));
 
-  if (toRemove.length > 0) {
-    const { error } = await db
-      .from('contact_tags')
-      .delete()
-      .eq('contact_id', contactId)
-      .in('tag_id', toRemove);
-    if (error) throw new ContactError('Failed to update contact tags', 500);
-  }
-  if (toAdd.length > 0) {
-    const { error } = await db
-      .from('contact_tags')
-      .insert(toAdd.map((tag_id) => ({ contact_id: contactId, tag_id })));
-    if (error) throw new ContactError('Failed to update contact tags', 500);
+  try {
+    if (toRemove.length > 0) {
+      await db
+        .delete(contactTags)
+        .where(
+          and(
+            eq(contactTags.contactId, contactId),
+            inArray(contactTags.tagId, toRemove)
+          )
+        );
+    }
+    if (toAdd.length > 0) {
+      await db
+        .insert(contactTags)
+        .values(toAdd.map((tagId) => ({ contactId, tagId })));
+    }
+  } catch {
+    throw new ContactError('Failed to update contact tags', 500);
   }
 }
 
 /** Fetch + serialize a single contact scoped to the account, or null. */
 export async function getContactById(
-  db: SupabaseClient,
   accountId: string,
   contactId: string
 ): Promise<ApiContact | null> {
-  const { data, error } = await db
-    .from('contacts')
-    .select(CONTACT_SELECT)
-    .eq('id', contactId)
-    .eq('account_id', accountId)
-    .maybeSingle();
-  if (error || !data) return null;
-  return serializeContact(data as Record<string, unknown>);
+  const row = firstOrNull(
+    await db
+      .select()
+      .from(contacts)
+      .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+      .limit(1)
+  );
+  if (!row) return null;
+
+  const tagsByContact = await loadTagsByContact([row.id]);
+
+  return {
+    id: row.id,
+    phone: row.phone,
+    name: row.name ?? null,
+    email: row.email ?? null,
+    company: row.company ?? null,
+    avatar_url: row.avatarUrl ?? null,
+    tags: tagsByContact.get(row.id) ?? [],
+    created_at: row.createdAt ?? '',
+    updated_at: row.updatedAt ?? '',
+  };
 }

@@ -1,7 +1,7 @@
 /**
  * Type definitions for the Flows runtime.
  *
- * These mirror the Supabase schema added in migration 010 (`flows`,
+ * These mirror the DB schema added in migration 010 (`flows`,
  * `flow_nodes`, `flow_runs`, `flow_run_events`) plus the discriminated
  * unions the engine uses to typecheck node configs.
  *
@@ -220,7 +220,7 @@ export type FlowTriggerConfig =
   | { trigger_type: "manual"; config: Record<string, never> };
 
 // ============================================================
-// DB-row shapes (read by the engine via supabaseAdmin)
+// DB-row shapes (read by the engine via the shared Drizzle client)
 // ============================================================
 
 export interface FlowRow {

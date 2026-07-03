@@ -1,4 +1,6 @@
-import type { SupabaseClient } from "@supabase/supabase-js";
+import { and, eq, like } from "drizzle-orm";
+
+import { db, contacts } from "@/db";
 import { normalizePhone, phonesMatch } from "@/lib/whatsapp/phone-utils";
 
 /**
@@ -33,7 +35,6 @@ export interface ExistingContact {
  * the small candidate set — the exact approach the webhook has used.
  */
 export async function findExistingContact(
-  db: SupabaseClient,
   accountId: string,
   phone: string,
 ): Promise<ExistingContact | null> {
@@ -42,17 +43,19 @@ export async function findExistingContact(
 
   const suffix = normalized.length >= 8 ? normalized.slice(-8) : normalized;
 
-  const { data, error } = await db
-    .from("contacts")
-    .select("*")
-    .eq("account_id", accountId)
-    .like("phone", `%${suffix}`);
+  let data: ExistingContact[];
+  try {
+    data = (await db
+      .select()
+      .from(contacts)
+      .where(
+        and(eq(contacts.accountId, accountId), like(contacts.phone, `%${suffix}`)),
+      )) as unknown as ExistingContact[];
+  } catch {
+    return null;
+  }
 
-  if (error || !data) return null;
-
-  return (
-    (data as ExistingContact[]).find((c) => phonesMatch(c.phone, phone)) ?? null
-  );
+  return data.find((c) => phonesMatch(c.phone, phone)) ?? null;
 }
 
 /**
@@ -67,11 +70,17 @@ export function isExactMatch(existing: ExistingContact, phone: string): boolean 
 /**
  * True for a Postgres unique-constraint violation (SQLSTATE 23505).
  * Used as the backstop when the DB unique index rejects a racing or
- * format-equal insert that slipped past the in-app check.
+ * format-equal insert that slipped past the in-app check. Drizzle may
+ * wrap the driver error, so `cause` is checked too.
  */
 export function isUniqueViolation(error: unknown): boolean {
   if (!error || typeof error !== "object") return false;
-  return (error as { code?: string }).code === "23505";
+  if ((error as { code?: string }).code === "23505") return true;
+  const cause = (error as { cause?: unknown }).cause;
+  if (cause && typeof cause === "object") {
+    return (cause as { code?: string }).code === "23505";
+  }
+  return false;
 }
 
 /**
