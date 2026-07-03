@@ -4,8 +4,7 @@ import * as schema from './schema'
 import * as relations from './relations'
 
 // Lazy, shared Drizzle client over a node-postgres Pool.
-// Mirrors the lazy-singleton convention of src/lib/flows/admin-client.ts —
-// nothing connects at import time, and a missing DATABASE_URL fails loudly
+// Nothing connects at import time, and a missing DATABASE_URL fails loudly
 // at first use instead of producing cryptic pool errors.
 const fullSchema = { ...schema, ...relations }
 

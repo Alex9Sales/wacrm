@@ -1,9 +1,7 @@
 "use client";
 
-import { useEffect, useRef, useCallback, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { useCallback } from "react";
 import type { Message, Conversation } from "@/types";
-import type { RealtimeChannel } from "@supabase/supabase-js";
 
 interface RealtimeEvent<T> {
   eventType: "INSERT" | "UPDATE" | "DELETE";
@@ -18,77 +16,25 @@ interface UseRealtimeOptions {
   enabled?: boolean;
 }
 
-export function useRealtime({
-  channelName,
-  onMessageEvent,
-  onConversationEvent,
-  enabled = true,
-}: UseRealtimeOptions) {
-  const channelRef = useRef<RealtimeChannel | null>(null);
-  const [isConnected, setIsConnected] = useState(false);
+/**
+ * Generic realtime channel subscription — NEUTRALIZED in Phase 1.
+ *
+ * The Supabase Realtime channel (postgres_changes on messages /
+ * conversations) is gone. Consumers still call this hook and read
+ * `{ isConnected, unsubscribe }`, so the signature is preserved, but
+ * the hook now subscribes to nothing: `isConnected` is always false
+ * and `unsubscribe` is a no-op. Callers that relied on live events
+ * should drive their own initial fetch + manual refetch until SSE
+ * lands.
+ *
+ * TODO(fase-3): realtime via SSE — reintroduce the subscription and
+ * flip `isConnected` / fire the onMessageEvent / onConversationEvent
+ * callbacks.
+ */
+export function useRealtime(_options: UseRealtimeOptions) {
+  // No channel to tear down; kept for API stability.
+  const unsubscribe = useCallback(() => {}, []);
 
-  // Store latest callbacks in refs to avoid re-subscribing when the
-  // parent re-renders with fresh closures. Assigned inside an effect
-  // so the mutation doesn't happen during render (React 19's refs
-  // rule) — subscribers only read `.current` inside async Realtime
-  // callbacks, which always run after the render that updates it.
-  const onMessageRef = useRef(onMessageEvent);
-  const onConversationRef = useRef(onConversationEvent);
-  useEffect(() => {
-    onMessageRef.current = onMessageEvent;
-    onConversationRef.current = onConversationEvent;
-  });
-
-  useEffect(() => {
-    if (!enabled) return;
-
-    const supabase = createClient();
-
-    const channel = supabase
-      .channel(channelName)
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "messages" },
-        (payload) => {
-          onMessageRef.current?.({
-            eventType: payload.eventType as RealtimeEvent<Message>["eventType"],
-            new: payload.new as Message,
-            old: payload.old as Partial<Message>,
-          });
-        }
-      )
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
-        (payload) => {
-          onConversationRef.current?.({
-            eventType: payload.eventType as RealtimeEvent<Conversation>["eventType"],
-            new: payload.new as Conversation,
-            old: payload.old as Partial<Conversation>,
-          });
-        }
-      )
-      .subscribe((status) => {
-        setIsConnected(status === "SUBSCRIBED");
-      });
-
-    channelRef.current = channel;
-
-    return () => {
-      supabase.removeChannel(channel);
-      channelRef.current = null;
-      setIsConnected(false);
-    };
-  }, [channelName, enabled]);
-
-  const unsubscribe = useCallback(() => {
-    if (channelRef.current) {
-      const supabase = createClient();
-      supabase.removeChannel(channelRef.current);
-      channelRef.current = null;
-      setIsConnected(false);
-    }
-  }, []);
-
-  return { isConnected, unsubscribe };
+  // TODO(fase-3): realtime via SSE — nothing is connected in Phase 1.
+  return { isConnected: false, unsubscribe };
 }

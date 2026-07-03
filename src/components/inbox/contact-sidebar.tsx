@@ -1,8 +1,12 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
-import { createClient } from "@/lib/supabase/client";
-import { useAuth } from "@/hooks/use-auth";
+import {
+  addContactNote,
+  listContactDeals,
+  listContactNotes,
+  listContactTagsWithJoinId,
+} from "@/app/(dashboard)/inbox/actions";
 import { cn } from "@/lib/utils";
 import type { Contact, Deal, ContactNote, Tag } from "@/types";
 import {
@@ -25,7 +29,6 @@ interface ContactSidebarProps {
 }
 
 export function ContactSidebar({ contact }: ContactSidebarProps) {
-  const { accountId } = useAuth();
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
@@ -35,37 +38,20 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
 
   const fetchContactData = useCallback(async () => {
     if (!contact) return;
+    const contactId = contact.id;
 
-    const supabase = createClient();
-
-    // Fetch deals, notes, and tags in parallel
-    const [dealsRes, notesRes, tagsRes] = await Promise.all([
-      supabase
-        .from("deals")
-        .select("*, stage:pipeline_stages(*)")
-        .eq("contact_id", contact.id)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("contact_notes")
-        .select("*")
-        .eq("contact_id", contact.id)
-        .order("created_at", { ascending: false }),
-      supabase
-        .from("contact_tags")
-        .select("id, tag_id, tags(*)")
-        .eq("contact_id", contact.id),
-    ]);
-
-    if (dealsRes.data) setDeals(dealsRes.data);
-    if (notesRes.data) setNotes(notesRes.data);
-    if (tagsRes.data) {
-      const mapped = tagsRes.data
-        .filter((ct: Record<string, unknown>) => ct.tags)
-        .map((ct: Record<string, unknown>) => ({
-          ...(ct.tags as Tag),
-          contact_tag_id: ct.id as string,
-        }));
-      setTags(mapped);
+    // Fetch deals, notes, and tags in parallel via account-scoped actions.
+    try {
+      const [dealsData, notesData, tagsData] = await Promise.all([
+        listContactDeals(contactId),
+        listContactNotes(contactId),
+        listContactTagsWithJoinId(contactId),
+      ]);
+      setDeals(dealsData);
+      setNotes(notesData);
+      setTags(tagsData);
+    } catch (error) {
+      console.error("Failed to fetch contact data:", error);
     }
   }, [contact]);
 
@@ -88,32 +74,22 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
 
   const handleAddNote = useCallback(async () => {
     if (!contact || !newNote.trim()) return;
-    if (!accountId) return;
     setAddingNote(true);
 
-    const supabase = createClient();
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const user = session?.user;
-
-    const { data, error } = await supabase
-      .from("contact_notes")
-      .insert({
-        contact_id: contact.id,
-        account_id: accountId,
-        user_id: user?.id,
-        note_text: newNote.trim(),
-      })
-      .select()
-      .single();
-
-    if (!error && data) {
-      setNotes((prev) => [data, ...prev]);
-      setNewNote("");
+    // The action derives author (user_id) + account from the session —
+    // the client no longer looks up or passes them.
+    try {
+      const data = await addContactNote(contact.id, newNote.trim());
+      if (data) {
+        setNotes((prev) => [data, ...prev]);
+        setNewNote("");
+      }
+    } catch (error) {
+      console.error("Failed to add note:", error);
+    } finally {
+      setAddingNote(false);
     }
-    setAddingNote(false);
-  }, [contact, newNote, accountId]);
+  }, [contact, newNote]);
 
   if (!contact) {
     return (

@@ -51,7 +51,7 @@ import type {
   MessageTemplate,
   Tag as TagRecord,
 } from "@/types"
-import { createClient } from "@/lib/supabase/client"
+import { getAutomationResources } from "@/app/(dashboard)/automations/actions"
 import { cn } from "@/lib/utils"
 
 // ------------------------------------------------------------
@@ -220,34 +220,24 @@ function ResourcesProvider({ children }: { children: ReactNode }) {
 
   useEffect(() => {
     let cancelled = false
-    const supabase = createClient()
 
-    // Tags, templates and custom fields come straight from the DB — RLS
-    // scopes them to the caller's account. Only APPROVED templates can
-    // actually be sent (anything else 400s at send time), matching the
-    // broadcast picker.
+    // Tags, templates and custom fields come straight from the DB via a
+    // server action that scopes them to the caller's account (no RLS
+    // anymore). Only APPROVED templates can actually be sent (anything
+    // else 400s at send time), matching the broadcast picker.
     void (async () => {
-      const [tagsRes, templatesRes, customFieldsRes, pipelinesRes, stagesRes] =
-        await Promise.all([
-          supabase.from("tags").select("*").order("name"),
-          supabase
-            .from("message_templates")
-            .select("*")
-            .eq("status", "APPROVED")
-            .order("name"),
-          supabase.from("custom_fields").select("*").order("field_name"),
-          supabase.from("pipelines").select("id, name").order("name"),
-          supabase
-            .from("pipeline_stages")
-            .select("id, name, pipeline_id, position")
-            .order("position"),
-        ])
-      if (cancelled) return
-      setTags((tagsRes.data as TagRecord[] | null) ?? [])
-      setTemplates((templatesRes.data as MessageTemplate[] | null) ?? [])
-      setCustomFields((customFieldsRes.data as CustomField[] | null) ?? [])
-      setPipelines((pipelinesRes.data as PipelineOption[] | null) ?? [])
-      setStages((stagesRes.data as PipelineStageOption[] | null) ?? [])
+      try {
+        const res = await getAutomationResources()
+        if (cancelled) return
+        setTags(res.tags as unknown as TagRecord[])
+        setTemplates(res.templates)
+        setCustomFields(res.customFields)
+        setPipelines(res.pipelines)
+        setStages(res.stages)
+      } catch {
+        // Resource load failed — pickers stay empty and fall back to
+        // raw inputs where supported.
+      }
     })()
 
     // Members go through the API so we inherit its email-visibility

@@ -16,7 +16,13 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { createClient } from "@/lib/supabase/client";
+import {
+  savePipelineSettings,
+  addStage,
+  countDealsInStage,
+  deleteStage,
+  deletePipeline,
+} from "@/app/(dashboard)/pipelines/actions";
 import type { Pipeline, PipelineStage } from "@/types";
 import {
   Dialog,
@@ -68,8 +74,6 @@ export function PipelineSettings({
   onStagesChanged,
   onCreateNewPipeline,
 }: PipelineSettingsProps) {
-  const supabase = createClient();
-
   const [name, setName] = useState(pipeline.name);
   const [localStages, setLocalStages] = useState<PipelineStage[]>(stages);
   const [newStageName, setNewStageName] = useState("");
@@ -110,23 +114,20 @@ export function PipelineSettings({
     // latency-scaled linearly with stage count.
     const stageRows = localStages.map((s, i) => ({
       id: s.id,
-      pipeline_id: s.pipeline_id,
       name: s.name,
       color: s.color,
       position: i,
     }));
 
-    const [renameRes, stagesRes] = await Promise.all([
-      supabase
-        .from("pipelines")
-        .update({ name: name.trim() })
-        .eq("id", pipeline.id),
-      supabase.from("pipeline_stages").upsert(stageRows, { onConflict: "id" }),
-    ]);
+    const { error } = await savePipelineSettings(
+      pipeline.id,
+      name.trim(),
+      stageRows,
+    );
 
     setSaving(false);
 
-    if (renameRes.error || stagesRes.error) {
+    if (error) {
       toast.error("Failed to save pipeline");
       return;
     }
@@ -140,39 +141,28 @@ export function PipelineSettings({
   async function handleAddStage() {
     const trimmed = newStageName.trim();
     if (!trimmed) return;
-    const { data, error } = await supabase
-      .from("pipeline_stages")
-      .insert({
-        pipeline_id: pipeline.id,
-        name: trimmed,
-        color: newStageColor,
-        position: localStages.length,
-      })
-      .select()
-      .single();
-    if (error || !data) {
+    const { stage, error } = await addStage(pipeline.id, {
+      name: trimmed,
+      color: newStageColor,
+      position: localStages.length,
+    });
+    if (error || !stage) {
       toast.error("Failed to add stage");
       return;
     }
-    setLocalStages([...localStages, data as PipelineStage]);
+    setLocalStages([...localStages, stage]);
     setNewStageName("");
     setNewStageColor(STAGE_COLORS[(localStages.length + 1) % STAGE_COLORS.length]);
   }
 
   async function handleRemoveStage(stageId: string) {
     // Refuse to delete if deals still reference the stage (FK would fail).
-    const { count } = await supabase
-      .from("deals")
-      .select("id", { count: "exact", head: true })
-      .eq("stage_id", stageId);
-    if (count && count > 0) {
+    const dealCount = await countDealsInStage(stageId);
+    if (dealCount > 0) {
       toast.error("Move or delete deals in this stage first");
       return;
     }
-    const { error } = await supabase
-      .from("pipeline_stages")
-      .delete()
-      .eq("id", stageId);
+    const { error } = await deleteStage(stageId);
     if (error) {
       toast.error("Failed to delete stage");
       return;
@@ -183,10 +173,7 @@ export function PipelineSettings({
   async function handleDeletePipeline() {
     setDeleting(true);
     // ON DELETE CASCADE handles deals + stages.
-    const { error } = await supabase
-      .from("pipelines")
-      .delete()
-      .eq("id", pipeline.id);
+    const { error } = await deletePipeline(pipeline.id);
     setDeleting(false);
     if (error) {
       toast.error("Failed to delete pipeline");

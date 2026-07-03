@@ -67,3 +67,24 @@ import { eq, and, or, desc, asc, ilike, inArray, sql, count, isNull, gte, lte } 
 - `supabase.channel(...)` (hooks de realtime) e `supabase.storage` ficam para a Fase 3
   (SSE + MinIO). Se um arquivo do seu lote usar isso, converta só a parte de dados e
   deixe um `// TODO(fase-3):` no restante — mas o arquivo precisa compilar.
+
+## Componentes client (leva final)
+
+Componentes `"use client"` NÃO podem importar `@/db` (o driver `pg` é Node-only).
+Regras:
+- **Contexto de auth**: usar `useAuth()` (já reescrito pra buscar `/api/me`). Nunca
+  `createClient()` do supabase.
+- **Leituras/mutações de dados que usavam `supabase.from()` no browser**: trocar por
+  (a) `fetch` numa rota de API já existente, ou (b) uma **server action** colocada
+  (`"use server"`, com `getCurrentAccount()` + Drizzle scoped por account). Preferir
+  reusar rota existente; criar action só quando não houver rota.
+- **Realtime** (`supabase.channel(...)`, `.on('postgres_changes'|'presence'|'broadcast')`):
+  fica pra Fase 3 (SSE). Nesta fase, **neutralizar**: remover a subscription e deixar
+  o dado carregar por fetch inicial + refetch manual/on-focus. Marcar `// TODO(fase-3): realtime via SSE`.
+  Hooks afetados: use-realtime, use-presence, use-total-unread, use-unread-notifications.
+- **Auth (`supabase.auth.*`)**: login/signup/reset/signOut → Fase 2 (Better Auth).
+  Páginas de auth viram placeholders que redirecionam/avisam; `signOut` do use-auth já
+  é stub. Não reimplementar auth agora.
+- **Storage (`supabase.storage`)**: upload de avatar/mídia → Fase 3 (MinIO). Deixar
+  `// TODO(fase-3)` e desabilitar o controle de upload (ou 501 na rota).
+- Manter shapes de dados (snake_case) idênticos aos que os componentes já esperam.

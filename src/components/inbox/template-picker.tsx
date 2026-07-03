@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
+import { listApprovedTemplates } from "@/app/(dashboard)/inbox/actions";
 import type { MessageTemplate } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -91,37 +91,20 @@ export function TemplatePicker({
     let cancelled = false;
     (async () => {
       setLoading(true);
-      const supabase = createClient();
-      const {
-        data: { user },
-      } = await supabase.auth.getUser();
-
-      if (!user) {
-        if (!cancelled) {
-          setTemplates([]);
-          setLoading(false);
-        }
-        return;
-      }
-
-      // Scope by RLS (message_templates_select → is_account_member), NOT by
-      // user_id. Templates are account-owned, so filtering on the caller's
-      // user_id hid templates that a teammate created — leaving them unable
-      // to send approved templates in a shared account.
-      const { data, error } = await supabase
-        .from("message_templates")
-        .select("*")
-        .eq("status", "APPROVED")
-        .order("created_at", { ascending: false });
-
-      if (cancelled) return;
-      if (error) {
+      // Templates are account-owned; the server action derives the caller's
+      // account from getCurrentAccount() and returns every APPROVED template
+      // in it — so a teammate's approved templates are visible too.
+      try {
+        const data = await listApprovedTemplates();
+        if (cancelled) return;
+        setTemplates(data);
+      } catch (error) {
+        if (cancelled) return;
         console.error("Failed to fetch templates:", error);
         setTemplates([]);
-      } else {
-        setTemplates((data as MessageTemplate[]) ?? []);
+      } finally {
+        if (!cancelled) setLoading(false);
       }
-      setLoading(false);
     })();
 
     return () => {

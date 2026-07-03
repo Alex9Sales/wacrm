@@ -1,10 +1,15 @@
 'use client';
 
 import { useCallback, useEffect, useState } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 import type { CustomField } from '@/types';
+import {
+  listCustomFields,
+  createCustomField,
+  renameCustomField,
+  deleteCustomField,
+} from '@/app/(dashboard)/contacts/actions';
 import {
   Dialog,
   DialogContent,
@@ -55,7 +60,6 @@ export function CustomFieldsManager({
  * `custom_fields` RLS also rejects non-admin writes as defense in depth.
  */
 export function CustomFieldsPanel() {
-  const supabase = createClient();
   const { user, accountId } = useAuth();
 
   const [fields, setFields] = useState<CustomField[]>([]);
@@ -67,13 +71,14 @@ export function CustomFieldsPanel() {
   const fetchFields = useCallback(async () => {
     if (!accountId) return;
     setLoading(true);
-    const { data } = await supabase
-      .from('custom_fields')
-      .select('*')
-      .order('field_name');
-    setFields((data as CustomField[] | null) ?? []);
+    try {
+      const data = await listCustomFields();
+      setFields(data);
+    } catch {
+      setFields([]);
+    }
     setLoading(false);
-  }, [supabase, accountId]);
+  }, [accountId]);
 
   // Load the field list on mount once the account is known. The setters
   // inside fetchFields run after the Supabase await — not synchronously in
@@ -106,16 +111,11 @@ export function CustomFieldsPanel() {
     }
 
     setCreating(true);
-    const { error } = await supabase.from('custom_fields').insert({
-      field_name: name,
-      field_type: 'text',
-      user_id: user.id,
-      account_id: accountId,
-    });
+    const { error } = await createCustomField(name);
     setCreating(false);
 
     if (error) {
-      toast.error('Could not create field. You may not have permission.');
+      toast.error(error || 'Could not create field. You may not have permission.');
       return;
     }
     toast.success(`Created "${name}".`);
@@ -136,13 +136,10 @@ export function CustomFieldsPanel() {
       return false;
     }
     setBusyId(field.id);
-    const { error } = await supabase
-      .from('custom_fields')
-      .update({ field_name: name })
-      .eq('id', field.id);
+    const { error } = await renameCustomField(field.id, name);
     setBusyId(null);
     if (error) {
-      toast.error('Could not rename field.');
+      toast.error(error || 'Could not rename field.');
       return false;
     }
     await fetchFields();
@@ -158,13 +155,10 @@ export function CustomFieldsPanel() {
       return;
     }
     setBusyId(field.id);
-    const { error } = await supabase
-      .from('custom_fields')
-      .delete()
-      .eq('id', field.id);
+    const { error } = await deleteCustomField(field.id);
     setBusyId(null);
     if (error) {
-      toast.error('Could not delete field.');
+      toast.error(error || 'Could not delete field.');
       return;
     }
     toast.success(`Deleted "${field.field_name}".`);

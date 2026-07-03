@@ -13,12 +13,8 @@ import {
   RotateCcw,
   Upload,
 } from 'lucide-react';
-import { createClient } from '@/lib/supabase/client';
-import {
-  uploadAccountMedia,
-  MEDIA_MAX_BYTES_BY_KIND,
-} from '@/lib/storage/upload-media';
 import { useAuth } from '@/hooks/use-auth';
+import { listTemplates } from './actions';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -124,7 +120,6 @@ function emptyButton(type: TemplateButton['type']): TemplateButton {
 }
 
 export function TemplateManager() {
-  const supabase = createClient();
   const { user, loading: authLoading } = useAuth();
 
   const [loading, setLoading] = useState(true);
@@ -143,10 +138,10 @@ export function TemplateManager() {
   // doesn't take the template off Meta as well as locally.
   const [templateToDelete, setTemplateToDelete] =
     useState<MessageTemplate | null>(null);
-  // Header-image upload (issue #230). Uploads to the account-scoped
-  // chat-media bucket and stores the public URL in header_media_url; the
-  // submit route turns that into a Meta Resumable-Upload handle.
-  const [uploadingHeader, setUploadingHeader] = useState(false);
+  // Header-image upload (issue #230). Uploaded to the account-scoped
+  // chat-media bucket; the submit route turns that into a Meta
+  // Resumable-Upload handle. TODO(fase-3): upload path is disabled
+  // pending MinIO — users paste a public URL for now.
   const headerFileRef = useRef<HTMLInputElement>(null);
 
   // Body variable indices — `[1, 2, 3]` for "{{1}} {{2}} {{3}}". We
@@ -181,20 +176,15 @@ export function TemplateManager() {
       setLoading(false);
       return;
     }
-    fetchTemplates(user.id);
+    fetchTemplates();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [authLoading, user?.id]);
 
-  async function fetchTemplates(userId: string) {
+  async function fetchTemplates() {
     try {
       setLoading(true);
-      const { data, error } = await supabase
-        .from('message_templates')
-        .select('*')
-        .eq('user_id', userId)
-        .order('created_at', { ascending: false });
-      if (error) throw error;
-      setTemplates(data || []);
+      const data = await listTemplates();
+      setTemplates(data);
     } catch (err) {
       console.error('Failed to fetch templates:', err);
       toast.error('Failed to load templates');
@@ -278,7 +268,7 @@ export function TemplateManager() {
       }
       // Refresh first, then close — re-opening the dialog
       // immediately should not show a stale list.
-      if (user) await fetchTemplates(user.id);
+      if (user) await fetchTemplates();
       toast.success(
         data.dry_run
           ? isEdit
@@ -332,7 +322,7 @@ export function TemplateManager() {
           { duration: 10000 },
         );
       }
-      await fetchTemplates(user.id);
+      await fetchTemplates();
     } catch (err) {
       console.error('Template sync error:', err);
       toast.error(err instanceof Error ? err.message : 'Failed to sync templates');
@@ -456,27 +446,15 @@ export function TemplateManager() {
   const headerNeedsMedia =
     form.header_format !== 'none' && form.header_format !== 'text';
 
-  async function handleHeaderImageFile(file: File) {
-    if (!['image/jpeg', 'image/png'].includes(file.type)) {
-      toast.error('Header image must be a JPEG or PNG.');
-      return;
-    }
-    if (file.size > MEDIA_MAX_BYTES_BY_KIND.image) {
-      toast.error(
-        `Image is ${(file.size / 1024 / 1024).toFixed(1)} MB — Meta's limit is 5 MB.`,
-      );
-      return;
-    }
-    setUploadingHeader(true);
-    try {
-      const { publicUrl } = await uploadAccountMedia('chat-media', file);
-      setForm((f) => ({ ...f, header_media_url: publicUrl }));
-      toast.success('Image uploaded.');
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Upload failed.');
-    } finally {
-      setUploadingHeader(false);
-    }
+  // TODO(fase-3): header-image upload used supabase.storage via
+  // uploadAccountMedia('chat-media', ...). Media upload moves to MinIO
+  // in Phase 3. Until then the "Upload image" control is disabled and
+  // users paste a public HTTPS link into header_media_url instead.
+  async function handleHeaderImageFile(_file: File) {
+    void _file;
+    toast.error(
+      'Image upload is temporarily unavailable — paste a public HTTPS image link instead.',
+    );
   }
 
   return (
@@ -816,22 +794,21 @@ export function TemplateManager() {
                           e.target.value = '';
                         }}
                       />
+                      {/* TODO(fase-3): re-enable once media upload lands
+                          on MinIO. Disabled for now — use the URL field. */}
                       <Button
                         type="button"
                         variant="outline"
                         size="sm"
-                        disabled={uploadingHeader}
+                        disabled
+                        title="Image upload returns in Phase 3 — paste a public link below for now."
                         onClick={() => headerFileRef.current?.click()}
                       >
-                        {uploadingHeader ? (
-                          <Loader2 className="h-3.5 w-3.5 animate-spin" />
-                        ) : (
-                          <Upload className="h-3.5 w-3.5" />
-                        )}
+                        <Upload className="h-3.5 w-3.5" />
                         Upload image
                       </Button>
                       <span className="text-[11px] text-muted-foreground">
-                        JPEG or PNG, ≤5 MB
+                        Upload returns in Phase 3 — paste a public link below
                       </span>
                     </div>
                   )}

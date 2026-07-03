@@ -1,9 +1,9 @@
 "use client";
 
 import { Suspense, useState } from "react";
-import { useRouter, useSearchParams } from "next/navigation";
+import { useSearchParams } from "next/navigation";
 import Link from "next/link";
-import { createClient } from "@/lib/supabase/client";
+import { toast } from "sonner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,6 +15,14 @@ import {
   CardTitle,
 } from "@/components/ui/card";
 import { MessageSquare, UsersRound } from "lucide-react";
+
+// Phase 1: the browser Supabase client is gone, so this page no longer
+// performs a real sign-in. Better Auth reintroduces login in Phase 2.
+// The form still renders (so the visual shell is preserved and the
+// middleware's dev redirect to /dashboard keeps working), but submit
+// is a no-op that surfaces a notice.
+// TODO(fase-2): wire the form to Better Auth sign-in.
+const LOGIN_DISABLED_NOTICE = "Login será reativado na Fase 2 (Better Auth)";
 
 // `useSearchParams` opts the component out of static prerendering
 // unless it sits under a Suspense boundary. We split the form into
@@ -32,38 +40,16 @@ export default function LoginPage() {
 function LoginPageInner() {
   const searchParams = useSearchParams();
   // Forwarded from `/join/<token>` when the visitor already has an
-  // account. After a successful sign-in we send them to the join
-  // page to accept rather than to /dashboard.
+  // account. Kept for link continuity even though sign-in is disabled.
   const inviteToken = searchParams.get("invite");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(false);
-  const router = useRouter();
-  const supabase = createClient();
 
-  const handleLogin = async (e: React.FormEvent) => {
+  const handleLogin = (e: React.FormEvent) => {
     e.preventDefault();
-    setError(null);
-    setLoading(true);
-
-    const { error } = await supabase.auth.signInWithPassword({
-      email,
-      password,
-    });
-
-    if (error) {
-      setError(error.message);
-      setLoading(false);
-      return;
-    }
-
-    if (inviteToken) {
-      router.push(`/join/${encodeURIComponent(inviteToken)}`);
-    } else {
-      router.push("/dashboard");
-    }
+    // TODO(fase-2): Better Auth sign-in. No-op for now.
+    toast.info(LOGIN_DISABLED_NOTICE);
   };
 
   return (
@@ -88,11 +74,9 @@ function LoginPageInner() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleLogin} className="flex flex-col gap-4">
-            {error && (
-              <div className="rounded-lg border border-red-500/20 bg-red-500/10 px-4 py-3 text-sm text-red-400">
-                {error}
-              </div>
-            )}
+            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
+              {LOGIN_DISABLED_NOTICE}
+            </div>
 
             <div className="flex flex-col gap-2">
               <Label htmlFor="email" className="text-muted-foreground">
@@ -134,10 +118,10 @@ function LoginPageInner() {
 
             <Button
               type="submit"
-              disabled={loading}
+              disabled
               className="mt-2 h-10 w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
-              {loading ? "Signing in..." : "Sign in"}
+              Sign in
             </Button>
           </form>
 

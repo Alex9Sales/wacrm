@@ -1,11 +1,24 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { createClient } from '@/lib/supabase/client';
 import { useAuth } from '@/hooks/use-auth';
 import { formatCurrency } from '@/lib/currency';
 import { toast } from 'sonner';
-import type { Contact, Tag, ContactTag, ContactNote, CustomField, ContactCustomValue, Deal, MessageTemplate } from '@/types';
+import type { Contact, Tag, ContactNote, CustomField, Deal, MessageTemplate } from '@/types';
+import {
+  listTags,
+  getContact,
+  listContactTagIds,
+  toggleContactTag,
+  updateContactDetails,
+  listContactNotes,
+  addContactNote,
+  deleteContactNote,
+  listCustomFields,
+  listContactCustomValues,
+  saveContactCustomValues,
+  listContactDeals,
+} from '@/app/(dashboard)/contacts/actions';
 import {
   TemplatePicker,
   type TemplateSendValues,
@@ -53,8 +66,7 @@ export function ContactDetailView({
   contactId,
   onUpdated,
 }: ContactDetailViewProps) {
-  const supabase = createClient();
-  const { accountId, defaultCurrency } = useAuth();
+  const { defaultCurrency } = useAuth();
 
   const [contact, setContact] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
@@ -98,84 +110,81 @@ export function ContactDetailView({
     if (!contactId) return;
     setLoading(true);
 
-    const { data } = await supabase
-      .from('contacts')
-      .select('*')
-      .eq('id', contactId)
-      .single();
-
-    if (data) {
-      setContact(data);
-      setEditName(data.name ?? '');
-      setEditPhone(data.phone);
-      setEditEmail(data.email ?? '');
-      setEditCompany(data.company ?? '');
+    try {
+      const data = await getContact(contactId);
+      if (data) {
+        setContact(data);
+        setEditName(data.name ?? '');
+        setEditPhone(data.phone);
+        setEditEmail(data.email ?? '');
+        setEditCompany(data.company ?? '');
+      }
+    } catch {
+      // Leave contact null → the sheet shows its loading/empty state.
     }
     setLoading(false);
-  }, [contactId, supabase]);
+  }, [contactId]);
 
   const fetchTags = useCallback(async () => {
     if (!contactId) return;
 
-    const [tagsRes, contactTagsRes] = await Promise.all([
-      supabase.from('tags').select('*').order('name'),
-      supabase.from('contact_tags').select('tag_id').eq('contact_id', contactId),
-    ]);
-
-    if (tagsRes.data) setAllTags(tagsRes.data);
-    if (contactTagsRes.data) {
-      setContactTagIds(contactTagsRes.data.map((ct) => ct.tag_id));
+    try {
+      const [tagsData, tagIds] = await Promise.all([
+        listTags(),
+        listContactTagIds(contactId),
+      ]);
+      setAllTags([...tagsData].sort((a, b) => a.name.localeCompare(b.name)));
+      setContactTagIds(tagIds);
+    } catch {
+      // Non-fatal; tabs render their empty states.
     }
-  }, [contactId, supabase]);
+  }, [contactId]);
 
   const fetchNotes = useCallback(async () => {
     if (!contactId) return;
     setLoadingNotes(true);
 
-    const { data } = await supabase
-      .from('contact_notes')
-      .select('*')
-      .eq('contact_id', contactId)
-      .order('created_at', { ascending: false });
-
-    if (data) setNotes(data);
+    try {
+      const data = await listContactNotes(contactId);
+      setNotes(data);
+    } catch {
+      setNotes([]);
+    }
     setLoadingNotes(false);
-  }, [contactId, supabase]);
+  }, [contactId]);
 
   const fetchCustomFields = useCallback(async () => {
     if (!contactId) return;
     setLoadingCustom(true);
 
-    const [fieldsRes, valuesRes] = await Promise.all([
-      supabase.from('custom_fields').select('*').order('field_name'),
-      supabase
-        .from('contact_custom_values')
-        .select('*')
-        .eq('contact_id', contactId),
-    ]);
-
-    if (fieldsRes.data) setCustomFields(fieldsRes.data);
-    if (valuesRes.data) {
+    try {
+      const [fields, values] = await Promise.all([
+        listCustomFields(),
+        listContactCustomValues(contactId),
+      ]);
+      setCustomFields(fields);
       const map: Record<string, string> = {};
-      valuesRes.data.forEach((v) => {
+      values.forEach((v) => {
         map[v.custom_field_id] = v.value ?? '';
       });
       setCustomValues(map);
+    } catch {
+      // Non-fatal.
     }
     setLoadingCustom(false);
-  }, [contactId, supabase]);
+  }, [contactId]);
 
   const fetchDeals = useCallback(async () => {
     if (!contactId) return;
     setLoadingDeals(true);
-    const { data } = await supabase
-      .from('deals')
-      .select('*, stage:pipeline_stages(*)')
-      .eq('contact_id', contactId)
-      .order('created_at', { ascending: false });
-    setDeals((data ?? []) as Deal[]);
+    try {
+      const data = await listContactDeals(contactId);
+      setDeals(data);
+    } catch {
+      setDeals([]);
+    }
     setLoadingDeals(false);
-  }, [contactId, supabase]);
+  }, [contactId]);
 
   useEffect(() => {
     if (open && contactId) {
@@ -201,19 +210,16 @@ export function ContactDetailView({
     }
 
     setSavingDetails(true);
-    const { error } = await supabase
-      .from('contacts')
-      .update({
-        name: editName.trim() || null,
-        phone: editPhone.trim(),
-        email: editEmail.trim() || null,
-        company: editCompany.trim() || null,
-        updated_at: new Date().toISOString(),
-      })
-      .eq('id', contactId);
+    const { error } = await updateContactDetails({
+      contactId,
+      name: editName,
+      phone: editPhone,
+      email: editEmail,
+      company: editCompany,
+    });
 
     if (error) {
-      toast.error('Failed to update contact');
+      toast.error(error || 'Failed to update contact');
     } else {
       toast.success('Contact updated');
       fetchContact();
@@ -227,25 +233,12 @@ export function ContactDetailView({
     setSavingTags(true);
 
     const isSelected = contactTagIds.includes(tagId);
-
-    if (isSelected) {
-      const { error } = await supabase
-        .from('contact_tags')
-        .delete()
-        .eq('contact_id', contactId)
-        .eq('tag_id', tagId);
-      if (!error) {
-        setContactTagIds((prev) => prev.filter((id) => id !== tagId));
-        onUpdated();
-      }
-    } else {
-      const { error } = await supabase
-        .from('contact_tags')
-        .insert({ contact_id: contactId, tag_id: tagId });
-      if (!error) {
-        setContactTagIds((prev) => [...prev, tagId]);
-        onUpdated();
-      }
+    const { error } = await toggleContactTag(contactId, tagId, !isSelected);
+    if (!error) {
+      setContactTagIds((prev) =>
+        isSelected ? prev.filter((id) => id !== tagId) : [...prev, tagId],
+      );
+      onUpdated();
     }
     setSavingTags(false);
   }
@@ -254,25 +247,9 @@ export function ContactDetailView({
     if (!contactId || !newNote.trim()) return;
     setSavingNote(true);
 
-    const {
-      data: { session },
-    } = await supabase.auth.getSession();
-    const user = session?.user;
-    if (!user || !accountId) {
-      toast.error('Not authenticated');
-      setSavingNote(false);
-      return;
-    }
-
-    const { error } = await supabase.from('contact_notes').insert({
-      contact_id: contactId,
-      account_id: accountId,
-      user_id: user.id,
-      note_text: newNote.trim(),
-    });
-
+    const { error } = await addContactNote(contactId, newNote.trim());
     if (error) {
-      toast.error('Failed to add note');
+      toast.error(error || 'Failed to add note');
     } else {
       setNewNote('');
       fetchNotes();
@@ -282,13 +259,9 @@ export function ContactDetailView({
   }
 
   async function deleteNote(noteId: string) {
-    const { error } = await supabase
-      .from('contact_notes')
-      .delete()
-      .eq('id', noteId);
-
+    const { error } = await deleteContactNote(noteId);
     if (error) {
-      toast.error('Failed to delete note');
+      toast.error(error || 'Failed to delete note');
     } else {
       setNotes((prev) => prev.filter((n) => n.id !== noteId));
       toast.success('Note deleted');
@@ -299,31 +272,11 @@ export function ContactDetailView({
     if (!contactId) return;
     setSavingCustom(true);
 
-    try {
-      // Delete existing values and re-insert
-      await supabase
-        .from('contact_custom_values')
-        .delete()
-        .eq('contact_id', contactId);
-
-      const rows = Object.entries(customValues)
-        .filter(([, val]) => val.trim())
-        .map(([fieldId, val]) => ({
-          contact_id: contactId,
-          custom_field_id: fieldId,
-          value: val.trim(),
-        }));
-
-      if (rows.length > 0) {
-        const { error } = await supabase
-          .from('contact_custom_values')
-          .insert(rows);
-        if (error) throw error;
-      }
-
+    const { error } = await saveContactCustomValues(contactId, customValues);
+    if (error) {
+      toast.error(error || 'Failed to save custom fields');
+    } else {
       toast.success('Custom fields saved');
-    } catch {
-      toast.error('Failed to save custom fields');
     }
     setSavingCustom(false);
   }

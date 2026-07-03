@@ -1,74 +1,47 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
-import { createClient } from "@/lib/supabase/client";
-import type { Conversation } from "@/types";
+import { useCallback, useEffect, useState } from "react";
 
 /**
  * Count of conversations with at least one unread inbound message for
  * the current user. Used by the sidebar to surface a green dot on the
  * Inbox nav entry when the user is elsewhere in the app.
  *
- * Lives on its own realtime channel (distinct from the inbox page's
- * "inbox-realtime") so both can coexist without sharing state.
+ * Phase 1: the Supabase Realtime channel is gone. The count is fetched
+ * once from GET /api/conversations/unread-count and refreshed when the
+ * tab regains focus, instead of ticking live off postgres_changes.
+ *
+ * Returns a bare `number` (unchanged shape) so the sidebar keeps
+ * typechecking.
+ *
+ * TODO(fase-3): live updates via SSE — restore the O(1) local mirror
+ * that adjusts the total on each INSERT/UPDATE/DELETE without a
+ * refetch.
  */
 export function useTotalUnread(): number {
   const [total, setTotal] = useState(0);
 
-  // Keep a live local mirror of {id: unread_count} so INSERT/UPDATE/DELETE
-  // events can adjust the total in O(1) without refetching.
-  const countsRef = useRef<Map<string, number>>(new Map());
+  const refetch = useCallback(async () => {
+    try {
+      const res = await fetch("/api/conversations/unread-count", {
+        cache: "no-store",
+      });
+      if (!res.ok) return;
+      const body = (await res.json()) as { count: number };
+      setTotal(body.count ?? 0);
+    } catch (err) {
+      console.error("[useTotalUnread] fetch failed:", err);
+    }
+  }, []);
 
   useEffect(() => {
-    const supabase = createClient();
-    let cancelled = false;
-
-    // Initial load. RLS scopes this to the signed-in user automatically —
-    // no explicit user_id filter needed here.
-    (async () => {
-      const { data, error } = await supabase
-        .from("conversations")
-        .select("id, unread_count");
-      if (cancelled || error || !data) return;
-
-      const map = new Map<string, number>();
-      let sum = 0;
-      for (const row of data as { id: string; unread_count: number }[]) {
-        const n = row.unread_count ?? 0;
-        map.set(row.id, n);
-        if (n > 0) sum += 1;
-      }
-      countsRef.current = map;
-      setTotal(sum);
-    })();
-
-    const channel = supabase
-      .channel("total-unread-realtime")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "conversations" },
-        (payload) => {
-          const map = countsRef.current;
-          if (payload.eventType === "DELETE") {
-            const oldRow = payload.old as Partial<Conversation>;
-            if (oldRow.id) map.delete(oldRow.id);
-          } else {
-            const row = payload.new as Conversation;
-            map.set(row.id, row.unread_count ?? 0);
-          }
-          // Recompute — cheap, conversations per user stay small.
-          let sum = 0;
-          for (const n of map.values()) if (n > 0) sum += 1;
-          setTotal(sum);
-        },
-      )
-      .subscribe();
-
-    return () => {
-      cancelled = true;
-      supabase.removeChannel(channel);
-    };
-  }, []);
+    void refetch();
+    // Refresh on focus so the badge isn't permanently stale between
+    // page views while realtime is deferred.
+    const onFocus = () => void refetch();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [refetch]);
 
   return total;
 }
