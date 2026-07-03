@@ -12,7 +12,10 @@
 // ============================================================
 
 import { NextResponse } from "next/server";
+import { eq } from "drizzle-orm";
 
+import { db, accounts } from "@/db";
+import { firstOrNull } from "@/db/helpers";
 import {
   requireRole,
   getCurrentAccount,
@@ -78,18 +81,25 @@ export async function PATCH(request: Request) {
       );
     }
 
-    // RLS allows this UPDATE because accounts_update requires
-    // `is_account_member(id, 'admin')`, and requireRole already
-    // guaranteed the caller is admin+.
-    const { data, error } = await ctx.supabase
-      .from("accounts")
-      .update({ name })
-      .eq("id", ctx.accountId)
-      .select("id, name")
-      .single();
-
-    if (error) {
-      console.error("[PATCH /api/account] update error:", error);
+    // Authorisation: requireRole('admin') above already guaranteed the
+    // caller is admin+ of ctx.accountId; the update is scoped to that id.
+    let data: { id: string; name: string } | null;
+    try {
+      data = firstOrNull(
+        await db
+          .update(accounts)
+          .set({ name })
+          .where(eq(accounts.id, ctx.accountId))
+          .returning({ id: accounts.id, name: accounts.name }),
+      );
+    } catch (err) {
+      console.error("[PATCH /api/account] update error:", err);
+      return NextResponse.json(
+        { error: "Failed to update account" },
+        { status: 500 },
+      );
+    }
+    if (!data) {
       return NextResponse.json(
         { error: "Failed to update account" },
         { status: 500 },

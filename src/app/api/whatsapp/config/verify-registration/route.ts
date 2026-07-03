@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { eq } from 'drizzle-orm'
+
+import { db, whatsappConfig } from '@/db'
+import { firstOrNull } from '@/db/helpers'
+import {
+  getCurrentAccount,
+  UnauthorizedError,
+  type AccountContext,
+} from '@/lib/auth/account'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
   getSubscribedApps,
@@ -29,25 +37,16 @@ import {
  * what the UI badges on.
  */
 export async function GET() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-    error: authError,
-  } = await supabase.auth.getUser()
-  if (authError || !user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
   // whatsapp_config is one-row-per-account post-017. Resolve the
-  // caller's account_id so a teammate who joined an existing account
+  // caller's account so a teammate who joined an existing account
   // sees the same registration state as the admin who set it up.
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('account_id')
-    .eq('user_id', user.id)
-    .maybeSingle()
-  const accountId = profile?.account_id as string | undefined
-  if (!accountId) {
+  let ctx: AccountContext
+  try {
+    ctx = await getCurrentAccount()
+  } catch (err) {
+    if (err instanceof UnauthorizedError) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    }
     return NextResponse.json({
       live: false,
       checks: { config_exists: false },
@@ -55,11 +54,13 @@ export async function GET() {
     })
   }
 
-  const { data: config } = await supabase
-    .from('whatsapp_config')
-    .select('*')
-    .eq('account_id', accountId)
-    .maybeSingle()
+  const config = firstOrNull(
+    await db
+      .select()
+      .from(whatsappConfig)
+      .where(eq(whatsappConfig.accountId, ctx.accountId))
+      .limit(1)
+  )
 
   if (!config) {
     return NextResponse.json({
@@ -71,7 +72,7 @@ export async function GET() {
 
   let accessToken: string
   try {
-    accessToken = decrypt(config.access_token)
+    accessToken = decrypt(config.accessToken)
   } catch {
     return NextResponse.json({
       live: false,
@@ -95,14 +96,14 @@ export async function GET() {
     token_decryptable: true,
     phone_metadata_ok: false,
     waba_subscribed_to_app: null,
-    locally_marked_registered: config.registered_at != null,
+    locally_marked_registered: config.registeredAt != null,
   }
   const errors: string[] = []
 
   // 1. Phone metadata
   try {
     await verifyPhoneNumber({
-      phoneNumberId: config.phone_number_id,
+      phoneNumberId: config.phoneNumberId,
       accessToken,
     })
     checks.phone_metadata_ok = true
@@ -113,10 +114,10 @@ export async function GET() {
   }
 
   // 2. WABA subscription — only meaningful if we have a waba_id
-  if (config.waba_id) {
+  if (config.wabaId) {
     try {
       const subs = await getSubscribedApps({
-        wabaId: config.waba_id,
+        wabaId: config.wabaId,
         accessToken,
       })
       // Meta returns the apps subscribed to this WABA. If the list
@@ -149,8 +150,8 @@ export async function GET() {
     live,
     checks,
     errors,
-    last_registration_error: config.last_registration_error ?? null,
-    registered_at: config.registered_at ?? null,
-    subscribed_apps_at: config.subscribed_apps_at ?? null,
+    last_registration_error: config.lastRegistrationError ?? null,
+    registered_at: config.registeredAt ?? null,
+    subscribed_apps_at: config.subscribedAppsAt ?? null,
   })
 }

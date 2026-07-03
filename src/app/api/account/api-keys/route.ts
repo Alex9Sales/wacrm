@@ -5,11 +5,10 @@
 //   POST — mint a new key.
 //
 // These are the *dashboard* endpoints for managing keys, so they
-// authenticate the normal way (cookie session) and go through the
-// RLS client. Listing is open to any member (viewer+) — the roster
-// is not secret; the secret (the key itself) is never in it. Minting
-// is admin+ (a key hands out capabilities), enforced by both
-// `requireRole('admin')` here and the `api_keys_insert` RLS policy.
+// authenticate the normal way (cookie session). Listing is open to
+// any member (viewer+) — the roster is not secret; the secret (the
+// key itself) is never in it. Minting is admin+ (a key hands out
+// capabilities), enforced by `requireRole('admin')`.
 //
 // IMPORTANT: the plaintext key is returned exactly ONCE, in the POST
 // response. We persist only its SHA-256 hash, so neither GET nor any
@@ -18,7 +17,10 @@
 // ============================================================
 
 import { NextResponse } from 'next/server';
+import { desc, eq } from 'drizzle-orm';
 
+import { db, apiKeys } from '@/db';
+import { firstOrNull } from '@/db/helpers';
 import {
   getCurrentAccount,
   requireRole,
@@ -39,30 +41,39 @@ const MAX_EXPIRY_DAYS = 365;
 
 // Columns safe to expose. `key_hash` is deliberately excluded — it
 // never leaves the server.
-const SAFE_COLUMNS =
-  'id, name, key_prefix, scopes, last_used_at, expires_at, revoked_at, created_at';
+const SAFE_COLUMNS = {
+  id: apiKeys.id,
+  name: apiKeys.name,
+  key_prefix: apiKeys.keyPrefix,
+  scopes: apiKeys.scopes,
+  last_used_at: apiKeys.lastUsedAt,
+  expires_at: apiKeys.expiresAt,
+  revoked_at: apiKeys.revokedAt,
+  created_at: apiKeys.createdAt,
+};
 
 export async function GET() {
   try {
-    // Any member can view the roster (RLS allows it); we just need a
-    // resolved account context.
+    // Any member can view the roster; we just need a resolved
+    // account context to scope the query.
     const ctx = await getCurrentAccount();
 
-    const { data, error } = await ctx.supabase
-      .from('api_keys')
-      .select(SAFE_COLUMNS)
-      .eq('account_id', ctx.accountId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
-      console.error('[GET /api/account/api-keys] fetch error:', error);
+    let data;
+    try {
+      data = await db
+        .select(SAFE_COLUMNS)
+        .from(apiKeys)
+        .where(eq(apiKeys.accountId, ctx.accountId))
+        .orderBy(desc(apiKeys.createdAt));
+    } catch (err) {
+      console.error('[GET /api/account/api-keys] fetch error:', err);
       return NextResponse.json(
         { error: 'Failed to load API keys' },
         { status: 500 }
       );
     }
 
-    return NextResponse.json({ keys: data ?? [] });
+    return NextResponse.json({ keys: data });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -123,22 +134,31 @@ export async function POST(request: Request) {
 
     const { plaintext, hash, prefix } = generateApiKey();
 
-    const { data, error } = await ctx.supabase
-      .from('api_keys')
-      .insert({
-        account_id: ctx.accountId,
-        created_by: ctx.userId,
-        name: rawName,
-        key_prefix: prefix,
-        key_hash: hash,
-        scopes,
-        expires_at: expiresAt,
-      })
-      .select(SAFE_COLUMNS)
-      .single();
-
-    if (error || !data) {
-      console.error('[POST /api/account/api-keys] insert error:', error);
+    let data;
+    try {
+      data = firstOrNull(
+        await db
+          .insert(apiKeys)
+          .values({
+            accountId: ctx.accountId,
+            createdBy: ctx.userId,
+            name: rawName,
+            keyPrefix: prefix,
+            keyHash: hash,
+            scopes,
+            expiresAt,
+          })
+          .returning(SAFE_COLUMNS)
+      );
+    } catch (err) {
+      console.error('[POST /api/account/api-keys] insert error:', err);
+      return NextResponse.json(
+        { error: 'Failed to create API key' },
+        { status: 500 }
+      );
+    }
+    if (!data) {
+      console.error('[POST /api/account/api-keys] insert returned no row');
       return NextResponse.json(
         { error: 'Failed to create API key' },
         { status: 500 }

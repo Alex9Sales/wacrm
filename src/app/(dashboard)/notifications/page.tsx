@@ -2,8 +2,11 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { createClient } from "@/lib/supabase/client";
-import { useAuth } from "@/hooks/use-auth";
+import {
+  listNotifications,
+  markAllNotificationsRead,
+  markNotificationRead,
+} from "./actions";
 import type { Notification } from "@/types";
 import { Bell, CheckCheck, Loader2, UserPlus } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
@@ -19,7 +22,6 @@ const TYPE_ICON: Record<Notification["type"], typeof Bell> = {
 
 export default function NotificationsPage() {
   const router = useRouter();
-  const { accountId } = useAuth();
   const [notifications, setNotifications] = useState<Notification[] | null>(
     null,
   );
@@ -27,63 +29,26 @@ export default function NotificationsPage() {
   const [markingAll, setMarkingAll] = useState(false);
 
   const load = useCallback(async () => {
-    if (!accountId) return;
-    const supabase = createClient();
-    const { data, error: fetchErr } = await supabase
-      .from("notifications")
-      .select("*")
-      .eq("account_id", accountId)
-      .order("created_at", { ascending: false })
-      .limit(100);
-    if (fetchErr) {
-      setError(fetchErr.message);
-      return;
+    try {
+      // Account + recipient scoping happens inside the server action.
+      const data = await listNotifications();
+      setNotifications(data);
+    } catch (err) {
+      setError(
+        err instanceof Error ? err.message : "Failed to load notifications",
+      );
     }
-    setNotifications((data ?? []) as Notification[]);
-  }, [accountId]);
+  }, []);
 
   useEffect(() => {
     // eslint-disable-next-line react-hooks/set-state-in-effect
     load();
   }, [load]);
 
-  // Realtime — new assignments appear without a refresh, and a
-  // "mark all read" fired from another tab/device stays in sync here.
-  useEffect(() => {
-    const supabase = createClient();
-    const channel = supabase
-      .channel("notifications-page")
-      .on(
-        "postgres_changes",
-        { event: "*", schema: "public", table: "notifications" },
-        (payload) => {
-          if (payload.eventType === "INSERT") {
-            const row = payload.new as Notification;
-            setNotifications((prev) => {
-              if (!prev) return [row];
-              if (prev.some((n) => n.id === row.id)) return prev;
-              return [row, ...prev];
-            });
-          } else if (payload.eventType === "UPDATE") {
-            const row = payload.new as Notification;
-            setNotifications((prev) =>
-              prev?.map((n) => (n.id === row.id ? { ...n, ...row } : n)) ??
-              prev,
-            );
-          } else if (payload.eventType === "DELETE") {
-            const oldRow = payload.old as Partial<Notification>;
-            setNotifications(
-              (prev) => prev?.filter((n) => n.id !== oldRow.id) ?? prev,
-            );
-          }
-        },
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(channel);
-    };
-  }, []);
+  // TODO(fase-3): the Supabase realtime subscription that kept this
+  // list live (new assignments appearing without a refresh, cross-tab
+  // "mark all read" sync) was removed with the Supabase client. Restore
+  // via the SSE channel in Phase 3.
 
   const markRead = useCallback(
     async (id: string) => {
@@ -97,12 +62,7 @@ export default function NotificationsPage() {
               : n,
           ) ?? prev,
       );
-      const supabase = createClient();
-      const { error: updateErr } = await supabase
-        .from("notifications")
-        .update({ read_at: new Date().toISOString() })
-        .eq("id", id)
-        .is("read_at", null);
+      const { error: updateErr } = await markNotificationRead(id);
       if (updateErr) {
         toast.error("Failed to mark notification as read");
         load();
@@ -130,11 +90,7 @@ export default function NotificationsPage() {
     setNotifications(
       (prev) => prev?.map((n) => (n.read_at ? n : { ...n, read_at: now })) ?? prev,
     );
-    const supabase = createClient();
-    const { error: updateErr } = await supabase
-      .from("notifications")
-      .update({ read_at: now })
-      .is("read_at", null);
+    const { error: updateErr } = await markAllNotificationsRead();
     setMarkingAll(false);
     if (updateErr) {
       toast.error("Failed to mark all as read");

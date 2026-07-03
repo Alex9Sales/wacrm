@@ -1,9 +1,18 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { and, eq } from 'drizzle-orm'
+
+import { db, messageTemplates, whatsappConfig } from '@/db'
+import { firstOrNull } from '@/db/helpers'
+import {
+  getCurrentAccount,
+  toErrorResponse,
+  type AccountContext,
+} from '@/lib/auth/account'
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder'
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
+import type { MessageTemplate } from '@/types'
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -60,40 +69,20 @@ interface NewRecipient {
 
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    let ctx: AccountContext
+    try {
+      ctx = await getCurrentAccount()
+    } catch (err) {
+      return toErrorResponse(err)
     }
+    const accountId = ctx.accountId
 
     // Per-user broadcast budget. Note: this limits how often a user
     // can *start* a campaign, not how many messages go out inside
     // one — the fan-out loop below runs without additional gating.
-    const limit = checkRateLimit(`broadcast:${user.id}`, RATE_LIMITS.broadcast)
+    const limit = checkRateLimit(`broadcast:${ctx.userId}`, RATE_LIMITS.broadcast)
     if (!limit.success) {
       return rateLimitResponse(limit)
-    }
-
-    // Resolve the caller's account_id. whatsapp_config + templates
-    // + broadcasts are all account-scoped post-multi-user, so the
-    // old `.eq('user_id', user.id)` filters miss every row created
-    // by a teammate.
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('account_id')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
     }
 
     const body = await request.json()
@@ -134,13 +123,15 @@ export async function POST(request: Request) {
       )
     }
 
-    const { data: config, error: configError } = await supabase
-      .from('whatsapp_config')
-      .select('*')
-      .eq('account_id', accountId)
-      .single()
+    const config = firstOrNull(
+      await db
+        .select()
+        .from(whatsappConfig)
+        .where(eq(whatsappConfig.accountId, accountId))
+        .limit(1)
+    )
 
-    if (configError || !config) {
+    if (!config) {
       return NextResponse.json(
         {
           error:
@@ -150,20 +141,49 @@ export async function POST(request: Request) {
       )
     }
 
-    const accessToken = decrypt(config.access_token)
+    const accessToken = decrypt(config.accessToken)
 
     // Load the template row once so sendTemplateMessage can build
     // header + button components on each iteration. Loading inside
-    // the loop would N+1 against Supabase for every recipient.
+    // the loop would N+1 against the DB for every recipient.
     // Guard against a malformed local row crashing every send in
     // the loop with the same opaque TypeError — fail loudly once.
-    const { data: rawTemplateRow } = await supabase
-      .from('message_templates')
-      .select('*')
-      .eq('account_id', accountId)
-      .eq('name', template_name)
-      .eq('language', template_language || 'en_US')
-      .maybeSingle()
+    // Selected with snake_case aliases so the row matches the public
+    // `MessageTemplate` shape the send-builder expects.
+    const rawTemplateRow = firstOrNull(
+      await db
+        .select({
+          id: messageTemplates.id,
+          user_id: messageTemplates.userId,
+          name: messageTemplates.name,
+          category: messageTemplates.category,
+          language: messageTemplates.language,
+          header_type: messageTemplates.headerType,
+          header_content: messageTemplates.headerContent,
+          header_handle: messageTemplates.headerHandle,
+          header_media_url: messageTemplates.headerMediaUrl,
+          body_text: messageTemplates.bodyText,
+          footer_text: messageTemplates.footerText,
+          buttons: messageTemplates.buttons,
+          sample_values: messageTemplates.sampleValues,
+          status: messageTemplates.status,
+          meta_template_id: messageTemplates.metaTemplateId,
+          rejection_reason: messageTemplates.rejectionReason,
+          quality_score: messageTemplates.qualityScore,
+          submission_error: messageTemplates.submissionError,
+          last_submitted_at: messageTemplates.lastSubmittedAt,
+          created_at: messageTemplates.createdAt,
+        })
+        .from(messageTemplates)
+        .where(
+          and(
+            eq(messageTemplates.accountId, accountId),
+            eq(messageTemplates.name, template_name),
+            eq(messageTemplates.language, template_language || 'en_US')
+          )
+        )
+        .limit(1)
+    )
     if (rawTemplateRow && !isMessageTemplate(rawTemplateRow)) {
       return NextResponse.json(
         {
@@ -173,7 +193,7 @@ export async function POST(request: Request) {
         { status: 500 },
       )
     }
-    const templateRow = rawTemplateRow ?? null
+    const templateRow = (rawTemplateRow as MessageTemplate | null) ?? null
 
     const results: BroadcastResult[] = []
     let sentCount = 0
@@ -201,7 +221,7 @@ export async function POST(request: Request) {
       for (const variant of variants) {
         try {
           const result = await sendTemplateMessage({
-            phoneNumberId: config.phone_number_id,
+            phoneNumberId: config.phoneNumberId,
             accessToken,
             to: variant,
             templateName: template_name,

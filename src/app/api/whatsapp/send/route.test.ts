@@ -8,133 +8,148 @@ import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 // ---------------------------------------------------------------------------
 
 // Records of what the route wrote, so we can assert the right rows landed.
-const conversationInserts: Array<Record<string, unknown>> = []
-const messageInserts: Array<Record<string, unknown>> = []
-
-// Toggles for the per-test scenario.
-let existingConversation: Record<string, unknown> | null = null
-let contactRow: Record<string, unknown> | null = null
-// A conversation created during the request becomes retrievable by id —
-// the shared send core re-loads the conversation (with its contact) from
-// just the id, so the mock must model insert-then-select-by-id.
-let createdConversation: Record<string, unknown> | null = null
+// Payloads are the camelCase drizzle `values(...)` objects.
+const h = vi.hoisted(() => ({
+  conversationInserts: [] as Array<Record<string, unknown>>,
+  messageInserts: [] as Array<Record<string, unknown>>,
+  // Toggles for the per-test scenario.
+  existingConversation: null as Record<string, unknown> | null,
+  contactRow: null as Record<string, unknown> | null,
+  // A conversation created during the request becomes retrievable by id —
+  // the shared send core re-loads the conversation from just the id, so
+  // the mock must model insert-then-select-by-id.
+  createdConversation: null as Record<string, unknown> | null,
+}))
 
 const CONTACT = {
   id: 'contact-1',
-  account_id: 'acct-1',
+  accountId: 'acct-1',
   phone: '+15551234567',
 }
 
-// Chainable Supabase mock. A fresh builder per `.from()` call tracks whether
-// `.insert()` ran so the terminal resolves to the inserted row for creates
-// and the canned select row otherwise.
-function makeSupabaseMock() {
-  function builder(table: string) {
-    let didInsert = false
+// Chainable drizzle mock over the real table objects (kept via
+// importOriginal so identity checks like `table === contacts` work).
+// Every select resolves canned rows per table; inserts are recorded.
+vi.mock('@/db', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('@/db')>()
 
-    const selectResult = () => {
-      switch (table) {
-        case 'profiles':
-          return { data: { account_id: 'acct-1' }, error: null }
-        case 'contacts':
-          return { data: contactRow, error: null }
-        case 'conversations':
-          // Once created this request, a by-id reload returns it (with
-          // its contact); otherwise fall back to the canned existing row.
-          return { data: createdConversation ?? existingConversation, error: null }
-        case 'whatsapp_config':
-          return {
-            data: {
-              id: 'cfg-1',
-              account_id: 'acct-1',
-              phone_number_id: 'PNID-1',
-              access_token: 'enc-token',
-            },
-            error: null,
-          }
-        case 'message_templates':
-          return { data: null, error: null }
-        default:
-          return { data: null, error: null }
-      }
+  const tableName = (t: unknown): string => {
+    switch (t) {
+      case actual.profiles:
+        return 'profiles'
+      case actual.accounts:
+        return 'accounts'
+      case actual.contacts:
+        return 'contacts'
+      case actual.conversations:
+        return 'conversations'
+      case actual.whatsappConfig:
+        return 'whatsapp_config'
+      case actual.messageTemplates:
+        return 'message_templates'
+      case actual.messages:
+        return 'messages'
+      case actual.flowRuns:
+        return 'flow_runs'
+      default:
+        return 'unknown'
     }
+  }
 
-    const insertResult = () => {
-      switch (table) {
-        case 'conversations':
-          return {
-            data: {
-              id: 'conv-new',
-              account_id: 'acct-1',
-              contact_id: 'contact-1',
-              contact: CONTACT,
-            },
-            error: null,
-          }
-        case 'messages':
-          return { data: { id: 'msg-1' }, error: null }
-        default:
-          return { data: null, error: null }
+  const selectRows = (table: string): unknown[] => {
+    switch (table) {
+      case 'profiles':
+        return [{ accountId: 'acct-1', accountRole: 'agent' }]
+      case 'accounts':
+        return [{ id: 'acct-1', name: 'Test Account' }]
+      case 'contacts':
+        return h.contactRow ? [h.contactRow] : []
+      case 'conversations': {
+        // Once created this request, a by-id reload returns it;
+        // otherwise fall back to the canned existing row.
+        const row = h.createdConversation ?? h.existingConversation
+        return row ? [row] : []
       }
+      case 'whatsapp_config':
+        return [
+          {
+            id: 'cfg-1',
+            accountId: 'acct-1',
+            phoneNumberId: 'PNID-1',
+            accessToken: 'enc-token',
+          },
+        ]
+      default:
+        return []
     }
+  }
 
-    const terminal = () =>
-      Promise.resolve(didInsert ? insertResult() : selectResult())
-
-    const b: Record<string, unknown> = {}
-    const chain = () => b
-    for (const m of ['select', 'eq', 'in', 'order', 'limit', 'update', 'delete']) {
-      b[m] = vi.fn(chain)
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const selectBuilder = (rowsFn: () => unknown[]) => {
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const b: any = {}
+    for (const m of ['where', 'limit', 'orderBy', 'leftJoin', 'innerJoin']) {
+      b[m] = vi.fn(() => b)
     }
-    b.insert = vi.fn((payload: Record<string, unknown>) => {
-      didInsert = true
-      if (table === 'conversations') {
-        conversationInserts.push(payload)
-        createdConversation = {
-          id: 'conv-new',
-          account_id: 'acct-1',
-          contact_id: 'contact-1',
-          contact: CONTACT,
-        }
-      }
-      if (table === 'messages') messageInserts.push(payload)
-      return b
-    })
-    b.single = vi.fn(terminal)
-    b.maybeSingle = vi.fn(terminal)
-    b.then = (resolve: (v: unknown) => unknown) =>
-      resolve(didInsert ? insertResult() : selectResult())
+    b.then = (
+      resolve: (v: unknown) => unknown,
+      reject?: (e: unknown) => unknown,
+    ) => Promise.resolve(rowsFn()).then(resolve, reject)
     return b
   }
 
-  return {
-    auth: {
-      getUser: vi.fn(async () => ({
-        data: { user: { id: 'user-1' } },
-        error: null,
-      })),
-    },
-    from: vi.fn((table: string) => builder(table)),
+  const insertResult = (table: string): unknown[] => {
+    switch (table) {
+      case 'conversations':
+        return [h.createdConversation!]
+      case 'messages':
+        return [{ id: 'msg-1' }]
+      default:
+        return [{}]
+    }
   }
-}
 
-let supabaseMock = makeSupabaseMock()
+  const db = {
+    select: vi.fn(() => ({
+      from: (table: unknown) => selectBuilder(() => selectRows(tableName(table))),
+    })),
+    insert: vi.fn((table: unknown) => ({
+      values: (payload: Record<string, unknown>) => {
+        const name = tableName(table)
+        if (name === 'conversations') {
+          h.conversationInserts.push(payload)
+          h.createdConversation = {
+            id: 'conv-new',
+            accountId: 'acct-1',
+            contactId: 'contact-1',
+          }
+        }
+        if (name === 'messages') h.messageInserts.push(payload)
+        return {
+          returning: vi.fn(() => Promise.resolve(insertResult(name))),
+          then: (
+            resolve: (v: unknown) => unknown,
+            reject?: (e: unknown) => unknown,
+          ) => Promise.resolve(insertResult(name)).then(resolve, reject),
+        }
+      },
+    })),
+    update: vi.fn(() => ({
+      set: vi.fn(() => ({
+        where: vi.fn(() => Promise.resolve([])),
+      })),
+    })),
+    delete: vi.fn(() => ({
+      where: vi.fn(() => Promise.resolve([])),
+    })),
+  }
 
-vi.mock('@/lib/supabase/server', () => ({
-  createClient: vi.fn(async () => supabaseMock),
-}))
+  return { ...actual, db }
+})
 
-vi.mock('@/lib/flows/admin-client', () => ({
-  supabaseAdmin: () => ({
-    from: () => {
-      const b: Record<string, unknown> = {}
-      const chain = () => b
-      for (const m of ['update', 'eq', 'select']) b[m] = vi.fn(chain)
-      b.then = (resolve: (v: unknown) => unknown) =>
-        resolve({ data: null, error: null })
-      return b
-    },
-  }),
+// Phase-1 session stub replacement — a fixed authenticated user.
+vi.mock('@/lib/auth/session', () => ({
+  getSessionUserId: vi.fn(async () => 'user-1'),
 }))
 
 vi.mock('@/lib/whatsapp/encryption', () => ({
@@ -174,12 +189,11 @@ function postContactTemplate(overrides: Record<string, unknown> = {}) {
 
 describe('POST /api/whatsapp/send — contact_id template path', () => {
   beforeEach(() => {
-    conversationInserts.length = 0
-    messageInserts.length = 0
-    existingConversation = null
-    createdConversation = null
-    contactRow = CONTACT
-    supabaseMock = makeSupabaseMock()
+    h.conversationInserts.length = 0
+    h.messageInserts.length = 0
+    h.existingConversation = null
+    h.createdConversation = null
+    h.contactRow = CONTACT
     sendTemplateMessage.mockClear()
   })
 
@@ -196,10 +210,10 @@ describe('POST /api/whatsapp/send — contact_id template path', () => {
     expect(json.whatsapp_message_id).toBe('wamid-1')
 
     // A conversation was created for this contact.
-    expect(conversationInserts).toHaveLength(1)
-    expect(conversationInserts[0]).toMatchObject({
-      account_id: 'acct-1',
-      contact_id: 'contact-1',
+    expect(h.conversationInserts).toHaveLength(1)
+    expect(h.conversationInserts[0]).toMatchObject({
+      accountId: 'acct-1',
+      contactId: 'contact-1',
     })
 
     // The template was sent to the contact's number.
@@ -213,32 +227,33 @@ describe('POST /api/whatsapp/send — contact_id template path', () => {
     expect(args.templateName).toBe('order_update')
 
     // The outbound message was persisted under the new conversation.
-    expect(messageInserts).toHaveLength(1)
-    expect(messageInserts[0]).toMatchObject({
-      conversation_id: 'conv-new',
-      content_type: 'template',
-      template_name: 'order_update',
-      sender_type: 'agent',
+    expect(h.messageInserts).toHaveLength(1)
+    expect(h.messageInserts[0]).toMatchObject({
+      conversationId: 'conv-new',
+      contentType: 'template',
+      templateName: 'order_update',
+      senderType: 'agent',
     })
   })
 
   it('reuses an existing conversation instead of creating a duplicate', async () => {
-    existingConversation = {
+    h.existingConversation = {
       id: 'conv-existing',
-      account_id: 'acct-1',
-      contact_id: 'contact-1',
-      contact: CONTACT,
+      accountId: 'acct-1',
+      contactId: 'contact-1',
     }
 
     const res = await postContactTemplate()
     expect(res.status).toBe(200)
 
-    expect(conversationInserts).toHaveLength(0)
-    expect(messageInserts[0]).toMatchObject({ conversation_id: 'conv-existing' })
+    expect(h.conversationInserts).toHaveLength(0)
+    expect(h.messageInserts[0]).toMatchObject({
+      conversationId: 'conv-existing',
+    })
   })
 
   it('404s when the contact is not in the caller account', async () => {
-    contactRow = null
+    h.contactRow = null
 
     const res = await postContactTemplate()
     const json = await res.json()

@@ -1,5 +1,8 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { db, flows, flowRuns, flowRunEvents, contacts } from '@/db'
+import { firstOrNull } from '@/db/helpers'
+import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 
 /**
  * GET /api/flows/[id]/runs
@@ -9,9 +12,8 @@ import { createClient } from '@/lib/supabase/server'
  * page (`/flows/[id]/runs`) to give the owner end-to-end visibility
  * into what the bot did with each customer.
  *
- * RLS does the ownership check (flow_runs has a `user_id` policy);
- * we also gate on the per-account beta flag so the route 404s for
- * non-beta accounts matching the rest of /api/flows.
+ * Ownership is enforced by scoping the flow lookup (and the run
+ * query) to the caller's account.
  *
  * Limited to the 50 most recent runs. Pagination can come later;
  * the dashboard surface here is for debugging, not heavy querying.
@@ -20,67 +22,91 @@ export async function GET(
   _request: Request,
   context: { params: Promise<{ id: string }> },
 ) {
-  const { id } = await context.params
+  try {
+    const { id } = await context.params
+    const ctx = await getCurrentAccount()
 
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-  }
-
-  // Confirm flow exists + caller owns it (RLS does this) before doing
-  // the run query — gives us a clean 404 instead of empty array.
-  const { data: flow } = await supabase
-    .from('flows')
-    .select('id, name')
-    .eq('id', id)
-    .maybeSingle()
-  if (!flow) {
-    return NextResponse.json({ error: 'Not found' }, { status: 404 })
-  }
-
-  // Pull runs + each run's contact name + each run's events. Two
-  // joined selects keep the round-trip count to the runs query + one
-  // per-run events query.
-  const { data: runs, error: runsErr } = await supabase
-    .from('flow_runs')
-    .select(
-      'id, status, current_node_key, started_at, last_advanced_at, ended_at, end_reason, vars, reprompt_count, contact:contacts(id, name, phone)',
+    // Confirm flow exists + caller's account owns it before doing the
+    // run query — gives us a clean 404 instead of empty array.
+    const flow = firstOrNull(
+      await db
+        .select({ id: flows.id, name: flows.name })
+        .from(flows)
+        .where(and(eq(flows.id, id), eq(flows.accountId, ctx.accountId)))
+        .limit(1),
     )
-    .eq('flow_id', id)
-    .order('started_at', { ascending: false })
-    .limit(50)
-  if (runsErr) {
-    return NextResponse.json({ error: runsErr.message }, { status: 500 })
-  }
-
-  const runIds = (runs ?? []).map((r) => (r as { id: string }).id)
-  let events: Array<{
-    flow_run_id: string
-    event_type: string
-    node_key: string | null
-    payload: Record<string, unknown>
-    created_at: string
-  }> = []
-  if (runIds.length > 0) {
-    const { data: evs, error: evsErr } = await supabase
-      .from('flow_run_events')
-      .select('flow_run_id, event_type, node_key, payload, created_at')
-      .in('flow_run_id', runIds)
-      .order('created_at', { ascending: true })
-    if (evsErr) {
-      // Non-fatal — the page can still show runs without timelines.
-      console.error('[flows-runs] events fetch failed:', evsErr.message)
-    } else if (evs) {
-      events = evs as typeof events
+    if (!flow) {
+      return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
-  }
 
-  return NextResponse.json({
-    flow,
-    runs: runs ?? [],
-    events,
-  })
+    // Pull runs + each run's contact name + each run's events. Two
+    // queries: the runs (with contact join) + one batch events query.
+    const runRows = await db
+      .select({
+        id: flowRuns.id,
+        status: flowRuns.status,
+        current_node_key: flowRuns.currentNodeKey,
+        started_at: flowRuns.startedAt,
+        last_advanced_at: flowRuns.lastAdvancedAt,
+        ended_at: flowRuns.endedAt,
+        end_reason: flowRuns.endReason,
+        vars: flowRuns.vars,
+        reprompt_count: flowRuns.repromptCount,
+        contact_id: contacts.id,
+        contact_name: contacts.name,
+        contact_phone: contacts.phone,
+      })
+      .from(flowRuns)
+      .leftJoin(contacts, eq(flowRuns.contactId, contacts.id))
+      .where(and(eq(flowRuns.flowId, id), eq(flowRuns.accountId, ctx.accountId)))
+      .orderBy(desc(flowRuns.startedAt))
+      .limit(50)
+
+    // Rebuild the embedded `contact` object the old PostgREST join
+    // (`contact:contacts(id, name, phone)`) produced.
+    const runs = runRows.map(({ contact_id, contact_name, contact_phone, ...run }) => ({
+      ...run,
+      contact: contact_id
+        ? { id: contact_id, name: contact_name, phone: contact_phone }
+        : null,
+    }))
+
+    const runIds = runs.map((r) => r.id)
+    let events: Array<{
+      flow_run_id: string
+      event_type: string
+      node_key: string | null
+      payload: Record<string, unknown>
+      created_at: string
+    }> = []
+    if (runIds.length > 0) {
+      try {
+        events = (await db
+          .select({
+            flow_run_id: flowRunEvents.flowRunId,
+            event_type: flowRunEvents.eventType,
+            node_key: flowRunEvents.nodeKey,
+            payload: flowRunEvents.payload,
+            created_at: flowRunEvents.createdAt,
+          })
+          .from(flowRunEvents)
+          .where(inArray(flowRunEvents.flowRunId, runIds))
+          .orderBy(asc(flowRunEvents.createdAt))) as typeof events
+      } catch (evsErr) {
+        // Non-fatal — the page can still show runs without timelines.
+        console.error(
+          '[flows-runs] events fetch failed:',
+          evsErr instanceof Error ? evsErr.message : evsErr,
+        )
+      }
+    }
+
+    return NextResponse.json({
+      flow,
+      runs,
+      events,
+    })
+  } catch (err) {
+    return toErrorResponse(err)
+  }
 }

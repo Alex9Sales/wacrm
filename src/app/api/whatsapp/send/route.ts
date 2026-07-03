@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { and, eq } from 'drizzle-orm'
+
+import { db, contacts, conversations } from '@/db'
+import { firstOrNull } from '@/db/helpers'
+import {
+  getCurrentAccount,
+  toErrorResponse,
+  type AccountContext,
+} from '@/lib/auth/account'
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -22,42 +30,22 @@ import {
 // dashboard's internal `{ error }` shape.
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json(
-        { error: 'Unauthorized' },
-        { status: 401 }
-      )
+    // Session + account context. Replaces the old Supabase cookie
+    // client — every query below runs on the shared Drizzle client,
+    // explicitly scoped by ctx.accountId (no RLS).
+    let ctx: AccountContext
+    try {
+      ctx = await getCurrentAccount()
+    } catch (err) {
+      return toErrorResponse(err)
     }
+    const accountId = ctx.accountId
 
     // Per-user rate limit. Bucket key is scoped to this route so
     // `/broadcast` has an independent budget.
-    const limit = checkRateLimit(`send:${user.id}`, RATE_LIMITS.send)
+    const limit = checkRateLimit(`send:${ctx.userId}`, RATE_LIMITS.send)
     if (!limit.success) {
       return rateLimitResponse(limit)
-    }
-
-    // Resolve the caller's account_id. Every downstream lookup
-    // (conversation, whatsapp_config, message_templates) is account-
-    // scoped post-multi-user, so the previous `user_id` filters
-    // returned nothing for teammates who didn't author the row.
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('account_id')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
     }
 
     const body = await request.json()
@@ -112,31 +100,52 @@ export async function POST(request: Request) {
     let conversationId: string | null = null
 
     if (conversationIdInput) {
-      const { data, error: convError } = await supabase
-        .from('conversations')
-        .select('id')
-        .eq('id', conversationIdInput)
-        .eq('account_id', accountId)
-        .single()
+      let conv: { id: string } | null = null
+      try {
+        conv = firstOrNull(
+          await db
+            .select({ id: conversations.id })
+            .from(conversations)
+            .where(
+              and(
+                eq(conversations.id, conversationIdInput),
+                eq(conversations.accountId, accountId)
+              )
+            )
+            .limit(1)
+        )
+      } catch {
+        // Malformed UUID → Postgres throws where PostgREST returned an
+        // error object; both collapse to the same 404.
+        conv = null
+      }
 
-      if (convError || !data) {
+      if (!conv) {
         return NextResponse.json(
           { error: 'Conversation not found' },
           { status: 404 }
         )
       }
-      conversationId = data.id
+      conversationId = conv.id
     } else {
       // contact_id path: verify the contact is in this account first so a
       // caller can't open a conversation against someone else's contact.
-      const { data: contactRow, error: contactErr } = await supabase
-        .from('contacts')
-        .select('id')
-        .eq('id', contact_id)
-        .eq('account_id', accountId)
-        .maybeSingle()
+      let contactRow: { id: string } | null = null
+      try {
+        contactRow = firstOrNull(
+          await db
+            .select({ id: contacts.id })
+            .from(contacts)
+            .where(
+              and(eq(contacts.id, contact_id), eq(contacts.accountId, accountId))
+            )
+            .limit(1)
+        )
+      } catch {
+        contactRow = null
+      }
 
-      if (contactErr || !contactRow) {
+      if (!contactRow) {
         return NextResponse.json(
           { error: 'Contact not found' },
           { status: 404 }
@@ -144,9 +153,8 @@ export async function POST(request: Request) {
       }
 
       const resolved = await findOrCreateConversation(
-        supabase,
         accountId,
-        user.id,
+        ctx.userId,
         contact_id
       )
       if (!resolved) {
@@ -170,7 +178,7 @@ export async function POST(request: Request) {
     // `SendMessageError` carries a machine code + HTTP status; the
     // dashboard maps it to the internal `{ error }` shape.
     try {
-      const result = await sendMessageToConversation(supabase, accountId, {
+      const result = await sendMessageToConversation(accountId, {
         conversationId,
         messageType: message_type,
         contentText: content_text,
@@ -206,44 +214,50 @@ export async function POST(request: Request) {
   }
 }
 
-type SendSupabase = Awaited<ReturnType<typeof createClient>>
-
 /**
  * Return the contact's conversation id in this account, creating one if
  * it doesn't exist yet. Mirrors the webhook's find-or-create so an
  * inbound-then-outbound (or outbound-first) sequence converges on a single
- * thread per contact. Runs under the caller's RLS — the conversations_insert
- * policy requires account agent membership, which the caller already is.
+ * thread per contact. Account-scoped explicitly — there is no RLS on the
+ * shared Drizzle client.
  */
 async function findOrCreateConversation(
-  supabase: SendSupabase,
   accountId: string,
   userId: string,
   contactId: string,
 ): Promise<string | null> {
-  const { data: existing } = await supabase
-    .from('conversations')
-    .select('id')
-    .eq('account_id', accountId)
-    .eq('contact_id', contactId)
-    .maybeSingle()
+  const existing = firstOrNull(
+    await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.accountId, accountId),
+          eq(conversations.contactId, contactId)
+        )
+      )
+      .limit(1)
+  )
 
   if (existing) return existing.id
 
-  const { data: created, error } = await supabase
-    .from('conversations')
-    .insert({
-      account_id: accountId,
-      user_id: userId,
-      contact_id: contactId,
-    })
-    .select('id')
-    .single()
-
-  if (error) {
-    console.error('Error creating conversation for contact send:', error.message)
+  try {
+    const created = firstOrNull(
+      await db
+        .insert(conversations)
+        .values({
+          accountId,
+          userId,
+          contactId,
+        })
+        .returning({ id: conversations.id })
+    )
+    return created?.id ?? null
+  } catch (error) {
+    console.error(
+      'Error creating conversation for contact send:',
+      error instanceof Error ? error.message : error
+    )
     return null
   }
-
-  return created.id
 }

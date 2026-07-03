@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { and, eq } from 'drizzle-orm'
+
+import { db, messageTemplates, whatsappConfig } from '@/db'
+import { firstOrNull } from '@/db/helpers'
+import {
+  getCurrentAccount,
+  toErrorResponse,
+  type AccountContext,
+} from '@/lib/auth/account'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import {
   deleteMessageTemplate,
@@ -33,9 +41,36 @@ const EDITABLE_STATUSES = new Set(['APPROVED', 'REJECTED', 'PAUSED'])
 
 // uuid v4 plus the looser shape Postgres gen_random_uuid emits.
 // We don't need exhaustive RFC parsing — just enough to reject
-// "../etc/passwd"-style payloads before they hit Supabase.
+// "../etc/passwd"-style payloads before they hit the DB.
 const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
+// Full row projected with snake_case aliases so the JSON response keeps
+// the exact shape the dashboard consumed from PostgREST.
+const TEMPLATE_ROW_SELECT = {
+  id: messageTemplates.id,
+  user_id: messageTemplates.userId,
+  account_id: messageTemplates.accountId,
+  name: messageTemplates.name,
+  category: messageTemplates.category,
+  language: messageTemplates.language,
+  header_type: messageTemplates.headerType,
+  header_content: messageTemplates.headerContent,
+  body_text: messageTemplates.bodyText,
+  footer_text: messageTemplates.footerText,
+  buttons: messageTemplates.buttons,
+  status: messageTemplates.status,
+  sample_values: messageTemplates.sampleValues,
+  meta_template_id: messageTemplates.metaTemplateId,
+  rejection_reason: messageTemplates.rejectionReason,
+  quality_score: messageTemplates.qualityScore,
+  header_handle: messageTemplates.headerHandle,
+  header_media_url: messageTemplates.headerMediaUrl,
+  submission_error: messageTemplates.submissionError,
+  last_submitted_at: messageTemplates.lastSubmittedAt,
+  created_at: messageTemplates.createdAt,
+  updated_at: messageTemplates.updatedAt,
+}
 
 function isDryRun(): boolean {
   return (
@@ -56,29 +91,16 @@ export async function PATCH(
         { status: 400 },
       )
     }
-    const supabase = await createClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
 
-    // Resolve the caller's account_id so template + whatsapp_config
+    // Resolve the caller's account so template + whatsapp_config
     // lookups work for teammates who didn't author the row.
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('account_id')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
+    let ctx: AccountContext
+    try {
+      ctx = await getCurrentAccount()
+    } catch (err) {
+      return toErrorResponse(err)
     }
+    const accountId = ctx.accountId
 
     let payload: TemplatePayload
     try {
@@ -87,19 +109,31 @@ export async function PATCH(
       return NextResponse.json({ error: 'Invalid JSON body.' }, { status: 400 })
     }
 
-    // RLS handles ownership, but we need the existing row to read
-    // meta_template_id and status — fetch explicitly.
-    const { data: existing, error: lookupErr } = await supabase
-      .from('message_templates')
-      .select('id, name, status, meta_template_id, language')
-      .eq('id', id)
-      .eq('account_id', accountId)
-      .maybeSingle()
-    if (lookupErr || !existing) {
+    // Account scoping IS the ownership check now (no RLS) — fetch the
+    // existing row to read meta_template_id and status.
+    const existing = firstOrNull(
+      await db
+        .select({
+          id: messageTemplates.id,
+          name: messageTemplates.name,
+          status: messageTemplates.status,
+          metaTemplateId: messageTemplates.metaTemplateId,
+          language: messageTemplates.language,
+        })
+        .from(messageTemplates)
+        .where(
+          and(
+            eq(messageTemplates.id, id),
+            eq(messageTemplates.accountId, accountId),
+          ),
+        )
+        .limit(1)
+    )
+    if (!existing) {
       return NextResponse.json({ error: 'Template not found.' }, { status: 404 })
     }
 
-    if (!existing.meta_template_id) {
+    if (!existing.metaTemplateId) {
       return NextResponse.json(
         {
           error:
@@ -109,7 +143,7 @@ export async function PATCH(
       )
     }
 
-    if (!EDITABLE_STATUSES.has(existing.status)) {
+    if (!EDITABLE_STATUSES.has(existing.status ?? '')) {
       return NextResponse.json(
         {
           error: `Templates in status ${existing.status} cannot be edited. Allowed: APPROVED, REJECTED, PAUSED.`,
@@ -138,18 +172,20 @@ export async function PATCH(
     }
 
     if (!isDryRun()) {
-      const { data: config, error: configError } = await supabase
-        .from('whatsapp_config')
-        .select('*')
-        .eq('account_id', accountId)
-        .single()
-      if (configError || !config) {
+      const config = firstOrNull(
+        await db
+          .select()
+          .from(whatsappConfig)
+          .where(eq(whatsappConfig.accountId, accountId))
+          .limit(1)
+      )
+      if (!config) {
         return NextResponse.json(
           { error: 'WhatsApp not configured.' },
           { status: 400 },
         )
       }
-      const accessToken = decrypt(config.access_token)
+      const accessToken = decrypt(config.accessToken)
 
       // Image headers need a fresh Resumable-Upload handle on every edit
       // (Meta replaces components wholesale). Derive from header_media_url.
@@ -165,49 +201,58 @@ export async function PATCH(
       const metaPayload = buildMetaTemplatePayload(payload)
       try {
         await editMessageTemplate({
-          metaTemplateId: existing.meta_template_id,
+          metaTemplateId: existing.metaTemplateId,
           accessToken,
           components: metaPayload.components,
         })
       } catch (e) {
         const message = e instanceof Error ? e.message : 'Meta edit failed.'
-        await supabase
-          .from('message_templates')
-          .update({
-            submission_error: message,
-            last_submitted_at: new Date().toISOString(),
-          })
-          .eq('id', id)
+        // Best-effort local note of the failure — must not mask the
+        // 502 we're about to return.
+        try {
+          await db
+            .update(messageTemplates)
+            .set({
+              submissionError: message,
+              lastSubmittedAt: new Date().toISOString(),
+            })
+            .where(eq(messageTemplates.id, id))
+        } catch (persistErr) {
+          console.error('Failed to persist template edit error:', persistErr)
+        }
         return NextResponse.json({ error: message }, { status: 502 })
       }
     }
 
     // Meta accepted the edit — status flips back to PENDING for review.
-    const { data: row, error: updErr } = await supabase
-      .from('message_templates')
-      .update({
-        category: payload.category,
-        header_type: payload.header_type ?? null,
-        header_content: payload.header_content ?? null,
-        header_media_url: payload.header_media_url ?? null,
-        header_handle: payload.header_handle ?? null,
-        body_text: payload.body_text,
-        footer_text: payload.footer_text ?? null,
-        buttons: payload.buttons ?? null,
-        sample_values: payload.sample_values ?? null,
-        status: 'PENDING',
-        submission_error: null,
-        rejection_reason: null,
-        last_submitted_at: new Date().toISOString(),
-      })
-      .eq('id', id)
-      .select()
-      .single()
-
-    if (updErr) {
+    let row
+    try {
+      row = firstOrNull(
+        await db
+          .update(messageTemplates)
+          .set({
+            category: payload.category,
+            headerType: payload.header_type ?? null,
+            headerContent: payload.header_content ?? null,
+            headerMediaUrl: payload.header_media_url ?? null,
+            headerHandle: payload.header_handle ?? null,
+            bodyText: payload.body_text,
+            footerText: payload.footer_text ?? null,
+            buttons: payload.buttons ?? null,
+            sampleValues: payload.sample_values ?? null,
+            status: 'PENDING',
+            submissionError: null,
+            rejectionReason: null,
+            lastSubmittedAt: new Date().toISOString(),
+          })
+          .where(eq(messageTemplates.id, id))
+          .returning(TEMPLATE_ROW_SELECT)
+      )
+    } catch (updErr) {
+      const message = updErr instanceof Error ? updErr.message : String(updErr)
       return NextResponse.json(
         {
-          error: `Edited on Meta but failed to save locally: ${updErr.message}. Run "Sync from Meta" to recover.`,
+          error: `Edited on Meta but failed to save locally: ${message}. Run "Sync from Meta" to recover.`,
         },
         { status: 500 },
       )
@@ -242,60 +287,59 @@ export async function DELETE(
         { status: 400 },
       )
     }
-    const supabase = await createClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
 
     // Same account-scoping rationale as the PATCH handler above —
     // teammates need to be able to operate on shared templates +
     // the shared whatsapp_config.
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('account_id')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
+    let ctx: AccountContext
+    try {
+      ctx = await getCurrentAccount()
+    } catch (err) {
+      return toErrorResponse(err)
     }
+    const accountId = ctx.accountId
 
-    const { data: existing, error: lookupErr } = await supabase
-      .from('message_templates')
-      .select('id, name, meta_template_id')
-      .eq('id', id)
-      .eq('account_id', accountId)
-      .maybeSingle()
-    if (lookupErr || !existing) {
+    const existing = firstOrNull(
+      await db
+        .select({
+          id: messageTemplates.id,
+          name: messageTemplates.name,
+          metaTemplateId: messageTemplates.metaTemplateId,
+        })
+        .from(messageTemplates)
+        .where(
+          and(
+            eq(messageTemplates.id, id),
+            eq(messageTemplates.accountId, accountId),
+          ),
+        )
+        .limit(1)
+    )
+    if (!existing) {
       return NextResponse.json({ error: 'Template not found.' }, { status: 404 })
     }
 
-    if (existing.meta_template_id && !isDryRun()) {
-      const { data: config, error: configError } = await supabase
-        .from('whatsapp_config')
-        .select('*')
-        .eq('account_id', accountId)
-        .single()
-      if (configError || !config || !config.waba_id) {
+    if (existing.metaTemplateId && !isDryRun()) {
+      const config = firstOrNull(
+        await db
+          .select()
+          .from(whatsappConfig)
+          .where(eq(whatsappConfig.accountId, accountId))
+          .limit(1)
+      )
+      if (!config || !config.wabaId) {
         return NextResponse.json(
           { error: 'WhatsApp not configured — cannot delete on Meta.' },
           { status: 400 },
         )
       }
-      const accessToken = decrypt(config.access_token)
+      const accessToken = decrypt(config.accessToken)
       try {
         await deleteMessageTemplate({
-          wabaId: config.waba_id,
+          wabaId: config.wabaId,
           accessToken,
           name: existing.name,
-          metaTemplateId: existing.meta_template_id,
+          metaTemplateId: existing.metaTemplateId,
         })
       } catch (e) {
         const message = e instanceof Error ? e.message : 'Meta delete failed.'
@@ -303,14 +347,13 @@ export async function DELETE(
       }
     }
 
-    const { error: delErr } = await supabase
-      .from('message_templates')
-      .delete()
-      .eq('id', id)
-    if (delErr) {
+    try {
+      await db.delete(messageTemplates).where(eq(messageTemplates.id, id))
+    } catch (delErr) {
+      const message = delErr instanceof Error ? delErr.message : String(delErr)
       return NextResponse.json(
         {
-          error: `Deleted on Meta but failed to delete locally: ${delErr.message}.`,
+          error: `Deleted on Meta but failed to delete locally: ${message}.`,
         },
         { status: 500 },
       )

@@ -1,7 +1,19 @@
 import { NextResponse, after } from 'next/server'
-import { createClient } from '@supabase/supabase-js'
+import { and, count, desc, eq, inArray } from 'drizzle-orm'
+
+import {
+  db,
+  broadcastRecipients,
+  broadcasts,
+  contacts,
+  conversations,
+  messageReactions,
+  messages,
+  whatsappConfig,
+} from '@/db'
+import { firstOrNull } from '@/db/helpers'
 import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption'
-import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
+import { getMediaUrl } from '@/lib/whatsapp/meta-api'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe'
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
@@ -19,19 +31,6 @@ import {
 // give it headroom beyond the platform default (Vercel clamps this to the
 // plan's ceiling). Tune as needed.
 export const maxDuration = 60
-
-// Lazy-initialized to avoid build-time crash when env vars are missing
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-let _adminClient: any = null
-function supabaseAdmin() {
-  if (!_adminClient) {
-    _adminClient = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL!,
-      process.env.SUPABASE_SERVICE_ROLE_KEY!
-    )
-  }
-  return _adminClient
-}
 
 interface WhatsAppMessage {
   id: string
@@ -102,11 +101,15 @@ export async function GET(request: Request) {
     }
 
     // Fetch all whatsapp configs to check verify tokens
-    const { data: configs, error: configError } = await supabaseAdmin()
-      .from('whatsapp_config')
-      .select('id, verify_token')
-
-    if (configError || !configs) {
+    let configs: Array<{ id: string; verifyToken: string | null }>
+    try {
+      configs = await db
+        .select({
+          id: whatsappConfig.id,
+          verifyToken: whatsappConfig.verifyToken,
+        })
+        .from(whatsappConfig)
+    } catch (configError) {
       console.error('Error fetching configs for verification:', configError)
       return NextResponse.json(
         { error: 'Verification failed' },
@@ -117,12 +120,11 @@ export async function GET(request: Request) {
     // Check if any config's verify_token matches. Also collect the
     // matching row so we can opportunistically upgrade its token to
     // GCM if it was still in the legacy CBC format.
-    // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    let matchedConfig: any = null
+    let matchedConfig: { id: string; verifyToken: string | null } | null = null
     for (const config of configs) {
-      if (!config.verify_token) continue
+      if (!config.verifyToken) continue
       try {
-        if (decrypt(config.verify_token) === verifyToken) {
+        if (decrypt(config.verifyToken) === verifyToken) {
           matchedConfig = config
           break
         }
@@ -134,19 +136,20 @@ export async function GET(request: Request) {
     if (matchedConfig) {
       // Fire-and-forget GCM upgrade. Safe to run on every subscribe
       // since it's a no-op once the column is already GCM.
-      if (isLegacyFormat(matchedConfig.verify_token)) {
-        void supabaseAdmin()
-          .from('whatsapp_config')
-          .update({ verify_token: encrypt(verifyToken) })
-          .eq('id', matchedConfig.id)
-          .then(({ error }: { error: unknown }) => {
-            if (error) {
+      if (matchedConfig.verifyToken && isLegacyFormat(matchedConfig.verifyToken)) {
+        void db
+          .update(whatsappConfig)
+          .set({ verifyToken: encrypt(verifyToken) })
+          .where(eq(whatsappConfig.id, matchedConfig.id))
+          .then(
+            () => {},
+            (error: unknown) => {
               console.warn(
                 '[webhook] verify_token GCM upgrade failed:',
-                (error as { message?: string })?.message ?? error,
+                error instanceof Error ? error.message : error,
               )
             }
-          })
+          )
       }
       // Return challenge as plain text
       return new Response(challenge, {
@@ -226,10 +229,10 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
       // dedicated handler. Skip the messaging branches below so we
       // don't try to read message-shaped fields off a template event.
       if (isTemplateWebhookField(change.field)) {
-        await handleTemplateWebhookChange(
-          { field: change.field, value: change.value as unknown },
-          supabaseAdmin(),
-        )
+        await handleTemplateWebhookChange({
+          field: change.field,
+          value: change.value as unknown,
+        })
         continue
       }
 
@@ -247,17 +250,18 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
 
       const phoneNumberId = value.metadata.phone_number_id
 
-      // Find user's config by phone_number_id. `.single()` returns
-      // PGRST116 for both 0 rows AND ≥2 rows — distinguish them so
-      // operators see the real cause in logs. ≥2 rows shouldn't happen
-      // post-migration 013 (UNIQUE constraint), but a row created
-      // before the constraint, or a race, would still surface here.
-      const { data: configRows, error: configError } = await supabaseAdmin()
-        .from('whatsapp_config')
-        .select('*')
-        .eq('phone_number_id', phoneNumberId)
-
-      if (configError) {
+      // Find the account's config by phone_number_id. Distinguish
+      // "no rows" from "≥2 rows" so operators see the real cause in
+      // logs. ≥2 rows shouldn't happen post-migration 013 (UNIQUE
+      // constraint), but a row created before the constraint, or a
+      // race, would still surface here.
+      let configRows
+      try {
+        configRows = await db
+          .select()
+          .from(whatsappConfig)
+          .where(eq(whatsappConfig.phoneNumberId, phoneNumberId))
+      } catch (configError) {
         console.error(
           'Error fetching whatsapp_config for phone_number_id:',
           phoneNumberId,
@@ -277,14 +281,14 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
           phoneNumberId,
           '— inbound message dropped. Resolve duplicates so each number maps to a single account.',
           'Account owners:',
-          configRows.map((r: { account_id: string; user_id: string }) => `${r.account_id} (admin ${r.user_id})`)
+          configRows.map((r) => `${r.accountId} (admin ${r.userId})`)
         )
         continue
       }
 
       const config = configRows[0]
 
-      const decryptedAccessToken = decrypt(config.access_token)
+      const decryptedAccessToken = decrypt(config.accessToken)
 
       for (let i = 0; i < value.messages.length; i++) {
         const message = value.messages[i]
@@ -295,11 +299,11 @@ async function processWebhook(body: { entry?: WhatsAppWebhookEntry[] }) {
           contact,
           // Tenancy — drives every contact / conversation lookup
           // and the engines' active-row dispatch.
-          config.account_id,
+          config.accountId,
           // Audit / sender-of-record — used as the user_id on row
           // inserts that need it for NOT NULL FK compliance. Always
           // the admin who saved the WhatsApp config.
-          config.user_id,
+          config.userId,
           decryptedAccessToken
         )
       }
@@ -356,16 +360,16 @@ async function handleStatusUpdate(status: {
   recipient_id: string
 }) {
   // 1) Mirror onto messages (legacy behavior) — Meta's status values
-  //    already match the CHECK constraint on messages.status. No
-  //    `.select()`: message_id is NOT unique (migration 009 — Meta ids
-  //    repeat across numbers), so this updates 0..N rows and must not
+  //    already match the CHECK constraint on messages.status.
+  //    message_id is NOT unique (migration 009 — Meta ids repeat
+  //    across numbers), so this updates 0..N rows and must not
   //    assume a single row.
-  const { error: msgErr } = await supabaseAdmin()
-    .from('messages')
-    .update({ status: status.status })
-    .eq('message_id', status.id)
-
-  if (msgErr) {
+  try {
+    await db
+      .update(messages)
+      .set({ status: status.status })
+      .where(eq(messages.messageId, status.id))
+  } catch (msgErr) {
     console.error('Error updating message status:', msgErr)
   }
 
@@ -379,31 +383,47 @@ async function handleStatusUpdate(status: {
   //    sent/delivered/read/failed counts automatically.
   const tsIso = new Date(parseInt(status.timestamp) * 1000).toISOString()
 
-  const { data: recipient, error: recFetchErr } = await supabaseAdmin()
-    .from('broadcast_recipients')
-    .select('id, status')
-    .eq('whatsapp_message_id', status.id)
-    .maybeSingle()
-
-  if (recFetchErr) {
+  let recipient: { id: string; status: string } | null = null
+  let recipientFetchFailed = false
+  try {
+    recipient = firstOrNull(
+      await db
+        .select({
+          id: broadcastRecipients.id,
+          status: broadcastRecipients.status,
+        })
+        .from(broadcastRecipients)
+        .where(eq(broadcastRecipients.whatsappMessageId, status.id))
+        .limit(1)
+    )
+  } catch (recFetchErr) {
+    recipientFetchFailed = true
     console.error('Error fetching broadcast recipient:', recFetchErr)
-  } else if (
+  }
+
+  if (
+    !recipientFetchFailed &&
     recipient &&
     // Guard transitions — forward-only on the success ladder, and
     // `failed` only from pre-delivered states.
     isValidStatusTransition(recipient.status, status.status)
   ) {
-    const update: Record<string, unknown> = { status: status.status }
-    if (status.status === 'sent' && !('sent_at' in update)) update.sent_at = tsIso
-    if (status.status === 'delivered') update.delivered_at = tsIso
-    if (status.status === 'read') update.read_at = tsIso
+    const update: {
+      status: string
+      sentAt?: string
+      deliveredAt?: string
+      readAt?: string
+    } = { status: status.status }
+    if (status.status === 'sent') update.sentAt = tsIso
+    if (status.status === 'delivered') update.deliveredAt = tsIso
+    if (status.status === 'read') update.readAt = tsIso
 
-    const { error: recUpdateErr } = await supabaseAdmin()
-      .from('broadcast_recipients')
-      .update(update)
-      .eq('id', recipient.id)
-
-    if (recUpdateErr) {
+    try {
+      await db
+        .update(broadcastRecipients)
+        .set(update)
+        .where(eq(broadcastRecipients.id, recipient.id))
+    } catch (recUpdateErr) {
       console.error('Error updating broadcast recipient status:', recUpdateErr)
     }
   }
@@ -412,28 +432,29 @@ async function handleStatusUpdate(status: {
   //    Runs last so a slow subscriber can't delay the mirrors above.
   //    Bounded to one row (message_id isn't unique) purely to resolve
   //    the owning account for delivery.
-  const { data: msgRow } = await supabaseAdmin()
-    .from('messages')
-    .select('conversation_id, conversations(account_id)')
-    .eq('message_id', status.id)
-    .limit(1)
-    .maybeSingle()
+  let msgRow: { conversationId: string; accountId: string | null } | null = null
+  try {
+    msgRow = firstOrNull(
+      await db
+        .select({
+          conversationId: messages.conversationId,
+          accountId: conversations.accountId,
+        })
+        .from(messages)
+        .leftJoin(conversations, eq(messages.conversationId, conversations.id))
+        .where(eq(messages.messageId, status.id))
+        .limit(1)
+    )
+  } catch (err) {
+    console.error('Error resolving account for status webhook:', err)
+  }
 
-  if (msgRow) {
-    const conv = msgRow.conversations as { account_id: string } | null
-    const accountId = conv?.account_id
-    if (accountId) {
-      await dispatchWebhookEvent(
-        supabaseAdmin(),
-        accountId,
-        'message.status_updated',
-        {
-          whatsapp_message_id: status.id,
-          conversation_id: msgRow.conversation_id,
-          status: status.status,
-        }
-      )
-    }
+  if (msgRow?.accountId) {
+    await dispatchWebhookEvent(msgRow.accountId, 'message.status_updated', {
+      whatsapp_message_id: status.id,
+      conversation_id: msgRow.conversationId,
+      status: status.status,
+    })
   }
 }
 
@@ -451,24 +472,29 @@ async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
     // been replied to yet. Account-scoped so a shared inbox reply
     // marks the broadcast as replied regardless of which teammate
     // sent it.
-    const { data: recs, error } = await supabaseAdmin()
-      .from('broadcast_recipients')
-      .select('id, status, broadcast_id, broadcasts!inner(account_id)')
-      .eq('contact_id', contactId)
-      .eq('broadcasts.account_id', accountId)
-      .in('status', ['sent', 'delivered', 'read'])
-      .order('created_at', { ascending: false })
+    const recs = await db
+      .select({ id: broadcastRecipients.id })
+      .from(broadcastRecipients)
+      .innerJoin(broadcasts, eq(broadcastRecipients.broadcastId, broadcasts.id))
+      .where(
+        and(
+          eq(broadcastRecipients.contactId, contactId),
+          eq(broadcasts.accountId, accountId),
+          inArray(broadcastRecipients.status, ['sent', 'delivered', 'read'])
+        )
+      )
+      .orderBy(desc(broadcastRecipients.createdAt))
       .limit(1)
 
-    if (error || !recs || recs.length === 0) return
+    if (!recs || recs.length === 0) return
 
     const row = recs[0]
-    const { error: updErr } = await supabaseAdmin()
-      .from('broadcast_recipients')
-      .update({ status: 'replied', replied_at: new Date().toISOString() })
-      .eq('id', row.id)
-
-    if (updErr) {
+    try {
+      await db
+        .update(broadcastRecipients)
+        .set({ status: 'replied', repliedAt: new Date().toISOString() })
+        .where(eq(broadcastRecipients.id, row.id))
+    } catch (updErr) {
       console.error('Error marking broadcast recipient replied:', updErr)
     }
   } catch (err) {
@@ -485,17 +511,27 @@ async function lookupInternalIdByMetaId(
   metaId: string,
   conversationId: string
 ): Promise<string | null> {
-  const { data, error } = await supabaseAdmin()
-    .from('messages')
-    .select('id')
-    .eq('message_id', metaId)
-    .eq('conversation_id', conversationId)
-    .maybeSingle()
-  if (error) {
-    console.error('[webhook] lookupInternalIdByMetaId failed:', error.message)
+  try {
+    const data = firstOrNull(
+      await db
+        .select({ id: messages.id })
+        .from(messages)
+        .where(
+          and(
+            eq(messages.messageId, metaId),
+            eq(messages.conversationId, conversationId)
+          )
+        )
+        .limit(1)
+    )
+    return data?.id ?? null
+  } catch (error) {
+    console.error(
+      '[webhook] lookupInternalIdByMetaId failed:',
+      error instanceof Error ? error.message : error
+    )
     return null
   }
-  return data?.id ?? null
 }
 
 /**
@@ -528,32 +564,48 @@ async function handleReaction(
 
   // Empty emoji = removal (per Meta's Cloud API spec).
   if (!reaction.emoji) {
-    const { error: delError } = await supabaseAdmin()
-      .from('message_reactions')
-      .delete()
-      .eq('message_id', targetInternalId)
-      .eq('actor_type', 'customer')
-      .eq('actor_id', contactId)
-    if (delError) {
-      console.error('[webhook] reaction delete failed:', delError.message)
+    try {
+      await db
+        .delete(messageReactions)
+        .where(
+          and(
+            eq(messageReactions.messageId, targetInternalId),
+            eq(messageReactions.actorType, 'customer'),
+            eq(messageReactions.actorId, contactId)
+          )
+        )
+    } catch (delError) {
+      console.error(
+        '[webhook] reaction delete failed:',
+        delError instanceof Error ? delError.message : delError
+      )
     }
     return
   }
 
-  const { error: upsertError } = await supabaseAdmin()
-    .from('message_reactions')
-    .upsert(
-      {
-        message_id: targetInternalId,
-        conversation_id: conversationId,
-        actor_type: 'customer',
-        actor_id: contactId,
+  try {
+    await db
+      .insert(messageReactions)
+      .values({
+        messageId: targetInternalId,
+        conversationId,
+        actorType: 'customer',
+        actorId: contactId,
         emoji: reaction.emoji,
-      },
-      { onConflict: 'message_id,actor_type,actor_id' }
+      })
+      .onConflictDoUpdate({
+        target: [
+          messageReactions.messageId,
+          messageReactions.actorType,
+          messageReactions.actorId,
+        ],
+        set: { emoji: reaction.emoji },
+      })
+  } catch (upsertError) {
+    console.error(
+      '[webhook] reaction upsert failed:',
+      upsertError instanceof Error ? upsertError.message : upsertError
     )
-  if (upsertError) {
-    console.error('[webhook] reaction upsert failed:', upsertError.message)
   }
 }
 
@@ -597,7 +649,7 @@ async function processMessage(
   // a reaction still fires the event, and a subscriber always sees the
   // thread open before its first message.received.
   if (convResult.created) {
-    await dispatchWebhookEvent(supabaseAdmin(), accountId, 'conversation.created', {
+    await dispatchWebhookEvent(accountId, 'conversation.created', {
       conversation_id: conversation.id,
       contact_id: contactRecord.id,
     })
@@ -631,10 +683,6 @@ async function processMessage(
     }
   }
 
-  // Insert message — field names MUST match the messages table schema
-  // (see supabase/migrations/001_initial_schema.sql):
-  //   conversation_id, sender_type, content_type, content_text,
-  //   media_url, template_name, message_id, status, created_at
   // `mediaType` is intentionally unused — the schema has no media_type
   // column; the MIME type is only used to construct the proxy URL during
   // parseMessageContent. Silence the unused-var warning:
@@ -659,46 +707,56 @@ async function processMessage(
   // BEFORE we insert, so the count is accurate. Covers the case where
   // the contact row already exists (manual add / CSV import) but they've
   // never messaged us before — which new_contact_created wouldn't catch.
-  const { count: priorCustomerMsgCount } = await supabaseAdmin()
-    .from('messages')
-    .select('id', { count: 'exact', head: true })
-    .eq('conversation_id', conversation.id)
-    .eq('sender_type', 'customer')
-  const isFirstInboundMessage = (priorCustomerMsgCount ?? 0) === 0
+  let priorCustomerMsgCount = 0
+  try {
+    const [counted] = await db
+      .select({ n: count() })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conversation.id),
+          eq(messages.senderType, 'customer')
+        )
+      )
+    priorCustomerMsgCount = counted?.n ?? 0
+  } catch (err) {
+    console.error('Error counting prior customer messages:', err)
+  }
+  const isFirstInboundMessage = priorCustomerMsgCount === 0
 
-  const { error: msgError } = await supabaseAdmin().from('messages').insert({
-    conversation_id: conversation.id,
-    sender_type: 'customer',
-    content_type: contentType,
-    content_text: contentText,
-    media_url: mediaUrl,
-    message_id: message.id,
-    status: 'delivered',
-    created_at: new Date(parseInt(message.timestamp) * 1000).toISOString(),
-    reply_to_message_id: replyToInternalId,
-    // Only populated for content_type='interactive'. Migration 010 added
-    // the column; null for every other content_type so existing inserts
-    // behave identically.
-    interactive_reply_id: interactiveReplyId,
-  })
-
-  if (msgError) {
+  try {
+    await db.insert(messages).values({
+      conversationId: conversation.id,
+      senderType: 'customer',
+      contentType,
+      contentText,
+      mediaUrl,
+      messageId: message.id,
+      status: 'delivered',
+      createdAt: new Date(parseInt(message.timestamp) * 1000).toISOString(),
+      replyToMessageId: replyToInternalId,
+      // Only populated for content_type='interactive'. Migration 010 added
+      // the column; null for every other content_type so existing inserts
+      // behave identically.
+      interactiveReplyId,
+    })
+  } catch (msgError) {
     console.error('Error inserting message:', msgError)
     return
   }
 
   // Update conversation
-  const { error: convError } = await supabaseAdmin()
-    .from('conversations')
-    .update({
-      last_message_text: contentText || `[${message.type}]`,
-      last_message_at: new Date().toISOString(),
-      unread_count: (conversation.unread_count || 0) + 1,
-      updated_at: new Date().toISOString(),
-    })
-    .eq('id', conversation.id)
-
-  if (convError) {
+  try {
+    await db
+      .update(conversations)
+      .set({
+        lastMessageText: contentText || `[${message.type}]`,
+        lastMessageAt: new Date().toISOString(),
+        unreadCount: (conversation.unreadCount || 0) + 1,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(conversations.id, conversation.id))
+  } catch (convError) {
     console.error('Error updating conversation:', convError)
   }
 
@@ -806,7 +864,7 @@ async function processMessage(
   // when the account has no matching endpoint and never throws.
   // (conversation.created is emitted earlier, right after the thread is
   // opened.)
-  await dispatchWebhookEvent(supabaseAdmin(), accountId, 'message.received', {
+  await dispatchWebhookEvent(accountId, 'message.received', {
     conversation_id: conversation.id,
     contact_id: contactRecord.id,
     whatsapp_message_id: message.id,
@@ -960,11 +1018,8 @@ async function parseMessageContent(
   }
 }
 
-// eslint-disable-next-line @typescript-eslint/no-explicit-any
-type ContactRow = any
-
 interface ContactOutcome {
-  contact: ContactRow
+  contact: { id: string; name?: string | null }
   /** True when this call created the row; drives new_contact_created
    *  automation dispatch in processMessage. */
   wasCreated: boolean
@@ -982,19 +1037,19 @@ async function findOrCreateContact(
   // strict `phonesMatch` in JS on the small candidate set. The same
   // helper backs the manual contact form and CSV import, so all three
   // paths agree on what "same number" means (issue #212).
-  const existingContact = await findExistingContact(
-    supabaseAdmin(),
-    accountId,
-    phone,
-  )
+  const existingContact = await findExistingContact(accountId, phone)
 
   if (existingContact) {
     // Update name if it changed
     if (name && name !== existingContact.name) {
-      await supabaseAdmin()
-        .from('contacts')
-        .update({ name, updated_at: new Date().toISOString() })
-        .eq('id', existingContact.id)
+      try {
+        await db
+          .update(contacts)
+          .set({ name, updatedAt: new Date().toISOString() })
+          .where(eq(contacts.id, existingContact.id))
+      } catch (err) {
+        console.error('Error updating contact name:', err)
+      }
     }
     return { contact: existingContact, wasCreated: false }
   }
@@ -1003,31 +1058,35 @@ async function findOrCreateContact(
   // user_id is the NOT NULL FK audit column (no inbound message
   // has a single "user who created" it — we attribute to the
   // WhatsApp config owner as a stable default).
-  const { data: newContact, error: createError } = await supabaseAdmin()
-    .from('contacts')
-    .insert({
-      account_id: accountId,
-      user_id: configOwnerUserId,
-      phone,
-      name: name || phone,
-    })
-    .select()
-    .single()
-
-  if (createError) {
+  try {
+    const newContact = firstOrNull(
+      await db
+        .insert(contacts)
+        .values({
+          accountId,
+          userId: configOwnerUserId,
+          phone,
+          name: name || phone,
+        })
+        .returning()
+    )
+    if (!newContact) {
+      console.error('Error creating contact: no row returned')
+      return null
+    }
+    return { contact: newContact, wasCreated: true }
+  } catch (createError) {
     // Lost a race: a concurrent inbound delivery (or another path)
     // created this contact between our lookup and insert, and the
     // unique index (migration 022) rejected the duplicate. Re-resolve
     // the existing row instead of dropping the message.
     if (isUniqueViolation(createError)) {
-      const raced = await findExistingContact(supabaseAdmin(), accountId, phone)
+      const raced = await findExistingContact(accountId, phone)
       if (raced) return { contact: raced, wasCreated: false }
     }
     console.error('Error creating contact:', createError)
     return null
   }
-
-  return { contact: newContact, wasCreated: true }
 }
 
 async function findOrCreateConversation(
@@ -1036,33 +1095,48 @@ async function findOrCreateConversation(
   contactId: string,
 ) {
   // Look for existing conversation in this account
-  const { data: existing, error: findError } = await supabaseAdmin()
-    .from('conversations')
-    .select('*')
-    .eq('account_id', accountId)
-    .eq('contact_id', contactId)
-    .single()
+  let existing: typeof conversations.$inferSelect | null = null
+  try {
+    existing = firstOrNull(
+      await db
+        .select()
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.accountId, accountId),
+            eq(conversations.contactId, contactId)
+          )
+        )
+        .limit(1)
+    )
+  } catch (findError) {
+    console.error('Error finding conversation:', findError)
+  }
 
-  if (!findError && existing) {
+  if (existing) {
     return { conversation: existing, created: false }
   }
 
   // Create new conversation. Same tenancy + audit split as
   // findOrCreateContact above.
-  const { data: newConv, error: createError } = await supabaseAdmin()
-    .from('conversations')
-    .insert({
-      account_id: accountId,
-      user_id: configOwnerUserId,
-      contact_id: contactId,
-    })
-    .select()
-    .single()
-
-  if (createError) {
+  try {
+    const newConv = firstOrNull(
+      await db
+        .insert(conversations)
+        .values({
+          accountId,
+          userId: configOwnerUserId,
+          contactId,
+        })
+        .returning()
+    )
+    if (!newConv) {
+      console.error('Error creating conversation: no row returned')
+      return null
+    }
+    return { conversation: newConv, created: true }
+  } catch (createError) {
     console.error('Error creating conversation:', createError)
     return null
   }
-
-  return { conversation: newConv, created: true }
 }

@@ -5,15 +5,18 @@
 // the key's name/prefix stay visible in the roster as an audit
 // trail ("this key existed and was turned off") and so the auth
 // path's liveness check (`findActiveKeyByHash` filters revoked
-// rows) starts rejecting it immediately. Admin+, enforced here and
-// by the `api_keys_update` RLS policy.
+// rows) starts rejecting it immediately. Admin+, enforced by
+// `requireRole('admin')`.
 //
 // Revocation is effective on the next request: once `revoked_at` is
 // set, `findActiveKeyByHash` returns null and the key 401s.
 // ============================================================
 
 import { NextResponse } from 'next/server';
+import { and, eq, isNull } from 'drizzle-orm';
 
+import { db, apiKeys } from '@/db';
+import { firstOrNull } from '@/db/helpers';
 import { requireRole, toErrorResponse } from '@/lib/auth/account';
 import {
   checkRateLimit,
@@ -37,20 +40,26 @@ export async function DELETE(
     const { id } = await params;
 
     // Scope the update by account_id as well as id so an admin can
-    // never revoke another account's key by guessing a UUID. (RLS
-    // already enforces this; the explicit filter is belt-and-braces
-    // and makes the "0 rows updated → 404" path precise.)
-    const { data, error } = await ctx.supabase
-      .from('api_keys')
-      .update({ revoked_at: new Date().toISOString() })
-      .eq('id', id)
-      .eq('account_id', ctx.accountId)
-      .is('revoked_at', null)
-      .select('id')
-      .maybeSingle();
-
-    if (error) {
-      console.error('[DELETE /api/account/api-keys/[id]] error:', error);
+    // never revoke another account's key by guessing a UUID. (No RLS
+    // anymore — this filter IS the authorisation boundary, and it
+    // makes the "0 rows updated → 404" path precise.)
+    let data: { id: string } | null;
+    try {
+      data = firstOrNull(
+        await db
+          .update(apiKeys)
+          .set({ revokedAt: new Date().toISOString() })
+          .where(
+            and(
+              eq(apiKeys.id, id),
+              eq(apiKeys.accountId, ctx.accountId),
+              isNull(apiKeys.revokedAt),
+            ),
+          )
+          .returning({ id: apiKeys.id }),
+      );
+    } catch (err) {
+      console.error('[DELETE /api/account/api-keys/[id]] error:', err);
       return NextResponse.json(
         { error: 'Failed to revoke API key' },
         { status: 500 }

@@ -8,16 +8,15 @@
 // `created: false`; a new row returns 201 with `created: true`.
 // ============================================================
 
+import { and, desc, eq, ilike, lt, or } from 'drizzle-orm';
+
+import { db, contactTags, contacts } from '@/db';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { parseListParams, buildPage } from '@/lib/api/v1/pagination';
 import {
-  parseListParams,
-  keysetFilter,
-  buildPage,
-} from '@/lib/api/v1/pagination';
-import {
-  CONTACT_SELECT,
   serializeContact,
+  loadTagsByContact,
   findOrCreateContact,
   setContactTags,
   getContactById,
@@ -25,9 +24,8 @@ import {
   ContactError,
 } from '@/lib/api/v1/contacts';
 
-// PostgREST filter values are comma/paren-delimited; strip anything
-// that could break the `.or()` grammar before interpolating a search
-// term. Leaves the characters a phone or name legitimately contains.
+// Strip anything that isn't a character a phone or name legitimately
+// contains before it reaches the ILIKE patterns.
 function sanitizeSearch(raw: string): string {
   return raw.replace(/[^\p{L}\p{N} +@.\-_]/gu, '').trim();
 }
@@ -40,52 +38,88 @@ export async function GET(request: Request) {
     const search = sanitizeSearch(url.searchParams.get('search') ?? '');
     const tag = url.searchParams.get('tag');
 
-    // When filtering by tag, add an aliased INNER join on contact_tags
-    // used purely for the WHERE — the parent is kept only if it has the
-    // tag. The main `contact_tags(tags(*))` embed still returns the
-    // contact's FULL tag set for serialization. This filters in one
-    // bounded query (paged by limit+1) instead of pre-fetching an
-    // unbounded id list into an `.in(...)`.
-    const selectClause = tag
-      ? `${CONTACT_SELECT}, tag_filter:contact_tags!inner(tag_id)`
-      : CONTACT_SELECT;
-
-    let query = ctx.supabase
-      .from('contacts')
-      .select(selectClause)
-      .eq('account_id', ctx.accountId);
+    const conditions = [eq(contacts.accountId, ctx.accountId)];
 
     if (search) {
-      query = query.or(`name.ilike.*${search}*,phone.ilike.*${search}*`);
+      conditions.push(
+        or(
+          ilike(contacts.name, `%${search}%`),
+          ilike(contacts.phone, `%${search}%`)
+        )!
+      );
     }
 
-    if (tag) {
-      query = query.eq('tag_filter.tag_id', tag);
+    // Keyset filter — walk past the cursor row under the
+    // (created_at desc, id desc) ordering.
+    if (cursor) {
+      conditions.push(
+        or(
+          lt(contacts.createdAt, cursor.createdAt),
+          and(
+            eq(contacts.createdAt, cursor.createdAt),
+            lt(contacts.id, cursor.id)
+          )
+        )!
+      );
     }
 
-    query = query
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(limit + 1);
+    const baseSelect = {
+      id: contacts.id,
+      phone: contacts.phone,
+      name: contacts.name,
+      email: contacts.email,
+      company: contacts.company,
+      avatar_url: contacts.avatarUrl,
+      created_at: contacts.createdAt,
+      updated_at: contacts.updatedAt,
+    };
 
-    const kf = keysetFilter(cursor);
-    if (kf) query = query.or(kf);
+    // When filtering by tag, an INNER join on contact_tags keeps the
+    // contact only if it has the tag — the join is bounded to that one
+    // tag id, so it can't fan out rows. The contact's FULL tag set is
+    // still loaded below for serialization. This filters in one bounded
+    // query (paged by limit+1) instead of pre-fetching an unbounded id
+    // list into an `inArray(...)`.
+    let rows: Array<Record<string, unknown> & { created_at: string | null; id: string }>;
+    try {
+      const query = tag
+        ? db
+            .select(baseSelect)
+            .from(contacts)
+            .innerJoin(
+              contactTags,
+              and(
+                eq(contactTags.contactId, contacts.id),
+                eq(contactTags.tagId, tag)
+              )
+            )
+        : db.select(baseSelect).from(contacts);
 
-    const { data, error } = await query;
-    if (error) {
+      rows = await query
+        .where(and(...conditions))
+        .orderBy(desc(contacts.createdAt), desc(contacts.id))
+        .limit(limit + 1);
+    } catch (error) {
       console.error('[api/v1/contacts] list error:', error);
       return fail('internal', 'Failed to list contacts', 500);
     }
 
-    // Cast via unknown: the conditional `selectClause` (with the
-    // tag_filter alias) is a runtime string, so supabase-js can't infer
-    // a row type from it.
     const { items, nextCursor } = buildPage(
-      (data ?? []) as unknown as Array<{ created_at: string; id: string }>,
+      rows as unknown as Array<{ created_at: string; id: string }>,
       limit
     );
+
+    const tagsByContact = await loadTagsByContact(items.map((r) => r.id));
+
     return okList(
-      items.map((r) => serializeContact(r as Record<string, unknown>)),
+      items.map((r) =>
+        serializeContact({
+          ...r,
+          contact_tags: (tagsByContact.get(r.id) ?? []).map((t) => ({
+            tags: t,
+          })),
+        })
+      ),
       nextCursor
     );
   } catch (err) {
@@ -110,10 +144,9 @@ export async function POST(request: Request) {
       return fail('bad_request', "'phone' is required", 400);
     }
 
-    const auditUserId = await resolveAuditUserId(ctx.supabase, ctx.accountId);
+    const auditUserId = await resolveAuditUserId(ctx.accountId);
 
     const { id, created } = await findOrCreateContact(
-      ctx.supabase,
       ctx.accountId,
       auditUserId,
       {
@@ -126,7 +159,6 @@ export async function POST(request: Request) {
 
     if (Array.isArray(body.tags)) {
       await setContactTags(
-        ctx.supabase,
         ctx.accountId,
         auditUserId,
         id,
@@ -134,7 +166,7 @@ export async function POST(request: Request) {
       );
     }
 
-    const contact = await getContactById(ctx.supabase, ctx.accountId, id);
+    const contact = await getContactById(ctx.accountId, id);
     return ok(contact, created ? 201 : 200);
   } catch (err) {
     if (err instanceof ContactError) {

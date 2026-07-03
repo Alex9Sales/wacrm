@@ -7,14 +7,29 @@
 // secret is never returned here — it's shown once at creation only.
 // ============================================================
 
+import { and, eq } from 'drizzle-orm';
+
+import { db, webhookEndpoints } from '@/db';
+import { firstOrNull } from '@/db/helpers';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { normalizeEvents } from '@/lib/webhooks/events';
 import {
-  WEBHOOK_PUBLIC_COLUMNS,
   serializeWebhookEndpoint,
   normalizeWebhookUrl,
 } from '@/lib/webhooks/endpoints';
+
+// Columns safe to return over the API — everything except the
+// (encrypted) `secret`. Mirrors src/app/api/v1/webhooks/route.ts.
+const WEBHOOK_PUBLIC_SELECT = {
+  id: webhookEndpoints.id,
+  url: webhookEndpoints.url,
+  events: webhookEndpoints.events,
+  is_active: webhookEndpoints.isActive,
+  last_delivery_at: webhookEndpoints.lastDeliveryAt,
+  failure_count: webhookEndpoints.failureCount,
+  created_at: webhookEndpoints.createdAt,
+};
 
 export async function GET(
   request: Request,
@@ -24,17 +39,25 @@ export async function GET(
     const ctx = await requireApiKey(request, 'webhooks:manage');
     const { id } = await params;
 
-    const { data, error } = await ctx.supabase
-      .from('webhook_endpoints')
-      .select(WEBHOOK_PUBLIC_COLUMNS)
-      .eq('id', id)
-      .eq('account_id', ctx.accountId)
-      .maybeSingle();
-
-    if (error) {
+    let data;
+    try {
+      data = firstOrNull(
+        await db
+          .select(WEBHOOK_PUBLIC_SELECT)
+          .from(webhookEndpoints)
+          .where(
+            and(
+              eq(webhookEndpoints.id, id),
+              eq(webhookEndpoints.accountId, ctx.accountId)
+            )
+          )
+          .limit(1)
+      );
+    } catch (error) {
       console.error('[api/v1/webhooks] read error:', error);
       return fail('internal', 'Failed to read webhook', 500);
     }
+
     if (!data) return fail('not_found', 'Webhook not found', 404);
 
     return ok(serializeWebhookEndpoint(data as Record<string, unknown>));
@@ -59,7 +82,12 @@ export async function PATCH(
       return fail('bad_request', 'Request body must be a JSON object', 400);
     }
 
-    const updates: Record<string, unknown> = {};
+    const updates: Partial<{
+      url: string;
+      events: string[];
+      isActive: boolean;
+      failureCount: number;
+    }> = {};
 
     if ('url' in body) {
       const url = normalizeWebhookUrl(body.url);
@@ -85,10 +113,10 @@ export async function PATCH(
       if (typeof body.is_active !== 'boolean') {
         return fail('bad_request', "'is_active' must be a boolean", 400);
       }
-      updates.is_active = body.is_active;
+      updates.isActive = body.is_active;
       // Re-enabling a disabled endpoint clears its failure streak so it
       // isn't instantly re-disabled by a single stale failure.
-      if (body.is_active === true) updates.failure_count = 0;
+      if (body.is_active === true) updates.failureCount = 0;
     }
 
     if (Object.keys(updates).length === 0) {
@@ -97,18 +125,25 @@ export async function PATCH(
 
     // Scope the update by account_id so a foreign id touches nothing;
     // the returned row (null when unmatched) drives the 404.
-    const { data, error } = await ctx.supabase
-      .from('webhook_endpoints')
-      .update(updates)
-      .eq('id', id)
-      .eq('account_id', ctx.accountId)
-      .select(WEBHOOK_PUBLIC_COLUMNS)
-      .maybeSingle();
-
-    if (error) {
+    let data;
+    try {
+      data = firstOrNull(
+        await db
+          .update(webhookEndpoints)
+          .set(updates)
+          .where(
+            and(
+              eq(webhookEndpoints.id, id),
+              eq(webhookEndpoints.accountId, ctx.accountId)
+            )
+          )
+          .returning(WEBHOOK_PUBLIC_SELECT)
+      );
+    } catch (error) {
       console.error('[api/v1/webhooks] update error:', error);
       return fail('internal', 'Failed to update webhook', 500);
     }
+
     if (!data) return fail('not_found', 'Webhook not found', 404);
 
     return ok(serializeWebhookEndpoint(data as Record<string, unknown>));
@@ -125,18 +160,24 @@ export async function DELETE(
     const ctx = await requireApiKey(request, 'webhooks:manage');
     const { id } = await params;
 
-    const { data, error } = await ctx.supabase
-      .from('webhook_endpoints')
-      .delete()
-      .eq('id', id)
-      .eq('account_id', ctx.accountId)
-      .select('id')
-      .maybeSingle();
-
-    if (error) {
+    let data;
+    try {
+      data = firstOrNull(
+        await db
+          .delete(webhookEndpoints)
+          .where(
+            and(
+              eq(webhookEndpoints.id, id),
+              eq(webhookEndpoints.accountId, ctx.accountId)
+            )
+          )
+          .returning({ id: webhookEndpoints.id })
+      );
+    } catch (error) {
       console.error('[api/v1/webhooks] delete error:', error);
       return fail('internal', 'Failed to delete webhook', 500);
     }
+
     if (!data) return fail('not_found', 'Webhook not found', 404);
 
     return ok({ id: data.id, deleted: true });

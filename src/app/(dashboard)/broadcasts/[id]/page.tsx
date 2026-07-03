@@ -2,7 +2,11 @@
 
 import { useEffect, useMemo, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
-import { createClient } from '@/lib/supabase/client';
+import {
+  deleteBroadcast,
+  getBroadcast,
+  listBroadcastRecipients,
+} from '../actions';
 import { Broadcast, BroadcastRecipient, RecipientStatus } from '@/types';
 import { Button } from '@/components/ui/button';
 import {
@@ -159,25 +163,12 @@ export default function BroadcastDetailPage() {
   useEffect(() => {
     async function fetchData() {
       try {
-        const supabase = createClient();
-
-        const { data: bc, error: bcError } = await supabase
-          .from('broadcasts')
-          .select('*')
-          .eq('id', broadcastId)
-          .single();
-
-        if (bcError) throw bcError;
+        const bc = await getBroadcast(broadcastId);
+        if (!bc) throw new Error('Broadcast not found');
         setBroadcast(bc);
 
-        const { data: recs, error: recsError } = await supabase
-          .from('broadcast_recipients')
-          .select('*, contact:contacts(*)')
-          .eq('broadcast_id', broadcastId)
-          .order('created_at', { ascending: false });
-
-        if (recsError) throw recsError;
-        setRecipients(recs ?? []);
+        const recs = await listBroadcastRecipients(broadcastId);
+        setRecipients(recs);
       } catch (err) {
         setError(err instanceof Error ? err.message : 'Failed to load broadcast');
       } finally {
@@ -225,18 +216,14 @@ export default function BroadcastDetailPage() {
 
   async function handleDelete() {
     setDeleting(true);
-    const supabase = createClient();
     // broadcast_recipients cascades on broadcasts.id (migration 001), so a
     // single delete is sufficient — the aggregate trigger in migration 003
     // is defined on broadcast_recipients but fires only on its own row
     // changes, not on a cascaded drop of the parent row.
-    const { error: delErr } = await supabase
-      .from('broadcasts')
-      .delete()
-      .eq('id', broadcastId);
+    const { error: delErr } = await deleteBroadcast(broadcastId);
     setDeleting(false);
     if (delErr) {
-      toast.error(`Failed to delete: ${delErr.message}`);
+      toast.error(`Failed to delete: ${delErr}`);
       return;
     }
     toast.success('Broadcast deleted');

@@ -59,9 +59,9 @@ export async function POST(request: Request) {
       typeof body.template_name === 'string' ? body.template_name : '';
     const recipients = Array.isArray(body.recipients) ? body.recipients : [];
 
-    const auditUserId = await resolveAuditUserId(ctx.supabase, ctx.accountId);
+    const auditUserId = await resolveAuditUserId(ctx.accountId);
 
-    const plan = await createBroadcast(ctx.supabase, ctx.accountId, auditUserId, {
+    const plan = await createBroadcast(ctx.accountId, auditUserId, {
       name: typeof body.name === 'string' ? body.name : null,
       templateName,
       templateLanguage:
@@ -74,10 +74,10 @@ export async function POST(request: Request) {
       })),
     });
 
-    // Fan out after the response is sent. Uses the same service-role
+    // Fan out after the response is sent. Uses the shared Drizzle
     // client — no request-scoped auth needed for the Meta calls or
     // the account-scoped row updates.
-    after(() => deliverBroadcast(ctx.supabase, plan));
+    after(() => deliverBroadcast(plan));
 
     return ok(
       {

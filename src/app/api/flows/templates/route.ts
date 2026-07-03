@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 import { listFlowTemplates } from '@/lib/flows/templates'
 
 /**
@@ -13,12 +13,10 @@ import { listFlowTemplates } from '@/lib/flows/templates'
  * Available to any signed-in user. Flows is in soft-GA.
  */
 export async function GET() {
-  const supabase = await createClient()
-  const {
-    data: { user },
-  } = await supabase.auth.getUser()
-  if (!user) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  try {
+    await getCurrentAccount()
+  } catch (err) {
+    return toErrorResponse(err)
   }
   // Shallow shape so the client gallery doesn't have to know about
   // the full node tree.

@@ -6,13 +6,13 @@
 // any message is returned — a foreign or unknown id → 404.
 // ============================================================
 
+import { and, desc, eq, lt, or } from 'drizzle-orm';
+
+import { db, conversations, messages } from '@/db';
+import { firstOrNull } from '@/db/helpers';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
-import {
-  parseListParams,
-  keysetFilter,
-  buildPage,
-} from '@/lib/api/v1/pagination';
+import { parseListParams, buildPage } from '@/lib/api/v1/pagination';
 import { serializeMessage } from '@/lib/api/v1/conversations';
 import type { Message } from '@/types';
 
@@ -25,34 +25,70 @@ export async function GET(
     const { id } = await params;
     const { limit, cursor } = parseListParams(request);
 
-    // Gate on account ownership of the conversation first.
-    const { data: conv } = await ctx.supabase
-      .from('conversations')
-      .select('id')
-      .eq('id', id)
-      .eq('account_id', ctx.accountId)
-      .maybeSingle();
+    // Gate on account ownership of the conversation first. A malformed
+    // UUID throws where PostgREST returned an error object — both
+    // collapse to the same 404.
+    let conv: { id: string } | null = null;
+    try {
+      conv = firstOrNull(
+        await db
+          .select({ id: conversations.id })
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.id, id),
+              eq(conversations.accountId, ctx.accountId)
+            )
+          )
+          .limit(1)
+      );
+    } catch {
+      conv = null;
+    }
     if (!conv) return fail('not_found', 'Conversation not found', 404);
 
-    let query = ctx.supabase
-      .from('messages')
-      .select('*')
-      .eq('conversation_id', id)
-      .order('created_at', { ascending: false })
-      .order('id', { ascending: false })
-      .limit(limit + 1);
+    const conditions = [eq(messages.conversationId, id)];
+    if (cursor) {
+      conditions.push(
+        or(
+          lt(messages.createdAt, cursor.createdAt),
+          and(
+            eq(messages.createdAt, cursor.createdAt),
+            lt(messages.id, cursor.id)
+          )
+        )!
+      );
+    }
 
-    const kf = keysetFilter(cursor);
-    if (kf) query = query.or(kf);
-
-    const { data, error } = await query;
-    if (error) {
+    let rows;
+    try {
+      rows = await db
+        .select({
+          id: messages.id,
+          conversation_id: messages.conversationId,
+          sender_type: messages.senderType,
+          sender_id: messages.senderId,
+          content_type: messages.contentType,
+          content_text: messages.contentText,
+          media_url: messages.mediaUrl,
+          template_name: messages.templateName,
+          message_id: messages.messageId,
+          status: messages.status,
+          reply_to_message_id: messages.replyToMessageId,
+          interactive_reply_id: messages.interactiveReplyId,
+          created_at: messages.createdAt,
+        })
+        .from(messages)
+        .where(and(...conditions))
+        .orderBy(desc(messages.createdAt), desc(messages.id))
+        .limit(limit + 1);
+    } catch (error) {
       console.error('[api/v1/messages] list error:', error);
       return fail('internal', 'Failed to list messages', 500);
     }
 
     const { items, nextCursor } = buildPage(
-      (data ?? []) as Array<{ created_at: string; id: string }>,
+      rows as unknown as Array<{ created_at: string; id: string }>,
       limit
     );
     return okList(

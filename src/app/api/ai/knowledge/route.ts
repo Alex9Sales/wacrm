@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server'
+import { desc, eq } from 'drizzle-orm'
+import { db, aiKnowledgeDocuments } from '@/db'
+import { firstOrThrow } from '@/db/helpers'
 import {
   getCurrentAccount,
   requireRole,
@@ -16,20 +19,26 @@ import { AiError } from '@/lib/ai/types'
  */
 export async function GET() {
   try {
-    const { supabase, accountId } = await getCurrentAccount()
-    const { data, error } = await supabase
-      .from('ai_knowledge_documents')
-      .select('id, title, updated_at')
-      .eq('account_id', accountId)
-      .order('updated_at', { ascending: false })
-    if (error) {
-      console.error('[ai/knowledge GET] error:', error)
+    const { accountId } = await getCurrentAccount()
+    let data
+    try {
+      data = await db
+        .select({
+          id: aiKnowledgeDocuments.id,
+          title: aiKnowledgeDocuments.title,
+          updated_at: aiKnowledgeDocuments.updatedAt,
+        })
+        .from(aiKnowledgeDocuments)
+        .where(eq(aiKnowledgeDocuments.accountId, accountId))
+        .orderBy(desc(aiKnowledgeDocuments.updatedAt))
+    } catch (err) {
+      console.error('[ai/knowledge GET] error:', err)
       return NextResponse.json(
         { error: 'Failed to load knowledge base' },
         { status: 500 },
       )
     }
-    return NextResponse.json({ documents: data ?? [] })
+    return NextResponse.json({ documents: data })
   } catch (err) {
     return toErrorResponse(err)
   }
@@ -43,7 +52,7 @@ export async function GET() {
  */
 export async function POST(request: Request) {
   try {
-    const { supabase, accountId, userId } = await requireRole('admin')
+    const { accountId, userId } = await requireRole('admin')
     const limit = checkRateLimit(`ai-kb:${userId}`, RATE_LIMITS.adminAction)
     if (!limit.success) return rateLimitResponse(limit)
 
@@ -57,31 +66,25 @@ export async function POST(request: Request) {
       )
     }
 
-    const { data: doc, error } = await supabase
-      .from('ai_knowledge_documents')
-      .insert({ account_id: accountId, created_by: userId, title, content })
-      .select('id')
-      .single()
-    if (error || !doc) {
-      console.error('[ai/knowledge POST] insert error:', error)
+    let doc: { id: string }
+    try {
+      doc = firstOrThrow(
+        await db
+          .insert(aiKnowledgeDocuments)
+          .values({ accountId, createdBy: userId, title, content })
+          .returning({ id: aiKnowledgeDocuments.id }),
+      )
+    } catch (err) {
+      console.error('[ai/knowledge POST] insert error:', err)
       return NextResponse.json(
         { error: 'Failed to save document' },
         { status: 500 },
       )
     }
 
-    const { key: embeddingsApiKey, corrupt } = await loadEmbeddingsKey(
-      supabase,
-      accountId,
-    )
+    const { key: embeddingsApiKey, corrupt } = await loadEmbeddingsKey(accountId)
     try {
-      await ingestDocument(
-        supabase,
-        accountId,
-        { embeddingsApiKey },
-        doc.id,
-        content,
-      )
+      await ingestDocument(accountId, { embeddingsApiKey }, doc.id, content)
     } catch (err) {
       const message = err instanceof AiError ? err.message : 'indexing failed'
       console.error('[ai/knowledge POST] ingest error:', err)

@@ -1,6 +1,13 @@
 import { NextResponse } from 'next/server'
-import type { SupabaseClient } from '@supabase/supabase-js'
-import { createClient } from '@/lib/supabase/server'
+import { eq } from 'drizzle-orm'
+
+import { db, messageTemplates, whatsappConfig } from '@/db'
+import { firstOrNull } from '@/db/helpers'
+import {
+  getCurrentAccount,
+  toErrorResponse,
+  type AccountContext,
+} from '@/lib/auth/account'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { submitMessageTemplate } from '@/lib/whatsapp/meta-api'
 import {
@@ -10,6 +17,33 @@ import {
 import { buildMetaTemplatePayload } from '@/lib/whatsapp/template-components'
 import { ensureImageHeaderHandle } from '@/lib/whatsapp/template-header-handle'
 import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
+
+// Full row projected with snake_case aliases so the JSON response keeps
+// the exact shape the dashboard consumed from PostgREST.
+const TEMPLATE_ROW_SELECT = {
+  id: messageTemplates.id,
+  user_id: messageTemplates.userId,
+  account_id: messageTemplates.accountId,
+  name: messageTemplates.name,
+  category: messageTemplates.category,
+  language: messageTemplates.language,
+  header_type: messageTemplates.headerType,
+  header_content: messageTemplates.headerContent,
+  body_text: messageTemplates.bodyText,
+  footer_text: messageTemplates.footerText,
+  buttons: messageTemplates.buttons,
+  status: messageTemplates.status,
+  sample_values: messageTemplates.sampleValues,
+  meta_template_id: messageTemplates.metaTemplateId,
+  rejection_reason: messageTemplates.rejectionReason,
+  quality_score: messageTemplates.qualityScore,
+  header_handle: messageTemplates.headerHandle,
+  header_media_url: messageTemplates.headerMediaUrl,
+  submission_error: messageTemplates.submissionError,
+  last_submitted_at: messageTemplates.lastSubmittedAt,
+  created_at: messageTemplates.createdAt,
+  updated_at: messageTemplates.updatedAt,
+}
 
 /**
  * Shared upsert payload builder — both the Meta-failure path and the
@@ -30,46 +64,55 @@ function buildUpsertRow(
     // Account tenancy — required NOT NULL on message_templates as
     // of migration 017. Without this an INSERT throws on the
     // not-null constraint.
-    account_id: accountId,
+    accountId,
     // Original author — kept as audit only. The unique index is
     // still on (user_id, name, language) — see the upsert helper
     // for the cross-teammate dedup follow-up.
-    user_id: userId,
+    userId,
     name: payload.name,
     category: payload.category,
     language: payload.language,
-    header_type: payload.header_type ?? null,
-    header_content: payload.header_content ?? null,
-    header_media_url: payload.header_media_url ?? null,
-    header_handle: payload.header_handle ?? null,
-    body_text: payload.body_text,
-    footer_text: payload.footer_text ?? null,
+    headerType: payload.header_type ?? null,
+    headerContent: payload.header_content ?? null,
+    headerMediaUrl: payload.header_media_url ?? null,
+    headerHandle: payload.header_handle ?? null,
+    bodyText: payload.body_text,
+    footerText: payload.footer_text ?? null,
     buttons: payload.buttons ?? null,
-    sample_values: payload.sample_values ?? null,
+    sampleValues: payload.sample_values ?? null,
     status: extras.status,
-    meta_template_id: extras.metaTemplateId,
-    submission_error: extras.submissionError,
+    metaTemplateId: extras.metaTemplateId,
+    submissionError: extras.submissionError,
     // Clear stale rejection_reason whenever we re-submit; the
     // webhook will set it again if Meta still rejects.
-    rejection_reason: extras.submissionError ? null : null,
-    last_submitted_at: new Date().toISOString(),
+    rejectionReason: extras.submissionError ? null : null,
+    lastSubmittedAt: new Date().toISOString(),
   }
 }
 
-async function upsertTemplateRow(
-  supabase: SupabaseClient,
-  row: ReturnType<typeof buildUpsertRow>,
-) {
+async function upsertTemplateRow(row: ReturnType<typeof buildUpsertRow>) {
   // TODO(account-sharing): conflict target is still scoped to
   // user_id. Once a follow-up migration drops the legacy unique
   // index on (user_id, name, language) and adds (account_id,
-  // name, language), switch `onConflict` here so two teammates
-  // can't shadow each other's same-named template.
-  return supabase
-    .from('message_templates')
-    .upsert(row, { onConflict: 'user_id,name,language' })
-    .select()
-    .single()
+  // name, language), switch the conflict target here so two
+  // teammates can't shadow each other's same-named template.
+  const { accountId: _accountId, userId: _userId, ...updatable } = row
+  void _accountId
+  void _userId
+  return firstOrNull(
+    await db
+      .insert(messageTemplates)
+      .values(row)
+      .onConflictDoUpdate({
+        target: [
+          messageTemplates.userId,
+          messageTemplates.name,
+          messageTemplates.language,
+        ],
+        set: updatable,
+      })
+      .returning(TEMPLATE_ROW_SELECT)
+  )
 }
 
 /**
@@ -88,29 +131,13 @@ async function upsertTemplateRow(
  */
 export async function POST(request: Request) {
   try {
-    const supabase = await createClient()
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    let ctx: AccountContext
+    try {
+      ctx = await getCurrentAccount()
+    } catch (err) {
+      return toErrorResponse(err)
     }
-
-    // Resolve the caller's account_id — whatsapp_config + the
-    // message_templates row are account-scoped post-multi-user.
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('account_id')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
-    }
+    const accountId = ctx.accountId
 
     let payload: TemplatePayload
     try {
@@ -149,12 +176,14 @@ export async function POST(request: Request) {
       metaTemplateId = `dry-run-${crypto.randomUUID()}`
       metaStatus = 'PENDING'
     } else {
-      const { data: config, error: configError } = await supabase
-        .from('whatsapp_config')
-        .select('*')
-        .eq('account_id', accountId)
-        .single()
-      if (configError || !config) {
+      const config = firstOrNull(
+        await db
+          .select()
+          .from(whatsappConfig)
+          .where(eq(whatsappConfig.accountId, accountId))
+          .limit(1)
+      )
+      if (!config) {
         return NextResponse.json(
           {
             error:
@@ -163,7 +192,7 @@ export async function POST(request: Request) {
           { status: 400 },
         )
       }
-      if (!config.waba_id) {
+      if (!config.wabaId) {
         return NextResponse.json(
           {
             error:
@@ -173,7 +202,7 @@ export async function POST(request: Request) {
         )
       }
 
-      const accessToken = decrypt(config.access_token)
+      const accessToken = decrypt(config.accessToken)
 
       // Image headers need a Resumable-Upload handle (Meta rejects a
       // plain URL at creation). Derive it from header_media_url before
@@ -191,7 +220,7 @@ export async function POST(request: Request) {
       const metaPayload = buildMetaTemplatePayload(payload)
       try {
         const meta = await submitMessageTemplate({
-          wabaId: config.waba_id,
+          wabaId: config.wabaId,
           accessToken,
           payload: metaPayload,
         })
@@ -200,15 +229,22 @@ export async function POST(request: Request) {
       } catch (e) {
         const message = e instanceof Error ? e.message : 'Meta submit failed.'
         // Persist the failure so the user can retry; row stays DRAFT
-        // until they fix and re-submit.
-        await upsertTemplateRow(
-          supabase,
-          buildUpsertRow(accountId, user.id, payload, {
-            status: 'DRAFT',
-            metaTemplateId: null,
-            submissionError: message,
-          }),
-        )
+        // until they fix and re-submit. Best-effort — a local write
+        // failure must not mask the Meta error we're about to return.
+        try {
+          await upsertTemplateRow(
+            buildUpsertRow(accountId, ctx.userId, payload, {
+              status: 'DRAFT',
+              metaTemplateId: null,
+              submissionError: message,
+            }),
+          )
+        } catch (persistErr) {
+          console.error(
+            'Failed to persist template submission error:',
+            persistErr,
+          )
+        }
         const isRateLimit = /\b429\b/.test(message)
         return NextResponse.json(
           {
@@ -221,22 +257,24 @@ export async function POST(request: Request) {
       }
     }
 
-    const { data: row, error: upsertErr } = await upsertTemplateRow(
-      supabase,
-      buildUpsertRow(accountId, user.id, payload, {
-        status: normalizeStatus(metaStatus),
-        metaTemplateId,
-        submissionError: null,
-      }),
-    )
-
-    if (upsertErr) {
+    let row
+    try {
+      row = await upsertTemplateRow(
+        buildUpsertRow(accountId, ctx.userId, payload, {
+          status: normalizeStatus(metaStatus),
+          metaTemplateId,
+          submissionError: null,
+        }),
+      )
+    } catch (upsertErr) {
       // The submit succeeded on Meta's side but we failed to persist
       // locally. That's a data-drift state — surface the meta_template_id
       // so the user can recover via "Sync from Meta".
+      const message =
+        upsertErr instanceof Error ? upsertErr.message : String(upsertErr)
       return NextResponse.json(
         {
-          error: `Submitted to Meta but failed to save locally: ${upsertErr.message}. Run "Sync from Meta" to recover.`,
+          error: `Submitted to Meta but failed to save locally: ${message}. Run "Sync from Meta" to recover.`,
           meta_template_id: metaTemplateId,
         },
         { status: 500 },

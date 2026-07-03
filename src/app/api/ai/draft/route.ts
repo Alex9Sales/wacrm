@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server'
+import { and, eq } from 'drizzle-orm'
+import { db, conversations } from '@/db'
+import { firstOrNull } from '@/db/helpers'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { loadAiConfig } from '@/lib/ai/config'
@@ -20,7 +23,7 @@ import { AiError } from '@/lib/ai/types'
  */
 export async function POST(request: Request) {
   try {
-    const { supabase, accountId, userId } = await requireRole('agent')
+    const { accountId, userId } = await requireRole('agent')
 
     const userLimit = checkRateLimit(`ai-draft:${userId}`, RATE_LIMITS.aiDraft)
     if (!userLimit.success) return rateLimitResponse(userLimit)
@@ -41,22 +44,25 @@ export async function POST(request: Request) {
       )
     }
 
-    // RLS scopes the SSR client to the caller's account, so a missing
-    // row means "not yours / not found" either way.
-    const { data: conversation, error: convErr } = await supabase
-      .from('conversations')
-      .select('id')
-      .eq('id', conversationId)
-      .maybeSingle()
-    if (convErr) {
-      console.error('[ai/draft] conversation lookup error:', convErr)
-      return NextResponse.json({ error: 'Failed to load conversation' }, { status: 500 })
-    }
+    // No RLS anymore — scope by account explicitly, so a missing row
+    // means "not yours / not found" either way.
+    const conversation = firstOrNull(
+      await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.id, conversationId),
+            eq(conversations.accountId, accountId),
+          ),
+        )
+        .limit(1),
+    )
     if (!conversation) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
     }
 
-    const config = await loadAiConfig(supabase, accountId).catch((err) => {
+    const config = await loadAiConfig(accountId).catch((err) => {
       // Decrypt failure — surface distinctly from "not configured".
       console.error('[ai/draft] loadAiConfig error:', err)
       throw new AiError('Stored API key could not be decrypted.', {
@@ -74,7 +80,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const messages = await buildConversationContext(supabase, conversationId)
+    const messages = await buildConversationContext(conversationId)
     // Nothing to draft from — a brand-new thread with no customer text
     // would otherwise produce a nonsensical reply-to-nothing.
     if (messages.length === 0) {
@@ -90,7 +96,6 @@ export async function POST(request: Request) {
     // Ground the draft in the account's knowledge base (best-effort —
     // returns [] when there's no KB or retrieval fails).
     const knowledge = await retrieveKnowledge(
-      supabase,
       accountId,
       config,
       latestUserMessage(messages),

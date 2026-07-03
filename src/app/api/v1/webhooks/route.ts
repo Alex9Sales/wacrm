@@ -7,28 +7,45 @@
 // an encrypted copy and can never show it again.
 // ============================================================
 
+import { desc, eq } from 'drizzle-orm';
+
+import { db, webhookEndpoints } from '@/db';
+import { firstOrNull } from '@/db/helpers';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { encrypt } from '@/lib/whatsapp/encryption';
 import { normalizeEvents } from '@/lib/webhooks/events';
 import {
-  WEBHOOK_PUBLIC_COLUMNS,
   serializeWebhookEndpoint,
   generateWebhookSecret,
   normalizeWebhookUrl,
 } from '@/lib/webhooks/endpoints';
 
+// Columns safe to return over the API — everything except the
+// (encrypted) `secret`. The drizzle equivalent of the old
+// WEBHOOK_PUBLIC_COLUMNS PostgREST select string.
+const WEBHOOK_PUBLIC_SELECT = {
+  id: webhookEndpoints.id,
+  url: webhookEndpoints.url,
+  events: webhookEndpoints.events,
+  is_active: webhookEndpoints.isActive,
+  last_delivery_at: webhookEndpoints.lastDeliveryAt,
+  failure_count: webhookEndpoints.failureCount,
+  created_at: webhookEndpoints.createdAt,
+};
+
 export async function GET(request: Request) {
   try {
     const ctx = await requireApiKey(request, 'webhooks:manage');
 
-    const { data, error } = await ctx.supabase
-      .from('webhook_endpoints')
-      .select(WEBHOOK_PUBLIC_COLUMNS)
-      .eq('account_id', ctx.accountId)
-      .order('created_at', { ascending: false });
-
-    if (error) {
+    let data;
+    try {
+      data = await db
+        .select(WEBHOOK_PUBLIC_SELECT)
+        .from(webhookEndpoints)
+        .where(eq(webhookEndpoints.accountId, ctx.accountId))
+        .orderBy(desc(webhookEndpoints.createdAt));
+    } catch (error) {
       console.error('[api/v1/webhooks] list error:', error);
       return fail('internal', 'Failed to list webhooks', 500);
     }
@@ -36,9 +53,7 @@ export async function GET(request: Request) {
     // The roster is small and settings-class — return it whole (the
     // list envelope's cursor is always null here).
     return okList(
-      (data ?? []).map((r) =>
-        serializeWebhookEndpoint(r as Record<string, unknown>)
-      ),
+      data.map((r) => serializeWebhookEndpoint(r as Record<string, unknown>)),
       null
     );
   } catch (err) {
@@ -74,20 +89,27 @@ export async function POST(request: Request) {
 
     const secret = generateWebhookSecret();
 
-    const { data: created, error } = await ctx.supabase
-      .from('webhook_endpoints')
-      .insert({
-        account_id: ctx.accountId,
-        created_by: ctx.createdBy,
-        url,
-        secret: encrypt(secret),
-        events,
-      })
-      .select(WEBHOOK_PUBLIC_COLUMNS)
-      .single();
-
-    if (error || !created) {
+    let created;
+    try {
+      created = firstOrNull(
+        await db
+          .insert(webhookEndpoints)
+          .values({
+            accountId: ctx.accountId,
+            createdBy: ctx.createdBy,
+            url,
+            secret: encrypt(secret),
+            events,
+          })
+          .returning(WEBHOOK_PUBLIC_SELECT)
+      );
+    } catch (error) {
       console.error('[api/v1/webhooks] create error:', error);
+      return fail('internal', 'Failed to create webhook', 500);
+    }
+
+    if (!created) {
+      console.error('[api/v1/webhooks] create error: no row returned');
       return fail('internal', 'Failed to create webhook', 500);
     }
 

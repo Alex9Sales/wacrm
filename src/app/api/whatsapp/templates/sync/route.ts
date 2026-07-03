@@ -1,5 +1,13 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { and, eq } from 'drizzle-orm'
+
+import { db, messageTemplates, whatsappConfig } from '@/db'
+import { firstOrNull } from '@/db/helpers'
+import {
+  getCurrentAccount,
+  toErrorResponse,
+  type AccountContext,
+} from '@/lib/auth/account'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
 import type { TemplateButton, TemplateSampleValues } from '@/types'
@@ -124,39 +132,25 @@ function extractSampleValues(
 
 export async function POST() {
   try {
-    const supabase = await createClient()
-
-    const {
-      data: { user },
-      error: authError,
-    } = await supabase.auth.getUser()
-
-    if (authError || !user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    // Resolve the caller's account_id — both whatsapp_config and
+    // Resolve the caller's account — both whatsapp_config and
     // the message_templates we sync into are account-scoped.
-    const { data: profile } = await supabase
-      .from('profiles')
-      .select('account_id')
-      .eq('user_id', user.id)
-      .maybeSingle()
-    const accountId = profile?.account_id as string | undefined
-    if (!accountId) {
-      return NextResponse.json(
-        { error: 'Your profile is not linked to an account.' },
-        { status: 403 },
-      )
+    let ctx: AccountContext
+    try {
+      ctx = await getCurrentAccount()
+    } catch (err) {
+      return toErrorResponse(err)
     }
+    const accountId = ctx.accountId
 
-    const { data: config, error: configError } = await supabase
-      .from('whatsapp_config')
-      .select('*')
-      .eq('account_id', accountId)
-      .single()
+    const config = firstOrNull(
+      await db
+        .select()
+        .from(whatsappConfig)
+        .where(eq(whatsappConfig.accountId, accountId))
+        .limit(1)
+    )
 
-    if (configError || !config) {
+    if (!config) {
       return NextResponse.json(
         {
           error:
@@ -166,7 +160,7 @@ export async function POST() {
       )
     }
 
-    if (!config.waba_id) {
+    if (!config.wabaId) {
       return NextResponse.json(
         {
           error:
@@ -176,12 +170,12 @@ export async function POST() {
       )
     }
 
-    const accessToken = decrypt(config.access_token)
+    const accessToken = decrypt(config.accessToken)
 
     const metaTemplates: MetaTemplate[] = []
     let nextUrl:
       | string
-      | null = `${META_API_BASE}/${config.waba_id}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`
+      | null = `${META_API_BASE}/${config.wabaId}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`
     const PAGE_CAP = 20
     let pageCount = 0
 
@@ -236,67 +230,73 @@ export async function POST() {
         // Account tenancy + user audit, same split as the submit
         // route. account_id is NOT NULL on message_templates
         // post-017, so an INSERT without it errors.
-        account_id: accountId,
-        user_id: user.id,
+        accountId,
+        userId: ctx.userId,
         name: t.name,
         category: normalizeCategory(t.category),
         language: t.language,
-        header_type: headerType,
-        header_content: header?.text ?? null,
-        header_handle: header?.example?.header_handle?.[0] ?? null,
-        body_text: body?.text ?? '',
-        footer_text: footer?.text ?? null,
+        headerType,
+        headerContent: header?.text ?? null,
+        headerHandle: header?.example?.header_handle?.[0] ?? null,
+        bodyText: body?.text ?? '',
+        footerText: footer?.text ?? null,
         buttons: parsedButtons.length ? parsedButtons : null,
-        sample_values: sampleValues,
+        sampleValues,
         status: normalizeStatus(t.status),
-        meta_template_id: t.id,
-        quality_score: normalizeQualityScore(t.quality_score),
-        updated_at: new Date().toISOString(),
+        metaTemplateId: t.id,
+        qualityScore: normalizeQualityScore(t.quality_score),
+        updatedAt: new Date().toISOString(),
       }
 
-      const { data: existing, error: lookupErr } = await supabase
-        .from('message_templates')
-        .select('id')
-        .eq('account_id', accountId)
-        .eq('name', t.name)
-        .eq('language', t.language)
-        .maybeSingle()
-
-      if (lookupErr) {
+      let existing: { id: string } | null
+      try {
+        existing = firstOrNull(
+          await db
+            .select({ id: messageTemplates.id })
+            .from(messageTemplates)
+            .where(
+              and(
+                eq(messageTemplates.accountId, accountId),
+                eq(messageTemplates.name, t.name),
+                eq(messageTemplates.language, t.language),
+              ),
+            )
+            .limit(1)
+        )
+      } catch (lookupErr) {
         errors.push({
           name: t.name,
           language: t.language,
-          message: lookupErr.message,
+          message:
+            lookupErr instanceof Error ? lookupErr.message : String(lookupErr),
         })
         continue
       }
 
       if (existing?.id) {
-        const { error: updErr } = await supabase
-          .from('message_templates')
-          .update(row)
-          .eq('id', existing.id)
-        if (updErr) {
+        try {
+          await db
+            .update(messageTemplates)
+            .set(row)
+            .where(eq(messageTemplates.id, existing.id))
+          updated++
+        } catch (updErr) {
           errors.push({
             name: t.name,
             language: t.language,
-            message: updErr.message,
+            message: updErr instanceof Error ? updErr.message : String(updErr),
           })
-        } else {
-          updated++
         }
       } else {
-        const { error: insErr } = await supabase
-          .from('message_templates')
-          .insert(row)
-        if (insErr) {
+        try {
+          await db.insert(messageTemplates).values(row)
+          inserted++
+        } catch (insErr) {
           errors.push({
             name: t.name,
             language: t.language,
-            message: insErr.message,
+            message: insErr instanceof Error ? insErr.message : String(insErr),
           })
-        } else {
-          inserted++
         }
       }
     }

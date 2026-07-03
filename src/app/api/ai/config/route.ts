@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server'
+import { eq } from 'drizzle-orm'
+import { db, aiConfigs } from '@/db'
+import { firstOrNull } from '@/db/helpers'
 import {
   getCurrentAccount,
   requireRole,
@@ -23,25 +26,26 @@ function bad(message: string) {
  */
 export async function GET() {
   try {
-    const { supabase, accountId } = await getCurrentAccount()
+    const { accountId } = await getCurrentAccount()
 
-    const { data, error } = await supabase
-      .from('ai_configs')
-      // `api_key` is selected only to derive `has_key` — it is stripped
-      // out below and never returned to the client.
-      .select(
-        'provider, model, system_prompt, is_active, auto_reply_enabled, auto_reply_max_per_conversation, api_key, embeddings_api_key',
-      )
-      .eq('account_id', accountId)
-      .maybeSingle()
-
-    if (error) {
-      console.error('[ai/config GET] fetch error:', error)
-      return NextResponse.json(
-        { error: 'Failed to load AI configuration' },
-        { status: 500 },
-      )
-    }
+    const data = firstOrNull(
+      await db
+        .select({
+          // `api_key` is selected only to derive `has_key` — it is
+          // stripped out below and never returned to the client.
+          provider: aiConfigs.provider,
+          model: aiConfigs.model,
+          system_prompt: aiConfigs.systemPrompt,
+          is_active: aiConfigs.isActive,
+          auto_reply_enabled: aiConfigs.autoReplyEnabled,
+          auto_reply_max_per_conversation: aiConfigs.autoReplyMaxPerConversation,
+          api_key: aiConfigs.apiKey,
+          embeddings_api_key: aiConfigs.embeddingsApiKey,
+        })
+        .from(aiConfigs)
+        .where(eq(aiConfigs.accountId, accountId))
+        .limit(1),
+    )
 
     if (!data) return NextResponse.json({ configured: false })
     // The keys are selected only to derive the has_* flags; neither is
@@ -69,7 +73,7 @@ export async function GET() {
  */
 export async function POST(request: Request) {
   try {
-    const { supabase, accountId, userId } = await requireRole('admin')
+    const { accountId, userId } = await requireRole('admin')
 
     const limit = checkRateLimit(`ai-config:${userId}`, RATE_LIMITS.adminAction)
     if (!limit.success) return rateLimitResponse(limit)
@@ -107,18 +111,25 @@ export async function POST(request: Request) {
     const clearEmbeddingsKey = body.embeddings_api_key === null
 
     // Reuse the stored key when the form didn't send a fresh one.
-    const { data: existing } = await supabase
-      .from('ai_configs')
-      .select('id, provider, model, api_key')
-      .eq('account_id', accountId)
-      .maybeSingle()
+    const existing = firstOrNull(
+      await db
+        .select({
+          id: aiConfigs.id,
+          provider: aiConfigs.provider,
+          model: aiConfigs.model,
+          apiKey: aiConfigs.apiKey,
+        })
+        .from(aiConfigs)
+        .where(eq(aiConfigs.accountId, accountId))
+        .limit(1),
+    )
 
     let apiKeyPlain: string
     if (rawKey) {
       apiKeyPlain = rawKey
-    } else if (existing?.api_key) {
+    } else if (existing?.apiKey) {
       try {
-        apiKeyPlain = decrypt(existing.api_key)
+        apiKeyPlain = decrypt(existing.apiKey)
       } catch {
         return bad('Stored API key could not be decrypted — re-enter your key.')
       }
@@ -178,46 +189,49 @@ export async function POST(request: Request) {
     }
 
     const encryptedKey = rawKey ? encrypt(rawKey) : null
-    const shared: Record<string, unknown> = {
+    const shared: {
+      provider: string
+      model: string
+      systemPrompt: string | null
+      isActive: boolean
+      autoReplyEnabled: boolean
+      autoReplyMaxPerConversation: number
+      embeddingsApiKey?: string | null
+    } = {
       provider,
       model,
-      system_prompt: systemPrompt,
-      is_active: isActive,
-      auto_reply_enabled: autoReplyEnabled,
-      auto_reply_max_per_conversation: maxPer,
+      systemPrompt,
+      isActive,
+      autoReplyEnabled,
+      autoReplyMaxPerConversation: maxPer,
     }
     if (rawEmbeddingsKey) {
-      shared.embeddings_api_key = encrypt(rawEmbeddingsKey)
+      shared.embeddingsApiKey = encrypt(rawEmbeddingsKey)
     } else if (clearEmbeddingsKey) {
-      shared.embeddings_api_key = null
+      shared.embeddingsApiKey = null
     }
 
-    if (existing) {
-      const { error: upErr } = await supabase
-        .from('ai_configs')
-        .update(encryptedKey ? { ...shared, api_key: encryptedKey } : shared)
-        .eq('account_id', accountId)
-      if (upErr) {
-        console.error('[ai/config POST] update error:', upErr)
-        return NextResponse.json(
-          { error: 'Failed to save AI configuration' },
-          { status: 500 },
-        )
+    try {
+      if (existing) {
+        await db
+          .update(aiConfigs)
+          .set(encryptedKey ? { ...shared, apiKey: encryptedKey } : shared)
+          .where(eq(aiConfigs.accountId, accountId))
+      } else {
+        await db.insert(aiConfigs).values({
+          accountId,
+          createdBy: userId,
+          // Guaranteed non-null: rawKey required when no existing row.
+          apiKey: encryptedKey!,
+          ...shared,
+        })
       }
-    } else {
-      const { error: insErr } = await supabase.from('ai_configs').insert({
-        account_id: accountId,
-        created_by: userId,
-        api_key: encryptedKey, // guaranteed non-null: rawKey required when no existing row
-        ...shared,
-      })
-      if (insErr) {
-        console.error('[ai/config POST] insert error:', insErr)
-        return NextResponse.json(
-          { error: 'Failed to save AI configuration' },
-          { status: 500 },
-        )
-      }
+    } catch (err) {
+      console.error('[ai/config POST] save error:', err)
+      return NextResponse.json(
+        { error: 'Failed to save AI configuration' },
+        { status: 500 },
+      )
     }
 
     return NextResponse.json({ success: true })
@@ -234,13 +248,11 @@ export async function POST(request: Request) {
  */
 export async function DELETE() {
   try {
-    const { supabase, accountId } = await requireRole('admin')
-    const { error } = await supabase
-      .from('ai_configs')
-      .delete()
-      .eq('account_id', accountId)
-    if (error) {
-      console.error('[ai/config DELETE] error:', error)
+    const { accountId } = await requireRole('admin')
+    try {
+      await db.delete(aiConfigs).where(eq(aiConfigs.accountId, accountId))
+    } catch (err) {
+      console.error('[ai/config DELETE] error:', err)
       return NextResponse.json(
         { error: 'Failed to delete AI configuration' },
         { status: 500 },

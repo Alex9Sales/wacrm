@@ -8,6 +8,10 @@
 // Account-scoped: a foreign id → 404.
 // ============================================================
 
+import { and, eq } from 'drizzle-orm';
+
+import { db, broadcasts } from '@/db';
+import { firstOrNull } from '@/db/helpers';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
 
@@ -19,19 +23,36 @@ export async function GET(
     const ctx = await requireApiKey(request, 'broadcasts:send');
     const { id } = await params;
 
-    const { data, error } = await ctx.supabase
-      .from('broadcasts')
-      .select(
-        'id, name, template_name, template_language, status, total_recipients, sent_count, delivered_count, read_count, replied_count, failed_count, created_at, updated_at'
-      )
-      .eq('id', id)
-      .eq('account_id', ctx.accountId)
-      .maybeSingle();
-
-    if (error) {
+    let data;
+    try {
+      data = firstOrNull(
+        await db
+          .select({
+            id: broadcasts.id,
+            name: broadcasts.name,
+            template_name: broadcasts.templateName,
+            template_language: broadcasts.templateLanguage,
+            status: broadcasts.status,
+            total_recipients: broadcasts.totalRecipients,
+            sent_count: broadcasts.sentCount,
+            delivered_count: broadcasts.deliveredCount,
+            read_count: broadcasts.readCount,
+            replied_count: broadcasts.repliedCount,
+            failed_count: broadcasts.failedCount,
+            created_at: broadcasts.createdAt,
+            updated_at: broadcasts.updatedAt,
+          })
+          .from(broadcasts)
+          .where(
+            and(eq(broadcasts.id, id), eq(broadcasts.accountId, ctx.accountId))
+          )
+          .limit(1)
+      );
+    } catch (error) {
       console.error('[api/v1/broadcasts] read error:', error);
       return fail('internal', 'Failed to read broadcast', 500);
     }
+
     if (!data) return fail('not_found', 'Broadcast not found', 404);
 
     return ok(data);

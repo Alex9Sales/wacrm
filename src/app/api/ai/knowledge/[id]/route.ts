@@ -1,4 +1,7 @@
 import { NextResponse } from 'next/server'
+import { and, eq } from 'drizzle-orm'
+import { db, aiKnowledgeDocuments } from '@/db'
+import { firstOrNull } from '@/db/helpers'
 import {
   getCurrentAccount,
   requireRole,
@@ -16,16 +19,29 @@ type Params = { params: Promise<{ id: string }> }
  */
 export async function GET(_request: Request, { params }: Params) {
   try {
-    const { supabase, accountId } = await getCurrentAccount()
+    const { accountId } = await getCurrentAccount()
     const { id } = await params
-    const { data, error } = await supabase
-      .from('ai_knowledge_documents')
-      .select('id, title, content, updated_at')
-      .eq('account_id', accountId)
-      .eq('id', id)
-      .maybeSingle()
-    if (error) {
-      console.error('[ai/knowledge/[id] GET] error:', error)
+    let data
+    try {
+      data = firstOrNull(
+        await db
+          .select({
+            id: aiKnowledgeDocuments.id,
+            title: aiKnowledgeDocuments.title,
+            content: aiKnowledgeDocuments.content,
+            updated_at: aiKnowledgeDocuments.updatedAt,
+          })
+          .from(aiKnowledgeDocuments)
+          .where(
+            and(
+              eq(aiKnowledgeDocuments.accountId, accountId),
+              eq(aiKnowledgeDocuments.id, id),
+            ),
+          )
+          .limit(1),
+      )
+    } catch (err) {
+      console.error('[ai/knowledge/[id] GET] error:', err)
       return NextResponse.json({ error: 'Failed to load document' }, { status: 500 })
     }
     if (!data) return NextResponse.json({ error: 'Not found' }, { status: 404 })
@@ -41,7 +57,7 @@ export async function GET(_request: Request, { params }: Params) {
  */
 export async function PATCH(request: Request, { params }: Params) {
   try {
-    const { supabase, accountId, userId } = await requireRole('admin')
+    const { accountId, userId } = await requireRole('admin')
     const limit = checkRateLimit(`ai-kb:${userId}`, RATE_LIMITS.adminAction)
     if (!limit.success) return rateLimitResponse(limit)
 
@@ -59,30 +75,34 @@ export async function PATCH(request: Request, { params }: Params) {
       return NextResponse.json({ error: 'content cannot be empty' }, { status: 400 })
     }
 
-    const update: Record<string, string> = {}
+    const update: { title?: string; content?: string } = {}
     if (title !== undefined) update.title = title
     if (content !== undefined) update.content = content
 
-    const { data: updated, error } = await supabase
-      .from('ai_knowledge_documents')
-      .update(update)
-      .eq('account_id', accountId)
-      .eq('id', id)
-      .select('id')
-      .maybeSingle()
-    if (error) {
-      console.error('[ai/knowledge/[id] PATCH] error:', error)
+    let updated: { id: string } | null
+    try {
+      updated = firstOrNull(
+        await db
+          .update(aiKnowledgeDocuments)
+          .set(update)
+          .where(
+            and(
+              eq(aiKnowledgeDocuments.accountId, accountId),
+              eq(aiKnowledgeDocuments.id, id),
+            ),
+          )
+          .returning({ id: aiKnowledgeDocuments.id }),
+      )
+    } catch (err) {
+      console.error('[ai/knowledge/[id] PATCH] error:', err)
       return NextResponse.json({ error: 'Failed to update document' }, { status: 500 })
     }
     if (!updated) return NextResponse.json({ error: 'Not found' }, { status: 404 })
 
     if (content !== undefined) {
-      const { key: embeddingsApiKey, corrupt } = await loadEmbeddingsKey(
-        supabase,
-        accountId,
-      )
+      const { key: embeddingsApiKey, corrupt } = await loadEmbeddingsKey(accountId)
       try {
-        await ingestDocument(supabase, accountId, { embeddingsApiKey }, id, content)
+        await ingestDocument(accountId, { embeddingsApiKey }, id, content)
       } catch (err) {
         const message = err instanceof AiError ? err.message : 'indexing failed'
         console.error('[ai/knowledge/[id] PATCH] ingest error:', err)
@@ -114,15 +134,19 @@ export async function PATCH(request: Request, { params }: Params) {
  */
 export async function DELETE(_request: Request, { params }: Params) {
   try {
-    const { supabase, accountId } = await requireRole('admin')
+    const { accountId } = await requireRole('admin')
     const { id } = await params
-    const { error } = await supabase
-      .from('ai_knowledge_documents')
-      .delete()
-      .eq('account_id', accountId)
-      .eq('id', id)
-    if (error) {
-      console.error('[ai/knowledge/[id] DELETE] error:', error)
+    try {
+      await db
+        .delete(aiKnowledgeDocuments)
+        .where(
+          and(
+            eq(aiKnowledgeDocuments.accountId, accountId),
+            eq(aiKnowledgeDocuments.id, id),
+          ),
+        )
+    } catch (err) {
+      console.error('[ai/knowledge/[id] DELETE] error:', err)
       return NextResponse.json({ error: 'Failed to delete document' }, { status: 500 })
     }
     return NextResponse.json({ success: true })

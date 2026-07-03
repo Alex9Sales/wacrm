@@ -23,7 +23,7 @@ const MAX_TURNS = 20
  */
 export async function POST(request: Request) {
   try {
-    const { supabase, accountId, userId } = await requireRole('agent')
+    const { accountId, userId } = await requireRole('agent')
 
     const limit = checkRateLimit(`ai-playground:${userId}`, RATE_LIMITS.aiDraft)
     if (!limit.success) return rateLimitResponse(limit)
@@ -53,7 +53,7 @@ export async function POST(request: Request) {
       )
     }
 
-    const config = await loadAiConfig(supabase, accountId, {
+    const config = await loadAiConfig(accountId, {
       requireActive: false,
     }).catch((err) => {
       console.error('[ai/playground] loadAiConfig error:', err)
@@ -73,7 +73,6 @@ export async function POST(request: Request) {
     }
 
     const knowledge = await retrieveKnowledge(
-      supabase,
       accountId,
       config,
       latestUserMessage(messages),

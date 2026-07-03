@@ -13,34 +13,34 @@
 // ============================================================
 
 import { NextResponse } from "next/server";
+import { asc, eq } from "drizzle-orm";
 
+import { db, profiles } from "@/db";
 import { getCurrentAccount, toErrorResponse } from "@/lib/auth/account";
 import { canManageMembers, isAccountRole } from "@/lib/auth/roles";
 import type { AccountMember } from "@/types";
-
-interface ProfileRow {
-  user_id: string;
-  full_name: string | null;
-  email: string | null;
-  avatar_url: string | null;
-  account_role: string;
-  created_at: string;
-}
 
 export async function GET() {
   try {
     const ctx = await getCurrentAccount();
 
-    // RLS on profiles allows reading any row whose account matches
-    // the caller's, so this query is naturally account-scoped.
-    const { data, error } = await ctx.supabase
-      .from("profiles")
-      .select("user_id, full_name, email, avatar_url, account_role, created_at")
-      .eq("account_id", ctx.accountId)
-      .order("created_at", { ascending: true });
-
-    if (error) {
-      console.error("[GET /api/account/members] fetch error:", error);
+    // No RLS anymore — the account scope is the explicit filter below.
+    let data;
+    try {
+      data = await db
+        .select({
+          user_id: profiles.userId,
+          full_name: profiles.fullName,
+          email: profiles.email,
+          avatar_url: profiles.avatarUrl,
+          account_role: profiles.accountRole,
+          created_at: profiles.createdAt,
+        })
+        .from(profiles)
+        .where(eq(profiles.accountId, ctx.accountId))
+        .orderBy(asc(profiles.createdAt));
+    } catch (err) {
+      console.error("[GET /api/account/members] fetch error:", err);
       return NextResponse.json(
         { error: "Failed to load members" },
         { status: 500 },
@@ -49,7 +49,7 @@ export async function GET() {
 
     const canSeeEmails = canManageMembers(ctx.role);
 
-    const members: AccountMember[] = (data as ProfileRow[]).flatMap((row) => {
+    const members: AccountMember[] = data.flatMap((row) => {
       // Defensive: the DB enum should never let an unknown role
       // through, but if a migration ever broadens the enum without
       // updating TS, skip the row rather than crash the page.
@@ -61,7 +61,7 @@ export async function GET() {
           email: canSeeEmails ? row.email : null,
           avatar_url: row.avatar_url,
           role: row.account_role,
-          joined_at: row.created_at,
+          joined_at: row.created_at ?? "",
         },
       ];
     });

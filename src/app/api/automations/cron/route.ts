@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
-import { supabaseAdmin } from '@/lib/automations/admin-client'
+import { and, asc, eq, lte } from 'drizzle-orm'
+import { db, automationPendingExecutions } from '@/db'
 import { resumePendingExecution } from '@/lib/automations/engine'
 import type { AutomationContext } from '@/lib/automations/engine'
 
@@ -24,41 +25,52 @@ export async function GET(request: Request) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
-  const admin = supabaseAdmin()
-  const { data: due, error } = await admin
-    .from('automation_pending_executions')
-    .select('*')
-    .eq('status', 'pending')
-    .lte('run_at', new Date().toISOString())
-    .order('run_at', { ascending: true })
-    .limit(50)
+  let due
+  try {
+    due = await db
+      .select()
+      .from(automationPendingExecutions)
+      .where(
+        and(
+          eq(automationPendingExecutions.status, 'pending'),
+          lte(automationPendingExecutions.runAt, new Date().toISOString()),
+        ),
+      )
+      .orderBy(asc(automationPendingExecutions.runAt))
+      .limit(50)
+  } catch (err) {
+    const message = err instanceof Error ? err.message : String(err)
+    return NextResponse.json({ error: message }, { status: 500 })
+  }
 
-  if (error) return NextResponse.json({ error: error.message }, { status: 500 })
-  if (!due || due.length === 0) return NextResponse.json({ processed: 0 })
+  if (due.length === 0) return NextResponse.json({ processed: 0 })
 
   let processed = 0
   for (const row of due) {
-    const { data: claim } = await admin
-      .from('automation_pending_executions')
-      .update({ status: 'running' })
-      .eq('id', row.id)
-      .eq('status', 'pending')
-      .select('id')
-      .maybeSingle()
-    if (!claim) continue
+    const claim = await db
+      .update(automationPendingExecutions)
+      .set({ status: 'running' })
+      .where(
+        and(
+          eq(automationPendingExecutions.id, row.id),
+          eq(automationPendingExecutions.status, 'pending'),
+        ),
+      )
+      .returning({ id: automationPendingExecutions.id })
+    if (claim.length === 0) continue
 
     await resumePendingExecution({
-      id: row.id as string,
-      automation_id: row.automation_id as string,
+      id: row.id,
+      automation_id: row.automationId,
       // account_id is NOT NULL on automation_pending_executions
       // post-017; the engine uses it for tenant-scoped lookups.
-      account_id: row.account_id as string,
-      user_id: row.user_id as string,
-      contact_id: (row.contact_id as string | null) ?? null,
-      log_id: (row.log_id as string | null) ?? null,
-      parent_step_id: (row.parent_step_id as string | null) ?? null,
+      account_id: row.accountId,
+      user_id: row.userId,
+      contact_id: row.contactId ?? null,
+      log_id: row.logId ?? null,
+      parent_step_id: row.parentStepId ?? null,
       branch: (row.branch as 'yes' | 'no' | null) ?? null,
-      next_step_position: row.next_step_position as number,
+      next_step_position: row.nextStepPosition,
       context: (row.context as AutomationContext) ?? {},
     })
     processed++
