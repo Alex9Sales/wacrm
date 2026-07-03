@@ -16,7 +16,7 @@ import type {
 } from '@/types'
 import {
   db,
-  accounts,
+  organization,
   automations as automationsTable,
   automationLogs,
   automationPendingExecutions,
@@ -27,7 +27,7 @@ import {
   conversations,
   customFields,
   deals,
-  profiles,
+  member,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { and, asc, count, eq, gte, isNull, sql } from 'drizzle-orm'
@@ -489,14 +489,14 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
         // Pick any member of the account. The existing implementation
         // only ever returned the automation's author; preserving that
         // shape until a real round-robin algorithm replaces it.
-        const member = firstOrNull(
+        const pick = firstOrNull(
           await db
-            .select({ user_id: profiles.userId })
-            .from(profiles)
-            .where(eq(profiles.accountId, args.automation.account_id))
+            .select({ user_id: member.userId })
+            .from(member)
+            .where(eq(member.organizationId, args.automation.account_id))
             .limit(1),
         )
-        agentId = member?.user_id
+        agentId = pick?.user_id
       }
       if (!agentId) return 'no agent resolved'
       await db
@@ -587,9 +587,9 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // missing the value (pre-021 forks).
       const acct = firstOrNull(
         await db
-          .select({ default_currency: accounts.defaultCurrency })
-          .from(accounts)
-          .where(eq(accounts.id, args.automation.account_id))
+          .select({ default_currency: organization.default_currency })
+          .from(organization)
+          .where(eq(organization.id, args.automation.account_id))
           .limit(1),
       )
       await db.insert(deals).values({

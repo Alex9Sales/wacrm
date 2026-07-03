@@ -1,18 +1,67 @@
-// Route disabled during the auth migration — see route.ts.
-// TODO(fase-2): restore real coverage when invitations are
-// reimplemented on Better Auth organizations.
-import { describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+
+// ---------------------------------------------------------------------------
+// GET — PUBLIC invitation peek. Reads the invitation row directly (no
+// session, no Better Auth call), joined to organization for the name.
+// ---------------------------------------------------------------------------
+
+const h = vi.hoisted(() => ({
+  row: {
+    email: "invitee@x.dev",
+    role: "agent",
+    status: "pending",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    organizationName: "Fluxia Dev",
+  } as Record<string, unknown> | null,
+}));
+
+vi.mock("@/db", () => {
+  const chain = {
+    select: () => chain,
+    from: () => chain,
+    innerJoin: () => chain,
+    where: () => chain,
+    limit: async () => (h.row ? [h.row] : []),
+  };
+  return { db: chain, invitation: {}, organization: {} };
+});
 
 import { GET } from "./route";
 
-describe("/api/invitations/[token]/peek (disabled during Phase 2 auth migration)", () => {
-  it("GET returns 501", async () => {
-    const res = await GET(new Request("http://test.local"), {
-      params: Promise.resolve({ token: "some-token" }),
-    });
-    expect(res.status).toBe(501);
+const ctx = { params: Promise.resolve({ token: "inv-1" }) };
+
+beforeEach(() => {
+  h.row = {
+    email: "invitee@x.dev",
+    role: "agent",
+    status: "pending",
+    expiresAt: "2099-01-01T00:00:00.000Z",
+    organizationName: "Fluxia Dev",
+  };
+});
+
+afterEach(() => {
+  vi.clearAllMocks();
+});
+
+describe("GET /api/invitations/[token]/peek (public)", () => {
+  it("returns non-sensitive invitation metadata", async () => {
+    const res = await GET(new Request("http://test.local"), ctx);
+    expect(res.status).toBe(200);
     expect(await res.json()).toEqual({
-      error: "Temporarily disabled during auth migration (Phase 2)",
+      invitation: {
+        email: "invitee@x.dev",
+        role: "agent",
+        status: "pending",
+        expiresAt: "2099-01-01T00:00:00.000Z",
+        organizationName: "Fluxia Dev",
+      },
     });
+  });
+
+  it("returns 404 when the invitation does not exist", async () => {
+    h.row = null;
+    const res = await GET(new Request("http://test.local"), ctx);
+    expect(res.status).toBe(404);
   });
 });

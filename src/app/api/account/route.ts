@@ -14,7 +14,7 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 
-import { db, accounts } from "@/db";
+import { db, organization } from "@/db";
 import { firstOrNull } from "@/db/helpers";
 import {
   requireRole,
@@ -87,10 +87,10 @@ export async function PATCH(request: Request) {
     try {
       data = firstOrNull(
         await db
-          .update(accounts)
+          .update(organization)
           .set({ name })
-          .where(eq(accounts.id, ctx.accountId))
-          .returning({ id: accounts.id, name: accounts.name }),
+          .where(eq(organization.id, ctx.accountId))
+          .returning({ id: organization.id, name: organization.name }),
       );
     } catch (err) {
       console.error("[PATCH /api/account] update error:", err);

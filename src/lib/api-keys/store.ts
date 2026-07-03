@@ -11,7 +11,7 @@
 
 import { eq } from 'drizzle-orm';
 
-import { db, accounts, apiKeys } from '@/db';
+import { db, organization, apiKeys } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 
 /** Shape of an `api_keys` row as the auth path consumes it. */
@@ -80,9 +80,9 @@ export async function getAccountName(
   try {
     const row = firstOrNull(
       await db
-        .select({ name: accounts.name })
-        .from(accounts)
-        .where(eq(accounts.id, accountId))
+        .select({ name: organization.name })
+        .from(organization)
+        .where(eq(organization.id, accountId))
         .limit(1)
     );
     return row?.name ?? null;

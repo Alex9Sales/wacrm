@@ -1,22 +1,52 @@
 // ============================================================
 // POST /api/invitations/[token]/redeem
 //
-// TODO(fase-2): reimplement on Better Auth organizations.
-// The previous implementation relied on the old auth session lookup
-// and the SECURITY DEFINER RPC `redeem_invitation` (migration 019)
-// against the `account_invitations` table; none of these exist in
-// the Drizzle baseline (Better Auth organizations replaces the
-// whole invitation flow in Phase 2). Returns 501 until then.
+// Requires a session. Accepts the invitation for the logged-in user
+// (whose email must match the invite's recipient — enforced by
+// Better Auth). `token` = the invitation id.
+//
+// Reimplemented on Better Auth organizations (Phase 2):
+//   auth.api.acceptInvitation({ body: { invitationId } })
 // ============================================================
 
 import { NextResponse } from "next/server";
 
+import { auth } from "@/lib/auth";
+import { getSessionUserId } from "@/lib/auth/session";
+
 export async function POST(
-  _request: Request,
-  _context: { params: Promise<{ token: string }> },
+  request: Request,
+  context: { params: Promise<{ token: string }> },
 ) {
-  return NextResponse.json(
-    { error: "Temporarily disabled during auth migration (Phase 2)" },
-    { status: 501 },
-  );
+  try {
+    const userId = await getSessionUserId();
+    if (!userId) {
+      return NextResponse.json({ error: "Unauthorized" }, { status: 401 });
+    }
+
+    const { token } = await context.params;
+
+    const result = await auth.api.acceptInvitation({
+      body: { invitationId: token },
+      headers: request.headers,
+    });
+
+    return NextResponse.json({
+      member: result?.member ?? null,
+      invitation: result?.invitation ?? null,
+    });
+  } catch (err) {
+    console.error("[POST /api/invitations/[token]/redeem] error:", err);
+    // Better Auth throws an APIError with a `.status` for known cases
+    // (invitation not found / not the recipient). Surface a 400 for
+    // those; anything else is a 500.
+    const status =
+      typeof (err as { statusCode?: number })?.statusCode === "number"
+        ? (err as { statusCode: number }).statusCode
+        : 400;
+    return NextResponse.json(
+      { error: "Failed to accept invitation" },
+      { status: status >= 400 && status < 600 ? status : 400 },
+    );
+  }
 }

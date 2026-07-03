@@ -35,10 +35,12 @@ vi.mock('@/db', async (importOriginal) => {
 
   const tableName = (t: unknown): string => {
     switch (t) {
-      case actual.profiles:
-        return 'profiles'
-      case actual.accounts:
-        return 'accounts'
+      case actual.member:
+        return 'member'
+      case actual.user:
+        return 'user'
+      case actual.organization:
+        return 'organization'
       case actual.contacts:
         return 'contacts'
       case actual.conversations:
@@ -58,10 +60,14 @@ vi.mock('@/db', async (importOriginal) => {
 
   const selectRows = (table: string): unknown[] => {
     switch (table) {
-      case 'profiles':
-        return [{ accountId: 'acct-1', accountRole: 'agent' }]
-      case 'accounts':
-        return [{ id: 'acct-1', name: 'Test Account' }]
+      case 'member':
+        // Tenancy + role: the fallback path in getCurrentAccount reads
+        // the caller's first membership (organizationId + role).
+        return [{ organizationId: 'acct-1', role: 'agent', userId: 'user-1' }]
+      case 'user':
+        return [{ id: 'user-1', name: 'Test User', email: 'user@test.dev' }]
+      case 'organization':
+        return [{ id: 'acct-1', name: 'Test Account', default_currency: 'USD' }]
       case 'contacts':
         return h.contactRow ? [h.contactRow] : []
       case 'conversations': {

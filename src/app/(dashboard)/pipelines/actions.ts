@@ -7,7 +7,7 @@
 // ============================================================
 
 import { and, asc, count, desc, eq, sql } from 'drizzle-orm'
-import { db, contacts, conversations, deals, pipelines, pipelineStages, profiles } from '@/db'
+import { db, contacts, conversations, deals, member, pipelines, pipelineStages, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import type { Contact, Conversation, Deal, Pipeline, PipelineStage, Profile } from '@/types'
@@ -26,17 +26,17 @@ const contactColumns = {
   updated_at: contacts.updatedAt,
 }
 
-const profileColumns = {
-  id: profiles.id,
-  user_id: profiles.userId,
-  account_id: profiles.accountId,
-  account_role: profiles.accountRole,
-  full_name: profiles.fullName,
-  email: profiles.email,
-  avatar_url: profiles.avatarUrl,
-  role: profiles.role,
-  beta_features: profiles.betaFeatures,
-  created_at: profiles.createdAt,
+// Assignee identity is `user.id` (deals.assigned_to FK → user.id).
+// Mapped into the legacy Profile shape the UI consumes; `id` and
+// `user_id` both carry the user id so `<option value={p.id}>` writes a
+// valid `deals.assigned_to` and lookups by user id still resolve.
+const assigneeColumns = {
+  id: user.id,
+  user_id: user.id,
+  full_name: user.name,
+  email: user.email,
+  avatar_url: user.image,
+  created_at: user.createdAt,
 }
 
 /** The account's pipelines, oldest first (matches the old `.order('created_at')`). */
@@ -101,11 +101,11 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
       created_at: deals.createdAt,
       updated_at: deals.updatedAt,
       contact: contactColumns,
-      assignee: profileColumns,
+      assignee: assigneeColumns,
     })
     .from(deals)
     .leftJoin(contacts, eq(deals.contactId, contacts.id))
-    .leftJoin(profiles, eq(deals.assignedTo, profiles.id))
+    .leftJoin(user, eq(deals.assignedTo, user.id))
     .where(and(eq(deals.pipelineId, pipelineId), eq(deals.accountId, ctx.accountId)))
     .orderBy(desc(deals.createdAt))
 
@@ -344,14 +344,25 @@ export async function listContactsForDeal(): Promise<Contact[]> {
   return rows as unknown as Contact[]
 }
 
-/** All profiles (potential assignees) in the account, ordered by full_name. */
+/**
+ * All members (potential assignees) in the account, ordered by name.
+ * Mapped into the legacy Profile shape. The assignee id is `user.id`
+ * because `deals.assigned_to` FK → user.id, so `<option value={p.id}>`
+ * writes a valid assignment.
+ */
 export async function listAssignees(): Promise<Profile[]> {
   const ctx = await getCurrentAccount()
   const rows = await db
-    .select(profileColumns)
-    .from(profiles)
-    .where(eq(profiles.accountId, ctx.accountId))
-    .orderBy(asc(profiles.fullName))
+    .select({
+      ...assigneeColumns,
+      account_id: member.organizationId,
+      account_role: member.role,
+      role: member.role,
+    })
+    .from(member)
+    .innerJoin(user, eq(member.userId, user.id))
+    .where(eq(member.organizationId, ctx.accountId))
+    .orderBy(asc(user.name))
   return rows as unknown as Profile[]
 }
 

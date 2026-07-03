@@ -4,6 +4,7 @@ import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
+import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -16,13 +17,10 @@ import {
 } from "@/components/ui/card";
 import { MessageSquare, UsersRound } from "lucide-react";
 
-// Phase 1: the browser Supabase client is gone, so this page no longer
-// performs a real sign-in. Better Auth reintroduces login in Phase 2.
-// The form still renders (so the visual shell is preserved and the
-// middleware's dev redirect to /dashboard keeps working), but submit
-// is a no-op that surfaces a notice.
-// TODO(fase-2): wire the form to Better Auth sign-in.
-const LOGIN_DISABLED_NOTICE = "Login será reativado na Fase 2 (Better Auth)";
+// Fase 2: login real via Better Auth. `authClient.signIn.email` cria a
+// sessão por cookie; o hook de sessão do servidor seta a organização
+// ativa. Redirecionamos com `window.location` (navegação completa) para
+// que o AuthProvider re-hidrate de /api/me com a sessão nova.
 
 // `useSearchParams` opts the component out of static prerendering
 // unless it sits under a Suspense boundary. We split the form into
@@ -40,16 +38,32 @@ export default function LoginPage() {
 function LoginPageInner() {
   const searchParams = useSearchParams();
   // Forwarded from `/join/<token>` when the visitor already has an
-  // account. Kept for link continuity even though sign-in is disabled.
+  // account. After a successful sign-in we bounce back to the invite.
   const inviteToken = searchParams.get("invite");
 
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [submitting, setSubmitting] = useState(false);
 
-  const handleLogin = (e: React.FormEvent) => {
+  const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
-    // TODO(fase-2): Better Auth sign-in. No-op for now.
-    toast.info(LOGIN_DISABLED_NOTICE);
+    if (submitting) return;
+    setSubmitting(true);
+
+    const { error } = await authClient.signIn.email({ email, password });
+
+    if (error) {
+      toast.error(error.message ?? "Não foi possível entrar. Verifique suas credenciais.");
+      setSubmitting(false);
+      return;
+    }
+
+    // Full navigation so AuthProvider re-hydrates from /api/me with the
+    // freshly-set session cookie. If we arrived from an invite, return
+    // to it so the visitor can accept now that they're authenticated.
+    window.location.href = inviteToken
+      ? `/join/${encodeURIComponent(inviteToken)}`
+      : "/dashboard";
   };
 
   return (
@@ -64,20 +78,16 @@ function LoginPageInner() {
             )}
           </div>
           <CardTitle className="text-xl text-foreground">
-            {inviteToken ? "Sign in to accept" : "Welcome back"}
+            {inviteToken ? "Entre para aceitar" : "Bem-vindo de volta"}
           </CardTitle>
           <CardDescription className="text-muted-foreground">
             {inviteToken
-              ? "Sign in and we'll take you to the invitation."
-              : "Sign in to your account"}
+              ? "Entre e levaremos você de volta ao convite."
+              : "Entre na sua conta"}
           </CardDescription>
         </CardHeader>
         <CardContent>
           <form onSubmit={handleLogin} className="flex flex-col gap-4">
-            <div className="rounded-lg border border-amber-500/20 bg-amber-500/10 px-4 py-3 text-sm text-amber-400">
-              {LOGIN_DISABLED_NOTICE}
-            </div>
-
             <div className="flex flex-col gap-2">
               <Label htmlFor="email" className="text-muted-foreground">
                 Email
@@ -85,10 +95,11 @@ function LoginPageInner() {
               <Input
                 id="email"
                 type="email"
-                placeholder="you@example.com"
+                placeholder="voce@exemplo.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                disabled={submitting}
                 className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
               />
             </div>
@@ -96,37 +107,38 @@ function LoginPageInner() {
             <div className="flex flex-col gap-2">
               <div className="flex items-center justify-between">
                 <Label htmlFor="password" className="text-muted-foreground">
-                  Password
+                  Senha
                 </Label>
                 <Link
                   href="/forgot-password"
                   className="text-sm text-primary hover:text-primary/80"
                 >
-                  Forgot password?
+                  Esqueceu a senha?
                 </Link>
               </div>
               <Input
                 id="password"
                 type="password"
-                placeholder="Enter your password"
+                placeholder="Digite sua senha"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
+                disabled={submitting}
                 className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
               />
             </div>
 
             <Button
               type="submit"
-              disabled
+              disabled={submitting}
               className="mt-2 h-10 w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
-              Sign in
+              {submitting ? "Entrando..." : "Entrar"}
             </Button>
           </form>
 
           <p className="mt-6 text-center text-sm text-muted-foreground">
-            Don&apos;t have an account?{" "}
+            Não tem uma conta?{" "}
             <Link
               href={
                 inviteToken
@@ -135,7 +147,7 @@ function LoginPageInner() {
               }
               className="text-primary hover:text-primary/80"
             >
-              Create account
+              Criar conta
             </Link>
           </p>
         </CardContent>

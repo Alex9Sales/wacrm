@@ -15,12 +15,13 @@ import {
   contactTags,
   conversations,
   deals,
+  member,
   messageReactions,
   messageTemplates,
   messages,
   pipelineStages,
-  profiles,
   tags,
+  user,
   whatsappConfig,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -203,20 +204,6 @@ const reactionColumns = {
   created_at: messageReactions.createdAt,
 }
 
-const profileColumns = {
-  id: profiles.id,
-  user_id: profiles.userId,
-  full_name: profiles.fullName,
-  email: profiles.email,
-  avatar_url: profiles.avatarUrl,
-  role: profiles.role,
-  beta_features: profiles.betaFeatures,
-  account_id: profiles.accountId,
-  account_role: profiles.accountRole,
-  created_at: profiles.createdAt,
-  updated_at: profiles.updatedAt,
-}
-
 const noteColumns = {
   id: contactNotes.id,
   contact_id: contactNotes.contactId,
@@ -358,14 +345,31 @@ async function assertConversationInAccount(
   return !!row
 }
 
-/** All profiles in the caller's account (assignee dropdown). */
+/**
+ * All members of the caller's account, mapped into the legacy Profile
+ * shape (assignee dropdown). Assignments target `user.id`, so `user_id`
+ * — the value the UI matches against `conversations.assigned_agent_id`
+ * — is the user's id. Account tenancy comes from `member.organizationId`
+ * and the role from `member.role`.
+ */
 export async function listProfiles(): Promise<Profile[]> {
   const ctx = await getCurrentAccount()
   const rows = await db
-    .select(profileColumns)
-    .from(profiles)
-    .where(eq(profiles.accountId, ctx.accountId))
-    .orderBy(asc(profiles.fullName))
+    .select({
+      id: user.id,
+      user_id: user.id,
+      full_name: user.name,
+      email: user.email,
+      avatar_url: user.image,
+      role: member.role,
+      account_id: member.organizationId,
+      account_role: member.role,
+      created_at: member.createdAt,
+    })
+    .from(member)
+    .innerJoin(user, eq(member.userId, user.id))
+    .where(eq(member.organizationId, ctx.accountId))
+    .orderBy(asc(user.name))
   return rows as unknown as Profile[]
 }
 

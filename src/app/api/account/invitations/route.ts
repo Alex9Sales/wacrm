@@ -1,26 +1,76 @@
 // ============================================================
 // /api/account/invitations
 //
-//   GET  — list outstanding (un-redeemed, non-expired) invites.
-//   POST — create a new invite link.
+//   GET  — list outstanding (pending) invites.  Any member.
+//   POST — create a new invite.                 Admin+.
 //
-// TODO(fase-2): reimplement on Better Auth organizations.
-// The previous implementation read/wrote the `account_invitations`
-// table, which no longer exists in the Drizzle baseline (Better
-// Auth organizations replaces the whole invitation flow in
-// Phase 2). Both verbs return 501 until then.
+// Reimplemented on Better Auth organizations (Phase 2).
+//   GET  → auth.api.listInvitations()   (scoped to active org)
+//   POST → auth.api.createInvitation({ body: { email, role } })
+//
+// The invitation email link is logged to the console in dev by the
+// `sendInvitationEmail` hook in src/lib/auth.ts — we do not resend.
 // ============================================================
 
 import { NextResponse } from "next/server";
+import { headers } from "next/headers";
 
-const DISABLED = {
-  error: "Temporarily disabled during auth migration (Phase 2)",
-} as const;
+import { auth } from "@/lib/auth";
+import {
+  getCurrentAccount,
+  requireRole,
+  toErrorResponse,
+} from "@/lib/auth/account";
+import { isAccountRole } from "@/lib/auth/roles";
 
 export async function GET() {
-  return NextResponse.json(DISABLED, { status: 501 });
+  try {
+    // Any member may view the roster of pending invites.
+    await getCurrentAccount();
+
+    const invitations = await auth.api.listInvitations({
+      headers: await headers(),
+    });
+
+    // Only surface still-actionable invites.
+    const pending = (invitations ?? []).filter(
+      (inv) => inv.status === "pending",
+    );
+
+    return NextResponse.json({ invitations: pending });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
 }
 
-export async function POST() {
-  return NextResponse.json(DISABLED, { status: 501 });
+export async function POST(request: Request) {
+  try {
+    await requireRole("admin");
+
+    let body: unknown;
+    try {
+      body = await request.json();
+    } catch {
+      return NextResponse.json({ error: "Invalid JSON body" }, { status: 400 });
+    }
+
+    const email = (body as { email?: unknown })?.email;
+    const role = (body as { role?: unknown })?.role;
+
+    if (typeof email !== "string" || !email) {
+      return NextResponse.json({ error: "Missing email" }, { status: 400 });
+    }
+    if (!isAccountRole(role)) {
+      return NextResponse.json({ error: "Invalid role" }, { status: 400 });
+    }
+
+    const invitation = await auth.api.createInvitation({
+      body: { email, role },
+      headers: request.headers,
+    });
+
+    return NextResponse.json({ invitation }, { status: 201 });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
 }

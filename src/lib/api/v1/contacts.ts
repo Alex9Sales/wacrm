@@ -9,7 +9,7 @@
 
 import { and, eq, inArray } from 'drizzle-orm';
 
-import { db, accounts, contactTags, contacts, tags, whatsappConfig } from '@/db';
+import { db, member, contactTags, contacts, tags, whatsappConfig } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { resolveImportTagIds } from '@/lib/contacts/resolve-import-tags';
@@ -108,17 +108,17 @@ export async function resolveAuditUserId(accountId: string): Promise<string> {
   );
   if (config?.userId) return config.userId;
 
-  const account = firstOrNull(
+  const owner = firstOrNull(
     await db
-      .select({ ownerUserId: accounts.ownerUserId })
-      .from(accounts)
-      .where(eq(accounts.id, accountId))
+      .select({ userId: member.userId })
+      .from(member)
+      .where(and(eq(member.organizationId, accountId), eq(member.role, 'owner')))
       .limit(1)
   );
-  if (!account?.ownerUserId) {
+  if (!owner?.userId) {
     throw new ContactError('Account owner could not be resolved', 500);
   }
-  return account.ownerUserId;
+  return owner.userId;
 }
 
 export interface ContactInput {

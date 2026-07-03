@@ -15,7 +15,7 @@
 import { NextResponse } from "next/server";
 import { asc, eq } from "drizzle-orm";
 
-import { db, profiles } from "@/db";
+import { db, member, user } from "@/db";
 import { getCurrentAccount, toErrorResponse } from "@/lib/auth/account";
 import { canManageMembers, isAccountRole } from "@/lib/auth/roles";
 import type { AccountMember } from "@/types";
@@ -29,16 +29,17 @@ export async function GET() {
     try {
       data = await db
         .select({
-          user_id: profiles.userId,
-          full_name: profiles.fullName,
-          email: profiles.email,
-          avatar_url: profiles.avatarUrl,
-          account_role: profiles.accountRole,
-          created_at: profiles.createdAt,
+          user_id: member.userId,
+          full_name: user.name,
+          email: user.email,
+          avatar_url: user.image,
+          account_role: member.role,
+          created_at: member.createdAt,
         })
-        .from(profiles)
-        .where(eq(profiles.accountId, ctx.accountId))
-        .orderBy(asc(profiles.createdAt));
+        .from(member)
+        .innerJoin(user, eq(member.userId, user.id))
+        .where(eq(member.organizationId, ctx.accountId))
+        .orderBy(asc(member.createdAt));
     } catch (err) {
       console.error("[GET /api/account/members] fetch error:", err);
       return NextResponse.json(

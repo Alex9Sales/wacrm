@@ -1,21 +1,32 @@
 // ============================================================
 // DELETE /api/account/invitations/[id]
 //
-// TODO(fase-2): reimplement on Better Auth organizations.
-// The previous implementation deleted rows from the
-// `account_invitations` table, which no longer exists in the
-// Drizzle baseline (Better Auth organizations replaces the whole
-// invitation flow in Phase 2). Returns 501 until then.
+// Revoke / cancel a pending invitation. Admin+.
+//
+// Reimplemented on Better Auth organizations (Phase 2):
+//   auth.api.cancelInvitation({ body: { invitationId } })
 // ============================================================
 
 import { NextResponse } from "next/server";
 
+import { auth } from "@/lib/auth";
+import { requireRole, toErrorResponse } from "@/lib/auth/account";
+
 export async function DELETE(
-  _request: Request,
-  _context: { params: Promise<{ id: string }> },
+  request: Request,
+  context: { params: Promise<{ id: string }> },
 ) {
-  return NextResponse.json(
-    { error: "Temporarily disabled during auth migration (Phase 2)" },
-    { status: 501 },
-  );
+  try {
+    await requireRole("admin");
+    const { id } = await context.params;
+
+    await auth.api.cancelInvitation({
+      body: { invitationId: id },
+      headers: request.headers,
+    });
+
+    return NextResponse.json({ success: true });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
 }

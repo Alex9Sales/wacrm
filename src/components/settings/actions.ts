@@ -18,8 +18,8 @@ import {
   messageTemplates,
   whatsappConfig,
   customFields,
-  accounts,
-  profiles,
+  organization,
+  user,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
@@ -225,9 +225,9 @@ export async function getWhatsAppConfig(): Promise<WhatsAppConfigRow | null> {
 export async function setDefaultCurrency(currency: string): Promise<void> {
   const ctx = await requireRole('admin')
   await db
-    .update(accounts)
-    .set({ defaultCurrency: currency })
-    .where(eq(accounts.id, ctx.accountId))
+    .update(organization)
+    .set({ default_currency: currency })
+    .where(eq(organization.id, ctx.accountId))
 }
 
 // ------------------------------------------------------------
@@ -238,11 +238,11 @@ export async function setDefaultCurrency(currency: string): Promise<void> {
 // untouched so a future upload path can set it independently.
 // ------------------------------------------------------------
 
-/** Update the current user's display name on their profile row. */
+/** Update the current user's display name on their user row. */
 export async function updateProfileName(fullName: string): Promise<void> {
   const ctx = await getCurrentAccount()
   await db
-    .update(profiles)
-    .set({ fullName })
-    .where(eq(profiles.userId, ctx.userId))
+    .update(user)
+    .set({ name: fullName })
+    .where(eq(user.id, ctx.userId))
 }
