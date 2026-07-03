@@ -154,6 +154,24 @@ export interface ParsedWebhook {
 }
 
 /**
+ * What `verifyWebhook` receives. Carries the RAW request body (not a
+ * re-encoded JSON) plus the request headers, because Meta signs the exact
+ * bytes it POSTed with HMAC-SHA256 — re-serializing the parsed JSON would
+ * change the bytes and break the signature. The route reads the body once
+ * (`await request.text()`) and passes it here so both verifyWebhook and
+ * parseWebhook see identical bytes.
+ *
+ * `headers` is the WHATWG `Headers` so providers can read whatever header
+ * they sign with (Meta: `x-hub-signature-256`; non-official: a per-channel
+ * token header). Kept small and provider-agnostic so every adapter shares
+ * one shape.
+ */
+export interface WebhookVerifyCtx {
+  rawBody: string;
+  headers: Headers;
+}
+
+/**
  * The provider contract. Required methods every transport implements;
  * optional methods are gated by `capabilities` (e.g. only Meta has
  * `sendTemplate`, only the QR providers have `startSession`).
@@ -193,8 +211,17 @@ export interface WhatsAppProvider {
     emoji: string,
   ): Promise<void>;
 
-  /** Meta: HMAC via app secret. Others: match the per-channel webhook_secret. */
-  verifyWebhook(req: Request, ch: ChannelCtx | null): Promise<boolean>;
+  /**
+   * Meta: HMAC over the raw body via the global app secret. Others: match
+   * the per-channel webhook_secret against a header/query token.
+   *
+   * Takes `WebhookVerifyCtx` (rawBody + headers) rather than a `Request`
+   * so the route can read the body exactly once and hand the same bytes to
+   * both verifyWebhook and parseWebhook — re-reading `Request.body` isn't
+   * possible, and re-serializing parsed JSON breaks Meta's HMAC. (Wave-2
+   * interface adjustment; see WebhookVerifyCtx above.)
+   */
+  verifyWebhook(ctx: WebhookVerifyCtx, ch: ChannelCtx | null): Promise<boolean>;
 
   /** Turn a raw webhook body into normalized inbound messages + statuses. */
   parseWebhook(body: unknown): ParsedWebhook;
