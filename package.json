@@ -1,17 +1,17 @@
 {
-  "name": "wacrm",
+  "name": "crm-fluxia",
   "version": "0.7.0",
   "private": true,
-  "description": "Self-hostable CRM template for WhatsApp built on Next.js and Supabase — shared inbox, contacts, sales pipelines, broadcasts, and no-code automations.",
+  "description": "CRM de WhatsApp multi-tenant da Fluxia — inbox compartilhada, contatos, pipelines, broadcasts e automações. Fork do wacrm (MIT, Arnas Donauskas).",
   "license": "MIT",
-  "author": "Arnas Donauskas",
-  "homepage": "https://github.com/ArnasDon/wacrm",
+  "author": "Fluxia",
+  "homepage": "https://github.com/Alex9Sales/wacrm",
   "repository": {
     "type": "git",
-    "url": "git+https://github.com/ArnasDon/wacrm.git"
+    "url": "git+https://github.com/Alex9Sales/wacrm.git"
   },
   "bugs": {
-    "url": "https://github.com/ArnasDon/wacrm/issues"
+    "url": "https://github.com/Alex9Sales/wacrm/issues"
   },
   "keywords": [
     "crm",
@@ -35,7 +35,7 @@
     "typecheck": "tsc --noEmit",
     "format": "prettier --write .",
     "format:check": "prettier --check .",
-    "test": "vitest run",
+    "test": "TZ=UTC vitest run",
     "test:watch": "vitest"
   },
   "dependencies": {

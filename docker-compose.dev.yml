@@ -1,0 +1,89 @@
+# Infra local de desenvolvimento do CRM Fluxia
+# Sobe: Postgres 16 (com pgvector), Redis 7, MinIO (S3) e WAHA.
+# Uso: docker compose -f docker-compose.dev.yml up -d
+
+name: crmfluxia-dev
+
+services:
+  postgres:
+    image: pgvector/pgvector:pg16
+    container_name: crmfluxia-postgres
+    environment:
+      POSTGRES_USER: crmfluxia
+      POSTGRES_PASSWORD: crmfluxia_dev
+      POSTGRES_DB: crmfluxia
+    ports:
+      - '5432:5432'
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ['CMD-SHELL', 'pg_isready -U crmfluxia -d crmfluxia']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7-alpine
+    container_name: crmfluxia-redis
+    ports:
+      - '6379:6379'
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ['CMD', 'redis-cli', 'ping']
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  minio:
+    image: minio/minio:latest
+    container_name: crmfluxia-minio
+    command: server /data --console-address ':9001'
+    environment:
+      MINIO_ROOT_USER: crmfluxia
+      MINIO_ROOT_PASSWORD: crmfluxia_dev
+    ports:
+      - '9000:9000' # API S3
+      - '9001:9001' # Console web
+    volumes:
+      - miniodata:/data
+    healthcheck:
+      test: ['CMD', 'mc', 'ready', 'local']
+      interval: 10s
+      timeout: 5s
+      retries: 10
+
+  # Cria os buckets padrão na subida e encerra
+  minio-init:
+    image: minio/mc:latest
+    depends_on:
+      minio:
+        condition: service_healthy
+    entrypoint: >
+      /bin/sh -c "
+      mc alias set local http://minio:9000 crmfluxia crmfluxia_dev &&
+      mc mb --ignore-existing local/avatars &&
+      mc mb --ignore-existing local/media &&
+      exit 0
+      "
+
+  waha:
+    image: devlikeapro/waha:latest
+    container_name: crmfluxia-waha
+    environment:
+      WAHA_API_KEY: waha_dev_key
+      # Em dev o app roda no host; WAHA alcança via host.docker.internal
+      WHATSAPP_HOOK_URL: http://host.docker.internal:3000/api/webhooks/waha
+      WHATSAPP_DEFAULT_ENGINE: NOWEB
+    ports:
+      - '3001:3000'
+    volumes:
+      - wahadata:/app/.sessions
+    extra_hosts:
+      - 'host.docker.internal:host-gateway'
+
+volumes:
+  pgdata:
+  redisdata:
+  miniodata:
+  wahadata:
