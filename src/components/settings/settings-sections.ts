@@ -9,6 +9,7 @@ import {
   Tags,
   User,
   UsersRound,
+  Webhook,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -30,6 +31,7 @@ export const SETTINGS_SECTIONS = [
   'fields',
   'deals',
   'members',
+  'integrations',
   'api',
 ] as const;
 
@@ -55,6 +57,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
   deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
   members: { id: 'members', label: 'Team members', icon: UsersRound, group: 'workspace' },
+  integrations: { id: 'integrations', label: 'Integrações', icon: Webhook, group: 'workspace' },
   api: { id: 'api', label: 'API keys', icon: KeyRound, group: 'workspace' },
 };
 

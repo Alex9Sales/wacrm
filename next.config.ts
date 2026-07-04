@@ -133,7 +133,25 @@ const nextConfig: NextConfig = {
   async headers() {
     return [
       {
-        source: "/api/:path*",
+        // Public media proxy (GET /api/files/:bucket/*key) re-serves
+        // immutable MinIO objects (timestamped / UUID keys) over the app's
+        // https origin to dodge mixed-content. Unlike the rest of /api,
+        // these ARE cacheable — carve them out of the no-store rule below
+        // and let the browser/CDN cache them for a day.
+        source: "/api/files/:path*",
+        headers: [
+          {
+            key: "Cache-Control",
+            value: "public, max-age=86400, immutable",
+          },
+        ],
+      },
+      {
+        // Everything else under /api is per-user — never share at the edge.
+        // The negative lookahead excludes /api/files so the media rule
+        // above wins (Next merges same-key headers; a single match keeps
+        // this deterministic).
+        source: "/api/:path((?!files/).*)",
         headers: [{ key: "Cache-Control", value: "no-store" }],
       },
       {

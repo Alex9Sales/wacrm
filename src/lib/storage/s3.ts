@@ -15,7 +15,9 @@ import {
   S3Client,
   PutObjectCommand,
   DeleteObjectCommand,
+  GetObjectCommand,
 } from "@aws-sdk/client-s3";
+import type { Readable } from "node:stream";
 
 let _client: S3Client | null = null;
 
@@ -78,6 +80,59 @@ export async function putObject(
       ContentType: contentType,
     }),
   );
+}
+
+/** Shape returned by getObject: the raw body plus its stored metadata. */
+export interface GetObjectResult {
+  /** Node Readable stream of the object bytes (from the AWS SDK). */
+  body: Readable;
+  /** ContentType saved on the object at put time, if any. */
+  contentType?: string;
+  /** Object size in bytes, if the store reported it. */
+  contentLength?: number;
+}
+
+/**
+ * Fetch an object's body + metadata for streaming back to a client.
+ *
+ * The AWS SDK's GetObject `Body` is a Node `Readable` under the Node
+ * runtime — we type it as such so the media-proxy route can pipe it
+ * straight into the HTTP response. Returns null when the object is
+ * missing (NoSuchKey / 404) so the caller can answer a clean 404 instead
+ * of surfacing an AWS error.
+ */
+export async function getObject(
+  bucket: string,
+  key: string,
+): Promise<GetObjectResult | null> {
+  try {
+    const res = await getS3Client().send(
+      new GetObjectCommand({ Bucket: bucket, Key: key }),
+    );
+    if (!res.Body) return null;
+    return {
+      body: res.Body as Readable,
+      contentType: res.ContentType,
+      contentLength: res.ContentLength,
+    };
+  } catch (err) {
+    // Missing object → 404 for the caller. MinIO/S3 signal this as
+    // NoSuchKey (or a 404 http status on the error metadata).
+    const e = err as {
+      name?: string;
+      Code?: string;
+      $metadata?: { httpStatusCode?: number };
+    };
+    if (
+      e?.name === "NoSuchKey" ||
+      e?.Code === "NoSuchKey" ||
+      e?.name === "NotFound" ||
+      e?.$metadata?.httpStatusCode === 404
+    ) {
+      return null;
+    }
+    throw err;
+  }
 }
 
 /** Delete an object. Best-effort — S3 delete is idempotent. */

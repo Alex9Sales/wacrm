@@ -24,6 +24,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/webhooks', // inbound provider webhooks (verified by signature)
   '/api/invitations', // public invite peek; redeem self-guards the session
   '/api/health', // liveness/readiness probe (Docker HEALTHCHECK, Traefik)
+  '/api/files', // public media proxy (browser + Meta fetch media by URL)
 ]
 
 function isProtectedPath(pathname: string): boolean {

@@ -361,9 +361,14 @@ export default function InboxPage() {
       // Reflect the selection in the URL so a refresh lands the user
       // back in the same thread, and so copy-paste links work. Use
       // replace() to avoid polluting browser history with every click.
-      router.replace(`/inbox?c=${conv.id}`, { scroll: false });
+      // Preserve any existing query params (e.g. the `?caixa=<channelId>`
+      // channel filter the ConversationList owns) so clicking a
+      // conversation doesn't silently drop the active caixa on refresh.
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("c", conv.id);
+      router.replace(`/inbox?${params.toString()}`, { scroll: false });
     },
-    [activeConversation?.id, router]
+    [activeConversation?.id, router, searchParams]
   );
 
   // Mobile "back" — deselect the conversation so the list pane comes
@@ -376,8 +381,13 @@ export default function InboxPage() {
     // Clearing the ref lets the deep-link auto-selector fire again if
     // the user later visits /inbox?c=<same-id> — desirable UX.
     autoSelectedForDeepLinkRef.current = null;
-    router.replace("/inbox", { scroll: false });
-  }, [router]);
+    // Drop the `?c=` thread param but keep the caixa filter (if any) so
+    // backing out to the list preserves the selected channel on refresh.
+    const params = new URLSearchParams(searchParams.toString());
+    params.delete("c");
+    const qs = params.toString();
+    router.replace(qs ? `/inbox?${qs}` : "/inbox", { scroll: false });
+  }, [router, searchParams]);
 
 
   // A conversation was deleted from the thread header. Drop it from the
@@ -392,10 +402,13 @@ export default function InboxPage() {
         setActiveContact(null);
         setMessages([]);
         autoSelectedForDeepLinkRef.current = null;
-        router.replace("/inbox", { scroll: false });
+        const params = new URLSearchParams(searchParams.toString());
+        params.delete("c");
+        const qs = params.toString();
+        router.replace(qs ? `/inbox?${qs}` : "/inbox", { scroll: false });
       }
     },
-    [activeConversation?.id, router]
+    [activeConversation?.id, router, searchParams]
   );
 
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {

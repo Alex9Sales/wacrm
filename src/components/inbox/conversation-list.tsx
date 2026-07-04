@@ -1,11 +1,17 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
+import { useRouter, useSearchParams } from "next/navigation";
 import { listConversations, listTags } from "@/app/(dashboard)/inbox/actions";
 import { matchesContactFilters } from "@/lib/inbox/conversations";
 import { cn } from "@/lib/utils";
-import type { Conversation, ConversationStatus, Tag } from "@/types";
-import { Search, ChevronDown, X, Radio } from "lucide-react";
+import type {
+  Conversation,
+  ConversationChannel,
+  ConversationStatus,
+  Tag,
+} from "@/types";
+import { Search, ChevronDown, X, Radio, Inbox } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { CHANNEL_PROVIDER_LABELS } from "./message-thread";
 import { Input } from "@/components/ui/input";
@@ -55,9 +61,19 @@ export function ConversationList({
   onConversationsLoaded,
   resyncToken = 0,
 }: ConversationListProps) {
+  const router = useRouter();
+  const searchParams = useSearchParams();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InboxFilter>("all");
   const [loading, setLoading] = useState(true);
+  // Channel ("caixa") filter — null means "Todas as conversas" (all
+  // channels). Seeded from the `?caixa=<channelId>` URL query so the
+  // selection survives a refresh / deep link. The list already carries
+  // each conversation's `channel.id`, so filtering is a client-side pass
+  // over the loaded conversations — instant, no refetch.
+  const [selectedChannelId, setSelectedChannelId] = useState<string | null>(
+    () => searchParams.get("caixa"),
+  );
   // Contact-based filters (issue #272). Tags use OR logic (a conversation
   // matches if its contact carries any selected tag), consistent with
   // Broadcast audience filtering. Company is an exact match on the field.
@@ -135,6 +151,48 @@ export function ConversationList({
     return Array.from(set).sort((a, b) => a.localeCompare(b));
   }, [conversations]);
 
+  // Channel ("caixa") options are derived from the loaded conversations —
+  // each conversation already carries its `channel` ({ id, provider,
+  // name }), so the set of channels with a live conversation is exactly
+  // what's worth offering as an inbox filter. Deduped by id, sorted by
+  // name. Legacy conversations with no channel_id (channel === undefined)
+  // contribute nothing here.
+  const channels = useMemo(() => {
+    const map = new Map<string, ConversationChannel>();
+    for (const c of conversations) {
+      if (c.channel?.id && !map.has(c.channel.id)) {
+        map.set(c.channel.id, c.channel);
+      }
+    }
+    return Array.from(map.values()).sort((a, b) =>
+      (a.name || CHANNEL_PROVIDER_LABELS[a.provider]).localeCompare(
+        b.name || CHANNEL_PROVIDER_LABELS[b.provider],
+      ),
+    );
+  }, [conversations]);
+
+  const selectedChannel = useMemo(
+    () => channels.find((c) => c.id === selectedChannelId) ?? null,
+    [channels, selectedChannelId],
+  );
+
+  // Update the channel filter and mirror it into the URL (`?caixa=<id>`,
+  // or drop the param for "Todas as conversas") so a refresh lands on the
+  // same caixa. Preserve the existing `?c=<convId>` deep-link param.
+  // replace() (not push) keeps browser history clean, matching how the
+  // page selects conversations.
+  const handleSelectChannel = useCallback(
+    (channelId: string | null) => {
+      setSelectedChannelId(channelId);
+      const params = new URLSearchParams(searchParams.toString());
+      if (channelId) params.set("caixa", channelId);
+      else params.delete("caixa");
+      const qs = params.toString();
+      router.replace(qs ? `/inbox?${qs}` : "/inbox", { scroll: false });
+    },
+    [router, searchParams],
+  );
+
   const tagsById = useMemo(() => {
     const m = new Map<string, Tag>();
     for (const t of tags) m.set(t.id, t);
@@ -143,6 +201,12 @@ export function ConversationList({
 
   const filtered = useMemo(() => {
     let result = conversations;
+
+    // Channel ("caixa") filter — applied alongside status & contact
+    // filters. Null = all channels.
+    if (selectedChannelId !== null) {
+      result = result.filter((c) => c.channel?.id === selectedChannelId);
+    }
 
     if (filter === "unread") {
       result = result.filter((c) => c.unread_count > 0);
@@ -171,7 +235,14 @@ export function ConversationList({
     }
 
     return result;
-  }, [conversations, filter, search, selectedTagIds, selectedCompany]);
+  }, [
+    conversations,
+    filter,
+    search,
+    selectedTagIds,
+    selectedCompany,
+    selectedChannelId,
+  ]);
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
@@ -218,6 +289,69 @@ export function ConversationList({
             className="border-border bg-muted pl-9 text-sm text-foreground placeholder-muted-foreground focus:border-primary/50"
           />
         </div>
+
+        {/* Caixa de entrada (channel) selector — Chatwoot-style. Filters
+            the list to a single channel's conversations, or shows all.
+            Only rendered when the account actually has channels with
+            conversations. */}
+        {channels.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className={cn(
+                "inline-flex w-full items-center justify-between gap-1 rounded-md border border-border bg-muted px-2.5 py-1.5 text-xs hover:bg-muted/70",
+                selectedChannel ? "text-foreground" : "text-muted-foreground",
+              )}
+            >
+              <span className="flex min-w-0 items-center gap-1.5">
+                <Inbox className="h-3.5 w-3.5 shrink-0" />
+                <span className="truncate">
+                  {selectedChannel
+                    ? `${selectedChannel.name || CHANNEL_PROVIDER_LABELS[selectedChannel.provider]} (${CHANNEL_PROVIDER_LABELS[selectedChannel.provider]})`
+                    : "Todas as conversas"}
+                </span>
+              </span>
+              <ChevronDown className="h-3 w-3 shrink-0" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              align="start"
+              className="max-h-72 w-64 border-border bg-popover"
+            >
+              <DropdownMenuItem
+                onClick={() => handleSelectChannel(null)}
+                className={cn(
+                  "text-sm",
+                  selectedChannelId === null
+                    ? "text-primary"
+                    : "text-popover-foreground",
+                )}
+              >
+                Todas as conversas
+              </DropdownMenuItem>
+              {channels.map((ch) => (
+                <DropdownMenuItem
+                  key={ch.id}
+                  onClick={() => handleSelectChannel(ch.id)}
+                  className={cn(
+                    "text-sm",
+                    selectedChannelId === ch.id
+                      ? "text-primary"
+                      : "text-popover-foreground",
+                  )}
+                >
+                  <span className="flex min-w-0 items-center gap-2">
+                    <Radio className="h-3 w-3 shrink-0" />
+                    <span className="truncate">
+                      {ch.name || CHANNEL_PROVIDER_LABELS[ch.provider]}
+                    </span>
+                    <span className="shrink-0 text-[10px] text-muted-foreground">
+                      {CHANNEL_PROVIDER_LABELS[ch.provider]}
+                    </span>
+                  </span>
+                </DropdownMenuItem>
+              ))}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
 
         <div className="flex flex-wrap items-center gap-1">
           <DropdownMenu>
