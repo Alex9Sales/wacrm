@@ -186,16 +186,24 @@ export async function dispatchInboundMessage(
   }
   const isFirstInbound = priorCustomerMsgCount === 0;
 
-  // 5) Insert the inbound message.
+  // `fromMe` = the operator answered from their OWN phone (mirrored to us by
+  // WAHA's message.any). It's an OUTGOING message, not a customer message:
+  // render it as an agent bubble, don't bump unread, and skip every
+  // customer-triggered side effect (flows / automations / AI / broadcast
+  // reply / first-inbound). Messages the CRM itself sent are already deduped
+  // upstream by external id, so this only covers phone-typed replies.
+  const isFromMe = ev.fromMe === true;
+
+  // 5) Insert the message (agent bubble when fromMe, else customer).
   try {
     await db.insert(messages).values({
       conversationId: conversation.id,
-      senderType: 'customer',
+      senderType: isFromMe ? 'agent' : 'customer',
       contentType,
       contentText,
       mediaUrl,
       messageId: ev.externalMessageId || null,
-      status: 'delivered',
+      status: isFromMe ? 'sent' : 'delivered',
       createdAt: new Date().toISOString(),
       interactiveReplyId: ev.interactiveReplyId ?? null,
     });
@@ -210,19 +218,27 @@ export async function dispatchInboundMessage(
     conversationId: conversation.id,
   });
 
-  // Bump unread + last message.
+  // Bump last message; unread only for genuinely incoming (customer) messages.
   try {
     await db
       .update(conversations)
       .set({
         lastMessageText: contentText,
         lastMessageAt: new Date().toISOString(),
-        unreadCount: (conversation.unreadCount || 0) + 1,
+        unreadCount: isFromMe
+          ? conversation.unreadCount || 0
+          : (conversation.unreadCount || 0) + 1,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(conversations.id, conversation.id));
   } catch (convError) {
     console.error('[inbound] Error updating conversation:', convError);
+  }
+
+  // A fromMe echo is the operator's own outgoing message — stop here. No
+  // broadcast-reply flag, no flows/automations/AI, no inbound webhook.
+  if (isFromMe) {
+    return { conversationId: conversation.id, contactId, isFirstInbound: false };
   }
 
   // Flag broadcast reply, if any.
