@@ -24,7 +24,10 @@
 FROM node:22-slim AS deps
 WORKDIR /app
 COPY package.json package-lock.json ./
-RUN npm ci
+# --include=dev is mandatory: Coolify injects NODE_ENV=production as a build
+# env, which would make npm OMIT devDependencies — but `next build` needs them
+# (typescript, tailwindcss, @tailwindcss/postcss…). Force the full tree.
+RUN npm ci --include=dev
 
 # ---------------------------------------------------------------------------
 # Stage 2 — builder: compile the Next app into `.next/standalone`.
