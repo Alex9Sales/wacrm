@@ -21,7 +21,7 @@ import { NextResponse } from "next/server";
 import { headers } from "next/headers";
 import { eq, asc } from "drizzle-orm";
 
-import { db, organization, member } from "@/db";
+import { db, organization, member, organizationBilling } from "@/db";
 import { firstOrNull } from "@/db/helpers";
 import { auth } from "@/lib/auth";
 import { getSessionUserId } from "./session";
@@ -48,12 +48,31 @@ export class ForbiddenError extends Error {
 }
 
 /**
+ * The active organization's billing status is 'suspended' (Phase 8 —
+ * super-admin suspension). Raised from `getCurrentAccount`, so it
+ * short-circuits every org-scoped request. Platform admins operate via
+ * /admin (requirePlatformAdmin), which never calls getCurrentAccount,
+ * so they're unaffected.
+ */
+export class AccountSuspendedError extends Error {
+  readonly status = 403 as const;
+  constructor(message = "Conta suspensa. Fale com a Fluxia.") {
+    super(message);
+    this.name = "AccountSuspendedError";
+  }
+}
+
+/**
  * Convert one of the typed errors above (or anything else) into a
  * `NextResponse`. Unknown errors collapse to 500 with the generic
  * message — we never leak `err.message` for non-classified errors.
  */
 export function toErrorResponse(err: unknown): NextResponse {
-  if (err instanceof UnauthorizedError || err instanceof ForbiddenError) {
+  if (
+    err instanceof UnauthorizedError ||
+    err instanceof ForbiddenError ||
+    err instanceof AccountSuspendedError
+  ) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
   console.error("[toErrorResponse] uncategorized error:", err);
@@ -163,6 +182,20 @@ export async function getCurrentAccount(): Promise<AccountContext> {
   if (!account) {
     // active org points at no organization row — orphaned session.
     throw new ForbiddenError("Active organization not found");
+  }
+
+  // Phase 8 suspension enforcement: if the org's billing row is
+  // 'suspended', block every org-scoped request here (the chokepoint).
+  // No billing row → treat as active (legacy orgs predate the satellite).
+  const billing = firstOrNull(
+    await db
+      .select({ status: organizationBilling.status })
+      .from(organizationBilling)
+      .where(eq(organizationBilling.organizationId, account.id))
+      .limit(1),
+  );
+  if (billing?.status === "suspended") {
+    throw new AccountSuspendedError();
   }
 
   return {

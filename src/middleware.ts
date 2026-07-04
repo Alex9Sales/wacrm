@@ -30,6 +30,12 @@ function isProtectedPath(pathname: string): boolean {
   if (pathname === '/dashboard' || pathname.startsWith('/dashboard/')) {
     return true
   }
+  // Phase 8: super-admin panel. Cookie presence only here; the real
+  // platform-admin allowlist check runs server-side in each /admin
+  // page / route via requirePlatformAdmin (middleware can't read the DB).
+  if (pathname === '/admin' || pathname.startsWith('/admin/')) {
+    return true
+  }
   if (pathname.startsWith('/api/')) {
     return !PUBLIC_API_PREFIXES.some(
       (p) => pathname === p || pathname.startsWith(`${p}/`),

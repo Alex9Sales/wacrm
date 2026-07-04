@@ -802,6 +802,29 @@ CREATE INDEX ai_knowledge_chunks_embedding_idx
   ON ai_knowledge_chunks USING hnsw (embedding vector_cosine_ops);
 
 -- ============================================================
+-- ORGANIZATION_BILLING (Phase 8 — super-admin billing satellite)
+--
+-- 1:1 with organization (PK = organization_id). Holds the SaaS
+-- operator (Fluxia) billing + status metadata. status='suspended'
+-- drives the AccountSuspendedError chokepoint in getCurrentAccount.
+-- ============================================================
+CREATE TABLE organization_billing (
+  organization_id   UUID PRIMARY KEY REFERENCES organization(id) ON DELETE CASCADE,
+  status            TEXT NOT NULL DEFAULT 'active'
+                      CHECK (status IN ('active', 'suspended', 'trial')),
+  started_at        TIMESTAMPTZ,
+  due_at            TIMESTAMPTZ,
+  plan              TEXT,
+  billing_phone     TEXT,
+  notes             TEXT,
+  last_reminder_at  TIMESTAMPTZ,
+  created_at        TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at        TIMESTAMPTZ NOT NULL DEFAULT NOW()
+);
+
+CREATE INDEX idx_organization_billing_due_at ON organization_billing (due_at);
+
+-- ============================================================
 -- ============================================================
 -- FUNCTIONS
 -- ============================================================
@@ -1175,3 +1198,6 @@ CREATE TRIGGER ai_configs_updated_at
 CREATE TRIGGER ai_knowledge_documents_updated_at
   BEFORE UPDATE ON ai_knowledge_documents
   FOR EACH ROW EXECUTE FUNCTION public.update_ai_knowledge_documents_updated_at();
+
+CREATE TRIGGER set_updated_at BEFORE UPDATE ON organization_billing
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

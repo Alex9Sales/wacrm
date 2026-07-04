@@ -141,6 +141,34 @@ export const invitation = pgTable("invitation", {
 		}).onDelete("cascade"),
 ]);
 
+// ============================================================
+// ORGANIZATION_BILLING — super-admin (Phase 8) billing satellite.
+//
+// 1:1 with `organization` (PK = organization_id, FK cascade). Holds
+// the SaaS-operator (Fluxia) billing + status metadata that lives
+// ABOVE the org's own data. `status` drives suspension enforcement in
+// getCurrentAccount (status='suspended' → AccountSuspendedError).
+// ============================================================
+export const organizationBilling = pgTable("organization_billing", {
+	organizationId: uuid("organization_id").primaryKey().notNull(),
+	status: text().default('active').notNull(),
+	startedAt: timestamp("started_at", { withTimezone: true, mode: 'string' }),
+	dueAt: timestamp("due_at", { withTimezone: true, mode: 'string' }),
+	plan: text(),
+	billingPhone: text("billing_phone"),
+	notes: text(),
+	lastReminderAt: timestamp("last_reminder_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organization.id],
+			name: "organization_billing_organization_id_fkey"
+		}).onDelete("cascade"),
+	check("organization_billing_status_check", sql`status = ANY (ARRAY['active'::text, 'suspended'::text, 'trial'::text])`),
+]);
+
 export const contacts = pgTable("contacts", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),

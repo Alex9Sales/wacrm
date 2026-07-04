@@ -46,9 +46,12 @@ vi.mock("@/db", async (importOriginal) => {
   return { ...actual, db: { select: () => builder } };
 });
 
-const { getCurrentAccount, UnauthorizedError, ForbiddenError } = await import(
-  "./account"
-);
+const {
+  getCurrentAccount,
+  UnauthorizedError,
+  ForbiddenError,
+  AccountSuspendedError,
+} = await import("./account");
 
 beforeEach(() => {
   state.results = [];
@@ -61,6 +64,7 @@ describe("getCurrentAccount", () => {
     state.results = [
       [{ organizationId: "org-1", role: "owner" }],
       [{ id: "org-1", name: "Acme", defaultCurrency: "BRL" }],
+      [{ status: "active" }], // organization_billing row
     ];
 
     const ctx = await getCurrentAccount();
@@ -72,6 +76,32 @@ describe("getCurrentAccount", () => {
       account: { id: "org-1", name: "Acme" },
       defaultCurrency: "BRL",
     });
+  });
+
+  it("resolves when the org has no billing row (legacy → active)", async () => {
+    state.userId = "user-1";
+    state.results = [
+      [{ organizationId: "org-1", role: "owner" }],
+      [{ id: "org-1", name: "Acme", defaultCurrency: "BRL" }],
+      [], // no organization_billing row
+    ];
+
+    const ctx = await getCurrentAccount();
+    expect(ctx.accountId).toBe("org-1");
+  });
+
+  it("throws AccountSuspendedError when billing status is suspended", async () => {
+    state.userId = "user-1";
+    state.results = [
+      [{ organizationId: "org-1", role: "owner" }],
+      [{ id: "org-1", name: "Acme", defaultCurrency: "BRL" }],
+      [{ status: "suspended" }],
+    ];
+
+    const err = await getCurrentAccount().catch((e) => e);
+    expect(err).toBeInstanceOf(AccountSuspendedError);
+    expect(err.status).toBe(403);
+    expect(err.message).toBe("Conta suspensa. Fale com a Fluxia.");
   });
 
   it("throws UnauthorizedError when there is no session", async () => {
