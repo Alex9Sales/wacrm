@@ -4,8 +4,8 @@
 # CRM Fluxia — multi-stage image for a multi-container deploy.
 #
 # ONE image, TWO runtime roles (selected by the container's command):
-#   web    → node server.js          (Next.js standalone server, port 3000)
-#   worker → npx tsx src/worker/index.ts   (BullMQ broadcast worker)
+#   web    → node server.js                 (Next.js standalone server, port 3000)
+#   worker → npx tsx src/worker/index.ts    (BullMQ broadcast worker)
 #
 # The Next build produces `.next/standalone` (a lean traced server bundle),
 # which the web role runs. The worker is NOT part of the Next build — it's
@@ -13,35 +13,30 @@
 # carries a full production `node_modules` (tsx is a prod dependency now) and
 # the `src/` + `tsconfig.json` + `drizzle/` trees the worker imports.
 #
-# No ffmpeg: the composer records Opus/WhatsApp-accepted audio client-side
-# (see src/components/inbox/message-composer.tsx), so there is no server-side
-# transcode step. If that ever changes, add `ffmpeg` to the runner apk line.
+# Base = node:22-slim (Debian/glibc), NOT alpine/musl: esbuild (pulled by
+# tsx / drizzle-kit) ships glibc prebuilt binaries and its install-time
+# version check fails on musl. Debian sidesteps that.
 # ============================================================================
 
 # ---------------------------------------------------------------------------
 # Stage 1 — deps: install the FULL dependency tree once (cached on lockfile).
 # ---------------------------------------------------------------------------
-FROM node:22-alpine AS deps
+FROM node:22-slim AS deps
 WORKDIR /app
-# libc6-compat: some native deps (e.g. transitive) expect glibc symbols on
-# Alpine's musl. Cheap insurance.
-RUN apk add --no-cache libc6-compat
 COPY package.json package-lock.json ./
 RUN npm ci
 
 # ---------------------------------------------------------------------------
 # Stage 2 — builder: compile the Next app into `.next/standalone`.
 # ---------------------------------------------------------------------------
-FROM node:22-alpine AS builder
+FROM node:22-slim AS builder
 WORKDIR /app
-RUN apk add --no-cache libc6-compat
 COPY --from=deps /app/node_modules ./node_modules
 COPY . .
 
 # NEXT_PUBLIC_* are inlined into the client bundle AT BUILD TIME — they must
-# be present now, not just at runtime. Pass via --build-arg (or Coolify's
-# build-time env). Anything read only server-side (DATABASE_URL, REDIS_URL,
-# secrets…) is NOT needed here and must NOT be baked in.
+# be present now, not just at runtime. Anything read only server-side
+# (DATABASE_URL, REDIS_URL, secrets…) is NOT needed here and must NOT be baked.
 ARG NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
 ENV NEXT_TELEMETRY_DISABLED=1
@@ -52,45 +47,44 @@ RUN npm run build
 # ---------------------------------------------------------------------------
 # Stage 3 — runner: the shipped image. Runs BOTH web and worker.
 # ---------------------------------------------------------------------------
-FROM node:22-alpine AS runner
+FROM node:22-slim AS runner
 WORKDIR /app
 
-RUN apk add --no-cache libc6-compat wget
+# wget for the HEALTHCHECK; slim ships none by default.
+RUN apt-get update \
+  && apt-get install -y --no-install-recommends wget \
+  && rm -rf /var/lib/apt/lists/*
+
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000
 ENV HOSTNAME=0.0.0.0
 
-# Non-root runtime user.
-RUN addgroup --system --gid 1001 nodejs \
-  && adduser --system --uid 1001 nextjs
+# node:22-slim ships a non-root `node` user (uid 1000) — reuse it.
 
 # --- Next.js WEB (standalone) -------------------------------------------------
-# `.next/standalone` already contains server.js + the traced node_modules the
-# web server needs. `.next/static` and `public` are served alongside it.
-COPY --from=builder --chown=nextjs:nodejs /app/.next/standalone ./
-COPY --from=builder --chown=nextjs:nodejs /app/.next/static ./.next/static
-COPY --from=builder --chown=nextjs:nodejs /app/public ./public
+COPY --from=builder --chown=node:node /app/.next/standalone ./
+COPY --from=builder --chown=node:node /app/.next/static ./.next/static
+COPY --from=builder --chown=node:node /app/public ./public
 
 # --- WORKER (tsx + raw source) ------------------------------------------------
-# The standalone bundle does NOT include the worker or tsx, so we overlay a
-# full production node_modules (tsx is a prod dep) and the source the worker
-# imports at runtime. This node_modules also supersedes the partial one inside
-# standalone — a superset, so the web server keeps working.
-COPY --from=builder --chown=nextjs:nodejs /app/node_modules ./node_modules
-COPY --from=builder --chown=nextjs:nodejs /app/package.json ./package.json
-COPY --from=builder --chown=nextjs:nodejs /app/tsconfig.json ./tsconfig.json
-COPY --from=builder --chown=nextjs:nodejs /app/src ./src
-COPY --from=builder --chown=nextjs:nodejs /app/drizzle ./drizzle
+# The standalone bundle excludes the worker + tsx, so overlay a full production
+# node_modules (tsx is a prod dep) plus the source the worker imports. This
+# node_modules supersedes the partial standalone one — a superset — so web
+# still works.
+COPY --from=builder --chown=node:node /app/node_modules ./node_modules
+COPY --from=builder --chown=node:node /app/package.json ./package.json
+COPY --from=builder --chown=node:node /app/tsconfig.json ./tsconfig.json
+COPY --from=builder --chown=node:node /app/src ./src
+COPY --from=builder --chown=node:node /app/drizzle ./drizzle
 
-USER nextjs
+USER node
 EXPOSE 3000
 
-# Liveness probe against the cheap /api/health endpoint. Coolify/Traefik can
-# use this too; it never touches the DB or Redis.
+# Liveness probe against the cheap /api/health endpoint (no DB/Redis).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget --quiet --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1
 
-# Default command = web. The worker container overrides this with:
-#   command: npx tsx src/worker/index.ts
+# Default command = web. The worker container overrides with:
+#   npx tsx src/worker/index.ts
 CMD ["node", "server.js"]
