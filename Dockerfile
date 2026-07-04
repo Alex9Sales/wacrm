@@ -81,13 +81,20 @@ COPY --from=builder --chown=node:node /app/tsconfig.json ./tsconfig.json
 COPY --from=builder --chown=node:node /app/src ./src
 COPY --from=builder --chown=node:node /app/drizzle ./drizzle
 
+# Role dispatcher: same image runs web (default) or worker (APP_ROLE=worker).
+# Needed because Coolify's "docker image" deployment runs the image's own
+# entrypoint/CMD and does NOT apply a per-app start-command override.
+COPY --chown=node:node docker-entrypoint.sh ./docker-entrypoint.sh
+RUN chmod +x ./docker-entrypoint.sh
+
 USER node
 EXPOSE 3000
 
 # Liveness probe against the cheap /api/health endpoint (no DB/Redis).
+# Only meaningful for the web role; the worker has its healthcheck disabled
+# in Coolify (it serves no HTTP).
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD wget --quiet --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1
 
-# Default command = web. The worker container overrides with:
-#   npx tsx src/worker/index.ts
-CMD ["node", "server.js"]
+# Entrypoint selects the role from APP_ROLE (worker) else defaults to web.
+ENTRYPOINT ["./docker-entrypoint.sh"]
