@@ -81,8 +81,16 @@ export default function BroadcastsPage() {
     fetchBroadcasts();
   }, []);
 
+  // Poll while any broadcast is still moving (scheduled / sending /
+  // paused) — the worker advances counts server-side.
   const anySending = useMemo(
-    () => broadcasts.some((b) => b.status === 'sending'),
+    () =>
+      broadcasts.some(
+        (b) =>
+          b.status === 'sending' ||
+          b.status === 'scheduled' ||
+          b.status === 'paused',
+      ),
     [broadcasts],
   );
 
@@ -255,17 +263,34 @@ export default function BroadcastsPage() {
                       />
                     </TableCell>
                     <TableCell>
-                      <span
-                        className={`inline-flex items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${status.classes}`}
-                      >
-                        {status.pulse && (
-                          <span className="relative flex h-1.5 w-1.5">
-                            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-yellow-400 opacity-75" />
-                            <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-yellow-400" />
-                          </span>
-                        )}
-                        {status.label}
-                      </span>
+                      <div className="flex flex-col gap-1">
+                        <span
+                          className={`inline-flex w-fit items-center gap-1.5 rounded-full border px-2 py-0.5 text-xs font-medium ${status.classes}`}
+                        >
+                          {status.pulse && (
+                            <span className="relative flex h-1.5 w-1.5">
+                              <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-yellow-400 opacity-75" />
+                              <span className="relative inline-flex h-1.5 w-1.5 rounded-full bg-yellow-400" />
+                            </span>
+                          )}
+                          {status.label}
+                        </span>
+                        {/* Compact progress for in-flight / completed
+                            broadcasts, e.g. "120/200 enviados". */}
+                        {(broadcast.status === 'sending' ||
+                          broadcast.status === 'paused' ||
+                          broadcast.status === 'sent') &&
+                          broadcast.total_recipients > 0 && (
+                            <span className="text-[11px] tabular-nums text-muted-foreground">
+                              {(
+                                broadcast.sent_count + broadcast.failed_count
+                              ).toLocaleString('pt-BR')}
+                              /
+                              {broadcast.total_recipients.toLocaleString('pt-BR')}{' '}
+                              enviados
+                            </span>
+                          )}
+                      </div>
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground sm:table-cell">
                       {new Date(broadcast.created_at).toLocaleDateString()}

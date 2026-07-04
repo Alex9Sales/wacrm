@@ -20,6 +20,13 @@ import {
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
+import { channels } from '@/db'
+import {
+  pauseBroadcast,
+  resumeBroadcast,
+  cancelBroadcast,
+  type ControlResult,
+} from '@/lib/queue/broadcast-controls'
 import type {
   Broadcast,
   BroadcastRecipient,
@@ -38,6 +45,7 @@ const broadcastColumns = {
   template_language: broadcasts.templateLanguage,
   template_variables: broadcasts.templateVariables,
   audience_filter: broadcasts.audienceFilter,
+  channel_id: broadcasts.channelId,
   scheduled_at: broadcasts.scheduledAt,
   status: broadcasts.status,
   total_recipients: broadcasts.totalRecipients,
@@ -231,6 +239,36 @@ export async function listApprovedTemplates(): Promise<MessageTemplate[]> {
     )
     .orderBy(desc(messageTemplates.createdAt))
   return rows as unknown as MessageTemplate[]
+}
+
+export interface BroadcastChannel {
+  id: string
+  name: string
+  phone_number: string | null
+  status: string
+}
+
+/**
+ * The account's Meta (WhatsApp Cloud) channels — the only providers a
+ * template broadcast can go out on. Backs the step-4 channel picker. When
+ * the account has exactly one, the wizard defaults it silently; with more
+ * than one the user must pick which number to send from.
+ */
+export async function listMetaChannels(): Promise<BroadcastChannel[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: channels.id,
+      name: channels.name,
+      phone_number: channels.phoneNumber,
+      status: channels.status,
+    })
+    .from(channels)
+    .where(
+      and(eq(channels.accountId, ctx.accountId), eq(channels.provider, 'meta')),
+    )
+    .orderBy(channels.name)
+  return rows as BroadcastChannel[]
 }
 
 /** The account's custom fields, ordered by name (step-2 / step-3). */
@@ -759,6 +797,35 @@ export async function updateRecipientStatuses(
       error: err instanceof Error ? err.message : 'Failed to update recipients',
     }
   }
+}
+
+// ------------------------------------------------------------
+// Broadcast lifecycle controls (Phase 5 UI): pause / resume / cancel.
+// The detail page drives these; each resolves the caller's account via
+// getCurrentAccount() then delegates to the Next-independent state machine
+// in @/lib/queue/broadcast-controls. Returns the ControlResult so the UI
+// can surface an invalid-transition message and refetch.
+// ------------------------------------------------------------
+
+export async function pauseBroadcastAction(
+  broadcastId: string,
+): Promise<ControlResult> {
+  const ctx = await getCurrentAccount()
+  return pauseBroadcast(broadcastId, ctx.accountId)
+}
+
+export async function resumeBroadcastAction(
+  broadcastId: string,
+): Promise<ControlResult> {
+  const ctx = await getCurrentAccount()
+  return resumeBroadcast(broadcastId, ctx.accountId)
+}
+
+export async function cancelBroadcastAction(
+  broadcastId: string,
+): Promise<ControlResult> {
+  const ctx = await getCurrentAccount()
+  return cancelBroadcast(broadcastId, ctx.accountId)
 }
 
 /** Flip a broadcast's final status once the send loop completes. */

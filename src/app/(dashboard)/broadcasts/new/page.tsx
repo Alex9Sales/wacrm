@@ -1,8 +1,12 @@
 'use client';
 
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { saveDraftBroadcast } from '../actions';
+import {
+  saveDraftBroadcast,
+  listMetaChannels,
+  type BroadcastChannel,
+} from '../actions';
 import { toast } from 'sonner';
 import { MessageTemplate } from '@/types';
 import { Step1ChooseTemplate } from '@/components/broadcasts/step1-choose-template';
@@ -42,6 +46,26 @@ export default function NewBroadcastPage() {
   const [headerMediaUrl, setHeaderMediaUrl] = useState('');
   const [name, setName] = useState('');
 
+  // Meta channels the account can broadcast from. Loaded once; a single
+  // channel is defaulted silently, more than one shows a picker in step4.
+  const [channels, setChannels] = useState<BroadcastChannel[]>([]);
+  const [channelId, setChannelId] = useState('');
+  const [scheduledAt, setScheduledAt] = useState('');
+
+  useEffect(() => {
+    listMetaChannels()
+      .then((list) => {
+        setChannels(list);
+        // Default to the first (or the single) channel so channel_id is
+        // always sent even when the picker is hidden.
+        if (list.length > 0) setChannelId(list[0].id);
+      })
+      .catch(() => {
+        // Non-fatal: without an explicit channel the backend falls back to
+        // the account's default channel.
+      });
+  }, []);
+
   async function handleSend() {
     if (!template) return;
 
@@ -58,6 +82,8 @@ export default function NewBroadcastPage() {
         },
         variables,
         headerMediaUrl,
+        channelId: channelId || undefined,
+        scheduledAt: scheduledAt || undefined,
       });
       router.push(`/broadcasts/${broadcastId}`);
     } catch (err) {
@@ -196,6 +222,11 @@ export default function NewBroadcastPage() {
               onNameChange={setName}
               template={template}
               audience={audience}
+              channels={channels}
+              channelId={channelId}
+              onChannelChange={setChannelId}
+              scheduledAt={scheduledAt}
+              onScheduledAtChange={setScheduledAt}
               onSend={handleSend}
               onSaveDraft={handleSaveDraft}
               onBack={() => setCurrentStep(2)}

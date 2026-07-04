@@ -1,11 +1,14 @@
 'use client';
 
-import { useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { useParams, useRouter } from 'next/navigation';
 import {
   deleteBroadcast,
   getBroadcast,
   listBroadcastRecipients,
+  pauseBroadcastAction,
+  resumeBroadcastAction,
+  cancelBroadcastAction,
 } from '../actions';
 import { Broadcast, BroadcastRecipient, RecipientStatus } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -24,6 +27,14 @@ import {
   DropdownMenuTrigger,
 } from '@/components/ui/dropdown-menu';
 import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
+import {
   ArrowLeft,
   Loader2,
   Users,
@@ -36,12 +47,25 @@ import {
   Download,
   ChevronDown,
   Trash2,
+  Pause,
+  Play,
+  Ban,
+  CalendarClock,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   getBroadcastStatus,
   getRecipientStatus,
 } from '@/lib/broadcast-status';
+
+/**
+ * Poll cadence while the broadcast is still moving. The queue worker
+ * advances counts server-side; we just surface the freshest snapshot.
+ */
+const POLL_INTERVAL_MS = 3_000;
+
+/** Statuses that are still in motion — polling stays on while in one. */
+const LIVE_STATUSES = new Set(['scheduled', 'sending', 'paused']);
 
 interface StatCardProps {
   label: string;
@@ -159,25 +183,103 @@ export default function BroadcastDetailPage() {
   );
   const [confirmDelete, setConfirmDelete] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  const [confirmCancel, setConfirmCancel] = useState(false);
+  const [controlBusy, setControlBusy] = useState(false);
+
+  const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  const fetchData = useCallback(async () => {
+    const bc = await getBroadcast(broadcastId);
+    if (!bc) throw new Error('Broadcast not found');
+    setBroadcast(bc);
+    const recs = await listBroadcastRecipients(broadcastId);
+    setRecipients(recs);
+    return bc;
+  }, [broadcastId]);
 
   useEffect(() => {
-    async function fetchData() {
-      try {
-        const bc = await getBroadcast(broadcastId);
-        if (!bc) throw new Error('Broadcast not found');
-        setBroadcast(bc);
+    fetchData()
+      .catch((err) =>
+        setError(err instanceof Error ? err.message : 'Failed to load broadcast'),
+      )
+      .finally(() => setLoading(false));
+  }, [fetchData]);
 
-        const recs = await listBroadcastRecipients(broadcastId);
-        setRecipients(recs);
-      } catch (err) {
-        setError(err instanceof Error ? err.message : 'Failed to load broadcast');
-      } finally {
-        setLoading(false);
+  // Live polling while the broadcast is scheduled / sending / paused. Stop
+  // once it reaches a terminal state (sent / failed / cancelled) so we
+  // don't keep hammering the DB. Pauses while the tab is hidden.
+  const isLive = broadcast ? LIVE_STATUSES.has(broadcast.status) : false;
+
+  useEffect(() => {
+    function start() {
+      if (pollTimer.current) return;
+      pollTimer.current = setInterval(() => {
+        fetchData().catch(() => {
+          /* transient — keep the last good snapshot */
+        });
+      }, POLL_INTERVAL_MS);
+    }
+    function stop() {
+      if (!pollTimer.current) return;
+      clearInterval(pollTimer.current);
+      pollTimer.current = null;
+    }
+    function onVisibility() {
+      if (document.visibilityState === 'hidden') {
+        stop();
+      } else if (isLive) {
+        fetchData().catch(() => {});
+        start();
       }
     }
 
-    fetchData();
-  }, [broadcastId]);
+    if (isLive && document.visibilityState === 'visible') {
+      start();
+    } else {
+      stop();
+    }
+    document.addEventListener('visibilitychange', onVisibility);
+    return () => {
+      stop();
+      document.removeEventListener('visibilitychange', onVisibility);
+    };
+  }, [isLive, fetchData]);
+
+  async function runControl(
+    action: 'pause' | 'resume' | 'cancel',
+  ): Promise<void> {
+    setControlBusy(true);
+    try {
+      const fn =
+        action === 'pause'
+          ? pauseBroadcastAction
+          : action === 'resume'
+            ? resumeBroadcastAction
+            : cancelBroadcastAction;
+      const result = await fn(broadcastId);
+      if (!result.ok) {
+        toast.error(
+          result.message ??
+            (result.code === 'not_found'
+              ? 'Broadcast não encontrado.'
+              : 'Não foi possível alterar o status.'),
+        );
+      } else {
+        const msg =
+          action === 'pause'
+            ? 'Broadcast pausado.'
+            : action === 'resume'
+              ? 'Broadcast retomado.'
+              : 'Broadcast cancelado.';
+        toast.success(msg);
+      }
+      await fetchData().catch(() => {});
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha na operação.');
+    } finally {
+      setControlBusy(false);
+    }
+  }
 
   const filteredRecipients = useMemo(
     () =>
@@ -251,6 +353,31 @@ export default function BroadcastDetailPage() {
 
   const status = getBroadcastStatus(broadcast.status);
 
+  // Control availability, mirroring the queue state machine:
+  //   sending          → Pause, Cancel
+  //   paused           → Resume, Cancel
+  //   scheduled        → Cancel
+  const canPause = broadcast.status === 'sending';
+  const canResume = broadcast.status === 'paused';
+  const canCancel =
+    broadcast.status === 'sending' ||
+    broadcast.status === 'scheduled' ||
+    broadcast.status === 'paused';
+  const deleteBlocked = isLive; // scheduled / sending / paused
+
+  const processed =
+    broadcast.sent_count + broadcast.failed_count;
+  const progressPct =
+    broadcast.total_recipients > 0
+      ? Math.round((processed / broadcast.total_recipients) * 100)
+      : 0;
+  const scheduledLabel = broadcast.scheduled_at
+    ? new Date(broadcast.scheduled_at).toLocaleString('pt-BR', {
+        dateStyle: 'short',
+        timeStyle: 'short',
+      })
+    : null;
+
   const funnelSteps: FunnelStep[] = [
     { label: 'Sent', value: broadcast.sent_count, color: 'bg-primary' },
     { label: 'Delivered', value: broadcast.delivered_count, color: 'bg-teal-500' },
@@ -290,49 +417,143 @@ export default function BroadcastDetailPage() {
           </div>
         </div>
 
-        {/* Delete — inline-confirm pattern matches the pipeline-settings
-            "Delete Pipeline" flow. Mid-send broadcasts can't be deleted
-            because orphaning in-flight Meta messages would leave the
-            funnel inconsistent. */}
-        {confirmDelete ? (
-          <div className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-sm">
-            <span className="text-red-300">Delete this broadcast?</span>
+        <div className="flex flex-wrap items-center gap-2">
+          {/* Lifecycle controls — pause / resume / cancel. Visibility
+              follows the queue state machine. */}
+          {canPause && (
             <Button
               variant="outline"
               size="sm"
-              onClick={() => setConfirmDelete(false)}
-              disabled={deleting}
-              className="h-7 border-border bg-transparent text-muted-foreground hover:bg-muted"
+              disabled={controlBusy}
+              onClick={() => runControl('pause')}
+              className="border-border text-muted-foreground hover:bg-muted disabled:opacity-50"
             >
-              Cancel
+              <Pause className="h-3.5 w-3.5" />
+              Pausar
             </Button>
+          )}
+          {canResume && (
             <Button
+              variant="outline"
               size="sm"
-              onClick={handleDelete}
-              disabled={deleting}
-              className="h-7 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              disabled={controlBusy}
+              onClick={() => runControl('resume')}
+              className="border-primary/30 text-primary hover:bg-primary/10 disabled:opacity-50"
             >
-              {deleting ? 'Deleting…' : 'Confirm'}
+              <Play className="h-3.5 w-3.5" />
+              Retomar
             </Button>
-          </div>
-        ) : (
-          <Button
-            variant="outline"
-            size="sm"
-            disabled={broadcast.status === 'sending'}
-            onClick={() => setConfirmDelete(true)}
-            title={
-              broadcast.status === 'sending'
-                ? 'Cannot delete while a broadcast is actively sending'
-                : 'Delete this broadcast'
-            }
-            className="border-red-500/30 bg-transparent text-red-400 hover:bg-red-500/10 disabled:opacity-40"
-          >
-            <Trash2 className="h-3.5 w-3.5" />
-            Delete
-          </Button>
-        )}
+          )}
+          {canCancel && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={controlBusy}
+              onClick={() => setConfirmCancel(true)}
+              className="border-red-500/30 bg-transparent text-red-400 hover:bg-red-500/10 disabled:opacity-50"
+            >
+              <Ban className="h-3.5 w-3.5" />
+              Cancelar
+            </Button>
+          )}
+
+          {/* Delete — inline-confirm pattern matches the pipeline-settings
+              "Delete Pipeline" flow. In-flight broadcasts (scheduled /
+              sending / paused) can't be deleted because orphaning queued
+              Meta sends would leave the funnel inconsistent. */}
+          {confirmDelete ? (
+            <div className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-sm">
+              <span className="text-red-300">Excluir este broadcast?</span>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setConfirmDelete(false)}
+                disabled={deleting}
+                className="h-7 border-border bg-transparent text-muted-foreground hover:bg-muted"
+              >
+                Cancelar
+              </Button>
+              <Button
+                size="sm"
+                onClick={handleDelete}
+                disabled={deleting}
+                className="h-7 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+              >
+                {deleting ? 'Excluindo…' : 'Confirmar'}
+              </Button>
+            </div>
+          ) : (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={deleteBlocked}
+              onClick={() => setConfirmDelete(true)}
+              title={
+                deleteBlocked
+                  ? 'Não é possível excluir enquanto o broadcast está agendado, enviando ou pausado'
+                  : 'Excluir este broadcast'
+              }
+              className="border-red-500/30 bg-transparent text-red-400 hover:bg-red-500/10 disabled:opacity-40"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
+              Excluir
+            </Button>
+          )}
+        </div>
       </div>
+
+      {/* Live progress / scheduled banner. Shows a progress bar while
+          sending or paused, and the scheduled time when scheduled. */}
+      {(isLive || broadcast.status === 'sent') && (
+        <div className="rounded-xl border border-border bg-card p-4">
+          {broadcast.status === 'scheduled' ? (
+            <div className="flex items-center gap-2 text-sm text-blue-400">
+              <CalendarClock className="h-4 w-4" />
+              <span className="font-medium">Agendado</span>
+              {scheduledLabel && (
+                <span className="text-muted-foreground">
+                  para {scheduledLabel}
+                </span>
+              )}
+            </div>
+          ) : (
+            <>
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex items-center gap-2 text-sm font-medium text-foreground">
+                  {broadcast.status === 'sending' && (
+                    <Loader2 className="h-4 w-4 animate-spin text-primary" />
+                  )}
+                  {broadcast.status === 'paused' && (
+                    <Pause className="h-4 w-4 text-amber-400" />
+                  )}
+                  <span>
+                    {broadcast.status === 'sending'
+                      ? 'Enviando…'
+                      : broadcast.status === 'paused'
+                        ? 'Pausado'
+                        : 'Concluído'}
+                  </span>
+                  <span className="text-muted-foreground">
+                    {processed.toLocaleString('pt-BR')} de{' '}
+                    {broadcast.total_recipients.toLocaleString('pt-BR')} processados
+                  </span>
+                </div>
+                <span className="text-xs font-medium text-primary tabular-nums">
+                  {progressPct}%
+                </span>
+              </div>
+              <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className={`h-1.5 rounded-full transition-all duration-500 ${
+                    broadcast.status === 'paused' ? 'bg-amber-400' : 'bg-primary'
+                  }`}
+                  style={{ width: `${progressPct}%` }}
+                />
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Stats — 6 cards: Total / Sent / Delivered / Read / Replied / Failed */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
@@ -510,6 +731,44 @@ export default function BroadcastDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Cancel confirmation — cancelling is terminal: pending recipients
+          won't be sent. */}
+      <Dialog open={confirmCancel} onOpenChange={setConfirmCancel}>
+        <DialogContent className="border-border bg-popover sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground">
+              Cancelar broadcast
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Tem certeza que deseja cancelar este broadcast? Os contatos
+              ainda não enviados não receberão a mensagem. Esta ação não pode
+              ser desfeita.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmCancel(false)}
+              disabled={controlBusy}
+              className="border-border text-muted-foreground"
+            >
+              Voltar
+            </Button>
+            <Button
+              onClick={async () => {
+                setConfirmCancel(false);
+                await runControl('cancel');
+              }}
+              disabled={controlBusy}
+              className="bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              <Ban className="h-4 w-4" />
+              Cancelar broadcast
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
