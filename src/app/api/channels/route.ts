@@ -10,6 +10,8 @@
 // credential encryption + webhook_secret generation.
 // ============================================================
 
+import { randomBytes } from 'node:crypto'
+
 import { NextResponse } from 'next/server'
 import { eq } from 'drizzle-orm'
 
@@ -17,6 +19,25 @@ import { db, channels } from '@/db'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { createChannel, type CreateChannelInput } from '@/lib/channels/channels'
 import type { ProviderId } from '@/lib/channels/provider'
+
+// Managed (Fluxia-hosted) infra for the non-official providers. When these
+// env vars are set, the operator does NOT type a URL/key/session — they just
+// name the channel and the platform fills the connection from here and
+// auto-generates a unique session/instance name. Falls back to any explicit
+// config the caller passed (advanced / self-hosted use).
+const MANAGED = {
+  waha: { baseUrl: process.env.WAHA_BASE_URL, apiKey: process.env.WAHA_API_KEY },
+  evolution: {
+    baseUrl: process.env.EVOLUTION_BASE_URL,
+    apiKey: process.env.EVOLUTION_API_KEY,
+  },
+  evogo: { baseUrl: process.env.EVOGO_BASE_URL, apiKey: process.env.EVOGO_TOKEN },
+} as const
+
+/** Unique session/instance name for a managed connection on a shared server. */
+function managedSessionName(): string {
+  return `crmfluxia-${randomBytes(5).toString('hex')}`
+}
 
 const PROVIDERS: ReadonlySet<ProviderId> = new Set([
   'meta',
@@ -132,17 +153,14 @@ function buildCreateInput(
       }
     }
     case 'waha': {
-      const base_url = str(config.base_url)
-      const api_key = str(config.api_key)
-      const session = str(config.session)
-      const missing = [
-        !base_url && 'base_url',
-        !api_key && 'api_key',
-        !session && 'session',
-      ].filter(Boolean)
-      if (missing.length) {
+      // Managed by default: fall back to the platform WAHA server + auto
+      // session. Advanced callers may still pass their own base_url/api_key.
+      const base_url = str(config.base_url) || MANAGED.waha.baseUrl || ''
+      const api_key = str(config.api_key) || MANAGED.waha.apiKey || ''
+      const session = str(config.session) || managedSessionName()
+      if (!base_url || !api_key) {
         throw new BadRequestError(
-          `waha channel requires: ${missing.join(', ')}`,
+          'Canal WAHA indisponível: a conexão gerenciada da Fluxia não está configurada.',
         )
       }
       return {
@@ -153,17 +171,12 @@ function buildCreateInput(
       }
     }
     case 'evolution': {
-      const base_url = str(config.base_url)
-      const api_key = str(config.api_key)
-      const instance = str(config.instance)
-      const missing = [
-        !base_url && 'base_url',
-        !api_key && 'api_key',
-        !instance && 'instance',
-      ].filter(Boolean)
-      if (missing.length) {
+      const base_url = str(config.base_url) || MANAGED.evolution.baseUrl || ''
+      const api_key = str(config.api_key) || MANAGED.evolution.apiKey || ''
+      const instance = str(config.instance) || managedSessionName()
+      if (!base_url || !api_key) {
         throw new BadRequestError(
-          `evolution channel requires: ${missing.join(', ')}`,
+          'Canal Evolution indisponível: a conexão gerenciada da Fluxia não está configurada.',
         )
       }
       return {
@@ -174,14 +187,11 @@ function buildCreateInput(
       }
     }
     case 'evogo': {
-      const base_url = str(config.base_url)
-      const token = str(config.token)
-      const missing = [!base_url && 'base_url', !token && 'token'].filter(
-        Boolean,
-      )
-      if (missing.length) {
+      const base_url = str(config.base_url) || MANAGED.evogo.baseUrl || ''
+      const token = str(config.token) || MANAGED.evogo.apiKey || ''
+      if (!base_url || !token) {
         throw new BadRequestError(
-          `evogo channel requires: ${missing.join(', ')}`,
+          'Canal EvoGo indisponível: a conexão gerenciada da Fluxia não está configurada.',
         )
       }
       return {

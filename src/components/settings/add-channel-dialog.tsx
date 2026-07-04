@@ -45,9 +45,9 @@ const PROVIDER_ORDER: ProviderId[] = ['meta', 'waha', 'evolution', 'evogo'];
 
 const PROVIDER_BLURB: Record<ProviderId, string> = {
   meta: 'API oficial do WhatsApp. Suporta templates e mensagens interativas.',
-  waha: 'Provedor não oficial (WAHA). Pareamento por QR Code.',
-  evolution: 'Provedor não oficial (Evolution API). Pareamento por QR Code.',
-  evogo: 'Provedor não oficial (EvoGo). Pareamento por QR Code.',
+  waha: 'Provedor não oficial (WAHA), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
+  evolution: 'Provedor não oficial (Evolution API), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
+  evogo: 'Provedor não oficial (EvoGo), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
 };
 
 /** Per-provider config fields (non-Meta). `secret` masks the input. */
@@ -59,24 +59,16 @@ interface FieldDef {
   optional?: boolean;
 }
 
+// WAHA / Evolution / EvoGo are MANAGED by Fluxia: the server URL + API key
+// come from platform env and the session/instance is auto-generated. The
+// operator only names the channel — so no config fields here.
 const PROVIDER_FIELDS: Record<
   Exclude<ProviderId, 'meta'>,
   FieldDef[]
 > = {
-  waha: [
-    { key: 'base_url', label: 'URL base', placeholder: 'https://waha.seudominio.com' },
-    { key: 'api_key', label: 'API Key', placeholder: 'Sua X-Api-Key', secret: true },
-    { key: 'session', label: 'Sessão', placeholder: 'default' },
-  ],
-  evolution: [
-    { key: 'base_url', label: 'URL base', placeholder: 'https://evolution.seudominio.com' },
-    { key: 'api_key', label: 'API Key', placeholder: 'Sua apikey', secret: true },
-    { key: 'instance', label: 'Instância', placeholder: 'nome-da-instancia' },
-  ],
-  evogo: [
-    { key: 'base_url', label: 'URL base', placeholder: 'https://evogo.seudominio.com' },
-    { key: 'token', label: 'Token', placeholder: 'Seu token', secret: true },
-  ],
+  waha: [],
+  evolution: [],
+  evogo: [],
 };
 
 export function AddChannelDialog({
@@ -194,9 +186,11 @@ export function AddChannelDialog({
             Adicionar canal
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            {provider
-              ? `Configure as credenciais do ${PROVIDER_LABELS[provider]}.`
-              : 'Escolha o provedor do canal de WhatsApp.'}
+            {!provider
+              ? 'Escolha o provedor do canal de WhatsApp.'
+              : provider !== 'meta' && fields.length === 0
+                ? `Conexão ${PROVIDER_LABELS[provider]} gerenciada pela Fluxia — só dê um nome e clique em Criar canal.`
+                : `Configure as credenciais do ${PROVIDER_LABELS[provider]}.`}
           </DialogDescription>
         </DialogHeader>
 
@@ -229,6 +223,13 @@ export function AddChannelDialog({
                 className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
               />
             </div>
+            {provider !== 'meta' && fields.length === 0 && (
+              <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                A URL e a chave do servidor são preenchidas automaticamente pela
+                Fluxia. Depois de criar, clique em <strong>Parear</strong> para
+                ler o QR Code no seu WhatsApp.
+              </p>
+            )}
             {fields.map((f) => (
               <div key={f.key} className="space-y-2">
                 <Label className="text-muted-foreground">
