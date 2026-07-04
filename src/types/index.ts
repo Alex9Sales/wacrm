@@ -147,6 +147,19 @@ export interface ContactNote {
 
 export type ConversationStatus = 'open' | 'pending' | 'closed';
 
+/** The set of WhatsApp transports a channel can use (Phase 4). Mirrors
+ *  `ProviderId` in src/lib/channels/provider.ts. */
+export type ChannelProvider = 'meta' | 'waha' | 'evolution' | 'evogo';
+
+/** The channel a conversation belongs to, threaded to the inbox client
+ *  so the composer can gate provider-specific affordances and the list /
+ *  thread can badge which channel a thread is on (Phase 4, Wave 4B). */
+export interface ConversationChannel {
+  id: string;
+  provider: ChannelProvider;
+  name: string;
+}
+
 export interface Conversation {
   id: string;
   user_id: string;
@@ -159,6 +172,9 @@ export interface Conversation {
   created_at: string;
   updated_at: string;
   contact?: Contact;
+  /** The channel this conversation is on. Undefined for legacy rows with
+   *  a NULL channel_id (pre-Phase-4 / single-Meta accounts). */
+  channel?: ConversationChannel;
 }
 
 // ============================================================

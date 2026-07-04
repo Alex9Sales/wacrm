@@ -27,8 +27,10 @@ import {
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import type {
+  ChannelProvider,
   Contact,
   Conversation,
+  ConversationChannel,
   ConversationStatus,
   ContactNote,
   Deal,
@@ -79,9 +81,11 @@ export async function getConversationWithContact(
           created_at: contacts.createdAt,
           updated_at: contacts.updatedAt,
         },
+        channel: channelColumns,
       })
       .from(conversations)
       .leftJoin(contacts, eq(conversations.contactId, contacts.id))
+      .leftJoin(channels, eq(conversations.channelId, channels.id))
       .where(
         and(
           eq(conversations.id, conversationId),
@@ -108,7 +112,7 @@ export async function getConversationWithContact(
       .where(eq(contactTags.contactId, row.contact.id))) as unknown as Tag[]
   }
 
-  const { contact, ...conv } = row
+  const { contact, channel, ...conv } = row
   return {
     ...conv,
     status: conv.status as ConversationStatus,
@@ -116,7 +120,23 @@ export async function getConversationWithContact(
     contact: contact?.id
       ? ({ ...contact, tags: contactTagsList } as unknown as Contact)
       : undefined,
+    channel: normalizeChannel(channel),
   } as unknown as Conversation
+}
+
+/** Shape the joined `channels` row into the client `ConversationChannel`,
+ *  or `undefined` for a legacy NULL channel_id. A leftJoin yields every
+ *  column null (typed non-null per column by Drizzle) when there's no
+ *  match, so we defensively null-check each field. */
+function normalizeChannel(
+  channel: { id: string; provider: string; name: string } | null,
+): ConversationChannel | undefined {
+  if (!channel?.id || !channel.provider) return undefined
+  return {
+    id: channel.id,
+    provider: channel.provider as ChannelProvider,
+    name: channel.name ?? '',
+  }
 }
 
 /**
@@ -173,6 +193,14 @@ const contactColumns = {
   avatar_url: contacts.avatarUrl,
   created_at: contacts.createdAt,
   updated_at: contacts.updatedAt,
+}
+
+// The conversation's channel — provider drives composer capability
+// gating (templates/interactive) and the inbox channel badge (Wave 4B).
+const channelColumns = {
+  id: channels.id,
+  provider: channels.provider,
+  name: channels.name,
 }
 
 const tagColumns = {
@@ -275,9 +303,14 @@ export async function listConversations(): Promise<Conversation[]> {
   const ctx = await getCurrentAccount()
 
   const rows = await db
-    .select({ ...conversationColumns, contact: contactColumns })
+    .select({
+      ...conversationColumns,
+      contact: contactColumns,
+      channel: channelColumns,
+    })
     .from(conversations)
     .leftJoin(contacts, eq(conversations.contactId, contacts.id))
+    .leftJoin(channels, eq(conversations.channelId, channels.id))
     .where(eq(conversations.accountId, ctx.accountId))
     .orderBy(desc(conversations.lastMessageAt))
 
@@ -301,7 +334,7 @@ export async function listConversations(): Promise<Conversation[]> {
   }
 
   return rows.map((row) => {
-    const { contact, ...conv } = row
+    const { contact, channel, ...conv } = row
     return {
       ...conv,
       status: conv.status as ConversationStatus,
@@ -312,6 +345,7 @@ export async function listConversations(): Promise<Conversation[]> {
             tags: tagsByContact.get(contact.id) ?? [],
           } as unknown as Contact)
         : undefined,
+      channel: normalizeChannel(channel),
     } as unknown as Conversation
   })
 }

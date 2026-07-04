@@ -3,8 +3,8 @@ import {
   FileText,
   KeyRound,
   LayoutGrid,
+  MessageSquare,
   Palette,
-  PlugZap,
   Shield,
   Tags,
   User,
@@ -25,7 +25,7 @@ export const SETTINGS_SECTIONS = [
   'profile',
   'security',
   'appearance',
-  'whatsapp',
+  'channels',
   'templates',
   'fields',
   'deals',
@@ -50,7 +50,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   profile: { id: 'profile', label: 'Your profile', icon: User, group: 'account' },
   security: { id: 'security', label: 'Login & security', icon: Shield, group: 'account' },
   appearance: { id: 'appearance', label: 'Appearance', icon: Palette, group: 'account' },
-  whatsapp: { id: 'whatsapp', label: 'WhatsApp', icon: PlugZap, group: 'workspace' },
+  channels: { id: 'channels', label: 'Canais', icon: MessageSquare, group: 'workspace' },
   templates: { id: 'templates', label: 'Templates', icon: FileText, group: 'workspace' },
   fields: { id: 'fields', label: 'Fields & tags', icon: Tags, group: 'workspace' },
   deals: { id: 'deals', label: 'Deals & currency', icon: Coins, group: 'workspace' },
@@ -71,11 +71,13 @@ function isSection(value: string | null): value is SettingsSection {
 /**
  * Resolve a raw `?tab=` value to a section. Legacy tabs from the old
  * flat layout collapse onto their new home (Tags + Custom fields → the
- * merged "Fields & tags" section). Anything unknown falls back to the
- * Overview landing.
+ * merged "Fields & tags" section; the old single-Meta "whatsapp" tab →
+ * the multi-channel "Canais" section). Anything unknown falls back to
+ * the Overview landing.
  */
 export function resolveSection(raw: string | null): SettingsSection {
   if (raw === 'tags' || raw === 'custom-fields') return 'fields';
+  if (raw === 'whatsapp') return 'channels';
   if (isSection(raw)) return raw;
   return DEFAULT_SECTION;
 }

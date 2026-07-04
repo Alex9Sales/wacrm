@@ -7,9 +7,12 @@
 // Flow:
 //   1. Load the channel by id (loadChannel) and assert channel.provider
 //      matches the :provider path segment.
-//   2. Verify the webhook via getProvider(provider).verifyWebhook — the
-//      non-official adapters check the per-channel secret against the
-//      `x-webhook-secret` header → 401 on failure.
+//   2. Verify the webhook secret. The /connect route registers the URL
+//      with the secret in the QUERY (`?secret=<webhook_secret>`) because the
+//      gateways only POST to the URL and don't send our header. We accept
+//      the secret from `?secret=` (constant-time compare vs channel
+//      .webhookSecret) OR, as a fallback, the provider's header-based
+//      verifyWebhook (`x-webhook-secret`) → 401 on failure.
 //   3. Session-lifecycle events (WAHA session.status, Evolution
 //      CONNECTION_UPDATE, EvoGo Connected/Disconnected) update
 //      channels.status via getState + updateChannelStatus, then return —
@@ -22,6 +25,8 @@
 // Heavy work runs in `after()` so we 200 quickly (the non-official gateways
 // retry aggressively on a slow ack).
 // ============================================================
+
+import crypto from 'crypto'
 
 import { NextResponse, after } from 'next/server'
 
@@ -67,11 +72,26 @@ export async function POST(request: Request, { params }: RouteParams) {
 
   const provider = getProvider(providerId)
 
-  // Verify the per-channel secret (x-webhook-secret header).
-  const verified = await provider.verifyWebhook(
-    { rawBody, headers: request.headers },
-    channel,
-  )
+  // ---- webhook auth: secret in the QUERY *or* the header ----
+  //
+  // The /connect route registers the webhook URL with the per-channel
+  // secret in the query string (`?secret=<webhook_secret>`), because the
+  // non-official gateways just POST to that URL — they do NOT send our
+  // custom `x-webhook-secret` header. So we accept the secret from the
+  // query and validate it here with a constant-time compare against
+  // channel.webhookSecret. If it matches we short-circuit; otherwise we
+  // fall back to the provider's header-based verifyWebhook so a manually
+  // configured `x-webhook-secret` header keeps working too.
+  const querySecret = new URL(request.url).searchParams.get('secret')
+  let verified = false
+  if (querySecret != null && secretsMatch(querySecret, channel.webhookSecret)) {
+    verified = true
+  } else {
+    verified = await provider.verifyWebhook(
+      { rawBody, headers: request.headers },
+      channel,
+    )
+  }
   if (!verified) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
@@ -109,6 +129,24 @@ export async function POST(request: Request, { params }: RouteParams) {
   })
 
   return NextResponse.json({ status: 'received' }, { status: 200 })
+}
+
+/**
+ * Constant-time comparison of two secrets. Encodes both to bytes and uses
+ * crypto.timingSafeEqual, guarding the length-mismatch case (which
+ * timingSafeEqual throws on) without leaking length via early-return
+ * timing — we still run a comparison against a same-length buffer.
+ */
+function secretsMatch(provided: string, expected: string): boolean {
+  const a = Buffer.from(provided, 'utf8')
+  const b = Buffer.from(expected, 'utf8')
+  if (a.length !== b.length) {
+    // Compare b against itself so the work is constant regardless of the
+    // provided length, then return false.
+    crypto.timingSafeEqual(b, b)
+    return false
+  }
+  return crypto.timingSafeEqual(a, b)
 }
 
 async function processInbound(

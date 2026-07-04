@@ -15,6 +15,7 @@ import { PresenceDot } from "@/components/presence/presence-dot";
 import { presenceLabel } from "@/lib/presence";
 import { cn } from "@/lib/utils";
 import type {
+  ChannelProvider,
   Conversation,
   Message,
   MessageReaction,
@@ -33,6 +34,7 @@ import {
   RefreshCw,
   PanelRightOpen,
   PanelRightClose,
+  Radio,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -61,6 +63,15 @@ interface ReplyDraft {
   authorLabel: string;
   preview: string;
 }
+
+/** Short provider labels for the inbox channel badge (pt-BR). Shared
+ *  with the conversation list. */
+export const CHANNEL_PROVIDER_LABELS: Record<ChannelProvider, string> = {
+  meta: "Meta",
+  waha: "WAHA",
+  evolution: "Evolution",
+  evogo: "EvoGo",
+};
 
 function renderTemplateBody(body: string, params: string[]): string {
   return body.replace(/\{\{(\d+)\}\}/g, (_, raw) => {
@@ -756,18 +767,38 @@ export function MessageThread({
             <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
             <p className="truncate text-xs text-muted-foreground">{contact.phone}</p>
           </div>
+          {/* Channel badge — which channel this thread is on (Phase 4).
+              Only shown when the conversation carries a channel (legacy
+              NULL-channel rows omit it). */}
+          {conversation.channel && (
+            <Badge
+              variant="secondary"
+              className="ml-1 hidden gap-1 text-[10px] sm:inline-flex sm:ml-2"
+              title={`Canal: ${conversation.channel.name} (${CHANNEL_PROVIDER_LABELS[conversation.channel.provider]})`}
+            >
+              <Radio className="h-3 w-3" />
+              <span className="max-w-28 truncate">
+                {conversation.channel.name ||
+                  CHANNEL_PROVIDER_LABELS[conversation.channel.provider]}
+              </span>
+            </Badge>
+          )}
+
           {/* Session timer badge — hidden on the narrowest phones so
-              the name + back arrow keep their room. */}
-          <Badge
-            variant="outline"
-            className={cn(
-              "ml-1 hidden gap-1 border-border text-[10px] sm:inline-flex sm:ml-2",
-              sessionInfo.expired ? "text-red-400" : "text-primary"
-            )}
-          >
-            <Clock className="h-3 w-3" />
-            {sessionInfo.remaining}
-          </Badge>
+              the name + back arrow keep their room. Only meaningful on
+              Meta, where the 24h window exists. */}
+          {(conversation.channel?.provider ?? "meta") === "meta" && (
+            <Badge
+              variant="outline"
+              className={cn(
+                "ml-1 hidden gap-1 border-border text-[10px] sm:inline-flex sm:ml-2",
+                sessionInfo.expired ? "text-red-400" : "text-primary"
+              )}
+            >
+              <Clock className="h-3 w-3" />
+              {sessionInfo.remaining}
+            </Badge>
+          )}
         </div>
 
         <div className="flex items-center gap-2">
@@ -994,6 +1025,7 @@ export function MessageThread({
         onOpenTemplates={handleOpenTemplates}
         replyTo={replyTo}
         onClearReply={() => setReplyTo(null)}
+        provider={conversation.channel?.provider}
       />
 
       <TemplatePicker

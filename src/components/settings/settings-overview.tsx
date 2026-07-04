@@ -128,7 +128,7 @@ export function SettingsOverview({
     subtitle: ReactNode;
   }[] = [
     {
-      section: 'whatsapp',
+      section: 'channels',
       loading: whatsappLoading,
       subtitle: !whatsapp?.configured ? (
         'Not set up yet'

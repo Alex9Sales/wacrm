@@ -29,6 +29,7 @@ import {
   DropdownMenuTrigger,
 } from "@/components/ui/dropdown-menu";
 import { useCan } from "@/hooks/use-can";
+import { CAPABILITIES, type ProviderId } from "@/lib/channels/provider";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import {
@@ -99,6 +100,15 @@ interface MessageComposerProps {
   onOpenTemplates: () => void;
   replyTo?: ReplyDraft | null;
   onClearReply?: () => void;
+  /**
+   * The conversation's channel provider (Phase 4). Drives capability
+   * gating: only providers whose CAPABILITIES include `templates` show
+   * the template button, and only Meta's `session24hWindow` gates the
+   * composer on session expiry. Undefined for legacy rows with no
+   * channel — treated as Meta so existing single-Meta accounts keep the
+   * full affordance set.
+   */
+  provider?: ProviderId;
 }
 
 function formatDuration(seconds: number): string {
@@ -120,7 +130,17 @@ export function MessageComposer({
   onOpenTemplates,
   replyTo,
   onClearReply,
+  provider,
 }: MessageComposerProps) {
+  // Capability gating (Phase 4). No channel → default to Meta's full
+  // capability set so legacy single-Meta accounts are unaffected.
+  const caps = CAPABILITIES[provider ?? "meta"];
+  const supportsTemplates = caps.templates;
+  // The 24h session window only applies to providers that have it (Meta).
+  // On WAHA/Evolution/EvoGo there's no window, so the "expired" state must
+  // never disable the composer.
+  const sessionGated = sessionExpired && caps.session24hWindow;
+
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
@@ -160,8 +180,10 @@ export function MessageComposer({
   // every capability — so the disabled branch is a no-op there.
   const canSend = useCan("send-messages");
   const readOnly = !canSend;
-  // Media (like free-form text) is only allowed inside the 24h window.
-  const inputsDisabled = readOnly || sessionExpired;
+  // Media (like free-form text) is only allowed inside the 24h window —
+  // but that window only exists for Meta, so `sessionGated` is false for
+  // the QR providers and never disables their inputs.
+  const inputsDisabled = readOnly || sessionGated;
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -193,7 +215,7 @@ export function MessageComposer({
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending || sessionExpired) return;
+    if (!trimmed || sending || sessionGated) return;
 
     setSending(true);
     try {
@@ -205,7 +227,7 @@ export function MessageComposer({
     } finally {
       setSending(false);
     }
-  }, [text, sending, sessionExpired, onSend, replyTo?.id]);
+  }, [text, sending, sessionGated, onSend, replyTo?.id]);
 
   const handleKeyDown = useCallback(
     (e: KeyboardEvent<HTMLTextAreaElement>) => {
@@ -434,20 +456,22 @@ export function MessageComposer({
           />
         </div>
       )}
-      {sessionExpired && (
+      {sessionGated && (
         <div className="mb-2 flex items-center justify-between rounded-lg bg-amber-500/10 px-3 py-2">
           <p className="text-xs text-amber-400">
             24-hour session expired. Use a template to re-engage.
           </p>
-          <Button
-            variant="ghost"
-            size="sm"
-            className="h-7 text-xs text-amber-400 hover:text-amber-300"
-            onClick={onOpenTemplates}
-          >
-            <LayoutTemplate className="mr-1 h-3 w-3" />
-            Templates
-          </Button>
+          {supportsTemplates && (
+            <Button
+              variant="ghost"
+              size="sm"
+              className="h-7 text-xs text-amber-400 hover:text-amber-300"
+              onClick={onOpenTemplates}
+            >
+              <LayoutTemplate className="mr-1 h-3 w-3" />
+              Templates
+            </Button>
+          )}
         </div>
       )}
 
@@ -557,17 +581,19 @@ export function MessageComposer({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          <GatedButton
-            variant="ghost"
-            size="sm"
-            canAct={!readOnly}
-            gateReason="send messages"
-            title={readOnly ? undefined : "Send template"}
-            className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
-            onClick={onOpenTemplates}
-          >
-            <LayoutTemplate className="h-4 w-4" />
-          </GatedButton>
+          {supportsTemplates && (
+            <GatedButton
+              variant="ghost"
+              size="sm"
+              canAct={!readOnly}
+              gateReason="send messages"
+              title={readOnly ? undefined : "Send template"}
+              className="h-9 w-9 shrink-0 p-0 text-muted-foreground hover:text-foreground"
+              onClick={onOpenTemplates}
+            >
+              <LayoutTemplate className="h-4 w-4" />
+            </GatedButton>
+          )}
 
           <GatedButton
             variant="ghost"
@@ -594,11 +620,11 @@ export function MessageComposer({
             placeholder={
               readOnly
                 ? "Read-only — viewers can browse but not reply"
-                : sessionExpired
+                : sessionGated
                   ? "Session expired - use a template"
                   : "Type a message... (Shift+Enter for new line)"
             }
-            disabled={sessionExpired || readOnly}
+            disabled={sessionGated || readOnly}
             rows={1}
             // Textarea keeps its own inline title — the GatedButton
             // wrapping pattern doesn't apply to non-button inputs.
@@ -606,7 +632,7 @@ export function MessageComposer({
             title={readOnly ? "Read-only — your role can't send messages" : undefined}
             className={cn(
               "flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
-              (sessionExpired || readOnly) && "cursor-not-allowed opacity-50"
+              (sessionGated || readOnly) && "cursor-not-allowed opacity-50"
             )}
           />
 
@@ -614,7 +640,7 @@ export function MessageComposer({
             size="sm"
             canAct={!readOnly}
             gateReason="send messages"
-            disabled={!text.trim() || sessionExpired || sending}
+            disabled={!text.trim() || sessionGated || sending}
             onClick={handleSend}
             className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
           >
