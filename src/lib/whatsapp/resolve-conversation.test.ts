@@ -12,7 +12,8 @@ type ContactRow = { id: string; phone: string; name?: string | null };
 const h = vi.hoisted(() => ({
   /** When true, any db call throws — proves a path never queries. */
   throwOnDb: false,
-  config: null as { id: string } | null, // whatsapp_config lookup
+  /** loadDefaultChannel result — the account's default channel (or null). */
+  channel: null as { id: string; accountId: string } | null,
   /** findExistingContact result (same every call). */
   existingContact: null as ContactRow | null,
   /** Per-call results — overrides existingContact. Lets a test
@@ -57,6 +58,14 @@ vi.mock('@/lib/api/v1/contacts', () => {
   };
 });
 
+// Channel resolution is mocked at the boundary — resolve-conversation only
+// needs the account's default channel (or an explicit one) to key the
+// conversation on. loadChannel / loadDefaultChannel have their own tests.
+vi.mock('@/lib/channels/channels', () => ({
+  loadDefaultChannel: vi.fn(async () => h.channel),
+  loadChannel: vi.fn(async () => h.channel),
+}));
+
 vi.mock('@/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/db')>();
   const guard = () => {
@@ -69,8 +78,6 @@ vi.mock('@/db', async (importOriginal) => {
         from: (table: unknown) => ({
           where: () => ({
             limit: async () => {
-              if (table === actual.whatsappConfig)
-                return h.config ? [h.config] : [];
               if (table === actual.conversations)
                 return h.existingConversation ? [h.existingConversation] : [];
               return [];
@@ -108,7 +115,7 @@ import { SendMessageError } from './send-message';
 
 beforeEach(() => {
   h.throwOnDb = false;
-  h.config = null;
+  h.channel = null;
   h.existingContact = null;
   h.existingByCall = null;
   h.findCalls = 0;
@@ -127,8 +134,8 @@ describe('resolveConversationByPhone', () => {
     ).rejects.toBeInstanceOf(SendMessageError);
   });
 
-  it('fails with whatsapp_not_configured when no config owner exists', async () => {
-    h.config = null;
+  it('fails with whatsapp_not_configured when no channel exists', async () => {
+    h.channel = null;
     await resolveConversationByPhone('acct', '+14155550123').catch(
       (e: SendMessageError) => {
         expect(e.code).toBe('whatsapp_not_configured');
@@ -141,7 +148,7 @@ describe('resolveConversationByPhone', () => {
   });
 
   it('returns the existing contact + conversation without creating', async () => {
-    h.config = { id: 'cfg-1' };
+    h.channel = { id: 'ch-1', accountId: 'acct' };
     h.existingContact = { id: 'c1', phone: '14155550123' };
     h.existingConversation = { id: 'cv1' };
     const res = await resolveConversationByPhone('acct', '+1 (415) 555-0123');
@@ -153,7 +160,7 @@ describe('resolveConversationByPhone', () => {
   });
 
   it('creates contact + conversation when none exist', async () => {
-    h.config = { id: 'cfg-1' };
+    h.channel = { id: 'ch-1', accountId: 'acct' };
     h.existingContact = null;
     h.insertedContactId = 'c2';
     h.existingConversation = null;
@@ -174,7 +181,7 @@ describe('resolveConversationByPhone', () => {
     // First lookup misses (→ we attempt an insert), the insert hits a
     // 23505 unique violation, and the post-race re-lookup now returns
     // the row a concurrent writer created.
-    h.config = { id: 'cfg-1' };
+    h.channel = { id: 'ch-1', accountId: 'acct' };
     h.existingByCall = [null, { id: 'c-raced', phone: '14155550123' }];
     h.insertContactError = { code: '23505' };
     h.existingConversation = { id: 'cv-raced' };

@@ -20,9 +20,10 @@
 
 import { and, eq } from 'drizzle-orm';
 
-import { db, contacts, conversations, whatsappConfig } from '@/db';
+import { db, contacts, conversations } from '@/db';
 import { firstOrNull, firstOrThrow } from '@/db/helpers';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
+import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
 import { SendMessageError } from '@/lib/whatsapp/send-message';
 import { resolveAuditUserId, ContactError } from '@/lib/api/v1/contacts';
@@ -38,12 +39,19 @@ export interface ResolvedConversation {
  * Find or create the contact + conversation for `phone` within
  * `accountId`. Throws `SendMessageError` (shared with the send core,
  * so the route maps one error family) on a bad phone, a missing
- * WhatsApp config, or a DB failure.
+ * channel, or a DB failure.
+ *
+ * Phase 4: conversations are keyed on (account, contact, channel). The
+ * caller may pass an explicit `channelId`; otherwise the account's default
+ * channel is used. A created conversation is stamped with that channel_id
+ * so it matches the one-conversation-per-(account, contact, channel) unique
+ * index the inbound pipeline relies on.
  */
 export async function resolveConversationByPhone(
   accountId: string,
   phone: string,
-  name?: string | null
+  name?: string | null,
+  channelId?: string | null
 ): Promise<ResolvedConversation> {
   const sanitized = sanitizePhoneForMeta(phone);
   if (!isValidE164(sanitized)) {
@@ -54,22 +62,20 @@ export async function resolveConversationByPhone(
     );
   }
 
-  // Fail fast (and create nothing) when the account has no WhatsApp
-  // connected — the same error the send would raise anyway.
-  const config = firstOrNull(
-    await db
-      .select({ id: whatsappConfig.id })
-      .from(whatsappConfig)
-      .where(eq(whatsappConfig.accountId, accountId))
-      .limit(1)
-  );
-  if (!config) {
+  // Resolve the channel (fail fast + create nothing when the account has no
+  // channel connected). An explicit channelId wins; else the account's
+  // default channel. A channel from another account is treated as missing.
+  const channel = channelId
+    ? await loadChannel(channelId)
+    : await loadDefaultChannel(accountId);
+  if (!channel || channel.accountId !== accountId) {
     throw new SendMessageError(
       'whatsapp_not_configured',
-      'WhatsApp not configured. Please set up your WhatsApp integration first.',
+      'WhatsApp not configured. Please connect a channel first.',
       400
     );
   }
+  const resolvedChannelId = channel.id;
 
   // Audit user for created rows = the single account-wide default used
   // by every public-API write (see resolveAuditUserId), so a contact
@@ -143,8 +149,8 @@ export async function resolveConversationByPhone(
   }
 
   // ---- conversation -------------------------------------------
-  // One conversation per (account, contact) — same convention as the
-  // webhook.
+  // One conversation per (account, contact, channel) — same convention as
+  // the inbound pipeline (inbound.ts).
   const conv = firstOrNull(
     await db
       .select({ id: conversations.id })
@@ -152,7 +158,8 @@ export async function resolveConversationByPhone(
       .where(
         and(
           eq(conversations.accountId, accountId),
-          eq(conversations.contactId, contactId!)
+          eq(conversations.contactId, contactId!),
+          eq(conversations.channelId, resolvedChannelId)
         )
       )
       .limit(1)
@@ -171,6 +178,7 @@ export async function resolveConversationByPhone(
           accountId,
           userId: ownerUserId,
           contactId: contactId!,
+          channelId: resolvedChannelId,
         })
         .returning({ id: conversations.id })
     );

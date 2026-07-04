@@ -7,7 +7,6 @@ import {
   conversations,
   messageReactions,
   messages,
-  whatsappConfig,
 } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import {
@@ -15,8 +14,8 @@ import {
   toErrorResponse,
   type AccountContext,
 } from '@/lib/auth/account';
-import { sendReactionMessage } from '@/lib/whatsapp/meta-api';
-import { decrypt } from '@/lib/whatsapp/encryption';
+import { loadChannel } from '@/lib/channels/channels';
+import { getProvider } from '@/lib/channels/registry';
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
 import {
   checkRateLimit,
@@ -100,6 +99,7 @@ export async function POST(request: Request) {
       await db
         .select({
           id: conversations.id,
+          channelId: conversations.channelId,
           contactPhone: contacts.phone,
         })
         .from(conversations)
@@ -127,40 +127,51 @@ export async function POST(request: Request) {
       );
     }
 
-    // WhatsApp config + access token. Account-scoped post-multi-user.
-    const config = firstOrNull(
-      await db
-        .select({
-          phoneNumberId: whatsappConfig.phoneNumberId,
-          accessToken: whatsappConfig.accessToken,
-        })
-        .from(whatsappConfig)
-        .where(eq(whatsappConfig.accountId, accountId))
-        .limit(1),
-    );
-
-    if (!config) {
+    if (!conversation.channelId) {
       return NextResponse.json(
         { error: 'WhatsApp not configured.' },
         { status: 400 },
       );
     }
 
-    const accessToken = decrypt(config.accessToken);
+    // Dispatch the reaction through the conversation's channel provider.
+    // Credentials arrive already decrypted on the ctx.
+    const channel = await loadChannel(conversation.channelId);
+    if (!channel) {
+      return NextResponse.json(
+        { error: 'WhatsApp not configured.' },
+        { status: 400 },
+      );
+    }
+
+    const provider = getProvider(channel.provider);
+    if (!provider.capabilities.reactions || !provider.sendReaction) {
+      return NextResponse.json(
+        { error: 'This channel does not support reactions.' },
+        { status: 400 },
+      );
+    }
+
     const sanitizedPhone = sanitizePhoneForMeta(conversation.contactPhone);
 
+    // The unified sendReaction signature carries only the target message
+    // id + emoji; the recipient phone is threaded through
+    // providerMeta.reaction_to (the Meta adapter reads it there).
+    const channelWithRecipient = {
+      ...channel,
+      providerMeta: { ...channel.providerMeta, reaction_to: sanitizedPhone },
+    };
+
     try {
-      await sendReactionMessage({
-        phoneNumberId: config.phoneNumberId,
-        accessToken,
-        to: sanitizedPhone,
-        targetMessageId: targetMessage.messageId,
+      await provider.sendReaction(
+        channelWithRecipient,
+        targetMessage.messageId,
         emoji,
-      });
+      );
     } catch (err) {
       const message =
-        err instanceof Error ? err.message : 'Unknown Meta API error';
-      console.error('[whatsapp/react] Meta send failed:', message);
+        err instanceof Error ? err.message : 'Unknown provider error';
+      console.error('[whatsapp/react] provider send failed:', message);
       return NextResponse.json(
         { error: `Meta API error: ${message}` },
         { status: 502 },

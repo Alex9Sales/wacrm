@@ -113,6 +113,47 @@ export async function loadMetaChannelByPhoneNumberId(
   return row ? toCtx(row) : null;
 }
 
+/**
+ * Load the account's default channel — for legacy paths that assumed a
+ * single WhatsApp config (health checks, "the" account channel). Prefers
+ * a connected channel, then a Meta channel, then any. Returns null if the
+ * account has no channels yet.
+ */
+export async function loadDefaultChannel(
+  accountId: string,
+): Promise<ChannelCtx | null> {
+  const rows = await db
+    .select()
+    .from(channels)
+    .where(eq(channels.accountId, accountId));
+  if (rows.length === 0) return null;
+  const pick =
+    rows.find((r) => r.status === 'connected') ??
+    rows.find((r) => r.provider === 'meta') ??
+    rows[0];
+  return toCtx(pick);
+}
+
+/**
+ * Load the account's Meta channel — for Meta-only features (templates,
+ * WABA operations) that have no meaning on the non-official providers.
+ * Returns null when the account has no Meta channel configured.
+ */
+export async function loadMetaChannelByAccount(
+  accountId: string,
+): Promise<ChannelCtx | null> {
+  const row = firstOrNull(
+    await db
+      .select()
+      .from(channels)
+      .where(
+        and(eq(channels.accountId, accountId), eq(channels.provider, 'meta')),
+      )
+      .limit(1),
+  );
+  return row ? toCtx(row) : null;
+}
+
 export interface CreateChannelInput {
   provider: ProviderId;
   name: string;

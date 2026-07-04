@@ -1,14 +1,14 @@
 import { NextResponse } from 'next/server'
 import { and, eq } from 'drizzle-orm'
 
-import { db, messageTemplates, whatsappConfig } from '@/db'
+import { db, messageTemplates } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import {
   getCurrentAccount,
   toErrorResponse,
   type AccountContext,
 } from '@/lib/auth/account'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { loadMetaChannelByAccount } from '@/lib/channels/channels'
 import {
   deleteMessageTemplate,
   editMessageTemplate,
@@ -172,20 +172,14 @@ export async function PATCH(
     }
 
     if (!isDryRun()) {
-      const config = firstOrNull(
-        await db
-          .select()
-          .from(whatsappConfig)
-          .where(eq(whatsappConfig.accountId, accountId))
-          .limit(1)
-      )
-      if (!config) {
+      const channel = await loadMetaChannelByAccount(accountId)
+      if (!channel) {
         return NextResponse.json(
-          { error: 'WhatsApp not configured.' },
+          { error: 'Nenhum canal oficial (Meta) configurado' },
           { status: 400 },
         )
       }
-      const accessToken = decrypt(config.accessToken)
+      const accessToken = channel.credentials.accessToken as string
 
       // Image headers need a fresh Resumable-Upload handle on every edit
       // (Meta replaces components wholesale). Derive from header_media_url.
@@ -320,23 +314,18 @@ export async function DELETE(
     }
 
     if (existing.metaTemplateId && !isDryRun()) {
-      const config = firstOrNull(
-        await db
-          .select()
-          .from(whatsappConfig)
-          .where(eq(whatsappConfig.accountId, accountId))
-          .limit(1)
-      )
-      if (!config || !config.wabaId) {
+      const channel = await loadMetaChannelByAccount(accountId)
+      const wabaId = channel?.providerMeta.waba_id as string | undefined
+      if (!channel || !wabaId) {
         return NextResponse.json(
-          { error: 'WhatsApp not configured — cannot delete on Meta.' },
+          { error: 'Nenhum canal oficial (Meta) configurado' },
           { status: 400 },
         )
       }
-      const accessToken = decrypt(config.accessToken)
+      const accessToken = channel.credentials.accessToken as string
       try {
         await deleteMessageTemplate({
-          wabaId: config.wabaId,
+          wabaId,
           accessToken,
           name: existing.name,
           metaTemplateId: existing.metaTemplateId,

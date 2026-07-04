@@ -23,11 +23,11 @@ import {
   broadcastRecipients,
   broadcasts,
   messageTemplates,
-  whatsappConfig,
 } from '@/db';
 import { firstOrNull, firstOrThrow } from '@/db/helpers';
-import { sendTemplateMessage } from '@/lib/whatsapp/meta-api';
-import { decrypt } from '@/lib/whatsapp/encryption';
+import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels';
+import { getProvider } from '@/lib/channels/registry';
+import type { ChannelCtx } from '@/lib/channels/provider';
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -62,6 +62,10 @@ export interface CreateBroadcastParams {
   templateName: string;
   templateLanguage?: string | null;
   recipients: BroadcastRecipientInput[];
+  // TODO(wave-3B): make broadcasts channel-explicit — the broadcast route
+  // should pass the channel the user chose to send on. Until then, when
+  // `channelId` is omitted we fall back to the account's default channel.
+  channelId?: string | null;
 }
 
 interface PlannedRecipient {
@@ -74,8 +78,9 @@ export interface BroadcastPlan {
   broadcastId: string;
   templateName: string;
   templateLanguage: string;
-  phoneNumberId: string;
-  accessToken: string;
+  /** The channel (decrypted ctx) the broadcast sends on. Its provider is
+   *  resolved via getProvider() in deliverBroadcast. */
+  channel: ChannelCtx;
   templateRow: MessageTemplate | null;
   planned: PlannedRecipient[];
   /** Phones rejected up front (invalid E.164) — counted as failed. */
@@ -116,23 +121,29 @@ export async function createBroadcast(
     );
   }
 
-  // Config (fail fast + provides the audit trail owner already resolved
-  // by the caller). Meta send needs phone_number_id + decrypted token.
-  const config = firstOrNull(
-    await db
-      .select()
-      .from(whatsappConfig)
-      .where(eq(whatsappConfig.accountId, accountId))
-      .limit(1)
-  );
-  if (!config) {
+  // Channel (fail fast). Broadcasts go out on a channel; prefer the
+  // explicit channelId the caller chose, else the account's default
+  // channel. Credentials arrive already-decrypted on the ChannelCtx.
+  const channel = params.channelId
+    ? await loadChannel(params.channelId)
+    : await loadDefaultChannel(accountId);
+  if (!channel || channel.accountId !== accountId) {
     throw new BroadcastError(
       'whatsapp_not_configured',
-      'WhatsApp not configured. Please set up your WhatsApp integration first.',
+      'WhatsApp not configured. Please connect a channel first.',
       400
     );
   }
-  const accessToken = decrypt(config.accessToken);
+  // Templates only exist on the official Meta channel — reject a broadcast
+  // on a non-Meta channel up front with a clean 422.
+  const provider = getProvider(channel.provider);
+  if (!provider.capabilities.templates || !provider.sendTemplate) {
+    throw new BroadcastError(
+      'unsupported',
+      'Broadcasts por template só no canal oficial (Meta).',
+      422
+    );
+  }
 
   // Template row (once) for header/button components; guard a
   // malformed local row rather than N identical opaque failures.
@@ -284,8 +295,7 @@ export async function createBroadcast(
     broadcastId: broadcast.id,
     templateName,
     templateLanguage,
-    phoneNumberId: config.phoneNumberId,
-    accessToken,
+    channel,
     templateRow,
     planned,
     rejected,
@@ -307,31 +317,45 @@ export async function createBroadcast(
  */
 export async function deliverBroadcast(plan: BroadcastPlan): Promise<void> {
   let sentCount = 0;
+  const provider = getProvider(plan.channel.provider);
+  // The capability gate in createBroadcast already guarantees sendTemplate
+  // exists; assert it here so the loop can call it unconditionally.
+  if (!provider.sendTemplate) {
+    throw new BroadcastError(
+      'unsupported',
+      'Broadcasts por template só no canal oficial (Meta).',
+      422
+    );
+  }
+  // Phone-variant retry (#131030) is Meta-specific — other providers
+  // resolve their own chatId or don't need it.
+  const useVariants = provider.id === 'meta';
 
   for (const recipient of plan.planned) {
-    const variants = phoneVariants(recipient.phone);
+    const variants = useVariants
+      ? phoneVariants(recipient.phone)
+      : [recipient.phone];
     let sentMessageId: string | null = null;
     let lastError: string | null = null;
 
     for (const variant of variants) {
       try {
-        const result = await sendTemplateMessage({
-          phoneNumberId: plan.phoneNumberId,
-          accessToken: plan.accessToken,
-          to: variant,
-          templateName: plan.templateName,
+        const result = await provider.sendTemplate(plan.channel, variant, {
+          name: plan.templateName,
           language: plan.templateLanguage,
-          template: plan.templateRow ?? undefined,
-          params: recipient.params,
+          params: {
+            template: plan.templateRow ?? undefined,
+            body: recipient.params,
+          },
         });
-        sentMessageId = result.messageId;
+        sentMessageId = result.externalMessageId;
         lastError = null;
         break;
       } catch (error) {
         const message = error instanceof Error ? error.message : 'Unknown error';
         lastError = message;
-        // Only a "recipient not allowed" error is worth another variant.
-        if (!isRecipientNotAllowedError(message)) break;
+        // Only a Meta "recipient not allowed" error is worth another variant.
+        if (!useVariants || !isRecipientNotAllowedError(message)) break;
       }
     }
 

@@ -1,15 +1,18 @@
 import { NextResponse } from 'next/server'
 import { and, eq } from 'drizzle-orm'
 
-import { db, messageTemplates, whatsappConfig } from '@/db'
+import { db, messageTemplates } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import {
   getCurrentAccount,
   toErrorResponse,
   type AccountContext,
 } from '@/lib/auth/account'
+import {
+  loadChannelByAccount,
+  loadDefaultChannel,
+} from '@/lib/channels/channels'
 import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
-import { decrypt } from '@/lib/whatsapp/encryption'
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder'
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
 import type { MessageTemplate } from '@/types'
@@ -92,6 +95,9 @@ export async function POST(request: Request) {
       template_name,
       template_language,
       template_params,
+      // Optional explicit channel to send on. Falls back to the
+      // account's default channel when omitted.
+      channel_id,
     } = body
 
     // Normalize to a list of {phone, params} regardless of shape.
@@ -123,15 +129,14 @@ export async function POST(request: Request) {
       )
     }
 
-    const config = firstOrNull(
-      await db
-        .select()
-        .from(whatsappConfig)
-        .where(eq(whatsappConfig.accountId, accountId))
-        .limit(1)
-    )
+    // Pick the channel to send on: an explicit channel_id from the body
+    // (account-scoped so a foreign id can't be used), else the account's
+    // default channel. Credentials arrive already decrypted on the ctx.
+    const channel = channel_id
+      ? await loadChannelByAccount(accountId, channel_id)
+      : await loadDefaultChannel(accountId)
 
-    if (!config) {
+    if (!channel) {
       return NextResponse.json(
         {
           error:
@@ -141,7 +146,21 @@ export async function POST(request: Request) {
       )
     }
 
-    const accessToken = decrypt(config.accessToken)
+    const phoneNumberId = channel.providerMeta.phone_number_id as
+      | string
+      | undefined
+    const accessToken = channel.credentials.accessToken as string | undefined
+
+    // sendTemplateMessage targets the Meta Cloud API — a broadcast on a
+    // non-Meta channel has no phone_number_id/token to send with.
+    if (!phoneNumberId || !accessToken) {
+      return NextResponse.json(
+        {
+          error: 'Nenhum canal oficial (Meta) configurado',
+        },
+        { status: 400 }
+      )
+    }
 
     // Load the template row once so sendTemplateMessage can build
     // header + button components on each iteration. Loading inside
@@ -221,7 +240,7 @@ export async function POST(request: Request) {
       for (const variant of variants) {
         try {
           const result = await sendTemplateMessage({
-            phoneNumberId: config.phoneNumberId,
+            phoneNumberId,
             accessToken,
             to: variant,
             templateName: template_name,

@@ -1,14 +1,11 @@
 import { NextResponse } from 'next/server'
-import { eq } from 'drizzle-orm'
 
-import { db, whatsappConfig } from '@/db'
-import { firstOrNull } from '@/db/helpers'
 import {
   getCurrentAccount,
   UnauthorizedError,
   type AccountContext,
 } from '@/lib/auth/account'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { loadMetaChannelByAccount } from '@/lib/channels/channels'
 import {
   getSubscribedApps,
   verifyPhoneNumber,
@@ -37,9 +34,8 @@ import {
  * what the UI badges on.
  */
 export async function GET() {
-  // whatsapp_config is one-row-per-account post-017. Resolve the
-  // caller's account so a teammate who joined an existing account
-  // sees the same registration state as the admin who set it up.
+  // Resolve the caller's account so a teammate who joined an existing
+  // account sees the same registration state as the admin who set it up.
   let ctx: AccountContext
   try {
     ctx = await getCurrentAccount()
@@ -54,25 +50,12 @@ export async function GET() {
     })
   }
 
-  const config = firstOrNull(
-    await db
-      .select()
-      .from(whatsappConfig)
-      .where(eq(whatsappConfig.accountId, ctx.accountId))
-      .limit(1)
-  )
-
-  if (!config) {
-    return NextResponse.json({
-      live: false,
-      checks: { config_exists: false },
-      message: 'No WhatsApp configuration saved yet.',
-    })
-  }
-
-  let accessToken: string
+  // Registration status is a Meta-only concept — read the Meta channel.
+  // Its credentials arrive already decrypted on the ctx; a decrypt
+  // failure surfaces as a thrown load error we map to token_decryptable.
+  let channel
   try {
-    accessToken = decrypt(config.accessToken)
+    channel = await loadMetaChannelByAccount(ctx.accountId)
   } catch {
     return NextResponse.json({
       live: false,
@@ -85,6 +68,30 @@ export async function GET() {
     })
   }
 
+  if (!channel) {
+    return NextResponse.json({
+      live: false,
+      checks: { config_exists: false },
+      message: 'No WhatsApp configuration saved yet.',
+    })
+  }
+
+  const accessToken = channel.credentials.accessToken as string
+  const phoneNumberId = channel.providerMeta.phone_number_id as
+    | string
+    | undefined
+  const wabaId = channel.providerMeta.waba_id as string | undefined
+  const registeredAt =
+    (channel.providerMeta.registered_at as string | null | undefined) ?? null
+  const subscribedAppsAt =
+    (channel.providerMeta.subscribed_apps_at as string | null | undefined) ??
+    null
+  const lastRegistrationError =
+    (channel.providerMeta.last_registration_error as
+      | string
+      | null
+      | undefined) ?? null
+
   const checks: {
     config_exists: boolean
     token_decryptable: boolean
@@ -96,28 +103,34 @@ export async function GET() {
     token_decryptable: true,
     phone_metadata_ok: false,
     waba_subscribed_to_app: null,
-    locally_marked_registered: config.registeredAt != null,
+    locally_marked_registered: registeredAt != null,
   }
   const errors: string[] = []
 
   // 1. Phone metadata
-  try {
-    await verifyPhoneNumber({
-      phoneNumberId: config.phoneNumberId,
-      accessToken,
-    })
-    checks.phone_metadata_ok = true
-  } catch (err) {
+  if (phoneNumberId) {
+    try {
+      await verifyPhoneNumber({
+        phoneNumberId,
+        accessToken,
+      })
+      checks.phone_metadata_ok = true
+    } catch (err) {
+      errors.push(
+        `Phone metadata check failed: ${err instanceof Error ? err.message : String(err)}`,
+      )
+    }
+  } else {
     errors.push(
-      `Phone metadata check failed: ${err instanceof Error ? err.message : String(err)}`,
+      'No phone number id on file — re-save the configuration to repair.',
     )
   }
 
   // 2. WABA subscription — only meaningful if we have a waba_id
-  if (config.wabaId) {
+  if (wabaId) {
     try {
       const subs = await getSubscribedApps({
-        wabaId: config.wabaId,
+        wabaId,
         accessToken,
       })
       // Meta returns the apps subscribed to this WABA. If the list
@@ -150,8 +163,8 @@ export async function GET() {
     live,
     checks,
     errors,
-    last_registration_error: config.lastRegistrationError ?? null,
-    registered_at: config.registeredAt ?? null,
-    subscribed_apps_at: config.subscribedAppsAt ?? null,
+    last_registration_error: lastRegistrationError,
+    registered_at: registeredAt,
+    subscribed_apps_at: subscribedAppsAt,
   })
 }

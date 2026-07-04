@@ -1,14 +1,14 @@
 import { NextResponse } from 'next/server'
 import { and, eq } from 'drizzle-orm'
 
-import { db, messageTemplates, whatsappConfig } from '@/db'
+import { db, messageTemplates } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import {
   getCurrentAccount,
   toErrorResponse,
   type AccountContext,
 } from '@/lib/auth/account'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { loadMetaChannelByAccount } from '@/lib/channels/channels'
 import { normalizeStatus } from '@/lib/whatsapp/template-status-normalize'
 import type { TemplateButton, TemplateSampleValues } from '@/types'
 
@@ -132,7 +132,7 @@ function extractSampleValues(
 
 export async function POST() {
   try {
-    // Resolve the caller's account — both whatsapp_config and
+    // Resolve the caller's account — both the Meta channel and
     // the message_templates we sync into are account-scoped.
     let ctx: AccountContext
     try {
@@ -142,25 +142,21 @@ export async function POST() {
     }
     const accountId = ctx.accountId
 
-    const config = firstOrNull(
-      await db
-        .select()
-        .from(whatsappConfig)
-        .where(eq(whatsappConfig.accountId, accountId))
-        .limit(1)
-    )
+    // Templates are a Meta-only feature — resolve the account's Meta
+    // channel and read its (already-decrypted) credentials + WABA id.
+    const channel = await loadMetaChannelByAccount(accountId)
 
-    if (!config) {
+    if (!channel) {
       return NextResponse.json(
         {
-          error:
-            'WhatsApp not configured. Connect your WhatsApp Business account in Settings first.',
+          error: 'Nenhum canal oficial (Meta) configurado',
         },
         { status: 400 },
       )
     }
 
-    if (!config.wabaId) {
+    const wabaId = channel.providerMeta.waba_id as string | undefined
+    if (!wabaId) {
       return NextResponse.json(
         {
           error:
@@ -170,12 +166,12 @@ export async function POST() {
       )
     }
 
-    const accessToken = decrypt(config.accessToken)
+    const accessToken = channel.credentials.accessToken as string
 
     const metaTemplates: MetaTemplate[] = []
     let nextUrl:
       | string
-      | null = `${META_API_BASE}/${config.wabaId}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`
+      | null = `${META_API_BASE}/${wabaId}/message_templates?limit=100&fields=id,name,language,status,category,components,quality_score`
     const PAGE_CAP = 20
     let pageCount = 0
 

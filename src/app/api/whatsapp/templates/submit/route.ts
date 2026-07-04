@@ -1,14 +1,13 @@
 import { NextResponse } from 'next/server'
-import { eq } from 'drizzle-orm'
 
-import { db, messageTemplates, whatsappConfig } from '@/db'
+import { db, messageTemplates } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import {
   getCurrentAccount,
   toErrorResponse,
   type AccountContext,
 } from '@/lib/auth/account'
-import { decrypt } from '@/lib/whatsapp/encryption'
+import { loadMetaChannelByAccount } from '@/lib/channels/channels'
 import { submitMessageTemplate } from '@/lib/whatsapp/meta-api'
 import {
   validateTemplatePayload,
@@ -176,23 +175,18 @@ export async function POST(request: Request) {
       metaTemplateId = `dry-run-${crypto.randomUUID()}`
       metaStatus = 'PENDING'
     } else {
-      const config = firstOrNull(
-        await db
-          .select()
-          .from(whatsappConfig)
-          .where(eq(whatsappConfig.accountId, accountId))
-          .limit(1)
-      )
-      if (!config) {
+      // Templates are Meta-only — resolve the account's Meta channel.
+      const channel = await loadMetaChannelByAccount(accountId)
+      if (!channel) {
         return NextResponse.json(
           {
-            error:
-              'WhatsApp not configured. Connect your WhatsApp Business account in Settings first.',
+            error: 'Nenhum canal oficial (Meta) configurado',
           },
           { status: 400 },
         )
       }
-      if (!config.wabaId) {
+      const wabaId = channel.providerMeta.waba_id as string | undefined
+      if (!wabaId) {
         return NextResponse.json(
           {
             error:
@@ -202,7 +196,7 @@ export async function POST(request: Request) {
         )
       }
 
-      const accessToken = decrypt(config.accessToken)
+      const accessToken = channel.credentials.accessToken as string
 
       // Image headers need a Resumable-Upload handle (Meta rejects a
       // plain URL at creation). Derive it from header_media_url before
@@ -220,7 +214,7 @@ export async function POST(request: Request) {
       const metaPayload = buildMetaTemplatePayload(payload)
       try {
         const meta = await submitMessageTemplate({
-          wabaId: config.wabaId,
+          wabaId,
           accessToken,
           payload: metaPayload,
         })

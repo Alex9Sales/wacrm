@@ -16,7 +16,7 @@ import {
   db,
   tags,
   messageTemplates,
-  whatsappConfig,
+  channels,
   customFields,
   organization,
   user,
@@ -194,26 +194,44 @@ export type WhatsAppConfigRow = Pick<
   | 'last_registration_error'
 >
 
-/** The account's WhatsApp config row (secrets omitted), or null. */
+/** The account's WhatsApp config row (secrets omitted), or null.
+ *  Backed by the account's Meta channel (Phase 4). Non-secret routing
+ *  info lives on `provider_meta`; the registration-progress timestamps
+ *  that the legacy whatsapp_config carried have no channel equivalent
+ *  yet, so they surface as null. */
 export async function getWhatsAppConfig(): Promise<WhatsAppConfigRow | null> {
   const ctx = await getCurrentAccount()
   const row = firstOrNull(
     await db
       .select({
-        id: whatsappConfig.id,
-        phone_number_id: whatsappConfig.phoneNumberId,
-        waba_id: whatsappConfig.wabaId,
-        status: whatsappConfig.status,
-        connected_at: whatsappConfig.connectedAt,
-        registered_at: whatsappConfig.registeredAt,
-        subscribed_apps_at: whatsappConfig.subscribedAppsAt,
-        last_registration_error: whatsappConfig.lastRegistrationError,
+        id: channels.id,
+        status: channels.status,
+        providerMeta: channels.providerMeta,
       })
-      .from(whatsappConfig)
-      .where(eq(whatsappConfig.accountId, ctx.accountId))
+      .from(channels)
+      .where(
+        and(
+          eq(channels.accountId, ctx.accountId),
+          eq(channels.provider, 'meta'),
+        ),
+      )
       .limit(1),
   )
-  return row as unknown as WhatsAppConfigRow | null
+  if (!row) return null
+
+  const meta = (row.providerMeta ?? {}) as Record<string, unknown>
+  return {
+    id: row.id,
+    phone_number_id: (meta.phone_number_id as string | undefined) ?? '',
+    waba_id: (meta.waba_id as string | undefined) ?? undefined,
+    status: row.status === 'connected' ? 'connected' : 'disconnected',
+    connected_at: (meta.connected_at as string | undefined) ?? undefined,
+    registered_at: (meta.registered_at as string | undefined) ?? undefined,
+    subscribed_apps_at:
+      (meta.subscribed_apps_at as string | undefined) ?? undefined,
+    last_registration_error:
+      (meta.last_registration_error as string | undefined) ?? undefined,
+  } as WhatsAppConfigRow
 }
 
 // ------------------------------------------------------------

@@ -5,8 +5,9 @@
 //
 // Given a conversation and message params, this:
 //   1. validates the params for the message type,
-//   2. loads the conversation + contact + WhatsApp config,
-//   3. sends to Meta (with phone-variant retry + contact auto-fix),
+//   2. loads the conversation + contact + its channel,
+//   3. dispatches through the channel's provider (Phase 4 registry) —
+//      Meta / WAHA / Evolution / EvoGo — never a hard-coded transport,
 //   4. persists the message + updates the conversation,
 //   5. pauses any active Flow run for the contact (agent stepped in).
 //
@@ -15,9 +16,15 @@
 // and throws `SendMessageError` on failure. The callers own auth,
 // rate-limiting, body parsing, and mapping the error to their
 // respective response shapes (internal `{ error }` vs the v1
-// envelope). Behaviour is identical to the original inline route —
-// this is a straight extraction so the public endpoint can reuse it
-// without duplicating ~250 lines of Meta plumbing.
+// envelope).
+//
+// Provider dispatch (Phase 4, wave 3A): the conversation carries a
+// `channel_id`; we load that channel (already-decrypted ChannelCtx) and
+// resolve its provider via getProvider(). A capability check runs BEFORE
+// the send so a template/interactive on a non-Meta channel fails with a
+// clean 422 rather than a cryptic upstream error. The phone-variant retry
+// (Meta error #131030) is Meta-specific and gated on provider.id==='meta';
+// other providers resolve their own chatId (WAHA) or don't need it.
 // ============================================================
 
 import { and, eq } from 'drizzle-orm';
@@ -29,16 +36,12 @@ import {
   flowRuns,
   messages,
   messageTemplates,
-  whatsappConfig,
 } from '@/db';
 import { firstOrNull, firstOrThrow } from '@/db/helpers';
-import {
-  sendTextMessage,
-  sendTemplateMessage,
-  sendMediaMessage,
-  type MediaKind,
-} from '@/lib/whatsapp/meta-api';
-import { decrypt, encrypt, isLegacyFormat } from '@/lib/whatsapp/encryption';
+import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels';
+import { getProvider } from '@/lib/channels/registry';
+import type { OutboundMedia } from '@/lib/channels/provider';
+import type { MediaKind } from '@/lib/whatsapp/meta-api';
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -200,11 +203,19 @@ export async function sendMessageToConversation(
   // Conversation + contact, account-scoped. A malformed UUID makes
   // Postgres throw where PostgREST used to return an error object —
   // both collapse to the same 404 the old code raised.
-  let conversation: { id: string; contactId: string } | null = null;
+  let conversation: {
+    id: string;
+    contactId: string;
+    channelId: string | null;
+  } | null = null;
   try {
     conversation = firstOrNull(
       await db
-        .select({ id: conversations.id, contactId: conversations.contactId })
+        .select({
+          id: conversations.id,
+          contactId: conversations.contactId,
+          channelId: conversations.channelId,
+        })
         .from(conversations)
         .where(
           and(
@@ -246,40 +257,38 @@ export async function sendMessageToConversation(
     );
   }
 
-  // WhatsApp config, account-scoped.
-  const config = firstOrNull(
-    await db
-      .select()
-      .from(whatsappConfig)
-      .where(eq(whatsappConfig.accountId, accountId))
-      .limit(1)
-  );
+  // Resolve the conversation's channel (Phase 4). Credentials arrive
+  // already-decrypted on the ChannelCtx (channels.ts owns that). Prefer the
+  // conversation's own channel_id; fall back to the account's default
+  // channel for legacy conversations created before channel_id existed.
+  const channel = conversation.channelId
+    ? await loadChannel(conversation.channelId)
+    : await loadDefaultChannel(accountId);
 
-  if (!config) {
+  if (!channel) {
     throw new SendMessageError(
       'whatsapp_not_configured',
-      'WhatsApp not configured. Please set up your WhatsApp integration first.',
+      'WhatsApp not configured. Please connect a channel first.',
       400
     );
   }
+  // Tenancy guard: a conversation's channel_id must belong to the same
+  // account (defense-in-depth — there is no RLS on the Drizzle client).
+  if (channel.accountId !== accountId) {
+    throw new SendMessageError('not_found', 'Conversation not found', 404);
+  }
 
-  const accessToken = decrypt(config.accessToken);
+  const provider = getProvider(channel.provider);
 
-  // Self-heal legacy CBC ciphertexts. Fire-and-forget; idempotent.
-  if (isLegacyFormat(config.accessToken)) {
-    void db
-      .update(whatsappConfig)
-      .set({ accessToken: encrypt(accessToken) })
-      .where(eq(whatsappConfig.id, config.id))
-      .then(
-        () => {},
-        (error: unknown) => {
-          console.warn(
-            '[send-message] access_token GCM upgrade failed:',
-            error instanceof Error ? error.message : error
-          );
-        }
-      );
+  // Capability gate — BEFORE sending. Reject an operation the channel's
+  // provider structurally can't do with a clean 422 rather than letting it
+  // fail with a cryptic upstream error deep in the adapter.
+  if (messageType === 'template' && !provider.capabilities.templates) {
+    throw new SendMessageError(
+      'unsupported',
+      'Templates só no canal oficial (Meta).',
+      422
+    );
   }
 
   // Resolve the reply target to its Meta message_id. The parent must
@@ -371,51 +380,58 @@ export async function sendMessageToConversation(
     templateRow = (data as MessageTemplate | null) ?? null;
   }
 
+  // Dispatch one send attempt through the resolved provider. Returns the
+  // provider-side message id. Media/text/template all route through the
+  // WhatsAppProvider interface — the adapter owns the transport specifics.
   const attempt = async (phone: string): Promise<string> => {
     if (messageType === 'template') {
-      const result = await sendTemplateMessage({
-        phoneNumberId: config.phoneNumberId,
-        accessToken,
-        to: phone,
-        templateName: templateName!,
+      if (!provider.sendTemplate) {
+        throw new SendMessageError(
+          'unsupported',
+          'Templates só no canal oficial (Meta).',
+          422
+        );
+      }
+      const result = await provider.sendTemplate(channel, phone, {
+        name: templateName!,
         language: templateLanguage || 'en_US',
-        template: templateRow ?? undefined,
-        messageParams: templateMessageParams ?? undefined,
-        params: templateParams || [],
-        contextMessageId,
+        // The Meta adapter narrows this back into template/messageParams/body.
+        params: {
+          template: templateRow ?? undefined,
+          messageParams: templateMessageParams ?? undefined,
+          body: templateParams || [],
+        },
       });
-      return result.messageId;
+      return result.externalMessageId;
     }
     if (isMediaKind) {
-      const result = await sendMediaMessage({
-        phoneNumberId: config.phoneNumberId,
-        accessToken,
-        to: phone,
+      const media: OutboundMedia = {
         kind: messageType as MediaKind,
-        link: mediaUrl!,
+        // Meta sends media by public link (the MinIO URL); non-official
+        // providers download this URL → base64 inside their adapter.
+        url: mediaUrl!,
         caption: contentText || undefined,
         filename: filename || undefined,
-        contextMessageId,
-      });
-      return result.messageId;
+      };
+      const result = await provider.sendMedia(channel, phone, media);
+      return result.externalMessageId;
     }
-    const result = await sendTextMessage({
-      phoneNumberId: config.phoneNumberId,
-      accessToken,
-      to: phone,
-      text: contentText!,
-      contextMessageId,
+    const result = await provider.sendText(channel, phone, contentText!, {
+      contextExternalId: contextMessageId,
     });
-    return result.messageId;
+    return result.externalMessageId;
   };
 
-  // Send via Meta — retry across phone-number variants if Meta rejects
-  // with "recipient not in allowed list"; persist a working variant
-  // back to the contact so the next send goes straight through.
+  // Send via the provider. The phone-variant retry (Meta error #131030,
+  // "recipient not in allowed list") is Meta-specific — other providers
+  // resolve their own chatId (WAHA's check-exists) or don't need it, so we
+  // only iterate variants for Meta and hand every other provider the
+  // sanitized number once.
   let waMessageId = '';
   let workingPhone = sanitizedPhone;
   try {
-    const variants = phoneVariants(sanitizedPhone);
+    const variants =
+      provider.id === 'meta' ? phoneVariants(sanitizedPhone) : [sanitizedPhone];
     let lastError: unknown = null;
 
     for (const variant of variants) {
@@ -425,8 +441,11 @@ export async function sendMessageToConversation(
         lastError = null;
         break;
       } catch (err) {
+        // A capability/validation SendMessageError should surface as-is,
+        // never be swallowed by the variant retry.
+        if (err instanceof SendMessageError) throw err;
         const message = err instanceof Error ? err.message : String(err);
-        if (!isRecipientNotAllowedError(message)) {
+        if (provider.id !== 'meta' || !isRecipientNotAllowedError(message)) {
           throw err;
         }
         lastError = err;
@@ -438,10 +457,18 @@ export async function sendMessageToConversation(
 
     if (lastError) throw lastError;
   } catch (err) {
+    if (err instanceof SendMessageError) throw err;
     const message =
-      err instanceof Error ? err.message : 'Unknown Meta API error';
-    console.error('[send-message] Meta send failed for all variants:', message);
-    throw new SendMessageError('meta_error', `Meta API error: ${message}`, 502);
+      err instanceof Error ? err.message : 'Unknown provider error';
+    console.error(
+      `[send-message] ${provider.id} send failed:`,
+      message
+    );
+    throw new SendMessageError(
+      'send_error',
+      `${provider.id} send error: ${message}`,
+      502
+    );
   }
 
   if (workingPhone !== sanitizedPhone) {

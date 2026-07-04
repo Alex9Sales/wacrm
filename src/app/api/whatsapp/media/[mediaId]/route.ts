@@ -1,15 +1,12 @@
 import { NextResponse } from 'next/server'
-import { eq } from 'drizzle-orm'
 
-import { db, whatsappConfig } from '@/db'
-import { firstOrNull } from '@/db/helpers'
 import {
   getCurrentAccount,
   toErrorResponse,
   type AccountContext,
 } from '@/lib/auth/account'
+import { loadMetaChannelByAccount } from '@/lib/channels/channels'
 import { getMediaUrl, downloadMedia } from '@/lib/whatsapp/meta-api'
-import { decrypt } from '@/lib/whatsapp/encryption'
 
 export async function GET(
   request: Request,
@@ -25,10 +22,9 @@ export async function GET(
       )
     }
 
-    // Resolve the caller's account — whatsapp_config is one-per-
-    // account post-multi-user, so a teammate fetching media for a
-    // conversation in the shared inbox needs the account's config,
-    // not their personal (non-existent) row.
+    // Resolve the caller's account — the Meta channel is account-
+    // scoped, so a teammate fetching media for a conversation in the
+    // shared inbox reads the account's channel, not a personal row.
     let ctx: AccountContext
     try {
       ctx = await getCurrentAccount()
@@ -36,23 +32,18 @@ export async function GET(
       return toErrorResponse(err)
     }
 
-    // Fetch and decrypt WhatsApp config
-    const config = firstOrNull(
-      await db
-        .select()
-        .from(whatsappConfig)
-        .where(eq(whatsappConfig.accountId, ctx.accountId))
-        .limit(1)
-    )
+    // Inbound media proxying only applies to Meta — resolve the
+    // account's Meta channel for its (already-decrypted) access token.
+    const channel = await loadMetaChannelByAccount(ctx.accountId)
 
-    if (!config) {
+    if (!channel) {
       return NextResponse.json(
-        { error: 'WhatsApp not configured' },
+        { error: 'Nenhum canal oficial (Meta) configurado' },
         { status: 400 }
       )
     }
 
-    const accessToken = decrypt(config.accessToken)
+    const accessToken = channel.credentials.accessToken as string
 
     // Get the download URL from Meta
     const mediaInfo = await getMediaUrl({ mediaId, accessToken })

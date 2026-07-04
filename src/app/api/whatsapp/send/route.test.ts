@@ -45,8 +45,8 @@ vi.mock('@/db', async (importOriginal) => {
         return 'contacts'
       case actual.conversations:
         return 'conversations'
-      case actual.whatsappConfig:
-        return 'whatsapp_config'
+      case actual.channels:
+        return 'channels'
       case actual.messageTemplates:
         return 'message_templates'
       case actual.messages:
@@ -76,13 +76,19 @@ vi.mock('@/db', async (importOriginal) => {
         const row = h.createdConversation ?? h.existingConversation
         return row ? [row] : []
       }
-      case 'whatsapp_config':
+      case 'channels':
         return [
           {
-            id: 'cfg-1',
+            id: 'chan-1',
             accountId: 'acct-1',
-            phoneNumberId: 'PNID-1',
-            accessToken: 'enc-token',
+            provider: 'meta',
+            name: 'WhatsApp (Meta)',
+            status: 'connected',
+            phoneNumber: null,
+            credentials: 'enc-token',
+            providerMeta: { phone_number_id: 'PNID-1' },
+            settings: {},
+            webhookSecret: 'whsec',
           },
         ]
       default:
@@ -162,6 +168,27 @@ vi.mock('@/lib/whatsapp/encryption', () => ({
   decrypt: vi.fn(() => 'plaintext-token'),
   encrypt: vi.fn(() => 'enc-token'),
   isLegacyFormat: vi.fn(() => false),
+}))
+
+// Phase 4: the send path resolves the channel through the channels
+// helpers (credentials already decrypted). Mock at that boundary so
+// the test doesn't depend on the encrypted DB round-trip.
+const META_CHANNEL_CTX = {
+  id: 'chan-1',
+  accountId: 'acct-1',
+  provider: 'meta' as const,
+  name: 'WhatsApp (Meta)',
+  phoneNumber: null,
+  credentials: { accessToken: 'plaintext-token' },
+  providerMeta: { phone_number_id: 'PNID-1' },
+  settings: {},
+  webhookSecret: 'whsec',
+}
+vi.mock('@/lib/channels/channels', () => ({
+  loadChannel: vi.fn(async () => META_CHANNEL_CTX),
+  loadChannelByAccount: vi.fn(async () => META_CHANNEL_CTX),
+  loadDefaultChannel: vi.fn(async () => META_CHANNEL_CTX),
+  loadMetaChannelByAccount: vi.fn(async () => META_CHANNEL_CTX),
 }))
 
 const { sendTemplateMessage } = vi.hoisted(() => ({

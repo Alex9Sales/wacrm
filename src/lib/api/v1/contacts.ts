@@ -9,7 +9,7 @@
 
 import { and, eq, inArray } from 'drizzle-orm';
 
-import { db, member, contactTags, contacts, tags, whatsappConfig } from '@/db';
+import { db, member, contactTags, contacts, tags } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { resolveImportTagIds } from '@/lib/contacts/resolve-import-tags';
@@ -93,21 +93,10 @@ export async function loadTagsByContact(
  * of truth used by every public-API write (contacts, messages,
  * broadcasts, resolve-conversation), so the same key's writes are
  * always attributed to the same human. API callers have no logged-in
- * user, so — like the inbound webhook — we attribute writes to the
- * **WhatsApp config owner** (the webhook's own convention). Contacts
- * can be created before WhatsApp is connected, so we fall back to the
- * account owner when there's no config yet.
+ * user, so we attribute writes to the **account owner** (the org's
+ * owner member).
  */
 export async function resolveAuditUserId(accountId: string): Promise<string> {
-  const config = firstOrNull(
-    await db
-      .select({ userId: whatsappConfig.userId })
-      .from(whatsappConfig)
-      .where(eq(whatsappConfig.accountId, accountId))
-      .limit(1)
-  );
-  if (config?.userId) return config.userId;
-
   const owner = firstOrNull(
     await db
       .select({ userId: member.userId })

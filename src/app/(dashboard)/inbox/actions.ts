@@ -22,7 +22,7 @@ import {
   pipelineStages,
   tags,
   user,
-  whatsappConfig,
+  channels,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
@@ -120,16 +120,22 @@ export async function getConversationWithContact(
 }
 
 /**
- * Whether the caller's account has a connected WhatsApp config.
- * whatsapp_config is one-row-per-account post-multi-user.
+ * Whether the caller's account has a connected WhatsApp channel.
+ * Backed by the `channels` table (Phase 4) — connected when any
+ * channel on the account is live.
  */
 export async function getWhatsappConnected(): Promise<boolean> {
   const ctx = await getCurrentAccount()
   const row = firstOrNull(
     await db
-      .select({ status: whatsappConfig.status })
-      .from(whatsappConfig)
-      .where(eq(whatsappConfig.accountId, ctx.accountId))
+      .select({ status: channels.status })
+      .from(channels)
+      .where(
+        and(
+          eq(channels.accountId, ctx.accountId),
+          eq(channels.status, 'connected'),
+        ),
+      )
       .limit(1),
   )
   return row?.status === 'connected'
