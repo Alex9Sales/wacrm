@@ -36,6 +36,7 @@ import {
 } from '@/lib/whatsapp/phone-utils';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
 import type { MessageTemplate } from '@/types';
+import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
 
 /** Thrown by createBroadcast on a caller-visible failure; route maps it. */
@@ -55,6 +56,13 @@ export interface BroadcastRecipientInput {
   to: string;
   /** Positional body params for the template ({{1}}, {{2}}…). */
   params?: string[];
+  /**
+   * Structured per-send values (header text/media, URL/COPY_CODE button
+   * values) — the dashboard's richer send path. Threaded to the provider
+   * as `OutboundTemplate.params.messageParams` and persisted per recipient
+   * so the queue worker can rebuild the send after a restart.
+   */
+  messageParams?: SendTimeParams;
 }
 
 export interface CreateBroadcastParams {
@@ -62,16 +70,23 @@ export interface CreateBroadcastParams {
   templateName: string;
   templateLanguage?: string | null;
   recipients: BroadcastRecipientInput[];
-  // TODO(wave-3B): make broadcasts channel-explicit — the broadcast route
-  // should pass the channel the user chose to send on. Until then, when
-  // `channelId` is omitted we fall back to the account's default channel.
+  // When omitted we fall back to the account's default channel. The
+  // resolved channel id is now persisted on the broadcast row so the
+  // queue worker can rebuild the send context after a restart.
   channelId?: string | null;
+  /**
+   * ISO timestamp to schedule the send. When in the future the caller
+   * enqueues the dispatch with a delay and sets status 'scheduled';
+   * persisted on the row for auditing.
+   */
+  scheduledAt?: string | null;
 }
 
 interface PlannedRecipient {
   recipientRowId: string;
   phone: string;
   params: string[];
+  messageParams?: SendTimeParams;
 }
 
 export interface BroadcastPlan {
@@ -85,9 +100,78 @@ export interface BroadcastPlan {
   planned: PlannedRecipient[];
   /** Phones rejected up front (invalid E.164) — counted as failed. */
   rejected: number;
+  /**
+   * Epoch ms the send is scheduled for, or null for send-now. The route
+   * turns a future value into the dispatch job's `delayMs`.
+   */
+  scheduledAtMs: number | null;
+  /** Initial persisted status: 'scheduled' when scheduled, else 'sending'. */
+  status: 'scheduled' | 'sending';
 }
 
-const MAX_RECIPIENTS = 1000;
+// A broadcast is now fanned out through a durable BullMQ queue, so the
+// old per-request cap (which existed because the immediate `after()` loop
+// could exceed the route's max duration) is relaxed to a high sanity
+// bound. Override via BROADCAST_MAX_RECIPIENTS.
+const MAX_RECIPIENTS = (() => {
+  const raw = Number(process.env.BROADCAST_MAX_RECIPIENTS);
+  return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : 50_000;
+})();
+
+/**
+ * Load the local template row (header/button components) matching
+ * name+language for an account, aliased to the public `MessageTemplate`
+ * shape. Throws {@link BroadcastError} if the row is malformed locally.
+ * Shared by createBroadcast and the queue worker.
+ */
+export async function loadBroadcastTemplateRow(
+  accountId: string,
+  templateName: string,
+  templateLanguage: string,
+): Promise<MessageTemplate | null> {
+  const rawTemplateRow = firstOrNull(
+    await db
+      .select({
+        id: messageTemplates.id,
+        user_id: messageTemplates.userId,
+        name: messageTemplates.name,
+        category: messageTemplates.category,
+        language: messageTemplates.language,
+        header_type: messageTemplates.headerType,
+        header_content: messageTemplates.headerContent,
+        header_handle: messageTemplates.headerHandle,
+        header_media_url: messageTemplates.headerMediaUrl,
+        body_text: messageTemplates.bodyText,
+        footer_text: messageTemplates.footerText,
+        buttons: messageTemplates.buttons,
+        sample_values: messageTemplates.sampleValues,
+        status: messageTemplates.status,
+        meta_template_id: messageTemplates.metaTemplateId,
+        rejection_reason: messageTemplates.rejectionReason,
+        quality_score: messageTemplates.qualityScore,
+        submission_error: messageTemplates.submissionError,
+        last_submitted_at: messageTemplates.lastSubmittedAt,
+        created_at: messageTemplates.createdAt,
+      })
+      .from(messageTemplates)
+      .where(
+        and(
+          eq(messageTemplates.accountId, accountId),
+          eq(messageTemplates.name, templateName),
+          eq(messageTemplates.language, templateLanguage),
+        ),
+      )
+      .limit(1),
+  );
+  if (rawTemplateRow && !isMessageTemplate(rawTemplateRow)) {
+    throw new BroadcastError(
+      'template_malformed',
+      'Template row is malformed locally — run "Sync from Meta" in Settings to repair it before broadcasting.',
+      500,
+    );
+  }
+  return (rawTemplateRow as MessageTemplate | null) ?? null;
+}
 
 /**
  * Validate + persist a broadcast, resolving each recipient to a
@@ -121,6 +205,14 @@ export async function createBroadcast(
     );
   }
 
+  // A future scheduled_at means the dispatch is delayed; the row starts
+  // 'scheduled'. Otherwise it starts 'sending' (the dispatch worker will
+  // (re)affirm 'sending' when it runs). An invalid date is ignored.
+  const scheduledAtMs = params.scheduledAt
+    ? Date.parse(params.scheduledAt)
+    : NaN;
+  const isScheduled = Number.isFinite(scheduledAtMs) && scheduledAtMs > Date.now();
+
   // Channel (fail fast). Broadcasts go out on a channel; prefer the
   // explicit channelId the caller chose, else the account's default
   // channel. Credentials arrive already-decrypted on the ChannelCtx.
@@ -147,54 +239,20 @@ export async function createBroadcast(
 
   // Template row (once) for header/button components; guard a
   // malformed local row rather than N identical opaque failures.
-  // Selected with snake_case aliases so the row matches the public
-  // `MessageTemplate` shape the send-builder expects.
-  const rawTemplateRow = firstOrNull(
-    await db
-      .select({
-        id: messageTemplates.id,
-        user_id: messageTemplates.userId,
-        name: messageTemplates.name,
-        category: messageTemplates.category,
-        language: messageTemplates.language,
-        header_type: messageTemplates.headerType,
-        header_content: messageTemplates.headerContent,
-        header_handle: messageTemplates.headerHandle,
-        header_media_url: messageTemplates.headerMediaUrl,
-        body_text: messageTemplates.bodyText,
-        footer_text: messageTemplates.footerText,
-        buttons: messageTemplates.buttons,
-        sample_values: messageTemplates.sampleValues,
-        status: messageTemplates.status,
-        meta_template_id: messageTemplates.metaTemplateId,
-        rejection_reason: messageTemplates.rejectionReason,
-        quality_score: messageTemplates.qualityScore,
-        submission_error: messageTemplates.submissionError,
-        last_submitted_at: messageTemplates.lastSubmittedAt,
-        created_at: messageTemplates.createdAt,
-      })
-      .from(messageTemplates)
-      .where(
-        and(
-          eq(messageTemplates.accountId, accountId),
-          eq(messageTemplates.name, templateName),
-          eq(messageTemplates.language, templateLanguage)
-        )
-      )
-      .limit(1)
+  const templateRow = await loadBroadcastTemplateRow(
+    accountId,
+    templateName,
+    templateLanguage,
   );
-  if (rawTemplateRow && !isMessageTemplate(rawTemplateRow)) {
-    throw new BroadcastError(
-      'template_malformed',
-      'Template row is malformed locally — run "Sync from Meta" in Settings to repair it before broadcasting.',
-      500
-    );
-  }
-  const templateRow = (rawTemplateRow as MessageTemplate | null) ?? null;
 
   // Resolve each recipient to a contact. Invalid phones are dropped
   // (counted as rejected) rather than aborting the whole broadcast.
-  const resolved: { contactId: string; phone: string; params: string[] }[] = [];
+  const resolved: {
+    contactId: string;
+    phone: string;
+    params: string[];
+    messageParams?: SendTimeParams;
+  }[] = [];
   let rejected = 0;
   for (const r of recipients) {
     const sanitized = sanitizePhoneForMeta(typeof r.to === 'string' ? r.to : '');
@@ -211,6 +269,7 @@ export async function createBroadcast(
       params: Array.isArray(r.params)
         ? r.params.filter((p): p is string => typeof p === 'string')
         : [],
+      messageParams: r.messageParams,
     });
   }
 
@@ -251,9 +310,13 @@ export async function createBroadcast(
           accountId,
           userId: auditUserId,
           name: name || `API broadcast (${templateName})`,
+          channelId: channel.id,
           templateName,
           templateLanguage,
-          status: 'sending',
+          status: isScheduled ? 'scheduled' : 'sending',
+          scheduledAt: isScheduled
+            ? new Date(scheduledAtMs).toISOString()
+            : null,
           totalRecipients: deduped.length,
         })
         .returning({ id: broadcasts.id })
@@ -272,6 +335,8 @@ export async function createBroadcast(
           broadcastId: broadcast.id,
           contactId: r.contactId,
           status: 'pending' as const,
+          params: r.params,
+          messageParams: r.messageParams ?? null,
         }))
       )
       .returning({
@@ -288,7 +353,12 @@ export async function createBroadcast(
   const byContact = new Map(deduped.map((r) => [r.contactId, r]));
   const planned: PlannedRecipient[] = recipientRows.map((row) => {
     const r = byContact.get(row.contactId as string)!;
-    return { recipientRowId: row.id, phone: r.phone, params: r.params };
+    return {
+      recipientRowId: row.id,
+      phone: r.phone,
+      params: r.params,
+      messageParams: r.messageParams,
+    };
   });
 
   return {
@@ -299,74 +369,116 @@ export async function createBroadcast(
     templateRow,
     planned,
     rejected,
+    scheduledAtMs: isScheduled ? scheduledAtMs : null,
+    status: isScheduled ? 'scheduled' : 'sending',
   };
 }
 
+// ---- shared single-recipient send --------------------------------------
+
+/** What the send helper needs about the broadcast (template identity). */
+export interface BroadcastSendContext {
+  templateName: string;
+  templateLanguage: string;
+  templateRow: MessageTemplate | null;
+}
+
+/** One recipient's phone + body params (+ optional structured params). */
+export interface RecipientSendInput {
+  phone: string;
+  params: string[];
+  messageParams?: SendTimeParams;
+}
+
+/** Outcome of a single send attempt (no DB writes performed here). */
+export type RecipientSendResult =
+  | { ok: true; externalMessageId: string }
+  | { ok: false; error: string };
+
 /**
- * Fan out a {@link BroadcastPlan}: send each recipient's template
- * (phone-variant retry) and stamp its `broadcast_recipients` row.
- * Best-effort per recipient — one failure never aborts the rest.
- * Designed to run inside `after()`.
- *
- * The per-status count columns on `broadcasts` are owned by the DB
- * aggregate trigger (migrations 003/005): each recipient-row update
- * below advances them automatically, and later Meta delivery/read
- * webhooks keep advancing them. We therefore never write those columns
- * here — only the terminal `status` — otherwise a manual value would
- * race and clobber the trigger-maintained counts.
+ * Send ONE recipient's template on `channel` (Meta phone-variant retry).
+ * Pure send — performs NO DB writes, so both the legacy
+ * {@link deliverBroadcast} loop and the queue worker can call it and own
+ * their own persistence/retry policy. Throws only if the channel's
+ * provider can't send templates at all (a programmer error by then).
  */
-export async function deliverBroadcast(plan: BroadcastPlan): Promise<void> {
-  let sentCount = 0;
-  const provider = getProvider(plan.channel.provider);
-  // The capability gate in createBroadcast already guarantees sendTemplate
-  // exists; assert it here so the loop can call it unconditionally.
+export async function sendBroadcastRecipient(
+  channel: ChannelCtx,
+  ctx: BroadcastSendContext,
+  recipient: RecipientSendInput,
+): Promise<RecipientSendResult> {
+  const provider = getProvider(channel.provider);
   if (!provider.sendTemplate) {
     throw new BroadcastError(
       'unsupported',
       'Broadcasts por template só no canal oficial (Meta).',
-      422
+      422,
     );
   }
   // Phone-variant retry (#131030) is Meta-specific — other providers
   // resolve their own chatId or don't need it.
   const useVariants = provider.id === 'meta';
+  const variants = useVariants
+    ? phoneVariants(recipient.phone)
+    : [recipient.phone];
+
+  let lastError = 'Unknown error';
+  for (const variant of variants) {
+    try {
+      const result = await provider.sendTemplate(channel, variant, {
+        name: ctx.templateName,
+        language: ctx.templateLanguage,
+        params: {
+          template: ctx.templateRow ?? undefined,
+          body: recipient.params,
+          messageParams: recipient.messageParams,
+        },
+      });
+      return { ok: true, externalMessageId: result.externalMessageId };
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Unknown error';
+      lastError = message;
+      // Only a Meta "recipient not allowed" error is worth another variant.
+      if (!useVariants || !isRecipientNotAllowedError(message)) break;
+    }
+  }
+  return { ok: false, error: lastError };
+}
+
+/**
+ * Fan out a {@link BroadcastPlan} synchronously (the legacy immediate
+ * loop). Kept for direct callers/tests; the production path now uses the
+ * BullMQ queue (see src/worker). Best-effort per recipient — one failure
+ * never aborts the rest.
+ *
+ * The per-status count columns on `broadcasts` are owned by the DB
+ * aggregate trigger: each recipient-row update below advances them
+ * automatically, and later Meta delivery/read webhooks keep advancing
+ * them. We only write the terminal `status` here.
+ */
+export async function deliverBroadcast(plan: BroadcastPlan): Promise<void> {
+  let sentCount = 0;
+  const ctx: BroadcastSendContext = {
+    templateName: plan.templateName,
+    templateLanguage: plan.templateLanguage,
+    templateRow: plan.templateRow,
+  };
 
   for (const recipient of plan.planned) {
-    const variants = useVariants
-      ? phoneVariants(recipient.phone)
-      : [recipient.phone];
-    let sentMessageId: string | null = null;
-    let lastError: string | null = null;
+    const result = await sendBroadcastRecipient(plan.channel, ctx, {
+      phone: recipient.phone,
+      params: recipient.params,
+      messageParams: recipient.messageParams,
+    });
 
-    for (const variant of variants) {
-      try {
-        const result = await provider.sendTemplate(plan.channel, variant, {
-          name: plan.templateName,
-          language: plan.templateLanguage,
-          params: {
-            template: plan.templateRow ?? undefined,
-            body: recipient.params,
-          },
-        });
-        sentMessageId = result.externalMessageId;
-        lastError = null;
-        break;
-      } catch (error) {
-        const message = error instanceof Error ? error.message : 'Unknown error';
-        lastError = message;
-        // Only a Meta "recipient not allowed" error is worth another variant.
-        if (!useVariants || !isRecipientNotAllowedError(message)) break;
-      }
-    }
-
-    if (sentMessageId) {
+    if (result.ok) {
       sentCount++;
       await db
         .update(broadcastRecipients)
         .set({
           status: 'sent',
           sentAt: new Date().toISOString(),
-          whatsappMessageId: sentMessageId,
+          whatsappMessageId: result.externalMessageId,
           errorMessage: null,
         })
         .where(eq(broadcastRecipients.id, recipient.recipientRowId));
@@ -375,15 +487,12 @@ export async function deliverBroadcast(plan: BroadcastPlan): Promise<void> {
         .update(broadcastRecipients)
         .set({
           status: 'failed',
-          errorMessage: lastError || 'Unknown error',
+          errorMessage: result.error,
         })
         .where(eq(broadcastRecipients.id, recipient.recipientRowId));
     }
   }
 
-  // Terminal status only — counts are trigger-owned (see the note
-  // above). If nothing sent, the broadcast failed outright; a partial
-  // send is still 'sent' (per-recipient failures show in failed_count).
   await db
     .update(broadcasts)
     .set({

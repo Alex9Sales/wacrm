@@ -546,6 +546,10 @@ export const broadcasts = pgTable("broadcasts", {
 	userId: uuid("user_id").notNull(),
 	accountId: uuid("account_id").notNull(),
 	name: text().notNull(),
+	// Channel the broadcast sends on. Nullable so the worker can resolve
+	// the channel after a restart (the channel used to live only in the
+	// transient BroadcastPlan); falls back to the default channel when null.
+	channelId: uuid("channel_id"),
 	templateName: text("template_name").notNull(),
 	templateLanguage: text("template_language").default('en_US').notNull(),
 	templateVariables: jsonb("template_variables"),
@@ -567,7 +571,12 @@ export const broadcasts = pgTable("broadcasts", {
 			foreignColumns: [organization.id],
 			name: "broadcasts_account_id_fkey"
 		}).onDelete("cascade"),
-	check("broadcasts_status_check", sql`status = ANY (ARRAY['draft'::text, 'scheduled'::text, 'sending'::text, 'sent'::text, 'failed'::text])`),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [channels.id],
+			name: "broadcasts_channel_id_fkey"
+		}).onDelete("set null"),
+	check("broadcasts_status_check", sql`status = ANY (ARRAY['draft'::text, 'scheduled'::text, 'sending'::text, 'paused'::text, 'cancelled'::text, 'sent'::text, 'failed'::text])`),
 ]);
 
 export const broadcastRecipients = pgTable("broadcast_recipients", {
@@ -575,6 +584,16 @@ export const broadcastRecipients = pgTable("broadcast_recipients", {
 	broadcastId: uuid("broadcast_id").notNull(),
 	contactId: uuid("contact_id"),
 	status: text().default('pending').notNull(),
+	// Send attempts (queue retries). Reuses error_message for last error.
+	attempts: integer().default(0).notNull(),
+	// Per-recipient body params ({{1}}, {{2}}…) — persisted so the queue
+	// worker can rebuild the template send after a process restart (they
+	// used to live only in the transient BroadcastPlan).
+	params: jsonb().default(sql`'[]'::jsonb`),
+	// Structured per-send values (header text/media, URL/COPY_CODE button
+	// values) — the dashboard's richer send path. Null for API sends that
+	// only use positional `params`.
+	messageParams: jsonb("message_params"),
 	whatsappMessageId: text("whatsapp_message_id"),
 	sentAt: timestamp("sent_at", { withTimezone: true, mode: 'string' }),
 	deliveredAt: timestamp("delivered_at", { withTimezone: true, mode: 'string' }),

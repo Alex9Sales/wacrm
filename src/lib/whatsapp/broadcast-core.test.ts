@@ -23,8 +23,10 @@ describe('createBroadcast validation', () => {
     ).rejects.toBeInstanceOf(BroadcastError);
   });
 
-  it('rejects more than 1000 recipients', async () => {
-    const recipients = Array.from({ length: 1001 }, () => ({
+  it('rejects more than the sanity cap of recipients', async () => {
+    // The old immediate-loop cap (1000) was relaxed to a high sanity
+    // bound (50000) now that fan-out is a durable BullMQ queue.
+    const recipients = Array.from({ length: 50_001 }, () => ({
       to: '+14155550123',
     }));
     await expect(

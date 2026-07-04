@@ -37,6 +37,7 @@
     "format:check": "prettier --check .",
     "test": "TZ=UTC vitest run",
     "seed:dev": "tsx scripts/seed-dev.ts",
+    "worker": "tsx src/worker/index.ts",
     "test:watch": "vitest"
   },
   "dependencies": {
@@ -49,6 +50,7 @@
     "@dnd-kit/utilities": "^3.2.2",
     "@xyflow/react": "^12.11.0",
     "better-auth": "^1.6.23",
+    "bullmq": "^5.79.2",
     "class-variance-authority": "^0.7.1",
     "clsx": "^2.1.1",
     "date-fns": "^4.4.0",

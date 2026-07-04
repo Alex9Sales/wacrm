@@ -7,41 +7,34 @@
 //     "name": "July promo",                 // optional label
 //     "template_name": "promo_july",        // required, approved template
 //     "template_language": "en_US",         // optional (default en_US)
-//     "recipients": [                        // required, 1..1000
+//     "channel_id": "…",                     // optional; default channel if omitted
+//     "scheduled_at": "2026-07-10T12:00:00Z",// optional ISO; future ⇒ scheduled
+//     "recipients": [                        // required, 1..50000
 //       { "to": "+14155550123", "params": ["Jane"] },
 //       { "to": "+14155550124" }
 //     ]
 //   }
 //
-// The broadcast + its recipient rows are persisted synchronously, then
-// the Meta fan-out runs in `after()` so the request returns fast. Poll
-// `GET /api/v1/broadcasts/{id}` for progress.
+// The broadcast + its recipient rows are persisted synchronously, then a
+// durable BullMQ dispatch job is enqueued (delayed when scheduled). A
+// separate worker (`npm run worker`) drains it with per-channel
+// throttling, retries, and idempotency. Poll `GET /api/v1/broadcasts/{id}`
+// for progress.
 //
 // Response (202):
-//   { "data": { "broadcast_id", "status": "sending",
-//               "total_recipients", "accepted", "rejected" } }
+//   { "data": { "broadcast_id", "status": "sending" | "scheduled",
+//               "total_recipients", "accepted", "rejected",
+//               "scheduled_at": string | null } }
 // ============================================================
 
-import { after } from 'next/server';
-
 import { requireApiKey } from '@/lib/auth/api-context';
-
-// The `after()` fan-out below sends to every recipient sequentially and
-// runs within this route's max duration (the same constraint the
-// webhook route documents). Give it headroom beyond the platform
-// default so a modest batch isn't cut off mid-send — which would leave
-// recipient rows 'pending' and the broadcast stuck 'sending'. This is a
-// bound, not a guarantee: a near-cap (MAX_RECIPIENTS) audience can
-// still exceed 60s, so very large sends should be split across
-// requests. A durable queue/cron drain is the complete fix (follow-up).
-export const maxDuration = 60;
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { resolveAuditUserId, ContactError } from '@/lib/api/v1/contacts';
 import {
   createBroadcast,
-  deliverBroadcast,
   BroadcastError,
 } from '@/lib/whatsapp/broadcast-core';
+import { enqueueBroadcastDispatch } from '@/lib/queue/queues';
 
 export async function POST(request: Request) {
   try {
@@ -68,24 +61,34 @@ export async function POST(request: Request) {
         typeof body.template_language === 'string'
           ? body.template_language
           : null,
+      channelId: typeof body.channel_id === 'string' ? body.channel_id : null,
+      scheduledAt:
+        typeof body.scheduled_at === 'string' ? body.scheduled_at : null,
       recipients: recipients.map((r) => ({
         to: typeof r?.to === 'string' ? r.to : '',
         params: Array.isArray(r?.params) ? r.params : undefined,
       })),
     });
 
-    // Fan out after the response is sent. Uses the shared Drizzle
-    // client — no request-scoped auth needed for the Meta calls or
-    // the account-scoped row updates.
-    after(() => deliverBroadcast(plan));
+    // Enqueue a durable dispatch job. Delayed when scheduled so the
+    // worker picks it up at scheduled_at; the worker then fans recipients
+    // out onto the channel's throttled outbound queue. Idempotent
+    // (jobId = dispatch:{broadcastId}).
+    const delayMs = plan.scheduledAtMs
+      ? Math.max(0, plan.scheduledAtMs - Date.now())
+      : undefined;
+    await enqueueBroadcastDispatch(plan.broadcastId, { delayMs });
 
     return ok(
       {
         broadcast_id: plan.broadcastId,
-        status: 'sending',
+        status: plan.status,
         total_recipients: plan.planned.length,
         accepted: plan.planned.length,
         rejected: plan.rejected,
+        scheduled_at: plan.scheduledAtMs
+          ? new Date(plan.scheduledAtMs).toISOString()
+          : null,
       },
       202
     );

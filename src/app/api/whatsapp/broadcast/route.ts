@@ -1,72 +1,49 @@
 import { NextResponse } from 'next/server'
-import { and, eq } from 'drizzle-orm'
 
-import { db, messageTemplates } from '@/db'
-import { firstOrNull } from '@/db/helpers'
 import {
   getCurrentAccount,
   toErrorResponse,
   type AccountContext,
 } from '@/lib/auth/account'
-import {
-  loadChannelByAccount,
-  loadDefaultChannel,
-} from '@/lib/channels/channels'
-import { sendTemplateMessage } from '@/lib/whatsapp/meta-api'
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder'
-import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard'
-import type { MessageTemplate } from '@/types'
-import {
-  sanitizePhoneForMeta,
-  isValidE164,
-  phoneVariants,
-  isRecipientNotAllowedError,
-} from '@/lib/whatsapp/phone-utils'
 import {
   checkRateLimit,
   rateLimitResponse,
   RATE_LIMITS,
 } from '@/lib/rate-limit'
-
-interface BroadcastResult {
-  phone: string
-  status: 'sent' | 'failed'
-  whatsapp_message_id?: string
-  error?: string
-}
+import { createBroadcast, BroadcastError } from '@/lib/whatsapp/broadcast-core'
+import { resolveAuditUserId, ContactError } from '@/lib/api/v1/contacts'
+import { enqueueBroadcastDispatch } from '@/lib/queue/queues'
 
 /**
- * Two input shapes are accepted:
+ * POST /api/whatsapp/broadcast — dashboard broadcast launcher.
  *
- *   NEW (preferred — supports per-recipient variable substitution):
- *     {
- *       recipients: Array<{ phone: string; params: string[] }>,
- *       template_name, template_language
- *     }
+ * Phase 5 CORE: this route no longer sends inline. It persists the
+ * broadcast + recipient rows via `createBroadcast` and enqueues a durable
+ * BullMQ dispatch job; a separate worker (`npm run worker`) drains it with
+ * per-channel throttling, retries, and idempotency. Poll
+ * `GET /api/v1/broadcasts/{id}` for progress + counts.
  *
- *   LEGACY (all phones receive the same params — kept so existing
- *   callers don't break):
- *     {
- *       phone_numbers: string[],
- *       template_params: string[],
- *       template_name, template_language
- *     }
+ * Two input shapes are accepted (unchanged):
  *
- * Previous implementation only supported the legacy shape, and the
- * sending hook was forced to ship every batch with `templateParams[0]`
- * — meaning every recipient got contact-0's personalization. The new
- * shape is what actually fixes that.
+ *   NEW (preferred — per-recipient variable substitution):
+ *     { recipients: [{ phone, params?, messageParams? }],
+ *       template_name, template_language?, channel_id?, scheduled_at? }
+ *
+ *   LEGACY (all phones share the same params):
+ *     { phone_numbers: string[], template_params?: string[],
+ *       template_name, template_language?, channel_id?, scheduled_at? }
+ *
+ * Response (202) — the shape changed from the old per-phone results to an
+ * async acknowledgement (documented for the broadcast UI agent):
+ *   { success: true, broadcast_id, status: 'sending'|'scheduled',
+ *     total, accepted, rejected, scheduled_at }
  */
 interface NewRecipient {
   phone: string
-  /** Body variable values, one per {{N}}. Legacy field. */
+  /** Body variable values, one per {{N}}. */
   params?: string[]
-  /**
-   * Structured per-send values (header text variable, media URL
-   * override, URL/COPY_CODE button values). When set, takes
-   * precedence over `params` for the body too — see
-   * sendTemplateMessage for the merge rules.
-   */
+  /** Structured per-send values (header text/media, button values). */
   messageParams?: SendTimeParams
 }
 
@@ -80,9 +57,8 @@ export async function POST(request: Request) {
     }
     const accountId = ctx.accountId
 
-    // Per-user broadcast budget. Note: this limits how often a user
-    // can *start* a campaign, not how many messages go out inside
-    // one — the fan-out loop below runs without additional gating.
+    // Per-user broadcast budget — limits how often a user can *start* a
+    // campaign (the fan-out itself is now the worker's job).
     const limit = checkRateLimit(`broadcast:${ctx.userId}`, RATE_LIMITS.broadcast)
     if (!limit.success) {
       return rateLimitResponse(limit)
@@ -95,12 +71,11 @@ export async function POST(request: Request) {
       template_name,
       template_language,
       template_params,
-      // Optional explicit channel to send on. Falls back to the
-      // account's default channel when omitted.
       channel_id,
+      scheduled_at,
     } = body
 
-    // Normalize to a list of {phone, params} regardless of shape.
+    // Normalize to {phone, params, messageParams} regardless of shape.
     let recipients: NewRecipient[]
     if (Array.isArray(newRecipients) && newRecipients.length > 0) {
       recipients = newRecipients
@@ -129,170 +104,53 @@ export async function POST(request: Request) {
       )
     }
 
-    // Pick the channel to send on: an explicit channel_id from the body
-    // (account-scoped so a foreign id can't be used), else the account's
-    // default channel. Credentials arrive already decrypted on the ctx.
-    const channel = channel_id
-      ? await loadChannelByAccount(accountId, channel_id)
-      : await loadDefaultChannel(accountId)
+    const auditUserId = await resolveAuditUserId(accountId)
 
-    if (!channel) {
-      return NextResponse.json(
-        {
-          error:
-            'WhatsApp not configured. Please set up your WhatsApp integration first.',
-        },
-        { status: 400 }
-      )
-    }
-
-    const phoneNumberId = channel.providerMeta.phone_number_id as
-      | string
-      | undefined
-    const accessToken = channel.credentials.accessToken as string | undefined
-
-    // sendTemplateMessage targets the Meta Cloud API — a broadcast on a
-    // non-Meta channel has no phone_number_id/token to send with.
-    if (!phoneNumberId || !accessToken) {
-      return NextResponse.json(
-        {
-          error: 'Nenhum canal oficial (Meta) configurado',
-        },
-        { status: 400 }
-      )
-    }
-
-    // Load the template row once so sendTemplateMessage can build
-    // header + button components on each iteration. Loading inside
-    // the loop would N+1 against the DB for every recipient.
-    // Guard against a malformed local row crashing every send in
-    // the loop with the same opaque TypeError — fail loudly once.
-    // Selected with snake_case aliases so the row matches the public
-    // `MessageTemplate` shape the send-builder expects.
-    const rawTemplateRow = firstOrNull(
-      await db
-        .select({
-          id: messageTemplates.id,
-          user_id: messageTemplates.userId,
-          name: messageTemplates.name,
-          category: messageTemplates.category,
-          language: messageTemplates.language,
-          header_type: messageTemplates.headerType,
-          header_content: messageTemplates.headerContent,
-          header_handle: messageTemplates.headerHandle,
-          header_media_url: messageTemplates.headerMediaUrl,
-          body_text: messageTemplates.bodyText,
-          footer_text: messageTemplates.footerText,
-          buttons: messageTemplates.buttons,
-          sample_values: messageTemplates.sampleValues,
-          status: messageTemplates.status,
-          meta_template_id: messageTemplates.metaTemplateId,
-          rejection_reason: messageTemplates.rejectionReason,
-          quality_score: messageTemplates.qualityScore,
-          submission_error: messageTemplates.submissionError,
-          last_submitted_at: messageTemplates.lastSubmittedAt,
-          created_at: messageTemplates.createdAt,
-        })
-        .from(messageTemplates)
-        .where(
-          and(
-            eq(messageTemplates.accountId, accountId),
-            eq(messageTemplates.name, template_name),
-            eq(messageTemplates.language, template_language || 'en_US')
-          )
-        )
-        .limit(1)
-    )
-    if (rawTemplateRow && !isMessageTemplate(rawTemplateRow)) {
-      return NextResponse.json(
-        {
-          error:
-            'Template row is malformed locally — run "Sync from Meta" in Settings to repair it before broadcasting.',
-        },
-        { status: 500 },
-      )
-    }
-    const templateRow = (rawTemplateRow as MessageTemplate | null) ?? null
-
-    const results: BroadcastResult[] = []
-    let sentCount = 0
-    let failedCount = 0
-
-    for (const recipient of recipients) {
-      const sanitized = sanitizePhoneForMeta(recipient.phone)
-
-      if (!isValidE164(sanitized)) {
-        results.push({
-          phone: recipient.phone,
-          status: 'failed',
-          error: 'Invalid phone number format',
-        })
-        failedCount++
-        continue
-      }
-
-      // Retry with phone variants on "not in allowed list" so numbers
-      // that differ only in a trunk-prefix 0 still reach recipients.
-      const variants = phoneVariants(sanitized)
-      let sentMessageId: string | null = null
-      let lastError: string | null = null
-
-      for (const variant of variants) {
-        try {
-          const result = await sendTemplateMessage({
-            phoneNumberId,
-            accessToken,
-            to: variant,
-            templateName: template_name,
-            language: template_language || 'en_US',
-            template: templateRow ?? undefined,
-            messageParams: recipient.messageParams,
-            params: recipient.params ?? [],
-          })
-          sentMessageId = result.messageId
-          lastError = null
-          break
-        } catch (error) {
-          const errorMessage =
-            error instanceof Error ? error.message : 'Unknown error'
-          if (!isRecipientNotAllowedError(errorMessage)) {
-            lastError = errorMessage
-            break
-          }
-          lastError = errorMessage
-          // retry with next variant
-        }
-      }
-
-      if (sentMessageId) {
-        results.push({
-          phone: recipient.phone,
-          status: 'sent',
-          whatsapp_message_id: sentMessageId,
-        })
-        sentCount++
-      } else {
-        console.error(
-          `Failed to send broadcast to ${recipient.phone}:`,
-          lastError
-        )
-        results.push({
-          phone: recipient.phone,
-          status: 'failed',
-          error: lastError || 'Unknown error',
-        })
-        failedCount++
-      }
-    }
-
-    return NextResponse.json({
-      success: true,
-      total: recipients.length,
-      sent: sentCount,
-      failed: failedCount,
-      results,
+    const plan = await createBroadcast(accountId, auditUserId, {
+      templateName: template_name,
+      templateLanguage:
+        typeof template_language === 'string' ? template_language : null,
+      channelId: typeof channel_id === 'string' ? channel_id : null,
+      scheduledAt: typeof scheduled_at === 'string' ? scheduled_at : null,
+      recipients: recipients.map((r) => ({
+        to: typeof r.phone === 'string' ? r.phone : '',
+        params: Array.isArray(r.params) ? r.params : undefined,
+        messageParams: r.messageParams,
+      })),
     })
+
+    const delayMs = plan.scheduledAtMs
+      ? Math.max(0, plan.scheduledAtMs - Date.now())
+      : undefined
+    await enqueueBroadcastDispatch(plan.broadcastId, { delayMs })
+
+    return NextResponse.json(
+      {
+        success: true,
+        broadcast_id: plan.broadcastId,
+        status: plan.status,
+        total: plan.planned.length,
+        accepted: plan.planned.length,
+        rejected: plan.rejected,
+        scheduled_at: plan.scheduledAtMs
+          ? new Date(plan.scheduledAtMs).toISOString()
+          : null,
+      },
+      { status: 202 }
+    )
   } catch (error) {
+    if (error instanceof BroadcastError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      )
+    }
+    if (error instanceof ContactError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: error.status }
+      )
+    }
     console.error('Error in WhatsApp broadcast POST:', error)
     return NextResponse.json(
       { error: 'Failed to process broadcast' },

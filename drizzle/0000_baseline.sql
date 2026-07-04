@@ -440,12 +440,16 @@ CREATE TABLE broadcasts (
   user_id UUID NOT NULL,
   account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
   name TEXT NOT NULL,
+  -- Channel the broadcast sends on. Nullable so the queue worker can
+  -- resolve the channel after a restart (it used to live only in the
+  -- transient BroadcastPlan); falls back to the default channel if null.
+  channel_id UUID REFERENCES channels(id) ON DELETE SET NULL,
   template_name TEXT NOT NULL,
   template_language TEXT NOT NULL DEFAULT 'en_US',
   template_variables JSONB,
   audience_filter JSONB,
   scheduled_at TIMESTAMPTZ,
-  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'scheduled', 'sending', 'sent', 'failed')),
+  status TEXT NOT NULL DEFAULT 'draft' CHECK (status IN ('draft', 'scheduled', 'sending', 'paused', 'cancelled', 'sent', 'failed')),
   total_recipients INTEGER DEFAULT 0,
   sent_count INTEGER DEFAULT 0,
   delivered_count INTEGER DEFAULT 0,
@@ -466,6 +470,14 @@ CREATE TABLE broadcast_recipients (
   broadcast_id UUID NOT NULL REFERENCES broadcasts(id) ON DELETE CASCADE,
   contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
   status TEXT NOT NULL DEFAULT 'pending' CHECK (status IN ('pending', 'sent', 'delivered', 'read', 'replied', 'failed')),
+  -- Send attempts (queue retries). error_message holds the last error.
+  attempts INTEGER NOT NULL DEFAULT 0,
+  -- Per-recipient body params ({{1}}, {{2}}…) — persisted so the queue
+  -- worker can rebuild the template send after a process restart.
+  params JSONB DEFAULT '[]'::jsonb,
+  -- Structured per-send values (header text/media, URL/COPY_CODE button
+  -- values) for the dashboard's richer send path. NULL for API sends.
+  message_params JSONB,
   whatsapp_message_id TEXT,
   sent_at TIMESTAMPTZ,
   delivered_at TIMESTAMPTZ,
