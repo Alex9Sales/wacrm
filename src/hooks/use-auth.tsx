@@ -39,6 +39,12 @@ interface Profile {
   beta_features: string[];
   account_id: string | null;
   account_role: AccountRole | null;
+  /** Phase 8: true when the session email is on the platform-admin
+   *  allowlist. Gates the /admin link in the header. */
+  is_platform_admin: boolean;
+  /** Phase 8: true when the active org's billing is 'suspended'. The
+   *  dashboard renders a "conta suspensa" screen when this is set. */
+  suspended: boolean;
 }
 
 interface AccountSummary {
@@ -106,6 +112,12 @@ interface AuthContextValue {
   canEditSettings: boolean;
   /** True if the caller can send messages and edit operational data (agent+). */
   canSendMessages: boolean;
+  /** Phase 8: session email is a platform admin (Fluxia operator).
+   *  Gates the /admin link. False while loading / outside the provider. */
+  isPlatformAdmin: boolean;
+  /** Phase 8: active org's billing is 'suspended'. Drives the
+   *  dashboard's full-page suspended screen. */
+  suspended: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -151,6 +163,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           beta_features: string[] | null;
           account_id: string | null;
           account_role: string | null;
+          is_platform_admin?: boolean;
+          suspended?: boolean;
         } | null;
         account: AccountSummary | null;
       };
@@ -176,6 +190,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         beta_features: body.profile.beta_features ?? [],
         account_id: body.profile.account_id ?? null,
         account_role: accountRole,
+        is_platform_admin: body.profile.is_platform_admin ?? false,
+        suspended: body.profile.suspended ?? false,
       });
       setAccount(
         body.account
@@ -253,6 +269,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         refreshProfile,
         account,
         defaultCurrency: account?.default_currency ?? DEFAULT_CURRENCY,
+        isPlatformAdmin: profile?.is_platform_admin ?? false,
+        suspended: profile?.suspended ?? false,
         ...derived,
       }}
     >
@@ -292,6 +310,8 @@ export function useAuth(): AuthContextValue {
       canManageMembers: false,
       canEditSettings: false,
       canSendMessages: false,
+      isPlatformAdmin: false,
+      suspended: false,
     };
   }
   return ctx;

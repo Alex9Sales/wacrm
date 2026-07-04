@@ -24,6 +24,25 @@ import { firstOrNull } from "@/db/helpers";
 import { auth } from "@/lib/auth";
 import { toErrorResponse } from "@/lib/auth/account";
 import { requirePlatformAdmin } from "@/lib/auth/platform";
+import { listClients, getClientOverview } from "@/lib/admin/clients";
+
+/**
+ * GET /api/admin/clients — every org + billing + owner + counts, plus the
+ * status overview counters in one round-trip for the /admin dashboard.
+ * Platform-admin only.
+ */
+export async function GET() {
+  try {
+    await requirePlatformAdmin();
+    const [clients, overview] = await Promise.all([
+      listClients(),
+      getClientOverview(),
+    ]);
+    return NextResponse.json({ clients, overview });
+  } catch (err) {
+    return toErrorResponse(err);
+  }
+}
 
 // `toErrorResponse` (account.ts) handles the shared Unauthorized /
 // Forbidden / AccountSuspended errors thrown by the platform gate.

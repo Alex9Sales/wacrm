@@ -1,0 +1,385 @@
+"use client";
+
+// ============================================================
+// AdminClients — the /admin client-management dashboard (Phase 8).
+//
+// - Overview cards (total / ativos / suspensos / vencidos).
+// - Client table ordered by due date, OVERDUE highlighted.
+// - Row actions: Ligar/Desligar (status toggle via PATCH), Editar
+//   (billing dialog), Enviar lembrete (POST reminder).
+// - "Provisionar cliente" (dialog → POST /api/admin/clients).
+//
+// Fetches GET /api/admin/clients; refetches after every mutation.
+// ============================================================
+
+import { useCallback, useEffect, useState } from "react";
+import { toast } from "sonner";
+import {
+  Loader2,
+  Power,
+  PowerOff,
+  Pencil,
+  Send,
+  UserPlus,
+  RefreshCw,
+  Users,
+  Radio,
+  AlertTriangle,
+} from "lucide-react";
+
+import { Button } from "@/components/ui/button";
+import { Badge } from "@/components/ui/badge";
+import { Card, CardContent } from "@/components/ui/card";
+import {
+  Table,
+  TableBody,
+  TableCell,
+  TableHead,
+  TableHeader,
+  TableRow,
+} from "@/components/ui/table";
+import { cn } from "@/lib/utils";
+import type {
+  AdminClientsResponse,
+  ClientListRow,
+  ClientOverview,
+} from "./admin-types";
+import {
+  formatDate,
+  formatDateTime,
+  isOverdue,
+  STATUS_LABEL,
+} from "./admin-format";
+import { EditBillingDialog } from "./edit-billing-dialog";
+import { ProvisionDialog } from "./provision-dialog";
+
+const EMPTY_OVERVIEW: ClientOverview = {
+  total: 0,
+  active: 0,
+  suspended: 0,
+  trial: 0,
+  overdue: 0,
+};
+
+function StatusBadge({ status }: { status: ClientListRow["status"] }) {
+  const label = STATUS_LABEL[status];
+  if (status === "active") {
+    return (
+      <Badge className="border-emerald-500/40 bg-emerald-500/10 text-emerald-400">
+        {label}
+      </Badge>
+    );
+  }
+  if (status === "suspended") {
+    return <Badge variant="destructive">{label}</Badge>;
+  }
+  return (
+    <Badge className="border-sky-500/40 bg-sky-500/10 text-sky-400">
+      {label}
+    </Badge>
+  );
+}
+
+function OverviewCard({
+  label,
+  value,
+  tone,
+}: {
+  label: string;
+  value: number;
+  tone?: "default" | "danger";
+}) {
+  return (
+    <Card size="sm">
+      <CardContent>
+        <p className="text-xs font-medium text-muted-foreground">{label}</p>
+        <p
+          className={cn(
+            "mt-1 text-2xl font-semibold tabular-nums",
+            tone === "danger" && value > 0
+              ? "text-destructive"
+              : "text-foreground",
+          )}
+        >
+          {value}
+        </p>
+      </CardContent>
+    </Card>
+  );
+}
+
+export function AdminClients() {
+  const [clients, setClients] = useState<ClientListRow[]>([]);
+  const [overview, setOverview] = useState<ClientOverview>(EMPTY_OVERVIEW);
+  const [loading, setLoading] = useState(true);
+  // Per-row in-flight state so a toggle/reminder disables only that row.
+  const [busyId, setBusyId] = useState<string | null>(null);
+
+  const [provisionOpen, setProvisionOpen] = useState(false);
+  const [editClient, setEditClient] = useState<ClientListRow | null>(null);
+  const [editOpen, setEditOpen] = useState(false);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/admin/clients", { cache: "no-store" });
+      if (!res.ok) {
+        toast.error("Não foi possível carregar os clientes.");
+        return;
+      }
+      const data = (await res.json()) as AdminClientsResponse;
+      setClients(data.clients ?? []);
+      setOverview(data.overview ?? EMPTY_OVERVIEW);
+    } catch (err) {
+      console.error("[AdminClients] load error:", err);
+      toast.error("Não foi possível conectar ao servidor.");
+    } finally {
+      setLoading(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    void load();
+  }, [load]);
+
+  async function toggleStatus(client: ClientListRow) {
+    const next = client.status === "suspended" ? "active" : "suspended";
+    setBusyId(client.id);
+    try {
+      const res = await fetch(`/api/admin/clients/${client.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ status: next }),
+      });
+      if (!res.ok) {
+        const payload = await res.json().catch(() => ({}));
+        toast.error(payload.error || "Não foi possível alterar o status.");
+        return;
+      }
+      toast.success(
+        next === "suspended" ? "Cliente desligado." : "Cliente ligado.",
+      );
+      await load();
+    } catch (err) {
+      console.error("[AdminClients] toggle error:", err);
+      toast.error("Não foi possível conectar ao servidor.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  async function sendReminder(client: ClientListRow) {
+    setBusyId(client.id);
+    try {
+      const res = await fetch(`/api/admin/clients/${client.id}/reminder`, {
+        method: "POST",
+      });
+      const payload = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        toast.error(payload.error || "Não foi possível enviar o lembrete.");
+        return;
+      }
+      toast.success("Lembrete enviado.");
+      await load();
+    } catch (err) {
+      console.error("[AdminClients] reminder error:", err);
+      toast.error("Não foi possível conectar ao servidor.");
+    } finally {
+      setBusyId(null);
+    }
+  }
+
+  function openEdit(client: ClientListRow) {
+    setEditClient(client);
+    setEditOpen(true);
+  }
+
+  return (
+    <div className="space-y-6">
+      {/* Header */}
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div>
+          <h1 className="font-heading text-xl font-semibold text-foreground">
+            Clientes
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Gerencie as organizações, cobrança e status de cada cliente.
+          </p>
+        </div>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => void load()}>
+            <RefreshCw className="size-4" />
+            Atualizar
+          </Button>
+          <Button onClick={() => setProvisionOpen(true)}>
+            <UserPlus className="size-4" />
+            Provisionar cliente
+          </Button>
+        </div>
+      </div>
+
+      {/* Overview cards */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+        <OverviewCard label="Total de clientes" value={overview.total} />
+        <OverviewCard label="Ativos" value={overview.active} />
+        <OverviewCard label="Suspensos" value={overview.suspended} />
+        <OverviewCard label="Vencidos" value={overview.overdue} tone="danger" />
+      </div>
+
+      {/* Table */}
+      <Card className="p-0">
+        <div className="overflow-x-auto">
+          {loading ? (
+            <div className="flex items-center justify-center gap-2 py-16 text-sm text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+              Carregando clientes…
+            </div>
+          ) : clients.length === 0 ? (
+            <div className="py-16 text-center text-sm text-muted-foreground">
+              Nenhum cliente ainda. Use “Provisionar cliente”.
+            </div>
+          ) : (
+            <Table>
+              <TableHeader>
+                <TableRow>
+                  <TableHead>Cliente</TableHead>
+                  <TableHead>Dono</TableHead>
+                  <TableHead>Status</TableHead>
+                  <TableHead>Plano</TableHead>
+                  <TableHead>Entrada</TableHead>
+                  <TableHead>Vencimento</TableHead>
+                  <TableHead className="text-center">Membros</TableHead>
+                  <TableHead className="text-center">Canais</TableHead>
+                  <TableHead className="text-right">Ações</TableHead>
+                </TableRow>
+              </TableHeader>
+              <TableBody>
+                {clients.map((c) => {
+                  const overdue = isOverdue(c.dueAt, c.status);
+                  const rowBusy = busyId === c.id;
+                  return (
+                    <TableRow key={c.id}>
+                      <TableCell className="font-medium text-foreground">
+                        {c.name}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {c.owner ? (
+                          <span className="text-xs">{c.owner.email}</span>
+                        ) : (
+                          <span className="text-xs italic">sem dono</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        <StatusBadge status={c.status} />
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {c.plan ?? "—"}
+                      </TableCell>
+                      <TableCell className="text-muted-foreground">
+                        {formatDate(c.startedAt)}
+                      </TableCell>
+                      <TableCell>
+                        <span
+                          className={cn(
+                            "inline-flex items-center gap-1",
+                            overdue
+                              ? "font-medium text-destructive"
+                              : "text-muted-foreground",
+                          )}
+                        >
+                          {overdue ? (
+                            <AlertTriangle className="size-3.5" />
+                          ) : null}
+                          {formatDate(c.dueAt)}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-center text-muted-foreground">
+                        <span className="inline-flex items-center gap-1">
+                          <Users className="size-3.5" />
+                          {c.memberCount}
+                        </span>
+                      </TableCell>
+                      <TableCell className="text-center text-muted-foreground">
+                        <span className="inline-flex items-center gap-1">
+                          <Radio className="size-3.5" />
+                          {c.channelCount}
+                        </span>
+                      </TableCell>
+                      <TableCell>
+                        <div className="flex items-center justify-end gap-1">
+                          <Button
+                            size="sm"
+                            variant={
+                              c.status === "suspended" ? "outline" : "destructive"
+                            }
+                            onClick={() => void toggleStatus(c)}
+                            disabled={rowBusy}
+                            title={
+                              c.status === "suspended"
+                                ? "Ligar cliente"
+                                : "Desligar cliente"
+                            }
+                          >
+                            {rowBusy ? (
+                              <Loader2 className="size-3.5 animate-spin" />
+                            ) : c.status === "suspended" ? (
+                              <Power className="size-3.5" />
+                            ) : (
+                              <PowerOff className="size-3.5" />
+                            )}
+                            {c.status === "suspended" ? "Ligar" : "Desligar"}
+                          </Button>
+                          <Button
+                            size="sm"
+                            variant="ghost"
+                            onClick={() => openEdit(c)}
+                            title="Editar cobrança"
+                          >
+                            <Pencil className="size-3.5" />
+                          </Button>
+                          {c.billingPhone ? (
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => void sendReminder(c)}
+                              disabled={rowBusy}
+                              title={
+                                c.lastReminderAt
+                                  ? `Último lembrete: ${formatDateTime(c.lastReminderAt)}`
+                                  : "Enviar lembrete de cobrança"
+                              }
+                            >
+                              <Send className="size-3.5" />
+                              {c.lastReminderAt ? (
+                                <span className="text-[10px] text-muted-foreground">
+                                  {formatDateTime(c.lastReminderAt)}
+                                </span>
+                              ) : (
+                                "Lembrete"
+                              )}
+                            </Button>
+                          ) : null}
+                        </div>
+                      </TableCell>
+                    </TableRow>
+                  );
+                })}
+              </TableBody>
+            </Table>
+          )}
+        </div>
+      </Card>
+
+      <ProvisionDialog
+        open={provisionOpen}
+        onOpenChange={setProvisionOpen}
+        onProvisioned={() => void load()}
+      />
+      <EditBillingDialog
+        client={editClient}
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        onSaved={() => void load()}
+      />
+    </div>
+  );
+}

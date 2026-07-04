@@ -9,9 +9,15 @@
 //
 // Response (snake_case — matches use-auth's Profile/AccountSummary):
 //   { profile: { id, full_name, email, avatar_url, role,
-//                beta_features, account_id, account_role },
+//                beta_features, account_id, account_role,
+//                is_platform_admin, suspended },
 //     account: { id, name, default_currency } | null }
 // 401 when unauthenticated.
+//
+// Phase 8: `is_platform_admin` gates the /admin link in the header;
+// `suspended` (true when the active org's billing is 'suspended') lets
+// the dashboard show a friendly "conta suspensa" screen instead of a
+// broken page (getCurrentAccount throws AccountSuspendedError there).
 // ============================================================
 
 import { NextResponse } from "next/server";
@@ -24,7 +30,9 @@ import {
   getCurrentAccount,
   UnauthorizedError,
   ForbiddenError,
+  AccountSuspendedError,
 } from "@/lib/auth/account";
+import { isPlatformAdmin } from "@/lib/auth/platform";
 
 export async function GET() {
   const userId = await getSessionUserId();
@@ -57,6 +65,9 @@ export async function GET() {
   let accountRole: string | null = null;
   let account: { id: string; name: string; default_currency: string } | null =
     null;
+  // Phase 8: true when the active org's billing is 'suspended'. The
+  // dashboard uses this to render a friendly full-page suspended screen.
+  let suspended = false;
 
   try {
     const ctx = await getCurrentAccount();
@@ -68,7 +79,13 @@ export async function GET() {
       default_currency: ctx.defaultCurrency ?? "USD",
     };
   } catch (err) {
-    if (!(err instanceof ForbiddenError || err instanceof UnauthorizedError)) {
+    if (err instanceof AccountSuspendedError) {
+      // Authenticated but the org is suspended — flag it so the client
+      // shows the "conta suspensa" screen. Account fields stay null.
+      suspended = true;
+    } else if (
+      !(err instanceof ForbiddenError || err instanceof UnauthorizedError)
+    ) {
       throw err;
     }
     // No active org / membership — leave account fields null.
@@ -83,6 +100,10 @@ export async function GET() {
     beta_features: [] as string[],
     account_id: accountId,
     account_role: accountRole,
+    // Phase 8 super-admin: gates the /admin link in the header.
+    is_platform_admin: isPlatformAdmin(userRow.email),
+    // Phase 8 suspension: drives the dashboard's suspended screen.
+    suspended,
   };
 
   return NextResponse.json({ profile, account });

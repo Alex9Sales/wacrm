@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import { Ban, LogOut } from "lucide-react";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
@@ -12,7 +13,7 @@ import { PresenceHeartbeat } from "@/components/presence/presence-heartbeat";
 // client components can't export Next's metadata object.
 
 function DashboardShellInner({ children }: { children: React.ReactNode }) {
-  const { user, loading } = useAuth();
+  const { user, loading, profileLoading, suspended, signOut } = useAuth();
   const router = useRouter();
 
   // Sidebar drawer state — only used on mobile. On lg+ the sidebar is
@@ -38,6 +39,37 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   }
 
   if (!user) return null;
+
+  // Phase 8: the active org's billing is 'suspended'. getCurrentAccount
+  // throws AccountSuspendedError, so every org-scoped page would break —
+  // show a friendly full-page notice instead. Platform admins operate via
+  // /admin (a separate layout) and are never suspended here.
+  if (!profileLoading && suspended) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-6 bg-background px-6 text-center">
+        <div className="flex size-14 items-center justify-center rounded-full bg-destructive/10 text-destructive">
+          <Ban className="size-7" />
+        </div>
+        <div className="max-w-md space-y-2">
+          <h1 className="font-heading text-xl font-semibold text-foreground">
+            Sua conta está suspensa
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            O acesso à sua conta foi temporariamente pausado. Para
+            reativá-la, fale com a Fluxia e regularize a sua assinatura.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={signOut}
+          className="inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <LogOut className="size-4" />
+          Sair
+        </button>
+      </div>
+    );
+  }
 
   return (
     <div className="flex h-screen overflow-hidden bg-background">

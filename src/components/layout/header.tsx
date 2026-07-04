@@ -3,7 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useAuth } from "@/hooks/use-auth";
-import { LogOut, Menu, Settings as SettingsIcon, User } from "lucide-react";
+import { LogOut, Menu, Settings as SettingsIcon, Shield, User } from "lucide-react";
 import {
   Avatar,
   AvatarFallback,
@@ -45,7 +45,7 @@ interface HeaderProps {
 
 export function Header({ onOpenSidebar }: HeaderProps) {
   const pathname = usePathname();
-  const { profile, signOut } = useAuth();
+  const { profile, signOut, isPlatformAdmin } = useAuth();
   const title = getPageTitle(pathname);
 
   const initial =
@@ -129,6 +129,21 @@ export function Header({ onOpenSidebar }: HeaderProps) {
             <SettingsIcon className="size-4" />
             Settings
           </DropdownMenuItem>
+          {/* Phase 8: super-admin panel — only for platform admins
+              (Fluxia operators). Gated on the /api/me flag. */}
+          {isPlatformAdmin ? (
+            <DropdownMenuItem
+              render={
+                <Link
+                  href="/admin"
+                  className="text-popover-foreground focus:bg-accent focus:text-accent-foreground"
+                />
+              }
+            >
+              <Shield className="size-4" />
+              Admin (Clientes)
+            </DropdownMenuItem>
+          ) : null}
           <DropdownMenuSeparator className="bg-border" />
           <DropdownMenuItem
             onClick={signOut}
