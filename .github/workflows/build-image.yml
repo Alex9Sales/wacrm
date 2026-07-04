@@ -17,7 +17,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  IMAGE: ghcr.io/${{ github.repository_owner }}/crm-fluxia
+  IMAGE: ghcr.io/alex9sales/crm-fluxia
   SITE_URL: https://crm.salestecnologia.com.br
 
 jobs:
