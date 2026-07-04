@@ -23,6 +23,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/auth', // Better Auth's own endpoints (sign-in/up/out, org, …)
   '/api/webhooks', // inbound provider webhooks (verified by signature)
   '/api/invitations', // public invite peek; redeem self-guards the session
+  '/api/health', // liveness/readiness probe (Docker HEALTHCHECK, Traefik)
 ]
 
 function isProtectedPath(pathname: string): boolean {
