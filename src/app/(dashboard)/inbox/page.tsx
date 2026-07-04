@@ -380,6 +380,24 @@ export default function InboxPage() {
   }, [router]);
 
 
+  // A conversation was deleted from the thread header. Drop it from the
+  // list and, if it's the open thread, clear the center pane back to the
+  // empty state (and reset the ?c= deep link so a refresh doesn't try to
+  // re-open a conversation that no longer exists).
+  const handleConversationDeleted = useCallback(
+    (conversationId: string) => {
+      setConversations((prev) => prev.filter((c) => c.id !== conversationId));
+      if (activeConversation?.id === conversationId) {
+        setActiveConversation(null);
+        setActiveContact(null);
+        setMessages([]);
+        autoSelectedForDeepLinkRef.current = null;
+        router.replace("/inbox", { scroll: false });
+      }
+    },
+    [activeConversation?.id, router]
+  );
+
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
     setMessages(loaded);
   }, []);
@@ -501,6 +519,7 @@ export default function InboxPage() {
             onRefresh={handleManualRefresh}
             contactPanelOpen={contactPanelOpen}
             onToggleContactPanel={handleToggleContactPanel}
+            onConversationDeleted={handleConversationDeleted}
           />
         </div>
 

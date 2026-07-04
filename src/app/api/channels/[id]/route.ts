@@ -8,10 +8,11 @@
 // from another account can't be touched.
 //
 // DELETE + FK cascade: conversations.channel_id → channels(id) is
-// ON DELETE ... — deleting a channel that has conversations would cascade
-// (or orphan) those conversations. For v1 we take the safer route and
-// BLOCK the delete with a 409 when the channel still has conversations,
-// rather than silently destroying inbox history.
+// ON DELETE CASCADE — deleting a channel that has conversations cascades
+// to those conversations (and their messages). To avoid silently
+// destroying inbox history, the DELETE handler BLOCKS with a 409 (carrying
+// the conversation count) unless the caller opts in with `?force=true`, at
+// which point the cascade is allowed to run.
 // ============================================================
 
 import { NextResponse } from 'next/server'
@@ -174,13 +175,18 @@ export async function PATCH(request: Request, { params }: RouteParams) {
 }
 
 /**
- * DELETE /api/channels/:id
+ * DELETE /api/channels/:id[?force=true]
  *
- * Account-scoped delete. Blocks with 409 when the channel still has
- * conversations — deleting would cascade and wipe inbox history, so v1
- * requires the caller to migrate/close those first.
+ * Account-scoped delete. Independent of the channel's session/connection
+ * state — an errored or dropped channel can still be removed.
+ *
+ * When the channel still owns conversations:
+ *   - Without `?force=true` → returns 409 with the conversation count, so
+ *     the UI can warn that deleting will also wipe that history.
+ *   - With `?force=true` → proceeds; conversations (and their messages)
+ *     cascade-delete via the `conversations.channel_id` FK.
  */
-export async function DELETE(_request: Request, { params }: RouteParams) {
+export async function DELETE(request: Request, { params }: RouteParams) {
   try {
     const ctx = await requireRole('admin')
     const { id } = await params
@@ -190,23 +196,27 @@ export async function DELETE(_request: Request, { params }: RouteParams) {
       return NextResponse.json({ error: 'Channel not found' }, { status: 404 })
     }
 
-    // Guard: refuse to delete a channel that still owns conversations. The
-    // FK cascade would otherwise remove them (and their messages) — safer
-    // to make the caller deal with them explicitly.
-    const counted = firstOrNull(
-      await db
-        .select({ count: sql<number>`count(*)::int` })
-        .from(conversations)
-        .where(eq(conversations.channelId, id)),
-    )
-    const convCount = counted?.count ?? 0
-    if (convCount > 0) {
-      return NextResponse.json(
-        {
-          error: `This channel has ${convCount} conversation(s). Delete or reassign them before removing the channel.`,
-        },
-        { status: 409 },
+    const force = new URL(request.url).searchParams.get('force') === 'true'
+
+    // Guard: unless forced, refuse to delete a channel that still owns
+    // conversations. Report the count so the UI can confirm the cascade.
+    if (!force) {
+      const counted = firstOrNull(
+        await db
+          .select({ count: sql<number>`count(*)::int` })
+          .from(conversations)
+          .where(eq(conversations.channelId, id)),
       )
+      const convCount = counted?.count ?? 0
+      if (convCount > 0) {
+        return NextResponse.json(
+          {
+            error: `This channel has ${convCount} conversation(s). Deleting it will also remove them and their history.`,
+            conversationCount: convCount,
+          },
+          { status: 409 },
+        )
+      }
     }
 
     await db

@@ -126,6 +126,13 @@ export function ChannelsTab() {
   // The channel pending delete-confirmation.
   const [deleting, setDeleting] = useState<ChannelSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  // When the first delete attempt is blocked (409, channel has
+  // conversations), we surface a second confirm dialog carrying the count.
+  // Non-null while that force-confirm is open.
+  const [forceDelete, setForceDelete] = useState<{
+    channel: ChannelSummary;
+    conversationCount: number;
+  } | null>(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -146,34 +153,59 @@ export function ChannelsTab() {
     void load();
   }, [load]);
 
-  const handleDelete = useCallback(async () => {
-    if (!deleting) return;
-    setDeleteBusy(true);
-    try {
-      const res = await fetch(`/api/channels/${deleting.id}`, {
-        method: 'DELETE',
-      });
-      if (res.status === 409) {
-        toast.error(
-          'Este canal tem conversas vinculadas e não pode ser removido. Arquive ou mova as conversas primeiro.',
+  // Delete a channel. `force` retries past the 409 the API raises when the
+  // channel still owns conversations (cascade-deleting them). The delete is
+  // independent of the channel's session state, so an errored/dropped
+  // channel deletes the same way.
+  const deleteChannel = useCallback(
+    async (channel: ChannelSummary, force: boolean) => {
+      setDeleteBusy(true);
+      try {
+        const res = await fetch(
+          `/api/channels/${channel.id}${force ? '?force=true' : ''}`,
+          { method: 'DELETE' },
         );
-        return;
+        if (res.status === 409 && !force) {
+          // Channel has conversations — surface the count and ask the
+          // operator to confirm the cascade instead of failing outright.
+          const payload = (await res.json().catch(() => ({}))) as {
+            conversationCount?: number;
+          };
+          setDeleting(null);
+          setForceDelete({
+            channel,
+            conversationCount: payload.conversationCount ?? 0,
+          });
+          return;
+        }
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          toast.error(payload.error || 'Falha ao remover o canal.');
+          return;
+        }
+        toast.success('Canal removido.');
+        setDeleting(null);
+        setForceDelete(null);
+        void load();
+      } catch (err) {
+        console.error('[channels] delete failed:', err);
+        toast.error('Não foi possível remover o canal.');
+      } finally {
+        setDeleteBusy(false);
       }
-      if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        toast.error(payload.error || 'Falha ao remover o canal.');
-        return;
-      }
-      toast.success('Canal removido.');
-      setDeleting(null);
-      void load();
-    } catch (err) {
-      console.error('[channels] delete failed:', err);
-      toast.error('Não foi possível remover o canal.');
-    } finally {
-      setDeleteBusy(false);
-    }
-  }, [deleting, load]);
+    },
+    [load],
+  );
+
+  const handleDelete = useCallback(() => {
+    if (!deleting) return;
+    void deleteChannel(deleting, false);
+  }, [deleting, deleteChannel]);
+
+  const handleForceDelete = useCallback(() => {
+    if (!forceDelete) return;
+    void deleteChannel(forceDelete.channel, true);
+  }, [forceDelete, deleteChannel]);
 
   // --- Meta editor view (folds in the existing WhatsAppConfig form) ---
   if (view.kind === 'meta') {
@@ -334,6 +366,59 @@ export function ChannelsTab() {
                 <>
                   <Trash2 className="size-4" />
                   Remover
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Force-delete confirmation — shown when the first delete attempt was
+          blocked because the channel still has conversations. Confirming
+          cascade-deletes those conversations and their history. */}
+      <Dialog
+        open={!!forceDelete}
+        onOpenChange={(next) => {
+          if (!next && !deleteBusy) setForceDelete(null);
+        }}
+      >
+        <DialogContent className="border-border bg-popover sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground">
+              Remover canal e conversas
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Este canal tem{' '}
+              <span className="font-medium text-foreground">
+                {forceDelete?.conversationCount ?? 0} conversa(s)
+              </span>
+              . Excluir o canal também apaga essas conversas e o histórico.
+              Deseja continuar?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="border-border bg-popover">
+            <Button
+              variant="outline"
+              onClick={() => setForceDelete(null)}
+              disabled={deleteBusy}
+              className="border-border text-muted-foreground hover:bg-muted"
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleForceDelete}
+              disabled={deleteBusy}
+            >
+              {deleteBusy ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Removendo...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="size-4" />
+                  Excluir tudo
                 </>
               )}
             </Button>

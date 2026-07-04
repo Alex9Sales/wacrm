@@ -25,7 +25,7 @@ import {
   channels,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
-import { getCurrentAccount } from '@/lib/auth/account'
+import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import type {
   ChannelProvider,
   Contact,
@@ -473,6 +473,29 @@ export async function updateConversationStatus(
         eq(conversations.accountId, ctx.accountId),
       ),
     )
+}
+
+/**
+ * Delete a conversation (and, via the `messages.conversation_id` ON DELETE
+ * CASCADE FK, all of its messages + reactions). Account-scoped: the WHERE
+ * clause pins both the id and the caller's account, so one account can
+ * never delete another's conversation. Requires the 'agent' role or higher.
+ * broadcast_recipients reference contacts, not conversations, so they're
+ * unaffected. Returns `{ ok: true }`.
+ */
+export async function deleteConversation(
+  conversationId: string,
+): Promise<{ ok: true }> {
+  const ctx = await requireRole('agent')
+  await db
+    .delete(conversations)
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.accountId, ctx.accountId),
+      ),
+    )
+  return { ok: true }
 }
 
 /** Assign / unassign a conversation. Account-scoped. */

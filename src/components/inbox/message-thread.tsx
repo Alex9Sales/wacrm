@@ -2,6 +2,7 @@
 
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
+  deleteConversation,
   listMessages,
   listProfiles,
   listReactions,
@@ -35,9 +36,20 @@ import {
   PanelRightOpen,
   PanelRightClose,
   Radio,
+  Trash2,
+  Loader2,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
+import { Button } from "@/components/ui/button";
+import {
+  Dialog,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -124,6 +136,13 @@ interface MessageThreadProps {
    */
   contactPanelOpen?: boolean;
   onToggleContactPanel?: () => void;
+  /**
+   * Fired after the active conversation is successfully deleted. The page
+   * uses it to drop the conversation from the list and clear the open
+   * thread. Optional so existing callers keep working; the trash button in
+   * the header only renders when this is wired up.
+   */
+  onConversationDeleted?: (conversationId: string) => void;
 }
 
 function formatDateSeparator(dateStr: string): string {
@@ -182,6 +201,7 @@ export function MessageThread({
   onRefresh,
   contactPanelOpen,
   onToggleContactPanel,
+  onConversationDeleted,
 }: MessageThreadProps) {
   const { user } = useAuth();
   const { getPresence, getRow, now } = usePresence();
@@ -213,6 +233,9 @@ export function MessageThread({
     }, 700);
   }, [isRefreshing, onRefresh]);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
+  // Delete-conversation confirm dialog + in-flight state.
+  const [deleteOpen, setDeleteOpen] = useState(false);
+  const [deleteBusy, setDeleteBusy] = useState(false);
 
   // Profiles are scoped to the caller's account by the server action —
   // the assignee dropdown lists every teammate in the workspace.
@@ -704,6 +727,22 @@ export function MessageThread({
     [conversation, onAssignChange],
   );
 
+  const handleDeleteConversation = useCallback(async () => {
+    if (!conversation || deleteBusy) return;
+    setDeleteBusy(true);
+    try {
+      await deleteConversation(conversation.id);
+      toast.success("Conversa excluída");
+      setDeleteOpen(false);
+      onConversationDeleted?.(conversation.id);
+    } catch (err) {
+      console.error("Failed to delete conversation:", err);
+      toast.error("Não foi possível excluir a conversa");
+    } finally {
+      setDeleteBusy(false);
+    }
+  }, [conversation, deleteBusy, onConversationDeleted]);
+
   // Empty state — same WhatsApp-style doodle background as the active
   // thread below, so swapping between empty/selected doesn't change the
   // pattern under the user's eye.
@@ -826,6 +865,21 @@ export function MessageThread({
               ) : (
                 <PanelRightOpen className="h-4 w-4" />
               )}
+            </button>
+          )}
+
+          {/* Delete conversation — opens a confirm dialog, then removes the
+              conversation (messages cascade-delete). Only rendered when the
+              parent wires up `onConversationDeleted`. */}
+          {onConversationDeleted && (
+            <button
+              type="button"
+              onClick={() => setDeleteOpen(true)}
+              aria-label="Excluir conversa"
+              title="Excluir conversa"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-destructive"
+            >
+              <Trash2 className="h-3.5 w-3.5" />
             </button>
           )}
 
@@ -1033,6 +1087,53 @@ export function MessageThread({
         onOpenChange={setTemplateModalOpen}
         onSelect={handleSendTemplate}
       />
+
+      {/* Delete-conversation confirmation. */}
+      <Dialog
+        open={deleteOpen}
+        onOpenChange={(next) => {
+          if (!next && !deleteBusy) setDeleteOpen(false);
+        }}
+      >
+        <DialogContent className="border-border bg-popover sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground">
+              Excluir conversa
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              Excluir esta conversa? As mensagens serão removidas. Esta ação
+              não pode ser desfeita.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter className="border-border bg-popover">
+            <Button
+              variant="outline"
+              onClick={() => setDeleteOpen(false)}
+              disabled={deleteBusy}
+              className="border-border text-muted-foreground hover:bg-muted"
+            >
+              Cancelar
+            </Button>
+            <Button
+              variant="destructive"
+              onClick={handleDeleteConversation}
+              disabled={deleteBusy}
+            >
+              {deleteBusy ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Excluindo...
+                </>
+              ) : (
+                <>
+                  <Trash2 className="size-4" />
+                  Excluir
+                </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
     </div>
   );
 }
