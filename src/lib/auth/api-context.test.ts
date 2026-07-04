@@ -4,6 +4,19 @@ import { generateApiKey } from "@/lib/api-keys/keys";
 import type { ApiKeyRow } from "@/lib/api-keys/store";
 import { ApiError } from "@/lib/api/v1/respond";
 import { __resetRateLimitForTests, RATE_LIMITS } from "@/lib/rate-limit";
+import { redisStore } from "@/lib/__mocks__/fake-redis";
+
+// The rate limiter is now Redis-backed. Mock ioredis with the shared
+// in-memory stub so the per-key budget actually COUNTS in this test
+// (without it the limiter fails open and never 429s). The factory is
+// hoisted above imports, so pull FakeRedis via vi.hoisted's dynamic import.
+vi.mock("ioredis", async () => {
+  const { FakeRedis } = await import("@/lib/__mocks__/fake-redis");
+  return { Redis: FakeRedis };
+});
+
+// Rate limiter needs REDIS_URL present to construct its client.
+process.env.REDIS_URL = process.env.REDIS_URL ?? "redis://localhost:6379";
 
 // Mock the store so we control which row a hash resolves to.
 const findActiveKeyByHash = vi.fn<(hash: string) => Promise<ApiKeyRow | null>>();
@@ -37,14 +50,16 @@ function row(overrides: Partial<ApiKeyRow> = {}): ApiKeyRow {
   };
 }
 
-beforeEach(() => {
-  __resetRateLimitForTests();
+beforeEach(async () => {
+  redisStore.clear();
+  await __resetRateLimitForTests();
   findActiveKeyByHash.mockReset();
   touchLastUsed.mockReset();
 });
 
-afterEach(() => {
-  __resetRateLimitForTests();
+afterEach(async () => {
+  redisStore.clear();
+  await __resetRateLimitForTests();
 });
 
 async function expectApiError(p: Promise<unknown>, code: string, status: number) {

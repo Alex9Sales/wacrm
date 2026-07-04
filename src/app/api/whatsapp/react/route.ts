@@ -42,7 +42,7 @@ export async function POST(request: Request) {
     }
     const accountId = ctx.accountId;
 
-    const limit = checkRateLimit(`react:${ctx.userId}`, RATE_LIMITS.react);
+    const limit = await checkRateLimit(`react:${ctx.userId}`, RATE_LIMITS.react);
     if (!limit.success) {
       return rateLimitResponse(limit);
     }

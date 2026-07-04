@@ -1,4 +1,6 @@
 import type { NextConfig } from "next";
+import { fileURLToPath } from "node:url";
+import { dirname } from "node:path";
 
 /**
  * Baseline security headers applied to every response.
@@ -61,6 +63,36 @@ const SECURITY_HEADERS = [
 ] as const;
 
 const nextConfig: NextConfig = {
+  /**
+   * Standalone output for Docker.
+   *
+   * Emits `.next/standalone/` — a self-contained server bundle (server.js
+   * + only the node_modules actually traced as reachable) plus
+   * `.next/static`. The Docker runner copies those three trees instead of
+   * the whole node_modules, giving a much smaller web image. The web
+   * container runs `node server.js` from that standalone tree.
+   *
+   * Note: the standalone bundle covers the Next WEB server only. The
+   * BullMQ worker (`tsx src/worker/index.ts`) is NOT part of the Next
+   * build and needs the raw src/ + tsx at runtime — the Dockerfile keeps
+   * a full `node_modules` (with tsx) in the image for that. See Dockerfile.
+   */
+  output: 'standalone',
+
+  /**
+   * Pin the file-tracing root to THIS project directory.
+   *
+   * Next infers the monorepo root by walking up for a lockfile. There's a
+   * stray package-lock.json in a parent dir on some machines (and none in
+   * the Docker context), so without pinning, `output: 'standalone'` nests
+   * server.js under `.next/standalone/<projectName>/` on one host and at
+   * `.next/standalone/` in Docker — a moving target the Dockerfile can't
+   * COPY reliably. Pinning to __dirname forces server.js to the standalone
+   * root everywhere, which is what the Dockerfile's COPY + `node server.js`
+   * assume.
+   */
+  outputFileTracingRoot: dirname(fileURLToPath(import.meta.url)),
+
   /**
    * Cache-Control policy.
    *

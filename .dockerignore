@@ -1,0 +1,45 @@
+# Build context hygiene. Keep it lean, but do NOT exclude anything the
+# worker needs at RUNTIME (src/, tsconfig.json, drizzle/) — those are copied
+# into the runner image and imported by `tsx src/worker/index.ts`.
+
+# Dependencies + build output are reinstalled/rebuilt inside the image.
+node_modules
+.next
+out
+dist
+
+# VCS + editor + OS cruft.
+.git
+.gitignore
+.github
+.vscode
+.idea
+.DS_Store
+*.swp
+
+# Secrets / local env — env is injected by Coolify at runtime, never baked.
+# (The worker falls back to process.env when .env.local is absent.)
+.env
+.env.*
+!.env.example
+
+# Docker + compose reference (not needed inside the build).
+Dockerfile
+.dockerignore
+docker-compose*.yml
+
+# Tests, coverage, scratch, docs — not needed to build or run.
+**/*.test.ts
+**/*.test.tsx
+**/*.spec.ts
+coverage
+.turbo
+.vitest
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+*.md
+docs
+scratch
+scratchpad
+.claude

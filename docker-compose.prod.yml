@@ -1,0 +1,122 @@
+# ============================================================================
+# REFERENCE production compose for CRM Fluxia.
+#
+# The real deploy is Coolify (it builds the Dockerfile and wires the domain +
+# TLS via its own Traefik). This file documents the two-container topology so
+# it also runs standalone with:
+#
+#   docker compose -f docker-compose.prod.yml up --build
+#
+# Both services are built from the SAME Dockerfile / image and differ only in
+# their `command`:
+#   web    → node server.js            (Next standalone server, port 3000)
+#   worker → npx tsx src/worker/index.ts   (BullMQ broadcast worker)
+#
+# Postgres + Redis are assumed to be provided (managed, or their own Coolify
+# services). Minimal local `db` / `redis` services are included at the bottom,
+# commented out — uncomment for a fully self-contained `docker compose up`.
+# ============================================================================
+
+x-app-env: &app-env
+  # Server-side only — NEVER baked into the image, injected at runtime.
+  DATABASE_URL: ${DATABASE_URL}
+  REDIS_URL: ${REDIS_URL}
+  BETTER_AUTH_SECRET: ${BETTER_AUTH_SECRET}
+  BETTER_AUTH_URL: ${BETTER_AUTH_URL}
+  ENCRYPTION_KEY: ${ENCRYPTION_KEY}
+  S3_ENDPOINT: ${S3_ENDPOINT}
+  S3_ACCESS_KEY: ${S3_ACCESS_KEY}
+  S3_SECRET_KEY: ${S3_SECRET_KEY}
+  S3_BUCKET_AVATARS: ${S3_BUCKET_AVATARS}
+  S3_BUCKET_MEDIA: ${S3_BUCKET_MEDIA}
+  S3_REGION: ${S3_REGION}
+  S3_FORCE_PATH_STYLE: ${S3_FORCE_PATH_STYLE}
+  S3_PUBLIC_URL: ${S3_PUBLIC_URL}
+  META_APP_SECRET: ${META_APP_SECRET}
+  # NEXT_PUBLIC_* is baked at BUILD time (see build.args) — repeating it at
+  # runtime is harmless and keeps server-side reads (worker, OG links) correct.
+  NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
+  # Set false in prod so broadcasts actually send. true = dry run (CI/staging).
+  BROADCAST_DRY_RUN: "false"
+  NODE_ENV: production
+
+services:
+  # --- Next.js web server ---------------------------------------------------
+  web:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      args:
+        # BAKED AT BUILD TIME — must match the public domain, it is inlined
+        # into the client bundle and cannot be changed at runtime.
+        NEXT_PUBLIC_SITE_URL: ${NEXT_PUBLIC_SITE_URL}
+    image: crm-fluxia:latest
+    command: ["node", "server.js"]
+    environment: *app-env
+    restart: unless-stopped
+    expose:
+      - "3000"
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--spider", "http://127.0.0.1:3000/api/health"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+      start_period: 20s
+    # depends_on is start-ordering only; the app also fails-open on Redis and
+    # fails-loud on a missing DATABASE_URL at first query, so ordering is a
+    # convenience, not a correctness guarantee.
+    # depends_on:
+    #   - db
+    #   - redis
+    labels:
+      # Coolify wires the real domain + TLS; these Traefik labels are the
+      # shape it produces. Adjust the router/service names to your stack.
+      - "traefik.enable=true"
+      - "traefik.http.routers.crmfluxia.rule=Host(`crm.salestecnologia.com.br`)"
+      - "traefik.http.routers.crmfluxia.entrypoints=websecure"
+      - "traefik.http.routers.crmfluxia.tls=true"
+      - "traefik.http.routers.crmfluxia.tls.certresolver=letsencrypt"
+      - "traefik.http.services.crmfluxia.loadbalancer.server.port=3000"
+
+  # --- BullMQ broadcast worker ----------------------------------------------
+  # Same image, different command. No ports, no Traefik — it only consumes
+  # the broadcast-dispatch queue from Redis and writes to Postgres.
+  worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: crm-fluxia:latest
+    command: ["sh", "-c", "npx tsx src/worker/index.ts"]
+    environment: *app-env
+    restart: unless-stopped
+    # The worker is useless without Redis (its queue) and Postgres.
+    # depends_on:
+    #   - db
+    #   - redis
+    #   - web   # reuse the image web builds; avoids a second build in Coolify
+
+  # --- Optional: self-contained Postgres + Redis ----------------------------
+  # Uncomment for a standalone `docker compose up` with no external services.
+  # In Coolify you'd point DATABASE_URL / REDIS_URL at managed services or
+  # separate Coolify resources instead.
+  #
+  # db:
+  #   image: pgvector/pgvector:pg16
+  #   environment:
+  #     POSTGRES_USER: crmfluxia
+  #     POSTGRES_PASSWORD: crmfluxia_prod
+  #     POSTGRES_DB: crmfluxia
+  #   volumes:
+  #     - pgdata:/var/lib/postgresql/data
+  #   restart: unless-stopped
+  #
+  # redis:
+  #   image: redis:7-alpine
+  #   command: ["redis-server", "--appendonly", "yes"]
+  #   volumes:
+  #     - redisdata:/data
+  #   restart: unless-stopped
+
+# volumes:
+#   pgdata:
+#   redisdata:

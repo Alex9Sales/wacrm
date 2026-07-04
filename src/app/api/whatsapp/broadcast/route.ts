@@ -59,7 +59,7 @@ export async function POST(request: Request) {
 
     // Per-user broadcast budget — limits how often a user can *start* a
     // campaign (the fan-out itself is now the worker's job).
-    const limit = checkRateLimit(`broadcast:${ctx.userId}`, RATE_LIMITS.broadcast)
+    const limit = await checkRateLimit(`broadcast:${ctx.userId}`, RATE_LIMITS.broadcast)
     if (!limit.success) {
       return rateLimitResponse(limit)
     }
