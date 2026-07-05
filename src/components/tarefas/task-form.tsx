@@ -48,6 +48,14 @@ interface TaskFormProps {
   contacts: PickerOption[]
   deals: PickerOption[]
   onSaved: () => void
+  /**
+   * Prefill the Cliente picker when CREATING a new task (task is null) —
+   * used by the inbox sidebar + Kanban card so the operator only fills
+   * título/prazo. Ignored when editing (the task's own link wins).
+   */
+  prefillContactId?: string | null
+  /** Prefill the Card do Kanban picker on create (see prefillContactId). */
+  prefillDealId?: string | null
 }
 
 const STATUS_LABELS: Record<TaskStatus, string> = {
@@ -76,6 +84,8 @@ export function TaskForm({
   contacts,
   deals,
   onSaved,
+  prefillContactId = null,
+  prefillDealId = null,
 }: TaskFormProps) {
   const isEdit = !!task
 
@@ -96,9 +106,11 @@ export function TaskForm({
     setDueAt(toLocalInput(task?.due_at ?? null))
     setStatus(task?.status ?? 'open')
     setType(task?.type ?? '')
-    setContactId(task?.contact_id ?? null)
-    setDealId(task?.deal_id ?? null)
-  }, [open, task])
+    // Editing → the task's own link wins. Creating → use the prefill so
+    // the inbox sidebar / Kanban card can pre-select the client/card.
+    setContactId(task?.contact_id ?? prefillContactId ?? null)
+    setDealId(task?.deal_id ?? prefillDealId ?? null)
+  }, [open, task, prefillContactId, prefillDealId])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()

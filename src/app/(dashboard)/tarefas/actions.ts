@@ -15,7 +15,7 @@
 // without any new server code.
 // ============================================================
 
-import { and, asc, desc, eq, ilike, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm'
 import {
   db,
   tasks,
@@ -218,6 +218,133 @@ export async function getTask(id: string): Promise<TaskRow | null> {
     .limit(1)
   const row = firstOrNull(rows)
   return row ? toTaskRow(row as Record<string, unknown>) : null
+}
+
+// ------------------------------------------------------------
+// Compact task shape for the inbox sidebar + Kanban card. Minimal
+// columns (no joins) — the caller already knows the contact/deal.
+// ------------------------------------------------------------
+
+export interface TaskLite {
+  id: string
+  title: string
+  due_at: string | null
+  status: TaskStatus
+  type: string | null
+  /** Computed server-side (due_at < now AND status='open'). */
+  overdue: boolean
+}
+
+const taskLiteSelect = {
+  id: tasks.id,
+  title: tasks.title,
+  due_at: tasks.dueAt,
+  status: tasks.status,
+  type: tasks.type,
+  overdue: sql<boolean>`(${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} < NOW() AND ${tasks.status} = 'open')`,
+}
+
+function toTaskLite(r: Record<string, unknown>): TaskLite {
+  return {
+    id: r.id as string,
+    title: r.title as string,
+    due_at: (r.due_at as string | null) ?? null,
+    status: r.status as TaskStatus,
+    type: (r.type as string | null) ?? null,
+    overdue: Boolean(r.overdue),
+  }
+}
+
+// Shared ordering: open tasks first, then overdue bubble up, soonest
+// due next (NULLs last), newest last.
+const liteOrderBy = [
+  // 'open' before done/cancelled.
+  sql`(${tasks.status} = 'open') DESC`,
+  desc(
+    sql`(${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} < NOW() AND ${tasks.status} = 'open')`,
+  ),
+  sql`${tasks.dueAt} ASC NULLS LAST`,
+  desc(tasks.createdAt),
+] as const
+
+/**
+ * A contact's tasks (account-scoped), open first then by due date.
+ * Powers the inbox sidebar "Tarefas" section. Minimal columns — no
+ * contact/deal joins since the caller already has the contact.
+ */
+export async function listTasksByContact(contactId: string): Promise<TaskLite[]> {
+  const ctx = await getCurrentAccount()
+  const id = cleanText(contactId)
+  if (!id) return []
+  const rows = await db
+    .select(taskLiteSelect)
+    .from(tasks)
+    .where(and(eq(tasks.accountId, ctx.accountId), eq(tasks.contactId, id)))
+    .orderBy(...liteOrderBy)
+  return rows.map((r) => toTaskLite(r as Record<string, unknown>))
+}
+
+/**
+ * A deal's (Kanban card's) tasks (account-scoped), open first then by
+ * due date. Powers the Kanban card task list + indicator.
+ */
+export async function listTasksByDeal(dealId: string): Promise<TaskLite[]> {
+  const ctx = await getCurrentAccount()
+  const id = cleanText(dealId)
+  if (!id) return []
+  const rows = await db
+    .select(taskLiteSelect)
+    .from(tasks)
+    .where(and(eq(tasks.accountId, ctx.accountId), eq(tasks.dealId, id)))
+    .orderBy(...liteOrderBy)
+  return rows.map((r) => toTaskLite(r as Record<string, unknown>))
+}
+
+export interface DealTaskCount {
+  /** Open (not done/cancelled) task count for the deal. */
+  open: number
+  /** Of the open ones, how many are overdue. */
+  overdue: number
+}
+
+/**
+ * Batched open-task counts for a set of deals — one query for the
+ * whole visible board (avoids N+1 per card). Returns a map keyed by
+ * deal id; deals with no open tasks are simply absent from the map.
+ */
+export async function getDealTaskCounts(
+  dealIds: string[],
+): Promise<Record<string, DealTaskCount>> {
+  const ctx = await getCurrentAccount()
+  const ids = Array.from(
+    new Set(dealIds.map((d) => cleanText(d)).filter((d): d is string => !!d)),
+  )
+  if (ids.length === 0) return {}
+
+  const rows = await db
+    .select({
+      deal_id: tasks.dealId,
+      open: sql<number>`COUNT(*) FILTER (WHERE ${tasks.status} = 'open')::int`,
+      overdue: sql<number>`COUNT(*) FILTER (WHERE ${tasks.status} = 'open' AND ${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} < NOW())::int`,
+    })
+    .from(tasks)
+    .where(
+      and(
+        eq(tasks.accountId, ctx.accountId),
+        inArray(tasks.dealId, ids),
+        eq(tasks.status, 'open'),
+      ),
+    )
+    .groupBy(tasks.dealId)
+
+  const map: Record<string, DealTaskCount> = {}
+  for (const r of rows) {
+    if (!r.deal_id) continue
+    const open = Number(r.open ?? 0)
+    if (open === 0) continue
+    map[r.deal_id] = { open, overdue: Number(r.overdue ?? 0) }
+  }
+  return map
 }
 
 // ------------------------------------------------------------

@@ -1,7 +1,8 @@
 "use client";
 
 import type { Deal, PipelineStage } from "@/types";
-import { Calendar, Check, X } from "lucide-react";
+import type { DealTaskCount } from "@/app/(dashboard)/tarefas/actions";
+import { Calendar, Check, X, ListTodo, Plus } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 
 interface DealCardProps {
@@ -9,6 +10,10 @@ interface DealCardProps {
   stage: PipelineStage | null;
   onEdit: (deal: Deal) => void;
   isOverlay?: boolean;
+  /** Open-task counts for this deal (from a batched board query). */
+  taskCount?: DealTaskCount;
+  /** Open the reused TaskForm prefilled with this deal (+ its contact). */
+  onCreateTask?: (deal: Deal) => void;
 }
 
 function formatDate(dateStr: string) {
@@ -25,9 +30,18 @@ function initials(name?: string, fallback?: string) {
   return source.charAt(0).toUpperCase();
 }
 
-export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
+export function DealCard({
+  deal,
+  stage,
+  onEdit,
+  isOverlay,
+  taskCount,
+  onCreateTask,
+}: DealCardProps) {
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
   const assigneeLabel = deal.assignee?.full_name || null;
+  const openTasks = taskCount?.open ?? 0;
+  const hasOverdue = (taskCount?.overdue ?? 0) > 0;
 
   return (
     <button
@@ -56,18 +70,88 @@ export function DealCard({ deal, stage, onEdit, isOverlay }: DealCardProps) {
         <h4 className="flex-1 text-sm font-semibold leading-snug text-foreground break-words">
           {deal.title}
         </h4>
-        {deal.status === "won" && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
-            <Check className="h-3 w-3" />
-            Won
-          </span>
-        )}
-        {deal.status === "lost" && (
-          <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-semibold text-red-400">
-            <X className="h-3 w-3" />
-            Lost
-          </span>
-        )}
+        <div className="flex shrink-0 items-center gap-1.5">
+          {/* Open-task indicator — count + red dot when any is overdue.
+              Clicking it opens the same create-task dialog (a lightweight
+              entry point to the deal's tasks). */}
+          {!isOverlay && openTasks > 0 && (
+            <span
+              role={onCreateTask ? "button" : undefined}
+              tabIndex={onCreateTask ? 0 : undefined}
+              aria-label={`${openTasks} tarefa(s) aberta(s)${hasOverdue ? ", com atraso" : ""}`}
+              title={
+                hasOverdue
+                  ? `${openTasks} tarefa(s) aberta(s) · com atraso`
+                  : `${openTasks} tarefa(s) aberta(s)`
+              }
+              onClick={(e) => {
+                if (!onCreateTask) return;
+                e.stopPropagation();
+                onCreateTask(deal);
+              }}
+              onKeyDown={(e) => {
+                if (!onCreateTask) return;
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onCreateTask(deal);
+                }
+              }}
+              className={`relative inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold ${
+                hasOverdue
+                  ? "bg-red-500/15 text-red-400"
+                  : "bg-primary/15 text-primary"
+              }`}
+            >
+              <ListTodo className="h-3 w-3" />
+              {openTasks}
+              {hasOverdue && (
+                <span
+                  aria-hidden
+                  className="absolute -right-0.5 -top-0.5 h-1.5 w-1.5 rounded-full bg-red-500"
+                />
+              )}
+            </span>
+          )}
+
+          {/* "criar tarefa" — appears on card hover; opens the reused
+              TaskForm prefilled with this deal (+ its contact). */}
+          {!isOverlay && onCreateTask && (
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label="Criar tarefa"
+              title="Criar tarefa"
+              onClick={(e) => {
+                e.stopPropagation();
+                onCreateTask(deal);
+              }}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  e.stopPropagation();
+                  onCreateTask(deal);
+                }
+              }}
+              className="flex h-5 w-5 items-center justify-center rounded-md text-muted-foreground opacity-0 transition-opacity hover:bg-background hover:text-foreground group-hover:opacity-100"
+            >
+              <Plus className="h-3.5 w-3.5" />
+            </span>
+          )}
+
+          {deal.status === "won" && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-primary/15 px-2 py-0.5 text-[10px] font-semibold text-primary">
+              <Check className="h-3 w-3" />
+              Won
+            </span>
+          )}
+          {deal.status === "lost" && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-red-500/15 px-2 py-0.5 text-[10px] font-semibold text-red-400">
+              <X className="h-3 w-3" />
+              Lost
+            </span>
+          )}
+        </div>
       </div>
 
       {/* Contact row */}

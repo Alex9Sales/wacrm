@@ -15,6 +15,7 @@ import {
   type DragStartEvent,
 } from "@dnd-kit/core";
 import type { Deal, PipelineStage } from "@/types";
+import type { DealTaskCount } from "@/app/(dashboard)/tarefas/actions";
 import { DealCard } from "./deal-card";
 import { Button } from "@/components/ui/button";
 import { Plus } from "lucide-react";
@@ -27,6 +28,10 @@ interface PipelineBoardProps {
   onDealMoved: (dealId: string, newStageId: string) => void;
   onAddDeal: (stageId: string) => void;
   onEditDeal: (deal: Deal) => void;
+  /** Batched open-task counts keyed by deal id (for the card indicator). */
+  taskCounts?: Record<string, DealTaskCount>;
+  /** Open the reused TaskForm prefilled with a deal (+ its contact). */
+  onCreateTask?: (deal: Deal) => void;
 }
 
 export function PipelineBoard({
@@ -35,6 +40,8 @@ export function PipelineBoard({
   onDealMoved,
   onAddDeal,
   onEditDeal,
+  taskCounts,
+  onCreateTask,
 }: PipelineBoardProps) {
   const { defaultCurrency } = useAuth();
   const [activeDealId, setActiveDealId] = useState<string | null>(null);
@@ -118,6 +125,8 @@ export function PipelineBoard({
               currency={defaultCurrency}
               onAddDeal={onAddDeal}
               onEditDeal={onEditDeal}
+              taskCounts={taskCounts}
+              onCreateTask={onCreateTask}
             />
           );
         })}
@@ -192,6 +201,8 @@ function StageColumn({
   currency,
   onAddDeal,
   onEditDeal,
+  taskCounts,
+  onCreateTask,
 }: {
   stage: PipelineStage;
   deals: Deal[];
@@ -199,6 +210,8 @@ function StageColumn({
   currency: string;
   onAddDeal: (stageId: string) => void;
   onEditDeal: (deal: Deal) => void;
+  taskCounts?: Record<string, DealTaskCount>;
+  onCreateTask?: (deal: Deal) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
 
@@ -246,6 +259,8 @@ function StageColumn({
               deal={deal}
               stage={stage}
               onEdit={onEditDeal}
+              taskCount={taskCounts?.[deal.id]}
+              onCreateTask={onCreateTask}
             />
           ))
         )}
@@ -268,10 +283,14 @@ function DraggableDealCard({
   deal,
   stage,
   onEdit,
+  taskCount,
+  onCreateTask,
 }: {
   deal: Deal;
   stage: PipelineStage;
   onEdit: (deal: Deal) => void;
+  taskCount?: DealTaskCount;
+  onCreateTask?: (deal: Deal) => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: deal.id,
@@ -284,7 +303,13 @@ function DraggableDealCard({
       {...attributes}
       style={{ opacity: isDragging ? 0.3 : 1, touchAction: "none" }}
     >
-      <DealCard deal={deal} stage={stage} onEdit={onEdit} />
+      <DealCard
+        deal={deal}
+        stage={stage}
+        onEdit={onEdit}
+        taskCount={taskCount}
+        onCreateTask={onCreateTask}
+      />
     </div>
   );
 }

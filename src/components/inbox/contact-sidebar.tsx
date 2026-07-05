@@ -19,6 +19,12 @@ import {
   saveContactCustomValues,
 } from "@/app/(dashboard)/contacts/actions";
 import { listPipelines, listStages } from "@/app/(dashboard)/pipelines/actions";
+import {
+  listTasksByContact,
+  type TaskLite,
+} from "@/app/(dashboard)/tarefas/actions";
+import { TaskForm } from "@/components/tarefas/task-form";
+import { TaskMiniList } from "@/components/tarefas/task-mini-list";
 import type {
   Contact,
   Conversation,
@@ -47,6 +53,7 @@ import {
   ChevronDown,
   MessageSquareText,
   ListChecks,
+  ListTodo,
   UserPlus,
   Flag,
   Trash2,
@@ -179,6 +186,9 @@ export function ContactSidebar({
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
+  // Tarefas — this contact's tasks (compact) + the reused create dialog.
+  const [tasks, setTasks] = useState<TaskLite[]>([]);
+  const [taskFormOpen, setTaskFormOpen] = useState(false);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
@@ -217,18 +227,27 @@ export function ContactSidebar({
     // Fetch deals, notes, tags, and custom fields/values in parallel via
     // account-scoped actions.
     try {
-      const [dealsData, notesData, tagsData, editTagsData, fieldsData, valuesData] =
-        await Promise.all([
-          listContactDeals(contactId),
-          listContactNotes(contactId),
-          listContactTagsWithJoinId(contactId),
-          getContactTags(contactId),
-          listCustomFields(),
-          listContactCustomValues(contactId),
-        ]);
+      const [
+        dealsData,
+        notesData,
+        tagsData,
+        editTagsData,
+        fieldsData,
+        valuesData,
+        tasksData,
+      ] = await Promise.all([
+        listContactDeals(contactId),
+        listContactNotes(contactId),
+        listContactTagsWithJoinId(contactId),
+        getContactTags(contactId),
+        listCustomFields(),
+        listContactCustomValues(contactId),
+        listTasksByContact(contactId),
+      ]);
       setDeals(dealsData);
       setNotes(notesData);
       setTags(tagsData);
+      setTasks(tasksData);
       setEditTags(editTagsData);
       setCustomFields(fieldsData);
       const valueMap: Record<string, string> = {};
@@ -410,6 +429,14 @@ export function ContactSidebar({
     void listContactDeals(contactId)
       .then(setDeals)
       .catch((e) => console.error("Failed to refresh deals:", e));
+  }, [contactId]);
+
+  // Refetch just this contact's tasks after a create/toggle/delete.
+  const refreshTasks = useCallback(() => {
+    if (!contactId) return;
+    void listTasksByContact(contactId)
+      .then(setTasks)
+      .catch((e) => console.error("Failed to refresh tasks:", e));
   }, [contactId]);
 
   const assignedAgentId = conversation?.assigned_agent_id ?? null;
@@ -783,6 +810,37 @@ export function ContactSidebar({
               )}
             </Section>
 
+            {/* ---- Tarefas ---- */}
+            <Section
+              icon={ListTodo}
+              title="Tarefas"
+              defaultOpen
+              action={
+                <button
+                  type="button"
+                  onClick={() => setTaskFormOpen(true)}
+                  aria-label="Criar tarefa"
+                  title="Criar tarefa"
+                  className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              }
+            >
+              <TaskMiniList
+                tasks={tasks}
+                onChanged={refreshTasks}
+                emptyLabel="Nenhuma tarefa para este contato."
+              />
+              <button
+                type="button"
+                onClick={() => setTaskFormOpen(true)}
+                className="mt-2 w-full rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+              >
+                + Criar tarefa
+              </button>
+            </Section>
+
             {/* ---- Notas ---- */}
             <Section icon={StickyNote} title="Notas" defaultOpen>
               <div className="flex gap-2">
@@ -828,6 +886,20 @@ export function ContactSidebar({
         contact={contact}
         contactTags={editTags}
         onSaved={handleContactSaved}
+      />
+
+      {/* Task creator — reuses the Tarefas TaskForm dialog, prefilled with
+          THIS contact so the Cliente picker is pre-selected. The operator
+          just fills título/prazo. On save we refetch the section. */}
+      <TaskForm
+        open={taskFormOpen}
+        onOpenChange={setTaskFormOpen}
+        contacts={[
+          { id: contact.id, label: displayName, sublabel: contact.phone },
+        ]}
+        deals={[]}
+        prefillContactId={contact.id}
+        onSaved={refreshTasks}
       />
 
       {/* Deal editor — reuses the pipelines DealForm sheet for create/edit

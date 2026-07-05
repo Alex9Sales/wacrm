@@ -9,6 +9,12 @@ import {
   moveDealToStage,
 } from "./actions";
 import type { Pipeline, PipelineStage, Deal } from "@/types";
+import {
+  getDealTaskCounts,
+  type DealTaskCount,
+  type PickerOption,
+} from "@/app/(dashboard)/tarefas/actions";
+import { TaskForm } from "@/components/tarefas/task-form";
 import { PipelineBoard } from "@/components/pipelines/pipeline-board";
 import { PipelineSettings } from "@/components/pipelines/pipeline-settings";
 import { DealForm } from "@/components/pipelines/deal-form";
@@ -59,6 +65,16 @@ export default function PipelinesPage() {
   const [deals, setDeals] = useState<Deal[]>([]);
   const [loading, setLoading] = useState(true);
 
+  // Batched open-task counts keyed by deal id — one query per board load
+  // (no N+1). Drives the per-card task indicator.
+  const [taskCounts, setTaskCounts] = useState<Record<string, DealTaskCount>>(
+    {},
+  );
+
+  // Reused Tarefas create dialog, prefilled with a deal (+ its contact).
+  const [taskFormOpen, setTaskFormOpen] = useState(false);
+  const [taskDeal, setTaskDeal] = useState<Deal | null>(null);
+
   // Dialog / sheet state
   const [newPipelineOpen, setNewPipelineOpen] = useState(false);
   const [newPipelineName, setNewPipelineName] = useState("");
@@ -92,6 +108,20 @@ export default function PipelinesPage() {
 
   const loadDeals = useCallback(async (pipelineId: string) => {
     return listDeals(pipelineId).catch(() => [] as Deal[]);
+  }, []);
+
+  // Batched open-task counts for a set of deals (one query for the board).
+  const loadTaskCounts = useCallback(async (dealList: Deal[]) => {
+    const ids = dealList.map((d) => d.id);
+    if (ids.length === 0) {
+      setTaskCounts({});
+      return;
+    }
+    try {
+      setTaskCounts(await getDealTaskCounts(ids));
+    } catch (err) {
+      console.error("Failed to load task counts:", err);
+    }
   }, []);
 
   const seedDefaultPipeline = useCallback(async (): Promise<Pipeline | null> => {
@@ -158,11 +188,12 @@ export default function PipelinesPage() {
       if (cancelled) return;
       setStages(s);
       setDeals(d);
+      void loadTaskCounts(d);
     })();
     return () => {
       cancelled = true;
     };
-  }, [selectedPipelineId, loadStages, loadDeals]);
+  }, [selectedPipelineId, loadStages, loadDeals, loadTaskCounts]);
 
   const refreshPipelines = useCallback(async () => {
     const list = await loadPipelines();
@@ -179,8 +210,21 @@ export default function PipelinesPage() {
 
   const refreshDeals = useCallback(async () => {
     if (!selectedPipelineId) return;
-    setDeals(await loadDeals(selectedPipelineId));
-  }, [loadDeals, selectedPipelineId]);
+    const d = await loadDeals(selectedPipelineId);
+    setDeals(d);
+    void loadTaskCounts(d);
+  }, [loadDeals, loadTaskCounts, selectedPipelineId]);
+
+  // Open the reused TaskForm prefilled with the deal (+ its contact).
+  const handleCreateTask = useCallback((deal: Deal) => {
+    setTaskDeal(deal);
+    setTaskFormOpen(true);
+  }, []);
+
+  // After creating a task from a card, refresh the badges (counts).
+  const handleTaskSaved = useCallback(() => {
+    void loadTaskCounts(deals);
+  }, [deals, loadTaskCounts]);
 
   const handleDealMoved = useCallback(
     async (dealId: string, newStageId: string) => {
@@ -239,6 +283,27 @@ export default function PipelinesPage() {
   }
 
   const selectedPipeline = pipelines.find((p) => p.id === selectedPipelineId);
+
+  // Picker options (label pre-selects the deal/contact) for the reused
+  // TaskForm opened from a Kanban card.
+  const taskDealOptions: PickerOption[] = taskDeal
+    ? [
+        {
+          id: taskDeal.id,
+          label: taskDeal.title,
+          sublabel: selectedPipeline?.name ?? null,
+        },
+      ]
+    : [];
+  const taskContactOptions: PickerOption[] = taskDeal?.contact_id
+    ? [
+        {
+          id: taskDeal.contact_id,
+          label: taskDeal.contact?.name || taskDeal.contact?.phone || "Cliente",
+          sublabel: taskDeal.contact?.phone ?? null,
+        },
+      ]
+    : [];
 
   if (loading) {
     return (
@@ -362,6 +427,8 @@ export default function PipelinesPage() {
             onDealMoved={handleDealMoved}
             onAddDeal={handleAddDeal}
             onEditDeal={handleEditDeal}
+            taskCounts={taskCounts}
+            onCreateTask={handleCreateTask}
           />
         </>
       )}
@@ -431,6 +498,19 @@ export default function PipelinesPage() {
         stages={stages}
         defaultStageId={defaultStageId}
         onSaved={refreshDeals}
+      />
+
+      {/* Task creator — reuses the Tarefas TaskForm dialog, prefilled with
+          the Kanban card (deal) AND its contact so the new task links to
+          both. On save we refresh the per-card task counts. */}
+      <TaskForm
+        open={taskFormOpen}
+        onOpenChange={setTaskFormOpen}
+        contacts={taskContactOptions}
+        deals={taskDealOptions}
+        prefillDealId={taskDeal?.id ?? null}
+        prefillContactId={taskDeal?.contact_id ?? null}
+        onSaved={handleTaskSaved}
       />
     </div>
   );
