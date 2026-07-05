@@ -343,6 +343,9 @@ export const conversations = pgTable("conversations", {
 	// (account_id, contact_id, channel_id).
 	channelId: uuid("channel_id"),
 	status: text().default('open').notNull(),
+	// Conversation priority (Chatwoot-style). CHECK in
+	// ('none','low','medium','high','urgent'); defaults to 'none'.
+	priority: text().default('none').notNull(),
 	assignedAgentId: uuid("assigned_agent_id"),
 	lastMessageText: text("last_message_text"),
 	lastMessageAt: timestamp("last_message_at", { withTimezone: true, mode: 'string' }),

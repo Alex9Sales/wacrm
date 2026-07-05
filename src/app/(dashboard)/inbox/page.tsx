@@ -3,7 +3,13 @@
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { getConversationWithContact, getWhatsappConnected } from "./actions";
-import type { Conversation, Message, Contact, ConversationStatus } from "@/types";
+import type {
+  Conversation,
+  Message,
+  Contact,
+  ConversationStatus,
+  ConversationPriority,
+} from "@/types";
 import { useRealtime } from "@/hooks/use-realtime";
 import { ConversationList } from "@/components/inbox/conversation-list";
 import { MessageThread } from "@/components/inbox/message-thread";
@@ -486,6 +492,21 @@ export default function InboxPage() {
     [activeConversation]
   );
 
+  // Priority changed from the contact sidebar's "Ações da conversa"
+  // section. Mirror into the active conversation + list row so any
+  // priority-driven UI stays in sync without a refetch.
+  const handlePriorityChange = useCallback(
+    (conversationId: string, priority: ConversationPriority) => {
+      setConversations((prev) =>
+        prev.map((c) => (c.id === conversationId ? { ...c, priority } : c))
+      );
+      if (activeConversation?.id === conversationId) {
+        setActiveConversation((prev) => (prev ? { ...prev, priority } : prev));
+      }
+    },
+    [activeConversation]
+  );
+
   // On mobile (<lg) we show a SINGLE pane — either the list or the
   // thread — rather than cramming both side-by-side. Selecting a
   // conversation slides the thread in; the thread's back button pops
@@ -567,7 +588,12 @@ export default function InboxPage() {
           <div className="hidden lg:block">
             <ContactSidebar
               contact={activeContact}
+              conversation={activeConversation}
               onContactUpdated={handleContactUpdated}
+              onStatusChange={handleStatusChange}
+              onAssignChange={handleAssignChange}
+              onPriorityChange={handlePriorityChange}
+              onConversationDeleted={handleConversationDeleted}
             />
           </div>
         )}

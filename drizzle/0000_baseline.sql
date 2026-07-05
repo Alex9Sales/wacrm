@@ -227,6 +227,7 @@ CREATE TABLE conversations (
   -- reference. One conversation per (account_id, contact_id, channel_id).
   channel_id UUID,
   status TEXT NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'pending', 'closed')),
+  priority TEXT NOT NULL DEFAULT 'none' CHECK (priority IN ('none', 'low', 'medium', 'high', 'urgent')),
   assigned_agent_id UUID,
   last_message_text TEXT,
   last_message_at TIMESTAMPTZ,

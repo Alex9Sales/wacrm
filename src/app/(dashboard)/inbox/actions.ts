@@ -31,6 +31,7 @@ import type {
   Contact,
   Conversation,
   ConversationChannel,
+  ConversationPriority,
   ConversationStatus,
   ContactNote,
   Deal,
@@ -60,6 +61,7 @@ export async function getConversationWithContact(
         account_id: conversations.accountId,
         contact_id: conversations.contactId,
         status: conversations.status,
+        priority: conversations.priority,
         assigned_agent_id: conversations.assignedAgentId,
         last_message_text: conversations.lastMessageText,
         last_message_at: conversations.lastMessageAt,
@@ -116,6 +118,7 @@ export async function getConversationWithContact(
   return {
     ...conv,
     status: conv.status as ConversationStatus,
+    priority: (conv.priority ?? 'none') as ConversationPriority,
     unread_count: conv.unread_count ?? 0,
     contact: contact?.id
       ? ({ ...contact, tags: contactTagsList } as unknown as Contact)
@@ -171,6 +174,7 @@ const conversationColumns = {
   account_id: conversations.accountId,
   contact_id: conversations.contactId,
   status: conversations.status,
+  priority: conversations.priority,
   assigned_agent_id: conversations.assignedAgentId,
   last_message_text: conversations.lastMessageText,
   last_message_at: conversations.lastMessageAt,
@@ -338,6 +342,7 @@ export async function listConversations(): Promise<Conversation[]> {
     return {
       ...conv,
       status: conv.status as ConversationStatus,
+      priority: (conv.priority ?? 'none') as ConversationPriority,
       unread_count: conv.unread_count ?? 0,
       contact: contact?.id
         ? ({
@@ -496,6 +501,23 @@ export async function deleteConversation(
       ),
     )
   return { ok: true }
+}
+
+/** Update a conversation's priority. Account-scoped. */
+export async function updateConversationPriority(
+  conversationId: string,
+  priority: ConversationPriority,
+): Promise<void> {
+  const ctx = await getCurrentAccount()
+  await db
+    .update(conversations)
+    .set({ priority })
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.accountId, ctx.accountId),
+      ),
+    )
 }
 
 /** Assign / unassign a conversation. Account-scoped. */

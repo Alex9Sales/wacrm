@@ -147,6 +147,15 @@ export interface ContactNote {
 
 export type ConversationStatus = 'open' | 'pending' | 'closed';
 
+/** Conversation priority (Chatwoot-style). Persisted on
+ *  `conversations.priority`; defaults to 'none'. */
+export type ConversationPriority =
+  | 'none'
+  | 'low'
+  | 'medium'
+  | 'high'
+  | 'urgent';
+
 /** The set of WhatsApp transports a channel can use (Phase 4). Mirrors
  *  `ProviderId` in src/lib/channels/provider.ts. */
 export type ChannelProvider = 'meta' | 'waha' | 'evolution' | 'evogo';
@@ -165,6 +174,7 @@ export interface Conversation {
   user_id: string;
   contact_id: string;
   status: ConversationStatus;
+  priority?: ConversationPriority;
   assigned_agent_id?: string;
   last_message_text?: string;
   last_message_at?: string;

@@ -1,17 +1,42 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, useMemo } from "react";
 import {
   addContactNote,
   listContactDeals,
   listContactNotes,
   listContactTagsWithJoinId,
+  listProfiles,
+  updateConversationStatus,
+  updateConversationAssignment,
+  updateConversationPriority,
 } from "@/app/(dashboard)/inbox/actions";
-import { getContact, getContactTags } from "@/app/(dashboard)/contacts/actions";
-import type { Contact, Deal, ContactNote, Tag, ContactTag } from "@/types";
+import {
+  getContact,
+  getContactTags,
+  listCustomFields,
+  listContactCustomValues,
+  saveContactCustomValues,
+} from "@/app/(dashboard)/contacts/actions";
+import { listPipelines, listStages } from "@/app/(dashboard)/pipelines/actions";
+import type {
+  Contact,
+  Conversation,
+  ConversationPriority,
+  ConversationStatus,
+  CustomField,
+  Deal,
+  ContactNote,
+  Tag,
+  ContactTag,
+  Pipeline,
+  PipelineStage,
+  Profile,
+} from "@/types";
 import {
   Phone,
   Mail,
+  Building2,
   Copy,
   Check,
   Tag as TagIcon,
@@ -19,25 +44,138 @@ import {
   StickyNote,
   Plus,
   Pencil,
+  ChevronDown,
+  MessageSquareText,
+  ListChecks,
+  UserPlus,
+  Flag,
+  Trash2,
+  ExternalLink,
+  Loader2,
 } from "lucide-react";
+import Link from "next/link";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ContactForm } from "@/components/contacts/contact-form";
+import { DealForm } from "@/components/pipelines/deal-form";
 import { ContactAvatar } from "./contact-avatar";
+import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { format } from "date-fns";
 
 interface ContactSidebarProps {
   contact: Contact | null;
+  /** The active conversation — drives the "Ações da conversa" section
+   *  (agent / status / priority). Optional so callers that only care
+   *  about the contact keep working. */
+  conversation?: Conversation | null;
   /**
    * Fired after the operator edits the contact inline (name/email/company/
    * tags) so the page can update the active contact — which drives the
    * thread header and the conversation-list row — without a reload.
    */
   onContactUpdated?: (contact: Contact) => void;
+  /** Mirror the conversation status change up so the thread header +
+   *  list row stay in sync (same signature the thread header uses). */
+  onStatusChange?: (
+    conversationId: string,
+    status: ConversationStatus,
+  ) => void;
+  /** Mirror the assignment change up (same signature as the thread). */
+  onAssignChange?: (
+    conversationId: string,
+    assignedAgentId: string | null,
+  ) => void;
+  /** Mirror the priority change up so the page state stays in sync. */
+  onPriorityChange?: (
+    conversationId: string,
+    priority: ConversationPriority,
+  ) => void;
+  /** Fired after the active conversation is deleted from this panel. */
+  onConversationDeleted?: (conversationId: string) => void;
 }
 
-export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProps) {
+// ------------------------------------------------------------
+// Priority + status option maps (pt-BR labels, coloured).
+// ------------------------------------------------------------
+
+const PRIORITY_OPTIONS: {
+  value: ConversationPriority;
+  label: string;
+  color: string;
+}[] = [
+  { value: "none", label: "Nenhuma", color: "text-muted-foreground" },
+  { value: "low", label: "Baixa", color: "text-sky-400" },
+  { value: "medium", label: "Média", color: "text-amber-400" },
+  { value: "high", label: "Alta", color: "text-orange-400" },
+  { value: "urgent", label: "Urgente", color: "text-red-400" },
+];
+
+const STATUS_OPTIONS: {
+  value: ConversationStatus;
+  label: string;
+  color: string;
+}[] = [
+  { value: "open", label: "Aberta", color: "text-primary" },
+  { value: "pending", label: "Pendente", color: "text-amber-400" },
+  { value: "closed", label: "Fechada", color: "text-muted-foreground" },
+];
+
+// ------------------------------------------------------------
+// Collapsible section shell — a simple useState toggle per section
+// with a chevron. Kept local so the whole panel scrolls naturally
+// inside the ScrollArea (base-ui Accordion's measured heights fight
+// the scroll container).
+// ------------------------------------------------------------
+
+function Section({
+  icon: Icon,
+  title,
+  defaultOpen = false,
+  action,
+  children,
+}: {
+  icon: React.ComponentType<{ className?: string }>;
+  title: string;
+  defaultOpen?: boolean;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  return (
+    <div className="border-t border-border">
+      <div className="flex items-center">
+        <button
+          type="button"
+          onClick={() => setOpen((v) => !v)}
+          aria-expanded={open}
+          className="flex flex-1 items-center gap-2 px-1 py-3 text-xs font-medium uppercase tracking-wider text-muted-foreground transition-colors hover:text-foreground"
+        >
+          <Icon className="h-3.5 w-3.5" />
+          <span className="flex-1 text-left">{title}</span>
+          <ChevronDown
+            className={cn(
+              "h-3.5 w-3.5 transition-transform",
+              open && "rotate-180",
+            )}
+          />
+        </button>
+        {action && <div className="pl-1">{action}</div>}
+      </div>
+      {open && <div className="pb-3">{children}</div>}
+    </div>
+  );
+}
+
+export function ContactSidebar({
+  contact,
+  conversation,
+  onContactUpdated,
+  onStatusChange,
+  onAssignChange,
+  onPriorityChange,
+  onConversationDeleted,
+}: ContactSidebarProps) {
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
@@ -49,37 +187,87 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
   const [editOpen, setEditOpen] = useState(false);
   const [editTags, setEditTags] = useState<ContactTag[]>([]);
 
-  const fetchContactData = useCallback(async () => {
-    if (!contact) return;
-    const contactId = contact.id;
+  // Conversation actions — assignee list (account teammates) + local
+  // in-flight state. Assignments/status/priority are optimistic: we call
+  // the server action then bubble the change up so the page mirrors it.
+  const [profiles, setProfiles] = useState<Profile[]>([]);
 
-    // Fetch deals, notes, and tags in parallel via account-scoped actions.
+  // Custom fields — account definitions + this contact's values. Editable
+  // inline; saved via saveContactCustomValues (delete-then-reinsert).
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [customValues, setCustomValues] = useState<Record<string, string>>({});
+  const [savingCustom, setSavingCustom] = useState(false);
+  const [customDirty, setCustomDirty] = useState(false);
+
+  // Deal editor (reuses the pipelines DealForm sheet). We load pipelines +
+  // stages lazily the first time the operator opens the editor.
+  const [dealFormOpen, setDealFormOpen] = useState(false);
+  const [editingDeal, setEditingDeal] = useState<Deal | null>(null);
+  const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  const [pipelineStages, setPipelineStages] = useState<
+    Record<string, PipelineStage[]>
+  >({});
+  const [dealPipelineId, setDealPipelineId] = useState<string>("");
+
+  const contactId = contact?.id;
+  const conversationId = conversation?.id;
+
+  const fetchContactData = useCallback(async () => {
+    if (!contactId) return;
+    // Fetch deals, notes, tags, and custom fields/values in parallel via
+    // account-scoped actions.
     try {
-      const [dealsData, notesData, tagsData, editTagsData] = await Promise.all([
-        listContactDeals(contactId),
-        listContactNotes(contactId),
-        listContactTagsWithJoinId(contactId),
-        getContactTags(contactId),
-      ]);
+      const [dealsData, notesData, tagsData, editTagsData, fieldsData, valuesData] =
+        await Promise.all([
+          listContactDeals(contactId),
+          listContactNotes(contactId),
+          listContactTagsWithJoinId(contactId),
+          getContactTags(contactId),
+          listCustomFields(),
+          listContactCustomValues(contactId),
+        ]);
       setDeals(dealsData);
       setNotes(notesData);
       setTags(tagsData);
       setEditTags(editTagsData);
+      setCustomFields(fieldsData);
+      const valueMap: Record<string, string> = {};
+      for (const v of valuesData) {
+        valueMap[v.custom_field_id] = v.value ?? "";
+      }
+      setCustomValues(valueMap);
+      setCustomDirty(false);
     } catch (error) {
       console.error("Failed to fetch contact data:", error);
     }
-  }, [contact]);
+  }, [contactId]);
+
+  // Load teammate list once — the conversation-actions assignee dropdown.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await listProfiles();
+        if (!cancelled) setProfiles(data);
+      } catch (error) {
+        if (!cancelled) console.error("Failed to fetch profiles:", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // After a successful edit, re-read the contact + its tag chips and push
   // the fresh contact up so the thread header + conversation-list row
   // reflect the new name immediately.
   const handleContactSaved = useCallback(async () => {
-    if (!contact) return;
+    if (!contactId) return;
     try {
       const [updated, editTagsData, tagsData] = await Promise.all([
-        getContact(contact.id),
-        getContactTags(contact.id),
-        listContactTagsWithJoinId(contact.id),
+        getContact(contactId),
+        getContactTags(contactId),
+        listContactTagsWithJoinId(contactId),
       ]);
       setEditTags(editTagsData);
       setTags(tagsData);
@@ -90,12 +278,11 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
     } catch (error) {
       console.error("Failed to refresh contact after edit:", error);
     }
-  }, [contact, onContactUpdated]);
+  }, [contactId, onContactUpdated]);
 
   // Load on contact change. setContactData/setTags run inside async
-  // Supabase callbacks, not synchronously in the effect body.
+  // callbacks, not synchronously in the effect body.
   useEffect(() => {
-    // eslint-disable-next-line react-hooks/set-state-in-effect
     fetchContactData();
   }, [fetchContactData]);
 
@@ -104,19 +291,13 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
     await navigator.clipboard.writeText(contact.phone);
     setCopied(true);
     setTimeout(() => setCopied(false), 2000);
-    // Dep is the whole `contact` object (not `contact?.phone`) so the
-    // React Compiler's inference agrees with the manual dep list —
-    // fixes the `preserve-manual-memoization` lint error.
   }, [contact]);
 
   const handleAddNote = useCallback(async () => {
-    if (!contact || !newNote.trim()) return;
+    if (!contactId || !newNote.trim()) return;
     setAddingNote(true);
-
-    // The action derives author (user_id) + account from the session —
-    // the client no longer looks up or passes them.
     try {
-      const data = await addContactNote(contact.id, newNote.trim());
+      const data = await addContactNote(contactId, newNote.trim());
       if (data) {
         setNotes((prev) => [data, ...prev]);
         setNewNote("");
@@ -126,26 +307,138 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
     } finally {
       setAddingNote(false);
     }
-  }, [contact, newNote]);
+  }, [contactId, newNote]);
+
+  // ---- Conversation actions ------------------------------------------
+
+  const handleStatus = useCallback(
+    async (status: ConversationStatus) => {
+      if (!conversationId) return;
+      try {
+        await updateConversationStatus(conversationId, status);
+        onStatusChange?.(conversationId, status);
+      } catch (error) {
+        console.error("Failed to update status:", error);
+        toast.error("Falha ao atualizar o status");
+      }
+    },
+    [conversationId, onStatusChange],
+  );
+
+  const handleAssign = useCallback(
+    async (agentId: string | null) => {
+      if (!conversationId) return;
+      try {
+        await updateConversationAssignment(conversationId, agentId);
+        onAssignChange?.(conversationId, agentId);
+      } catch (error) {
+        console.error("Failed to update assignment:", error);
+        toast.error("Falha ao atribuir a conversa");
+      }
+    },
+    [conversationId, onAssignChange],
+  );
+
+  const handlePriority = useCallback(
+    async (priority: ConversationPriority) => {
+      if (!conversationId) return;
+      try {
+        await updateConversationPriority(conversationId, priority);
+        onPriorityChange?.(conversationId, priority);
+      } catch (error) {
+        console.error("Failed to update priority:", error);
+        toast.error("Falha ao atualizar a prioridade");
+      }
+    },
+    [conversationId, onPriorityChange],
+  );
+
+  // ---- Custom fields --------------------------------------------------
+
+  const handleSaveCustom = useCallback(async () => {
+    if (!contactId) return;
+    setSavingCustom(true);
+    try {
+      const { error } = await saveContactCustomValues(contactId, customValues);
+      if (error) {
+        toast.error(error);
+        return;
+      }
+      setCustomDirty(false);
+      toast.success("Atributos salvos");
+    } finally {
+      setSavingCustom(false);
+    }
+  }, [contactId, customValues]);
+
+  // ---- Deals ----------------------------------------------------------
+
+  // Load pipelines + the first pipeline's stages the first time the deal
+  // editor is needed, then open the DealForm sheet.
+  const openDealEditor = useCallback(
+    async (deal: Deal | null) => {
+      try {
+        let pl = pipelines;
+        if (pl.length === 0) {
+          pl = await listPipelines();
+          setPipelines(pl);
+        }
+        if (pl.length === 0) {
+          toast.error("Crie um funil primeiro em Funis");
+          return;
+        }
+        // For an existing deal, use its pipeline; otherwise the first one.
+        const pid = deal?.pipeline_id ?? pl[0].id;
+        setDealPipelineId(pid);
+        if (!pipelineStages[pid]) {
+          const stages = await listStages(pid);
+          setPipelineStages((prev) => ({ ...prev, [pid]: stages }));
+        }
+        setEditingDeal(deal);
+        setDealFormOpen(true);
+      } catch (error) {
+        console.error("Failed to open deal editor:", error);
+        toast.error("Falha ao abrir o negócio");
+      }
+    },
+    [pipelines, pipelineStages],
+  );
+
+  const handleDealSaved = useCallback(() => {
+    // Refetch just the deals so the list reflects the edit/create.
+    if (!contactId) return;
+    void listContactDeals(contactId)
+      .then(setDeals)
+      .catch((e) => console.error("Failed to refresh deals:", e));
+  }, [contactId]);
+
+  const assignedAgentId = conversation?.assigned_agent_id ?? null;
+  const currentAssignee = useMemo(
+    () => profiles.find((p) => p.user_id === assignedAgentId),
+    [profiles, assignedAgentId],
+  );
+  const currentPriority = conversation?.priority ?? "none";
+  const currentStatus = conversation?.status ?? "open";
 
   if (!contact) {
     return (
       <div className="flex h-full w-70 items-center justify-center border-l border-border bg-card">
-        <p className="text-sm text-muted-foreground">Select a conversation</p>
+        <p className="text-sm text-muted-foreground">
+          Selecione uma conversa
+        </p>
       </div>
     );
   }
 
   const displayName = contact.name || contact.phone;
+  const dealStages = pipelineStages[dealPipelineId] ?? [];
 
   return (
     <div className="flex h-full w-70 flex-col border-l border-border bg-card">
       <ScrollArea className="flex-1">
         <div className="p-4">
-          {/* Contact Info */}
+          {/* ---- Contato (always visible) ---- */}
           <div className="flex flex-col items-center text-center">
-            {/* AVATAR image (owned by the avatar agent). Name/fields edit
-                below is owned separately. */}
             <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-muted text-lg font-semibold text-foreground">
               <ContactAvatar
                 avatarUrl={contact.avatar_url}
@@ -176,13 +469,10 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
                 Adicionar nome
               </button>
             )}
-            {contact.company && (
-              <p className="text-xs text-muted-foreground">{contact.company}</p>
-            )}
           </div>
 
-          {/* Phone */}
-          <div className="mt-4 space-y-2">
+          {/* Contact fields: phone (copy), email, empresa */}
+          <div className="mt-4 space-y-1.5">
             <button
               onClick={handleCopyPhone}
               className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted"
@@ -196,102 +486,310 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
               )}
             </button>
 
-            {contact.email && (
-              <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground">
-                <Mail className="h-4 w-4 text-muted-foreground" />
-                <span className="truncate">{contact.email}</span>
-              </div>
+            <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground">
+              <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="truncate">
+                {contact.email || (
+                  <span className="text-muted-foreground/60">Indisponível</span>
+                )}
+              </span>
+            </div>
+
+            <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground">
+              <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+              <span className="truncate">
+                {contact.company || (
+                  <span className="text-muted-foreground/60">—</span>
+                )}
+              </span>
+            </div>
+          </div>
+
+          {/* Action buttons: Editar / Abrir contato / Excluir conversa */}
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setEditOpen(true)}
+              className="h-7 flex-1 border-border bg-transparent text-xs text-muted-foreground hover:bg-muted"
+            >
+              <Pencil className="h-3 w-3" />
+              Editar
+            </Button>
+            <Link
+              href="/contacts"
+              title="Abrir contatos"
+              className="inline-flex h-7 flex-1 items-center justify-center gap-1.5 rounded-md border border-border bg-transparent text-xs text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+            >
+              <ExternalLink className="h-3 w-3" />
+              Contato
+            </Link>
+            {conversationId && onConversationDeleted && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => {
+                  if (
+                    window.confirm(
+                      "Excluir esta conversa? As mensagens serão removidas. Esta ação não pode ser desfeita.",
+                    )
+                  ) {
+                    onConversationDeleted(conversationId);
+                  }
+                }}
+                className="h-7 flex-1 border-border bg-transparent text-xs text-red-400 hover:bg-red-500/10 hover:text-red-300"
+              >
+                <Trash2 className="h-3 w-3" />
+                Excluir
+              </Button>
             )}
           </div>
 
-          {/* Divider */}
-          <div className="my-4 border-t border-border" />
-
-          {/* Tags */}
-          <div>
-            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              <TagIcon className="h-3 w-3" />
-              Tags
-            </div>
-            <div className="mt-2 flex flex-wrap gap-1">
-              {tags.length === 0 ? (
-                <p className="px-1 text-xs text-muted-foreground">No tags</p>
-              ) : (
-                tags.map((tag) => (
-                  <span
-                    key={tag.contact_tag_id}
-                    className="rounded-full px-2 py-0.5 text-[10px] font-medium"
-                    style={{
-                      backgroundColor: `${tag.color}20`,
-                      color: tag.color,
-                    }}
-                  >
-                    {tag.name}
-                  </span>
-                ))
-              )}
-            </div>
-          </div>
-
-          {/* Divider */}
-          <div className="my-4 border-t border-border" />
-
-          {/* Active Deals */}
-          <div>
-            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              <DollarSign className="h-3 w-3" />
-              Active Deals
-            </div>
-            <div className="mt-2 space-y-2">
+          <div className="mt-3">
+            {/* ---- Negócio ---- */}
+            <Section
+              icon={DollarSign}
+              title="Negócio"
+              defaultOpen
+              action={
+                <button
+                  type="button"
+                  onClick={() => void openDealEditor(null)}
+                  aria-label="Criar negócio"
+                  title="Criar negócio"
+                  className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                >
+                  <Plus className="h-3.5 w-3.5" />
+                </button>
+              }
+            >
               {deals.length === 0 ? (
-                <p className="px-1 text-xs text-muted-foreground">No deals</p>
+                <button
+                  type="button"
+                  onClick={() => void openDealEditor(null)}
+                  className="w-full rounded-lg border border-dashed border-border px-3 py-3 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                >
+                  + Criar negócio
+                </button>
               ) : (
-                deals.map((deal) => (
-                  <div
-                    key={deal.id}
-                    className="rounded-lg bg-muted px-3 py-2"
-                  >
-                    <p className="text-sm font-medium text-foreground">
-                      {deal.title}
-                    </p>
-                    <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-                      <span>
-                        {deal.currency ?? "$"}
-                        {deal.value.toLocaleString()}
-                      </span>
-                      {deal.stage && (
-                        <span
-                          className="rounded-full px-1.5 py-0.5 text-[10px]"
-                          style={{
-                            backgroundColor: `${deal.stage.color}20`,
-                            color: deal.stage.color,
-                          }}
-                        >
-                          {deal.stage.name}
-                        </span>
-                      )}
+                <div className="space-y-2">
+                  {deals.map((deal) => {
+                    const agent = profiles.find(
+                      (p) => p.user_id === deal.assigned_to,
+                    );
+                    return (
+                      <button
+                        type="button"
+                        key={deal.id}
+                        onClick={() => void openDealEditor(deal)}
+                        className="w-full rounded-lg bg-muted px-3 py-2 text-left transition-colors hover:bg-muted/70"
+                      >
+                        <p className="text-sm font-medium text-foreground">
+                          {deal.title}
+                        </p>
+                        <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+                          <span>
+                            {deal.currency ?? "$"}
+                            {deal.value.toLocaleString()}
+                          </span>
+                          {deal.stage && (
+                            <span
+                              className="rounded-full px-1.5 py-0.5 text-[10px]"
+                              style={{
+                                backgroundColor: `${deal.stage.color}20`,
+                                color: deal.stage.color,
+                              }}
+                            >
+                              {deal.stage.name}
+                            </span>
+                          )}
+                        </div>
+                        {agent && (
+                          <p className="mt-1 text-[10px] text-muted-foreground">
+                            {agent.full_name || agent.email}
+                          </p>
+                        )}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </Section>
+
+            {/* ---- Ações da conversa ---- */}
+            {conversation && (
+              <Section
+                icon={MessageSquareText}
+                title="Ações da conversa"
+                defaultOpen
+              >
+                <div className="space-y-3">
+                  {/* Agente atribuído */}
+                  <div className="space-y-1">
+                    <label className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+                      <UserPlus className="h-3 w-3" />
+                      Agente atribuído
+                    </label>
+                    <select
+                      value={assignedAgentId ?? ""}
+                      onChange={(e) =>
+                        void handleAssign(e.target.value || null)
+                      }
+                      className="h-8 w-full rounded-lg border border-border bg-muted px-2.5 text-xs text-foreground outline-none focus:border-primary"
+                    >
+                      <option value="">Não atribuído</option>
+                      {profiles.map((p) => (
+                        <option key={p.id} value={p.user_id}>
+                          {p.full_name || p.email}
+                        </option>
+                      ))}
+                    </select>
+                    {assignedAgentId && !currentAssignee && (
+                      <p className="text-[10px] text-muted-foreground">
+                        Atribuído
+                      </p>
+                    )}
+                  </div>
+
+                  {/* Status */}
+                  <div className="space-y-1">
+                    <label className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+                      <ListChecks className="h-3 w-3" />
+                      Status
+                    </label>
+                    <select
+                      value={currentStatus}
+                      onChange={(e) =>
+                        void handleStatus(
+                          e.target.value as ConversationStatus,
+                        )
+                      }
+                      className="h-8 w-full rounded-lg border border-border bg-muted px-2.5 text-xs text-foreground outline-none focus:border-primary"
+                    >
+                      {STATUS_OPTIONS.map((opt) => (
+                        <option key={opt.value} value={opt.value}>
+                          {opt.label}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+
+                  {/* Prioridade */}
+                  <div className="space-y-1">
+                    <label className="flex items-center gap-1.5 text-[11px] font-medium text-muted-foreground">
+                      <Flag className="h-3 w-3" />
+                      Prioridade
+                    </label>
+                    <div className="flex flex-wrap gap-1">
+                      {PRIORITY_OPTIONS.map((opt) => {
+                        const active = currentPriority === opt.value;
+                        return (
+                          <button
+                            key={opt.value}
+                            type="button"
+                            onClick={() => void handlePriority(opt.value)}
+                            className={cn(
+                              "rounded-full border px-2 py-0.5 text-[10px] font-medium transition-colors",
+                              opt.color,
+                              active
+                                ? "border-current bg-current/10"
+                                : "border-border opacity-70 hover:opacity-100",
+                            )}
+                          >
+                            {opt.label}
+                          </button>
+                        );
+                      })}
                     </div>
                   </div>
-                ))
+                </div>
+              </Section>
+            )}
+
+            {/* ---- Etiquetas ---- */}
+            <Section icon={TagIcon} title="Etiquetas" defaultOpen>
+              <div className="flex flex-wrap gap-1">
+                {tags.length === 0 ? (
+                  <p className="px-1 text-xs text-muted-foreground">
+                    Sem etiquetas
+                  </p>
+                ) : (
+                  tags.map((tag) => (
+                    <span
+                      key={tag.contact_tag_id}
+                      className="rounded-full px-2 py-0.5 text-[10px] font-medium"
+                      style={{
+                        backgroundColor: `${tag.color}20`,
+                        color: tag.color,
+                      }}
+                    >
+                      {tag.name}
+                    </span>
+                  ))
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditOpen(true)}
+                className="mt-2 text-[11px] text-primary underline-offset-2 hover:underline"
+              >
+                Gerenciar etiquetas
+              </button>
+            </Section>
+
+            {/* ---- Atributos do contato (custom fields) ---- */}
+            <Section icon={ListChecks} title="Atributos do contato">
+              {customFields.length === 0 ? (
+                <p className="px-1 text-xs text-muted-foreground">
+                  Nenhum atributo definido.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {customFields.map((field) => (
+                    <div key={field.id} className="space-y-1">
+                      <label className="text-[11px] font-medium text-muted-foreground">
+                        {field.field_name}
+                      </label>
+                      <input
+                        value={customValues[field.id] ?? ""}
+                        onChange={(e) => {
+                          const val = e.target.value;
+                          setCustomValues((prev) => ({
+                            ...prev,
+                            [field.id]: val,
+                          }));
+                          setCustomDirty(true);
+                        }}
+                        placeholder="—"
+                        className="h-8 w-full rounded-lg border border-border bg-muted px-2.5 text-xs text-foreground placeholder-muted-foreground outline-none focus:border-primary"
+                      />
+                    </div>
+                  ))}
+                  {customDirty && (
+                    <Button
+                      size="sm"
+                      onClick={() => void handleSaveCustom()}
+                      disabled={savingCustom}
+                      className="h-7 w-full bg-primary text-xs text-primary-foreground hover:bg-primary/90"
+                    >
+                      {savingCustom ? (
+                        <Loader2 className="h-3 w-3 animate-spin" />
+                      ) : (
+                        "Salvar atributos"
+                      )}
+                    </Button>
+                  )}
+                </div>
               )}
-            </div>
-          </div>
+            </Section>
 
-          {/* Divider */}
-          <div className="my-4 border-t border-border" />
-
-          {/* Notes */}
-          <div>
-            <div className="flex items-center gap-2 px-1 text-xs font-medium uppercase tracking-wider text-muted-foreground">
-              <StickyNote className="h-3 w-3" />
-              Notes
-            </div>
-            <div className="mt-2">
+            {/* ---- Notas ---- */}
+            <Section icon={StickyNote} title="Notas" defaultOpen>
               <div className="flex gap-2">
                 <textarea
                   value={newNote}
                   onChange={(e) => setNewNote(e.target.value)}
-                  placeholder="Add a note..."
+                  placeholder="Adicionar uma nota..."
                   rows={2}
                   className="flex-1 resize-none rounded-lg border border-border bg-muted px-3 py-2 text-xs text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
                 />
@@ -307,27 +805,23 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
 
               <div className="mt-2 space-y-2">
                 {notes.map((note) => (
-                  <div
-                    key={note.id}
-                    className="rounded-lg bg-muted px-3 py-2"
-                  >
+                  <div key={note.id} className="rounded-lg bg-muted px-3 py-2">
                     <p className="whitespace-pre-wrap text-xs text-muted-foreground">
                       {note.note_text}
                     </p>
                     <p className="mt-1 text-[10px] text-muted-foreground">
-                      {format(new Date(note.created_at), "MMM d, yyyy HH:mm")}
+                      {format(new Date(note.created_at), "dd/MM/yyyy HH:mm")}
                     </p>
                   </div>
                 ))}
               </div>
-            </div>
+            </Section>
           </div>
         </div>
       </ScrollArea>
 
-      {/* Inline contact editor — the full Contacts-page form (name, phone,
-          email, company, tags) reused in a dialog so the operator can
-          name/register the contact without leaving the inbox. */}
+      {/* Inline contact editor — the full Contacts-page form reused in a
+          dialog (name, phone, email, company, tags). */}
       <ContactForm
         open={editOpen}
         onOpenChange={setEditOpen}
@@ -335,6 +829,19 @@ export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProp
         contactTags={editTags}
         onSaved={handleContactSaved}
       />
+
+      {/* Deal editor — reuses the pipelines DealForm sheet for create/edit
+          (pipeline, stage, value, assigned agent, notes, status). */}
+      {dealPipelineId && (
+        <DealForm
+          open={dealFormOpen}
+          onOpenChange={setDealFormOpen}
+          deal={editingDeal}
+          pipelineId={dealPipelineId}
+          stages={dealStages}
+          onSaved={handleDealSaved}
+        />
+      )}
     </div>
   );
 }
