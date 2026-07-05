@@ -18,7 +18,7 @@
 // ============================================================
 
 import { randomUUID } from 'crypto';
-import { and, count, eq } from 'drizzle-orm';
+import { and, count, eq, isNull } from 'drizzle-orm';
 
 import { db, contacts, conversations, messages } from '@/db';
 import { firstOrNull } from '@/db/helpers';
@@ -29,6 +29,7 @@ import { runAutomationsForTrigger } from '@/lib/automations/engine';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import { putObject, publicUrl } from '@/lib/storage/s3';
+import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
 
 /** Bucket for inbound media — public-read, same as the rest of Phase 3. */
@@ -133,6 +134,18 @@ export async function dispatchInboundMessage(
   );
   if (!contactOutcome) return null;
   const contactId = contactOutcome.contact.id;
+
+  // 2b) Best-effort avatar backfill. For a GENUINE incoming (customer)
+  //     message from a contact that has no avatar yet, pull the sender's
+  //     WhatsApp profile photo, re-host it in MinIO, and set avatar_url.
+  //     Skipped for fromMe (that's the operator's own phone) and when the
+  //     contact already has an avatar (attempt-once). Fire-and-forget: it
+  //     is NEVER awaited on the critical path and can never drop a message.
+  if (!isFromMe && !contactOutcome.contact.avatarUrl) {
+    void backfillContactAvatar(channel, contactId, senderPhone).catch((err) =>
+      console.error('[inbound] avatar backfill dispatch failed:', err),
+    );
+  }
 
   // 3) Resolve / create conversation by (account, contact, channel.id).
   const convResult = await findOrCreateConversation(
@@ -356,6 +369,61 @@ async function storeInboundMedia(media: NonNullable<NormalizedInbound['media']>)
   }
 }
 
+/**
+ * Best-effort backfill of a contact's WhatsApp profile photo into
+ * contacts.avatar_url. Asks the channel's provider for the (short-lived,
+ * cross-origin) CDN URL, downloads the bytes, re-hosts them in MinIO
+ * (so the app serves a stable HTTPS URL via the media proxy — the raw
+ * pps.whatsapp.net URL expires and can be http/cross-origin, so we never
+ * store it directly), then sets avatar_url. Every step is guarded: a
+ * profile-pic hiccup must never affect the inbound message that spawned
+ * it (the caller runs this fire-and-forget).
+ */
+async function backfillContactAvatar(
+  channel: ChannelCtx,
+  contactId: string,
+  phoneE164: string,
+): Promise<void> {
+  try {
+    const provider = getProvider(channel.provider);
+    // Optional method — providers that don't expose profile photos (Meta /
+    // Evolution / EvoGo today) simply skip the backfill.
+    if (typeof provider.fetchProfilePicture !== 'function') return;
+
+    const pic = await provider.fetchProfilePicture(channel, phoneE164);
+    if (!pic || !pic.url) return;
+
+    // Download the CDN image bytes.
+    const res = await fetch(pic.url);
+    if (!res.ok) {
+      console.error(
+        `[inbound] avatar fetch failed: ${res.status} ${pic.url}`,
+      );
+      return;
+    }
+    const bytes = Buffer.from(await res.arrayBuffer());
+    if (bytes.length === 0) return;
+    const mimetype =
+      res.headers.get('content-type')?.split(';')[0]?.trim() || 'image/jpeg';
+
+    // Re-host in MinIO under an avatars/ key → stable public proxy URL.
+    const ext = extensionFor(mimetype);
+    const key = `avatars/${contactId}/${randomUUID()}${ext || '.jpg'}`;
+    await putObject(MEDIA_BUCKET, key, bytes, mimetype);
+    const url = publicUrl(MEDIA_BUCKET, key);
+
+    // Only set avatar_url when it's still empty — avoids clobbering a value
+    // a concurrent inbound (or a manual edit) may have set in the meantime,
+    // and keeps this a one-time backfill.
+    await db
+      .update(contacts)
+      .set({ avatarUrl: url, updatedAt: new Date().toISOString() })
+      .where(and(eq(contacts.id, contactId), isNull(contacts.avatarUrl)));
+  } catch (err) {
+    console.error('[inbound] backfillContactAvatar failed:', err);
+  }
+}
+
 /** Best-effort file extension from mimetype or filename. */
 function extensionFor(mimetype?: string, filename?: string): string {
   if (filename && filename.includes('.')) {
@@ -376,7 +444,12 @@ function extensionFor(mimetype?: string, filename?: string): string {
 }
 
 interface ContactOutcome {
-  contact: { id: string; userId: string; name?: string | null };
+  contact: {
+    id: string;
+    userId: string;
+    name?: string | null;
+    avatarUrl?: string | null;
+  };
   wasCreated: boolean;
 }
 
@@ -413,6 +486,7 @@ async function findOrCreateContact(
         id: existing.id,
         userId: String(existing.userId),
         name: existing.name,
+        avatarUrl: (existing.avatarUrl ?? null) as string | null,
       },
       wasCreated: false,
     };
@@ -444,7 +518,12 @@ async function findOrCreateContact(
       return null;
     }
     return {
-      contact: { id: created.id, userId: created.userId, name: created.name },
+      contact: {
+        id: created.id,
+        userId: created.userId,
+        name: created.name,
+        avatarUrl: created.avatarUrl ?? null,
+      },
       wasCreated: true,
     };
   } catch (createError) {

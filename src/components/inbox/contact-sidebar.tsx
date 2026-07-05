@@ -7,34 +7,47 @@ import {
   listContactNotes,
   listContactTagsWithJoinId,
 } from "@/app/(dashboard)/inbox/actions";
-import { cn } from "@/lib/utils";
-import type { Contact, Deal, ContactNote, Tag } from "@/types";
+import { getContact, getContactTags } from "@/app/(dashboard)/contacts/actions";
+import type { Contact, Deal, ContactNote, Tag, ContactTag } from "@/types";
 import {
   Phone,
   Mail,
   Copy,
   Check,
-  User,
   Tag as TagIcon,
   DollarSign,
   StickyNote,
   Plus,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import { ContactForm } from "@/components/contacts/contact-form";
+import { ContactAvatar } from "./contact-avatar";
+import { toast } from "sonner";
 import { format } from "date-fns";
 
 interface ContactSidebarProps {
   contact: Contact | null;
+  /**
+   * Fired after the operator edits the contact inline (name/email/company/
+   * tags) so the page can update the active contact — which drives the
+   * thread header and the conversation-list row — without a reload.
+   */
+  onContactUpdated?: (contact: Contact) => void;
 }
 
-export function ContactSidebar({ contact }: ContactSidebarProps) {
+export function ContactSidebar({ contact, onContactUpdated }: ContactSidebarProps) {
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
+  // Inline contact edit — reuses the full Contacts page ContactForm in a
+  // dialog so the operator can name/edit the contact right here.
+  const [editOpen, setEditOpen] = useState(false);
+  const [editTags, setEditTags] = useState<ContactTag[]>([]);
 
   const fetchContactData = useCallback(async () => {
     if (!contact) return;
@@ -42,18 +55,42 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
 
     // Fetch deals, notes, and tags in parallel via account-scoped actions.
     try {
-      const [dealsData, notesData, tagsData] = await Promise.all([
+      const [dealsData, notesData, tagsData, editTagsData] = await Promise.all([
         listContactDeals(contactId),
         listContactNotes(contactId),
         listContactTagsWithJoinId(contactId),
+        getContactTags(contactId),
       ]);
       setDeals(dealsData);
       setNotes(notesData);
       setTags(tagsData);
+      setEditTags(editTagsData);
     } catch (error) {
       console.error("Failed to fetch contact data:", error);
     }
   }, [contact]);
+
+  // After a successful edit, re-read the contact + its tag chips and push
+  // the fresh contact up so the thread header + conversation-list row
+  // reflect the new name immediately.
+  const handleContactSaved = useCallback(async () => {
+    if (!contact) return;
+    try {
+      const [updated, editTagsData, tagsData] = await Promise.all([
+        getContact(contact.id),
+        getContactTags(contact.id),
+        listContactTagsWithJoinId(contact.id),
+      ]);
+      setEditTags(editTagsData);
+      setTags(tagsData);
+      if (updated) {
+        onContactUpdated?.(updated);
+        toast.success("Contato atualizado");
+      }
+    } catch (error) {
+      console.error("Failed to refresh contact after edit:", error);
+    }
+  }, [contact, onContactUpdated]);
 
   // Load on contact change. setContactData/setTags run inside async
   // Supabase callbacks, not synchronously in the effect body.
@@ -100,7 +137,6 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
   }
 
   const displayName = contact.name || contact.phone;
-  const initials = displayName.charAt(0).toUpperCase();
 
   return (
     <div className="flex h-full w-70 flex-col border-l border-border bg-card">
@@ -108,20 +144,38 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
         <div className="p-4">
           {/* Contact Info */}
           <div className="flex flex-col items-center text-center">
-            <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted text-lg font-semibold text-foreground">
-              {contact.avatar_url ? (
-                <img
-                  src={contact.avatar_url}
-                  alt={displayName}
-                  className="h-16 w-16 rounded-full object-cover"
-                />
-              ) : (
-                initials
-              )}
+            {/* AVATAR image (owned by the avatar agent). Name/fields edit
+                below is owned separately. */}
+            <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-muted text-lg font-semibold text-foreground">
+              <ContactAvatar
+                avatarUrl={contact.avatar_url}
+                displayName={displayName}
+                className="h-16 w-16"
+              />
             </div>
-            <h3 className="mt-3 text-sm font-semibold text-foreground">
-              {displayName}
-            </h3>
+            <div className="mt-3 flex items-center gap-1">
+              <h3 className="text-sm font-semibold text-foreground">
+                {displayName}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setEditOpen(true)}
+                aria-label="Editar contato"
+                title="Editar contato"
+                className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <Pencil className="h-3.5 w-3.5" />
+              </button>
+            </div>
+            {!contact.name && (
+              <button
+                type="button"
+                onClick={() => setEditOpen(true)}
+                className="text-xs text-primary underline-offset-2 hover:underline"
+              >
+                Adicionar nome
+              </button>
+            )}
             {contact.company && (
               <p className="text-xs text-muted-foreground">{contact.company}</p>
             )}
@@ -270,6 +324,17 @@ export function ContactSidebar({ contact }: ContactSidebarProps) {
           </div>
         </div>
       </ScrollArea>
+
+      {/* Inline contact editor — the full Contacts-page form (name, phone,
+          email, company, tags) reused in a dialog so the operator can
+          name/register the contact without leaving the inbox. */}
+      <ContactForm
+        open={editOpen}
+        onOpenChange={setEditOpen}
+        contact={contact}
+        contactTags={editTags}
+        onSaved={handleContactSaved}
+      />
     </div>
   );
 }

@@ -411,6 +411,29 @@ export default function InboxPage() {
     [activeConversation?.id, router, searchParams]
   );
 
+  // The operator edited the contact from the sidebar. Update the active
+  // contact (drives the thread header + the sidebar) and patch the
+  // conversation's embedded contact in both the active conversation and
+  // the list row so the name/avatar update everywhere without a reload.
+  const handleContactUpdated = useCallback(
+    (updated: Contact) => {
+      setActiveContact(updated);
+      setActiveConversation((prev) =>
+        prev && prev.contact?.id === updated.id
+          ? { ...prev, contact: { ...prev.contact, ...updated } }
+          : prev,
+      );
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.contact?.id === updated.id
+            ? { ...c, contact: { ...c.contact, ...updated } }
+            : c,
+        ),
+      );
+    },
+    [],
+  );
+
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
     setMessages(loaded);
   }, []);
@@ -542,7 +565,10 @@ export default function InboxPage() {
             toggle — which is itself desktop-only — never affects it. */}
         {contactPanelOpen && (
           <div className="hidden lg:block">
-            <ContactSidebar contact={activeContact} />
+            <ContactSidebar
+              contact={activeContact}
+              onContactUpdated={handleContactUpdated}
+            />
           </div>
         )}
       </div>

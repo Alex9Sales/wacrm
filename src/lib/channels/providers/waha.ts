@@ -558,6 +558,46 @@ export const wahaProvider: WhatsAppProvider = {
     }
   },
 
+  async fetchProfilePicture(
+    ch: ChannelCtx,
+    phoneE164: string,
+  ): Promise<{ url: string } | null> {
+    // Build the WhatsApp contact id from E.164 digits. We do NOT run the
+    // 9th-digit check-exists round-trip here (that's for SENDING) — the
+    // profile-picture lookup is best-effort backfill, so a plain @c.us id
+    // is fine; a miss just yields no photo.
+    const digits = normalizePhone(phoneE164);
+    if (!digits) return null;
+    const chatId = `${digits}@c.us`;
+    const base = baseUrlOf(ch);
+    const session = sessionOf(ch);
+    try {
+      // VERIFIED against the live WAHA (NOWEB) instance:
+      //   GET {base}/api/contacts/profile-picture?contactId=<id>&session=<s>
+      //   → { profilePictureURL: "https://pps.whatsapp.net/..." } | { profilePictureURL: null }
+      // The session-in-path variant (/api/{session}/contacts/...) 400s on
+      // this engine, so we only use the query-param shape.
+      const { ok, body } = await httpJson(
+        `${base}/api/contacts/profile-picture?contactId=${encodeURIComponent(
+          chatId,
+        )}&session=${encodeURIComponent(session)}`,
+        { method: 'GET', headers: headersOf(ch) },
+      );
+      if (!ok) return null;
+      const url = (body as { profilePictureURL?: unknown }).profilePictureURL;
+      if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+        return { url };
+      }
+      return null;
+    } catch (err) {
+      console.error(
+        `[waha] fetchProfilePicture failed for ${chatId}:`,
+        err instanceof Error ? err.message : err,
+      );
+      return null;
+    }
+  },
+
   // ---- session lifecycle (QR pairing) ----
 
   async startSession(

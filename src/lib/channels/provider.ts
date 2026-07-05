@@ -236,6 +236,19 @@ export interface WhatsAppProvider {
     fetchKey: unknown,
   ): Promise<{ base64: string; mimetype: string } | null>;
 
+  /**
+   * Best-effort lookup of a contact's WhatsApp profile photo, returning
+   * a (possibly short-lived, cross-origin) CDN URL the caller must
+   * download + re-host — NOT stored directly. Used by the inbound
+   * pipeline to backfill contacts.avatar_url. Returns null on no photo /
+   * privacy / error. Optional: only the QR providers that expose it
+   * implement it (WAHA today); Meta / Evolution / EvoGo may omit it.
+   */
+  fetchProfilePicture?(
+    ch: ChannelCtx,
+    phoneE164: string,
+  ): Promise<{ url: string } | null>;
+
   // ---- session lifecycle (non-official providers) ----
   startSession?(ch: ChannelCtx, webhookUrl: string): Promise<{ qr?: string }>;
   getState?(ch: ChannelCtx): Promise<{ status: string }>;

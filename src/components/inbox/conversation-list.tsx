@@ -14,6 +14,7 @@ import type {
 import { Search, ChevronDown, X, Radio, Inbox } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { CHANNEL_PROVIDER_LABELS } from "./message-thread";
+import { ContactAvatar } from "./contact-avatar";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -552,7 +553,6 @@ function ConversationItem({
 }: ConversationItemProps) {
   const contact = conversation.contact;
   const displayName = contact?.name || contact?.phone || "Unknown";
-  const initials = displayName.charAt(0).toUpperCase();
 
   const handleClick = useCallback(() => {
     onSelect(conversation);
@@ -573,16 +573,12 @@ function ConversationItem({
       )}
     >
       {/* Avatar */}
-      <div className="flex h-10 w-10 shrink-0 items-center justify-center rounded-full bg-muted text-sm font-medium text-foreground">
-        {contact?.avatar_url ? (
-          <img
-            src={contact.avatar_url}
-            alt={displayName}
-            className="h-10 w-10 rounded-full object-cover"
-          />
-        ) : (
-          initials
-        )}
+      <div className="flex h-10 w-10 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-sm font-medium text-foreground">
+        <ContactAvatar
+          avatarUrl={contact?.avatar_url}
+          displayName={displayName}
+          className="h-10 w-10"
+        />
       </div>
 
       {/* Content */}
