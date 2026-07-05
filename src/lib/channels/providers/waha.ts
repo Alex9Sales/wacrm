@@ -499,12 +499,16 @@ export const wahaProvider: WhatsAppProvider = {
             ? kind
             : 'document'
         ) as NormalizedInbound['contentType'];
+        // NOTE: do NOT expose `url` here. WAHA's media URL points at WAHA's
+        // OWN internal host (e.g. http://localhost:3000/api/files/…) and needs
+        // the host rewritten to baseUrl + an X-Api-Key header to fetch — both
+        // of which live in fetchInboundMedia. Leaving `url` set would make the
+        // generic pipeline fetch the raw internal URL directly (→ 404), so we
+        // pass ONLY fetchKey to force the fetchInboundMedia path.
         media = {
           kind,
           mimetype,
-          url: p.media?.url,
           filename: p.media?.filename,
-          // fetchInboundMedia resolves the internal host → baseUrl.
           fetchKey: { mediaUrl: p.media?.url },
         };
       }

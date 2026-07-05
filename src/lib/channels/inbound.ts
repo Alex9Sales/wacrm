@@ -118,11 +118,18 @@ export async function dispatchInboundMessage(
     }
   }
 
+  // `fromMe` = the operator answered from their OWN phone. On such echoes the
+  // pushName is the OPERATOR's WhatsApp name, NOT the contact's — using it
+  // would rename every customer to the operator ("Alex Sales"). So only carry
+  // the pushName for genuine incoming (customer) messages; fromMe passes no
+  // name (a new contact falls back to its phone number).
+  const isFromMe = ev.fromMe === true;
+
   // 2) Resolve / create contact by E.164 (shared dedupe helper).
   const contactOutcome = await findOrCreateContact(
     accountId,
     senderPhone,
-    ev.pushName ?? '',
+    isFromMe ? '' : ev.pushName ?? '',
   );
   if (!contactOutcome) return null;
   const contactId = contactOutcome.contact.id;
@@ -186,15 +193,11 @@ export async function dispatchInboundMessage(
   }
   const isFirstInbound = priorCustomerMsgCount === 0;
 
-  // `fromMe` = the operator answered from their OWN phone (mirrored to us by
-  // WAHA's message.any). It's an OUTGOING message, not a customer message:
-  // render it as an agent bubble, don't bump unread, and skip every
-  // customer-triggered side effect (flows / automations / AI / broadcast
-  // reply / first-inbound). Messages the CRM itself sent are already deduped
-  // upstream by external id, so this only covers phone-typed replies.
-  const isFromMe = ev.fromMe === true;
-
-  // 5) Insert the message (agent bubble when fromMe, else customer).
+  // 5) Insert the message (agent bubble when fromMe, else customer). A fromMe
+  // echo is the operator's own outgoing message (see isFromMe above): render
+  // it as an agent bubble, don't bump unread, and skip every customer-triggered
+  // side effect below. Messages the CRM itself sent are deduped upstream by
+  // external id, so this only covers phone-typed replies.
   try {
     await db.insert(messages).values({
       conversationId: conversation.id,
