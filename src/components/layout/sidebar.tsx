@@ -7,12 +7,14 @@ import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
+import { useTasksDueAlert } from "@/hooks/use-tasks-due-alert";
 import {
   Bell,
   Bot,
   Crown,
   GitBranch,
   LayoutDashboard,
+  ListTodo,
   LogOut,
   MessageSquare,
   Radio,
@@ -94,6 +96,7 @@ const navItems: NavItem[] = [
   { href: "/inbox", label: "Inbox", icon: MessageSquare },
   { href: "/notifications", label: "Notifications", icon: Bell },
   { href: "/contacts", label: "Contacts", icon: Users },
+  { href: "/tarefas", label: "Tarefas", icon: ListTodo },
   { href: "/pipelines", label: "Pipelines", icon: GitBranch },
   { href: "/broadcasts", label: "Broadcasts", icon: Radio },
   { href: "/automations", label: "Automations", icon: Zap },
@@ -116,6 +119,9 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   const { profile, profileLoading, account, accountRole, signOut } = useAuth();
   const totalUnread = useTotalUnread();
   const unreadNotifications = useUnreadNotifications();
+  // Count of open tasks that are overdue or due today — drives the red
+  // due-alert badge on the "Tarefas" entry.
+  const tasksDueAlert = useTasksDueAlert();
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it
@@ -220,6 +226,12 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               const showNotificationBadge =
                 item.href === "/notifications" && unreadNotifications > 0;
 
+              // Red due-alert badge on Tarefas — stays visible even
+              // while the page is active (it reflects work to do, not
+              // "currently viewing"). Mirrors the notifications badge.
+              const showTasksBadge =
+                item.href === "/tarefas" && tasksDueAlert > 0;
+
               return (
                 <li key={item.href}>
                   <Link
@@ -257,6 +269,14 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                         className="flex h-5 min-w-5 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-semibold text-primary-foreground"
                       >
                         {unreadNotifications > 9 ? "9+" : unreadNotifications}
+                      </span>
+                    )}
+                    {showTasksBadge && (
+                      <span
+                        aria-label={`${tasksDueAlert} tarefa${tasksDueAlert === 1 ? "" : "s"} vencida ou para hoje`}
+                        className="flex h-5 min-w-5 items-center justify-center rounded-full bg-destructive px-1 text-[10px] font-semibold text-destructive-foreground"
+                      >
+                        {tasksDueAlert > 9 ? "9+" : tasksDueAlert}
                       </span>
                     )}
                   </Link>

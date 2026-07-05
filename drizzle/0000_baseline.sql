@@ -1202,3 +1202,38 @@ CREATE TRIGGER ai_knowledge_documents_updated_at
 
 CREATE TRIGGER set_updated_at BEFORE UPDATE ON organization_billing
   FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();
+
+-- ============================================================
+-- TASKS ("Tarefas") — per-account task / reminder subsystem.
+-- Additive; safe to apply to a live DB (IF NOT EXISTS + guarded
+-- trigger). account_id cascades from organization; contact_id /
+-- deal_id SET NULL so removing a contact/deal keeps the task.
+-- `type` is free-text (no CHECK). assigned_to / created_by are
+-- loose uuids (no FK), mirroring other user refs.
+-- ============================================================
+CREATE TABLE IF NOT EXISTS tasks (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  account_id UUID NOT NULL REFERENCES organization(id) ON DELETE CASCADE,
+  title TEXT NOT NULL,
+  description TEXT,
+  due_at TIMESTAMPTZ,
+  status TEXT NOT NULL DEFAULT 'open',
+  type TEXT,
+  contact_id UUID REFERENCES contacts(id) ON DELETE SET NULL,
+  deal_id UUID REFERENCES deals(id) ON DELETE SET NULL,
+  assigned_to UUID,
+  created_by UUID,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+  CONSTRAINT tasks_status_check CHECK (status IN ('open', 'done', 'cancelled'))
+);
+
+CREATE INDEX IF NOT EXISTS idx_tasks_account ON tasks(account_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_account_status ON tasks(account_id, status);
+CREATE INDEX IF NOT EXISTS idx_tasks_due_at ON tasks(due_at);
+CREATE INDEX IF NOT EXISTS idx_tasks_contact ON tasks(contact_id);
+CREATE INDEX IF NOT EXISTS idx_tasks_deal ON tasks(deal_id);
+
+DROP TRIGGER IF EXISTS set_updated_at ON tasks;
+CREATE TRIGGER set_updated_at BEFORE UPDATE ON tasks
+  FOR EACH ROW EXECUTE FUNCTION update_updated_at_column();

@@ -1036,3 +1036,56 @@ export const aiKnowledgeChunks = pgTable("ai_knowledge_chunks", {
 			name: "ai_knowledge_chunks_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
+
+// ============================================================
+// TASKS ("Tarefas") — per-account task / reminder subsystem.
+//
+// Account-scoped (account_id → organization, cascade). A task has a
+// free-text title + OPTIONAL free-text `type` label (no CHECK, stays
+// flexible). It may link to a contact (client) and/or a deal (Kanban
+// card) — both nullable, SET NULL on delete so removing a
+// contact/deal doesn't destroy the task. `assigned_to` / `created_by`
+// are plain uuids (member/user ids) with no FK, mirroring the loose
+// user refs elsewhere. `set_updated_at` trigger keeps updated_at
+// fresh (see baseline). The due-alert badge reads (overdue +
+// dueToday) via getTasksOverview.
+// ============================================================
+export const tasks = pgTable("tasks", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	title: text().notNull(),
+	description: text(),
+	dueAt: timestamp("due_at", { withTimezone: true, mode: 'string' }),
+	status: text().default('open').notNull(),
+	// Optional free-text label (e.g. 'ligar','cobrar','enviar_boleto',
+	// 'outro'). Deliberately no CHECK so accounts can coin their own.
+	type: text(),
+	contactId: uuid("contact_id"),
+	dealId: uuid("deal_id"),
+	assignedTo: uuid("assigned_to"),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_tasks_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	index("idx_tasks_account_status").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.status.asc().nullsLast().op("text_ops")),
+	index("idx_tasks_due_at").using("btree", table.dueAt.asc().nullsLast().op("timestamptz_ops")),
+	index("idx_tasks_contact").using("btree", table.contactId.asc().nullsLast().op("uuid_ops")),
+	index("idx_tasks_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "tasks_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.contactId],
+			foreignColumns: [contacts.id],
+			name: "tasks_contact_id_fkey"
+		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.dealId],
+			foreignColumns: [deals.id],
+			name: "tasks_deal_id_fkey"
+		}).onDelete("set null"),
+	check("tasks_status_check", sql`status = ANY (ARRAY['open'::text, 'done'::text, 'cancelled'::text])`),
+]);
