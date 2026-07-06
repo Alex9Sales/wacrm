@@ -135,11 +135,15 @@ export async function enqueueBroadcastDispatch(
 export async function enqueueRecipient(
   channelId: string,
   payload: { broadcastId: string; recipientRowId: string },
+  opts: { delayMs?: number } = {},
 ): Promise<void> {
+  const jobOptions: JobsOptions = { jobId: payload.recipientRowId };
+  // Humanized drips schedule each recipient into the future (its slot).
+  if (opts.delayMs && opts.delayMs > 0) jobOptions.delay = opts.delayMs;
   await outboundQueue(channelId).add(
     'send',
     { broadcastId: payload.broadcastId, recipientRowId: payload.recipientRowId },
-    { jobId: payload.recipientRowId },
+    jobOptions,
   );
 }
 

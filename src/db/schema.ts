@@ -581,7 +581,17 @@ export const broadcasts = pgTable("broadcasts", {
 	// the channel after a restart (the channel used to live only in the
 	// transient BroadcastPlan); falls back to the default channel when null.
 	channelId: uuid("channel_id"),
-	templateName: text("template_name").notNull(),
+	// 'template' = Meta approved-template broadcast (official). 'text' = a
+	// free-text drip on a non-official channel (WAHA/Evolution/EvoGo),
+	// humanized-paced. bodyText holds the message for 'text' broadcasts.
+	messageKind: text("message_kind").default('template').notNull(),
+	bodyText: text("body_text"),
+	// Pacing config for humanized 'text' drips: { dailyCap, startMin, endMin,
+	// days:[1..6], offsetMin }. Null → send as fast as the throughput limiter
+	// allows (template/burst path).
+	pacing: jsonb(),
+	// Nullable: 'text' broadcasts carry no Meta template.
+	templateName: text("template_name"),
 	templateLanguage: text("template_language").default('en_US').notNull(),
 	templateVariables: jsonb("template_variables"),
 	audienceFilter: jsonb("audience_filter"),
@@ -626,6 +636,9 @@ export const broadcastRecipients = pgTable("broadcast_recipients", {
 	// only use positional `params`.
 	messageParams: jsonb("message_params"),
 	whatsappMessageId: text("whatsapp_message_id"),
+	// Humanized drip: the computed instant this recipient should be sent.
+	// Null for burst/template broadcasts (sent as fast as the limiter allows).
+	scheduledSlotAt: timestamp("scheduled_slot_at", { withTimezone: true, mode: 'string' }),
 	sentAt: timestamp("sent_at", { withTimezone: true, mode: 'string' }),
 	deliveredAt: timestamp("delivered_at", { withTimezone: true, mode: 'string' }),
 	readAt: timestamp("read_at", { withTimezone: true, mode: 'string' }),

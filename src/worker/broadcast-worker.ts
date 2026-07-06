@@ -49,12 +49,20 @@ import {
   resolveBroadcastChannel,
   markBroadcastSending,
   listPendingRecipientIds,
+  listPendingRecipientSlots,
   loadRecipientJobContext,
   markRecipientSent,
   recordRecipientAttempt,
   markRecipientFailed,
   finalizeBroadcastIfDone,
 } from '@/lib/queue/broadcast-jobs';
+import {
+  normalizePacing,
+  computeDripSlots,
+  localMinuteOfDay,
+  localWeekday,
+  type PacingConfig,
+} from '@/lib/whatsapp/drip-schedule';
 import { getProvider } from '@/lib/channels/registry';
 import { sendBroadcastRecipient } from '@/lib/whatsapp/broadcast-core';
 import { startScheduledMessageWorker } from './scheduled-message-worker';
@@ -154,6 +162,28 @@ async function processRecipientJob(job: Job<RecipientJob>): Promise<void> {
   const { channel, sendContext, recipient } = loaded.ctx;
   const attempts = recipient.attempts + 1;
 
+  // Business-hours guard for humanized drips: if this job fires OUTSIDE the
+  // allowed window/day (e.g. the worker was down across its slot and BullMQ
+  // released it late), re-delay to the next valid window instead of sending
+  // at, say, 3am. Slots are pre-computed inside the window, so in the happy
+  // path this never triggers.
+  if (loaded.ctx.broadcast.pacing) {
+    const cfg = normalizePacing(loaded.ctx.broadcast.pacing as Partial<PacingConfig>);
+    const nowMs = Date.now();
+    const minute = localMinuteOfDay(nowMs, cfg.offsetMin);
+    const weekday = localWeekday(nowMs, cfg.offsetMin);
+    const within =
+      cfg.days.includes(weekday) && minute >= cfg.startMin && minute < cfg.endMin;
+    if (!within) {
+      const next = computeDripSlots(1, cfg, nowMs)[0];
+      if (next && next > nowMs) {
+        await job.moveToDelayed(next, job.token);
+        log(`recipient ${recipient.id} deferred to next business window`);
+        return;
+      }
+    }
+  }
+
   // Jitter for non-official providers to reduce ban risk.
   const jitter = jitterForChannel({
     settings: channel.settings,
@@ -230,13 +260,30 @@ async function processDispatchJob(job: Job<BroadcastDispatchJob>): Promise<void>
   await markBroadcastSending(broadcastId);
   await ensureRecipientWorker(channel.id);
 
-  const pending = await listPendingRecipientIds(broadcastId);
-  log(
-    `dispatch ${broadcastId}: enqueueing ${pending.length} recipients on ` +
-      `channel ${channel.id}`,
-  );
-  for (const recipientRowId of pending) {
-    await enqueueRecipient(channel.id, { broadcastId, recipientRowId });
+  // Humanized drip: each recipient carries a computed slot; enqueue it with
+  // delay = slot - now so BullMQ fires it at the right time (spread across
+  // business hours, capped per day). Otherwise fan out immediately and let
+  // the per-channel limiter pace it (template/burst path).
+  if (broadcast.pacing) {
+    const slots = await listPendingRecipientSlots(broadcastId);
+    const now = Date.now();
+    log(
+      `dispatch ${broadcastId}: scheduling ${slots.length} humanized recipients ` +
+        `on channel ${channel.id}`,
+    );
+    for (const { id, slotAt } of slots) {
+      const delayMs = slotAt ? Math.max(0, Date.parse(slotAt) - now) : 0;
+      await enqueueRecipient(channel.id, { broadcastId, recipientRowId: id }, { delayMs });
+    }
+  } else {
+    const pending = await listPendingRecipientIds(broadcastId);
+    log(
+      `dispatch ${broadcastId}: enqueueing ${pending.length} recipients on ` +
+        `channel ${channel.id}`,
+    );
+    for (const recipientRowId of pending) {
+      await enqueueRecipient(channel.id, { broadcastId, recipientRowId });
+    }
   }
   // Nothing pending (all already settled) → finalize.
   await finalizeBroadcastIfDone(broadcastId);

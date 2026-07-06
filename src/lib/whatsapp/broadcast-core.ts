@@ -376,8 +376,13 @@ export async function createBroadcast(
 
 // ---- shared single-recipient send --------------------------------------
 
-/** What the send helper needs about the broadcast (template identity). */
+/** What the send helper needs about the broadcast (template identity, or
+ *  the free-text body for a 'text' drip). */
 export interface BroadcastSendContext {
+  /** 'template' (Meta) or 'text' (free-text drip on a non-official channel). */
+  messageKind?: 'template' | 'text';
+  /** The message body for a 'text' broadcast. */
+  bodyText?: string | null;
   templateName: string;
   templateLanguage: string;
   templateRow: MessageTemplate | null;
@@ -408,6 +413,23 @@ export async function sendBroadcastRecipient(
   recipient: RecipientSendInput,
 ): Promise<RecipientSendResult> {
   const provider = getProvider(channel.provider);
+
+  // Free-text drip: send the plain body via the provider's text path
+  // (WAHA/Evolution/EvoGo resolve their own chatId). No template needed.
+  if (ctx.messageKind === 'text') {
+    const body = (ctx.bodyText ?? '').trim();
+    if (!body) return { ok: false, error: 'empty text body' };
+    try {
+      const result = await provider.sendText(channel, recipient.phone, body, {});
+      return { ok: true, externalMessageId: result.externalMessageId };
+    } catch (error) {
+      return {
+        ok: false,
+        error: error instanceof Error ? error.message : 'Unknown error',
+      };
+    }
+  }
+
   if (!provider.sendTemplate) {
     throw new BroadcastError(
       'unsupported',

@@ -26,7 +26,10 @@ export interface BroadcastRow {
   accountId: string;
   channelId: string | null;
   status: string;
-  templateName: string;
+  messageKind: string;
+  bodyText: string | null;
+  pacing: unknown;
+  templateName: string | null;
   templateLanguage: string;
 }
 
@@ -41,6 +44,9 @@ export async function loadBroadcastRow(
         accountId: broadcasts.accountId,
         channelId: broadcasts.channelId,
         status: broadcasts.status,
+        messageKind: broadcasts.messageKind,
+        bodyText: broadcasts.bodyText,
+        pacing: broadcasts.pacing,
         templateName: broadcasts.templateName,
         templateLanguage: broadcasts.templateLanguage,
       })
@@ -89,6 +95,26 @@ export async function listPendingRecipientIds(
   return rows.map((r) => r.id);
 }
 
+/** Pending recipients WITH their computed slot time (humanized drips). The
+ *  dispatch worker enqueues each with delay = slot - now. */
+export async function listPendingRecipientSlots(
+  broadcastId: string,
+): Promise<{ id: string; slotAt: string | null }[]> {
+  const rows = await db
+    .select({
+      id: broadcastRecipients.id,
+      slotAt: broadcastRecipients.scheduledSlotAt,
+    })
+    .from(broadcastRecipients)
+    .where(
+      and(
+        eq(broadcastRecipients.broadcastId, broadcastId),
+        eq(broadcastRecipients.status, 'pending'),
+      ),
+    );
+  return rows;
+}
+
 /** Everything a recipient send job needs, rebuilt from the DB. */
 export interface RecipientJobContext {
   broadcast: BroadcastRow;
@@ -101,6 +127,8 @@ export interface RecipientJobContext {
     phone: string;
     params: string[];
     messageParams?: SendTimeParams;
+    /** Humanized drip: this recipient's target send instant (ISO), if any. */
+    slotAt: string | null;
   };
 }
 
@@ -125,6 +153,7 @@ export async function loadRecipientJobContext(
         attempts: broadcastRecipients.attempts,
         params: broadcastRecipients.params,
         messageParams: broadcastRecipients.messageParams,
+        slotAt: broadcastRecipients.scheduledSlotAt,
         phone: contacts.phone,
       })
       .from(broadcastRecipients)
@@ -148,14 +177,21 @@ export async function loadRecipientJobContext(
   const channel = await resolveBroadcastChannel(broadcast);
   if (!channel) return { kind: 'missing', reason: 'channel not resolvable' };
 
+  const isText = broadcast.messageKind === 'text';
   const sendContext: BroadcastSendContext = {
-    templateName: broadcast.templateName,
+    messageKind: isText ? 'text' : 'template',
+    bodyText: broadcast.bodyText,
+    templateName: broadcast.templateName ?? '',
     templateLanguage: broadcast.templateLanguage,
-    templateRow: await loadBroadcastTemplateRow(
-      broadcast.accountId,
-      broadcast.templateName,
-      broadcast.templateLanguage,
-    ),
+    // Text broadcasts have no Meta template row to load.
+    templateRow:
+      isText || !broadcast.templateName
+        ? null
+        : await loadBroadcastTemplateRow(
+            broadcast.accountId,
+            broadcast.templateName,
+            broadcast.templateLanguage,
+          ),
   };
 
   const params = Array.isArray(row.params)
@@ -175,6 +211,7 @@ export async function loadRecipientJobContext(
         phone: row.phone,
         params,
         messageParams: (row.messageParams as SendTimeParams | null) ?? undefined,
+        slotAt: row.slotAt ?? null,
       },
     },
   };

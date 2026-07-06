@@ -1,0 +1,407 @@
+'use client'
+
+// ============================================================
+// TextBroadcastForm — create a humanized text drip (RecebAI-style) on a
+// non-official channel. Pick a channel, write ONE plain message, choose an
+// audience (all / tags / CSV import), set the daily cap. The server spreads
+// the sends across business hours (08–18h, Mon–Sat, Campo Grande), at most
+// `dailyCap` per day. Server-side + queued, so it survives a browser close
+// and runs over days.
+// ============================================================
+
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useRouter } from 'next/navigation'
+import { toast } from 'sonner'
+import { Loader2, Upload, Users, CalendarClock, Send } from 'lucide-react'
+import { Button } from '@/components/ui/button'
+import { Input } from '@/components/ui/input'
+import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
+import {
+  listTextBroadcastChannels,
+  estimateAudienceCount,
+  createTextBroadcast,
+  type BroadcastChannel,
+} from '@/app/(dashboard)/broadcasts/actions'
+import { listTags } from '@/app/(dashboard)/contacts/actions'
+import type { Tag } from '@/types'
+import { cn } from '@/lib/utils'
+
+type AudienceType = 'all' | 'tags' | 'csv'
+
+interface CsvContact {
+  phone: string
+  name?: string
+}
+
+/** Parse pasted/uploaded CSV text into { phone, name } rows. Accepts comma,
+ *  semicolon or tab separators; drops an obvious header line. */
+function parseCsv(text: string): CsvContact[] {
+  const out: CsvContact[] = []
+  const lines = text.split(/\r?\n/)
+  for (const raw of lines) {
+    const line = raw.trim()
+    if (!line) continue
+    const parts = line.split(/[,;\t]/).map((p) => p.trim())
+    const phoneRaw = parts[0] ?? ''
+    // Skip a header row (e.g. "phone,name" / "telefone;nome").
+    if (/[a-zA-Z]/.test(phoneRaw) && /(phone|telefone|numero|número|contato)/i.test(phoneRaw)) {
+      continue
+    }
+    const phone = phoneRaw.replace(/[^\d+]/g, '')
+    if (phone.replace(/\D/g, '').length < 8) continue // too short to be a phone
+    out.push({ phone, name: parts[1] || undefined })
+  }
+  return out
+}
+
+const DAY_LABELS = 'seg–sáb'
+
+export function TextBroadcastForm() {
+  const router = useRouter()
+
+  const [channels, setChannels] = useState<BroadcastChannel[]>([])
+  const [tags, setTags] = useState<Tag[]>([])
+  const [loading, setLoading] = useState(true)
+
+  const [name, setName] = useState('')
+  const [channelId, setChannelId] = useState('')
+  const [message, setMessage] = useState('')
+  const [dailyCap, setDailyCap] = useState(50)
+
+  const [audienceType, setAudienceType] = useState<AudienceType>('all')
+  const [selectedTagIds, setSelectedTagIds] = useState<string[]>([])
+  const [csvContacts, setCsvContacts] = useState<CsvContact[]>([])
+  const [csvName, setCsvName] = useState('')
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  const [estimate, setEstimate] = useState<number | null>(null)
+  const [estimating, setEstimating] = useState(false)
+  const [submitting, setSubmitting] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      try {
+        const [chs, tgs] = await Promise.all([
+          listTextBroadcastChannels(),
+          listTags(),
+        ])
+        if (cancelled) return
+        setChannels(chs)
+        setTags(tgs)
+        if (chs.length > 0) setChannelId(chs[0].id)
+      } finally {
+        if (!cancelled) setLoading(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [])
+
+  // Live recipient estimate for the chosen audience.
+  useEffect(() => {
+    let cancelled = false
+    ;(async () => {
+      if (audienceType === 'csv') {
+        setEstimate(csvContacts.length)
+        return
+      }
+      if (audienceType === 'tags' && selectedTagIds.length === 0) {
+        setEstimate(null)
+        return
+      }
+      setEstimating(true)
+      try {
+        const n = await estimateAudienceCount({
+          type: audienceType,
+          tagIds: audienceType === 'tags' ? selectedTagIds : undefined,
+        })
+        if (!cancelled) setEstimate(n)
+      } finally {
+        if (!cancelled) setEstimating(false)
+      }
+    })()
+    return () => {
+      cancelled = true
+    }
+  }, [audienceType, selectedTagIds, csvContacts])
+
+  const handleFile = useCallback(async (file: File) => {
+    const text = await file.text()
+    const parsed = parseCsv(text)
+    setCsvContacts(parsed)
+    setCsvName(file.name)
+    if (parsed.length === 0) {
+      toast.error('Nenhum telefone válido encontrado no arquivo.')
+    } else {
+      toast.success(`${parsed.length} contatos lidos de ${file.name}.`)
+    }
+  }, [])
+
+  const toggleTag = useCallback((id: string) => {
+    setSelectedTagIds((prev) =>
+      prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id],
+    )
+  }, [])
+
+  const cap = Math.max(1, Math.min(2000, Math.floor(dailyCap) || 50))
+  const estDays = estimate && estimate > 0 ? Math.ceil(estimate / cap) : 0
+
+  const canSubmit =
+    !submitting &&
+    !!channelId &&
+    message.trim().length > 0 &&
+    ((audienceType === 'all') ||
+      (audienceType === 'tags' && selectedTagIds.length > 0) ||
+      (audienceType === 'csv' && csvContacts.length > 0))
+
+  const handleSubmit = useCallback(async () => {
+    if (!canSubmit) return
+    setSubmitting(true)
+    try {
+      const res = await createTextBroadcast({
+        name: name.trim() || null,
+        channelId,
+        bodyText: message.trim(),
+        dailyCap: cap,
+        audience: {
+          type: audienceType,
+          tagIds: audienceType === 'tags' ? selectedTagIds : undefined,
+          csvContacts: audienceType === 'csv' ? csvContacts : undefined,
+        },
+      })
+      if (res.error || !res.broadcastId) {
+        toast.error(res.error || 'Falha ao criar o disparo.')
+        return
+      }
+      toast.success(
+        `Disparo criado — ${res.totalRecipients} contatos, ${cap}/dia (${DAY_LABELS}).`,
+      )
+      router.push('/broadcasts')
+    } finally {
+      setSubmitting(false)
+    }
+  }, [canSubmit, name, channelId, message, cap, audienceType, selectedTagIds, csvContacts, router])
+
+  if (loading) {
+    return (
+      <div className="flex items-center gap-2 p-8 text-muted-foreground">
+        <Loader2 className="h-4 w-4 animate-spin" /> Carregando…
+      </div>
+    )
+  }
+
+  if (channels.length === 0) {
+    return (
+      <div className="rounded-xl border border-border bg-card/50 p-6 text-sm text-muted-foreground">
+        Nenhum canal não-oficial (WAHA/Evolution/EvoGo) conectado. Conecte um
+        canal em <strong>Configurações → Canais</strong> para fazer disparos de
+        texto.
+      </div>
+    )
+  }
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-6">
+      {/* Channel + name */}
+      <div className="grid gap-4 sm:grid-cols-2">
+        <div className="space-y-1.5">
+          <Label>Canal</Label>
+          <Select value={channelId} onValueChange={(v) => v && setChannelId(v)}>
+            <SelectTrigger className="w-full bg-muted border-border">
+              <SelectValue placeholder="Escolha o canal" />
+            </SelectTrigger>
+            <SelectContent>
+              {channels.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                  {c.phone_number ? ` · ${c.phone_number}` : ''}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div className="space-y-1.5">
+          <Label>Nome do disparo (opcional)</Label>
+          <Input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Ex.: Promoção de julho"
+            className="bg-muted border-border"
+          />
+        </div>
+      </div>
+
+      {/* Message */}
+      <div className="space-y-1.5">
+        <Label>Mensagem</Label>
+        <textarea
+          value={message}
+          onChange={(e) => setMessage(e.target.value)}
+          rows={5}
+          placeholder="Escreva a mensagem que será enviada para cada contato…"
+          className="w-full resize-none rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
+        />
+        <p className="text-xs text-muted-foreground">
+          Texto simples, enviado igual para todos. {message.trim().length} caracteres.
+        </p>
+      </div>
+
+      {/* Audience */}
+      <div className="space-y-2">
+        <Label>Para quem</Label>
+        <div className="grid grid-cols-3 gap-2">
+          {(
+            [
+              { key: 'all', label: 'Todos os contatos' },
+              { key: 'tags', label: 'Por etiquetas' },
+              { key: 'csv', label: 'Importar planilha' },
+            ] as { key: AudienceType; label: string }[]
+          ).map((opt) => (
+            <button
+              key={opt.key}
+              type="button"
+              onClick={() => setAudienceType(opt.key)}
+              className={cn(
+                'rounded-lg border px-3 py-2 text-xs transition-colors',
+                audienceType === opt.key
+                  ? 'border-primary bg-primary/10 text-foreground'
+                  : 'border-border text-muted-foreground hover:border-primary/40',
+              )}
+            >
+              {opt.label}
+            </button>
+          ))}
+        </div>
+
+        {audienceType === 'tags' && (
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {tags.length === 0 ? (
+              <p className="text-xs text-muted-foreground">
+                Nenhuma etiqueta criada ainda.
+              </p>
+            ) : (
+              tags.map((t) => (
+                <button
+                  key={t.id}
+                  type="button"
+                  onClick={() => toggleTag(t.id)}
+                  className={cn(
+                    'rounded-full border px-2.5 py-1 text-xs transition-colors',
+                    selectedTagIds.includes(t.id)
+                      ? 'border-primary bg-primary/10 text-foreground'
+                      : 'border-border text-muted-foreground hover:border-primary/40',
+                  )}
+                >
+                  {t.name}
+                </button>
+              ))
+            )}
+          </div>
+        )}
+
+        {audienceType === 'csv' && (
+          <div className="pt-1">
+            <input
+              ref={fileRef}
+              type="file"
+              accept=".csv,.txt"
+              className="hidden"
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) void handleFile(f)
+              }}
+            />
+            <button
+              type="button"
+              onClick={() => fileRef.current?.click()}
+              className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border px-3 py-3 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+            >
+              <Upload className="h-4 w-4" />
+              {csvName
+                ? `${csvName} — ${csvContacts.length} contatos`
+                : 'Enviar planilha (.csv) — uma linha por contato: telefone,nome'}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Daily cap */}
+      <div className="space-y-1.5">
+        <Label>Máximo por dia</Label>
+        <Input
+          type="number"
+          min={1}
+          max={2000}
+          value={dailyCap}
+          onChange={(e) => setDailyCap(Number(e.target.value))}
+          className="w-32 bg-muted border-border"
+        />
+        <p className="text-xs text-muted-foreground">
+          Recomendado até 50/dia em canal não-oficial para evitar bloqueio.
+        </p>
+      </div>
+
+      {/* Summary */}
+      <div className="rounded-xl border border-border bg-card/50 p-4 text-sm">
+        <div className="flex items-center gap-2">
+          <Users className="h-4 w-4 text-primary" />
+          {estimating ? (
+            <span className="text-muted-foreground">Calculando…</span>
+          ) : estimate === null ? (
+            <span className="text-muted-foreground">
+              Escolha a audiência para ver o total.
+            </span>
+          ) : (
+            <span className="text-foreground">
+              {estimate.toLocaleString('pt-BR')} contatos
+            </span>
+          )}
+        </div>
+        {estimate !== null && estimate > 0 && (
+          <div className="mt-2 flex items-center gap-2 text-muted-foreground">
+            <CalendarClock className="h-4 w-4 text-primary" />
+            <span>
+              ~{cap}/dia · leva ~{estDays} dia{estDays > 1 ? 's' : ''} útil
+              {estDays > 1 ? 'eis' : ''} · 08h–18h ({DAY_LABELS})
+            </span>
+          </div>
+        )}
+      </div>
+
+      <div className="flex items-center justify-end gap-2 border-t border-border pt-4">
+        <Button
+          variant="outline"
+          onClick={() => router.push('/broadcasts')}
+          disabled={submitting}
+          className="border-border text-muted-foreground"
+        >
+          Cancelar
+        </Button>
+        <Button
+          onClick={() => void handleSubmit()}
+          disabled={!canSubmit}
+          className="bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+        >
+          {submitting ? (
+            <>
+              <Loader2 className="h-4 w-4 animate-spin" /> Criando…
+            </>
+          ) : (
+            <>
+              <Send className="h-4 w-4" /> Iniciar disparo
+            </>
+          )}
+        </Button>
+      </div>
+    </div>
+  )
+}

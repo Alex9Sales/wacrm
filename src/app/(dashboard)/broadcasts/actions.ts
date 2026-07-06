@@ -19,7 +19,7 @@ import {
   messageTemplates,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
-import { getCurrentAccount } from '@/lib/auth/account'
+import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { channels } from '@/db'
 import {
   pauseBroadcast,
@@ -27,6 +27,16 @@ import {
   cancelBroadcast,
   type ControlResult,
 } from '@/lib/queue/broadcast-controls'
+import { loadChannel } from '@/lib/channels/channels'
+import { getProvider } from '@/lib/channels/registry'
+import type { ProviderId } from '@/lib/channels/provider'
+import { enqueueBroadcastDispatch } from '@/lib/queue/queues'
+import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils'
+import {
+  computeDripSlots,
+  normalizePacing,
+  type PacingConfig,
+} from '@/lib/whatsapp/drip-schedule'
 import type {
   Broadcast,
   BroadcastRecipient,
@@ -795,6 +805,153 @@ export async function updateRecipientStatuses(
   } catch (err) {
     return {
       error: err instanceof Error ? err.message : 'Failed to update recipients',
+    }
+  }
+}
+
+// ============================================================
+// Humanized text broadcast (RecebAI-style drip) — non-official channels.
+// A free-text message trickled out to an audience: at most `dailyCap` per
+// day, spread across business hours (08–18h, Mon–Sat, Campo Grande), one
+// every window/dailyCap minutes. Server-side (BullMQ), so it survives
+// browser close and spans days. Distinct from the template wizard.
+// ============================================================
+
+/** Non-official channels (WAHA/Evolution/EvoGo) — the only ones a free-text
+ *  drip can go out on (Meta requires an approved template for cold sends). */
+export async function listTextBroadcastChannels(): Promise<BroadcastChannel[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: channels.id,
+      name: channels.name,
+      phone_number: channels.phoneNumber,
+      status: channels.status,
+      provider: channels.provider,
+    })
+    .from(channels)
+    .where(eq(channels.accountId, ctx.accountId))
+    .orderBy(channels.name)
+  // Only providers that need jitter (non-official) support free-text drips.
+  return rows
+    .filter((r) => getProvider(r.provider as ProviderId).capabilities.needsJitter)
+    .map(({ provider: _p, ...r }) => r as BroadcastChannel)
+}
+
+export interface CreateTextBroadcastInput {
+  name?: string | null
+  channelId: string
+  bodyText: string
+  /** Max sends per day (default 50). Window/days/timezone use the defaults. */
+  dailyCap?: number
+  audience: ResolveAudienceInput
+}
+
+/**
+ * Create + launch a humanized text drip. Resolves the audience, computes a
+ * send slot per recipient, persists the broadcast + recipient rows, and
+ * enqueues the dispatch (which schedules each recipient at its slot).
+ */
+export async function createTextBroadcast(
+  input: CreateTextBroadcastInput,
+): Promise<{ broadcastId: string | null; totalRecipients: number; error: string | null }> {
+  try {
+    const ctx = await requireRole('agent')
+
+    const body = (input.bodyText ?? '').trim()
+    if (!body) {
+      return { broadcastId: null, totalRecipients: 0, error: 'Escreva a mensagem.' }
+    }
+
+    // Channel must belong to the account AND be a non-official provider.
+    const channel = input.channelId ? await loadChannel(input.channelId) : null
+    if (!channel || channel.accountId !== ctx.accountId) {
+      return { broadcastId: null, totalRecipients: 0, error: 'Canal inválido.' }
+    }
+    if (!getProvider(channel.provider).capabilities.needsJitter) {
+      return {
+        broadcastId: null,
+        totalRecipients: 0,
+        error: 'Disparo de texto só em canal não-oficial (WAHA/Evolution/EvoGo). Para o Meta use um template.',
+      }
+    }
+
+    // Resolve audience → contacts with a valid E.164 phone, deduped.
+    const contactsList = await resolveAudienceContacts(input.audience)
+    const seen = new Set<string>()
+    const recipients: { contactId: string }[] = []
+    for (const c of contactsList) {
+      if (!c.id || seen.has(c.id)) continue
+      const sanitized = sanitizePhoneForMeta(c.phone ?? '')
+      if (!isValidE164(sanitized)) continue
+      seen.add(c.id)
+      recipients.push({ contactId: c.id })
+    }
+    if (recipients.length === 0) {
+      return {
+        broadcastId: null,
+        totalRecipients: 0,
+        error: 'Nenhum contato com telefone válido nesta audiência.',
+      }
+    }
+
+    // Pacing (Campo Grande 08–18h Mon–Sat by default; only dailyCap is
+    // user-tunable here) + one slot per recipient.
+    const pacing: PacingConfig = normalizePacing({ dailyCap: input.dailyCap })
+    const slots = computeDripSlots(recipients.length, pacing, Date.now())
+
+    const broadcast = firstOrThrow(
+      await db
+        .insert(broadcasts)
+        .values({
+          userId: ctx.userId,
+          accountId: ctx.accountId,
+          name: input.name?.trim() || `Disparo de texto (${recipients.length})`,
+          channelId: channel.id,
+          messageKind: 'text',
+          bodyText: body,
+          pacing: pacing as unknown as Record<string, unknown>,
+          audienceFilter: input.audience as unknown as Record<string, unknown>,
+          status: 'sending',
+          totalRecipients: recipients.length,
+          sentCount: 0,
+          deliveredCount: 0,
+          readCount: 0,
+          repliedCount: 0,
+          failedCount: 0,
+        })
+        .returning({ id: broadcasts.id }),
+    )
+
+    const rows = recipients.map((r, i) => ({
+      broadcastId: broadcast.id,
+      contactId: r.contactId,
+      status: 'pending' as const,
+      scheduledSlotAt: slots[i] ? new Date(slots[i]).toISOString() : null,
+    }))
+    const BATCH = 200
+    try {
+      for (let i = 0; i < rows.length; i += BATCH) {
+        await db.insert(broadcastRecipients).values(rows.slice(i, i + BATCH))
+      }
+    } catch (recipErr) {
+      await db
+        .update(broadcasts)
+        .set({ status: 'failed', failedCount: recipients.length })
+        .where(eq(broadcasts.id, broadcast.id))
+      throw recipErr
+    }
+
+    // Dispatch now: the worker reads each recipient's slot and schedules it.
+    await enqueueBroadcastDispatch(broadcast.id)
+
+    return { broadcastId: broadcast.id, totalRecipients: recipients.length, error: null }
+  } catch (err) {
+    console.error('[broadcast] createTextBroadcast failed:', err)
+    return {
+      broadcastId: null,
+      totalRecipients: 0,
+      error: err instanceof Error ? err.message : 'Falha ao criar o disparo.',
     }
   }
 }
