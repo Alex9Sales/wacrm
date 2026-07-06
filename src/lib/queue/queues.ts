@@ -25,6 +25,7 @@ import { Queue, type JobsOptions } from 'bullmq';
 import { bullConnection } from './connection';
 
 export const BROADCAST_DISPATCH_QUEUE = 'broadcast-dispatch';
+export const SCHEDULED_MESSAGE_QUEUE = 'scheduled-message';
 
 /** Payload of a dispatch job. */
 export interface BroadcastDispatchJob {
@@ -35,6 +36,11 @@ export interface BroadcastDispatchJob {
 export interface RecipientJob {
   broadcastId: string;
   recipientRowId: string;
+}
+
+/** Payload of a scheduled 1:1 message job. */
+export interface ScheduledMessageJob {
+  scheduledMessageId: string;
 }
 
 /** Name of the per-channel outbound queue. (BullMQ forbids ':' in queue
@@ -59,6 +65,26 @@ export function broadcastDispatchQueue(): Queue<BroadcastDispatchJob> {
     });
   }
   return _dispatchQueue;
+}
+
+let _scheduledQueue: Queue<ScheduledMessageJob> | null = null;
+
+/** The single scheduled-message queue (delayed 1:1 sends). */
+export function scheduledMessageQueue(): Queue<ScheduledMessageJob> {
+  if (!_scheduledQueue) {
+    _scheduledQueue = new Queue<ScheduledMessageJob>(SCHEDULED_MESSAGE_QUEUE, {
+      connection: bullConnection(),
+      defaultJobOptions: {
+        // Transient send failures retry a few times; permanent ones throw
+        // UnrecoverableError in the worker and skip retries.
+        attempts: 3,
+        backoff: { type: 'exponential', delay: 30_000 },
+        removeOnComplete: { count: 500 },
+        removeOnFail: { count: 1000 },
+      },
+    });
+  }
+  return _scheduledQueue;
 }
 
 const _outboundQueues = new Map<string, Queue<RecipientJob>>();
@@ -117,11 +143,50 @@ export async function enqueueRecipient(
   );
 }
 
+/**
+ * Enqueue a scheduled 1:1 message. `delayMs` schedules it to fire at
+ * `scheduled_at`. jobId = `sched-{id}` so re-enqueue is a no-op and the
+ * job can be located + removed on cancel.
+ */
+export async function enqueueScheduledMessage(
+  scheduledMessageId: string,
+  opts: { delayMs?: number } = {},
+): Promise<void> {
+  const jobOptions: JobsOptions = { jobId: `sched-${scheduledMessageId}` };
+  if (opts.delayMs && opts.delayMs > 0) {
+    jobOptions.delay = opts.delayMs;
+  }
+  await scheduledMessageQueue().add('send', { scheduledMessageId }, jobOptions);
+}
+
+/**
+ * Remove a scheduled message's delayed job (best-effort). Safe to call
+ * even if the job already ran or never existed — the worker also re-checks
+ * the row's status, so a cancelled row is never sent even if the job
+ * couldn't be removed (e.g. it was already active).
+ */
+export async function removeScheduledMessageJob(
+  scheduledMessageId: string,
+): Promise<void> {
+  try {
+    const job = await scheduledMessageQueue().getJob(
+      `sched-${scheduledMessageId}`,
+    );
+    if (job) await job.remove();
+  } catch {
+    // Job is active/locked or already gone — the status re-check covers it.
+  }
+}
+
 /** Close all queue connections (graceful shutdown / test teardown). */
 export async function closeQueues(): Promise<void> {
   if (_dispatchQueue) {
     await _dispatchQueue.close();
     _dispatchQueue = null;
+  }
+  if (_scheduledQueue) {
+    await _scheduledQueue.close();
+    _scheduledQueue = null;
   }
   for (const q of _outboundQueues.values()) {
     await q.close();

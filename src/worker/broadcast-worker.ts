@@ -57,6 +57,7 @@ import {
 } from '@/lib/queue/broadcast-jobs';
 import { getProvider } from '@/lib/channels/registry';
 import { sendBroadcastRecipient } from '@/lib/whatsapp/broadcast-core';
+import { startScheduledMessageWorker } from './scheduled-message-worker';
 
 const DRY_RUN = process.env.BROADCAST_DRY_RUN === 'true';
 const PAUSE_RECHECK_MS = 15_000;
@@ -255,6 +256,10 @@ dispatchWorker.on('failed', (job, err) =>
 );
 dispatchWorker.on('error', (err) => log('dispatch worker error:', err.message));
 
+// Scheduled 1:1 messages ("Agendar mensagem") run in this same process on
+// their own queue. Kept as a separate module for clarity; closed on shutdown.
+const scheduledWorker = startScheduledMessageWorker();
+
 log(`started. DRY_RUN=${DRY_RUN}. Listening on '${BROADCAST_DISPATCH_QUEUE}'.`);
 
 // ---- startup recovery --------------------------------------------------
@@ -291,6 +296,7 @@ async function shutdown(signal: string): Promise<void> {
   log(`${signal} received — closing workers…`);
   try {
     await dispatchWorker.close();
+    await scheduledWorker.close();
     await Promise.all([...recipientWorkers.values()].map((w) => w.close()));
     await rawRedis.quit();
   } catch (err) {

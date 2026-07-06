@@ -25,6 +25,12 @@ import {
 } from "@/app/(dashboard)/tarefas/actions";
 import { TaskForm } from "@/components/tarefas/task-form";
 import { TaskMiniList } from "@/components/tarefas/task-mini-list";
+import {
+  listScheduledMessages,
+  type ScheduledMessageLite,
+} from "@/app/(dashboard)/inbox/schedule-actions";
+import { ScheduleMessageForm } from "./schedule-message-form";
+import { ScheduleMiniList } from "./schedule-mini-list";
 import type {
   Contact,
   Conversation,
@@ -54,6 +60,7 @@ import {
   MessageSquareText,
   ListChecks,
   ListTodo,
+  CalendarClock,
   UserPlus,
   Flag,
   Trash2,
@@ -189,6 +196,9 @@ export function ContactSidebar({
   // Tarefas — this contact's tasks (compact) + the reused create dialog.
   const [tasks, setTasks] = useState<TaskLite[]>([]);
   const [taskFormOpen, setTaskFormOpen] = useState(false);
+  // Mensagens agendadas — this conversation's schedule + create dialog.
+  const [scheduled, setScheduled] = useState<ScheduledMessageLite[]>([]);
+  const [scheduleFormOpen, setScheduleFormOpen] = useState(false);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
@@ -304,6 +314,22 @@ export function ContactSidebar({
   useEffect(() => {
     fetchContactData();
   }, [fetchContactData]);
+
+  // Scheduled messages are keyed on the CONVERSATION (not the contact), so
+  // load them separately whenever the active conversation changes.
+  const refreshScheduled = useCallback(() => {
+    if (!conversationId) {
+      setScheduled([]);
+      return;
+    }
+    listScheduledMessages(conversationId)
+      .then(setScheduled)
+      .catch(() => setScheduled([]));
+  }, [conversationId]);
+
+  useEffect(() => {
+    refreshScheduled();
+  }, [refreshScheduled]);
 
   const handleCopyPhone = useCallback(async () => {
     if (!contact?.phone) return;
@@ -841,6 +867,39 @@ export function ContactSidebar({
               </button>
             </Section>
 
+            {/* ---- Mensagens agendadas (requer conversa ativa) ---- */}
+            {conversation && (
+              <Section
+                icon={CalendarClock}
+                title="Mensagens agendadas"
+                defaultOpen
+                action={
+                  <button
+                    type="button"
+                    onClick={() => setScheduleFormOpen(true)}
+                    aria-label="Agendar mensagem"
+                    title="Agendar mensagem"
+                    className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                }
+              >
+                <ScheduleMiniList
+                  items={scheduled}
+                  onChanged={refreshScheduled}
+                  emptyLabel="Nenhuma mensagem agendada."
+                />
+                <button
+                  type="button"
+                  onClick={() => setScheduleFormOpen(true)}
+                  className="mt-2 w-full rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                >
+                  + Agendar mensagem
+                </button>
+              </Section>
+            )}
+
             {/* ---- Notas ---- */}
             <Section icon={StickyNote} title="Notas" defaultOpen>
               <div className="flex gap-2">
@@ -901,6 +960,18 @@ export function ContactSidebar({
         prefillContactId={contact.id}
         onSaved={refreshTasks}
       />
+
+      {/* Message scheduler — queues a text message into THIS conversation at
+          a future time (worker sends it). Only mounted when a conversation is
+          active. On save we refetch the "Mensagens agendadas" section. */}
+      {conversation && (
+        <ScheduleMessageForm
+          open={scheduleFormOpen}
+          onOpenChange={setScheduleFormOpen}
+          conversationId={conversation.id}
+          onSaved={refreshScheduled}
+        />
+      )}
 
       {/* Deal editor — reuses the pipelines DealForm sheet for create/edit
           (pipeline, stage, value, assigned agent, notes, status). */}

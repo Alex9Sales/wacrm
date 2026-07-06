@@ -1089,3 +1089,56 @@ export const tasks = pgTable("tasks", {
 		}).onDelete("set null"),
 	check("tasks_status_check", sql`status = ANY (ARRAY['open'::text, 'done'::text, 'cancelled'::text])`),
 ]);
+
+// ============================================================
+// Scheduled messages — a single WhatsApp message queued to be sent
+// into ONE conversation at a future time. Distinct from broadcasts
+// (bulk, template-driven): this is a 1:1 free-text (or media) message
+// an operator schedules from the inbox sidebar. A BullMQ delayed job
+// (queue 'scheduled-message', jobId `sched-{id}`) fires at scheduled_at
+// and the worker calls sendMessageToConversation, then flips status to
+// 'sent'. Cancelling removes the job AND flips status to 'cancelled'.
+// ============================================================
+export const scheduledMessages = pgTable("scheduled_messages", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	conversationId: uuid("conversation_id").notNull(),
+	// Denormalized for display + so a deleted contact just nulls out.
+	contactId: uuid("contact_id"),
+	// 'text' | 'image' | 'video' | 'document' | 'audio' (matches the send
+	// funnel's message types; v1 UI only creates 'text').
+	messageType: text("message_type").default('text').notNull(),
+	contentText: text("content_text"),
+	mediaUrl: text("media_url"),
+	filename: text(),
+	scheduledAt: timestamp("scheduled_at", { withTimezone: true, mode: 'string' }).notNull(),
+	status: text().default('pending').notNull(),
+	// Set after a successful send.
+	sentMessageId: uuid("sent_message_id"),
+	externalMessageId: text("external_message_id"),
+	lastError: text("last_error"),
+	attempts: integer().default(0).notNull(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_scheduled_messages_conversation").using("btree", table.conversationId.asc().nullsLast().op("uuid_ops")),
+	index("idx_scheduled_messages_account_status").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.status.asc().nullsLast().op("text_ops")),
+	index("idx_scheduled_messages_due").using("btree", table.scheduledAt.asc().nullsLast().op("timestamptz_ops")),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "scheduled_messages_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.conversationId],
+			foreignColumns: [conversations.id],
+			name: "scheduled_messages_conversation_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.contactId],
+			foreignColumns: [contacts.id],
+			name: "scheduled_messages_contact_id_fkey"
+		}).onDelete("set null"),
+	check("scheduled_messages_status_check", sql`status = ANY (ARRAY['pending'::text, 'sent'::text, 'cancelled'::text, 'failed'::text])`),
+]);
