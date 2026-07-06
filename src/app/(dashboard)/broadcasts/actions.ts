@@ -842,6 +842,10 @@ export interface CreateTextBroadcastInput {
   name?: string | null
   channelId: string
   bodyText: string
+  /** Optional media attachment (public URL + kind + filename). */
+  mediaUrl?: string | null
+  mediaType?: 'image' | 'video' | 'document' | 'audio' | null
+  mediaFilename?: string | null
   /** Max sends per day (default 50). Window/days/timezone use the defaults. */
   dailyCap?: number
   audience: ResolveAudienceInput
@@ -859,9 +863,21 @@ export async function createTextBroadcast(
     const ctx = await requireRole('agent')
 
     const body = (input.bodyText ?? '').trim()
-    if (!body) {
-      return { broadcastId: null, totalRecipients: 0, error: 'Escreva a mensagem.' }
+    const mediaUrl = (input.mediaUrl ?? '').trim()
+    if (!body && !mediaUrl) {
+      return {
+        broadcastId: null,
+        totalRecipients: 0,
+        error: 'Escreva a mensagem ou anexe uma mídia.',
+      }
     }
+    const mediaType = mediaUrl
+      ? ((['image', 'video', 'document', 'audio'] as const).includes(
+          input.mediaType as 'image',
+        )
+          ? input.mediaType
+          : 'image')
+      : null
 
     // Channel must belong to the account AND be a non-official provider.
     const channel = input.channelId ? await loadChannel(input.channelId) : null
@@ -909,7 +925,10 @@ export async function createTextBroadcast(
           name: input.name?.trim() || `Disparo de texto (${recipients.length})`,
           channelId: channel.id,
           messageKind: 'text',
-          bodyText: body,
+          bodyText: body || null,
+          mediaUrl: mediaUrl || null,
+          mediaType,
+          mediaFilename: input.mediaFilename?.trim() || null,
           pacing: pacing as unknown as Record<string, unknown>,
           audienceFilter: input.audience as unknown as Record<string, unknown>,
           status: 'sending',

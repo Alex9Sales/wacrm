@@ -35,6 +35,8 @@ import {
   isRecipientNotAllowedError,
 } from '@/lib/whatsapp/phone-utils';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
+import { renderMessageVars } from '@/lib/whatsapp/message-vars';
+import type { OutboundMedia } from '@/lib/channels/provider';
 import type { MessageTemplate } from '@/types';
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 import { findOrCreateContact } from '@/lib/api/v1/contacts';
@@ -377,12 +379,16 @@ export async function createBroadcast(
 // ---- shared single-recipient send --------------------------------------
 
 /** What the send helper needs about the broadcast (template identity, or
- *  the free-text body for a 'text' drip). */
+ *  the free-text body + optional media for a 'text' drip). */
 export interface BroadcastSendContext {
   /** 'template' (Meta) or 'text' (free-text drip on a non-official channel). */
   messageKind?: 'template' | 'text';
-  /** The message body for a 'text' broadcast. */
+  /** The message body for a 'text' broadcast (may contain {{tokens}}). */
   bodyText?: string | null;
+  /** Optional media attachment for a 'text' broadcast. */
+  mediaUrl?: string | null;
+  mediaType?: string | null;
+  mediaFilename?: string | null;
   templateName: string;
   templateLanguage: string;
   templateRow: MessageTemplate | null;
@@ -393,6 +399,8 @@ export interface RecipientSendInput {
   phone: string;
   params: string[];
   messageParams?: SendTimeParams;
+  /** Personalization values for {{tokens}} in a 'text' body (nome, etc.). */
+  vars?: Record<string, string>;
 }
 
 /** Outcome of a single send attempt (no DB writes performed here). */
@@ -414,12 +422,30 @@ export async function sendBroadcastRecipient(
 ): Promise<RecipientSendResult> {
   const provider = getProvider(channel.provider);
 
-  // Free-text drip: send the plain body via the provider's text path
-  // (WAHA/Evolution/EvoGo resolve their own chatId). No template needed.
+  // Free-text drip: personalize the body per recipient, then send — either
+  // as media (with the text as caption) or as a plain text message. The
+  // provider (WAHA/Evolution/EvoGo) resolves its own chatId. No template.
   if (ctx.messageKind === 'text') {
-    const body = (ctx.bodyText ?? '').trim();
-    if (!body) return { ok: false, error: 'empty text body' };
+    const rawBody = ctx.bodyText ?? '';
+    const body = renderMessageVars(rawBody, recipient.vars ?? {}).trim();
+    const mediaUrl = (ctx.mediaUrl ?? '').trim();
+
     try {
+      if (mediaUrl) {
+        const kind = (ctx.mediaType as OutboundMedia['kind']) || 'image';
+        // Audio carries no caption on WhatsApp; everything else uses the
+        // personalized text as the caption.
+        const media: OutboundMedia = {
+          kind,
+          url: mediaUrl,
+          caption: kind === 'audio' || !body ? undefined : body,
+          filename: ctx.mediaFilename ?? undefined,
+        };
+        const result = await provider.sendMedia(channel, recipient.phone, media);
+        return { ok: true, externalMessageId: result.externalMessageId };
+      }
+
+      if (!body) return { ok: false, error: 'empty text body' };
       const result = await provider.sendText(channel, recipient.phone, body, {});
       return { ok: true, externalMessageId: result.externalMessageId };
     } catch (error) {

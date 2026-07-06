@@ -207,6 +207,7 @@ async function processRecipientJob(job: Job<RecipientJob>): Promise<void> {
     phone: recipient.phone,
     params: recipient.params,
     messageParams: recipient.messageParams,
+    vars: recipient.vars,
   });
 
   if (result.ok) {

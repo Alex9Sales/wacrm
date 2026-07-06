@@ -19,6 +19,7 @@ import {
   type BroadcastSendContext,
 } from '@/lib/whatsapp/broadcast-core';
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
+import { contactTokenValues } from '@/lib/whatsapp/message-vars';
 
 /** A broadcast row as the worker sees it. */
 export interface BroadcastRow {
@@ -28,6 +29,9 @@ export interface BroadcastRow {
   status: string;
   messageKind: string;
   bodyText: string | null;
+  mediaUrl: string | null;
+  mediaType: string | null;
+  mediaFilename: string | null;
   pacing: unknown;
   templateName: string | null;
   templateLanguage: string;
@@ -46,6 +50,9 @@ export async function loadBroadcastRow(
         status: broadcasts.status,
         messageKind: broadcasts.messageKind,
         bodyText: broadcasts.bodyText,
+        mediaUrl: broadcasts.mediaUrl,
+        mediaType: broadcasts.mediaType,
+        mediaFilename: broadcasts.mediaFilename,
         pacing: broadcasts.pacing,
         templateName: broadcasts.templateName,
         templateLanguage: broadcasts.templateLanguage,
@@ -129,6 +136,8 @@ export interface RecipientJobContext {
     messageParams?: SendTimeParams;
     /** Humanized drip: this recipient's target send instant (ISO), if any. */
     slotAt: string | null;
+    /** Personalization values for {{tokens}} in a 'text' body. */
+    vars: Record<string, string>;
   };
 }
 
@@ -155,6 +164,9 @@ export async function loadRecipientJobContext(
         messageParams: broadcastRecipients.messageParams,
         slotAt: broadcastRecipients.scheduledSlotAt,
         phone: contacts.phone,
+        contactName: contacts.name,
+        contactEmail: contacts.email,
+        contactCompany: contacts.company,
       })
       .from(broadcastRecipients)
       .leftJoin(contacts, eq(broadcastRecipients.contactId, contacts.id))
@@ -181,6 +193,9 @@ export async function loadRecipientJobContext(
   const sendContext: BroadcastSendContext = {
     messageKind: isText ? 'text' : 'template',
     bodyText: broadcast.bodyText,
+    mediaUrl: broadcast.mediaUrl,
+    mediaType: broadcast.mediaType,
+    mediaFilename: broadcast.mediaFilename,
     templateName: broadcast.templateName ?? '',
     templateLanguage: broadcast.templateLanguage,
     // Text broadcasts have no Meta template row to load.
@@ -212,6 +227,12 @@ export async function loadRecipientJobContext(
         params,
         messageParams: (row.messageParams as SendTimeParams | null) ?? undefined,
         slotAt: row.slotAt ?? null,
+        vars: contactTokenValues({
+          name: row.contactName,
+          phone: row.phone,
+          email: row.contactEmail,
+          company: row.contactCompany,
+        }),
       },
     },
   };

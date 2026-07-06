@@ -9,10 +9,10 @@
 // and runs over days.
 // ============================================================
 
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { Loader2, Upload, Users, CalendarClock, Send } from 'lucide-react'
+import { Loader2, Upload, Users, CalendarClock, Send, Paperclip, X } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -30,8 +30,30 @@ import {
   type BroadcastChannel,
 } from '@/app/(dashboard)/broadcasts/actions'
 import { listTags } from '@/app/(dashboard)/contacts/actions'
+import {
+  uploadAccountMedia,
+  MEDIA_MAX_BYTES_BY_KIND,
+} from '@/lib/storage/upload-media'
+import { renderForContact, SUPPORTED_TOKENS } from '@/lib/whatsapp/message-vars'
 import type { Tag } from '@/types'
 import { cn } from '@/lib/utils'
+
+type MediaKind = 'image' | 'video' | 'document' | 'audio'
+
+function kindFromMime(type: string): MediaKind {
+  if (type.startsWith('image/')) return 'image'
+  if (type.startsWith('video/')) return 'video'
+  if (type.startsWith('audio/')) return 'audio'
+  return 'document'
+}
+
+/** A sample contact for the live preview. */
+const PREVIEW_CONTACT = {
+  name: 'Maria Silva',
+  phone: '+55 67 99999-8888',
+  email: 'maria@exemplo.com',
+  company: 'Empresa Exemplo',
+}
 
 type AudienceType = 'all' | 'tags' | 'csv'
 
@@ -74,6 +96,14 @@ export function TextBroadcastForm() {
   const [channelId, setChannelId] = useState('')
   const [message, setMessage] = useState('')
   const [dailyCap, setDailyCap] = useState(50)
+  const messageRef = useRef<HTMLTextAreaElement>(null)
+
+  // Optional media attachment.
+  const [mediaUrl, setMediaUrl] = useState('')
+  const [mediaType, setMediaType] = useState<MediaKind | null>(null)
+  const [mediaFilename, setMediaFilename] = useState('')
+  const [uploadingMedia, setUploadingMedia] = useState(false)
+  const mediaRef = useRef<HTMLInputElement>(null)
 
   const [audienceType, setAudienceType] = useState<AudienceType>('all')
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([])
@@ -152,13 +182,61 @@ export function TextBroadcastForm() {
     )
   }, [])
 
+  const handleMediaFile = useCallback(async (file: File) => {
+    const kind = kindFromMime(file.type)
+    const max = MEDIA_MAX_BYTES_BY_KIND[kind]
+    if (file.size > max) {
+      toast.error(`Arquivo grande demais para ${kind} (máx. ${Math.round(max / 1024 / 1024)}MB).`)
+      return
+    }
+    setUploadingMedia(true)
+    try {
+      const { publicUrl } = await uploadAccountMedia('media', file)
+      setMediaUrl(publicUrl)
+      setMediaType(kind)
+      setMediaFilename(file.name)
+      toast.success('Mídia anexada.')
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao enviar a mídia.')
+    } finally {
+      setUploadingMedia(false)
+    }
+  }, [])
+
+  const clearMedia = useCallback(() => {
+    setMediaUrl('')
+    setMediaType(null)
+    setMediaFilename('')
+    if (mediaRef.current) mediaRef.current.value = ''
+  }, [])
+
+  /** Insert a {{token}} at the cursor in the message textarea. */
+  const insertToken = useCallback((token: string) => {
+    const snippet = `{{${token}}}`
+    const el = messageRef.current
+    if (!el) {
+      setMessage((m) => m + snippet)
+      return
+    }
+    const start = el.selectionStart ?? el.value.length
+    const end = el.selectionEnd ?? el.value.length
+    setMessage((m) => m.slice(0, start) + snippet + m.slice(end))
+    // Restore focus + caret after the inserted token.
+    requestAnimationFrame(() => {
+      el.focus()
+      const pos = start + snippet.length
+      el.setSelectionRange(pos, pos)
+    })
+  }, [])
+
   const cap = Math.max(1, Math.min(2000, Math.floor(dailyCap) || 50))
   const estDays = estimate && estimate > 0 ? Math.ceil(estimate / cap) : 0
 
   const canSubmit =
     !submitting &&
+    !uploadingMedia &&
     !!channelId &&
-    message.trim().length > 0 &&
+    (message.trim().length > 0 || !!mediaUrl) &&
     ((audienceType === 'all') ||
       (audienceType === 'tags' && selectedTagIds.length > 0) ||
       (audienceType === 'csv' && csvContacts.length > 0))
@@ -171,6 +249,9 @@ export function TextBroadcastForm() {
         name: name.trim() || null,
         channelId,
         bodyText: message.trim(),
+        mediaUrl: mediaUrl || null,
+        mediaType,
+        mediaFilename: mediaFilename || null,
         dailyCap: cap,
         audience: {
           type: audienceType,
@@ -189,7 +270,7 @@ export function TextBroadcastForm() {
     } finally {
       setSubmitting(false)
     }
-  }, [canSubmit, name, channelId, message, cap, audienceType, selectedTagIds, csvContacts, router])
+  }, [canSubmit, name, channelId, message, mediaUrl, mediaType, mediaFilename, cap, audienceType, selectedTagIds, csvContacts, router])
 
   if (loading) {
     return (
@@ -243,16 +324,100 @@ export function TextBroadcastForm() {
       {/* Message */}
       <div className="space-y-1.5">
         <Label>Mensagem</Label>
+        {/* Variable helper chips — insert {{token}} at the cursor. */}
+        <div className="flex flex-wrap gap-1.5">
+          {SUPPORTED_TOKENS.map((tok) => (
+            <button
+              key={tok}
+              type="button"
+              onClick={() => insertToken(tok)}
+              className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+              title={`Inserir {{${tok}}}`}
+            >
+              {`{{${tok}}}`}
+            </button>
+          ))}
+        </div>
         <textarea
+          ref={messageRef}
           value={message}
           onChange={(e) => setMessage(e.target.value)}
           rows={5}
-          placeholder="Escreva a mensagem que será enviada para cada contato…"
+          placeholder="Ex.: Olá {{primeiro_nome|cliente}}, tudo bem? Temos uma novidade…"
           className="w-full resize-none rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
         />
         <p className="text-xs text-muted-foreground">
-          Texto simples, enviado igual para todos. {message.trim().length} caracteres.
+          Use as variáveis acima para personalizar. Ex.:{' '}
+          <code>{'{{primeiro_nome|cliente}}'}</code> usa o primeiro nome, ou
+          &quot;cliente&quot; se estiver vazio. {message.trim().length} caracteres.
         </p>
+        {/* Live preview with a sample contact. */}
+        {message.trim().length > 0 && (
+          <div className="rounded-lg border border-border bg-card/50 p-3">
+            <p className="mb-1 text-[10px] uppercase tracking-wide text-muted-foreground">
+              Prévia (exemplo: {PREVIEW_CONTACT.name})
+            </p>
+            <p className="whitespace-pre-wrap text-sm text-foreground">
+              {renderForContact(message, PREVIEW_CONTACT)}
+            </p>
+          </div>
+        )}
+      </div>
+
+      {/* Media attachment */}
+      <div className="space-y-1.5">
+        <Label>Mídia (opcional)</Label>
+        <input
+          ref={mediaRef}
+          type="file"
+          accept="image/*,video/*,audio/*,application/pdf"
+          className="hidden"
+          onChange={(e) => {
+            const f = e.target.files?.[0]
+            if (f) void handleMediaFile(f)
+          }}
+        />
+        {mediaUrl ? (
+          <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-muted px-3 py-2">
+            <span className="flex items-center gap-2 truncate text-xs text-foreground">
+              <Paperclip className="h-3.5 w-3.5 shrink-0 text-primary" />
+              <span className="truncate">{mediaFilename}</span>
+              <span className="shrink-0 rounded-full bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                {mediaType}
+              </span>
+            </span>
+            <button
+              type="button"
+              onClick={clearMedia}
+              className="shrink-0 text-muted-foreground hover:text-red-400"
+              aria-label="Remover mídia"
+            >
+              <X className="h-4 w-4" />
+            </button>
+          </div>
+        ) : (
+          <button
+            type="button"
+            onClick={() => mediaRef.current?.click()}
+            disabled={uploadingMedia}
+            className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border px-3 py-3 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:opacity-50"
+          >
+            {uploadingMedia ? (
+              <>
+                <Loader2 className="h-4 w-4 animate-spin" /> Enviando…
+              </>
+            ) : (
+              <>
+                <Paperclip className="h-4 w-4" /> Anexar imagem, vídeo, áudio ou PDF
+              </>
+            )}
+          </button>
+        )}
+        {mediaType === 'audio' && message.trim().length > 0 && (
+          <p className="text-[11px] text-amber-400">
+            Áudio não leva legenda — o texto acima não será enviado junto.
+          </p>
+        )}
       </div>
 
       {/* Audience */}

@@ -586,6 +586,11 @@ export const broadcasts = pgTable("broadcasts", {
 	// humanized-paced. bodyText holds the message for 'text' broadcasts.
 	messageKind: text("message_kind").default('template').notNull(),
 	bodyText: text("body_text"),
+	// Optional media attachment for a 'text' broadcast (image/video/document/
+	// audio). mediaUrl is the public (proxy) URL the provider fetches.
+	mediaUrl: text("media_url"),
+	mediaType: text("media_type"),
+	mediaFilename: text("media_filename"),
 	// Pacing config for humanized 'text' drips: { dailyCap, startMin, endMin,
 	// days:[1..6], offsetMin }. Null → send as fast as the throughput limiter
 	// allows (template/burst path).
