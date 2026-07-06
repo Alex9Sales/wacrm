@@ -324,9 +324,21 @@ export const evogoProvider: WhatsAppProvider = {
 // Inbound normalization
 // ------------------------------------------------------------
 
-/** JIDs we never ingest: groups (@g.us) and status broadcasts. */
+/**
+ * JIDs we never ingest: groups (@g.us), newsletters, broadcasts and status.
+ * Also drops a bare numeric group/newsletter id that arrived without its
+ * suffix — those are 16+ digits, while an E.164 phone is at most 15.
+ */
 function isIgnorableJid(jid: string): boolean {
-  return jid.endsWith('@g.us') || jid.startsWith('status@');
+  if (
+    jid.endsWith('@g.us') ||
+    jid.endsWith('@broadcast') ||
+    jid.endsWith('@newsletter') ||
+    jid.startsWith('status@')
+  ) {
+    return true;
+  }
+  return /^\d{16,}$/.test(jid.split('@')[0]);
 }
 
 /**

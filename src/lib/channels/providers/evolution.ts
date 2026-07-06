@@ -430,10 +430,14 @@ function normalizeUpsert(
   if (!key || !key.id || !jid) return null;
 
   // Filter out non-direct chats: groups, broadcast lists, status updates.
+  // Also drop a bare numeric group/newsletter id that lost its suffix (16+
+  // digits — an E.164 phone is at most 15).
   if (
     jid.endsWith('@g.us') ||
     jid.endsWith('@broadcast') ||
-    jid.startsWith('status@')
+    jid.endsWith('@newsletter') ||
+    jid.startsWith('status@') ||
+    /^\d{16,}$/.test(jid.split('@')[0])
   ) {
     return null;
   }

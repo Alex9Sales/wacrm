@@ -62,6 +62,29 @@ describe('wahaProvider.parseWebhook', () => {
     expect(messages).toHaveLength(0);
   });
 
+  it('ignores group ids delivered without a @g.us suffix (bare numeric)', () => {
+    // WAHA NOWEB sometimes sends a group message with the chat as a raw
+    // 18-digit id (prefixed 120363) and no suffix — must still be dropped.
+    const bare = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: { id: 'g_b_H', from: '120363400053019227', body: 'grupo raw' },
+    });
+    expect(bare.messages).toHaveLength(0);
+
+    const suffixed = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: { id: 'g_c_H', from: '120363400053019227@g.us', body: 'grupo' },
+    });
+    expect(suffixed.messages).toHaveLength(0);
+
+    // A normal E.164 phone (≤15 digits) must still pass through.
+    const direct = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: { id: 'd_e_H', from: '5567999998888@c.us', body: 'oi' },
+    });
+    expect(direct.messages).toHaveLength(1);
+  });
+
   it('processes fromMe on message.any but skips non-fromMe echoes', () => {
     const skipped = wahaProvider.parseWebhook({
       event: 'message.any',

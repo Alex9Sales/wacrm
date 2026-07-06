@@ -283,9 +283,28 @@ interface WahaWebhookBody {
 const LID_RE = /@lid$/i;
 const WA_NET_RE = /@s\.whatsapp\.net$/i;
 
-/** Groups (@g.us) and status broadcasts are ignored in v1. */
+/**
+ * Groups, newsletters and status broadcasts are ignored in v1.
+ *
+ * We match both the suffixed form (`@g.us` / `@newsletter` / `@broadcast`)
+ * AND the bare id shape: WAHA NOWEB sometimes delivers a group message with
+ * the chat as a raw numeric id (e.g. `120363400053019227`) with no `@g.us`
+ * suffix. WhatsApp group/newsletter ids are long (18+ digits, usually
+ * prefixed `120363`), while an E.164 phone is at most 15 digits — so a bare
+ * numeric local part of 16+ digits is a group/newsletter that lost its suffix.
+ */
 function isNonDirectJid(jid: string): boolean {
-  return /@g\.us$/i.test(jid) || /@broadcast$/i.test(jid) || jid.startsWith('status@');
+  if (
+    /@g\.us$/i.test(jid) ||
+    /@broadcast$/i.test(jid) ||
+    /@newsletter$/i.test(jid) ||
+    jid.startsWith('status@')
+  ) {
+    return true;
+  }
+  const local = jid.split('@')[0];
+  // Bare numeric id too long to be a phone (E.164 max = 15 digits) → group.
+  return /^\d{16,}$/.test(local);
 }
 
 /** Map a media mimetype to a NormalizedInbound.contentType-ish kind. */
