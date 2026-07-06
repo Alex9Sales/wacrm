@@ -182,6 +182,33 @@ export async function removeScheduledMessageJob(
   }
 }
 
+/**
+ * Force a paced broadcast's pending recipients to send NOW: promote each
+ * recipient's delayed outbound job to the front of the queue (or enqueue it
+ * fresh if it isn't there yet). Used by "Enviar agora" on a humanized drip —
+ * the caller must first null the broadcast's pacing so the worker's
+ * business-hours guard is skipped when the promoted jobs run.
+ */
+export async function sendRecipientsNow(
+  channelId: string,
+  broadcastId: string,
+  recipientRowIds: string[],
+): Promise<void> {
+  const q = outboundQueue(channelId);
+  for (const recipientRowId of recipientRowIds) {
+    const job = await q.getJob(recipientRowId);
+    if (job) {
+      try {
+        await job.promote(); // delayed → waiting (runs immediately)
+      } catch {
+        // Not in a delayed state (already waiting/active/done) — nothing to do.
+      }
+    } else {
+      await enqueueRecipient(channelId, { broadcastId, recipientRowId });
+    }
+  }
+}
+
 /** Close all queue connections (graceful shutdown / test teardown). */
 export async function closeQueues(): Promise<void> {
   if (_dispatchQueue) {

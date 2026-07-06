@@ -27,10 +27,11 @@ import {
   cancelBroadcast,
   type ControlResult,
 } from '@/lib/queue/broadcast-controls'
-import { loadChannel } from '@/lib/channels/channels'
+import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import type { ProviderId } from '@/lib/channels/provider'
-import { enqueueBroadcastDispatch } from '@/lib/queue/queues'
+import { enqueueBroadcastDispatch, sendRecipientsNow } from '@/lib/queue/queues'
+import { listPendingRecipientIds } from '@/lib/queue/broadcast-jobs'
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils'
 import {
   computeDripSlots,
@@ -54,6 +55,8 @@ const broadcastColumns = {
   template_name: broadcasts.templateName,
   template_language: broadcasts.templateLanguage,
   template_variables: broadcasts.templateVariables,
+  message_kind: broadcasts.messageKind,
+  pacing: broadcasts.pacing,
   audience_filter: broadcasts.audienceFilter,
   channel_id: broadcasts.channelId,
   scheduled_at: broadcasts.scheduledAt,
@@ -1000,6 +1003,71 @@ export async function createTextBroadcast(
       broadcastId: null,
       totalRecipients: 0,
       error: err instanceof Error ? err.message : 'Falha ao criar o disparo.',
+    }
+  }
+}
+
+/**
+ * "Enviar agora" on a humanized text drip: flip it to a burst (null pacing)
+ * and promote all its pending recipients so they fire immediately instead
+ * of waiting for their business-hours slots. No-op-ish for non-paced
+ * broadcasts. Account-scoped.
+ */
+export async function sendBroadcastNowAction(
+  broadcastId: string,
+): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const ctx = await requireRole('agent')
+    const b = firstOrNull(
+      await db
+        .select({
+          id: broadcasts.id,
+          accountId: broadcasts.accountId,
+          channelId: broadcasts.channelId,
+          status: broadcasts.status,
+          pacing: broadcasts.pacing,
+        })
+        .from(broadcasts)
+        .where(
+          and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, ctx.accountId)),
+        )
+        .limit(1),
+    )
+    if (!b) return { ok: false, error: 'Disparo não encontrado.' }
+    if (!b.pacing) return { ok: false, error: 'Este disparo já é envio imediato.' }
+    if (!['sending', 'scheduled', 'paused'].includes(b.status)) {
+      return { ok: false, error: 'O disparo já foi finalizado.' }
+    }
+
+    // Flip to burst so the worker's business-hours guard is skipped, and
+    // (re)affirm 'sending'.
+    await db
+      .update(broadcasts)
+      .set({ pacing: null, status: 'sending', updatedAt: new Date().toISOString() })
+      .where(eq(broadcasts.id, b.id))
+    await db
+      .update(broadcastRecipients)
+      .set({ scheduledSlotAt: null })
+      .where(
+        and(
+          eq(broadcastRecipients.broadcastId, b.id),
+          eq(broadcastRecipients.status, 'pending'),
+        ),
+      )
+
+    const channel = b.channelId
+      ? await loadChannel(b.channelId)
+      : await loadDefaultChannel(b.accountId)
+    if (!channel) return { ok: false, error: 'Canal do disparo não encontrado.' }
+
+    const pending = await listPendingRecipientIds(b.id)
+    await sendRecipientsNow(channel.id, b.id, pending)
+    return { ok: true }
+  } catch (err) {
+    console.error('[broadcast] sendBroadcastNowAction failed:', err)
+    return {
+      ok: false,
+      error: err instanceof Error ? err.message : 'Falha ao enviar agora.',
     }
   }
 }

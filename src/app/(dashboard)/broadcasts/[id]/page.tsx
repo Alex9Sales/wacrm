@@ -9,6 +9,7 @@ import {
   pauseBroadcastAction,
   resumeBroadcastAction,
   cancelBroadcastAction,
+  sendBroadcastNowAction,
 } from '../actions';
 import { Broadcast, BroadcastRecipient, RecipientStatus } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -51,6 +52,7 @@ import {
   Play,
   Ban,
   CalendarClock,
+  Zap,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -281,6 +283,23 @@ export default function BroadcastDetailPage() {
     }
   }
 
+  async function runSendNow(): Promise<void> {
+    setControlBusy(true);
+    try {
+      const result = await sendBroadcastNowAction(broadcastId);
+      if (!result.ok) {
+        toast.error(result.error ?? 'Não foi possível enviar agora.');
+      } else {
+        toast.success('Enviando agora — os contatos pendentes vão sair já.');
+      }
+      await fetchData().catch(() => {});
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha na operação.');
+    } finally {
+      setControlBusy(false);
+    }
+  }
+
   const filteredRecipients = useMemo(
     () =>
       statusFilter === 'all'
@@ -364,6 +383,13 @@ export default function BroadcastDetailPage() {
     broadcast.status === 'scheduled' ||
     broadcast.status === 'paused';
   const deleteBlocked = isLive; // scheduled / sending / paused
+  // "Enviar agora" only for a humanized drip still waiting on its slots
+  // (pacing present). Bursts (pacing null) already send immediately.
+  const canSendNow =
+    (broadcast as unknown as { pacing?: unknown }).pacing != null &&
+    (broadcast.status === 'sending' ||
+      broadcast.status === 'scheduled' ||
+      broadcast.status === 'paused');
 
   const processed =
     broadcast.sent_count + broadcast.failed_count;
@@ -418,6 +444,21 @@ export default function BroadcastDetailPage() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
+          {/* "Enviar agora" — force a humanized drip to fire its pending
+              recipients immediately (skip the business-hours slots). */}
+          {canSendNow && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={controlBusy}
+              onClick={() => runSendNow()}
+              className="border-primary/40 text-primary hover:bg-primary/10 disabled:opacity-50"
+            >
+              <Zap className="h-3.5 w-3.5" />
+              Enviar agora
+            </Button>
+          )}
+
           {/* Lifecycle controls — pause / resume / cancel. Visibility
               follows the queue state machine. */}
           {canPause && (
