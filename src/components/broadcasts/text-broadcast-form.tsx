@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { Loader2, Upload, Users, CalendarClock, Send, Paperclip, X } from 'lucide-react'
+import { Loader2, Upload, Users, CalendarClock, Send, Paperclip, X, Check } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -29,7 +29,7 @@ import {
   createTextBroadcast,
   type BroadcastChannel,
 } from '@/app/(dashboard)/broadcasts/actions'
-import { listTags } from '@/app/(dashboard)/contacts/actions'
+import { listTags, listContacts } from '@/app/(dashboard)/contacts/actions'
 import {
   uploadAccountMedia,
   MEDIA_MAX_BYTES_BY_KIND,
@@ -55,11 +55,17 @@ const PREVIEW_CONTACT = {
   company: 'Empresa Exemplo',
 }
 
-type AudienceType = 'all' | 'tags' | 'csv'
+type AudienceType = 'all' | 'tags' | 'contacts' | 'csv'
 
 interface CsvContact {
   phone: string
   name?: string
+}
+
+interface PickContact {
+  id: string
+  name: string
+  phone: string
 }
 
 /** Parse pasted/uploaded CSV text into { phone, name } rows. Accepts comma,
@@ -111,6 +117,12 @@ export function TextBroadcastForm() {
   const [csvName, setCsvName] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
 
+  // Pick-specific-contacts audience.
+  const [contactSearch, setContactSearch] = useState('')
+  const [contactResults, setContactResults] = useState<PickContact[]>([])
+  const [searchingContacts, setSearchingContacts] = useState(false)
+  const [pickedContacts, setPickedContacts] = useState<PickContact[]>([])
+
   const [estimate, setEstimate] = useState<number | null>(null)
   const [estimating, setEstimating] = useState(false)
   const [submitting, setSubmitting] = useState(false)
@@ -144,6 +156,10 @@ export function TextBroadcastForm() {
         setEstimate(csvContacts.length)
         return
       }
+      if (audienceType === 'contacts') {
+        setEstimate(pickedContacts.length)
+        return
+      }
       if (audienceType === 'tags' && selectedTagIds.length === 0) {
         setEstimate(null)
         return
@@ -162,7 +178,40 @@ export function TextBroadcastForm() {
     return () => {
       cancelled = true
     }
-  }, [audienceType, selectedTagIds, csvContacts])
+  }, [audienceType, selectedTagIds, csvContacts, pickedContacts])
+
+  // Contact search for the "select contacts" audience (server-side, top 50).
+  useEffect(() => {
+    if (audienceType !== 'contacts') return
+    let cancelled = false
+    setSearchingContacts(true)
+    const run = async () => {
+      try {
+        const res = await listContacts({
+          offset: 0,
+          limit: 50,
+          search: contactSearch.trim(),
+          tagIds: [],
+        })
+        if (cancelled) return
+        setContactResults(
+          res.contacts.map((c) => ({
+            id: c.id,
+            name: c.name || '',
+            phone: c.phone || '',
+          })),
+        )
+      } finally {
+        if (!cancelled) setSearchingContacts(false)
+      }
+    }
+    // Small debounce so typing doesn't hammer the server.
+    const t = setTimeout(run, 250)
+    return () => {
+      cancelled = true
+      clearTimeout(t)
+    }
+  }, [audienceType, contactSearch])
 
   const handleFile = useCallback(async (file: File) => {
     const text = await file.text()
@@ -179,6 +228,14 @@ export function TextBroadcastForm() {
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
       prev.includes(id) ? prev.filter((t) => t !== id) : [...prev, id],
+    )
+  }, [])
+
+  const togglePicked = useCallback((c: PickContact) => {
+    setPickedContacts((prev) =>
+      prev.some((p) => p.id === c.id)
+        ? prev.filter((p) => p.id !== c.id)
+        : [...prev, c],
     )
   }, [])
 
@@ -239,6 +296,7 @@ export function TextBroadcastForm() {
     (message.trim().length > 0 || !!mediaUrl) &&
     ((audienceType === 'all') ||
       (audienceType === 'tags' && selectedTagIds.length > 0) ||
+      (audienceType === 'contacts' && pickedContacts.length > 0) ||
       (audienceType === 'csv' && csvContacts.length > 0))
 
   const handleSubmit = useCallback(async () => {
@@ -257,6 +315,10 @@ export function TextBroadcastForm() {
           type: audienceType,
           tagIds: audienceType === 'tags' ? selectedTagIds : undefined,
           csvContacts: audienceType === 'csv' ? csvContacts : undefined,
+          contactIds:
+            audienceType === 'contacts'
+              ? pickedContacts.map((c) => c.id)
+              : undefined,
         },
       })
       if (res.error || !res.broadcastId) {
@@ -270,7 +332,7 @@ export function TextBroadcastForm() {
     } finally {
       setSubmitting(false)
     }
-  }, [canSubmit, name, channelId, message, mediaUrl, mediaType, mediaFilename, cap, audienceType, selectedTagIds, csvContacts, router])
+  }, [canSubmit, name, channelId, message, mediaUrl, mediaType, mediaFilename, cap, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
 
   if (loading) {
     return (
@@ -423,10 +485,11 @@ export function TextBroadcastForm() {
       {/* Audience */}
       <div className="space-y-2">
         <Label>Para quem</Label>
-        <div className="grid grid-cols-3 gap-2">
+        <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
           {(
             [
               { key: 'all', label: 'Todos os contatos' },
+              { key: 'contacts', label: 'Selecionar contatos' },
               { key: 'tags', label: 'Por etiquetas' },
               { key: 'csv', label: 'Importar planilha' },
             ] as { key: AudienceType; label: string }[]
@@ -470,6 +533,78 @@ export function TextBroadcastForm() {
                 </button>
               ))
             )}
+          </div>
+        )}
+
+        {audienceType === 'contacts' && (
+          <div className="space-y-2 pt-1">
+            <Input
+              value={contactSearch}
+              onChange={(e) => setContactSearch(e.target.value)}
+              placeholder="Buscar por nome ou telefone…"
+              className="bg-muted border-border"
+            />
+            {/* Selected chips */}
+            {pickedContacts.length > 0 && (
+              <div className="flex flex-wrap gap-1.5">
+                {pickedContacts.map((c) => (
+                  <button
+                    key={c.id}
+                    type="button"
+                    onClick={() => togglePicked(c)}
+                    className="flex items-center gap-1 rounded-full border border-primary bg-primary/10 px-2.5 py-1 text-xs text-foreground"
+                    title="Remover"
+                  >
+                    {c.name || c.phone}
+                    <X className="h-3 w-3" />
+                  </button>
+                ))}
+              </div>
+            )}
+            {/* Results list */}
+            <div className="max-h-56 overflow-y-auto rounded-lg border border-border">
+              {searchingContacts ? (
+                <div className="flex items-center gap-2 px-3 py-3 text-xs text-muted-foreground">
+                  <Loader2 className="h-3.5 w-3.5 animate-spin" /> Buscando…
+                </div>
+              ) : contactResults.length === 0 ? (
+                <p className="px-3 py-3 text-xs text-muted-foreground">
+                  Nenhum contato encontrado.
+                </p>
+              ) : (
+                contactResults.map((c) => {
+                  const checked = pickedContacts.some((p) => p.id === c.id)
+                  return (
+                    <button
+                      key={c.id}
+                      type="button"
+                      onClick={() => togglePicked(c)}
+                      className="flex w-full items-center gap-2 border-b border-border px-3 py-2 text-left text-xs last:border-b-0 hover:bg-muted"
+                    >
+                      <span
+                        className={cn(
+                          'flex h-4 w-4 shrink-0 items-center justify-center rounded border',
+                          checked
+                            ? 'border-primary bg-primary text-primary-foreground'
+                            : 'border-muted-foreground/50',
+                        )}
+                      >
+                        {checked && <Check className="h-3 w-3" />}
+                      </span>
+                      <span className="min-w-0 flex-1 truncate text-foreground">
+                        {c.name || '(sem nome)'}
+                      </span>
+                      <span className="shrink-0 text-muted-foreground">{c.phone}</span>
+                    </button>
+                  )
+                })
+              )}
+            </div>
+            <p className="text-xs text-muted-foreground">
+              {pickedContacts.length} selecionado
+              {pickedContacts.length === 1 ? '' : 's'}. Mostrando os 50 primeiros —
+              use a busca para achar mais.
+            </p>
           </div>
         )}
 

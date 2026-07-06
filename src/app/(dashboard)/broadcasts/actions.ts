@@ -300,7 +300,7 @@ export async function listCustomFields(): Promise<CustomField[]> {
   return rows as unknown as CustomField[]
 }
 
-export type AudienceCountType = 'all' | 'tags' | 'custom_field' | 'csv'
+export type AudienceCountType = 'all' | 'tags' | 'custom_field' | 'csv' | 'contacts'
 export type CustomFieldOperator = 'is' | 'is_not' | 'contains'
 
 export interface AudienceCountInput {
@@ -313,6 +313,8 @@ export interface AudienceCountInput {
   }
   /** For CSV the caller already knows the count — passed through as-is. */
   csvCount?: number
+  /** Explicitly picked contact ids (type 'contacts'). */
+  contactIds?: string[]
   excludeTagIds?: string[]
 }
 
@@ -350,6 +352,10 @@ export async function estimateAudienceCount(
 
   if (input.type === 'csv') {
     return input.csvCount ?? 0
+  }
+
+  if (input.type === 'contacts') {
+    return input.contactIds?.length ?? 0
   }
 
   if (input.type === 'all') {
@@ -454,6 +460,8 @@ export interface ResolveAudienceInput {
     value: string
   }
   csvContacts?: { phone: string; name?: string }[]
+  /** Explicitly picked contact ids (type 'contacts'). */
+  contactIds?: string[]
   excludeTagIds?: string[]
 }
 
@@ -523,6 +531,20 @@ export async function resolveAudienceContacts(
     }
   } else if (input.type === 'csv' && input.csvContacts) {
     rows = await upsertCsvContacts(ctx.userId, ctx.accountId, input.csvContacts)
+  } else if (
+    input.type === 'contacts' &&
+    input.contactIds &&
+    input.contactIds.length > 0
+  ) {
+    rows = (await db
+      .select(contactColumns)
+      .from(contacts)
+      .where(
+        and(
+          inArray(contacts.id, input.contactIds),
+          eq(contacts.accountId, ctx.accountId),
+        ),
+      )) as unknown as Contact[]
   }
 
   // Exclude tags — works across every contact-derived audience type.
