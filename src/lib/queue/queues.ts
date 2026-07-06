@@ -183,30 +183,28 @@ export async function removeScheduledMessageJob(
 }
 
 /**
- * Force a paced broadcast's pending recipients to send NOW: promote each
- * recipient's delayed outbound job to the front of the queue (or enqueue it
- * fresh if it isn't there yet). Used by "Enviar agora" on a humanized drip —
- * the caller must first null the broadcast's pacing so the worker's
- * business-hours guard is skipped when the promoted jobs run.
+ * Re-schedule one recipient's outbound job to a new delay: drop the existing
+ * delayed job (jobId = recipientRowId) and re-enqueue it with `delayMs`. Used
+ * by "Enviar agora" to re-anchor a humanized drip's pending recipients to a
+ * fresh, now-based spacing (the caller also nulls the broadcast's pacing so
+ * the worker's business-hours guard is skipped).
  */
-export async function sendRecipientsNow(
+export async function rescheduleRecipient(
   channelId: string,
   broadcastId: string,
-  recipientRowIds: string[],
+  recipientRowId: string,
+  delayMs: number,
 ): Promise<void> {
   const q = outboundQueue(channelId);
-  for (const recipientRowId of recipientRowIds) {
-    const job = await q.getJob(recipientRowId);
-    if (job) {
-      try {
-        await job.promote(); // delayed → waiting (runs immediately)
-      } catch {
-        // Not in a delayed state (already waiting/active/done) — nothing to do.
-      }
-    } else {
-      await enqueueRecipient(channelId, { broadcastId, recipientRowId });
+  const job = await q.getJob(recipientRowId);
+  if (job) {
+    try {
+      await job.remove();
+    } catch {
+      // Active/locked — can't remove; leave it (it'll run on its old slot).
     }
   }
+  await enqueueRecipient(channelId, { broadcastId, recipientRowId }, { delayMs });
 }
 
 /** Close all queue connections (graceful shutdown / test teardown). */

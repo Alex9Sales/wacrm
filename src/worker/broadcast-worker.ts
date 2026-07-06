@@ -48,7 +48,6 @@ import {
   loadBroadcastRow,
   resolveBroadcastChannel,
   markBroadcastSending,
-  listPendingRecipientIds,
   listPendingRecipientSlots,
   loadRecipientJobContext,
   markRecipientSent,
@@ -261,30 +260,19 @@ async function processDispatchJob(job: Job<BroadcastDispatchJob>): Promise<void>
   await markBroadcastSending(broadcastId);
   await ensureRecipientWorker(channel.id);
 
-  // Humanized drip: each recipient carries a computed slot; enqueue it with
-  // delay = slot - now so BullMQ fires it at the right time (spread across
-  // business hours, capped per day). Otherwise fan out immediately and let
-  // the per-channel limiter pace it (template/burst path).
-  if (broadcast.pacing) {
-    const slots = await listPendingRecipientSlots(broadcastId);
-    const now = Date.now();
-    log(
-      `dispatch ${broadcastId}: scheduling ${slots.length} humanized recipients ` +
-        `on channel ${channel.id}`,
-    );
-    for (const { id, slotAt } of slots) {
-      const delayMs = slotAt ? Math.max(0, Date.parse(slotAt) - now) : 0;
-      await enqueueRecipient(channel.id, { broadcastId, recipientRowId: id }, { delayMs });
-    }
-  } else {
-    const pending = await listPendingRecipientIds(broadcastId);
-    log(
-      `dispatch ${broadcastId}: enqueueing ${pending.length} recipients on ` +
-        `channel ${channel.id}`,
-    );
-    for (const recipientRowId of pending) {
-      await enqueueRecipient(channel.id, { broadcastId, recipientRowId });
-    }
+  // Each pending recipient carries a slot (humanized drip or a spaced
+  // "send now"). Enqueue it with delay = slot - now; a null slot (plain
+  // burst) means immediate. BullMQ then fires each at the right time and
+  // the per-channel limiter caps the raw rate as a safety net.
+  const slots = await listPendingRecipientSlots(broadcastId);
+  const now = Date.now();
+  log(
+    `dispatch ${broadcastId}: scheduling ${slots.length} recipients on ` +
+      `channel ${channel.id}`,
+  );
+  for (const { id, slotAt } of slots) {
+    const delayMs = slotAt ? Math.max(0, Date.parse(slotAt) - now) : 0;
+    await enqueueRecipient(channel.id, { broadcastId, recipientRowId: id }, { delayMs });
   }
   // Nothing pending (all already settled) → finalize.
   await finalizeBroadcastIfDone(broadcastId);

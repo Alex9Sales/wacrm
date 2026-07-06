@@ -103,6 +103,7 @@ export function TextBroadcastForm() {
   const [message, setMessage] = useState('')
   const [dailyCap, setDailyCap] = useState(50)
   const [sendNow, setSendNow] = useState(false)
+  const [sendNowIntervalMin, setSendNowIntervalMin] = useState(1)
   const messageRef = useRef<HTMLTextAreaElement>(null)
 
   // Optional media attachment.
@@ -313,6 +314,7 @@ export function TextBroadcastForm() {
         mediaFilename: mediaFilename || null,
         dailyCap: cap,
         sendNow,
+        sendNowIntervalMin: Math.max(0, Math.floor(sendNowIntervalMin) || 0),
         audience: {
           type: audienceType,
           tagIds: audienceType === 'tags' ? selectedTagIds : undefined,
@@ -336,7 +338,7 @@ export function TextBroadcastForm() {
     } finally {
       setSubmitting(false)
     }
-  }, [canSubmit, name, channelId, message, mediaUrl, mediaType, mediaFilename, cap, sendNow, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
+  }, [canSubmit, name, channelId, message, mediaUrl, mediaType, mediaFilename, cap, sendNow, sendNowIntervalMin, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
 
   if (loading) {
     return (
@@ -649,11 +651,30 @@ export function TextBroadcastForm() {
         <span className="text-sm">
           <span className="text-foreground">Enviar agora</span>
           <span className="block text-xs text-muted-foreground">
-            Dispara imediatamente, ignorando o horário comercial. Use para testes
+            Começa imediatamente, ignorando o horário comercial. Use para testes
             ou envios urgentes (cuidado com bloqueio em listas grandes).
           </span>
         </span>
       </label>
+
+      {/* Interval between messages — only for "send now" */}
+      {sendNow && (
+        <div className="space-y-1.5">
+          <Label>Intervalo entre mensagens (min)</Label>
+          <Input
+            type="number"
+            min={0}
+            max={1440}
+            value={sendNowIntervalMin}
+            onChange={(e) => setSendNowIntervalMin(Number(e.target.value))}
+            className="w-32 bg-muted border-border"
+          />
+          <p className="text-xs text-muted-foreground">
+            Tempo entre uma mensagem e a próxima, a partir de agora.{' '}
+            <strong>0</strong> = todas de uma vez.
+          </p>
+        </div>
+      )}
 
       {/* Daily cap — only relevant for the humanized drip */}
       {!sendNow && (
@@ -693,7 +714,12 @@ export function TextBroadcastForm() {
           <div className="mt-2 flex items-center gap-2 text-muted-foreground">
             <CalendarClock className="h-4 w-4 text-primary" />
             {sendNow ? (
-              <span>Envio imediato (sem espaçar no horário)</span>
+              <span>
+                Começa agora ·{' '}
+                {sendNowIntervalMin > 0
+                  ? `1 msg a cada ${sendNowIntervalMin} min`
+                  : 'todas de uma vez'}
+              </span>
             ) : (
               <span>
                 ~{cap}/dia · leva ~{estDays} dia{estDays > 1 ? 's' : ''} útil

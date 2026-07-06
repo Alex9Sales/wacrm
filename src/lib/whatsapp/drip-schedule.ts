@@ -61,6 +61,28 @@ export function normalizePacing(input: Partial<PacingConfig> | null | undefined)
   };
 }
 
+/** The humanized interval (minutes) between sends implied by a pacing
+ *  config: the business window split across the daily cap. */
+export function pacingIntervalMinutes(cfg: PacingConfig): number {
+  return Math.max(1, Math.round((cfg.endMin - cfg.startMin) / cfg.dailyCap));
+}
+
+/**
+ * Slots for a "send now, but spaced" run: the first at `nowMs`, then one
+ * every `intervalMs`. No business-hours / daily-cap gating — the caller
+ * chose to send immediately. `intervalMs <= 0` → everything at once (burst).
+ */
+export function nowSpacedSlots(
+  count: number,
+  intervalMs: number,
+  nowMs: number,
+): number[] {
+  const step = intervalMs > 0 ? intervalMs : 0;
+  const slots: number[] = [];
+  for (let i = 0; i < count; i++) slots.push(nowMs + i * step);
+  return slots;
+}
+
 /** Local weekday (0-6) for a UTC instant under the given offset. */
 export function localWeekday(utcMs: number, offsetMin: number): number {
   return new Date(utcMs + offsetMin * MIN_MS).getUTCDay();

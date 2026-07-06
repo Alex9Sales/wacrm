@@ -30,12 +30,13 @@ import {
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import type { ProviderId } from '@/lib/channels/provider'
-import { enqueueBroadcastDispatch, sendRecipientsNow } from '@/lib/queue/queues'
-import { listPendingRecipientIds } from '@/lib/queue/broadcast-jobs'
+import { enqueueBroadcastDispatch, rescheduleRecipient } from '@/lib/queue/queues'
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils'
 import {
   computeDripSlots,
   normalizePacing,
+  nowSpacedSlots,
+  pacingIntervalMinutes,
   type PacingConfig,
 } from '@/lib/whatsapp/drip-schedule'
 import type {
@@ -873,9 +874,11 @@ export interface CreateTextBroadcastInput {
   mediaFilename?: string | null
   /** Max sends per day (default 50). Window/days/timezone use the defaults. */
   dailyCap?: number
-  /** Send immediately (burst, no pacing / business-hours) instead of the
-   *  humanized drip. Useful for tests and urgent sends. */
+  /** Send starting now (no business-hours wait) instead of the humanized
+   *  drip. Useful for tests and urgent sends. */
   sendNow?: boolean
+  /** When sendNow: minutes between each message (0 = all at once). */
+  sendNowIntervalMin?: number
   audience: ResolveAudienceInput
 }
 
@@ -939,14 +942,23 @@ export async function createTextBroadcast(
       }
     }
 
-    // "Enviar agora" = burst (no pacing, fired immediately by the dispatch
-    // worker, paced only by the channel's per-minute limiter). Otherwise the
-    // humanized drip: Campo Grande 08–18h Mon–Sat, one slot per recipient.
+    // "Enviar agora" = start now (no business-hours gate), one message every
+    // `sendNowIntervalMin` minutes (0 = all at once). Otherwise the humanized
+    // drip: Campo Grande 08–18h Mon–Sat, spaced by window/dailyCap.
     const sendNow = !!input.sendNow
     const pacing: PacingConfig | null = sendNow
       ? null
       : normalizePacing({ dailyCap: input.dailyCap })
-    const slots = sendNow ? [] : computeDripSlots(recipients.length, pacing!, Date.now())
+    let slots: number[]
+    if (sendNow) {
+      const intervalMin = Math.max(
+        0,
+        Math.min(1440, Math.floor(Number(input.sendNowIntervalMin ?? 0)) || 0),
+      )
+      slots = nowSpacedSlots(recipients.length, intervalMin * 60_000, Date.now())
+    } else {
+      slots = computeDripSlots(recipients.length, pacing!, Date.now())
+    }
 
     const broadcast = firstOrThrow(
       await db
@@ -978,7 +990,7 @@ export async function createTextBroadcast(
       broadcastId: broadcast.id,
       contactId: r.contactId,
       status: 'pending' as const,
-      scheduledSlotAt: sendNow || !slots[i] ? null : new Date(slots[i]).toISOString(),
+      scheduledSlotAt: slots[i] ? new Date(slots[i]).toISOString() : null,
     }))
     const BATCH = 200
     try {
@@ -1034,34 +1046,48 @@ export async function sendBroadcastNowAction(
         .limit(1),
     )
     if (!b) return { ok: false, error: 'Disparo não encontrado.' }
-    if (!b.pacing) return { ok: false, error: 'Este disparo já é envio imediato.' }
+    if (!b.pacing) return { ok: false, error: 'Este disparo já está enviando agora.' }
     if (!['sending', 'scheduled', 'paused'].includes(b.status)) {
       return { ok: false, error: 'O disparo já foi finalizado.' }
     }
 
-    // Flip to burst so the worker's business-hours guard is skipped, and
-    // (re)affirm 'sending'.
+    // Keep the SAME spacing the drip used (window ÷ máx/dia), but start now
+    // and drop the business-hours gate (null pacing skips the worker guard).
+    const cfg = normalizePacing(b.pacing as Partial<PacingConfig>)
+    const intervalMs = pacingIntervalMinutes(cfg) * 60_000
+
     await db
       .update(broadcasts)
       .set({ pacing: null, status: 'sending', updatedAt: new Date().toISOString() })
       .where(eq(broadcasts.id, b.id))
-    await db
-      .update(broadcastRecipients)
-      .set({ scheduledSlotAt: null })
-      .where(
-        and(
-          eq(broadcastRecipients.broadcastId, b.id),
-          eq(broadcastRecipients.status, 'pending'),
-        ),
-      )
 
     const channel = b.channelId
       ? await loadChannel(b.channelId)
       : await loadDefaultChannel(b.accountId)
     if (!channel) return { ok: false, error: 'Canal do disparo não encontrado.' }
 
-    const pending = await listPendingRecipientIds(b.id)
-    await sendRecipientsNow(channel.id, b.id, pending)
+    // Pending recipients in their originally-scheduled order, re-anchored to
+    // now + i·interval.
+    const pending = await db
+      .select({ id: broadcastRecipients.id })
+      .from(broadcastRecipients)
+      .where(
+        and(
+          eq(broadcastRecipients.broadcastId, b.id),
+          eq(broadcastRecipients.status, 'pending'),
+        ),
+      )
+      .orderBy(broadcastRecipients.scheduledSlotAt)
+
+    const now = Date.now()
+    for (let i = 0; i < pending.length; i++) {
+      const delayMs = i * intervalMs
+      await db
+        .update(broadcastRecipients)
+        .set({ scheduledSlotAt: new Date(now + delayMs).toISOString() })
+        .where(eq(broadcastRecipients.id, pending[i].id))
+      await rescheduleRecipient(channel.id, b.id, pending[i].id, delayMs)
+    }
     return { ok: true }
   } catch (err) {
     console.error('[broadcast] sendBroadcastNowAction failed:', err)

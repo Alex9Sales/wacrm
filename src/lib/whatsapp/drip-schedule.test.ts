@@ -4,6 +4,8 @@ import {
   normalizePacing,
   localWeekday,
   localMinuteOfDay,
+  pacingIntervalMinutes,
+  nowSpacedSlots,
   DEFAULT_PACING,
   type PacingConfig,
 } from './drip-schedule';
@@ -93,6 +95,28 @@ describe('computeDripSlots', () => {
     const monEarly = Date.parse('2026-07-06T10:00:00.000Z');
     const slots = computeDripSlots(5, CFG, monEarly);
     expect(localMinuteOfDay(slots[0], CFG.offsetMin)).toBe(CFG.startMin); // 08:00
+  });
+});
+
+describe('pacingIntervalMinutes', () => {
+  it('splits the window across the daily cap', () => {
+    expect(pacingIntervalMinutes(CFG)).toBe(12); // 600 / 50
+    expect(pacingIntervalMinutes({ ...CFG, dailyCap: 20 })).toBe(30); // 600 / 20
+    expect(pacingIntervalMinutes({ ...CFG, dailyCap: 10000 })).toBe(1); // floored at 1
+  });
+});
+
+describe('nowSpacedSlots', () => {
+  it('spaces from now by the interval', () => {
+    const now = 1_000_000
+    expect(nowSpacedSlots(3, 60_000, now)).toEqual([now, now + 60_000, now + 120_000]);
+  });
+  it('bursts (all at now) when interval is 0', () => {
+    const now = 5_000
+    expect(nowSpacedSlots(3, 0, now)).toEqual([now, now, now]);
+  });
+  it('returns empty for zero count', () => {
+    expect(nowSpacedSlots(0, 1000, 5)).toEqual([]);
   });
 });
 
