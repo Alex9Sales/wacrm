@@ -870,6 +870,9 @@ export interface CreateTextBroadcastInput {
   mediaFilename?: string | null
   /** Max sends per day (default 50). Window/days/timezone use the defaults. */
   dailyCap?: number
+  /** Send immediately (burst, no pacing / business-hours) instead of the
+   *  humanized drip. Useful for tests and urgent sends. */
+  sendNow?: boolean
   audience: ResolveAudienceInput
 }
 
@@ -933,10 +936,14 @@ export async function createTextBroadcast(
       }
     }
 
-    // Pacing (Campo Grande 08–18h Mon–Sat by default; only dailyCap is
-    // user-tunable here) + one slot per recipient.
-    const pacing: PacingConfig = normalizePacing({ dailyCap: input.dailyCap })
-    const slots = computeDripSlots(recipients.length, pacing, Date.now())
+    // "Enviar agora" = burst (no pacing, fired immediately by the dispatch
+    // worker, paced only by the channel's per-minute limiter). Otherwise the
+    // humanized drip: Campo Grande 08–18h Mon–Sat, one slot per recipient.
+    const sendNow = !!input.sendNow
+    const pacing: PacingConfig | null = sendNow
+      ? null
+      : normalizePacing({ dailyCap: input.dailyCap })
+    const slots = sendNow ? [] : computeDripSlots(recipients.length, pacing!, Date.now())
 
     const broadcast = firstOrThrow(
       await db
@@ -951,7 +958,7 @@ export async function createTextBroadcast(
           mediaUrl: mediaUrl || null,
           mediaType,
           mediaFilename: input.mediaFilename?.trim() || null,
-          pacing: pacing as unknown as Record<string, unknown>,
+          pacing: pacing ? (pacing as unknown as Record<string, unknown>) : null,
           audienceFilter: input.audience as unknown as Record<string, unknown>,
           status: 'sending',
           totalRecipients: recipients.length,
@@ -968,7 +975,7 @@ export async function createTextBroadcast(
       broadcastId: broadcast.id,
       contactId: r.contactId,
       status: 'pending' as const,
-      scheduledSlotAt: slots[i] ? new Date(slots[i]).toISOString() : null,
+      scheduledSlotAt: sendNow || !slots[i] ? null : new Date(slots[i]).toISOString(),
     }))
     const BATCH = 200
     try {

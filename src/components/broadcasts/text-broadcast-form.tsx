@@ -102,6 +102,7 @@ export function TextBroadcastForm() {
   const [channelId, setChannelId] = useState('')
   const [message, setMessage] = useState('')
   const [dailyCap, setDailyCap] = useState(50)
+  const [sendNow, setSendNow] = useState(false)
   const messageRef = useRef<HTMLTextAreaElement>(null)
 
   // Optional media attachment.
@@ -311,6 +312,7 @@ export function TextBroadcastForm() {
         mediaType,
         mediaFilename: mediaFilename || null,
         dailyCap: cap,
+        sendNow,
         audience: {
           type: audienceType,
           tagIds: audienceType === 'tags' ? selectedTagIds : undefined,
@@ -326,13 +328,15 @@ export function TextBroadcastForm() {
         return
       }
       toast.success(
-        `Disparo criado — ${res.totalRecipients} contatos, ${cap}/dia (${DAY_LABELS}).`,
+        sendNow
+          ? `Disparo iniciado agora — ${res.totalRecipients} contatos.`
+          : `Disparo criado — ${res.totalRecipients} contatos, ${cap}/dia (${DAY_LABELS}).`,
       )
       router.push('/broadcasts')
     } finally {
       setSubmitting(false)
     }
-  }, [canSubmit, name, channelId, message, mediaUrl, mediaType, mediaFilename, cap, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
+  }, [canSubmit, name, channelId, message, mediaUrl, mediaType, mediaFilename, cap, sendNow, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
 
   if (loading) {
     return (
@@ -634,21 +638,40 @@ export function TextBroadcastForm() {
         )}
       </div>
 
-      {/* Daily cap */}
-      <div className="space-y-1.5">
-        <Label>Máximo por dia</Label>
-        <Input
-          type="number"
-          min={1}
-          max={2000}
-          value={dailyCap}
-          onChange={(e) => setDailyCap(Number(e.target.value))}
-          className="w-32 bg-muted border-border"
+      {/* Send now vs humanized drip */}
+      <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
+        <input
+          type="checkbox"
+          checked={sendNow}
+          onChange={(e) => setSendNow(e.target.checked)}
+          className="mt-0.5 h-4 w-4 accent-primary"
         />
-        <p className="text-xs text-muted-foreground">
-          Recomendado até 50/dia em canal não-oficial para evitar bloqueio.
-        </p>
-      </div>
+        <span className="text-sm">
+          <span className="text-foreground">Enviar agora</span>
+          <span className="block text-xs text-muted-foreground">
+            Dispara imediatamente, ignorando o horário comercial. Use para testes
+            ou envios urgentes (cuidado com bloqueio em listas grandes).
+          </span>
+        </span>
+      </label>
+
+      {/* Daily cap — only relevant for the humanized drip */}
+      {!sendNow && (
+        <div className="space-y-1.5">
+          <Label>Máximo por dia</Label>
+          <Input
+            type="number"
+            min={1}
+            max={2000}
+            value={dailyCap}
+            onChange={(e) => setDailyCap(Number(e.target.value))}
+            className="w-32 bg-muted border-border"
+          />
+          <p className="text-xs text-muted-foreground">
+            Recomendado até 50/dia em canal não-oficial para evitar bloqueio.
+          </p>
+        </div>
+      )}
 
       {/* Summary */}
       <div className="rounded-xl border border-border bg-card/50 p-4 text-sm">
@@ -669,10 +692,14 @@ export function TextBroadcastForm() {
         {estimate !== null && estimate > 0 && (
           <div className="mt-2 flex items-center gap-2 text-muted-foreground">
             <CalendarClock className="h-4 w-4 text-primary" />
-            <span>
-              ~{cap}/dia · leva ~{estDays} dia{estDays > 1 ? 's' : ''} útil
-              {estDays > 1 ? 'eis' : ''} · 08h–18h ({DAY_LABELS})
-            </span>
+            {sendNow ? (
+              <span>Envio imediato (sem espaçar no horário)</span>
+            ) : (
+              <span>
+                ~{cap}/dia · leva ~{estDays} dia{estDays > 1 ? 's' : ''} útil
+                {estDays > 1 ? 'eis' : ''} · 08h–18h ({DAY_LABELS})
+              </span>
+            )}
           </div>
         )}
       </div>
