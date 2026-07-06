@@ -76,7 +76,7 @@ interface TemplateFormData {
 const emptyForm: TemplateFormData = {
   name: '',
   category: 'Marketing',
-  language: 'en_US',
+  language: 'pt_BR',
   header_format: 'none',
   header_content: '',
   header_media_url: '',
@@ -88,6 +88,8 @@ const emptyForm: TemplateFormData = {
 };
 
 const COMMON_LANGUAGE_CODES = [
+  'pt_BR',
+  'pt_PT',
   'en_US',
   'en_GB',
   'en',
@@ -98,8 +100,6 @@ const COMMON_LANGUAGE_CODES = [
   'fr_FR',
   'de',
   'it',
-  'pt_BR',
-  'pt_PT',
   'nl',
   'pl',
   'ru',
@@ -207,7 +207,7 @@ export function TemplateManager() {
     return {
       name: form.name.trim(),
       category: form.category,
-      language: form.language.trim() || 'en_US',
+      language: form.language.trim() || 'pt_BR',
       header_type: form.header_format === 'none' ? undefined : form.header_format,
       header_content:
         form.header_format === 'text' ? form.header_content.trim() : undefined,
@@ -708,7 +708,7 @@ export function TemplateManager() {
                 <Label className="text-muted-foreground">Language</Label>
                 <Input
                   list="template-language-codes"
-                  placeholder="en_US"
+                  placeholder="pt_BR"
                   value={form.language}
                   onChange={(e) =>
                     setForm({ ...form, language: e.target.value })
@@ -726,8 +726,8 @@ export function TemplateManager() {
                     ? 'Language is fixed once a template exists on Meta.'
                     : (
                         <>
-                          Must match the exact code on Meta — <code>en_US</code>{' '}
-                          and <code>en</code> are distinct.
+                          Deve bater com o código exato no Meta — <code>pt_BR</code>{' '}
+                          e <code>en_US</code> são distintos.
                         </>
                       )}
                 </p>
