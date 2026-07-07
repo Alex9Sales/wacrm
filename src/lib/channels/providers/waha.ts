@@ -640,20 +640,41 @@ export const wahaProvider: WhatsAppProvider = {
       method: 'GET',
       headers: headersOf(ch),
     });
+    // Whether we (re)started the session fresh below. A fresh start already
+    // applies the webhook config, so we skip the running-session restart.
+    let startedFresh = false;
     if (cur.ok) {
-      // Already exists → update the webhook config, start if STOPPED.
+      // Already exists → refresh the webhook config first.
       await httpJson(`${base}/api/sessions/${enc}`, {
         method: 'PUT',
         headers: headersOf(ch),
         body: JSON.stringify({ config }),
       });
       const status = String((cur.body as { status?: unknown }).status || '');
-      if (status === 'STOPPED') {
+      if (status === 'FAILED') {
+        // The number was logged out (e.g. unlinked from WhatsApp on the
+        // phone, or the same number paired elsewhere) → the stored auth is
+        // dead. A plain restart won't recover a FAILED NOWEB session; we
+        // must LOGOUT to clear the dead credentials, then start fresh so a
+        // new QR is generated.
+        await httpJson(`${base}/api/sessions/${enc}/logout`, {
+          method: 'POST',
+          headers: headersOf(ch),
+          body: '{}',
+        });
         await httpJson(`${base}/api/sessions/${enc}/start`, {
           method: 'POST',
           headers: headersOf(ch),
           body: '{}',
         });
+        startedFresh = true;
+      } else if (status === 'STOPPED') {
+        await httpJson(`${base}/api/sessions/${enc}/start`, {
+          method: 'POST',
+          headers: headersOf(ch),
+          body: '{}',
+        });
+        startedFresh = true;
       }
     } else {
       // Doesn't exist → create it, already started, with the webhook config.
@@ -662,18 +683,23 @@ export const wahaProvider: WhatsAppProvider = {
         headers: headersOf(ch),
         body: JSON.stringify({ name: session, start: true, config }),
       });
+      startedFresh = true;
     }
 
-    // CRITICAL: a webhook config change on a running session only takes
-    // effect after a restart — otherwise inbound / acks never arrive.
-    try {
-      await httpJson(`${base}/api/sessions/${enc}/restart`, {
-        method: 'POST',
-        headers: headersOf(ch),
-        body: '{}',
-      });
-    } catch {
-      /* proceed even if the restart call fails */
+    // CRITICAL: a webhook config change on an ALREADY-RUNNING session only
+    // takes effect after a restart — otherwise inbound / acks never arrive.
+    // When we just started fresh (create / start), the config is already
+    // applied, so skip the restart to avoid churning the pairing state.
+    if (!startedFresh) {
+      try {
+        await httpJson(`${base}/api/sessions/${enc}/restart`, {
+          method: 'POST',
+          headers: headersOf(ch),
+          body: '{}',
+        });
+      } catch {
+        /* proceed even if the restart call fails */
+      }
     }
 
     // Poll for the QR: NOWEB takes a few seconds to reach SCAN_QR_CODE.
