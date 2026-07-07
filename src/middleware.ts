@@ -25,6 +25,9 @@ const PUBLIC_API_PREFIXES = [
   '/api/invitations', // public invite peek; redeem self-guards the session
   '/api/health', // liveness/readiness probe (Docker HEALTHCHECK, Traefik)
   '/api/files', // public media proxy (browser + Meta fetch media by URL)
+  '/api/v1', // public API — auths per-request via API key (requireApiKey),
+  //            not the session cookie, so the middleware must let it through
+  //            and let each route enforce its own key + scope.
 ]
 
 function isProtectedPath(pathname: string): boolean {
