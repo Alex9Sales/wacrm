@@ -30,15 +30,13 @@ import {
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import type { ProviderId } from '@/lib/channels/provider'
-import { enqueueBroadcastDispatch, rescheduleRecipient } from '@/lib/queue/queues'
-import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils'
+import { rescheduleRecipient } from '@/lib/queue/queues'
 import {
-  computeDripSlots,
   normalizePacing,
-  nowSpacedSlots,
   pacingIntervalMinutes,
   type PacingConfig,
 } from '@/lib/whatsapp/drip-schedule'
+import { enqueueTextBroadcast } from '@/lib/broadcasts/text-broadcast'
 import type {
   Broadcast,
   BroadcastRecipient,
@@ -892,123 +890,25 @@ export async function createTextBroadcast(
 ): Promise<{ broadcastId: string | null; totalRecipients: number; error: string | null }> {
   try {
     const ctx = await requireRole('agent')
-
-    const body = (input.bodyText ?? '').trim()
-    const mediaUrl = (input.mediaUrl ?? '').trim()
-    if (!body && !mediaUrl) {
-      return {
-        broadcastId: null,
-        totalRecipients: 0,
-        error: 'Escreva a mensagem ou anexe uma mídia.',
-      }
-    }
-    const mediaType = mediaUrl
-      ? ((['image', 'video', 'document', 'audio'] as const).includes(
-          input.mediaType as 'image',
-        )
-          ? input.mediaType
-          : 'image')
-      : null
-
-    // Channel must belong to the account AND be a non-official provider.
-    const channel = input.channelId ? await loadChannel(input.channelId) : null
-    if (!channel || channel.accountId !== ctx.accountId) {
-      return { broadcastId: null, totalRecipients: 0, error: 'Canal inválido.' }
-    }
-    if (!getProvider(channel.provider).capabilities.needsJitter) {
-      return {
-        broadcastId: null,
-        totalRecipients: 0,
-        error: 'Disparo de texto só em canal não-oficial (WAHA/Evolution/EvoGo). Para o Meta use um template.',
-      }
-    }
-
-    // Resolve audience → contacts with a valid E.164 phone, deduped.
+    // Resolve the audience (session-scoped) → account-owned contact ids, then
+    // hand off to the shared core (validation / slots / persist / enqueue).
     const contactsList = await resolveAudienceContacts(input.audience)
-    const seen = new Set<string>()
-    const recipients: { contactId: string }[] = []
-    for (const c of contactsList) {
-      if (!c.id || seen.has(c.id)) continue
-      const sanitized = sanitizePhoneForMeta(c.phone ?? '')
-      if (!isValidE164(sanitized)) continue
-      seen.add(c.id)
-      recipients.push({ contactId: c.id })
-    }
-    if (recipients.length === 0) {
-      return {
-        broadcastId: null,
-        totalRecipients: 0,
-        error: 'Nenhum contato com telefone válido nesta audiência.',
-      }
-    }
-
-    // "Enviar agora" = start now (no business-hours gate), one message every
-    // `sendNowIntervalMin` minutes (0 = all at once). Otherwise the humanized
-    // drip: Campo Grande 08–18h Mon–Sat, spaced by window/dailyCap.
-    const sendNow = !!input.sendNow
-    const pacing: PacingConfig | null = sendNow
-      ? null
-      : normalizePacing({ dailyCap: input.dailyCap })
-    let slots: number[]
-    if (sendNow) {
-      const intervalMin = Math.max(
-        0,
-        Math.min(1440, Math.floor(Number(input.sendNowIntervalMin ?? 0)) || 0),
-      )
-      slots = nowSpacedSlots(recipients.length, intervalMin * 60_000, Date.now())
-    } else {
-      slots = computeDripSlots(recipients.length, pacing!, Date.now())
-    }
-
-    const broadcast = firstOrThrow(
-      await db
-        .insert(broadcasts)
-        .values({
-          userId: ctx.userId,
-          accountId: ctx.accountId,
-          name: input.name?.trim() || `Disparo de texto (${recipients.length})`,
-          channelId: channel.id,
-          messageKind: 'text',
-          bodyText: body || null,
-          mediaUrl: mediaUrl || null,
-          mediaType,
-          mediaFilename: input.mediaFilename?.trim() || null,
-          pacing: pacing ? (pacing as unknown as Record<string, unknown>) : null,
-          audienceFilter: input.audience as unknown as Record<string, unknown>,
-          status: 'sending',
-          totalRecipients: recipients.length,
-          sentCount: 0,
-          deliveredCount: 0,
-          readCount: 0,
-          repliedCount: 0,
-          failedCount: 0,
-        })
-        .returning({ id: broadcasts.id }),
-    )
-
-    const rows = recipients.map((r, i) => ({
-      broadcastId: broadcast.id,
-      contactId: r.contactId,
-      status: 'pending' as const,
-      scheduledSlotAt: slots[i] ? new Date(slots[i]).toISOString() : null,
-    }))
-    const BATCH = 200
-    try {
-      for (let i = 0; i < rows.length; i += BATCH) {
-        await db.insert(broadcastRecipients).values(rows.slice(i, i + BATCH))
-      }
-    } catch (recipErr) {
-      await db
-        .update(broadcasts)
-        .set({ status: 'failed', failedCount: recipients.length })
-        .where(eq(broadcasts.id, broadcast.id))
-      throw recipErr
-    }
-
-    // Dispatch now: the worker reads each recipient's slot and schedules it.
-    await enqueueBroadcastDispatch(broadcast.id)
-
-    return { broadcastId: broadcast.id, totalRecipients: recipients.length, error: null }
+    const recipientContactIds = contactsList
+      .map((c) => c.id)
+      .filter((id): id is string => !!id)
+    return enqueueTextBroadcast(ctx.accountId, ctx.userId, {
+      name: input.name,
+      channelId: input.channelId,
+      bodyText: input.bodyText,
+      mediaUrl: input.mediaUrl,
+      mediaType: input.mediaType,
+      mediaFilename: input.mediaFilename,
+      dailyCap: input.dailyCap,
+      sendNow: input.sendNow,
+      sendNowIntervalMin: input.sendNowIntervalMin,
+      recipientContactIds,
+      audienceFilter: input.audience,
+    })
   } catch (err) {
     console.error('[broadcast] createTextBroadcast failed:', err)
     return {
