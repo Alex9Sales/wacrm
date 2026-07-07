@@ -189,7 +189,7 @@ export default function BroadcastsPage() {
         <div className="flex items-center gap-2">
           <GatedButton
             canAct={canCreate}
-            gateReason="create broadcasts"
+            gateReason="criar disparos"
             onClick={() => router.push('/broadcasts/text')}
             variant="outline"
             className="border-border text-foreground hover:bg-muted"
@@ -199,7 +199,7 @@ export default function BroadcastsPage() {
           </GatedButton>
           <GatedButton
             canAct={canCreate}
-            gateReason="create broadcasts"
+            gateReason="criar disparos"
             onClick={() => router.push('/broadcasts/new')}
             className="bg-primary text-primary-foreground hover:bg-primary/90"
           >
@@ -218,7 +218,7 @@ export default function BroadcastsPage() {
           </p>
           <GatedButton
             canAct={canCreate}
-            gateReason="create broadcasts"
+            gateReason="criar disparos"
             onClick={() => router.push('/broadcasts/new')}
             className="mt-4 bg-primary text-primary-foreground hover:bg-primary/90"
           >

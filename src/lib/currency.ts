@@ -28,15 +28,15 @@ export interface CurrencyOption {
  * list to offer more — nothing else needs to change.
  */
 export const CURRENCIES: CurrencyOption[] = [
-  { code: "USD", label: "US Dollar", symbol: "$" },
+  { code: "USD", label: "Dólar americano", symbol: "$" },
   { code: "EUR", label: "Euro", symbol: "€" },
-  { code: "GBP", label: "British Pound", symbol: "£" },
-  { code: "INR", label: "Indian Rupee", symbol: "₹" },
-  { code: "AUD", label: "Australian Dollar", symbol: "A$" },
-  { code: "CAD", label: "Canadian Dollar", symbol: "C$" },
-  { code: "BRL", label: "Brazilian Real", symbol: "R$" },
-  { code: "JPY", label: "Japanese Yen", symbol: "¥" },
-  { code: "CNY", label: "Chinese Yuan", symbol: "¥" },
+  { code: "GBP", label: "Libra esterlina", symbol: "£" },
+  { code: "INR", label: "Rupia indiana", symbol: "₹" },
+  { code: "AUD", label: "Dólar australiano", symbol: "A$" },
+  { code: "CAD", label: "Dólar canadense", symbol: "C$" },
+  { code: "BRL", label: "Real brasileiro", symbol: "R$" },
+  { code: "JPY", label: "Iene japonês", symbol: "¥" },
+  { code: "CNY", label: "Yuan chinês", symbol: "¥" },
   { code: "AED", label: "UAE Dirham", symbol: "د.إ" },
   { code: "ZAR", label: "South African Rand", symbol: "R" },
   { code: "NGN", label: "Nigerian Naira", symbol: "₦" },

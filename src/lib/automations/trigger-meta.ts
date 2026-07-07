@@ -47,13 +47,13 @@ export function triggerMeta(t: AutomationTriggerType | string): TriggerMeta {
 }
 
 export function formatRelative(iso: string | null | undefined): string {
-  if (!iso) return 'never'
+  if (!iso) return 'nunca'
   const then = new Date(iso).getTime()
-  if (Number.isNaN(then)) return 'never'
+  if (Number.isNaN(then)) return 'nunca'
   const diffSec = Math.round((Date.now() - then) / 1000)
-  if (diffSec < 60) return 'just now'
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`
-  if (diffSec < 2_592_000) return `${Math.floor(diffSec / 86400)}d ago`
-  return new Date(iso).toLocaleDateString()
+  if (diffSec < 60) return 'agora mesmo'
+  if (diffSec < 3600) return `há ${Math.floor(diffSec / 60)}min`
+  if (diffSec < 86400) return `há ${Math.floor(diffSec / 3600)}h`
+  if (diffSec < 2_592_000) return `há ${Math.floor(diffSec / 86400)}d`
+  return new Date(iso).toLocaleDateString('pt-BR')
 }

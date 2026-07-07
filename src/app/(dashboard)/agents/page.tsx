@@ -36,12 +36,12 @@ export default function AgentsPage() {
       <div className="flex items-center gap-2">
         <Bot className="h-6 w-6 text-primary" />
         <h1 className="text-2xl font-bold tracking-tight text-foreground">
-          AI Agents
+          Agentes IA
         </h1>
       </div>
       <p className="mt-1 text-sm text-muted-foreground">
-        Your bring-your-own-key AI agent — set it up, then test it in the
-        playground before it replies to customers in the inbox.
+        Seu agente de IA com chave própria — configure-o e depois teste-o no
+        playground antes que ele responda aos clientes na caixa de entrada.
       </p>
 
       {decided && (
@@ -55,7 +55,7 @@ export default function AgentsPage() {
               <Sparkles className="mr-1.5 h-4 w-4" /> Playground
             </TabsTrigger>
             <TabsTrigger value="setup">
-              <Settings2 className="mr-1.5 h-4 w-4" /> Setup
+              <Settings2 className="mr-1.5 h-4 w-4" /> Configuração
             </TabsTrigger>
           </TabsList>
 

@@ -84,8 +84,8 @@ export function ResponseTimeChart({
         ) : !hasData ? (
           <EmptyState
             icon={Clock}
-            title="No replies recorded yet"
-            hint="This chart fills in as you reply to customer messages."
+            title="Nenhuma resposta registrada ainda"
+            hint="Este gráfico é preenchido conforme você responde às mensagens dos clientes."
           />
         ) : (
           <BarChart

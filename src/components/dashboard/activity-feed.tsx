@@ -75,8 +75,8 @@ export function ActivityFeed({ items, loading }: ActivityFeedProps) {
         <div className="p-5">
           <EmptyState
             icon={Inbox}
-            title="No activity yet"
-            hint="Activity from messages, deals, broadcasts, and automations will appear here."
+            title="Nenhuma atividade ainda"
+            hint="A atividade de mensagens, negócios, disparos e automações aparece aqui."
           />
         </div>
       ) : (
@@ -159,9 +159,9 @@ function relativeTime(iso: string): string {
   const then = new Date(iso).getTime()
   if (Number.isNaN(then)) return ''
   const diffSec = Math.round((Date.now() - then) / 1000)
-  if (diffSec < 60) return `${Math.max(1, diffSec)}s ago`
-  if (diffSec < 3600) return `${Math.floor(diffSec / 60)}m ago`
-  if (diffSec < 86400) return `${Math.floor(diffSec / 3600)}h ago`
-  if (diffSec < 2_592_000) return `${Math.floor(diffSec / 86400)}d ago`
-  return new Date(iso).toLocaleDateString()
+  if (diffSec < 60) return `há ${Math.max(1, diffSec)}s`
+  if (diffSec < 3600) return `há ${Math.floor(diffSec / 60)}min`
+  if (diffSec < 86400) return `há ${Math.floor(diffSec / 3600)}h`
+  if (diffSec < 2_592_000) return `há ${Math.floor(diffSec / 86400)}d`
+  return new Date(iso).toLocaleDateString('pt-BR')
 }

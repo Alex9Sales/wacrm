@@ -128,14 +128,14 @@ export function PipelineSettings({
     setSaving(false);
 
     if (error) {
-      toast.error("Failed to save pipeline");
+      toast.error("Falha ao salvar o funil");
       return;
     }
 
     onOpenChange(false);
     onPipelinesChanged();
     onStagesChanged();
-    toast.success("Pipeline saved");
+    toast.success("Funil salvo");
   }
 
   async function handleAddStage() {
@@ -147,7 +147,7 @@ export function PipelineSettings({
       position: localStages.length,
     });
     if (error || !stage) {
-      toast.error("Failed to add stage");
+      toast.error("Falha ao adicionar a etapa");
       return;
     }
     setLocalStages([...localStages, stage]);
@@ -159,12 +159,12 @@ export function PipelineSettings({
     // Refuse to delete if deals still reference the stage (FK would fail).
     const dealCount = await countDealsInStage(stageId);
     if (dealCount > 0) {
-      toast.error("Move or delete deals in this stage first");
+      toast.error("Mova ou exclua os negócios desta etapa primeiro");
       return;
     }
     const { error } = await deleteStage(stageId);
     if (error) {
-      toast.error("Failed to delete stage");
+      toast.error("Falha ao excluir a etapa");
       return;
     }
     setLocalStages(localStages.filter((s) => s.id !== stageId));
@@ -176,19 +176,19 @@ export function PipelineSettings({
     const { error } = await deletePipeline(pipeline.id);
     setDeleting(false);
     if (error) {
-      toast.error("Failed to delete pipeline");
+      toast.error("Falha ao excluir o funil");
       return;
     }
     onOpenChange(false);
     onPipelinesChanged();
-    toast.success("Pipeline deleted");
+    toast.success("Funil excluído");
   }
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md bg-popover border-border max-h-[85vh] overflow-y-auto">
         <DialogHeader>
-          <DialogTitle className="text-popover-foreground">Manage Pipeline</DialogTitle>
+          <DialogTitle className="text-popover-foreground">Gerenciar funil</DialogTitle>
         </DialogHeader>
 
         {showDeleteConfirm ? (
@@ -197,11 +197,11 @@ export function PipelineSettings({
               <AlertTriangle className="h-5 w-5 shrink-0 text-red-400" />
               <div>
                 <p className="text-sm font-medium text-red-400">
-                  Delete Pipeline
+                  Excluir funil
                 </p>
                 <p className="mt-1 text-xs text-muted-foreground">
-                  This will archive all deals in this pipeline. This cannot be
-                  undone.
+                  Isso vai arquivar todos os negócios deste funil. Não é
+                  possível desfazer.
                 </p>
               </div>
             </div>
@@ -211,14 +211,14 @@ export function PipelineSettings({
                 onClick={() => setShowDeleteConfirm(false)}
                 className="border-border bg-transparent text-muted-foreground hover:bg-muted"
               >
-                Cancel
+                Cancelar
               </Button>
               <Button
                 onClick={handleDeletePipeline}
                 disabled={deleting}
                 className="bg-red-600 text-white hover:bg-red-700"
               >
-                {deleting ? "Deleting..." : "Delete Pipeline"}
+                {deleting ? "Excluindo..." : "Excluir funil"}
               </Button>
             </div>
           </div>
@@ -226,7 +226,7 @@ export function PipelineSettings({
           <>
             <div className="grid gap-4 py-2">
               <div className="grid gap-2">
-                <Label className="text-muted-foreground">Pipeline Name</Label>
+                <Label className="text-muted-foreground">Nome do funil</Label>
                 <Input
                   value={name}
                   onChange={(e) => setName(e.target.value)}
@@ -235,7 +235,7 @@ export function PipelineSettings({
               </div>
 
               <div className="grid gap-2">
-                <Label className="text-muted-foreground">Stages</Label>
+                <Label className="text-muted-foreground">Etapas</Label>
                 <DndContext
                   sensors={sensors}
                   collisionDetection={closestCenter}
@@ -283,7 +283,7 @@ export function PipelineSettings({
                             ? "var(--foreground)"
                             : "transparent",
                       }}
-                      aria-label={`Pick color ${color}`}
+                      aria-label={`Escolher cor ${color}`}
                     />
                   ))}
                 </div>
@@ -291,7 +291,7 @@ export function PipelineSettings({
                   <Input
                     value={newStageName}
                     onChange={(e) => setNewStageName(e.target.value)}
-                    placeholder="New stage name"
+                    placeholder="Nome da nova etapa"
                     className="border-border bg-muted text-sm text-foreground"
                     onKeyDown={(e) => {
                       if (e.key === "Enter") handleAddStage();
@@ -305,7 +305,7 @@ export function PipelineSettings({
                     className="shrink-0 border-border bg-transparent text-muted-foreground hover:bg-muted"
                   >
                     <Plus className="mr-1 h-3 w-3" />
-                    Add
+                    Adicionar
                   </Button>
                 </div>
               </div>
@@ -316,7 +316,7 @@ export function PipelineSettings({
                 className="w-full border-border bg-transparent text-muted-foreground hover:bg-muted"
               >
                 <Plus className="mr-1 h-3 w-3" />
-                Create a new pipeline
+                Criar um novo funil
               </Button>
             </div>
 
@@ -326,21 +326,21 @@ export function PipelineSettings({
                 onClick={() => setShowDeleteConfirm(true)}
                 className="mr-auto bg-red-600 hover:bg-red-700"
               >
-                Delete Pipeline
+                Excluir funil
               </Button>
               <Button
                 variant="outline"
                 onClick={() => onOpenChange(false)}
                 className="border-border bg-transparent text-muted-foreground hover:bg-muted"
               >
-                Cancel
+                Cancelar
               </Button>
               <Button
                 onClick={handleSave}
                 disabled={saving || !name.trim()}
                 className="bg-primary text-primary-foreground hover:bg-primary/90"
               >
-                {saving ? "Saving..." : "Save Changes"}
+                {saving ? "Salvando..." : "Salvar alterações"}
               </Button>
             </DialogFooter>
           </>
@@ -383,7 +383,7 @@ function SortableStageRow({
         {...attributes}
         {...listeners}
         className="cursor-grab touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing"
-        aria-label="Drag to reorder"
+        aria-label="Arraste para reordenar"
       >
         <GripVertical className="h-4 w-4" />
       </button>
@@ -422,7 +422,7 @@ function ColorSwatch({
         onClick={() => setOpen((v) => !v)}
         className="h-4 w-4 rounded-full border border-border"
         style={{ backgroundColor: value }}
-        aria-label="Change color"
+        aria-label="Alterar cor"
       />
       {open && (
         <>

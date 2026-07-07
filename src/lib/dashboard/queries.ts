@@ -398,11 +398,11 @@ export async function loadActivity(accountId: string, limit = 20): Promise<Activ
   const items: ActivityItem[] = []
 
   for (const m of msgs) {
-    const who = m.contact_name || m.contact_phone || 'Unknown'
+    const who = m.contact_name || m.contact_phone || 'Desconhecido'
     items.push({
       id: `msg-${m.id}`,
       kind: 'message',
-      text: `New message from ${who}`,
+      text: `Nova mensagem de ${who}`,
       at: m.created_at ?? '',
       href: `/inbox?c=${m.conversation_id}`,
     })
@@ -412,7 +412,7 @@ export async function loadActivity(accountId: string, limit = 20): Promise<Activ
     items.push({
       id: `contact-${c.id}`,
       kind: 'contact',
-      text: `New contact: ${c.name || c.phone}`,
+      text: `Novo contato: ${c.name || c.phone}`,
       at: c.created_at ?? '',
       href: '/contacts',
     })
@@ -423,8 +423,8 @@ export async function loadActivity(accountId: string, limit = 20): Promise<Activ
       id: `deal-${d.id}`,
       kind: 'deal',
       text: d.stage_name
-        ? `Deal "${d.title}" in ${d.stage_name}`
-        : `Deal "${d.title}" updated`,
+        ? `Negócio "${d.title}" em ${d.stage_name}`
+        : `Negócio "${d.title}" atualizado`,
       at: d.updated_at ?? '',
       href: '/pipelines',
     })
@@ -433,24 +433,24 @@ export async function loadActivity(accountId: string, limit = 20): Promise<Activ
   for (const b of broadcastRows) {
     const label =
       b.status === 'sent'
-        ? `sent to ${b.total_recipients ?? 0} contacts`
-        : `${b.status} (${b.total_recipients ?? 0} recipients)`
+        ? `enviado para ${b.total_recipients ?? 0} contatos`
+        : `${b.status} (${b.total_recipients ?? 0} destinatários)`
     items.push({
       id: `broadcast-${b.id}`,
       kind: 'broadcast',
-      text: `Broadcast "${b.name}" ${label}`,
+      text: `Disparo "${b.name}" ${label}`,
       at: b.created_at ?? '',
       href: '/broadcasts',
     })
   }
 
   for (const l of autoLogs) {
-    const who = l.contact_name || l.contact_phone || 'a contact'
-    const autoName = l.automation_name || 'Automation'
+    const who = l.contact_name || l.contact_phone || 'um contato'
+    const autoName = l.automation_name || 'Automação'
     items.push({
       id: `auto-${l.id}`,
       kind: 'automation',
-      text: `Automation "${autoName}" ${l.status === 'failed' ? 'failed for' : 'triggered for'} ${who}`,
+      text: `Automação "${autoName}" ${l.status === 'failed' ? 'falhou para' : 'acionada para'} ${who}`,
       at: l.created_at,
     })
   }

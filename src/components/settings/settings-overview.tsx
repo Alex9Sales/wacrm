@@ -131,14 +131,14 @@ export function SettingsOverview({
       section: 'channels',
       loading: whatsappLoading,
       subtitle: !whatsapp?.configured ? (
-        'Not set up yet'
+        'Ainda não configurado'
       ) : whatsapp.connected ? (
         <>
-          <StatusDot tone="ok" /> Connected
+          <StatusDot tone="ok" /> Conectado
         </>
       ) : (
         <>
-          <StatusDot tone="muted" /> Needs reconnecting
+          <StatusDot tone="muted" /> Precisa reconectar
         </>
       ),
     },
@@ -147,10 +147,10 @@ export function SettingsOverview({
       loading: countsLoading,
       subtitle:
         counts?.members == null
-          ? 'View team members'
-          : `${counts.members} member${counts.members === 1 ? '' : 's'}${
+          ? 'Ver membros da equipe'
+          : `${counts.members} membro${counts.members === 1 ? '' : 's'}${
               counts.pendingInvites
-                ? ` · ${counts.pendingInvites} pending invite${
+                ? ` · ${counts.pendingInvites} convite${
                     counts.pendingInvites === 1 ? '' : 's'
                   }`
                 : ''
@@ -161,10 +161,10 @@ export function SettingsOverview({
       loading: countsLoading,
       subtitle:
         counts?.templates == null
-          ? 'Manage message templates'
+          ? 'Gerenciar templates de mensagem'
           : `${counts.templates} template${counts.templates === 1 ? '' : 's'}${
               counts.templatesPending
-                ? ` · ${counts.templatesPending} pending review`
+                ? ` · ${counts.templatesPending} em análise`
                 : ''
             }`,
     },
@@ -178,15 +178,15 @@ export function SettingsOverview({
       loading: countsLoading,
       subtitle:
         counts?.tags == null && counts?.customFields == null
-          ? 'Tags and custom fields'
-          : `${counts?.tags ?? 0} tag${counts?.tags === 1 ? '' : 's'} · ${
+          ? 'Etiquetas e campos personalizados'
+          : `${counts?.tags ?? 0} etiqueta${counts?.tags === 1 ? '' : 's'} · ${
               counts?.customFields ?? 0
-            } custom field${counts?.customFields === 1 ? '' : 's'}`,
+            } campo${counts?.customFields === 1 ? '' : 's'} personalizado${counts?.customFields === 1 ? '' : 's'}`,
     },
     {
       section: 'appearance',
       loading: false,
-      subtitle: `${cap(mode)} mode · ${themeName} accent`,
+      subtitle: `Modo ${mode === 'dark' ? 'escuro' : 'claro'} · Destaque ${themeName}`,
     },
   ];
 

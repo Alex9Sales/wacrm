@@ -13,6 +13,8 @@ import {
   LayoutTemplate,
   ImageOff,
   CornerDownLeft,
+  X,
+  ExternalLink,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
@@ -48,7 +50,71 @@ function MediaUnavailable({ label }: { label: string }) {
   return (
     <div className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
       <ImageOff className="h-4 w-4 shrink-0 text-muted-foreground" />
-      <span>{label} unavailable</span>
+      <span>{label} indisponível</span>
+    </div>
+  );
+}
+
+/**
+ * Full-screen image viewer. Opens when a message image is clicked; closes on
+ * backdrop click, the X, or Escape. Also offers "open in new tab".
+ */
+function Lightbox({
+  src,
+  alt,
+  onClose,
+}: {
+  src: string;
+  alt: string;
+  onClose: () => void;
+}) {
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape") onClose();
+    };
+    window.addEventListener("keydown", onKey);
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => {
+      window.removeEventListener("keydown", onKey);
+      document.body.style.overflow = prev;
+    };
+  }, [onClose]);
+
+  return (
+    <div
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4"
+      onClick={onClose}
+      role="dialog"
+      aria-modal="true"
+    >
+      <a
+        href={src}
+        target="_blank"
+        rel="noopener noreferrer"
+        onClick={(e) => e.stopPropagation()}
+        title="Abrir em nova aba"
+        aria-label="Abrir em nova aba"
+        className="absolute left-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+      >
+        <ExternalLink className="h-5 w-5" />
+      </a>
+      <button
+        type="button"
+        onClick={onClose}
+        title="Fechar"
+        aria-label="Fechar"
+        className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
+      >
+        <X className="h-5 w-5" />
+      </button>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src}
+        alt={alt}
+        onClick={(e) => e.stopPropagation()}
+        className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+      />
     </div>
   );
 }
@@ -57,6 +123,7 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   const [src, setSrc] = useState<string | null>(null);
   const [error, setError] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [zoomed, setZoomed] = useState(false);
 
   const loadImage = useCallback(async () => {
     if (!url) return;
@@ -107,12 +174,19 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   }
 
   return (
-    <img
-      src={src ?? ""}
-      alt={alt}
-      className="max-h-64 max-w-60 rounded-lg object-cover"
-      onError={() => setError(true)}
-    />
+    <>
+      {/* eslint-disable-next-line @next/next/no-img-element */}
+      <img
+        src={src ?? ""}
+        alt={alt}
+        onClick={() => setZoomed(true)}
+        className="max-h-64 max-w-60 cursor-zoom-in rounded-lg object-cover transition-opacity hover:opacity-90"
+        onError={() => setError(true)}
+      />
+      {zoomed && src && (
+        <Lightbox src={src} alt={alt} onClose={() => setZoomed(false)} />
+      )}
+    </>
   );
 }
 
@@ -129,9 +203,9 @@ function MessageContent({ message }: { message: Message }) {
       return (
         <div>
           {message.media_url ? (
-            <MediaImage url={message.media_url} alt="Shared image" />
+            <MediaImage url={message.media_url} alt="Imagem" />
           ) : (
-            <MediaUnavailable label="Image" />
+            <MediaUnavailable label="Imagem" />
           )}
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
@@ -151,7 +225,7 @@ function MessageContent({ message }: { message: Message }) {
               className="max-h-64 max-w-60 rounded-lg"
             />
           ) : (
-            <MediaUnavailable label="Video" />
+            <MediaUnavailable label="Vídeo" />
           )}
           {message.content_text && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
@@ -167,14 +241,14 @@ function MessageContent({ message }: { message: Message }) {
           {message.media_url ? (
             <audio src={message.media_url} controls className="max-w-60" />
           ) : (
-            <MediaUnavailable label="Audio" />
+            <MediaUnavailable label="Áudio" />
           )}
         </div>
       );
 
     case "document":
       if (!message.media_url) {
-        return <MediaUnavailable label={message.content_text || "Document"} />;
+        return <MediaUnavailable label={message.content_text || "Documento"} />;
       }
       return (
         <a
@@ -185,7 +259,7 @@ function MessageContent({ message }: { message: Message }) {
         >
           <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
           <span className="truncate">
-            {message.content_text || "Document"}
+            {message.content_text || "Documento"}
           </span>
         </a>
       );
@@ -209,7 +283,7 @@ function MessageContent({ message }: { message: Message }) {
       return (
         <div className="flex items-center gap-2 text-sm">
           <MapPin className="h-4 w-4 shrink-0 text-muted-foreground" />
-          <span>{message.content_text || "Location shared"}</span>
+          <span>{message.content_text || "Localização compartilhada"}</span>
         </div>
       );
 
@@ -222,11 +296,9 @@ function MessageContent({ message }: { message: Message }) {
       return (
         <div className="flex flex-col gap-0.5">
           <span className="inline-flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
-            <CornerDownLeft className="h-3 w-3" />
-            Button reply
-          </span>
+            <CornerDownLeft className="h-3 w-3" />Resposta de botão</span>
           <p className="whitespace-pre-wrap break-words text-sm">
-            {message.content_text || "[Interactive reply]"}
+            {message.content_text || "[Resposta interativa]"}
           </p>
         </div>
       );
@@ -235,7 +307,7 @@ function MessageContent({ message }: { message: Message }) {
     default:
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text || "[Unsupported message type]"}
+          {message.content_text || "[Tipo de mensagem não suportado]"}
         </p>
       );
   }
