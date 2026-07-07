@@ -26,16 +26,16 @@ export function SessionsCard() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-foreground">
           <LogOut className="size-4 text-primary" />
-          Active sessions
+          Sessões ativas
         </CardTitle>
         <CardDescription className="text-muted-foreground">
-          Sign out of every device where you&apos;re logged in — useful if you
-          lost a laptop or shared your password.
+          Desconecte todos os dispositivos onde você está logado — útil se você
+          perdeu um aparelho ou compartilhou sua senha.
         </CardDescription>
       </CardHeader>
       <CardContent>
         <Alert>
-          <AlertTitle>Temporarily unavailable</AlertTitle>
+          <AlertTitle>Temporariamente indisponível</AlertTitle>
           <AlertDescription>
             Gerenciamento de sessões volta na Fase 2.
           </AlertDescription>
