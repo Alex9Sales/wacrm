@@ -4,7 +4,7 @@ import { useEffect, useState, type ReactNode } from 'react';
 import { ChevronRight, Loader2 } from 'lucide-react';
 
 import { useAuth } from '@/hooks/use-auth';
-import { getOverviewCounts, getWhatsAppConfig } from './actions';
+import { getOverviewCounts } from './actions';
 import { useTheme } from '@/hooks/use-theme';
 import { THEMES } from '@/lib/themes';
 import { CURRENCIES } from '@/lib/currency';
@@ -90,19 +90,27 @@ export function SettingsOverview({
       setCountsLoading(false);
     })();
 
-    // WhatsApp connection status — slower, independent.
+    // Channels status — reflects the multi-provider `channels` table (WAHA /
+    // Evolution / EvoGo / Meta), not just the legacy Meta config. Configured
+    // = at least one channel exists; connected = at least one is connected.
     (async () => {
       setWhatsappLoading(true);
-      const [row, health] = await Promise.allSettled([
-        getWhatsAppConfig(),
-        fetch('/api/whatsapp/config', { cache: 'no-store' }).then((r) => r.json()),
-      ]);
-      if (cancelled) return;
-      setWhatsapp({
-        configured: row.status === 'fulfilled' && !!row.value?.phone_number_id,
-        connected: health.status === 'fulfilled' && !!health.value?.connected,
-      });
-      setWhatsappLoading(false);
+      try {
+        const res = await fetch('/api/channels', { cache: 'no-store' });
+        const data = (await res.json()) as {
+          channels?: { status?: string }[];
+        };
+        if (cancelled) return;
+        const chans = Array.isArray(data.channels) ? data.channels : [];
+        setWhatsapp({
+          configured: chans.length > 0,
+          connected: chans.some((c) => c.status === 'connected'),
+        });
+      } catch {
+        if (!cancelled) setWhatsapp({ configured: false, connected: false });
+      } finally {
+        if (!cancelled) setWhatsappLoading(false);
+      }
     })();
 
     return () => {
