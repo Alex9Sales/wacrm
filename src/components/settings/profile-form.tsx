@@ -64,14 +64,14 @@ export function ProfileForm() {
     if (!file) return;
 
     if (!ALLOWED_MIME.has(file.type)) {
-      toast.error('Unsupported image type', {
-        description: 'Use PNG, JPG, WebP, or GIF.',
+      toast.error('Tipo de imagem não suportado', {
+        description: 'Use PNG, JPG, WebP ou GIF.',
       });
       return;
     }
     if (file.size > MAX_AVATAR_BYTES) {
-      toast.error('Image is too large', {
-        description: 'Maximum 2 MB.',
+      toast.error('A imagem é muito grande', {
+        description: 'Máximo 2 MB.',
       });
       return;
     }
@@ -95,7 +95,7 @@ export function ProfileForm() {
 
     const trimmedName = fullName.trim();
     if (!trimmedName) {
-      toast.error('Display name is required');
+      toast.error('O nome de exibição é obrigatório');
       return;
     }
 
@@ -124,9 +124,9 @@ export function ProfileForm() {
       setRemoveAvatar(false);
       await refreshProfile();
 
-      toast.success('Profile saved');
+      toast.success('Perfil salvo');
     } catch (err) {
-      const msg = err instanceof Error ? err.message : 'Unknown error';
+      const msg = err instanceof Error ? err.message : 'Erro desconhecido';
       toast.error(msg);
     } finally {
       setSaving(false);
@@ -149,8 +149,8 @@ export function ProfileForm() {
   return (
     <section className="max-w-2xl animate-in fade-in-50 duration-200">
       <SettingsPanelHead
-        title="Your profile"
-        description="How you show up across the app. Your avatar and name appear in the header, sidebar, and anywhere your teammates see you."
+        title="Seu perfil"
+        description="Como você aparece no app. Seu avatar e nome aparecem no cabeçalho, na barra lateral e em qualquer lugar onde seus colegas veem você."
       />
       <form onSubmit={onSubmit} className="space-y-4">
         <Card>
@@ -181,7 +181,7 @@ export function ProfileForm() {
                 onClick={() => fileInputRef.current?.click()}
               >
                 <Upload className="size-4" />
-                {currentAvatar ? 'Change photo' : 'Upload photo'}
+                {currentAvatar ? 'Trocar foto' : 'Enviar foto'}
               </Button>
               {currentAvatar && (
                 <Button
@@ -192,11 +192,11 @@ export function ProfileForm() {
                   className="text-muted-foreground hover:text-foreground"
                 >
                   <Trash2 className="size-4" />
-                  Remove
+                  Remover
                 </Button>
               )}
               <p className="w-full text-xs text-muted-foreground">
-                PNG, JPG, WebP, or GIF — up to 2 MB.
+                PNG, JPG, WebP ou GIF — até 2 MB.
               </p>
             </div>
           </div>
@@ -204,13 +204,13 @@ export function ProfileForm() {
           {/* Name */}
           <div className="space-y-2">
             <Label htmlFor="profile-full-name" className="text-foreground">
-              Display name
+              Nome de exibição
             </Label>
             <Input
               id="profile-full-name"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
-              placeholder="Ada Lovelace"
+              placeholder="Maria Silva"
               maxLength={120}
               disabled={saving}
               required
@@ -222,7 +222,7 @@ export function ProfileForm() {
               double-confirmation flow; that returns with Better Auth. */}
           <div className="space-y-2">
             <Label htmlFor="profile-email" className="text-foreground">
-              Email
+              E-mail
             </Label>
             <Input
               id="profile-email"
@@ -233,28 +233,28 @@ export function ProfileForm() {
             />
             <p className="flex items-start gap-2 text-xs text-muted-foreground">
               <Mail className="mt-0.5 size-3.5 shrink-0" />
-              <span>Changing your email address returns in Phase 2.</span>
+              <span>A alteração do seu endereço de e-mail volta na Fase 2.</span>
             </p>
           </div>
 
           {/* Read-only block */}
           <div className="rounded-lg border border-border bg-muted p-4">
             <p className="mb-3 text-xs font-semibold uppercase tracking-wider text-muted-foreground">
-              Account details
+              Detalhes da conta
             </p>
             <dl className="grid grid-cols-1 gap-3 text-sm sm:grid-cols-2">
               <div>
-                <dt className="text-muted-foreground">Role</dt>
+                <dt className="text-muted-foreground">Perfil</dt>
                 <dd className="mt-0.5 font-mono text-foreground">
                   {profile?.role ?? 'user'}
                 </dd>
               </div>
               <div>
-                <dt className="text-muted-foreground">Joined</dt>
+                <dt className="text-muted-foreground">Entrou em</dt>
                 <dd className="mt-0.5 text-foreground">{joined}</dd>
               </div>
               <div className="sm:col-span-2">
-                <dt className="text-muted-foreground">User ID</dt>
+                <dt className="text-muted-foreground">ID do usuário</dt>
                 <dd className="mt-0.5 break-all font-mono text-xs text-muted-foreground">
                   {user?.id ?? '—'}
                 </dd>
@@ -265,7 +265,7 @@ export function ProfileForm() {
           {!profile && (
             <p className="flex items-center gap-2 text-sm text-muted-foreground">
               <CircleAlert className="size-4" />
-              Loading your profile…
+              Carregando seu perfil…
             </p>
           )}
 
@@ -277,10 +277,10 @@ export function ProfileForm() {
             {saving ? (
               <>
                 <Loader2 className="size-4 animate-spin" />
-                Saving…
+                Salvando…
               </>
             ) : (
-              'Save changes'
+              'Salvar alterações'
             )}
           </Button>
         </div>

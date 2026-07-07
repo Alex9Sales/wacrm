@@ -40,11 +40,11 @@ export function CustomFieldsManager({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="border-border bg-popover text-popover-foreground sm:max-w-md">
         <DialogHeader>
-          <DialogTitle className="text-popover-foreground">Custom fields</DialogTitle>
+          <DialogTitle className="text-popover-foreground">Campos personalizados</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Define extra contact fields (e.g. ZIP code, lead source). They
-            appear on every contact and in the “Update Contact Field” automation
-            action.
+            Defina campos extras de contato (ex.: CEP, origem do lead). Eles
+            aparecem em todos os contatos e na ação de automação “Atualizar campo
+            do contato”.
           </DialogDescription>
         </DialogHeader>
         <CustomFieldsPanel />
@@ -102,11 +102,11 @@ export function CustomFieldsPanel() {
     const name = newName.trim();
     if (!name) return;
     if (!accountId || !user) {
-      toast.error('Your profile is not linked to an account.');
+      toast.error('Seu perfil não está vinculado a uma conta.');
       return;
     }
     if (isDuplicate(name)) {
-      toast.error(`A field named "${name}" already exists.`);
+      toast.error(`Já existe um campo chamado "${name}".`);
       return;
     }
 
@@ -115,10 +115,10 @@ export function CustomFieldsPanel() {
     setCreating(false);
 
     if (error) {
-      toast.error(error || 'Could not create field. You may not have permission.');
+      toast.error(error || 'Não foi possível criar o campo. Você pode não ter permissão.');
       return;
     }
-    toast.success(`Created "${name}".`);
+    toast.success(`"${name}" criado.`);
     setNewName('');
     await fetchFields();
   }
@@ -132,14 +132,14 @@ export function CustomFieldsPanel() {
     const name = nextName.trim();
     if (!name || name === field.field_name) return true;
     if (isDuplicate(name, field.id)) {
-      toast.error(`A field named "${name}" already exists.`);
+      toast.error(`Já existe um campo chamado "${name}".`);
       return false;
     }
     setBusyId(field.id);
     const { error } = await renameCustomField(field.id, name);
     setBusyId(null);
     if (error) {
-      toast.error(error || 'Could not rename field.');
+      toast.error(error || 'Não foi possível renomear o campo.');
       return false;
     }
     await fetchFields();
@@ -149,7 +149,7 @@ export function CustomFieldsPanel() {
   async function handleDelete(field: CustomField) {
     if (
       !window.confirm(
-        `Delete "${field.field_name}"? This also removes its stored value on every contact. This cannot be undone.`
+        `Excluir "${field.field_name}"? Isso também remove o valor armazenado em todos os contatos. Esta ação não pode ser desfeita.`
       )
     ) {
       return;
@@ -158,10 +158,10 @@ export function CustomFieldsPanel() {
     const { error } = await deleteCustomField(field.id);
     setBusyId(null);
     if (error) {
-      toast.error(error || 'Could not delete field.');
+      toast.error(error || 'Não foi possível excluir o campo.');
       return;
     }
-    toast.success(`Deleted "${field.field_name}".`);
+    toast.success(`"${field.field_name}" excluído.`);
     await fetchFields();
   }
 
@@ -178,7 +178,7 @@ export function CustomFieldsPanel() {
               void handleCreate();
             }
           }}
-          placeholder="New field name…"
+          placeholder="Nome do novo campo…"
           className="bg-muted text-foreground"
         />
         <Button
@@ -191,7 +191,7 @@ export function CustomFieldsPanel() {
           ) : (
             <Plus className="size-4" />
           )}
-          Add
+          Adicionar
         </Button>
       </div>
 
@@ -200,11 +200,11 @@ export function CustomFieldsPanel() {
         {loading ? (
           <div className="flex items-center justify-center gap-2 py-8 text-sm text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
-            Loading…
+            Carregando…
           </div>
         ) : fields.length === 0 ? (
           <p className="py-8 text-center text-sm text-muted-foreground">
-            No custom fields yet.
+            Nenhum campo personalizado ainda.
           </p>
         ) : (
           <ul className="divide-y divide-border">
@@ -258,7 +258,7 @@ function FieldRow({
         onKeyDown={(e) => {
           if (e.key === 'Enter') e.currentTarget.blur();
         }}
-        aria-label={`Rename ${field.field_name}`}
+        aria-label={`Renomear ${field.field_name}`}
         className="focus:border-primary h-8 border-transparent bg-transparent text-foreground hover:border-border"
       />
       <Button
@@ -266,7 +266,7 @@ function FieldRow({
         size="icon-sm"
         disabled={busy}
         onClick={() => onDelete(field)}
-        title="Delete field"
+        title="Excluir campo"
         className="shrink-0 text-muted-foreground hover:text-red-400"
       >
         {busy ? (

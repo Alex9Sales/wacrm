@@ -136,7 +136,7 @@ export function Step4ScheduleSend({
       : audience.type === 'tags'
         ? `Tags (${audience.tagIds?.length ?? 0} selecionadas)`
         : audience.type === 'csv'
-          ? 'Upload CSV'
+          ? 'Importar CSV'
           : 'Personalizado';
 
   // With a single Meta channel the picker is hidden and that channel is

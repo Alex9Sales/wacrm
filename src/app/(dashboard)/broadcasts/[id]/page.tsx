@@ -108,7 +108,7 @@ function FunnelChart({ steps }: { steps: FunnelStep[] }) {
   const max = Math.max(...steps.map((s) => s.value), 1);
   return (
     <div className="rounded-xl border border-border bg-card p-4">
-      <h3 className="mb-4 text-sm font-medium text-foreground">Funnel</h3>
+      <h3 className="mb-4 text-sm font-medium text-foreground">Funil</h3>
       <div className="space-y-2">
         {steps.map((step) => {
           const pctOfMax = Math.max(5, Math.round((step.value / max) * 100));
@@ -192,7 +192,7 @@ export default function BroadcastDetailPage() {
 
   const fetchData = useCallback(async () => {
     const bc = await getBroadcast(broadcastId);
-    if (!bc) throw new Error('Broadcast not found');
+    if (!bc) throw new Error('Disparo não encontrado');
     setBroadcast(bc);
     const recs = await listBroadcastRecipients(broadcastId);
     setRecipients(recs);
@@ -202,7 +202,7 @@ export default function BroadcastDetailPage() {
   useEffect(() => {
     fetchData()
       .catch((err) =>
-        setError(err instanceof Error ? err.message : 'Failed to load broadcast'),
+        setError(err instanceof Error ? err.message : 'Falha ao carregar o disparo'),
       )
       .finally(() => setLoading(false));
   }, [fetchData]);
@@ -311,14 +311,14 @@ export default function BroadcastDetailPage() {
   function handleExport() {
     if (!broadcast) return;
     const header = [
-      'Contact',
-      'Phone',
+      'Contato',
+      'Telefone',
       'Status',
-      'Sent At',
-      'Delivered At',
-      'Read At',
-      'Replied At',
-      'Error',
+      'Enviada em',
+      'Entregue em',
+      'Lida em',
+      'Respondida em',
+      'Erro',
     ];
     const rows = recipients.map((r) => [
       r.contact?.name ?? '',
@@ -344,10 +344,10 @@ export default function BroadcastDetailPage() {
     const { error: delErr } = await deleteBroadcast(broadcastId);
     setDeleting(false);
     if (delErr) {
-      toast.error(`Failed to delete: ${delErr}`);
+      toast.error(`Falha ao excluir: ${delErr}`);
       return;
     }
-    toast.success('Broadcast deleted');
+    toast.success('Disparo excluído');
     router.push('/broadcasts');
   }
 
@@ -362,9 +362,9 @@ export default function BroadcastDetailPage() {
   if (error || !broadcast) {
     return (
       <div className="flex h-64 flex-col items-center justify-center gap-2">
-        <p className="text-sm text-red-400">{error ?? 'Broadcast not found'}</p>
+        <p className="text-sm text-red-400">{error ?? 'Disparo não encontrado'}</p>
         <Button variant="outline" onClick={() => router.push('/broadcasts')}>
-          Back to Broadcasts
+          Voltar para Disparos
         </Button>
       </div>
     );
@@ -405,10 +405,10 @@ export default function BroadcastDetailPage() {
     : null;
 
   const funnelSteps: FunnelStep[] = [
-    { label: 'Sent', value: broadcast.sent_count, color: 'bg-primary' },
-    { label: 'Delivered', value: broadcast.delivered_count, color: 'bg-teal-500' },
-    { label: 'Read', value: broadcast.read_count, color: 'bg-blue-500' },
-    { label: 'Replied', value: broadcast.replied_count, color: 'bg-indigo-500' },
+    { label: 'Enviadas', value: broadcast.sent_count, color: 'bg-primary' },
+    { label: 'Entregues', value: broadcast.delivered_count, color: 'bg-teal-500' },
+    { label: 'Lidas', value: broadcast.read_count, color: 'bg-blue-500' },
+    { label: 'Respondidas', value: broadcast.replied_count, color: 'bg-indigo-500' },
   ];
 
   return (
@@ -437,7 +437,7 @@ export default function BroadcastDetailPage() {
               <span>Template: {broadcast.template_name}</span>
               <span>-</span>
               <span>
-                Created {new Date(broadcast.created_at).toLocaleDateString()}
+                Criado em {new Date(broadcast.created_at).toLocaleDateString()}
               </span>
             </div>
           </div>
@@ -599,42 +599,42 @@ export default function BroadcastDetailPage() {
       {/* Stats — 6 cards: Total / Sent / Delivered / Read / Replied / Failed */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
         <StatCard
-          label="Total Recipients"
+          label="Total de destinatários"
           value={broadcast.total_recipients}
           total={broadcast.total_recipients}
           icon={<Users className="h-4 w-4" />}
           color="bg-muted text-muted-foreground"
         />
         <StatCard
-          label="Sent"
+          label="Enviadas"
           value={broadcast.sent_count}
           total={broadcast.total_recipients}
           icon={<Send className="h-4 w-4" />}
           color="bg-primary/10 text-primary"
         />
         <StatCard
-          label="Delivered"
+          label="Entregues"
           value={broadcast.delivered_count}
           total={broadcast.total_recipients}
           icon={<CheckCheck className="h-4 w-4" />}
           color="bg-teal-500/10 text-teal-400"
         />
         <StatCard
-          label="Read"
+          label="Lidas"
           value={broadcast.read_count}
           total={broadcast.total_recipients}
           icon={<Eye className="h-4 w-4" />}
           color="bg-blue-500/10 text-blue-400"
         />
         <StatCard
-          label="Replied"
+          label="Respondidas"
           value={broadcast.replied_count}
           total={broadcast.total_recipients}
           icon={<MessageCircle className="h-4 w-4" />}
           color="bg-indigo-500/10 text-indigo-400"
         />
         <StatCard
-          label="Failed"
+          label="Falhas"
           value={broadcast.failed_count}
           total={broadcast.total_recipients}
           icon={<AlertCircle className="h-4 w-4" />}
@@ -648,8 +648,8 @@ export default function BroadcastDetailPage() {
       <div className="rounded-xl border border-border bg-card">
         <div className="flex flex-wrap items-center justify-between gap-2 border-b border-border px-4 py-3">
           <h2 className="text-sm font-medium text-foreground">
-            Recipients ({filteredRecipients.length}
-            {statusFilter !== 'all' ? ` of ${recipients.length}` : ''})
+            Destinatários ({filteredRecipients.length}
+            {statusFilter !== 'all' ? ` de ${recipients.length}` : ''})
           </h2>
           <div className="flex items-center gap-2">
             <DropdownMenu>
@@ -664,7 +664,7 @@ export default function BroadcastDetailPage() {
               >
                 <Filter className="h-3.5 w-3.5" />
                 {statusFilter === 'all'
-                  ? 'All statuses'
+                  ? 'Todos os status'
                   : getRecipientStatus(statusFilter).label}
                 <ChevronDown className="h-3 w-3" />
               </DropdownMenuTrigger>
@@ -675,7 +675,7 @@ export default function BroadcastDetailPage() {
                     statusFilter === 'all' ? 'text-primary' : 'text-popover-foreground'
                   }
                 >
-                  All statuses
+                  Todos os status
                 </DropdownMenuItem>
                 {RECIPIENT_STATUSES.map((s) => (
                   <DropdownMenuItem
@@ -701,7 +701,7 @@ export default function BroadcastDetailPage() {
               className="border-border text-muted-foreground hover:bg-muted"
             >
               <Download className="h-3.5 w-3.5" />
-              Export CSV
+              Exportar CSV
             </Button>
           </div>
         </div>
@@ -710,8 +710,8 @@ export default function BroadcastDetailPage() {
           <div className="flex h-32 items-center justify-center">
             <p className="text-sm text-muted-foreground">
               {recipients.length === 0
-                ? 'No recipients found.'
-                : 'No recipients match this filter.'}
+                ? 'Nenhum destinatário encontrado.'
+                : 'Nenhum destinatário corresponde a este filtro.'}
             </p>
           </div>
         ) : (
@@ -719,13 +719,13 @@ export default function BroadcastDetailPage() {
             <Table>
               <TableHeader>
                 <TableRow className="border-border hover:bg-transparent">
-                  <TableHead className="text-muted-foreground">Contact</TableHead>
-                  <TableHead className="text-muted-foreground">Phone</TableHead>
+                  <TableHead className="text-muted-foreground">Contato</TableHead>
+                  <TableHead className="text-muted-foreground">Telefone</TableHead>
                   <TableHead className="text-muted-foreground">Status</TableHead>
-                  <TableHead className="text-muted-foreground">Sent</TableHead>
-                  <TableHead className="text-muted-foreground">Delivered</TableHead>
-                  <TableHead className="text-muted-foreground">Read</TableHead>
-                  <TableHead className="text-muted-foreground">Error</TableHead>
+                  <TableHead className="text-muted-foreground">Enviada</TableHead>
+                  <TableHead className="text-muted-foreground">Entregue</TableHead>
+                  <TableHead className="text-muted-foreground">Lida</TableHead>
+                  <TableHead className="text-muted-foreground">Erro</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -734,7 +734,7 @@ export default function BroadcastDetailPage() {
                   return (
                     <TableRow key={recipient.id} className="border-border">
                       <TableCell className="font-medium text-foreground">
-                        {recipient.contact?.name ?? 'Unknown'}
+                        {recipient.contact?.name ?? 'Desconhecido'}
                       </TableCell>
                       <TableCell className="text-muted-foreground">
                         {recipient.contact?.phone ?? '-'}

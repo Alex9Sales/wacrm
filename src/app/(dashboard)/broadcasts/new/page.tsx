@@ -18,9 +18,9 @@ import { Check } from 'lucide-react';
 
 const steps = [
   { label: 'Template', key: 'template' },
-  { label: 'Audience', key: 'audience' },
-  { label: 'Personalize', key: 'personalize' },
-  { label: 'Send', key: 'send' },
+  { label: 'Audiência', key: 'audience' },
+  { label: 'Personalizar', key: 'personalize' },
+  { label: 'Enviar', key: 'send' },
 ] as const;
 
 export default function NewBroadcastPage() {
@@ -89,7 +89,7 @@ export default function NewBroadcastPage() {
     } catch (err) {
       // Previously swallowed with console.error — the wizard would
       // just no-op, leaving the user confused. Surface the reason.
-      const message = err instanceof Error ? err.message : 'Broadcast failed';
+      const message = err instanceof Error ? err.message : 'Falha ao enviar o disparo';
       console.error('Broadcast failed:', err);
       toast.error(message);
     }
@@ -106,7 +106,7 @@ export default function NewBroadcastPage() {
    */
   async function handleSaveDraft() {
     if (!template || !name.trim()) {
-      toast.error('Give the broadcast a name before saving a draft.');
+      toast.error('Dê um nome ao disparo antes de salvar o rascunho.');
       return;
     }
 
@@ -123,10 +123,10 @@ export default function NewBroadcastPage() {
     });
 
     if (error) {
-      toast.error(`Failed to save draft: ${error}`);
+      toast.error(`Falha ao salvar o rascunho: ${error}`);
       return;
     }
-    toast.success('Draft saved');
+    toast.success('Rascunho salvo');
     router.push('/broadcasts');
   }
 
@@ -134,9 +134,9 @@ export default function NewBroadcastPage() {
     <div className="mx-auto max-w-3xl space-y-8">
       {/* Header */}
       <div>
-        <h1 className="text-2xl font-bold text-foreground">New Broadcast</h1>
+        <h1 className="text-2xl font-bold text-foreground">Novo disparo</h1>
         <p className="mt-1 text-sm text-muted-foreground">
-          Create and send a broadcast message to your contacts.
+          Crie e envie uma mensagem de disparo para seus contatos.
         </p>
       </div>
 
