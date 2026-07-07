@@ -1143,9 +1143,9 @@ BEGIN
     NEW.id,
     NEW.contact_id,
     NULL,
-    'New conversation assigned',
-    'Someone assigned you a conversation with '
-      || COALESCE(v_contact_name, 'a contact')
+    'Nova conversa atribuída',
+    'Você recebeu uma conversa com '
+      || COALESCE(v_contact_name, 'um contato')
   );
 
   RETURN NEW;

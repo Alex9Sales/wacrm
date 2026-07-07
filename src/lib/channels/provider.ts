@@ -251,7 +251,9 @@ export interface WhatsAppProvider {
 
   // ---- session lifecycle (non-official providers) ----
   startSession?(ch: ChannelCtx, webhookUrl: string): Promise<{ qr?: string }>;
-  getState?(ch: ChannelCtx): Promise<{ status: string }>;
+  getState?(
+    ch: ChannelCtx,
+  ): Promise<{ status: string; phoneNumber?: string | null }>;
 }
 
 /**

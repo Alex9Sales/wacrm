@@ -47,8 +47,10 @@ export async function GET(_request: Request, { params }: RouteParams) {
       return NextResponse.json({ status: row?.status ?? channel.provider })
     }
 
-    const { status } = await provider.getState(channel)
-    await updateChannelStatus(channel.id, status)
+    const { status, phoneNumber } = await provider.getState(channel)
+    // Persist the paired number when the provider reports one (WAHA surfaces
+    // it once WORKING) so the channel stops showing "Número não vinculado".
+    await updateChannelStatus(channel.id, status, phoneNumber ?? undefined)
     return NextResponse.json({ status })
   } catch (err) {
     return toErrorResponse(err)

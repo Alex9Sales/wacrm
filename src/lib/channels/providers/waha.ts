@@ -711,16 +711,25 @@ export const wahaProvider: WhatsAppProvider = {
     return {};
   },
 
-  async getState(ch: ChannelCtx): Promise<{ status: string }> {
+  async getState(
+    ch: ChannelCtx,
+  ): Promise<{ status: string; phoneNumber?: string | null }> {
     const { ok, body } = await httpJson(
       `${baseUrlOf(ch)}/api/sessions/${encodeURIComponent(sessionOf(ch))}`,
       { method: 'GET', headers: headersOf(ch) },
     );
     if (!ok) return { status: 'error' };
     const st = String((body as { status?: unknown }).status || '');
+    // The paired number lives in `me.id` (e.g. "556791875477@c.us"). Surface
+    // it so the channel row can persist phone_number once WORKING.
+    const meId = (body as { me?: { id?: unknown } }).me?.id;
+    const phoneNumber =
+      typeof meId === 'string' && meId
+        ? normalizePhone(meId.split('@')[0])
+        : undefined;
     switch (st) {
       case 'WORKING':
-        return { status: 'connected' };
+        return { status: 'connected', phoneNumber };
       case 'SCAN_QR_CODE':
         return { status: 'qr_pending' };
       case 'STOPPED':

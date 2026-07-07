@@ -110,8 +110,15 @@ export async function POST(request: Request, { params }: RouteParams) {
   if (isSessionStateEvent(providerId, body)) {
     try {
       if (provider.getState) {
-        const { status } = await provider.getState(channel)
-        await updateChannelStatus(channel.id, status)
+        const { status, phoneNumber } = await provider.getState(channel)
+        // Persist the paired number when the provider reports one (WAHA
+        // surfaces it once WORKING) so the channel stops showing
+        // "Número não vinculado". Passing undefined leaves it unchanged.
+        await updateChannelStatus(
+          channel.id,
+          status,
+          phoneNumber ?? undefined,
+        )
       }
     } catch (err) {
       console.error('[webhooks/generic] session-state update failed:', err)
