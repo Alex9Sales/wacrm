@@ -394,6 +394,10 @@ export const messages = pgTable("messages", {
 	status: text().default('sent').notNull(),
 	replyToMessageId: uuid("reply_to_message_id"),
 	interactiveReplyId: text("interactive_reply_id"),
+	// Speech-to-text of an inbound audio/voice note (null until transcribed).
+	transcription: text("transcription"),
+	// WhatsApp "view once" media — persisted so an agent can re-open it.
+	viewOnce: boolean("view_once").default(false).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_messages_conversation").using("btree", table.conversationId.asc().nullsLast().op("uuid_ops")),
@@ -1159,4 +1163,23 @@ export const scheduledMessages = pgTable("scheduled_messages", {
 			name: "scheduled_messages_contact_id_fkey"
 		}).onDelete("set null"),
 	check("scheduled_messages_status_check", sql`status = ANY (ARRAY['pending'::text, 'sent'::text, 'cancelled'::text, 'failed'::text])`),
+]);
+
+// ============================================================
+// account_settings — one row per account (organization) holding
+// workspace-wide preference toggles that don't warrant their own table
+// (e.g. the agent-signature toggle). Shape of `settings` is app-defined
+// (see src/lib/settings/account-settings.ts).
+// ============================================================
+export const accountSettings = pgTable("account_settings", {
+	accountId: uuid("account_id").primaryKey().notNull(),
+	settings: jsonb().default({}).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "account_settings_account_id_fkey"
+		}).onDelete("cascade"),
 ]);

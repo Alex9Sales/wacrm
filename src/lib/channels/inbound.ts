@@ -28,6 +28,8 @@ import { dispatchWebhookEvent } from '@/lib/webhooks/deliver';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
+import { transcribeInboundAudio } from '@/lib/ai/transcribe';
+import { getAccountSettings } from '@/lib/settings/account-settings';
 import { putObject, publicUrl } from '@/lib/storage/s3';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
@@ -182,6 +184,21 @@ export async function dispatchInboundMessage(
     ? ev.contentType
     : 'text';
 
+  // Audio transcription (opt-in). Inbound voice notes → text via the
+  // account's OpenAI key, computed here so the message row lands with the
+  // transcript already attached. Best-effort: null on any failure.
+  let transcription: string | null = null;
+  if (contentType === 'audio' && ev.media && !isFromMe) {
+    try {
+      const { audioTranscriptionEnabled } = await getAccountSettings(accountId);
+      if (audioTranscriptionEnabled) {
+        transcription = await transcribeInboundAudio(accountId, ev.media);
+      }
+    } catch (err) {
+      console.error('[inbound] transcription failed:', err);
+    }
+  }
+
   // Fallback text so an inbound with no body still renders legibly (e.g.
   // EvoGo media placeholder, unsupported types).
   const contentText =
@@ -218,6 +235,8 @@ export async function dispatchInboundMessage(
       contentType,
       contentText,
       mediaUrl,
+      transcription,
+      viewOnce: ev.media?.viewOnce ?? false,
       messageId: ev.externalMessageId || null,
       status: isFromMe ? 'sent' : 'delivered',
       createdAt: new Date().toISOString(),

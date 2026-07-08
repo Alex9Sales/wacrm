@@ -6,6 +6,7 @@ import {
   useCallback,
   useEffect,
   KeyboardEvent,
+  type DragEvent,
 } from "react";
 import {
   Send,
@@ -82,6 +83,17 @@ const PICKER_ACCEPT: Record<"image" | "video" | "document", string> = {
   document:
     "application/pdf,application/msword,application/vnd.openxmlformats-officedocument.wordprocessingml.document,application/vnd.ms-excel,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-powerpoint,application/vnd.openxmlformats-officedocument.presentationml.presentation,text/plain",
 };
+
+/** Map a dropped/pasted file to a composer media kind by its MIME type.
+ *  Anything that isn't image/video/audio is treated as a document (matches
+ *  WhatsApp: drop a PDF/zip/etc. and it attaches as a document). */
+function kindFromFile(file: File): ComposerMediaKind {
+  const t = file.type || "";
+  if (t.startsWith("image/")) return "image";
+  if (t.startsWith("video/")) return "video";
+  if (t.startsWith("audio/")) return "audio";
+  return "document";
+}
 
 interface MediaDraft {
   kind: ComposerMediaKind;
@@ -184,6 +196,12 @@ export function MessageComposer({
   // but that window only exists for Meta, so `sessionGated` is false for
   // the QR providers and never disables their inputs.
   const inputsDisabled = readOnly || sessionGated;
+
+  // Drag-and-drop of files onto the composer. `dragDepth` counts enter/leave
+  // across child elements so the overlay doesn't flicker when the cursor
+  // crosses an inner node.
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
 
   const clearTimer = useCallback(() => {
     if (timerRef.current !== null) {
@@ -328,6 +346,50 @@ export function MessageComposer({
     [stageUpload],
   );
 
+  // ---- Drag & drop (drop a file anywhere on the composer) ------------
+  const dragHasFiles = (e: DragEvent) =>
+    Array.from(e.dataTransfer?.types ?? []).includes("Files");
+
+  const handleDragEnter = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (inputsDisabled || busy || !dragHasFiles(e)) return;
+      e.preventDefault();
+      dragDepth.current += 1;
+      setDragOver(true);
+    },
+    [inputsDisabled, busy],
+  );
+
+  const handleDragOver = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      if (inputsDisabled || busy || !dragHasFiles(e)) return;
+      e.preventDefault();
+      e.dataTransfer.dropEffect = "copy";
+    },
+    [inputsDisabled, busy],
+  );
+
+  const handleDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
+    if (!dragHasFiles(e)) return;
+    dragDepth.current -= 1;
+    if (dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragOver(false);
+    }
+  }, []);
+
+  const handleDrop = useCallback(
+    (e: DragEvent<HTMLDivElement>) => {
+      dragDepth.current = 0;
+      setDragOver(false);
+      if (inputsDisabled || busy || !dragHasFiles(e)) return;
+      e.preventDefault();
+      const file = e.dataTransfer.files?.[0];
+      if (file) void stageUpload(kindFromFile(file), file);
+    },
+    [inputsDisabled, busy, stageUpload],
+  );
+
   // ---- Voice recording (client-side Ogg/Opus, no server transcode) ---
 
   // The encoded Ogg/Opus file from opus-recorder → upload as an audio
@@ -446,7 +508,19 @@ export function MessageComposer({
   // ---- Render --------------------------------------------------------
 
   return (
-    <div className="border-t border-border bg-card p-3">
+    <div
+      className="relative border-t border-border bg-card p-3"
+      onDragEnter={handleDragEnter}
+      onDragOver={handleDragOver}
+      onDragLeave={handleDragLeave}
+      onDrop={handleDrop}
+    >
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-1 z-10 flex flex-col items-center justify-center gap-1 rounded-xl border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm">
+          <Paperclip className="h-6 w-6 text-primary" />
+          <p className="text-sm font-medium text-primary">Solte o arquivo para anexar</p>
+        </div>
+      )}
       {replyTo && (
         <div className="mb-2">
           <ReplyQuote

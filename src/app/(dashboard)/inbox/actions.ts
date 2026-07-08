@@ -229,6 +229,8 @@ const messageColumns = {
   status: messages.status,
   reply_to_message_id: messages.replyToMessageId,
   interactive_reply_id: messages.interactiveReplyId,
+  transcription: messages.transcription,
+  view_once: messages.viewOnce,
   created_at: messages.createdAt,
 }
 

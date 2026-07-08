@@ -84,6 +84,9 @@ export interface NormalizedInbound {
     url?: string;
     filename?: string;
     fetchKey?: unknown;
+    /** WhatsApp "view once" media — the CRM persists it so agents can
+     *  re-open, but the bubble hides it behind a tap-to-reveal cover. */
+    viewOnce?: boolean;
   };
   /** For interactive button / list taps: the stable id of the option. */
   interactiveReplyId?: string;

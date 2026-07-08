@@ -1,6 +1,7 @@
 import {
   Coins,
   FileText,
+  Headset,
   KeyRound,
   LayoutGrid,
   MessageSquare,
@@ -27,6 +28,7 @@ export const SETTINGS_SECTIONS = [
   'security',
   'appearance',
   'channels',
+  'atendimento',
   'templates',
   'fields',
   'deals',
@@ -53,6 +55,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   security: { id: 'security', label: 'Login e segurança', icon: Shield, group: 'account' },
   appearance: { id: 'appearance', label: 'Aparência', icon: Palette, group: 'account' },
   channels: { id: 'channels', label: 'Canais', icon: MessageSquare, group: 'workspace' },
+  atendimento: { id: 'atendimento', label: 'Atendimento', icon: Headset, group: 'workspace' },
   templates: { id: 'templates', label: 'Templates', icon: FileText, group: 'workspace' },
   fields: { id: 'fields', label: 'Campos e etiquetas', icon: Tags, group: 'workspace' },
   deals: { id: 'deals', label: 'Negócios e moeda', icon: Coins, group: 'workspace' },

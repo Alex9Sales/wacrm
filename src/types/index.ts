@@ -242,6 +242,10 @@ export interface Message {
    * cue (renders with a "↩ button reply" affordance).
    */
   interactive_reply_id?: string;
+  /** Speech-to-text of an inbound audio note (null until transcribed). */
+  transcription?: string | null;
+  /** WhatsApp "view once" media — shown behind a tap-to-reveal cover. */
+  view_once?: boolean;
 }
 
 export type ReactionActor = 'customer' | 'agent';

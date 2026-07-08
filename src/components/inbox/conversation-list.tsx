@@ -4,6 +4,7 @@ import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { listConversations, listTags } from "@/app/(dashboard)/inbox/actions";
 import { matchesContactFilters } from "@/lib/inbox/conversations";
+import { formatConversationPreview } from "@/lib/inbox/preview";
 import { cn } from "@/lib/utils";
 import type {
   Conversation,
@@ -591,7 +592,7 @@ function ConversationItem({
         </div>
         <div className="mt-0.5 flex items-center justify-between gap-2">
           <p className="truncate text-xs text-muted-foreground">
-            {conversation.last_message_text || "Nenhuma mensagem ainda"}
+            {formatConversationPreview(conversation.last_message_text)}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
             {conversation.channel && (

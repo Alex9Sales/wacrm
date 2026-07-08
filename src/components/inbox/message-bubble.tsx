@@ -15,10 +15,43 @@ import {
   CornerDownLeft,
   X,
   ExternalLink,
+  Sparkles,
+  EyeOff,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
+
+const DOC_MIME_BY_EXT: Record<string, string> = {
+  pdf: "application/pdf",
+  doc: "application/msword",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  xls: "application/vnd.ms-excel",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  ppt: "application/vnd.ms-powerpoint",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  txt: "text/plain",
+  csv: "text/csv",
+  zip: "application/zip",
+};
+
+/** Best filename for a document: the caption if it looks like a filename,
+ *  else the URL's basename, else a generic name. */
+function documentFilename(caption: string | undefined, url: string): string {
+  if (caption && /\.[a-z0-9]{2,5}$/i.test(caption.trim())) return caption.trim();
+  try {
+    const base = new URL(url).pathname.split("/").pop();
+    if (base) return decodeURIComponent(base);
+  } catch {
+    // relative/opaque URL — fall through
+  }
+  return caption?.trim() || "documento";
+}
+
+function mimeFromName(name: string): string {
+  const ext = name.split(".").pop()?.toLowerCase() ?? "";
+  return DOC_MIME_BY_EXT[ext] ?? "application/octet-stream";
+}
 
 interface MessageBubbleProps {
   message: Message;
@@ -190,6 +223,32 @@ function MediaImage({ url, alt }: { url: string; alt: string }) {
   );
 }
 
+/** WhatsApp "view once" media: keep it hidden behind a tap-to-reveal cover
+ *  (the CRM stores it so an agent can re-open, unlike WhatsApp). */
+function ViewOnceCover({
+  kind,
+  children,
+}: {
+  kind: "image" | "video";
+  children: React.ReactNode;
+}) {
+  const [revealed, setRevealed] = useState(false);
+  if (revealed) return <>{children}</>;
+  return (
+    <button
+      type="button"
+      onClick={() => setRevealed(true)}
+      className="flex items-center gap-2 rounded-lg border border-dashed border-border bg-muted/60 px-3 py-3 text-sm text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+    >
+      <EyeOff className="h-4 w-4 shrink-0" />
+      <span>
+        {kind === "image" ? "Foto" : "Vídeo"} de visualização única — toque para
+        ver
+      </span>
+    </button>
+  );
+}
+
 function MessageContent({ message }: { message: Message }) {
   switch (message.content_type) {
     case "text":
@@ -203,7 +262,13 @@ function MessageContent({ message }: { message: Message }) {
       return (
         <div>
           {message.media_url ? (
-            <MediaImage url={message.media_url} alt="Imagem" />
+            message.view_once ? (
+              <ViewOnceCover kind="image">
+                <MediaImage url={message.media_url} alt="Imagem" />
+              </ViewOnceCover>
+            ) : (
+              <MediaImage url={message.media_url} alt="Imagem" />
+            )
           ) : (
             <MediaUnavailable label="Imagem" />
           )}
@@ -215,15 +280,22 @@ function MessageContent({ message }: { message: Message }) {
         </div>
       );
 
-    case "video":
+    case "video": {
+      const videoEl = message.media_url ? (
+        <video
+          src={message.media_url}
+          controls
+          className="max-h-64 max-w-60 rounded-lg"
+        />
+      ) : null;
       return (
         <div>
-          {message.media_url ? (
-            <video
-              src={message.media_url}
-              controls
-              className="max-h-64 max-w-60 rounded-lg"
-            />
+          {videoEl ? (
+            message.view_once ? (
+              <ViewOnceCover kind="video">{videoEl}</ViewOnceCover>
+            ) : (
+              videoEl
+            )
           ) : (
             <MediaUnavailable label="Vídeo" />
           )}
@@ -234,14 +306,26 @@ function MessageContent({ message }: { message: Message }) {
           )}
         </div>
       );
+    }
 
     case "audio":
       return (
-        <div>
+        <div className="space-y-1.5">
           {message.media_url ? (
             <audio src={message.media_url} controls className="max-w-60" />
           ) : (
             <MediaUnavailable label="Áudio" />
+          )}
+          {message.transcription && (
+            <div className="max-w-60 rounded-lg bg-muted/50 px-2.5 py-1.5">
+              <p className="mb-0.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                <Sparkles className="h-3 w-3" />
+                Transcrição
+              </p>
+              <p className="whitespace-pre-wrap text-sm leading-snug text-foreground/90">
+                {message.transcription}
+              </p>
+            </div>
           )}
         </div>
       );
@@ -255,6 +339,19 @@ function MessageContent({ message }: { message: Message }) {
           href={message.media_url}
           target="_blank"
           rel="noopener noreferrer"
+          draggable
+          onDragStart={(e) => {
+            // Let the user drag the document straight out to their desktop
+            // (Chromium DownloadURL protocol: "mime:filename:absolute-url").
+            const url = message.media_url!;
+            const name = documentFilename(message.content_text, url);
+            e.dataTransfer.setData(
+              "DownloadURL",
+              `${mimeFromName(name)}:${name}:${url}`,
+            );
+            e.dataTransfer.setData("text/uri-list", url);
+          }}
+          title="Abrir ou arrastar para baixar"
           className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"
         >
           <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />

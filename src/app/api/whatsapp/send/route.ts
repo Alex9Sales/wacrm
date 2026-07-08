@@ -1,8 +1,9 @@
 import { NextResponse } from 'next/server'
 import { and, eq } from 'drizzle-orm'
 
-import { db, contacts, conversations } from '@/db'
+import { db, contacts, conversations, user } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { getAccountSettings } from '@/lib/settings/account-settings'
 import {
   getCurrentAccount,
   toErrorResponse,
@@ -173,6 +174,30 @@ export async function POST(request: Request) {
       )
     }
 
+    // Agent signature (workspace toggle): prefix the human agent's name in
+    // bold so the customer sees who replied. Applies only to this dashboard
+    // route (real people) — NOT the v1 API (agents) or automations/AI, which
+    // never hit this path. Skips templates and empty bodies (bare media).
+    let outboundText: string | null | undefined = content_text
+    if (
+      typeof content_text === 'string' &&
+      content_text.trim() &&
+      message_type !== 'template'
+    ) {
+      const settings = await getAccountSettings(accountId)
+      if (settings.agentSignatureEnabled) {
+        const sender = firstOrNull(
+          await db
+            .select({ name: user.name })
+            .from(user)
+            .where(eq(user.id, ctx.userId))
+            .limit(1),
+        )
+        const name = sender?.name?.trim()
+        if (name) outboundText = `*${name}:*\n${content_text}`
+      }
+    }
+
     // Delegate to the shared send core (validates, sends to Meta with
     // phone-variant retry, persists, pauses active flow runs). Its
     // `SendMessageError` carries a machine code + HTTP status; the
@@ -181,7 +206,7 @@ export async function POST(request: Request) {
       const result = await sendMessageToConversation(accountId, {
         conversationId,
         messageType: message_type,
-        contentText: content_text,
+        contentText: outboundText,
         mediaUrl: media_url,
         filename,
         templateName: template_name,

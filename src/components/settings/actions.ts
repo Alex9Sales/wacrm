@@ -23,6 +23,10 @@ import {
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
+import {
+  getAccountSettings,
+  updateAccountSettings,
+} from '@/lib/settings/account-settings'
 import type { Tag, MessageTemplate, WhatsAppConfig } from '@/types'
 
 // ------------------------------------------------------------
@@ -255,6 +259,42 @@ export async function setDefaultCurrency(currency: string): Promise<void> {
 // uploaded to MinIO by the client via POST /api/media/upload; this
 // action persists the resulting public URL (or clears it on removal).
 // ------------------------------------------------------------
+
+// ------------------------------------------------------------
+// Atendimento — workspace-wide inbox preferences (service-panel.tsx)
+// ------------------------------------------------------------
+
+/** Whether outbound agent messages are prefixed with the sender's name. */
+export async function getAgentSignatureEnabled(): Promise<boolean> {
+  const ctx = await getCurrentAccount()
+  const settings = await getAccountSettings(ctx.accountId)
+  return settings.agentSignatureEnabled
+}
+
+/** Toggle the agent-signature preference (admins only). */
+export async function setAgentSignatureEnabled(
+  enabled: boolean,
+): Promise<void> {
+  const ctx = await requireRole('admin')
+  await updateAccountSettings(ctx.accountId, { agentSignatureEnabled: enabled })
+}
+
+/** Whether inbound audio notes are transcribed to text. */
+export async function getAudioTranscriptionEnabled(): Promise<boolean> {
+  const ctx = await getCurrentAccount()
+  const settings = await getAccountSettings(ctx.accountId)
+  return settings.audioTranscriptionEnabled
+}
+
+/** Toggle audio transcription (admins only). Uses the account's OpenAI key. */
+export async function setAudioTranscriptionEnabled(
+  enabled: boolean,
+): Promise<void> {
+  const ctx = await requireRole('admin')
+  await updateAccountSettings(ctx.accountId, {
+    audioTranscriptionEnabled: enabled,
+  })
+}
 
 /** Update the current user's display name on their user row. */
 export async function updateProfileName(fullName: string): Promise<void> {
