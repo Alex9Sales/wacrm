@@ -53,6 +53,14 @@ function mimeFromName(name: string): string {
   return DOC_MIME_BY_EXT[ext] ?? "application/octet-stream";
 }
 
+/** A media message with no real caption stores a bare "[image]"/"[audio]"…
+ *  placeholder in content_text (see lib/channels/inbound.ts). Don't render
+ *  that as a caption/filename — return undefined so callers fall back. */
+function realCaption(text: string | undefined): string | undefined {
+  if (!text) return undefined;
+  return /^\[[a-zA-Z]+\]$/.test(text.trim()) ? undefined : text;
+}
+
 interface MessageBubbleProps {
   message: Message;
   /** Pre-computed quote info for messages that reply to another. */
@@ -272,7 +280,7 @@ function MessageContent({ message }: { message: Message }) {
           ) : (
             <MediaUnavailable label="Imagem" />
           )}
-          {message.content_text && (
+          {realCaption(message.content_text) && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
               {message.content_text}
             </p>
@@ -299,7 +307,7 @@ function MessageContent({ message }: { message: Message }) {
           ) : (
             <MediaUnavailable label="Vídeo" />
           )}
-          {message.content_text && (
+          {realCaption(message.content_text) && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
               {message.content_text}
             </p>
@@ -332,7 +340,7 @@ function MessageContent({ message }: { message: Message }) {
 
     case "document":
       if (!message.media_url) {
-        return <MediaUnavailable label={message.content_text || "Documento"} />;
+        return <MediaUnavailable label={realCaption(message.content_text) || "Documento"} />;
       }
       return (
         <a
@@ -356,7 +364,7 @@ function MessageContent({ message }: { message: Message }) {
         >
           <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
           <span className="truncate">
-            {message.content_text || "Documento"}
+            {realCaption(message.content_text) || "Documento"}
           </span>
         </a>
       );
@@ -368,7 +376,7 @@ function MessageContent({ message }: { message: Message }) {
             <LayoutTemplate className="h-3 w-3" />
             Template
           </span>
-          {message.content_text && (
+          {realCaption(message.content_text) && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
               {message.content_text}
             </p>

@@ -184,17 +184,23 @@ export async function POST(request: Request) {
       content_text.trim() &&
       message_type !== 'template'
     ) {
-      const settings = await getAccountSettings(accountId)
-      if (settings.agentSignatureEnabled) {
-        const sender = firstOrNull(
-          await db
-            .select({ name: user.name })
-            .from(user)
-            .where(eq(user.id, ctx.userId))
-            .limit(1),
-        )
-        const name = sender?.name?.trim()
-        if (name) outboundText = `*${name}:*\n${content_text}`
+      // Fail-open: a settings/user lookup hiccup must never block the send —
+      // worst case the message just goes out without the signature.
+      try {
+        const settings = await getAccountSettings(accountId)
+        if (settings.agentSignatureEnabled) {
+          const sender = firstOrNull(
+            await db
+              .select({ name: user.name })
+              .from(user)
+              .where(eq(user.id, ctx.userId))
+              .limit(1),
+          )
+          const name = sender?.name?.trim()
+          if (name) outboundText = `*${name}:*\n${content_text}`
+        }
+      } catch (err) {
+        console.error('[send] signature lookup failed, sending without it:', err)
       }
     }
 
