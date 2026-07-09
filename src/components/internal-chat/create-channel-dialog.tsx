@@ -49,6 +49,7 @@ export function CreateChannelDialog({
   const [description, setDescription] = useState("");
   const [isPrivate, setIsPrivate] = useState(false);
   const [members, setMembers] = useState<TeamMemberOption[]>([]);
+  const [loadingMembers, setLoadingMembers] = useState(false);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
 
@@ -59,9 +60,11 @@ export function CreateChannelDialog({
     setDescription("");
     setIsPrivate(false);
     setSelected(new Set());
+    setLoadingMembers(true);
     listTeamMembers()
       .then(setMembers)
-      .catch(() => setMembers([]));
+      .catch(() => setMembers([]))
+      .finally(() => setLoadingMembers(false));
   }, [open]);
 
   const toggleMember = (id: string) =>
@@ -188,7 +191,9 @@ export function CreateChannelDialog({
                   ))}
                   {members.length === 0 && (
                     <li className="px-3 py-4 text-center text-xs text-muted-foreground">
-                      Carregando equipe…
+                      {loadingMembers
+                        ? "Carregando equipe…"
+                        : "Nenhum outro membro na equipe ainda. Crie membros em Configurações › Membros da equipe."}
                     </li>
                   )}
                 </ul>
