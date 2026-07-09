@@ -20,8 +20,10 @@ import {
   customFields,
   organization,
   user,
+  member,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
+import { auth } from '@/lib/auth'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import {
   getAccountSettings,
@@ -294,6 +296,80 @@ export async function setAudioTranscriptionEnabled(
   await updateAccountSettings(ctx.accountId, {
     audioTranscriptionEnabled: enabled,
   })
+}
+
+// ------------------------------------------------------------
+// Team members — direct create (members-tab.tsx)
+// ------------------------------------------------------------
+
+export interface CreateTeamMemberInput {
+  name: string
+  email: string
+  password: string
+  role: 'admin' | 'agent' | 'viewer'
+}
+
+/**
+ * Create a team member directly with a login + password (admins only) and
+ * add them to THIS account. Mirrors the super-admin client provisioning:
+ * `signUpEmail` creates the user (hashed credential, no personal org — org
+ * creation lives on the signup page, not a hook), then a `member` row ties
+ * them to the current account. The caller hands the credentials over
+ * out-of-band (WhatsApp, etc.); the person can change the password later.
+ */
+export async function createTeamMember(
+  input: CreateTeamMemberInput,
+): Promise<{ email: string }> {
+  const ctx = await requireRole('admin')
+  const name = input.name.trim()
+  const email = input.email.trim().toLowerCase()
+  const password = input.password
+  if (!name || !email || !password) {
+    throw new Error('Preencha nome, e-mail e senha.')
+  }
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+    throw new Error('E-mail inválido.')
+  }
+  if (password.length < 8) {
+    throw new Error('A senha precisa ter ao menos 8 caracteres.')
+  }
+  const role = (['admin', 'agent', 'viewer'] as const).includes(input.role)
+    ? input.role
+    : 'agent'
+
+  const existing = firstOrNull(
+    await db.select({ id: user.id }).from(user).where(eq(user.email, email)).limit(1),
+  )
+  if (existing) {
+    throw new Error('Já existe um usuário com esse e-mail.')
+  }
+
+  let newUserId: string
+  try {
+    const res = await auth.api.signUpEmail({ body: { name, email, password } })
+    newUserId = res.user.id
+  } catch (err) {
+    const message =
+      err && typeof err === 'object' && 'message' in err
+        ? String((err as { message: unknown }).message)
+        : ''
+    if (/exist|taken|unique|duplicate/i.test(message)) {
+      throw new Error('Já existe um usuário com esse e-mail.')
+    }
+    if (/password|weak|short|8|character/i.test(message)) {
+      throw new Error('Senha muito fraca — use ao menos 8 caracteres.')
+    }
+    console.error('[createTeamMember] signUpEmail failed:', err)
+    throw new Error('Não foi possível criar o membro.')
+  }
+
+  await db.insert(member).values({
+    userId: newUserId,
+    organizationId: ctx.accountId,
+    role,
+  })
+
+  return { email }
 }
 
 /** Update the current user's display name on their user row. */

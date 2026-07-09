@@ -72,6 +72,7 @@ import {
   PresenceDot,
 } from '@/components/presence/presence-dot';
 import { InviteMemberDialog } from './invite-member-dialog';
+import { CreateMemberDialog } from './create-member-dialog';
 import { SettingsPanelHead } from './settings-panel-head';
 import { ROLE_META } from './role-meta';
 
@@ -133,6 +134,7 @@ export function MembersTab() {
   const [loading, setLoading] = useState(true);
 
   const [inviteOpen, setInviteOpen] = useState(false);
+  const [createOpen, setCreateOpen] = useState(false);
   const [removingMember, setRemovingMember] = useState<Member | null>(null);
   const [pendingMemberAction, setPendingMemberAction] = useState<string | null>(
     null,
@@ -289,10 +291,15 @@ export function MembersTab() {
         description="Pessoas com acesso a esta conta. Os perfis controlam o que cada membro pode fazer."
         action={
           <RequireRole min="admin">
-            <Button onClick={() => setInviteOpen(true)}>
-              <Plus className="size-4" />
-              Convidar membro
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button onClick={() => setCreateOpen(true)}>
+                <Plus className="size-4" />
+                Criar membro
+              </Button>
+              <Button variant="outline" onClick={() => setInviteOpen(true)}>
+                Convidar por link
+              </Button>
+            </div>
           </RequireRole>
         }
       />
@@ -564,6 +571,12 @@ export function MembersTab() {
           )}
         </div>
       </RequireRole>
+
+      <CreateMemberDialog
+        open={createOpen}
+        onOpenChange={setCreateOpen}
+        onCreated={loadEverything}
+      />
 
       <InviteMemberDialog
         open={inviteOpen}
