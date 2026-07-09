@@ -14,6 +14,7 @@ import {
   Bot,
   Crown,
   GitBranch,
+  Gauge,
   LayoutDashboard,
   ListTodo,
   LogOut,
@@ -93,6 +94,8 @@ interface NavItem {
    * Purely informational — doesn't affect routing or access.
    */
   beta?: boolean;
+  /** Only shown to admins/owner (the page itself also enforces this). */
+  adminOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
@@ -107,6 +110,7 @@ const navItems: NavItem[] = [
   { href: "/automations", label: "Automações", icon: Zap },
   { href: "/flows", label: "Fluxos", icon: Workflow, beta: true },
   { href: "/agents", label: "Agentes IA", icon: Bot },
+  { href: "/supervisao", label: "Supervisão", icon: Gauge, adminOnly: true },
 ];
 
 const bottomNavItems = [
@@ -123,7 +127,8 @@ const COLLAPSE_KEY = "fluxia-sidebar-collapsed";
 
 export function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const { profile, profileLoading, account, accountRole, signOut } = useAuth();
+  const { profile, profileLoading, account, accountRole, canEditSettings, signOut } =
+    useAuth();
 
   // Desktop-only collapse (icon rail) — gives the chat more room. Persisted
   // across sessions. Starts expanded on the server, then syncs from storage
@@ -253,7 +258,9 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
         {/* Main navigation */}
         <nav className="flex-1 overflow-y-auto px-3 py-4">
           <ul className="flex flex-col gap-1">
-            {navItems.map((item) => {
+            {navItems
+              .filter((item) => !item.adminOnly || canEditSettings)
+              .map((item) => {
               const isActive =
                 pathname === item.href ||
                 (item.href !== "/dashboard" && pathname.startsWith(item.href));
