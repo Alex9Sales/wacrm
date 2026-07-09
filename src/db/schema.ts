@@ -350,6 +350,9 @@ export const conversations = pgTable("conversations", {
 	// When the current agent was assigned — resets the SLA clock so a
 	// just-reassigned conversation gives the new agent the full window.
 	assignedAt: timestamp("assigned_at", { withTimezone: true, mode: 'string' }),
+	// Sector (department) this conversation belongs to. NULL = general queue
+	// (visible to everyone); otherwise only members of the sector see it.
+	sectorId: uuid("sector_id"),
 	lastMessageText: text("last_message_text"),
 	lastMessageAt: timestamp("last_message_at", { withTimezone: true, mode: 'string' }),
 	unreadCount: integer("unread_count").default(0),
@@ -1251,5 +1254,42 @@ export const internalChannelReads = pgTable("internal_channel_reads", {
 			columns: [table.channelId],
 			foreignColumns: [internalChannels.id],
 			name: "internal_channel_reads_channel_id_fkey"
+		}).onDelete("cascade"),
+]);
+
+// ============================================================
+// Sectors (departments) — organize conversations by team (Vendas,
+// Financeiro, Suporte…). Drive both routing and PRIVACY: a non-admin agent
+// only sees conversations whose sector they belong to (plus the general,
+// null-sector queue). Admins/owner see everything.
+// ============================================================
+export const sectors = pgTable("sectors", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	name: text().notNull(),
+	color: text().default('#6d4bd8').notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_sectors_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "sectors_account_id_fkey"
+		}).onDelete("cascade"),
+]);
+
+export const sectorMembers = pgTable("sector_members", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	sectorId: uuid("sector_id").notNull(),
+	userId: uuid("user_id").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("sector_members_unique").using("btree", table.sectorId.asc().nullsLast().op("uuid_ops"), table.userId.asc().nullsLast().op("uuid_ops")),
+	index("idx_sector_members_user").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.sectorId],
+			foreignColumns: [sectors.id],
+			name: "sector_members_sector_id_fkey"
 		}).onDelete("cascade"),
 ]);

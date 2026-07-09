@@ -10,7 +10,7 @@
 // kept snake_case, identical to what the components already expect.
 // ============================================================
 
-import { and, count, eq } from 'drizzle-orm'
+import { and, asc, count, eq, inArray } from 'drizzle-orm'
 
 import {
   db,
@@ -21,6 +21,9 @@ import {
   organization,
   user,
   member,
+  sectors,
+  sectorMembers,
+  conversations,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { auth } from '@/lib/auth'
@@ -393,6 +396,144 @@ export async function createTeamMember(
   })
 
   return { email }
+}
+
+// ------------------------------------------------------------
+// Sectors (departments) — routing + privacy (sectors-panel.tsx)
+// ------------------------------------------------------------
+
+export interface SectorWithMembers {
+  id: string
+  name: string
+  color: string
+  memberIds: string[]
+}
+
+/** All sectors in the account with their member user ids. */
+export async function listSectorsWithMembers(): Promise<SectorWithMembers[]> {
+  const ctx = await requireRole('admin')
+  const secs = await db
+    .select({ id: sectors.id, name: sectors.name, color: sectors.color })
+    .from(sectors)
+    .where(eq(sectors.accountId, ctx.accountId))
+    .orderBy(asc(sectors.name))
+  if (secs.length === 0) return []
+  const links = await db
+    .select({ sectorId: sectorMembers.sectorId, userId: sectorMembers.userId })
+    .from(sectorMembers)
+    .where(
+      inArray(
+        sectorMembers.sectorId,
+        secs.map((s) => s.id),
+      ),
+    )
+  const byId = new Map<string, string[]>()
+  for (const l of links) {
+    const arr = byId.get(l.sectorId) ?? []
+    arr.push(l.userId)
+    byId.set(l.sectorId, arr)
+  }
+  return secs.map((s) => ({ ...s, memberIds: byId.get(s.id) ?? [] }))
+}
+
+/** Create a sector (admins). */
+export async function createSector(input: {
+  name: string
+  color?: string
+  memberIds?: string[]
+}): Promise<{ id: string }> {
+  const ctx = await requireRole('admin')
+  const name = input.name.trim()
+  if (!name) throw new Error('Dê um nome ao setor.')
+  const [row] = await db
+    .insert(sectors)
+    .values({
+      accountId: ctx.accountId,
+      name,
+      color: input.color?.trim() || '#6d4bd8',
+    })
+    .returning({ id: sectors.id })
+  await replaceSectorMembers(ctx.accountId, row.id, input.memberIds ?? [])
+  return { id: row.id }
+}
+
+/** Rename / recolor a sector (admins). */
+export async function updateSector(
+  sectorId: string,
+  input: { name?: string; color?: string },
+): Promise<void> {
+  const ctx = await requireRole('admin')
+  const patch: { name?: string; color?: string; updatedAt: string } = {
+    updatedAt: new Date().toISOString(),
+  }
+  if (input.name !== undefined) {
+    const n = input.name.trim()
+    if (!n) throw new Error('Dê um nome ao setor.')
+    patch.name = n
+  }
+  if (input.color !== undefined) patch.color = input.color.trim() || '#6d4bd8'
+  await db
+    .update(sectors)
+    .set(patch)
+    .where(and(eq(sectors.id, sectorId), eq(sectors.accountId, ctx.accountId)))
+}
+
+/** Replace the members of a sector (admins). */
+export async function setSectorMembers(
+  sectorId: string,
+  userIds: string[],
+): Promise<void> {
+  const ctx = await requireRole('admin')
+  // Verify the sector is in this account.
+  const s = firstOrNull(
+    await db
+      .select({ id: sectors.id })
+      .from(sectors)
+      .where(and(eq(sectors.id, sectorId), eq(sectors.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  if (!s) throw new Error('Setor não encontrado.')
+  await replaceSectorMembers(ctx.accountId, sectorId, userIds)
+}
+
+/** Delete a sector (admins). Its conversations fall back to the general
+ *  queue so they don't become invisible. */
+export async function deleteSector(sectorId: string): Promise<void> {
+  const ctx = await requireRole('admin')
+  await db
+    .update(conversations)
+    .set({ sectorId: null })
+    .where(
+      and(
+        eq(conversations.sectorId, sectorId),
+        eq(conversations.accountId, ctx.accountId),
+      ),
+    )
+  await db
+    .delete(sectors)
+    .where(and(eq(sectors.id, sectorId), eq(sectors.accountId, ctx.accountId)))
+}
+
+/** Internal: set a sector's members to exactly `userIds` (account-validated). */
+async function replaceSectorMembers(
+  accountId: string,
+  sectorId: string,
+  userIds: string[],
+): Promise<void> {
+  const memberRows = await db
+    .select({ id: user.id })
+    .from(member)
+    .innerJoin(user, eq(member.userId, user.id))
+    .where(eq(member.organizationId, accountId))
+  const valid = new Set(memberRows.map((r) => r.id))
+  const ids = [...new Set(userIds.filter((id) => valid.has(id)))]
+  await db.delete(sectorMembers).where(eq(sectorMembers.sectorId, sectorId))
+  if (ids.length > 0) {
+    await db
+      .insert(sectorMembers)
+      .values(ids.map((userId) => ({ sectorId, userId })))
+      .onConflictDoNothing()
+  }
 }
 
 /** Update the current user's display name on their user row. */

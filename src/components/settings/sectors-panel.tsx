@@ -1,0 +1,311 @@
+"use client";
+
+import { useEffect, useState } from "react";
+import { toast } from "sonner";
+import { Loader2, Plus, Trash2, Users, Pencil } from "lucide-react";
+
+import { useAuth } from "@/hooks/use-auth";
+import { cn } from "@/lib/utils";
+import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Checkbox } from "@/components/ui/checkbox";
+import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from "@/components/ui/dialog";
+import { SettingsPanelHead } from "./settings-panel-head";
+import {
+  listSectorsWithMembers,
+  createSector,
+  updateSector,
+  setSectorMembers,
+  deleteSector,
+  type SectorWithMembers,
+} from "./actions";
+import { listTeamMembers } from "@/app/(dashboard)/internal-chat/actions";
+import type { TeamMemberOption } from "@/lib/internal-chat/types";
+
+const COLORS = ["#6d4bd8", "#0e8a5f", "#c0392b", "#9a6a00", "#2563eb", "#db2777", "#0891b2", "#4b5563"];
+
+export function SectorsPanel() {
+  const { canEditSettings } = useAuth();
+  const [sectors, setSectors] = useState<SectorWithMembers[]>([]);
+  const [members, setMembers] = useState<TeamMemberOption[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [editing, setEditing] = useState<SectorWithMembers | null>(null);
+  const [creating, setCreating] = useState(false);
+
+  const reload = () =>
+    listSectorsWithMembers()
+      .then(setSectors)
+      .catch(() => setSectors([]));
+
+  useEffect(() => {
+    Promise.all([listSectorsWithMembers(), listTeamMembers()])
+      .then(([s, m]) => {
+        setSectors(s);
+        setMembers(m);
+      })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, []);
+
+  const nameOf = (id: string) =>
+    members.find((m) => m.id === id)?.name ?? "?";
+
+  return (
+    <div>
+      <SettingsPanelHead
+        title="Setores"
+        description="Organize as conversas por time (Vendas, Financeiro, Suporte…). Cada atendente só vê os setores dele — o resto fica privado."
+        action={
+          canEditSettings ? (
+            <Button onClick={() => setCreating(true)}>
+              <Plus className="size-4" />
+              Novo setor
+            </Button>
+          ) : undefined
+        }
+      />
+
+      <div className="mt-4 space-y-3">
+        {loading ? (
+          <div className="flex justify-center py-10">
+            <Loader2 className="h-5 w-5 animate-spin text-muted-foreground" />
+          </div>
+        ) : sectors.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-border p-8 text-center">
+            <Users className="mx-auto h-8 w-8 text-muted-foreground/40" />
+            <p className="mt-2 text-sm font-medium text-foreground">
+              Nenhum setor ainda
+            </p>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Crie setores para separar as conversas por equipe e manter o
+              financeiro/admin privado.
+            </p>
+          </div>
+        ) : (
+          sectors.map((s) => (
+            <div
+              key={s.id}
+              className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3"
+            >
+              <span
+                className="h-3.5 w-3.5 shrink-0 rounded-full"
+                style={{ backgroundColor: s.color }}
+              />
+              <div className="min-w-0 flex-1">
+                <p className="truncate text-sm font-medium text-foreground">
+                  {s.name}
+                </p>
+                <p className="truncate text-xs text-muted-foreground">
+                  {s.memberIds.length === 0
+                    ? "Sem atendentes — ninguém vê este setor (só admin)"
+                    : s.memberIds.map(nameOf).join(", ")}
+                </p>
+              </div>
+              {canEditSettings && (
+                <div className="flex shrink-0 items-center gap-1">
+                  <button
+                    type="button"
+                    onClick={() => setEditing(s)}
+                    title="Editar"
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+                  >
+                    <Pencil className="h-4 w-4" />
+                  </button>
+                  <button
+                    type="button"
+                    onClick={async () => {
+                      if (!confirm(`Excluir o setor "${s.name}"? As conversas dele voltam para a fila geral.`)) return;
+                      try {
+                        await deleteSector(s.id);
+                        toast.success("Setor excluído.");
+                        void reload();
+                      } catch {
+                        toast.error("Não foi possível excluir.");
+                      }
+                    }}
+                    title="Excluir"
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-muted-foreground hover:bg-destructive/10 hover:text-destructive"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              )}
+            </div>
+          ))
+        )}
+      </div>
+
+      <SectorDialog
+        open={creating}
+        onOpenChange={setCreating}
+        members={members}
+        onSaved={() => void reload()}
+      />
+      <SectorDialog
+        open={!!editing}
+        onOpenChange={(o) => !o && setEditing(null)}
+        members={members}
+        sector={editing}
+        onSaved={() => void reload()}
+      />
+    </div>
+  );
+}
+
+function SectorDialog({
+  open,
+  onOpenChange,
+  members,
+  sector,
+  onSaved,
+}: {
+  open: boolean;
+  onOpenChange: (o: boolean) => void;
+  members: TeamMemberOption[];
+  sector?: SectorWithMembers | null;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState("");
+  const [color, setColor] = useState(COLORS[0]);
+  const [selected, setSelected] = useState<Set<string>>(new Set());
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!open) return;
+    setName(sector?.name ?? "");
+    setColor(sector?.color ?? COLORS[0]);
+    setSelected(new Set(sector?.memberIds ?? []));
+  }, [open, sector]);
+
+  const toggle = (id: string) =>
+    setSelected((p) => {
+      const n = new Set(p);
+      if (n.has(id)) n.delete(id);
+      else n.add(id);
+      return n;
+    });
+
+  const save = async () => {
+    if (!name.trim()) {
+      toast.error("Dê um nome ao setor.");
+      return;
+    }
+    setSaving(true);
+    try {
+      if (sector) {
+        await updateSector(sector.id, { name, color });
+        await setSectorMembers(sector.id, [...selected]);
+        toast.success("Setor atualizado.");
+      } else {
+        await createSector({ name, color, memberIds: [...selected] });
+        toast.success(`Setor "${name.trim()}" criado.`);
+      }
+      onSaved();
+      onOpenChange(false);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não foi possível salvar.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{sector ? "Editar setor" : "Novo setor"}</DialogTitle>
+          <DialogDescription>
+            Escolha um nome, uma cor e quem participa. Só os membros do setor
+            veem as conversas dele.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="space-y-4">
+          <div className="space-y-1.5">
+            <Label htmlFor="sector-name">Nome</Label>
+            <Input
+              id="sector-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Vendas, Financeiro, Suporte…"
+              maxLength={40}
+              autoFocus
+            />
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Cor</Label>
+            <div className="flex flex-wrap gap-2">
+              {COLORS.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => setColor(c)}
+                  className={cn(
+                    "h-7 w-7 rounded-full ring-2 ring-offset-2 ring-offset-background transition",
+                    color === c ? "ring-foreground" : "ring-transparent",
+                  )}
+                  style={{ backgroundColor: c }}
+                  aria-label={`Cor ${c}`}
+                />
+              ))}
+            </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Atendentes do setor</Label>
+            <ScrollArea className="max-h-48 rounded-lg border border-border">
+              <ul className="divide-y divide-border">
+                {members.map((m) => (
+                  <li key={m.id}>
+                    <button
+                      type="button"
+                      onClick={() => toggle(m.id)}
+                      className="flex w-full items-center gap-3 px-3 py-2 text-left transition-colors hover:bg-muted/60"
+                    >
+                      <Checkbox
+                        checked={selected.has(m.id)}
+                        onCheckedChange={() => toggle(m.id)}
+                        aria-label={`Selecionar ${m.name}`}
+                      />
+                      <div className="min-w-0">
+                        <p className="truncate text-sm text-foreground">{m.name}</p>
+                        <p className="truncate text-xs text-muted-foreground">
+                          {m.email}
+                        </p>
+                      </div>
+                    </button>
+                  </li>
+                ))}
+                {members.length === 0 && (
+                  <li className="px-3 py-4 text-center text-xs text-muted-foreground">
+                    Nenhum membro na equipe.
+                  </li>
+                )}
+              </ul>
+            </ScrollArea>
+          </div>
+        </div>
+
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
+            Cancelar
+          </Button>
+          <Button onClick={save} disabled={saving || !name.trim()}>
+            {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+            {sector ? "Salvar" : "Criar setor"}
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  );
+}

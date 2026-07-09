@@ -1,4 +1,5 @@
 import {
+  Building2,
   Coins,
   FileText,
   Headset,
@@ -28,6 +29,7 @@ export const SETTINGS_SECTIONS = [
   'security',
   'appearance',
   'channels',
+  'setores',
   'atendimento',
   'templates',
   'fields',
@@ -55,6 +57,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   security: { id: 'security', label: 'Login e segurança', icon: Shield, group: 'account' },
   appearance: { id: 'appearance', label: 'Aparência', icon: Palette, group: 'account' },
   channels: { id: 'channels', label: 'Canais', icon: MessageSquare, group: 'workspace' },
+  setores: { id: 'setores', label: 'Setores', icon: Building2, group: 'workspace' },
   atendimento: { id: 'atendimento', label: 'Atendimento', icon: Headset, group: 'workspace' },
   templates: { id: 'templates', label: 'Templates', icon: FileText, group: 'workspace' },
   fields: { id: 'fields', label: 'Campos e etiquetas', icon: Tags, group: 'workspace' },

@@ -23,9 +23,18 @@ import {
   tags,
   user,
   channels,
+  sectors,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
-import { getCurrentAccount, requireRole } from '@/lib/auth/account'
+import {
+  getCurrentAccount,
+  requireRole,
+  type AccountContext,
+} from '@/lib/auth/account'
+import {
+  conversationVisibility,
+  canSeeConversation,
+} from '@/lib/sectors/access'
 import type {
   ChannelProvider,
   Contact,
@@ -63,6 +72,7 @@ export async function getConversationWithContact(
         status: conversations.status,
         priority: conversations.priority,
         assigned_agent_id: conversations.assignedAgentId,
+        sector_id: conversations.sectorId,
         last_message_text: conversations.lastMessageText,
         last_message_at: conversations.lastMessageAt,
         unread_count: conversations.unreadCount,
@@ -97,6 +107,10 @@ export async function getConversationWithContact(
       .limit(1),
   )
   if (!row) return null
+  // Sector privacy: hide a conversation an agent isn't allowed to see.
+  if (!(await canSeeConversation(ctx.role, ctx.userId, row.sector_id))) {
+    return null
+  }
 
   let contactTagsList: Tag[] = []
   if (row.contact?.id) {
@@ -176,6 +190,7 @@ const conversationColumns = {
   status: conversations.status,
   priority: conversations.priority,
   assigned_agent_id: conversations.assignedAgentId,
+  sector_id: conversations.sectorId,
   last_message_text: conversations.lastMessageText,
   last_message_at: conversations.lastMessageAt,
   unread_count: conversations.unreadCount,
@@ -308,6 +323,10 @@ const templateColumns = {
 export async function listConversations(): Promise<Conversation[]> {
   const ctx = await getCurrentAccount()
 
+  // Sector privacy: non-admins only see general (null-sector) conversations
+  // plus the ones in sectors they belong to.
+  const visibility = await conversationVisibility(ctx.role, ctx.userId)
+
   const rows = await db
     .select({
       ...conversationColumns,
@@ -317,7 +336,7 @@ export async function listConversations(): Promise<Conversation[]> {
     .from(conversations)
     .leftJoin(contacts, eq(conversations.contactId, contacts.id))
     .leftJoin(channels, eq(conversations.channelId, channels.id))
-    .where(eq(conversations.accountId, ctx.accountId))
+    .where(and(eq(conversations.accountId, ctx.accountId), visibility))
     .orderBy(desc(conversations.lastMessageAt))
 
   const contactIds = Array.from(
@@ -372,24 +391,27 @@ export async function listTags(): Promise<Tag[]> {
 // Message thread (MessageThread component)
 // ============================================================
 
-/** Guard: verify a conversation belongs to the caller's account. */
+/** Guard: verify a conversation is in the caller's account AND visible to
+ *  them under sector privacy (admins see all; agents only their sectors +
+ *  the general queue). */
 async function assertConversationInAccount(
   conversationId: string,
-  accountId: string,
+  ctx: AccountContext,
 ): Promise<boolean> {
   const row = firstOrNull(
     await db
-      .select({ id: conversations.id })
+      .select({ id: conversations.id, sectorId: conversations.sectorId })
       .from(conversations)
       .where(
         and(
           eq(conversations.id, conversationId),
-          eq(conversations.accountId, accountId),
+          eq(conversations.accountId, ctx.accountId),
         ),
       )
       .limit(1),
   )
-  return !!row
+  if (!row) return false
+  return canSeeConversation(ctx.role, ctx.userId, row.sectorId)
 }
 
 /**
@@ -423,7 +445,7 @@ export async function listProfiles(): Promise<Profile[]> {
 /** Messages for one conversation, ascending by creation time. */
 export async function listMessages(conversationId: string): Promise<Message[]> {
   const ctx = await getCurrentAccount()
-  if (!(await assertConversationInAccount(conversationId, ctx.accountId))) {
+  if (!(await assertConversationInAccount(conversationId, ctx))) {
     return []
   }
   const rows = await db
@@ -439,7 +461,7 @@ export async function listReactions(
   conversationId: string,
 ): Promise<MessageReaction[]> {
   const ctx = await getCurrentAccount()
-  if (!(await assertConversationInAccount(conversationId, ctx.accountId))) {
+  if (!(await assertConversationInAccount(conversationId, ctx))) {
     return []
   }
   const rows = await db
@@ -665,4 +687,47 @@ export async function listApprovedTemplates(): Promise<MessageTemplate[]> {
     )
     .orderBy(desc(messageTemplates.createdAt))
   return rows as unknown as MessageTemplate[]
+}
+
+// ============================================================
+// Sectors (departments) — pickers + moving a conversation.
+// ============================================================
+
+/** All sectors in the account (for the conversation picker + filter). */
+export async function listSectors(): Promise<
+  { id: string; name: string; color: string }[]
+> {
+  const ctx = await getCurrentAccount()
+  return db
+    .select({ id: sectors.id, name: sectors.name, color: sectors.color })
+    .from(sectors)
+    .where(eq(sectors.accountId, ctx.accountId))
+    .orderBy(asc(sectors.name))
+}
+
+/** Move a conversation to a sector (or null = general queue). Agent+. */
+export async function updateConversationSector(
+  conversationId: string,
+  sectorId: string | null,
+): Promise<void> {
+  const ctx = await requireRole('agent')
+  if (sectorId) {
+    const s = firstOrNull(
+      await db
+        .select({ id: sectors.id })
+        .from(sectors)
+        .where(and(eq(sectors.id, sectorId), eq(sectors.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!s) throw new Error('Setor inválido.')
+  }
+  await db
+    .update(conversations)
+    .set({ sectorId })
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.accountId, ctx.accountId),
+      ),
+    )
 }

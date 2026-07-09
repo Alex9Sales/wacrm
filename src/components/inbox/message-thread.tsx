@@ -9,6 +9,8 @@ import {
   markConversationRead,
   updateConversationAssignment,
   updateConversationStatus,
+  listSectors,
+  updateConversationSector,
 } from "@/app/(dashboard)/inbox/actions";
 import { useAuth } from "@/hooks/use-auth";
 import { usePresence } from "@/hooks/use-presence";
@@ -38,6 +40,7 @@ import {
   Radio,
   Trash2,
   Loader2,
+  Building2,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -711,6 +714,40 @@ export function MessageThread({
     [conversation, user?.id],
   );
 
+  // Sectors (departments) — set which team sees this conversation.
+  const [sectors, setSectors] = useState<
+    { id: string; name: string; color: string }[]
+  >([]);
+  useEffect(() => {
+    listSectors()
+      .then(setSectors)
+      .catch(() => setSectors([]));
+  }, []);
+  const [sectorId, setSectorId] = useState<string | null>(null);
+  useEffect(() => {
+    setSectorId(conversation?.sector_id ?? null);
+  }, [conversation?.id, conversation?.sector_id]);
+
+  const handleSectorChange = useCallback(
+    async (nextSectorId: string | null) => {
+      if (!conversation) return;
+      const prev = sectorId;
+      setSectorId(nextSectorId);
+      try {
+        await updateConversationSector(conversation.id, nextSectorId);
+        toast.success(
+          nextSectorId
+            ? "Setor atualizado."
+            : "Conversa movida para a fila geral.",
+        );
+      } catch {
+        setSectorId(prev);
+        toast.error("Falha ao atualizar o setor");
+      }
+    },
+    [conversation, sectorId],
+  );
+
   const handleAssignChange = useCallback(
     async (agentId: string | null) => {
       if (!conversation) return;
@@ -994,6 +1031,55 @@ export function MessageThread({
                     className="text-sm text-muted-foreground"
                   >
                     Remover atribuição
+                  </DropdownMenuItem>
+                </>
+              )}
+            </DropdownMenuContent>
+          </DropdownMenu>
+
+          {/* Sector dropdown — routes/privacy */}
+          <DropdownMenu>
+            <DropdownMenuTrigger
+              className={cn(
+                "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                sectorId ? "text-primary" : "text-muted-foreground",
+              )}
+            >
+              <Building2 className="h-3 w-3" />
+              <span className="hidden sm:inline">
+                {sectors.find((s) => s.id === sectorId)?.name ?? "Setor"}
+              </span>
+              <ChevronDown className="h-3 w-3" />
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="end" className="border-border bg-popover">
+              {sectors.length === 0 ? (
+                <DropdownMenuItem disabled className="text-sm text-muted-foreground">
+                  Nenhum setor criado
+                </DropdownMenuItem>
+              ) : (
+                sectors.map((s) => (
+                  <DropdownMenuItem
+                    key={s.id}
+                    onClick={() => handleSectorChange(s.id)}
+                    className="text-sm text-popover-foreground"
+                  >
+                    <span
+                      className="mr-2 h-2.5 w-2.5 rounded-full"
+                      style={{ backgroundColor: s.color }}
+                    />
+                    {s.name}
+                    {s.id === sectorId && <Check className="ml-2 h-3 w-3" />}
+                  </DropdownMenuItem>
+                ))
+              )}
+              {sectorId && (
+                <>
+                  <DropdownMenuSeparator className="bg-border" />
+                  <DropdownMenuItem
+                    onClick={() => handleSectorChange(null)}
+                    className="text-sm text-muted-foreground"
+                  >
+                    Fila geral (sem setor)
                   </DropdownMenuItem>
                 </>
               )}

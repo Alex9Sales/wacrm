@@ -12,6 +12,7 @@ import { SecurityPanel } from '@/components/settings/security-panel';
 import { AppearancePanel } from '@/components/settings/appearance-panel';
 import { ChannelsTab } from '@/components/settings/channels-tab';
 import { ServicePanel } from '@/components/settings/service-panel';
+import { SectorsPanel } from '@/components/settings/sectors-panel';
 import { TemplateManager } from '@/components/settings/template-manager';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
@@ -58,6 +59,7 @@ export default function SettingsPage() {
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
     channels: <ChannelsTab />,
+    setores: <SectorsPanel />,
     atendimento: <ServicePanel />,
     templates: <TemplateManager />,
     fields: <FieldsAndTagsPanel />,

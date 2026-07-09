@@ -176,6 +176,7 @@ export interface Conversation {
   status: ConversationStatus;
   priority?: ConversationPriority;
   assigned_agent_id?: string;
+  sector_id?: string | null;
   last_message_text?: string;
   last_message_at?: string;
   unread_count: number;
