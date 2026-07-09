@@ -222,7 +222,12 @@ export function SectorsPanel() {
                   }}
                 >
                   <SelectTrigger className="w-44 shrink-0">
-                    <SelectValue placeholder="Fila geral" />
+                    <SelectValue placeholder="Fila geral">
+                      {ch.defaultSectorId
+                        ? (sectors.find((s) => s.id === ch.defaultSectorId)
+                            ?.name ?? "Fila geral")
+                        : "Fila geral"}
+                    </SelectValue>
                   </SelectTrigger>
                   <SelectContent>
                     <SelectItem value="none">Fila geral</SelectItem>

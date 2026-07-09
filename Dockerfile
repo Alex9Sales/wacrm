@@ -91,10 +91,11 @@ USER node
 EXPOSE 3000
 
 # Liveness probe against the cheap /api/health endpoint (no DB/Redis).
-# Only meaningful for the web role; the worker has its healthcheck disabled
-# in Coolify (it serves no HTTP).
+# Role-aware: the worker serves no HTTP, so it reports healthy unconditionally
+# (probing :3000 would always fail → a false "unhealthy"). Only the web role
+# actually hits /api/health.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
-  CMD wget --quiet --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1
+  CMD sh -c 'if [ "$APP_ROLE" = "worker" ]; then exit 0; else wget --quiet --tries=1 --spider http://127.0.0.1:3000/api/health || exit 1; fi'
 
 # Entrypoint selects the role from APP_ROLE (worker) else defaults to web.
 ENTRYPOINT ["./docker-entrypoint.sh"]
