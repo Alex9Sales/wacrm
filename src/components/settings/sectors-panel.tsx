@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Plus, Trash2, Users, Pencil } from "lucide-react";
+import { Loader2, Plus, Trash2, Users, Pencil, Hash, Phone } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
@@ -11,6 +11,13 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Dialog,
   DialogContent,
@@ -26,7 +33,10 @@ import {
   updateSector,
   setSectorMembers,
   deleteSector,
+  listChannelsForRouting,
+  setChannelDefaultSector,
   type SectorWithMembers,
+  type ChannelRouting,
 } from "./actions";
 import { listTeamMembers } from "@/app/(dashboard)/internal-chat/actions";
 import type { TeamMemberOption } from "@/lib/internal-chat/types";
@@ -37,20 +47,29 @@ export function SectorsPanel() {
   const { canEditSettings } = useAuth();
   const [sectors, setSectors] = useState<SectorWithMembers[]>([]);
   const [members, setMembers] = useState<TeamMemberOption[]>([]);
+  const [channelsList, setChannelsList] = useState<ChannelRouting[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<SectorWithMembers | null>(null);
   const [creating, setCreating] = useState(false);
 
   const reload = () =>
-    listSectorsWithMembers()
-      .then(setSectors)
-      .catch(() => setSectors([]));
+    Promise.all([listSectorsWithMembers(), listChannelsForRouting()])
+      .then(([s, c]) => {
+        setSectors(s);
+        setChannelsList(c);
+      })
+      .catch(() => {});
 
   useEffect(() => {
-    Promise.all([listSectorsWithMembers(), listTeamMembers()])
-      .then(([s, m]) => {
+    Promise.all([
+      listSectorsWithMembers(),
+      listTeamMembers(),
+      listChannelsForRouting(),
+    ])
+      .then(([s, m, c]) => {
         setSectors(s);
         setMembers(m);
+        setChannelsList(c);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -101,14 +120,27 @@ export function SectorsPanel() {
                 style={{ backgroundColor: s.color }}
               />
               <div className="min-w-0 flex-1">
-                <p className="truncate text-sm font-medium text-foreground">
-                  {s.name}
-                </p>
+                <div className="flex items-center gap-2">
+                  <p className="truncate text-sm font-medium text-foreground">
+                    {s.name}
+                  </p>
+                  {!s.autoAssign && (
+                    <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                      fila manual
+                    </span>
+                  )}
+                </div>
                 <p className="truncate text-xs text-muted-foreground">
                   {s.memberIds.length === 0
                     ? "Sem atendentes — ninguém vê este setor (só admin)"
                     : s.memberIds.map(nameOf).join(", ")}
                 </p>
+                {s.keywords.length > 0 && (
+                  <p className="mt-0.5 flex items-center gap-1 truncate text-xs text-muted-foreground/80">
+                    <Hash className="size-3 shrink-0" />
+                    {s.keywords.join(", ")}
+                  </p>
+                )}
               </div>
               {canEditSettings && (
                 <div className="flex shrink-0 items-center gap-1">
@@ -144,6 +176,69 @@ export function SectorsPanel() {
         )}
       </div>
 
+      {!loading && sectors.length > 0 && channelsList.length > 0 && (
+        <div className="mt-8">
+          <h3 className="text-sm font-semibold text-foreground">
+            Roteamento por número
+          </h3>
+          <p className="mt-1 text-xs text-muted-foreground">
+            Escolha para qual setor cai cada número de WhatsApp por padrão.
+            Palavras-chave na 1ª mensagem ainda podem redirecionar.
+          </p>
+          <div className="mt-3 space-y-2">
+            {channelsList.map((ch) => (
+              <div
+                key={ch.id}
+                className="flex items-center gap-3 rounded-xl border border-border bg-card px-4 py-3"
+              >
+                <Phone className="size-4 shrink-0 text-muted-foreground" />
+                <div className="min-w-0 flex-1">
+                  <p className="truncate text-sm font-medium text-foreground">
+                    {ch.name}
+                  </p>
+                  {ch.phoneNumber && (
+                    <p className="truncate text-xs text-muted-foreground">
+                      {ch.phoneNumber}
+                    </p>
+                  )}
+                </div>
+                <Select
+                  value={ch.defaultSectorId ?? "none"}
+                  disabled={!canEditSettings}
+                  onValueChange={async (v) => {
+                    const next = v === "none" ? null : v;
+                    setChannelsList((prev) =>
+                      prev.map((c) =>
+                        c.id === ch.id ? { ...c, defaultSectorId: next } : c,
+                      ),
+                    );
+                    try {
+                      await setChannelDefaultSector(ch.id, next);
+                      toast.success("Roteamento atualizado.");
+                    } catch {
+                      toast.error("Não foi possível salvar.");
+                      void reload();
+                    }
+                  }}
+                >
+                  <SelectTrigger className="w-44 shrink-0">
+                    <SelectValue placeholder="Fila geral" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Fila geral</SelectItem>
+                    {sectors.map((s) => (
+                      <SelectItem key={s.id} value={s.id}>
+                        {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
       <SectorDialog
         open={creating}
         onOpenChange={setCreating}
@@ -176,6 +271,8 @@ function SectorDialog({
 }) {
   const [name, setName] = useState("");
   const [color, setColor] = useState(COLORS[0]);
+  const [keywords, setKeywords] = useState("");
+  const [autoAssign, setAutoAssign] = useState(true);
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
 
@@ -183,8 +280,16 @@ function SectorDialog({
     if (!open) return;
     setName(sector?.name ?? "");
     setColor(sector?.color ?? COLORS[0]);
+    setKeywords((sector?.keywords ?? []).join(", "));
+    setAutoAssign(sector?.autoAssign ?? true);
     setSelected(new Set(sector?.memberIds ?? []));
   }, [open, sector]);
+
+  const parseKeywords = (raw: string) =>
+    raw
+      .split(",")
+      .map((k) => k.trim())
+      .filter(Boolean);
 
   const toggle = (id: string) =>
     setSelected((p) => {
@@ -201,12 +306,19 @@ function SectorDialog({
     }
     setSaving(true);
     try {
+      const kws = parseKeywords(keywords);
       if (sector) {
-        await updateSector(sector.id, { name, color });
+        await updateSector(sector.id, { name, color, keywords: kws, autoAssign });
         await setSectorMembers(sector.id, [...selected]);
         toast.success("Setor atualizado.");
       } else {
-        await createSector({ name, color, memberIds: [...selected] });
+        await createSector({
+          name,
+          color,
+          keywords: kws,
+          autoAssign,
+          memberIds: [...selected],
+        });
         toast.success(`Setor "${name.trim()}" criado.`);
       }
       onSaved();
@@ -260,6 +372,40 @@ function SectorDialog({
               ))}
             </div>
           </div>
+
+          <div className="space-y-1.5">
+            <Label htmlFor="sector-keywords">Palavras-chave (roteamento)</Label>
+            <Input
+              id="sector-keywords"
+              value={keywords}
+              onChange={(e) => setKeywords(e.target.value)}
+              placeholder="financeiro, segunda via, boleto"
+            />
+            <p className="text-xs text-muted-foreground">
+              Se a 1ª mensagem do cliente contiver uma destas palavras, a
+              conversa cai neste setor (vale mais que o número). Separe por
+              vírgula.
+            </p>
+          </div>
+
+          <label className="flex items-start gap-3 rounded-lg border border-border px-3 py-2.5">
+            <Checkbox
+              checked={autoAssign}
+              onCheckedChange={(v) => setAutoAssign(v === true)}
+              aria-label="Atribuir automaticamente"
+              className="mt-0.5"
+            />
+            <span className="min-w-0">
+              <span className="block text-sm text-foreground">
+                Atribuir automaticamente
+              </span>
+              <span className="block text-xs text-muted-foreground">
+                A conversa vai direto para o atendente do setor com menos
+                conversas abertas. Desligado: fica na fila do setor para alguém
+                pegar.
+              </span>
+            </span>
+          </label>
 
           <div className="space-y-1.5">
             <Label>Atendentes do setor</Label>

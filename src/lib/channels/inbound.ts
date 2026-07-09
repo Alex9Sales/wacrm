@@ -30,6 +30,7 @@ import { dispatchInboundToFlows } from '@/lib/flows/engine';
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import { transcribeInboundAudio } from '@/lib/ai/transcribe';
 import { getAccountSettings } from '@/lib/settings/account-settings';
+import { routeNewConversation } from '@/lib/sectors/routing';
 import { putObject, publicUrl } from '@/lib/storage/s3';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
@@ -275,6 +276,26 @@ export async function dispatchInboundMessage(
       .where(eq(conversations.id, conversation.id));
   } catch (convError) {
     console.error('[inbound] Error updating conversation:', convError);
+  }
+
+  // Phase 2: a brand-new customer conversation is routed to a sector (by
+  // keyword on this first message, else the channel's default sector) and,
+  // when that sector auto-assigns, handed to its least-loaded member. The
+  // assignment write fires the notify trigger; we re-ping message.received so
+  // the inbox list refetches the now-routed row. Best-effort inside.
+  if (convResult.created && !isFromMe) {
+    const routed = await routeNewConversation({
+      accountId,
+      channelId: conversation.channelId ?? channel.id,
+      conversationId: conversation.id,
+      firstText: ev.contentText ?? contentText,
+    });
+    if (routed.sectorId || routed.assignedAgentId) {
+      await publishEvent(accountId, {
+        type: 'message.received',
+        conversationId: conversation.id,
+      });
+    }
   }
 
   // A fromMe echo is the operator's own outgoing message — stop here. No

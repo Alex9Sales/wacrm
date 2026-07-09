@@ -406,6 +406,8 @@ export interface SectorWithMembers {
   id: string
   name: string
   color: string
+  keywords: string[]
+  autoAssign: boolean
   memberIds: string[]
 }
 
@@ -413,7 +415,13 @@ export interface SectorWithMembers {
 export async function listSectorsWithMembers(): Promise<SectorWithMembers[]> {
   const ctx = await requireRole('admin')
   const secs = await db
-    .select({ id: sectors.id, name: sectors.name, color: sectors.color })
+    .select({
+      id: sectors.id,
+      name: sectors.name,
+      color: sectors.color,
+      keywords: sectors.keywords,
+      autoAssign: sectors.autoAssign,
+    })
     .from(sectors)
     .where(eq(sectors.accountId, ctx.accountId))
     .orderBy(asc(sectors.name))
@@ -436,10 +444,20 @@ export async function listSectorsWithMembers(): Promise<SectorWithMembers[]> {
   return secs.map((s) => ({ ...s, memberIds: byId.get(s.id) ?? [] }))
 }
 
+/** Normalize a keyword list: trim, drop empties, dedupe. */
+function cleanKeywords(kws?: string[]): string[] {
+  if (!kws) return []
+  return [
+    ...new Set(kws.map((k) => k.trim()).filter((k) => k.length > 0)),
+  ]
+}
+
 /** Create a sector (admins). */
 export async function createSector(input: {
   name: string
   color?: string
+  keywords?: string[]
+  autoAssign?: boolean
   memberIds?: string[]
 }): Promise<{ id: string }> {
   const ctx = await requireRole('admin')
@@ -451,19 +469,32 @@ export async function createSector(input: {
       accountId: ctx.accountId,
       name,
       color: input.color?.trim() || '#6d4bd8',
+      keywords: cleanKeywords(input.keywords),
+      autoAssign: input.autoAssign ?? true,
     })
     .returning({ id: sectors.id })
   await replaceSectorMembers(ctx.accountId, row.id, input.memberIds ?? [])
   return { id: row.id }
 }
 
-/** Rename / recolor a sector (admins). */
+/** Rename / recolor / retune routing of a sector (admins). */
 export async function updateSector(
   sectorId: string,
-  input: { name?: string; color?: string },
+  input: {
+    name?: string
+    color?: string
+    keywords?: string[]
+    autoAssign?: boolean
+  },
 ): Promise<void> {
   const ctx = await requireRole('admin')
-  const patch: { name?: string; color?: string; updatedAt: string } = {
+  const patch: {
+    name?: string
+    color?: string
+    keywords?: string[]
+    autoAssign?: boolean
+    updatedAt: string
+  } = {
     updatedAt: new Date().toISOString(),
   }
   if (input.name !== undefined) {
@@ -472,10 +503,61 @@ export async function updateSector(
     patch.name = n
   }
   if (input.color !== undefined) patch.color = input.color.trim() || '#6d4bd8'
+  if (input.keywords !== undefined) patch.keywords = cleanKeywords(input.keywords)
+  if (input.autoAssign !== undefined) patch.autoAssign = input.autoAssign
   await db
     .update(sectors)
     .set(patch)
     .where(and(eq(sectors.id, sectorId), eq(sectors.accountId, ctx.accountId)))
+}
+
+/** A channel + its default routing sector (settings routing UI). */
+export interface ChannelRouting {
+  id: string
+  name: string
+  provider: string
+  phoneNumber: string | null
+  defaultSectorId: string | null
+}
+
+/** List the account's channels with their default sector (admins). */
+export async function listChannelsForRouting(): Promise<ChannelRouting[]> {
+  const ctx = await requireRole('admin')
+  const rows = await db
+    .select({
+      id: channels.id,
+      name: channels.name,
+      provider: channels.provider,
+      phoneNumber: channels.phoneNumber,
+      defaultSectorId: channels.defaultSectorId,
+    })
+    .from(channels)
+    .where(eq(channels.accountId, ctx.accountId))
+    .orderBy(asc(channels.name))
+  return rows
+}
+
+/** Set (or clear) a channel's default routing sector (admins). */
+export async function setChannelDefaultSector(
+  channelId: string,
+  sectorId: string | null,
+): Promise<void> {
+  const ctx = await requireRole('admin')
+  // Validate the sector belongs to this account when provided.
+  if (sectorId) {
+    const s = firstOrNull(
+      await db
+        .select({ id: sectors.id })
+        .from(sectors)
+        .where(and(eq(sectors.id, sectorId), eq(sectors.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!s) throw new Error('Setor não encontrado.')
+  }
+  await db
+    .update(channels)
+    .set({ defaultSectorId: sectorId, updatedAt: new Date().toISOString() })
+    .where(and(eq(channels.id, channelId), eq(channels.accountId, ctx.accountId)))
 }
 
 /** Replace the members of a sector (admins). */

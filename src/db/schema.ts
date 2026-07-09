@@ -311,6 +311,11 @@ export const channels = pgTable("channels", {
 	credentials: text().notNull(),
 	providerMeta: jsonb("provider_meta").default({}).notNull(),
 	settings: jsonb().default({}).notNull(),
+	// Phase 2 routing: new conversations that arrive on this channel are
+	// routed to this sector by default (keyword matches on the first message
+	// can still override). Null = no default → the general (null) queue. FK
+	// to sectors is declared in the migration (sectors is defined below).
+	defaultSectorId: uuid("default_sector_id"),
 	// Per-channel token used to validate non-Meta webhook deliveries.
 	webhookSecret: text("webhook_secret").notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
@@ -1268,6 +1273,14 @@ export const sectors = pgTable("sectors", {
 	accountId: uuid("account_id").notNull(),
 	name: text().notNull(),
 	color: text().default('#6d4bd8').notNull(),
+	// Phase 2 routing: if the first inbound message text contains any of
+	// these keywords (case/accent-insensitive), the conversation is routed
+	// to this sector — this beats the channel's default sector.
+	keywords: text().array().default(sql`ARRAY[]::text[]`).notNull(),
+	// When true, a conversation routed to this sector is auto-assigned to the
+	// least-loaded member of the sector. When false, it lands unassigned in
+	// the sector's queue for someone to pick up.
+	autoAssign: boolean("auto_assign").default(true).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

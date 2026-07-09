@@ -270,8 +270,32 @@ interface WahaMessagePayload {
     pushName?: string;
     notifyName?: string;
     viewOnce?: boolean;
+    body?: string;
+    // Raw Baileys message node — for fromMe echoes `p.body` is empty and the
+    // text lives here (`conversation` / `extendedTextMessage.text`).
+    message?: Record<string, unknown>;
   };
   notifyName?: string;
+}
+
+/** Extract the text of a WAHA message. For fromMe echoes `p.body` is empty,
+ *  so fall back to the raw Baileys node (NOWEB). */
+function textOfPayload(p: WahaMessagePayload): string {
+  if (p.body) return p.body;
+  if (p.caption) return p.caption;
+  const d = p._data;
+  if (typeof d?.body === 'string' && d.body) return d.body;
+  const m = d?.message as
+    | {
+        conversation?: unknown;
+        extendedTextMessage?: { text?: unknown };
+      }
+    | undefined;
+  if (typeof m?.conversation === 'string' && m.conversation) return m.conversation;
+  if (typeof m?.extendedTextMessage?.text === 'string') {
+    return m.extendedTextMessage.text;
+  }
+  return '';
 }
 
 /**
@@ -518,7 +542,7 @@ export const wahaProvider: WhatsAppProvider = {
         return { messages, statuses };
       }
 
-      const text = p.body ?? p.caption ?? '';
+      const text = textOfPayload(p);
       const raw = serializedIdToString(p.id);
       const externalMessageId = raw ? normalizeSerializedId(raw) : '';
       const fromPhoneE164 = normalizePhone(chat.split('@')[0]);
