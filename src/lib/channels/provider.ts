@@ -92,6 +92,9 @@ export interface NormalizedInbound {
   interactiveReplyId?: string;
   /** When the customer swipe-replied: the external id of the quoted message. */
   replyToExternalId?: string;
+  /** WhatsApp "view once" — set even when the provider delivers no media
+   *  (WAHA flags it but withholds the bytes). */
+  viewOnce?: boolean;
 }
 
 /** A delivery/read receipt normalized across providers. */

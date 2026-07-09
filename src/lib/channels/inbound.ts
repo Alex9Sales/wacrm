@@ -200,10 +200,17 @@ export async function dispatchInboundMessage(
   }
 
   // Fallback text so an inbound with no body still renders legibly (e.g.
-  // EvoGo media placeholder, unsupported types).
+  // EvoGo media placeholder, unsupported types). WhatsApp "view once" is
+  // delivered by WAHA WITHOUT the media, so give it a clear label instead
+  // of the raw "[text]" placeholder.
+  const isViewOnce = ev.viewOnce ?? ev.media?.viewOnce ?? false;
   const contentText =
     ev.contentText ??
-    (ev.media ? `[${ev.media.kind}]` : `[${ev.contentType}]`);
+    (ev.media
+      ? `[${ev.media.kind}]`
+      : isViewOnce
+        ? '🔒 Visualização única'
+        : `[${ev.contentType}]`);
 
   // Is this the contact's first-ever inbound in this conversation?
   let priorCustomerMsgCount = 0;
@@ -236,7 +243,7 @@ export async function dispatchInboundMessage(
       contentText,
       mediaUrl,
       transcription,
-      viewOnce: ev.media?.viewOnce ?? false,
+      viewOnce: isViewOnce,
       messageId: ev.externalMessageId || null,
       status: isFromMe ? 'sent' : 'delivered',
       createdAt: new Date().toISOString(),

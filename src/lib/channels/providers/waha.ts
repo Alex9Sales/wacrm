@@ -264,39 +264,27 @@ interface WahaMessagePayload {
   ack?: number;
   viewOnce?: boolean;
   _data?: {
-    key?: { remoteJidAlt?: string };
+    // WAHA NOWEB flags view-once here: `_data.key.isViewOnce` (confirmed
+    // against a real payload — the media itself is withheld).
+    key?: { remoteJidAlt?: string; isViewOnce?: boolean };
     pushName?: string;
     notifyName?: string;
-    /** Raw NOWEB (Baileys) message object — probed for view-once markers. */
-    message?: Record<string, unknown>;
     viewOnce?: boolean;
   };
   notifyName?: string;
 }
 
 /**
- * Best-effort detection of a WhatsApp "view once" message across the shapes
- * WAHA NOWEB can deliver it in (a top-level flag, or a `viewOnceMessage*`
- * wrapper / a `viewOnce:true` on the inner image/video in the raw Baileys
- * message). Missing → false, so undetected view-once just renders as normal
- * media rather than breaking anything.
+ * Detect a WhatsApp "view once" message. WAHA NOWEB sets
+ * `_data.key.isViewOnce` (and delivers no media/body for it). The extra
+ * checks are cheap fallbacks for other engines/shapes.
  */
 function detectViewOnce(p: WahaMessagePayload): boolean {
-  if (p.viewOnce === true || p._data?.viewOnce === true) return true;
-  const msg = p._data?.message as Record<string, unknown> | undefined;
-  if (!msg) return false;
-  if (
-    msg.viewOnceMessage ||
-    msg.viewOnceMessageV2 ||
-    msg.viewOnceMessageV2Extension
-  ) {
-    return true;
-  }
-  for (const key of ['imageMessage', 'videoMessage']) {
-    const inner = msg[key] as { viewOnce?: boolean } | undefined;
-    if (inner?.viewOnce === true) return true;
-  }
-  return false;
+  return (
+    p._data?.key?.isViewOnce === true ||
+    p.viewOnce === true ||
+    p._data?.viewOnce === true
+  );
 }
 
 interface WahaWebhookBody {
@@ -537,6 +525,7 @@ export const wahaProvider: WhatsAppProvider = {
       const pushName =
         p._data?.pushName || p._data?.notifyName || p.notifyName || undefined;
 
+      const viewOnce = detectViewOnce(p);
       let media: NormalizedInbound['media'] | undefined;
       let contentType: NormalizedInbound['contentType'] = 'text';
       if (p.hasMedia || p.media) {
@@ -558,22 +547,8 @@ export const wahaProvider: WhatsAppProvider = {
           mimetype,
           filename: p.media?.filename,
           fetchKey: { mediaUrl: p.media?.url },
-          viewOnce: detectViewOnce(p),
+          viewOnce,
         };
-      }
-
-      // TEMP debug (view-once investigation): dump the raw payload for
-      // messages that arrive with neither text nor media — that's how WAHA
-      // seems to deliver "view once" today. Remove once VO handling is done.
-      if (!media && !text) {
-        try {
-          console.log(
-            '[waha][vo-debug] empty msg payload:',
-            JSON.stringify(p).slice(0, 6000),
-          );
-        } catch {
-          /* non-serializable payload — ignore */
-        }
       }
 
       messages.push({
@@ -584,6 +559,7 @@ export const wahaProvider: WhatsAppProvider = {
         contentType,
         contentText: text || null,
         media,
+        viewOnce,
       });
     }
 
