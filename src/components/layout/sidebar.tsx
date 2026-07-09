@@ -17,6 +17,7 @@ import {
   ListTodo,
   LogOut,
   MessageSquare,
+  MessagesSquare,
   PanelLeftClose,
   PanelLeftOpen,
   Radio,
@@ -96,6 +97,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: "/dashboard", label: "Painel", icon: LayoutDashboard },
   { href: "/inbox", label: "Conversas", icon: MessageSquare },
+  { href: "/internal-chat", label: "Chat Interno", icon: MessagesSquare },
   { href: "/notifications", label: "Notificações", icon: Bell },
   { href: "/contacts", label: "Contatos", icon: Users },
   { href: "/tarefas", label: "Tarefas", icon: ListTodo },

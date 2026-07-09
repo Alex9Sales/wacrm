@@ -26,6 +26,7 @@ import Redis from "ioredis";
 export type RealtimeEvent =
   | { type: "message.received"; conversationId: string }
   | { type: "conversation.created"; conversationId: string }
+  | { type: "internal_message"; channelId: string }
   | { type: "notification" };
 
 /** Channel name for an account's ephemeral event stream. */

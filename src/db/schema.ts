@@ -1183,3 +1183,55 @@ export const accountSettings = pgTable("account_settings", {
 			name: "account_settings_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
+
+// ============================================================
+// Internal team chat (Chat Interno) — Slack-style channels for the
+// account's team members. Public channels are visible to everyone in the
+// account; private channels only to rows in internal_channel_members.
+// ============================================================
+export const internalChannels = pgTable("internal_channels", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	name: text().notNull(),
+	description: text(),
+	isPrivate: boolean("is_private").default(false).notNull(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_internal_channels_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "internal_channels_account_id_fkey"
+		}).onDelete("cascade"),
+]);
+
+export const internalChannelMembers = pgTable("internal_channel_members", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	channelId: uuid("channel_id").notNull(),
+	userId: uuid("user_id").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("internal_channel_members_unique").using("btree", table.channelId.asc().nullsLast().op("uuid_ops"), table.userId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [internalChannels.id],
+			name: "internal_channel_members_channel_id_fkey"
+		}).onDelete("cascade"),
+]);
+
+export const internalMessages = pgTable("internal_messages", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	channelId: uuid("channel_id").notNull(),
+	senderId: uuid("sender_id").notNull(),
+	content: text().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_internal_messages_channel").using("btree", table.channelId.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast().op("timestamptz_ops")),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [internalChannels.id],
+			name: "internal_messages_channel_id_fkey"
+		}).onDelete("cascade"),
+]);
