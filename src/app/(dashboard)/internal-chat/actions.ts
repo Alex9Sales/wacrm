@@ -14,6 +14,7 @@ import {
   db,
   internalChannels,
   internalChannelMembers,
+  internalChannelReads,
   internalMessages,
   member,
   user,
@@ -70,8 +71,70 @@ async function canAccessChannel(
   return !!membership;
 }
 
+/** Set of channel ids with messages from OTHERS newer than the user's last
+ *  read — the "has unread" signal for the badge and per-channel dots. */
+async function unreadChannelIds(
+  userId: string,
+  channelIds: string[],
+): Promise<Set<string>> {
+  if (channelIds.length === 0) return new Set();
+  const last = await db
+    .select({
+      channelId: internalMessages.channelId,
+      lastOther: sql<
+        string | null
+      >`max(${internalMessages.createdAt}) filter (where ${internalMessages.senderId} <> ${userId})`,
+    })
+    .from(internalMessages)
+    .where(inArray(internalMessages.channelId, channelIds))
+    .groupBy(internalMessages.channelId);
+  const reads = await db
+    .select({
+      channelId: internalChannelReads.channelId,
+      lastReadAt: internalChannelReads.lastReadAt,
+    })
+    .from(internalChannelReads)
+    .where(
+      and(
+        eq(internalChannelReads.userId, userId),
+        inArray(internalChannelReads.channelId, channelIds),
+      ),
+    );
+  const readMap = new Map(reads.map((r) => [r.channelId, r.lastReadAt]));
+  const set = new Set<string>();
+  for (const row of last) {
+    if (!row.lastOther) continue;
+    const lastRead = readMap.get(row.channelId);
+    if (!lastRead || new Date(row.lastOther) > new Date(lastRead)) {
+      set.add(row.channelId);
+    }
+  }
+  return set;
+}
+
+/** Ids of every channel the current user can see (public + private member). */
+async function accessibleChannelIds(
+  accountId: string,
+  userId: string,
+): Promise<string[]> {
+  const mine = await memberChannelIds(userId);
+  const rows = await db
+    .select({ id: internalChannels.id })
+    .from(internalChannels)
+    .where(
+      and(
+        eq(internalChannels.accountId, accountId),
+        or(
+          eq(internalChannels.isPrivate, false),
+          mine.length ? inArray(internalChannels.id, mine) : sql`false`,
+        ),
+      ),
+    );
+  return rows.map((r) => r.id);
+}
+
 /** Channels the current user can see: every public channel in the account
- *  plus the private ones they belong to. */
+ *  plus the private ones they belong to, each with its unread flag. */
 export async function listInternalChannels(): Promise<InternalChannel[]> {
   const ctx = await getCurrentAccount();
   const mine = await memberChannelIds(ctx.userId);
@@ -94,7 +157,31 @@ export async function listInternalChannels(): Promise<InternalChannel[]> {
       ),
     )
     .orderBy(asc(internalChannels.name));
-  return rows as InternalChannel[];
+  const unread = await unreadChannelIds(
+    ctx.userId,
+    rows.map((r) => r.id),
+  );
+  return rows.map((r) => ({ ...r, unread: unread.has(r.id) })) as InternalChannel[];
+}
+
+/** Total number of channels with unread messages — for the sidebar badge. */
+export async function getInternalUnreadCount(): Promise<number> {
+  const ctx = await getCurrentAccount();
+  const ids = await accessibleChannelIds(ctx.accountId, ctx.userId);
+  const unread = await unreadChannelIds(ctx.userId, ids);
+  return unread.size;
+}
+
+/** Mark a channel read up to now for the current user. */
+export async function markInternalChannelRead(channelId: string): Promise<void> {
+  const ctx = await getCurrentAccount();
+  await db
+    .insert(internalChannelReads)
+    .values({ channelId, userId: ctx.userId })
+    .onConflictDoUpdate({
+      target: [internalChannelReads.channelId, internalChannelReads.userId],
+      set: { lastReadAt: new Date().toISOString() },
+    });
 }
 
 /** The account's team members — for the private-channel member picker. */
@@ -237,6 +324,15 @@ export async function sendInternalMessage(
       .where(eq(user.id, ctx.userId))
       .limit(1),
   );
+
+  // The sender has obviously seen their own channel — keep it "read".
+  await db
+    .insert(internalChannelReads)
+    .values({ channelId, userId: ctx.userId })
+    .onConflictDoUpdate({
+      target: [internalChannelReads.channelId, internalChannelReads.userId],
+      set: { lastReadAt: new Date().toISOString() },
+    });
 
   await publishEvent(ctx.accountId, { type: 'internal_message', channelId });
 

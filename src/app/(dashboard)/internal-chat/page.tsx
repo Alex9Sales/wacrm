@@ -20,11 +20,14 @@ import {
   AvatarFallback,
   AvatarImage,
 } from "@/components/ui/avatar";
+import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { CreateChannelDialog } from "@/components/internal-chat/create-channel-dialog";
+import { refreshInternalUnread } from "@/hooks/use-internal-unread";
 import {
   listInternalChannels,
   getInternalMessages,
   sendInternalMessage,
+  markInternalChannelRead,
 } from "./actions";
 import type {
   InternalChannel,
@@ -48,6 +51,23 @@ export default function InternalChatPage() {
   const [sending, setSending] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const composerRef = useRef<HTMLTextAreaElement>(null);
+
+  const insertEmoji = useCallback((emoji: string) => {
+    const el = composerRef.current;
+    if (!el) {
+      setText((t) => t + emoji);
+      return;
+    }
+    const start = el.selectionStart ?? el.value.length;
+    const end = el.selectionEnd ?? el.value.length;
+    setText(el.value.slice(0, start) + emoji + el.value.slice(end));
+    requestAnimationFrame(() => {
+      el.focus();
+      const pos = start + emoji.length;
+      el.setSelectionRange(pos, pos);
+    });
+  }, []);
 
   const loadChannels = useCallback(async () => {
     try {
@@ -76,23 +96,40 @@ export default function InternalChatPage() {
     }
   }, []);
 
-  useEffect(() => {
-    if (activeId) void loadMessages(activeId);
-  }, [activeId, loadMessages]);
+  // Mark a channel read (clears its dot + the sidebar badge).
+  const markRead = useCallback(async (channelId: string) => {
+    try {
+      await markInternalChannelRead(channelId);
+    } catch {
+      // best-effort
+    }
+    setChannels((cs) =>
+      cs.map((c) => (c.id === channelId ? { ...c, unread: false } : c)),
+    );
+    refreshInternalUnread();
+  }, []);
 
-  // Realtime: refetch when someone posts in the channel we're viewing.
+  // Opening a channel loads its messages and marks it read.
+  useEffect(() => {
+    if (activeId) {
+      void loadMessages(activeId);
+      void markRead(activeId);
+    }
+  }, [activeId, loadMessages, markRead]);
+
+  // Realtime: a new message anywhere refreshes the channel dots; if it's the
+  // channel we're viewing, refetch its thread and keep it read.
   useServerEvents(
     useCallback(
       (e: ServerEvent) => {
-        if (
-          e.type === "internal_message" &&
-          e.channelId === activeId &&
-          activeId
-        ) {
+        if (e.type !== "internal_message") return;
+        void loadChannels();
+        if (e.channelId === activeId && activeId) {
           void loadMessages(activeId);
+          void markRead(activeId);
         }
       },
-      [activeId, loadMessages],
+      [activeId, loadChannels, loadMessages, markRead],
     ),
   );
 
@@ -176,7 +213,20 @@ export default function InternalChatPage() {
                     ) : (
                       <Hash className="h-3.5 w-3.5 shrink-0" />
                     )}
-                    <span className="truncate">{c.name}</span>
+                    <span
+                      className={cn(
+                        "flex-1 truncate",
+                        c.unread && c.id !== activeId && "font-semibold text-foreground",
+                      )}
+                    >
+                      {c.name}
+                    </span>
+                    {c.unread && c.id !== activeId && (
+                      <span
+                        aria-label="Mensagens não lidas"
+                        className="h-2 w-2 shrink-0 rounded-full bg-primary"
+                      />
+                    )}
                   </button>
                 </li>
               ))}
@@ -273,7 +323,9 @@ export default function InternalChatPage() {
 
             <div className="shrink-0 border-t border-border p-3">
               <div className="flex items-end gap-2">
+                <EmojiPicker onPick={insertEmoji} />
                 <textarea
+                  ref={composerRef}
                   value={text}
                   onChange={(e) => setText(e.target.value)}
                   onKeyDown={(e) => {

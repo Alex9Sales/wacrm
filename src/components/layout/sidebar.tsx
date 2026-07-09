@@ -8,6 +8,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useTotalUnread } from "@/hooks/use-total-unread";
 import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
 import { useTasksDueAlert } from "@/hooks/use-tasks-due-alert";
+import { useInternalUnread } from "@/hooks/use-internal-unread";
 import {
   Bell,
   Bot,
@@ -146,6 +147,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
   // Count of open tasks that are overdue or due today — drives the red
   // due-alert badge on the "Tarefas" entry.
   const tasksDueAlert = useTasksDueAlert();
+  const internalUnread = useInternalUnread();
   // Only surface the account-name strip when it actually carries
   // information. A solo user's personal account is named after them
   // (the 017 signup trigger seeds it from `full_name`), so showing it
@@ -272,10 +274,20 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
               const showTasksBadge =
                 item.href === "/tarefas" && tasksDueAlert > 0;
 
+              // A dot on Chat Interno when there are unread channels and the
+              // user is elsewhere (mirrors the inbox dot).
+              const showInternalDot =
+                item.href === "/internal-chat" &&
+                internalUnread > 0 &&
+                !isActive;
+
               // When collapsed (icon rail), badges/labels are hidden — a
               // single dot on the icon signals "needs attention" instead.
               const hasBadge =
-                showUnreadDot || showNotificationBadge || showTasksBadge;
+                showUnreadDot ||
+                showNotificationBadge ||
+                showTasksBadge ||
+                showInternalDot;
 
               return (
                 <li key={item.href}>
@@ -343,6 +355,18 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
                         )}
                       >
                         {tasksDueAlert > 9 ? "9+" : tasksDueAlert}
+                      </span>
+                    )}
+                    {showInternalDot && (
+                      <span
+                        aria-label={`${internalUnread} canal${internalUnread === 1 ? "" : "is"} com mensagens não lidas`}
+                        className={cn(
+                          "relative flex h-2 w-2",
+                          collapsed && "lg:hidden",
+                        )}
+                      >
+                        <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-primary opacity-75" />
+                        <span className="relative inline-flex h-2 w-2 rounded-full bg-primary" />
                       </span>
                     )}
                   </Link>

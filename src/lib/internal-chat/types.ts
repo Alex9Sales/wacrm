@@ -6,6 +6,8 @@ export interface InternalChannel {
   description: string | null;
   is_private: boolean;
   created_at: string;
+  /** True when there are messages from others newer than the user's last read. */
+  unread?: boolean;
 }
 
 export interface InternalChatMessage {

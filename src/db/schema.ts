@@ -1235,3 +1235,18 @@ export const internalMessages = pgTable("internal_messages", {
 			name: "internal_messages_channel_id_fkey"
 		}).onDelete("cascade"),
 ]);
+
+// Per-user read state for internal chat channels — drives the unread badge.
+export const internalChannelReads = pgTable("internal_channel_reads", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	channelId: uuid("channel_id").notNull(),
+	userId: uuid("user_id").notNull(),
+	lastReadAt: timestamp("last_read_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("internal_channel_reads_unique").using("btree", table.channelId.asc().nullsLast().op("uuid_ops"), table.userId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [internalChannels.id],
+			name: "internal_channel_reads_channel_id_fkey"
+		}).onDelete("cascade"),
+]);
