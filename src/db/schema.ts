@@ -347,6 +347,9 @@ export const conversations = pgTable("conversations", {
 	// ('none','low','medium','high','urgent'); defaults to 'none'.
 	priority: text().default('none').notNull(),
 	assignedAgentId: uuid("assigned_agent_id"),
+	// When the current agent was assigned — resets the SLA clock so a
+	// just-reassigned conversation gives the new agent the full window.
+	assignedAt: timestamp("assigned_at", { withTimezone: true, mode: 'string' }),
 	lastMessageText: text("last_message_text"),
 	lastMessageAt: timestamp("last_message_at", { withTimezone: true, mode: 'string' }),
 	unreadCount: integer("unread_count").default(0),

@@ -16,11 +16,18 @@ export interface AccountSettings {
   /** Transcribe inbound audio/voice notes to text (uses the account's
    *  OpenAI key). Off by default — it has a per-minute cost. */
   audioTranscriptionEnabled: boolean
+  /** Auto-reassign an assigned conversation to another agent when it waits
+   *  too long for a reply (SLA). Off by default (impactful). */
+  autoReassignEnabled: boolean
+  /** Minutes without an agent reply before auto-reassign kicks in. */
+  autoReassignMinutes: number
 }
 
 export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   agentSignatureEnabled: false,
   audioTranscriptionEnabled: false,
+  autoReassignEnabled: false,
+  autoReassignMinutes: 5,
 }
 
 /** Read an account's settings, merged over the defaults. */

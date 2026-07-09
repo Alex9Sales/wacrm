@@ -298,6 +298,29 @@ export async function setAudioTranscriptionEnabled(
   })
 }
 
+/** Read the auto-reassign (SLA) config. */
+export async function getAutoReassignConfig(): Promise<{
+  enabled: boolean
+  minutes: number
+}> {
+  const ctx = await getCurrentAccount()
+  const s = await getAccountSettings(ctx.accountId)
+  return { enabled: s.autoReassignEnabled, minutes: s.autoReassignMinutes }
+}
+
+/** Update the auto-reassign (SLA) config (admins only). */
+export async function setAutoReassignConfig(
+  enabled: boolean,
+  minutes: number,
+): Promise<void> {
+  const ctx = await requireRole('admin')
+  const clamped = Math.min(120, Math.max(1, Math.floor(minutes) || 5))
+  await updateAccountSettings(ctx.accountId, {
+    autoReassignEnabled: enabled,
+    autoReassignMinutes: clamped,
+  })
+}
+
 // ------------------------------------------------------------
 // Team members — direct create (members-tab.tsx)
 // ------------------------------------------------------------

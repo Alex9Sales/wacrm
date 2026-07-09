@@ -30,3 +30,11 @@ import('./broadcast-worker').catch((err) => {
   console.error('[worker] failed to start:', err);
   process.exit(1);
 });
+
+// SLA auto-reassign tick. Dynamic import (same env-ordering reason as above).
+import('./sla-worker')
+  .then((m) => m.startSlaWorker())
+  .catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('[worker] sla-worker failed to start:', err);
+  });

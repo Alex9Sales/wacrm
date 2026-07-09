@@ -530,7 +530,12 @@ export async function updateConversationAssignment(
   const ctx = await getCurrentAccount()
   await db
     .update(conversations)
-    .set({ assignedAgentId })
+    .set({
+      assignedAgentId,
+      // Reset the SLA clock on (re)assignment so the new agent gets the
+      // full window before auto-reassign can consider it again.
+      assignedAt: assignedAgentId ? new Date().toISOString() : null,
+    })
     .where(
       and(
         eq(conversations.id, conversationId),

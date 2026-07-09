@@ -28,7 +28,7 @@ import type {
 /** Walk 7 days of an account's messages once, returning per-conversation
  *  waiting state (the time of the oldest unanswered customer message, or
  *  null) and response-time samples grouped by the replying agent. */
-async function walkAccountMessages(accountId: string): Promise<{
+export async function walkAccountMessages(accountId: string): Promise<{
   pendingByConv: Map<string, number>; // convId → waiting-since (ms epoch)
   responseSumByAgent: Map<string, { sum: number; count: number }>;
 }> {

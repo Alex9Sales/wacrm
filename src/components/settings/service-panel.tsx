@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Loader2, PenLine, AudioLines } from "lucide-react";
+import { Loader2, PenLine, AudioLines, Timer } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -10,9 +10,18 @@ import {
   setAgentSignatureEnabled,
   getAudioTranscriptionEnabled,
   setAudioTranscriptionEnabled,
+  getAutoReassignConfig,
+  setAutoReassignConfig,
 } from "./actions";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
 import {
   Card,
   CardContent,
@@ -34,15 +43,23 @@ export function ServicePanel() {
 
   const [signature, setSignature] = useState(false);
   const [transcription, setTranscription] = useState(false);
+  const [reassign, setReassign] = useState(false);
+  const [reassignMin, setReassignMin] = useState(5);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     let active = true;
-    Promise.all([getAgentSignatureEnabled(), getAudioTranscriptionEnabled()])
-      .then(([sig, tr]) => {
+    Promise.all([
+      getAgentSignatureEnabled(),
+      getAudioTranscriptionEnabled(),
+      getAutoReassignConfig(),
+    ])
+      .then(([sig, tr, rc]) => {
         if (!active) return;
         setSignature(sig);
         setTranscription(tr);
+        setReassign(rc.enabled);
+        setReassignMin(rc.minutes);
       })
       .catch(() => {})
       .finally(() => {
@@ -95,8 +112,138 @@ export function ServicePanel() {
           canEdit={canEditSettings}
           loading={loading}
         />
+
+        <AutoReassignCard
+          enabled={reassign}
+          setEnabled={setReassign}
+          minutes={reassignMin}
+          setMinutes={setReassignMin}
+          canEdit={canEditSettings}
+          loading={loading}
+        />
       </div>
     </div>
+  );
+}
+
+const MINUTE_OPTIONS = [5, 10, 15, 30, 60];
+
+function AutoReassignCard({
+  enabled,
+  setEnabled,
+  minutes,
+  setMinutes,
+  canEdit,
+  loading,
+}: {
+  enabled: boolean;
+  setEnabled: (v: boolean) => void;
+  minutes: number;
+  setMinutes: (v: number) => void;
+  canEdit: boolean;
+  loading: boolean;
+}) {
+  const [saving, setSaving] = useState(false);
+
+  const persist = async (nextEnabled: boolean, nextMinutes: number) => {
+    setSaving(true);
+    try {
+      await setAutoReassignConfig(nextEnabled, nextMinutes);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não foi possível salvar.");
+      return false;
+    } finally {
+      setSaving(false);
+    }
+    return true;
+  };
+
+  const onToggle = async (next: boolean) => {
+    setEnabled(next);
+    const ok = await persist(next, minutes);
+    if (!ok) setEnabled(!next);
+    else toast.success(next ? "Reatribuição automática ativada." : "Reatribuição automática desativada.");
+  };
+
+  const onMinutes = async (val: string) => {
+    const m = Number(val);
+    const prev = minutes;
+    setMinutes(m);
+    const ok = await persist(enabled, m);
+    if (!ok) setMinutes(prev);
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Timer className="h-4 w-4 text-primary" />
+          Reatribuição automática (SLA)
+        </CardTitle>
+        <CardDescription>
+          Se um atendente ficar sem responder um cliente por muito tempo, a
+          conversa cai automaticamente para outro atendente (o de menor carga)
+          — e ele é notificado. Ajuda a não deixar cliente esperando.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-3">
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/40 p-3">
+          <div className="min-w-0">
+            <Label className="text-sm font-medium text-foreground">
+              Ativar reatribuição automática
+            </Label>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Só reatribui quando há outro atendente para receber a conversa.
+            </p>
+          </div>
+          <div className="flex shrink-0 items-center gap-2">
+            {(loading || saving) && (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+            <Switch
+              checked={enabled}
+              onCheckedChange={onToggle}
+              disabled={!canEdit || loading || saving}
+              aria-label="Ativar reatribuição automática"
+            />
+          </div>
+        </div>
+
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/40 p-3">
+          <div className="min-w-0">
+            <Label className="text-sm font-medium text-foreground">
+              Tempo sem resposta
+            </Label>
+            <p className="mt-0.5 text-xs text-muted-foreground">
+              Depois desse tempo sem o atendente responder, a conversa é
+              reatribuída.
+            </p>
+          </div>
+          <Select
+            value={String(minutes)}
+            onValueChange={(v) => v && void onMinutes(v)}
+            disabled={!canEdit || loading || saving || !enabled}
+          >
+            <SelectTrigger className="w-32 bg-muted border-border text-foreground">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {MINUTE_OPTIONS.map((m) => (
+                <SelectItem key={m} value={String(m)}>
+                  {m} min
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+
+        {!canEdit && (
+          <p className="text-xs text-muted-foreground">
+            Só administradores podem alterar esta configuração.
+          </p>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 
