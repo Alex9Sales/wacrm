@@ -31,6 +31,7 @@ import type {
 export async function walkAccountMessages(accountId: string): Promise<{
   pendingByConv: Map<string, number>; // convId → waiting-since (ms epoch)
   responseSumByAgent: Map<string, { sum: number; count: number }>;
+  agentRepliedConvs: Set<string>; // convs with ≥1 human-agent message (fromMe or CRM)
 }> {
   const sevenDaysAgo = new Date(Date.now() - 7 * 86_400_000).toISOString();
   const rows = await db
@@ -52,6 +53,7 @@ export async function walkAccountMessages(accountId: string): Promise<{
 
   const pendingByConv = new Map<string, number>();
   const responseSumByAgent = new Map<string, { sum: number; count: number }>();
+  const agentRepliedConvs = new Set<string>();
 
   let currentConv = '';
   let pendingCustomer: number | null = null;
@@ -67,6 +69,9 @@ export async function walkAccountMessages(accountId: string): Promise<{
     }
     if (!row.createdAt) continue;
     const ts = new Date(row.createdAt).getTime();
+    // A human agent reply (CRM-sent or a fromMe echo) marks the conversation
+    // as already-engaged — the SLA alerts on these instead of reassigning.
+    if (row.senderType === 'agent') agentRepliedConvs.add(row.conversationId);
     if (row.senderType === 'customer') {
       if (pendingCustomer == null) pendingCustomer = ts;
     } else {
@@ -85,7 +90,7 @@ export async function walkAccountMessages(accountId: string): Promise<{
   }
   flush(currentConv);
 
-  return { pendingByConv, responseSumByAgent };
+  return { pendingByConv, responseSumByAgent, agentRepliedConvs };
 }
 
 /** Per-agent workload overview for the supervision panel (admins). */

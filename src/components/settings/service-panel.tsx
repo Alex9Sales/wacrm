@@ -181,9 +181,11 @@ function AutoReassignCard({
           Reatribuição automática (SLA)
         </CardTitle>
         <CardDescription>
-          Se um atendente ficar sem responder um cliente por muito tempo, a
-          conversa cai automaticamente para outro atendente (o de menor carga)
-          — e ele é notificado. Ajuda a não deixar cliente esperando.
+          Se uma conversa <strong>sem nenhuma resposta ainda</strong> passar do
+          tempo, ela cai automaticamente para outro atendente do mesmo setor (o
+          de menor carga) — e ele é notificado. Conversas que o atendente já
+          respondeu não são reatribuídas: nesse caso o admin recebe um alerta
+          para não deixar o cliente esperando.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-3">
@@ -193,7 +195,8 @@ function AutoReassignCard({
               Ativar reatribuição automática
             </Label>
             <p className="mt-0.5 text-xs text-muted-foreground">
-              Só reatribui quando há outro atendente para receber a conversa.
+              Só reatribui quando há outro atendente no setor para receber a
+              conversa. Senão, avisa o admin.
             </p>
           </div>
           <div className="flex shrink-0 items-center gap-2">
