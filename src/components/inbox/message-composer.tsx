@@ -20,6 +20,7 @@ import {
   X,
   Loader2,
   Sparkles,
+  Smile,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
@@ -38,7 +39,27 @@ import {
   deleteAccountMedia,
   MEDIA_MAX_BYTES_BY_KIND,
 } from "@/lib/storage/upload-media";
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from "@/components/ui/popover";
 import { ReplyQuote } from "./reply-quote";
+
+// Curated set for the composer emoji picker — the common chat/business
+// ones. No dependency: emojis are just unicode characters.
+const EMOJIS = [
+  "😀","😃","😄","😁","😆","😅","😂","🤣","🙂","😉","😊","😇",
+  "😍","🥰","😘","😗","😋","😜","🤪","😎","🤩","🥳","😏","😌",
+  "🤔","🤨","😐","😶","🙄","😬","😴","😷","🤒","🥺","😢","😭",
+  "😤","😠","😡","🤯","😱","😨","😥","😓","🤗","🤭","🫡","🥳",
+  "👍","👎","👌","✌️","🤞","🤟","🤙","👋","🙌","👏","🙏","💪",
+  "👀","🫶","🤝","💅","🫣","🤦","🤷","💁","🙆","🙅","💃","🕺",
+  "❤️","🧡","💛","💚","💙","💜","🖤","🤍","💔","❤️‍🔥","💯","🔥",
+  "⭐","✨","🎉","🎊","✅","❌","⚠️","❓","❗","💰","💵","🛒",
+  "📦","🚀","📞","📱","💬","📅","⏰","📌","🎁","🍺","☕","🎯",
+  "💡","📸","😃","👇","👆","➡️","🙏","🥂","🤑","😅","🫰","🤌",
+];
 
 /** Media content types an agent can send from the composer. */
 export type ComposerMediaKind = "image" | "video" | "document" | "audio";
@@ -261,6 +282,29 @@ export function MessageComposer({
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       setText(e.target.value);
       adjustHeight();
+    },
+    [adjustHeight]
+  );
+
+  // Insert an emoji at the cursor (or replace the selection), then restore
+  // focus + caret so the agent can keep typing.
+  const insertEmoji = useCallback(
+    (emoji: string) => {
+      const el = textareaRef.current;
+      if (!el) {
+        setText((t) => t + emoji);
+        return;
+      }
+      const start = el.selectionStart ?? el.value.length;
+      const end = el.selectionEnd ?? el.value.length;
+      const next = el.value.slice(0, start) + emoji + el.value.slice(end);
+      setText(next);
+      requestAnimationFrame(() => {
+        el.focus();
+        const pos = start + emoji.length;
+        el.setSelectionRange(pos, pos);
+        adjustHeight();
+      });
     },
     [adjustHeight]
   );
@@ -685,6 +729,35 @@ export function MessageComposer({
               <Sparkles className="h-4 w-4" />
             )}
           </GatedButton>
+
+          <Popover>
+            <PopoverTrigger
+              disabled={inputsDisabled}
+              title={readOnly ? undefined : "Emojis"}
+              className="inline-flex h-9 w-9 shrink-0 items-center justify-center rounded-md p-0 text-muted-foreground hover:text-foreground disabled:cursor-not-allowed disabled:opacity-50"
+            >
+              <Smile className="h-4 w-4" />
+            </PopoverTrigger>
+            <PopoverContent
+              align="start"
+              className="w-72 p-2"
+              aria-label="Selecionar emoji"
+            >
+              <div className="grid max-h-56 grid-cols-8 gap-0.5 overflow-y-auto">
+                {EMOJIS.map((emoji, i) => (
+                  <button
+                    key={`${emoji}-${i}`}
+                    type="button"
+                    onClick={() => insertEmoji(emoji)}
+                    className="flex h-8 w-8 items-center justify-center rounded-md text-xl leading-none transition-colors hover:bg-muted"
+                    aria-label={`Inserir ${emoji}`}
+                  >
+                    {emoji}
+                  </button>
+                ))}
+              </div>
+            </PopoverContent>
+          </Popover>
 
           <textarea
             ref={textareaRef}

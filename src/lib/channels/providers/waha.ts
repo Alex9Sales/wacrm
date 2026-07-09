@@ -562,6 +562,20 @@ export const wahaProvider: WhatsAppProvider = {
         };
       }
 
+      // TEMP debug (view-once investigation): dump the raw payload for
+      // messages that arrive with neither text nor media — that's how WAHA
+      // seems to deliver "view once" today. Remove once VO handling is done.
+      if (!media && !text) {
+        try {
+          console.log(
+            '[waha][vo-debug] empty msg payload:',
+            JSON.stringify(p).slice(0, 6000),
+          );
+        } catch {
+          /* non-serializable payload — ignore */
+        }
+      }
+
       messages.push({
         externalMessageId,
         fromPhoneE164,
