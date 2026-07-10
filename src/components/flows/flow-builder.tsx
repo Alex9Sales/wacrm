@@ -171,9 +171,10 @@ export function FlowBuilder() {
 
         {state.nodes.length === 0 ? (
           <div className="border-border bg-card/50 text-muted-foreground rounded-lg border border-dashed p-8 text-center text-sm">
-            Adicione um nó <strong>Start</strong>, depois um nó{' '}
-            <strong>Send buttons</strong>, depois um <strong>Handoff</strong>{' '}
-            — esse é o formato do menu de boas-vindas do briefing.
+            Adicione um nó <strong>Início</strong>, depois um{' '}
+            <strong>Enviar botões</strong>, depois um{' '}
+            <strong>Transferir para atendente</strong> — esse é o formato do
+            menu de boas-vindas.
           </div>
         ) : (
           state.nodes.map((node) => (

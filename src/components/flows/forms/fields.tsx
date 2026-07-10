@@ -83,7 +83,7 @@ export function NextNodeRow({
         nodes={allNodes}
         excludeKey={currentKey}
         onChange={(v) => onChange(v ?? "")}
-        placeholder="Pick a next node…"
+        placeholder="Escolha o próximo nó…"
       />
     </div>
   );

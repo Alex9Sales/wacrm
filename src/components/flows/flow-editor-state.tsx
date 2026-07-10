@@ -360,7 +360,7 @@ export function FlowEditorProvider({
   const setStatus = useCallback(
     async (next: BuilderState["status"]) => {
       if (next === "active" && !canActivate) {
-        toast.error("Fix the issues below before activating.");
+        toast.error("Corrija os problemas abaixo antes de ativar.");
         return;
       }
       setActivating(true);
