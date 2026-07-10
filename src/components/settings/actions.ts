@@ -327,6 +327,51 @@ export async function setAutoReassignConfig(
 }
 
 // ------------------------------------------------------------
+// Business hours (horário de atendimento) — service-panel.tsx
+// ------------------------------------------------------------
+
+export interface BusinessHoursConfig {
+  enabled: boolean
+  days: { open: string | null; close: string | null }[]
+  timezone: string
+  message: string
+}
+
+export async function getBusinessHoursConfig(): Promise<BusinessHoursConfig> {
+  const ctx = await getCurrentAccount()
+  const s = await getAccountSettings(ctx.accountId)
+  return {
+    enabled: s.businessHoursEnabled,
+    days: s.businessDays,
+    timezone: s.businessTimezone,
+    message: s.outOfHoursMessage,
+  }
+}
+
+/** Update the business-hours config (admins only). */
+export async function setBusinessHoursConfig(
+  input: BusinessHoursConfig,
+): Promise<void> {
+  const ctx = await requireRole('admin')
+  // Normalize: 7 days, each {open,close} either both "HH:MM" or both null.
+  const hhmm = /^\d{1,2}:\d{2}$/
+  const days = Array.from({ length: 7 }, (_, i) => {
+    const d = input.days?.[i]
+    const open = d?.open && hhmm.test(d.open) ? d.open : null
+    const close = d?.close && hhmm.test(d.close) ? d.close : null
+    return open && close ? { open, close } : { open: null, close: null }
+  })
+  await updateAccountSettings(ctx.accountId, {
+    businessHoursEnabled: input.enabled,
+    businessDays: days,
+    businessTimezone: input.timezone?.trim() || 'America/Campo_Grande',
+    outOfHoursMessage:
+      input.message?.trim() ||
+      'Olá! No momento estamos fora do horário de atendimento.',
+  })
+}
+
+// ------------------------------------------------------------
 // Team members — direct create (members-tab.tsx)
 // ------------------------------------------------------------
 

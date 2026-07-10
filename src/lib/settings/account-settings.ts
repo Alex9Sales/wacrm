@@ -9,6 +9,13 @@ import { eq } from 'drizzle-orm'
 import { db, accountSettings } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 
+/** One weekday's opening window. `open`/`close` are "HH:MM" (24h) in the
+ *  account's business timezone; null on either side means closed all day. */
+export interface BusinessDay {
+  open: string | null
+  close: string | null
+}
+
 export interface AccountSettings {
   /** Prefix outbound agent messages with the sender's name (WhatsApp
    *  shows it in bold), so the customer knows who is replying. */
@@ -21,13 +28,37 @@ export interface AccountSettings {
   autoReassignEnabled: boolean
   /** Minutes without an agent reply before auto-reassign kicks in. */
   autoReassignMinutes: number
+  /** Auto-reply when a customer writes outside business hours. Off by default. */
+  businessHoursEnabled: boolean
+  /** Per-weekday opening windows, index 0=Sunday … 6=Saturday. */
+  businessDays: BusinessDay[]
+  /** IANA timezone the windows are evaluated in. */
+  businessTimezone: string
+  /** The message auto-sent (once per closed period) outside business hours. */
+  outOfHoursMessage: string
 }
+
+/** Mon–Fri 08:00–18:00, weekend closed. Index 0=Sunday … 6=Saturday. */
+const DEFAULT_BUSINESS_DAYS: BusinessDay[] = [
+  { open: null, close: null }, // Sun
+  { open: '08:00', close: '18:00' }, // Mon
+  { open: '08:00', close: '18:00' }, // Tue
+  { open: '08:00', close: '18:00' }, // Wed
+  { open: '08:00', close: '18:00' }, // Thu
+  { open: '08:00', close: '18:00' }, // Fri
+  { open: null, close: null }, // Sat
+]
 
 export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   agentSignatureEnabled: false,
   audioTranscriptionEnabled: false,
   autoReassignEnabled: false,
   autoReassignMinutes: 5,
+  businessHoursEnabled: false,
+  businessDays: DEFAULT_BUSINESS_DAYS,
+  businessTimezone: 'America/Campo_Grande',
+  outOfHoursMessage:
+    'Olá! No momento estamos fora do horário de atendimento. Assim que abrirmos, retornamos sua mensagem. 🙏',
 }
 
 /** Read an account's settings, merged over the defaults. */

@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Loader2, PenLine, AudioLines, Timer } from "lucide-react";
+import { Loader2, PenLine, AudioLines, Timer, Clock } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -12,8 +12,13 @@ import {
   setAudioTranscriptionEnabled,
   getAutoReassignConfig,
   setAutoReassignConfig,
+  getBusinessHoursConfig,
+  setBusinessHoursConfig,
+  type BusinessHoursConfig,
 } from "./actions";
 import { Switch } from "@/components/ui/switch";
+import { Input } from "@/components/ui/input";
+import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
 import {
   Select,
@@ -45,6 +50,9 @@ export function ServicePanel() {
   const [transcription, setTranscription] = useState(false);
   const [reassign, setReassign] = useState(false);
   const [reassignMin, setReassignMin] = useState(5);
+  const [businessHours, setBusinessHours] = useState<BusinessHoursConfig | null>(
+    null,
+  );
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -53,13 +61,15 @@ export function ServicePanel() {
       getAgentSignatureEnabled(),
       getAudioTranscriptionEnabled(),
       getAutoReassignConfig(),
+      getBusinessHoursConfig(),
     ])
-      .then(([sig, tr, rc]) => {
+      .then(([sig, tr, rc, bh]) => {
         if (!active) return;
         setSignature(sig);
         setTranscription(tr);
         setReassign(rc.enabled);
         setReassignMin(rc.minutes);
+        setBusinessHours(bh);
       })
       .catch(() => {})
       .finally(() => {
@@ -121,8 +131,173 @@ export function ServicePanel() {
           canEdit={canEditSettings}
           loading={loading}
         />
+
+        <BusinessHoursCard
+          initial={businessHours}
+          canEdit={canEditSettings}
+          loading={loading}
+        />
       </div>
     </div>
+  );
+}
+
+const WEEKDAYS = [
+  "Domingo",
+  "Segunda",
+  "Terça",
+  "Quarta",
+  "Quinta",
+  "Sexta",
+  "Sábado",
+];
+
+function BusinessHoursCard({
+  initial,
+  canEdit,
+  loading,
+}: {
+  initial: BusinessHoursConfig | null;
+  canEdit: boolean;
+  loading: boolean;
+}) {
+  const [enabled, setEnabled] = useState(false);
+  const [days, setDays] = useState<BusinessHoursConfig["days"]>([]);
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!initial) return;
+    setEnabled(initial.enabled);
+    setDays(initial.days);
+    setMessage(initial.message);
+  }, [initial]);
+
+  const setDay = (
+    i: number,
+    patch: Partial<BusinessHoursConfig["days"][number]>,
+  ) =>
+    setDays((prev) =>
+      prev.map((d, idx) => (idx === i ? { ...d, ...patch } : d)),
+    );
+
+  const toggleDay = (i: number, open: boolean) =>
+    setDay(i, open ? { open: "08:00", close: "18:00" } : { open: null, close: null });
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await setBusinessHoursConfig({
+        enabled,
+        days,
+        timezone: initial?.timezone || "America/Campo_Grande",
+        message,
+      });
+      toast.success("Horário de atendimento salvo.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não foi possível salvar.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Clock className="h-4 w-4 text-primary" />
+          Horário de atendimento
+        </CardTitle>
+        <CardDescription>
+          Fora do horário, responde o cliente automaticamente com a mensagem
+          abaixo (uma vez por conversa). Útil pra não deixar ninguém sem
+          resposta de madrugada ou no fim de semana.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/40 p-3">
+          <Label className="text-sm font-medium text-foreground">
+            Ativar horário de atendimento
+          </Label>
+          <div className="flex shrink-0 items-center gap-2">
+            {(loading || saving) && (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+            <Switch
+              checked={enabled}
+              onCheckedChange={setEnabled}
+              disabled={!canEdit || loading || saving}
+              aria-label="Ativar horário de atendimento"
+            />
+          </div>
+        </div>
+
+        {enabled && (
+          <>
+            <div className="space-y-2">
+              {days.map((d, i) => {
+                const isOpen = !!(d.open && d.close);
+                return (
+                  <div key={i} className="flex items-center gap-3">
+                    <div className="flex w-28 items-center gap-2">
+                      <Switch
+                        checked={isOpen}
+                        onCheckedChange={(v) => toggleDay(i, v)}
+                        disabled={!canEdit}
+                        aria-label={`Abrir ${WEEKDAYS[i]}`}
+                      />
+                      <span className="text-sm text-foreground">{WEEKDAYS[i]}</span>
+                    </div>
+                    {isOpen ? (
+                      <div className="flex items-center gap-2">
+                        <Input
+                          type="time"
+                          value={d.open ?? ""}
+                          onChange={(e) => setDay(i, { open: e.target.value })}
+                          disabled={!canEdit}
+                          className="w-28"
+                        />
+                        <span className="text-muted-foreground">até</span>
+                        <Input
+                          type="time"
+                          value={d.close ?? ""}
+                          onChange={(e) => setDay(i, { close: e.target.value })}
+                          disabled={!canEdit}
+                          className="w-28"
+                        />
+                      </div>
+                    ) : (
+                      <span className="text-sm text-muted-foreground">Fechado</span>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+
+            <div className="space-y-1.5">
+              <Label htmlFor="ooh-msg">Mensagem fora do horário</Label>
+              <textarea
+                id="ooh-msg"
+                value={message}
+                onChange={(e) => setMessage(e.target.value)}
+                rows={3}
+                disabled={!canEdit}
+                className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50 disabled:opacity-50"
+              />
+            </div>
+          </>
+        )}
+
+        {canEdit && (
+          <div className="flex justify-end">
+            <Button onClick={save} disabled={saving || loading}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Salvar horário
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

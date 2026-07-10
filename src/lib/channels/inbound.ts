@@ -18,7 +18,7 @@
 // ============================================================
 
 import { randomUUID } from 'crypto';
-import { and, count, eq, isNull } from 'drizzle-orm';
+import { and, count, eq, gte, inArray, isNull } from 'drizzle-orm';
 
 import { db, contacts, conversations, messages } from '@/db';
 import { firstOrNull } from '@/db/helpers';
@@ -30,6 +30,8 @@ import { dispatchInboundToFlows } from '@/lib/flows/engine';
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import { transcribeInboundAudio } from '@/lib/ai/transcribe';
 import { getAccountSettings } from '@/lib/settings/account-settings';
+import { isWithinBusinessHours } from '@/lib/settings/business-hours';
+import { engineSendText } from '@/lib/flows/meta-send';
 import { routeNewConversation, rerouteByKeyword } from '@/lib/sectors/routing';
 import { putObject, publicUrl } from '@/lib/storage/s3';
 import { getProvider } from './registry';
@@ -340,6 +342,17 @@ export async function dispatchInboundMessage(
   // Flag broadcast reply, if any.
   await flagBroadcastReplyIfAny(accountId, contactId);
 
+  // Out-of-hours auto-reply. When the customer writes outside business hours
+  // (and we haven't already sent a closed-notice recently), send the account's
+  // configured message and skip the AI auto-reply below — a human isn't
+  // available, so the closed notice stands in for it.
+  const outOfHoursSent = await maybeSendOutOfHoursReply(
+    accountId,
+    conversation.id,
+    contactId,
+    contactOutcome.contact.userId,
+  );
+
   // ---- Flows / automations / AI dispatch (identical to the Meta webhook) ----
   const inboundText = ev.contentText ?? '';
   const flowResult = await dispatchInboundToFlows({
@@ -386,8 +399,9 @@ export async function dispatchInboundMessage(
     }).catch((err) => console.error('[automations] dispatch failed:', err));
   }
 
-  // AI auto-reply — plain-text, not consumed by a flow.
-  if (!flowConsumed && !ev.interactiveReplyId && inboundText.trim()) {
+  // AI auto-reply — plain-text, not consumed by a flow, and not already
+  // handled by the out-of-hours notice.
+  if (!flowConsumed && !outOfHoursSent && !ev.interactiveReplyId && inboundText.trim()) {
     await dispatchInboundToAiReply({
       accountId,
       conversationId: conversation.id,
@@ -406,6 +420,48 @@ export async function dispatchInboundMessage(
   });
 
   return { conversationId: conversation.id, contactId, isFirstInbound };
+}
+
+/**
+ * If business hours are enabled and `now` is outside them, send the account's
+ * out-of-hours message (as a bot reply) — deduped so it fires at most once per
+ * closed period per conversation (skipped when any agent/bot message already
+ * went out in the last 6h). Returns true when a notice was sent. Best-effort:
+ * any failure returns false and never blocks the inbound.
+ */
+async function maybeSendOutOfHoursReply(
+  accountId: string,
+  conversationId: string,
+  contactId: string,
+  userId: string,
+): Promise<boolean> {
+  try {
+    const settings = await getAccountSettings(accountId);
+    if (!settings.businessHoursEnabled) return false;
+    if (isWithinBusinessHours(settings)) return false;
+    const message = settings.outOfHoursMessage?.trim();
+    if (!message) return false;
+
+    // Dedup: don't re-send if we already replied (agent OR bot) in the last 6h.
+    const sixHoursAgo = new Date(Date.now() - 6 * 3_600_000).toISOString();
+    const [recent] = await db
+      .select({ n: count() })
+      .from(messages)
+      .where(
+        and(
+          eq(messages.conversationId, conversationId),
+          inArray(messages.senderType, ['agent', 'bot']),
+          gte(messages.createdAt, sixHoursAgo),
+        ),
+      );
+    if ((recent?.n ?? 0) > 0) return false;
+
+    await engineSendText({ accountId, userId, conversationId, contactId, text: message });
+    return true;
+  } catch (err) {
+    console.error('[inbound] out-of-hours reply failed:', err);
+    return false;
+  }
 }
 
 /**
