@@ -35,10 +35,67 @@ function normalize(s: string): string {
     .replace(/[̀-ͯ]/g, '');
 }
 
+interface SectorRow {
+  id: string;
+  keywords: string[];
+  autoAssign: boolean;
+}
+type Chosen = { id: string; autoAssign: boolean };
+
+/** All sectors of an account, with their keywords + auto-assign flag. */
+async function loadAccountSectors(accountId: string): Promise<SectorRow[]> {
+  return db
+    .select({
+      id: sectors.id,
+      keywords: sectors.keywords,
+      autoAssign: sectors.autoAssign,
+    })
+    .from(sectors)
+    .where(eq(sectors.accountId, accountId));
+}
+
+/** First sector whose keyword appears in `text` (accent/case-insensitive). */
+function matchKeyword(accountSectors: SectorRow[], text: string): Chosen | null {
+  const haystack = normalize(text || '');
+  if (!haystack) return null;
+  for (const s of accountSectors) {
+    const kws = (s.keywords ?? []).map(normalize).filter(Boolean);
+    if (kws.some((kw) => haystack.includes(kw))) {
+      return { id: s.id, autoAssign: s.autoAssign };
+    }
+  }
+  return null;
+}
+
+/** Persist the chosen sector on a conversation, auto-assigning when enabled. */
+async function applySector(
+  accountId: string,
+  conversationId: string,
+  chosen: Chosen,
+): Promise<RouteResult> {
+  const assignedAgentId = chosen.autoAssign
+    ? await pickLeastLoadedSectorAgent(accountId, chosen.id)
+    : null;
+
+  await db
+    .update(conversations)
+    .set({
+      sectorId: chosen.id,
+      ...(assignedAgentId
+        ? { assignedAgentId, assignedAt: new Date().toISOString() }
+        : {}),
+      updatedAt: new Date().toISOString(),
+    })
+    .where(eq(conversations.id, conversationId));
+
+  return { sectorId: chosen.id, assignedAgentId };
+}
+
 /**
  * Resolve and persist the sector (and optional assignee) for a freshly
- * created conversation. Best-effort: any failure leaves the conversation in
- * the general queue rather than dropping the message.
+ * created conversation: keyword on the first message wins, else the channel's
+ * default sector, else the general queue. Best-effort: any failure leaves the
+ * conversation in the general queue rather than dropping the message.
  */
 export async function routeNewConversation(params: {
   accountId: string;
@@ -48,27 +105,10 @@ export async function routeNewConversation(params: {
 }): Promise<RouteResult> {
   const { accountId, channelId, conversationId, firstText } = params;
   try {
-    const accountSectors = await db
-      .select({
-        id: sectors.id,
-        keywords: sectors.keywords,
-        autoAssign: sectors.autoAssign,
-      })
-      .from(sectors)
-      .where(eq(sectors.accountId, accountId));
+    const accountSectors = await loadAccountSectors(accountId);
 
     // 1) Keyword match wins.
-    let chosen: { id: string; autoAssign: boolean } | null = null;
-    const haystack = normalize(firstText || '');
-    if (haystack) {
-      for (const s of accountSectors) {
-        const kws = (s.keywords ?? []).map(normalize).filter(Boolean);
-        if (kws.some((kw) => haystack.includes(kw))) {
-          chosen = { id: s.id, autoAssign: s.autoAssign };
-          break;
-        }
-      }
-    }
+    let chosen = matchKeyword(accountSectors, firstText);
 
     // 2) Else the channel's default sector.
     if (!chosen && channelId) {
@@ -87,26 +127,33 @@ export async function routeNewConversation(params: {
 
     // 3) Else the general queue.
     if (!chosen) return { sectorId: null, assignedAgentId: null };
-
-    // Persist the sector.
-    const assignedAgentId = chosen.autoAssign
-      ? await pickLeastLoadedSectorAgent(accountId, chosen.id)
-      : null;
-
-    await db
-      .update(conversations)
-      .set({
-        sectorId: chosen.id,
-        ...(assignedAgentId
-          ? { assignedAgentId, assignedAt: new Date().toISOString() }
-          : {}),
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(conversations.id, conversationId));
-
-    return { sectorId: chosen.id, assignedAgentId };
+    return await applySector(accountId, conversationId, chosen);
   } catch (err) {
     console.error('[routing] routeNewConversation failed:', err);
+    return { sectorId: null, assignedAgentId: null };
+  }
+}
+
+/**
+ * Mid-conversation keyword re-route. The caller guarantees this fires ONLY
+ * while a thread is still unclaimed (in the general queue and no HUMAN agent
+ * has replied) — so a later "boleto" moves an unattended thread to Financeiro,
+ * but a conversation a salesperson is already handling is never yanked away.
+ * Keyword-only (no channel default): the channel already had its say at
+ * creation. Best-effort; a no-match leaves the thread where it is.
+ */
+export async function rerouteByKeyword(params: {
+  accountId: string;
+  conversationId: string;
+  text: string;
+}): Promise<RouteResult> {
+  const { accountId, conversationId, text } = params;
+  try {
+    const chosen = matchKeyword(await loadAccountSectors(accountId), text);
+    if (!chosen) return { sectorId: null, assignedAgentId: null };
+    return await applySector(accountId, conversationId, chosen);
+  } catch (err) {
+    console.error('[routing] rerouteByKeyword failed:', err);
     return { sectorId: null, assignedAgentId: null };
   }
 }

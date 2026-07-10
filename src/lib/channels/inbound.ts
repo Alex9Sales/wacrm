@@ -30,7 +30,7 @@ import { dispatchInboundToFlows } from '@/lib/flows/engine';
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import { transcribeInboundAudio } from '@/lib/ai/transcribe';
 import { getAccountSettings } from '@/lib/settings/account-settings';
-import { routeNewConversation } from '@/lib/sectors/routing';
+import { routeNewConversation, rerouteByKeyword } from '@/lib/sectors/routing';
 import { putObject, publicUrl } from '@/lib/storage/s3';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
@@ -278,23 +278,56 @@ export async function dispatchInboundMessage(
     console.error('[inbound] Error updating conversation:', convError);
   }
 
-  // Phase 2: a brand-new customer conversation is routed to a sector (by
-  // keyword on this first message, else the channel's default sector) and,
-  // when that sector auto-assigns, handed to its least-loaded member. The
-  // assignment write fires the notify trigger; we re-ping message.received so
-  // the inbox list refetches the now-routed row. Best-effort inside.
-  if (convResult.created && !isFromMe) {
-    const routed = await routeNewConversation({
-      accountId,
-      channelId: conversation.channelId ?? channel.id,
-      conversationId: conversation.id,
-      firstText: ev.contentText ?? contentText,
-    });
-    if (routed.sectorId || routed.assignedAgentId) {
-      await publishEvent(accountId, {
-        type: 'message.received',
+  // Phase 2: route this customer message to a sector.
+  if (!isFromMe) {
+    if (convResult.created) {
+      // Brand-new conversation: keyword on the first message → channel's
+      // default sector → general queue; auto-assign when the sector does.
+      const routed = await routeNewConversation({
+        accountId,
+        channelId: conversation.channelId ?? channel.id,
         conversationId: conversation.id,
+        firstText: ev.contentText ?? contentText,
       });
+      if (routed.sectorId || routed.assignedAgentId) {
+        await publishEvent(accountId, {
+          type: 'message.received',
+          conversationId: conversation.id,
+        });
+      }
+    } else if (conversation.sectorId == null) {
+      // Existing conversation still in the GENERAL QUEUE: a keyword in a later
+      // message can move it to a sector — but ONLY while it's unattended (no
+      // HUMAN agent has replied yet). A 'bot'/AI auto-reply doesn't count, so
+      // an AI triaging the queue can still hand off; but the moment a real
+      // agent answers (from the CRM or their own phone → sender_type 'agent'),
+      // the thread is locked and keywords never yank it away.
+      try {
+        const [agentMsgs] = await db
+          .select({ n: count() })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, conversation.id),
+              eq(messages.senderType, 'agent'),
+            ),
+          );
+        if ((agentMsgs?.n ?? 0) === 0) {
+          const routed = await rerouteByKeyword({
+            accountId,
+            conversationId: conversation.id,
+            text: ev.contentText ?? contentText,
+          });
+          if (routed.sectorId) {
+            await publishEvent(accountId, {
+              type: 'message.received',
+              conversationId: conversation.id,
+            });
+          }
+        }
+      } catch (err) {
+        console.error('[inbound] keyword reroute failed:', err);
+      }
     }
   }
 
