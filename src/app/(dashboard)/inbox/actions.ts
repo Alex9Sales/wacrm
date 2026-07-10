@@ -776,3 +776,44 @@ export async function listQuickReplies(): Promise<QuickReplyOption[]> {
     .orderBy(asc(quickReplies.shortcut))
   return rows
 }
+
+// ------------------------------------------------------------
+// Lightweight preview for the new-message pop-up (contact name + snippet).
+// Respects sector privacy — returns null for a conversation the caller
+// isn't allowed to see (so no leaking a hidden sector's contact name).
+// ------------------------------------------------------------
+
+export interface ConversationPreview {
+  name: string
+  preview: string
+}
+
+export async function getConversationPreview(
+  conversationId: string,
+): Promise<ConversationPreview | null> {
+  const ctx = await getCurrentAccount()
+  const row = firstOrNull(
+    await db
+      .select({
+        sectorId: conversations.sectorId,
+        lastMessageText: conversations.lastMessageText,
+        contactName: contacts.name,
+        contactPhone: contacts.phone,
+      })
+      .from(conversations)
+      .leftJoin(contacts, eq(conversations.contactId, contacts.id))
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      )
+      .limit(1),
+  )
+  if (!row) return null
+  if (!(await canSeeConversation(ctx.role, ctx.userId, row.sectorId))) return null
+  return {
+    name: row.contactName?.trim() || row.contactPhone || 'Cliente',
+    preview: (row.lastMessageText ?? '').slice(0, 80),
+  }
+}

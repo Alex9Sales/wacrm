@@ -14,6 +14,7 @@ import { ChannelsTab } from '@/components/settings/channels-tab';
 import { ServicePanel } from '@/components/settings/service-panel';
 import { SectorsPanel } from '@/components/settings/sectors-panel';
 import { QuickRepliesPanel } from '@/components/settings/quick-replies-panel';
+import { NotificationsPanel } from '@/components/settings/notifications-panel';
 import { TemplateManager } from '@/components/settings/template-manager';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
@@ -59,6 +60,7 @@ export default function SettingsPage() {
     profile: <ProfileForm />,
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
+    notificacoes: <NotificationsPanel />,
     channels: <ChannelsTab />,
     setores: <SectorsPanel />,
     atendimento: <ServicePanel />,

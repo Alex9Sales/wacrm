@@ -13,6 +13,7 @@ import {
   UsersRound,
   Webhook,
   Zap,
+  Bell,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -29,6 +30,7 @@ export const SETTINGS_SECTIONS = [
   'profile',
   'security',
   'appearance',
+  'notificacoes',
   'channels',
   'setores',
   'atendimento',
@@ -58,6 +60,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   profile: { id: 'profile', label: 'Seu perfil', icon: User, group: 'account' },
   security: { id: 'security', label: 'Login e segurança', icon: Shield, group: 'account' },
   appearance: { id: 'appearance', label: 'Aparência', icon: Palette, group: 'account' },
+  notificacoes: { id: 'notificacoes', label: 'Notificações', icon: Bell, group: 'account' },
   channels: { id: 'channels', label: 'Canais', icon: MessageSquare, group: 'workspace' },
   setores: { id: 'setores', label: 'Setores', icon: Building2, group: 'workspace' },
   atendimento: { id: 'atendimento', label: 'Atendimento', icon: Headset, group: 'workspace' },
