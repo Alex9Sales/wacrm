@@ -154,37 +154,41 @@ export default function InboxPage() {
   }, []);
 
   // External deep-link while the inbox is ALREADY mounted (notification
-  // pop-up, a shared /inbox?c= link, the dashboard recents): the ?c= param
-  // changes but the conversation list won't refetch, so
-  // handleConversationsLoaded never fires. React to it here — select the
-  // conversation from the loaded list, hydrating it first if it isn't loaded
-  // yet. Guarded by the same ref as the load-time selector so the two never
-  // double-fire (and a realtime list refetch can't snap the user back).
+  // pop-up, a shared /inbox?c= link): the ?c= param changes but the list
+  // won't refetch, so handleConversationsLoaded never fires. React ONLY to a
+  // genuine ?c= change (never to selection/list state, which would race a
+  // fresh in-list click and snap the user back). The ref is claimed
+  // synchronously up front, so a list click — which sets the ref BEFORE it
+  // updates the URL — short-circuits here as a no-op. We fetch the target
+  // directly (one call per external nav) so it works even for a conversation
+  // not yet in the loaded list.
   useEffect(() => {
-    if (!deepLinkConvId) return;
-    if (autoSelectedForDeepLinkRef.current === deepLinkConvId) return;
-    if (activeConversation?.id === deepLinkConvId) {
-      autoSelectedForDeepLinkRef.current = deepLinkConvId;
-      return;
-    }
-    const match = conversations.find((c) => c.id === deepLinkConvId);
-    if (!match) {
-      // Not in the loaded list — pull it in; this effect re-runs on arrival.
-      void hydrateConversation(deepLinkConvId);
-      return;
-    }
-    autoSelectedForDeepLinkRef.current = deepLinkConvId;
-    setActiveConversation(match);
-    setActiveContact(match.contact ?? null);
-    setMessages([]);
-    if (match.unread_count > 0) {
+    const target = deepLinkConvId;
+    if (!target) return;
+    if (autoSelectedForDeepLinkRef.current === target) return;
+    autoSelectedForDeepLinkRef.current = target;
+    let cancelled = false;
+    void (async () => {
+      const fetched = await getConversationWithContact(target).catch(() => null);
+      if (cancelled || !fetched) return;
+      // The user may have moved on while the fetch was in flight.
+      if (searchParams.get("c") !== target) return;
       setConversations((prev) =>
-        prev.map((c) =>
-          c.id === match.id ? { ...c, unread_count: 0 } : c,
-        ),
+        prev.some((c) => c.id === fetched.id)
+          ? prev.map((c) =>
+              c.id === fetched.id ? { ...c, unread_count: 0 } : c,
+            )
+          : [{ ...fetched, unread_count: 0 }, ...prev],
       );
-    }
-  }, [deepLinkConvId, conversations, activeConversation?.id, hydrateConversation]);
+      setActiveConversation(fetched);
+      setActiveContact(fetched.contact ?? null);
+      setMessages([]);
+    })();
+    return () => {
+      cancelled = true;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [deepLinkConvId]);
 
   // Check WhatsApp connection status on mount
   useEffect(() => {
