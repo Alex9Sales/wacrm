@@ -46,8 +46,8 @@ export function NotificationListener() {
           <button
             type="button"
             onClick={() => {
-              toast.dismiss(id);
               router.push(opts.href);
+              toast.dismiss(id);
             }}
             className="flex w-full items-start gap-3 rounded-xl border border-border bg-card p-3 text-left shadow-lg shadow-black/10 transition-colors hover:bg-muted/60"
           >
@@ -68,7 +68,7 @@ export function NotificationListener() {
             </span>
           </button>
         ),
-        { duration: 6000 },
+        { duration: 12000 },
       );
     },
     [router],

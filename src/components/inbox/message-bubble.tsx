@@ -21,6 +21,7 @@ import {
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
+import { RichText } from "@/lib/inbox/rich-text";
 
 const DOC_MIME_BY_EXT: Record<string, string> = {
   pdf: "application/pdf",
@@ -262,7 +263,7 @@ function MessageContent({ message }: { message: Message }) {
     case "text":
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
-          {message.content_text}
+          <RichText text={message.content_text} />
         </p>
       );
 
@@ -282,7 +283,7 @@ function MessageContent({ message }: { message: Message }) {
           )}
           {realCaption(message.content_text) && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              <RichText text={message.content_text} />
             </p>
           )}
         </div>
@@ -309,7 +310,7 @@ function MessageContent({ message }: { message: Message }) {
           )}
           {realCaption(message.content_text) && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              <RichText text={message.content_text} />
             </p>
           )}
         </div>
@@ -378,7 +379,7 @@ function MessageContent({ message }: { message: Message }) {
           </span>
           {realCaption(message.content_text) && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {message.content_text}
+              <RichText text={message.content_text} />
             </p>
           )}
         </div>
