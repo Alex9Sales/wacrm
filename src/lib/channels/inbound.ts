@@ -364,6 +364,21 @@ export async function dispatchInboundMessage(
     return { conversationId: conversation.id, contactId, isFirstInbound };
   }
 
+  // Re-open a closed conversation when the customer comes back with a real
+  // message (not a CSAT rating, handled above). The SAME thread resurfaces —
+  // full history + the agent who handled it are preserved; only the status
+  // flips back to open so it isn't lost in the "Fechada" filter.
+  if (conversation.status === 'closed') {
+    try {
+      await db
+        .update(conversations)
+        .set({ status: 'open', updatedAt: new Date().toISOString() })
+        .where(eq(conversations.id, conversation.id));
+    } catch (err) {
+      console.error('[inbound] reopen on new message failed:', err);
+    }
+  }
+
   // Flag broadcast reply, if any.
   await flagBroadcastReplyIfAny(accountId, contactId);
 
