@@ -372,6 +372,34 @@ export async function setBusinessHoursConfig(
 }
 
 // ------------------------------------------------------------
+// CSAT (pesquisa de satisfação) — service-panel.tsx
+// ------------------------------------------------------------
+
+export interface CsatConfig {
+  enabled: boolean
+  question: string
+  thanks: string
+}
+
+export async function getCsatConfig(): Promise<CsatConfig> {
+  const ctx = await getCurrentAccount()
+  const s = await getAccountSettings(ctx.accountId)
+  return { enabled: s.csatEnabled, question: s.csatQuestion, thanks: s.csatThanks }
+}
+
+/** Update the CSAT config (admins only). */
+export async function setCsatConfig(input: CsatConfig): Promise<void> {
+  const ctx = await requireRole('admin')
+  await updateAccountSettings(ctx.accountId, {
+    csatEnabled: input.enabled,
+    csatQuestion:
+      input.question?.trim() ||
+      'Como você avalia nosso atendimento? Responda de 1 a 5.',
+    csatThanks: input.thanks?.trim() || 'Obrigado pela sua avaliação!',
+  })
+}
+
+// ------------------------------------------------------------
 // Team members — direct create (members-tab.tsx)
 // ------------------------------------------------------------
 

@@ -36,6 +36,12 @@ export interface AccountSettings {
   businessTimezone: string
   /** The message auto-sent (once per closed period) outside business hours. */
   outOfHoursMessage: string
+  /** Send a 1–5 satisfaction survey when a conversation is closed. Off by default. */
+  csatEnabled: boolean
+  /** The survey question sent on close. */
+  csatQuestion: string
+  /** The thank-you sent after the customer replies with a score. */
+  csatThanks: string
 }
 
 /** Mon–Fri 08:00–18:00, weekend closed. Index 0=Sunday … 6=Saturday. */
@@ -59,6 +65,10 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   businessTimezone: 'America/Campo_Grande',
   outOfHoursMessage:
     'Olá! No momento estamos fora do horário de atendimento. Assim que abrirmos, retornamos sua mensagem. 🙏',
+  csatEnabled: false,
+  csatQuestion:
+    'Como você avalia nosso atendimento? Responda com uma nota de 1 a 5 (sendo 5 = ótimo). 🙏',
+  csatThanks: 'Obrigado pela sua avaliação! 💜',
 }
 
 /** Read an account's settings, merged over the defaults. */

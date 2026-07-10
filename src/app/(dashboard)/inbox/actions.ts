@@ -488,12 +488,26 @@ export async function markConversationRead(
     )
 }
 
-/** Update a conversation's status. Account-scoped. */
+/** Update a conversation's status. Account-scoped. Closing a conversation
+ *  triggers the CSAT survey (when enabled). */
 export async function updateConversationStatus(
   conversationId: string,
   status: ConversationStatus,
 ): Promise<void> {
   const ctx = await getCurrentAccount()
+  // Was it open before this? Only survey on an open→closed transition.
+  const prev = firstOrNull(
+    await db
+      .select({ status: conversations.status })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      )
+      .limit(1),
+  )
   await db
     .update(conversations)
     .set({ status })
@@ -503,6 +517,10 @@ export async function updateConversationStatus(
         eq(conversations.accountId, ctx.accountId),
       ),
     )
+  if (status === 'closed' && prev && prev.status !== 'closed') {
+    const { sendCsatSurveyIfEnabled } = await import('@/lib/csat/csat')
+    await sendCsatSurveyIfEnabled(ctx.accountId, conversationId)
+  }
 }
 
 /**

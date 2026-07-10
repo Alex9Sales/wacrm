@@ -358,6 +358,8 @@ export const conversations = pgTable("conversations", {
 	// Sector (department) this conversation belongs to. NULL = general queue
 	// (visible to everyone); otherwise only members of the sector see it.
 	sectorId: uuid("sector_id"),
+	// Set when a CSAT survey was sent on close and we're awaiting the 1–5 reply.
+	csatPendingAt: timestamp("csat_pending_at", { withTimezone: true, mode: 'string' }),
 	lastMessageText: text("last_message_text"),
 	lastMessageAt: timestamp("last_message_at", { withTimezone: true, mode: 'string' }),
 	unreadCount: integer("unread_count").default(0),
@@ -1325,5 +1327,27 @@ export const quickReplies = pgTable("quick_replies", {
 			columns: [table.accountId],
 			foreignColumns: [organization.id],
 			name: "quick_replies_account_id_fkey"
+		}).onDelete("cascade"),
+]);
+
+// ============================================================
+// CSAT (pesquisa de satisfação) — a 1–5 score the customer sends after a
+// conversation is closed. conversations.csat_pending_at flags an awaited reply.
+// ============================================================
+export const csatResponses = pgTable("csat_responses", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	conversationId: uuid("conversation_id"),
+	contactId: uuid("contact_id"),
+	agentId: uuid("agent_id"),
+	score: integer().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_csat_account_created").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast().op("timestamptz_ops")),
+	check("csat_responses_score_check", sql`score >= 1 AND score <= 5`),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "csat_responses_account_id_fkey"
 		}).onDelete("cascade"),
 ]);

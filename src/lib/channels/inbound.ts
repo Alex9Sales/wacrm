@@ -32,6 +32,7 @@ import { transcribeInboundAudio } from '@/lib/ai/transcribe';
 import { getAccountSettings } from '@/lib/settings/account-settings';
 import { isWithinBusinessHours } from '@/lib/settings/business-hours';
 import { engineSendText } from '@/lib/flows/meta-send';
+import { maybeRecordCsat } from '@/lib/csat/csat';
 import { routeNewConversation, rerouteByKeyword } from '@/lib/sectors/routing';
 import { putObject, publicUrl } from '@/lib/storage/s3';
 import { getProvider } from './registry';
@@ -337,6 +338,30 @@ export async function dispatchInboundMessage(
   // broadcast-reply flag, no flows/automations/AI, no inbound webhook.
   if (isFromMe) {
     return { conversationId: conversation.id, contactId, isFirstInbound: false };
+  }
+
+  // CSAT: if this conversation is awaiting a satisfaction rating, a 1–5 reply
+  // is recorded as the score (and thanked) instead of flowing to bots/agents.
+  const csatHandled = await maybeRecordCsat(
+    accountId,
+    {
+      id: conversation.id,
+      contactId,
+      userId: contactOutcome.contact.userId,
+      assignedAgentId: conversation.assignedAgentId ?? null,
+      csatPendingAt: conversation.csatPendingAt ?? null,
+    },
+    ev.contentText ?? '',
+  );
+  if (csatHandled) {
+    await dispatchWebhookEvent(accountId, 'message.received', {
+      conversation_id: conversation.id,
+      contact_id: contactId,
+      whatsapp_message_id: ev.externalMessageId,
+      content_type: contentType,
+      text: ev.contentText ?? null,
+    });
+    return { conversationId: conversation.id, contactId, isFirstInbound };
   }
 
   // Flag broadcast reply, if any.

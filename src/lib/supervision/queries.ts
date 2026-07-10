@@ -18,6 +18,7 @@ import {
   user,
   contacts,
   channels,
+  csatResponses,
 } from '@/db';
 import type {
   AgentStat,
@@ -211,4 +212,42 @@ export async function loadAgentConversations(
       unread: r.unread ?? 0,
     };
   });
+}
+
+// ------------------------------------------------------------
+// CSAT summary — last 30 days of satisfaction scores for the account.
+// ------------------------------------------------------------
+
+export interface CsatSummary {
+  count: number;
+  average: number | null;
+  /** Counts per score, index 0 = score 1 … index 4 = score 5. */
+  distribution: number[];
+}
+
+export async function loadCsatSummary(accountId: string): Promise<CsatSummary> {
+  const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
+  const rows = await db
+    .select({ score: csatResponses.score })
+    .from(csatResponses)
+    .where(
+      and(
+        eq(csatResponses.accountId, accountId),
+        gte(csatResponses.createdAt, since),
+      ),
+    );
+  const distribution = [0, 0, 0, 0, 0];
+  let sum = 0;
+  for (const r of rows) {
+    if (r.score >= 1 && r.score <= 5) {
+      distribution[r.score - 1] += 1;
+      sum += r.score;
+    }
+  }
+  const count = rows.length;
+  return {
+    count,
+    average: count ? Math.round((sum / count) * 10) / 10 : null,
+    distribution,
+  };
 }

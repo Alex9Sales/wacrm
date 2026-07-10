@@ -11,6 +11,7 @@ import {
   RefreshCw,
   ChevronRight,
   ShieldAlert,
+  Star,
 } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
@@ -20,12 +21,17 @@ import {
   AvatarFallback,
   AvatarImage,
 } from "@/components/ui/avatar";
-import { getSupervisionOverview, getAgentConversations } from "./actions";
+import {
+  getSupervisionOverview,
+  getAgentConversations,
+  getCsatSummary,
+} from "./actions";
 import type {
   SupervisionOverview,
   AgentStat,
   AgentConversationRow,
 } from "@/lib/supervision/types";
+import type { CsatSummary } from "@/lib/supervision/queries";
 
 function fmtMin(min: number | null): string {
   if (min == null) return "—";
@@ -45,11 +51,17 @@ export default function SupervisaoPage() {
   const [selected, setSelected] = useState<AgentStat | null>(null);
   const [convs, setConvs] = useState<AgentConversationRow[]>([]);
   const [loadingConvs, setLoadingConvs] = useState(false);
+  const [csat, setCsat] = useState<CsatSummary | null>(null);
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
     try {
-      setOverview(await getSupervisionOverview());
+      const [ov, cs] = await Promise.all([
+        getSupervisionOverview(),
+        getCsatSummary().catch(() => null),
+      ]);
+      setOverview(ov);
+      setCsat(cs);
     } catch {
       setOverview(null);
     } finally {
@@ -140,6 +152,53 @@ export default function SupervisaoPage() {
               tone={overview.unassignedOpen > 0 ? "warn" : "default"}
             />
           </div>
+
+          {csat && csat.count > 0 && (
+            <div className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center gap-2">
+                <Star className="h-4 w-4 text-primary" />
+                <h2 className="text-sm font-semibold text-foreground">
+                  Satisfação (CSAT) — últimos 30 dias
+                </h2>
+              </div>
+              <div className="mt-3 flex flex-wrap items-center gap-x-8 gap-y-3">
+                <div>
+                  <p className="text-2xl font-bold text-foreground">
+                    {csat.average?.toFixed(1)}
+                    <span className="text-sm font-normal text-muted-foreground">
+                      {" "}
+                      / 5
+                    </span>
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {csat.count} avaliaç{csat.count === 1 ? "ão" : "ões"}
+                  </p>
+                </div>
+                <div className="flex-1 space-y-1">
+                  {[5, 4, 3, 2, 1].map((score) => {
+                    const n = csat.distribution[score - 1] ?? 0;
+                    const pct = csat.count ? (n / csat.count) * 100 : 0;
+                    return (
+                      <div key={score} className="flex items-center gap-2">
+                        <span className="w-8 shrink-0 text-xs text-muted-foreground">
+                          {score}★
+                        </span>
+                        <div className="h-2 flex-1 overflow-hidden rounded-full bg-muted">
+                          <div
+                            className="h-full rounded-full bg-primary"
+                            style={{ width: `${pct}%` }}
+                          />
+                        </div>
+                        <span className="w-6 shrink-0 text-right text-xs text-muted-foreground">
+                          {n}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            </div>
+          )}
 
           <div className="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)] lg:items-start">
             {/* Agents */}

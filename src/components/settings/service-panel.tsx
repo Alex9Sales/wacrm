@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Loader2, PenLine, AudioLines, Timer, Clock } from "lucide-react";
+import { Loader2, PenLine, AudioLines, Timer, Clock, Star } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -15,6 +15,9 @@ import {
   getBusinessHoursConfig,
   setBusinessHoursConfig,
   type BusinessHoursConfig,
+  getCsatConfig,
+  setCsatConfig,
+  type CsatConfig,
 } from "./actions";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
@@ -53,6 +56,7 @@ export function ServicePanel() {
   const [businessHours, setBusinessHours] = useState<BusinessHoursConfig | null>(
     null,
   );
+  const [csat, setCsat] = useState<CsatConfig | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -62,14 +66,16 @@ export function ServicePanel() {
       getAudioTranscriptionEnabled(),
       getAutoReassignConfig(),
       getBusinessHoursConfig(),
+      getCsatConfig(),
     ])
-      .then(([sig, tr, rc, bh]) => {
+      .then(([sig, tr, rc, bh, cs]) => {
         if (!active) return;
         setSignature(sig);
         setTranscription(tr);
         setReassign(rc.enabled);
         setReassignMin(rc.minutes);
         setBusinessHours(bh);
+        setCsat(cs);
       })
       .catch(() => {})
       .finally(() => {
@@ -137,8 +143,113 @@ export function ServicePanel() {
           canEdit={canEditSettings}
           loading={loading}
         />
+
+        <CsatCard initial={csat} canEdit={canEditSettings} loading={loading} />
       </div>
     </div>
+  );
+}
+
+function CsatCard({
+  initial,
+  canEdit,
+  loading,
+}: {
+  initial: CsatConfig | null;
+  canEdit: boolean;
+  loading: boolean;
+}) {
+  const [enabled, setEnabled] = useState(false);
+  const [question, setQuestion] = useState("");
+  const [thanks, setThanks] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!initial) return;
+    setEnabled(initial.enabled);
+    setQuestion(initial.question);
+    setThanks(initial.thanks);
+  }, [initial]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await setCsatConfig({ enabled, question, thanks });
+      toast.success("Pesquisa de satisfação salva.");
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não foi possível salvar.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Star className="h-4 w-4 text-primary" />
+          Pesquisa de satisfação (CSAT)
+        </CardTitle>
+        <CardDescription>
+          Ao fechar uma conversa, pergunta ao cliente uma nota de 1 a 5. A
+          resposta é registrada e aparece no relatório da Supervisão.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/40 p-3">
+          <Label className="text-sm font-medium text-foreground">
+            Ativar pesquisa ao fechar conversa
+          </Label>
+          <div className="flex shrink-0 items-center gap-2">
+            {(loading || saving) && (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+            <Switch
+              checked={enabled}
+              onCheckedChange={setEnabled}
+              disabled={!canEdit || loading || saving}
+              aria-label="Ativar pesquisa de satisfação"
+            />
+          </div>
+        </div>
+
+        {enabled && (
+          <>
+            <div className="space-y-1.5">
+              <Label htmlFor="csat-q">Pergunta enviada</Label>
+              <textarea
+                id="csat-q"
+                value={question}
+                onChange={(e) => setQuestion(e.target.value)}
+                rows={2}
+                disabled={!canEdit}
+                className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50 disabled:opacity-50"
+              />
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="csat-t">Agradecimento (após a nota)</Label>
+              <textarea
+                id="csat-t"
+                value={thanks}
+                onChange={(e) => setThanks(e.target.value)}
+                rows={2}
+                disabled={!canEdit}
+                className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50 disabled:opacity-50"
+              />
+            </div>
+          </>
+        )}
+
+        {canEdit && (
+          <div className="flex justify-end">
+            <Button onClick={save} disabled={saving || loading}>
+              {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Salvar pesquisa
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
   );
 }
 

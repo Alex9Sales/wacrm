@@ -95,7 +95,7 @@ export async function PATCH(
 
     const existing = firstOrNull(
       await db
-        .select({ id: conversations.id })
+        .select({ id: conversations.id, status: conversations.status })
         .from(conversations)
         .where(
           and(
@@ -219,6 +219,12 @@ export async function PATCH(
     } catch (error) {
       console.error('[api/v1/conversations] patch error:', error);
       return fail('internal', 'Failed to update conversation', 500);
+    }
+
+    // Closing (open→closed) triggers the CSAT survey when enabled.
+    if (body.status === 'closed' && existing.status !== 'closed') {
+      const { sendCsatSurveyIfEnabled } = await import('@/lib/csat/csat');
+      await sendCsatSurveyIfEnabled(ctx.accountId, id);
     }
 
     const serialized = await loadAndSerialize(id, ctx.accountId);
