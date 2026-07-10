@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, isNull, sql } from 'drizzle-orm'
 
 import { db, contacts, conversations, user } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -221,6 +221,33 @@ export async function POST(request: Request) {
         templateMessageParams: template_message_params,
         replyToMessageId: reply_to_message_id,
       })
+
+      // Claim-on-reply: a human answering an UNASSIGNED thread takes ownership
+      // of it (keeps the sector as-is). The `isNull` guard means we never
+      // clobber an existing assignee, and the SET LOCAL suppresses the
+      // assignment-notification trigger for this self-claim (no point pinging
+      // the agent about a conversation they're actively handling). Best-effort
+      // — a claim hiccup must never fail the send that already went out.
+      try {
+        await db.transaction(async (tx) => {
+          await tx.execute(sql`SET LOCAL app.suppress_assign_notify = 'on'`)
+          await tx
+            .update(conversations)
+            .set({
+              assignedAgentId: ctx.userId,
+              assignedAt: new Date().toISOString(),
+            })
+            .where(
+              and(
+                eq(conversations.id, conversationId!),
+                eq(conversations.accountId, accountId),
+                isNull(conversations.assignedAgentId),
+              ),
+            )
+        })
+      } catch (err) {
+        console.error('[send] claim-on-reply failed:', err)
+      }
 
       return NextResponse.json({
         success: true,
