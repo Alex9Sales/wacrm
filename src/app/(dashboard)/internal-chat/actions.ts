@@ -334,7 +334,12 @@ export async function sendInternalMessage(
       set: { lastReadAt: new Date().toISOString() },
     });
 
-  await publishEvent(ctx.accountId, { type: 'internal_message', channelId });
+  await publishEvent(ctx.accountId, {
+    type: 'internal_message',
+    channelId,
+    senderId: ctx.userId,
+    senderName: me?.name ?? undefined,
+  });
 
   return {
     ...inserted,

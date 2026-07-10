@@ -40,7 +40,7 @@ export function NotificationsPanel() {
     <div>
       <SettingsPanelHead
         title="Notificações"
-        description="Som e pop-up de mensagens novas. Vale só para este navegador/dispositivo."
+        description="Som e pop-up de mensagens novas — de clientes e do chat interno. Vale só para este navegador/dispositivo."
       />
 
       <div className="mt-4 space-y-4">
