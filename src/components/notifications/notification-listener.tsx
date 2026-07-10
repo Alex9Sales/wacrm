@@ -46,8 +46,28 @@ export function NotificationListener() {
           <button
             type="button"
             onClick={() => {
-              router.push(opts.href);
               toast.dismiss(id);
+              // Same-page SPA nav when possible; otherwise a normal navigation.
+              // Both reliably land on the right conversation (the inbox reads
+              // ?c= on mount and on change).
+              const onInbox = window.location.pathname.startsWith("/inbox");
+              if (onInbox) {
+                router.push(opts.href);
+                // Belt-and-suspenders: if the SPA push didn't take (some
+                // portal/router edge cases), force it.
+                const target = opts.href;
+                window.setTimeout(() => {
+                  const cur = new URLSearchParams(window.location.search).get(
+                    "c",
+                  );
+                  const want = new URLSearchParams(target.split("?")[1]).get(
+                    "c",
+                  );
+                  if (cur !== want) window.location.assign(target);
+                }, 150);
+              } else {
+                window.location.assign(opts.href);
+              }
             }}
             className="flex w-full items-start gap-3 rounded-xl border border-border bg-card p-3 text-left shadow-lg shadow-black/10 transition-colors hover:bg-muted/60"
           >
