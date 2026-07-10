@@ -12,6 +12,7 @@ import {
   User,
   UsersRound,
   Webhook,
+  Zap,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -31,6 +32,7 @@ export const SETTINGS_SECTIONS = [
   'channels',
   'setores',
   'atendimento',
+  'respostas',
   'templates',
   'fields',
   'deals',
@@ -59,6 +61,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   channels: { id: 'channels', label: 'Canais', icon: MessageSquare, group: 'workspace' },
   setores: { id: 'setores', label: 'Setores', icon: Building2, group: 'workspace' },
   atendimento: { id: 'atendimento', label: 'Atendimento', icon: Headset, group: 'workspace' },
+  respostas: { id: 'respostas', label: 'Respostas rápidas', icon: Zap, group: 'workspace' },
   templates: { id: 'templates', label: 'Templates', icon: FileText, group: 'workspace' },
   fields: { id: 'fields', label: 'Campos e etiquetas', icon: Tags, group: 'workspace' },
   deals: { id: 'deals', label: 'Negócios e moeda', icon: Coins, group: 'workspace' },

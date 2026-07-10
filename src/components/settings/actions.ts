@@ -24,8 +24,10 @@ import {
   sectors,
   sectorMembers,
   conversations,
+  quickReplies,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
+import { isUniqueViolation } from '@/lib/contacts/dedupe'
 import { auth } from '@/lib/auth'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import {
@@ -640,4 +642,98 @@ export async function updateProfileAvatar(
     .update(user)
     .set({ image: imageUrl })
     .where(eq(user.id, ctx.userId))
+}
+
+// ------------------------------------------------------------
+// Quick replies (respostas rápidas) — admin CRUD. Reading (for the
+// composer) lives in inbox/actions.ts and is open to any member.
+// ------------------------------------------------------------
+
+export interface QuickReply {
+  id: string
+  shortcut: string
+  content: string
+}
+
+export async function listQuickRepliesAdmin(): Promise<QuickReply[]> {
+  const ctx = await requireRole('admin')
+  return db
+    .select({
+      id: quickReplies.id,
+      shortcut: quickReplies.shortcut,
+      content: quickReplies.content,
+    })
+    .from(quickReplies)
+    .where(eq(quickReplies.accountId, ctx.accountId))
+    .orderBy(asc(quickReplies.shortcut))
+}
+
+function normalizeShortcut(raw: string): string {
+  // Strip a leading "/" and spaces; keep it a single token, lowercased.
+  return raw.trim().replace(/^\/+/, '').replace(/\s+/g, '_').toLowerCase()
+}
+
+export async function createQuickReply(input: {
+  shortcut: string
+  content: string
+}): Promise<{ id: string }> {
+  const ctx = await requireRole('admin')
+  const shortcut = normalizeShortcut(input.shortcut)
+  const content = input.content.trim()
+  if (!shortcut) throw new Error('Dê um atalho à resposta (ex.: preco).')
+  if (!content) throw new Error('Escreva o conteúdo da resposta.')
+  try {
+    const [row] = await db
+      .insert(quickReplies)
+      .values({ accountId: ctx.accountId, shortcut, content })
+      .returning({ id: quickReplies.id })
+    return { id: row.id }
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new Error(`Já existe uma resposta com o atalho "${shortcut}".`)
+    }
+    throw err
+  }
+}
+
+export async function updateQuickReply(
+  id: string,
+  input: { shortcut?: string; content?: string },
+): Promise<void> {
+  const ctx = await requireRole('admin')
+  const patch: { shortcut?: string; content?: string; updatedAt: string } = {
+    updatedAt: new Date().toISOString(),
+  }
+  if (input.shortcut !== undefined) {
+    const s = normalizeShortcut(input.shortcut)
+    if (!s) throw new Error('Dê um atalho à resposta.')
+    patch.shortcut = s
+  }
+  if (input.content !== undefined) {
+    const c = input.content.trim()
+    if (!c) throw new Error('Escreva o conteúdo da resposta.')
+    patch.content = c
+  }
+  try {
+    await db
+      .update(quickReplies)
+      .set(patch)
+      .where(
+        and(eq(quickReplies.id, id), eq(quickReplies.accountId, ctx.accountId)),
+      )
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      throw new Error('Já existe uma resposta com esse atalho.')
+    }
+    throw err
+  }
+}
+
+export async function deleteQuickReply(id: string): Promise<void> {
+  const ctx = await requireRole('admin')
+  await db
+    .delete(quickReplies)
+    .where(
+      and(eq(quickReplies.id, id), eq(quickReplies.accountId, ctx.accountId)),
+    )
 }

@@ -24,6 +24,7 @@ import {
   user,
   channels,
   sectors,
+  quickReplies,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import {
@@ -730,4 +731,30 @@ export async function updateConversationSector(
         eq(conversations.accountId, ctx.accountId),
       ),
     )
+}
+
+// ------------------------------------------------------------
+// Quick replies (respostas rápidas) — read for the composer.
+// Available to any member of the account (agents use them daily).
+// Management (create/update/delete) lives in settings actions (admin).
+// ------------------------------------------------------------
+
+export interface QuickReplyOption {
+  id: string
+  shortcut: string
+  content: string
+}
+
+export async function listQuickReplies(): Promise<QuickReplyOption[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: quickReplies.id,
+      shortcut: quickReplies.shortcut,
+      content: quickReplies.content,
+    })
+    .from(quickReplies)
+    .where(eq(quickReplies.accountId, ctx.accountId))
+    .orderBy(asc(quickReplies.shortcut))
+  return rows
 }

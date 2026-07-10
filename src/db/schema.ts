@@ -1306,3 +1306,24 @@ export const sectorMembers = pgTable("sector_members", {
 			name: "sector_members_sector_id_fkey"
 		}).onDelete("cascade"),
 ]);
+
+// ============================================================
+// Quick replies (respostas rápidas) — canned messages an agent inserts in
+// the composer by shortcut. Account-shared; managed by admins, used by all.
+// ============================================================
+export const quickReplies = pgTable("quick_replies", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	shortcut: text().notNull(),
+	content: text().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_quick_replies_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	uniqueIndex("quick_replies_account_shortcut").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), sql`lower(shortcut)`),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "quick_replies_account_id_fkey"
+		}).onDelete("cascade"),
+]);

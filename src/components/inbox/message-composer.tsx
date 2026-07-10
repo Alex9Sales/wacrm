@@ -39,6 +39,7 @@ import {
   MEDIA_MAX_BYTES_BY_KIND,
 } from "@/lib/storage/upload-media";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
+import { QuickReplyPicker } from "@/components/inbox/quick-reply-picker";
 import { ReplyQuote } from "./reply-quote";
 
 /** Media content types an agent can send from the composer. */
@@ -157,6 +158,9 @@ export function MessageComposer({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
+  // Quick-replies picker: opens on the "/" shortcut or the toolbar button.
+  const [qrOpen, setQrOpen] = useState(false);
+  const [qrQuery, setQrQuery] = useState("");
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   // Media attachment state. `draft` holds an uploaded-but-not-yet-sent
@@ -260,8 +264,39 @@ export function MessageComposer({
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
-      setText(e.target.value);
+      const v = e.target.value;
+      setText(v);
       adjustHeight();
+      // "/atalho" as the WHOLE input opens the quick-replies picker, seeded
+      // with the typed token. Any space or extra content closes it again.
+      const m = /^\/(\S*)$/.exec(v);
+      if (m) {
+        setQrQuery(m[1]);
+        setQrOpen(true);
+      } else if (qrOpen) {
+        setQrOpen(false);
+      }
+    },
+    [adjustHeight, qrOpen]
+  );
+
+  // Insert a quick-reply's content. When the input was just the "/atalho"
+  // token, replace it entirely; otherwise append after the current text.
+  const insertQuickReply = useCallback(
+    (content: string) => {
+      setText((t) =>
+        /^\/\S*$/.test(t.trim())
+          ? content
+          : t
+            ? `${t}${t.endsWith(" ") || t.endsWith("\n") ? "" : " "}${content}`
+            : content,
+      );
+      setQrOpen(false);
+      setQrQuery("");
+      requestAnimationFrame(() => {
+        textareaRef.current?.focus();
+        adjustHeight();
+      });
     },
     [adjustHeight]
   );
@@ -714,6 +749,15 @@ export function MessageComposer({
             onPick={insertEmoji}
             disabled={inputsDisabled}
             title={readOnly ? undefined : "Emojis"}
+          />
+
+          <QuickReplyPicker
+            onPick={insertQuickReply}
+            disabled={inputsDisabled}
+            title={readOnly ? undefined : "Respostas rápidas (ou digite /)"}
+            open={qrOpen}
+            onOpenChange={setQrOpen}
+            initialQuery={qrQuery}
           />
 
           <textarea
