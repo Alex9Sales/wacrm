@@ -19,6 +19,7 @@ export const API_SCOPES = [
   'contacts:read',
   'contacts:write',
   'conversations:read',
+  'conversations:write',
   'deals:read',
   'deals:write',
   'broadcasts:send',
@@ -34,6 +35,8 @@ export const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   'contacts:read': 'List and read contacts',
   'contacts:write': 'Create and update contacts',
   'conversations:read': 'List and read conversations',
+  'conversations:write':
+    'Transfer/assign conversations (set agent, sector, or status)',
   'deals:read': 'List and read pipelines and deals (Kanban cards)',
   'deals:write': 'Create, update and move deals (Kanban cards)',
   'broadcasts:send': 'Launch broadcast campaigns',
