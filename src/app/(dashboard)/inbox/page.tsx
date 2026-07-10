@@ -153,6 +153,39 @@ export default function InboxPage() {
     }
   }, []);
 
+  // External deep-link while the inbox is ALREADY mounted (notification
+  // pop-up, a shared /inbox?c= link, the dashboard recents): the ?c= param
+  // changes but the conversation list won't refetch, so
+  // handleConversationsLoaded never fires. React to it here — select the
+  // conversation from the loaded list, hydrating it first if it isn't loaded
+  // yet. Guarded by the same ref as the load-time selector so the two never
+  // double-fire (and a realtime list refetch can't snap the user back).
+  useEffect(() => {
+    if (!deepLinkConvId) return;
+    if (autoSelectedForDeepLinkRef.current === deepLinkConvId) return;
+    if (activeConversation?.id === deepLinkConvId) {
+      autoSelectedForDeepLinkRef.current = deepLinkConvId;
+      return;
+    }
+    const match = conversations.find((c) => c.id === deepLinkConvId);
+    if (!match) {
+      // Not in the loaded list — pull it in; this effect re-runs on arrival.
+      void hydrateConversation(deepLinkConvId);
+      return;
+    }
+    autoSelectedForDeepLinkRef.current = deepLinkConvId;
+    setActiveConversation(match);
+    setActiveContact(match.contact ?? null);
+    setMessages([]);
+    if (match.unread_count > 0) {
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.id === match.id ? { ...c, unread_count: 0 } : c,
+        ),
+      );
+    }
+  }, [deepLinkConvId, conversations, activeConversation?.id, hydrateConversation]);
+
   // Check WhatsApp connection status on mount
   useEffect(() => {
     const checkConnection = async () => {
