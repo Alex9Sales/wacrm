@@ -113,7 +113,14 @@ export async function getConversationWithContact(
   )
   if (!row) return null
   // Sector privacy: hide a conversation an agent isn't allowed to see.
-  if (!(await canSeeConversation(ctx.role, ctx.userId, row.sector_id))) {
+  if (
+    !(await canSeeConversation(
+      ctx.role,
+      ctx.userId,
+      row.sector_id,
+      row.assigned_agent_id,
+    ))
+  ) {
     return null
   }
 
@@ -419,7 +426,11 @@ async function assertConversationInAccount(
 ): Promise<boolean> {
   const row = firstOrNull(
     await db
-      .select({ id: conversations.id, sectorId: conversations.sectorId })
+      .select({
+        id: conversations.id,
+        sectorId: conversations.sectorId,
+        assignedAgentId: conversations.assignedAgentId,
+      })
       .from(conversations)
       .where(
         and(
@@ -430,7 +441,12 @@ async function assertConversationInAccount(
       .limit(1),
   )
   if (!row) return false
-  return canSeeConversation(ctx.role, ctx.userId, row.sectorId)
+  return canSeeConversation(
+    ctx.role,
+    ctx.userId,
+    row.sectorId,
+    row.assignedAgentId,
+  )
 }
 
 /**
@@ -814,6 +830,7 @@ export async function getConversationPreview(
     await db
       .select({
         sectorId: conversations.sectorId,
+        assignedAgentId: conversations.assignedAgentId,
         lastMessageText: conversations.lastMessageText,
         contactName: contacts.name,
         contactPhone: contacts.phone,
@@ -829,7 +846,15 @@ export async function getConversationPreview(
       .limit(1),
   )
   if (!row) return null
-  if (!(await canSeeConversation(ctx.role, ctx.userId, row.sectorId))) return null
+  if (
+    !(await canSeeConversation(
+      ctx.role,
+      ctx.userId,
+      row.sectorId,
+      row.assignedAgentId,
+    ))
+  )
+    return null
   // Friendly type label (🎤 Áudio / 📷 Foto / 📄 Documento …) for media whose
   // last_message_text is a bare `[kind]` placeholder; real text passes through.
   const label = formatConversationPreview(row.lastMessageText)
@@ -853,7 +878,11 @@ export async function transferConversation(
 
   const conv = firstOrNull(
     await db
-      .select({ id: conversations.id, sectorId: conversations.sectorId })
+      .select({
+        id: conversations.id,
+        sectorId: conversations.sectorId,
+        assignedAgentId: conversations.assignedAgentId,
+      })
       .from(conversations)
       .where(
         and(
@@ -865,7 +894,14 @@ export async function transferConversation(
   )
   if (!conv) throw new Error('Conversa não encontrada.')
   // Only someone who can see the conversation may transfer it.
-  if (!(await canSeeConversation(ctx.role, ctx.userId, conv.sectorId))) {
+  if (
+    !(await canSeeConversation(
+      ctx.role,
+      ctx.userId,
+      conv.sectorId,
+      conv.assignedAgentId,
+    ))
+  ) {
     throw new Error('Sem permissão para esta conversa.')
   }
 
