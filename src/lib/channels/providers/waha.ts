@@ -575,6 +575,21 @@ export const wahaProvider: WhatsAppProvider = {
         };
       }
 
+      // DIAG (temporário): messages sem texto E sem mídia — captura a
+      // ESTRUTURA (chaves do node Baileys), sem valores, pra tratar Pix e
+      // outros tipos especiais. Remover depois de mapear.
+      if (!text && !p.hasMedia && !p.media) {
+        const node = p._data?.message as Record<string, unknown> | undefined;
+        console.log(
+          '[waha][diag] msg sem texto/mídia:',
+          JSON.stringify({
+            type: (p as { type?: unknown }).type ?? null,
+            dataType: (p._data as { type?: unknown } | undefined)?.type ?? null,
+            messageKeys: node ? Object.keys(node) : null,
+          }),
+        );
+      }
+
       messages.push({
         externalMessageId,
         fromPhoneE164,

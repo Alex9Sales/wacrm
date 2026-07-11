@@ -36,6 +36,7 @@ import {
   conversationVisibility,
   canSeeConversation,
 } from '@/lib/sectors/access'
+import { formatConversationPreview } from '@/lib/inbox/preview'
 import type {
   ChannelProvider,
   Contact,
@@ -812,8 +813,11 @@ export async function getConversationPreview(
   )
   if (!row) return null
   if (!(await canSeeConversation(ctx.role, ctx.userId, row.sectorId))) return null
+  // Friendly type label (🎤 Áudio / 📷 Foto / 📄 Documento …) for media whose
+  // last_message_text is a bare `[kind]` placeholder; real text passes through.
+  const label = formatConversationPreview(row.lastMessageText)
   return {
     name: row.contactName?.trim() || row.contactPhone || 'Cliente',
-    preview: (row.lastMessageText ?? '').slice(0, 80),
+    preview: label === 'Nenhuma mensagem ainda' ? '' : label.slice(0, 80),
   }
 }

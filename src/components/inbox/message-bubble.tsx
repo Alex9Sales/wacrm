@@ -17,6 +17,7 @@ import {
   ExternalLink,
   Sparkles,
   EyeOff,
+  Maximize2,
 } from "lucide-react";
 import { format } from "date-fns";
 import { ReplyQuote } from "./reply-quote";
@@ -105,10 +106,12 @@ function Lightbox({
   src,
   alt,
   onClose,
+  kind = "image",
 }: {
   src: string;
   alt: string;
   onClose: () => void;
+  kind?: "image" | "video";
 }) {
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
@@ -150,14 +153,92 @@ function Lightbox({
       >
         <X className="h-5 w-5" />
       </button>
-      {/* eslint-disable-next-line @next/next/no-img-element */}
-      <img
-        src={src}
-        alt={alt}
-        onClick={(e) => e.stopPropagation()}
-        className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
-      />
+      {kind === "video" ? (
+        <video
+          src={src}
+          controls
+          autoPlay
+          onClick={(e) => e.stopPropagation()}
+          className="max-h-[90vh] max-w-[90vw] rounded-lg"
+        />
+      ) : (
+        /* eslint-disable-next-line @next/next/no-img-element */
+        <img
+          src={src}
+          alt={alt}
+          onClick={(e) => e.stopPropagation()}
+          className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
+        />
+      )}
     </div>
+  );
+}
+
+/** Inline video with a maximize button that opens it fullscreen — mirrors
+ *  MediaImage (blob-loads proxy URLs so auth headers are sent). */
+function MediaVideo({ url }: { url: string }) {
+  const [src, setSrc] = useState<string | null>(null);
+  const [error, setError] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [zoomed, setZoomed] = useState(false);
+
+  useEffect(() => {
+    let revoked: string | null = null;
+    (async () => {
+      if (!url) return;
+      if (url.startsWith("/api/whatsapp/media/")) {
+        try {
+          const res = await fetch(url);
+          if (!res.ok) throw new Error("Failed to load media");
+          const blobUrl = URL.createObjectURL(await res.blob());
+          revoked = blobUrl;
+          setSrc(blobUrl);
+        } catch {
+          setError(true);
+        } finally {
+          setLoading(false);
+        }
+      } else {
+        setSrc(url);
+        setLoading(false);
+      }
+    })();
+    return () => {
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [url]);
+
+  if (error) return <MediaUnavailable label="Vídeo" />;
+  if (loading || !src) {
+    return (
+      <div className="flex h-40 w-60 items-center justify-center rounded-lg bg-muted">
+        <div className="h-5 w-5 animate-spin rounded-full border-2 border-primary border-t-transparent" />
+      </div>
+    );
+  }
+  return (
+    <>
+      <div className="group relative w-fit">
+        <video src={src} controls className="max-h-64 max-w-60 rounded-lg" />
+        <button
+          type="button"
+          onClick={() => setZoomed(true)}
+          title="Ampliar"
+          aria-label="Ampliar vídeo"
+          className="absolute right-2 top-2 flex h-8 w-8 items-center justify-center rounded-full bg-black/50 text-white opacity-0 transition-opacity hover:bg-black/70 group-hover:opacity-100"
+        >
+          <Maximize2 className="h-4 w-4" />
+        </button>
+      </div>
+      {zoomed && (
+        <Lightbox
+          src={src}
+          alt="Vídeo"
+          kind="video"
+          onClose={() => setZoomed(false)}
+        />
+      )}
+    </>
   );
 }
 
@@ -291,11 +372,7 @@ function MessageContent({ message }: { message: Message }) {
 
     case "video": {
       const videoEl = message.media_url ? (
-        <video
-          src={message.media_url}
-          controls
-          className="max-h-64 max-w-60 rounded-lg"
-        />
+        <MediaVideo url={message.media_url} />
       ) : null;
       return (
         <div>
