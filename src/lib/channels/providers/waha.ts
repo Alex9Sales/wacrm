@@ -298,6 +298,50 @@ function textOfPayload(p: WahaMessagePayload): string {
   return '';
 }
 
+/** Extract legible text from a WhatsApp `interactiveMessage` (NOWEB). Handles
+ *  the Pix key card (nativeFlowMessage → payment_info → pix_static_code) and
+ *  falls back to any body/header title. Empty when it's not something we can
+ *  render as text. The PIX_PREFIX marker lets the bubble render a copy card. */
+export const PIX_PREFIX = '💠 Chave Pix';
+function textFromInteractive(p: WahaMessagePayload): string {
+  const im = (p._data?.message as { interactiveMessage?: unknown } | undefined)
+    ?.interactiveMessage as
+    | {
+        nativeFlowMessage?: {
+          buttons?: Array<{ name?: string; buttonParamsJson?: string }>;
+        };
+        body?: { text?: string };
+        header?: { title?: string };
+      }
+    | undefined;
+  if (!im) return '';
+  for (const b of im.nativeFlowMessage?.buttons ?? []) {
+    if (!b.buttonParamsJson) continue;
+    try {
+      const params = JSON.parse(b.buttonParamsJson) as {
+        payment_settings?: Array<{
+          pix_static_code?: {
+            merchant_name?: string;
+            key?: string;
+            key_type?: string;
+          };
+        }>;
+      };
+      for (const s of params.payment_settings ?? []) {
+        const pix = s.pix_static_code;
+        if (pix?.key) {
+          const kt = pix.key_type ? ` • ${pix.key_type}` : '';
+          const name = pix.merchant_name ? `\n${pix.merchant_name}` : '';
+          return `${PIX_PREFIX}${kt}${name}\n${pix.key}`;
+        }
+      }
+    } catch {
+      // malformed JSON — ignore this button
+    }
+  }
+  return im.body?.text || im.header?.title || '';
+}
+
 /**
  * Detect a WhatsApp "view once" message. WAHA NOWEB sets
  * `_data.key.isViewOnce` (and delivers no media/body for it). The extra
@@ -542,7 +586,10 @@ export const wahaProvider: WhatsAppProvider = {
         return { messages, statuses };
       }
 
-      const text = textOfPayload(p);
+      let text = textOfPayload(p);
+      // WhatsApp Pix key cards arrive as an interactiveMessage with no body —
+      // extract the key so it renders instead of an empty [text].
+      if (!text) text = textFromInteractive(p);
       const raw = serializedIdToString(p.id);
       const externalMessageId = raw ? normalizeSerializedId(raw) : '';
       const fromPhoneE164 = normalizePhone(chat.split('@')[0]);
@@ -573,22 +620,6 @@ export const wahaProvider: WhatsAppProvider = {
           fetchKey: { mediaUrl: p.media?.url },
           viewOnce,
         };
-      }
-
-      // DIAG (temporário): messages sem texto E sem mídia — captura a
-      // ESTRUTURA (chaves do node Baileys), sem valores, pra tratar Pix e
-      // outros tipos especiais. Remover depois de mapear.
-      if (!text && !p.hasMedia && !p.media) {
-        const node = p._data?.message as Record<string, unknown> | undefined;
-        console.log(
-          '[waha][diag] msg sem texto/mídia:',
-          JSON.stringify({
-            type: (p as { type?: unknown }).type ?? null,
-            dataType: (p._data as { type?: unknown } | undefined)?.type ?? null,
-            messageKeys: node ? Object.keys(node) : null,
-            interactive: node?.interactiveMessage ?? null,
-          }),
-        );
       }
 
       messages.push({

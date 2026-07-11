@@ -18,11 +18,50 @@ import {
   Sparkles,
   EyeOff,
   Maximize2,
+  Copy,
 } from "lucide-react";
 import { format } from "date-fns";
+import { toast } from "sonner";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
 import { RichText } from "@/lib/inbox/rich-text";
+
+/** Content_text prefix a WhatsApp Pix key card is stored with (see waha.ts). */
+const PIX_PREFIX = "💠 Chave Pix";
+
+/** Render a Pix key card (header + merchant + key) with a copy button. */
+function PixCard({ text }: { text: string }) {
+  const lines = text.split("\n").filter(Boolean);
+  const header = lines[0] ?? PIX_PREFIX;
+  const key = lines.length > 1 ? lines[lines.length - 1] : "";
+  const merchant = lines.slice(1, -1).join(" ");
+  return (
+    <div className="min-w-[220px]">
+      <p className="text-sm font-semibold text-foreground">{header}</p>
+      {merchant && (
+        <p className="mt-0.5 text-xs text-muted-foreground">{merchant}</p>
+      )}
+      {key && (
+        <p className="mt-1 break-all font-mono text-sm text-foreground">{key}</p>
+      )}
+      {key && (
+        <button
+          type="button"
+          onClick={() => {
+            void navigator.clipboard
+              ?.writeText(key)
+              .then(() => toast.success("Chave Pix copiada."))
+              .catch(() => toast.error("Não foi possível copiar."));
+          }}
+          className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+        >
+          <Copy className="h-3.5 w-3.5" />
+          Copiar chave
+        </button>
+      )}
+    </div>
+  );
+}
 
 const DOC_MIME_BY_EXT: Record<string, string> = {
   pdf: "application/pdf",
@@ -341,12 +380,15 @@ function ViewOnceCover({
 
 function MessageContent({ message }: { message: Message }) {
   switch (message.content_type) {
-    case "text":
+    case "text": {
+      const txt = message.content_text ?? "";
+      if (txt.startsWith(PIX_PREFIX)) return <PixCard text={txt} />;
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
           <RichText text={message.content_text} />
         </p>
       );
+    }
 
     case "image":
       return (
