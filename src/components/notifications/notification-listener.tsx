@@ -101,6 +101,7 @@ export function NotificationListener() {
       channelId?: unknown;
       senderId?: unknown;
       senderName?: unknown;
+      fromMe?: unknown;
     }) => {
       const prefs = getNotificationPrefs();
       const alert = (sound: boolean, showPopup: () => void) => {
@@ -112,6 +113,9 @@ export function NotificationListener() {
 
       // ---- Customer message ----
       if (e.type === "message.received") {
+        // Skip the operator's own echoes (replied from their phone) — only
+        // genuinely RECEIVED (customer) messages should sound/pop.
+        if (e.fromMe === true) return;
         const conversationId =
           typeof e.conversationId === "string" ? e.conversationId : "";
         if (!conversationId) return;

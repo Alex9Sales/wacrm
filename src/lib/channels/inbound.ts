@@ -258,10 +258,12 @@ export async function dispatchInboundMessage(
     return null;
   }
 
-  // Realtime ping.
+  // Realtime ping. `fromMe` lets the notification listener skip the operator's
+  // own phone-typed echoes (unread refetch still runs, but no sound/pop-up).
   await publishEvent(accountId, {
     type: 'message.received',
     conversationId: conversation.id,
+    fromMe: isFromMe,
   });
 
   // Bump last message; unread only for genuinely incoming (customer) messages.

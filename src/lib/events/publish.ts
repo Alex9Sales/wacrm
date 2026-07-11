@@ -24,7 +24,10 @@ import Redis from "ioredis";
  * resync token) and moves on.
  */
 export type RealtimeEvent =
-  | { type: "message.received"; conversationId: string }
+  // `fromMe` marks an operator's own outgoing echo (they replied from their
+  // phone) — consumers that refetch (unread) still act, but the notification
+  // sound/pop-up skips it (you don't get alerted about your own reply).
+  | { type: "message.received"; conversationId: string; fromMe?: boolean }
   | { type: "conversation.created"; conversationId: string }
   | {
       type: "internal_message";
