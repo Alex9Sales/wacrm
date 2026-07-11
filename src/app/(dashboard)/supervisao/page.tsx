@@ -197,6 +197,73 @@ export default function SupervisaoPage() {
                   })}
                 </div>
               </div>
+
+              {/* Per-agent performance — spot who's earning the best ratings. */}
+              {csat.perAgent.length > 0 && (
+                <div className="mt-4 border-t border-border pt-3">
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">
+                    Nota por atendente
+                  </p>
+                  <div className="space-y-1.5">
+                    {csat.perAgent.map((a, i) => (
+                      <div key={a.agentId} className="flex items-center gap-2">
+                        <span className="w-4 shrink-0 text-xs text-muted-foreground">
+                          {i + 1}º
+                        </span>
+                        <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                          {a.name}
+                        </span>
+                        <span className="shrink-0 text-sm font-semibold text-foreground">
+                          {a.average.toFixed(1)}
+                          <span className="text-xs font-normal text-muted-foreground">
+                            {" "}
+                            ({a.count})
+                          </span>
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Recent customer comments (with who attended). */}
+              {csat.comments.length > 0 && (
+                <div className="mt-4 border-t border-border pt-3">
+                  <p className="mb-2 text-xs font-medium text-muted-foreground">
+                    Comentários recentes
+                  </p>
+                  <div className="space-y-2">
+                    {csat.comments.slice(0, 8).map((c, i) => (
+                      <div
+                        key={i}
+                        className="rounded-lg border border-border bg-muted/40 px-3 py-2"
+                      >
+                        <div className="flex items-center gap-2 text-xs">
+                          <span className="font-medium text-primary">
+                            {"★".repeat(c.score)}
+                            <span className="text-muted-foreground/50">
+                              {"★".repeat(5 - c.score)}
+                            </span>
+                          </span>
+                          {c.agentName && (
+                            <span className="text-muted-foreground">
+                              · {c.agentName}
+                            </span>
+                          )}
+                          {c.contactName && (
+                            <span className="truncate text-muted-foreground/70">
+                              · {c.contactName}
+                            </span>
+                          )}
+                        </div>
+                        <p className="mt-1 whitespace-pre-wrap break-words text-sm text-foreground/90">
+                          {c.comment}
+                        </p>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
           )}
 

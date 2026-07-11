@@ -352,6 +352,7 @@ export async function dispatchInboundMessage(
       userId: contactOutcome.contact.userId,
       assignedAgentId: conversation.assignedAgentId ?? null,
       csatPendingAt: conversation.csatPendingAt ?? null,
+      csatCommentPending: conversation.csatCommentPending ?? null,
     },
     ev.contentText ?? '',
   );

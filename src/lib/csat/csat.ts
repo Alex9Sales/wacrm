@@ -97,10 +97,38 @@ export async function maybeRecordCsat(
     userId: string
     assignedAgentId: string | null
     csatPendingAt: string | null
+    csatCommentPending: string | null
   },
   text: string,
 ): Promise<boolean> {
   try {
+    // Phase 2: we already have the score and are awaiting a free-text comment.
+    if (conversation.csatCommentPending) {
+      const comment = text.trim().slice(0, 1000)
+      if (comment) {
+        await db
+          .update(csatResponses)
+          .set({ comment })
+          .where(eq(csatResponses.id, conversation.csatCommentPending))
+      }
+      await db
+        .update(conversations)
+        .set({ csatCommentPending: null })
+        .where(eq(conversations.id, conversation.id))
+      const settings = await getAccountSettings(accountId)
+      const thanks = settings.csatThanks?.trim()
+      if (thanks) {
+        await engineSendText({
+          accountId,
+          userId: conversation.userId,
+          conversationId: conversation.id,
+          contactId: conversation.contactId,
+          text: thanks,
+        })
+      }
+      return true
+    }
+
     if (!conversation.csatPendingAt) return false
     const ageMs = Date.now() - new Date(conversation.csatPendingAt).getTime()
     if (ageMs > CSAT_WINDOW_HOURS * 3_600_000) {
@@ -123,28 +151,49 @@ export async function maybeRecordCsat(
       return false
     }
 
-    await db.insert(csatResponses).values({
-      accountId,
-      conversationId: conversation.id,
-      contactId: conversation.contactId,
-      agentId: conversation.assignedAgentId,
-      score,
-    })
-    await db
-      .update(conversations)
-      .set({ csatPendingAt: null })
-      .where(eq(conversations.id, conversation.id))
+    // Phase 1: record the score, then ask for an optional comment. The next
+    // customer message is captured as the comment (phase 2 above).
+    const [inserted] = await db
+      .insert(csatResponses)
+      .values({
+        accountId,
+        conversationId: conversation.id,
+        contactId: conversation.contactId,
+        agentId: conversation.assignedAgentId,
+        score,
+      })
+      .returning({ id: csatResponses.id })
 
     const settings = await getAccountSettings(accountId)
-    const thanks = settings.csatThanks?.trim()
-    if (thanks) {
+    const prompt = settings.csatCommentPrompt?.trim()
+    if (inserted && prompt) {
+      await db
+        .update(conversations)
+        .set({ csatPendingAt: null, csatCommentPending: inserted.id })
+        .where(eq(conversations.id, conversation.id))
       await engineSendText({
         accountId,
         userId: conversation.userId,
         conversationId: conversation.id,
         contactId: conversation.contactId,
-        text: thanks,
+        text: prompt,
       })
+    } else {
+      // No comment prompt configured — thank right away.
+      await db
+        .update(conversations)
+        .set({ csatPendingAt: null })
+        .where(eq(conversations.id, conversation.id))
+      const thanks = settings.csatThanks?.trim()
+      if (thanks) {
+        await engineSendText({
+          accountId,
+          userId: conversation.userId,
+          conversationId: conversation.id,
+          contactId: conversation.contactId,
+          text: thanks,
+        })
+      }
     }
     return true
   } catch (err) {

@@ -8,7 +8,7 @@
 // "waiting" state (a conversation whose last message is from the customer).
 // ============================================================
 
-import { and, asc, eq, gte, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, inArray } from 'drizzle-orm';
 
 import {
   db,
@@ -218,36 +218,99 @@ export async function loadAgentConversations(
 // CSAT summary — last 30 days of satisfaction scores for the account.
 // ------------------------------------------------------------
 
+export interface CsatAgentStat {
+  agentId: string;
+  name: string;
+  count: number;
+  average: number;
+}
+
+export interface CsatComment {
+  score: number;
+  comment: string;
+  agentName: string | null;
+  contactName: string | null;
+  createdAt: string | null;
+}
+
 export interface CsatSummary {
   count: number;
   average: number | null;
   /** Counts per score, index 0 = score 1 … index 4 = score 5. */
   distribution: number[];
+  /** Average score per agent (best first), to spot top performers. */
+  perAgent: CsatAgentStat[];
+  /** Recent free-text comments left by customers. */
+  comments: CsatComment[];
 }
 
 export async function loadCsatSummary(accountId: string): Promise<CsatSummary> {
   const since = new Date(Date.now() - 30 * 86_400_000).toISOString();
   const rows = await db
-    .select({ score: csatResponses.score })
+    .select({
+      score: csatResponses.score,
+      comment: csatResponses.comment,
+      agentId: csatResponses.agentId,
+      agentName: user.name,
+      contactName: contacts.name,
+      createdAt: csatResponses.createdAt,
+    })
     .from(csatResponses)
+    .leftJoin(user, eq(csatResponses.agentId, user.id))
+    .leftJoin(contacts, eq(csatResponses.contactId, contacts.id))
     .where(
       and(
         eq(csatResponses.accountId, accountId),
         gte(csatResponses.createdAt, since),
       ),
-    );
+    )
+    .orderBy(desc(csatResponses.createdAt));
+
   const distribution = [0, 0, 0, 0, 0];
   let sum = 0;
+  const byAgent = new Map<string, { name: string; sum: number; count: number }>();
+  const comments: CsatComment[] = [];
   for (const r of rows) {
     if (r.score >= 1 && r.score <= 5) {
       distribution[r.score - 1] += 1;
       sum += r.score;
     }
+    if (r.agentId) {
+      const a = byAgent.get(r.agentId) ?? {
+        name: r.agentName ?? 'Atendente',
+        sum: 0,
+        count: 0,
+      };
+      a.sum += r.score;
+      a.count += 1;
+      byAgent.set(r.agentId, a);
+    }
+    if (r.comment && r.comment.trim() && comments.length < 30) {
+      comments.push({
+        score: r.score,
+        comment: r.comment.trim(),
+        agentName: r.agentName ?? null,
+        contactName: r.contactName ?? null,
+        createdAt: r.createdAt,
+      });
+    }
   }
+
+  const perAgent: CsatAgentStat[] = [...byAgent.entries()]
+    .map(([agentId, a]) => ({
+      agentId,
+      name: a.name,
+      count: a.count,
+      average: Math.round((a.sum / a.count) * 10) / 10,
+    }))
+    .sort((a, b) => b.average - a.average || b.count - a.count);
+
   const count = rows.length;
   return {
     count,
     average: count ? Math.round((sum / count) * 10) / 10 : null,
     distribution,
+    perAgent,
+    comments,
   };
 }

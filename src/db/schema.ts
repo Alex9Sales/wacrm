@@ -365,6 +365,8 @@ export const conversations = pgTable("conversations", {
 	transferNoteBy: uuid("transfer_note_by"),
 	// Set when a CSAT survey was sent on close and we're awaiting the 1–5 reply.
 	csatPendingAt: timestamp("csat_pending_at", { withTimezone: true, mode: 'string' }),
+	// The csat_responses id awaiting a free-text comment (next customer message).
+	csatCommentPending: uuid("csat_comment_pending"),
 	lastMessageText: text("last_message_text"),
 	lastMessageAt: timestamp("last_message_at", { withTimezone: true, mode: 'string' }),
 	unreadCount: integer("unread_count").default(0),
@@ -1346,6 +1348,7 @@ export const csatResponses = pgTable("csat_responses", {
 	contactId: uuid("contact_id"),
 	agentId: uuid("agent_id"),
 	score: integer().notNull(),
+	comment: text(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("idx_csat_account_created").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast().op("timestamptz_ops")),

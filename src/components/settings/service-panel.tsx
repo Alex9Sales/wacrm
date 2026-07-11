@@ -162,6 +162,7 @@ function CsatCard({
   const [enabled, setEnabled] = useState(false);
   const [question, setQuestion] = useState("");
   const [thanks, setThanks] = useState("");
+  const [commentPrompt, setCommentPrompt] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -169,12 +170,13 @@ function CsatCard({
     setEnabled(initial.enabled);
     setQuestion(initial.question);
     setThanks(initial.thanks);
+    setCommentPrompt(initial.commentPrompt);
   }, [initial]);
 
   const save = async () => {
     setSaving(true);
     try {
-      await setCsatConfig({ enabled, question, thanks });
+      await setCsatConfig({ enabled, question, thanks, commentPrompt });
       toast.success("Pesquisa de satisfação salva.");
     } catch (err) {
       toast.error(err instanceof Error ? err.message : "Não foi possível salvar.");
@@ -227,7 +229,22 @@ function CsatCard({
               />
             </div>
             <div className="space-y-1.5">
-              <Label htmlFor="csat-t">Agradecimento (após a nota)</Label>
+              <Label htmlFor="csat-c">Pedido de comentário (após a nota)</Label>
+              <textarea
+                id="csat-c"
+                value={commentPrompt}
+                onChange={(e) => setCommentPrompt(e.target.value)}
+                rows={2}
+                disabled={!canEdit}
+                className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50 disabled:opacity-50"
+              />
+              <p className="text-xs text-muted-foreground">
+                Após a nota, o cliente recebe isso e a próxima mensagem dele vira
+                o comentário (aparece na Supervisão, com quem atendeu).
+              </p>
+            </div>
+            <div className="space-y-1.5">
+              <Label htmlFor="csat-t">Agradecimento (após o comentário)</Label>
               <textarea
                 id="csat-t"
                 value={thanks}

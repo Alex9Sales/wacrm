@@ -42,6 +42,8 @@ export interface AccountSettings {
   csatQuestion: string
   /** The thank-you sent after the customer replies with a score. */
   csatThanks: string
+  /** Prompt asking for an optional free-text comment after the score. */
+  csatCommentPrompt: string
 }
 
 /** Mon–Fri 08:00–18:00, weekend closed. Index 0=Sunday … 6=Saturday. */
@@ -69,6 +71,8 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   csatQuestion:
     'Como você avalia nosso atendimento? Responda com uma nota de 1 a 5 (sendo 5 = ótimo). 🙏',
   csatThanks: 'Obrigado pela sua avaliação! 💜',
+  csatCommentPrompt:
+    'Obrigado pela nota! Se quiser, deixe um comentário sobre o atendimento — é rapidinho. 🙏',
 }
 
 /** Read an account's settings, merged over the defaults. */

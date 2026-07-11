@@ -379,12 +379,18 @@ export interface CsatConfig {
   enabled: boolean
   question: string
   thanks: string
+  commentPrompt: string
 }
 
 export async function getCsatConfig(): Promise<CsatConfig> {
   const ctx = await getCurrentAccount()
   const s = await getAccountSettings(ctx.accountId)
-  return { enabled: s.csatEnabled, question: s.csatQuestion, thanks: s.csatThanks }
+  return {
+    enabled: s.csatEnabled,
+    question: s.csatQuestion,
+    thanks: s.csatThanks,
+    commentPrompt: s.csatCommentPrompt,
+  }
 }
 
 /** Update the CSAT config (admins only). */
@@ -396,6 +402,9 @@ export async function setCsatConfig(input: CsatConfig): Promise<void> {
       input.question?.trim() ||
       'Como você avalia nosso atendimento? Responda de 1 a 5.',
     csatThanks: input.thanks?.trim() || 'Obrigado pela sua avaliação!',
+    csatCommentPrompt:
+      input.commentPrompt?.trim() ||
+      'Obrigado pela nota! Se quiser, deixe um comentário sobre o atendimento. 🙏',
   })
 }
 
