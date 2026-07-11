@@ -11,6 +11,8 @@ import {
   updateConversationStatus,
   listSectors,
   updateConversationSector,
+  transferConversation,
+  dismissTransferNote,
 } from "@/app/(dashboard)/inbox/actions";
 import { useAuth } from "@/hooks/use-auth";
 import { usePresence } from "@/hooks/use-presence";
@@ -41,6 +43,8 @@ import {
   Trash2,
   Loader2,
   Building2,
+  ArrowRightLeft,
+  X,
 } from "lucide-react";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
@@ -748,6 +752,43 @@ export function MessageThread({
     [conversation, sectorId],
   );
 
+  // Transfer flow: pick a target sector → optional handoff note → move +
+  // auto-assign to the least-loaded agent of that sector.
+  const [transferSector, setTransferSector] = useState<{
+    id: string;
+    name: string;
+  } | null>(null);
+  const [transferNote, setTransferNote] = useState("");
+  const [transferring, setTransferring] = useState(false);
+
+  const handleTransfer = useCallback(async () => {
+    if (!conversation || !transferSector) return;
+    setTransferring(true);
+    try {
+      await transferConversation(
+        conversation.id,
+        transferSector.id,
+        transferNote,
+      );
+      setSectorId(transferSector.id);
+      toast.success(`Transferida para ${transferSector.name}.`);
+      setTransferSector(null);
+      setTransferNote("");
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : "Não foi possível transferir.",
+      );
+    } finally {
+      setTransferring(false);
+    }
+  }, [conversation, transferSector, transferNote]);
+
+  // Handoff-note banner (shown to the receiving agent). Dismiss clears it.
+  const [noteDismissed, setNoteDismissed] = useState(false);
+  useEffect(() => {
+    setNoteDismissed(false);
+  }, [conversation?.id]);
+
   const handleAssignChange = useCallback(
     async (agentId: string | null) => {
       if (!conversation) return;
@@ -1060,7 +1101,11 @@ export function MessageThread({
                 sectors.map((s) => (
                   <DropdownMenuItem
                     key={s.id}
-                    onClick={() => handleSectorChange(s.id)}
+                    onClick={() =>
+                      s.id === sectorId
+                        ? undefined
+                        : setTransferSector({ id: s.id, name: s.name })
+                    }
                     className="text-sm text-popover-foreground"
                   >
                     <span
@@ -1087,6 +1132,85 @@ export function MessageThread({
           </DropdownMenu>
         </div>
       </div>
+
+      {/* Handoff-note banner — context left by whoever transferred this here. */}
+      {conversation.transfer_note && !noteDismissed && (
+        <div className="mx-4 mt-3 flex items-start gap-2 rounded-lg border border-primary/30 bg-primary/5 px-3 py-2">
+          <ArrowRightLeft className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+          <div className="min-w-0 flex-1">
+            <p className="text-xs font-medium text-foreground">
+              Transferência
+              {conversation.transfer_note_by_name
+                ? ` de ${conversation.transfer_note_by_name}`
+                : ""}
+            </p>
+            <p className="mt-0.5 whitespace-pre-wrap break-words text-sm text-foreground/90">
+              {conversation.transfer_note}
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={async () => {
+              setNoteDismissed(true);
+              try {
+                await dismissTransferNote(conversation.id);
+              } catch {
+                /* best-effort — the banner is already hidden locally */
+              }
+            }}
+            title="Marcar como lido"
+            className="flex h-6 w-6 shrink-0 items-center justify-center rounded-md text-muted-foreground hover:bg-muted hover:text-foreground"
+          >
+            <X className="h-3.5 w-3.5" />
+          </button>
+        </div>
+      )}
+
+      {/* Transfer dialog — target sector + optional handoff note. */}
+      <Dialog
+        open={!!transferSector}
+        onOpenChange={(o) => {
+          if (!o) {
+            setTransferSector(null);
+            setTransferNote("");
+          }
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Transferir para {transferSector?.name}</DialogTitle>
+            <DialogDescription>
+              A conversa vai pro setor e cai no atendente disponível (menor
+              carga). Deixe uma nota do que o cliente precisa — o próximo vê no
+              topo da conversa.
+            </DialogDescription>
+          </DialogHeader>
+          <textarea
+            value={transferNote}
+            onChange={(e) => setTransferNote(e.target.value)}
+            placeholder="Ex.: cliente quer 2ª via do boleto do mês passado. (opcional)"
+            rows={3}
+            autoFocus
+            className="w-full resize-y rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50"
+          />
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => {
+                setTransferSector(null);
+                setTransferNote("");
+              }}
+              disabled={transferring}
+            >
+              Cancelar
+            </Button>
+            <Button onClick={handleTransfer} disabled={transferring}>
+              {transferring && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Transferir
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Messages Area */}
       <div ref={scrollRef} className="flex-1 overflow-y-auto px-4 py-4">

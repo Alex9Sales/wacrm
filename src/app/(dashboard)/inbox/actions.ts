@@ -75,6 +75,9 @@ export async function getConversationWithContact(
         priority: conversations.priority,
         assigned_agent_id: conversations.assignedAgentId,
         sector_id: conversations.sectorId,
+        transfer_note: conversations.transferNote,
+        transfer_note_at: conversations.transferNoteAt,
+        transfer_note_by: conversations.transferNoteBy,
         last_message_text: conversations.lastMessageText,
         last_message_at: conversations.lastMessageAt,
         unread_count: conversations.unreadCount,
@@ -130,12 +133,26 @@ export async function getConversationWithContact(
       .where(eq(contactTags.contactId, row.contact.id))) as unknown as Tag[]
   }
 
+  // Resolve who wrote the handoff note (for the transfer banner).
+  let transferNoteByName: string | null = null
+  if (row.transfer_note && row.transfer_note_by) {
+    const u = firstOrNull(
+      await db
+        .select({ name: user.name })
+        .from(user)
+        .where(eq(user.id, row.transfer_note_by))
+        .limit(1),
+    )
+    transferNoteByName = u?.name ?? null
+  }
+
   const { contact, channel, ...conv } = row
   return {
     ...conv,
     status: conv.status as ConversationStatus,
     priority: (conv.priority ?? 'none') as ConversationPriority,
     unread_count: conv.unread_count ?? 0,
+    transfer_note_by_name: transferNoteByName,
     contact: contact?.id
       ? ({ ...contact, tags: contactTagsList } as unknown as Contact)
       : undefined,
@@ -820,4 +837,93 @@ export async function getConversationPreview(
     name: row.contactName?.trim() || row.contactPhone || 'Cliente',
     preview: label === 'Nenhuma mensagem ainda' ? '' : label.slice(0, 80),
   }
+}
+
+// ------------------------------------------------------------
+// Transfer a conversation to a sector — with an optional handoff note and
+// auto-assignment to the least-loaded agent of that sector.
+// ------------------------------------------------------------
+
+export async function transferConversation(
+  conversationId: string,
+  sectorId: string,
+  note?: string,
+): Promise<void> {
+  const ctx = await getCurrentAccount()
+
+  const conv = firstOrNull(
+    await db
+      .select({ id: conversations.id, sectorId: conversations.sectorId })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      )
+      .limit(1),
+  )
+  if (!conv) throw new Error('Conversa não encontrada.')
+  // Only someone who can see the conversation may transfer it.
+  if (!(await canSeeConversation(ctx.role, ctx.userId, conv.sectorId))) {
+    throw new Error('Sem permissão para esta conversa.')
+  }
+
+  const sector = firstOrNull(
+    await db
+      .select({ id: sectors.id })
+      .from(sectors)
+      .where(and(eq(sectors.id, sectorId), eq(sectors.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  if (!sector) throw new Error('Setor inválido.')
+
+  const { pickLeastLoadedSectorAgent } = await import('@/lib/sectors/routing')
+  const assignedAgentId = await pickLeastLoadedSectorAgent(
+    ctx.accountId,
+    sectorId,
+  )
+
+  const trimmedNote = note?.trim() || null
+  await db
+    .update(conversations)
+    .set({
+      sectorId,
+      ...(assignedAgentId
+        ? { assignedAgentId, assignedAt: new Date().toISOString() }
+        : {}),
+      transferNote: trimmedNote,
+      transferNoteAt: trimmedNote ? new Date().toISOString() : null,
+      transferNoteBy: trimmedNote ? ctx.userId : null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.accountId, ctx.accountId),
+      ),
+    )
+
+  const { publishEvent } = await import('@/lib/events/publish')
+  await publishEvent(ctx.accountId, {
+    type: 'message.received',
+    conversationId,
+    fromMe: true, // internal change — no notification sound/pop-up
+  })
+}
+
+/** Clear a conversation's handoff note (the receiving agent read it). */
+export async function dismissTransferNote(
+  conversationId: string,
+): Promise<void> {
+  const ctx = await getCurrentAccount()
+  await db
+    .update(conversations)
+    .set({ transferNote: null, transferNoteAt: null, transferNoteBy: null })
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.accountId, ctx.accountId),
+      ),
+    )
 }

@@ -162,7 +162,7 @@ export async function rerouteByKeyword(params: {
  * Pick the handling-role member of a sector with the fewest open assigned
  * conversations. Returns null when the sector has no eligible member.
  */
-async function pickLeastLoadedSectorAgent(
+export async function pickLeastLoadedSectorAgent(
   accountId: string,
   sectorId: string,
 ): Promise<string | null> {

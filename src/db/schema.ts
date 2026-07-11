@@ -358,6 +358,11 @@ export const conversations = pgTable("conversations", {
 	// Sector (department) this conversation belongs to. NULL = general queue
 	// (visible to everyone); otherwise only members of the sector see it.
 	sectorId: uuid("sector_id"),
+	// Handoff note written when the conversation was transferred to a sector —
+	// shown to the receiving agent as a banner. Cleared on dismiss.
+	transferNote: text("transfer_note"),
+	transferNoteAt: timestamp("transfer_note_at", { withTimezone: true, mode: 'string' }),
+	transferNoteBy: uuid("transfer_note_by"),
 	// Set when a CSAT survey was sent on close and we're awaiting the 1–5 reply.
 	csatPendingAt: timestamp("csat_pending_at", { withTimezone: true, mode: 'string' }),
 	lastMessageText: text("last_message_text"),

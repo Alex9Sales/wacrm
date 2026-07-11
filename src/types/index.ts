@@ -177,6 +177,11 @@ export interface Conversation {
   priority?: ConversationPriority;
   assigned_agent_id?: string;
   sector_id?: string | null;
+  /** Handoff note shown to the receiving agent after a sector transfer. */
+  transfer_note?: string | null;
+  transfer_note_at?: string | null;
+  transfer_note_by?: string | null;
+  transfer_note_by_name?: string | null;
   last_message_text?: string;
   last_message_at?: string;
   unread_count: number;
