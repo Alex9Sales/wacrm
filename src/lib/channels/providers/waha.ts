@@ -586,6 +586,7 @@ export const wahaProvider: WhatsAppProvider = {
             type: (p as { type?: unknown }).type ?? null,
             dataType: (p._data as { type?: unknown } | undefined)?.type ?? null,
             messageKeys: node ? Object.keys(node) : null,
+            interactive: node?.interactiveMessage ?? null,
           }),
         );
       }
