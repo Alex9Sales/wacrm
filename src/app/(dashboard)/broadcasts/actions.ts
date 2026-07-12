@@ -12,7 +12,6 @@ import {
   db,
   broadcasts,
   broadcastRecipients,
-  channels,
   contacts,
   contactTags,
   customFields,
