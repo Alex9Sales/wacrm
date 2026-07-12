@@ -49,7 +49,7 @@ export function ChannelStatusBanner() {
 
   const load = useCallback(async () => {
     try {
-      const res = await fetch('/api/channels', { cache: 'no-store' });
+      const res = await fetch('/api/channels/status', { cache: 'no-store' });
       if (!res.ok) return;
       const data = (await res.json()) as { channels: ChannelSummary[] };
       setDown(data.channels.filter((c) => isDown(c.status)));
