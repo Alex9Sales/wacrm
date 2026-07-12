@@ -35,6 +35,15 @@ export type RealtimeEvent =
       senderId?: string;
       senderName?: string;
     }
+  // A WhatsApp channel's session changed state (connected/disconnected/
+  // error/qr_pending). Drives the global "channel down — reconnect" banner
+  // so the operator sees a drop live, without refreshing.
+  | {
+      type: "channel_status";
+      channelId: string;
+      name: string;
+      status: string;
+    }
   | { type: "notification" };
 
 /** Channel name for an account's ephemeral event stream. */

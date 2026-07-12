@@ -35,6 +35,7 @@ import { getProvider } from '@/lib/channels/registry'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
 import { applyStatusUpdate, levelToStatus } from '@/lib/channels/status'
 import type { ProviderId, WhatsAppProvider } from '@/lib/channels/provider'
+import { publishEvent } from '@/lib/events/publish'
 
 const NON_OFFICIAL: ReadonlySet<ProviderId> = new Set([
   'waha',
@@ -119,6 +120,15 @@ export async function POST(request: Request, { params }: RouteParams) {
           status,
           phoneNumber ?? undefined,
         )
+        // Fan the new session state out to open tabs so the global
+        // "channel down — reconnect" banner reacts live (appears on a
+        // drop/ban, clears once it's WORKING again).
+        await publishEvent(channel.accountId, {
+          type: 'channel_status',
+          channelId: channel.id,
+          name: channel.name,
+          status,
+        })
       }
     } catch (err) {
       console.error('[webhooks/generic] session-state update failed:', err)
