@@ -14,7 +14,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import QRCode from 'qrcode';
-import { Loader2, RefreshCw, XCircle } from 'lucide-react';
+import { CheckCircle2, Loader2, RefreshCw, XCircle } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -36,7 +36,11 @@ interface ChannelQrModalProps {
   onConnected: () => void;
 }
 
-type Phase = 'loading' | 'ready' | 'error';
+// 'connecting' — /connect returned no QR because the session still has valid
+// credentials and is re-establishing on its own (NOWEB auto-reconnect); no
+// scan needed. 'connected' — a brief success beat before the modal closes,
+// so a reconnect never just silently vanishes.
+type Phase = 'loading' | 'ready' | 'connecting' | 'connected' | 'error';
 
 export function ChannelQrModal({
   channel,
@@ -51,6 +55,7 @@ export function ChannelQrModal({
   // the modal has been torn down.
   const closedRef = useRef(false);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const connectedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const onConnectedRef = useRef(onConnected);
   useEffect(() => {
     onConnectedRef.current = onConnected;
@@ -78,7 +83,14 @@ export function ChannelQrModal({
         throw new Error(payload.error || `HTTP ${res.status}`);
       }
       const data = (await res.json()) as { qr: string; qrIsImage: boolean };
-      if (!data.qr) throw new Error('QR Code indisponível.');
+      if (closedRef.current) return;
+      if (!data.qr) {
+        // No QR means the session isn't asking to pair — its credentials are
+        // still valid and it's reconnecting on its own. Not an error; the
+        // state poll will confirm 'connected' shortly.
+        setPhase('connecting');
+        return;
+      }
       const dataUrl = await resolveQr(data.qr, !!data.qrIsImage);
       if (closedRef.current) return;
       setQrDataUrl(dataUrl);
@@ -106,7 +118,12 @@ export function ChannelQrModal({
         if (closedRef.current) return;
         if (status === 'connected') {
           toast.success(`Canal "${channel.name}" conectado.`);
-          onConnectedRef.current();
+          // Show a brief success beat so a reconnect never just vanishes,
+          // then hand back to the parent (which closes + refreshes).
+          setPhase('connected');
+          connectedTimerRef.current = setTimeout(() => {
+            if (!closedRef.current) onConnectedRef.current();
+          }, 1200);
           return;
         }
         if (status === 'error') {
@@ -133,6 +150,10 @@ export function ChannelQrModal({
       if (pollTimerRef.current !== null) {
         clearTimeout(pollTimerRef.current);
         pollTimerRef.current = null;
+      }
+      if (connectedTimerRef.current !== null) {
+        clearTimeout(connectedTimerRef.current);
+        connectedTimerRef.current = null;
       }
     };
     // Mount-once: requestQr/poll are stable for a given channel id.
@@ -183,6 +204,24 @@ export function ChannelQrModal({
                 Aguardando leitura...
               </div>
             </>
+          )}
+
+          {phase === 'connecting' && (
+            <div className="flex flex-col items-center gap-2 text-muted-foreground">
+              <Loader2 className="size-6 animate-spin" />
+              <p className="text-sm">Reconectando a sessão...</p>
+              <p className="max-w-[16rem] text-center text-xs text-muted-foreground/80">
+                Este número ainda está logado — não precisa ler QR. Aguarde a
+                reconexão.
+              </p>
+            </div>
+          )}
+
+          {phase === 'connected' && (
+            <div className="flex flex-col items-center gap-2 text-emerald-600 dark:text-emerald-400">
+              <CheckCircle2 className="size-8" />
+              <p className="text-sm font-medium">Canal conectado!</p>
+            </div>
           )}
 
           {phase === 'error' && (
