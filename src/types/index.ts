@@ -397,6 +397,7 @@ export interface Broadcast {
   template_variables?: Record<string, unknown>;
   audience_filter?: Record<string, unknown>;
   channel_id?: string | null;
+  channel_name?: string | null;
   scheduled_at?: string | null;
   status: BroadcastStatus;
   total_recipients: number;

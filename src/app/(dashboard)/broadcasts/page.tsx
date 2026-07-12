@@ -233,6 +233,7 @@ export default function BroadcastsPage() {
               <TableRow className="border-border hover:bg-transparent">
                 <TableHead className="text-muted-foreground">Nome</TableHead>
                 <TableHead className="hidden text-muted-foreground md:table-cell">Template</TableHead>
+                <TableHead className="hidden text-muted-foreground sm:table-cell">Canal</TableHead>
                 <TableHead className="hidden text-right text-muted-foreground sm:table-cell">
                   Destinatários
                 </TableHead>
@@ -256,6 +257,16 @@ export default function BroadcastsPage() {
                     </TableCell>
                     <TableCell className="hidden text-muted-foreground md:table-cell">
                       {broadcast.template_name}
+                    </TableCell>
+                    <TableCell className="hidden text-muted-foreground sm:table-cell">
+                      {broadcast.channel_name ? (
+                        <span className="inline-flex items-center gap-1.5">
+                          <Radio className="h-3.5 w-3.5 text-primary" />
+                          {broadcast.channel_name}
+                        </span>
+                      ) : (
+                        <span className="text-muted-foreground/60">—</span>
+                      )}
                     </TableCell>
                     <TableCell className="hidden text-right text-muted-foreground tabular-nums sm:table-cell">
                       {broadcast.total_recipients}

@@ -12,6 +12,7 @@ import {
   db,
   broadcasts,
   broadcastRecipients,
+  channels,
   contacts,
   contactTags,
   customFields,
@@ -58,6 +59,7 @@ const broadcastColumns = {
   pacing: broadcasts.pacing,
   audience_filter: broadcasts.audienceFilter,
   channel_id: broadcasts.channelId,
+  channel_name: channels.name,
   scheduled_at: broadcasts.scheduledAt,
   status: broadcasts.status,
   total_recipients: broadcasts.totalRecipients,
@@ -90,6 +92,7 @@ export async function listBroadcasts(): Promise<Broadcast[]> {
   const rows = await db
     .select(broadcastColumns)
     .from(broadcasts)
+    .leftJoin(channels, eq(channels.id, broadcasts.channelId))
     .where(eq(broadcasts.accountId, ctx.accountId))
     .orderBy(desc(broadcasts.createdAt))
   return rows as unknown as Broadcast[]
@@ -102,6 +105,7 @@ export async function getBroadcast(broadcastId: string): Promise<Broadcast | nul
     await db
       .select(broadcastColumns)
       .from(broadcasts)
+      .leftJoin(channels, eq(channels.id, broadcasts.channelId))
       .where(and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, ctx.accountId)))
       .limit(1),
   )
