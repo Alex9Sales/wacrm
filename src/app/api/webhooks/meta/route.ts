@@ -173,10 +173,8 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
-  // TEMP: capture the raw call-permission webhook shape.
-  if (rawBody.toLowerCase().includes('permission')) {
-    console.log('[meta] RAW permission webhook:', rawBody)
-  }
+  // TEMP: capture every raw webhook body to learn the permission shape.
+  console.log('[meta] RAW webhook:', rawBody)
 
   let body: MetaRawBody
   try {
