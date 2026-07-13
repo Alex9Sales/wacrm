@@ -72,9 +72,20 @@ export function IncomingCallModal() {
     }
     ringCtxRef.current?.close().catch(() => {});
     ringCtxRef.current = null;
+    try {
+      navigator.vibrate?.(0); // stop any vibration
+    } catch {
+      /* not supported */
+    }
   }, []);
 
   const startRingtone = useCallback(() => {
+    // Screen/device vibration in the classic ring cadence (mobile only).
+    try {
+      navigator.vibrate?.([600, 400, 600, 1400]);
+    } catch {
+      /* not supported */
+    }
     try {
       const Ctx =
         window.AudioContext ||
@@ -82,20 +93,39 @@ export function IncomingCallModal() {
           .webkitAudioContext;
       const ctx = new Ctx();
       ringCtxRef.current = ctx;
-      const beep = () => {
-        const o = ctx.createOscillator();
-        const g = ctx.createGain();
-        o.type = 'sine';
-        o.frequency.value = 480;
-        g.gain.setValueAtTime(0.0001, ctx.currentTime);
-        g.gain.exponentialRampToValueAtTime(0.15, ctx.currentTime + 0.05);
-        g.gain.exponentialRampToValueAtTime(0.0001, ctx.currentTime + 0.9);
-        o.connect(g).connect(ctx.destination);
-        o.start();
-        o.stop(ctx.currentTime + 1);
+      // A telephone-style "brrring": a dual-tone (440+480 Hz) burst that
+      // pulses twice, then a gap — repeated on a ~3s cadence.
+      const ringBurst = () => {
+        const t0 = ctx.currentTime;
+        for (const [f1, f2] of [[440, 480]] as const) {
+          // two short pulses ("brr-brr")
+          for (const start of [0, 0.5]) {
+            const g = ctx.createGain();
+            g.gain.setValueAtTime(0.0001, t0 + start);
+            g.gain.exponentialRampToValueAtTime(0.12, t0 + start + 0.04);
+            g.gain.setValueAtTime(0.12, t0 + start + 0.35);
+            g.gain.exponentialRampToValueAtTime(0.0001, t0 + start + 0.42);
+            g.connect(ctx.destination);
+            for (const f of [f1, f2]) {
+              const o = ctx.createOscillator();
+              o.type = 'sine';
+              o.frequency.value = f;
+              o.connect(g);
+              o.start(t0 + start);
+              o.stop(t0 + start + 0.42);
+            }
+          }
+        }
       };
-      beep();
-      ringTimerRef.current = setInterval(beep, 2000);
+      ringBurst();
+      ringTimerRef.current = setInterval(() => {
+        ringBurst();
+        try {
+          navigator.vibrate?.([600, 400, 600, 1400]);
+        } catch {
+          /* not supported */
+        }
+      }, 3000);
     } catch {
       /* autoplay blocked until a gesture — modal still shows */
     }

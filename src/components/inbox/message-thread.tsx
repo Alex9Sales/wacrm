@@ -1292,6 +1292,12 @@ export function MessageThread({
                           reactions={msgReactions}
                           currentUserId={user?.id}
                           onToggleReaction={handlePillToggle}
+                          contactPhone={
+                            (conversation.channel?.provider ?? "meta") === "meta"
+                              ? contact.phone
+                              : null
+                          }
+                          contactName={contact.name}
                         />
                       </MessageActions>
                     );

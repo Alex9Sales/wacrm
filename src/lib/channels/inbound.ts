@@ -35,6 +35,7 @@ import { engineSendText } from '@/lib/flows/meta-send';
 import { maybeRecordCsat } from '@/lib/csat/csat';
 import { routeNewConversation, rerouteByKeyword } from '@/lib/sectors/routing';
 import { putObject, publicUrl } from '@/lib/storage/s3';
+import { CALL_PERM_PREFIX } from '@/lib/inbox/call-log';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
 
@@ -260,10 +261,12 @@ export async function dispatchInboundMessage(
 
   // Realtime ping. `fromMe` lets the notification listener skip the operator's
   // own phone-typed echoes (unread refetch still runs, but no sound/pop-up).
+  // Call-permission replies are system-ish — refresh the thread but don't ring.
+  const silent = contentText.startsWith(CALL_PERM_PREFIX);
   await publishEvent(accountId, {
     type: 'message.received',
     conversationId: conversation.id,
-    fromMe: isFromMe,
+    fromMe: isFromMe || silent,
   });
 
   // Bump last message; unread only for genuinely incoming (customer) messages.

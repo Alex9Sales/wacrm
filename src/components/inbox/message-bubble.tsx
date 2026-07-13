@@ -34,6 +34,7 @@ import {
   type ParsedCallPermission,
 } from "@/lib/inbox/call-log";
 import { Phone, PhoneMissed, PhoneOff, ShieldCheck } from "lucide-react";
+import { startOutboundCall } from "@/components/calls/incoming-call-modal";
 
 /** Content_text prefix a WhatsApp Pix key card is stored with (see waha.ts). */
 const PIX_PREFIX = "💠 Chave Pix";
@@ -118,6 +119,9 @@ interface MessageBubbleProps {
   reactions?: MessageReaction[];
   currentUserId?: string;
   onToggleReaction?: (emoji: string) => void;
+  /** Contact phone/name — lets a call-log card offer "ligar de volta". */
+  contactPhone?: string | null;
+  contactName?: string | null;
 }
 
 function StatusIcon({ status }: { status: Message["status"] }) {
@@ -387,10 +391,30 @@ function ViewOnceCover({
   );
 }
 
-function CallCard({ call }: { call: ParsedCallLog }) {
+function CallCard({
+  call,
+  contactPhone,
+  contactName,
+}: {
+  call: ParsedCallLog;
+  contactPhone?: string | null;
+  contactName?: string | null;
+}) {
   const missed = !call.answered;
+  const canCallBack = !!contactPhone;
   return (
-    <div className="flex items-center gap-2.5 py-0.5 text-sm">
+    <button
+      type="button"
+      disabled={!canCallBack}
+      onClick={() =>
+        contactPhone &&
+        startOutboundCall(contactPhone, contactName ?? undefined)
+      }
+      title={canCallBack ? "Ligar de volta" : undefined}
+      className={`flex w-full items-center gap-2.5 py-0.5 text-left text-sm ${
+        canCallBack ? "cursor-pointer hover:opacity-80" : "cursor-default"
+      }`}
+    >
       <span
         className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
           missed ? "bg-red-500/15 text-red-500" : "bg-emerald-500/15 text-emerald-600"
@@ -402,9 +426,10 @@ function CallCard({ call }: { call: ParsedCallLog }) {
         <span className="font-medium">Ligação de voz</span>
         <span className="text-xs text-muted-foreground">
           {missed ? "Perdida" : formatCallDuration(call.durationSec)}
+          {canCallBack ? " · toque para ligar" : ""}
         </span>
       </span>
-    </div>
+    </button>
   );
 }
 
@@ -438,13 +463,28 @@ function CallPermissionCard({ perm }: { perm: ParsedCallPermission }) {
   );
 }
 
-function MessageContent({ message }: { message: Message }) {
+function MessageContent({
+  message,
+  contactPhone,
+  contactName,
+}: {
+  message: Message;
+  contactPhone?: string | null;
+  contactName?: string | null;
+}) {
   switch (message.content_type) {
     case "text": {
       const txt = message.content_text ?? "";
       if (txt.startsWith(PIX_PREFIX)) return <PixCard text={txt} />;
       const callLog = parseCallLog(txt);
-      if (callLog) return <CallCard call={callLog} />;
+      if (callLog)
+        return (
+          <CallCard
+            call={callLog}
+            contactPhone={contactPhone}
+            contactName={contactName}
+          />
+        );
       const perm = parseCallPermission(txt);
       if (perm) return <CallPermissionCard perm={perm} />;
       return (
@@ -608,6 +648,8 @@ export function MessageBubble({
   reactions,
   currentUserId,
   onToggleReaction,
+  contactPhone,
+  contactName,
 }: MessageBubbleProps) {
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
   const time = format(new Date(message.created_at), "HH:mm");
@@ -636,7 +678,11 @@ export function MessageBubble({
             onPrimary={isAgent}
           />
         )}
-        <MessageContent message={message} />
+        <MessageContent
+          message={message}
+          contactPhone={contactPhone}
+          contactName={contactName}
+        />
         <div
           className={cn(
             "mt-1 flex items-center gap-1",
