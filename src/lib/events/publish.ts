@@ -44,6 +44,16 @@ export type RealtimeEvent =
       name: string;
       status: string;
     }
+  // WhatsApp voice call (Business Calling API) ringing on a Meta channel —
+  // drives the incoming-call toast/ring in the CRM.
+  | {
+      type: "call_incoming";
+      callId: string;
+      from: string;
+      callerName?: string;
+    }
+  // A voice call ended (terminate webhook): COMPLETED | REJECTED | FAILED.
+  | { type: "call_status"; callId: string; status: string }
   | { type: "notification" };
 
 /** Channel name for an account's ephemeral event stream. */

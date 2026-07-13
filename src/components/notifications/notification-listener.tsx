@@ -102,6 +102,9 @@ export function NotificationListener() {
       senderId?: unknown;
       senderName?: unknown;
       fromMe?: unknown;
+      callId?: unknown;
+      from?: unknown;
+      callerName?: unknown;
     }) => {
       const prefs = getNotificationPrefs();
       const alert = (sound: boolean, showPopup: () => void) => {
@@ -153,6 +156,27 @@ export function NotificationListener() {
               }),
             );
           });
+        return;
+      }
+
+      // ---- Incoming WhatsApp voice call (Fase 1a: só toca/avisa) ----
+      if (e.type === "call_incoming") {
+        const callId = typeof e.callId === "string" ? e.callId : "";
+        if (callId && recentlyAlerted(`call:${callId}`)) return;
+        const who =
+          typeof e.callerName === "string" && e.callerName
+            ? e.callerName
+            : typeof e.from === "string" && e.from
+              ? e.from
+              : "Cliente";
+        alert(true, () =>
+          popup({
+            title: "📞 Ligação recebida",
+            description: `${who} está te ligando no WhatsApp`,
+            href: "/inbox",
+            variant: "chat",
+          }),
+        );
         return;
       }
 

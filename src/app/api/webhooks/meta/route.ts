@@ -28,6 +28,7 @@ import { decryptCredentials, loadMetaChannelByPhoneNumberId } from '@/lib/channe
 import { metaProvider } from '@/lib/channels/providers/meta'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
 import { applyStatusUpdate } from '@/lib/channels/status'
+import { publishEvent } from '@/lib/events/publish'
 import type { ChannelCtx } from '@/lib/channels/provider'
 import {
   handleTemplateWebhookChange,
@@ -67,11 +68,23 @@ interface MetaRawContact {
   wa_id?: string
 }
 
+interface MetaRawCall {
+  id?: string
+  from?: string
+  to?: string
+  event?: string // 'connect' (incoming) | 'terminate'
+  direction?: string
+  status?: string // on terminate: COMPLETED | REJECTED | FAILED
+  duration?: number
+  session?: { sdp?: string; sdp_type?: string }
+}
+
 interface MetaRawValue {
   metadata?: { phone_number_id?: string }
   contacts?: MetaRawContact[]
   messages?: MetaRawMessage[]
   statuses?: MetaRawStatus[]
+  calls?: MetaRawCall[]
 }
 
 interface MetaRawChange {
@@ -207,6 +220,46 @@ async function processWebhook(body: MetaRawBody) {
               : undefined,
           })
         }
+      }
+
+      // ---- voice calls (WhatsApp Business Calling API) ----
+      // 'connect' = an inbound call is ringing (carries the caller's SDP
+      // offer in session.sdp); 'terminate' = the call ended. Fase 1a: surface
+      // it live in the CRM (SSE) + log the raw shape. The WebRTC answer flow
+      // (pre_accept/accept with our SDP answer) comes in 1b.
+      if (Array.isArray(value.calls) && value.calls.length > 0) {
+        const phoneNumberId = value.metadata?.phone_number_id
+        const channel = phoneNumberId
+          ? await loadMetaChannelByPhoneNumberId(phoneNumberId)
+          : null
+        if (!channel) {
+          console.error('[webhooks/meta] call event with no matching channel', phoneNumberId)
+          continue
+        }
+        const callerName = value.contacts?.[0]?.profile?.name
+        for (const call of value.calls) {
+          console.log('[webhooks/meta] CALL event', JSON.stringify({
+            id: call.id, from: call.from, event: call.event,
+            status: call.status, direction: call.direction,
+            sdp_type: call.session?.sdp_type, has_sdp: !!call.session?.sdp,
+          }))
+          if (call.event === 'terminate') {
+            await publishEvent(channel.accountId, {
+              type: 'call_status',
+              callId: call.id ?? '',
+              status: call.status ?? 'COMPLETED',
+            })
+          } else {
+            // 'connect' or any ringing event
+            await publishEvent(channel.accountId, {
+              type: 'call_incoming',
+              callId: call.id ?? '',
+              from: call.from ?? '',
+              callerName: callerName ?? undefined,
+            })
+          }
+        }
+        continue
       }
 
       // ---- inbound messages ----
