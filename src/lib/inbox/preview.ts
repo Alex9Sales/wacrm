@@ -9,6 +9,8 @@
 // (real text, captions) passes through untouched.
 // ============================================================
 
+import { parseCallLog, parseCallPermission } from '@/lib/inbox/call-log';
+
 const MEDIA_PREVIEW_LABELS: Record<string, string> = {
   text: 'Mensagem',
   image: '📷 Foto',
@@ -32,6 +34,11 @@ const MEDIA_PREVIEW_LABELS: Record<string, string> = {
 export function formatConversationPreview(text?: string | null): string {
   const trimmed = text?.trim();
   if (!trimmed) return 'Nenhuma mensagem ainda';
+  // Call markers → friendly labels (never show the raw sentinel).
+  const call = parseCallLog(text);
+  if (call) return call.answered ? '📞 Ligação de voz' : '📞 Ligação perdida';
+  const perm = parseCallPermission(text);
+  if (perm) return perm.granted ? '📞 Autorizou você a ligar' : '📵 Não autorizou ligação';
   const match = /^\[([a-zA-Z]+)\]$/.exec(trimmed);
   if (match) {
     const key = match[1].toLowerCase();
