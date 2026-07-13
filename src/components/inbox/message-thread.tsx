@@ -44,8 +44,10 @@ import {
   Loader2,
   Building2,
   ArrowRightLeft,
+  PhoneCall,
   X,
 } from "lucide-react";
+import { startOutboundCall } from "@/components/calls/incoming-call-modal";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
@@ -924,6 +926,22 @@ export function MessageThread({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Ligar (voz WhatsApp) — só no canal Meta (Business Calling API),
+              e só com telefone. Abre o modal de chamada em modo outbound. */}
+          {(conversation.channel?.provider ?? "meta") === "meta" &&
+            contact.phone && (
+              <button
+                type="button"
+                onClick={() =>
+                  startOutboundCall(contact.phone, contact.name ?? undefined)
+                }
+                aria-label="Ligar para o cliente"
+                title="Ligar (voz WhatsApp)"
+                className="inline-flex h-7 w-7 items-center justify-center rounded-md text-emerald-600 transition-colors hover:bg-emerald-500/10"
+              >
+                <PhoneCall className="h-4 w-4" />
+              </button>
+            )}
           {/* Contact-panel toggle — desktop only. The contact sidebar
               eats a chunk of horizontal width that crowds the thread on
               smaller laptops; this lets agents reclaim it when they just

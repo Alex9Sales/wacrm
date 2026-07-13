@@ -1,30 +1,42 @@
 'use client';
 
 // ============================================================
-// IncomingCallModal — answers WhatsApp voice calls (Meta Business Calling)
-// in the browser. Listens for the `call_incoming` SSE event (which carries
-// the caller's SDP offer), rings, and on "Atender" runs the WebRTC answer:
-//   getUserMedia → setRemote(offer) → createAnswer → gather ICE →
-//   POST /api/calls/{id} {action:'accept', sdp, to}. Media (mic/speaker)
-//   lives here in the browser; the token stays server-side.
+// Call modal for WhatsApp voice calls (Meta Business Calling), both ways:
+//  - INBOUND: `call_incoming` SSE carries the caller's SDP offer → ring →
+//    Atender → answer (setRemote(offer) → createAnswer → POST accept).
+//  - OUTBOUND: a `fluxia:outbound-call` window event (from the conversation
+//    header "Ligar" button) → createOffer → POST /api/calls/initiate → the
+//    customer's answer arrives via the `call_answer` SSE → setRemote(answer).
+// Media (mic/speaker) lives in the browser; the token stays server-side.
 // Mounted once, globally, in the dashboard shell.
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Phone, PhoneOff, Mic, MicOff } from 'lucide-react';
+import { Phone, PhoneOff, Mic, MicOff, ShieldQuestion } from 'lucide-react';
 
 import { useServerEvents } from '@/hooks/use-server-events';
 
-type Phase = 'idle' | 'ringing' | 'connecting' | 'active';
+type Phase =
+  | 'idle'
+  | 'ringing' // inbound, waiting for the agent to answer
+  | 'dialing' // outbound, setting up / waiting for the customer
+  | 'connecting'
+  | 'active'
+  | 'permission'; // outbound blocked — needs the customer's permission
 
-interface IncomingCall {
+interface ActiveCall {
   callId: string;
-  from: string;
-  callerName?: string;
-  sdp: string;
+  peer: string; // customer phone (E.164 digits)
+  name?: string;
 }
 
-/** Wait for ICE gathering to finish (Meta expects a non-trickle SDP answer). */
+/** Fire this to start an outbound call from anywhere in the app. */
+export function startOutboundCall(to: string, name?: string) {
+  window.dispatchEvent(
+    new CustomEvent('fluxia:outbound-call', { detail: { to, name } }),
+  );
+}
+
 function waitIceComplete(pc: RTCPeerConnection): Promise<void> {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
   return new Promise((resolve) => {
@@ -35,19 +47,21 @@ function waitIceComplete(pc: RTCPeerConnection): Promise<void> {
       }
     };
     pc.addEventListener('icegatheringstatechange', done);
-    // Fallback so we never hang if the last candidate is slow.
     setTimeout(resolve, 2500);
   });
 }
 
 export function IncomingCallModal() {
   const [phase, setPhase] = useState<Phase>('idle');
-  const [call, setCall] = useState<IncomingCall | null>(null);
+  const [dir, setDir] = useState<'in' | 'out'>('in');
+  const [call, setCall] = useState<ActiveCall | null>(null);
   const [muted, setMuted] = useState(false);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
+  const callIdRef = useRef<string>('');
+  const offerSdpRef = useRef<string>(''); // inbound offer to answer
   const ringCtxRef = useRef<AudioContext | null>(null);
   const ringTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -83,7 +97,7 @@ export function IncomingCallModal() {
       beep();
       ringTimerRef.current = setInterval(beep, 2000);
     } catch {
-      // Autoplay blocked until a gesture — fine, the modal is still visible.
+      /* autoplay blocked until a gesture — modal still shows */
     }
   }, []);
 
@@ -100,6 +114,8 @@ export function IncomingCallModal() {
       localStreamRef.current = null;
     }
     if (audioRef.current) audioRef.current.srcObject = null;
+    callIdRef.current = '';
+    offerSdpRef.current = '';
     setCall(null);
     setPhase('idle');
     setMuted(false);
@@ -107,39 +123,9 @@ export function IncomingCallModal() {
 
   useEffect(() => () => cleanup(), [cleanup]);
 
-  const onEvent = useCallback(
-    (e: {
-      type: string;
-      callId?: unknown;
-      from?: unknown;
-      callerName?: unknown;
-      sdp?: unknown;
-    }) => {
-      if (e.type === 'call_incoming') {
-        if (pcRef.current || phase !== 'idle') return; // busy
-        if (typeof e.sdp !== 'string' || !e.sdp) return; // no offer to answer
-        setCall({
-          callId: typeof e.callId === 'string' ? e.callId : '',
-          from: typeof e.from === 'string' ? e.from : '',
-          callerName: typeof e.callerName === 'string' ? e.callerName : undefined,
-          sdp: e.sdp,
-        });
-        setPhase('ringing');
-        startRingtone();
-      } else if (e.type === 'call_status') {
-        // The other side ended/rejected the call.
-        cleanup();
-      }
-    },
-    [phase, startRingtone, cleanup],
-  );
-  useServerEvents(onEvent);
-
-  const answer = useCallback(async () => {
-    if (!call) return;
-    stopRingtone();
-    setPhase('connecting');
-    try {
+  /** Build the PeerConnection with mic + remote audio wired. */
+  const newPeer = useCallback(
+    async (): Promise<RTCPeerConnection> => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       localStreamRef.current = stream;
       const pc = new RTCPeerConnection({
@@ -158,15 +144,30 @@ export function IncomingCallModal() {
         if (s === 'connected') setPhase('active');
         if (s === 'failed' || s === 'closed' || s === 'disconnected') cleanup();
       };
-      await pc.setRemoteDescription({ type: 'offer', sdp: call.sdp });
+      return pc;
+    },
+    [cleanup],
+  );
+
+  // ---- inbound answer ----
+  const answer = useCallback(async () => {
+    if (!call) return;
+    stopRingtone();
+    setPhase('connecting');
+    try {
+      const pc = await newPeer();
+      await pc.setRemoteDescription({ type: 'offer', sdp: offerSdpRef.current });
       const ans = await pc.createAnswer();
       await pc.setLocalDescription(ans);
       await waitIceComplete(pc);
-      const answerSdp = pc.localDescription?.sdp;
       const res = await fetch(`/api/calls/${encodeURIComponent(call.callId)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ action: 'accept', sdp: answerSdp, to: call.from }),
+        body: JSON.stringify({
+          action: 'accept',
+          sdp: pc.localDescription?.sdp,
+          to: call.peer,
+        }),
       });
       if (!res.ok) throw new Error(`accept HTTP ${res.status}`);
       setPhase('active');
@@ -174,24 +175,140 @@ export function IncomingCallModal() {
       console.error('[calls] answer failed:', err);
       cleanup();
     }
-  }, [call, stopRingtone, cleanup]);
+  }, [call, stopRingtone, newPeer, cleanup]);
 
-  const post = (action: string) => {
-    if (!call) return;
-    fetch(`/api/calls/${encodeURIComponent(call.callId)}`, {
+  // ---- outbound dial ----
+  const dial = useCallback(
+    async (to: string, name?: string) => {
+      if (pcRef.current || phase !== 'idle') return;
+      setDir('out');
+      setCall({ callId: '', peer: to, name });
+      setPhase('dialing');
+      try {
+        const pc = await newPeer();
+        const offer = await pc.createOffer({ offerToReceiveAudio: true });
+        await pc.setLocalDescription(offer);
+        await waitIceComplete(pc);
+        const res = await fetch('/api/calls/initiate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to, sdp: pc.localDescription?.sdp }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          callId?: string;
+          needsPermission?: boolean;
+        };
+        if (!res.ok || !data.callId) {
+          if (data.needsPermission) {
+            // Keep the modal; drop media and offer to request permission.
+            if (localStreamRef.current) {
+              localStreamRef.current.getTracks().forEach((t) => t.stop());
+              localStreamRef.current = null;
+            }
+            pc.close();
+            pcRef.current = null;
+            setPhase('permission');
+            return;
+          }
+          throw new Error('initiate failed');
+        }
+        callIdRef.current = data.callId;
+        setCall({ callId: data.callId, peer: to, name });
+        setPhase('connecting'); // "chamando…" until the answer arrives
+      } catch (err) {
+        console.error('[calls] dial failed:', err);
+        cleanup();
+      }
+    },
+    [phase, newPeer, cleanup],
+  );
+
+  // outbound trigger from the header button
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as { to?: string; name?: string };
+      if (detail?.to) void dial(detail.to, detail.name);
+    };
+    window.addEventListener('fluxia:outbound-call', handler);
+    return () => window.removeEventListener('fluxia:outbound-call', handler);
+  }, [dial]);
+
+  // ---- SSE ----
+  const onEvent = useCallback(
+    (e: {
+      type: string;
+      callId?: unknown;
+      from?: unknown;
+      callerName?: unknown;
+      sdp?: unknown;
+    }) => {
+      if (e.type === 'call_incoming') {
+        if (pcRef.current || phase !== 'idle') return;
+        if (typeof e.sdp !== 'string' || !e.sdp) return;
+        offerSdpRef.current = e.sdp;
+        setDir('in');
+        setCall({
+          callId: typeof e.callId === 'string' ? e.callId : '',
+          peer: typeof e.from === 'string' ? e.from : '',
+          name: typeof e.callerName === 'string' ? e.callerName : undefined,
+        });
+        setPhase('ringing');
+        startRingtone();
+      } else if (e.type === 'call_answer') {
+        // customer answered our outbound call
+        if (
+          pcRef.current &&
+          typeof e.sdp === 'string' &&
+          e.callId === callIdRef.current
+        ) {
+          void pcRef.current
+            .setRemoteDescription({ type: 'answer', sdp: e.sdp })
+            .then(() => setPhase('active'))
+            .catch((err) => {
+              console.error('[calls] setRemote(answer) failed:', err);
+              cleanup();
+            });
+        }
+      } else if (e.type === 'call_status') {
+        cleanup();
+      }
+    },
+    [phase, startRingtone, cleanup],
+  );
+  useServerEvents(onEvent);
+
+  const postAction = (action: string) => {
+    const id = call?.callId || callIdRef.current;
+    if (!id || !call) return;
+    fetch(`/api/calls/${encodeURIComponent(id)}`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, to: call.from }),
+      body: JSON.stringify({ action, to: call.peer }),
     }).catch(() => {});
   };
 
   const reject = useCallback(() => {
-    post('reject');
+    postAction('reject');
     cleanup();
   }, [call, cleanup]);
 
   const hangup = useCallback(() => {
-    post('terminate');
+    postAction('terminate');
+    cleanup();
+  }, [call, cleanup]);
+
+  const requestPermission = useCallback(async () => {
+    if (!call) return;
+    try {
+      await fetch('/api/calls/permission', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to: call.peer }),
+      });
+    } catch {
+      /* best-effort */
+    }
     cleanup();
   }, [call, cleanup]);
 
@@ -205,20 +322,36 @@ export function IncomingCallModal() {
 
   if (phase === 'idle' || !call) return null;
 
-  const who = call.callerName || call.from || 'Cliente';
+  const who = call.name || call.peer || 'Cliente';
   const statusText =
     phase === 'ringing'
       ? 'está te ligando no WhatsApp…'
-      : phase === 'connecting'
-        ? 'conectando…'
-        : 'em ligação';
+      : phase === 'dialing'
+        ? 'iniciando ligação…'
+        : phase === 'connecting'
+          ? dir === 'out'
+            ? 'chamando…'
+            : 'conectando…'
+          : phase === 'permission'
+            ? 'ainda não autorizou receber ligação'
+            : 'em ligação';
 
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
       <audio ref={audioRef} autoPlay />
       <div className="w-full max-w-xs rounded-2xl border border-border bg-card p-6 text-center shadow-2xl">
-        <div className="mx-auto flex size-16 items-center justify-center rounded-full bg-primary/10 text-primary">
-          <Phone className="size-7" />
+        <div
+          className={`mx-auto flex size-16 items-center justify-center rounded-full ${
+            phase === 'permission'
+              ? 'bg-amber-500/15 text-amber-600'
+              : 'bg-primary/10 text-primary'
+          }`}
+        >
+          {phase === 'permission' ? (
+            <ShieldQuestion className="size-7" />
+          ) : (
+            <Phone className="size-7" />
+          )}
         </div>
         <p className="mt-4 text-lg font-semibold text-foreground">{who}</p>
         <p className="mt-1 text-sm text-muted-foreground">{statusText}</p>
@@ -239,6 +372,27 @@ export function IncomingCallModal() {
             >
               <Phone className="size-6" />
             </button>
+          </div>
+        ) : phase === 'permission' ? (
+          <div className="mt-6 flex flex-col items-center gap-3">
+            <p className="text-xs text-muted-foreground">
+              O WhatsApp exige que o cliente autorize antes de você ligar. Envie
+              o pedido de permissão — ele aceita na conversa e depois você liga.
+            </p>
+            <div className="flex gap-3">
+              <button
+                onClick={cleanup}
+                className="rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-muted"
+              >
+                Cancelar
+              </button>
+              <button
+                onClick={requestPermission}
+                className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+              >
+                Pedir permissão
+              </button>
+            </div>
           </div>
         ) : (
           <div className="mt-6 flex items-center justify-center gap-6">

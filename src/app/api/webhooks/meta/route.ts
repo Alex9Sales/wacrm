@@ -295,9 +295,20 @@ async function processWebhook(body: MetaRawBody) {
             } catch (err) {
               console.error('[webhooks/meta] call-log insert failed:', err)
             }
+          } else if (
+            call.session?.sdp_type === 'answer' &&
+            call.session?.sdp
+          ) {
+            // The customer answered our OUTBOUND call — deliver their SDP
+            // answer to the browser that initiated it.
+            await publishEvent(channel.accountId, {
+              type: 'call_answer',
+              callId: call.id ?? '',
+              sdp: call.session.sdp,
+            })
           } else {
-            // 'connect' or any ringing event — carry the SDP offer so the
-            // agent's browser can answer it (WebRTC).
+            // 'connect' with an offer = inbound call ringing — the agent's
+            // browser answers it (WebRTC).
             await publishEvent(channel.accountId, {
               type: 'call_incoming',
               callId: call.id ?? '',

@@ -56,6 +56,9 @@ export type RealtimeEvent =
     }
   // A voice call ended (terminate webhook): COMPLETED | REJECTED | FAILED.
   | { type: "call_status"; callId: string; status: string }
+  // The customer answered our OUTBOUND call — carries their SDP answer for
+  // the browser to setRemoteDescription and connect.
+  | { type: "call_answer"; callId: string; sdp: string }
   | { type: "notification" };
 
 /** Channel name for an account's ephemeral event stream. */
