@@ -12,9 +12,18 @@
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
-import { Phone, PhoneOff, Mic, MicOff, ShieldQuestion } from 'lucide-react';
+import {
+  Phone,
+  PhoneOff,
+  Mic,
+  MicOff,
+  ShieldQuestion,
+  Minimize2,
+  Maximize2,
+} from 'lucide-react';
 
 import { useServerEvents } from '@/hooks/use-server-events';
+import { formatCallDuration } from '@/lib/inbox/call-log';
 
 type Phase =
   | 'idle'
@@ -56,6 +65,8 @@ export function IncomingCallModal() {
   const [dir, setDir] = useState<'in' | 'out'>('in');
   const [call, setCall] = useState<ActiveCall | null>(null);
   const [muted, setMuted] = useState(false);
+  const [minimized, setMinimized] = useState(false);
+  const [seconds, setSeconds] = useState(0);
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
@@ -149,7 +160,16 @@ export function IncomingCallModal() {
     setCall(null);
     setPhase('idle');
     setMuted(false);
+    setMinimized(false);
+    setSeconds(0);
   }, [stopRingtone]);
+
+  // Call timer while active.
+  useEffect(() => {
+    if (phase !== 'active') return;
+    const t = setInterval(() => setSeconds((s) => s + 1), 1000);
+    return () => clearInterval(t);
+  }, [phase]);
 
   useEffect(() => () => cleanup(), [cleanup]);
 
@@ -364,12 +384,66 @@ export function IncomingCallModal() {
             : 'conectando…'
           : phase === 'permission'
             ? 'ainda não autorizou receber ligação'
-            : 'em ligação';
+            : formatCallDuration(seconds);
 
+  // Minimized: a small floating pill so the whole CRM stays usable during a
+  // call (reply to other clients while talking, WhatsApp-style). The <audio>
+  // element stays mounted across the toggle so the stream never drops.
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+    <>
       <audio ref={audioRef} autoPlay />
-      <div className="w-full max-w-xs rounded-2xl border border-border bg-card p-6 text-center shadow-2xl">
+      {minimized && phase === 'active' ? (
+        <div className="fixed bottom-4 right-4 z-[60] flex items-center gap-3 rounded-2xl border border-border bg-card px-3 py-2 shadow-2xl">
+          <span className="relative flex size-9 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600">
+            <Phone className="size-4" />
+            <span className="absolute -right-0.5 -top-0.5 size-2.5 animate-pulse rounded-full bg-emerald-500" />
+          </span>
+          <div className="flex flex-col leading-tight">
+            <span className="max-w-[9rem] truncate text-sm font-medium">
+              {who}
+            </span>
+            <span className="text-xs tabular-nums text-muted-foreground">
+              {formatCallDuration(seconds)}
+            </span>
+          </div>
+          <button
+            onClick={toggleMute}
+            title={muted ? 'Ativar microfone' : 'Silenciar'}
+            className={`flex size-8 items-center justify-center rounded-full transition ${
+              muted
+                ? 'bg-red-500 text-white'
+                : 'bg-muted text-muted-foreground hover:bg-muted/70'
+            }`}
+          >
+            {muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+          </button>
+          <button
+            onClick={() => setMinimized(false)}
+            title="Expandir"
+            className="flex size-8 items-center justify-center rounded-full bg-muted text-muted-foreground transition hover:bg-muted/70"
+          >
+            <Maximize2 className="size-4" />
+          </button>
+          <button
+            onClick={hangup}
+            title="Desligar"
+            className="flex size-8 items-center justify-center rounded-full bg-red-500 text-white transition hover:bg-red-600"
+          >
+            <PhoneOff className="size-4" />
+          </button>
+        </div>
+      ) : (
+        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+          <div className="relative w-full max-w-xs rounded-2xl border border-border bg-card p-6 text-center shadow-2xl">
+        {phase === 'active' && (
+          <button
+            onClick={() => setMinimized(true)}
+            title="Minimizar (continuar atendendo)"
+            className="absolute right-3 top-3 flex size-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted"
+          >
+            <Minimize2 className="size-4" />
+          </button>
+        )}
         <div
           className={`mx-auto flex size-16 items-center justify-center rounded-full ${
             phase === 'permission'
@@ -446,7 +520,9 @@ export function IncomingCallModal() {
             </button>
           </div>
         )}
-      </div>
-    </div>
+          </div>
+        </div>
+      )}
+    </>
   );
 }
