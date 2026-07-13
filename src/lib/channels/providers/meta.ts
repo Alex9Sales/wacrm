@@ -511,6 +511,7 @@ function normalizeInboundMessage(
     }
 
     case 'interactive': {
+      console.log('[meta] DBG interactive itype=', msg.interactive?.type, 'keys=', Object.keys(msg.interactive ?? {}))
       // Call permission reply — the customer authorised (or declined) the
       // business to call them. Render as a WhatsApp-style status entry.
       const perm = msg.interactive?.call_permission_reply;
