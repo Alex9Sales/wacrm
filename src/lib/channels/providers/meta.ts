@@ -515,6 +515,9 @@ function normalizeInboundMessage(
           interactiveReplyId: reply.id,
         };
       }
+      // TEMP: capture the raw shape of unknown interactive replies (e.g.
+      // call_permission_reply) so we can render them properly.
+      console.log('[meta] interactive (raw):', JSON.stringify(msg.interactive))
       return {
         ...base,
         contentType: 'interactive',
@@ -523,6 +526,9 @@ function normalizeInboundMessage(
     }
 
     default:
+      // TEMP: log unknown message types (e.g. call_permission_reply may be a
+      // top-level type) to learn the exact payload.
+      console.log('[meta] unknown msg type (raw):', JSON.stringify(msg))
       return {
         ...base,
         contentType: 'text' as InboundContentType,
