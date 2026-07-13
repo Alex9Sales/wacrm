@@ -22,7 +22,9 @@
 import { NextResponse, after } from 'next/server'
 import { and, eq } from 'drizzle-orm'
 
-import { db, channels, messageReactions, messages } from '@/db'
+import { db, channels, contacts, conversations, messageReactions, messages } from '@/db'
+import { normalizePhone } from '@/lib/whatsapp/phone-utils'
+import { buildCallLog } from '@/lib/inbox/call-log'
 import { firstOrNull } from '@/db/helpers'
 import { decryptCredentials, loadMetaChannelByPhoneNumberId } from '@/lib/channels/channels'
 import { metaProvider } from '@/lib/channels/providers/meta'
@@ -249,6 +251,50 @@ async function processWebhook(body: MetaRawBody) {
               callId: call.id ?? '',
               status: call.status ?? 'COMPLETED',
             })
+            // Log the call in the conversation (WhatsApp-style entry).
+            try {
+              const answered =
+                typeof call.duration === 'number' && call.duration > 0
+              const normalized = normalizePhone(call.from ?? '')
+              const conv = normalized
+                ? firstOrNull(
+                    await db
+                      .select({ id: conversations.id })
+                      .from(conversations)
+                      .innerJoin(
+                        contacts,
+                        eq(contacts.id, conversations.contactId),
+                      )
+                      .where(
+                        and(
+                          eq(conversations.accountId, channel.accountId),
+                          eq(conversations.channelId, channel.id),
+                          eq(contacts.phoneNormalized, normalized),
+                        ),
+                      )
+                      .limit(1),
+                  )
+                : null
+              if (conv) {
+                await db.insert(messages).values({
+                  conversationId: conv.id,
+                  senderType: 'customer',
+                  contentType: 'text',
+                  contentText: buildCallLog({
+                    answered,
+                    durationSec: call.duration,
+                  }),
+                })
+                // Refresh the thread without ringing (fromMe skips the sound).
+                await publishEvent(channel.accountId, {
+                  type: 'message.received',
+                  conversationId: conv.id,
+                  fromMe: true,
+                })
+              }
+            } catch (err) {
+              console.error('[webhooks/meta] call-log insert failed:', err)
+            }
           } else {
             // 'connect' or any ringing event — carry the SDP offer so the
             // agent's browser can answer it (WebRTC).

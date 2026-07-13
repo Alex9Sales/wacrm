@@ -25,6 +25,12 @@ import { toast } from "sonner";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
 import { RichText } from "@/lib/inbox/rich-text";
+import {
+  parseCallLog,
+  formatCallDuration,
+  type ParsedCallLog,
+} from "@/lib/inbox/call-log";
+import { Phone, PhoneMissed } from "lucide-react";
 
 /** Content_text prefix a WhatsApp Pix key card is stored with (see waha.ts). */
 const PIX_PREFIX = "💠 Chave Pix";
@@ -378,11 +384,34 @@ function ViewOnceCover({
   );
 }
 
+function CallCard({ call }: { call: ParsedCallLog }) {
+  const missed = !call.answered;
+  return (
+    <div className="flex items-center gap-2.5 py-0.5 text-sm">
+      <span
+        className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+          missed ? "bg-red-500/15 text-red-500" : "bg-emerald-500/15 text-emerald-600"
+        }`}
+      >
+        {missed ? <PhoneMissed className="size-4" /> : <Phone className="size-4" />}
+      </span>
+      <span className="flex flex-col leading-tight">
+        <span className="font-medium">Ligação de voz</span>
+        <span className="text-xs text-muted-foreground">
+          {missed ? "Perdida" : formatCallDuration(call.durationSec)}
+        </span>
+      </span>
+    </div>
+  );
+}
+
 function MessageContent({ message }: { message: Message }) {
   switch (message.content_type) {
     case "text": {
       const txt = message.content_text ?? "";
       if (txt.startsWith(PIX_PREFIX)) return <PixCard text={txt} />;
+      const callLog = parseCallLog(txt);
+      if (callLog) return <CallCard call={callLog} />;
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
           <RichText text={message.content_text} />
