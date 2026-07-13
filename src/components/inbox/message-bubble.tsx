@@ -28,9 +28,12 @@ import { RichText } from "@/lib/inbox/rich-text";
 import {
   parseCallLog,
   formatCallDuration,
+  parseCallPermission,
+  formatDayMonth,
   type ParsedCallLog,
+  type ParsedCallPermission,
 } from "@/lib/inbox/call-log";
-import { Phone, PhoneMissed } from "lucide-react";
+import { Phone, PhoneMissed, PhoneOff, ShieldCheck } from "lucide-react";
 
 /** Content_text prefix a WhatsApp Pix key card is stored with (see waha.ts). */
 const PIX_PREFIX = "💠 Chave Pix";
@@ -405,6 +408,36 @@ function CallCard({ call }: { call: ParsedCallLog }) {
   );
 }
 
+function CallPermissionCard({ perm }: { perm: ParsedCallPermission }) {
+  if (!perm.granted) {
+    return (
+      <div className="flex items-center gap-2.5 py-0.5 text-sm">
+        <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-red-500/15 text-red-500">
+          <PhoneOff className="size-4" />
+        </span>
+        <span className="font-medium">Não autorizou ligações</span>
+      </div>
+    );
+  }
+  return (
+    <div className="flex items-center gap-2.5 py-0.5 text-sm">
+      <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600">
+        <ShieldCheck className="size-4" />
+      </span>
+      <span className="flex flex-col leading-tight">
+        <span className="font-medium">Autorizou você a ligar</span>
+        <span className="text-xs text-muted-foreground">
+          {perm.permanent
+            ? "Permissão permanente"
+            : perm.expiresAt
+              ? `Pode ligar até ${formatDayMonth(perm.expiresAt)}`
+              : "Permissão temporária"}
+        </span>
+      </span>
+    </div>
+  );
+}
+
 function MessageContent({ message }: { message: Message }) {
   switch (message.content_type) {
     case "text": {
@@ -412,6 +445,8 @@ function MessageContent({ message }: { message: Message }) {
       if (txt.startsWith(PIX_PREFIX)) return <PixCard text={txt} />;
       const callLog = parseCallLog(txt);
       if (callLog) return <CallCard call={callLog} />;
+      const perm = parseCallPermission(txt);
+      if (perm) return <CallPermissionCard perm={perm} />;
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
           <RichText text={message.content_text} />

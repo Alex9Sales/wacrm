@@ -52,6 +52,7 @@ import {
 } from '@/lib/whatsapp/meta-api';
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
+import { buildCallPermission } from '@/lib/inbox/call-log';
 import type { MessageTemplate } from '@/types';
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 
@@ -110,9 +111,14 @@ interface MetaWebhookMessage {
   };
   reaction?: { message_id: string; emoji: string };
   interactive?: {
-    type: 'button_reply' | 'list_reply';
+    type: 'button_reply' | 'list_reply' | 'call_permission_reply';
     button_reply?: { id: string; title: string };
     list_reply?: { id: string; title: string; description?: string };
+    call_permission_reply?: {
+      response: string; // 'accept' | 'reject'
+      is_permanent?: boolean;
+      expiration_timestamp?: number;
+    };
   };
   context?: { id: string };
 }
@@ -505,6 +511,20 @@ function normalizeInboundMessage(
     }
 
     case 'interactive': {
+      // Call permission reply — the customer authorised (or declined) the
+      // business to call them. Render as a WhatsApp-style status entry.
+      const perm = msg.interactive?.call_permission_reply;
+      if (msg.interactive?.type === 'call_permission_reply' && perm) {
+        return {
+          ...base,
+          contentType: 'text',
+          contentText: buildCallPermission({
+            granted: perm.response === 'accept',
+            permanent: perm.is_permanent === true,
+            expirationTs: perm.expiration_timestamp,
+          }),
+        };
+      }
       const reply =
         msg.interactive?.button_reply ?? msg.interactive?.list_reply;
       if (reply?.id) {
@@ -515,9 +535,6 @@ function normalizeInboundMessage(
           interactiveReplyId: reply.id,
         };
       }
-      // TEMP: capture the raw shape of unknown interactive replies (e.g.
-      // call_permission_reply) so we can render them properly.
-      console.log('[meta] interactive (raw):', JSON.stringify(msg.interactive))
       return {
         ...base,
         contentType: 'interactive',
@@ -526,9 +543,6 @@ function normalizeInboundMessage(
     }
 
     default:
-      // TEMP: log unknown message types (e.g. call_permission_reply may be a
-      // top-level type) to learn the exact payload.
-      console.log('[meta] unknown msg type (raw):', JSON.stringify(msg))
       return {
         ...base,
         contentType: 'text' as InboundContentType,

@@ -38,3 +38,43 @@ export function formatCallDuration(sec: number): string {
   const s = sec % 60;
   return `${m}:${String(s).padStart(2, '0')}`;
 }
+
+// ---- call permission (customer authorised the business to call) ----
+
+export const CALL_PERM_PREFIX = '⁣callperm⁣';
+
+/** Encode a call_permission_reply into a thread message body. */
+export function buildCallPermission(opts: {
+  granted: boolean;
+  permanent: boolean;
+  expirationTs?: number;
+}): string {
+  const g = opts.granted ? '1' : '0';
+  const p = opts.permanent ? 'p' : 't';
+  return `${CALL_PERM_PREFIX}${g}:${p}:${opts.expirationTs ?? 0}`;
+}
+
+export interface ParsedCallPermission {
+  granted: boolean;
+  permanent: boolean;
+  expiresAt: number; // epoch seconds; 0 when none
+}
+
+export function parseCallPermission(
+  text: string | null | undefined,
+): ParsedCallPermission | null {
+  if (!text || !text.startsWith(CALL_PERM_PREFIX)) return null;
+  const m = text.slice(CALL_PERM_PREFIX.length).match(/^([01]):([pt]):(\d+)$/);
+  if (!m) return null;
+  return {
+    granted: m[1] === '1',
+    permanent: m[2] === 'p',
+    expiresAt: parseInt(m[3], 10),
+  };
+}
+
+/** DD/MM from epoch seconds. */
+export function formatDayMonth(epochSec: number): string {
+  const d = new Date(epochSec * 1000);
+  return `${String(d.getDate()).padStart(2, '0')}/${String(d.getMonth() + 1).padStart(2, '0')}`;
+}
