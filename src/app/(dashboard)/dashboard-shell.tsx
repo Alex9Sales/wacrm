@@ -9,6 +9,7 @@ import { Header } from "@/components/layout/header";
 import { PresenceHeartbeat } from "@/components/presence/presence-heartbeat";
 import { NotificationListener } from "@/components/notifications/notification-listener";
 import { ChannelStatusBanner } from "@/components/channels/channel-status-banner";
+import { IncomingCallModal } from "@/components/calls/incoming-call-modal";
 
 // Auth-gated dashboard shell. Extracted from the layout so the layout
 // itself can stay a server component and export metadata (noindex) —
@@ -79,6 +80,8 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           signed in. Headless — renders nothing. */}
       <PresenceHeartbeat />
       <NotificationListener />
+      {/* Global incoming WhatsApp voice call — rings + answers (WebRTC). */}
+      <IncomingCallModal />
       <Sidebar open={sidebarOpen} onClose={closeSidebar} />
       <div className="flex flex-1 flex-col overflow-hidden">
         <Header onOpenSidebar={() => setSidebarOpen(true)} />

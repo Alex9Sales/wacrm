@@ -159,26 +159,8 @@ export function NotificationListener() {
         return;
       }
 
-      // ---- Incoming WhatsApp voice call (Fase 1a: só toca/avisa) ----
-      if (e.type === "call_incoming") {
-        const callId = typeof e.callId === "string" ? e.callId : "";
-        if (callId && recentlyAlerted(`call:${callId}`)) return;
-        const who =
-          typeof e.callerName === "string" && e.callerName
-            ? e.callerName
-            : typeof e.from === "string" && e.from
-              ? e.from
-              : "Cliente";
-        alert(true, () =>
-          popup({
-            title: "📞 Ligação recebida",
-            description: `${who} está te ligando no WhatsApp`,
-            href: "/inbox",
-            variant: "chat",
-          }),
-        );
-        return;
-      }
+      // Incoming voice calls are handled by <IncomingCallModal /> (it needs
+      // the SDP offer to answer), so no toast here.
 
       // ---- Internal team chat ----
       if (e.type === "internal_message") {

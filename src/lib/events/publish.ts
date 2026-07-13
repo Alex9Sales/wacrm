@@ -51,6 +51,8 @@ export type RealtimeEvent =
       callId: string;
       from: string;
       callerName?: string;
+      /** The caller's SDP offer — the browser answers it (WebRTC). */
+      sdp?: string;
     }
   // A voice call ended (terminate webhook): COMPLETED | REJECTED | FAILED.
   | { type: "call_status"; callId: string; status: string }

@@ -250,12 +250,14 @@ async function processWebhook(body: MetaRawBody) {
               status: call.status ?? 'COMPLETED',
             })
           } else {
-            // 'connect' or any ringing event
+            // 'connect' or any ringing event — carry the SDP offer so the
+            // agent's browser can answer it (WebRTC).
             await publishEvent(channel.accountId, {
               type: 'call_incoming',
               callId: call.id ?? '',
               from: call.from ?? '',
               callerName: callerName ?? undefined,
+              sdp: call.session?.sdp ?? undefined,
             })
           }
         }
