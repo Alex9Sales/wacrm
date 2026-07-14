@@ -20,7 +20,11 @@ import { and, eq } from 'drizzle-orm';
 
 import { db, broadcastRecipients, broadcasts } from '@/db';
 import { firstOrNull } from '@/db/helpers';
-import { enqueueBroadcastDispatch } from './queues';
+import {
+  enqueueBroadcastDispatch,
+  removeBroadcastDispatchJob,
+  removeRecipientJobs,
+} from './queues';
 
 export type BroadcastControlAction = 'pause' | 'resume' | 'cancel';
 
@@ -136,18 +140,28 @@ export async function retryFailedBroadcast(
   broadcastId: string,
   accountId: string,
 ): Promise<ControlResult & { requeued?: number }> {
-  const status = await currentStatus(broadcastId, accountId);
-  if (status === null)
-    return { ok: false, status: 'unknown', code: 'not_found' };
-  if (status === 'sending' || status === 'scheduled') {
+  const row = firstOrNull(
+    await db
+      .select({ status: broadcasts.status, channelId: broadcasts.channelId })
+      .from(broadcasts)
+      .where(
+        and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, accountId)),
+      )
+      .limit(1),
+  );
+  if (!row) return { ok: false, status: 'unknown', code: 'not_found' };
+  const status = row.status;
+  if (status === 'scheduled') {
     return {
       ok: false,
       status,
       code: 'invalid_state',
-      message: `Broadcast ainda em andamento ('${status}')`,
+      message: `Broadcast ainda agendado ('${status}')`,
     };
   }
-  const reset = await db
+  // Reset failed → pending, then re-fan ALL pending (failed just reset +
+  // any that got stuck) — covers a channel drop mid-broadcast.
+  await db
     .update(broadcastRecipients)
     .set({ status: 'pending', attempts: 0, errorMessage: null })
     .where(
@@ -155,19 +169,36 @@ export async function retryFailedBroadcast(
         eq(broadcastRecipients.broadcastId, broadcastId),
         eq(broadcastRecipients.status, 'failed'),
       ),
-    )
-    .returning({ id: broadcastRecipients.id });
-  if (reset.length === 0) {
+    );
+  const pending = await db
+    .select({ id: broadcastRecipients.id })
+    .from(broadcastRecipients)
+    .where(
+      and(
+        eq(broadcastRecipients.broadcastId, broadcastId),
+        eq(broadcastRecipients.status, 'pending'),
+      ),
+    );
+  if (pending.length === 0) {
     return {
       ok: false,
       status,
       code: 'invalid_state',
-      message: 'Nenhum destinatário falhado para reenviar',
+      message: 'Nenhum destinatário pendente/falhado para reenviar',
     };
+  }
+  // Clear the BullMQ jobId dedup: a completed dispatch job and prior
+  // failed recipient jobs block the re-enqueue otherwise.
+  await removeBroadcastDispatchJob(broadcastId);
+  if (row.channelId) {
+    await removeRecipientJobs(
+      row.channelId,
+      pending.map((p) => p.id),
+    );
   }
   await setStatus(broadcastId, 'sending');
   await enqueueBroadcastDispatch(broadcastId, {});
-  return { ok: true, status: 'sending', requeued: reset.length };
+  return { ok: true, status: 'sending', requeued: pending.length };
 }
 
 export async function controlBroadcast(

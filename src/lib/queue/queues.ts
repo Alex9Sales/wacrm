@@ -148,6 +148,42 @@ export async function enqueueRecipient(
 }
 
 /**
+ * Remove a broadcast's dispatch job (best-effort). BullMQ dedups by jobId
+ * even for COMPLETED jobs, so a finished `dispatch-{id}` blocks a re-enqueue
+ * — "reenviar falhados" must drop it first.
+ */
+export async function removeBroadcastDispatchJob(
+  broadcastId: string,
+): Promise<void> {
+  try {
+    const job = await broadcastDispatchQueue().getJob(`dispatch-${broadcastId}`);
+    if (job) await job.remove();
+  } catch {
+    // active/locked or already gone
+  }
+}
+
+/**
+ * Remove stale outbound jobs for a set of recipients (best-effort). Their
+ * jobId = recipientRowId, so a prior failed/completed job blocks the fresh
+ * enqueue on retry.
+ */
+export async function removeRecipientJobs(
+  channelId: string,
+  recipientRowIds: string[],
+): Promise<void> {
+  const q = outboundQueue(channelId);
+  for (const id of recipientRowIds) {
+    try {
+      const job = await q.getJob(id);
+      if (job) await job.remove();
+    } catch {
+      // active/locked — leave it
+    }
+  }
+}
+
+/**
  * Enqueue a scheduled 1:1 message. `delayMs` schedules it to fire at
  * `scheduled_at`. jobId = `sched-{id}` so re-enqueue is a no-op and the
  * job can be located + removed on cancel.
