@@ -29,13 +29,17 @@
 import crypto from 'crypto'
 
 import { NextResponse, after } from 'next/server'
+import { and, eq } from 'drizzle-orm'
 
+import { db, callLogs, contacts } from '@/db'
+import { firstOrNull } from '@/db/helpers'
 import { loadChannel, updateChannelStatus } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
 import { applyStatusUpdate, levelToStatus } from '@/lib/channels/status'
 import type { ProviderId, WhatsAppProvider } from '@/lib/channels/provider'
 import { publishEvent } from '@/lib/events/publish'
+import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 
 const NON_OFFICIAL: ReadonlySet<ProviderId> = new Set([
   'waha',
@@ -137,8 +141,9 @@ export async function POST(request: Request, { params }: RouteParams) {
   }
 
   // waha-voip native call events (unofficial calling). call.received rings
-  // the global call modal via SSE; accepted/rejected (answered or declined
-  // on the phone) dismisses it. No message processing for these.
+  // the global call modal via SSE and records a 'missed' history row (the
+  // panel's source of truth for calls nobody saw); accepted/rejected
+  // promotes that row and dismisses the modal. No message processing.
   if (providerId === 'waha') {
     const ev = body as {
       event?: string
@@ -158,6 +163,43 @@ export async function POST(request: Request, { params }: RouteParams) {
           provider: 'waha',
           channelId: channel.id,
         })
+        try {
+          // Born 'missed' — promoted by call.accepted/rejected below. The
+          // partial unique index (account, external_call_id) absorbs the
+          // webhook retries.
+          const digits = /@(c\.us|s\.whatsapp\.net)$/.test(rawFrom)
+            ? rawFrom.split('@')[0].replace(/\D/g, '')
+            : ''
+          const contact = digits
+            ? firstOrNull(
+                await db
+                  .select({ id: contacts.id })
+                  .from(contacts)
+                  .where(
+                    and(
+                      eq(contacts.accountId, channel.accountId),
+                      eq(contacts.phoneNormalized, normalizePhone(digits)),
+                    ),
+                  )
+                  .limit(1),
+              )
+            : null
+          await db
+            .insert(callLogs)
+            .values({
+              accountId: channel.accountId,
+              channelId: channel.id,
+              contactId: contact?.id ?? null,
+              peer: rawFrom,
+              direction: 'in',
+              status: 'missed',
+              provider: 'waha',
+              externalCallId: callId,
+            })
+            .onConflictDoNothing()
+        } catch (err) {
+          console.error('[webhooks/generic] call-log insert failed:', err)
+        }
       } else if (
         (ev.event === 'call.accepted' || ev.event === 'call.rejected') &&
         callId
@@ -167,6 +209,22 @@ export async function POST(request: Request, { params }: RouteParams) {
           callId,
           status: ev.event === 'call.accepted' ? 'ACCEPTED_ELSEWHERE' : 'REJECTED',
         })
+        try {
+          await db
+            .update(callLogs)
+            .set({
+              status: ev.event === 'call.accepted' ? 'answered' : 'rejected',
+              updatedAt: new Date().toISOString(),
+            })
+            .where(
+              and(
+                eq(callLogs.accountId, channel.accountId),
+                eq(callLogs.externalCallId, callId),
+              ),
+            )
+        } catch (err) {
+          console.error('[webhooks/generic] call-log update failed:', err)
+        }
       }
       return NextResponse.json({ status: 'ok' }, { status: 200 })
     }

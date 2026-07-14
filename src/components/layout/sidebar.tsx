@@ -22,6 +22,7 @@ import {
   MessagesSquare,
   PanelLeftClose,
   PanelLeftOpen,
+  Phone,
   Radio,
   Settings,
   Shield,
@@ -101,6 +102,7 @@ interface NavItem {
 const navItems: NavItem[] = [
   { href: "/dashboard", label: "Painel", icon: LayoutDashboard },
   { href: "/inbox", label: "Conversas", icon: MessageSquare },
+  { href: "/calls", label: "Ligações", icon: Phone },
   { href: "/internal-chat", label: "Chat Interno", icon: MessagesSquare },
   { href: "/notifications", label: "Notificações", icon: Bell },
   { href: "/contacts", label: "Contatos", icon: Users },

@@ -22,7 +22,7 @@
 import { NextResponse, after } from 'next/server'
 import { and, eq } from 'drizzle-orm'
 
-import { db, channels, contacts, conversations, messageReactions, messages } from '@/db'
+import { db, callLogs, channels, contacts, conversations, messageReactions, messages } from '@/db'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import { buildCallLog } from '@/lib/inbox/call-log'
 import { firstOrNull } from '@/db/helpers'
@@ -292,6 +292,36 @@ async function processWebhook(body: MetaRawBody) {
                   fromMe: true,
                 })
               }
+              // History row for the "Ligações" panel (Meta transport).
+              const metaContact = normalized
+                ? firstOrNull(
+                    await db
+                      .select({ id: contacts.id })
+                      .from(contacts)
+                      .where(
+                        and(
+                          eq(contacts.accountId, channel.accountId),
+                          eq(contacts.phoneNormalized, normalized),
+                        ),
+                      )
+                      .limit(1),
+                  )
+                : null
+              await db
+                .insert(callLogs)
+                .values({
+                  accountId: channel.accountId,
+                  channelId: channel.id,
+                  contactId: metaContact?.id ?? null,
+                  peer: call.from ?? '',
+                  direction:
+                    call.direction === 'BUSINESS_INITIATED' ? 'out' : 'in',
+                  status: answered ? 'answered' : 'missed',
+                  provider: 'meta',
+                  externalCallId: call.id ?? null,
+                  durationSec: answered ? (call.duration ?? null) : null,
+                })
+                .onConflictDoNothing()
             } catch (err) {
               console.error('[webhooks/meta] call-log insert failed:', err)
             }

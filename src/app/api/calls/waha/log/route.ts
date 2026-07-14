@@ -11,7 +11,7 @@
 import { NextResponse } from 'next/server'
 import { and, eq } from 'drizzle-orm'
 
-import { db, conversations, messages } from '@/db'
+import { db, callLogs, conversations, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 import { buildCallLog } from '@/lib/inbox/call-log'
@@ -24,12 +24,33 @@ export async function POST(request: Request) {
       conversationId?: string
       durationSec?: number
       answered?: boolean
+      callId?: string
+    }
+    // Finalize the history row regardless of a conversation (the panel is
+    // the source of truth; the chat entry below needs the conversation).
+    if (body.callId) {
+      try {
+        await db
+          .update(callLogs)
+          .set({
+            status: body.answered ? 'answered' : 'missed',
+            durationSec: body.answered
+              ? Math.max(0, Math.round(body.durationSec ?? 0))
+              : null,
+            updatedAt: new Date().toISOString(),
+          })
+          .where(
+            and(
+              eq(callLogs.accountId, ctx.accountId),
+              eq(callLogs.externalCallId, body.callId),
+            ),
+          )
+      } catch (err) {
+        console.error('[waha-calls] history finalize failed:', err)
+      }
     }
     if (!body.conversationId) {
-      return NextResponse.json(
-        { error: 'conversationId required' },
-        { status: 400 },
-      )
+      return NextResponse.json({ ok: true, chatLog: false })
     }
 
     const conv = firstOrNull(

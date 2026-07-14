@@ -401,6 +401,28 @@ export const conversations = pgTable("conversations", {
 	check("conversations_status_check", sql`status = ANY (ARRAY['open'::text, 'pending'::text, 'closed'::text])`),
 ]);
 
+// Histórico de ligações ("Ligações" panel, WhatsApp-style). One row per call
+// on any transport (waha-voip or Meta). Inbound is born 'missed' and promoted
+// to 'answered'/'rejected' by the call.accepted/rejected webhook; outbound is
+// born 'dialing' and finalized by the modal's hangup.
+export const callLogs = pgTable("call_logs", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	channelId: uuid("channel_id"),
+	contactId: uuid("contact_id"),
+	// Raw peer chatId (556…@c.us or …@lid) or E.164 digits.
+	peer: text().notNull(),
+	direction: text().notNull(),
+	status: text().notNull(),
+	provider: text().default('waha').notNull(),
+	externalCallId: text("external_call_id"),
+	durationSec: integer("duration_sec"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("call_logs_account_created").on(table.accountId, table.createdAt.desc()),
+]);
+
 export const messages = pgTable("messages", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	conversationId: uuid("conversation_id").notNull(),

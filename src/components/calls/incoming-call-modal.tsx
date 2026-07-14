@@ -630,8 +630,9 @@ export function IncomingCallModal() {
 
   const hangup = useCallback(() => {
     postAction('terminate');
-    // waha-voip has no terminate webhook — log the outbound call from here.
-    if (call?.provider === 'waha' && call.conversationId) {
+    // waha-voip has no terminate webhook — log the outbound call from here
+    // (chat entry + finalize the history row in the Ligações panel).
+    if (call?.provider === 'waha' && (call.conversationId || call.callId)) {
       const cid = call.conversationId;
       fetch('/api/calls/waha/log', {
         method: 'POST',
@@ -640,6 +641,7 @@ export function IncomingCallModal() {
           conversationId: cid,
           durationSec: seconds,
           answered: phase === 'active',
+          callId: call.callId || callIdRef.current,
         }),
       })
         .then(() => {

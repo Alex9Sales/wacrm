@@ -9,8 +9,12 @@
 // ============================================================
 
 import { NextResponse } from 'next/server'
+import { and, eq } from 'drizzle-orm'
 
+import { db, callLogs, contacts } from '@/db'
+import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
+import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import {
   wahaCallsForAccount,
   wahaCallsForChannel,
@@ -61,6 +65,44 @@ export async function POST(request: Request) {
     }
 
     const callId = (r.data as { id?: string }).id ?? null
+
+    // History row (panel "Ligações"): born 'dialing'; the modal's hangup
+    // finalizes it (answered + duration, or missed) via /api/calls/waha/log.
+    if (callId) {
+      try {
+        const digits = normalizePhone(body.to)
+        const contact = digits
+          ? firstOrNull(
+              await db
+                .select({ id: contacts.id })
+                .from(contacts)
+                .where(
+                  and(
+                    eq(contacts.accountId, ctx.accountId),
+                    eq(contacts.phoneNormalized, digits),
+                  ),
+                )
+                .limit(1),
+            )
+          : null
+        await db
+          .insert(callLogs)
+          .values({
+            accountId: ctx.accountId,
+            channelId: body.channelId ?? null,
+            contactId: contact?.id ?? null,
+            peer: chatId,
+            direction: 'out',
+            status: 'dialing',
+            provider: 'waha',
+            externalCallId: callId,
+          })
+          .onConflictDoNothing()
+      } catch (err) {
+        console.error('[waha-calls] history insert failed:', err)
+      }
+    }
+
     return NextResponse.json({ ok: true, callId, chatId })
   } catch (err) {
     return toErrorResponse(err)
