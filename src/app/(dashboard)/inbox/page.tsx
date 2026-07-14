@@ -240,6 +240,20 @@ export default function InboxPage() {
     [activeConversation?.id, hydrateConversation]
   );
 
+  // Local (same-tab) refresh trigger — the waha-voip call modal fires this on
+  // hang-up after logging the call, since its SSE ping can race with the modal
+  // teardown. Reuses the exact hydrate + resync path as a real message event.
+  useEffect(() => {
+    const h = (e: Event) => {
+      const convId = (e as CustomEvent).detail?.conversationId as
+        | string
+        | undefined;
+      if (convId) handleMessageEvent({ type: "message.received", conversationId: convId });
+    };
+    window.addEventListener("fluxia:conversation-refresh", h);
+    return () => window.removeEventListener("fluxia:conversation-refresh", h);
+  }, [handleMessageEvent]);
+
   // Handle realtime conversation-created events.
   //
   // Phase 3 (SSE): a tiny `{ type, conversationId }` ping. Hydrate the

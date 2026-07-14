@@ -514,15 +514,25 @@ export function IncomingCallModal() {
     postAction('terminate');
     // waha-voip has no terminate webhook — log the outbound call from here.
     if (call?.provider === 'waha' && call.conversationId) {
+      const cid = call.conversationId;
       fetch('/api/calls/waha/log', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          conversationId: call.conversationId,
+          conversationId: cid,
           durationSec: seconds,
           answered: phase === 'active',
         }),
-      }).catch(() => {});
+      })
+        .then(() => {
+          // Refresh the thread live (the SSE ping can race with modal cleanup).
+          window.dispatchEvent(
+            new CustomEvent('fluxia:conversation-refresh', {
+              detail: { conversationId: cid },
+            }),
+          );
+        })
+        .catch(() => {});
     }
     cleanup();
   }, [call, phase, seconds, cleanup]);
