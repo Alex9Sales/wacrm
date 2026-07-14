@@ -801,7 +801,18 @@ export const wahaProvider: WhatsAppProvider = {
       webhooks: [
         {
           url: webhookUrl,
-          events: ['message', 'message.any', 'message.ack', 'session.status'],
+          // Includes the waha-voip native-call events so a freshly-connected
+          // channel rings inbound calls in the CRM without any extra setup.
+          // (Harmless on engines that don't emit them, e.g. NOWEB.)
+          events: [
+            'message',
+            'message.any',
+            'message.ack',
+            'session.status',
+            'call.received',
+            'call.accepted',
+            'call.rejected',
+          ],
         },
       ],
     };
