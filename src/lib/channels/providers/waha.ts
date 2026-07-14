@@ -284,6 +284,10 @@ interface WahaMessagePayload {
     // Raw Baileys message node — for fromMe echoes `p.body` is empty and the
     // text lives here (`conversation` / `extendedTextMessage.text`).
     message?: Record<string, unknown>;
+    // GOWS puts the same node at `Message` (Go struct, capital M) and flags
+    // view-once at the _data root.
+    Message?: Record<string, unknown>;
+    IsViewOnce?: boolean;
   };
   notifyName?: string;
 }
@@ -295,7 +299,9 @@ function textOfPayload(p: WahaMessagePayload): string {
   if (p.caption) return p.caption;
   const d = p._data;
   if (typeof d?.body === 'string' && d.body) return d.body;
-  const m = d?.message as
+  // Raw message node: NOWEB/Baileys puts it at `_data.message` (lowercase);
+  // GOWS/whatsmeow (waha-voip) at `_data.Message` (Go struct, capital M).
+  const m = (d?.message ?? d?.Message) as
     | {
         conversation?: unknown;
         extendedTextMessage?: { text?: unknown };
@@ -314,8 +320,10 @@ function textOfPayload(p: WahaMessagePayload): string {
  *  render as text. The PIX_PREFIX marker lets the bubble render a copy card. */
 export const PIX_PREFIX = '💠 Chave Pix';
 function textFromInteractive(p: WahaMessagePayload): string {
-  const im = (p._data?.message as { interactiveMessage?: unknown } | undefined)
-    ?.interactiveMessage as
+  // `_data.message` = NOWEB/Baileys; `_data.Message` = GOWS (waha-voip).
+  const im = ((p._data?.message ?? p._data?.Message) as
+    | { interactiveMessage?: unknown }
+    | undefined)?.interactiveMessage as
     | {
         nativeFlowMessage?: {
           buttons?: Array<{ name?: string; buttonParamsJson?: string }>;
@@ -361,7 +369,8 @@ function detectViewOnce(p: WahaMessagePayload): boolean {
   return (
     p._data?.key?.isViewOnce === true ||
     p.viewOnce === true ||
-    p._data?.viewOnce === true
+    p._data?.viewOnce === true ||
+    p._data?.IsViewOnce === true // GOWS (waha-voip)
   );
 }
 
