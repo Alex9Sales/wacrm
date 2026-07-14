@@ -948,7 +948,12 @@ export function MessageThread({
             <button
               type="button"
               onClick={() =>
-                startOutboundCall(contact.phone, contact.name ?? undefined, "waha")
+                startOutboundCall(
+                  contact.phone,
+                  contact.name ?? undefined,
+                  "waha",
+                  conversation.id,
+                )
               }
               aria-label="Ligar para o cliente pelo WhatsApp"
               title="Ligar pelo WhatsApp"

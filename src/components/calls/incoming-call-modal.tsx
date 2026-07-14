@@ -43,17 +43,22 @@ interface ActiveCall {
   peer: string; // customer phone (E.164 digits)
   name?: string;
   provider: CallProvider;
+  conversationId?: string; // for the call-log entry (waha outbound)
 }
 
 /** Fire this to start an outbound call from anywhere in the app. Defaults to
- *  the official Meta transport; pass 'waha' for the unofficial waha-voip one. */
+ *  the official Meta transport; pass 'waha' for the unofficial waha-voip one.
+ *  conversationId lets the waha path log the call in the thread on hang-up. */
 export function startOutboundCall(
   to: string,
   name?: string,
   provider: CallProvider = 'meta',
+  conversationId?: string,
 ) {
   window.dispatchEvent(
-    new CustomEvent('fluxia:outbound-call', { detail: { to, name, provider } }),
+    new CustomEvent('fluxia:outbound-call', {
+      detail: { to, name, provider, conversationId },
+    }),
   );
 }
 
@@ -312,7 +317,7 @@ export function IncomingCallModal() {
   // worklet → 16 kHz s16le PCM → DC; DC → Float32 → playback worklet → speaker.
   // /webrtc returns the SDP answer synchronously (no permission, no SSE).
   const dialWaha = useCallback(
-    async (to: string, name?: string) => {
+    async (to: string, name?: string, conversationId?: string) => {
       const initRes = await fetch('/api/calls/waha/initiate', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -323,7 +328,13 @@ export function IncomingCallModal() {
       };
       if (!initRes.ok || !initData.callId) throw new Error('waha initiate failed');
       callIdRef.current = initData.callId;
-      setCall({ callId: initData.callId, peer: to, name, provider: 'waha' });
+      setCall({
+        callId: initData.callId,
+        peer: to,
+        name,
+        provider: 'waha',
+        conversationId,
+      });
       setPhase('connecting');
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -389,13 +400,18 @@ export function IncomingCallModal() {
   );
 
   const dial = useCallback(
-    async (to: string, name?: string, provider: CallProvider = 'meta') => {
+    async (
+      to: string,
+      name?: string,
+      provider: CallProvider = 'meta',
+      conversationId?: string,
+    ) => {
       if (pcRef.current || phase !== 'idle') return;
       setDir('out');
-      setCall({ callId: '', peer: to, name, provider });
+      setCall({ callId: '', peer: to, name, provider, conversationId });
       setPhase('dialing');
       try {
-        if (provider === 'waha') await dialWaha(to, name);
+        if (provider === 'waha') await dialWaha(to, name, conversationId);
         else await dialMeta(to, name);
       } catch (err) {
         console.error('[calls] dial failed:', err);
@@ -412,8 +428,10 @@ export function IncomingCallModal() {
         to?: string;
         name?: string;
         provider?: CallProvider;
+        conversationId?: string;
       };
-      if (detail?.to) void dial(detail.to, detail.name, detail.provider);
+      if (detail?.to)
+        void dial(detail.to, detail.name, detail.provider, detail.conversationId);
     };
     window.addEventListener('fluxia:outbound-call', handler);
     return () => window.removeEventListener('fluxia:outbound-call', handler);
@@ -494,8 +512,20 @@ export function IncomingCallModal() {
 
   const hangup = useCallback(() => {
     postAction('terminate');
+    // waha-voip has no terminate webhook — log the outbound call from here.
+    if (call?.provider === 'waha' && call.conversationId) {
+      fetch('/api/calls/waha/log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: call.conversationId,
+          durationSec: seconds,
+          answered: phase === 'active',
+        }),
+      }).catch(() => {});
+    }
     cleanup();
-  }, [call, cleanup]);
+  }, [call, phase, seconds, cleanup]);
 
   const requestPermission = useCallback(async () => {
     if (!call) return;
