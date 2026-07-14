@@ -8,7 +8,9 @@
 // ============================================================
 
 import { NextResponse } from 'next/server'
+import { and, eq } from 'drizzle-orm'
 
+import { db, callLogs } from '@/db'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 import {
   wahaCallsForAccount,
@@ -69,6 +71,25 @@ export async function POST(request: Request, { params }: RouteParams) {
         { error: `${action} failed`, data: r.data },
         { status: 502 },
       )
+    }
+
+    // Mark the history row answered on accept — authoritative. gows does NOT
+    // emit call.accepted for our OWN accept (only for accept-elsewhere), so
+    // without this the call ends as 'rejected' from the terminate event.
+    if (action === 'accept') {
+      try {
+        await db
+          .update(callLogs)
+          .set({ status: 'answered', updatedAt: new Date().toISOString() })
+          .where(
+            and(
+              eq(callLogs.accountId, ctx.accountId),
+              eq(callLogs.externalCallId, callId),
+            ),
+          )
+      } catch (err) {
+        console.error('[waha-calls] mark answered failed:', err)
+      }
     }
 
     return NextResponse.json({ ok: true })

@@ -58,6 +58,9 @@ export type RealtimeEvent =
       provider?: "meta" | "waha";
       /** The WAHA channel the call rang on (routes accept/reject/webrtc). */
       channelId?: string;
+      /** waha @lid callers: the raw @lid chatId (reject targets it; `from`
+       *  carries the resolved real phone for display/contact). */
+      callerLid?: string;
     }
   // A voice call ended (terminate webhook): COMPLETED | REJECTED | FAILED.
   | { type: "call_status"; callId: string; status: string }

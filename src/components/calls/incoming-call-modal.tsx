@@ -536,6 +536,7 @@ export function IncomingCallModal() {
       sdp?: unknown;
       provider?: unknown;
       channelId?: unknown;
+      callerLid?: unknown;
       status?: unknown;
     }) => {
       if (e.type === 'call_incoming') {
@@ -546,11 +547,11 @@ export function IncomingCallModal() {
         if (!isWaha && (typeof e.sdp !== 'string' || !e.sdp)) return;
         if (typeof e.sdp === 'string') offerSdpRef.current = e.sdp;
         const rawFrom = typeof e.from === 'string' ? e.from : '';
-        // waha inbound `from` is a chatId (556…@c.us or …@lid) — show just
-        // the digits when it's a real phone; @lid has no readable number.
+        // waha inbound `from` now carries the resolved real phone (the
+        // webhook maps @lid → CallCreatorAlt) — show the digits.
         const display = isWaha
           ? /@(c\.us|s\.whatsapp\.net)$/.test(rawFrom)
-            ? rawFrom.split('@')[0].split(':')[0] // strip multi-device suffix
+            ? rawFrom.split('@')[0].split(':')[0]
             : 'WhatsApp'
           : rawFrom;
         setDir('in');
@@ -560,7 +561,13 @@ export function IncomingCallModal() {
           name: typeof e.callerName === 'string' ? e.callerName : undefined,
           provider: isWaha ? 'waha' : 'meta',
           channelId: typeof e.channelId === 'string' ? e.channelId : undefined,
-          wahaFrom: isWaha ? rawFrom : undefined,
+          // Reject must target the caller's chatId gows knows: the @lid when
+          // present, else the phone chatId in `from`.
+          wahaFrom: isWaha
+            ? typeof e.callerLid === 'string'
+              ? e.callerLid
+              : rawFrom
+            : undefined,
         });
         setPhase('ringing');
         startRingtone();

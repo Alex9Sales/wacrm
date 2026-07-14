@@ -147,60 +147,71 @@ export async function POST(request: Request, { params }: RouteParams) {
   if (providerId === 'waha') {
     const ev = body as {
       event?: string
-      payload?: { id?: string; from?: string; isGroup?: boolean }
+      payload?: {
+        id?: string
+        from?: string
+        isGroup?: boolean
+        _data?: {
+          CallCreatorAlt?: string
+          Data?: { Attrs?: { caller_pn?: string } }
+        }
+      }
     }
     if (typeof ev?.event === 'string' && ev.event.startsWith('call.')) {
       const callId = ev.payload?.id ?? ''
       if (ev.event === 'call.received' && callId && !ev.payload?.isGroup) {
         const rawFrom = String(ev.payload?.from ?? '')
-        // TEMP diagnostic: capture the raw shape once so we can learn where
-        // gows hides the caller's real phone for @lid callers (name +
-        // call-back in the Ligações panel). Remove after confirming.
-        if (/@lid$/.test(rawFrom)) {
-          console.log(
-            '[webhooks/generic] call.received @lid payload:',
-            JSON.stringify(ev.payload).slice(0, 1500),
-          )
-        }
-        // @lid callers can't be reduced to a phone here — pass the raw
-        // chatId; reject needs it verbatim and the modal falls back to it
-        // for display.
+        // gows hides the caller's real phone for @lid callers in
+        // _data.CallCreatorAlt (or Data.Attrs.caller_pn), both
+        // @s.whatsapp.net — use it for display / contact / call-back. The
+        // raw @lid still goes to the modal (reject needs it verbatim).
+        const altJid = String(
+          ev.payload?._data?.CallCreatorAlt ||
+            ev.payload?._data?.Data?.Attrs?.caller_pn ||
+            '',
+        )
+        const phoneSource = /@(c\.us|s\.whatsapp\.net)$/.test(altJid)
+          ? altJid
+          : /@(c\.us|s\.whatsapp\.net)$/.test(rawFrom)
+            ? rawFrom
+            : ''
+        const digits = phoneSource
+          ? phoneSource.split('@')[0].split(':')[0].replace(/\D/g, '')
+          : ''
+        const contact = digits
+          ? firstOrNull(
+              await db
+                .select({ id: contacts.id, name: contacts.name })
+                .from(contacts)
+                .where(
+                  and(
+                    eq(contacts.accountId, channel.accountId),
+                    eq(contacts.phoneNormalized, normalizePhone(digits)),
+                  ),
+                )
+                .limit(1),
+            )
+          : null
+        // Prefer the real phone JID as the modal/panel peer; keep the @lid
+        // as callerLid so reject still targets the right chatId.
+        const displayFrom = digits ? `${digits}@c.us` : rawFrom
         await publishEvent(channel.accountId, {
           type: 'call_incoming',
           callId,
-          from: rawFrom,
+          from: displayFrom,
+          callerName: contact?.name ?? undefined,
+          callerLid: /@lid$/.test(rawFrom) ? rawFrom : undefined,
           provider: 'waha',
           channelId: channel.id,
         })
         try {
-          // Born 'missed' — promoted by call.accepted/rejected below. The
-          // partial unique index (account, external_call_id) absorbs the
-          // webhook retries.
-          // Strip the multi-device suffix (":9") before reducing to digits.
-          const digits = /@(c\.us|s\.whatsapp\.net)$/.test(rawFrom)
-            ? rawFrom.split('@')[0].split(':')[0].replace(/\D/g, '')
-            : ''
-          const contact = digits
-            ? firstOrNull(
-                await db
-                  .select({ id: contacts.id })
-                  .from(contacts)
-                  .where(
-                    and(
-                      eq(contacts.accountId, channel.accountId),
-                      eq(contacts.phoneNormalized, normalizePhone(digits)),
-                    ),
-                  )
-                  .limit(1),
-              )
-            : null
           await db
             .insert(callLogs)
             .values({
               accountId: channel.accountId,
               channelId: channel.id,
               contactId: contact?.id ?? null,
-              peer: rawFrom,
+              peer: displayFrom,
               direction: 'in',
               status: 'missed',
               provider: 'waha',
