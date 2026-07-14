@@ -9,7 +9,7 @@
 // ============================================================
 
 import { NextResponse } from 'next/server'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 
 import { db, callLogs, conversations, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -26,8 +26,13 @@ export async function POST(request: Request) {
       answered?: boolean
       callId?: string
     }
-    // Finalize the history row regardless of a conversation (the panel is
-    // the source of truth; the chat entry below needs the conversation).
+    // Finalize the history row (the panel is the source of truth). Promote-
+    // only: never downgrade a call the call.accepted webhook already marked
+    // answered (e.g. the peer hung up first and the modal missed the state).
+    let historyRow: {
+      contactId: string | null
+      channelId: string | null
+    } | null = null
     if (body.callId) {
       try {
         await db
@@ -40,36 +45,72 @@ export async function POST(request: Request) {
             updatedAt: new Date().toISOString(),
           })
           .where(
-            and(
-              eq(callLogs.accountId, ctx.accountId),
-              eq(callLogs.externalCallId, body.callId),
-            ),
+            body.answered
+              ? and(
+                  eq(callLogs.accountId, ctx.accountId),
+                  eq(callLogs.externalCallId, body.callId),
+                )
+              : and(
+                  eq(callLogs.accountId, ctx.accountId),
+                  eq(callLogs.externalCallId, body.callId),
+                  inArray(callLogs.status, ['dialing', 'missed']),
+                ),
           )
+        historyRow = firstOrNull(
+          await db
+            .select({
+              contactId: callLogs.contactId,
+              channelId: callLogs.channelId,
+            })
+            .from(callLogs)
+            .where(
+              and(
+                eq(callLogs.accountId, ctx.accountId),
+                eq(callLogs.externalCallId, body.callId),
+              ),
+            )
+            .limit(1),
+        )
       } catch (err) {
         console.error('[waha-calls] history finalize failed:', err)
       }
     }
-    if (!body.conversationId) {
-      return NextResponse.json({ ok: true, chatLog: false })
-    }
 
-    const conv = firstOrNull(
-      await db
-        .select({ id: conversations.id })
-        .from(conversations)
-        .where(
-          and(
-            eq(conversations.id, body.conversationId),
-            eq(conversations.accountId, ctx.accountId),
-          ),
-        )
-        .limit(1),
-    )
-    if (!conv) {
-      return NextResponse.json(
-        { error: 'conversation not found' },
-        { status: 404 },
+    // Chat entry (WhatsApp-style: the call shows in the thread and bumps the
+    // conversation to the top). Prefer the conversation the modal was opened
+    // from; otherwise resolve it from the call's contact + channel (calls
+    // placed from the Ligações panel don't carry a conversationId).
+    let conv: { id: string } | null = null
+    if (body.conversationId) {
+      conv = firstOrNull(
+        await db
+          .select({ id: conversations.id })
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.id, body.conversationId),
+              eq(conversations.accountId, ctx.accountId),
+            ),
+          )
+          .limit(1),
       )
+    } else if (historyRow?.contactId && historyRow.channelId) {
+      conv = firstOrNull(
+        await db
+          .select({ id: conversations.id })
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.accountId, ctx.accountId),
+              eq(conversations.contactId, historyRow.contactId),
+              eq(conversations.channelId, historyRow.channelId),
+            ),
+          )
+          .limit(1),
+      )
+    }
+    if (!conv) {
+      return NextResponse.json({ ok: true, chatLog: false })
     }
 
     await db.insert(messages).values({

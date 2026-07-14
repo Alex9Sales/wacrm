@@ -29,7 +29,7 @@
 import crypto from 'crypto'
 
 import { NextResponse, after } from 'next/server'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, ne } from 'drizzle-orm'
 
 import { db, callLogs, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -210,18 +210,27 @@ export async function POST(request: Request, { params }: RouteParams) {
           status: ev.event === 'call.accepted' ? 'ACCEPTED_ELSEWHERE' : 'REJECTED',
         })
         try {
+          // Promote-only: gows fires call.rejected when the PEER HANGS UP an
+          // active call too — that must never downgrade an answered call
+          // back to "não atendida".
+          const where =
+            ev.event === 'call.accepted'
+              ? and(
+                  eq(callLogs.accountId, channel.accountId),
+                  eq(callLogs.externalCallId, callId),
+                )
+              : and(
+                  eq(callLogs.accountId, channel.accountId),
+                  eq(callLogs.externalCallId, callId),
+                  ne(callLogs.status, 'answered'),
+                )
           await db
             .update(callLogs)
             .set({
               status: ev.event === 'call.accepted' ? 'answered' : 'rejected',
               updatedAt: new Date().toISOString(),
             })
-            .where(
-              and(
-                eq(callLogs.accountId, channel.accountId),
-                eq(callLogs.externalCallId, callId),
-              ),
-            )
+            .where(where)
         } catch (err) {
           console.error('[webhooks/generic] call-log update failed:', err)
         }
