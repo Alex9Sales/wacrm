@@ -9,6 +9,7 @@
 // ============================================================
 
 import { useCallback, useEffect, useState } from 'react';
+import { useRouter } from 'next/navigation';
 import {
   Phone,
   PhoneCall,
@@ -35,6 +36,7 @@ interface CallRow {
   contactId: string | null;
   contactName: string | null;
   contactPhone: string | null;
+  conversationId: string | null;
 }
 
 function displayPeer(c: CallRow): string {
@@ -61,6 +63,7 @@ function whenLabel(iso: string): string {
 }
 
 export default function CallsPage() {
+  const router = useRouter();
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -154,8 +157,17 @@ export default function CallsPage() {
               !!c.channelId &&
               (!!c.contactPhone ||
                 /@(c\.us|s\.whatsapp\.net)$/.test(c.peer));
+            const openConversation = c.conversationId
+              ? () => router.push(`/inbox?c=${c.conversationId}`)
+              : undefined;
             return (
-              <li key={c.id} className="flex items-center gap-3 px-4 py-3">
+              <li
+                key={c.id}
+                onClick={openConversation}
+                className={`flex items-center gap-3 px-4 py-3 ${
+                  openConversation ? 'cursor-pointer hover:bg-muted/50' : ''
+                }`}
+              >
                 <span
                   className={`flex size-10 shrink-0 items-center justify-center rounded-full ${
                     missed
@@ -183,7 +195,10 @@ export default function CallsPage() {
                 </span>
                 {canCallBack && (
                   <button
-                    onClick={() => callBack(c)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      callBack(c);
+                    }}
                     title="Ligar de volta"
                     className="flex size-8 shrink-0 items-center justify-center rounded-full text-emerald-600 transition hover:bg-emerald-500/10"
                   >

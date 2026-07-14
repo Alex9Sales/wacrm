@@ -5,14 +5,24 @@
 // ============================================================
 
 import { NextResponse } from 'next/server'
-import { desc, eq } from 'drizzle-orm'
+import { desc, eq, sql } from 'drizzle-orm'
 
-import { db, callLogs, channels, contacts } from '@/db'
+import { db, callLogs, channels, contacts, conversations } from '@/db'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 
 export async function GET() {
   try {
     const ctx = await getCurrentAccount()
+    // The contact's conversation for the click-to-open shortcut — prefer the
+    // conversation on the call's own channel, fall back to the most recent.
+    const conversationIdSql = sql<string | null>`(
+      select cv.id from conversations cv
+      where cv.contact_id = ${callLogs.contactId}
+        and cv.account_id = ${ctx.accountId}
+      order by (cv.channel_id = ${callLogs.channelId}) desc,
+        cv.last_message_at desc nulls last
+      limit 1
+    )`
     const rows = await db
       .select({
         id: callLogs.id,
@@ -27,6 +37,7 @@ export async function GET() {
         contactId: contacts.id,
         contactName: contacts.name,
         contactPhone: contacts.phone,
+        conversationId: conversationIdSql,
       })
       .from(callLogs)
       .leftJoin(channels, eq(channels.id, callLogs.channelId))
