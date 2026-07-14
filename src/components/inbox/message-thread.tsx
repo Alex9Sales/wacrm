@@ -942,6 +942,21 @@ export function MessageThread({
                 <PhoneCall className="h-4 w-4" />
               </button>
             )}
+          {/* Ligar via waha-voip (não-oficial) — canal WAHA com telefone.
+              Usa o motor de voz waha-voip; não exige permissão do cliente. */}
+          {conversation.channel?.provider === "waha" && contact.phone && (
+            <button
+              type="button"
+              onClick={() =>
+                startOutboundCall(contact.phone, contact.name ?? undefined, "waha")
+              }
+              aria-label="Ligar para o cliente pelo WhatsApp"
+              title="Ligar pelo WhatsApp"
+              className="inline-flex h-7 w-7 items-center justify-center rounded-md text-emerald-600 transition-colors hover:bg-emerald-500/10"
+            >
+              <PhoneCall className="h-4 w-4" />
+            </button>
+          )}
           {/* Contact-panel toggle — desktop only. The contact sidebar
               eats a chunk of horizontal width that crowds the thread on
               smaller laptops; this lets agents reclaim it when they just
