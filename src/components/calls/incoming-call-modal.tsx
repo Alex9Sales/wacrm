@@ -134,6 +134,39 @@ export function IncomingCallModal() {
     }
   }, []);
 
+  // Outbound "chamando…" ringback (what the CALLER hears): single 425 Hz
+  // tone, Brazilian cadence (1 s on / 4 s off). Reuses the ringtone refs so
+  // stopRingtone() silences either sound.
+  const startRingback = useCallback(() => {
+    try {
+      const Ctx =
+        window.AudioContext ||
+        (window as unknown as { webkitAudioContext: typeof AudioContext })
+          .webkitAudioContext;
+      const ctx = new Ctx();
+      ringCtxRef.current = ctx;
+      const beep = () => {
+        const t0 = ctx.currentTime;
+        const g = ctx.createGain();
+        g.gain.setValueAtTime(0.0001, t0);
+        g.gain.exponentialRampToValueAtTime(0.08, t0 + 0.05);
+        g.gain.setValueAtTime(0.08, t0 + 0.95);
+        g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.0);
+        g.connect(ctx.destination);
+        const o = ctx.createOscillator();
+        o.type = 'sine';
+        o.frequency.value = 425;
+        o.connect(g);
+        o.start(t0);
+        o.stop(t0 + 1.0);
+      };
+      beep();
+      ringTimerRef.current = setInterval(beep, 5000);
+    } catch {
+      /* autoplay blocked — silent dialing still works */
+    }
+  }, []);
+
   const startRingtone = useCallback(() => {
     // Screen/device vibration in the classic ring cadence (mobile only).
     try {
@@ -253,7 +286,7 @@ export function IncomingCallModal() {
   // DC; DC → Float32 → playback worklet → speaker. /webrtc returns the SDP
   // answer synchronously.
   const wahaConnectAudio = useCallback(
-    async (callId: string, channelId?: string) => {
+    async (callId: string, channelId?: string, ringUntilAudio = false) => {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: false,
@@ -265,7 +298,9 @@ export function IncomingCallModal() {
       pcRef.current = pc;
       pc.onconnectionstatechange = () => {
         const s = pc.connectionState;
-        if (s === 'connected') setPhase('active');
+        // Outbound: the browser↔server leg connects in ~1 s, long before the
+        // customer answers — hold "chamando…" until real audio arrives.
+        if (s === 'connected' && !ringUntilAudio) setPhase('active');
         if (s === 'failed' || s === 'closed' || s === 'disconnected') cleanup();
       };
       const dc = pc.createDataChannel('pcm', { ordered: true });
@@ -288,7 +323,17 @@ export function IncomingCallModal() {
       const playback = new AudioWorkletNode(ctx, 'playback-processor');
       const dest = ctx.createMediaStreamDestination();
       playback.connect(dest);
+      let gotAudio = false;
       dc.onmessage = (ev) => {
+        // First peer PCM frame = the call is genuinely live (the server only
+        // streams audio once the callee accepts) — stop the ringback.
+        if (!gotAudio) {
+          gotAudio = true;
+          if (ringUntilAudio) {
+            stopRingtone();
+            setPhase('active');
+          }
+        }
         playback.port.postMessage(pcmToFloat(ev.data as ArrayBuffer));
       };
       if (audioRef.current) {
@@ -313,7 +358,7 @@ export function IncomingCallModal() {
       if (!rtcRes.ok || !rtcData.sdpAnswer) throw new Error('waha webrtc failed');
       await pc.setRemoteDescription({ type: 'answer', sdp: rtcData.sdpAnswer });
     },
-    [cleanup],
+    [cleanup, stopRingtone],
   );
 
   // ---- inbound answer ----
@@ -428,9 +473,10 @@ export function IncomingCallModal() {
         channelId,
       });
       setPhase('connecting');
-      await wahaConnectAudio(initData.callId, channelId);
+      startRingback(); // "tuuu… tuuu" until the customer actually answers
+      await wahaConnectAudio(initData.callId, channelId, true);
     },
-    [wahaConnectAudio],
+    [wahaConnectAudio, startRingback],
   );
 
   const dial = useCallback(
@@ -534,19 +580,22 @@ export function IncomingCallModal() {
             });
         }
       } else if (e.type === 'call_status') {
-        // waha emits call.accepted for OUR OWN accept too — if we're already
-        // past ringing on this waha call, that echo must not tear it down.
-        if (
-          e.status === 'ACCEPTED_ELSEWHERE' &&
-          call?.provider === 'waha' &&
-          phase !== 'ringing'
-        ) {
-          return;
+        if (e.status === 'ACCEPTED_ELSEWHERE' && call?.provider === 'waha') {
+          // Outbound: the customer answered → flip "chamando…" to active
+          // (backs up the first-audio-frame trigger in wahaConnectAudio).
+          if (dir === 'out' && phase === 'connecting') {
+            stopRingtone();
+            setPhase('active');
+            return;
+          }
+          // Our own accept echoes call.accepted too — never tear down a call
+          // that's already past ringing.
+          if (phase !== 'ringing') return;
         }
         cleanup();
       }
     },
-    [phase, call, startRingtone, cleanup],
+    [phase, dir, call, startRingtone, stopRingtone, cleanup],
   );
   useServerEvents(onEvent);
 
