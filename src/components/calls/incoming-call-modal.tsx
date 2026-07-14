@@ -57,6 +57,29 @@ export function startOutboundCall(
   );
 }
 
+// waha-voip carries browser audio as raw 16 kHz s16le PCM over a DataChannel
+// (not an RTP track). These convert between the AudioWorklet's Float32 blocks
+// and the s16le bytes on the wire. Ported from the waha-voip dashboard dialer.
+function floatToPcm(samples: Float32Array): ArrayBuffer {
+  const view = new DataView(new ArrayBuffer(samples.length * 2));
+  for (let i = 0; i < samples.length; i += 1) {
+    let n = samples[i];
+    if (Number.isNaN(n)) n = 0;
+    else if (n > 1) n = 1;
+    else if (n < -1) n = -1;
+    view.setInt16(i * 2, n < 0 ? Math.round(n * 32768) : Math.round(n * 32767), true);
+  }
+  return view.buffer;
+}
+
+function pcmToFloat(buf: ArrayBuffer): Float32Array {
+  const view = new DataView(buf);
+  const len = Math.floor(buf.byteLength / 2);
+  const out = new Float32Array(len);
+  for (let i = 0; i < len; i += 1) out[i] = view.getInt16(i * 2, true) / 32768;
+  return out;
+}
+
 function waitIceComplete(pc: RTCPeerConnection): Promise<void> {
   if (pc.iceGatheringState === 'complete') return Promise.resolve();
   return new Promise((resolve) => {
@@ -81,6 +104,7 @@ export function IncomingCallModal() {
 
   const pcRef = useRef<RTCPeerConnection | null>(null);
   const localStreamRef = useRef<MediaStream | null>(null);
+  const audioCtxRef = useRef<AudioContext | null>(null); // waha-voip PCM path
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const callIdRef = useRef<string>('');
   const offerSdpRef = useRef<string>(''); // inbound offer to answer
@@ -164,6 +188,10 @@ export function IncomingCallModal() {
     if (localStreamRef.current) {
       localStreamRef.current.getTracks().forEach((t) => t.stop());
       localStreamRef.current = null;
+    }
+    if (audioCtxRef.current) {
+      audioCtxRef.current.close().catch(() => {});
+      audioCtxRef.current = null;
     }
     if (audioRef.current) audioRef.current.srcObject = null;
     callIdRef.current = '';
@@ -279,8 +307,10 @@ export function IncomingCallModal() {
   );
 
   // ---- outbound dial (waha-voip) ----
-  // POST /initiate rings the customer; then /webrtc returns the SDP answer
-  // synchronously (no permission, no SSE). Goes active via connectionstate.
+  // POST /initiate rings the customer; then the browser negotiates audio over a
+  // "pcm" DataChannel (waha-voip's protocol — NOT an RTP track): mic → capture
+  // worklet → 16 kHz s16le PCM → DC; DC → Float32 → playback worklet → speaker.
+  // /webrtc returns the SDP answer synchronously (no permission, no SSE).
   const dialWaha = useCallback(
     async (to: string, name?: string) => {
       const initRes = await fetch('/api/calls/waha/initiate', {
@@ -296,8 +326,49 @@ export function IncomingCallModal() {
       setCall({ callId: initData.callId, peer: to, name, provider: 'waha' });
       setPhase('connecting');
 
-      const pc = await newPeer();
-      const offer = await pc.createOffer({ offerToReceiveAudio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({
+        audio: true,
+        video: false,
+      });
+      localStreamRef.current = stream;
+      // No STUN: waha-voip advertises its public IP directly and learns the
+      // browser's address from the incoming ICE checks (peer-reflexive).
+      const pc = new RTCPeerConnection({ iceServers: [] });
+      pcRef.current = pc;
+      pc.onconnectionstatechange = () => {
+        const s = pc.connectionState;
+        if (s === 'connected') setPhase('active');
+        if (s === 'failed' || s === 'closed' || s === 'disconnected') cleanup();
+      };
+      const dc = pc.createDataChannel('pcm', { ordered: true });
+      dc.binaryType = 'arraybuffer';
+
+      const ctx = new AudioContext({ sampleRate: 16000 });
+      audioCtxRef.current = ctx;
+      await ctx.audioWorklet.addModule('/worklets/capture-processor.js');
+      await ctx.audioWorklet.addModule('/worklets/playback-processor.js');
+      await ctx.resume();
+
+      const src = ctx.createMediaStreamSource(stream);
+      const capture = new AudioWorkletNode(ctx, 'capture-processor');
+      capture.port.onmessage = (ev) => {
+        if (dc.readyState === 'open') dc.send(floatToPcm(ev.data as Float32Array));
+      };
+      src.connect(capture);
+      capture.connect(ctx.destination);
+
+      const playback = new AudioWorkletNode(ctx, 'playback-processor');
+      const dest = ctx.createMediaStreamDestination();
+      playback.connect(dest);
+      dc.onmessage = (ev) => {
+        playback.port.postMessage(pcmToFloat(ev.data as ArrayBuffer));
+      };
+      if (audioRef.current) {
+        audioRef.current.srcObject = dest.stream;
+        audioRef.current.play().catch(() => {});
+      }
+
+      const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
       await waitIceComplete(pc);
       const rtcRes = await fetch(
@@ -314,7 +385,7 @@ export function IncomingCallModal() {
       if (!rtcRes.ok || !rtcData.sdpAnswer) throw new Error('waha webrtc failed');
       await pc.setRemoteDescription({ type: 'answer', sdp: rtcData.sdpAnswer });
     },
-    [newPeer],
+    [cleanup],
   );
 
   const dial = useCallback(
