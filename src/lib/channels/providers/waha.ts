@@ -267,6 +267,16 @@ interface WahaMessagePayload {
     // WAHA NOWEB flags view-once here: `_data.key.isViewOnce` (confirmed
     // against a real payload — the media itself is withheld).
     key?: { remoteJidAlt?: string; isViewOnce?: boolean };
+    // GOWS (whatsmeow) engine — waha-voip: raw Go Info struct. With native
+    // @lid addressing the real phone lives in Info.SenderAlt (inbound) /
+    // Info.RecipientAlt (fromMe echoes), both @s.whatsapp.net (confirmed
+    // against a real waha-voip payload).
+    Info?: {
+      Chat?: string;
+      SenderAlt?: string;
+      RecipientAlt?: string;
+      PushName?: string;
+    };
     pushName?: string;
     notifyName?: string;
     viewOnce?: boolean;
@@ -573,10 +583,19 @@ export const wahaProvider: WhatsAppProvider = {
       // storing the same inbound twice.
       if (event === 'message.any' && !fromMe) return { messages, statuses };
 
-      // @lid privacy addressing: the real phone lives in
-      // _data.key.remoteJidAlt (@s.whatsapp.net). Prefer it when the
-      // primary chat is @lid; otherwise a @lid-only chat is non-direct.
-      const alt = String(p._data?.key?.remoteJidAlt || '');
+      // @lid privacy addressing: the real phone lives in an "alt" field —
+      // NOWEB/Baileys: _data.key.remoteJidAlt; GOWS/whatsmeow (waha-voip):
+      // _data.Info.SenderAlt (inbound) / Info.RecipientAlt (fromMe echoes).
+      // Prefer the alt when the primary chat is @lid; otherwise a @lid-only
+      // chat is non-direct.
+      const info = p._data?.Info;
+      // (fromMe: Sender = us, so SenderAlt would be OUR number — only
+      // RecipientAlt identifies the customer there.)
+      const alt = String(
+        p._data?.key?.remoteJidAlt ||
+          (fromMe ? info?.RecipientAlt : info?.SenderAlt) ||
+          '',
+      );
       // NOWEB puts the contact in `from` for both incoming and fromMe;
       // WEBJS used `to` for fromMe — keep it as a fallback.
       let chat = String(p.from || p.to || '');
@@ -594,7 +613,11 @@ export const wahaProvider: WhatsAppProvider = {
       const externalMessageId = raw ? normalizeSerializedId(raw) : '';
       const fromPhoneE164 = normalizePhone(chat.split('@')[0]);
       const pushName =
-        p._data?.pushName || p._data?.notifyName || p.notifyName || undefined;
+        p._data?.pushName ||
+        p._data?.notifyName ||
+        p.notifyName ||
+        info?.PushName ||
+        undefined;
 
       const viewOnce = detectViewOnce(p);
       let media: NormalizedInbound['media'] | undefined;
