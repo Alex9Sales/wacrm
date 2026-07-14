@@ -276,15 +276,25 @@ async function processWebhook(body: MetaRawBody) {
                   )
                 : null
               if (conv) {
+                const logText = buildCallLog({
+                  answered,
+                  durationSec: call.duration,
+                })
                 await db.insert(messages).values({
                   conversationId: conv.id,
                   senderType: 'customer',
                   contentType: 'text',
-                  contentText: buildCallLog({
-                    answered,
-                    durationSec: call.duration,
-                  }),
+                  contentText: logText,
                 })
+                // Direct insert bypasses the inbound pipeline — bump the
+                // conversation preview/ordering (floats to the top).
+                await db
+                  .update(conversations)
+                  .set({
+                    lastMessageText: logText,
+                    lastMessageAt: new Date().toISOString(),
+                  })
+                  .where(eq(conversations.id, conv.id))
                 // Refresh the thread without ringing (fromMe skips the sound).
                 await publishEvent(channel.accountId, {
                   type: 'message.received',

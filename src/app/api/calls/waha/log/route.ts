@@ -113,15 +113,26 @@ export async function POST(request: Request) {
       return NextResponse.json({ ok: true, chatLog: false })
     }
 
+    const logText = buildCallLog({
+      answered: !!body.answered,
+      durationSec: body.durationSec,
+    })
     await db.insert(messages).values({
       conversationId: conv.id,
       senderType: 'agent', // outbound — shows on the agent's side
       contentType: 'text',
-      contentText: buildCallLog({
-        answered: !!body.answered,
-        durationSec: body.durationSec,
-      }),
+      contentText: logText,
     })
+    // Direct inserts bypass the inbound pipeline, so bump the conversation
+    // preview/ordering ourselves (WhatsApp-style: the call floats the chat
+    // to the top of the list).
+    await db
+      .update(conversations)
+      .set({
+        lastMessageText: logText,
+        lastMessageAt: new Date().toISOString(),
+      })
+      .where(eq(conversations.id, conv.id))
     // Refresh the thread without ringing (fromMe skips the notification sound).
     await publishEvent(ctx.accountId, {
       type: 'message.received',
