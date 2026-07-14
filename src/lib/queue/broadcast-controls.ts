@@ -18,7 +18,7 @@
 
 import { and, eq } from 'drizzle-orm';
 
-import { db, broadcasts } from '@/db';
+import { db, broadcastRecipients, broadcasts } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { enqueueBroadcastDispatch } from './queues';
 
@@ -123,6 +123,51 @@ export async function cancelBroadcast(
   }
   await setStatus(broadcastId, 'cancelled');
   return { ok: true, status: 'cancelled' };
+}
+
+/**
+ * Requeue only the FAILED recipients of a finished (or stuck) broadcast —
+ * "reenviar falhados". Resets them to 'pending' (attempts zeroed, error
+ * cleared), flips the broadcast back to 'sending' and re-enqueues the
+ * dispatch, which fans out pending recipients only (already-sent ones are
+ * untouched). Typical use: a channel dropped mid-broadcast and reconnected.
+ */
+export async function retryFailedBroadcast(
+  broadcastId: string,
+  accountId: string,
+): Promise<ControlResult & { requeued?: number }> {
+  const status = await currentStatus(broadcastId, accountId);
+  if (status === null)
+    return { ok: false, status: 'unknown', code: 'not_found' };
+  if (status === 'sending' || status === 'scheduled') {
+    return {
+      ok: false,
+      status,
+      code: 'invalid_state',
+      message: `Broadcast ainda em andamento ('${status}')`,
+    };
+  }
+  const reset = await db
+    .update(broadcastRecipients)
+    .set({ status: 'pending', attempts: 0, errorMessage: null })
+    .where(
+      and(
+        eq(broadcastRecipients.broadcastId, broadcastId),
+        eq(broadcastRecipients.status, 'failed'),
+      ),
+    )
+    .returning({ id: broadcastRecipients.id });
+  if (reset.length === 0) {
+    return {
+      ok: false,
+      status,
+      code: 'invalid_state',
+      message: 'Nenhum destinatário falhado para reenviar',
+    };
+  }
+  await setStatus(broadcastId, 'sending');
+  await enqueueBroadcastDispatch(broadcastId, {});
+  return { ok: true, status: 'sending', requeued: reset.length };
 }
 
 export async function controlBroadcast(

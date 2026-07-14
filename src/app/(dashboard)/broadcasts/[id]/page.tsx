@@ -10,6 +10,7 @@ import {
   resumeBroadcastAction,
   cancelBroadcastAction,
   sendBroadcastNowAction,
+  retryFailedBroadcastAction,
 } from '../actions';
 import { Broadcast, BroadcastRecipient, RecipientStatus } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -53,6 +54,8 @@ import {
   Ban,
   CalendarClock,
   Zap,
+  RefreshCw,
+  MessageSquare,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
@@ -283,6 +286,25 @@ export default function BroadcastDetailPage() {
     }
   }
 
+  async function runRetryFailed(): Promise<void> {
+    setControlBusy(true);
+    try {
+      const result = await retryFailedBroadcastAction(broadcastId);
+      if (!result.ok) {
+        toast.error(result.message ?? 'Não foi possível reenviar os falhados.');
+      } else {
+        toast.success(
+          `Reenviando ${result.requeued ?? 0} destinatário(s) falhado(s).`,
+        );
+      }
+      await fetchData().catch(() => {});
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha na operação.');
+    } finally {
+      setControlBusy(false);
+    }
+  }
+
   async function runSendNow(): Promise<void> {
     setControlBusy(true);
     try {
@@ -456,6 +478,22 @@ export default function BroadcastDetailPage() {
             >
               <Zap className="h-3.5 w-3.5" />
               Enviar agora
+            </Button>
+          )}
+
+          {/* Reenviar falhados — requeue only the failed recipients (e.g.
+              the channel dropped mid-broadcast and reconnected). Hidden
+              while the broadcast is still live. */}
+          {broadcast.failed_count > 0 && !isLive && (
+            <Button
+              variant="outline"
+              size="sm"
+              disabled={controlBusy}
+              onClick={() => void runRetryFailed()}
+              className="border-amber-500/40 text-amber-600 hover:bg-amber-500/10 disabled:opacity-50"
+            >
+              <RefreshCw className="h-3.5 w-3.5" />
+              Reenviar falhados ({broadcast.failed_count})
             </Button>
           )}
 
@@ -726,6 +764,7 @@ export default function BroadcastDetailPage() {
                   <TableHead className="text-muted-foreground">Entregue</TableHead>
                   <TableHead className="text-muted-foreground">Lida</TableHead>
                   <TableHead className="text-muted-foreground">Erro</TableHead>
+                  <TableHead className="text-muted-foreground text-right">Chat</TableHead>
                 </TableRow>
               </TableHeader>
               <TableBody>
@@ -763,6 +802,24 @@ export default function BroadcastDetailPage() {
                       </TableCell>
                       <TableCell className="max-w-xs truncate text-xs text-red-400">
                         {recipient.error_message ?? '-'}
+                      </TableCell>
+                      <TableCell className="text-right">
+                        {recipient.conversation_id ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              router.push(
+                                `/inbox?c=${recipient.conversation_id}`,
+                              )
+                            }
+                            title="Abrir a conversa deste contato"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-primary transition-colors hover:bg-primary/10"
+                          >
+                            <MessageSquare className="h-4 w-4" />
+                          </button>
+                        ) : (
+                          <span className="text-muted-foreground">-</span>
+                        )}
                       </TableCell>
                     </TableRow>
                   );

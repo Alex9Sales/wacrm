@@ -153,6 +153,15 @@ export async function POST(request: Request, { params }: RouteParams) {
       const callId = ev.payload?.id ?? ''
       if (ev.event === 'call.received' && callId && !ev.payload?.isGroup) {
         const rawFrom = String(ev.payload?.from ?? '')
+        // TEMP diagnostic: capture the raw shape once so we can learn where
+        // gows hides the caller's real phone for @lid callers (name +
+        // call-back in the Ligações panel). Remove after confirming.
+        if (/@lid$/.test(rawFrom)) {
+          console.log(
+            '[webhooks/generic] call.received @lid payload:',
+            JSON.stringify(ev.payload).slice(0, 1500),
+          )
+        }
         // @lid callers can't be reduced to a phone here — pass the raw
         // chatId; reject needs it verbatim and the modal falls back to it
         // for display.

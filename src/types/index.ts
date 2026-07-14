@@ -412,6 +412,9 @@ export interface Broadcast {
 export interface BroadcastRecipient {
   id: string;
   broadcast_id: string;
+  /** The contact's conversation (broadcast channel preferred) — powers the
+   *  "abrir chat" shortcut in the recipients table. */
+  conversation_id?: string | null;
   /**
    * Nullable after migration 004 — becomes NULL when the referenced
    * contact is deleted (ON DELETE SET NULL). History preserved; the

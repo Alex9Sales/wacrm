@@ -25,6 +25,7 @@ import {
   pauseBroadcast,
   resumeBroadcast,
   cancelBroadcast,
+  retryFailedBroadcast,
   type ControlResult,
 } from '@/lib/queue/broadcast-controls'
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels'
@@ -123,12 +124,31 @@ export async function listBroadcastRecipients(
   // Scope through the parent broadcast — recipients have no account_id.
   const parent = firstOrNull(
     await db
-      .select({ id: broadcasts.id })
+      .select({ id: broadcasts.id, channelId: broadcasts.channelId })
       .from(broadcasts)
       .where(and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, ctx.accountId)))
       .limit(1),
   )
   if (!parent) return []
+
+  // The contact's conversation for the "abrir chat" shortcut — prefer the
+  // broadcast's channel, fall back to the contact's most recent thread.
+  const conversationIdSql = parent.channelId
+    ? sql<string | null>`(
+        select cv.id from conversations cv
+        where cv.contact_id = ${broadcastRecipients.contactId}
+          and cv.account_id = ${ctx.accountId}
+        order by (cv.channel_id = ${parent.channelId}) desc,
+          cv.last_message_at desc nulls last
+        limit 1
+      )`
+    : sql<string | null>`(
+        select cv.id from conversations cv
+        where cv.contact_id = ${broadcastRecipients.contactId}
+          and cv.account_id = ${ctx.accountId}
+        order by cv.last_message_at desc nulls last
+        limit 1
+      )`
 
   const rows = await db
     .select({
@@ -143,6 +163,7 @@ export async function listBroadcastRecipients(
       replied_at: broadcastRecipients.repliedAt,
       error_message: broadcastRecipients.errorMessage,
       created_at: broadcastRecipients.createdAt,
+      conversation_id: conversationIdSql,
       contact: contactColumns,
     })
     .from(broadcastRecipients)
@@ -1028,6 +1049,14 @@ export async function cancelBroadcastAction(
 ): Promise<ControlResult> {
   const ctx = await getCurrentAccount()
   return cancelBroadcast(broadcastId, ctx.accountId)
+}
+
+/** "Reenviar falhados" — requeue only the failed recipients of a broadcast. */
+export async function retryFailedBroadcastAction(
+  broadcastId: string,
+): Promise<ControlResult & { requeued?: number }> {
+  const ctx = await getCurrentAccount()
+  return retryFailedBroadcast(broadcastId, ctx.accountId)
 }
 
 /** Flip a broadcast's final status once the send loop completes. */
