@@ -376,6 +376,34 @@ function textFromInteractive(p: WahaMessagePayload): string {
  * `_data.key.isViewOnce` (and delivers no media/body for it). The extra
  * checks are cheap fallbacks for other engines/shapes.
  */
+/** Location share → a clickable Google Maps link (opens the pin, and the
+ *  agent can forward it by copying the link). Handles static and live
+ *  location, both engines (`_data.message` NOWEB / `_data.Message` GOWS). */
+function textFromLocation(p: WahaMessagePayload): string {
+  const msg = (p._data?.message ?? p._data?.Message) as
+    | {
+        locationMessage?: LocationNode
+        liveLocationMessage?: LocationNode
+      }
+    | undefined
+  const live = msg?.liveLocationMessage
+  const loc = msg?.locationMessage ?? live
+  const lat = loc?.degreesLatitude
+  const lng = loc?.degreesLongitude
+  if (typeof lat !== 'number' || typeof lng !== 'number') return ''
+  const label = live ? '📍 Localização em tempo real' : '📍 Localização'
+  const place = loc?.name || loc?.address
+  const named = place ? `\n${place}` : ''
+  return `${label}${named}\nhttps://www.google.com/maps?q=${lat},${lng}`
+}
+
+interface LocationNode {
+  degreesLatitude?: number
+  degreesLongitude?: number
+  name?: string
+  address?: string
+}
+
 function detectViewOnce(p: WahaMessagePayload): boolean {
   return (
     p._data?.key?.isViewOnce === true ||
@@ -629,6 +657,10 @@ export const wahaProvider: WhatsAppProvider = {
       // WhatsApp Pix key cards arrive as an interactiveMessage with no body —
       // extract the key so it renders instead of an empty [text].
       if (!text) text = textFromInteractive(p);
+      // Location shares: render as a clickable Google Maps link (opens the
+      // pin; forwardable by copying the link) instead of an empty [text].
+      const locationText = textFromLocation(p);
+      if (locationText) text = locationText;
       const raw = serializedIdToString(p.id);
       const externalMessageId = raw ? normalizeSerializedId(raw) : '';
       // GOWS alts carry the multi-device suffix ("556…5477:9@s.whatsapp.net");
@@ -645,7 +677,9 @@ export const wahaProvider: WhatsAppProvider = {
       const viewOnce = detectViewOnce(p);
       let media: NormalizedInbound['media'] | undefined;
       let contentType: NormalizedInbound['contentType'] = 'text';
-      if (p.hasMedia || p.media) {
+      // A location's JPEG thumbnail can look like media — keep it as the
+      // text (maps link) rather than trying to fetch a nonexistent file.
+      if ((p.hasMedia || p.media) && !locationText) {
         const mimetype = p.media?.mimetype || 'application/octet-stream';
         const kind = kindOfMime(mimetype);
         contentType = (
