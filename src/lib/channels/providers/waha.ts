@@ -319,24 +319,35 @@ function textOfPayload(p: WahaMessagePayload): string {
  *  falls back to any body/header title. Empty when it's not something we can
  *  render as text. The PIX_PREFIX marker lets the bubble render a copy card. */
 export const PIX_PREFIX = '💠 Chave Pix';
+interface InteractiveNode {
+  // GOWS wraps the proto one level deeper: interactiveMessage.InteractiveMessage
+  InteractiveMessage?: InteractiveNode;
+  // Baileys: nativeFlowMessage/buttonParamsJson; GOWS: NativeFlowMessage/
+  // buttonParamsJSON (confirmed against a real waha-voip Pix payload).
+  nativeFlowMessage?: {
+    buttons?: Array<{ name?: string; buttonParamsJson?: string; buttonParamsJSON?: string }>;
+  };
+  NativeFlowMessage?: {
+    buttons?: Array<{ name?: string; buttonParamsJson?: string; buttonParamsJSON?: string }>;
+  };
+  body?: { text?: string };
+  header?: { title?: string };
+}
+
 function textFromInteractive(p: WahaMessagePayload): string {
   // `_data.message` = NOWEB/Baileys; `_data.Message` = GOWS (waha-voip).
-  const im = ((p._data?.message ?? p._data?.Message) as
+  let im = ((p._data?.message ?? p._data?.Message) as
     | { interactiveMessage?: unknown }
-    | undefined)?.interactiveMessage as
-    | {
-        nativeFlowMessage?: {
-          buttons?: Array<{ name?: string; buttonParamsJson?: string }>;
-        };
-        body?: { text?: string };
-        header?: { title?: string };
-      }
-    | undefined;
+    | undefined)?.interactiveMessage as InteractiveNode | undefined;
   if (!im) return '';
-  for (const b of im.nativeFlowMessage?.buttons ?? []) {
-    if (!b.buttonParamsJson) continue;
+  // GOWS nests the actual node one level down.
+  if (im.InteractiveMessage) im = im.InteractiveMessage;
+  const flow = im.nativeFlowMessage ?? im.NativeFlowMessage;
+  for (const b of flow?.buttons ?? []) {
+    const raw = b.buttonParamsJson ?? b.buttonParamsJSON;
+    if (!raw) continue;
     try {
-      const params = JSON.parse(b.buttonParamsJson) as {
+      const params = JSON.parse(raw) as {
         payment_settings?: Array<{
           pix_static_code?: {
             merchant_name?: string;
