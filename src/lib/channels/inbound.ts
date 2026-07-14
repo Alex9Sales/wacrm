@@ -82,8 +82,12 @@ export async function dispatchInboundMessage(
   const senderPhone = ev.fromPhoneE164;
 
   // 1) Dedup by externalMessageId — skip if a message with that id already
-  //    exists in this account. messages have no account_id column, so we
-  //    join through conversations.
+  //    exists on THIS CHANNEL (messages have no account_id column, so we
+  //    join through conversations). Scoped per channel, not per account:
+  //    a replayed webhook always hits the same channel, but when BOTH sides
+  //    of a chat are channels of the same account (e.g. two of the org's
+  //    numbers talking), the same WhatsApp message id legitimately appears
+  //    once per channel — account-wide dedupe silently dropped the second.
   if (ev.externalMessageId) {
     const dupe = firstOrNull(
       await db
@@ -94,6 +98,7 @@ export async function dispatchInboundMessage(
           and(
             eq(messages.messageId, ev.externalMessageId),
             eq(conversations.accountId, accountId),
+            eq(conversations.channelId, channel.id),
           ),
         )
         .limit(1),
