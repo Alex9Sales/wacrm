@@ -134,11 +134,15 @@ export default function CallsPage() {
       ) : (
         <ul className="divide-y divide-border rounded-xl border border-border bg-card">
           {calls.map((c) => {
-            const missed = c.status === 'missed' || c.status === 'rejected';
+            const notAnswered = c.status === 'missed' || c.status === 'rejected';
+            // Red ("you missed this") ONLY for INBOUND calls you didn't take.
+            // An OUTBOUND call the other side didn't answer is your own
+            // unanswered call, not something you missed → neutral.
+            const inboundMissed = c.direction === 'in' && notAnswered;
             const Icon =
               c.direction === 'out'
                 ? PhoneOutgoing
-                : missed
+                : inboundMissed
                   ? PhoneMissed
                   : PhoneIncoming;
             const statusLabel =
@@ -147,7 +151,7 @@ export default function CallsPage() {
                   ? `Efetuada${c.durationSec ? ` • ${formatCallDuration(c.durationSec)}` : ''}`
                   : c.status === 'dialing'
                     ? 'Efetuada'
-                    : 'Não atendida'
+                    : 'Não atendida' // callee didn't answer — neutral
                 : c.status === 'answered'
                   ? 'Recebida'
                   : c.status === 'rejected'
@@ -170,9 +174,11 @@ export default function CallsPage() {
               >
                 <span
                   className={`flex size-10 shrink-0 items-center justify-center rounded-full ${
-                    missed
+                    inboundMissed
                       ? 'bg-red-500/15 text-red-500'
-                      : 'bg-emerald-500/15 text-emerald-600'
+                      : c.direction === 'out' && notAnswered
+                        ? 'bg-muted text-muted-foreground'
+                        : 'bg-emerald-500/15 text-emerald-600'
                   }`}
                 >
                   <Icon className="size-4" />
@@ -180,7 +186,7 @@ export default function CallsPage() {
                 <div className="min-w-0 flex-1">
                   <p
                     className={`truncate text-sm font-medium ${
-                      missed ? 'text-red-500' : 'text-foreground'
+                      inboundMissed ? 'text-red-500' : 'text-foreground'
                     }`}
                   >
                     {displayPeer(c)}
