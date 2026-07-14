@@ -40,24 +40,28 @@ type CallProvider = 'meta' | 'waha';
 
 interface ActiveCall {
   callId: string;
-  peer: string; // customer phone (E.164 digits)
+  peer: string; // customer phone (E.164 digits) — display + Meta actions
   name?: string;
   provider: CallProvider;
   conversationId?: string; // for the call-log entry (waha outbound)
+  channelId?: string; // waha: which channel's voice engine handles this call
+  wahaFrom?: string; // waha inbound: the caller's raw chatId (reject needs it)
 }
 
 /** Fire this to start an outbound call from anywhere in the app. Defaults to
  *  the official Meta transport; pass 'waha' for the unofficial waha-voip one.
- *  conversationId lets the waha path log the call in the thread on hang-up. */
+ *  conversationId lets the waha path log the call in the thread on hang-up;
+ *  channelId routes the call through that channel's own number. */
 export function startOutboundCall(
   to: string,
   name?: string,
   provider: CallProvider = 'meta',
   conversationId?: string,
+  channelId?: string,
 ) {
   window.dispatchEvent(
     new CustomEvent('fluxia:outbound-call', {
-      detail: { to, name, provider, conversationId },
+      detail: { to, name, provider, conversationId, channelId },
     }),
   );
 }
@@ -243,100 +247,13 @@ export function IncomingCallModal() {
     [cleanup],
   );
 
-  // ---- inbound answer ----
-  const answer = useCallback(async () => {
-    if (!call) return;
-    stopRingtone();
-    setPhase('connecting');
-    try {
-      const pc = await newPeer();
-      await pc.setRemoteDescription({ type: 'offer', sdp: offerSdpRef.current });
-      const ans = await pc.createAnswer();
-      await pc.setLocalDescription(ans);
-      await waitIceComplete(pc);
-      const res = await fetch(`/api/calls/${encodeURIComponent(call.callId)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'accept',
-          sdp: pc.localDescription?.sdp,
-          to: call.peer,
-        }),
-      });
-      if (!res.ok) throw new Error(`accept HTTP ${res.status}`);
-      setPhase('active');
-    } catch (err) {
-      console.error('[calls] answer failed:', err);
-      cleanup();
-    }
-  }, [call, stopRingtone, newPeer, cleanup]);
-
-  // ---- outbound dial (Meta) ----
-  // createOffer → POST /initiate → the customer's answer arrives later via the
-  // `call_answer` SSE. Permission-gated.
-  const dialMeta = useCallback(
-    async (to: string, name?: string) => {
-      const pc = await newPeer();
-      const offer = await pc.createOffer({ offerToReceiveAudio: true });
-      await pc.setLocalDescription(offer);
-      await waitIceComplete(pc);
-      const res = await fetch('/api/calls/initiate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to, sdp: pc.localDescription?.sdp }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        callId?: string;
-        needsPermission?: boolean;
-      };
-      if (!res.ok || !data.callId) {
-        if (data.needsPermission) {
-          // Keep the modal; drop media and offer to request permission.
-          if (localStreamRef.current) {
-            localStreamRef.current.getTracks().forEach((t) => t.stop());
-            localStreamRef.current = null;
-          }
-          pc.close();
-          pcRef.current = null;
-          setPhase('permission');
-          return;
-        }
-        throw new Error('initiate failed');
-      }
-      callIdRef.current = data.callId;
-      setCall({ callId: data.callId, peer: to, name, provider: 'meta' });
-      setPhase('connecting'); // "chamando…" until the answer arrives
-    },
-    [newPeer],
-  );
-
-  // ---- outbound dial (waha-voip) ----
-  // POST /initiate rings the customer; then the browser negotiates audio over a
-  // "pcm" DataChannel (waha-voip's protocol — NOT an RTP track): mic → capture
-  // worklet → 16 kHz s16le PCM → DC; DC → Float32 → playback worklet → speaker.
-  // /webrtc returns the SDP answer synchronously (no permission, no SSE).
-  const dialWaha = useCallback(
-    async (to: string, name?: string, conversationId?: string) => {
-      const initRes = await fetch('/api/calls/waha/initiate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to }),
-      });
-      const initData = (await initRes.json().catch(() => ({}))) as {
-        callId?: string;
-      };
-      if (!initRes.ok || !initData.callId) throw new Error('waha initiate failed');
-      callIdRef.current = initData.callId;
-      setCall({
-        callId: initData.callId,
-        peer: to,
-        name,
-        provider: 'waha',
-        conversationId,
-      });
-      setPhase('connecting');
-
+  // ---- waha-voip browser audio (shared by dial + answer) ----
+  // The browser negotiates audio over a "pcm" DataChannel (waha-voip's
+  // protocol — NOT an RTP track): mic → capture worklet → 16 kHz s16le PCM →
+  // DC; DC → Float32 → playback worklet → speaker. /webrtc returns the SDP
+  // answer synchronously.
+  const wahaConnectAudio = useCallback(
+    async (callId: string, channelId?: string) => {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: false,
@@ -383,11 +300,11 @@ export function IncomingCallModal() {
       await pc.setLocalDescription(offer);
       await waitIceComplete(pc);
       const rtcRes = await fetch(
-        `/api/calls/waha/${encodeURIComponent(initData.callId)}/webrtc`,
+        `/api/calls/waha/${encodeURIComponent(callId)}/webrtc`,
         {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ sdpOffer: pc.localDescription?.sdp }),
+          body: JSON.stringify({ sdpOffer: pc.localDescription?.sdp, channelId }),
         },
       );
       const rtcData = (await rtcRes.json().catch(() => ({}))) as {
@@ -399,19 +316,138 @@ export function IncomingCallModal() {
     [cleanup],
   );
 
+  // ---- inbound answer ----
+  const answer = useCallback(async () => {
+    if (!call) return;
+    stopRingtone();
+    setPhase('connecting');
+    try {
+      if (call.provider === 'waha') {
+        // waha-voip: the server answers the WhatsApp call, then the browser
+        // negotiates its own audio leg (PCM DataChannel).
+        const res = await fetch(
+          `/api/calls/waha/${encodeURIComponent(call.callId)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'accept', channelId: call.channelId }),
+          },
+        );
+        if (!res.ok) throw new Error(`waha accept HTTP ${res.status}`);
+        await wahaConnectAudio(call.callId, call.channelId);
+        return;
+      }
+      const pc = await newPeer();
+      await pc.setRemoteDescription({ type: 'offer', sdp: offerSdpRef.current });
+      const ans = await pc.createAnswer();
+      await pc.setLocalDescription(ans);
+      await waitIceComplete(pc);
+      const res = await fetch(`/api/calls/${encodeURIComponent(call.callId)}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          action: 'accept',
+          sdp: pc.localDescription?.sdp,
+          to: call.peer,
+        }),
+      });
+      if (!res.ok) throw new Error(`accept HTTP ${res.status}`);
+      setPhase('active');
+    } catch (err) {
+      console.error('[calls] answer failed:', err);
+      cleanup();
+    }
+  }, [call, stopRingtone, newPeer, wahaConnectAudio, cleanup]);
+
+  // ---- outbound dial (Meta) ----
+  // createOffer → POST /initiate → the customer's answer arrives later via the
+  // `call_answer` SSE. Permission-gated.
+  const dialMeta = useCallback(
+    async (to: string, name?: string) => {
+      const pc = await newPeer();
+      const offer = await pc.createOffer({ offerToReceiveAudio: true });
+      await pc.setLocalDescription(offer);
+      await waitIceComplete(pc);
+      const res = await fetch('/api/calls/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to, sdp: pc.localDescription?.sdp }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        ok?: boolean;
+        callId?: string;
+        needsPermission?: boolean;
+      };
+      if (!res.ok || !data.callId) {
+        if (data.needsPermission) {
+          // Keep the modal; drop media and offer to request permission.
+          if (localStreamRef.current) {
+            localStreamRef.current.getTracks().forEach((t) => t.stop());
+            localStreamRef.current = null;
+          }
+          pc.close();
+          pcRef.current = null;
+          setPhase('permission');
+          return;
+        }
+        throw new Error('initiate failed');
+      }
+      callIdRef.current = data.callId;
+      setCall({ callId: data.callId, peer: to, name, provider: 'meta' });
+      setPhase('connecting'); // "chamando…" until the answer arrives
+    },
+    [newPeer],
+  );
+
+  // ---- outbound dial (waha-voip) ----
+  // POST /initiate rings the customer (from the channel's own number), then
+  // the browser wires audio via wahaConnectAudio. No permission, no SSE.
+  const dialWaha = useCallback(
+    async (
+      to: string,
+      name?: string,
+      conversationId?: string,
+      channelId?: string,
+    ) => {
+      const initRes = await fetch('/api/calls/waha/initiate', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ to, channelId }),
+      });
+      const initData = (await initRes.json().catch(() => ({}))) as {
+        callId?: string;
+      };
+      if (!initRes.ok || !initData.callId) throw new Error('waha initiate failed');
+      callIdRef.current = initData.callId;
+      setCall({
+        callId: initData.callId,
+        peer: to,
+        name,
+        provider: 'waha',
+        conversationId,
+        channelId,
+      });
+      setPhase('connecting');
+      await wahaConnectAudio(initData.callId, channelId);
+    },
+    [wahaConnectAudio],
+  );
+
   const dial = useCallback(
     async (
       to: string,
       name?: string,
       provider: CallProvider = 'meta',
       conversationId?: string,
+      channelId?: string,
     ) => {
       if (pcRef.current || phase !== 'idle') return;
       setDir('out');
-      setCall({ callId: '', peer: to, name, provider, conversationId });
+      setCall({ callId: '', peer: to, name, provider, conversationId, channelId });
       setPhase('dialing');
       try {
-        if (provider === 'waha') await dialWaha(to, name, conversationId);
+        if (provider === 'waha')
+          await dialWaha(to, name, conversationId, channelId);
         else await dialMeta(to, name);
       } catch (err) {
         console.error('[calls] dial failed:', err);
@@ -429,9 +465,16 @@ export function IncomingCallModal() {
         name?: string;
         provider?: CallProvider;
         conversationId?: string;
+        channelId?: string;
       };
       if (detail?.to)
-        void dial(detail.to, detail.name, detail.provider, detail.conversationId);
+        void dial(
+          detail.to,
+          detail.name,
+          detail.provider,
+          detail.conversationId,
+          detail.channelId,
+        );
     };
     window.addEventListener('fluxia:outbound-call', handler);
     return () => window.removeEventListener('fluxia:outbound-call', handler);
@@ -446,17 +489,32 @@ export function IncomingCallModal() {
       callerName?: unknown;
       sdp?: unknown;
       provider?: unknown;
+      channelId?: unknown;
+      status?: unknown;
     }) => {
       if (e.type === 'call_incoming') {
         if (pcRef.current || phase !== 'idle') return;
-        if (typeof e.sdp !== 'string' || !e.sdp) return;
-        offerSdpRef.current = e.sdp;
+        const isWaha = e.provider === 'waha';
+        // Meta carries the caller's SDP offer up front; waha negotiates the
+        // browser leg only at answer time, so no SDP is expected here.
+        if (!isWaha && (typeof e.sdp !== 'string' || !e.sdp)) return;
+        if (typeof e.sdp === 'string') offerSdpRef.current = e.sdp;
+        const rawFrom = typeof e.from === 'string' ? e.from : '';
+        // waha inbound `from` is a chatId (556…@c.us or …@lid) — show just
+        // the digits when it's a real phone; @lid has no readable number.
+        const display = isWaha
+          ? /@(c\.us|s\.whatsapp\.net)$/.test(rawFrom)
+            ? rawFrom.split('@')[0]
+            : 'WhatsApp'
+          : rawFrom;
         setDir('in');
         setCall({
           callId: typeof e.callId === 'string' ? e.callId : '',
-          peer: typeof e.from === 'string' ? e.from : '',
+          peer: display,
           name: typeof e.callerName === 'string' ? e.callerName : undefined,
-          provider: e.provider === 'waha' ? 'waha' : 'meta',
+          provider: isWaha ? 'waha' : 'meta',
+          channelId: typeof e.channelId === 'string' ? e.channelId : undefined,
+          wahaFrom: isWaha ? rawFrom : undefined,
         });
         setPhase('ringing');
         startRingtone();
@@ -476,10 +534,19 @@ export function IncomingCallModal() {
             });
         }
       } else if (e.type === 'call_status') {
+        // waha emits call.accepted for OUR OWN accept too — if we're already
+        // past ringing on this waha call, that echo must not tear it down.
+        if (
+          e.status === 'ACCEPTED_ELSEWHERE' &&
+          call?.provider === 'waha' &&
+          phase !== 'ringing'
+        ) {
+          return;
+        }
         cleanup();
       }
     },
-    [phase, startRingtone, cleanup],
+    [phase, call, startRingtone, cleanup],
   );
   useServerEvents(onEvent);
 
@@ -487,13 +554,15 @@ export function IncomingCallModal() {
     const id = call?.callId || callIdRef.current;
     if (!id || !call) return;
     if (call.provider === 'waha') {
-      // waha-voip: hang up = /end, decline = /reject (needs the caller chatId).
+      // waha-voip: hang up = /end, decline = /reject (needs the caller's raw
+      // chatId — @lid callers can't be reconstructed from the display peer).
       fetch(`/api/calls/waha/${encodeURIComponent(id)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           action: action === 'terminate' ? 'end' : 'reject',
-          from: call.peer,
+          from: call.wahaFrom ?? call.peer,
+          channelId: call.channelId,
         }),
       }).catch(() => {});
       return;

@@ -136,6 +136,42 @@ export async function POST(request: Request, { params }: RouteParams) {
     return NextResponse.json({ status: 'ok' }, { status: 200 })
   }
 
+  // waha-voip native call events (unofficial calling). call.received rings
+  // the global call modal via SSE; accepted/rejected (answered or declined
+  // on the phone) dismisses it. No message processing for these.
+  if (providerId === 'waha') {
+    const ev = body as {
+      event?: string
+      payload?: { id?: string; from?: string; isGroup?: boolean }
+    }
+    if (typeof ev?.event === 'string' && ev.event.startsWith('call.')) {
+      const callId = ev.payload?.id ?? ''
+      if (ev.event === 'call.received' && callId && !ev.payload?.isGroup) {
+        const rawFrom = String(ev.payload?.from ?? '')
+        // @lid callers can't be reduced to a phone here — pass the raw
+        // chatId; reject needs it verbatim and the modal falls back to it
+        // for display.
+        await publishEvent(channel.accountId, {
+          type: 'call_incoming',
+          callId,
+          from: rawFrom,
+          provider: 'waha',
+          channelId: channel.id,
+        })
+      } else if (
+        (ev.event === 'call.accepted' || ev.event === 'call.rejected') &&
+        callId
+      ) {
+        await publishEvent(channel.accountId, {
+          type: 'call_status',
+          callId,
+          status: ev.event === 'call.accepted' ? 'ACCEPTED_ELSEWHERE' : 'REJECTED',
+        })
+      }
+      return NextResponse.json({ status: 'ok' }, { status: 200 })
+    }
+  }
+
   // Message + status processing runs after the ack.
   after(async () => {
     try {

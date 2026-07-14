@@ -44,15 +44,20 @@ export type RealtimeEvent =
       name: string;
       status: string;
     }
-  // WhatsApp voice call (Business Calling API) ringing on a Meta channel —
-  // drives the incoming-call toast/ring in the CRM.
+  // WhatsApp voice call ringing — official Meta (carries the caller's SDP
+  // offer) or unofficial waha-voip (provider:'waha'; the browser negotiates
+  // its own SDP at answer time, so no sdp here). Drives the call modal.
   | {
       type: "call_incoming";
       callId: string;
       from: string;
       callerName?: string;
-      /** The caller's SDP offer — the browser answers it (WebRTC). */
+      /** The caller's SDP offer — Meta only; waha negotiates on accept. */
       sdp?: string;
+      /** Calling transport. Absent = 'meta' (backwards compat). */
+      provider?: "meta" | "waha";
+      /** The WAHA channel the call rang on (routes accept/reject/webrtc). */
+      channelId?: string;
     }
   // A voice call ended (terminate webhook): COMPLETED | REJECTED | FAILED.
   | { type: "call_status"; callId: string; status: string }

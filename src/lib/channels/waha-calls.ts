@@ -21,12 +21,37 @@ import { and, eq } from 'drizzle-orm'
 
 import { db, channels } from '@/db'
 import { firstOrNull } from '@/db/helpers'
-import { decryptCredentials } from '@/lib/channels/channels'
+import { decryptCredentials, loadChannelByAccount } from '@/lib/channels/channels'
 
 export interface WahaCallsCoords {
   baseUrl: string
   session: string
   apiKey: string
+}
+
+/**
+ * Resolve the calls engine FROM a specific WAHA channel (unified mode: every
+ * channel lives on waha-voip, so its own baseUrl/session/apiKey IS the voice
+ * engine — the call goes out from that channel's number). Returns null when
+ * the channel isn't a WAHA channel of this account or lacks coordinates.
+ */
+export async function wahaCallsForChannel(
+  accountId: string,
+  channelId: string,
+): Promise<WahaCallsCoords | null> {
+  const ch = await loadChannelByAccount(accountId, channelId)
+  if (!ch || ch.provider !== 'waha') return null
+  const baseUrl = ch.providerMeta.baseUrl
+  const session = ch.providerMeta.session
+  const apiKey = ch.credentials.apiKey
+  if (
+    typeof baseUrl !== 'string' || !baseUrl ||
+    typeof session !== 'string' || !session ||
+    typeof apiKey !== 'string' || !apiKey
+  ) {
+    return null
+  }
+  return { baseUrl: baseUrl.replace(/\/+$/, ''), session, apiKey }
 }
 
 /**

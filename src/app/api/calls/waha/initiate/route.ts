@@ -13,6 +13,7 @@ import { NextResponse } from 'next/server'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 import {
   wahaCallsForAccount,
+  wahaCallsForChannel,
   wahaCallsPost,
   resolveCallChatId,
 } from '@/lib/channels/waha-calls'
@@ -20,12 +21,20 @@ import {
 export async function POST(request: Request) {
   try {
     const ctx = await getCurrentAccount()
-    const body = (await request.json().catch(() => ({}))) as { to?: string }
+    const body = (await request.json().catch(() => ({}))) as {
+      to?: string
+      channelId?: string
+    }
     if (!body.to) {
       return NextResponse.json({ error: 'to required' }, { status: 400 })
     }
 
-    const coords = await wahaCallsForAccount(ctx.accountId)
+    // Unified mode: the conversation's channel IS the voice engine, so the
+    // call goes out from that channel's number. Env/account = pilot fallback.
+    const coords =
+      (body.channelId
+        ? await wahaCallsForChannel(ctx.accountId, body.channelId)
+        : null) ?? (await wahaCallsForAccount(ctx.accountId))
     if (!coords) {
       return NextResponse.json(
         { error: 'No WAHA calls engine configured' },

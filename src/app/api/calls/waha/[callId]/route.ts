@@ -10,7 +10,11 @@
 import { NextResponse } from 'next/server'
 
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
-import { wahaCallsForAccount, wahaCallsPost } from '@/lib/channels/waha-calls'
+import {
+  wahaCallsForAccount,
+  wahaCallsForChannel,
+  wahaCallsPost,
+} from '@/lib/channels/waha-calls'
 
 interface RouteParams {
   params: Promise<{ callId: string }>
@@ -23,6 +27,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     const body = (await request.json().catch(() => ({}))) as {
       action?: 'accept' | 'end' | 'reject'
       from?: string
+      channelId?: string
     }
     const action = body.action
     if (action !== 'accept' && action !== 'end' && action !== 'reject') {
@@ -38,7 +43,10 @@ export async function POST(request: Request, { params }: RouteParams) {
       )
     }
 
-    const coords = await wahaCallsForAccount(ctx.accountId)
+    const coords =
+      (body.channelId
+        ? await wahaCallsForChannel(ctx.accountId, body.channelId)
+        : null) ?? (await wahaCallsForAccount(ctx.accountId))
     if (!coords) {
       return NextResponse.json(
         { error: 'No WAHA calls engine configured' },

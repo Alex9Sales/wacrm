@@ -953,6 +953,7 @@ export function MessageThread({
                   contact.name ?? undefined,
                   "waha",
                   conversation.id,
+                  conversation.channel?.id,
                 )
               }
               aria-label="Ligar para o cliente pelo WhatsApp"
