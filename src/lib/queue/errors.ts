@@ -24,6 +24,12 @@ const PERMANENT_PATTERNS: RegExp[] = [
   /unsupported/i,
   /\b(?:132000|132001|132005|132007|132012|132015|132016|131008|131009|131026)\b/,
   // 131026 = message undeliverable; 131008/9 = required param missing.
+  // GOWS/whatsmeow (waha-voip): 463 = WhatsApp's anti-spam block on cold/
+  // unsolicited outbound (the number got flagged, or the recipient rejects
+  // non-contacts). It won't clear on an immediate retry — retrying only
+  // HAMMERS the sender number's reputation, so fail fast (no retry).
+  /server returned error 463\b/i,
+  /\berror 46[0-3]\b/i,
 ];
 
 /** True when the error is permanent (mark failed, skip retries). */
