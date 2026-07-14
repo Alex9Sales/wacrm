@@ -631,7 +631,10 @@ export const wahaProvider: WhatsAppProvider = {
       if (!text) text = textFromInteractive(p);
       const raw = serializedIdToString(p.id);
       const externalMessageId = raw ? normalizeSerializedId(raw) : '';
-      const fromPhoneE164 = normalizePhone(chat.split('@')[0]);
+      // GOWS alts carry the multi-device suffix ("556…5477:9@s.whatsapp.net");
+      // strip it BEFORE normalizing or the digits gain a phantom tail and
+      // spawn a duplicate contact + conversation.
+      const fromPhoneE164 = normalizePhone(chat.split('@')[0].split(':')[0]);
       const pushName =
         p._data?.pushName ||
         p._data?.notifyName ||

@@ -40,7 +40,7 @@ interface CallRow {
 function displayPeer(c: CallRow): string {
   if (c.contactName) return c.contactName;
   if (c.contactPhone) return c.contactPhone;
-  if (/@(c\.us|s\.whatsapp\.net)$/.test(c.peer)) return c.peer.split('@')[0];
+  if (/@(c\.us|s\.whatsapp\.net)$/.test(c.peer)) return c.peer.split('@')[0].split(':')[0];
   if (/@lid$/.test(c.peer)) return 'WhatsApp';
   return c.peer || '—';
 }
@@ -92,7 +92,7 @@ export default function CallsPage() {
   const callBack = (c: CallRow) => {
     const phone =
       c.contactPhone ||
-      (/@(c\.us|s\.whatsapp\.net)$/.test(c.peer) ? c.peer.split('@')[0] : '');
+      (/@(c\.us|s\.whatsapp\.net)$/.test(c.peer) ? c.peer.split('@')[0].split(':')[0] : '');
     if (!phone || !c.channelId) return;
     startOutboundCall(
       phone,

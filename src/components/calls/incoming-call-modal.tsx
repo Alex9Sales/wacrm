@@ -550,7 +550,7 @@ export function IncomingCallModal() {
         // the digits when it's a real phone; @lid has no readable number.
         const display = isWaha
           ? /@(c\.us|s\.whatsapp\.net)$/.test(rawFrom)
-            ? rawFrom.split('@')[0]
+            ? rawFrom.split('@')[0].split(':')[0] // strip multi-device suffix
             : 'WhatsApp'
           : rawFrom;
         setDir('in');

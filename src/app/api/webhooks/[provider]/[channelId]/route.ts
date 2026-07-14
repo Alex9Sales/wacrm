@@ -167,8 +167,9 @@ export async function POST(request: Request, { params }: RouteParams) {
           // Born 'missed' — promoted by call.accepted/rejected below. The
           // partial unique index (account, external_call_id) absorbs the
           // webhook retries.
+          // Strip the multi-device suffix (":9") before reducing to digits.
           const digits = /@(c\.us|s\.whatsapp\.net)$/.test(rawFrom)
-            ? rawFrom.split('@')[0].replace(/\D/g, '')
+            ? rawFrom.split('@')[0].split(':')[0].replace(/\D/g, '')
             : ''
           const contact = digits
             ? firstOrNull(
