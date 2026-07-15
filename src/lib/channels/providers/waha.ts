@@ -404,6 +404,79 @@ interface LocationNode {
   address?: string
 }
 
+/** Read a field trying multiple casings — GOWS PascalCases nested proto structs
+ *  while NOWEB/Baileys keeps camelCase. */
+function pickField(obj: unknown, ...names: string[]): unknown {
+  if (!obj || typeof obj !== 'object') return undefined
+  const rec = obj as Record<string, unknown>
+  for (const n of names) if (rec[n] != null) return rec[n]
+  return undefined
+}
+
+function phoneFromVcard(v: string): string {
+  const tel = v.match(/TEL[^:\n]*:\s*([+\d][\d\s()\-]{5,})/i)
+  if (tel) return tel[1].trim().replace(/\s+/g, ' ')
+  const waid = v.match(/waid=(\d{6,})/i)
+  return waid ? `+${waid[1]}` : ''
+}
+
+/** Shared contact (vCard) message → legible line. Handles a single
+ *  contactMessage and a contactsArrayMessage, both engine casings. */
+function textFromContact(p: WahaMessagePayload): string {
+  const m = (p._data?.message ?? p._data?.Message) as unknown
+  const cards: unknown[] = []
+  const single = pickField(m, 'contactMessage', 'ContactMessage')
+  if (single) cards.push(single)
+  const arr = pickField(m, 'contactsArrayMessage', 'ContactsArrayMessage')
+  const list = pickField(arr, 'contacts', 'Contacts')
+  if (Array.isArray(list)) cards.push(...list)
+  const parts = cards
+    .map((c) => {
+      const name = String(pickField(c, 'displayName', 'DisplayName') ?? '')
+      const vc = String(pickField(c, 'vcard', 'vCard', 'Vcard', 'VCard') ?? '')
+      const phone = phoneFromVcard(vc)
+      return [name, phone].filter(Boolean).join(' · ')
+    })
+    .filter(Boolean)
+  return parts.length ? `👤 Contato: ${parts.join(' | ')}` : ''
+}
+
+/** Template / buttons / list messages (e.g. a WhatsApp/Meta marketing template
+ *  someone forwards) → the body text, so it renders instead of an empty [text]. */
+function textFromTemplate(p: WahaMessagePayload): string {
+  const m = (p._data?.message ?? p._data?.Message) as unknown
+  const bm = pickField(m, 'buttonsMessage', 'ButtonsMessage')
+  if (bm) {
+    const t = pickField(bm, 'contentText', 'ContentText', 'headerText', 'HeaderText')
+    if (t) return String(t)
+  }
+  const lm = pickField(m, 'listMessage', 'ListMessage')
+  if (lm) {
+    const t = pickField(lm, 'description', 'Description', 'title', 'Title')
+    if (t) return String(t)
+  }
+  const tm = pickField(m, 'templateMessage', 'TemplateMessage')
+  if (tm) {
+    const h =
+      pickField(
+        tm,
+        'hydratedTemplate',
+        'HydratedTemplate',
+        'hydratedFourRowTemplate',
+        'HydratedFourRowTemplate',
+      ) ?? tm
+    const t = pickField(
+      h,
+      'hydratedContentText',
+      'HydratedContentText',
+      'hydratedTitleText',
+      'HydratedTitleText',
+    )
+    if (t) return String(t)
+  }
+  return ''
+}
+
 function detectViewOnce(p: WahaMessagePayload): boolean {
   return (
     p._data?.key?.isViewOnce === true ||
@@ -657,6 +730,10 @@ export const wahaProvider: WhatsAppProvider = {
       // WhatsApp Pix key cards arrive as an interactiveMessage with no body —
       // extract the key so it renders instead of an empty [text].
       if (!text) text = textFromInteractive(p);
+      // Shared contact (vCard) → name · phone.
+      if (!text) text = textFromContact(p);
+      // Template / buttons / list (e.g. a forwarded marketing template) → body.
+      if (!text) text = textFromTemplate(p);
       // Location shares: render as a clickable Google Maps link (opens the
       // pin; forwardable by copying the link) instead of an empty [text].
       const locationText = textFromLocation(p);
@@ -700,6 +777,22 @@ export const wahaProvider: WhatsAppProvider = {
           fetchKey: { mediaUrl: p.media?.url },
           viewOnce,
         };
+      }
+
+      // Diagnostic: anything that would still render as a bare [text]/[type]
+      // placeholder — log the raw proto keys so we can add a parser for it.
+      if (!text && !media && !viewOnce) {
+        const mm = (p._data?.Message ?? p._data?.message) as
+          | Record<string, unknown>
+          | undefined;
+        console.log(
+          '[waha parse] UNRENDERED type=',
+          String((p as { type?: unknown }).type ?? ''),
+          'keys=',
+          mm ? Object.keys(mm).join(',') : 'none',
+          'sample=',
+          JSON.stringify(mm ?? {}).slice(0, 900),
+        );
       }
 
       messages.push({
