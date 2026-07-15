@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback } from "react";
+import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import type { Message, MessageReaction } from "@/types";
 import {
@@ -19,6 +20,7 @@ import {
   EyeOff,
   Maximize2,
   Copy,
+  User,
 } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
@@ -38,6 +40,82 @@ import { startOutboundCall } from "@/components/calls/incoming-call-modal";
 
 /** Content_text prefix a WhatsApp Pix key card is stored with (see waha.ts). */
 const PIX_PREFIX = "💠 Chave Pix";
+
+/** Content_text prefix a shared contact (vCard) is stored with (see waha.ts
+ *  textFromContact): "👤 Contato: <nome> · <telefone> | <nome2> · <telefone2>". */
+const CONTACT_PREFIX = "👤 Contato:";
+
+/** Render shared contact(s) as a card with a "Conversar" action that opens
+ *  (or creates) that contact's conversation in the inbox. */
+function ContactCard({ text }: { text: string }) {
+  const router = useRouter();
+  const [busy, setBusy] = useState(false);
+  const cards = text
+    .replace(/^👤\s*Contato:\s*/u, "")
+    .split(" | ")
+    .map((part) => {
+      const [name, phone] = part.split(" · ");
+      return { name: (name ?? "").trim(), phone: (phone ?? "").trim() };
+    })
+    .filter((c) => c.name || c.phone);
+
+  const open = async (phone: string) => {
+    if (!phone || busy) return;
+    setBusy(true);
+    try {
+      const res = await fetch("/api/conversations/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        conversationId?: string;
+      };
+      if (res.ok && data.conversationId) {
+        router.push(`/inbox?c=${data.conversationId}`);
+      } else {
+        toast.error("Não foi possível abrir a conversa desse contato.");
+      }
+    } catch {
+      toast.error("Não foi possível abrir a conversa desse contato.");
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <div className="flex min-w-[220px] flex-col gap-1.5">
+      {cards.map((c, i) => (
+        <div
+          key={i}
+          className="flex items-center gap-2 rounded-lg bg-muted/40 px-3 py-2"
+        >
+          <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-full bg-muted">
+            <User className="h-4 w-4 text-muted-foreground" />
+          </div>
+          <div className="min-w-0 flex-1">
+            <p className="truncate text-sm font-medium text-foreground">
+              {c.name || c.phone}
+            </p>
+            {c.name && c.phone && (
+              <p className="truncate text-xs text-muted-foreground">{c.phone}</p>
+            )}
+          </div>
+          {c.phone && (
+            <button
+              type="button"
+              onClick={() => open(c.phone)}
+              disabled={busy}
+              className="shrink-0 rounded-md px-2.5 py-1 text-xs font-medium text-emerald-600 transition-colors hover:bg-emerald-500/10 disabled:opacity-50"
+            >
+              Conversar
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
 
 /** Render a Pix key card (header + merchant + key) with a copy button. */
 function PixCard({ text }: { text: string }) {
@@ -476,6 +554,7 @@ function MessageContent({
     case "text": {
       const txt = message.content_text ?? "";
       if (txt.startsWith(PIX_PREFIX)) return <PixCard text={txt} />;
+      if (txt.startsWith(CONTACT_PREFIX)) return <ContactCard text={txt} />;
       const callLog = parseCallLog(txt);
       if (callLog)
         return (
@@ -562,36 +641,54 @@ function MessageContent({
         </div>
       );
 
-    case "document":
+    case "document": {
+      const cap = realCaption(message.content_text);
+      // A caption that's a bare filename (no spaces, ends in an extension) is
+      // the file's own name → use it as the card label. Anything else is a
+      // real caption → keep the card compact and render the caption wrapped
+      // BELOW it (instead of stretching it into a single overflowing line).
+      const isFilenameCaption =
+        !!cap && /\.[a-z0-9]{2,5}$/i.test(cap.trim()) && !/\s/.test(cap.trim());
+      const label = isFilenameCaption ? cap!.trim() : "Documento";
+      const caption = isFilenameCaption ? null : cap;
       if (!message.media_url) {
-        return <MediaUnavailable label={realCaption(message.content_text) || "Documento"} />;
+        return <MediaUnavailable label={label} />;
       }
       return (
-        <a
-          href={message.media_url}
-          target="_blank"
-          rel="noopener noreferrer"
-          draggable
-          onDragStart={(e) => {
-            // Let the user drag the document straight out to their desktop
-            // (Chromium DownloadURL protocol: "mime:filename:absolute-url").
-            const url = message.media_url!;
-            const name = documentFilename(message.content_text, url);
-            e.dataTransfer.setData(
-              "DownloadURL",
-              `${mimeFromName(name)}:${name}:${url}`,
-            );
-            e.dataTransfer.setData("text/uri-list", url);
-          }}
-          title="Abrir ou arrastar para baixar"
-          className="flex items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"
-        >
-          <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
-          <span className="truncate">
-            {realCaption(message.content_text) || "Documento"}
-          </span>
-        </a>
+        <div>
+          <a
+            href={message.media_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            draggable
+            onDragStart={(e) => {
+              // Let the user drag the document straight out to their desktop
+              // (Chromium DownloadURL protocol: "mime:filename:absolute-url").
+              const url = message.media_url!;
+              const name = documentFilename(
+                isFilenameCaption ? cap : undefined,
+                url,
+              );
+              e.dataTransfer.setData(
+                "DownloadURL",
+                `${mimeFromName(name)}:${name}:${url}`,
+              );
+              e.dataTransfer.setData("text/uri-list", url);
+            }}
+            title="Abrir ou arrastar para baixar"
+            className="flex max-w-full items-center gap-2 rounded-lg bg-muted/50 px-3 py-2 text-sm hover:bg-muted"
+          >
+            <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
+            <span className="truncate">{label}</span>
+          </a>
+          {caption && (
+            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
+              <RichText text={caption} />
+            </p>
+          )}
+        </div>
       );
+    }
 
     case "template":
       return (
