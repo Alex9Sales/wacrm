@@ -138,6 +138,7 @@ export function IncomingCallModal() {
   // tone, Brazilian cadence (1 s on / 4 s off). Reuses the ringtone refs so
   // stopRingtone() silences either sound.
   const startRingback = useCallback(() => {
+    stopRingtone(); // idempotent: never leak a previous ring/ringback context
     try {
       const Ctx =
         window.AudioContext ||
@@ -165,9 +166,10 @@ export function IncomingCallModal() {
     } catch {
       /* autoplay blocked — silent dialing still works */
     }
-  }, []);
+  }, [stopRingtone]);
 
   const startRingtone = useCallback(() => {
+    stopRingtone(); // idempotent: a duplicate call_incoming must not leak a 2nd ctx
     // Screen/device vibration in the classic ring cadence (mobile only).
     try {
       navigator.vibrate?.([600, 400, 600, 1400]);
@@ -217,7 +219,7 @@ export function IncomingCallModal() {
     } catch {
       /* autoplay blocked until a gesture — modal still shows */
     }
-  }, []);
+  }, [stopRingtone]);
 
   const cleanup = useCallback(() => {
     stopRingtone();
@@ -540,7 +542,12 @@ export function IncomingCallModal() {
       status?: unknown;
     }) => {
       if (e.type === 'call_incoming') {
-        if (pcRef.current || phase !== 'idle') return;
+        // Dedup: waha/gows can redeliver call.received for one call. `phase` is
+        // async state (stale within a tick), so also guard on callIdRef — a
+        // synchronous ref — to block a duplicate before it double-rings.
+        const incomingId = typeof e.callId === 'string' ? e.callId : '';
+        if (pcRef.current || phase !== 'idle' || callIdRef.current) return;
+        if (incomingId) callIdRef.current = incomingId;
         const isWaha = e.provider === 'waha';
         // Meta carries the caller's SDP offer up front; waha negotiates the
         // browser leg only at answer time, so no SDP is expected here.
