@@ -26,19 +26,7 @@ import { toast } from 'sonner';
 
 import { useServerEvents } from '@/hooks/use-server-events';
 import { formatCallDuration } from '@/lib/inbox/call-log';
-
-type Phase =
-  | 'idle'
-  | 'ringing' // inbound, waiting for the agent to answer
-  | 'dialing' // outbound, setting up / waiting for the customer
-  | 'connecting'
-  | 'active'
-  | 'permission'; // outbound blocked — needs the customer's permission
-
-/** Which calling transport a call runs on. Meta = official Business Calling
- *  (permission + SSE answer); waha = unofficial waha-voip (no permission, the
- *  /webrtc endpoint returns the SDP answer synchronously). */
-type CallProvider = 'meta' | 'waha';
+import { routeCallStatus, type CallProvider, type Phase } from './call-routing';
 
 interface ActiveCall {
   callId: string;
@@ -607,17 +595,20 @@ export function IncomingCallModal() {
         // calls the API), so this only dismisses the losers.
         if (e.callId === callIdRef.current && phase === 'ringing') cleanup();
       } else if (e.type === 'call_status') {
-        if (e.status === 'ACCEPTED_ELSEWHERE' && call?.provider === 'waha') {
-          // Outbound: the customer answered → flip "chamando…" to active
-          // (backs up the first-audio-frame trigger in wahaConnectAudio).
-          if (dir === 'out' && phase === 'connecting') {
-            stopRingtone();
-            setPhase('active');
-            return;
-          }
-          // Our own accept echoes call.accepted too — never tear down a call
-          // that's already past ringing.
-          if (phase !== 'ringing') return;
+        const action = routeCallStatus({
+          eventCallId: typeof e.callId === 'string' ? e.callId : '',
+          eventStatus: typeof e.status === 'string' ? e.status : '',
+          currentCallId: callIdRef.current,
+          provider: call?.provider,
+          dir,
+          phase,
+        });
+        if (action === 'ignore') return;
+        if (action === 'go-active') {
+          // Backs up the first-audio-frame trigger in wahaConnectAudio.
+          stopRingtone();
+          setPhase('active');
+          return;
         }
         cleanup();
       }
