@@ -35,6 +35,7 @@ export async function POST(request: Request) {
     } | null = null
     if (body.callId) {
       try {
+        const now = new Date().toISOString()
         await db
           .update(callLogs)
           .set({
@@ -42,7 +43,14 @@ export async function POST(request: Request) {
             durationSec: body.answered
               ? Math.max(0, Math.round(body.durationSec ?? 0))
               : null,
-            updatedAt: new Date().toISOString(),
+            // The leg is over — stamp it. Without this the row stays open and
+            // the "channel busy" check (answered AND ended_at IS NULL) reads
+            // this finished call as still running, auto-rejecting real
+            // customers on that number for the next 30 minutes. gows fires no
+            // webhook when WE end the call, so this is the only thing that
+            // closes an agent-hung-up row.
+            endedAt: now,
+            updatedAt: now,
           })
           .where(
             body.answered

@@ -1,14 +1,19 @@
 'use client';
 
 // ============================================================
-// Call modal for WhatsApp voice calls (Meta Business Calling), both ways:
-//  - INBOUND: `call_incoming` SSE carries the caller's SDP offer → ring →
+// Call modal for WhatsApp voice calls, both ways and both transports:
+//  - INBOUND: `call_incoming` SSE carries the caller's SDP offer (Meta) → ring →
 //    Atender → answer (setRemote(offer) → createAnswer → POST accept).
 //  - OUTBOUND: a `fluxia:outbound-call` window event (from the conversation
 //    header "Ligar" button) → createOffer → POST /api/calls/initiate → the
 //    customer's answer arrives via the `call_answer` SSE → setRemote(answer).
 // Media (mic/speaker) lives in the browser; the token stays server-side.
 // Mounted once, globally, in the dashboard shell.
+//
+// MULTI-LEG: WhatsApp allows ONE active call per NUMBER, so two calls can only
+// be live on DIFFERENT channels. This holds a map of legs — exactly one active,
+// the rest parked (mic cut, audio muted, connection alive). The ordering rules
+// live in ./call-legs; only media wiring is here.
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react';
@@ -20,23 +25,25 @@ import {
   ShieldQuestion,
   Minimize2,
   Maximize2,
+  Pause,
+  BellOff,
+  Bell,
 } from 'lucide-react';
 
 import { toast } from 'sonner';
 
 import { useServerEvents } from '@/hooks/use-server-events';
 import { formatCallDuration } from '@/lib/inbox/call-log';
-import { routeCallStatus, type CallProvider, type Phase } from './call-routing';
-
-interface ActiveCall {
-  callId: string;
-  peer: string; // customer phone (E.164 digits) — display + Meta actions
-  name?: string;
-  provider: CallProvider;
-  conversationId?: string; // for the call-log entry (waha outbound)
-  channelId?: string; // waha: which channel's voice engine handles this call
-  wahaFrom?: string; // waha inbound: the caller's raw chatId (reject needs it)
-}
+import { routeCallStatus, type CallProvider } from './call-routing';
+import {
+  findByCallId,
+  isDuplicateIncoming,
+  isHeld,
+  micLive,
+  pickAutoResume,
+  pickForeground,
+  type Leg,
+} from './call-legs';
 
 /** Fire this to start an outbound call from anywhere in the app. Defaults to
  *  the official Meta transport; pass 'waha' for the unofficial waha-voip one.
@@ -54,6 +61,37 @@ export function startOutboundCall(
       detail: { to, name, provider, conversationId, channelId },
     }),
   );
+}
+
+/** Per-leg media. Lives in a ref (never in state): these are imperative
+ *  objects and re-rendering must not recreate them. */
+interface LegMedia {
+  pc: RTCPeerConnection | null;
+  localStream: MediaStream | null;
+  audioCtx: AudioContext | null; // waha-voip PCM path
+  audioEl: HTMLAudioElement | null;
+  ringCtx: AudioContext | null;
+  ringTimer: ReturnType<typeof setInterval> | null;
+  offerSdp: string; // inbound Meta offer to answer
+  logged: boolean; // guards against double-finalizing the call log
+  /** waha: the capture worklet reads this every block. Gating here (rather
+   *  than on the track) is what lets one leg go quiet while another talks —
+   *  each leg has its own AudioContext, so a shared mic stream still works. */
+  sendMic: boolean;
+}
+
+function emptyMedia(): LegMedia {
+  return {
+    pc: null,
+    localStream: null,
+    audioCtx: null,
+    audioEl: null,
+    ringCtx: null,
+    ringTimer: null,
+    offerSdp: '',
+    logged: false,
+    sendMic: true,
+  };
 }
 
 // waha-voip carries browser audio as raw 16 kHz s16le PCM over a DataChannel
@@ -93,92 +131,119 @@ function waitIceComplete(pc: RTCPeerConnection): Promise<void> {
   });
 }
 
+function newAudioContext(sampleRate?: number): AudioContext {
+  const Ctx =
+    window.AudioContext ||
+    (window as unknown as { webkitAudioContext: typeof AudioContext })
+      .webkitAudioContext;
+  return sampleRate ? new Ctx({ sampleRate }) : new Ctx();
+}
+
 export function IncomingCallModal() {
-  const [phase, setPhase] = useState<Phase>('idle');
-  const [dir, setDir] = useState<'in' | 'out'>('in');
-  const [call, setCall] = useState<ActiveCall | null>(null);
-  const [muted, setMuted] = useState(false);
+  const [legs, setLegs] = useState<Leg[]>([]);
+  const [activeKey, setActiveKey] = useState<string | null>(null);
   const [minimized, setMinimized] = useState(false);
-  const [seconds, setSeconds] = useState(0);
 
-  const pcRef = useRef<RTCPeerConnection | null>(null);
-  const localStreamRef = useRef<MediaStream | null>(null);
-  const audioCtxRef = useRef<AudioContext | null>(null); // waha-voip PCM path
-  const audioRef = useRef<HTMLAudioElement | null>(null);
-  const callIdRef = useRef<string>('');
-  const offerSdpRef = useRef<string>(''); // inbound offer to answer
-  const ringCtxRef = useRef<AudioContext | null>(null);
-  const ringTimerRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const mediaRef = useRef<Map<string, LegMedia>>(new Map());
+  const keySeq = useRef(0);
+  // Mirrors `legs` for the SSE handler and async media callbacks, which must
+  // read the current legs without being re-created on every state change.
+  const legsRef = useRef<Leg[]>([]);
+  legsRef.current = legs;
 
-  const stopRingtone = useCallback(() => {
-    if (ringTimerRef.current) {
-      clearInterval(ringTimerRef.current);
-      ringTimerRef.current = null;
+  /** Media for a live leg, creating it on first use. Never call this for a leg
+   *  that closeLeg already dropped — see `mediaOf` for the read-only path. */
+  const media = useCallback((key: string): LegMedia => {
+    let m = mediaRef.current.get(key);
+    if (!m) {
+      m = emptyMedia();
+      mediaRef.current.set(key, m);
     }
-    ringCtxRef.current?.close().catch(() => {});
-    ringCtxRef.current = null;
-    try {
-      navigator.vibrate?.(0); // stop any vibration
-    } catch {
-      /* not supported */
-    }
+    return m;
   }, []);
 
-  // Outbound "chamando…" ringback (what the CALLER hears): single 425 Hz
-  // tone, Brazilian cadence (1 s on / 4 s off). Reuses the ringtone refs so
-  // stopRingtone() silences either sound.
-  const startRingback = useCallback(() => {
-    stopRingtone(); // idempotent: never leak a previous ring/ringback context
-    try {
-      const Ctx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext })
-          .webkitAudioContext;
-      const ctx = new Ctx();
-      ringCtxRef.current = ctx;
-      const beep = () => {
-        const t0 = ctx.currentTime;
-        const g = ctx.createGain();
-        g.gain.setValueAtTime(0.0001, t0);
-        g.gain.exponentialRampToValueAtTime(0.08, t0 + 0.05);
-        g.gain.setValueAtTime(0.08, t0 + 0.95);
-        g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.0);
-        g.connect(ctx.destination);
-        const o = ctx.createOscillator();
-        o.type = 'sine';
-        o.frequency.value = 425;
-        o.connect(g);
-        o.start(t0);
-        o.stop(t0 + 1.0);
-      };
-      beep();
-      ringTimerRef.current = setInterval(beep, 5000);
-    } catch {
-      /* autoplay blocked — silent dialing still works */
-    }
-  }, [stopRingtone]);
+  /** Read-only lookup: returns undefined for a dropped leg instead of
+   *  resurrecting it. Resurrection would reset the `logged` once-guard (double
+   *  call-log entries) and leak an entry that nothing ever deletes. */
+  const mediaOf = useCallback(
+    (key: string): LegMedia | undefined => mediaRef.current.get(key),
+    [],
+  );
 
-  const startRingtone = useCallback(() => {
-    stopRingtone(); // idempotent: a duplicate call_incoming must not leak a 2nd ctx
-    // Screen/device vibration in the classic ring cadence (mobile only).
-    try {
-      navigator.vibrate?.([600, 400, 600, 1400]);
-    } catch {
-      /* not supported */
-    }
-    try {
-      const Ctx =
-        window.AudioContext ||
-        (window as unknown as { webkitAudioContext: typeof AudioContext })
-          .webkitAudioContext;
-      const ctx = new Ctx();
-      ringCtxRef.current = ctx;
-      // A telephone-style "brrring": a dual-tone (440+480 Hz) burst that
-      // pulses twice, then a gap — repeated on a ~3s cadence.
-      const ringBurst = () => {
-        const t0 = ctx.currentTime;
-        for (const [f1, f2] of [[440, 480]] as const) {
-          // two short pulses ("brr-brr")
+  const patchLeg = useCallback((key: string, patch: Partial<Leg>) => {
+    setLegs((prev) =>
+      prev.map((l) => (l.key === key ? { ...l, ...patch } : l)),
+    );
+  }, []);
+
+  // ---- ringtones (per leg: silencing one must not silence another) ----
+
+  const stopRing = useCallback(
+    (key: string) => {
+      const m = mediaRef.current.get(key);
+      if (!m) return;
+      if (m.ringTimer) {
+        clearInterval(m.ringTimer);
+        m.ringTimer = null;
+      }
+      m.ringCtx?.close().catch(() => {});
+      m.ringCtx = null;
+      try {
+        navigator.vibrate?.(0);
+      } catch {
+        /* not supported */
+      }
+    },
+    [],
+  );
+
+  // Outbound "chamando…" ringback (what the CALLER hears): single 425 Hz tone,
+  // Brazilian cadence (1 s on / 4 s off).
+  const startRingback = useCallback(
+    (key: string) => {
+      stopRing(key); // idempotent: never leak a previous ring/ringback context
+      try {
+        const ctx = newAudioContext();
+        media(key).ringCtx = ctx;
+        const beep = () => {
+          const t0 = ctx.currentTime;
+          const g = ctx.createGain();
+          g.gain.setValueAtTime(0.0001, t0);
+          g.gain.exponentialRampToValueAtTime(0.08, t0 + 0.05);
+          g.gain.setValueAtTime(0.08, t0 + 0.95);
+          g.gain.exponentialRampToValueAtTime(0.0001, t0 + 1.0);
+          g.connect(ctx.destination);
+          const o = ctx.createOscillator();
+          o.type = 'sine';
+          o.frequency.value = 425;
+          o.connect(g);
+          o.start(t0);
+          o.stop(t0 + 1.0);
+        };
+        beep();
+        media(key).ringTimer = setInterval(beep, 5000);
+      } catch {
+        /* autoplay blocked — silent dialing still works */
+      }
+    },
+    [media, stopRing],
+  );
+
+  const startRingtone = useCallback(
+    (key: string) => {
+      stopRing(key); // idempotent: a duplicate call_incoming must not leak a 2nd ctx
+      try {
+        navigator.vibrate?.([600, 400, 600, 1400]);
+      } catch {
+        /* not supported */
+      }
+      try {
+        const ctx = newAudioContext();
+        media(key).ringCtx = ctx;
+        // A telephone-style "brrring": a dual-tone (440+480 Hz) burst that
+        // pulses twice, then a gap — repeated on a ~3s cadence.
+        const ringBurst = () => {
+          const t0 = ctx.currentTime;
           for (const start of [0, 0.5]) {
             const g = ctx.createGain();
             g.gain.setValueAtTime(0.0001, t0 + start);
@@ -186,7 +251,7 @@ export function IncomingCallModal() {
             g.gain.setValueAtTime(0.12, t0 + start + 0.35);
             g.gain.exponentialRampToValueAtTime(0.0001, t0 + start + 0.42);
             g.connect(ctx.destination);
-            for (const f of [f1, f2]) {
+            for (const f of [440, 480]) {
               const o = ctx.createOscillator();
               o.type = 'sine';
               o.frequency.value = f;
@@ -195,81 +260,188 @@ export function IncomingCallModal() {
               o.stop(t0 + start + 0.42);
             }
           }
-        }
-      };
-      ringBurst();
-      ringTimerRef.current = setInterval(() => {
+        };
         ringBurst();
-        try {
-          navigator.vibrate?.([600, 400, 600, 1400]);
-        } catch {
-          /* not supported */
-        }
-      }, 3000);
-    } catch {
-      /* autoplay blocked until a gesture — modal still shows */
-    }
-  }, [stopRingtone]);
+        media(key).ringTimer = setInterval(() => {
+          ringBurst();
+          try {
+            navigator.vibrate?.([600, 400, 600, 1400]);
+          } catch {
+            /* not supported */
+          }
+        }, 3000);
+      } catch {
+        /* autoplay blocked until a gesture — modal still shows */
+      }
+    },
+    [media, stopRing],
+  );
 
-  const cleanup = useCallback(() => {
-    stopRingtone();
-    if (pcRef.current) {
-      pcRef.current.ontrack = null;
-      pcRef.current.onconnectionstatechange = null;
-      pcRef.current.close();
-      pcRef.current = null;
-    }
-    if (localStreamRef.current) {
-      localStreamRef.current.getTracks().forEach((t) => t.stop());
-      localStreamRef.current = null;
-    }
-    if (audioCtxRef.current) {
-      audioCtxRef.current.close().catch(() => {});
-      audioCtxRef.current = null;
-    }
-    if (audioRef.current) audioRef.current.srcObject = null;
-    callIdRef.current = '';
-    offerSdpRef.current = '';
-    setCall(null);
-    setPhase('idle');
-    setMuted(false);
-    setMinimized(false);
-    setSeconds(0);
-  }, [stopRingtone]);
+  // ---- audio gating ----
 
-  // Call timer while active.
+  // One declarative pass instead of remembering to gate audio at every call
+  // site: whenever the legs or the active one change, push the derived
+  // hold/mute state onto the media. A parked leg stops feeding the wire and
+  // goes silent in the agent's ear, but its connection stays up.
   useEffect(() => {
-    if (phase !== 'active') return;
-    const t = setInterval(() => setSeconds((s) => s + 1), 1000);
+    for (const leg of legs) {
+      const m = mediaRef.current.get(leg.key);
+      if (!m) continue;
+      const micOn = micLive(leg, activeKey);
+      m.sendMic = micOn; // waha: read by the capture worklet each block
+      const track = m.localStream?.getAudioTracks()[0];
+      if (track) track.enabled = micOn; // Meta: RTP track gate
+      if (m.audioEl) m.audioEl.muted = isHeld(leg, activeKey);
+    }
+  }, [legs, activeKey]);
+
+  // Resume the survivor when the agent's ear frees up and the choice is
+  // unambiguous, and forget "minimized" once every call is gone — otherwise
+  // the next answered call would jump straight to the pill.
+  useEffect(() => {
+    const resume = pickAutoResume(legs, activeKey);
+    if (resume) setActiveKey(resume);
+    if (!legs.length) {
+      setMinimized(false);
+      if (activeKey) setActiveKey(null);
+    }
+  }, [legs, activeKey]);
+
+  // ---- teardown ----
+
+  /** Stamp the call log for a leg that is going away. waha-voip emits no
+   *  "terminated" webhook, so the browser is what closes the row out — and an
+   *  un-closed row makes the channel read BUSY for 30 minutes, silently
+   *  auto-rejecting real customers. Only ever fires once per leg. */
+  const finalizeLeg = useCallback(
+    (leg: Leg) => {
+      const m = mediaOf(leg.key);
+      if (!m || m.logged) return;
+      if (leg.provider !== 'waha') return;
+      const id = leg.callId;
+      if (!id && !leg.conversationId) return;
+      m.logged = true;
+      const cid = leg.conversationId;
+      fetch('/api/calls/waha/log', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          conversationId: cid,
+          durationSec: leg.seconds,
+          answered: leg.phase === 'active',
+          callId: id,
+        }),
+      })
+        .then(() => {
+          // Refresh the thread live (the SSE ping can race with modal cleanup).
+          if (cid)
+            window.dispatchEvent(
+              new CustomEvent('fluxia:conversation-refresh', {
+                detail: { conversationId: cid },
+              }),
+            );
+        })
+        .catch(() => {});
+    },
+    [mediaOf],
+  );
+
+  /** Drop a leg and free its media. Who takes over (and whether the pill
+   *  should collapse) is reconciled by the effects above — this only has to
+   *  say that the leg is gone. */
+  const closeLeg = useCallback(
+    (key: string) => {
+      stopRing(key);
+      const m = mediaRef.current.get(key);
+      if (m) {
+        if (m.pc) {
+          m.pc.ontrack = null;
+          m.pc.onconnectionstatechange = null;
+          m.pc.close();
+        }
+        m.localStream?.getTracks().forEach((t) => t.stop());
+        m.audioCtx?.close().catch(() => {});
+        if (m.audioEl) {
+          m.audioEl.pause();
+          m.audioEl.srcObject = null;
+        }
+        mediaRef.current.delete(key);
+      }
+      setLegs((prev) => prev.filter((l) => l.key !== key));
+      setActiveKey((cur) => (cur === key ? null : cur));
+    },
+    [stopRing],
+  );
+
+  /** Close every leg — unmount only. */
+  const closeAll = useCallback(() => {
+    for (const key of Array.from(mediaRef.current.keys())) {
+      stopRing(key);
+      const m = mediaRef.current.get(key);
+      if (!m) continue;
+      m.pc?.close();
+      m.localStream?.getTracks().forEach((t) => t.stop());
+      m.audioCtx?.close().catch(() => {});
+      if (m.audioEl) m.audioEl.srcObject = null;
+    }
+    mediaRef.current.clear();
+  }, [stopRing]);
+
+  useEffect(() => () => closeAll(), [closeAll]);
+
+  // Call timer. A parked leg is still connected, so it keeps counting.
+  // Keyed on "is anything live" rather than on `legs`: this effect writes to
+  // `legs` every second, so depending on it would tear down and rebuild the
+  // interval on its own tick — and any unrelated change (mute, hold) would
+  // reset the second in progress.
+  const anyActive = legs.some((l) => l.phase === 'active');
+  useEffect(() => {
+    if (!anyActive) return;
+    const t = setInterval(() => {
+      setLegs((prev) =>
+        prev.map((l) =>
+          l.phase === 'active' ? { ...l, seconds: l.seconds + 1 } : l,
+        ),
+      );
+    }, 1000);
     return () => clearInterval(t);
-  }, [phase]);
+  }, [anyActive]);
 
-  useEffect(() => () => cleanup(), [cleanup]);
+  // ---- media wiring ----
 
-  /** Build the PeerConnection with mic + remote audio wired. */
+  /** Build the PeerConnection with mic + remote audio wired (Meta transport). */
   const newPeer = useCallback(
-    async (): Promise<RTCPeerConnection> => {
+    async (key: string): Promise<RTCPeerConnection> => {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      localStreamRef.current = stream;
+      const m = media(key);
+      m.localStream = stream;
       const pc = new RTCPeerConnection({
         iceServers: [{ urls: 'stun:stun.l.google.com:19302' }],
       });
-      pcRef.current = pc;
+      m.pc = pc;
       stream.getTracks().forEach((t) => pc.addTrack(t, stream));
+      const el = new Audio();
+      el.autoplay = true;
+      m.audioEl = el;
       pc.ontrack = (ev) => {
-        if (audioRef.current) {
-          audioRef.current.srcObject = ev.streams[0];
-          audioRef.current.play().catch(() => {});
-        }
+        el.srcObject = ev.streams[0];
+        el.play().catch(() => {});
       };
       pc.onconnectionstatechange = () => {
         const s = pc.connectionState;
-        if (s === 'connected') setPhase('active');
-        if (s === 'failed' || s === 'closed' || s === 'disconnected') cleanup();
+        if (s === 'connected') patchLeg(key, { phase: 'active' });
+        if (s === 'failed' || s === 'closed' || s === 'disconnected') {
+          // The leg died without anyone hanging up (network blip, tab sleep).
+          // Finalize before dropping it or the row stays open and wedges the
+          // channel as busy.
+          const leg = legsRef.current.find((l) => l.key === key);
+          if (leg) finalizeLeg(leg);
+          closeLeg(key);
+        }
       };
       return pc;
     },
-    [cleanup],
+    [media, patchLeg, closeLeg, finalizeLeg],
   );
 
   // ---- waha-voip browser audio (shared by dial + answer) ----
@@ -278,28 +450,38 @@ export function IncomingCallModal() {
   // DC; DC → Float32 → playback worklet → speaker. /webrtc returns the SDP
   // answer synchronously.
   const wahaConnectAudio = useCallback(
-    async (callId: string, channelId?: string, ringUntilAudio = false) => {
+    async (
+      key: string,
+      callId: string,
+      channelId?: string,
+      ringUntilAudio = false,
+    ) => {
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: true,
         video: false,
       });
-      localStreamRef.current = stream;
+      const m = media(key);
+      m.localStream = stream;
       // No STUN: waha-voip advertises its public IP directly and learns the
       // browser's address from the incoming ICE checks (peer-reflexive).
       const pc = new RTCPeerConnection({ iceServers: [] });
-      pcRef.current = pc;
+      m.pc = pc;
       pc.onconnectionstatechange = () => {
         const s = pc.connectionState;
         // Outbound: the browser↔server leg connects in ~1 s, long before the
         // customer answers — hold "chamando…" until real audio arrives.
-        if (s === 'connected' && !ringUntilAudio) setPhase('active');
-        if (s === 'failed' || s === 'closed' || s === 'disconnected') cleanup();
+        if (s === 'connected' && !ringUntilAudio) patchLeg(key, { phase: 'active' });
+        if (s === 'failed' || s === 'closed' || s === 'disconnected') {
+          const leg = legsRef.current.find((l) => l.key === key);
+          if (leg) finalizeLeg(leg);
+          closeLeg(key);
+        }
       };
       const dc = pc.createDataChannel('pcm', { ordered: true });
       dc.binaryType = 'arraybuffer';
 
-      const ctx = new AudioContext({ sampleRate: 16000 });
-      audioCtxRef.current = ctx;
+      const ctx = newAudioContext(16000);
+      m.audioCtx = ctx;
       await ctx.audioWorklet.addModule('/worklets/capture-processor.js');
       await ctx.audioWorklet.addModule('/worklets/playback-processor.js');
       await ctx.resume();
@@ -307,7 +489,10 @@ export function IncomingCallModal() {
       const src = ctx.createMediaStreamSource(stream);
       const capture = new AudioWorkletNode(ctx, 'capture-processor');
       capture.port.onmessage = (ev) => {
-        if (dc.readyState === 'open') dc.send(floatToPcm(ev.data as Float32Array));
+        // sendMic is the hold/mute gate: parked legs stop feeding the wire,
+        // so the customer hears silence while the connection stays up.
+        if (m.sendMic && dc.readyState === 'open')
+          dc.send(floatToPcm(ev.data as Float32Array));
       };
       src.connect(capture);
       capture.connect(ctx.destination);
@@ -322,16 +507,17 @@ export function IncomingCallModal() {
         if (!gotAudio) {
           gotAudio = true;
           if (ringUntilAudio) {
-            stopRingtone();
-            setPhase('active');
+            stopRing(key);
+            patchLeg(key, { phase: 'active' });
           }
         }
         playback.port.postMessage(pcmToFloat(ev.data as ArrayBuffer));
       };
-      if (audioRef.current) {
-        audioRef.current.srcObject = dest.stream;
-        audioRef.current.play().catch(() => {});
-      }
+      const el = new Audio();
+      el.autoplay = true;
+      el.srcObject = dest.stream;
+      m.audioEl = el;
+      el.play().catch(() => {});
 
       const offer = await pc.createOffer();
       await pc.setLocalDescription(offer);
@@ -350,132 +536,159 @@ export function IncomingCallModal() {
       if (!rtcRes.ok || !rtcData.sdpAnswer) throw new Error('waha webrtc failed');
       await pc.setRemoteDescription({ type: 'answer', sdp: rtcData.sdpAnswer });
     },
-    [cleanup, stopRingtone],
+    [media, patchLeg, closeLeg, finalizeLeg, stopRing],
   );
 
-  // ---- inbound answer ----
-  const answer = useCallback(async () => {
-    if (!call) return;
-    stopRingtone();
-    setPhase('connecting');
-    try {
-      if (call.provider === 'waha') {
-        // waha-voip: the server answers the WhatsApp call, then the browser
-        // negotiates its own audio leg (PCM DataChannel).
-        const res = await fetch(
-          `/api/calls/waha/${encodeURIComponent(call.callId)}`,
-          {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ action: 'accept', channelId: call.channelId }),
-          },
-        );
-        // 409 = another agent claimed it first (the call rings for everyone).
-        if (res.status === 409) {
-          toast.info('Essa ligação já foi atendida por outro atendente.');
-          cleanup();
+  // ---- actions ----
+
+  /** Bring a leg to the front. Everything else that is connected is parked by
+   *  definition — `held` is derived from this, so there is nothing else to set. */
+  const activate = useCallback((key: string) => setActiveKey(key), []);
+
+  const answer = useCallback(
+    async (key: string) => {
+      const leg = legsRef.current.find((l) => l.key === key);
+      if (!leg) return;
+      stopRing(key);
+      // Taking this leg parks whatever else was live: two live legs would mix
+      // both customers into the agent's headset.
+      patchLeg(key, { phase: 'connecting' });
+      setActiveKey(key);
+      try {
+        if (leg.provider === 'waha') {
+          // waha-voip: the server answers the WhatsApp call, then the browser
+          // negotiates its own audio leg (PCM DataChannel).
+          const res = await fetch(
+            `/api/calls/waha/${encodeURIComponent(leg.callId)}`,
+            {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ action: 'accept', channelId: leg.channelId }),
+            },
+          );
+          // 409 = another agent claimed it first (the call rings for everyone).
+          if (res.status === 409) {
+            toast.info('Essa ligação já foi atendida por outro atendente.');
+            closeLeg(key);
+            return;
+          }
+          if (!res.ok) throw new Error(`waha accept HTTP ${res.status}`);
+          await wahaConnectAudio(key, leg.callId, leg.channelId);
           return;
         }
-        if (!res.ok) throw new Error(`waha accept HTTP ${res.status}`);
-        await wahaConnectAudio(call.callId, call.channelId);
-        return;
+        const pc = await newPeer(key);
+        await pc.setRemoteDescription({
+          type: 'offer',
+          sdp: media(key).offerSdp,
+        });
+        const ans = await pc.createAnswer();
+        await pc.setLocalDescription(ans);
+        await waitIceComplete(pc);
+        const res = await fetch(`/api/calls/${encodeURIComponent(leg.callId)}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'accept',
+            sdp: pc.localDescription?.sdp,
+            to: leg.peer,
+          }),
+        });
+        if (!res.ok) throw new Error(`accept HTTP ${res.status}`);
+        patchLeg(key, { phase: 'active' });
+      } catch (err) {
+        console.error('[calls] answer failed:', err);
+        closeLeg(key);
       }
-      const pc = await newPeer();
-      await pc.setRemoteDescription({ type: 'offer', sdp: offerSdpRef.current });
-      const ans = await pc.createAnswer();
-      await pc.setLocalDescription(ans);
-      await waitIceComplete(pc);
-      const res = await fetch(`/api/calls/${encodeURIComponent(call.callId)}`, {
+    },
+    [stopRing, newPeer, media, wahaConnectAudio, patchLeg, closeLeg],
+  );
+
+  const postAction = useCallback((leg: Leg, action: 'terminate' | 'reject') => {
+    const id = leg.callId;
+    if (!id) return;
+    if (leg.provider === 'waha') {
+      // waha-voip: hang up = /end, decline = /reject (needs the caller's raw
+      // chatId — @lid callers can't be reconstructed from the display peer).
+      fetch(`/api/calls/waha/${encodeURIComponent(id)}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          action: 'accept',
-          sdp: pc.localDescription?.sdp,
-          to: call.peer,
+          action: action === 'terminate' ? 'end' : 'reject',
+          from: leg.wahaFrom ?? leg.peer,
+          channelId: leg.channelId,
         }),
-      });
-      if (!res.ok) throw new Error(`accept HTTP ${res.status}`);
-      setPhase('active');
-    } catch (err) {
-      console.error('[calls] answer failed:', err);
-      cleanup();
+      }).catch(() => {});
+      return;
     }
-  }, [call, stopRingtone, newPeer, wahaConnectAudio, cleanup]);
+    fetch(`/api/calls/${encodeURIComponent(id)}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ action, to: leg.peer }),
+    }).catch(() => {});
+  }, []);
 
-  // ---- outbound dial (Meta) ----
-  // createOffer → POST /initiate → the customer's answer arrives later via the
-  // `call_answer` SSE. Permission-gated.
-  const dialMeta = useCallback(
-    async (to: string, name?: string) => {
-      const pc = await newPeer();
-      const offer = await pc.createOffer({ offerToReceiveAudio: true });
-      await pc.setLocalDescription(offer);
-      await waitIceComplete(pc);
-      const res = await fetch('/api/calls/initiate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to, sdp: pc.localDescription?.sdp }),
-      });
-      const data = (await res.json().catch(() => ({}))) as {
-        ok?: boolean;
-        callId?: string;
-        needsPermission?: boolean;
-      };
-      if (!res.ok || !data.callId) {
-        if (data.needsPermission) {
-          // Keep the modal; drop media and offer to request permission.
-          if (localStreamRef.current) {
-            localStreamRef.current.getTracks().forEach((t) => t.stop());
-            localStreamRef.current = null;
-          }
-          pc.close();
-          pcRef.current = null;
-          setPhase('permission');
-          return;
-        }
-        throw new Error('initiate failed');
+  const reject = useCallback(
+    (key: string) => {
+      const leg = legsRef.current.find((l) => l.key === key);
+      if (!leg) return;
+      postAction(leg, 'reject');
+      // No finalize here: the server's reject makes gows fire call.rejected,
+      // and that webhook both stamps ended_at and logs the missed call.
+      closeLeg(key);
+    },
+    [postAction, closeLeg],
+  );
+
+  const hangup = useCallback(
+    (key: string) => {
+      const leg = legsRef.current.find((l) => l.key === key);
+      if (!leg) return;
+      postAction(leg, 'terminate');
+      finalizeLeg(leg);
+      closeLeg(key);
+    },
+    [postAction, finalizeLeg, closeLeg],
+  );
+
+  const toggleMute = useCallback(
+    (key: string) => {
+      setLegs((prev) =>
+        prev.map((l) => (l.key === key ? { ...l, muted: !l.muted } : l)),
+      );
+    },
+    [],
+  );
+
+  const toggleRingMute = useCallback(
+    (key: string) => {
+      const leg = legsRef.current.find((l) => l.key === key);
+      if (!leg) return;
+      if (!leg.ringMuted) stopRing(key);
+      else startRingtone(key);
+      patchLeg(key, { ringMuted: !leg.ringMuted });
+    },
+    [stopRing, startRingtone, patchLeg],
+  );
+
+  const requestPermission = useCallback(
+    async (key: string) => {
+      const leg = legsRef.current.find((l) => l.key === key);
+      if (!leg) return;
+      try {
+        await fetch('/api/calls/permission', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to: leg.peer }),
+        });
+      } catch {
+        /* best-effort */
       }
-      callIdRef.current = data.callId;
-      setCall({ callId: data.callId, peer: to, name, provider: 'meta' });
-      setPhase('connecting'); // "chamando…" until the answer arrives
+      closeLeg(key);
     },
-    [newPeer],
+    [closeLeg],
   );
 
-  // ---- outbound dial (waha-voip) ----
-  // POST /initiate rings the customer (from the channel's own number), then
-  // the browser wires audio via wahaConnectAudio. No permission, no SSE.
-  const dialWaha = useCallback(
-    async (
-      to: string,
-      name?: string,
-      conversationId?: string,
-      channelId?: string,
-    ) => {
-      const initRes = await fetch('/api/calls/waha/initiate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to, channelId }),
-      });
-      const initData = (await initRes.json().catch(() => ({}))) as {
-        callId?: string;
-      };
-      if (!initRes.ok || !initData.callId) throw new Error('waha initiate failed');
-      callIdRef.current = initData.callId;
-      setCall({
-        callId: initData.callId,
-        peer: to,
-        name,
-        provider: 'waha',
-        conversationId,
-        channelId,
-      });
-      setPhase('connecting');
-      startRingback(); // "tuuu… tuuu" until the customer actually answers
-      await wahaConnectAudio(initData.callId, channelId, true);
-    },
-    [wahaConnectAudio, startRingback],
-  );
+  // ---- outbound dial ----
 
   const dial = useCallback(
     async (
@@ -485,20 +698,85 @@ export function IncomingCallModal() {
       conversationId?: string,
       channelId?: string,
     ) => {
-      if (pcRef.current || phase !== 'idle') return;
-      setDir('out');
-      setCall({ callId: '', peer: to, name, provider, conversationId, channelId });
-      setPhase('dialing');
+      // One active call per NUMBER: dialing out on a channel that is already
+      // on a call would just be refused by WhatsApp.
+      if (
+        channelId &&
+        legsRef.current.some((l) => l.channelId === channelId)
+      ) {
+        toast.error('Esse número já está em uma ligação.');
+        return;
+      }
+      keySeq.current += 1;
+      const key = `leg-${keySeq.current}`;
+      mediaRef.current.set(key, emptyMedia());
+      const leg: Leg = {
+        key,
+        callId: '',
+        peer: to,
+        name,
+        provider,
+        conversationId,
+        channelId,
+        phase: 'dialing',
+        dir: 'out',
+        muted: false,
+        ringMuted: false,
+        seconds: 0,
+      };
+      setLegs((prev) => [...prev, leg]);
+      setActiveKey(key); // parks whatever was live — held is derived from this
       try {
-        if (provider === 'waha')
-          await dialWaha(to, name, conversationId, channelId);
-        else await dialMeta(to, name);
+        if (provider === 'waha') {
+          const initRes = await fetch('/api/calls/waha/initiate', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ to, channelId }),
+          });
+          const initData = (await initRes.json().catch(() => ({}))) as {
+            callId?: string;
+          };
+          if (!initRes.ok || !initData.callId)
+            throw new Error('waha initiate failed');
+          patchLeg(key, { callId: initData.callId, phase: 'connecting' });
+          startRingback(key); // "tuuu… tuuu" until the customer actually answers
+          await wahaConnectAudio(key, initData.callId, channelId, true);
+          return;
+        }
+        const pc = await newPeer(key);
+        const offer = await pc.createOffer({ offerToReceiveAudio: true });
+        await pc.setLocalDescription(offer);
+        await waitIceComplete(pc);
+        const res = await fetch('/api/calls/initiate', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ to, sdp: pc.localDescription?.sdp }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          ok?: boolean;
+          callId?: string;
+          needsPermission?: boolean;
+        };
+        if (!res.ok || !data.callId) {
+          if (data.needsPermission) {
+            // Keep the leg; drop media and offer to request permission.
+            const m = media(key);
+            m.localStream?.getTracks().forEach((t) => t.stop());
+            m.localStream = null;
+            m.pc?.close();
+            m.pc = null;
+            patchLeg(key, { phase: 'permission' });
+            return;
+          }
+          throw new Error('initiate failed');
+        }
+        patchLeg(key, { callId: data.callId, phase: 'connecting' });
       } catch (err) {
         console.error('[calls] dial failed:', err);
-        cleanup();
+        closeLeg(key);
       }
     },
-    [phase, dialMeta, dialWaha, cleanup],
+    [patchLeg, startRingback, wahaConnectAudio, newPeer, media, closeLeg],
   );
 
   // outbound trigger from the header button
@@ -537,18 +815,15 @@ export function IncomingCallModal() {
       callerLid?: unknown;
       status?: unknown;
     }) => {
+      const eventCallId = typeof e.callId === 'string' ? e.callId : '';
       if (e.type === 'call_incoming') {
-        // Dedup: waha/gows can redeliver call.received for one call. `phase` is
-        // async state (stale within a tick), so also guard on callIdRef — a
-        // synchronous ref — to block a duplicate before it double-rings.
-        const incomingId = typeof e.callId === 'string' ? e.callId : '';
-        if (pcRef.current || phase !== 'idle' || callIdRef.current) return;
-        if (incomingId) callIdRef.current = incomingId;
+        // Dedup: waha/gows can redeliver call.received for one call.
+        if (!eventCallId) return;
+        if (isDuplicateIncoming(legsRef.current, eventCallId)) return;
         const isWaha = e.provider === 'waha';
         // Meta carries the caller's SDP offer up front; waha negotiates the
         // browser leg only at answer time, so no SDP is expected here.
         if (!isWaha && (typeof e.sdp !== 'string' || !e.sdp)) return;
-        if (typeof e.sdp === 'string') offerSdpRef.current = e.sdp;
         const rawFrom = typeof e.from === 'string' ? e.from : '';
         // waha inbound `from` now carries the resolved real phone (the
         // webhook maps @lid → CallCreatorAlt) — show the digits.
@@ -557,192 +832,211 @@ export function IncomingCallModal() {
             ? rawFrom.split('@')[0].split(':')[0]
             : 'WhatsApp'
           : rawFrom;
-        setDir('in');
-        setCall({
-          callId: typeof e.callId === 'string' ? e.callId : '',
-          peer: display,
-          name: typeof e.callerName === 'string' ? e.callerName : undefined,
-          provider: isWaha ? 'waha' : 'meta',
-          channelId: typeof e.channelId === 'string' ? e.channelId : undefined,
-          // Reject must target the caller's chatId gows knows: the @lid when
-          // present, else the phone chatId in `from`.
-          wahaFrom: isWaha
-            ? typeof e.callerLid === 'string'
-              ? e.callerLid
-              : rawFrom
-            : undefined,
-        });
-        setPhase('ringing');
-        startRingtone();
+        keySeq.current += 1;
+        const key = `leg-${keySeq.current}`;
+        const m = emptyMedia();
+        if (typeof e.sdp === 'string') m.offerSdp = e.sdp;
+        mediaRef.current.set(key, m);
+        setLegs((prev) => [
+          ...prev,
+          {
+            key,
+            callId: eventCallId,
+            peer: display,
+            name: typeof e.callerName === 'string' ? e.callerName : undefined,
+            provider: isWaha ? 'waha' : 'meta',
+            channelId: typeof e.channelId === 'string' ? e.channelId : undefined,
+            // Reject must target the caller's chatId gows knows: the @lid when
+            // present, else the phone chatId in `from`.
+            wahaFrom: isWaha
+              ? typeof e.callerLid === 'string'
+                ? e.callerLid
+                : rawFrom
+              : undefined,
+            phase: 'ringing',
+            dir: 'in',
+            muted: false,
+            held: false,
+            ringMuted: false,
+            seconds: 0,
+          },
+        ]);
+        startRingtone(key);
       } else if (e.type === 'call_answer') {
         // customer answered our outbound call
-        if (
-          pcRef.current &&
-          typeof e.sdp === 'string' &&
-          e.callId === callIdRef.current
-        ) {
-          void pcRef.current
-            .setRemoteDescription({ type: 'answer', sdp: e.sdp })
-            .then(() => setPhase('active'))
-            .catch((err) => {
-              console.error('[calls] setRemote(answer) failed:', err);
-              cleanup();
-            });
-        }
+        const leg = findByCallId(legsRef.current, eventCallId);
+        if (!leg || typeof e.sdp !== 'string') return;
+        const pc = media(leg.key).pc;
+        if (!pc) return;
+        void pc
+          .setRemoteDescription({ type: 'answer', sdp: e.sdp })
+          .then(() => patchLeg(leg.key, { phase: 'active' }))
+          .catch((err) => {
+            console.error('[calls] setRemote(answer) failed:', err);
+            closeLeg(leg.key);
+          });
       } else if (e.type === 'call_claimed') {
         // Another agent answered this ringing call → stand down. The agent who
         // won is already past 'ringing' (answer() flips the phase before it
         // calls the API), so this only dismisses the losers.
-        if (e.callId === callIdRef.current && phase === 'ringing') cleanup();
+        const leg = findByCallId(legsRef.current, eventCallId);
+        if (leg && leg.phase === 'ringing') closeLeg(leg.key);
       } else if (e.type === 'call_status') {
+        // The stream is account-wide: find the leg this belongs to, if any.
+        const leg = eventCallId
+          ? findByCallId(legsRef.current, eventCallId)
+          : legsRef.current.find((l) => l.key === activeKey);
+        if (!leg) return;
         const action = routeCallStatus({
-          eventCallId: typeof e.callId === 'string' ? e.callId : '',
+          eventCallId,
           eventStatus: typeof e.status === 'string' ? e.status : '',
-          currentCallId: callIdRef.current,
-          provider: call?.provider,
-          dir,
-          phase,
+          currentCallId: leg.callId,
+          provider: leg.provider,
+          dir: leg.dir,
+          phase: leg.phase,
         });
         if (action === 'ignore') return;
         if (action === 'go-active') {
           // Backs up the first-audio-frame trigger in wahaConnectAudio.
-          stopRingtone();
-          setPhase('active');
+          stopRing(leg.key);
+          patchLeg(leg.key, { phase: 'active' });
           return;
         }
-        cleanup();
+        // The peer ended it — close the row out before dropping the leg.
+        finalizeLeg(leg);
+        closeLeg(leg.key);
       }
     },
-    [phase, dir, call, startRingtone, stopRingtone, cleanup],
+    [
+      activeKey,
+      startRingtone,
+      stopRing,
+      media,
+      patchLeg,
+      closeLeg,
+      finalizeLeg,
+    ],
   );
   useServerEvents(onEvent);
 
-  const postAction = (action: 'terminate' | 'reject') => {
-    const id = call?.callId || callIdRef.current;
-    if (!id || !call) return;
-    if (call.provider === 'waha') {
-      // waha-voip: hang up = /end, decline = /reject (needs the caller's raw
-      // chatId — @lid callers can't be reconstructed from the display peer).
-      fetch(`/api/calls/waha/${encodeURIComponent(id)}`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: action === 'terminate' ? 'end' : 'reject',
-          from: call.wahaFrom ?? call.peer,
-          channelId: call.channelId,
-        }),
-      }).catch(() => {});
-      return;
-    }
-    fetch(`/api/calls/${encodeURIComponent(id)}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ action, to: call.peer }),
-    }).catch(() => {});
-  };
+  // ---- render ----
 
-  const reject = useCallback(() => {
-    postAction('reject');
-    cleanup();
-  }, [call, cleanup]);
+  const front = pickForeground(legs, activeKey);
+  if (!front) return null;
 
-  const hangup = useCallback(() => {
-    postAction('terminate');
-    // waha-voip has no terminate webhook — log the outbound call from here
-    // (chat entry + finalize the history row in the Ligações panel).
-    if (call?.provider === 'waha' && (call.conversationId || call.callId)) {
-      const cid = call.conversationId;
-      fetch('/api/calls/waha/log', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          conversationId: cid,
-          durationSec: seconds,
-          answered: phase === 'active',
-          callId: call.callId || callIdRef.current,
-        }),
-      })
-        .then(() => {
-          // Refresh the thread live (the SSE ping can race with modal cleanup).
-          window.dispatchEvent(
-            new CustomEvent('fluxia:conversation-refresh', {
-              detail: { conversationId: cid },
-            }),
-          );
-        })
-        .catch(() => {});
-    }
-    cleanup();
-  }, [call, phase, seconds, cleanup]);
-
-  const requestPermission = useCallback(async () => {
-    if (!call) return;
-    try {
-      await fetch('/api/calls/permission', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ to: call.peer }),
-      });
-    } catch {
-      /* best-effort */
-    }
-    cleanup();
-  }, [call, cleanup]);
-
-  const toggleMute = useCallback(() => {
-    const track = localStreamRef.current?.getAudioTracks()[0];
-    if (track) {
-      track.enabled = !track.enabled;
-      setMuted(!track.enabled);
-    }
-  }, []);
-
-  if (phase === 'idle' || !call) return null;
-
-  const who = call.name || call.peer || 'Cliente';
+  const others = legs.filter((l) => l.key !== front.key);
+  const frontHeld = isHeld(front, activeKey);
+  const who = (l: Leg) => l.name || l.peer || 'Cliente';
   const statusText =
-    phase === 'ringing'
+    front.phase === 'ringing'
       ? 'está te ligando no WhatsApp…'
-      : phase === 'dialing'
+      : front.phase === 'dialing'
         ? 'iniciando ligação…'
-        : phase === 'connecting'
-          ? dir === 'out'
+        : front.phase === 'connecting'
+          ? front.dir === 'out'
             ? 'chamando…'
             : 'conectando…'
-          : phase === 'permission'
+          : front.phase === 'permission'
             ? 'ainda não autorizou receber ligação'
-            : formatCallDuration(seconds);
+            : frontHeld
+              ? `em espera • ${formatCallDuration(front.seconds)}`
+              : formatCallDuration(front.seconds);
+
+  // Parked/ringing legs ride along as a stack so the agent can switch, silence
+  // a ringer, or hang one up without losing the call in front.
+  const legStack = others.length ? (
+    <div className="mb-3 flex flex-col gap-2">
+      {others.map((l) => (
+        <div
+          key={l.key}
+          className="flex items-center gap-2 rounded-xl border border-border bg-card px-3 py-2 shadow-lg"
+        >
+          <span
+            className={`flex size-8 shrink-0 items-center justify-center rounded-full ${
+              l.phase === 'ringing'
+                ? 'animate-pulse bg-amber-500/15 text-amber-600'
+                : 'bg-muted text-muted-foreground'
+            }`}
+          >
+            {l.phase === 'ringing' ? (
+              <Phone className="size-4" />
+            ) : (
+              <Pause className="size-4" />
+            )}
+          </span>
+          <div className="flex min-w-0 flex-col leading-tight">
+            <span className="max-w-[8rem] truncate text-sm font-medium">
+              {who(l)}
+            </span>
+            <span className="text-xs text-muted-foreground">
+              {l.phase === 'ringing'
+                ? 'tocando…'
+                : `em espera • ${formatCallDuration(l.seconds)}`}
+            </span>
+          </div>
+          <div className="ml-auto flex items-center gap-1.5">
+            {l.phase === 'ringing' && (
+              <button
+                onClick={() => toggleRingMute(l.key)}
+                title={l.ringMuted ? 'Voltar a tocar' : 'Silenciar o toque'}
+                className="flex size-8 items-center justify-center rounded-full bg-muted text-muted-foreground transition hover:bg-muted/70"
+              >
+                {l.ringMuted ? (
+                  <BellOff className="size-4" />
+                ) : (
+                  <Bell className="size-4" />
+                )}
+              </button>
+            )}
+            <button
+              onClick={() => (l.phase === 'ringing' ? answer(l.key) : activate(l.key))}
+              title={l.phase === 'ringing' ? 'Atender' : 'Voltar para esta'}
+              className="flex size-8 items-center justify-center rounded-full bg-emerald-500 text-white transition hover:bg-emerald-600"
+            >
+              <Phone className="size-4" />
+            </button>
+            <button
+              onClick={() => (l.phase === 'ringing' ? reject(l.key) : hangup(l.key))}
+              title={l.phase === 'ringing' ? 'Recusar' : 'Desligar'}
+              className="flex size-8 items-center justify-center rounded-full bg-red-500 text-white transition hover:bg-red-600"
+            >
+              <PhoneOff className="size-4" />
+            </button>
+          </div>
+        </div>
+      ))}
+    </div>
+  ) : null;
 
   // Minimized: a small floating pill so the whole CRM stays usable during a
-  // call (reply to other clients while talking, WhatsApp-style). The <audio>
-  // element stays mounted across the toggle so the stream never drops.
-  return (
-    <>
-      <audio ref={audioRef} autoPlay />
-      {minimized && phase === 'active' ? (
-        <div className="fixed bottom-4 right-4 z-[60] flex items-center gap-3 rounded-2xl border border-border bg-card px-3 py-2 shadow-2xl">
+  // call (reply to other clients while talking, WhatsApp-style).
+  if (minimized && front.phase === 'active') {
+    return (
+      <div className="fixed bottom-4 right-4 z-[60] flex flex-col items-end">
+        {legStack}
+        <div className="flex items-center gap-3 rounded-2xl border border-border bg-card px-3 py-2 shadow-2xl">
           <span className="relative flex size-9 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600">
             <Phone className="size-4" />
             <span className="absolute -right-0.5 -top-0.5 size-2.5 animate-pulse rounded-full bg-emerald-500" />
           </span>
           <div className="flex flex-col leading-tight">
             <span className="max-w-[9rem] truncate text-sm font-medium">
-              {who}
+              {who(front)}
             </span>
             <span className="text-xs tabular-nums text-muted-foreground">
-              {formatCallDuration(seconds)}
+              {frontHeld ? 'em espera' : formatCallDuration(front.seconds)}
             </span>
           </div>
           <button
-            onClick={toggleMute}
-            title={muted ? 'Ativar microfone' : 'Silenciar'}
+            onClick={() => toggleMute(front.key)}
+            title={front.muted ? 'Ativar microfone' : 'Silenciar'}
             className={`flex size-8 items-center justify-center rounded-full transition ${
-              muted
+              front.muted
                 ? 'bg-red-500 text-white'
                 : 'bg-muted text-muted-foreground hover:bg-muted/70'
             }`}
           >
-            {muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
+            {front.muted ? <MicOff className="size-4" /> : <Mic className="size-4" />}
           </button>
           <button
             onClick={() => setMinimized(false)}
@@ -752,104 +1046,140 @@ export function IncomingCallModal() {
             <Maximize2 className="size-4" />
           </button>
           <button
-            onClick={hangup}
+            onClick={() => hangup(front.key)}
             title="Desligar"
             className="flex size-8 items-center justify-center rounded-full bg-red-500 text-white transition hover:bg-red-600"
           >
             <PhoneOff className="size-4" />
           </button>
         </div>
-      ) : (
-        <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
-          <div className="relative w-full max-w-xs rounded-2xl border border-border bg-card p-6 text-center shadow-2xl">
-        {phase === 'active' && (
-          <button
-            onClick={() => setMinimized(true)}
-            title="Minimizar (continuar atendendo)"
-            className="absolute right-3 top-3 flex size-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted"
-          >
-            <Minimize2 className="size-4" />
-          </button>
-        )}
-        <div
-          className={`mx-auto flex size-16 items-center justify-center rounded-full ${
-            phase === 'permission'
-              ? 'bg-amber-500/15 text-amber-600'
-              : 'bg-primary/10 text-primary'
-          }`}
-        >
-          {phase === 'permission' ? (
-            <ShieldQuestion className="size-7" />
-          ) : (
-            <Phone className="size-7" />
-          )}
-        </div>
-        <p className="mt-4 text-lg font-semibold text-foreground">{who}</p>
-        <p className="mt-1 text-sm text-muted-foreground">{statusText}</p>
+      </div>
+    );
+  }
 
-        {phase === 'ringing' ? (
-          <div className="mt-6 flex items-center justify-center gap-8">
+  return (
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/50 p-4">
+      <div className="w-full max-w-xs">
+        {legStack}
+        <div className="relative rounded-2xl border border-border bg-card p-6 text-center shadow-2xl">
+          {front.phase === 'active' && (
             <button
-              onClick={reject}
-              className="flex size-14 items-center justify-center rounded-full bg-red-500 text-white transition hover:bg-red-600"
-              title="Recusar"
+              onClick={() => setMinimized(true)}
+              title="Minimizar (continuar atendendo)"
+              className="absolute right-3 top-3 flex size-8 items-center justify-center rounded-full text-muted-foreground transition hover:bg-muted"
             >
-              <PhoneOff className="size-6" />
+              <Minimize2 className="size-4" />
             </button>
-            <button
-              onClick={answer}
-              className="flex size-14 items-center justify-center rounded-full bg-emerald-500 text-white transition hover:bg-emerald-600"
-              title="Atender"
-            >
-              <Phone className="size-6" />
-            </button>
+          )}
+          <div
+            className={`mx-auto flex size-16 items-center justify-center rounded-full ${
+              front.phase === 'permission'
+                ? 'bg-amber-500/15 text-amber-600'
+                : 'bg-primary/10 text-primary'
+            }`}
+          >
+            {front.phase === 'permission' ? (
+              <ShieldQuestion className="size-7" />
+            ) : (
+              <Phone className="size-7" />
+            )}
           </div>
-        ) : phase === 'permission' ? (
-          <div className="mt-6 flex flex-col items-center gap-3">
-            <p className="text-xs text-muted-foreground">
-              O WhatsApp exige que o cliente autorize antes de você ligar. Envie
-              o pedido de permissão — ele aceita na conversa e depois você liga.
-            </p>
-            <div className="flex gap-3">
+          <p className="mt-4 text-lg font-semibold text-foreground">
+            {who(front)}
+          </p>
+          <p className="mt-1 text-sm text-muted-foreground">{statusText}</p>
+
+          {front.phase === 'ringing' ? (
+            <div className="mt-6 flex items-center justify-center gap-6">
               <button
-                onClick={cleanup}
-                className="rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-muted"
+                onClick={() => reject(front.key)}
+                className="flex size-14 items-center justify-center rounded-full bg-red-500 text-white transition hover:bg-red-600"
+                title="Recusar"
               >
-                Cancelar
+                <PhoneOff className="size-6" />
               </button>
               <button
-                onClick={requestPermission}
-                className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                onClick={() => toggleRingMute(front.key)}
+                className="flex size-12 items-center justify-center rounded-full bg-muted text-muted-foreground transition hover:bg-muted/70"
+                title={front.ringMuted ? 'Voltar a tocar' : 'Silenciar o toque'}
               >
-                Pedir permissão
+                {front.ringMuted ? (
+                  <BellOff className="size-5" />
+                ) : (
+                  <Bell className="size-5" />
+                )}
+              </button>
+              <button
+                onClick={() => answer(front.key)}
+                className="flex size-14 items-center justify-center rounded-full bg-emerald-500 text-white transition hover:bg-emerald-600"
+                title="Atender"
+              >
+                <Phone className="size-6" />
               </button>
             </div>
-          </div>
-        ) : (
-          <div className="mt-6 flex items-center justify-center gap-6">
-            <button
-              onClick={toggleMute}
-              className={`flex size-12 items-center justify-center rounded-full transition ${
-                muted
-                  ? 'bg-red-500 text-white hover:bg-red-600'
-                  : 'bg-muted text-muted-foreground hover:bg-muted/70'
-              }`}
-              title={muted ? 'Ativar microfone' : 'Silenciar'}
-            >
-              {muted ? <MicOff className="size-5" /> : <Mic className="size-5" />}
-            </button>
-            <button
-              onClick={hangup}
-              className="flex size-14 items-center justify-center rounded-full bg-red-500 text-white transition hover:bg-red-600"
-              title="Desligar"
-            >
-              <PhoneOff className="size-6" />
-            </button>
-          </div>
-        )}
-          </div>
+          ) : front.phase === 'permission' ? (
+            <div className="mt-6 flex flex-col items-center gap-3">
+              <p className="text-xs text-muted-foreground">
+                O WhatsApp exige que o cliente autorize antes de você ligar.
+                Envie o pedido de permissão — ele aceita na conversa e depois
+                você liga.
+              </p>
+              <div className="flex gap-3">
+                <button
+                  onClick={() => closeLeg(front.key)}
+                  className="rounded-lg border border-border px-3 py-2 text-sm text-muted-foreground hover:bg-muted"
+                >
+                  Cancelar
+                </button>
+                <button
+                  onClick={() => requestPermission(front.key)}
+                  className="rounded-lg bg-primary px-3 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90"
+                >
+                  Pedir permissão
+                </button>
+              </div>
+            </div>
+          ) : (
+            <div className="mt-6 flex items-center justify-center gap-6">
+              {frontHeld ? (
+                // A parked leg in the foreground needs its own way back —
+                // without this the agent can only resume it by first
+                // activating some other leg to push this one into the stack.
+                <button
+                  onClick={() => activate(front.key)}
+                  className="flex size-12 items-center justify-center rounded-full bg-emerald-500 text-white transition hover:bg-emerald-600"
+                  title="Retomar esta ligação"
+                >
+                  <Phone className="size-5" />
+                </button>
+              ) : (
+                <button
+                  onClick={() => toggleMute(front.key)}
+                  className={`flex size-12 items-center justify-center rounded-full transition ${
+                    front.muted
+                      ? 'bg-red-500 text-white hover:bg-red-600'
+                      : 'bg-muted text-muted-foreground hover:bg-muted/70'
+                  }`}
+                  title={front.muted ? 'Ativar microfone' : 'Silenciar'}
+                >
+                  {front.muted ? (
+                    <MicOff className="size-5" />
+                  ) : (
+                    <Mic className="size-5" />
+                  )}
+                </button>
+              )}
+              <button
+                onClick={() => hangup(front.key)}
+                className="flex size-14 items-center justify-center rounded-full bg-red-500 text-white transition hover:bg-red-600"
+                title="Desligar"
+              >
+                <PhoneOff className="size-6" />
+              </button>
+            </div>
+          )}
         </div>
-      )}
-    </>
+      </div>
+    </div>
   );
 }
