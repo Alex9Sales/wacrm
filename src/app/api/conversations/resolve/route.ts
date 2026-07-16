@@ -23,6 +23,7 @@ export async function POST(request: Request) {
     const resolved = await resolveConversationByPhone(
       ctx.accountId,
       body.phone,
+      undefined, // name
       body.channelId ?? null,
     )
     return NextResponse.json({ conversationId: resolved.conversationId })

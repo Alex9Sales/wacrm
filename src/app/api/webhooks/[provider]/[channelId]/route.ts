@@ -29,7 +29,7 @@
 import crypto from 'crypto'
 
 import { NextResponse, after } from 'next/server'
-import { and, eq, isNull, ne } from 'drizzle-orm'
+import { and, eq, gt, isNull, ne } from 'drizzle-orm'
 
 import { db, callLogs, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -204,6 +204,9 @@ export async function POST(request: Request, { params }: RouteParams) {
         // the number is the account). Reject it with an automatic message
         // instead of letting it ring into the void, and log it to the panel so
         // it gets a call-back.
+        // Time-bounded on purpose: if an end event is ever missed, ended_at
+        // stays NULL and an unbounded check would wedge the channel as "busy"
+        // forever (no call would ever ring again). A live call is a recent one.
         const [live] = await db
           .select({ id: callLogs.id })
           .from(callLogs)
@@ -213,6 +216,10 @@ export async function POST(request: Request, { params }: RouteParams) {
               eq(callLogs.channelId, channel.id),
               eq(callLogs.status, 'answered'),
               isNull(callLogs.endedAt),
+              gt(
+                callLogs.createdAt,
+                new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+              ),
             ),
           )
           .limit(1)
@@ -253,7 +260,8 @@ export async function POST(request: Request, { params }: RouteParams) {
                 const conv = await resolveConversationByPhone(
                   channel.accountId,
                   phone,
-                  channel.id,
+                  undefined, // name — deixa o pipeline resolver o contato
+                  channel.id, // canal DA LIGACAO (senao vai pro canal padrao)
                 )
                 await sendMessageToConversation(channel.accountId, {
                   conversationId: conv.conversationId,
