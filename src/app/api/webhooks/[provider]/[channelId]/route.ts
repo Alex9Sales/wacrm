@@ -199,30 +199,48 @@ export async function POST(request: Request, { params }: RouteParams) {
         // as callerLid so reject still targets the right chatId.
         const displayFrom = digits ? `${digits}@c.us` : rawFrom
 
-        // WhatsApp allows ONE active call per number, so while this channel is
-        // on a call NOBODY can answer a second caller (not even another agent —
-        // the number is the account). Reject it with an automatic message
-        // instead of letting it ring into the void, and log it to the panel so
-        // it gets a call-back.
-        // Time-bounded on purpose: if an end event is ever missed, ended_at
-        // stays NULL and an unbounded check would wedge the channel as "busy"
-        // forever (no call would ever ring again). A live call is a recent one.
-        const [live] = await db
-          .select({ id: callLogs.id })
-          .from(callLogs)
-          .where(
-            and(
-              eq(callLogs.accountId, channel.accountId),
-              eq(callLogs.channelId, channel.id),
-              eq(callLogs.status, 'answered'),
-              isNull(callLogs.endedAt),
-              gt(
-                callLogs.createdAt,
-                new Date(Date.now() - 30 * 60 * 1000).toISOString(),
-              ),
-            ),
-          )
-          .limit(1)
+        // Busy overflow: while this channel is on a call, reject a second
+        // caller with an automatic message instead of letting it ring, and log
+        // it so it gets a call-back.
+        //
+        // ⚠️ THE PREMISE FOR THIS IS IN DOUBT. It was built on "WhatsApp allows
+        // ONE active call per number" — which was DEDUCED, never tested, and a
+        // live test on 16/07 broke it: with a call live in the CRM, a second
+        // caller was rejected here AND THE PHONE RANG ANYWAY; answering it on
+        // the phone left the first call with normal audio. Two live calls on
+        // one number. The real limit looks like one call per DEVICE (gows is a
+        // linked device, the phone is the primary) — not per number.
+        //
+        // So this reject protects nothing: it tells the customer we are busy
+        // while the phone rings in the agent's hand. It stays only because we
+        // do not yet know whether gows ALONE can hold two calls — if it cannot,
+        // letting the second through could drop a live customer on answer.
+        // WAHA_CALLS_BUSY_REJECT=off runs that experiment: the second call
+        // reaches the CRM and we find out. Flip it back if gows misbehaves.
+        //
+        // Time-bounded on purpose: gows emits NO "ended" event, so a call
+        // answered on the phone never closes its row. Unbounded, that wedges
+        // the channel as busy forever. 30min = fail open.
+        const busyRejectOn =
+          (process.env.WAHA_CALLS_BUSY_REJECT ?? 'on').toLowerCase() !== 'off'
+        const [live] = busyRejectOn
+          ? await db
+              .select({ id: callLogs.id })
+              .from(callLogs)
+              .where(
+                and(
+                  eq(callLogs.accountId, channel.accountId),
+                  eq(callLogs.channelId, channel.id),
+                  eq(callLogs.status, 'answered'),
+                  isNull(callLogs.endedAt),
+                  gt(
+                    callLogs.createdAt,
+                    new Date(Date.now() - 30 * 60 * 1000).toISOString(),
+                  ),
+                ),
+              )
+              .limit(1)
+          : []
         if (live) {
           try {
             const coords = await wahaCallsForChannel(
