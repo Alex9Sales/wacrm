@@ -29,7 +29,7 @@
 import crypto from 'crypto'
 
 import { NextResponse, after } from 'next/server'
-import { and, eq, ne } from 'drizzle-orm'
+import { and, eq, isNull, ne } from 'drizzle-orm'
 
 import { db, callLogs, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -39,6 +39,9 @@ import { dispatchInboundMessage } from '@/lib/channels/inbound'
 import { applyStatusUpdate, levelToStatus } from '@/lib/channels/status'
 import type { ProviderId, WhatsAppProvider } from '@/lib/channels/provider'
 import { publishEvent } from '@/lib/events/publish'
+import { wahaCallsForChannel, wahaCallsPost } from '@/lib/channels/waha-calls'
+import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
+import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 
 const NON_OFFICIAL: ReadonlySet<ProviderId> = new Set([
@@ -195,6 +198,77 @@ export async function POST(request: Request, { params }: RouteParams) {
         // Prefer the real phone JID as the modal/panel peer; keep the @lid
         // as callerLid so reject still targets the right chatId.
         const displayFrom = digits ? `${digits}@c.us` : rawFrom
+
+        // WhatsApp allows ONE active call per number, so while this channel is
+        // on a call NOBODY can answer a second caller (not even another agent —
+        // the number is the account). Reject it with an automatic message
+        // instead of letting it ring into the void, and log it to the panel so
+        // it gets a call-back.
+        const [live] = await db
+          .select({ id: callLogs.id })
+          .from(callLogs)
+          .where(
+            and(
+              eq(callLogs.accountId, channel.accountId),
+              eq(callLogs.channelId, channel.id),
+              eq(callLogs.status, 'answered'),
+              isNull(callLogs.endedAt),
+            ),
+          )
+          .limit(1)
+        if (live) {
+          try {
+            const coords = await wahaCallsForChannel(
+              channel.accountId,
+              channel.id,
+            )
+            if (coords) {
+              await wahaCallsPost(coords, 'reject', { from: rawFrom, id: callId })
+            }
+          } catch (err) {
+            console.error('[webhooks/generic] busy-reject failed:', err)
+          }
+          try {
+            await db
+              .insert(callLogs)
+              .values({
+                accountId: channel.accountId,
+                channelId: channel.id,
+                contactId: contact?.id ?? null,
+                peer: displayFrom,
+                direction: 'in',
+                status: 'missed',
+                provider: 'waha',
+                externalCallId: callId,
+                endedAt: new Date().toISOString(),
+              })
+              .onConflictDoNothing()
+          } catch (err) {
+            console.error('[webhooks/generic] busy call-log insert failed:', err)
+          }
+          if (digits) {
+            const phone = digits
+            after(async () => {
+              try {
+                const conv = await resolveConversationByPhone(
+                  channel.accountId,
+                  phone,
+                  channel.id,
+                )
+                await sendMessageToConversation(channel.accountId, {
+                  conversationId: conv.conversationId,
+                  messageType: 'text',
+                  contentText:
+                    'Oi! Estamos em atendimento no momento e não conseguimos atender sua ligação. Já te retornamos, tá? 🙏',
+                })
+              } catch (err) {
+                console.error('[webhooks/generic] busy auto-reply failed:', err)
+              }
+            })
+          }
+          return NextResponse.json({ status: 'ok' }, { status: 200 })
+        }
+
         await publishEvent(channel.accountId, {
           type: 'call_incoming',
           callId,
@@ -252,6 +326,23 @@ export async function POST(request: Request, { params }: RouteParams) {
               updatedAt: new Date().toISOString(),
             })
             .where(where)
+          // gows fires call.rejected both for a decline AND when the peer
+          // hangs up a live call — either way the leg is over, so stamp
+          // ended_at (separate from the promote-only status update above, which
+          // deliberately skips answered rows) and free the channel.
+          if (ev.event === 'call.rejected') {
+            const now = new Date().toISOString()
+            await db
+              .update(callLogs)
+              .set({ endedAt: now, updatedAt: now })
+              .where(
+                and(
+                  eq(callLogs.accountId, channel.accountId),
+                  eq(callLogs.externalCallId, callId),
+                  isNull(callLogs.endedAt),
+                ),
+              )
+          }
         } catch (err) {
           console.error('[webhooks/generic] call-log update failed:', err)
         }

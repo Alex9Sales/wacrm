@@ -22,6 +22,8 @@ import {
   Maximize2,
 } from 'lucide-react';
 
+import { toast } from 'sonner';
+
 import { useServerEvents } from '@/hooks/use-server-events';
 import { formatCallDuration } from '@/lib/inbox/call-log';
 
@@ -380,6 +382,12 @@ export function IncomingCallModal() {
             body: JSON.stringify({ action: 'accept', channelId: call.channelId }),
           },
         );
+        // 409 = another agent claimed it first (the call rings for everyone).
+        if (res.status === 409) {
+          toast.info('Essa ligação já foi atendida por outro atendente.');
+          cleanup();
+          return;
+        }
         if (!res.ok) throw new Error(`waha accept HTTP ${res.status}`);
         await wahaConnectAudio(call.callId, call.channelId);
         return;
@@ -593,6 +601,11 @@ export function IncomingCallModal() {
               cleanup();
             });
         }
+      } else if (e.type === 'call_claimed') {
+        // Another agent answered this ringing call → stand down. The agent who
+        // won is already past 'ringing' (answer() flips the phase before it
+        // calls the API), so this only dismisses the losers.
+        if (e.callId === callIdRef.current && phase === 'ringing') cleanup();
       } else if (e.type === 'call_status') {
         if (e.status === 'ACCEPTED_ELSEWHERE' && call?.provider === 'waha') {
           // Outbound: the customer answered → flip "chamando…" to active

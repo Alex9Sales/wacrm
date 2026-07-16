@@ -417,6 +417,11 @@ export const callLogs = pgTable("call_logs", {
 	provider: text().default('waha').notNull(),
 	externalCallId: text("external_call_id"),
 	durationSec: integer("duration_sec"),
+	// The agent who took the call. Claimed atomically (UPDATE ... WHERE
+	// claimed_by IS NULL) so only one of the ringing agents wins.
+	claimedBy: uuid("claimed_by"),
+	// When this leg finished. "Channel busy right now" = ended_at IS NULL.
+	endedAt: timestamp("ended_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

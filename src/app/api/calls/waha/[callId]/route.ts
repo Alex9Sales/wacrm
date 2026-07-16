@@ -8,10 +8,11 @@
 // ============================================================
 
 import { NextResponse } from 'next/server'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, isNull } from 'drizzle-orm'
 
 import { db, callLogs } from '@/db'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
+import { publishEvent } from '@/lib/events/publish'
 import {
   wahaCallsForAccount,
   wahaCallsForChannel,
@@ -45,6 +46,48 @@ export async function POST(request: Request, { params }: RouteParams) {
       )
     }
 
+    // An inbound call rings on EVERY agent's browser (the SSE fans out to the
+    // whole account), so the first accept has to win. Claim atomically —
+    // UPDATE ... WHERE claimed_by IS NULL — BEFORE touching the engine, so a
+    // loser never answers a call someone else already took.
+    if (action === 'accept') {
+      const won = await db
+        .update(callLogs)
+        .set({
+          claimedBy: ctx.userId,
+          status: 'answered',
+          updatedAt: new Date().toISOString(),
+        })
+        .where(
+          and(
+            eq(callLogs.accountId, ctx.accountId),
+            eq(callLogs.externalCallId, callId),
+            isNull(callLogs.claimedBy),
+          ),
+        )
+        .returning({ id: callLogs.id })
+      if (won.length === 0) {
+        // Lost the race, or there's simply no history row yet (the webhook
+        // insert can lag an outbound/edge case) — only block on a real loss.
+        const [existing] = await db
+          .select({ claimedBy: callLogs.claimedBy })
+          .from(callLogs)
+          .where(
+            and(
+              eq(callLogs.accountId, ctx.accountId),
+              eq(callLogs.externalCallId, callId),
+            ),
+          )
+          .limit(1)
+        if (existing?.claimedBy && existing.claimedBy !== ctx.userId) {
+          return NextResponse.json(
+            { error: 'already_claimed' },
+            { status: 409 },
+          )
+        }
+      }
+    }
+
     const coords =
       (body.channelId
         ? await wahaCallsForChannel(ctx.accountId, body.channelId)
@@ -76,6 +119,7 @@ export async function POST(request: Request, { params }: RouteParams) {
     // Mark the history row answered on accept — authoritative. gows does NOT
     // emit call.accepted for our OWN accept (only for accept-elsewhere), so
     // without this the call ends as 'rejected' from the terminate event.
+    // (The claim above already set it; this covers the no-row-yet case.)
     if (action === 'accept') {
       try {
         await db
@@ -87,8 +131,34 @@ export async function POST(request: Request, { params }: RouteParams) {
               eq(callLogs.externalCallId, callId),
             ),
           )
+        // Tell the other agents' ringing modals to stand down.
+        await publishEvent(ctx.accountId, {
+          type: 'call_claimed',
+          callId,
+          by: ctx.userId,
+        })
       } catch (err) {
         console.error('[waha-calls] mark answered failed:', err)
+      }
+    }
+
+    // The leg is over — free the channel so the next inbound isn't treated as
+    // "busy" (WhatsApp allows one active call per number).
+    if (action === 'end' || action === 'reject') {
+      try {
+        const now = new Date().toISOString()
+        await db
+          .update(callLogs)
+          .set({ endedAt: now, updatedAt: now })
+          .where(
+            and(
+              eq(callLogs.accountId, ctx.accountId),
+              eq(callLogs.externalCallId, callId),
+              isNull(callLogs.endedAt),
+            ),
+          )
+      } catch (err) {
+        console.error('[waha-calls] mark ended failed:', err)
       }
     }
 
