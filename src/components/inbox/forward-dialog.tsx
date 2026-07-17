@@ -9,7 +9,7 @@
 
 import { useEffect, useMemo, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Search, Send, X } from "lucide-react";
+import { Loader2, Search, Send, UserPlus, X } from "lucide-react";
 
 import { listConversations } from "@/app/(dashboard)/inbox/actions";
 import type { Conversation, Message } from "@/types";
@@ -47,6 +47,7 @@ export function ForwardDialog({
   const [query, setQuery] = useState("");
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [sending, setSending] = useState(false);
+  const [resolving, setResolving] = useState(false);
 
   useEffect(() => {
     listConversations()
@@ -74,6 +75,43 @@ export function ForwardDialog({
       else next.add(id);
       return next;
     });
+
+  // "Forward to a new number": when the query is a phone with no matching
+  // conversation, offer to open/create it and add it to the selection.
+  const queryDigits = query.replace(/\D/g, "");
+  const isPhoneQuery = queryDigits.length >= 10;
+  const alreadyListed = filtered.some(
+    (c) => (c.contact?.phone ?? "").replace(/\D/g, "").endsWith(queryDigits),
+  );
+  const showNewNumber = isPhoneQuery && !alreadyListed;
+
+  const addNewNumber = async () => {
+    if (resolving) return;
+    setResolving(true);
+    try {
+      const res = await fetch("/api/conversations/resolve", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ phone: queryDigits }),
+      });
+      const data = (await res.json().catch(() => ({}))) as {
+        conversationId?: string;
+      };
+      if (!res.ok || !data.conversationId) {
+        toast.error("Não foi possível abrir a conversa desse número.");
+        return;
+      }
+      // Fetch fresh so the new conversation shows in the list with its name.
+      const list = await listConversations().catch(() => conversations);
+      setConversations(list);
+      setSelected((prev) => new Set(prev).add(data.conversationId!));
+      setQuery("");
+    } catch {
+      toast.error("Não foi possível abrir a conversa desse número.");
+    } finally {
+      setResolving(false);
+    }
+  };
 
   const forward = async () => {
     if (selected.size === 0 || sending) return;
@@ -129,14 +167,43 @@ export function ForwardDialog({
           />
         </div>
 
+        {showNewNumber && (
+          <button
+            type="button"
+            onClick={addNewNumber}
+            disabled={resolving}
+            className="flex w-full items-center gap-3 rounded-lg border border-dashed border-border px-3 py-2.5 text-left transition hover:bg-muted/50 disabled:opacity-60"
+          >
+            <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-primary/10 text-primary">
+              {resolving ? (
+                <Loader2 className="size-4 animate-spin" />
+              ) : (
+                <UserPlus className="size-4" />
+              )}
+            </span>
+            <span className="flex flex-col leading-tight">
+              <span className="text-sm font-medium text-foreground">
+                Encaminhar para {queryDigits}
+              </span>
+              <span className="text-xs text-muted-foreground">
+                Número novo — abre a conversa
+              </span>
+            </span>
+          </button>
+        )}
+
         <div className="max-h-72 overflow-y-auto rounded-lg border border-border">
           {loading ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
               Carregando…
             </p>
-          ) : filtered.length === 0 ? (
+          ) : filtered.length === 0 && !showNewNumber ? (
             <p className="py-8 text-center text-sm text-muted-foreground">
               Nenhuma conversa encontrada.
+            </p>
+          ) : filtered.length === 0 ? (
+            <p className="py-6 text-center text-xs text-muted-foreground">
+              Selecione o número acima para encaminhar.
             </p>
           ) : (
             <ul className="divide-y divide-border">

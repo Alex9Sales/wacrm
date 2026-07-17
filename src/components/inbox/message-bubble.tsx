@@ -152,6 +152,56 @@ function PixCard({ text }: { text: string }) {
   );
 }
 
+/** A shared/sent location = a Google Maps link with `q=lat,lng`. Sent pins are
+ *  a bare link, inbound ones carry a "📍 Localização" header + optional place
+ *  name. Detect either so the bubble shows a compact card, not a raw URL. */
+function detectLocation(
+  txt: string,
+): { header: string; place?: string; url: string } | null {
+  const m = txt.match(
+    /https?:\/\/[^\s]*google\.[^\s]*maps[^\s]*[?&]q=-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?[^\s]*/i,
+  );
+  if (!m) return null;
+  const lines = txt.split("\n").filter(Boolean);
+  const header = lines[0]?.startsWith("📍") ? lines[0] : "📍 Localização";
+  // A middle line that isn't the header and isn't the URL is the place name.
+  const place = lines.find((l) => !l.startsWith("📍") && !/^https?:\/\//.test(l));
+  return { header, place, url: m[0] };
+}
+
+/** Compact clickable location card (opens the pin / route in Google Maps). */
+function LocationCard({
+  header,
+  place,
+  url,
+}: {
+  header: string;
+  place?: string;
+  url: string;
+}) {
+  return (
+    <a
+      href={url}
+      target="_blank"
+      rel="noopener noreferrer"
+      className="flex min-w-[210px] items-center gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5 transition-colors hover:bg-muted"
+    >
+      <span className="flex size-9 shrink-0 items-center justify-center rounded-full bg-emerald-500/15 text-emerald-600">
+        <MapPin className="size-4" />
+      </span>
+      <span className="flex min-w-0 flex-col leading-tight">
+        <span className="text-sm font-medium text-foreground">{header}</span>
+        {place && (
+          <span className="truncate text-xs text-muted-foreground">{place}</span>
+        )}
+        <span className="mt-0.5 text-xs font-medium text-emerald-600">
+          Abrir no Google Maps
+        </span>
+      </span>
+    </a>
+  );
+}
+
 /** Compact card for a Pix copia-e-cola / boleto code with a copy button. */
 function CopyCodeCard({ label, code }: { label: string; code: string }) {
   const preview = code.length > 44 ? `${code.slice(0, 44)}…` : code;
@@ -584,6 +634,8 @@ function MessageContent({
       if (txt.startsWith(CONTACT_PREFIX)) return <ContactCard text={txt} />;
       const copyCode = detectCopyCode(txt);
       if (copyCode) return <CopyCodeCard {...copyCode} />;
+      const location = detectLocation(txt);
+      if (location) return <LocationCard {...location} />;
       const callLog = parseCallLog(txt);
       if (callLog)
         return (
