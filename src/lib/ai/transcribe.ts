@@ -63,6 +63,19 @@ async function mediaBytes(
 }
 
 /**
+ * Transcribe an audio file at a URL (e.g. an agent voice note recorded in the
+ * CRM, whose media lives in our own storage). Thin wrapper over the inbound
+ * path — same download + Whisper call. Never throws.
+ */
+export async function transcribeAudioFromUrl(
+  accountId: string,
+  url: string,
+  mimetype?: string,
+): Promise<string | null> {
+  return transcribeInboundAudio(accountId, { kind: 'audio', url, mimetype })
+}
+
+/**
  * Transcribe an inbound audio note to text, or null when it can't (no key,
  * unsupported format, too large, API error). Never throws.
  */

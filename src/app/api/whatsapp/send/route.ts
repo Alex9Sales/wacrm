@@ -1,9 +1,11 @@
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { and, eq, isNull, sql } from 'drizzle-orm'
 
-import { db, contacts, conversations, user } from '@/db'
+import { db, contacts, conversations, messages, user } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getAccountSettings } from '@/lib/settings/account-settings'
+import { transcribeAudioFromUrl } from '@/lib/ai/transcribe'
+import { publishEvent } from '@/lib/events/publish'
 import {
   getCurrentAccount,
   toErrorResponse,
@@ -221,6 +223,38 @@ export async function POST(request: Request) {
         templateMessageParams: template_message_params,
         replyToMessageId: reply_to_message_id,
       })
+
+      // Transcribe an agent voice note recorded in the CRM (Alex asked for
+      // sent audio too). This path can't be caught by the inbound transcriber:
+      // the send persists the row and the gows echo is deduplicated, so it
+      // never reaches inbound. Done AFTER the response so the send stays fast;
+      // best-effort, opt-in. (Audio sent from the operator's phone is handled
+      // by the inbound transcriber instead.)
+      if (message_type === 'audio' && media_url && result?.messageId) {
+        const msgId = result.messageId
+        const convId = conversationId
+        after(async () => {
+          try {
+            const { audioTranscriptionEnabled } =
+              await getAccountSettings(accountId)
+            if (!audioTranscriptionEnabled) return
+            const text = await transcribeAudioFromUrl(accountId, media_url)
+            if (!text) return
+            await db
+              .update(messages)
+              .set({ transcription: text })
+              .where(eq(messages.id, msgId))
+            if (convId)
+              await publishEvent(accountId, {
+                type: 'message.received',
+                conversationId: convId,
+                fromMe: true,
+              })
+          } catch (err) {
+            console.error('[send] agent audio transcription failed:', err)
+          }
+        })
+      }
 
       // Claim-on-reply: a human answering an UNASSIGNED thread takes ownership
       // of it (keeps the sector as-is). The `isNull` guard means we never
