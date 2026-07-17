@@ -194,11 +194,16 @@ export async function dispatchInboundMessage(
     ? ev.contentType
     : 'text';
 
-  // Audio transcription (opt-in). Inbound voice notes → text via the
-  // account's OpenAI key, computed here so the message row lands with the
-  // transcript already attached. Best-effort: null on any failure.
+  // Audio transcription (opt-in). Voice notes → text via the account's OpenAI
+  // key, computed here so the message row lands with the transcript attached.
+  // Covers BOTH directions: the customer's notes AND the operator's own audio
+  // sent from their phone (fromMe echo) — Alex asked for sent audio too, so an
+  // audio the operator recorded on the phone is legible in the thread. (Audio
+  // recorded inside the CRM goes through the send path and its echo is
+  // deduplicated, so it isn't transcribed here — that's a separate path.)
+  // Best-effort: null on any failure.
   let transcription: string | null = null;
-  if (contentType === 'audio' && ev.media && !isFromMe) {
+  if (contentType === 'audio' && ev.media) {
     try {
       const { audioTranscriptionEnabled } = await getAccountSettings(accountId);
       if (audioTranscriptionEnabled) {
