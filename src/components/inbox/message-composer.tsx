@@ -588,6 +588,27 @@ export function MessageComposer({
     }
   }, [sendingLoc, conversationId]);
 
+  // Send this channel's saved Pix key (same pattern as sendLocation).
+  const [sendingPix, setSendingPix] = useState(false);
+  const sendPix = useCallback(async () => {
+    if (sendingPix) return;
+    setSendingPix(true);
+    try {
+      const res = await fetch(
+        `/api/conversations/${conversationId}/send-pix`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        toast.error(d.error || "Não foi possível enviar o Pix.");
+      }
+    } catch {
+      toast.error("Não foi possível enviar o Pix.");
+    } finally {
+      setSendingPix(false);
+    }
+  }, [sendingPix, conversationId]);
+
   // ---- Render --------------------------------------------------------
 
   return (
@@ -745,6 +766,15 @@ export function MessageComposer({
                 >
                   <MapPin className="mr-2 h-4 w-4" />
                   Localização
+                </DropdownMenuItem>
+              )}
+              {provider === "waha" && (
+                <DropdownMenuItem
+                  onClick={() => void sendPix()}
+                  disabled={sendingPix}
+                >
+                  <span className="mr-2 text-base leading-none">💠</span>
+                  Pix
                 </DropdownMenuItem>
               )}
             </DropdownMenuContent>

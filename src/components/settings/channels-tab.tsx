@@ -44,6 +44,7 @@ import { WhatsAppConfig } from './whatsapp-config';
 import { AddChannelDialog } from './add-channel-dialog';
 import { ChannelQrModal } from './channel-qr-modal';
 import { ChannelLocationDialog } from './channel-location-dialog';
+import { ChannelPixDialog } from './channel-pix-dialog';
 
 // ------------------------------------------------------------
 // Shared types + labels (mirrored by the child dialogs).
@@ -127,6 +128,8 @@ export function ChannelsTab() {
   const [pairing, setPairing] = useState<ChannelSummary | null>(null);
   // The channel whose business location is being set.
   const [locating, setLocating] = useState<ChannelSummary | null>(null);
+  // The channel whose Pix key is being set.
+  const [pixing, setPixing] = useState<ChannelSummary | null>(null);
   // The channel pending delete-confirmation.
   const [deleting, setDeleting] = useState<ChannelSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -289,6 +292,7 @@ export function ChannelsTab() {
               onEditMeta={() => setView({ kind: 'meta', channelId: ch.id })}
               onPair={() => setPairing(ch)}
               onLocation={() => setLocating(ch)}
+              onPix={() => setPixing(ch)}
               onDelete={() => setDeleting(ch)}
             />
           ))}
@@ -321,6 +325,18 @@ export function ChannelsTab() {
           onClose={() => setLocating(null)}
           onSaved={() => {
             setLocating(null);
+            void load();
+          }}
+        />
+      )}
+
+      {/* Pix key editor for a channel. */}
+      {pixing && (
+        <ChannelPixDialog
+          channel={pixing}
+          onClose={() => setPixing(null)}
+          onSaved={() => {
+            setPixing(null);
             void load();
           }}
         />
@@ -455,12 +471,14 @@ function ChannelRow({
   onEditMeta,
   onPair,
   onLocation,
+  onPix,
   onDelete,
 }: {
   channel: ChannelSummary;
   onEditMeta: () => void;
   onPair: () => void;
   onLocation: () => void;
+  onPix: () => void;
   onDelete: () => void;
 }) {
   const isMeta = channel.provider === 'meta';
@@ -469,6 +487,7 @@ function ChannelRow({
     channel.status === 'connected' ? 'Reparear' : 'Parear';
   const hasLocation = !!(channel.provider_meta as { location?: unknown })
     .location;
+  const hasPix = !!(channel.provider_meta as { pix?: unknown }).pix;
 
   return (
     <Card size="sm">
@@ -519,8 +538,7 @@ function ChannelRow({
 
           <Button
             variant="ghost"
-            size="icon-sm"
-            aria-label="Localização do canal"
+            size="sm"
             title={
               hasLocation
                 ? 'Localização cadastrada — editar'
@@ -533,7 +551,22 @@ function ChannelRow({
                 : 'text-muted-foreground hover:text-foreground'
             }
           >
-            <MapPin className="size-4" />
+            <MapPin className="size-3.5" />
+            Localização
+          </Button>
+
+          <Button
+            variant="ghost"
+            size="sm"
+            title={hasPix ? 'Chave Pix cadastrada — editar' : 'Cadastrar chave Pix'}
+            onClick={onPix}
+            className={
+              hasPix
+                ? 'text-emerald-600 hover:text-emerald-700'
+                : 'text-muted-foreground hover:text-foreground'
+            }
+          >
+            Pix
           </Button>
 
           <Button

@@ -73,6 +73,30 @@ function applyConfigPatch(
       break
   }
 
+  // Pix key — cross-provider, per channel (each number is a business with its
+  // own key). null clears it.
+  if ('pix' in config) {
+    const p = config.pix as
+      | { key?: unknown; keyType?: unknown; name?: unknown }
+      | null
+      | undefined
+    if (p === null) {
+      delete providerMeta.pix
+    } else if (p && typeof p.key === 'string' && p.key.trim()) {
+      const keyType =
+        typeof p.keyType === 'string' && p.keyType.trim()
+          ? p.keyType.trim()
+          : undefined
+      const name =
+        typeof p.name === 'string' && p.name.trim() ? p.name.trim() : undefined
+      providerMeta.pix = {
+        key: p.key.trim(),
+        ...(keyType ? { keyType } : {}),
+        ...(name ? { name } : {}),
+      }
+    }
+  }
+
   // Business location pin — cross-provider (each channel is a business with
   // its own address). The front sends parsed coords; null clears it.
   if ('location' in config) {
