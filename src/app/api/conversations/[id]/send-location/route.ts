@@ -97,7 +97,7 @@ export async function POST(
       )
     }
 
-    await provider.sendLocation(channel, phone, {
+    const { externalMessageId } = await provider.sendLocation(channel, phone, {
       latitude: loc.latitude,
       longitude: loc.longitude,
       title: loc.label,
@@ -105,12 +105,16 @@ export async function POST(
 
     // Log the sent pin as a clickable Maps link — same shape the inbound
     // parser produces, so it reads like any other location in the thread.
+    // Persist the external id so the gows echo of this same message is
+    // deduplicated by the inbound pipeline (without it, the echo inserts a
+    // second copy — the message shows twice in the CRM).
     const linkText = mapsLink({ lat: loc.latitude, lng: loc.longitude })
     await db.insert(messages).values({
       conversationId,
       senderType: 'agent',
       contentType: 'text',
       contentText: linkText,
+      messageId: externalMessageId,
       status: 'sent',
     })
     await db

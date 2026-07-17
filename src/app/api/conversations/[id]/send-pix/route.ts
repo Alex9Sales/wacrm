@@ -85,15 +85,18 @@ export async function POST(
     }
 
     const provider = getProvider(channel.provider)
-    await provider.sendText(channel, phone, text)
+    const { externalMessageId } = await provider.sendText(channel, phone, text)
 
     // Log it. The `💠 Chave Pix` marker makes the bubble render a copy card,
-    // same as a received Pix.
+    // same as a received Pix. Persist the external id so the gows echo of this
+    // message is deduplicated by the inbound pipeline (without it, the echo
+    // inserts a second copy — the Pix shows twice in the CRM).
     await db.insert(messages).values({
       conversationId,
       senderType: 'agent',
       contentType: 'text',
       contentText: text,
+      messageId: externalMessageId,
       status: 'sent',
     })
     await db
