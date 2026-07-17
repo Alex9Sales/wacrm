@@ -17,9 +17,11 @@ import {
   PhoneMissed,
   PhoneOutgoing,
   RefreshCw,
+  Grid3x3,
 } from 'lucide-react';
 
 import { startOutboundCall } from '@/components/calls/incoming-call-modal';
+import { Dialer } from '@/components/calls/dialer';
 import { useServerEvents } from '@/hooks/use-server-events';
 import { formatCallDuration } from '@/lib/inbox/call-log';
 
@@ -66,6 +68,7 @@ export default function CallsPage() {
   const router = useRouter();
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [loading, setLoading] = useState(true);
+  const [dialerOpen, setDialerOpen] = useState(false);
 
   const load = useCallback(async () => {
     try {
@@ -110,17 +113,29 @@ export default function CallsPage() {
     <div className="mx-auto w-full max-w-3xl p-4 sm:p-6">
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-foreground">Ligações</h1>
-        <button
-          onClick={() => {
-            setLoading(true);
-            void load();
-          }}
-          title="Atualizar"
-          className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted"
-        >
-          <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
-        </button>
+        <div className="flex items-center gap-2">
+          <button
+            onClick={() => setDialerOpen(true)}
+            title="Nova ligação"
+            className="flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600"
+          >
+            <Grid3x3 className="size-4" />
+            Discar
+          </button>
+          <button
+            onClick={() => {
+              setLoading(true);
+              void load();
+            }}
+            title="Atualizar"
+            className="flex size-8 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted"
+          >
+            <RefreshCw className={`size-4 ${loading ? 'animate-spin' : ''}`} />
+          </button>
+        </div>
       </div>
+
+      {dialerOpen && <Dialer onClose={() => setDialerOpen(false)} />}
 
       {loading && calls.length === 0 ? (
         <p className="py-12 text-center text-sm text-muted-foreground">
