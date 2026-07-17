@@ -27,6 +27,7 @@ import { toast } from "sonner";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
 import { RichText } from "@/lib/inbox/rich-text";
+import { detectCopyCode } from "@/lib/inbox/copy-code";
 import {
   parseCallLog,
   formatCallDuration,
@@ -147,6 +148,32 @@ function PixCard({ text }: { text: string }) {
           Copiar chave
         </button>
       )}
+    </div>
+  );
+}
+
+/** Compact card for a Pix copia-e-cola / boleto code with a copy button. */
+function CopyCodeCard({ label, code }: { label: string; code: string }) {
+  const preview = code.length > 44 ? `${code.slice(0, 44)}…` : code;
+  return (
+    <div className="min-w-[220px] max-w-[280px]">
+      <p className="text-sm font-semibold text-foreground">📋 {label}</p>
+      <p className="mt-1 break-all font-mono text-xs text-muted-foreground">
+        {preview}
+      </p>
+      <button
+        type="button"
+        onClick={() => {
+          void navigator.clipboard
+            ?.writeText(code)
+            .then(() => toast.success("Código copiado."))
+            .catch(() => toast.error("Não foi possível copiar."));
+        }}
+        className="mt-2 inline-flex items-center gap-1.5 rounded-md border border-border bg-background px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+      >
+        <Copy className="h-3.5 w-3.5" />
+        Copiar código
+      </button>
     </div>
   );
 }
@@ -555,6 +582,8 @@ function MessageContent({
       const txt = message.content_text ?? "";
       if (txt.startsWith(PIX_PREFIX)) return <PixCard text={txt} />;
       if (txt.startsWith(CONTACT_PREFIX)) return <ContactCard text={txt} />;
+      const copyCode = detectCopyCode(txt);
+      if (copyCode) return <CopyCodeCard {...copyCode} />;
       const callLog = parseCallLog(txt);
       if (callLog)
         return (
