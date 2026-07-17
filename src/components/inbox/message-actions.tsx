@@ -1,7 +1,7 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { CornerUpLeft, Copy, SmilePlus } from "lucide-react";
+import { CornerUpLeft, CornerUpRight, Copy, SmilePlus } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -19,6 +19,7 @@ interface MessageActionsProps {
   message: Message;
   onReply: () => void;
   onReact: (emoji: string) => void;
+  onForward: () => void;
   children: ReactNode;
 }
 
@@ -31,6 +32,7 @@ export function MessageActions({
   message,
   onReply,
   onReact,
+  onForward,
   children,
 }: MessageActionsProps) {
   // Touch devices have no hover. Long-press fires `contextmenu`; we capture
@@ -70,6 +72,11 @@ export function MessageActions({
 
   const handleReply = () => {
     onReply();
+    setTouchOpen(false);
+  };
+
+  const handleForward = () => {
+    onForward();
     setTouchOpen(false);
   };
 
@@ -132,6 +139,14 @@ export function MessageActions({
           aria-label="Responder"
         >
           <CornerUpLeft className="h-3.5 w-3.5" />
+        </button>
+        <button
+          type="button"
+          onClick={handleForward}
+          className="flex h-5 w-5 items-center justify-center rounded-full text-popover-foreground hover:bg-muted hover:text-foreground"
+          aria-label="Encaminhar"
+        >
+          <CornerUpRight className="h-3.5 w-3.5" />
         </button>
         <button
           type="button"

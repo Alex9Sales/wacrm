@@ -70,6 +70,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { ContactAvatar } from "./contact-avatar";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
+import { ForwardDialog } from "./forward-dialog";
 import {
   MessageComposer,
   CHAT_MEDIA_BUCKET,
@@ -243,6 +244,8 @@ export function MessageThread({
     }, 700);
   }, [isRefreshing, onRefresh]);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
+  // The message being forwarded (opens the ForwardDialog).
+  const [forwarding, setForwarding] = useState<Message | null>(null);
   // Delete-conversation confirm dialog + in-flight state.
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -1306,6 +1309,7 @@ export function MessageThread({
                         onReact={(emoji) => {
                           if (emoji) void postReaction(msg.id, emoji);
                         }}
+                        onForward={() => setForwarding(msg)}
                       >
                         <MessageBubble
                           message={msg}
@@ -1347,6 +1351,13 @@ export function MessageThread({
         onOpenChange={setTemplateModalOpen}
         onSelect={handleSendTemplate}
       />
+
+      {forwarding && (
+        <ForwardDialog
+          message={forwarding}
+          onClose={() => setForwarding(null)}
+        />
+      )}
 
       {/* Delete-conversation confirmation. */}
       <Dialog
