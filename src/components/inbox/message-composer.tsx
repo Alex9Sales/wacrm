@@ -20,6 +20,7 @@ import {
   X,
   Loader2,
   Sparkles,
+  MapPin,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
@@ -564,6 +565,29 @@ export function MessageComposer({
     setDraft((d) => (d ? { ...d, caption } : d));
   }, []);
 
+  // Send this channel's configured business location as a map pin. The
+  // backend resolves channel → location, so the composer only asks; a missing
+  // location comes back as a 400 with a "cadastre em Configurações" message.
+  const [sendingLoc, setSendingLoc] = useState(false);
+  const sendLocation = useCallback(async () => {
+    if (sendingLoc) return;
+    setSendingLoc(true);
+    try {
+      const res = await fetch(
+        `/api/conversations/${conversationId}/send-location`,
+        { method: "POST" },
+      );
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        toast.error(d.error || "Não foi possível enviar a localização.");
+      }
+    } catch {
+      toast.error("Não foi possível enviar a localização.");
+    } finally {
+      setSendingLoc(false);
+    }
+  }, [sendingLoc, conversationId]);
+
   // ---- Render --------------------------------------------------------
 
   return (
@@ -711,6 +735,18 @@ export function MessageComposer({
                 <Mic className="mr-2 h-4 w-4" />
                 Mensagem de voz
               </DropdownMenuItem>
+              {/* Location: only providers whose engine can send a pin
+                  (waha-voip/gows). Sends the channel's configured business
+                  address. */}
+              {provider === "waha" && (
+                <DropdownMenuItem
+                  onClick={() => void sendLocation()}
+                  disabled={sendingLoc}
+                >
+                  <MapPin className="mr-2 h-4 w-4" />
+                  Localização
+                </DropdownMenuItem>
+              )}
             </DropdownMenuContent>
           </DropdownMenu>
 

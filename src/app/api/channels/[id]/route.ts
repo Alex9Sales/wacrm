@@ -73,6 +73,30 @@ function applyConfigPatch(
       break
   }
 
+  // Business location pin — cross-provider (each channel is a business with
+  // its own address). The front sends parsed coords; null clears it.
+  if ('location' in config) {
+    const l = config.location as
+      | { latitude?: unknown; longitude?: unknown; label?: unknown }
+      | null
+      | undefined
+    if (l === null) {
+      delete providerMeta.location
+    } else if (
+      l &&
+      typeof l.latitude === 'number' &&
+      typeof l.longitude === 'number'
+    ) {
+      const label =
+        typeof l.label === 'string' && l.label.trim() ? l.label.trim() : undefined
+      providerMeta.location = {
+        latitude: l.latitude,
+        longitude: l.longitude,
+        ...(label ? { label } : {}),
+      }
+    }
+  }
+
   return { credentials, providerMeta }
 }
 

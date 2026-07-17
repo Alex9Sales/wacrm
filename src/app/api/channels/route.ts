@@ -56,10 +56,14 @@ function safeProviderMeta(
   provider: string,
   meta: Record<string, unknown>,
 ): Record<string, unknown> {
+  // Business location pin is cross-provider — expose it on every channel so
+  // Settings can show/edit what's saved.
+  const location = meta.location ?? null
   if (provider === 'meta') {
     return {
       phone_number_id: meta.phone_number_id ?? null,
       waba_id: meta.waba_id ?? null,
+      location,
     }
   }
   // waha / evolution / evogo: baseUrl + the session or instance name.
@@ -67,6 +71,7 @@ function safeProviderMeta(
     baseUrl: meta.baseUrl ?? null,
     session: meta.session ?? undefined,
     instance: meta.instance ?? undefined,
+    location,
   }
 }
 

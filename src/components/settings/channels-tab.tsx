@@ -23,6 +23,7 @@ import {
   Trash2,
   RefreshCw,
   ArrowLeft,
+  MapPin,
 } from 'lucide-react';
 
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider';
@@ -42,6 +43,7 @@ import { cn } from '@/lib/utils';
 import { WhatsAppConfig } from './whatsapp-config';
 import { AddChannelDialog } from './add-channel-dialog';
 import { ChannelQrModal } from './channel-qr-modal';
+import { ChannelLocationDialog } from './channel-location-dialog';
 
 // ------------------------------------------------------------
 // Shared types + labels (mirrored by the child dialogs).
@@ -123,6 +125,8 @@ export function ChannelsTab() {
   const [addOpen, setAddOpen] = useState(false);
   // The channel currently being paired via the QR modal (non-Meta only).
   const [pairing, setPairing] = useState<ChannelSummary | null>(null);
+  // The channel whose business location is being set.
+  const [locating, setLocating] = useState<ChannelSummary | null>(null);
   // The channel pending delete-confirmation.
   const [deleting, setDeleting] = useState<ChannelSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -284,6 +288,7 @@ export function ChannelsTab() {
               channel={ch}
               onEditMeta={() => setView({ kind: 'meta', channelId: ch.id })}
               onPair={() => setPairing(ch)}
+              onLocation={() => setLocating(ch)}
               onDelete={() => setDeleting(ch)}
             />
           ))}
@@ -308,6 +313,18 @@ export function ChannelsTab() {
           setView({ kind: 'meta', channelId: null });
         }}
       />
+
+      {/* Business location editor for a channel. */}
+      {locating && (
+        <ChannelLocationDialog
+          channel={locating}
+          onClose={() => setLocating(null)}
+          onSaved={() => {
+            setLocating(null);
+            void load();
+          }}
+        />
+      )}
 
       {/* QR pairing modal — polls state, closes on 'connected'. */}
       {pairing && (
@@ -437,17 +454,21 @@ function ChannelRow({
   channel,
   onEditMeta,
   onPair,
+  onLocation,
   onDelete,
 }: {
   channel: ChannelSummary;
   onEditMeta: () => void;
   onPair: () => void;
+  onLocation: () => void;
   onDelete: () => void;
 }) {
   const isMeta = channel.provider === 'meta';
   const canPair = CAPABILITIES[channel.provider]?.qrPairing ?? false;
   const pairLabel =
     channel.status === 'connected' ? 'Reparear' : 'Parear';
+  const hasLocation = !!(channel.provider_meta as { location?: unknown })
+    .location;
 
   return (
     <Card size="sm">
@@ -495,6 +516,25 @@ function ChannelRow({
               {pairLabel}
             </Button>
           ) : null}
+
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label="Localização do canal"
+            title={
+              hasLocation
+                ? 'Localização cadastrada — editar'
+                : 'Cadastrar localização'
+            }
+            onClick={onLocation}
+            className={
+              hasLocation
+                ? 'text-emerald-600 hover:text-emerald-700'
+                : 'text-muted-foreground hover:text-foreground'
+            }
+          >
+            <MapPin className="size-4" />
+          </Button>
 
           <Button
             variant="ghost"

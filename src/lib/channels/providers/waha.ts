@@ -655,6 +655,29 @@ export const wahaProvider: WhatsAppProvider = {
   // sendTemplate / sendInteractive intentionally omitted:
   // capabilities.templates and capabilities.interactive are both false.
 
+  async sendLocation(
+    ch: ChannelCtx,
+    toE164: string,
+    loc: { latitude: number; longitude: number; title?: string },
+  ): Promise<{ externalMessageId: string }> {
+    const chatId = await resolveChatId(ch, toE164);
+    const { ok, status, body } = await sendWithRetry(ch, 'sendLocation', {
+      session: sessionOf(ch),
+      chatId,
+      latitude: loc.latitude,
+      longitude: loc.longitude,
+      title: loc.title,
+    });
+    if (!ok) {
+      throw new Error(`waha sendLocation failed: ${wahaError(body, status)}`);
+    }
+    const externalMessageId = extractExternalId(body as Record<string, unknown>);
+    if (!externalMessageId) {
+      throw new Error('waha sendLocation: response carried no message id');
+    }
+    return { externalMessageId };
+  },
+
   async verifyWebhook(
     ctx: WebhookVerifyCtx,
     ch: ChannelCtx | null,

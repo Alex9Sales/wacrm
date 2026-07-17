@@ -141,6 +141,14 @@ export interface OutboundMedia {
   caption?: string;
 }
 
+/** Outbound location pin. */
+export interface OutboundLocation {
+  latitude: number;
+  longitude: number;
+  /** Optional label shown on the pin (e.g. the business name/address). */
+  title?: string;
+}
+
 /** Outbound template descriptor (Meta only). */
 export interface OutboundTemplate {
   name: string;
@@ -216,6 +224,14 @@ export interface WhatsAppProvider {
     targetExternalId: string,
     emoji: string,
   ): Promise<void>;
+
+  /** Send a location pin (map card). Optional — only providers whose engine
+   *  exposes it implement it (waha-voip/gows does; Meta does not here). */
+  sendLocation?(
+    ch: ChannelCtx,
+    toE164: string,
+    loc: OutboundLocation,
+  ): Promise<{ externalMessageId: string }>;
 
   /**
    * Meta: HMAC over the raw body via the global app secret. Others: match
