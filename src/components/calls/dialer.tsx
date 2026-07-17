@@ -110,6 +110,8 @@ export function Dialer({ onClose }: { onClose: () => void }) {
     }
   }, [busy, digits, channelId, router, onClose]);
 
+  const display = formatDisplay(digits);
+
   return (
     <div className="fixed inset-0 z-[55] flex items-center justify-center bg-black/50 p-4">
       <div className="relative w-full max-w-[17rem] rounded-2xl border border-border bg-card p-5 shadow-2xl">
@@ -125,13 +127,25 @@ export function Dialer({ onClose }: { onClose: () => void }) {
           Nova ligação
         </p>
 
-        {/* Number display */}
-        <div className="mb-3 flex min-h-[2.5rem] items-center justify-center px-2">
-          <span className="truncate text-center text-xl font-semibold tabular-nums text-foreground">
-            {formatDisplay(digits) || (
-              <span className="text-muted-foreground">Digite o número</span>
-            )}
-          </span>
+        {/* Number display. Font shrinks as the number grows so the full
+            number always fits (no truncation) — a dialer that hides the last
+            digits you typed is worse than a slightly smaller font. */}
+        <div className="mb-3 flex min-h-[2.5rem] items-center justify-center px-1">
+          {digits ? (
+            <span
+              className={`whitespace-nowrap text-center font-semibold tabular-nums text-foreground ${
+                display.length > 17
+                  ? 'text-base'
+                  : display.length > 14
+                    ? 'text-lg'
+                    : 'text-xl'
+              }`}
+            >
+              {display}
+            </span>
+          ) : (
+            <span className="text-xl text-muted-foreground">Digite o número</span>
+          )}
         </div>
 
         {/* Channel picker — hidden when there's only one channel. */}
