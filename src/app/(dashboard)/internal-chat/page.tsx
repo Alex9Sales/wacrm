@@ -28,11 +28,14 @@ import {
   getInternalMessages,
   sendInternalMessage,
   markInternalChannelRead,
+  listTeamMembers,
 } from "./actions";
 import type {
   InternalChannel,
   InternalChatMessage,
 } from "@/lib/internal-chat/types";
+import { MentionComposer, MentionText } from "@/components/inbox/mention-composer";
+import type { MentionMember } from "@/lib/inbox/mentions";
 
 function timeOf(iso: string): string {
   const d = new Date(iso);
@@ -50,6 +53,7 @@ export default function InternalChatPage() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [members, setMembers] = useState<MentionMember[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
 
@@ -83,6 +87,12 @@ export default function InternalChatPage() {
 
   useEffect(() => {
     void loadChannels();
+    // Members for @mention autocomplete.
+    listTeamMembers()
+      .then((list) =>
+        setMembers(list.map((m) => ({ id: m.id, name: m.name }))),
+      )
+      .catch(() => {});
   }, [loadChannels]);
 
   const loadMessages = useCallback(async (channelId: string) => {
@@ -303,7 +313,7 @@ export default function InternalChatPage() {
                         </p>
                       )}
                       <p className="whitespace-pre-wrap break-words text-sm">
-                        {m.content}
+                        <MentionText text={m.content} members={members} />
                       </p>
                       <p
                         className={cn(
@@ -324,19 +334,12 @@ export default function InternalChatPage() {
             <div className="shrink-0 border-t border-border p-3">
               <div className="flex items-end gap-2">
                 <EmojiPicker onPick={insertEmoji} />
-                <textarea
-                  ref={composerRef}
+                <MentionComposer
                   value={text}
-                  onChange={(e) => setText(e.target.value)}
-                  onKeyDown={(e) => {
-                    if (e.key === "Enter" && !e.shiftKey) {
-                      e.preventDefault();
-                      void send();
-                    }
-                  }}
-                  rows={1}
-                  placeholder={`Mensagem para #${active.name}`}
-                  className="flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50"
+                  onChange={setText}
+                  onSubmit={() => void send()}
+                  members={members}
+                  placeholder={`Mensagem para #${active.name} · @ para mencionar`}
                 />
                 <Button
                   size="sm"

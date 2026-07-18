@@ -35,6 +35,16 @@ export type RealtimeEvent =
       senderId?: string;
       senderName?: string;
     }
+  // Someone @-mentioned one or more members. Account-wide fan-out, so it
+  // carries the mentioned user ids and the listener alerts only if you're one.
+  | {
+      type: "mention";
+      /** Where the mention lives, for the pop-up's deep link. */
+      channelId?: string;
+      conversationId?: string;
+      senderName?: string;
+      mentionedUserIds: string[];
+    }
   // A WhatsApp channel's session changed state (connected/disconnected/
   // error/qr_pending). Drives the global "channel down — reconnect" banner
   // so the operator sees a drop live, without refreshing.

@@ -1015,7 +1015,7 @@ export const notifications = pgTable("notifications", {
 			foreignColumns: [contacts.id],
 			name: "notifications_contact_id_fkey"
 		}).onDelete("set null"),
-	check("notifications_type_check", sql`type = ANY (ARRAY['conversation_assigned'::text, 'sla_alert'::text])`),
+	check("notifications_type_check", sql`type = ANY (ARRAY['conversation_assigned'::text, 'sla_alert'::text, 'mention'::text])`),
 ]);
 
 export const webhookEndpoints = pgTable("webhook_endpoints", {

@@ -17,11 +17,13 @@ import {
   internalChannelReads,
   internalMessages,
   member,
+  notifications,
   user,
 } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { getCurrentAccount, requireRole } from '@/lib/auth/account';
 import { publishEvent } from '@/lib/events/publish';
+import { parseMentions } from '@/lib/inbox/mentions';
 import type {
   InternalChannel,
   InternalChatMessage,
@@ -340,6 +342,40 @@ export async function sendInternalMessage(
     senderId: ctx.userId,
     senderName: me?.name ?? undefined,
   });
+
+  // @mentions → a persistent notification (bell) for each mentioned member,
+  // plus a live "mention" event so their pop-up fires even inside the chat.
+  // Best-effort: a mention hiccup must never fail the message that went out.
+  try {
+    const membersList = await db
+      .select({ id: user.id, name: user.name })
+      .from(member)
+      .innerJoin(user, eq(member.userId, user.id))
+      .where(eq(member.organizationId, ctx.accountId));
+    const mentionedIds = parseMentions(text, membersList).filter(
+      (id) => id !== ctx.userId,
+    );
+    if (mentionedIds.length > 0) {
+      await db.insert(notifications).values(
+        mentionedIds.map((uid) => ({
+          accountId: ctx.accountId,
+          userId: uid,
+          type: 'mention' as const,
+          actorUserId: ctx.userId,
+          title: `${me?.name ?? 'Alguém'} mencionou você`,
+          body: text.length > 140 ? `${text.slice(0, 140)}…` : text,
+        })),
+      );
+      await publishEvent(ctx.accountId, {
+        type: 'mention',
+        channelId,
+        senderName: me?.name ?? undefined,
+        mentionedUserIds: mentionedIds,
+      });
+    }
+  } catch (err) {
+    console.error('[internal-chat] mention notify failed:', err);
+  }
 
   return {
     ...inserted,

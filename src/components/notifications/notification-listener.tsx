@@ -105,6 +105,7 @@ export function NotificationListener() {
       callId?: unknown;
       from?: unknown;
       callerName?: unknown;
+      mentionedUserIds?: unknown;
     }) => {
       const prefs = getNotificationPrefs();
       const alert = (sound: boolean, showPopup: () => void) => {
@@ -186,6 +187,30 @@ export function NotificationListener() {
             title: `${who} · Chat interno`,
             description: "Nova mensagem no chat interno.",
             href: `/internal-chat`,
+            variant: "internal",
+          }),
+        );
+      }
+
+      // ---- @mention ----
+      if (e.type === "mention") {
+        // Account-wide fan-out; only alert if YOU were mentioned.
+        const ids = Array.isArray(e.mentionedUserIds) ? e.mentionedUserIds : [];
+        if (!user?.id || !ids.includes(user.id)) return;
+        const who =
+          typeof e.senderName === "string" && e.senderName
+            ? e.senderName
+            : "Alguém";
+        // A conversation mention deep-links to the thread; else the chat.
+        const href =
+          typeof e.conversationId === "string" && e.conversationId
+            ? `/inbox?c=${e.conversationId}`
+            : `/internal-chat`;
+        alert(true, () =>
+          popup({
+            title: `${who} mencionou você`,
+            description: "Toque para ver.",
+            href,
             variant: "internal",
           }),
         );

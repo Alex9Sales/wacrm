@@ -197,7 +197,10 @@ export interface Conversation {
 // Notifications (migration 027)
 // ============================================================
 
-export type NotificationType = 'conversation_assigned' | 'sla_alert';
+export type NotificationType =
+  | 'conversation_assigned'
+  | 'sla_alert'
+  | 'mention';
 
 export interface Notification {
   id: string;
