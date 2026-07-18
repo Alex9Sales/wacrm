@@ -119,6 +119,7 @@ export async function getConversationWithContact(
       ctx.userId,
       row.sector_id,
       row.assigned_agent_id,
+      conversationId,
     ))
   ) {
     return null
@@ -447,6 +448,7 @@ async function assertConversationInAccount(
     ctx.userId,
     row.sectorId,
     row.assignedAgentId,
+    conversationId,
   )
 }
 
@@ -853,6 +855,7 @@ export async function getConversationPreview(
       ctx.userId,
       row.sectorId,
       row.assignedAgentId,
+      conversationId,
     ))
   )
     return null
@@ -901,6 +904,7 @@ export async function transferConversation(
       ctx.userId,
       conv.sectorId,
       conv.assignedAgentId,
+      conversationId,
     ))
   ) {
     throw new Error('Sem permissão para esta conversa.')

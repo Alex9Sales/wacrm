@@ -10,7 +10,15 @@
 import { NextResponse } from 'next/server'
 import { and, eq } from 'drizzle-orm'
 
-import { db, conversations, messages, notifications, member, user } from '@/db'
+import {
+  db,
+  conversations,
+  messages,
+  notifications,
+  member,
+  user,
+  conversationParticipants,
+} from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 import { publishEvent } from '@/lib/events/publish'
@@ -72,6 +80,12 @@ export async function POST(
         (id) => id !== ctx.userId,
       )
       if (mentioned.length > 0) {
+        // Grant the mentioned members access to THIS conversation (even if it's
+        // assigned to someone else) — otherwise the mention is a dead link.
+        await db
+          .insert(conversationParticipants)
+          .values(mentioned.map((uid) => ({ conversationId, userId: uid })))
+          .onConflictDoNothing()
         await db.insert(notifications).values(
           mentioned.map((uid) => ({
             accountId: ctx.accountId,

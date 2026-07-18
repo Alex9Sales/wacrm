@@ -12,7 +12,8 @@
 
 import { and, eq, inArray, isNull, or, sql, type SQL } from 'drizzle-orm';
 
-import { db, sectorMembers, conversations } from '@/db';
+import { db, sectorMembers, conversations, conversationParticipants } from '@/db';
+import { firstOrNull } from '@/db/helpers';
 import { hasMinRole, type AccountRole } from '@/lib/auth/roles';
 
 /** Sector ids a user belongs to. */
@@ -44,30 +45,60 @@ export async function conversationVisibility(
   if (hasMinRole(role, 'admin')) return undefined;
   const sectorIds = await getUserSectorIds(userId);
   const mine = eq(conversations.assignedAgentId, userId);
+  // Conversations you were @mentioned into (a participant), regardless of
+  // sector/assignee — otherwise a mention in a private conversation is useless.
+  const participant = sql`${conversations.id} IN (SELECT conversation_id FROM conversation_participants WHERE user_id = ${userId})`;
   if (sectorIds.length === 0) {
-    return or(mine, openQueue());
+    return or(mine, participant, openQueue());
   }
   return or(
     mine,
     inArray(conversations.sectorId, sectorIds),
+    participant,
     openQueue(),
   );
 }
 
-/** Whether the caller may open a specific conversation. */
+/** Whether the caller may open a specific conversation. Pass `conversationId`
+ *  so an @mention participant is granted access even to a private thread. */
 export async function canSeeConversation(
   role: AccountRole,
   userId: string,
   conversationSectorId: string | null,
   assignedAgentId: string | null = null,
+  conversationId?: string,
 ): Promise<boolean> {
   if (hasMinRole(role, 'admin')) return true;
   if (assignedAgentId && assignedAgentId === userId) return true;
   // Open general queue — no sector and no owner yet.
   if (!conversationSectorId && !assignedAgentId) return true;
+  // @mention participant — access to this one conversation regardless of owner.
+  if (conversationId && (await isParticipant(conversationId, userId))) {
+    return true;
+  }
   if (!conversationSectorId) return false; // no sector but owned by someone else
   const sectorIds = await getUserSectorIds(userId);
   return sectorIds.includes(conversationSectorId);
+}
+
+/** True when the user is an explicit participant of the conversation. */
+export async function isParticipant(
+  conversationId: string,
+  userId: string,
+): Promise<boolean> {
+  const row = firstOrNull(
+    await db
+      .select({ id: conversationParticipants.id })
+      .from(conversationParticipants)
+      .where(
+        and(
+          eq(conversationParticipants.conversationId, conversationId),
+          eq(conversationParticipants.userId, userId),
+        ),
+      )
+      .limit(1),
+  );
+  return !!row;
 }
 
 // Re-export for callers that need the raw helpers.

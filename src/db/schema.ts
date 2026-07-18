@@ -1257,6 +1257,23 @@ export const internalChannels = pgTable("internal_channels", {
 		}).onDelete("cascade"),
 ]);
 
+// Conversation participants — a user granted access to a specific conversation
+// (via @mention) without being its assignee. Read by the sector-privacy check.
+export const conversationParticipants = pgTable("conversation_participants", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	conversationId: uuid("conversation_id").notNull(),
+	userId: uuid("user_id").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("conversation_participants_unique").using("btree", table.conversationId.asc().nullsLast().op("uuid_ops"), table.userId.asc().nullsLast().op("uuid_ops")),
+	index("conversation_participants_user").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.conversationId],
+			foreignColumns: [conversations.id],
+			name: "conversation_participants_conversation_id_fkey"
+		}).onDelete("cascade"),
+]);
+
 export const internalChannelMembers = pgTable("internal_channel_members", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	channelId: uuid("channel_id").notNull(),
