@@ -24,6 +24,7 @@ import {
   RefreshCw,
   ArrowLeft,
   MapPin,
+  Users,
 } from 'lucide-react';
 
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider';
@@ -45,6 +46,7 @@ import { AddChannelDialog } from './add-channel-dialog';
 import { ChannelQrModal } from './channel-qr-modal';
 import { ChannelLocationDialog } from './channel-location-dialog';
 import { ChannelPixDialog } from './channel-pix-dialog';
+import { ChannelGroupsDialog } from './channel-groups-dialog';
 
 // ------------------------------------------------------------
 // Shared types + labels (mirrored by the child dialogs).
@@ -130,6 +132,8 @@ export function ChannelsTab() {
   const [locating, setLocating] = useState<ChannelSummary | null>(null);
   // The channel whose Pix key is being set.
   const [pixing, setPixing] = useState<ChannelSummary | null>(null);
+  // The channel whose monitored groups are being picked.
+  const [grouping, setGrouping] = useState<ChannelSummary | null>(null);
   // The channel pending delete-confirmation.
   const [deleting, setDeleting] = useState<ChannelSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -293,6 +297,7 @@ export function ChannelsTab() {
               onPair={() => setPairing(ch)}
               onLocation={() => setLocating(ch)}
               onPix={() => setPixing(ch)}
+              onGroups={() => setGrouping(ch)}
               onDelete={() => setDeleting(ch)}
             />
           ))}
@@ -339,6 +344,14 @@ export function ChannelsTab() {
             setPixing(null);
             void load();
           }}
+        />
+      )}
+
+      {/* Group-monitoring picker for a channel. */}
+      {grouping && (
+        <ChannelGroupsDialog
+          channel={grouping}
+          onClose={() => setGrouping(null)}
         />
       )}
 
@@ -472,6 +485,7 @@ function ChannelRow({
   onPair,
   onLocation,
   onPix,
+  onGroups,
   onDelete,
 }: {
   channel: ChannelSummary;
@@ -479,6 +493,7 @@ function ChannelRow({
   onPair: () => void;
   onLocation: () => void;
   onPix: () => void;
+  onGroups: () => void;
   onDelete: () => void;
 }) {
   const isMeta = channel.provider === 'meta';
@@ -568,6 +583,19 @@ function ChannelRow({
           >
             Pix
           </Button>
+
+          {channel.provider === 'waha' && (
+            <Button
+              variant="ghost"
+              size="sm"
+              title="Grupos monitorados"
+              onClick={onGroups}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <Users className="size-3.5" />
+              Grupos
+            </Button>
+          )}
 
           <Button
             variant="ghost"

@@ -655,6 +655,24 @@ export const wahaProvider: WhatsAppProvider = {
   // sendTemplate / sendInteractive intentionally omitted:
   // capabilities.templates and capabilities.interactive are both false.
 
+  /** List the WhatsApp groups this channel's number belongs to (for the
+   *  opt-in monitoring picker). gows: GET /api/{session}/groups → [{JID,Name}]. */
+  async listGroups(
+    ch: ChannelCtx,
+  ): Promise<{ jid: string; name: string }[]> {
+    const { ok, body } = await httpJson(
+      `${baseUrlOf(ch)}/api/${sessionOf(ch)}/groups`,
+      { method: 'GET', headers: headersOf(ch) },
+    );
+    if (!ok || !Array.isArray(body)) return [];
+    return (body as Array<{ JID?: string; jid?: string; Name?: string; name?: string }>)
+      .map((g) => ({
+        jid: String(g.JID ?? g.jid ?? ''),
+        name: String(g.Name ?? g.name ?? ''),
+      }))
+      .filter((g) => g.jid);
+  },
+
   async sendLocation(
     ch: ChannelCtx,
     toE164: string,

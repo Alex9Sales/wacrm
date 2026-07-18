@@ -233,6 +233,10 @@ export interface WhatsAppProvider {
     loc: OutboundLocation,
   ): Promise<{ externalMessageId: string }>;
 
+  /** List the WhatsApp groups this channel's number belongs to. Optional —
+   *  only the non-official engines expose it. For group-monitoring opt-in. */
+  listGroups?(ch: ChannelCtx): Promise<{ jid: string; name: string }[]>;
+
   /**
    * Meta: HMAC over the raw body via the global app secret. Others: match
    * the per-channel webhook_secret against a header/query token.

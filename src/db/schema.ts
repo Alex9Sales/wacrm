@@ -179,6 +179,9 @@ export const contacts = pgTable("contacts", {
 	email: text(),
 	company: text(),
 	avatarUrl: text("avatar_url"),
+	// A "contact" that is actually a WhatsApp group (phone holds the group
+	// jid's digits, name the group name). Only set for monitored groups.
+	isGroup: boolean("is_group").default(false).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
@@ -1254,6 +1257,24 @@ export const internalChannels = pgTable("internal_channels", {
 			columns: [table.accountId],
 			foreignColumns: [organization.id],
 			name: "internal_channels_account_id_fkey"
+		}).onDelete("cascade"),
+]);
+
+// Monitored WhatsApp groups — opt-in ingestion. A group's messages enter the
+// CRM only when it has a row here (for its channel).
+export const monitoredGroups = pgTable("monitored_groups", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	channelId: uuid("channel_id").notNull(),
+	groupJid: text("group_jid").notNull(),
+	groupName: text("group_name"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("monitored_groups_unique").using("btree", table.channelId.asc().nullsLast().op("uuid_ops"), table.groupJid.asc().nullsLast().op("text_ops")),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [channels.id],
+			name: "monitored_groups_channel_id_fkey"
 		}).onDelete("cascade"),
 ]);
 
