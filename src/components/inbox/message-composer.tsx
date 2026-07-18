@@ -21,6 +21,7 @@ import {
   Loader2,
   Sparkles,
   MapPin,
+  Lock,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
@@ -34,6 +35,8 @@ import { useCan } from "@/hooks/use-can";
 import { CAPABILITIES, type ProviderId } from "@/lib/channels/provider";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
+import { MentionComposer } from "@/components/inbox/mention-composer";
+import type { MentionMember } from "@/lib/inbox/mentions";
 import {
   uploadAccountMedia,
   deleteAccountMedia,
@@ -124,6 +127,8 @@ interface MessageComposerProps {
    * full affordance set.
    */
   provider?: ProviderId;
+  /** Team members for the internal-note @mention autocomplete. */
+  mentionMembers?: MentionMember[];
 }
 
 function formatDuration(seconds: number): string {
@@ -146,6 +151,7 @@ export function MessageComposer({
   replyTo,
   onClearReply,
   provider,
+  mentionMembers,
 }: MessageComposerProps) {
   // Capability gating (Phase 4). No channel → default to Meta's full
   // capability set so legacy single-Meta accounts are unaffected.
@@ -588,6 +594,34 @@ export function MessageComposer({
     }
   }, [sendingLoc, conversationId]);
 
+  // Internal note mode: the text becomes a team-only note on the thread (with
+  // @mention), never sent to the customer.
+  const [noteMode, setNoteMode] = useState(false);
+  const [noteText, setNoteText] = useState("");
+  const [sendingNote, setSendingNote] = useState(false);
+  const sendNote = useCallback(async () => {
+    const body = noteText.trim();
+    if (!body || sendingNote) return;
+    setSendingNote(true);
+    try {
+      const res = await fetch(`/api/conversations/${conversationId}/note`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ text: body }),
+      });
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        toast.error(d.error || "Não foi possível adicionar a nota.");
+        return;
+      }
+      setNoteText(""); // the thread refreshes via the SSE ping from the route
+    } catch {
+      toast.error("Não foi possível adicionar a nota.");
+    } finally {
+      setSendingNote(false);
+    }
+  }, [noteText, sendingNote, conversationId]);
+
   // Send this channel's saved Pix key (same pattern as sendLocation).
   const [sendingPix, setSendingPix] = useState(false);
   const sendPix = useCallback(async () => {
@@ -685,6 +719,37 @@ export function MessageComposer({
         }}
       />
 
+      {/* Reply-to-customer / internal-note toggle. */}
+      {!draft && !recording && !readOnly && (
+        <div className="mb-2 flex w-fit gap-0.5 rounded-lg bg-muted p-0.5 text-xs">
+          <button
+            type="button"
+            onClick={() => setNoteMode(false)}
+            className={cn(
+              "rounded-md px-2.5 py-1 font-medium transition",
+              !noteMode
+                ? "bg-card text-foreground shadow-sm"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            Responder
+          </button>
+          <button
+            type="button"
+            onClick={() => setNoteMode(true)}
+            className={cn(
+              "flex items-center gap-1 rounded-md px-2.5 py-1 font-medium transition",
+              noteMode
+                ? "bg-amber-100 text-amber-900 shadow-sm dark:bg-amber-950/60 dark:text-amber-200"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <Lock className="size-3" />
+            Nota interna
+          </button>
+        </div>
+      )}
+
       {draft ? (
         <MediaDraftPreview
           draft={draft}
@@ -717,6 +782,29 @@ export function MessageComposer({
           >
             <Square className="h-4 w-4" />
           </Button>
+        </div>
+      ) : noteMode ? (
+        <div className="flex items-end gap-2">
+          <MentionComposer
+            value={noteText}
+            onChange={setNoteText}
+            onSubmit={() => void sendNote()}
+            members={mentionMembers ?? []}
+            placeholder="Nota interna (só a equipe vê) · @ para mencionar um colega"
+          />
+          <button
+            type="button"
+            onClick={() => void sendNote()}
+            disabled={!noteText.trim() || sendingNote}
+            title="Adicionar nota interna"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md bg-amber-500 p-0 text-white transition hover:bg-amber-600 disabled:opacity-40"
+          >
+            {sendingNote ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Send className="h-4 w-4" />
+            )}
+          </button>
         </div>
       ) : (
         <div className="flex items-end gap-2">

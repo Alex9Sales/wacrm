@@ -445,6 +445,9 @@ export const messages = pgTable("messages", {
 	transcription: text("transcription"),
 	// WhatsApp "view once" media — persisted so an agent can re-open it.
 	viewOnce: boolean("view_once").default(false).notNull(),
+	// Internal note: written in the thread but never sent to the customer —
+	// for @mentioning a colleague without leaving the conversation.
+	isInternal: boolean("is_internal").default(false).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_messages_conversation").using("btree", table.conversationId.asc().nullsLast().op("uuid_ops")),

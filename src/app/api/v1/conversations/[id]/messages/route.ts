@@ -47,7 +47,13 @@ export async function GET(
     }
     if (!conv) return fail('not_found', 'Conversation not found', 404);
 
-    const conditions = [eq(messages.conversationId, id)];
+    // Internal notes are team-only. The public API (used by the AI agent /
+    // Hermes to read history and reply to the customer) must never see them —
+    // otherwise the agent could echo an internal note back to the customer.
+    const conditions = [
+      eq(messages.conversationId, id),
+      eq(messages.isInternal, false),
+    ];
     if (cursor) {
       conditions.push(
         or(

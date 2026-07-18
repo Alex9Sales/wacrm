@@ -21,6 +21,7 @@ import {
   Maximize2,
   Copy,
   User,
+  Lock,
 } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
@@ -28,6 +29,8 @@ import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
 import { RichText } from "@/lib/inbox/rich-text";
 import { detectCopyCode } from "@/lib/inbox/copy-code";
+import { MentionText } from "@/components/inbox/mention-composer";
+import type { MentionMember } from "@/lib/inbox/mentions";
 import {
   parseCallLog,
   formatCallDuration,
@@ -277,6 +280,8 @@ interface MessageBubbleProps {
   /** Contact phone/name — lets a call-log card offer "ligar de volta". */
   contactPhone?: string | null;
   contactName?: string | null;
+  /** Team members, for highlighting @mentions in an internal note. */
+  mentionMembers?: MentionMember[];
 }
 
 function StatusIcon({ status }: { status: Message["status"] }) {
@@ -828,9 +833,36 @@ export function MessageBubble({
   onToggleReaction,
   contactPhone,
   contactName,
+  mentionMembers,
 }: MessageBubbleProps) {
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
   const time = format(new Date(message.created_at), "HH:mm");
+
+  // Internal note: a team-only message on the thread (never sent to the
+  // customer). Amber, right-aligned like an agent message, with a clear label.
+  if (message.is_internal) {
+    return (
+      <div className="flex flex-col items-end">
+        <div className="max-w-full rounded-2xl rounded-br-md border border-amber-400/40 bg-amber-100 px-3 py-2 text-amber-950 dark:bg-amber-950/40 dark:text-amber-100">
+          <p className="mb-1 flex items-center gap-1 text-[10px] font-semibold uppercase tracking-wide text-amber-700 dark:text-amber-400">
+            <Lock className="size-3" />
+            Nota interna · só a equipe vê
+          </p>
+          <p className="whitespace-pre-wrap break-words text-sm">
+            <MentionText
+              text={message.content_text ?? ""}
+              members={mentionMembers ?? []}
+            />
+          </p>
+          <div className="mt-1 flex justify-end">
+            <span className="text-[10px] text-amber-700/80 dark:text-amber-400/70">
+              {time}
+            </span>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   // Row alignment + width cap are owned by <MessageActions> so its hover
   // group matches the bubble's content area, not the full row.

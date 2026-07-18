@@ -26,6 +26,9 @@ export async function buildConversationContext(
       and(
         eq(messages.conversationId, conversationId),
         eq(messages.contentType, 'text'),
+        // NEVER feed internal notes to the AI: they're team-only and would
+        // otherwise leak to the customer in the model's reply.
+        eq(messages.isInternal, false),
       ),
     )
     .orderBy(desc(messages.createdAt))

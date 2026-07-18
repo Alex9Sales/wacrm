@@ -253,6 +253,8 @@ export interface Message {
   interactive_reply_id?: string;
   /** Speech-to-text of an inbound audio note (null until transcribed). */
   transcription?: string | null;
+  /** Internal note — shown to the team only, never sent to the customer. */
+  is_internal?: boolean;
   /** WhatsApp "view once" media — shown behind a tap-to-reveal cover. */
   view_once?: boolean;
 }

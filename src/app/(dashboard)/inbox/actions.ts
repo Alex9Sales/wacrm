@@ -272,6 +272,7 @@ const messageColumns = {
   interactive_reply_id: messages.interactiveReplyId,
   transcription: messages.transcription,
   view_once: messages.viewOnce,
+  is_internal: messages.isInternal,
   created_at: messages.createdAt,
 }
 

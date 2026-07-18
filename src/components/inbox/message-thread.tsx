@@ -71,6 +71,8 @@ import { ContactAvatar } from "./contact-avatar";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
 import { ForwardDialog } from "./forward-dialog";
+import { listTeamMembers } from "@/app/(dashboard)/internal-chat/actions";
+import type { MentionMember } from "@/lib/inbox/mentions";
 import {
   MessageComposer,
   CHAT_MEDIA_BUCKET,
@@ -234,6 +236,16 @@ export function MessageThread({
       }
     };
   }, []);
+
+  // Team members for internal-note @mention (autocomplete + highlight).
+  useEffect(() => {
+    listTeamMembers()
+      .then((list) =>
+        setMentionMembers(list.map((m) => ({ id: m.id, name: m.name }))),
+      )
+      .catch(() => {});
+  }, []);
+
   const handleRefreshClick = useCallback(() => {
     if (isRefreshing || !onRefresh) return;
     setIsRefreshing(true);
@@ -246,6 +258,8 @@ export function MessageThread({
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
   // The message being forwarded (opens the ForwardDialog).
   const [forwarding, setForwarding] = useState<Message | null>(null);
+  // Team members, for internal-note @mention (autocomplete + highlight).
+  const [mentionMembers, setMentionMembers] = useState<MentionMember[]>([]);
   // Delete-conversation confirm dialog + in-flight state.
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -1323,6 +1337,7 @@ export function MessageThread({
                               : null
                           }
                           contactName={contact.name}
+                          mentionMembers={mentionMembers}
                         />
                       </MessageActions>
                     );
@@ -1344,6 +1359,7 @@ export function MessageThread({
         replyTo={replyTo}
         onClearReply={() => setReplyTo(null)}
         provider={conversation.channel?.provider}
+        mentionMembers={mentionMembers}
       />
 
       <TemplatePicker
