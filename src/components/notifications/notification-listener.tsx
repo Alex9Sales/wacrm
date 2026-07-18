@@ -9,6 +9,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { useServerEvents } from "@/hooks/use-server-events";
 import { playNotificationSound } from "@/lib/notifications/sounds";
 import { getNotificationPrefs } from "@/lib/notifications/prefs";
+import { getActiveInternalChannel } from "@/lib/internal-chat/active-channel";
 import { getConversationPreview } from "@/app/(dashboard)/inbox/actions";
 
 /**
@@ -171,12 +172,14 @@ export function NotificationListener() {
         if (senderId && user?.id && senderId === user.id) return; // your own
         if (recentlyAlerted(`internal:${channelId}`)) return;
 
-        // Skip if you're already in the internal chat.
-        const viewingInternal =
+        // Silence only the channel you're actively reading — a message in
+        // ANOTHER channel still sounds even with the chat open (WhatsApp/Slack).
+        const viewingThisChannel =
           typeof window !== "undefined" &&
           !document.hidden &&
-          window.location.pathname.startsWith("/internal-chat");
-        if (viewingInternal) return;
+          window.location.pathname.startsWith("/internal-chat") &&
+          getActiveInternalChannel() === channelId;
+        if (viewingThisChannel) return;
 
         const who =
           typeof e.senderName === "string" && e.senderName

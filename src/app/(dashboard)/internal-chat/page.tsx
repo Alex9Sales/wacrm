@@ -36,6 +36,7 @@ import type {
 } from "@/lib/internal-chat/types";
 import { MentionComposer, MentionText } from "@/components/inbox/mention-composer";
 import type { MentionMember } from "@/lib/inbox/mentions";
+import { setActiveInternalChannel } from "@/lib/internal-chat/active-channel";
 
 function timeOf(iso: string): string {
   const d = new Date(iso);
@@ -126,6 +127,13 @@ export default function InternalChatPage() {
       void markRead(activeId);
     }
   }, [activeId, loadMessages, markRead]);
+
+  // Tell the notification listener which channel is on screen, so only THIS
+  // channel stays silent (others still sound). Clear it when leaving the page.
+  useEffect(() => {
+    setActiveInternalChannel(activeId);
+    return () => setActiveInternalChannel(null);
+  }, [activeId]);
 
   // Realtime: a new message anywhere refreshes the channel dots; if it's the
   // channel we're viewing, refetch its thread and keep it read.
