@@ -1303,6 +1303,22 @@ export const voiceAgents = pgTable("voice_agents", {
 	check("voice_agents_mode_check", sql`mode = ANY (ARRAY['always'::text, 'overflow'::text])`),
 ]);
 
+// Voice credentials per account (client-supplied). ElevenLabs (TTS) + OpenAI
+// (Realtime brain) keys, one set per account, AES-256-GCM encrypted like
+// ai_configs.api_key. The per-channel persona/voice lives in voice_agents.
+export const voiceSettings = pgTable("voice_settings", {
+	accountId: uuid("account_id").primaryKey().notNull(),
+	elevenlabsApiKey: text("elevenlabs_api_key"),
+	openaiApiKey: text("openai_api_key"),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "voice_settings_account_id_fkey"
+		}).onDelete("cascade"),
+]);
+
 // Group participant name registry — maps a participant's wa_key (LID user-part
 // or phone digits) to the pushName we saw on their messages, so mentions inside
 // group messages ("@146089705500852") render as the name ("@Guilherme Andrade").

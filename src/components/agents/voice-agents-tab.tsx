@@ -22,15 +22,21 @@ interface VoiceAgent {
   greeting: string;
 }
 
-// Confirmed ElevenLabs preset (Keren — the pilot's voice). More can be added
-// later; "Outra" lets an operator paste any ElevenLabs voice id.
+// Default ElevenLabs voice (Keren — the pilot's voice). Operators paste any
+// ElevenLabs voice id to switch.
 const KEREN_ID = '33B4UnXyTNbgLmdEDh5P';
-const VOICE_PRESETS = [{ id: KEREN_ID, label: 'Keren (feminina, pt-BR)' }];
 
 export function VoiceAgentsTab() {
   const [agents, setAgents] = useState<VoiceAgent[]>([]);
   const [loading, setLoading] = useState(true);
   const [savingId, setSavingId] = useState<string | null>(null);
+
+  // Account-level provider keys (never returned raw — we only know if set).
+  const [elevenlabsSet, setElevenlabsSet] = useState(false);
+  const [openaiSet, setOpenaiSet] = useState(false);
+  const [elevenlabsKey, setElevenlabsKey] = useState('');
+  const [openaiKey, setOpenaiKey] = useState('');
+  const [savingKeys, setSavingKeys] = useState(false);
 
   useEffect(() => {
     fetch('/api/voice-agents')
@@ -52,7 +58,46 @@ export function VoiceAgentsTab() {
       })
       .catch(() => toast.error('Não foi possível carregar os canais.'))
       .finally(() => setLoading(false));
+
+    fetch('/api/voice-agents/credentials')
+      .then(async (res) => {
+        const d = (await res.json().catch(() => ({}))) as {
+          elevenlabsSet?: boolean;
+          openaiSet?: boolean;
+        };
+        setElevenlabsSet(!!d.elevenlabsSet);
+        setOpenaiSet(!!d.openaiSet);
+      })
+      .catch(() => {});
   }, []);
+
+  const saveKeys = async () => {
+    if (!elevenlabsKey.trim() && !openaiKey.trim()) return;
+    setSavingKeys(true);
+    try {
+      const payload: Record<string, string> = {};
+      if (elevenlabsKey.trim()) payload.elevenlabsApiKey = elevenlabsKey.trim();
+      if (openaiKey.trim()) payload.openaiApiKey = openaiKey.trim();
+      const res = await fetch('/api/voice-agents/credentials', {
+        method: 'PUT',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload),
+      });
+      if (!res.ok) {
+        toast.error('Não foi possível salvar as chaves.');
+        return;
+      }
+      if (payload.elevenlabsApiKey) setElevenlabsSet(true);
+      if (payload.openaiApiKey) setOpenaiSet(true);
+      setElevenlabsKey('');
+      setOpenaiKey('');
+      toast.success('Chaves salvas.');
+    } catch {
+      toast.error('Não foi possível salvar as chaves.');
+    } finally {
+      setSavingKeys(false);
+    }
+  };
 
   const patch = (channelId: string, next: Partial<VoiceAgent>) =>
     setAgents((prev) =>
@@ -108,13 +153,62 @@ export function VoiceAgentsTab() {
         <Info className="mt-0.5 size-4 shrink-0" />
         <span>
           A IA de voz atende as ligações do canal com a persona e a voz
-          definidas aqui. Reaproveita a chave OpenAI do agente de texto. Comece
-          desligado e ligue onde quiser testar.
+          definidas aqui. Comece desligado e ligue onde quiser testar.
         </span>
       </div>
 
+      {/* Account-level provider keys */}
+      <div className="rounded-lg border border-border bg-card p-4">
+        <h3 className="text-sm font-semibold text-foreground">
+          Chaves de voz (da sua conta)
+        </h3>
+        <p className="mt-0.5 text-xs text-muted-foreground">
+          A voz usa <strong>ElevenLabs</strong> (fala) e{' '}
+          <strong>OpenAI Realtime</strong> (cérebro). Cada chave é guardada
+          criptografada e nunca é exibida de volta.
+        </p>
+        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+          <div>
+            <label className="text-xs font-medium text-foreground">
+              Chave ElevenLabs {elevenlabsSet && <span className="text-emerald-500">· configurada</span>}
+            </label>
+            <input
+              type="password"
+              value={elevenlabsKey}
+              onChange={(e) => setElevenlabsKey(e.target.value)}
+              placeholder={elevenlabsSet ? '••••••••  (deixe em branco p/ manter)' : 'sk_...'}
+              autoComplete="off"
+              className="mt-1.5 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+            />
+          </div>
+          <div>
+            <label className="text-xs font-medium text-foreground">
+              Chave OpenAI (voz) {openaiSet && <span className="text-emerald-500">· configurada</span>}
+            </label>
+            <input
+              type="password"
+              value={openaiKey}
+              onChange={(e) => setOpenaiKey(e.target.value)}
+              placeholder={openaiSet ? '••••••••  (deixe em branco p/ manter)' : 'sk-...'}
+              autoComplete="off"
+              className="mt-1.5 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+            />
+          </div>
+        </div>
+        <div className="mt-3 flex justify-end">
+          <button
+            type="button"
+            onClick={saveKeys}
+            disabled={savingKeys || (!elevenlabsKey.trim() && !openaiKey.trim())}
+            className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
+          >
+            {savingKeys && <Loader2 className="size-4 animate-spin" />}
+            Salvar chaves
+          </button>
+        </div>
+      </div>
+
       {agents.map((a) => {
-        const custom = !VOICE_PRESETS.some((v) => v.id === a.voiceId);
         return (
           <div
             key={a.channelId}
@@ -190,35 +284,26 @@ export function VoiceAgentsTab() {
 
                 <div>
                   <label className="text-xs font-medium text-foreground">
-                    Voz
+                    Voz — ID do ElevenLabs
                   </label>
-                  <select
-                    value={custom ? 'custom' : a.voiceId}
+                  <input
+                    value={a.voiceId}
                     onChange={(e) =>
-                      patch(a.channelId, {
-                        voiceId:
-                          e.target.value === 'custom' ? '' : e.target.value,
-                      })
+                      patch(a.channelId, { voiceId: e.target.value })
                     }
-                    className="mt-1.5 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
-                  >
-                    {VOICE_PRESETS.map((v) => (
-                      <option key={v.id} value={v.id}>
-                        {v.label}
-                      </option>
-                    ))}
-                    <option value="custom">Outra (informar ID)</option>
-                  </select>
-                  {custom && (
-                    <input
-                      value={a.voiceId}
-                      onChange={(e) =>
-                        patch(a.channelId, { voiceId: e.target.value })
-                      }
-                      placeholder="ID da voz no ElevenLabs"
-                      className="mt-2 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
-                    />
-                  )}
+                    placeholder={KEREN_ID}
+                    className="mt-1.5 w-full rounded-lg border border-border bg-background px-3 py-2 font-mono text-sm text-foreground"
+                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Pegue o ID da voz no ElevenLabs e cole aqui.{' '}
+                    <button
+                      type="button"
+                      onClick={() => patch(a.channelId, { voiceId: KEREN_ID })}
+                      className="text-primary hover:underline"
+                    >
+                      Usar Keren (padrão)
+                    </button>
+                  </p>
                 </div>
 
                 <div>
