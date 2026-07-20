@@ -1291,6 +1291,7 @@ export const voiceAgents = pgTable("voice_agents", {
 	systemPrompt: text("system_prompt"),
 	voiceId: text("voice_id"),
 	greeting: text(),
+	notifyPhone: text("notify_phone"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
