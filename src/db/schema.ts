@@ -1310,6 +1310,7 @@ export const voiceSettings = pgTable("voice_settings", {
 	accountId: uuid("account_id").primaryKey().notNull(),
 	elevenlabsApiKey: text("elevenlabs_api_key"),
 	openaiApiKey: text("openai_api_key"),
+	llmProvider: text("llm_provider").default('openai').notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	foreignKey({

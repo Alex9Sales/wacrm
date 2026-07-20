@@ -33,9 +33,10 @@ export function VoiceAgentsTab() {
 
   // Account-level provider keys (never returned raw — we only know if set).
   const [elevenlabsSet, setElevenlabsSet] = useState(false);
-  const [openaiSet, setOpenaiSet] = useState(false);
+  const [llmKeySet, setLlmKeySet] = useState(false);
+  const [llmProvider, setLlmProvider] = useState('openai');
   const [elevenlabsKey, setElevenlabsKey] = useState('');
-  const [openaiKey, setOpenaiKey] = useState('');
+  const [llmKey, setLlmKey] = useState('');
   const [savingKeys, setSavingKeys] = useState(false);
 
   useEffect(() => {
@@ -63,21 +64,23 @@ export function VoiceAgentsTab() {
       .then(async (res) => {
         const d = (await res.json().catch(() => ({}))) as {
           elevenlabsSet?: boolean;
-          openaiSet?: boolean;
+          llmKeySet?: boolean;
+          llmProvider?: string;
         };
         setElevenlabsSet(!!d.elevenlabsSet);
-        setOpenaiSet(!!d.openaiSet);
+        setLlmKeySet(!!d.llmKeySet);
+        if (d.llmProvider) setLlmProvider(d.llmProvider);
       })
       .catch(() => {});
   }, []);
 
   const saveKeys = async () => {
-    if (!elevenlabsKey.trim() && !openaiKey.trim()) return;
+    const hasChange = elevenlabsKey.trim() || llmKey.trim();
     setSavingKeys(true);
     try {
-      const payload: Record<string, string> = {};
+      const payload: Record<string, string> = { llmProvider };
       if (elevenlabsKey.trim()) payload.elevenlabsApiKey = elevenlabsKey.trim();
-      if (openaiKey.trim()) payload.openaiApiKey = openaiKey.trim();
+      if (llmKey.trim()) payload.llmApiKey = llmKey.trim();
       const res = await fetch('/api/voice-agents/credentials', {
         method: 'PUT',
         headers: { 'Content-Type': 'application/json' },
@@ -88,10 +91,10 @@ export function VoiceAgentsTab() {
         return;
       }
       if (payload.elevenlabsApiKey) setElevenlabsSet(true);
-      if (payload.openaiApiKey) setOpenaiSet(true);
+      if (payload.llmApiKey) setLlmKeySet(true);
       setElevenlabsKey('');
-      setOpenaiKey('');
-      toast.success('Chaves salvas.');
+      setLlmKey('');
+      toast.success(hasChange ? 'Chaves salvas.' : 'Motor salvo.');
     } catch {
       toast.error('Não foi possível salvar as chaves.');
     } finally {
@@ -163,43 +166,76 @@ export function VoiceAgentsTab() {
           Chaves de voz (da sua conta)
         </h3>
         <p className="mt-0.5 text-xs text-muted-foreground">
-          A voz usa <strong>ElevenLabs</strong> (fala) e{' '}
-          <strong>OpenAI Realtime</strong> (cérebro). Cada chave é guardada
-          criptografada e nunca é exibida de volta.
+          A voz usa <strong>ElevenLabs</strong> (a fala) e uma{' '}
+          <strong>LLM</strong> (o cérebro). Cada chave é guardada criptografada e
+          nunca é exibida de volta.
         </p>
-        <div className="mt-3 grid gap-3 sm:grid-cols-2">
+        <div className="mt-3 space-y-3">
+          {/* Fala — ElevenLabs */}
           <div>
             <label className="text-xs font-medium text-foreground">
-              Chave ElevenLabs {elevenlabsSet && <span className="text-emerald-500">· configurada</span>}
+              Chave ElevenLabs (voz){' '}
+              {elevenlabsSet && (
+                <span className="text-emerald-500">· configurada</span>
+              )}
             </label>
             <input
               type="password"
               value={elevenlabsKey}
               onChange={(e) => setElevenlabsKey(e.target.value)}
-              placeholder={elevenlabsSet ? '••••••••  (deixe em branco p/ manter)' : 'sk_...'}
+              placeholder={
+                elevenlabsSet ? '••••••••  (deixe em branco p/ manter)' : 'sk_...'
+              }
               autoComplete="off"
               className="mt-1.5 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
             />
           </div>
-          <div>
+
+          {/* Cérebro — LLM (motor escolhível) */}
+          <div className="rounded-lg border border-dashed border-border p-3">
             <label className="text-xs font-medium text-foreground">
-              Chave OpenAI (voz) {openaiSet && <span className="text-emerald-500">· configurada</span>}
+              Cérebro (LLM)
+            </label>
+            <select
+              value={llmProvider}
+              onChange={(e) => setLlmProvider(e.target.value)}
+              className="mt-1.5 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+            >
+              <option value="openai">OpenAI Realtime</option>
+              <option value="anthropic" disabled>
+                Anthropic — em breve
+              </option>
+              <option value="hermes" disabled>
+                Hermes (agente autônomo) — em breve
+              </option>
+            </select>
+            <label className="mt-3 block text-xs font-medium text-foreground">
+              Chave da LLM{' '}
+              {llmKeySet && (
+                <span className="text-emerald-500">· configurada</span>
+              )}
             </label>
             <input
               type="password"
-              value={openaiKey}
-              onChange={(e) => setOpenaiKey(e.target.value)}
-              placeholder={openaiSet ? '••••••••  (deixe em branco p/ manter)' : 'sk-...'}
+              value={llmKey}
+              onChange={(e) => setLlmKey(e.target.value)}
+              placeholder={
+                llmKeySet ? '••••••••  (deixe em branco p/ manter)' : 'sk-...'
+              }
               autoComplete="off"
               className="mt-1.5 w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
             />
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Hoje o motor de voz é o OpenAI Realtime. Outros motores (Anthropic,
+              Hermes) entram sem trocar nada aqui.
+            </p>
           </div>
         </div>
         <div className="mt-3 flex justify-end">
           <button
             type="button"
             onClick={saveKeys}
-            disabled={savingKeys || (!elevenlabsKey.trim() && !openaiKey.trim())}
+            disabled={savingKeys}
             className="inline-flex items-center gap-2 rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-60"
           >
             {savingKeys && <Loader2 className="size-4 animate-spin" />}

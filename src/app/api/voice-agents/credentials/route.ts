@@ -19,6 +19,11 @@ import { db, voiceSettings } from '@/db'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { encrypt } from '@/lib/whatsapp/encryption'
 
+// Voice brain engines. Only 'openai' (Realtime) is wired to the media bridge
+// today; the rest are surfaced in the UI as "em breve" so the config is
+// future-proof (a swap to Anthropic / self-hosted Hermes needs no schema change).
+const LLM_PROVIDERS = new Set(['openai'])
+
 export async function GET() {
   try {
     const ctx = await requireRole('admin')
@@ -26,13 +31,15 @@ export async function GET() {
       .select({
         elevenlabsApiKey: voiceSettings.elevenlabsApiKey,
         openaiApiKey: voiceSettings.openaiApiKey,
+        llmProvider: voiceSettings.llmProvider,
       })
       .from(voiceSettings)
       .where(eq(voiceSettings.accountId, ctx.accountId))
       .limit(1)
     return NextResponse.json({
       elevenlabsSet: !!row?.elevenlabsApiKey,
-      openaiSet: !!row?.openaiApiKey,
+      llmKeySet: !!row?.openaiApiKey,
+      llmProvider: row?.llmProvider ?? 'openai',
     })
   } catch (err) {
     return toErrorResponse(err)
@@ -44,7 +51,8 @@ export async function PUT(request: Request) {
     const ctx = await requireRole('admin')
     const body = (await request.json().catch(() => ({}))) as {
       elevenlabsApiKey?: unknown
-      openaiApiKey?: unknown
+      llmApiKey?: unknown
+      llmProvider?: unknown
     }
 
     // Only touch a field that was actually sent. '' clears it; a value encrypts.
@@ -53,9 +61,12 @@ export async function PUT(request: Request) {
       const v = body.elevenlabsApiKey.trim()
       patch.elevenlabsApiKey = v ? encrypt(v) : null
     }
-    if (typeof body.openaiApiKey === 'string') {
-      const v = body.openaiApiKey.trim()
+    if (typeof body.llmApiKey === 'string') {
+      const v = body.llmApiKey.trim()
       patch.openaiApiKey = v ? encrypt(v) : null
+    }
+    if (typeof body.llmProvider === 'string' && LLM_PROVIDERS.has(body.llmProvider)) {
+      patch.llmProvider = body.llmProvider
     }
     if (Object.keys(patch).length === 0) {
       return NextResponse.json({ error: 'nothing to update' }, { status: 400 })
