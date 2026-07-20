@@ -98,6 +98,9 @@ export interface Contact {
   email?: string;
   company?: string;
   avatar_url?: string;
+  /** True when this "contact" is a monitored WhatsApp GROUP (not a person).
+   *  Drives the inbox group segmentation + the group marker on the row. */
+  is_group?: boolean;
   created_at: string;
   updated_at: string;
   /** Hydrated by queries that embed `contact_tags(tags(*))` (e.g. the

@@ -237,6 +237,7 @@ const contactColumns = {
   email: contacts.email,
   company: contacts.company,
   avatar_url: contacts.avatarUrl,
+  is_group: contacts.isGroup,
   created_at: contacts.createdAt,
   updated_at: contacts.updatedAt,
 }

@@ -12,7 +12,7 @@ import type {
   ConversationStatus,
   Tag,
 } from "@/types";
-import { Search, ChevronDown, X, Radio, Inbox } from "lucide-react";
+import { Search, ChevronDown, X, Radio, Inbox, Users } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { CHANNEL_PROVIDER_LABELS } from "./message-thread";
 import { ContactAvatar } from "./contact-avatar";
@@ -56,6 +56,17 @@ const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = [
   { label: "Fechada", value: "closed" },
 ];
 
+// Group segmentation (Grupos Fase 1, etapa E). A monitored group is a
+// "contact" with is_group=true; this splits the list so group chatter doesn't
+// drown out real clients. Only surfaced when the account actually has groups.
+type SegmentFilter = "all" | "clients" | "groups";
+
+const SEGMENT_OPTIONS: { label: string; value: SegmentFilter }[] = [
+  { label: "Todos", value: "all" },
+  { label: "Clientes", value: "clients" },
+  { label: "Grupos", value: "groups" },
+];
+
 export function ConversationList({
   activeConversationId,
   onSelect,
@@ -67,6 +78,7 @@ export function ConversationList({
   const searchParams = useSearchParams();
   const [search, setSearch] = useState("");
   const [filter, setFilter] = useState<InboxFilter>("all");
+  const [segment, setSegment] = useState<SegmentFilter>("all");
   const [loading, setLoading] = useState(true);
   // Channel ("caixa") filter — null means "Todas as conversas" (all
   // channels). Seeded from the `?caixa=<channelId>` URL query so the
@@ -210,6 +222,13 @@ export function ConversationList({
       result = result.filter((c) => c.channel?.id === selectedChannelId);
     }
 
+    // Group segmentation: clients = 1:1 only, groups = monitored groups only.
+    if (segment === "groups") {
+      result = result.filter((c) => c.contact?.is_group === true);
+    } else if (segment === "clients") {
+      result = result.filter((c) => !c.contact?.is_group);
+    }
+
     if (filter === "unread") {
       result = result.filter((c) => c.unread_count > 0);
     } else if (filter !== "all") {
@@ -240,11 +259,20 @@ export function ConversationList({
   }, [
     conversations,
     filter,
+    segment,
     search,
     selectedTagIds,
     selectedCompany,
     selectedChannelId,
   ]);
+
+  // Only offer the Clientes/Grupos segmentation when the account actually has
+  // a monitored group in the list — keeps the toolbar clean otherwise.
+  const hasGroups = useMemo(
+    () => conversations.some((c) => c.contact?.is_group === true),
+    [conversations],
+  );
+  const activeSegment = SEGMENT_OPTIONS.find((o) => o.value === segment);
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
@@ -381,6 +409,42 @@ export function ConversationList({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {hasGroups && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className={cn(
+                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                  segment !== "all"
+                    ? "text-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                <Users className="h-3 w-3" />
+                {activeSegment?.label ?? "Todos"}
+                <ChevronDown className="h-3 w-3" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                className="border-border bg-popover"
+              >
+                {SEGMENT_OPTIONS.map((opt) => (
+                  <DropdownMenuItem
+                    key={opt.value}
+                    onClick={() => setSegment(opt.value)}
+                    className={cn(
+                      "text-sm",
+                      segment === opt.value
+                        ? "text-primary"
+                        : "text-popover-foreground",
+                    )}
+                  >
+                    {opt.label}
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
 
           {tags.length > 0 && (
             <DropdownMenu>
@@ -595,6 +659,14 @@ function ConversationItem({
             {formatConversationPreview(conversation.last_message_text)}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
+            {contact?.is_group && (
+              <span
+                className="inline-flex items-center rounded-full bg-muted px-1 py-0.5 text-muted-foreground"
+                title="Grupo monitorado"
+              >
+                <Users className="h-2.5 w-2.5" />
+              </span>
+            )}
             {conversation.channel && (
               <span
                 className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground"
