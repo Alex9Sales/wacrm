@@ -90,6 +90,18 @@ export function ChannelGroupsDialog({
     : groups;
   const monitoredCount = groups.filter((g) => g.monitored).length;
 
+  // WhatsApp Communities expose several groups with the SAME name (the
+  // community node + its "Avisos" announcement group, etc.). Disambiguate
+  // those with a short jid tail so the user can tell which is which.
+  const nameCounts = groups.reduce<Record<string, number>>((acc, g) => {
+    const n = (g.name || g.jid.split('@')[0]).toLowerCase();
+    acc[n] = (acc[n] || 0) + 1;
+    return acc;
+  }, {});
+  const isDupName = (g: GroupRow) =>
+    nameCounts[(g.name || g.jid.split('@')[0]).toLowerCase()] > 1;
+  const jidTail = (g: GroupRow) => g.jid.replace(/\D/g, '').slice(-5);
+
   return (
     <Dialog open onOpenChange={(next) => !next && onClose()}>
       <DialogContent className="border-border bg-popover sm:max-w-md">
@@ -138,6 +150,11 @@ export function ChannelGroupsDialog({
                   </span>
                   <span className="min-w-0 flex-1 truncate text-sm text-foreground">
                     {g.name || g.jid.split('@')[0]}
+                    {isDupName(g) && (
+                      <span className="ml-1.5 text-xs text-muted-foreground">
+                        ·{jidTail(g)}
+                      </span>
+                    )}
                   </span>
                   <button
                     type="button"

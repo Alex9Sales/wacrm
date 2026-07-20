@@ -95,6 +95,34 @@ describe('wahaProvider.parseWebhook', () => {
     expect(direct.messages[0].group).toBeUndefined();
   });
 
+  it('drops reactions (encrypted/plain) — no empty row', () => {
+    // Encrypted reaction from a group (GOWS) — must NOT become a message.
+    const enc = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: {
+        id: 'r_1_H',
+        from: '120363400053019227@g.us',
+        _data: {
+          Message: {
+            encReactionMessage: { targetMessageKey: { ID: 'ABC' } },
+          },
+        },
+      },
+    });
+    expect(enc.messages).toHaveLength(0);
+
+    // Plain reaction on a 1:1 chat — also dropped.
+    const plain = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: {
+        id: 'r_2_H',
+        from: '5567999998888@c.us',
+        _data: { message: { reactionMessage: { text: '👍' } } },
+      },
+    });
+    expect(plain.messages).toHaveLength(0);
+  });
+
   it('still drops newsletters and broadcast (not groups)', () => {
     const news = wahaProvider.parseWebhook({
       event: 'message',

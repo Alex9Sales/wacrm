@@ -495,6 +495,17 @@ function detectViewOnce(p: WahaMessagePayload): boolean {
   );
 }
 
+/** True when the message node is ONLY a reaction — `reactionMessage` (plain)
+ *  or `encReactionMessage` (encrypted, GOWS/whatsmeow). These carry no body,
+ *  so we drop them rather than store an empty placeholder row. */
+function isReactionMessage(p: WahaMessagePayload): boolean {
+  const m = (p._data?.message ?? p._data?.Message) as
+    | Record<string, unknown>
+    | undefined;
+  if (!m) return false;
+  return 'reactionMessage' in m || 'encReactionMessage' in m;
+}
+
 interface WahaWebhookBody {
   event?: string;
   session?: string;
@@ -872,6 +883,14 @@ export const wahaProvider: WhatsAppProvider = {
           fetchKey: { mediaUrl: p.media?.url },
           viewOnce,
         };
+      }
+
+      // A reaction (👍 etc — encrypted `encReactionMessage` or plain
+      // `reactionMessage`) arrives as a message event with no body/media. Drop
+      // it: it must NOT become an empty "[text]" row — in a monitored group it
+      // would spam the thread on every reaction.
+      if (!text && !media && !viewOnce && isReactionMessage(p)) {
+        return { messages, statuses };
       }
 
       // Diagnostic: anything that would still render as a bare [text]/[type]
