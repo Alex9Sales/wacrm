@@ -53,6 +53,7 @@ export async function GET(
       groups: groups.map((g) => ({
         jid: g.jid,
         name: g.name,
+        community: g.community,
         monitored: monitoredSet.has(g.jid),
       })),
     })

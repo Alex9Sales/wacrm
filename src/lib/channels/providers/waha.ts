@@ -713,20 +713,42 @@ export const wahaProvider: WhatsAppProvider = {
   // capabilities.templates and capabilities.interactive are both false.
 
   /** List the WhatsApp groups this channel's number belongs to (for the
-   *  opt-in monitoring picker). gows: GET /api/{session}/groups → [{JID,Name}]. */
+   *  opt-in monitoring picker). gows: GET /api/{session}/groups → [{JID,Name,
+   *  LinkedParentJID,...}]. A group inside a WhatsApp Community carries
+   *  `LinkedParentJID` pointing at the community node — we resolve its name so
+   *  the picker can show/search by community (a sub-group like "Conversa
+   *  Business" is otherwise undiscoverable by the community name). */
   async listGroups(
     ch: ChannelCtx,
-  ): Promise<{ jid: string; name: string }[]> {
+  ): Promise<{ jid: string; name: string; community?: string }[]> {
     const { ok, body } = await httpJson(
       `${baseUrlOf(ch)}/api/${sessionOf(ch)}/groups`,
       { method: 'GET', headers: headersOf(ch) },
     );
     if (!ok || !Array.isArray(body)) return [];
-    return (body as Array<{ JID?: string; jid?: string; Name?: string; name?: string }>)
-      .map((g) => ({
-        jid: String(g.JID ?? g.jid ?? ''),
-        name: String(g.Name ?? g.name ?? ''),
-      }))
+    const raw = body as Array<{
+      JID?: string;
+      jid?: string;
+      Name?: string;
+      name?: string;
+      LinkedParentJID?: string;
+    }>;
+    // jid → name, so we can resolve a sub-group's community by its parent jid.
+    const nameByJid = new Map<string, string>();
+    for (const g of raw) {
+      const jid = String(g.JID ?? g.jid ?? '');
+      if (jid) nameByJid.set(jid, String(g.Name ?? g.name ?? ''));
+    }
+    return raw
+      .map((g) => {
+        const parent = String(g.LinkedParentJID ?? '');
+        const community = parent ? nameByJid.get(parent) : undefined;
+        return {
+          jid: String(g.JID ?? g.jid ?? ''),
+          name: String(g.Name ?? g.name ?? ''),
+          community: community || undefined,
+        };
+      })
       .filter((g) => g.jid);
   },
 

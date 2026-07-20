@@ -23,6 +23,9 @@ import type { ChannelSummary } from './channels-tab';
 interface GroupRow {
   jid: string;
   name: string;
+  /** Parent Community name when this is a sub-group — shown as a subtitle and
+   *  matched in search so a sub-group is findable by its community name. */
+  community?: string;
   monitored: boolean;
 }
 
@@ -86,7 +89,11 @@ export function ChannelGroupsDialog({
 
   const q = query.trim().toLowerCase();
   const filtered = q
-    ? groups.filter((g) => (g.name || g.jid).toLowerCase().includes(q))
+    ? groups.filter(
+        (g) =>
+          (g.name || g.jid).toLowerCase().includes(q) ||
+          (g.community?.toLowerCase().includes(q) ?? false),
+      )
     : groups;
   const monitoredCount = groups.filter((g) => g.monitored).length;
 
@@ -148,14 +155,21 @@ export function ChannelGroupsDialog({
                   <span className="flex size-8 shrink-0 items-center justify-center rounded-full bg-muted text-muted-foreground">
                     <Users className="size-4" />
                   </span>
-                  <span className="min-w-0 flex-1 truncate text-sm text-foreground">
-                    {g.name || g.jid.split('@')[0]}
-                    {isDupName(g) && (
-                      <span className="ml-1.5 text-xs text-muted-foreground">
-                        ·{jidTail(g)}
-                      </span>
+                  <div className="min-w-0 flex-1">
+                    <div className="truncate text-sm text-foreground">
+                      {g.name || g.jid.split('@')[0]}
+                      {isDupName(g) && (
+                        <span className="ml-1.5 text-xs text-muted-foreground">
+                          ·{jidTail(g)}
+                        </span>
+                      )}
+                    </div>
+                    {g.community && (
+                      <div className="truncate text-xs text-muted-foreground">
+                        {g.community}
+                      </div>
                     )}
-                  </span>
+                  </div>
                   <button
                     type="button"
                     onClick={() => toggle(g)}

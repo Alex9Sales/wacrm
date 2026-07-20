@@ -248,8 +248,12 @@ export interface WhatsAppProvider {
   ): Promise<{ externalMessageId: string }>;
 
   /** List the WhatsApp groups this channel's number belongs to. Optional —
-   *  only the non-official engines expose it. For group-monitoring opt-in. */
-  listGroups?(ch: ChannelCtx): Promise<{ jid: string; name: string }[]>;
+   *  only the non-official engines expose it. For group-monitoring opt-in.
+   *  `community` is the parent Community's name when the group is a sub-group
+   *  (lets the picker show/search by community). */
+  listGroups?(
+    ch: ChannelCtx,
+  ): Promise<{ jid: string; name: string; community?: string }[]>;
 
   /**
    * Meta: HMAC over the raw body via the global app secret. Others: match
