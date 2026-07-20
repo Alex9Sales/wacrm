@@ -28,6 +28,8 @@ const PUBLIC_API_PREFIXES = [
   '/api/v1', // public API — auths per-request via API key (requireApiKey),
   //            not the session cookie, so the middleware must let it through
   //            and let each route enforce its own key + scope.
+  '/api/internal', // server-to-server (voice bridge) — auths per-request via a
+  //            bearer service token, not the session cookie.
 ]
 
 function isProtectedPath(pathname: string): boolean {
