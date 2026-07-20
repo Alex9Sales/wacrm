@@ -1278,6 +1278,31 @@ export const monitoredGroups = pgTable("monitored_groups", {
 		}).onDelete("cascade"),
 ]);
 
+// Voice agent config per channel (IA de voz). The account-wide ai_configs is
+// the TEXT agent; this is the opt-in-per-channel VOICE agent read by the media
+// bridge: whether the AI answers on this number, with which prompt/voice, and
+// when (always vs only on overflow).
+export const voiceAgents = pgTable("voice_agents", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	channelId: uuid("channel_id").notNull(),
+	enabled: boolean().default(false).notNull(),
+	mode: text().default('overflow').notNull(),
+	systemPrompt: text("system_prompt"),
+	voiceId: text("voice_id"),
+	greeting: text(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("voice_agents_channel_unique").using("btree", table.channelId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [channels.id],
+			name: "voice_agents_channel_id_fkey"
+		}).onDelete("cascade"),
+	check("voice_agents_mode_check", sql`mode = ANY (ARRAY['always'::text, 'overflow'::text])`),
+]);
+
 // Group participant name registry — maps a participant's wa_key (LID user-part
 // or phone digits) to the pushName we saw on their messages, so mentions inside
 // group messages ("@146089705500852") render as the name ("@Guilherme Andrade").

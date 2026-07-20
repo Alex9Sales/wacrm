@@ -1,12 +1,13 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Bot, Sparkles, Settings2 } from 'lucide-react';
+import { Bot, Sparkles, Settings2, Phone } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { AiPlayground } from '@/components/agents/ai-playground';
 import { AiConfig } from '@/components/settings/ai-config';
+import { VoiceAgentsTab } from '@/components/agents/voice-agents-tab';
 
-type Tab = 'playground' | 'setup';
+type Tab = 'playground' | 'setup' | 'voice';
 
 export default function AgentsPage() {
   const [tab, setTab] = useState<Tab>('playground');
@@ -57,6 +58,9 @@ export default function AgentsPage() {
             <TabsTrigger value="setup">
               <Settings2 className="mr-1.5 h-4 w-4" /> Configuração
             </TabsTrigger>
+            <TabsTrigger value="voice">
+              <Phone className="mr-1.5 h-4 w-4" /> Voz
+            </TabsTrigger>
           </TabsList>
 
           <TabsContent value="playground" className="mt-4">
@@ -65,6 +69,10 @@ export default function AgentsPage() {
 
           <TabsContent value="setup" className="mt-4">
             <AiConfig />
+          </TabsContent>
+
+          <TabsContent value="voice" className="mt-4">
+            <VoiceAgentsTab />
           </TabsContent>
         </Tabs>
       )}
