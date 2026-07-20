@@ -54,35 +54,59 @@ describe('wahaProvider.parseWebhook', () => {
     expect(messages).toHaveLength(0);
   });
 
-  it('ignores group chats (@g.us)', () => {
+  it('emits group chats (@g.us) with a group descriptor (Fase 1 etapa D)', () => {
+    // Groups are no longer dropped in parseWebhook — they're emitted with a
+    // `group` field; the PIPELINE (inbound.ts) then drops any group that isn't
+    // opt-in monitored. Here we only assert the parse surfaces the group.
     const { messages } = wahaProvider.parseWebhook({
       event: 'message',
-      payload: { id: 'a_b_H', from: '12345-67890@g.us', body: 'grupo' },
+      payload: {
+        id: 'a_b_H',
+        from: '120363400053019227@g.us',
+        body: 'grupo',
+        participant: '5567999998888@s.whatsapp.net',
+        _data: { pushName: 'Fulano' },
+      },
     });
-    expect(messages).toHaveLength(0);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].group).toBeDefined();
+    expect(messages[0].group?.jid).toBe('120363400053019227@g.us');
+    expect(messages[0].group?.authorName).toBe('Fulano');
+    expect(messages[0].group?.authorPhone).toBe('5567999998888');
+    expect(messages[0].contentText).toBe('grupo');
   });
 
-  it('ignores group ids delivered without a @g.us suffix (bare numeric)', () => {
+  it('emits group ids delivered without a @g.us suffix (bare numeric)', () => {
     // WAHA NOWEB sometimes sends a group message with the chat as a raw
-    // 18-digit id (prefixed 120363) and no suffix — must still be dropped.
+    // 18-digit id (prefixed 120363) and no suffix — still recognized as group.
     const bare = wahaProvider.parseWebhook({
       event: 'message',
       payload: { id: 'g_b_H', from: '120363400053019227', body: 'grupo raw' },
     });
-    expect(bare.messages).toHaveLength(0);
+    expect(bare.messages).toHaveLength(1);
+    expect(bare.messages[0].group?.jid).toBe('120363400053019227');
 
-    const suffixed = wahaProvider.parseWebhook({
-      event: 'message',
-      payload: { id: 'g_c_H', from: '120363400053019227@g.us', body: 'grupo' },
-    });
-    expect(suffixed.messages).toHaveLength(0);
-
-    // A normal E.164 phone (≤15 digits) must still pass through.
+    // A normal E.164 phone (≤15 digits) must still pass through as 1:1.
     const direct = wahaProvider.parseWebhook({
       event: 'message',
       payload: { id: 'd_e_H', from: '5567999998888@c.us', body: 'oi' },
     });
     expect(direct.messages).toHaveLength(1);
+    expect(direct.messages[0].group).toBeUndefined();
+  });
+
+  it('still drops newsletters and broadcast (not groups)', () => {
+    const news = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: { id: 'n_1_H', from: '120363111@newsletter', body: 'news' },
+    });
+    expect(news.messages).toHaveLength(0);
+
+    const bc = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: { id: 'b_1_H', from: '120363111@broadcast', body: 'bc' },
+    });
+    expect(bc.messages).toHaveLength(0);
   });
 
   it('processes fromMe on message.any but skips non-fromMe echoes', () => {

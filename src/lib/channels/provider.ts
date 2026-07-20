@@ -95,6 +95,20 @@ export interface NormalizedInbound {
   /** WhatsApp "view once" — set even when the provider delivers no media
    *  (WAHA flags it but withholds the bytes). */
   viewOnce?: boolean;
+  /**
+   * Set ONLY for a message from a WhatsApp GROUP. Its mere presence routes the
+   * message to the isolated group-ingestion path (opt-in filtered against
+   * monitored_groups) instead of the 1:1 contact/conversation pipeline — a
+   * group event must never touch the direct-message flow. `jid` is the group's
+   * jid (`…@g.us` or bare) used for the opt-in lookup; `authorName`/
+   * `authorPhone` identify the participant who sent it (best-effort).
+   */
+  group?: {
+    jid: string;
+    name?: string;
+    authorName?: string;
+    authorPhone?: string;
+  };
 }
 
 /** A delivery/read receipt normalized across providers. */

@@ -52,6 +52,7 @@ import type {
   WhatsAppProvider,
 } from '../provider';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
+import { isGroupJid } from '@/lib/whatsapp/group';
 
 // ------------------------------------------------------------
 // httpJson — fetch + JSON + timeout (ported from RecebIA)
@@ -263,18 +264,26 @@ interface WahaMessagePayload {
   media?: WahaMediaPayload;
   ack?: number;
   viewOnce?: boolean;
+  // Group messages carry the participant (author) jid outside the chat:
+  //   NOWEB/Baileys: top-level `participant` / `author`, or `key.participant`.
+  participant?: string;
+  author?: string;
   _data?: {
     // WAHA NOWEB flags view-once here: `_data.key.isViewOnce` (confirmed
     // against a real payload — the media itself is withheld).
-    key?: { remoteJidAlt?: string; isViewOnce?: boolean };
+    // In a group, the sender participant is `key.participant`.
+    key?: { remoteJidAlt?: string; isViewOnce?: boolean; participant?: string };
     // GOWS (whatsmeow) engine — waha-voip: raw Go Info struct. With native
     // @lid addressing the real phone lives in Info.SenderAlt (inbound) /
     // Info.RecipientAlt (fromMe echoes), both @s.whatsapp.net (confirmed
-    // against a real waha-voip payload).
+    // against a real waha-voip payload). In a GROUP, Info.Chat is the group
+    // jid and Info.Sender is the participant who sent the message.
     Info?: {
       Chat?: string;
+      Sender?: string;
       SenderAlt?: string;
       RecipientAlt?: string;
+      IsGroup?: boolean;
       PushName?: string;
     };
     pushName?: string;
@@ -523,6 +532,43 @@ function isNonDirectJid(jid: string): boolean {
   return /^\d{16,}$/.test(local);
 }
 
+/**
+ * Build the `group` descriptor for an inbound GROUP message. The chat jid is
+ * the group; the AUTHOR (participant) lives elsewhere depending on the engine:
+ *   - GOWS/whatsmeow (waha-voip): `_data.Info.Sender`
+ *   - NOWEB/Baileys: top-level `participant` / `author`, or `key.participant`
+ * Author phone/name are best-effort (used only to label the line — the group
+ * thread itself is keyed by the group jid, not the author).
+ */
+function buildGroupInfo(
+  p: WahaMessagePayload,
+  chatJid: string,
+): NonNullable<NormalizedInbound['group']> {
+  const info = p._data?.Info;
+  const authorJid = String(
+    info?.Sender ||
+      p.participant ||
+      p.author ||
+      p._data?.key?.participant ||
+      '',
+  );
+  const authorPhone = authorJid
+    ? normalizePhone(authorJid.split('@')[0].split(':')[0])
+    : '';
+  const authorName = String(
+    info?.PushName ||
+      p._data?.pushName ||
+      p.notifyName ||
+      p._data?.notifyName ||
+      '',
+  );
+  return {
+    jid: chatJid,
+    authorName: authorName || undefined,
+    authorPhone: authorPhone || undefined,
+  };
+}
+
 /** Map a media mimetype to a NormalizedInbound.contentType-ish kind. */
 function kindOfMime(mimetype: string): string {
   const mt = mimetype.toLowerCase();
@@ -762,8 +808,11 @@ export const wahaProvider: WhatsAppProvider = {
       // WEBJS used `to` for fromMe — keep it as a fallback.
       let chat = String(p.from || p.to || '');
       if (LID_RE.test(chat) && WA_NET_RE.test(alt)) chat = alt;
-      if (!chat || isNonDirectJid(chat) || LID_RE.test(chat)) {
-        // groups / status / @lid without an alt → drop.
+      // GROUP message → ingest as a group thread (the pipeline drops it unless
+      // the group is opt-in monitored). Newsletters / broadcast / status / a
+      // bare @lid without an alt stay dropped as before.
+      const group = isGroupJid(chat) ? buildGroupInfo(p, chat) : null;
+      if (!group && (!chat || isNonDirectJid(chat) || LID_RE.test(chat))) {
         return { messages, statuses };
       }
 
@@ -784,7 +833,12 @@ export const wahaProvider: WhatsAppProvider = {
       // GOWS alts carry the multi-device suffix ("556…5477:9@s.whatsapp.net");
       // strip it BEFORE normalizing or the digits gain a phantom tail and
       // spawn a duplicate contact + conversation.
-      const fromPhoneE164 = normalizePhone(chat.split('@')[0].split(':')[0]);
+      // For a group, `chat` is the group jid; attribute the message to the
+      // author's phone (best-effort) — the group thread itself is resolved by
+      // ev.group.jid in the pipeline, so this is only for completeness.
+      const fromPhoneE164 =
+        group?.authorPhone ||
+        normalizePhone(chat.split('@')[0].split(':')[0]);
       const pushName =
         p._data?.pushName ||
         p._data?.notifyName ||
@@ -845,6 +899,7 @@ export const wahaProvider: WhatsAppProvider = {
         contentText: text || null,
         media,
         viewOnce,
+        group: group ?? undefined,
       });
     }
 

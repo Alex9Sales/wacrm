@@ -20,7 +20,7 @@
 import { randomUUID } from 'crypto';
 import { and, count, eq, gte, inArray, isNull } from 'drizzle-orm';
 
-import { db, contacts, conversations, messages } from '@/db';
+import { db, contacts, conversations, messages, monitoredGroups } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { publishEvent } from '@/lib/events/publish';
@@ -36,6 +36,7 @@ import { maybeRecordCsat } from '@/lib/csat/csat';
 import { routeNewConversation, rerouteByKeyword } from '@/lib/sectors/routing';
 import { putObject, publicUrl } from '@/lib/storage/s3';
 import { CALL_PERM_PREFIX } from '@/lib/inbox/call-log';
+import { groupJidDigits, prefixGroupAuthor } from '@/lib/whatsapp/group';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
 
@@ -71,6 +72,14 @@ export async function dispatchInboundMessage(
   channel: ChannelCtx,
   ev: NormalizedInbound,
 ): Promise<DispatchInboundResult | null> {
+  // A GROUP message follows a deliberately NARROW path (opt-in filtered, no
+  // AI/flows/automations/routing) — its presence here routes it entirely away
+  // from the 1:1 pipeline below. This is the single branch point; nothing
+  // downstream ever sees ev.group.
+  if (ev.group) {
+    return ingestGroupMessage(channel, ev);
+  }
+
   const accountId = channel.accountId;
   // Sender-of-record for NOT NULL user_id FKs on inserts. Legacy webhook
   // used the config owner; channels carry no owner, so we attribute
@@ -479,6 +488,172 @@ export async function dispatchInboundMessage(
 }
 
 /**
+ * Ingest one message from a WhatsApp GROUP — the isolated path for Grupos
+ * Fase 1 (etapa D). Deliberately NARROW vs the 1:1 pipeline: it resolves a
+ * group "contact"/conversation and stores the message (author-prefixed) so the
+ * agent can read/summarize the group via the API, and NOTHING else — no AI
+ * auto-reply, no flows/automations, no sector routing, no CSAT, no out-of-hours
+ * (a monitored group is watched, never auto-answered — auto-posting to a group
+ * is a real ban risk, and the CRM is the "eyes+mouth", the agent is the brain).
+ *
+ * Opt-in: only groups the admin marked in `monitored_groups` are ingested;
+ * everything else is dropped exactly as before. Idempotent on
+ * externalMessageId (per channel).
+ */
+async function ingestGroupMessage(
+  channel: ChannelCtx,
+  ev: NormalizedInbound,
+): Promise<DispatchInboundResult | null> {
+  const group = ev.group;
+  if (!group) return null;
+  const accountId = channel.accountId;
+
+  // 1) OPT-IN gate. Match by jid digits so a bare-vs-@g.us mismatch between the
+  //    picker (GET /groups) and inbound doesn't miss a monitored group.
+  const wantedDigits = groupJidDigits(group.jid);
+  if (!wantedDigits) return null;
+  let monitoredRow: { groupJid: string; groupName: string | null } | undefined;
+  try {
+    const rows = await db
+      .select({
+        groupJid: monitoredGroups.groupJid,
+        groupName: monitoredGroups.groupName,
+      })
+      .from(monitoredGroups)
+      .where(eq(monitoredGroups.channelId, channel.id));
+    monitoredRow = rows.find(
+      (r) => groupJidDigits(r.groupJid) === wantedDigits,
+    );
+  } catch (err) {
+    console.error('[inbound] group monitored lookup failed:', err);
+    return null;
+  }
+  if (!monitoredRow) return null; // not opt-in → drop (unchanged v1 behaviour)
+
+  // 2) Dedup by externalMessageId on THIS channel (same rule as the 1:1 path).
+  if (ev.externalMessageId) {
+    const dupe = firstOrNull(
+      await db
+        .select({ conversationId: messages.conversationId })
+        .from(messages)
+        .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+        .where(
+          and(
+            eq(messages.messageId, ev.externalMessageId),
+            eq(conversations.accountId, accountId),
+            eq(conversations.channelId, channel.id),
+          ),
+        )
+        .limit(1),
+    );
+    if (dupe) {
+      return {
+        conversationId: dupe.conversationId,
+        contactId: '',
+        isFirstInbound: false,
+      };
+    }
+  }
+
+  // 3) Resolve/create the group "contact" (phone = jid digits, is_group=true).
+  //    The 18-digit key can never collide with an E.164 phone (max 15 digits).
+  const groupName =
+    group.name ||
+    monitoredRow.groupName ||
+    `Grupo ${wantedDigits.slice(-6)}`;
+  const contactOutcome = await findOrCreateContact(
+    accountId,
+    wantedDigits,
+    groupName,
+    { isGroup: true },
+  );
+  if (!contactOutcome) return null;
+  const contactId = contactOutcome.contact.id;
+
+  // 4) Resolve/create the single group conversation for this channel.
+  const convResult = await findOrCreateConversation(
+    accountId,
+    contactOutcome.contact.userId,
+    contactId,
+    channel.id,
+  );
+  if (!convResult) return null;
+  const conversation = convResult.conversation;
+  if (convResult.created) {
+    await dispatchWebhookEvent(accountId, 'conversation.created', {
+      conversation_id: conversation.id,
+      contact_id: contactId,
+    });
+    await publishEvent(accountId, {
+      type: 'conversation.created',
+      conversationId: conversation.id,
+    });
+  }
+
+  // 5) Media (reuse the same MinIO upload path).
+  let mediaUrl: string | null = null;
+  if (ev.media && (ev.media.base64 || ev.media.url)) {
+    mediaUrl = await storeInboundMedia(ev.media);
+  }
+
+  const contentType = ALLOWED_CONTENT_TYPES.has(ev.contentType)
+    ? ev.contentType
+    : 'text';
+  const isFromMe = ev.fromMe === true;
+  const baseText =
+    ev.contentText ?? (ev.media ? `[${ev.media.kind}]` : `[${ev.contentType}]`);
+  // Prefix the author so the single group thread stays legible. A fromMe echo
+  // is OUR own post in the group → agent bubble, no prefix.
+  const contentText = isFromMe
+    ? baseText
+    : prefixGroupAuthor(group.authorName ?? '', baseText);
+
+  // 6) Insert. No transcription/AI/flows — a group is watched, not answered.
+  try {
+    await db.insert(messages).values({
+      conversationId: conversation.id,
+      senderType: isFromMe ? 'agent' : 'customer',
+      contentType,
+      contentText,
+      mediaUrl,
+      viewOnce: ev.viewOnce ?? ev.media?.viewOnce ?? false,
+      messageId: ev.externalMessageId || null,
+      status: isFromMe ? 'sent' : 'delivered',
+      createdAt: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.error('[inbound] Error inserting group message:', err);
+    return null;
+  }
+
+  // 7) Bump last message. Publish with fromMe=true so the inbox list refetches
+  //    but the NotificationListener never RINGS for ordinary group chatter.
+  try {
+    await db
+      .update(conversations)
+      .set({
+        lastMessageText: contentText,
+        lastMessageAt: new Date().toISOString(),
+        unreadCount: isFromMe
+          ? conversation.unreadCount || 0
+          : (conversation.unreadCount || 0) + 1,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(conversations.id, conversation.id));
+  } catch (err) {
+    console.error('[inbound] Error updating group conversation:', err);
+  }
+
+  await publishEvent(accountId, {
+    type: 'message.received',
+    conversationId: conversation.id,
+    fromMe: true,
+  });
+
+  return { conversationId: conversation.id, contactId, isFirstInbound: false };
+}
+
+/**
  * If business hours are enabled and `now` is outside them, send the account's
  * out-of-hours message (as a bot reply) — deduped so it fires at most once per
  * closed period per conversation (skipped when any agent/bot message already
@@ -660,6 +835,7 @@ async function findOrCreateContact(
   accountId: string,
   phone: string,
   name: string,
+  opts?: { isGroup?: boolean },
 ): Promise<ContactOutcome | null> {
   const existing = await findExistingContact(accountId, phone);
   if (existing) {
@@ -702,6 +878,7 @@ async function findOrCreateContact(
           userId: ownerUserId,
           phone,
           name: name || phone,
+          isGroup: opts?.isGroup ?? false,
         })
         .returning(),
     );
