@@ -108,6 +108,12 @@ export interface NormalizedInbound {
     name?: string;
     authorName?: string;
     authorPhone?: string;
+    /** The author's LID user-part (when the group uses @lid addressing). Used
+     *  to register their pushName so later @mentions resolve to the name. */
+    authorLid?: string;
+    /** Mentioned participants' user-parts (LID user or phone digits) — the
+     *  pipeline rewrites "@<user>" in the body to the known display name. */
+    mentions?: string[];
   };
 }
 

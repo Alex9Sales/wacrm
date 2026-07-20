@@ -20,7 +20,14 @@
 import { randomUUID } from 'crypto';
 import { and, count, eq, gte, inArray, isNull } from 'drizzle-orm';
 
-import { db, contacts, conversations, messages, monitoredGroups } from '@/db';
+import {
+  db,
+  contacts,
+  conversations,
+  messages,
+  monitoredGroups,
+  groupParticipantNames,
+} from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
 import { publishEvent } from '@/lib/events/publish';
@@ -36,7 +43,11 @@ import { maybeRecordCsat } from '@/lib/csat/csat';
 import { routeNewConversation, rerouteByKeyword } from '@/lib/sectors/routing';
 import { putObject, publicUrl } from '@/lib/storage/s3';
 import { CALL_PERM_PREFIX } from '@/lib/inbox/call-log';
-import { groupJidDigits, prefixGroupAuthor } from '@/lib/whatsapp/group';
+import {
+  groupJidDigits,
+  prefixGroupAuthor,
+  resolveGroupMentions,
+} from '@/lib/whatsapp/group';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
 
@@ -600,8 +611,25 @@ async function ingestGroupMessage(
     ? ev.contentType
     : 'text';
   const isFromMe = ev.fromMe === true;
-  const baseText =
+  let baseText =
     ev.contentText ?? (ev.media ? `[${ev.media.kind}]` : `[${ev.contentType}]`);
+
+  // Register the author's pushName against their LID + phone so later @mentions
+  // of them resolve to the name. Best-effort — never blocks the message.
+  if (group.authorName) {
+    await registerParticipantName(
+      accountId,
+      [group.authorLid, group.authorPhone],
+      group.authorName,
+    );
+  }
+  // Rewrite "@<number>" mentions in the body to the known display name, the way
+  // WhatsApp shows them. Unknown participants stay as the number.
+  if (group.mentions?.length) {
+    const nameByUser = await lookupParticipantNames(accountId, group.mentions);
+    baseText = resolveGroupMentions(baseText, group.mentions, nameByUser);
+  }
+
   // Prefix the author so the single group thread stays legible. A fromMe echo
   // is OUR own post in the group → agent bubble, no prefix.
   const contentText = isFromMe
@@ -651,6 +679,64 @@ async function ingestGroupMessage(
   });
 
   return { conversationId: conversation.id, contactId, isFirstInbound: false };
+}
+
+/**
+ * Record a group participant's display name against each of their wa_keys (LID
+ * user-part + phone digits) so later @mentions of them resolve to the name.
+ * Best-effort: any failure is swallowed — it must never block a group message.
+ */
+async function registerParticipantName(
+  accountId: string,
+  keys: (string | undefined)[],
+  name: string,
+): Promise<void> {
+  const clean = name.trim();
+  if (!clean) return;
+  const now = new Date().toISOString();
+  for (const key of keys) {
+    if (!key) continue;
+    try {
+      await db
+        .insert(groupParticipantNames)
+        .values({ accountId, waKey: key, name: clean, updatedAt: now })
+        .onConflictDoUpdate({
+          target: [groupParticipantNames.accountId, groupParticipantNames.waKey],
+          set: { name: clean, updatedAt: now },
+        });
+    } catch (err) {
+      console.error('[inbound] participant name upsert failed:', err);
+    }
+  }
+}
+
+/** Resolve a set of mention user-parts to display names (from the registry). */
+async function lookupParticipantNames(
+  accountId: string,
+  users: string[],
+): Promise<Record<string, string>> {
+  const uniq = Array.from(new Set(users.filter(Boolean)));
+  if (uniq.length === 0) return {};
+  try {
+    const rows = await db
+      .select({
+        waKey: groupParticipantNames.waKey,
+        name: groupParticipantNames.name,
+      })
+      .from(groupParticipantNames)
+      .where(
+        and(
+          eq(groupParticipantNames.accountId, accountId),
+          inArray(groupParticipantNames.waKey, uniq),
+        ),
+      );
+    const map: Record<string, string> = {};
+    for (const r of rows) map[r.waKey] = r.name;
+    return map;
+  } catch (err) {
+    console.error('[inbound] participant name lookup failed:', err);
+    return {};
+  }
 }
 
 /**

@@ -52,3 +52,42 @@ export function prefixGroupAuthor(authorName: string, text: string): string {
   if (!a) return text;
   return `${a}: ${text}`;
 }
+
+/**
+ * The "user" part of each mentioned jid — the LID user-part or the phone
+ * digits (WhatsApp puts one of these, not a name, into the message text as
+ * "@<user>"). Strips the `@suffix` and any `:device` tag; drops non-digits.
+ */
+export function mentionUsers(mentionedJids: unknown): string[] {
+  if (!Array.isArray(mentionedJids)) return [];
+  const out: string[] = [];
+  for (const j of mentionedJids) {
+    if (typeof j !== 'string') continue;
+    const user = j.split('@')[0].split(':')[0].replace(/\D/g, '');
+    if (user) out.push(user);
+  }
+  return out;
+}
+
+/**
+ * Rewrite "@<user>" mention tokens in a group message to "@<name>", the way
+ * WhatsApp shows them. `users` is the set of mentioned user-parts (from
+ * mentionUsers); `nameByUser` maps a user-part to a known display name. An
+ * unknown user is left as the raw number — exactly like WhatsApp when it
+ * doesn't know the contact.
+ */
+export function resolveGroupMentions(
+  text: string,
+  users: string[],
+  nameByUser: Record<string, string>,
+): string {
+  if (!text || !users.length) return text;
+  let out = text;
+  // Longest user-part first so "@12345" never rewrites inside "@123456789".
+  for (const user of [...users].sort((a, b) => b.length - a.length)) {
+    const name = nameByUser[user];
+    if (!name) continue;
+    out = out.split(`@${user}`).join(`@${name}`);
+  }
+  return out;
+}

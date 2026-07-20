@@ -52,7 +52,7 @@ import type {
   WhatsAppProvider,
 } from '../provider';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
-import { isGroupJid } from '@/lib/whatsapp/group';
+import { isGroupJid, mentionUsers } from '@/lib/whatsapp/group';
 
 // ------------------------------------------------------------
 // httpJson — fetch + JSON + timeout (ported from RecebIA)
@@ -556,15 +556,23 @@ function buildGroupInfo(
   chatJid: string,
 ): NonNullable<NormalizedInbound['group']> {
   const info = p._data?.Info;
-  const authorJid = String(
+  const senderJid = String(
     info?.Sender ||
       p.participant ||
       p.author ||
       p._data?.key?.participant ||
       '',
   );
-  const authorPhone = authorJid
-    ? normalizePhone(authorJid.split('@')[0].split(':')[0])
+  const isLid = LID_RE.test(senderJid);
+  // In a @lid group the sender jid is the LID (not the phone) — the real phone
+  // rides in Info.SenderAlt (@s.whatsapp.net). Capture both: the LID user-part
+  // (mention token) and the phone (contact key), both mapped to the pushName.
+  const authorLid = isLid
+    ? senderJid.split('@')[0].split(':')[0].replace(/\D/g, '')
+    : '';
+  const phoneJid = String(info?.SenderAlt || (isLid ? '' : senderJid));
+  const authorPhone = phoneJid
+    ? normalizePhone(phoneJid.split('@')[0].split(':')[0])
     : '';
   const authorName = String(
     info?.PushName ||
@@ -573,11 +581,37 @@ function buildGroupInfo(
       p._data?.notifyName ||
       '',
   );
+  const mentions = mentionUsers(extractMentionedJids(p));
   return {
     jid: chatJid,
     authorName: authorName || undefined,
     authorPhone: authorPhone || undefined,
+    authorLid: authorLid || undefined,
+    mentions: mentions.length ? mentions : undefined,
   };
+}
+
+/** Pull the mentioned-jid list out of a message node — WhatsApp puts it in
+ *  `<type>.contextInfo.mentionedJID` (gows) / `mentionedJid` (NOWEB). Scans the
+ *  message node's children so it works regardless of message type. */
+function extractMentionedJids(p: WahaMessagePayload): string[] {
+  const node = (p._data?.message ?? p._data?.Message) as
+    | Record<string, unknown>
+    | undefined;
+  if (!node) return [];
+  for (const v of Object.values(node)) {
+    if (!v || typeof v !== 'object') continue;
+    const ci = (v as Record<string, unknown>).contextInfo ??
+      (v as Record<string, unknown>).ContextInfo;
+    if (ci && typeof ci === 'object') {
+      const list =
+        (ci as Record<string, unknown>).mentionedJID ??
+        (ci as Record<string, unknown>).mentionedJid ??
+        (ci as Record<string, unknown>).MentionedJID;
+      if (Array.isArray(list)) return list.map(String);
+    }
+  }
+  return [];
 }
 
 /** Map a media mimetype to a NormalizedInbound.contentType-ish kind. */

@@ -1,4 +1,4 @@
-import { pgTable, uniqueIndex, check, uuid, text, timestamp, index, foreignKey, unique, jsonb, integer, boolean, numeric, date, vector, customType } from "drizzle-orm/pg-core"
+import { pgTable, uniqueIndex, check, uuid, text, timestamp, index, foreignKey, unique, primaryKey, jsonb, integer, boolean, numeric, date, vector, customType } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 // tsvector is not a built-in drizzle column type; the column is a
@@ -1276,6 +1276,19 @@ export const monitoredGroups = pgTable("monitored_groups", {
 			foreignColumns: [channels.id],
 			name: "monitored_groups_channel_id_fkey"
 		}).onDelete("cascade"),
+]);
+
+// Group participant name registry — maps a participant's wa_key (LID user-part
+// or phone digits) to the pushName we saw on their messages, so mentions inside
+// group messages ("@146089705500852") render as the name ("@Guilherme Andrade").
+// Best-effort cache accumulated at ingestion; keyed per account.
+export const groupParticipantNames = pgTable("group_participant_names", {
+	accountId: uuid("account_id").notNull(),
+	waKey: text("wa_key").notNull(),
+	name: text().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	primaryKey({ columns: [table.accountId, table.waKey], name: "group_participant_names_pkey" }),
 ]);
 
 // Conversation participants — a user granted access to a specific conversation

@@ -1,5 +1,11 @@
 import { describe, it, expect } from 'vitest';
-import { isGroupJid, groupJidDigits, prefixGroupAuthor } from './group';
+import {
+  isGroupJid,
+  groupJidDigits,
+  prefixGroupAuthor,
+  mentionUsers,
+  resolveGroupMentions,
+} from './group';
 
 describe('isGroupJid', () => {
   it('matches the @g.us suffixed form', () => {
@@ -59,5 +65,58 @@ describe('prefixGroupAuthor', () => {
 
   it('trims the author', () => {
     expect(prefixGroupAuthor('  Ana Paula  ', 'oi')).toBe('Ana Paula: oi');
+  });
+});
+
+describe('mentionUsers', () => {
+  it('extracts the user-part of LID and phone jids', () => {
+    expect(
+      mentionUsers(['146089705500852@lid', '5513992126485@s.whatsapp.net']),
+    ).toEqual(['146089705500852', '5513992126485']);
+  });
+
+  it('strips the :device tag', () => {
+    expect(mentionUsers(['146089705500852:4@lid'])).toEqual(['146089705500852']);
+  });
+
+  it('returns [] for non-arrays / garbage', () => {
+    expect(mentionUsers(undefined)).toEqual([]);
+    expect(mentionUsers(null)).toEqual([]);
+    expect(mentionUsers([42, '', '@lid'])).toEqual([]);
+  });
+});
+
+describe('resolveGroupMentions', () => {
+  it('rewrites a known mention to its name', () => {
+    expect(
+      resolveGroupMentions(
+        '@146089705500852 obrigado!',
+        ['146089705500852'],
+        { '146089705500852': 'Guilherme Andrade' },
+      ),
+    ).toBe('@Guilherme Andrade obrigado!');
+  });
+
+  it('leaves an unknown mention as the raw number', () => {
+    expect(
+      resolveGroupMentions('@999 e @146089705500852', ['999', '146089705500852'], {
+        '146089705500852': 'Guilherme Andrade',
+      }),
+    ).toBe('@999 e @Guilherme Andrade');
+  });
+
+  it('does not rewrite a shorter user inside a longer one', () => {
+    // "@12345" must not corrupt "@123456789" — longest-first guards it.
+    expect(
+      resolveGroupMentions('@123456789', ['12345', '123456789'], {
+        '12345': 'Curto',
+        '123456789': 'Longo',
+      }),
+    ).toBe('@Longo');
+  });
+
+  it('no-ops with no mentions or empty text', () => {
+    expect(resolveGroupMentions('oi', [], {})).toBe('oi');
+    expect(resolveGroupMentions('', ['1'], { '1': 'x' })).toBe('');
   });
 });
