@@ -33,6 +33,7 @@ export async function POST(request: Request) {
     callerName?: unknown
     role?: unknown
     text?: unknown
+    ts?: unknown
   }
   const session = typeof body.session === 'string' ? body.session : ''
   const channelId = typeof body.channelId === 'string' ? body.channelId : ''
@@ -65,6 +66,7 @@ export async function POST(request: Request) {
     callerName: typeof body.callerName === 'string' ? body.callerName : undefined,
     role: body.role === 'ai' || body.role === 'customer' ? body.role : undefined,
     text: typeof body.text === 'string' ? body.text : undefined,
+    ts: typeof body.ts === 'number' ? body.ts : undefined,
   })
   return NextResponse.json({ ok: true })
 }

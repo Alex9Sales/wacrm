@@ -15,6 +15,7 @@ import { useServerEvents, type ServerEvent } from '@/hooks/use-server-events';
 interface Line {
   role: 'ai' | 'customer';
   text: string;
+  ts: number;
 }
 interface LiveCall {
   callId: string;
@@ -38,6 +39,7 @@ export function VoiceMonitor() {
       callerName?: string;
       role?: 'ai' | 'customer';
       text?: string;
+      ts?: number;
     };
     setCalls((prev) => {
       const next = { ...prev };
@@ -55,10 +57,16 @@ export function VoiceMonitor() {
           ended: false,
         };
       } else if (ev.phase === 'line' && ev.role && ev.text) {
+        // Sort by turn-start ts so a late-arriving customer line lands in
+        // order (the customer's STT completes after the AI already replied).
+        const lines = [
+          ...cur.lines,
+          { role: ev.role, text: ev.text, ts: ev.ts ?? Date.now() },
+        ].sort((a, b) => a.ts - b.ts);
         next[ev.callId] = {
           ...cur,
           channelName: ev.channelName ?? cur.channelName,
-          lines: [...cur.lines, { role: ev.role, text: ev.text }],
+          lines,
         };
       } else if (ev.phase === 'end') {
         next[ev.callId] = { ...cur, ended: true };

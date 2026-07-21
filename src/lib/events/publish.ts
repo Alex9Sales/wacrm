@@ -93,6 +93,9 @@ export type RealtimeEvent =
       /** For phase 'line': who spoke + what. */
       role?: "ai" | "customer";
       text?: string;
+      /** When the turn STARTED (ms) — the monitor sorts by it so a
+       *  late-arriving customer transcription lands in the right order. */
+      ts?: number;
     }
   | { type: "notification" };
 
