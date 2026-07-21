@@ -15,6 +15,7 @@ import {
 } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
+import { VoiceMonitor } from "@/components/supervision/voice-monitor";
 import { cn } from "@/lib/utils";
 import {
   Avatar,
@@ -123,6 +124,8 @@ export default function SupervisaoPage() {
           Atualizar
         </button>
       </div>
+
+      <VoiceMonitor />
 
       {loading ? (
         <div className="flex justify-center py-16">

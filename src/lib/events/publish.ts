@@ -80,6 +80,20 @@ export type RealtimeEvent =
   // The customer answered our OUTBOUND call — carries their SDP answer for
   // the browser to setRemoteDescription and connect.
   | { type: "call_answer"; callId: string; sdp: string }
+  // Live monitor of an AI voice call (Fatia 5). The bridge streams each spoken
+  // line as it happens so an operator can watch the call unfold in real time.
+  // phase 'start' opens the panel, 'line' appends a turn, 'end' closes it.
+  | {
+      type: "voice_live";
+      callId: string;
+      phase: "start" | "line" | "end";
+      channelName?: string;
+      from?: string;
+      callerName?: string;
+      /** For phase 'line': who spoke + what. */
+      role?: "ai" | "customer";
+      text?: string;
+    }
   | { type: "notification" };
 
 /** Channel name for an account's ephemeral event stream. */
