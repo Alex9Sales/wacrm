@@ -90,10 +90,17 @@ export async function POST(request: Request) {
     // Find-or-create the conversation for this phone, then send. Both
     // steps share `SendMessageError`, so one catch maps the whole
     // pipeline to the envelope.
+    // `channel_id` (optional) pins the send to a specific channel — e.g. reply
+    // on the customer's own WhatsApp channel (waha) instead of the account
+    // default, which could be the official Meta API. Without it the default
+    // channel is used (loadDefaultChannel).
+    const channelId =
+      typeof body.channel_id === 'string' ? body.channel_id : null;
     const resolved = await resolveConversationByPhone(
       ctx.accountId,
       to,
-      typeof body.name === 'string' ? body.name : null
+      typeof body.name === 'string' ? body.name : null,
+      channelId
     );
 
     const result = await sendMessageToConversation(

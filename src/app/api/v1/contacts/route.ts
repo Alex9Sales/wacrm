@@ -11,6 +11,7 @@
 import { and, desc, eq, ilike, lt, or } from 'drizzle-orm';
 
 import { db, contactTags, contacts } from '@/db';
+import { normalizePhone } from '@/lib/whatsapp/phone-utils';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { parseListParams, buildPage } from '@/lib/api/v1/pagination';
@@ -37,8 +38,14 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const search = sanitizeSearch(url.searchParams.get('search') ?? '');
     const tag = url.searchParams.get('tag');
+    const phone = url.searchParams.get('phone');
 
     const conditions = [eq(contacts.accountId, ctx.accountId)];
+
+    // ?phone=<numero> → busca EXATA pelo número (dígitos normalizados).
+    if (phone) {
+      conditions.push(eq(contacts.phoneNormalized, normalizePhone(phone)));
+    }
 
     if (search) {
       conditions.push(

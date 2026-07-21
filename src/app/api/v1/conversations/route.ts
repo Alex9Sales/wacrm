@@ -7,9 +7,10 @@
 // `contact:contacts(*, contact_tags(tags(*)))` embed).
 // ============================================================
 
-import { and, desc, eq, lt, or } from 'drizzle-orm';
+import { and, desc, eq, gte, lt, or } from 'drizzle-orm';
 
 import { db, contacts, conversations } from '@/db';
+import { normalizePhone } from '@/lib/whatsapp/phone-utils';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { parseListParams, buildPage } from '@/lib/api/v1/pagination';
@@ -24,10 +25,22 @@ export async function GET(request: Request) {
     const url = new URL(request.url);
     const status = url.searchParams.get('status');
     const contactId = url.searchParams.get('contact_id');
+    const channelId = url.searchParams.get('channel_id');
+    const contactPhone = url.searchParams.get('contact_phone');
+    const createdAfter = url.searchParams.get('created_after');
 
     const conditions = [eq(conversations.accountId, ctx.accountId)];
     if (status) conditions.push(eq(conversations.status, status));
     if (contactId) conditions.push(eq(conversations.contactId, contactId));
+    if (channelId) conditions.push(eq(conversations.channelId, channelId));
+    if (contactPhone) {
+      conditions.push(
+        eq(contacts.phoneNormalized, normalizePhone(contactPhone)),
+      );
+    }
+    if (createdAfter) {
+      conditions.push(gte(conversations.createdAt, createdAfter));
+    }
 
     if (cursor) {
       conditions.push(
@@ -47,6 +60,7 @@ export async function GET(request: Request) {
         .select({
           id: conversations.id,
           contact_id: conversations.contactId,
+          channel_id: conversations.channelId,
           status: conversations.status,
           assigned_agent_id: conversations.assignedAgentId,
           last_message_text: conversations.lastMessageText,

@@ -27,14 +27,63 @@
 //               "scheduled_at": string | null } }
 // ============================================================
 
+import { and, desc, eq, lt, or } from 'drizzle-orm';
+
+import { db, broadcasts } from '@/db';
 import { requireApiKey } from '@/lib/auth/api-context';
-import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { ok, okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { parseListParams, buildPage } from '@/lib/api/v1/pagination';
 import { resolveAuditUserId, ContactError } from '@/lib/api/v1/contacts';
 import {
   createBroadcast,
   BroadcastError,
 } from '@/lib/whatsapp/broadcast-core';
 import { enqueueBroadcastDispatch } from '@/lib/queue/queues';
+
+// GET /api/v1/broadcasts — list broadcasts (newest first), keyset-paginated.
+export async function GET(request: Request) {
+  try {
+    const ctx = await requireApiKey(request, 'broadcasts:send');
+    const { limit, cursor } = parseListParams(request);
+    const conditions = [eq(broadcasts.accountId, ctx.accountId)];
+    if (cursor) {
+      conditions.push(
+        or(
+          lt(broadcasts.createdAt, cursor.createdAt),
+          and(
+            eq(broadcasts.createdAt, cursor.createdAt),
+            lt(broadcasts.id, cursor.id),
+          ),
+        )!,
+      );
+    }
+    const rows = await db
+      .select({
+        id: broadcasts.id,
+        name: broadcasts.name,
+        status: broadcasts.status,
+        channel_id: broadcasts.channelId,
+        total_recipients: broadcasts.totalRecipients,
+        sent_count: broadcasts.sentCount,
+        delivered_count: broadcasts.deliveredCount,
+        read_count: broadcasts.readCount,
+        replied_count: broadcasts.repliedCount,
+        failed_count: broadcasts.failedCount,
+        created_at: broadcasts.createdAt,
+        updated_at: broadcasts.updatedAt,
+      })
+      .from(broadcasts)
+      .where(and(...conditions))
+      .orderBy(desc(broadcasts.createdAt), desc(broadcasts.id))
+      .limit(limit + 1);
+    // created_at is defaulted (never null in practice) — coalesce for the keyset type.
+    const norm = rows.map((r) => ({ ...r, created_at: r.created_at ?? '' }));
+    const page = buildPage(norm, limit);
+    return okList(page.items, page.nextCursor);
+  } catch (err) {
+    return toApiErrorResponse(err);
+  }
+}
 
 export async function POST(request: Request) {
   try {

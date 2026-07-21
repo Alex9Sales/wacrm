@@ -1371,6 +1371,7 @@ export function MessageThread({
       {forwarding && (
         <ForwardDialog
           message={forwarding}
+          sourceChannelId={conversation.channel?.id}
           onClose={() => setForwarding(null)}
         />
       )}

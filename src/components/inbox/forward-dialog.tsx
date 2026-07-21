@@ -37,9 +37,14 @@ function messagePreview(m: Message): string {
 
 export function ForwardDialog({
   message,
+  sourceChannelId,
   onClose,
 }: {
   message: Message;
+  /** The channel of the conversation the message is being forwarded FROM — used
+   *  so a "new number" conversation is created on the SAME channel (e.g. waha),
+   *  not the account default (which could be the official Meta API). */
+  sourceChannelId?: string;
   onClose: () => void;
 }) {
   const [conversations, setConversations] = useState<Conversation[]>([]);
@@ -92,7 +97,7 @@ export function ForwardDialog({
       const res = await fetch("/api/conversations/resolve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone: queryDigits }),
+        body: JSON.stringify({ phone: queryDigits, channelId: sourceChannelId }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         conversationId?: string;

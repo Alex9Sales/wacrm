@@ -6,7 +6,7 @@
 // any message is returned — a foreign or unknown id → 404.
 // ============================================================
 
-import { and, desc, eq, lt, or } from 'drizzle-orm';
+import { and, desc, eq, inArray, lt, or } from 'drizzle-orm';
 
 import { db, conversations, messages } from '@/db';
 import { firstOrNull } from '@/db/helpers';
@@ -54,6 +54,13 @@ export async function GET(
       eq(messages.conversationId, id),
       eq(messages.isInternal, false),
     ];
+    // ?direction=inbound → só o cliente; outbound → atendente/IA (agent+bot).
+    const direction = new URL(request.url).searchParams.get('direction');
+    if (direction === 'inbound') {
+      conditions.push(eq(messages.senderType, 'customer'));
+    } else if (direction === 'outbound') {
+      conditions.push(inArray(messages.senderType, ['agent', 'bot']));
+    }
     if (cursor) {
       conditions.push(
         or(
