@@ -13,7 +13,7 @@
 import { NextResponse } from 'next/server'
 import { eq, sql } from 'drizzle-orm'
 
-import { db, channels } from '@/db'
+import { db, channels, callLogs } from '@/db'
 import { publishEvent } from '@/lib/events/publish'
 
 export const dynamic = 'force-dynamic'
@@ -56,6 +56,21 @@ export async function POST(request: Request) {
     )
     .limit(1)
   if (!ch) return NextResponse.json({ ok: false, reason: 'channel not found' })
+
+  // When the AI assumes the call, tell the CRM so the ringing modal on every
+  // agent's browser stands down (call_claimed) and the log row stops reading
+  // as a missed/ringing call.
+  if (phase === 'start') {
+    await publishEvent(ch.accountId, { type: 'call_claimed', callId, by: 'IA' })
+    try {
+      await db
+        .update(callLogs)
+        .set({ status: 'answered', updatedAt: new Date().toISOString() })
+        .where(eq(callLogs.externalCallId, callId))
+    } catch (err) {
+      console.error('[voice-live] call_logs update failed:', err)
+    }
+  }
 
   await publishEvent(ch.accountId, {
     type: 'voice_live',
