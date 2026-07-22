@@ -93,6 +93,12 @@ async function httpJson(
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Cache of resolved @lid → phone (per session). The LID↔PN map is stable, and
+ *  a bare-@lid inbound can repeat in a burst, so memoize with a TTL (null =
+ *  "known-unresolvable", also cached, so we don't re-hit WAHA every message). */
+const LID_PHONE_TTL_MS = 60 * 60_000;
+const lidPhoneCache = new Map<string, { phone: string | null; exp: number }>();
+
 // ------------------------------------------------------------
 // ChannelCtx → WAHA routing extraction
 // ------------------------------------------------------------
@@ -1020,6 +1026,42 @@ export const wahaProvider: WhatsAppProvider = {
     return parseGroupParticipants(group.Participants ?? group.participants);
   },
 
+  /** Resolve a @lid privacy id to the contact's real phone. gows/WAHA keeps a
+   *  LID↔PN map: GET /api/{session}/lids/{lid} → { lid, pn:"55…@c.us" }. Used for
+   *  a 1:1 inbound that arrived addressed ONLY by @lid (no phone in the payload).
+   *  Cached per session (TTL); null when the lid is unknown. */
+  async resolveLidToPhone(
+    ch: ChannelCtx,
+    lid: string,
+  ): Promise<string | null> {
+    const user = lid.split('@')[0].split(':')[0].replace(/\D/g, '');
+    if (!user) return null;
+    const cacheKey = `${sessionOf(ch)}:${user}`;
+    const now = Date.now();
+    const hit = lidPhoneCache.get(cacheKey);
+    if (hit && hit.exp > now) return hit.phone;
+    let phone: string | null = null;
+    try {
+      const { ok, body } = await httpJson(
+        `${baseUrlOf(ch)}/api/${sessionOf(ch)}/lids/${encodeURIComponent(user)}`,
+        { method: 'GET', headers: headersOf(ch) },
+      );
+      const pn = (body as { pn?: unknown })?.pn;
+      if (ok && typeof pn === 'string' && !LID_RE.test(pn)) {
+        const digits = normalizePhone(pn.split('@')[0].split(':')[0]);
+        if (digits) phone = digits;
+      }
+    } catch (err) {
+      console.error(
+        `[waha] resolveLidToPhone failed for ${user}:`,
+        err instanceof Error ? err.message : err,
+      );
+      return null; // transient — don't cache a failure
+    }
+    lidPhoneCache.set(cacheKey, { phone, exp: now + LID_PHONE_TTL_MS });
+    return phone;
+  },
+
   async sendLocation(
     ch: ChannelCtx,
     toE164: string,
@@ -1113,23 +1155,16 @@ export const wahaProvider: WhatsAppProvider = {
       // the group is opt-in monitored). Newsletters / broadcast / status / a
       // bare @lid without an alt stay dropped as before.
       const group = isGroupJid(chat) ? buildGroupInfo(p, chat) : null;
-      if (!group && (!chat || isNonDirectJid(chat) || LID_RE.test(chat))) {
-        // Diagnostic for the ONE drop that silently loses a real 1:1 reply: an
-        // inbound addressed by @lid with no @s.whatsapp.net alt to resolve the
-        // phone. Newsletters/broadcast/status are expected drops, so scope the
-        // log to the @lid / empty-chat case. Dumps the addressing fields (not
-        // the message body) so we can see where the phone actually rides.
-        if ((!chat || LID_RE.test(chat)) && !isNonDirectJid(chat)) {
-          console.log(
-            '[waha parse] DROP-LID',
-            'from=', String(p.from ?? ''),
-            'to=', String(p.to ?? ''),
-            'alt=', alt,
-            'fromMe=', String(fromMe),
-            'info=', JSON.stringify(info ?? {}).slice(0, 700),
-            'key=', JSON.stringify(p._data?.key ?? {}).slice(0, 300),
-          );
-        }
+      // A bare @lid 1:1 (no @s.whatsapp.net alt) hides the phone — WhatsApp sent
+      // ONLY the LID. Don't drop it: capture the LID so the async webhook route
+      // resolves it to the real phone (via resolveLidToPhone) and ingests it in
+      // the right contact thread. Empty chat + non-direct jids (group/newsletter/
+      // broadcast/status) still drop as before.
+      const senderLid =
+        !group && !isNonDirectJid(chat) && LID_RE.test(chat)
+          ? chat.split('@')[0].split(':')[0].replace(/\D/g, '')
+          : '';
+      if (!group && !senderLid && (!chat || isNonDirectJid(chat) || LID_RE.test(chat))) {
         return { messages, statuses };
       }
 
@@ -1188,9 +1223,12 @@ export const wahaProvider: WhatsAppProvider = {
       // For a group, `chat` is the group jid; attribute the message to the
       // author's phone (best-effort) — the group thread itself is resolved by
       // ev.group.jid in the pipeline, so this is only for completeness.
-      const fromPhoneE164 =
-        group?.authorPhone ||
-        normalizePhone(chat.split('@')[0].split(':')[0]);
+      // An unresolved @lid carries no phone — leave it empty; the route fills it
+      // in via resolveLidToPhone(senderLid) before dispatch.
+      const fromPhoneE164 = senderLid
+        ? ''
+        : group?.authorPhone ||
+          normalizePhone(chat.split('@')[0].split(':')[0]);
       const pushName =
         p._data?.pushName ||
         p._data?.notifyName ||
@@ -1266,6 +1304,7 @@ export const wahaProvider: WhatsAppProvider = {
         media,
         viewOnce,
         group: group ?? undefined,
+        senderLid: senderLid || undefined,
       });
     }
 

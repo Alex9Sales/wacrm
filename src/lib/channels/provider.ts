@@ -62,6 +62,14 @@ export interface NormalizedInbound {
   fromMe: boolean;
   /** WhatsApp push name, when the provider supplies it. */
   pushName?: string;
+  /**
+   * Set when a 1:1 message arrived addressed ONLY by @lid, with no phone in the
+   * payload (`fromPhoneE164` is then empty). The webhook route resolves it to
+   * the real phone via `resolveLidToPhone` BEFORE dispatch, so the message lands
+   * in the right contact thread instead of being lost. Carries the LID user-part
+   * (digits only).
+   */
+  senderLid?: string;
   contentType:
     | 'text'
     | 'image'
@@ -272,6 +280,15 @@ export interface WhatsAppProvider {
     ch: ChannelCtx,
     groupJid: string,
   ): Promise<{ lidUser?: string; phone?: string }[]>;
+
+  /**
+   * Resolve a `@lid` privacy id to the contact's real phone (E.164 digits). Used
+   * by the webhook route when a 1:1 message arrives addressed only by @lid, with
+   * no phone in the payload — WhatsApp's LID addressing. Optional: only the
+   * engines exposing a LID→PN map implement it (gows/WAHA does). Returns null
+   * when the id can't be resolved (unknown lid / error).
+   */
+  resolveLidToPhone?(ch: ChannelCtx, lid: string): Promise<string | null>;
 
   /**
    * Meta: HMAC over the raw body via the global app secret. Others: match

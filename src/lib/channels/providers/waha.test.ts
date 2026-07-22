@@ -46,12 +46,33 @@ describe('wahaProvider.parseWebhook', () => {
     expect(messages[0].fromPhoneE164).toBe('5567992539584');
   });
 
-  it('drops a @lid chat with no @s.whatsapp.net alt', () => {
+  it('emits a @lid chat with no alt as senderLid (route resolves the phone)', () => {
+    // No @s.whatsapp.net alt → the phone is hidden behind the LID. Instead of
+    // dropping (losing the reply), emit with senderLid + empty phone so the
+    // webhook route resolves it via resolveLidToPhone before dispatch.
     const { messages } = wahaProvider.parseWebhook({
       event: 'message',
       payload: { id: 'x_y_H', from: '123456@lid', body: 'no alt' },
     });
-    expect(messages).toHaveLength(0);
+    expect(messages).toHaveLength(1);
+    expect(messages[0].senderLid).toBe('123456');
+    expect(messages[0].fromPhoneE164).toBe('');
+    expect(messages[0].contentText).toBe('no alt');
+  });
+
+  it('prefers the @s.whatsapp.net alt over the @lid (no senderLid needed)', () => {
+    const { messages } = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: {
+        id: 'x_y_H2',
+        from: '123456@lid',
+        _data: { key: { remoteJidAlt: '5567992539584@s.whatsapp.net' } },
+        body: 'via alt',
+      },
+    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0].fromPhoneE164).toBe('5567992539584');
+    expect(messages[0].senderLid).toBeUndefined();
   });
 
   it('emits group chats (@g.us) with a group descriptor (Fase 1 etapa D)', () => {

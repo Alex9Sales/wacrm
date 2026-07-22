@@ -344,6 +344,27 @@ async function processInbound(
 
   // ---- inbound messages ----
   for (const ev of messages) {
+    // A 1:1 message addressed only by @lid carries no phone — resolve it to the
+    // real phone via the provider's LID→PN map so it lands in the right contact
+    // thread instead of being lost. If it can't be resolved, skip (the old drop
+    // behaviour) rather than spawn a bogus lid-keyed contact.
+    if (ev.senderLid && !ev.fromPhoneE164) {
+      if (provider.resolveLidToPhone) {
+        try {
+          const phone = await provider.resolveLidToPhone(channel, ev.senderLid)
+          if (phone) ev.fromPhoneE164 = phone
+        } catch (err) {
+          console.error('[webhooks/generic] resolveLidToPhone failed:', err)
+        }
+      }
+      if (!ev.fromPhoneE164) {
+        console.error(
+          '[webhooks/generic] inbound @lid unresolvable, dropping:',
+          ev.senderLid,
+        )
+        continue
+      }
+    }
     // Resolve inbound media bytes when the webhook didn't inline them
     // (WAHA/Evolution deliver a fetchKey; EvoGo has no fetch — inboundMedia
     // is false there and the pipeline stores a text placeholder).
