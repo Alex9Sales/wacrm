@@ -149,9 +149,20 @@ function serializedIdToString(raw: unknown): string | null {
   return null;
 }
 
-/** `true_<chat>_<HASH>` → `<HASH>` (last `_`-segment). Plain ids pass through. */
+/**
+ * WAHA/gows message id → the stable message HASH (the dedup key).
+ *   1:1:   `<fromMe>_<chatJid>_<HASH>`
+ *   group: `<fromMe>_<chatJid>_<HASH>_<participantJid>`  ← extra trailing jid
+ * jids never contain `_`, so the HASH is always segment [2] when the id has the
+ * full `<bool>_<jid>_<hash>` shape. The old `.pop()` took the LAST segment,
+ * which for a GROUP id is the participant jid — constant per author — so every
+ * message from one author collapsed to the same id and got dropped by the
+ * inbound dedup after their first. Take [2]; plain/short ids pass through.
+ */
 function normalizeSerializedId(id: string): string {
-  return id.split('_').pop() || id;
+  const parts = id.split('_');
+  if (parts.length >= 3) return parts[2];
+  return parts.pop() || id;
 }
 
 /** Strip a `data:...;base64,` prefix — WAHA wants raw base64. */
