@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback } from "react";
+import { useState, useEffect, useCallback, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import type { Message, MessageReaction } from "@/types";
@@ -28,7 +28,7 @@ import { toast } from "sonner";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
 import { RichText } from "@/lib/inbox/rich-text";
-import { GroupText } from "@/lib/inbox/group-color";
+import { GroupText, groupColor } from "@/lib/inbox/group-color";
 import { detectCopyCode } from "@/lib/inbox/copy-code";
 import { MentionText } from "@/components/inbox/mention-composer";
 import type { MentionMember } from "@/lib/inbox/mentions";
@@ -320,6 +320,40 @@ function mimeFromName(name: string): string {
 function realCaption(text: string | undefined): string | undefined {
   if (!text) return undefined;
   return /^\[[a-zA-Z]+\]$/.test(text.trim()) ? undefined : text;
+}
+
+/** The caption line rendered UNDER a media/template bubble.
+ *
+ *  In a GROUP the ingestion prefixes "Author: " and, when there's no caption,
+ *  a bare "[kind]" placeholder (see lib/channels/inbound.ts) — so a captionless
+ *  image lands as "Fulano: [image]". `realCaption`'s bare-placeholder filter
+ *  misses that (the prefix isn't bare), which is why the redundant "[image]"
+ *  leaks into the bubble. Here we peel the author off first: a placeholder body
+ *  → render just the colored author name (WhatsApp shows the sender above group
+ *  media) and drop the "[image]"; a real caption → the normal colored render.
+ *
+ *  Non-group: the caption when it's real, nothing for a bare placeholder.
+ *  Returns null when there's nothing worth showing. */
+function captionNode(
+  text: string | undefined,
+  isGroup: boolean,
+): ReactNode | null {
+  if (isGroup) {
+    const raw = text ?? "";
+    if (!raw) return null;
+    const m = raw.match(/^([^\n:]{1,40}): ([\s\S]*)$/);
+    const author = m?.[1] ?? null;
+    const body = m ? m[2] : raw;
+    if (/^\[[a-zA-Z]+\]$/.test(body.trim())) {
+      return author ? (
+        <span className="font-semibold" style={{ color: groupColor(author) }}>
+          {author}
+        </span>
+      ) : null;
+    }
+    return <GroupText text={raw} />;
+  }
+  return realCaption(text) ? <RichText text={text} /> : null;
 }
 
 interface MessageBubbleProps {
@@ -818,7 +852,8 @@ function MessageContent({
       );
     }
 
-    case "image":
+    case "image": {
+      const cap = captionNode(message.content_text, !!isGroup);
       return (
         <div>
           {message.media_url ? (
@@ -832,22 +867,18 @@ function MessageContent({
           ) : (
             <MediaUnavailable label="Imagem" />
           )}
-          {realCaption(message.content_text) && (
-            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {isGroup ? (
-            <GroupText text={message.content_text ?? ""} />
-          ) : (
-            <RichText text={message.content_text} />
-          )}
-            </p>
+          {cap != null && (
+            <p className="mt-1 whitespace-pre-wrap break-words text-sm">{cap}</p>
           )}
         </div>
       );
+    }
 
     case "video": {
       const videoEl = message.media_url ? (
         <MediaVideo url={message.media_url} />
       ) : null;
+      const cap = captionNode(message.content_text, !!isGroup);
       return (
         <div>
           {videoEl ? (
@@ -859,14 +890,8 @@ function MessageContent({
           ) : (
             <MediaUnavailable label="Vídeo" />
           )}
-          {realCaption(message.content_text) && (
-            <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {isGroup ? (
-            <GroupText text={message.content_text ?? ""} />
-          ) : (
-            <RichText text={message.content_text} />
-          )}
-            </p>
+          {cap != null && (
+            <p className="mt-1 whitespace-pre-wrap break-words text-sm">{cap}</p>
           )}
         </div>
       );
@@ -900,10 +925,22 @@ function MessageContent({
       // the file's own name → use it as the card label. Anything else is a
       // real caption → keep the card compact and render the caption wrapped
       // BELOW it (instead of stretching it into a single overflowing line).
+      // In a group the caption carries an "Author: " prefix (so it can never
+      // look like a bare filename) — route it through captionNode instead, so
+      // a captionless doc shows just the author and drops the "[document]".
       const isFilenameCaption =
-        !!cap && /\.[a-z0-9]{2,5}$/i.test(cap.trim()) && !/\s/.test(cap.trim());
+        !isGroup &&
+        !!cap &&
+        /\.[a-z0-9]{2,5}$/i.test(cap.trim()) &&
+        !/\s/.test(cap.trim());
       const label = isFilenameCaption ? cap!.trim() : "Documento";
-      const caption = isFilenameCaption ? null : cap;
+      const caption = isGroup
+        ? captionNode(message.content_text, true)
+        : isFilenameCaption
+          ? null
+          : cap
+            ? <RichText text={cap} />
+            : null;
       if (!message.media_url) {
         return <MediaUnavailable label={label} />;
       }
@@ -934,9 +971,9 @@ function MessageContent({
             <FileText className="h-5 w-5 shrink-0 text-muted-foreground" />
             <span className="truncate">{label}</span>
           </a>
-          {caption && (
+          {caption != null && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              <RichText text={caption} />
+              {caption}
             </p>
           )}
         </div>
@@ -950,13 +987,9 @@ function MessageContent({
             <LayoutTemplate className="h-3 w-3" />
             Template
           </span>
-          {realCaption(message.content_text) && (
+          {captionNode(message.content_text, !!isGroup) != null && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              {isGroup ? (
-            <GroupText text={message.content_text ?? ""} />
-          ) : (
-            <RichText text={message.content_text} />
-          )}
+              {captionNode(message.content_text, !!isGroup)}
             </p>
           )}
         </div>

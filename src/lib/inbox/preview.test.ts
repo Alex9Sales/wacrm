@@ -15,6 +15,21 @@ describe('formatConversationPreview', () => {
     expect(formatConversationPreview('  [IMAGE] ')).toBe('📷 Foto')
   })
 
+  it('keeps the group author prefix and labels the placeholder', () => {
+    // Group messages are author-prefixed on ingestion; a captionless media
+    // lands as "Author: [kind]" — friendly-label the kind, keep the author.
+    expect(formatConversationPreview('Diego Fernando: [image]')).toBe(
+      'Diego Fernando: 📷 Foto',
+    )
+    expect(formatConversationPreview('Fulano: [audio]')).toBe(
+      'Fulano: 🎤 Áudio',
+    )
+    // A real group caption still passes through untouched.
+    expect(formatConversationPreview('Diego Fernando: olha isso')).toBe(
+      'Diego Fernando: olha isso',
+    )
+  })
+
   it('passes real text and captions through untouched', () => {
     expect(formatConversationPreview('Olá, tudo bem?')).toBe('Olá, tudo bem?')
     expect(formatConversationPreview('[unknown-kind]')).toBe('[unknown-kind]')

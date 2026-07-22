@@ -39,10 +39,15 @@ export function formatConversationPreview(text?: string | null): string {
   if (call) return call.answered ? '📞 Ligação de voz' : '📞 Ligação perdida';
   const perm = parseCallPermission(text);
   if (perm) return perm.granted ? '📞 Autorizou você a ligar' : '📵 Não autorizou ligação';
-  const match = /^\[([a-zA-Z]+)\]$/.exec(trimmed);
+  // A bare `[kind]` placeholder, optionally carrying a group "Author: " prefix
+  // (group messages are author-prefixed on ingestion — see lib/channels/
+  // inbound.ts). Map the placeholder to a friendly label and keep the author.
+  const match = /^(?:([^\n:]{1,40}): )?\[([a-zA-Z]+)\]$/.exec(trimmed);
   if (match) {
-    const key = match[1].toLowerCase();
-    return MEDIA_PREVIEW_LABELS[key] ?? trimmed;
+    const author = match[1];
+    const key = match[2].toLowerCase();
+    const label = MEDIA_PREVIEW_LABELS[key] ?? `[${match[2]}]`;
+    return author ? `${author}: ${label}` : label;
   }
   return trimmed;
 }
