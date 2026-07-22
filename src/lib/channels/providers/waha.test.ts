@@ -194,6 +194,39 @@ describe('wahaProvider.parseWebhook', () => {
     expect(messages[0].contentText).toContain('🔘 Botões: Confirmar · Remarcar');
   });
 
+  it('encodes a URL/CTA button with its link (label ↗ url)', () => {
+    // A template with a URL button ("Link da aula") — the link rides after the
+    // ↗ separator so the inbox bubble opens it instead of sending a reply.
+    const { messages } = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: {
+        id: 'tu_1_H',
+        from: '5511936200210@c.us',
+        _data: {
+          Message: {
+            templateMessage: {
+              hydratedTemplate: {
+                hydratedContentText: '[ESTAMOS AO VIVO] Acesse a aula.',
+                hydratedButtons: [
+                  {
+                    urlButton: {
+                      displayText: 'Link da aula',
+                      url: 'https://myhub.io/aula',
+                    },
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0].contentText).toContain(
+      '🔘 Botões: Link da aula ↗ https://myhub.io/aula',
+    );
+  });
+
   it('still drops newsletters and broadcast (not groups)', () => {
     const news = wahaProvider.parseWebhook({
       event: 'message',

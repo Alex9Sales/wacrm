@@ -46,18 +46,26 @@ import { startOutboundCall } from "@/components/calls/incoming-call-modal";
 /** Content_text prefix a WhatsApp Pix key card is stored with (see waha.ts). */
 const PIX_PREFIX = "💠 Chave Pix";
 
-/** Marker the WAHA provider appends when an inbound template carries quick-reply
- *  / CTA buttons (see buttonLabelsFromTemplate in waha.ts):
- *  "<body>\n\n🔘 Botões: Confirmar · Remarcar". The bubble renders the labels as
- *  clickable chips so the agent can fire the reply in one tap. */
+/** Marker the WAHA provider appends when an inbound template carries buttons
+ *  (see templateButtons in waha.ts):
+ *  "<body>\n\n🔘 Botões: Confirmar · Link da aula ↗ https://...". A plain label
+ *  is a quick-reply (click fires a text reply); "label ↗ url" is a URL/CTA
+ *  button (click opens the link). */
 const BUTTONS_PREFIX = "🔘 Botões: ";
 const BUTTONS_SEP = " · ";
+const BUTTONS_URL_SEP = " ↗ ";
 
-/** Split a content_text into its body and template button labels, or null when
+interface TemplateBtn {
+  label: string;
+  /** Set only for a URL/CTA button — the chip opens it instead of replying. */
+  url?: string;
+}
+
+/** Split a content_text into its body and template buttons, or null when
  *  there's no button line. The marker sits on its own trailing line. */
 function parseTemplateButtons(
   txt: string,
-): { body: string; labels: string[] } | null {
+): { body: string; buttons: TemplateBtn[] } | null {
   let body: string;
   let line: string;
   const at = txt.lastIndexOf("\n" + BUTTONS_PREFIX);
@@ -70,13 +78,23 @@ function parseTemplateButtons(
   } else {
     return null;
   }
-  const labels = line
+  const buttons = line
     .slice(BUTTONS_PREFIX.length)
     .split(BUTTONS_SEP)
-    .map((s) => s.trim())
-    .filter(Boolean);
-  if (!labels.length) return null;
-  return { body: body.replace(/\s+$/, ""), labels };
+    .map((part): TemplateBtn | null => {
+      const s = part.trim();
+      if (!s) return null;
+      const sep = s.indexOf(BUTTONS_URL_SEP);
+      if (sep >= 0) {
+        const label = s.slice(0, sep).trim();
+        const url = s.slice(sep + BUTTONS_URL_SEP.length).trim();
+        if (label && /^https?:\/\//i.test(url)) return { label, url };
+      }
+      return { label: s };
+    })
+    .filter((b): b is TemplateBtn => b !== null);
+  if (!buttons.length) return null;
+  return { body: body.replace(/\s+$/, ""), buttons };
 }
 
 /** Content_text prefix a shared contact (vCard) is stored with (see waha.ts
@@ -661,19 +679,20 @@ function CallPermissionCard({ perm }: { perm: ParsedCallPermission }) {
   );
 }
 
-/** Body + a row of the template's quick-reply buttons. When `onQuickReply` is
- *  set (an inbound message the agent can answer) the labels are clickable and
- *  fire the reply immediately — the whole row locks after one pick so a stray
- *  second click can't send twice. On an outbound echo (no handler) they render
- *  as static chips. */
+/** Body + a row of the template's buttons. A URL/CTA button ("Link da aula")
+ *  renders as a link that opens the page — always, regardless of direction. A
+ *  quick-reply ("Confirmar") is clickable only on an INBOUND message (when
+ *  `onQuickReply` is set): clicking fires the reply immediately and the whole
+ *  quick-reply row locks after one pick so a stray second click can't send
+ *  twice. On an outbound echo, quick-replies render as static chips. */
 function TemplateButtons({
   body,
-  labels,
+  buttons,
   isGroup,
   onQuickReply,
 }: {
   body: string;
-  labels: string[];
+  buttons: TemplateBtn[];
   isGroup?: boolean;
   onQuickReply?: (text: string) => void;
 }) {
@@ -686,37 +705,56 @@ function TemplateButtons({
         </p>
       )}
       <div className="mt-2 flex flex-wrap gap-1.5">
-        {labels.map((label, i) =>
-          onQuickReply ? (
+        {buttons.map((btn, i) => {
+          if (btn.url) {
+            // URL/CTA button → open the page (like tapping it in WhatsApp).
+            return (
+              <a
+                key={i}
+                href={btn.url}
+                target="_blank"
+                rel="noopener noreferrer"
+                className="inline-flex items-center gap-1 rounded-full border border-primary/40 bg-primary/10 px-3 py-1 text-xs font-medium text-primary transition hover:bg-primary/20 active:scale-95"
+              >
+                <ExternalLink className="h-3 w-3" />
+                {btn.label}
+              </a>
+            );
+          }
+          // Quick-reply → send the label as a reply (inbound only).
+          if (!onQuickReply) {
+            return (
+              <span
+                key={i}
+                className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground"
+              >
+                {btn.label}
+              </span>
+            );
+          }
+          return (
             <button
               key={i}
               type="button"
               disabled={chosen !== null}
               onClick={() => {
                 if (chosen) return;
-                setChosen(label);
-                onQuickReply(label);
+                setChosen(btn.label);
+                onQuickReply(btn.label);
               }}
               className={cn(
                 "rounded-full border px-3 py-1 text-xs font-medium transition active:scale-95",
-                chosen === label
+                chosen === btn.label
                   ? "border-primary bg-primary text-primary-foreground"
                   : chosen
                     ? "border-border bg-muted text-muted-foreground opacity-60"
                     : "border-primary/40 bg-primary/10 text-primary hover:bg-primary/20",
               )}
             >
-              {label}
+              {btn.label}
             </button>
-          ) : (
-            <span
-              key={i}
-              className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground"
-            >
-              {label}
-            </span>
-          ),
-        )}
+          );
+        })}
       </div>
     </div>
   );
@@ -743,7 +781,7 @@ function MessageContent({
         return (
           <TemplateButtons
             body={buttons.body}
-            labels={buttons.labels}
+            buttons={buttons.buttons}
             isGroup={isGroup}
             // Clickable only on an INBOUND (customer) message — that's when the
             // agent is answering the received template's buttons.

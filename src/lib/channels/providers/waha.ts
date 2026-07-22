@@ -542,16 +542,28 @@ function textFromTemplate(p: WahaMessagePayload): string {
   return ''
 }
 
-/** Collect the button labels of a template / buttons / list message
- *  (e.g. a Meta template's "Confirmar" / "Remarcar" quick-replies). A CRM inbox
- *  can't render an INBOUND template's buttons as tappable — the recipient taps
- *  them in WhatsApp, not here — but the agent still needs to SEE which options
- *  were offered, so we surface the labels as text. All WhatsApp button variants
- *  (quickReply / url / call / buttonsMessage) expose their label via
- *  `displayText`; we scan the button carriers for those (both engine casings).
- *  Scoped to the classic carriers so a stray `displayText` elsewhere can't leak
- *  in. Order-preserving + deduped. */
-function buttonLabelsFromTemplate(p: WahaMessagePayload): string[] {
+/** Marker + separators the button line is encoded with (parsed by the inbox
+ *  bubble). A URL/CTA button carries its link after BTN_URL_SEP so the bubble
+ *  can open it instead of sending a text reply. */
+const BTN_PREFIX = '🔘 Botões: ';
+const BTN_SEP = ' · ';
+const BTN_URL_SEP = ' ↗ ';
+
+interface TemplateButton {
+  label: string;
+  /** Set only for a URL/CTA button — the bubble opens it (vs a quick-reply,
+   *  which sends the label as a text reply). */
+  url?: string;
+}
+
+/** Collect the buttons of a template / buttons / list message — a Meta
+ *  template's "Confirmar" / "Remarcar" quick-replies OR a URL/CTA button like
+ *  "Link da aula". Every WhatsApp button variant exposes its label via
+ *  `displayText`; a URL button carries a sibling `url` in the same node, which
+ *  we keep so the CRM opens the link (a quick-reply has none → the CRM sends the
+ *  label as a reply). Scoped to the classic carriers so a stray `displayText`
+ *  can't leak in. Order-preserving + deduped by label. */
+function templateButtons(p: WahaMessagePayload): TemplateButton[] {
   const m = p._data?.message ?? p._data?.Message;
   const carrier = pickField(
     m,
@@ -563,33 +575,33 @@ function buttonLabelsFromTemplate(p: WahaMessagePayload): string[] {
     'ListMessage',
   );
   if (!carrier) return [];
-  const labels: string[] = [];
+  const out: TemplateButton[] = [];
   const seen = new Set<string>();
-  const push = (s: unknown) => {
-    const t = String(s).trim();
-    if (t && !seen.has(t)) {
-      seen.add(t);
-      labels.push(t);
-    }
-  };
   const visit = (node: unknown, depth: number): void => {
-    if (!node || typeof node !== 'object' || depth > 6) return;
+    if (!node || typeof node !== 'object' || depth > 7) return;
     if (Array.isArray(node)) {
       for (const el of node) visit(el, depth + 1);
       return;
     }
-    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
-      if (typeof v === 'string') {
-        // `displayText` (all button types) or a list row's `title`.
-        const kl = k.toLowerCase();
-        if (kl === 'displaytext') push(v);
-      } else if (v && typeof v === 'object') {
-        visit(v, depth + 1);
-      }
+    const rec = node as Record<string, unknown>;
+    const rawLabel = pickField(rec, 'displayText', 'DisplayText', 'display_text');
+    if (typeof rawLabel === 'string' && rawLabel.trim() && !seen.has(rawLabel.trim())) {
+      const label = rawLabel.trim();
+      seen.add(label);
+      // A URL button keeps its link as a sibling; a quick-reply has none.
+      const rawUrl = pickField(rec, 'url', 'URL', 'Url');
+      const url =
+        typeof rawUrl === 'string' && /^https?:\/\//i.test(rawUrl.trim())
+          ? rawUrl.trim()
+          : undefined;
+      out.push({ label, url });
+    }
+    for (const v of Object.values(rec)) {
+      if (v && typeof v === 'object') visit(v, depth + 1);
     }
   };
   visit(carrier, 0);
-  return labels;
+  return out;
 }
 
 /** Last-resort text for an unrecognized STRUCTURED message — a template /
@@ -1096,12 +1108,16 @@ export const wahaProvider: WhatsAppProvider = {
       ) {
         text = textFromStructuredDeep(p);
       }
-      // A template's quick-reply / CTA buttons (e.g. "Confirmar" / "Remarcar")
-      // can't be tapped from the CRM (inbound template → the recipient taps in
-      // WhatsApp), but the agent needs to see the options — append the labels.
-      const buttonLabels = buttonLabelsFromTemplate(p);
-      if (buttonLabels.length) {
-        text = `${text ? `${text}\n\n` : ''}🔘 Botões: ${buttonLabels.join(' · ')}`;
+      // A template's buttons: quick-replies ("Confirmar"/"Remarcar") the agent
+      // fires as a reply, or URL/CTA buttons ("Link da aula") the CRM opens.
+      // Encode them on a trailing marker line the inbox bubble turns into chips
+      // (label alone = quick-reply; "label ↗ url" = link).
+      const btns = templateButtons(p);
+      if (btns.length) {
+        const parts = btns.map((b) =>
+          b.url ? `${b.label}${BTN_URL_SEP}${b.url}` : b.label,
+        );
+        text = `${text ? `${text}\n\n` : ''}${BTN_PREFIX}${parts.join(BTN_SEP)}`;
       }
       // Location shares: render as a clickable Google Maps link (opens the
       // pin; forwardable by copying the link) instead of an empty [text].
