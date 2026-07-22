@@ -1114,6 +1114,22 @@ export const wahaProvider: WhatsAppProvider = {
       // bare @lid without an alt stay dropped as before.
       const group = isGroupJid(chat) ? buildGroupInfo(p, chat) : null;
       if (!group && (!chat || isNonDirectJid(chat) || LID_RE.test(chat))) {
+        // Diagnostic for the ONE drop that silently loses a real 1:1 reply: an
+        // inbound addressed by @lid with no @s.whatsapp.net alt to resolve the
+        // phone. Newsletters/broadcast/status are expected drops, so scope the
+        // log to the @lid / empty-chat case. Dumps the addressing fields (not
+        // the message body) so we can see where the phone actually rides.
+        if ((!chat || LID_RE.test(chat)) && !isNonDirectJid(chat)) {
+          console.log(
+            '[waha parse] DROP-LID',
+            'from=', String(p.from ?? ''),
+            'to=', String(p.to ?? ''),
+            'alt=', alt,
+            'fromMe=', String(fromMe),
+            'info=', JSON.stringify(info ?? {}).slice(0, 700),
+            'key=', JSON.stringify(p._data?.key ?? {}).slice(0, 300),
+          );
+        }
         return { messages, statuses };
       }
 
