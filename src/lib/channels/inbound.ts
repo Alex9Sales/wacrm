@@ -630,6 +630,14 @@ async function ingestGroupMessage(
   let baseText =
     ev.contentText ?? (ev.media ? `[${ev.media.kind}]` : `[${ev.contentType}]`);
 
+  // The stable key of THIS message's author (phone digits preferred — more
+  // stable and shared with 1:1 contacts — else the LID user-part). Persisted on
+  // the message so the inbox can render the sender's avatar per bubble. Null for
+  // our own (fromMe) echoes: those are the agent side, no author avatar.
+  const authorKey = isFromMe
+    ? null
+    : group.authorPhone?.trim() || group.authorLid?.trim() || null;
+
   // Register the author's pushName against their LID + phone so later @mentions
   // of them resolve to the name. Best-effort — never blocks the message.
   if (group.authorName) {
@@ -637,6 +645,22 @@ async function ingestGroupMessage(
       accountId,
       [group.authorLid, group.authorPhone],
       group.authorName,
+    );
+  }
+
+  // Best-effort participant photo backfill — the per-author avatar in the group
+  // thread. Only when we know the sender's PHONE (the profile-picture lookup
+  // needs a @c.us id; a LID-only participant can't be fetched). Runs on any
+  // incoming message; the helper's attempt-once guard keeps it cheap. NEVER
+  // awaited on the critical path.
+  if (!isFromMe && group.authorPhone) {
+    void backfillParticipantAvatar(
+      channel,
+      accountId,
+      [group.authorLid, group.authorPhone],
+      group.authorPhone,
+    ).catch((err) =>
+      console.error('[inbound] participant avatar dispatch failed:', err),
     );
   }
   // Rewrite "@<number>" mentions in the body to the known display name, the way
@@ -677,6 +701,7 @@ async function ingestGroupMessage(
       viewOnce: ev.viewOnce ?? ev.media?.viewOnce ?? false,
       messageId: ev.externalMessageId || null,
       status: isFromMe ? 'sent' : 'delivered',
+      authorKey,
       createdAt: new Date().toISOString(),
     });
   } catch (err) {
@@ -1021,6 +1046,63 @@ async function backfillGroupAvatar(
 }
 
 /**
+ * Best-effort backfill of a GROUP participant's profile photo into
+ * `group_participant_names.avatar_url`, so the inbox can show that person's
+ * avatar next to their group bubbles. Fetches by the participant's PHONE (the
+ * same @c.us profile-picture path as 1:1 contacts) and writes the re-hosted URL
+ * onto EVERY wa_key the participant is known by (`keys` = [LID, phone]), so a
+ * message keyed by either addressing form resolves. Attempt-once-per-null:
+ * skipped once any of those rows already has a photo. Fire-and-forget — a
+ * hiccup must never affect the group message that spawned it.
+ */
+async function backfillParticipantAvatar(
+  channel: ChannelCtx,
+  accountId: string,
+  keys: (string | undefined)[],
+  phoneE164: string,
+): Promise<void> {
+  try {
+    const waKeys = keys.filter((k): k is string => !!k && k.trim() !== '');
+    if (waKeys.length === 0) return;
+
+    const provider = getProvider(channel.provider);
+    if (typeof provider.fetchProfilePicture !== 'function') return;
+
+    // Attempt-once: bail if any of this participant's rows already has a photo.
+    const existing = await db
+      .select({ avatarUrl: groupParticipantNames.avatarUrl })
+      .from(groupParticipantNames)
+      .where(
+        and(
+          eq(groupParticipantNames.accountId, accountId),
+          inArray(groupParticipantNames.waKey, waKeys),
+        ),
+      );
+    if (existing.some((r) => r.avatarUrl)) return;
+
+    const pic = await provider.fetchProfilePicture(channel, phoneE164);
+    if (!pic || !pic.url) return;
+
+    const url = await rehostImage(pic.url, `participants/${accountId}`);
+    if (!url) return;
+
+    // Only set rows still missing a photo (race-safe, keeps it one-time).
+    await db
+      .update(groupParticipantNames)
+      .set({ avatarUrl: url, updatedAt: new Date().toISOString() })
+      .where(
+        and(
+          eq(groupParticipantNames.accountId, accountId),
+          inArray(groupParticipantNames.waKey, waKeys),
+          isNull(groupParticipantNames.avatarUrl),
+        ),
+      );
+  } catch (err) {
+    console.error('[inbound] backfillParticipantAvatar failed:', err);
+  }
+}
+
+/**
  * Download a (short-lived, cross-origin) WhatsApp CDN photo URL, re-host the
  * bytes in MinIO under an `avatars/` key, and set `contacts.avatar_url` — but
  * only while it's still empty (race-safe, one-time backfill). Shared by the
@@ -1028,25 +1110,38 @@ async function backfillGroupAvatar(
  * stored: it expires and can be http/cross-origin.
  */
 async function rehostAvatar(contactId: string, cdnUrl: string): Promise<void> {
-  const res = await fetch(cdnUrl);
-  if (!res.ok) {
-    console.error(`[inbound] avatar fetch failed: ${res.status} ${cdnUrl}`);
-    return;
-  }
-  const bytes = Buffer.from(await res.arrayBuffer());
-  if (bytes.length === 0) return;
-  const mimetype =
-    res.headers.get('content-type')?.split(';')[0]?.trim() || 'image/jpeg';
-
-  const ext = extensionFor(mimetype);
-  const key = `avatars/${contactId}/${randomUUID()}${ext || '.jpg'}`;
-  await putObject(MEDIA_BUCKET, key, bytes, mimetype);
-  const url = publicUrl(MEDIA_BUCKET, key);
-
+  const url = await rehostImage(cdnUrl, contactId);
+  if (!url) return;
   await db
     .update(contacts)
     .set({ avatarUrl: url, updatedAt: new Date().toISOString() })
     .where(and(eq(contacts.id, contactId), isNull(contacts.avatarUrl)));
+}
+
+/**
+ * Download a WhatsApp CDN image and re-host the bytes in MinIO under
+ * `avatars/<keyHint>/<uuid>.<ext>`, returning the stable public proxy URL (or
+ * null on any hiccup). The re-host is shared by every avatar backfill; only the
+ * DB write differs per caller.
+ */
+async function rehostImage(
+  cdnUrl: string,
+  keyHint: string,
+): Promise<string | null> {
+  const res = await fetch(cdnUrl);
+  if (!res.ok) {
+    console.error(`[inbound] avatar fetch failed: ${res.status} ${cdnUrl}`);
+    return null;
+  }
+  const bytes = Buffer.from(await res.arrayBuffer());
+  if (bytes.length === 0) return null;
+  const mimetype =
+    res.headers.get('content-type')?.split(';')[0]?.trim() || 'image/jpeg';
+
+  const ext = extensionFor(mimetype);
+  const key = `avatars/${keyHint}/${randomUUID()}${ext || '.jpg'}`;
+  await putObject(MEDIA_BUCKET, key, bytes, mimetype);
+  return publicUrl(MEDIA_BUCKET, key);
 }
 
 /** Best-effort file extension from mimetype or filename. */

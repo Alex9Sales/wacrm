@@ -23,6 +23,13 @@ export function groupColor(name: string): string {
   return PALETTE[h % PALETTE.length];
 }
 
+/** The "Author:" prefix a group message is ingested with, or null if absent.
+ *  Shared by GroupText (colors it) and the bubble avatar (initial + color). */
+export function parseGroupAuthor(text: string): string | null {
+  const m = (text ?? "").match(/^([^\n:]{1,40}): ([\s\S]*)$/);
+  return m ? m[1] : null;
+}
+
 // @mention token: "@" + letters/digits/._- (stops at space/punctuation). The
 // negative lookbehind keeps it from matching the "@" inside e.g. an email.
 const MENTION_SRC = "(?<!\\S)@[\\p{L}\\p{N}._-]+";
@@ -33,9 +40,8 @@ export function GroupText({ text }: { text: string }): ReactNode {
   if (!text) return null;
 
   // Split an author prefix "Name: rest" (the ingestion prefixes group messages).
-  const m = text.match(/^([^\n:]{1,40}): ([\s\S]*)$/);
-  const author = m ? m[1] : null;
-  const body = m ? m[2] : text;
+  const author = parseGroupAuthor(text);
+  const body = author ? text.slice(author.length + 2) : text;
 
   const out: ReactNode[] = [];
   if (author) {

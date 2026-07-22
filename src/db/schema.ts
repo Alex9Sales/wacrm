@@ -451,6 +451,11 @@ export const messages = pgTable("messages", {
 	// Internal note: written in the thread but never sent to the customer —
 	// for @mentioning a colleague without leaving the conversation.
 	isInternal: boolean("is_internal").default(false).notNull(),
+	// GROUP messages only: the stable key of the participant who sent this
+	// message (phone digits when known, else LID user-part) — same key space as
+	// group_participant_names.wa_key. Lets the inbox render a per-author avatar
+	// next to each group bubble. Null for 1:1 and for our own (fromMe) echoes.
+	authorKey: text("author_key"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_messages_conversation").using("btree", table.conversationId.asc().nullsLast().op("uuid_ops")),
@@ -1330,6 +1335,11 @@ export const groupParticipantNames = pgTable("group_participant_names", {
 	accountId: uuid("account_id").notNull(),
 	waKey: text("wa_key").notNull(),
 	name: text().notNull(),
+	// Re-hosted (MinIO) profile photo of this participant — the group-thread
+	// avatar. Backfilled best-effort from the participant's phone via the same
+	// profile-picture pipeline as 1:1 contacts. Null = no photo yet / privacy /
+	// only a LID is known. Kept as attempt-once-per-null.
+	avatarUrl: text("avatar_url"),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	primaryKey({ columns: [table.accountId, table.waKey], name: "group_participant_names_pkey" }),

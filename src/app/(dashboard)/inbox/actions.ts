@@ -16,6 +16,7 @@ import {
   conversations,
   deals,
   member,
+  groupParticipantNames,
   messageReactions,
   messageTemplates,
   messages,
@@ -275,6 +276,7 @@ const messageColumns = {
   transcription: messages.transcription,
   view_once: messages.viewOnce,
   is_internal: messages.isInternal,
+  author_key: messages.authorKey,
   created_at: messages.createdAt,
 }
 
@@ -487,12 +489,37 @@ export async function listMessages(conversationId: string): Promise<Message[]> {
   if (!(await assertConversationInAccount(conversationId, ctx))) {
     return []
   }
-  const rows = await db
+  const rows = (await db
     .select(messageColumns)
     .from(messages)
     .where(eq(messages.conversationId, conversationId))
-    .orderBy(asc(messages.createdAt))
-  return rows as unknown as Message[]
+    .orderBy(asc(messages.createdAt))) as unknown as Message[]
+
+  // Resolve each group author's re-hosted photo (group_participant_names,
+  // keyed by wa_key) in ONE batch query and attach it per message, so the inbox
+  // can render a per-sender avatar. No-op for 1:1 threads (no author_key set).
+  const authorKeys = Array.from(
+    new Set(rows.map((r) => r.author_key).filter((k): k is string => !!k)),
+  )
+  if (authorKeys.length > 0) {
+    const avatars = await db
+      .select({
+        waKey: groupParticipantNames.waKey,
+        avatarUrl: groupParticipantNames.avatarUrl,
+      })
+      .from(groupParticipantNames)
+      .where(
+        and(
+          eq(groupParticipantNames.accountId, ctx.accountId),
+          inArray(groupParticipantNames.waKey, authorKeys),
+        ),
+      )
+    const byKey = new Map(avatars.map((a) => [a.waKey, a.avatarUrl]))
+    for (const r of rows) {
+      if (r.author_key) r.author_avatar_url = byKey.get(r.author_key) ?? null
+    }
+  }
+  return rows
 }
 
 /** Reactions for one conversation. */

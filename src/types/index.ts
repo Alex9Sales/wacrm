@@ -260,6 +260,17 @@ export interface Message {
   is_internal?: boolean;
   /** WhatsApp "view once" media — shown behind a tap-to-reveal cover. */
   view_once?: boolean;
+  /**
+   * GROUP messages only: the stable key (phone digits or LID user-part) of the
+   * participant who sent this message. Used to render their avatar per bubble.
+   */
+  author_key?: string | null;
+  /**
+   * GROUP messages only: the sender's re-hosted profile photo URL, resolved
+   * from `author_key`. Null when unknown / no photo / privacy → the bubble
+   * falls back to the author's colored initial.
+   */
+  author_avatar_url?: string | null;
 }
 
 export type ReactionActor = 'customer' | 'agent';

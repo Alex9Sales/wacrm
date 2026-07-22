@@ -9,6 +9,8 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { ContactAvatar } from "./contact-avatar";
+import { groupColor, parseGroupAuthor } from "@/lib/inbox/group-color";
 import type { Message } from "@/types";
 
 // WhatsApp's own quick-reaction bar starts with these six. Picking the same
@@ -20,7 +22,32 @@ interface MessageActionsProps {
   onReply: () => void;
   onReact: (emoji: string) => void;
   onForward: () => void;
+  /** Group conversation → show the sender's avatar in the left gutter. */
+  isGroup?: boolean;
   children: ReactNode;
+}
+
+/**
+ * The per-participant avatar in the left gutter of an incoming GROUP bubble.
+ * Photo when known (`author_avatar_url`), else the author's first letter over
+ * their stable group color — matching how the name is colored in the bubble.
+ */
+function GroupAuthorAvatar({ message }: { message: Message }) {
+  const name = parseGroupAuthor(message.content_text ?? "") ?? "?";
+  return (
+    <div
+      className="mb-0.5 flex size-7 shrink-0 items-center justify-center self-end overflow-hidden rounded-full text-xs font-semibold text-white"
+      style={{ backgroundColor: groupColor(name) }}
+      title={name === "?" ? undefined : name}
+      aria-hidden
+    >
+      <ContactAvatar
+        avatarUrl={message.author_avatar_url}
+        displayName={name}
+        className="size-7"
+      />
+    </div>
+  );
 }
 
 /**
@@ -33,6 +60,7 @@ export function MessageActions({
   onReply,
   onReact,
   onForward,
+  isGroup,
   children,
 }: MessageActionsProps) {
   // Touch devices have no hover. Long-press fires `contextmenu`; we capture
@@ -83,15 +111,21 @@ export function MessageActions({
   // Row alignment lives here (not in MessageBubble) so the `group/actions`
   // hover region matches the bubble's content width — hovering empty space
   // in the row no longer reveals the toolbar.
+  // The sender's avatar sits in the left gutter of an incoming group bubble —
+  // outside the 75% cap, aligned to the bubble's bottom. Never for our own
+  // (agent) side or an internal note (both render right-aligned).
+  const showAuthorAvatar = !!isGroup && !isAgent && !message.is_internal;
+
   return (
     <div
       className={cn(
-        "flex w-full",
+        "flex w-full items-end gap-2",
         isAgent ? "justify-end" : "justify-start",
       )}
       onContextMenu={handleContextMenu}
       onBlur={() => setTouchOpen(false)}
     >
+      {showAuthorAvatar && <GroupAuthorAvatar message={message} />}
       {/* `min-w-0` lets this flex child actually respect the 75% cap.
        *  Default `min-width: auto` lets content (a long quote preview,
        *  an unbroken URL) push past the cap and shove the row past
