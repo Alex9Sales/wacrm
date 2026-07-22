@@ -166,6 +166,34 @@ describe('wahaProvider.parseWebhook', () => {
     expect(messages[0].contentType).toBe('text');
   });
 
+  it('appends template quick-reply button labels to the body', () => {
+    // A Meta confirmation template with "Confirmar"/"Remarcar" quick-replies —
+    // body via textFromTemplate, button labels surfaced for the agent.
+    const { messages } = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: {
+        id: 'tb_1_H',
+        from: '5567936180557@c.us',
+        _data: {
+          Message: {
+            templateMessage: {
+              hydratedTemplate: {
+                hydratedContentText: 'Confirma nossa reunião amanhã às 09:30?',
+                hydratedButtons: [
+                  { quickReplyButton: { displayText: 'Confirmar' } },
+                  { quickReplyButton: { displayText: 'Remarcar' } },
+                ],
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0].contentText).toContain('Confirma nossa reunião amanhã');
+    expect(messages[0].contentText).toContain('🔘 Botões: Confirmar · Remarcar');
+  });
+
   it('still drops newsletters and broadcast (not groups)', () => {
     const news = wahaProvider.parseWebhook({
       event: 'message',

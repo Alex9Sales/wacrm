@@ -542,6 +542,56 @@ function textFromTemplate(p: WahaMessagePayload): string {
   return ''
 }
 
+/** Collect the button labels of a template / buttons / list message
+ *  (e.g. a Meta template's "Confirmar" / "Remarcar" quick-replies). A CRM inbox
+ *  can't render an INBOUND template's buttons as tappable — the recipient taps
+ *  them in WhatsApp, not here — but the agent still needs to SEE which options
+ *  were offered, so we surface the labels as text. All WhatsApp button variants
+ *  (quickReply / url / call / buttonsMessage) expose their label via
+ *  `displayText`; we scan the button carriers for those (both engine casings).
+ *  Scoped to the classic carriers so a stray `displayText` elsewhere can't leak
+ *  in. Order-preserving + deduped. */
+function buttonLabelsFromTemplate(p: WahaMessagePayload): string[] {
+  const m = p._data?.message ?? p._data?.Message;
+  const carrier = pickField(
+    m,
+    'templateMessage',
+    'TemplateMessage',
+    'buttonsMessage',
+    'ButtonsMessage',
+    'listMessage',
+    'ListMessage',
+  );
+  if (!carrier) return [];
+  const labels: string[] = [];
+  const seen = new Set<string>();
+  const push = (s: unknown) => {
+    const t = String(s).trim();
+    if (t && !seen.has(t)) {
+      seen.add(t);
+      labels.push(t);
+    }
+  };
+  const visit = (node: unknown, depth: number): void => {
+    if (!node || typeof node !== 'object' || depth > 6) return;
+    if (Array.isArray(node)) {
+      for (const el of node) visit(el, depth + 1);
+      return;
+    }
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (typeof v === 'string') {
+        // `displayText` (all button types) or a list row's `title`.
+        const kl = k.toLowerCase();
+        if (kl === 'displaytext') push(v);
+      } else if (v && typeof v === 'object') {
+        visit(v, depth + 1);
+      }
+    }
+  };
+  visit(carrier, 0);
+  return labels;
+}
+
 /** Last-resort text for an unrecognized STRUCTURED message — a template /
  *  button / flow / list variant we don't have a specific parser for (Meta keeps
  *  shipping new proto shapes). Walk the raw message node (bounded depth) and
@@ -1045,6 +1095,13 @@ export const wahaProvider: WhatsAppProvider = {
         !isAlbumMessage(p)
       ) {
         text = textFromStructuredDeep(p);
+      }
+      // A template's quick-reply / CTA buttons (e.g. "Confirmar" / "Remarcar")
+      // can't be tapped from the CRM (inbound template → the recipient taps in
+      // WhatsApp), but the agent needs to see the options — append the labels.
+      const buttonLabels = buttonLabelsFromTemplate(p);
+      if (buttonLabels.length) {
+        text = `${text ? `${text}\n\n` : ''}🔘 Botões: ${buttonLabels.join(' · ')}`;
       }
       // Location shares: render as a clickable Google Maps link (opens the
       // pin; forwardable by copying the link) instead of an empty [text].
