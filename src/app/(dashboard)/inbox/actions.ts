@@ -86,19 +86,14 @@ export async function getConversationWithContact(
         ai_reply_count: conversations.aiReplyCount,
         created_at: conversations.createdAt,
         updated_at: conversations.updatedAt,
-        contact: {
-          id: contacts.id,
-          user_id: contacts.userId,
-          account_id: contacts.accountId,
-          phone: contacts.phone,
-          phone_normalized: contacts.phoneNormalized,
-          name: contacts.name,
-          email: contacts.email,
-          company: contacts.company,
-          avatar_url: contacts.avatarUrl,
-          created_at: contacts.createdAt,
-          updated_at: contacts.updatedAt,
-        },
+        // Reuse contactColumns so the detail fetch stays in lockstep with the
+        // list. It was drifting: this inline copy omitted `is_group`, so a
+        // deep-link/reload (which loads the contact via THIS query) got
+        // is_group=undefined → the thread rendered the group as a 1:1 (no
+        // per-sender avatars, media captions fell to the non-group path). A
+        // click, which reuses the list's contact, was fine — hence "broken on
+        // reload, ok after entering the conversation".
+        contact: contactColumns,
         channel: channelColumns,
       })
       .from(conversations)
