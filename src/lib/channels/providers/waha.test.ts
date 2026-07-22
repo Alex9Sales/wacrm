@@ -123,6 +123,49 @@ describe('wahaProvider.parseWebhook', () => {
     expect(plain.messages).toHaveLength(0);
   });
 
+  it('drops an album header (photos arrive as their own messages)', () => {
+    // GOWS album placeholder — announces N images/M videos, no body/media.
+    const gows = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: {
+        id: 'a_1_H',
+        from: '5567999998888@c.us',
+        _data: {
+          Message: {
+            messageContextInfo: { messageSecret: 'x' },
+            albumMessage: { expectedImageCount: 2, expectedVideoCount: 0 },
+          },
+        },
+      },
+    });
+    expect(gows.messages).toHaveLength(0);
+  });
+
+  it('deep-scans an unrecognized template shape for its body text', () => {
+    // A template variant textFromTemplate does not specifically handle — the
+    // deep-scan fallback must surface the body instead of an empty [text].
+    const { messages } = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: {
+        id: 't_1_H',
+        from: '5511932227906@c.us',
+        _data: {
+          Message: {
+            templateMessage: {
+              someNewWrapper: {
+                contentText: 'Aproveite nossa promoção de gás!',
+                footerText: 'Família do Gás',
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0].contentText).toBe('Aproveite nossa promoção de gás!');
+    expect(messages[0].contentType).toBe('text');
+  });
+
   it('still drops newsletters and broadcast (not groups)', () => {
     const news = wahaProvider.parseWebhook({
       event: 'message',

@@ -542,6 +542,54 @@ function textFromTemplate(p: WahaMessagePayload): string {
   return ''
 }
 
+/** Last-resort text for an unrecognized STRUCTURED message — a template /
+ *  button / flow / list variant we don't have a specific parser for (Meta keeps
+ *  shipping new proto shapes). Walk the raw message node (bounded depth) and
+ *  return the first legible text field, preferring body/content over titles, so
+ *  the bubble shows the actual copy instead of a bare [text]. Only meant as the
+ *  final fallback after every specific extractor came up empty AND the message
+ *  carries no media (callers also gate out reactions/albums, which legitimately
+ *  have no renderable body and must stay dropped). */
+const DEEP_TEXT_KEYS = [
+  'hydratedcontenttext',
+  'contenttext',
+  'conversation',
+  'selecteddisplaytext',
+  'caption',
+  'description',
+  'text',
+  'hydratedtitletext',
+  'title',
+  'displaytext',
+];
+function textFromStructuredDeep(p: WahaMessagePayload): string {
+  const root = (p._data?.message ?? p._data?.Message) as unknown;
+  if (!root || typeof root !== 'object') return '';
+  const found = new Map<string, string>();
+  const visit = (node: unknown, depth: number): void => {
+    if (!node || typeof node !== 'object' || depth > 6) return;
+    if (Array.isArray(node)) {
+      for (const el of node) visit(el, depth + 1);
+      return;
+    }
+    for (const [k, v] of Object.entries(node as Record<string, unknown>)) {
+      if (typeof v === 'string') {
+        const kl = k.toLowerCase();
+        const val = v.trim();
+        if (val && !found.has(kl)) found.set(kl, val);
+      } else if (v && typeof v === 'object') {
+        visit(v, depth + 1);
+      }
+    }
+  };
+  visit(root, 0);
+  for (const key of DEEP_TEXT_KEYS) {
+    const hit = found.get(key);
+    if (hit) return hit;
+  }
+  return '';
+}
+
 function detectViewOnce(p: WahaMessagePayload): boolean {
   return (
     p._data?.key?.isViewOnce === true ||
@@ -560,6 +608,19 @@ function isReactionMessage(p: WahaMessagePayload): boolean {
     | undefined;
   if (!m) return false;
   return 'reactionMessage' in m || 'encReactionMessage' in m;
+}
+
+/** True when the node is a WhatsApp "album" header — the grouping placeholder
+ *  that only announces N images/M videos (`albumMessage`, GOWS `AlbumMessage`).
+ *  The actual photos/videos arrive as their OWN subsequent messages, so this
+ *  header carries no body/media and must be dropped rather than stored as an
+ *  empty [text] row sitting as noise right before the media it announces. */
+function isAlbumMessage(p: WahaMessagePayload): boolean {
+  const m = (p._data?.message ?? p._data?.Message) as
+    | Record<string, unknown>
+    | undefined;
+  if (!m) return false;
+  return 'albumMessage' in m || 'AlbumMessage' in m;
 }
 
 interface WahaWebhookBody {
@@ -972,6 +1033,19 @@ export const wahaProvider: WhatsAppProvider = {
       if (!text) text = textFromContact(p);
       // Template / buttons / list (e.g. a forwarded marketing template) → body.
       if (!text) text = textFromTemplate(p);
+      // Last resort for an unrecognized structured message (a template variant
+      // we don't specifically parse yet): deep-scan the node for any legible
+      // text so it renders instead of a bare [text]. Gated out of media and of
+      // reactions/albums (those have no body and must stay dropped below).
+      if (
+        !text &&
+        !p.hasMedia &&
+        !p.media &&
+        !isReactionMessage(p) &&
+        !isAlbumMessage(p)
+      ) {
+        text = textFromStructuredDeep(p);
+      }
       // Location shares: render as a clickable Google Maps link (opens the
       // pin; forwardable by copying the link) instead of an empty [text].
       const locationText = textFromLocation(p);
@@ -1023,10 +1097,16 @@ export const wahaProvider: WhatsAppProvider = {
       }
 
       // A reaction (👍 etc — encrypted `encReactionMessage` or plain
-      // `reactionMessage`) arrives as a message event with no body/media. Drop
-      // it: it must NOT become an empty "[text]" row — in a monitored group it
-      // would spam the thread on every reaction.
-      if (!text && !media && !viewOnce && isReactionMessage(p)) {
+      // `reactionMessage`) or an album header (`albumMessage` — the photos it
+      // announces arrive as their own messages) comes in with no body/media.
+      // Drop it: it must NOT become an empty "[text]" row — in a monitored group
+      // it would spam the thread on every reaction / album.
+      if (
+        !text &&
+        !media &&
+        !viewOnce &&
+        (isReactionMessage(p) || isAlbumMessage(p))
+      ) {
         return { messages, statuses };
       }
 
