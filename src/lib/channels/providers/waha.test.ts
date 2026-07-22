@@ -227,6 +227,38 @@ describe('wahaProvider.parseWebhook', () => {
     );
   });
 
+  it('extracts a nativeFlow CTA button (label + url inside buttonParamsJson)', () => {
+    // "Acessar a aula" — the label/url live in a JSON string, not a direct
+    // displayText (the shape a plain displayText scan misses).
+    const { messages } = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: {
+        id: 'cta_1_H',
+        from: '5511955023337@c.us',
+        _data: {
+          Message: {
+            interactiveMessage: {
+              body: { text: 'A AULA JÁ COMEÇOU' },
+              nativeFlowMessage: {
+                buttons: [
+                  {
+                    name: 'cta_url',
+                    buttonParamsJson:
+                      '{"display_text":"Acessar a aula","url":"https://myhub.io/live"}',
+                  },
+                ],
+              },
+            },
+          },
+        },
+      },
+    });
+    expect(messages).toHaveLength(1);
+    expect(messages[0].contentText).toContain(
+      '🔘 Botões: Acessar a aula ↗ https://myhub.io/live',
+    );
+  });
+
   it('still drops newsletters and broadcast (not groups)', () => {
     const news = wahaProvider.parseWebhook({
       event: 'message',

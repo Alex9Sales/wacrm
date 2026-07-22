@@ -556,16 +556,11 @@ interface TemplateButton {
   url?: string;
 }
 
-/** Collect the buttons of a template / buttons / list message — a Meta
- *  template's "Confirmar" / "Remarcar" quick-replies OR a URL/CTA button like
- *  "Link da aula". Every WhatsApp button variant exposes its label via
- *  `displayText`; a URL button carries a sibling `url` in the same node, which
- *  we keep so the CRM opens the link (a quick-reply has none → the CRM sends the
- *  label as a reply). Scoped to the classic carriers so a stray `displayText`
- *  can't leak in. Order-preserving + deduped by label. */
-function templateButtons(p: WahaMessagePayload): TemplateButton[] {
+/** The carriers a button can live in. `interactiveMessage` included because
+ *  Meta CTA buttons ("Acessar a aula") ride there as a nativeFlow. */
+function buttonCarrier(p: WahaMessagePayload): unknown {
   const m = p._data?.message ?? p._data?.Message;
-  const carrier = pickField(
+  return pickField(
     m,
     'templateMessage',
     'TemplateMessage',
@@ -573,29 +568,64 @@ function templateButtons(p: WahaMessagePayload): TemplateButton[] {
     'ButtonsMessage',
     'listMessage',
     'ListMessage',
+    'interactiveMessage',
+    'InteractiveMessage',
   );
+}
+
+/** Collect the buttons of a template / buttons / list / interactive message —
+ *  a Meta template's "Confirmar" / "Remarcar" quick-replies OR a URL/CTA button
+ *  like "Link da aula" / "Acessar a aula". Two shapes in the wild:
+ *   - hydrated / classic: the label is a direct `displayText`, a URL button
+ *     carrying a sibling `url`;
+ *   - nativeFlow CTA: label + url live INSIDE a `buttonParamsJson` string
+ *     (`{"display_text":"Acessar a aula","url":"https://…"}`) — same shape the
+ *     Pix card parses, so we skip payment flows here (handled by
+ *     textFromInteractive). A URL keeps its link (the CRM opens it); a
+ *     quick-reply has none (the CRM sends the label as a reply). Order-preserving
+ *     + deduped by label. */
+function templateButtons(p: WahaMessagePayload): TemplateButton[] {
+  const carrier = buttonCarrier(p);
   if (!carrier) return [];
   const out: TemplateButton[] = [];
   const seen = new Set<string>();
+  const add = (label: unknown, url: unknown): void => {
+    if (typeof label !== 'string' || !label.trim() || seen.has(label.trim())) {
+      return;
+    }
+    const l = label.trim();
+    seen.add(l);
+    const u =
+      typeof url === 'string' && /^https?:\/\//i.test(url.trim())
+        ? url.trim()
+        : undefined;
+    out.push({ label: l, url: u });
+  };
   const visit = (node: unknown, depth: number): void => {
-    if (!node || typeof node !== 'object' || depth > 7) return;
+    if (!node || typeof node !== 'object' || depth > 8) return;
     if (Array.isArray(node)) {
       for (const el of node) visit(el, depth + 1);
       return;
     }
     const rec = node as Record<string, unknown>;
-    const rawLabel = pickField(rec, 'displayText', 'DisplayText', 'display_text');
-    if (typeof rawLabel === 'string' && rawLabel.trim() && !seen.has(rawLabel.trim())) {
-      const label = rawLabel.trim();
-      seen.add(label);
-      // A URL button keeps its link as a sibling; a quick-reply has none.
-      const rawUrl = pickField(rec, 'url', 'URL', 'Url');
-      const url =
-        typeof rawUrl === 'string' && /^https?:\/\//i.test(rawUrl.trim())
-          ? rawUrl.trim()
-          : undefined;
-      out.push({ label, url });
+    // nativeFlow CTA: label + url are inside a JSON string.
+    const rawParams = pickField(rec, 'buttonParamsJson', 'buttonParamsJSON');
+    if (typeof rawParams === 'string') {
+      try {
+        const params = JSON.parse(rawParams) as Record<string, unknown>;
+        // Pix / payment flows render as their own card, not a button.
+        if (!('payment_settings' in params) && !('pix_static_code' in params)) {
+          add(params.display_text ?? params.displayText, params.url);
+        }
+      } catch {
+        // malformed JSON — ignore this button
+      }
     }
+    // hydrated / classic: label is a direct field, URL a sibling.
+    add(
+      pickField(rec, 'displayText', 'DisplayText', 'display_text'),
+      pickField(rec, 'url', 'URL', 'Url'),
+    );
     for (const v of Object.values(rec)) {
       if (v && typeof v === 'object') visit(v, depth + 1);
     }
@@ -1118,6 +1148,17 @@ export const wahaProvider: WhatsAppProvider = {
           b.url ? `${b.label}${BTN_URL_SEP}${b.url}` : b.label,
         );
         text = `${text ? `${text}\n\n` : ''}${BTN_PREFIX}${parts.join(BTN_SEP)}`;
+      } else {
+        // Diagnostic: a message whose carrier looks like it HAS buttons but we
+        // extracted none — log the shape so we can add a parser for it.
+        const carrier = buttonCarrier(p);
+        const dump = carrier ? JSON.stringify(carrier) : '';
+        if (
+          /button|hydrated|nativeflow/i.test(dump) &&
+          !/payment_settings|pix_static_code/i.test(dump)
+        ) {
+          console.log('[waha parse] BTNMISS sample=', dump.slice(0, 1400));
+        }
       }
       // Location shares: render as a clickable Google Maps link (opens the
       // pin; forwardable by copying the link) instead of an empty [text].
