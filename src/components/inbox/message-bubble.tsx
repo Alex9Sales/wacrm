@@ -46,6 +46,39 @@ import { startOutboundCall } from "@/components/calls/incoming-call-modal";
 /** Content_text prefix a WhatsApp Pix key card is stored with (see waha.ts). */
 const PIX_PREFIX = "💠 Chave Pix";
 
+/** Marker the WAHA provider appends when an inbound template carries quick-reply
+ *  / CTA buttons (see buttonLabelsFromTemplate in waha.ts):
+ *  "<body>\n\n🔘 Botões: Confirmar · Remarcar". The bubble renders the labels as
+ *  clickable chips so the agent can fire the reply in one tap. */
+const BUTTONS_PREFIX = "🔘 Botões: ";
+const BUTTONS_SEP = " · ";
+
+/** Split a content_text into its body and template button labels, or null when
+ *  there's no button line. The marker sits on its own trailing line. */
+function parseTemplateButtons(
+  txt: string,
+): { body: string; labels: string[] } | null {
+  let body: string;
+  let line: string;
+  const at = txt.lastIndexOf("\n" + BUTTONS_PREFIX);
+  if (at >= 0) {
+    body = txt.slice(0, at);
+    line = txt.slice(at + 1);
+  } else if (txt.startsWith(BUTTONS_PREFIX)) {
+    body = "";
+    line = txt;
+  } else {
+    return null;
+  }
+  const labels = line
+    .slice(BUTTONS_PREFIX.length)
+    .split(BUTTONS_SEP)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (!labels.length) return null;
+  return { body: body.replace(/\s+$/, ""), labels };
+}
+
 /** Content_text prefix a shared contact (vCard) is stored with (see waha.ts
  *  textFromContact): "👤 Contato: <nome> · <telefone> | <nome2> · <telefone2>". */
 const CONTACT_PREFIX = "👤 Contato:";
@@ -285,6 +318,8 @@ interface MessageBubbleProps {
   mentionMembers?: MentionMember[];
   /** Group conversation → color the author prefix + @mentions (WhatsApp-style). */
   isGroup?: boolean;
+  /** Fire a text reply — wired to a template's quick-reply button chips. */
+  onQuickReply?: (text: string) => void;
 }
 
 function StatusIcon({ status }: { status: Message["status"] }) {
@@ -626,20 +661,97 @@ function CallPermissionCard({ perm }: { perm: ParsedCallPermission }) {
   );
 }
 
+/** Body + a row of the template's quick-reply buttons. When `onQuickReply` is
+ *  set (an inbound message the agent can answer) the labels are clickable and
+ *  fire the reply immediately — the whole row locks after one pick so a stray
+ *  second click can't send twice. On an outbound echo (no handler) they render
+ *  as static chips. */
+function TemplateButtons({
+  body,
+  labels,
+  isGroup,
+  onQuickReply,
+}: {
+  body: string;
+  labels: string[];
+  isGroup?: boolean;
+  onQuickReply?: (text: string) => void;
+}) {
+  const [chosen, setChosen] = useState<string | null>(null);
+  return (
+    <div>
+      {body && (
+        <p className="whitespace-pre-wrap break-words text-sm">
+          {isGroup ? <GroupText text={body} /> : <RichText text={body} />}
+        </p>
+      )}
+      <div className="mt-2 flex flex-wrap gap-1.5">
+        {labels.map((label, i) =>
+          onQuickReply ? (
+            <button
+              key={i}
+              type="button"
+              disabled={chosen !== null}
+              onClick={() => {
+                if (chosen) return;
+                setChosen(label);
+                onQuickReply(label);
+              }}
+              className={cn(
+                "rounded-full border px-3 py-1 text-xs font-medium transition active:scale-95",
+                chosen === label
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : chosen
+                    ? "border-border bg-muted text-muted-foreground opacity-60"
+                    : "border-primary/40 bg-primary/10 text-primary hover:bg-primary/20",
+              )}
+            >
+              {label}
+            </button>
+          ) : (
+            <span
+              key={i}
+              className="rounded-full border border-border bg-muted px-3 py-1 text-xs text-muted-foreground"
+            >
+              {label}
+            </span>
+          ),
+        )}
+      </div>
+    </div>
+  );
+}
+
 function MessageContent({
   message,
   contactPhone,
   contactName,
   isGroup,
+  onQuickReply,
 }: {
   message: Message;
   contactPhone?: string | null;
   contactName?: string | null;
   isGroup?: boolean;
+  onQuickReply?: (text: string) => void;
 }) {
   switch (message.content_type) {
     case "text": {
       const txt = message.content_text ?? "";
+      const buttons = parseTemplateButtons(txt);
+      if (buttons)
+        return (
+          <TemplateButtons
+            body={buttons.body}
+            labels={buttons.labels}
+            isGroup={isGroup}
+            // Clickable only on an INBOUND (customer) message — that's when the
+            // agent is answering the received template's buttons.
+            onQuickReply={
+              message.sender_type === "customer" ? onQuickReply : undefined
+            }
+          />
+        );
       if (txt.startsWith(PIX_PREFIX)) return <PixCard text={txt} />;
       if (txt.startsWith(CONTACT_PREFIX)) return <ContactCard text={txt} />;
       const copyCode = detectCopyCode(txt);
@@ -856,6 +968,7 @@ export function MessageBubble({
   contactName,
   mentionMembers,
   isGroup,
+  onQuickReply,
 }: MessageBubbleProps) {
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
   const time = format(new Date(message.created_at), "HH:mm");
@@ -915,6 +1028,7 @@ export function MessageBubble({
           contactPhone={contactPhone}
           contactName={contactName}
           isGroup={isGroup}
+          onQuickReply={onQuickReply}
         />
         <div
           className={cn(
