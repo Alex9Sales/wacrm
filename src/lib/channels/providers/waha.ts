@@ -1191,13 +1191,17 @@ export const wahaProvider: WhatsAppProvider = {
     groupJid: string,
   ): Promise<{ url: string } | null> {
     // Groups share the 1:1 profile-picture endpoint — only the id suffix is
-    // `@g.us` instead of `@c.us`. Key off the group jid's raw digits (NOT
-    // normalizePhone, which applies 9th-digit phone logic that would mangle an
-    // 18-digit group id). A miss (photo not yet propagated / no photo / privacy)
-    // just yields null and the caller retries on a later message.
-    const digits = groupJidDigits(groupJid);
-    if (!digits) return null;
-    return fetchPictureByChatId(ch, `${digits}@g.us`);
+    // `@g.us` instead of `@c.us`. Pass the FULL group jid VERBATIM: old-format
+    // group jids are `<creator>-<timestamp>@g.us` and the hyphen is
+    // significant — stripping to bare digits (groupJidDigits) yields a jid the
+    // engine can't resolve, so it returns null and no photo ever lands. We only
+    // ensure the `@g.us` suffix and keep every other char. A genuine miss
+    // (photo not yet propagated / no photo / privacy) still yields null and the
+    // caller retries on a later message.
+    const raw = (groupJid ?? '').trim();
+    if (!/\d/.test(raw)) return null;
+    const chatId = raw.includes('@') ? raw : `${raw}@g.us`;
+    return fetchPictureByChatId(ch, chatId);
   },
 
   // ---- session lifecycle (QR pairing) ----

@@ -585,10 +585,15 @@ async function ingestGroupMessage(
   //     keyed by the group jid (@g.us) instead of a phone. Runs whenever the
   //     group has no avatar yet (attempt-once per null), regardless of fromMe
   //     since the group photo is independent of who authored the message.
-  //     Fire-and-forget: NEVER awaited on the critical path.
+  //     Pass the CANONICAL stored jid (`monitoredRow.groupJid`, from the GET
+  //     /groups picker) rather than `group.jid`: the webhook jid can arrive
+  //     bare/digits-only, but the profile-picture endpoint needs the full jid
+  //     (old-format groups are `<creator>-<timestamp>@g.us` — the hyphen
+  //     matters). Fire-and-forget: NEVER awaited on the critical path.
   if (!contactOutcome.contact.avatarUrl) {
-    void backfillGroupAvatar(channel, contactId, group.jid).catch((err) =>
-      console.error('[inbound] group avatar backfill dispatch failed:', err),
+    void backfillGroupAvatar(channel, contactId, monitoredRow.groupJid).catch(
+      (err) =>
+        console.error('[inbound] group avatar backfill dispatch failed:', err),
     );
   }
 
