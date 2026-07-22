@@ -28,6 +28,7 @@ import { toast } from "sonner";
 import { ReplyQuote } from "./reply-quote";
 import { MessageReactions } from "./message-reactions";
 import { RichText } from "@/lib/inbox/rich-text";
+import { GroupText } from "@/lib/inbox/group-color";
 import { detectCopyCode } from "@/lib/inbox/copy-code";
 import { MentionText } from "@/components/inbox/mention-composer";
 import type { MentionMember } from "@/lib/inbox/mentions";
@@ -282,6 +283,8 @@ interface MessageBubbleProps {
   contactName?: string | null;
   /** Team members, for highlighting @mentions in an internal note. */
   mentionMembers?: MentionMember[];
+  /** Group conversation → color the author prefix + @mentions (WhatsApp-style). */
+  isGroup?: boolean;
 }
 
 function StatusIcon({ status }: { status: Message["status"] }) {
@@ -627,10 +630,12 @@ function MessageContent({
   message,
   contactPhone,
   contactName,
+  isGroup,
 }: {
   message: Message;
   contactPhone?: string | null;
   contactName?: string | null;
+  isGroup?: boolean;
 }) {
   switch (message.content_type) {
     case "text": {
@@ -654,7 +659,11 @@ function MessageContent({
       if (perm) return <CallPermissionCard perm={perm} />;
       return (
         <p className="whitespace-pre-wrap break-words text-sm">
-          <RichText text={message.content_text} />
+          {isGroup ? (
+            <GroupText text={message.content_text ?? ""} />
+          ) : (
+            <RichText text={message.content_text} />
+          )}
         </p>
       );
     }
@@ -675,7 +684,11 @@ function MessageContent({
           )}
           {realCaption(message.content_text) && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              <RichText text={message.content_text} />
+              {isGroup ? (
+            <GroupText text={message.content_text ?? ""} />
+          ) : (
+            <RichText text={message.content_text} />
+          )}
             </p>
           )}
         </div>
@@ -698,7 +711,11 @@ function MessageContent({
           )}
           {realCaption(message.content_text) && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              <RichText text={message.content_text} />
+              {isGroup ? (
+            <GroupText text={message.content_text ?? ""} />
+          ) : (
+            <RichText text={message.content_text} />
+          )}
             </p>
           )}
         </div>
@@ -785,7 +802,11 @@ function MessageContent({
           </span>
           {realCaption(message.content_text) && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">
-              <RichText text={message.content_text} />
+              {isGroup ? (
+            <GroupText text={message.content_text ?? ""} />
+          ) : (
+            <RichText text={message.content_text} />
+          )}
             </p>
           )}
         </div>
@@ -834,6 +855,7 @@ export function MessageBubble({
   contactPhone,
   contactName,
   mentionMembers,
+  isGroup,
 }: MessageBubbleProps) {
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
   const time = format(new Date(message.created_at), "HH:mm");
@@ -892,6 +914,7 @@ export function MessageBubble({
           message={message}
           contactPhone={contactPhone}
           contactName={contactName}
+          isGroup={isGroup}
         />
         <div
           className={cn(

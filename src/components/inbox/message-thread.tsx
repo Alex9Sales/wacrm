@@ -1338,6 +1338,7 @@ export function MessageThread({
                           }
                           contactName={contact.name}
                           mentionMembers={mentionMembers}
+                          isGroup={contact.is_group ?? false}
                         />
                       </MessageActions>
                     );
