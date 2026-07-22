@@ -4,6 +4,7 @@ import {
   groupJidDigits,
   prefixGroupAuthor,
   mentionUsers,
+  parseGroupParticipants,
   resolveGroupMentions,
 } from './group';
 
@@ -83,6 +84,47 @@ describe('mentionUsers', () => {
     expect(mentionUsers(undefined)).toEqual([]);
     expect(mentionUsers(null)).toEqual([]);
     expect(mentionUsers([42, '', '@lid'])).toEqual([]);
+  });
+});
+
+describe('parseGroupParticipants', () => {
+  it('pairs the @lid mention token with the phone jid (gows shape)', () => {
+    expect(
+      parseGroupParticipants([
+        { JID: '146089705500852@lid', PhoneNumber: '5513992126485@s.whatsapp.net' },
+      ]),
+    ).toEqual([{ lidUser: '146089705500852', phone: '5513992126485' }]);
+  });
+
+  it('accepts @c.us phones and the :device tag', () => {
+    expect(
+      parseGroupParticipants([
+        { JID: '146089705500852:4@lid', PN: '5513992126485@c.us' },
+      ]),
+    ).toEqual([{ lidUser: '146089705500852', phone: '5513992126485' }]);
+  });
+
+  it('falls back to bare PhoneNumber/LID field names', () => {
+    expect(
+      parseGroupParticipants([
+        { LID: '146089705500852', PhoneNumber: '5513992126485' },
+      ]),
+    ).toEqual([{ lidUser: '146089705500852', phone: '5513992126485' }]);
+  });
+
+  it('keeps a participant with only one id resolvable', () => {
+    expect(
+      parseGroupParticipants([
+        { JID: '5513992126485@s.whatsapp.net' },
+        { JID: '146089705500852@lid' },
+      ]),
+    ).toEqual([{ phone: '5513992126485' }, { lidUser: '146089705500852' }]);
+  });
+
+  it('skips empty/garbage participants and non-arrays', () => {
+    expect(parseGroupParticipants(undefined)).toEqual([]);
+    expect(parseGroupParticipants(null)).toEqual([]);
+    expect(parseGroupParticipants([{}, 42, null, { foo: 'bar' }])).toEqual([]);
   });
 });
 

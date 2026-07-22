@@ -69,6 +69,60 @@ export function mentionUsers(mentionedJids: unknown): string[] {
   return out;
 }
 
+/** One group participant reduced to the two ids we key on: the LID user-part
+ *  (the @mention token in an @lid group) and the phone digits (the `contacts`
+ *  key). Either may be absent. */
+export interface GroupParticipantIds {
+  /** LID user-part (digits only). */
+  lidUser?: string;
+  /** Phone digits (E.164 without the +). */
+  phone?: string;
+}
+
+/**
+ * Reduce a gows/WAHA group Participants array to (LID user-part, phone digits)
+ * pairs. The engine gives each participant a jid carrying `@lid` (the mention
+ * token) and a phone jid carrying `@s.whatsapp.net` (or `@c.us`), plus in some
+ * serializations a bare `PhoneNumber`/`PN`/`LID` field. Classification is by
+ * jid suffix first (robust to field-name drift), falling back to the field name
+ * only for bare numeric values. Anything unrecognized is skipped. This is the
+ * bridge that lets an @lid mention of someone who never posted resolve to a
+ * saved contact by phone.
+ */
+export function parseGroupParticipants(raw: unknown): GroupParticipantIds[] {
+  if (!Array.isArray(raw)) return [];
+  const out: GroupParticipantIds[] = [];
+  for (const p of raw) {
+    if (!p || typeof p !== 'object') continue;
+    let lidUser = '';
+    let phone = '';
+    for (const [key, val] of Object.entries(p as Record<string, unknown>)) {
+      if (typeof val !== 'string' || !val) continue;
+      const at = val.indexOf('@');
+      const suffix = at >= 0 ? val.slice(at).toLowerCase() : '';
+      const digits = val.split('@')[0].split(':')[0].replace(/\D/g, '');
+      if (!digits) continue;
+      if (suffix === '@lid') {
+        if (!lidUser) lidUser = digits;
+      } else if (suffix === '@s.whatsapp.net' || suffix === '@c.us') {
+        if (!phone) phone = digits;
+      } else if (!suffix) {
+        // Bare numeric value — disambiguate by the field name.
+        const k = key.toLowerCase();
+        if (k === 'lid') {
+          if (!lidUser) lidUser = digits;
+        } else if (k === 'phonenumber' || k === 'pn' || k === 'phone') {
+          if (!phone) phone = digits;
+        }
+      }
+    }
+    if (lidUser || phone) {
+      out.push({ lidUser: lidUser || undefined, phone: phone || undefined });
+    }
+  }
+  return out;
+}
+
 /**
  * Rewrite "@<user>" mention tokens in a group message to "@<name>", the way
  * WhatsApp shows them. `users` is the set of mentioned user-parts (from

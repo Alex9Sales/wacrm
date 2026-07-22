@@ -262,6 +262,18 @@ export interface WhatsAppProvider {
   ): Promise<{ jid: string; name: string; community?: string }[]>;
 
   /**
+   * Resolve a group's participants to (LID user-part, phone digits) pairs, so
+   * the inbound pipeline can map a `@lid` mention to a saved contact when the
+   * mentioned person never posted (and thus has no registry name). Optional —
+   * only the non-official engines that expose the participant list implement it
+   * (gows/WAHA does; Meta does not). Best-effort: returns `[]` on any failure.
+   */
+  listGroupParticipants?(
+    ch: ChannelCtx,
+    groupJid: string,
+  ): Promise<{ lidUser?: string; phone?: string }[]>;
+
+  /**
    * Meta: HMAC over the raw body via the global app secret. Others: match
    * the per-channel webhook_secret against a header/query token.
    *

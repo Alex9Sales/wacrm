@@ -52,7 +52,12 @@ import type {
   WhatsAppProvider,
 } from '../provider';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
-import { isGroupJid, mentionUsers, groupJidDigits } from '@/lib/whatsapp/group';
+import {
+  groupJidDigits,
+  isGroupJid,
+  mentionUsers,
+  parseGroupParticipants,
+} from '@/lib/whatsapp/group';
 
 // ------------------------------------------------------------
 // httpJson — fetch + JSON + timeout (ported from RecebIA)
@@ -835,6 +840,31 @@ export const wahaProvider: WhatsAppProvider = {
         };
       })
       .filter((g) => g.jid);
+  },
+
+  /** Resolve a group's participants to (LID user-part, phone digits) pairs. The
+   *  participant list rides on the same gows endpoint as listGroups —
+   *  GET /api/{session}/groups → [{ JID, Participants:[{ JID:'…@lid',
+   *  PhoneNumber:'…@s.whatsapp.net', … }] }] — so we fetch it, pick the group by
+   *  jid digits (robust to the @g.us-vs-bare mismatch), and reduce Participants
+   *  to the two ids the mention contact-fallback keys on. */
+  async listGroupParticipants(
+    ch: ChannelCtx,
+    groupJid: string,
+  ): Promise<{ lidUser?: string; phone?: string }[]> {
+    const { ok, body } = await httpJson(
+      `${baseUrlOf(ch)}/api/${sessionOf(ch)}/groups`,
+      { method: 'GET', headers: headersOf(ch) },
+    );
+    if (!ok || !Array.isArray(body)) return [];
+    const wanted = groupJidDigits(groupJid);
+    if (!wanted) return [];
+    const group = (body as Array<Record<string, unknown>>).find((g) => {
+      const jid = String(g.JID ?? g.jid ?? '');
+      return jid !== '' && groupJidDigits(jid) === wanted;
+    });
+    if (!group) return [];
+    return parseGroupParticipants(group.Participants ?? group.participants);
   },
 
   async sendLocation(

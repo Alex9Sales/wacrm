@@ -638,6 +638,20 @@ async function ingestGroupMessage(
   // WhatsApp shows them. Unknown participants stay as the number.
   if (group.mentions?.length) {
     const nameByUser = await lookupParticipantNames(accountId, group.mentions);
+    // Second chance for mentions the registry couldn't name (the person was
+    // mentioned but never posted, so we never learned their pushName): resolve
+    // LID→phone via the group's participant list and match a saved contact.
+    // Only fires when something is still unknown → no cost on the common path.
+    const unknown = group.mentions.filter((u) => !nameByUser[u]);
+    if (unknown.length) {
+      await resolveUnknownMentionsViaContacts(
+        channel,
+        accountId,
+        group.jid,
+        unknown,
+        nameByUser,
+      );
+    }
     baseText = resolveGroupMentions(baseText, group.mentions, nameByUser);
   }
 
@@ -747,6 +761,120 @@ async function lookupParticipantNames(
   } catch (err) {
     console.error('[inbound] participant name lookup failed:', err);
     return {};
+  }
+}
+
+/**
+ * Per-(channel, group) cache of the LID user-part → phone-digits map derived
+ * from the provider's participant list. The list is stable minute-to-minute but
+ * a `GET /groups` round-trip is heavy, so we memoize it (promise included, so
+ * concurrent group messages share one in-flight fetch) with a short TTL. The
+ * async body never rejects — a failed/absent fetch caches an empty map, which
+ * simply means "no LID fallback available", never a thrown error on the
+ * ingestion hot-path.
+ */
+const GROUP_PARTICIPANT_TTL_MS = 10 * 60_000;
+const groupParticipantCache = new Map<
+  string,
+  { expires: number; map: Promise<Map<string, string>> }
+>();
+
+function groupLidToPhone(
+  channel: ChannelCtx,
+  groupJid: string,
+): Promise<Map<string, string>> {
+  const cacheKey = `${channel.id}::${groupJidDigits(groupJid)}`;
+  const now = Date.now();
+  const hit = groupParticipantCache.get(cacheKey);
+  if (hit && hit.expires > now) return hit.map;
+
+  const map = (async () => {
+    const provider = getProvider(channel.provider);
+    if (typeof provider.listGroupParticipants !== 'function') {
+      return new Map<string, string>();
+    }
+    try {
+      const parts = await provider.listGroupParticipants(channel, groupJid);
+      const out = new Map<string, string>();
+      for (const p of parts) {
+        if (p.lidUser && p.phone) out.set(p.lidUser, p.phone);
+      }
+      return out;
+    } catch (err) {
+      console.error('[inbound] group participant fetch failed:', err);
+      return new Map<string, string>();
+    }
+  })();
+
+  groupParticipantCache.set(cacheKey, {
+    expires: now + GROUP_PARTICIPANT_TTL_MS,
+    map,
+  });
+  return map;
+}
+
+/**
+ * Fallback for @mentions the registry couldn't name (the person was mentioned
+ * but never posted, so we never learned their pushName). Resolve each unknown
+ * LID → phone via the group's participant list (cached), then match that phone
+ * against the CRM's saved `contacts` by phone_normalized. On a hit we adopt the
+ * contact's name AND prime the registry (under both the LID user-part and the
+ * phone) so the next mention is a cheap lookup with no participant round-trip.
+ * No match anywhere → the number stays, exactly like WhatsApp. Mutates
+ * `nameByUser` in place. Best-effort: any failure leaves it untouched.
+ */
+async function resolveUnknownMentionsViaContacts(
+  channel: ChannelCtx,
+  accountId: string,
+  groupJid: string,
+  unknownUsers: string[],
+  nameByUser: Record<string, string>,
+): Promise<void> {
+  try {
+    const lidToPhone = await groupLidToPhone(channel, groupJid);
+    // Candidate phone per unknown mention: the LID's phone from the participant
+    // list, or the mention token itself (already a phone in a non-@lid group).
+    const phoneByUser = new Map<string, string>();
+    const phones = new Set<string>();
+    for (const u of unknownUsers) {
+      const phone = lidToPhone.get(u) || u;
+      if (!phone) continue;
+      phoneByUser.set(u, phone);
+      phones.add(phone);
+    }
+    if (phones.size === 0) return;
+
+    const rows = await db
+      .select({
+        name: contacts.name,
+        phoneNormalized: contacts.phoneNormalized,
+      })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.accountId, accountId),
+          eq(contacts.isGroup, false),
+          inArray(contacts.phoneNormalized, Array.from(phones)),
+        ),
+      );
+    const nameByPhone = new Map<string, string>();
+    for (const r of rows) {
+      const name = (r.name ?? '').trim();
+      if (name && r.phoneNormalized) nameByPhone.set(r.phoneNormalized, name);
+    }
+    if (nameByPhone.size === 0) return;
+
+    for (const u of unknownUsers) {
+      const phone = phoneByUser.get(u);
+      if (!phone) continue;
+      const name = nameByPhone.get(phone);
+      if (!name) continue;
+      nameByUser[u] = name;
+      // Prime the registry so future mentions skip the participant round-trip.
+      await registerParticipantName(accountId, [u, phone], name);
+    }
+  } catch (err) {
+    console.error('[inbound] mention contact-fallback failed:', err);
   }
 }
 
