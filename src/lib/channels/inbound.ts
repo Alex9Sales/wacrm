@@ -581,6 +581,17 @@ async function ingestGroupMessage(
   if (!contactOutcome) return null;
   const contactId = contactOutcome.contact.id;
 
+  // 3b) Best-effort group photo backfill — same pipeline as the 1:1 avatar,
+  //     keyed by the group jid (@g.us) instead of a phone. Runs whenever the
+  //     group has no avatar yet (attempt-once per null), regardless of fromMe
+  //     since the group photo is independent of who authored the message.
+  //     Fire-and-forget: NEVER awaited on the critical path.
+  if (!contactOutcome.contact.avatarUrl) {
+    void backfillGroupAvatar(channel, contactId, group.jid).catch((err) =>
+      console.error('[inbound] group avatar backfill dispatch failed:', err),
+    );
+  }
+
   // 4) Resolve/create the single group conversation for this channel.
   const convResult = await findOrCreateConversation(
     accountId,
@@ -845,36 +856,64 @@ async function backfillContactAvatar(
 
     const pic = await provider.fetchProfilePicture(channel, phoneE164);
     if (!pic || !pic.url) return;
-
-    // Download the CDN image bytes.
-    const res = await fetch(pic.url);
-    if (!res.ok) {
-      console.error(
-        `[inbound] avatar fetch failed: ${res.status} ${pic.url}`,
-      );
-      return;
-    }
-    const bytes = Buffer.from(await res.arrayBuffer());
-    if (bytes.length === 0) return;
-    const mimetype =
-      res.headers.get('content-type')?.split(';')[0]?.trim() || 'image/jpeg';
-
-    // Re-host in MinIO under an avatars/ key → stable public proxy URL.
-    const ext = extensionFor(mimetype);
-    const key = `avatars/${contactId}/${randomUUID()}${ext || '.jpg'}`;
-    await putObject(MEDIA_BUCKET, key, bytes, mimetype);
-    const url = publicUrl(MEDIA_BUCKET, key);
-
-    // Only set avatar_url when it's still empty — avoids clobbering a value
-    // a concurrent inbound (or a manual edit) may have set in the meantime,
-    // and keeps this a one-time backfill.
-    await db
-      .update(contacts)
-      .set({ avatarUrl: url, updatedAt: new Date().toISOString() })
-      .where(and(eq(contacts.id, contactId), isNull(contacts.avatarUrl)));
+    await rehostAvatar(contactId, pic.url);
   } catch (err) {
     console.error('[inbound] backfillContactAvatar failed:', err);
   }
+}
+
+/**
+ * Same as {@link backfillContactAvatar} but for a monitored GROUP "contact":
+ * fetches the group photo (keyed by group jid `@g.us`) and re-hosts it into the
+ * SAME `contacts.avatar_url`, so a group thread shows its photo instead of just
+ * an initial. WhatsApp can lag on a freshly-set group photo (miss → null); the
+ * `isNull(avatar_url)` guard keeps this attempt-once-per-null, so a later group
+ * message naturally retries until the photo has propagated.
+ */
+async function backfillGroupAvatar(
+  channel: ChannelCtx,
+  contactId: string,
+  groupJid: string,
+): Promise<void> {
+  try {
+    const provider = getProvider(channel.provider);
+    if (typeof provider.fetchGroupPicture !== 'function') return;
+
+    const pic = await provider.fetchGroupPicture(channel, groupJid);
+    if (!pic || !pic.url) return;
+    await rehostAvatar(contactId, pic.url);
+  } catch (err) {
+    console.error('[inbound] backfillGroupAvatar failed:', err);
+  }
+}
+
+/**
+ * Download a (short-lived, cross-origin) WhatsApp CDN photo URL, re-host the
+ * bytes in MinIO under an `avatars/` key, and set `contacts.avatar_url` — but
+ * only while it's still empty (race-safe, one-time backfill). Shared by the
+ * 1:1 and group avatar backfills. The raw `pps.whatsapp.net` URL is never
+ * stored: it expires and can be http/cross-origin.
+ */
+async function rehostAvatar(contactId: string, cdnUrl: string): Promise<void> {
+  const res = await fetch(cdnUrl);
+  if (!res.ok) {
+    console.error(`[inbound] avatar fetch failed: ${res.status} ${cdnUrl}`);
+    return;
+  }
+  const bytes = Buffer.from(await res.arrayBuffer());
+  if (bytes.length === 0) return;
+  const mimetype =
+    res.headers.get('content-type')?.split(';')[0]?.trim() || 'image/jpeg';
+
+  const ext = extensionFor(mimetype);
+  const key = `avatars/${contactId}/${randomUUID()}${ext || '.jpg'}`;
+  await putObject(MEDIA_BUCKET, key, bytes, mimetype);
+  const url = publicUrl(MEDIA_BUCKET, key);
+
+  await db
+    .update(contacts)
+    .set({ avatarUrl: url, updatedAt: new Date().toISOString() })
+    .where(and(eq(contacts.id, contactId), isNull(contacts.avatarUrl)));
 }
 
 /** Best-effort file extension from mimetype or filename. */

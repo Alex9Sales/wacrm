@@ -299,6 +299,18 @@ export interface WhatsAppProvider {
     phoneE164: string,
   ): Promise<{ url: string } | null>;
 
+  /**
+   * Best-effort lookup of a WhatsApp GROUP's photo, keyed by the group jid
+   * (`<digits>@g.us`). Same contract/pipeline as `fetchProfilePicture` — the
+   * caller must download + re-host the returned CDN URL, never store it
+   * directly. Returns null on no photo / not-yet-propagated / error. Optional:
+   * only the QR engines that expose group photos implement it (WAHA/gows).
+   */
+  fetchGroupPicture?(
+    ch: ChannelCtx,
+    groupJid: string,
+  ): Promise<{ url: string } | null>;
+
   // ---- session lifecycle (non-official providers) ----
   startSession?(ch: ChannelCtx, webhookUrl: string): Promise<{ qr?: string }>;
   getState?(

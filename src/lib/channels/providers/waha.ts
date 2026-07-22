@@ -52,7 +52,7 @@ import type {
   WhatsAppProvider,
 } from '../provider';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
-import { isGroupJid, mentionUsers } from '@/lib/whatsapp/group';
+import { isGroupJid, mentionUsers, groupJidDigits } from '@/lib/whatsapp/group';
 
 // ------------------------------------------------------------
 // httpJson — fetch + JSON + timeout (ported from RecebIA)
@@ -116,6 +116,46 @@ function apiKeyOf(ch: ChannelCtx): string {
 
 function headersOf(ch: ChannelCtx): Record<string, string> {
   return { 'Content-Type': 'application/json', 'X-Api-Key': apiKeyOf(ch) };
+}
+
+/**
+ * Best-effort profile-picture lookup for ANY WhatsApp chat id — a 1:1 contact
+ * (`<digits>@c.us`) or a group (`<digits>@g.us`). Both go through the SAME
+ * gows endpoint; only the id suffix differs, so the two public methods below
+ * just build the id and delegate here.
+ *
+ * VERIFIED against the live WAHA/gows instance:
+ *   GET {base}/api/contacts/profile-picture?contactId=<id>&session=<s>
+ *   → { profilePictureURL: "https://pps.whatsapp.net/..." } | { profilePictureURL: null }
+ * The session-in-path variant (/api/{session}/contacts/...) 400s on this
+ * engine, so we only use the query-param shape.
+ */
+async function fetchPictureByChatId(
+  ch: ChannelCtx,
+  chatId: string,
+): Promise<{ url: string } | null> {
+  const base = baseUrlOf(ch);
+  const session = sessionOf(ch);
+  try {
+    const { ok, body } = await httpJson(
+      `${base}/api/contacts/profile-picture?contactId=${encodeURIComponent(
+        chatId,
+      )}&session=${encodeURIComponent(session)}`,
+      { method: 'GET', headers: headersOf(ch) },
+    );
+    if (!ok) return null;
+    const url = (body as { profilePictureURL?: unknown }).profilePictureURL;
+    if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
+      return { url };
+    }
+    return null;
+  } catch (err) {
+    console.error(
+      `[waha] fetchPictureByChatId failed for ${chatId}:`,
+      err instanceof Error ? err.message : err,
+    );
+    return null;
+  }
 }
 
 // ------------------------------------------------------------
@@ -1033,34 +1073,21 @@ export const wahaProvider: WhatsAppProvider = {
     // is fine; a miss just yields no photo.
     const digits = normalizePhone(phoneE164);
     if (!digits) return null;
-    const chatId = `${digits}@c.us`;
-    const base = baseUrlOf(ch);
-    const session = sessionOf(ch);
-    try {
-      // VERIFIED against the live WAHA (NOWEB) instance:
-      //   GET {base}/api/contacts/profile-picture?contactId=<id>&session=<s>
-      //   → { profilePictureURL: "https://pps.whatsapp.net/..." } | { profilePictureURL: null }
-      // The session-in-path variant (/api/{session}/contacts/...) 400s on
-      // this engine, so we only use the query-param shape.
-      const { ok, body } = await httpJson(
-        `${base}/api/contacts/profile-picture?contactId=${encodeURIComponent(
-          chatId,
-        )}&session=${encodeURIComponent(session)}`,
-        { method: 'GET', headers: headersOf(ch) },
-      );
-      if (!ok) return null;
-      const url = (body as { profilePictureURL?: unknown }).profilePictureURL;
-      if (typeof url === 'string' && /^https?:\/\//i.test(url)) {
-        return { url };
-      }
-      return null;
-    } catch (err) {
-      console.error(
-        `[waha] fetchProfilePicture failed for ${chatId}:`,
-        err instanceof Error ? err.message : err,
-      );
-      return null;
-    }
+    return fetchPictureByChatId(ch, `${digits}@c.us`);
+  },
+
+  async fetchGroupPicture(
+    ch: ChannelCtx,
+    groupJid: string,
+  ): Promise<{ url: string } | null> {
+    // Groups share the 1:1 profile-picture endpoint — only the id suffix is
+    // `@g.us` instead of `@c.us`. Key off the group jid's raw digits (NOT
+    // normalizePhone, which applies 9th-digit phone logic that would mangle an
+    // 18-digit group id). A miss (photo not yet propagated / no photo / privacy)
+    // just yields null and the caller retries on a later message.
+    const digits = groupJidDigits(groupJid);
+    if (!digits) return null;
+    return fetchPictureByChatId(ch, `${digits}@g.us`);
   },
 
   // ---- session lifecycle (QR pairing) ----
