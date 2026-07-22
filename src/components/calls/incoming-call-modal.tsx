@@ -63,6 +63,23 @@ export function startOutboundCall(
   );
 }
 
+/** Take over a live AI voice call (Fatia 5B handoff). Fired from the "Assumir"
+ *  button on the VoiceLiveBadge / VoiceMonitor: the agent joins the in-progress
+ *  waha-voip call (claim + own audio leg); the AI bridge sees the claim, says a
+ *  short handoff line, and drops its leg. waha-voip only. */
+export function takeOverVoiceCall(
+  callId: string,
+  channelId?: string,
+  peer?: string,
+  name?: string,
+) {
+  window.dispatchEvent(
+    new CustomEvent('fluxia:voice-takeover', {
+      detail: { callId, channelId, peer, name },
+    }),
+  );
+}
+
 /** Per-leg media. Lives in a ref (never in state): these are imperative
  *  objects and re-rendering must not recreate them. */
 interface LegMedia {
@@ -603,6 +620,76 @@ export function IncomingCallModal() {
     [stopRing, newPeer, media, wahaConnectAudio, patchLeg, closeLeg],
   );
 
+  // ---- takeover (Fatia 5B handoff): join a live AI voice call ----
+  // The agent clicks "Assumir" on the AI-call badge/monitor. Unlike answer(),
+  // there is no ringing leg — we open a fresh one straight into 'connecting',
+  // claim the call (writes claimed_by = me; the AI never sets it, so we win the
+  // WHERE claimed_by IS NULL update even though it already reads 'answered'),
+  // and attach our own audio leg to the in-progress gows call. The AI bridge
+  // polls voice-handoff, sees the claim, speaks a short line and drops its leg —
+  // gows keeps the call live on ours. waha-voip only.
+  const joinCall = useCallback(
+    async (
+      callId: string,
+      channelId?: string,
+      peer?: string,
+      name?: string,
+    ) => {
+      if (!callId) return;
+      // Already holding a leg for this call? Just bring it to the front.
+      const existing = findByCallId(legsRef.current, callId);
+      if (existing) {
+        setActiveKey(existing.key);
+        return;
+      }
+      keySeq.current += 1;
+      const key = `leg-${keySeq.current}`;
+      mediaRef.current.set(key, emptyMedia());
+      setLegs((prev) => [
+        ...prev,
+        {
+          key,
+          callId,
+          peer: peer || 'Cliente',
+          name,
+          provider: 'waha',
+          channelId,
+          phase: 'connecting',
+          dir: 'in',
+          muted: false,
+          ringMuted: false,
+          seconds: 0,
+        },
+      ]);
+      setActiveKey(key);
+      try {
+        // 'claim' = grab the lock WITHOUT re-accepting at the engine (the AI
+        // already accepted); the browser then attaches its own media leg.
+        const res = await fetch(
+          `/api/calls/waha/${encodeURIComponent(callId)}`,
+          {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ action: 'claim', channelId }),
+          },
+        );
+        // 409 = another human already took this call over.
+        if (res.status === 409) {
+          toast.info('Essa ligação já foi assumida por outro atendente.');
+          closeLeg(key);
+          return;
+        }
+        if (!res.ok) throw new Error(`waha accept HTTP ${res.status}`);
+        await wahaConnectAudio(key, callId, channelId);
+      } catch (err) {
+        console.error('[calls] takeover failed:', err);
+        toast.error('Não consegui assumir a ligação.');
+        closeLeg(key);
+      }
+    },
+    [setActiveKey, wahaConnectAudio, closeLeg],
+  );
+
   const postAction = useCallback((leg: Leg, action: 'terminate' | 'reject') => {
     const id = leg.callId;
     if (!id) return;
@@ -801,6 +888,27 @@ export function IncomingCallModal() {
     window.addEventListener('fluxia:outbound-call', handler);
     return () => window.removeEventListener('fluxia:outbound-call', handler);
   }, [dial]);
+
+  // "Assumir" on the AI-call badge/monitor → take over the live call.
+  useEffect(() => {
+    const handler = (e: Event) => {
+      const detail = (e as CustomEvent).detail as {
+        callId?: string;
+        channelId?: string;
+        peer?: string;
+        name?: string;
+      };
+      if (detail?.callId)
+        void joinCall(
+          detail.callId,
+          detail.channelId,
+          detail.peer,
+          detail.name,
+        );
+    };
+    window.addEventListener('fluxia:voice-takeover', handler);
+    return () => window.removeEventListener('fluxia:voice-takeover', handler);
+  }, [joinCall]);
 
   // ---- SSE ----
   const onEvent = useCallback(

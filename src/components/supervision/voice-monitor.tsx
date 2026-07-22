@@ -11,6 +11,7 @@ import { useEffect, useRef, useState } from 'react';
 import { Phone, Radio } from 'lucide-react';
 
 import { useServerEvents, type ServerEvent } from '@/hooks/use-server-events';
+import { takeOverVoiceCall } from '@/components/calls/incoming-call-modal';
 
 interface Line {
   role: 'ai' | 'customer';
@@ -20,6 +21,7 @@ interface Line {
 interface LiveCall {
   callId: string;
   channelName?: string;
+  channelId?: string;
   from?: string;
   callerName?: string;
   lines: Line[];
@@ -35,6 +37,7 @@ export function VoiceMonitor() {
       callId: string;
       phase: 'start' | 'line' | 'end';
       channelName?: string;
+      channelId?: string;
       from?: string;
       callerName?: string;
       role?: 'ai' | 'customer';
@@ -52,6 +55,7 @@ export function VoiceMonitor() {
         next[ev.callId] = {
           ...cur,
           channelName: ev.channelName ?? cur.channelName,
+          channelId: ev.channelId ?? cur.channelId,
           from: ev.from ?? cur.from,
           callerName: ev.callerName ?? cur.callerName,
           ended: false,
@@ -66,6 +70,7 @@ export function VoiceMonitor() {
         next[ev.callId] = {
           ...cur,
           channelName: ev.channelName ?? cur.channelName,
+          channelId: ev.channelId ?? cur.channelId,
           lines,
         };
       } else if (ev.phase === 'end') {
@@ -139,15 +144,35 @@ function LiveCallCard({ call }: { call: LiveCall }) {
             )}
           </div>
         </div>
-        <span
-          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-medium ${
-            call.ended
-              ? 'bg-muted text-muted-foreground'
-              : 'bg-emerald-500/15 text-emerald-600'
-          }`}
-        >
-          {call.ended ? 'encerrada' : '● ao vivo'}
-        </span>
+        <div className="flex shrink-0 items-center gap-2">
+          {!call.ended && (
+            <button
+              type="button"
+              onClick={() =>
+                takeOverVoiceCall(
+                  call.callId,
+                  call.channelId,
+                  call.from,
+                  call.callerName,
+                )
+              }
+              className="flex items-center gap-1 rounded-full bg-emerald-600 px-2.5 py-1 text-[11px] font-semibold text-white transition hover:bg-emerald-700"
+              title="Assumir a ligação — a IA se despede e te passa a chamada"
+            >
+              <Phone className="size-3" />
+              Assumir
+            </button>
+          )}
+          <span
+            className={`rounded-full px-2 py-0.5 text-[10px] font-medium ${
+              call.ended
+                ? 'bg-muted text-muted-foreground'
+                : 'bg-emerald-500/15 text-emerald-600'
+            }`}
+          >
+            {call.ended ? 'encerrada' : '● ao vivo'}
+          </span>
+        </div>
       </div>
 
       <div

@@ -47,7 +47,7 @@ export async function POST(request: Request) {
   }
 
   const [ch] = await db
-    .select({ accountId: channels.accountId, name: channels.name })
+    .select({ id: channels.id, accountId: channels.accountId, name: channels.name })
     .from(channels)
     .where(
       channelId
@@ -77,6 +77,7 @@ export async function POST(request: Request) {
     callId,
     phase,
     channelName: ch.name,
+    channelId: ch.id,
     from: typeof body.from === 'string' ? body.from : undefined,
     callerName: typeof body.callerName === 'string' ? body.callerName : undefined,
     role: body.role === 'ai' || body.role === 'customer' ? body.role : undefined,

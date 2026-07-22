@@ -88,6 +88,9 @@ export type RealtimeEvent =
       callId: string;
       phase: "start" | "line" | "end";
       channelName?: string;
+      /** The WAHA channel the AI call runs on — a human "Assumir" (handoff)
+       *  needs it to claim + attach its own audio leg to the same call. */
+      channelId?: string;
       from?: string;
       callerName?: string;
       /** For phase 'line': who spoke + what. */
