@@ -43,7 +43,8 @@ import {
   type RecipientJob,
 } from '@/lib/queue/queues';
 import { limiterForChannel, jitterForChannel } from '@/lib/queue/throughput';
-import { isPermanentSendError } from '@/lib/queue/errors';
+import { channelHaltReason, isPermanentSendError } from '@/lib/queue/errors';
+import { haltBroadcast } from '@/lib/queue/broadcast-controls';
 import {
   loadBroadcastRow,
   resolveBroadcastChannel,
@@ -217,6 +218,30 @@ async function processRecipientJob(job: Job<RecipientJob>): Promise<void> {
   }
 
   // Failure — classify.
+
+  // CHANNEL in trouble (reputation 463 / session down)? Then this isn't about
+  // this recipient: every remaining one would fail too, and with a 463 each
+  // extra attempt burns the sender number further. Stop the WHOLE broadcast
+  // (pause + alert the owner) instead of grinding through the rest. The pause
+  // is race-safe, so only the first job to notice raises the alert; the other
+  // queued recipients see 'paused' and defer, keeping their place for a later
+  // "Reenviar falhados".
+  const haltReason = channelHaltReason(result.error);
+  if (haltReason) {
+    await markRecipientFailed(recipient.id, attempts, result.error);
+    const paused = await haltBroadcast(
+      loaded.ctx.broadcast.id,
+      haltReason,
+      result.error,
+    );
+    log(
+      `recipient ${recipient.id} channel-halt (${haltReason})` +
+        `${paused ? ' → broadcast PAUSADO + alerta' : ''}: ${result.error}`,
+    );
+    await finalizeBroadcastIfDone(loaded.ctx.broadcast.id);
+    throw new UnrecoverableError(result.error);
+  }
+
   if (isPermanentSendError(result.error)) {
     await markRecipientFailed(recipient.id, attempts, result.error);
     log(`recipient ${recipient.id} PERMANENT failure: ${result.error}`);

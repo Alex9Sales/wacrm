@@ -18,8 +18,10 @@
 
 import { and, eq } from 'drizzle-orm';
 
-import { db, broadcastRecipients, broadcasts } from '@/db';
+import { db, broadcastRecipients, broadcasts, notifications } from '@/db';
 import { firstOrNull } from '@/db/helpers';
+import { publishEvent } from '@/lib/events/publish';
+import type { ChannelHaltReason } from './errors';
 import {
   enqueueBroadcastDispatch,
   removeBroadcastDispatchJob,
@@ -199,6 +201,84 @@ export async function retryFailedBroadcast(
   await setStatus(broadcastId, 'sending');
   await enqueueBroadcastDispatch(broadcastId, {});
   return { ok: true, status: 'sending', requeued: pending.length };
+}
+
+/** What the operator sees when a broadcast is auto-paused. */
+function haltAlert(
+  reason: ChannelHaltReason,
+  broadcastName: string,
+): { title: string; body: string } {
+  if (reason === 'reputation') {
+    return {
+      title: 'Disparo pausado — número bloqueado pelo WhatsApp',
+      body:
+        `Pausei "${broadcastName}" automaticamente: o WhatsApp começou a recusar os envios ` +
+        `desse número por reputação (erro 463). Insistir piora e pode banir o número de vez. ` +
+        `Deixe-o descansar e aqueça-o antes de continuar — ou siga por outro número. ` +
+        `Quando estiver liberado, use "Reenviar falhados".`,
+    };
+  }
+  return {
+    title: 'Disparo pausado — canal desconectado',
+    body:
+      `Pausei "${broadcastName}" automaticamente: a sessão do WhatsApp desse canal caiu ` +
+      `(deslogada ou fora do ar), então nada mais sairia. Reconecte o canal e use ` +
+      `"Reenviar falhados" para retomar de onde parou.`,
+  };
+}
+
+/**
+ * Auto-pause a broadcast because the CHANNEL is in trouble (reputation block /
+ * session down) and alert its owner. Called by the worker on the first such
+ * failure — every remaining recipient would fail anyway, and with a 463 each
+ * extra attempt burns the sender number further.
+ *
+ * Race-safe by construction: the pause is a conditional UPDATE on
+ * `status = 'sending'`, so of N recipient jobs failing at once exactly ONE
+ * flips the status and raises the alert — the rest get `false` and stay quiet.
+ * Their queued jobs then see 'paused' and defer themselves, so the broadcast
+ * stops without losing anyone: the pending recipients keep their slot and a
+ * later "Reenviar falhados" picks the failed ones back up.
+ *
+ * Returns true when THIS call did the pausing (and alerted).
+ */
+export async function haltBroadcast(
+  broadcastId: string,
+  reason: ChannelHaltReason,
+  detail: string,
+): Promise<boolean> {
+  const won = firstOrNull(
+    await db
+      .update(broadcasts)
+      .set({ status: 'paused', updatedAt: new Date().toISOString() })
+      .where(
+        and(eq(broadcasts.id, broadcastId), eq(broadcasts.status, 'sending')),
+      )
+      .returning({
+        accountId: broadcasts.accountId,
+        userId: broadcasts.userId,
+        name: broadcasts.name,
+      }),
+  );
+  // Lost the race (someone already paused/finished it) → don't double-alert.
+  if (!won) return false;
+
+  // Alerting must never break the pause — the pause is the part that protects
+  // the number.
+  try {
+    const { title, body } = haltAlert(reason, won.name);
+    await db.insert(notifications).values({
+      accountId: won.accountId,
+      userId: won.userId,
+      type: 'broadcast_halted',
+      title,
+      body: `${body}\n\nErro: ${detail.slice(0, 300)}`,
+    });
+    await publishEvent(won.accountId, { type: 'notification' });
+  } catch (err) {
+    console.error('[broadcast-controls] halt alert failed:', err);
+  }
+  return true;
 }
 
 export async function controlBroadcast(
