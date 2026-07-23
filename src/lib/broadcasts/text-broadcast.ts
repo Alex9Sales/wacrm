@@ -206,44 +206,76 @@ export async function upsertContactsByPhone(
   userId: string,
   rows: { phone: string; name?: string | null }[],
 ): Promise<string[]> {
-  const uniqueByPhone = new Map<string, { phone: string; name?: string | null }>()
+  // Key on DIGITS, never the raw string. `contacts.phone_normalized` is a
+  // GENERATED column (digits of `phone`) with a UNIQUE index per account, but
+  // ~a third of contacts are stored formatted ("+5567…"). Matching the raw
+  // string therefore missed an existing "+55…" when the caller sent plain
+  // digits, so the number looked NEW, the bulk insert hit the unique index, and
+  // the whole request died with a 500 — one collision killed a 50-recipient
+  // broadcast. Digits are exactly what the DB uniques on, so they're the key.
+  const digitsOf = (p: string) => p.replace(/\D/g, '')
+  const byDigits = new Map<string, { phone: string; name?: string | null }>()
+  const order: string[] = []
   for (const r of rows) {
     const phone = typeof r.phone === 'string' ? r.phone.trim() : ''
-    if (phone) uniqueByPhone.set(phone, { phone, name: r.name })
+    const d = digitsOf(phone)
+    if (!phone || !d) continue
+    if (!byDigits.has(d)) {
+      byDigits.set(d, { phone, name: r.name })
+      order.push(d)
+    }
   }
-  const phones = [...uniqueByPhone.keys()]
-  if (phones.length === 0) return []
+  if (order.length === 0) return []
 
+  const idByDigits = new Map<string, string>()
   const existing = (await db
-    .select({ id: contacts.id, phone: contacts.phone })
+    .select({ id: contacts.id, digits: contacts.phoneNormalized })
     .from(contacts)
-    .where(and(eq(contacts.accountId, accountId), inArray(contacts.phone, phones)))) as {
-    id: string
-    phone: string | null
-  }[]
-  const byPhone = new Map<string, string>()
-  for (const c of existing) if (c.phone) byPhone.set(c.phone, c.id)
+    .where(
+      and(
+        eq(contacts.accountId, accountId),
+        inArray(contacts.phoneNormalized, order),
+      ),
+    )) as { id: string; digits: string | null }[]
+  for (const c of existing) if (c.digits) idByDigits.set(c.digits, c.id)
 
-  const missing = phones
-    .filter((p) => !byPhone.has(p))
-    .map((phone) => ({
+  const missing = order
+    .filter((d) => !idByDigits.has(d))
+    .map((d) => ({
       userId,
       accountId,
-      phone,
-      name: uniqueByPhone.get(phone)?.name ?? null,
+      phone: byDigits.get(d)!.phone,
+      name: byDigits.get(d)?.name ?? null,
     }))
   if (missing.length > 0) {
     const inserted = (await db
       .insert(contacts)
       .values(missing)
-      .returning({ id: contacts.id, phone: contacts.phone })) as {
+      // A concurrent insert of the same number must not fail the whole batch.
+      .onConflictDoNothing()
+      .returning({ id: contacts.id, digits: contacts.phoneNormalized })) as {
       id: string
-      phone: string | null
+      digits: string | null
     }[]
-    for (const c of inserted) if (c.phone) byPhone.set(c.phone, c.id)
+    for (const c of inserted) if (c.digits) idByDigits.set(c.digits, c.id)
+    // Rows skipped by onConflictDoNothing (lost a race) return nothing — read
+    // their ids back so the recipient never silently drops out of the campaign.
+    const raced = order.filter((d) => !idByDigits.has(d))
+    if (raced.length > 0) {
+      const rows2 = (await db
+        .select({ id: contacts.id, digits: contacts.phoneNormalized })
+        .from(contacts)
+        .where(
+          and(
+            eq(contacts.accountId, accountId),
+            inArray(contacts.phoneNormalized, raced),
+          ),
+        )) as { id: string; digits: string | null }[]
+      for (const c of rows2) if (c.digits) idByDigits.set(c.digits, c.id)
+    }
   }
 
-  return phones
-    .map((p) => byPhone.get(p))
+  return order
+    .map((d) => idByDigits.get(d))
     .filter((id): id is string => !!id)
 }
