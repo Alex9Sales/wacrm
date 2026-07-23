@@ -80,6 +80,11 @@ export function takeOverVoiceCall(
   );
 }
 
+/** How long a takeover waits for the AI to finish its handoff line before
+ *  attaching anyway. The bridge's own safety net releases at 6s, so this sits
+ *  just past it — long enough for the goodbye, short enough not to feel stuck. */
+const HANDOFF_WAIT_MS = 7000;
+
 /** Per-leg media. Lives in a ref (never in state): these are imperative
  *  objects and re-rendering must not recreate them. */
 interface LegMedia {
@@ -163,6 +168,10 @@ export function IncomingCallModal() {
 
   const mediaRef = useRef<Map<string, LegMedia>>(new Map());
   const keySeq = useRef(0);
+  /** Takeovers waiting for the AI to finish its handoff line (keyed by callId).
+   *  Resolved by the `voice_live` phase 'end' the bridge posts when it goes
+   *  quiet — see joinCall. */
+  const handoffWaiters = useRef<Map<string, () => void>>(new Map());
   // Mirrors `legs` for the SSE handler and async media callbacks, which must
   // read the current legs without being re-created on every state change.
   const legsRef = useRef<Leg[]>([]);
@@ -680,6 +689,20 @@ export function IncomingCallModal() {
           return;
         }
         if (!res.ok) throw new Error(`waha accept HTTP ${res.status}`);
+        // Let the AI finish its handoff line and go quiet BEFORE we attach.
+        // gows keeps ONE media transport per call: our offer SWAPS it, which
+        // cuts the AI off mid-sentence (and, on 23/07, killed the call). The
+        // bridge posts voice_live 'end' when it's done — wait for that, or
+        // give up after a beat and take the call anyway.
+        await new Promise<void>((resolve) => {
+          const done = () => {
+            clearTimeout(timer);
+            handoffWaiters.current.delete(callId);
+            resolve();
+          };
+          const timer = setTimeout(done, HANDOFF_WAIT_MS);
+          handoffWaiters.current.set(callId, done);
+        });
         await wahaConnectAudio(key, callId, channelId);
       } catch (err) {
         console.error('[calls] takeover failed:', err);
@@ -922,6 +945,7 @@ export function IncomingCallModal() {
       channelId?: unknown;
       callerLid?: unknown;
       status?: unknown;
+      phase?: unknown;
     }) => {
       const eventCallId = typeof e.callId === 'string' ? e.callId : '';
       if (e.type === 'call_incoming') {
@@ -989,6 +1013,12 @@ export function IncomingCallModal() {
         // calls the API), so this only dismisses the losers.
         const leg = findByCallId(legsRef.current, eventCallId);
         if (leg && leg.phase === 'ringing') closeLeg(leg.key);
+      } else if (e.type === 'voice_live') {
+        // The AI finished its handoff line and went silent — a takeover
+        // waiting on this call can now attach its audio leg (joinCall).
+        if (e.phase === 'end' && eventCallId) {
+          handoffWaiters.current.get(eventCallId)?.();
+        }
       } else if (e.type === 'call_status') {
         // The stream is account-wide: find the leg this belongs to, if any.
         const leg = eventCallId
