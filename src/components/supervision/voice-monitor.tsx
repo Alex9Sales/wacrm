@@ -12,6 +12,7 @@ import { Phone, Radio } from 'lucide-react';
 
 import { useServerEvents, type ServerEvent } from '@/hooks/use-server-events';
 import { takeOverVoiceCall } from '@/components/calls/incoming-call-modal';
+import { VOICE_HANDOFF_ENABLED } from '@/lib/calls/handoff';
 
 interface Line {
   role: 'ai' | 'customer';
@@ -145,7 +146,7 @@ function LiveCallCard({ call }: { call: LiveCall }) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
-          {!call.ended && (
+          {VOICE_HANDOFF_ENABLED && !call.ended && (
             <button
               type="button"
               onClick={() =>

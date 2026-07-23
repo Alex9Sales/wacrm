@@ -14,6 +14,7 @@ import { Bot, Phone } from 'lucide-react';
 
 import { useServerEvents, type ServerEvent } from '@/hooks/use-server-events';
 import { takeOverVoiceCall } from './incoming-call-modal';
+import { VOICE_HANDOFF_ENABLED } from '@/lib/calls/handoff';
 
 interface ActiveCall {
   channelName?: string;
@@ -84,7 +85,7 @@ export function VoiceLiveBadge() {
       </Link>
       {/* Single live AI call → one-click takeover. With several, the operator
           picks the specific call from the Supervisão monitor. */}
-      {entries.length === 1 && (
+      {VOICE_HANDOFF_ENABLED && entries.length === 1 && (
         <button
           type="button"
           onClick={() =>
