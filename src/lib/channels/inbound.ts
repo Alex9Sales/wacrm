@@ -846,12 +846,17 @@ function groupLidToPhone(
 /**
  * Fallback for @mentions the registry couldn't name (the person was mentioned
  * but never posted, so we never learned their pushName). Resolve each unknown
- * LID → phone via the group's participant list (cached), then match that phone
- * against the CRM's saved `contacts` by phone_normalized. On a hit we adopt the
- * contact's name AND prime the registry (under both the LID user-part and the
- * phone) so the next mention is a cheap lookup with no participant round-trip.
- * No match anywhere → the number stays, exactly like WhatsApp. Mutates
- * `nameByUser` in place. Best-effort: any failure leaves it untouched.
+ * LID → phone, then match that phone against the CRM's saved `contacts` by
+ * phone_normalized:
+ *   - a saved contact → adopt its name AND prime the registry (under both the
+ *     LID user-part and the phone) so the next mention is a cheap lookup;
+ *   - no saved contact but a resolved phone → render the PHONE instead of the
+ *     meaningless LID, exactly like WhatsApp shows an unknown participant.
+ * LID→phone comes from the engine's own LID↔PN map first (authoritative, keyed
+ * to THIS channel's session, cached per lid), falling back to the group's
+ * participant list — fetched lazily, since it costs a full /groups round-trip.
+ * Nothing resolves → the token stays. Mutates `nameByUser` in place.
+ * Best-effort: any failure leaves it untouched.
  */
 async function resolveUnknownMentionsViaContacts(
   channel: ChannelCtx,
@@ -861,16 +866,37 @@ async function resolveUnknownMentionsViaContacts(
   nameByUser: Record<string, string>,
 ): Promise<void> {
   try {
-    const lidToPhone = await groupLidToPhone(channel, groupJid);
-    // Candidate phone per unknown mention: the LID's phone from the participant
-    // list, or the mention token itself (already a phone in a non-@lid group).
+    const provider = getProvider(channel.provider);
     const phoneByUser = new Map<string, string>();
     const phones = new Set<string>();
+    // Pass 1 — the engine's LID↔PN map (cheap, per-lid, cached in the provider).
+    const stillUnknown: string[] = [];
     for (const u of unknownUsers) {
-      const phone = lidToPhone.get(u) || u;
-      if (!phone) continue;
-      phoneByUser.set(u, phone);
-      phones.add(phone);
+      let phone = '';
+      if (typeof provider.resolveLidToPhone === 'function') {
+        try {
+          phone = (await provider.resolveLidToPhone(channel, u)) || '';
+        } catch {
+          // best-effort — fall through to the participant list
+        }
+      }
+      if (phone) {
+        phoneByUser.set(u, phone);
+        phones.add(phone);
+      } else {
+        stillUnknown.push(u);
+      }
+    }
+    // Pass 2 — only if something is left, pay for the group participant list.
+    if (stillUnknown.length) {
+      const lidToPhone = await groupLidToPhone(channel, groupJid);
+      for (const u of stillUnknown) {
+        // The mention token itself is already a phone in a non-@lid group.
+        const phone = lidToPhone.get(u) || u;
+        if (!phone) continue;
+        phoneByUser.set(u, phone);
+        phones.add(phone);
+      }
     }
     if (phones.size === 0) return;
 
@@ -892,16 +918,23 @@ async function resolveUnknownMentionsViaContacts(
       const name = (r.name ?? '').trim();
       if (name && r.phoneNormalized) nameByPhone.set(r.phoneNormalized, name);
     }
-    if (nameByPhone.size === 0) return;
 
     for (const u of unknownUsers) {
       const phone = phoneByUser.get(u);
       if (!phone) continue;
       const name = nameByPhone.get(phone);
-      if (!name) continue;
-      nameByUser[u] = name;
-      // Prime the registry so future mentions skip the participant round-trip.
-      await registerParticipantName(accountId, [u, phone], name);
+      if (name) {
+        nameByUser[u] = name;
+        // Prime the registry so future mentions skip the resolution entirely.
+        await registerParticipantName(accountId, [u, phone], name);
+      } else if (phone !== u) {
+        // Not a saved contact, but we DID resolve the phone — show it instead
+        // of the raw LID (a meaningless 15-digit id), matching how WhatsApp
+        // renders a mention of someone you don't have saved. Deliberately NOT
+        // written to the name registry: that table holds real display names,
+        // and the person may still post later with a proper pushName.
+        nameByUser[u] = phone;
+      }
     }
   } catch (err) {
     console.error('[inbound] mention contact-fallback failed:', err);
