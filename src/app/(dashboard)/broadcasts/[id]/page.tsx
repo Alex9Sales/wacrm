@@ -482,9 +482,13 @@ export default function BroadcastDetailPage() {
           )}
 
           {/* Reenviar falhados — requeue only the failed recipients (e.g.
-              the channel dropped mid-broadcast and reconnected). Hidden
-              while the broadcast is still live. */}
-          {broadcast.failed_count > 0 && !isLive && (
+              the channel dropped mid-broadcast and reconnected). Shown
+              whenever there are failures and a retry is valid — INCLUDING
+              while 'sending', so a channel that dropped mid-send can be
+              retried the moment it reconnects, without pausing first. Only
+              'scheduled' has nothing to retry (retryFailedBroadcast rejects
+              it). */}
+          {broadcast.failed_count > 0 && broadcast.status !== 'scheduled' && (
             <Button
               variant="outline"
               size="sm"
