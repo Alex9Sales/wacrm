@@ -15,6 +15,7 @@ import {
   dismissTransferNote,
 } from "@/app/(dashboard)/inbox/actions";
 import { useAuth } from "@/hooks/use-auth";
+import { hasMinRole } from "@/lib/auth/roles";
 import { usePresence } from "@/hooks/use-presence";
 import { PresenceDot } from "@/components/presence/presence-dot";
 import { presenceLabel } from "@/lib/presence";
@@ -216,7 +217,10 @@ export function MessageThread({
   onToggleContactPanel,
   onConversationDeleted,
 }: MessageThreadProps) {
-  const { user } = useAuth();
+  const { user, accountRole } = useAuth();
+  // Deleting a conversation is admin/owner-only (matches the server-side
+  // requireRole('admin') in deleteConversation) — hide the button otherwise.
+  const canDeleteConversation = hasMinRole(accountRole ?? "viewer", "admin");
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -1010,7 +1014,7 @@ export function MessageThread({
           {/* Delete conversation — opens a confirm dialog, then removes the
               conversation (messages cascade-delete). Only rendered when the
               parent wires up `onConversationDeleted`. */}
-          {onConversationDeleted && (
+          {onConversationDeleted && canDeleteConversation && (
             <button
               type="button"
               onClick={() => setDeleteOpen(true)}

@@ -594,7 +594,22 @@ export async function updateConversationStatus(
 export async function deleteConversation(
   conversationId: string,
 ): Promise<{ ok: true }> {
-  const ctx = await requireRole('agent')
+  // Only admins/owners may delete a conversation — it wipes the whole thread and
+  // can't be undone. (Agents/viewers get a 403 from requireRole.)
+  const ctx = await requireRole('admin')
+  // A linked deal FK-blocks the delete (deals.conversation_id has no ON DELETE
+  // rule). Detach any deals first — the deal itself stays, just loses the
+  // thread link — so the conversation (and its cascade-deleted messages/
+  // reactions/notifications) can be removed cleanly.
+  await db
+    .update(deals)
+    .set({ conversationId: null })
+    .where(
+      and(
+        eq(deals.conversationId, conversationId),
+        eq(deals.accountId, ctx.accountId),
+      ),
+    )
   await db
     .delete(conversations)
     .where(

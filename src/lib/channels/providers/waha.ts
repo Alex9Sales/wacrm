@@ -237,6 +237,12 @@ function rawBase64(b64: string): string {
  */
 async function resolveChatId(ch: ChannelCtx, toE164: string): Promise<string> {
   const digits = normalizePhone(toE164);
+  // A GROUP target: the "phone" is the group jid's digits (16+, e.g. a monitored
+  // group the operator is replying into). Send straight to `<digits>@g.us` —
+  // check-exists is for 1:1 phones and 400s ("Invalid phone number format") on a
+  // group id. Manual operator replies to groups are allowed (only AI/flows are
+  // withheld from groups); this is the send-side counterpart.
+  if (isGroupJid(digits)) return `${digits}@g.us`;
   const base = baseUrlOf(ch);
   const session = sessionOf(ch);
   try {
