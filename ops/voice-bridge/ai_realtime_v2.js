@@ -132,6 +132,8 @@ async function handleCall(cid, session, payload){
     + 'REGRAS: (1) NUNCA diga "vou registrar", "já encaminhei", "vou despachar" ou parecido sem antes ter chamado a ferramenta. (2) Só DEPOIS que a ferramenta responder é que você se despede e usa [DESLIGAR]. (3) NUNCA use [DESLIGAR] com um pedido em aberto sem ter chamado a ferramenta. (4) Se ainda faltar algum dado (produto, endereço ou pagamento), pergunte — não chame a ferramenta incompleta. (5) Nos DADOS da ferramenta, escreva valores e números em ALGARISMOS (ex: valor "R$ 125,00", troco "R$ 150,00", número da casa "53") — a regra de falar por extenso vale SÓ para a voz, NUNCA para a ferramenta.\n'
     + '\n--- RITMO E CORREÇÕES (não atropele o cliente) ---\n'
     + 'Deixe o cliente TERMINAR de falar. Se ele pausar pensando, ESPERE — não emende pergunta nem ofereça produto no meio da fala dele.\n'
+    + 'SE O CLIENTE FIZER UMA PERGUNTA (ex: perguntar o preço, o valor de novo, prazo, forma de pagamento), RESPONDA a pergunta primeiro. NÃO vá para o fechamento nem chame ferramenta enquanto houver pergunta em aberto — só siga depois de responder e o cliente demonstrar que quer prosseguir.\n'
+    + 'Uma dúvida repetida NÃO é sinal de fechar — é sinal de que ele quer entender melhor. Responda com calma.\n'
     + 'NÃO chame notificar_pedido enquanto o cliente estiver corrigindo qualquer dado. Registre só quando ele confirmar que está tudo certo.\n'
     + 'NOME DE RUA: se o cliente corrigir a rua e você entender diferente do que ele disse, NÃO insista na sua versão — repita o que ELE falou. Se corrigir duas vezes, peça pra soletrar ("pode soletrar a rua pra mim?").\n'
     + 'SE O CLIENTE CORRIGIR UM DADO DEPOIS DE VOCÊ JÁ TER REGISTRADO: NUNCA cancele o pedido e NUNCA desligue por causa disso. Diga que vai ajustar, confirme o dado certo com ele e avise que um atendente confirma o acerto. NUNCA use marcar_sem_venda com "cancelado" por causa de correção de endereço — cancelado é só quando o CLIENTE desiste da compra.\n'
@@ -277,7 +279,11 @@ async function handleCall(cid, session, payload){
     if(empty&&!wasEmpty){ aiQEmptiedAt=Date.now();
       if(hangupAfterPlay && !hangingUp){ hangingUp=true; setTimeout(()=>doHangup(),800); } }
     wasEmpty=empty; };
-  const aiTalking=()=> aiQ.length>=FRAME || (Date.now()-aiQEmptiedAt < 300);
+  // Cauda do eco: depois que a fala dela drena, ela espera AI_TAIL_MS antes de
+  // voltar a escutar — no viva-voz o eco da própria voz ainda ecoa uns 100s de
+  // ms na caixa do cliente; escutar cedo demais captaria esse rabo como "fala".
+  const AI_TAIL_MS=Number(process.env.AI_TAIL_MS||500);
+  const aiTalking=()=> aiQ.length>=FRAME || (Date.now()-aiQEmptiedAt < AI_TAIL_MS);
 
   function startTTSTurn(){
     const url=`wss://api.elevenlabs.io/v1/text-to-speech/${VOICE_ID}/stream-input?model_id=${EL_MODEL}&output_format=pcm_16000&language_code=pt`;
@@ -294,9 +300,11 @@ async function handleCall(cid, session, payload){
              flush:()=>{ flushed=true; if(open){ try{el.send(JSON.stringify({text:''}))}catch{} } },
              close:()=>{ try{el.close()}catch{} } };
   }
-  let ttsTurn=null, responding=false, barged=false, bargeUntil=0;
-  const ECHO_GATE=1200;
-  const NOISE_FLOOR=300;  // abaixo disto (IA calada) = silêncio injetado (zeros) p/ o VAD fechar o turno
+  let ttsTurn=null, responding=false, barged=false, bargeUntil=0, loudRun=0;
+  // Robustez a RUÍDO/VIVA-VOZ (tudo ajustável por env, pra afinar sem redeploy):
+  const ECHO_GATE=Number(process.env.ECHO_GATE||1500);   // energia pra contar como "alto"
+  const BARGE_FRAMES=Number(process.env.BARGE_FRAMES||5); // frames ALTOS seguidos p/ cortar (20ms cada → 100ms)
+  const NOISE_FLOOR=Number(process.env.NOISE_FLOOR||300); // abaixo disto (IA calada) = silêncio injetado (zeros)
   let turnBuf='', turnFull='', hangupAfterPlay=false, hangingUp=false;
   // handoff (fatia 5B): humano assumiu → fala HANDOFF_LINE e solta a perna SEM calls/end
   let handoffPoll=null, handoffStarted=false;
@@ -393,7 +401,7 @@ async function handleCall(cid, session, payload){
         if(!ready){ ready=true; log('sessão pronta → saudação');
           ws.send(JSON.stringify({type:'response.create'})); }
         break;
-      case 'response.created':  lastRespAt=Date.now(); ttsTurn=startTTSTurn(); responding=true; barged=false; bargeUntil=0; turnBuf=''; turnFull=''; break;
+      case 'response.created':  lastRespAt=Date.now(); ttsTurn=startTTSTurn(); responding=true; barged=false; bargeUntil=0; loudRun=0; turnBuf=''; turnFull=''; break;
       case 'response.output_text.delta':
       case 'response.text.delta':
         if(m.delta) ttsFeed(m.delta); break;
@@ -439,25 +447,31 @@ async function handleCall(cid, session, payload){
     if(relay.talk) return;
     const r=rms(buf); if(r>300)spoke++;
     if(!aiTalking()){ fc++; if(r>peakR)peakR=r; if(fc%100===0){ log('[rms] pico(2s)='+peakR); peakR=0; } }
-    let forward=false;
+
     if(aiTalking()){
-      // durante o handoff, NÃO deixa barge-in cortar a frase de despedida
-      if((r>ECHO_GATE || Date.now()<bargeUntil) && !handoffStarted){
-        bargeUntil=Date.now()+1200;
-        if(!barged){ barged=true; log('[barge-in] cliente interrompeu → corta a IA');
-          aiQ=Buffer.alloc(0);
-          hangupAfterPlay=false;
-          if(ttsTurn){ ttsTurn.close(); }
-          if(responding){ try{ws.send(JSON.stringify({type:'response.cancel'}))}catch{} } }
-        forward=true;
+      // ENQUANTO A IA FALA: nada é mandado pro cérebro. No viva-voz a própria
+      // voz dela volta pela caixa do cliente; se a gente encaminhasse, o OpenAI
+      // ouviria a IA como se fosse o cliente e ela se perderia (foi o que o Alex
+      // viu). O barge-in só CORTA ela localmente — e exige som ALTO E SUSTENTADO
+      // (BARGE_FRAMES frames seguidos), pra um estalo/ruído isolado não cortar.
+      if(handoffStarted) return;                 // handoff cuida da própria saída
+      if(r>ECHO_GATE) loudRun++; else loudRun=0;
+      if(loudRun>=BARGE_FRAMES && !barged){
+        barged=true; loudRun=0; log('[barge-in] cliente interrompeu → corta a IA');
+        aiQ=Buffer.alloc(0); hangupAfterPlay=false;
+        if(ttsTurn){ ttsTurn.close(); }
+        if(responding){ try{ws.send(JSON.stringify({type:'response.cancel'}))}catch{} }
       }
-    } else { forward=true; }
-    if(forward && ws.readyState===WebSocket.OPEN){
+      return;                                    // nunca encaminha durante a fala da IA
+    }
+    // IA CALADA: encaminha a voz do cliente pro cérebro.
+    loudRun=0;
+    if(ws.readyState===WebSocket.OPEN){
       let up=resample(buf,RATE,OAI_RATE);
-      // IA calada + som ABAIXO do piso = ruído de linha → manda SILÊNCIO (zeros)
-      // em vez do ruído, senão o VAD do OpenAI nunca vê silêncio pra fechar o
-      // turno (a linha do canal real tem ruído constante) e a IA fica muda.
-      if(!aiTalking() && r < NOISE_FLOOR) up = Buffer.alloc(up.length);
+      // som ABAIXO do piso = ruído de linha → manda SILÊNCIO (zeros), senão o
+      // VAD do OpenAI nunca vê silêncio pra fechar o turno (ruído constante) e a
+      // IA fica muda.
+      if(r < NOISE_FLOOR) up = Buffer.alloc(up.length);
       ws.send(JSON.stringify({type:'input_audio_buffer.append',audio:up.toString('base64')}));
     }
   });
