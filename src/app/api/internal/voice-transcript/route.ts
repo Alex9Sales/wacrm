@@ -105,6 +105,13 @@ export async function POST(request: Request) {
       contentType: 'text',
       contentText,
       status: 'delivered',
+      // NOTA INTERNA: a transcrição é registro do time, não mensagem para o
+      // cliente. Ela nunca foi enviada (não há chamada de envio aqui, e o
+      // message_id fica nulo), mas renderizava como balão de SAÍDA — e quem
+      // abria a conversa jurava que o cliente tinha recebido o diálogo inteiro.
+      // Como nota interna o visual passa a dizer a verdade, e de quebra ela
+      // deixa de entrar no contexto que vai para a IA/Hermes.
+      isInternal: true,
       createdAt: new Date().toISOString(),
     })
     await db
