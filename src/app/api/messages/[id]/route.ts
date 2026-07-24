@@ -38,6 +38,16 @@ export async function PATCH(
         { status: 400 },
       )
     }
+    // Guard the uuid column against a non-uuid id (e.g. an optimistic `temp-…`
+    // the client shouldn't send) — a raw query would 500 on the cast.
+    const UUID_RE =
+      /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+    if (!UUID_RE.test(messageId)) {
+      return NextResponse.json(
+        { error: 'Aguarde a mensagem terminar de enviar para editar.' },
+        { status: 400 },
+      )
+    }
 
     // Load the message + its conversation/contact, scoped to the account.
     const row = firstOrNull(

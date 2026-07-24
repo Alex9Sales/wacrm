@@ -194,6 +194,9 @@ function isMessageEditable(msg: Message, now: number): boolean {
   if (msg.sender_type !== "agent" && msg.sender_type !== "bot") return false;
   if (msg.content_type !== "text" || msg.is_internal) return false;
   if (msg.status === "sending" || msg.status === "failed") return false;
+  // Optimistic message not yet persisted (id is `temp-…`, no real WhatsApp id):
+  // wait until the server round-trip replaces it with the real row.
+  if (msg.id.startsWith("temp-")) return false;
   const sentMs = msg.created_at ? new Date(msg.created_at).getTime() : 0;
   if (!sentMs) return false;
   return now - sentMs <= EDIT_WINDOW_MS;

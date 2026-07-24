@@ -235,7 +235,11 @@ export async function sendMessageToConversation(
 
   const contact = firstOrNull(
     await db
-      .select({ id: contacts.id, phone: contacts.phone })
+      .select({
+        id: contacts.id,
+        phone: contacts.phone,
+        isGroup: contacts.isGroup,
+      })
       .from(contacts)
       .where(eq(contacts.id, conversation.contactId))
       .limit(1)
@@ -249,7 +253,10 @@ export async function sendMessageToConversation(
   }
 
   const sanitizedPhone = sanitizePhoneForMeta(contact.phone);
-  if (!isValidE164(sanitizedPhone)) {
+  // A GROUP "phone" is the group jid's digits (16+), never a valid E.164 — the
+  // provider turns it into `<digits>@g.us`. Skip the phone-format gate for
+  // groups so a manual operator reply into a monitored group can go out.
+  if (!contact.isGroup && !isValidE164(sanitizedPhone)) {
     throw new SendMessageError(
       'bad_request',
       'Invalid phone number format',
