@@ -77,14 +77,17 @@ export async function POST(request: Request) {
       .update(`${callId}.${mode}.${exp}`)
       .digest('hex')
 
-    // Mesmo host do CRM: o Traefik termina o TLS e encaminha /voice-relay ao
-    // bridge, então não há porta extra nem certificado próprio para manter.
-    const host = new URL(request.url).host
-    const url =
-      `wss://${host}/voice-relay?callId=${encodeURIComponent(callId)}` +
+    // Devolve só o CAMINHO — quem monta a URL é o navegador, com a própria
+    // origem. Montar aqui exigiria adivinhar o host público, e atrás do proxy
+    // `request.url` traz o endereço INTERNO do container (localhost:3000): o
+    // navegador tentaria `wss://localhost:3000/...` e falharia sem nunca sair
+    // da máquina dele. O relay vive no mesmo domínio do CRM, então a origem do
+    // navegador já é a resposta certa.
+    const path =
+      `/voice-relay?callId=${encodeURIComponent(callId)}` +
       `&mode=${mode}&exp=${exp}&sig=${sig}`
 
-    return NextResponse.json({ url, mode, exp })
+    return NextResponse.json({ path, mode, exp })
   } catch (err) {
     return toErrorResponse(err)
   }

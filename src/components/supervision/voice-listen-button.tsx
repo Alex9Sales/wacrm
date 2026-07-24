@@ -57,8 +57,23 @@ export function VoiceListenButton({ callId }: { callId: string }) {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ callId, mode: 'listen' }),
       });
-      const data = (await res.json().catch(() => ({}))) as { url?: string };
-      if (!res.ok || !data.url) throw new Error('ticket');
+      const data = (await res.json().catch(() => ({}))) as {
+        path?: string;
+        error?: string;
+      };
+      if (!res.ok || !data.path) {
+        console.error('[escuta] bilhete recusado:', res.status, data.error);
+        toast.error(
+          res.status === 404
+            ? 'Essa ligação já terminou.'
+            : 'Não consegui liberar a escuta.',
+        );
+        stop();
+        return;
+      }
+      // A URL é montada AQUI, com a origem do navegador: o servidor está atrás
+      // do proxy e enxerga só o host interno do container.
+      const url = `${location.origin.replace(/^http/, 'ws')}${data.path}`;
 
       const ctx = new AudioContext({ sampleRate: 16000 });
       ctxRef.current = ctx;
@@ -73,7 +88,7 @@ export function VoiceListenButton({ callId }: { callId: string }) {
       audioRef.current = el;
       el.play().catch(() => {});
 
-      const ws = new WebSocket(data.url);
+      const ws = new WebSocket(url);
       ws.binaryType = 'arraybuffer';
       wsRef.current = ws;
       ws.onopen = () => setState('listening');
@@ -92,8 +107,11 @@ export function VoiceListenButton({ callId }: { callId: string }) {
         else if (ev.code === 4001) toast.error('Sem permissão para ouvir.');
         stop();
       };
-    } catch {
-      toast.error('Não consegui entrar na escuta.');
+    } catch (err) {
+      // Sobra aqui o que falhou no ÁUDIO (AudioContext/worklet bloqueado) ou
+      // rede — o bilhete já foi tratado acima com mensagem própria.
+      console.error('[escuta] falhou ao preparar o áudio:', err);
+      toast.error('Não consegui abrir o áudio da escuta.');
       stop();
     }
   }, [callId, stop]);
