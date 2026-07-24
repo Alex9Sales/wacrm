@@ -183,6 +183,22 @@ function groupMessagesByDate(messages: Message[]) {
   return groups;
 }
 
+/** WhatsApp only allows editing within ~15 min of sending. */
+const EDIT_WINDOW_MS = 15 * 60_000;
+
+/** UI-side editability of a message: an own (agent/bot) TEXT message, not an
+ *  internal note, already sent, and within WhatsApp's ~15min window. `now` is
+ *  the thread's mount-time clock (pure — the server re-checks the real window,
+ *  so a slightly stale UI just yields a clean "janela expirada" toast). */
+function isMessageEditable(msg: Message, now: number): boolean {
+  if (msg.sender_type !== "agent" && msg.sender_type !== "bot") return false;
+  if (msg.content_type !== "text" || msg.is_internal) return false;
+  if (msg.status === "sending" || msg.status === "failed") return false;
+  const sentMs = msg.created_at ? new Date(msg.created_at).getTime() : 0;
+  if (!sentMs) return false;
+  return now - sentMs <= EDIT_WINDOW_MS;
+}
+
 const STATUS_OPTIONS: { label: string; value: ConversationStatus; color: string }[] = [
   { label: "Aberta", value: "open", color: "text-primary" },
   { label: "Pendente", value: "pending", color: "text-amber-400" },
@@ -267,6 +283,10 @@ export function MessageThread({
   // Delete-conversation confirm dialog + in-flight state.
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
+  // Edit-message dialog: the message being edited, its draft text, in-flight.
+  const [editingMsg, setEditingMsg] = useState<Message | null>(null);
+  const [editText, setEditText] = useState("");
+  const [editBusy, setEditBusy] = useState(false);
 
   // Profiles are scoped to the caller's account by the server action —
   // the assignee dropdown lists every teammate in the workspace.
@@ -845,6 +865,38 @@ export function MessageThread({
     }
   }, [conversation, deleteBusy, onConversationDeleted]);
 
+  const handleEditMessage = useCallback(async () => {
+    if (!editingMsg || editBusy) return;
+    const trimmed = editText.trim();
+    if (!trimmed || trimmed === editingMsg.content_text) {
+      setEditingMsg(null);
+      return;
+    }
+    setEditBusy(true);
+    try {
+      const res = await fetch(`/api/messages/${editingMsg.id}`, {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ content_text: trimmed }),
+      });
+      const payload = (await res.json().catch(() => ({}))) as {
+        error?: string;
+      };
+      if (!res.ok) {
+        toast.error(payload.error || "Não foi possível editar a mensagem");
+        return;
+      }
+      onUpdateMessage(editingMsg.id, { content_text: trimmed });
+      toast.success("Mensagem editada");
+      setEditingMsg(null);
+    } catch (err) {
+      console.error("Failed to edit message:", err);
+      toast.error("Não foi possível editar a mensagem");
+    } finally {
+      setEditBusy(false);
+    }
+  }, [editingMsg, editText, editBusy, onUpdateMessage]);
+
   // Empty state — same WhatsApp-style doodle background as the active
   // thread below, so swapping between empty/selected doesn't change the
   // pattern under the user's eye.
@@ -1328,6 +1380,14 @@ export function MessageThread({
                           if (emoji) void postReaction(msg.id, emoji);
                         }}
                         onForward={() => setForwarding(msg)}
+                        onEdit={
+                          isMessageEditable(msg, now)
+                            ? () => {
+                                setEditingMsg(msg);
+                                setEditText(msg.content_text ?? "");
+                              }
+                            : undefined
+                        }
                         isGroup={contact.is_group ?? false}
                       >
                         <MessageBubble
@@ -1425,6 +1485,57 @@ export function MessageThread({
                   <Trash2 className="size-4" />
                   Excluir
                 </>
+              )}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Edit-message dialog — edits the real WhatsApp message (via PATCH
+          /api/messages/[id]) and, on success, the local copy. */}
+      <Dialog
+        open={!!editingMsg}
+        onOpenChange={(open) => {
+          if (!open && !editBusy) setEditingMsg(null);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Editar mensagem</DialogTitle>
+            <DialogDescription>
+              A edição vale por até 15 min após o envio, como no WhatsApp.
+            </DialogDescription>
+          </DialogHeader>
+          <textarea
+            value={editText}
+            onChange={(e) => setEditText(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !e.shiftKey) {
+                e.preventDefault();
+                void handleEditMessage();
+              }
+            }}
+            rows={4}
+            autoFocus
+            className="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-primary/40"
+            placeholder="Digite o novo texto..."
+          />
+          <DialogFooter>
+            <Button
+              variant="ghost"
+              onClick={() => setEditingMsg(null)}
+              disabled={editBusy}
+            >
+              Cancelar
+            </Button>
+            <Button onClick={handleEditMessage} disabled={editBusy}>
+              {editBusy ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Salvando...
+                </>
+              ) : (
+                "Salvar"
               )}
             </Button>
           </DialogFooter>

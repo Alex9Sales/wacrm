@@ -964,6 +964,36 @@ export const wahaProvider: WhatsAppProvider = {
     }
   },
 
+  /** Edit an own message's text. WAHA/gows:
+   *  PUT /api/{session}/chats/{chatId}/messages/{messageId} { text }.
+   *  gows keys messages by the SERIALIZED id (`true_<chatId>_<HASH>`) while we
+   *  store just the HASH — reconstruct it (fromMe=true, since only our own
+   *  messages are editable). Throws on failure so the caller can leave the CRM
+   *  copy untouched (no silent desync). */
+  async editMessage(
+    ch: ChannelCtx,
+    toE164: string,
+    targetExternalId: string,
+    newText: string,
+  ): Promise<void> {
+    const chatId = await resolveChatId(ch, toE164);
+    // Reconstruct the serialized id unless the caller already passed one.
+    const serialized = targetExternalId.includes('_')
+      ? targetExternalId
+      : `true_${chatId}_${targetExternalId}`;
+    const url = `${baseUrlOf(ch)}/api/${sessionOf(ch)}/chats/${encodeURIComponent(
+      chatId,
+    )}/messages/${encodeURIComponent(serialized)}`;
+    const { ok, status, body } = await httpJson(url, {
+      method: 'PUT',
+      headers: headersOf(ch),
+      body: JSON.stringify({ text: newText, session: sessionOf(ch) }),
+    });
+    if (!ok) {
+      throw new Error(`waha editMessage failed: ${wahaError(body, status)}`);
+    }
+  },
+
   // sendTemplate / sendInteractive intentionally omitted:
   // capabilities.templates and capabilities.interactive are both false.
 

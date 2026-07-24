@@ -1,7 +1,13 @@
 "use client";
 
 import { useState, type ReactNode } from "react";
-import { CornerUpLeft, CornerUpRight, Copy, SmilePlus } from "lucide-react";
+import {
+  CornerUpLeft,
+  CornerUpRight,
+  Copy,
+  SmilePlus,
+  Pencil,
+} from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import {
@@ -22,6 +28,10 @@ interface MessageActionsProps {
   onReply: () => void;
   onReact: (emoji: string) => void;
   onForward: () => void;
+  /** Edit an own text message (WhatsApp "Editar"). The PARENT decides
+   *  editability (own text msg, not internal, inside WhatsApp's ~15min window)
+   *  and only passes this when editable — absent → the button is hidden. */
+  onEdit?: () => void;
   /** Group conversation → show the sender's avatar in the left gutter. */
   isGroup?: boolean;
   children: ReactNode;
@@ -60,6 +70,7 @@ export function MessageActions({
   onReply,
   onReact,
   onForward,
+  onEdit,
   isGroup,
   children,
 }: MessageActionsProps) {
@@ -107,6 +118,14 @@ export function MessageActions({
     onForward();
     setTouchOpen(false);
   };
+
+  const handleEdit = () => {
+    onEdit?.();
+    setTouchOpen(false);
+  };
+
+  // The parent only wires up onEdit for an editable message, so this is enough.
+  const canEdit = !!onEdit;
 
   // Row alignment lives here (not in MessageBubble) so the `group/actions`
   // hover region matches the bubble's content width — hovering empty space
@@ -182,6 +201,16 @@ export function MessageActions({
         >
           <CornerUpRight className="h-3.5 w-3.5" />
         </button>
+        {canEdit && (
+          <button
+            type="button"
+            onClick={handleEdit}
+            className="flex h-5 w-5 items-center justify-center rounded-full text-popover-foreground hover:bg-muted hover:text-foreground"
+            aria-label="Editar"
+          >
+            <Pencil className="h-3.5 w-3.5" />
+          </button>
+        )}
         <button
           type="button"
           onClick={handleCopy}

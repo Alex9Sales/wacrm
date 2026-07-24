@@ -253,6 +253,21 @@ export interface WhatsAppProvider {
     emoji: string,
   ): Promise<void>;
 
+  /**
+   * Edit the text of a message WE previously sent (WhatsApp "Editar"). Optional
+   * — only engines whose API exposes edit implement it (gows/WAHA). WhatsApp
+   * only allows editing within ~15 min and only own messages; the caller
+   * enforces that, and a late/invalid edit throws. `toE164` identifies the chat
+   * (a group's jid digits resolve to `@g.us`), `targetExternalId` is the stored
+   * message id.
+   */
+  editMessage?(
+    ch: ChannelCtx,
+    toE164: string,
+    targetExternalId: string,
+    newText: string,
+  ): Promise<void>;
+
   /** Send a location pin (map card). Optional — only providers whose engine
    *  exposes it implement it (waha-voip/gows does; Meta does not here). */
   sendLocation?(
