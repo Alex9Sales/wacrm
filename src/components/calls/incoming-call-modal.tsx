@@ -33,6 +33,7 @@ import {
 import { toast } from 'sonner';
 
 import { useServerEvents } from '@/hooks/use-server-events';
+import { floatToPcm, pcmToFloat } from '@/lib/calls/pcm';
 import { formatCallDuration } from '@/lib/inbox/call-log';
 import { routeCallStatus, type CallProvider } from './call-routing';
 import {
@@ -114,29 +115,6 @@ function emptyMedia(): LegMedia {
     logged: false,
     sendMic: true,
   };
-}
-
-// waha-voip carries browser audio as raw 16 kHz s16le PCM over a DataChannel
-// (not an RTP track). These convert between the AudioWorklet's Float32 blocks
-// and the s16le bytes on the wire. Ported from the waha-voip dashboard dialer.
-function floatToPcm(samples: Float32Array): ArrayBuffer {
-  const view = new DataView(new ArrayBuffer(samples.length * 2));
-  for (let i = 0; i < samples.length; i += 1) {
-    let n = samples[i];
-    if (Number.isNaN(n)) n = 0;
-    else if (n > 1) n = 1;
-    else if (n < -1) n = -1;
-    view.setInt16(i * 2, n < 0 ? Math.round(n * 32768) : Math.round(n * 32767), true);
-  }
-  return view.buffer;
-}
-
-function pcmToFloat(buf: ArrayBuffer): Float32Array {
-  const view = new DataView(buf);
-  const len = Math.floor(buf.byteLength / 2);
-  const out = new Float32Array(len);
-  for (let i = 0; i < len; i += 1) out[i] = view.getInt16(i * 2, true) / 32768;
-  return out;
 }
 
 function waitIceComplete(pc: RTCPeerConnection): Promise<void> {

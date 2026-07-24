@@ -13,6 +13,7 @@ import { Phone, Radio } from 'lucide-react';
 import { useServerEvents, type ServerEvent } from '@/hooks/use-server-events';
 import { takeOverVoiceCall } from '@/components/calls/incoming-call-modal';
 import { VOICE_HANDOFF_ENABLED } from '@/lib/calls/handoff';
+import { VoiceListenButton } from './voice-listen-button';
 
 interface Line {
   role: 'ai' | 'customer';
@@ -146,6 +147,8 @@ function LiveCallCard({ call }: { call: LiveCall }) {
           </div>
         </div>
         <div className="flex shrink-0 items-center gap-2">
+          {/* Escuta ao vivo — só recebe áudio, o cliente não ouve o supervisor. */}
+          {!call.ended && <VoiceListenButton callId={call.callId} />}
           {VOICE_HANDOFF_ENABLED && !call.ended && (
             <button
               type="button"
