@@ -1340,6 +1340,7 @@ export function MessageThread({
                           contactName={contact.name}
                           mentionMembers={mentionMembers}
                           isGroup={contact.is_group ?? false}
+                          channelId={conversation.channel?.id}
                           onQuickReply={(text) => void handleSend(text)}
                         />
                       </MessageActions>

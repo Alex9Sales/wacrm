@@ -103,7 +103,14 @@ const CONTACT_PREFIX = "👤 Contato:";
 
 /** Render shared contact(s) as a card with a "Conversar" action that opens
  *  (or creates) that contact's conversation in the inbox. */
-function ContactCard({ text }: { text: string }) {
+function ContactCard({
+  text,
+  channelId,
+}: {
+  text: string;
+  /** Canal da conversa de origem: abre o contato NELE, não no canal padrão. */
+  channelId?: string;
+}) {
   const router = useRouter();
   const [busy, setBusy] = useState(false);
   const cards = text
@@ -122,7 +129,11 @@ function ContactCard({ text }: { text: string }) {
       const res = await fetch("/api/conversations/resolve", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ phone }),
+        // Sem channelId, o resolve cai no canal PADRÃO da conta (o Meta), então
+        // "Conversar" criava conversa vazia no canal oficial em vez do waha onde
+        // o time trabalha. Passar o canal da conversa de origem mantém o contato
+        // no mesmo canal.
+        body: JSON.stringify({ phone, channelId }),
       });
       const data = (await res.json().catch(() => ({}))) as {
         conversationId?: string;
@@ -370,6 +381,8 @@ interface MessageBubbleProps {
   mentionMembers?: MentionMember[];
   /** Group conversation → color the author prefix + @mentions (WhatsApp-style). */
   isGroup?: boolean;
+  /** Canal da conversa — pra o cartão de contato abrir "Conversar" no canal certo. */
+  channelId?: string;
   /** Fire a text reply — wired to a template's quick-reply button chips. */
   onQuickReply?: (text: string) => void;
 }
@@ -799,11 +812,13 @@ function MessageContent({
   contactPhone,
   contactName,
   isGroup,
+  channelId,
   onQuickReply,
 }: {
   message: Message;
   contactPhone?: string | null;
   contactName?: string | null;
+  channelId?: string;
   isGroup?: boolean;
   onQuickReply?: (text: string) => void;
 }) {
@@ -825,7 +840,7 @@ function MessageContent({
           />
         );
       if (txt.startsWith(PIX_PREFIX)) return <PixCard text={txt} />;
-      if (txt.startsWith(CONTACT_PREFIX)) return <ContactCard text={txt} />;
+      if (txt.startsWith(CONTACT_PREFIX)) return <ContactCard text={txt} channelId={channelId} />;
       const copyCode = detectCopyCode(txt);
       if (copyCode) return <CopyCodeCard {...copyCode} />;
       const location = detectLocation(txt);
@@ -1039,6 +1054,7 @@ export function MessageBubble({
   contactName,
   mentionMembers,
   isGroup,
+  channelId,
   onQuickReply,
 }: MessageBubbleProps) {
   const isAgent = message.sender_type === "agent" || message.sender_type === "bot";
@@ -1099,6 +1115,7 @@ export function MessageBubble({
           contactPhone={contactPhone}
           contactName={contactName}
           isGroup={isGroup}
+          channelId={channelId}
           onQuickReply={onQuickReply}
         />
         <div
