@@ -236,12 +236,14 @@ function rawBase64(b64: string): string {
  *   → body.chatId when body.numberExists; fallback `${digits}@c.us`.
  */
 async function resolveChatId(ch: ChannelCtx, toE164: string): Promise<string> {
+  // Already a full group jid (`…@g.us`, possibly with the legacy `<creator>-<ts>`
+  // hyphen) — use it verbatim. Normalizing would strip the hyphen and break the
+  // id, and check-exists is for 1:1 phones only.
+  if (/@g\.us$/i.test(toE164)) return toE164;
   const digits = normalizePhone(toE164);
-  // A GROUP target: the "phone" is the group jid's digits (16+, e.g. a monitored
-  // group the operator is replying into). Send straight to `<digits>@g.us` —
-  // check-exists is for 1:1 phones and 400s ("Invalid phone number format") on a
-  // group id. Manual operator replies to groups are allowed (only AI/flows are
-  // withheld from groups); this is the send-side counterpart.
+  // A GROUP target passed as bare digits (16+) — best-effort `<digits>@g.us`.
+  // (Legacy hyphen jids should arrive already suffixed via the line above; this
+  // covers the modern `120363…` ids whose digits ARE the jid.)
   if (isGroupJid(digits)) return `${digits}@g.us`;
   const base = baseUrlOf(ch);
   const session = sessionOf(ch);

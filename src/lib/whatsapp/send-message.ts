@@ -36,7 +36,9 @@ import {
   flowRuns,
   messages,
   messageTemplates,
+  monitoredGroups,
 } from '@/db';
+import { groupJidDigits } from '@/lib/whatsapp/group';
 import { firstOrNull, firstOrThrow } from '@/db/helpers';
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels';
 import { getProvider } from '@/lib/channels/registry';
@@ -287,6 +289,25 @@ export async function sendMessageToConversation(
 
   const provider = getProvider(channel.provider);
 
+  // For a GROUP, the provider must receive the FULL group jid. contact.phone is
+  // the digits only, which loses the hyphen of a legacy `<creator>-<ts>` jid
+  // (e.g. 556792539584-1481125514@g.us) — sending to the reconstructed
+  // hyphen-less id makes WAHA hang and abort. The intact jid lives in
+  // monitored_groups.group_jid; look it up by matching digits.
+  let providerTarget = sanitizedPhone;
+  if (contact.isGroup) {
+    const wantedDigits = contact.phone.replace(/\D/g, '');
+    const monitored = await db
+      .select({ jid: monitoredGroups.groupJid })
+      .from(monitoredGroups)
+      .where(eq(monitoredGroups.channelId, channel.id));
+    const match = monitored.find(
+      (m) => groupJidDigits(m.jid) === wantedDigits,
+    );
+    const jid = match?.jid || wantedDigits;
+    providerTarget = /@g\.us$/i.test(jid) ? jid : `${jid}@g.us`;
+  }
+
   // Capability gate — BEFORE sending. Reject an operation the channel's
   // provider structurally can't do with a clean 422 rather than letting it
   // fail with a cryptic upstream error deep in the adapter.
@@ -438,7 +459,9 @@ export async function sendMessageToConversation(
   let workingPhone = sanitizedPhone;
   try {
     const variants =
-      provider.id === 'meta' ? phoneVariants(sanitizedPhone) : [sanitizedPhone];
+      provider.id === 'meta'
+        ? phoneVariants(providerTarget)
+        : [providerTarget];
     let lastError: unknown = null;
 
     for (const variant of variants) {
@@ -478,7 +501,10 @@ export async function sendMessageToConversation(
     );
   }
 
-  if (workingPhone !== sanitizedPhone) {
+  // The 9th-digit auto-correct is a 1:1 (Meta) thing. NEVER for a group —
+  // workingPhone is the full group jid there; writing it into contacts.phone
+  // would corrupt the group key (digits matched against monitored_groups).
+  if (!contact.isGroup && workingPhone !== sanitizedPhone) {
     console.log(
       `[send-message] Auto-corrected contact phone: ${sanitizedPhone} → ${workingPhone}`
     );
