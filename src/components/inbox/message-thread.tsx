@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef, useMemo } from "react";
 import {
   deleteConversation,
+  listGroupMentionNames,
   listMessages,
   listProfiles,
   listReactions,
@@ -269,6 +270,18 @@ export function MessageThread({
       .catch(() => {});
   }, []);
 
+  // Group participants for the reply @mention autocomplete (groups only).
+  const isGroupConversation = contact?.is_group ?? false;
+  useEffect(() => {
+    if (!isGroupConversation) {
+      setGroupMentions([]);
+      return;
+    }
+    listGroupMentionNames()
+      .then(setGroupMentions)
+      .catch(() => setGroupMentions([]));
+  }, [isGroupConversation]);
+
   const handleRefreshClick = useCallback(() => {
     if (isRefreshing || !onRefresh) return;
     setIsRefreshing(true);
@@ -283,6 +296,11 @@ export function MessageThread({
   const [forwarding, setForwarding] = useState<Message | null>(null);
   // Team members, for internal-note @mention (autocomplete + highlight).
   const [mentionMembers, setMentionMembers] = useState<MentionMember[]>([]);
+  // Group participants (name + avatar), for the reply @mention autocomplete —
+  // only fetched for a group conversation.
+  const [groupMentions, setGroupMentions] = useState<
+    { id: string; name: string; avatarUrl: string | null }[]
+  >([]);
   // Delete-conversation confirm dialog + in-flight state.
   const [deleteOpen, setDeleteOpen] = useState(false);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -1431,6 +1449,7 @@ export function MessageThread({
         onClearReply={() => setReplyTo(null)}
         provider={conversation.channel?.provider}
         mentionMembers={mentionMembers}
+        groupMentions={groupMentions}
       />
 
       <TemplatePicker

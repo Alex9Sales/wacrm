@@ -517,6 +517,39 @@ export async function listMessages(conversationId: string): Promise<Message[]> {
   return rows
 }
 
+/**
+ * Names we know for group participants (from `group_participant_names` — people
+ * who posted), for the composer's @mention autocomplete. Account-scoped and
+ * deduped by name (a person can have a LID and a phone row with the same name);
+ * the outbound send re-validates against the real group participants, so a
+ * cross-group name here is harmless. `id` is the wa_key.
+ */
+export async function listGroupMentionNames(): Promise<
+  { id: string; name: string; avatarUrl: string | null }[]
+> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      waKey: groupParticipantNames.waKey,
+      name: groupParticipantNames.name,
+      avatarUrl: groupParticipantNames.avatarUrl,
+    })
+    .from(groupParticipantNames)
+    .where(eq(groupParticipantNames.accountId, ctx.accountId))
+  // Dedupe by trimmed name (case-insensitive); keep the row with an avatar.
+  const byName = new Map<string, { id: string; name: string; avatarUrl: string | null }>()
+  for (const r of rows) {
+    const name = (r.name ?? '').trim()
+    if (!name) continue
+    const key = name.toLowerCase()
+    const prev = byName.get(key)
+    if (!prev || (!prev.avatarUrl && r.avatarUrl)) {
+      byName.set(key, { id: r.waKey, name, avatarUrl: r.avatarUrl ?? null })
+    }
+  }
+  return Array.from(byName.values()).sort((a, b) => a.name.localeCompare(b.name))
+}
+
 /** Reactions for one conversation. */
 export async function listReactions(
   conversationId: string,

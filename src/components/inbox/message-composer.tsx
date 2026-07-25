@@ -5,6 +5,7 @@ import {
   useRef,
   useCallback,
   useEffect,
+  useMemo,
   KeyboardEvent,
   type DragEvent,
 } from "react";
@@ -36,7 +37,9 @@ import { CAPABILITIES, type ProviderId } from "@/lib/channels/provider";
 import { cn } from "@/lib/utils";
 import { toast } from "sonner";
 import { MentionComposer } from "@/components/inbox/mention-composer";
+import { ContactAvatar } from "./contact-avatar";
 import type { MentionMember } from "@/lib/inbox/mentions";
+import { activeMentionQuery } from "@/lib/inbox/mentions";
 import {
   uploadAccountMedia,
   deleteAccountMedia,
@@ -129,6 +132,9 @@ interface MessageComposerProps {
   provider?: ProviderId;
   /** Team members for the internal-note @mention autocomplete. */
   mentionMembers?: MentionMember[];
+  /** Group participants (name + avatar) for the reply @mention autocomplete —
+   *  non-empty only in a group conversation. */
+  groupMentions?: { id: string; name: string; avatarUrl: string | null }[];
 }
 
 function formatDuration(seconds: number): string {
@@ -152,6 +158,7 @@ export function MessageComposer({
   onClearReply,
   provider,
   mentionMembers,
+  groupMentions,
 }: MessageComposerProps) {
   // Capability gating (Phase 4). No channel → default to Meta's full
   // capability set so legacy single-Meta accounts are unaffected.
@@ -165,6 +172,9 @@ export function MessageComposer({
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
+  // Group @mention autocomplete (reply textarea, groups only).
+  const [mentionCaret, setMentionCaret] = useState(0);
+  const [mentionHl, setMentionHl] = useState(0);
   // Quick-replies picker: opens on the "/" shortcut or the toolbar button.
   const [qrOpen, setQrOpen] = useState(false);
   const [qrQuery, setQrQuery] = useState("");
@@ -259,20 +269,11 @@ export function MessageComposer({
     }
   }, [text, sending, sessionGated, onSend, replyTo?.id]);
 
-  const handleKeyDown = useCallback(
-    (e: KeyboardEvent<HTMLTextAreaElement>) => {
-      if (e.key === "Enter" && !e.shiftKey) {
-        e.preventDefault();
-        handleSend();
-      }
-    },
-    [handleSend]
-  );
-
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const v = e.target.value;
       setText(v);
+      setMentionCaret(e.target.selectionStart ?? v.length);
       adjustHeight();
       // "/atalho" as the WHOLE input opens the quick-replies picker, seeded
       // with the typed token. Any space or extra content closes it again.
@@ -306,6 +307,80 @@ export function MessageComposer({
       });
     },
     [adjustHeight]
+  );
+
+  // ---- group @mention autocomplete (reply textarea) ----
+  const mentionQuery =
+    groupMentions && groupMentions.length > 0
+      ? activeMentionQuery(text, mentionCaret)
+      : null;
+  const mentionMatches = useMemo(() => {
+    if (mentionQuery === null || !groupMentions) return [];
+    const q = mentionQuery.toLowerCase();
+    return groupMentions
+      .filter((m) => m.name.toLowerCase().includes(q))
+      .slice(0, 6);
+  }, [mentionQuery, groupMentions]);
+  const mentionOpen = mentionMatches.length > 0;
+
+  const pickMention = useCallback(
+    (name: string) => {
+      // Replace the "@query" ending at the caret with "@Name ".
+      const before = text
+        .slice(0, mentionCaret)
+        .replace(/(?:^|\s)@[\p{L}\p{N}]*$/u, (s) =>
+          s.replace(/@[\p{L}\p{N}]*$/u, `@${name} `),
+        );
+      const next = before + text.slice(mentionCaret);
+      setText(next);
+      setMentionHl(0);
+      requestAnimationFrame(() => {
+        const el = textareaRef.current;
+        if (el) {
+          el.focus();
+          el.selectionStart = el.selectionEnd = before.length;
+          setMentionCaret(before.length);
+          adjustHeight();
+        }
+      });
+    },
+    [text, mentionCaret, adjustHeight],
+  );
+
+  // Reply textarea keydown: the @mention picker gets first dibs on the arrow/
+  // enter/tab/escape keys; otherwise Enter (no shift) sends.
+  const handleReplyKeyDown = useCallback(
+    (e: KeyboardEvent<HTMLTextAreaElement>) => {
+      if (mentionOpen) {
+        if (e.key === "ArrowDown") {
+          e.preventDefault();
+          setMentionHl((h) => (h + 1) % mentionMatches.length);
+          return;
+        }
+        if (e.key === "ArrowUp") {
+          e.preventDefault();
+          setMentionHl(
+            (h) => (h - 1 + mentionMatches.length) % mentionMatches.length,
+          );
+          return;
+        }
+        if (e.key === "Enter" || e.key === "Tab") {
+          e.preventDefault();
+          pickMention(mentionMatches[mentionHl].name);
+          return;
+        }
+        if (e.key === "Escape") {
+          e.preventDefault();
+          setMentionCaret(-1); // close without changing text
+          return;
+        }
+      }
+      if (e.key === "Enter" && !e.shiftKey) {
+        e.preventDefault();
+        handleSend();
+      }
+    },
+    [mentionOpen, mentionMatches, mentionHl, pickMention, handleSend],
   );
 
   // Insert an emoji at the cursor (or replace the selection), then restore
@@ -914,29 +989,72 @@ export function MessageComposer({
             initialQuery={qrQuery}
           />
 
-          <textarea
-            ref={textareaRef}
-            value={text}
-            onChange={handleChange}
-            onKeyDown={handleKeyDown}
-            placeholder={
-              readOnly
-                ? "Somente leitura — visualizadores podem navegar mas não responder"
-                : sessionGated
-                  ? "Sessão expirada - use um template"
-                  : "Digite uma mensagem... (Shift+Enter para nova linha)"
-            }
-            disabled={sessionGated || readOnly}
-            rows={1}
-            // Textarea keeps its own inline title — the GatedButton
-            // wrapping pattern doesn't apply to non-button inputs.
-            // The placeholder text also surfaces the read-only state.
-            title={readOnly ? "Somente leitura — seu perfil não pode enviar mensagens" : undefined}
-            className={cn(
-              "flex-1 resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
-              (sessionGated || readOnly) && "cursor-not-allowed opacity-50"
+          <div className="relative flex-1">
+            {/* Group @mention picker — WhatsApp-style: type "@" to filter the
+                group's participants and click/Enter to insert the mention. */}
+            {mentionOpen && (
+              <ul className="absolute bottom-full left-0 z-20 mb-1 max-h-52 w-64 overflow-y-auto rounded-xl border border-border bg-popover p-1 shadow-lg">
+                {mentionMatches.map((m, i) => (
+                  <li key={m.id}>
+                    <button
+                      type="button"
+                      // onMouseDown (not onClick) so the textarea doesn't blur.
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        pickMention(m.name);
+                      }}
+                      className={cn(
+                        "flex w-full items-center gap-2 rounded-lg px-2.5 py-1.5 text-left text-sm",
+                        i === mentionHl
+                          ? "bg-primary/10 text-foreground"
+                          : "text-foreground hover:bg-muted",
+                      )}
+                    >
+                      <ContactAvatar
+                        avatarUrl={m.avatarUrl}
+                        displayName={m.name}
+                        className="size-6 shrink-0"
+                      />
+                      <span className="truncate">{m.name}</span>
+                    </button>
+                  </li>
+                ))}
+              </ul>
             )}
-          />
+            <textarea
+              ref={textareaRef}
+              value={text}
+              onChange={handleChange}
+              onKeyDown={handleReplyKeyDown}
+              onKeyUp={(e) =>
+                setMentionCaret(
+                  (e.target as HTMLTextAreaElement).selectionStart ?? 0,
+                )
+              }
+              onClick={(e) =>
+                setMentionCaret(
+                  (e.target as HTMLTextAreaElement).selectionStart ?? 0,
+                )
+              }
+              placeholder={
+                readOnly
+                  ? "Somente leitura — visualizadores podem navegar mas não responder"
+                  : sessionGated
+                    ? "Sessão expirada - use um template"
+                    : "Digite uma mensagem... (Shift+Enter para nova linha)"
+              }
+              disabled={sessionGated || readOnly}
+              rows={1}
+              // Textarea keeps its own inline title — the GatedButton
+              // wrapping pattern doesn't apply to non-button inputs.
+              // The placeholder text also surfaces the read-only state.
+              title={readOnly ? "Somente leitura — seu perfil não pode enviar mensagens" : undefined}
+              className={cn(
+                "w-full resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
+                (sessionGated || readOnly) && "cursor-not-allowed opacity-50"
+              )}
+            />
+          </div>
 
           <GatedButton
             size="sm"
