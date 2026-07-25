@@ -112,8 +112,8 @@ const TYPING_ON = (process.env.TYPING_SOUND||'on') !== 'off';
 // Leito de fundo (escritório) tocando a ligação INTEIRA. Dois volumes: sozinho
 // no silêncio (TYPING_GAIN) e mais baixo POR BAIXO da voz dela (TYPING_UNDER_GAIN),
 // pra não competir com a fala. Ambos ajustáveis por env, sem redeploy pesado.
-const TYPING_GAIN = Number(process.env.TYPING_GAIN||0.13);
-const TYPING_UNDER_GAIN = Number(process.env.TYPING_UNDER_GAIN||0.075);
+const TYPING_GAIN = Number(process.env.TYPING_GAIN||0.09);
+const TYPING_UNDER_GAIN = Number(process.env.TYPING_UNDER_GAIN||0.05);
 function makeTypingPcm(seconds){
   const n = RATE*seconds, buf = Buffer.alloc(n*2); let t = 0, keys = 0;
   const put=(i,v)=>{ if(i>=0&&i<n) buf.writeInt16LE(Math.max(-32768,Math.min(32767,Math.round(v))), i*2); };
@@ -318,7 +318,7 @@ async function handleCall(cid, session, payload){
     }
     return out;
   }
-  let playStartAt=null, bytesSent=0, lastAiSentAt=0;
+  let playStartAt=null, bytesSent=0, lastAiSentAt=0, lastVoiceAt=0;
   const drainer=setInterval(()=>{ if(dc.readyState!=='open')return; const now=Date.now();
     // Atendente no comando: a IA não toca nada (o áudio dele já vai direto).
     if(relay.talk){ aiQ=Buffer.alloc(0); playStartAt=null; return; }
@@ -329,7 +329,7 @@ async function handleCall(cid, session, payload){
       const shouldBytes=Math.floor((now-playStartAt)/1000*RATE*2/FRAME)*FRAME;
       while(bytesSent<shouldBytes && aiQ.length>=FRAME){ let f=aiQ.subarray(0,FRAME); aiQ=aiQ.subarray(FRAME);
         if(bed) f=mixTyping(f, TYPING_UNDER_GAIN);   // voz da IA + teclado bem por baixo
-        emit(f); bytesSent+=FRAME; }
+        emit(f); bytesSent+=FRAME; lastVoiceAt=now; }
     } else {
       // Fila vazia. Só REINICIA o relógio se a fala realmente acabou (>300ms
       // sem áudio). Reiniciar a cada soluço da ElevenLabs zerava o `shouldBytes`
@@ -340,7 +340,12 @@ async function handleCall(cid, session, payload){
       // SILÊNCIO: mantém o escritório vivo — 1 frame de teclado a cada tick (20ms
       // = tempo real). Não entra em aiQ (não atrasa a voz) e não conta como "IA
       // falando", então não muta o cliente nem atrapalha o barge-in.
-      if(bed) emit(mixTyping(Buffer.alloc(FRAME), TYPING_GAIN));
+      // Se a voz engasgou HÁ POUCO (<700ms), ainda estamos no MEIO da fala dela —
+      // o vão é um soluço da ElevenLabs, não um silêncio de escritório. Nesse caso
+      // preenche com o teclado BEM baixinho (under), pra o engasgo não virar um
+      // estalo alto no meio da frase. Silêncio de verdade usa o volume normal.
+      if(bed){ const g = (now-lastVoiceAt < 700) ? TYPING_UNDER_GAIN : TYPING_GAIN;
+        emit(mixTyping(Buffer.alloc(FRAME), g)); }
     }
     trackQ(); },20);
   let iaPlayed=0, aiQEmptiedAt=0, wasEmpty=true;
