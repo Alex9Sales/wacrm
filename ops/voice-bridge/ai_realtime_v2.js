@@ -94,8 +94,11 @@ function numerosPorExtenso(t){
     let s=extenso(reais)+(reais===1?' real':' reais');
     if(cent) s+=' e '+extenso(cent)+(cent===1?' centavo':' centavos');
     return s; });
-  // inteiros SOLTOS. O "não colado a letra" preserva código de produto:
-  // "P13" continua "P13", só "1248" vira "mil duzentos e quarenta e oito".
+  // CÓDIGO DE PRODUTO colado (P13, G45): a voz enrola no glifo "P13". Dá as
+  // PALAVRAS pro TTS — "P13" vira "P treze" — pra sair limpo. (Só na voz; os
+  // dados da ferramenta não passam por aqui, então o código cru é preservado lá.)
+  t=t.replace(/\b([A-Za-z]{1,2})(\d{1,3})\b/g,(_m,l,d)=>l.toUpperCase()+' '+extenso(Number(d)));
+  // inteiros SOLTOS. "1248" vira "mil duzentos e quarenta e oito".
   t=t.replace(/(^|[^\p{L}\d])(\d{1,6})(?![\d\p{L}])/gu,(_m,pre,n)=>pre+extenso(Number(n)));
   return t;
 }
@@ -160,9 +163,13 @@ async function handleCall(cid, session, payload){
   // (sem isto, um prompt minúsculo faz o OpenAI cair no inglês/defaults).
   const BASE='Você é uma atendente de voz ao TELEFONE. Fale SEMPRE em português do Brasil (pt-BR), com frases curtas e naturais de telefone. NUNCA responda em inglês. Nunca invente preço nem endereço.';
   let PROMPT = BASE + (cfg.prompt ? `\n\n--- Persona e regras deste atendimento ---\n${cfg.prompt}` : '');
-  PROMPT += '\n\n--- REGISTRO DO PEDIDO (OBRIGATÓRIO — use a FERRAMENTA) ---\n'
-    + 'Assim que o cliente confirmar produto, endereço (rua, número e bairro) e forma de pagamento, você DEVE CHAMAR a ferramenta notificar_pedido com esses dados. Essa chamada de ferramenta é o ÚNICO jeito de registrar e despachar o pedido — falar que vai registrar NÃO registra nada.\n'
-    + 'REGRAS: (1) NUNCA diga "vou registrar", "já encaminhei", "vou despachar" ou parecido sem antes ter chamado a ferramenta. (2) Só DEPOIS que a ferramenta responder é que você confirma o pedido pro cliente — mas a despedida e o [DESLIGAR] seguem a seção FECHAMENTO (espere o cliente antes de se despedir). (3) NUNCA use [DESLIGAR] com um pedido em aberto sem ter chamado a ferramenta. (4) Se ainda faltar algum dado (produto, endereço ou pagamento), pergunte — não chame a ferramenta incompleta. (5) Nos DADOS da ferramenta, escreva valores e números em ALGARISMOS (ex: valor "R$ 125,00", troco "R$ 150,00", número da casa "53") — a regra de falar por extenso vale SÓ para a voz, NUNCA para a ferramenta.\n'
+  PROMPT += '\n\n--- REGISTRO DO PEDIDO (OBRIGATÓRIO — use a FERRAMENTA, UMA ÚNICA VEZ) ---\n'
+    + 'A ferramenta notificar_pedido é o ÚNICO jeito de registrar e despachar o pedido — falar que vai registrar NÃO registra nada. Cada chamada MANDA um pedido pro grupo da entrega, então chamar duas vezes gera pedido DUPLICADO. Por isso a ferramenta é chamada NO MÁXIMO UMA VEZ na ligação inteira.\n'
+    + 'ORDEM OBRIGATÓRIA (nunca pule etapa): (1) COLETE tudo: produto, endereço completo (rua, número e bairro) e forma de pagamento. (2) FAÇA O RESUMO em voz alta — repita produto, endereço completo, pagamento e valor. (3) PERGUNTE explicitamente se está tudo certo: "Posso confirmar e já mandar pra entrega? Está tudo certo?". (4) ESPERE o cliente responder. (5) SÓ quando o cliente CONFIRMAR de forma clara (ex.: "sim", "está certo", "pode mandar", "isso") é que você chama notificar_pedido — UMA vez só.\n'
+    + 'PROIBIDO: chamar notificar_pedido durante o resumo, antes da pergunta de confirmação, ou antes do cliente responder "sim/está certo". O RESUMO NÃO É REGISTRO — é só pra ele conferir. Registrar só depois do "sim" dele.\n'
+    + 'SE O CLIENTE CORRIGIR qualquer coisa no resumo (bairro, número, produto, pagamento): NÃO chame a ferramenta. Ajuste o dado, refaça o resumo com a correção e pergunte de novo "agora está tudo certo?". Só chame notificar_pedido depois do "sim" final. Assim ela nunca é chamada duas vezes.\n'
+    + 'JÁ CHAMOU? Se você já chamou notificar_pedido uma vez nesta ligação, NUNCA chame de novo — nem se o cliente corrigir algo depois. Nesse caso diga que vai ajustar e que um atendente confirma o acerto (ver seção CORREÇÕES).\n'
+    + 'OUTRAS REGRAS: (a) NUNCA diga "vou registrar", "já encaminhei", "vou despachar" sem ter chamado a ferramenta. (b) Só DEPOIS que a ferramenta responder é que você confirma o pedido pro cliente — a despedida e o [DESLIGAR] seguem a seção FECHAMENTO. (c) NUNCA use [DESLIGAR] com um pedido em aberto sem ter chamado a ferramenta. (d) Nos DADOS da ferramenta, escreva valores e números em ALGARISMOS (ex: valor "R$ 125,00", troco "R$ 150,00", número da casa "53") — falar por extenso vale SÓ para a voz, NUNCA para a ferramenta.\n'
     + '\n--- FECHAMENTO (não atropele a despedida) ---\n'
     + 'Depois que a ferramenta registrar o pedido, faça UMA fala curta: confirme o resumo do pedido e diga que já vai encaminhar pra entrega. E PARE — espere o cliente responder. NÃO emende "de nada", "por nada" nem "tenha um ótimo dia" nessa mesma fala, e NÃO use [DESLIGAR] ainda.\n'
     + 'NUNCA diga "de nada"/"por nada" antes do cliente te agradecer — isso é RESPOSTA a um "obrigado". Só use depois que ele agradecer de verdade.\n'
