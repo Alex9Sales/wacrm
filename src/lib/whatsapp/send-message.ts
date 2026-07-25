@@ -37,12 +37,16 @@ import {
   messages,
   messageTemplates,
   monitoredGroups,
+  groupParticipantNames,
 } from '@/db';
-import { groupJidDigits } from '@/lib/whatsapp/group';
+import {
+  groupJidDigits,
+  buildOutboundGroupMentions,
+} from '@/lib/whatsapp/group';
 import { firstOrNull, firstOrThrow } from '@/db/helpers';
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels';
 import { getProvider } from '@/lib/channels/registry';
-import type { OutboundMedia } from '@/lib/channels/provider';
+import type { OutboundMedia, ChannelCtx } from '@/lib/channels/provider';
 import type { MediaKind } from '@/lib/whatsapp/meta-api';
 import {
   sanitizePhoneForMeta,
@@ -408,6 +412,32 @@ export async function sendMessageToConversation(
     templateRow = (data as MessageTemplate | null) ?? null;
   }
 
+  // Group @mentions: when the operator typed "@Name" in a group text, resolve
+  // it to a real WhatsApp mention. `waText` is what goes to WhatsApp (@<user>
+  // tokens); the CRM keeps the original readable `contentText`. Only for group
+  // text with an "@" — never a heavy round-trip otherwise.
+  let waText = contentText;
+  let mentionJids: string[] = [];
+  if (
+    contact.isGroup &&
+    messageType === 'text' &&
+    contentText &&
+    contentText.includes('@')
+  ) {
+    try {
+      const resolved = await resolveOutboundGroupMentions(
+        accountId,
+        channel,
+        providerTarget,
+        contentText,
+      );
+      waText = resolved.text;
+      mentionJids = resolved.mentions;
+    } catch (err) {
+      console.error('[send-message] group mention resolve failed:', err);
+    }
+  }
+
   // Dispatch one send attempt through the resolved provider. Returns the
   // provider-side message id. Media/text/template all route through the
   // WhatsAppProvider interface — the adapter owns the transport specifics.
@@ -444,8 +474,9 @@ export async function sendMessageToConversation(
       const result = await provider.sendMedia(channel, phone, media);
       return result.externalMessageId;
     }
-    const result = await provider.sendText(channel, phone, contentText!, {
+    const result = await provider.sendText(channel, phone, waText!, {
       contextExternalId: contextMessageId,
+      mentions: mentionJids.length ? mentionJids : undefined,
     });
     return result.externalMessageId;
   };
@@ -577,4 +608,64 @@ export async function sendMessageToConversation(
   }
 
   return { messageId: messageRecord.id, whatsappMessageId: waMessageId };
+}
+
+/**
+ * Resolve the "@Name" tokens an operator typed in a GROUP text into real
+ * WhatsApp mentions. Cross-references the display names we already learned
+ * (`group_participant_names`, from people who posted) with the group's live
+ * participant list (LID user-part + phone) so each name maps to the mention
+ * user-part and jid WhatsApp expects IN THIS GROUP — the @lid form for a
+ * lid-addressed group, else the phone. Returns the rewritten text (@<user>
+ * tokens) + the jids to send in `mentions`. The participant list is only
+ * fetched when a KNOWN name actually appears in the text (no heavy round-trip
+ * otherwise). Best-effort: on any gap the token stays as typed.
+ */
+async function resolveOutboundGroupMentions(
+  accountId: string,
+  channel: ChannelCtx,
+  groupJid: string,
+  text: string,
+): Promise<{ text: string; mentions: string[] }> {
+  const nameRows = await db
+    .select({
+      waKey: groupParticipantNames.waKey,
+      name: groupParticipantNames.name,
+    })
+    .from(groupParticipantNames)
+    .where(eq(groupParticipantNames.accountId, accountId));
+  // Only the names actually mentioned in the text matter.
+  const relevant = nameRows.filter(
+    (r) => r.name && text.includes(`@${r.name}`),
+  );
+  if (relevant.length === 0) return { text, mentions: [] };
+
+  const provider = getProvider(channel.provider);
+  const parts =
+    typeof provider.listGroupParticipants === 'function'
+      ? await provider.listGroupParticipants(channel, groupJid)
+      : [];
+  // Index participants by BOTH ids so a name's wa_key (LID user OR phone)
+  // resolves to the same participant either way.
+  const byKey = new Map<string, { lidUser?: string; phone?: string }>();
+  for (const p of parts) {
+    if (p.lidUser) byKey.set(p.lidUser, p);
+    if (p.phone) byKey.set(p.phone, p);
+  }
+
+  const nameToUser: Record<string, string> = {};
+  const jidByUser: Record<string, string> = {};
+  for (const r of relevant) {
+    const part = r.waKey ? byKey.get(r.waKey) : undefined;
+    if (!part) continue;
+    // Prefer the LID (a lid-addressed group mentions by @lid); else the phone.
+    if (part.lidUser) {
+      nameToUser[r.name as string] = part.lidUser;
+      jidByUser[part.lidUser] = `${part.lidUser}@lid`;
+    } else if (part.phone) {
+      nameToUser[r.name as string] = part.phone;
+      jidByUser[part.phone] = `${part.phone}@c.us`;
+    }
+  }
+  return buildOutboundGroupMentions(text, nameToUser, jidByUser);
 }

@@ -5,6 +5,7 @@ import {
   prefixGroupAuthor,
   mentionUsers,
   parseGroupParticipants,
+  buildOutboundGroupMentions,
   resolveGroupMentions,
 } from './group';
 
@@ -125,6 +126,45 @@ describe('parseGroupParticipants', () => {
     expect(parseGroupParticipants(undefined)).toEqual([]);
     expect(parseGroupParticipants(null)).toEqual([]);
     expect(parseGroupParticipants([{}, 42, null, { foo: 'bar' }])).toEqual([]);
+  });
+});
+
+describe('buildOutboundGroupMentions', () => {
+  const nameToUser = { 'Ana Paula': '111@x', Ana: '222', João: '146089705500852' };
+  const jidByUser = {
+    '111@x': '111@lid', // (won't be used — Ana Paula's user is odd on purpose)
+    '222': '5567992539584@c.us',
+    '146089705500852': '146089705500852@lid',
+  };
+
+  it('rewrites @Name to @<user> and collects the jid', () => {
+    const r = buildOutboundGroupMentions(
+      'bom dia @João, confirma?',
+      { João: '146089705500852' },
+      { '146089705500852': '146089705500852@lid' },
+    );
+    expect(r.text).toBe('bom dia @146089705500852, confirma?');
+    expect(r.mentions).toEqual(['146089705500852@lid']);
+  });
+
+  it('prefers the longest name (Ana Paula over Ana)', () => {
+    const r = buildOutboundGroupMentions('oi @Ana Paula', nameToUser, jidByUser);
+    // "Ana Paula" matched first; its jid resolves so it rewrites.
+    expect(r.text).toBe('oi @111@x');
+    expect(r.mentions).toEqual(['111@lid']);
+  });
+
+  it('leaves an unknown @name untouched, no mentions', () => {
+    const r = buildOutboundGroupMentions('oi @Fulano', nameToUser, jidByUser);
+    expect(r.text).toBe('oi @Fulano');
+    expect(r.mentions).toEqual([]);
+  });
+
+  it('no-ops without an @', () => {
+    expect(buildOutboundGroupMentions('bom dia', nameToUser, jidByUser)).toEqual({
+      text: 'bom dia',
+      mentions: [],
+    });
   });
 });
 

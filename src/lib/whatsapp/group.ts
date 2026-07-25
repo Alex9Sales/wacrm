@@ -124,6 +124,39 @@ export function parseGroupParticipants(raw: unknown): GroupParticipantIds[] {
 }
 
 /**
+ * OUTBOUND counterpart of resolveGroupMentions: turn the "@Name" an operator
+ * typed into the WhatsApp mention token "@<user>" AND collect the jids to send
+ * in `mentions`, so the mentioned person is really pinged (blue mention) rather
+ * than seeing plain text. `nameToUser` maps a known participant's display name
+ * to their mention user-part (LID user or phone digits); `jidByUser` maps that
+ * user-part to the full mention jid (`…@lid` / `…@c.us`). Longest name first so
+ * "@Ana Paula" wins over "@Ana". Unmatched "@text" is left untouched. Returns
+ * the rewritten text (for WhatsApp) + the deduped jid list; the CRM keeps the
+ * original readable "@Name" separately.
+ */
+export function buildOutboundGroupMentions(
+  text: string,
+  nameToUser: Record<string, string>,
+  jidByUser: Record<string, string>,
+): { text: string; mentions: string[] } {
+  if (!text || !text.includes('@')) return { text, mentions: [] };
+  const names = Object.keys(nameToUser).sort((a, b) => b.length - a.length);
+  let out = text;
+  const mentions = new Set<string>();
+  for (const name of names) {
+    if (!name) continue;
+    const token = `@${name}`;
+    if (!out.includes(token)) continue;
+    const user = nameToUser[name];
+    const jid = user ? jidByUser[user] : undefined;
+    if (!user || !jid) continue;
+    out = out.split(token).join(`@${user}`);
+    mentions.add(jid);
+  }
+  return { text: out, mentions: [...mentions] };
+}
+
+/**
  * Rewrite "@<user>" mention tokens in a group message to "@<name>", the way
  * WhatsApp shows them. `users` is the set of mentioned user-parts (from
  * mentionUsers); `nameByUser` maps a user-part to a known display name. An

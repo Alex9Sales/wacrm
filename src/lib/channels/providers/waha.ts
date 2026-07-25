@@ -858,14 +858,18 @@ export const wahaProvider: WhatsAppProvider = {
     ch: ChannelCtx,
     toE164: string,
     text: string,
-    _opts?: SendOptions,
+    opts?: SendOptions,
   ): Promise<{ externalMessageId: string }> {
     const chatId = await resolveChatId(ch, toE164);
-    const { ok, status, body } = await sendWithRetry(ch, 'sendText', {
+    const payload: Record<string, unknown> = {
       session: sessionOf(ch),
       chatId,
       text,
-    });
+    };
+    // Real WhatsApp @mentions (group): the text carries the @<user> tokens and
+    // `mentions` the jids to ping. gows accepts a `mentions` array of jids.
+    if (opts?.mentions?.length) payload.mentions = opts.mentions;
+    const { ok, status, body } = await sendWithRetry(ch, 'sendText', payload);
     if (!ok) {
       throw new Error(`waha sendText failed: ${wahaError(body, status)}`);
     }

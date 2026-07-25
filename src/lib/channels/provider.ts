@@ -156,6 +156,12 @@ export interface ChannelCtx {
 export interface SendOptions {
   /** External id of a message to quote (swipe-reply). */
   contextExternalId?: string;
+  /**
+   * Group @mentions: the jids to ping (e.g. `["146…@lid"]`). The text must
+   * already carry the matching `@<user>` tokens. Providers that support it send
+   * a real WhatsApp mention (blue, notifies); others ignore it (plain text).
+   */
+  mentions?: string[];
 }
 
 /** Outbound media descriptor. */
