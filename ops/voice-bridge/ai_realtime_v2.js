@@ -396,8 +396,8 @@ async function handleCall(cid, session, payload){
   }
   let ttsTurn=null, responding=false, barged=false, bargeUntil=0, loudRun=0;
   // Robustez a RUÍDO/VIVA-VOZ (tudo ajustável por env, pra afinar sem redeploy):
-  const ECHO_GATE=Number(process.env.ECHO_GATE||1500);   // energia pra contar como "alto"
-  const BARGE_FRAMES=Number(process.env.BARGE_FRAMES||5); // frames ALTOS seguidos p/ cortar (20ms cada → 100ms)
+  const ECHO_GATE=Number(process.env.ECHO_GATE||1200);   // energia pra contar como "alto"
+  const BARGE_FRAMES=Number(process.env.BARGE_FRAMES||4); // frames ALTOS seguidos p/ cortar (20ms cada → 80ms)
   const NOISE_FLOOR=Number(process.env.NOISE_FLOOR||300); // abaixo disto (IA calada) = silêncio injetado (zeros)
   let turnBuf='', turnFull='', hangupAfterPlay=false, hangingUp=false;
   // handoff (fatia 5B): humano assumiu → fala HANDOFF_LINE e solta a perna SEM calls/end
@@ -549,6 +549,9 @@ async function handleCall(cid, session, payload){
       // viu). O barge-in só CORTA ela localmente — e exige som ALTO E SUSTENTADO
       // (BARGE_FRAMES frames seguidos), pra um estalo/ruído isolado não cortar.
       if(handoffStarted) return;                 // handoff cuida da própria saída
+      // DIAG (calibração do barge-in): loga entrada alta durante a fala dela, pra
+      // ver a energia real de uma interrupção vs o gate. Remover depois de afinar.
+      if(r>800) log('[barge?] r='+r+' gate='+ECHO_GATE+' run='+loudRun);
       if(r>ECHO_GATE) loudRun++; else loudRun=0;
       if(loudRun>=BARGE_FRAMES && !barged){
         barged=true; loudRun=0; log('[barge-in] cliente interrompeu → corta a IA');
