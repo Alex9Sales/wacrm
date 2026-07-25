@@ -100,13 +100,17 @@ function numerosPorExtenso(t){
   return t;
 }
 
-// ---- som de TECLADO no "pensando" --------------------------------------
-// Enquanto a IA "pensa" (o cliente terminou de falar e a voz ainda não começou),
-// tocamos uma digitação BAIXA de fundo — como um atendente anotando o pedido —
-// pra preencher o silêncio e não parecer uma IA travando. Sintetizado aqui (sem
-// asset externo): cliques curtos e irregulares. Volume ajustável por env.
+// ---- som de TECLADO de fundo (escritório) ------------------------------
+// Leito de digitação BAIXA tocando a ligação INTEIRA — como um atendente num
+// escritório movimentado — pra não soar como IA num silêncio de estúdio. Toca
+// sozinho nos silêncios e por baixo da voz dela quando fala (ver mixTyping no
+// drainer). Sintetizado aqui (sem asset externo): cliques curtos e irregulares.
 const TYPING_ON = (process.env.TYPING_SOUND||'on') !== 'off';
-const TYPING_GAIN = Number(process.env.TYPING_GAIN||0.22);
+// Leito de fundo (escritório) tocando a ligação INTEIRA. Dois volumes: sozinho
+// no silêncio (TYPING_GAIN) e mais baixo POR BAIXO da voz dela (TYPING_UNDER_GAIN),
+// pra não competir com a fala. Ambos ajustáveis por env, sem redeploy pesado.
+const TYPING_GAIN = Number(process.env.TYPING_GAIN||0.20);
+const TYPING_UNDER_GAIN = Number(process.env.TYPING_UNDER_GAIN||0.12);
 function makeTypingPcm(seconds){
   const n = RATE*seconds, buf = Buffer.alloc(n*2); let t = 0, keys = 0;
   const put=(i,v)=>{ if(i>=0&&i<n) buf.writeInt16LE(Math.max(-32768,Math.min(32767,Math.round(v))), i*2); };
@@ -127,7 +131,7 @@ function makeTypingPcm(seconds){
   }
   return buf;
 }
-const TYPING_PCM = TYPING_ON ? makeTypingPcm(6) : Buffer.alloc(0);
+const TYPING_PCM = TYPING_ON ? makeTypingPcm(22) : Buffer.alloc(0);  // loop longo p/ não soar repetitivo
 
 const OVERFLOW_WAIT_MS = Number(process.env.OVERFLOW_WAIT_MS||15000);
 const HANDOFF_POLL_MS = Number(process.env.HANDOFF_POLL_MS||2000);
@@ -291,13 +295,18 @@ async function handleCall(cid, session, payload){
 
   let aiQ=Buffer.alloc(0);
   const FRAME=Math.floor(RATE*0.02)*2; // 640 bytes = 20ms
-  // "pensando": cliente terminou e a voz ainda não começou → toca teclado.
-  let thinking=false, typingOff=0;
-  function typingFrame(){
-    const out=Buffer.alloc(FRAME);
-    for(let i=0;i<FRAME;i+=2){
+  // Leito de teclado (escritório) SEMPRE tocando. Em vez de enfileirar frames de
+  // teclado em aiQ (o que atrasaria a voz dela), o teclado é SOMADO no frame na
+  // hora de enviar: sozinho no silêncio, e por baixo da voz dela quando ela fala.
+  // `typingOff` anda a cada frame enviado → o leito corre em tempo real.
+  let typingOff=0;
+  function mixTyping(frame, gain){
+    const out=Buffer.from(frame);   // cópia; não mexe no original
+    for(let i=0;i<out.length;i+=2){
       if(typingOff>=TYPING_PCM.length) typingOff=0;
-      out.writeInt16LE(Math.round(TYPING_PCM.readInt16LE(typingOff)*TYPING_GAIN), i);
+      let v = out.readInt16LE(i) + Math.round(TYPING_PCM.readInt16LE(typingOff)*gain);
+      if(v>32767)v=32767; else if(v<-32768)v=-32768;
+      out.writeInt16LE(v,i);
       typingOff+=2;
     }
     return out;
@@ -306,14 +315,14 @@ async function handleCall(cid, session, payload){
   const drainer=setInterval(()=>{ if(dc.readyState!=='open')return; const now=Date.now();
     // Atendente no comando: a IA não toca nada (o áudio dele já vai direto).
     if(relay.talk){ aiQ=Buffer.alloc(0); playStartAt=null; return; }
-    // Enquanto ela "pensa" e a fila está vazia, injeta um frame de teclado — só
-    // o suficiente pra manter o áudio de fundo até a voz real chegar (aí a fila
-    // enche de voz e o teclado para sozinho).
-    if(TYPING_ON && thinking && !handoffStarted && aiQ.length<FRAME){ aiQ=Buffer.concat([aiQ, typingFrame()]); }
+    const bed = TYPING_ON && !handoffStarted;   // leito de teclado ligado?
+    const emit=(f)=>{ try{dc.send(f)}catch{}; if(relay.clients.size && aiEcho.length<AI_ECHO_MAX) aiEcho=Buffer.concat([aiEcho,f]); lastAiSentAt=now; };
     if(aiQ.length>=FRAME){
       if(playStartAt===null){ playStartAt=now; bytesSent=0; }
       const shouldBytes=Math.floor((now-playStartAt)/1000*RATE*2/FRAME)*FRAME;
-      while(bytesSent<shouldBytes && aiQ.length>=FRAME){ const f=aiQ.subarray(0,FRAME); aiQ=aiQ.subarray(FRAME); try{dc.send(f)}catch{}; if(relay.clients.size && aiEcho.length<AI_ECHO_MAX) aiEcho=Buffer.concat([aiEcho,f]); bytesSent+=FRAME; lastAiSentAt=now; }
+      while(bytesSent<shouldBytes && aiQ.length>=FRAME){ let f=aiQ.subarray(0,FRAME); aiQ=aiQ.subarray(FRAME);
+        if(bed) f=mixTyping(f, TYPING_UNDER_GAIN);   // voz da IA + teclado bem por baixo
+        emit(f); bytesSent+=FRAME; }
     } else {
       // Fila vazia. Só REINICIA o relógio se a fala realmente acabou (>300ms
       // sem áudio). Reiniciar a cada soluço da ElevenLabs zerava o `shouldBytes`
@@ -321,6 +330,10 @@ async function handleCall(cid, session, payload){
       // efeito de "câmera lenta". Mantendo o relógio, o que atrasou é enviado
       // em seguida (o receptor tem buffer) e a frase sai inteira.
       if(aiQEmptiedAt && Date.now()-aiQEmptiedAt>300) playStartAt=null;
+      // SILÊNCIO: mantém o escritório vivo — 1 frame de teclado a cada tick (20ms
+      // = tempo real). Não entra em aiQ (não atrasa a voz) e não conta como "IA
+      // falando", então não muta o cliente nem atrapalha o barge-in.
+      if(bed) emit(mixTyping(Buffer.alloc(FRAME), TYPING_GAIN));
     }
     trackQ(); },20);
   let iaPlayed=0, aiQEmptiedAt=0, wasEmpty=true;
@@ -343,11 +356,7 @@ async function handleCall(cid, session, payload){
       for(const t of pend) el.send(JSON.stringify({text:t})); pend=[];
       if(flushed){ try{el.send(JSON.stringify({text:''}))}catch{} } });
     el.on('message',raw=>{ let m; try{m=JSON.parse(raw)}catch{return;}
-      if(m.audio){ const b=Buffer.from(m.audio,'base64');
-        // Chegou a VOZ real → some com o teclado: limpa o que já foi enfileirado
-        // de teclado (senão sobraria um estalo antes da fala) e para de injetar.
-        if(thinking){ thinking=false; aiQ=Buffer.alloc(0); }
-        aiQ=Buffer.concat([aiQ,b]); iaPlayed+=b.length; got+=b.length; trackQ(); } });
+      if(m.audio){ const b=Buffer.from(m.audio,'base64'); aiQ=Buffer.concat([aiQ,b]); iaPlayed+=b.length; got+=b.length; trackQ(); } });
     el.on('error',e=>log('EL err',e.message));
     return { push:(t)=>{ if(!t)return; if(open)el.send(JSON.stringify({text:t})); else pend.push(t); },
              flush:()=>{ flushed=true; if(open){ try{el.send(JSON.stringify({text:''}))}catch{} } },
@@ -461,9 +470,9 @@ async function handleCall(cid, session, payload){
       case 'response.output_text.done':
       case 'response.text.done':
         if(m.text){ const t=m.text.replace(/\[[^\]]*\]/g,'').trim(); log('🤖 IA:', m.text.trim()); if(t){ const at=lastRespAt||Date.now(); transcript.push({role:'ai',text:t,ts:at}); postLive('line','ai',t,at); } } ttsFinish(); break;
-      case 'input_audio_buffer.speech_started': thinking=false; lastSpeechAt=Date.now(); log('[oai] speech_started (cliente falando)'); break;
-      case 'input_audio_buffer.committed':      thinking=true; typingOff=0; log('[oai] buffer committed → gerando resposta'); break;
-      case 'response.done':     responding=false; thinking=false; log('[oai] response.done', (m.response&&m.response.status)||''); if(ttsTurn) ttsTurn.flush(); break;
+      case 'input_audio_buffer.speech_started': lastSpeechAt=Date.now(); log('[oai] speech_started (cliente falando)'); break;
+      case 'input_audio_buffer.committed':      log('[oai] buffer committed → gerando resposta'); break;
+      case 'response.done':     responding=false; log('[oai] response.done', (m.response&&m.response.status)||''); if(ttsTurn) ttsTurn.flush(); break;
       case 'conversation.item.input_audio_transcription.completed':
         if(m.transcript){ const t=m.transcript.trim(); log('🗣️ CLIENTE:', t); if(t){ const at=lastSpeechAt||Date.now(); transcript.push({role:'customer',text:t,ts:at}); postLive('line','customer',t,at); } } break;
       case 'response.output_item.added':
@@ -510,7 +519,7 @@ async function handleCall(cid, session, payload){
       if(handoffStarted) return;                 // handoff cuida da própria saída
       if(r>ECHO_GATE) loudRun++; else loudRun=0;
       if(loudRun>=BARGE_FRAMES && !barged){
-        barged=true; loudRun=0; thinking=false; log('[barge-in] cliente interrompeu → corta a IA');
+        barged=true; loudRun=0; log('[barge-in] cliente interrompeu → corta a IA');
         aiQ=Buffer.alloc(0); hangupAfterPlay=false;
         if(ttsTurn){ ttsTurn.close(); }
         if(responding){ try{ws.send(JSON.stringify({type:'response.cancel'}))}catch{} }
