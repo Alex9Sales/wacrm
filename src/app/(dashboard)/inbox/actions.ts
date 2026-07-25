@@ -17,6 +17,7 @@ import {
   deals,
   member,
   groupParticipantNames,
+  monitoredGroups,
   messageReactions,
   messageTemplates,
   messages,
@@ -38,6 +39,9 @@ import {
   canSeeConversation,
 } from '@/lib/sectors/access'
 import { formatConversationPreview } from '@/lib/inbox/preview'
+import { loadChannel } from '@/lib/channels/channels'
+import { getProvider } from '@/lib/channels/registry'
+import { groupJidDigits } from '@/lib/whatsapp/group'
 import type {
   ChannelProvider,
   Contact,
@@ -518,16 +522,72 @@ export async function listMessages(conversationId: string): Promise<Message[]> {
 }
 
 /**
- * Names we know for group participants (from `group_participant_names` — people
- * who posted), for the composer's @mention autocomplete. Account-scoped and
- * deduped by name (a person can have a LID and a phone row with the same name);
- * the outbound send re-validates against the real group participants, so a
- * cross-group name here is harmless. `id` is the wa_key.
+ * Participants of THIS group whose names we know, for the composer's @mention
+ * autocomplete. Cross-references the group's real member list (from the engine)
+ * with the names we learned (`group_participant_names`), so only people IN this
+ * group show — not every name in the account. Deduped by name. Returns `[]` for
+ * a 1:1 conversation or when the group's participants can't be fetched.
  */
-export async function listGroupMentionNames(): Promise<
-  { id: string; name: string; avatarUrl: string | null }[]
-> {
+export async function listGroupMentionNames(
+  conversationId: string,
+): Promise<{ id: string; name: string; avatarUrl: string | null }[]> {
   const ctx = await getCurrentAccount()
+
+  const conv = firstOrNull(
+    await db
+      .select({
+        contactId: conversations.contactId,
+        channelId: conversations.channelId,
+      })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      )
+      .limit(1),
+  )
+  if (!conv?.channelId) return []
+
+  const contact = firstOrNull(
+    await db
+      .select({ phone: contacts.phone, isGroup: contacts.isGroup })
+      .from(contacts)
+      .where(eq(contacts.id, conv.contactId))
+      .limit(1),
+  )
+  if (!contact?.isGroup) return []
+
+  // The intact group jid (with its hyphen) lives in monitored_groups.
+  const wantedDigits = contact.phone.replace(/\D/g, '')
+  const monitored = await db
+    .select({ jid: monitoredGroups.groupJid })
+    .from(monitoredGroups)
+    .where(eq(monitoredGroups.channelId, conv.channelId))
+  const groupJid =
+    monitored.find((m) => groupJidDigits(m.jid) === wantedDigits)?.jid ??
+    `${wantedDigits}@g.us`
+
+  // Fetch the group's real participants (lid user-part + phone) from the engine.
+  let waKeys: Set<string>
+  try {
+    const channel = await loadChannel(conv.channelId)
+    if (!channel || channel.accountId !== ctx.accountId) return []
+    const provider = getProvider(channel.provider)
+    if (typeof provider.listGroupParticipants !== 'function') return []
+    const parts = await provider.listGroupParticipants(channel, groupJid)
+    waKeys = new Set<string>()
+    for (const p of parts) {
+      if (p.lidUser) waKeys.add(p.lidUser)
+      if (p.phone) waKeys.add(p.phone)
+    }
+  } catch {
+    return []
+  }
+  if (waKeys.size === 0) return []
+
+  // Names we know, restricted to this group's members.
   const rows = await db
     .select({
       waKey: groupParticipantNames.waKey,
@@ -535,9 +595,17 @@ export async function listGroupMentionNames(): Promise<
       avatarUrl: groupParticipantNames.avatarUrl,
     })
     .from(groupParticipantNames)
-    .where(eq(groupParticipantNames.accountId, ctx.accountId))
+    .where(
+      and(
+        eq(groupParticipantNames.accountId, ctx.accountId),
+        inArray(groupParticipantNames.waKey, Array.from(waKeys)),
+      ),
+    )
   // Dedupe by trimmed name (case-insensitive); keep the row with an avatar.
-  const byName = new Map<string, { id: string; name: string; avatarUrl: string | null }>()
+  const byName = new Map<
+    string,
+    { id: string; name: string; avatarUrl: string | null }
+  >()
   for (const r of rows) {
     const name = (r.name ?? '').trim()
     if (!name) continue

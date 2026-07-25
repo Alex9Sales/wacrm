@@ -272,15 +272,16 @@ export function MessageThread({
 
   // Group participants for the reply @mention autocomplete (groups only).
   const isGroupConversation = contact?.is_group ?? false;
+  const conversationIdForMentions = conversation?.id;
   useEffect(() => {
-    if (!isGroupConversation) {
+    if (!isGroupConversation || !conversationIdForMentions) {
       setGroupMentions([]);
       return;
     }
-    listGroupMentionNames()
+    listGroupMentionNames(conversationIdForMentions)
       .then(setGroupMentions)
       .catch(() => setGroupMentions([]));
-  }, [isGroupConversation]);
+  }, [isGroupConversation, conversationIdForMentions]);
 
   const handleRefreshClick = useCallback(() => {
     if (isRefreshing || !onRefresh) return;
