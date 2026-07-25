@@ -112,8 +112,8 @@ const TYPING_ON = (process.env.TYPING_SOUND||'on') !== 'off';
 // Leito de fundo (escritório) tocando a ligação INTEIRA. Dois volumes: sozinho
 // no silêncio (TYPING_GAIN) e mais baixo POR BAIXO da voz dela (TYPING_UNDER_GAIN),
 // pra não competir com a fala. Ambos ajustáveis por env, sem redeploy pesado.
-const TYPING_GAIN = Number(process.env.TYPING_GAIN||0.09);
-const TYPING_UNDER_GAIN = Number(process.env.TYPING_UNDER_GAIN||0.05);
+const TYPING_GAIN = Number(process.env.TYPING_GAIN||0.06);
+const TYPING_UNDER_GAIN = Number(process.env.TYPING_UNDER_GAIN||0.035);
 function makeTypingPcm(seconds){
   const n = RATE*seconds, buf = Buffer.alloc(n*2); let t = 0, keys = 0;
   const put=(i,v)=>{ if(i>=0&&i<n) buf.writeInt16LE(Math.max(-32768,Math.min(32767,Math.round(v))), i*2); };
@@ -318,18 +318,21 @@ async function handleCall(cid, session, payload){
     }
     return out;
   }
-  let playStartAt=null, bytesSent=0, lastAiSentAt=0, lastVoiceAt=0;
+  let playStartAt=null, bytesSent=0, lastAiSentAt=0, lastVoiceAt=0, bedArmed=false;
   const drainer=setInterval(()=>{ if(dc.readyState!=='open')return; const now=Date.now();
     // Atendente no comando: a IA não toca nada (o áudio dele já vai direto).
     if(relay.talk){ aiQ=Buffer.alloc(0); playStartAt=null; return; }
-    const bed = TYPING_ON && !handoffStarted;   // leito de teclado ligado?
+    // Leito só liga DEPOIS que ela começou a falar (bedArmed). No atendimento,
+    // ela fala primeiro (a saudação sai limpa, sem teclado no silêncio inicial)
+    // e o escritório entra no fundo a partir daí — como o Alex pediu.
+    const bed = TYPING_ON && !handoffStarted && bedArmed;
     const emit=(f)=>{ try{dc.send(f)}catch{}; if(relay.clients.size && aiEcho.length<AI_ECHO_MAX) aiEcho=Buffer.concat([aiEcho,f]); lastAiSentAt=now; };
     if(aiQ.length>=FRAME){
       if(playStartAt===null){ playStartAt=now; bytesSent=0; }
       const shouldBytes=Math.floor((now-playStartAt)/1000*RATE*2/FRAME)*FRAME;
       while(bytesSent<shouldBytes && aiQ.length>=FRAME){ let f=aiQ.subarray(0,FRAME); aiQ=aiQ.subarray(FRAME);
         if(bed) f=mixTyping(f, TYPING_UNDER_GAIN);   // voz da IA + teclado bem por baixo
-        emit(f); bytesSent+=FRAME; lastVoiceAt=now; }
+        emit(f); bytesSent+=FRAME; lastVoiceAt=now; bedArmed=true; }
     } else {
       // Fila vazia. Só REINICIA o relógio se a fala realmente acabou (>300ms
       // sem áudio). Reiniciar a cada soluço da ElevenLabs zerava o `shouldBytes`
