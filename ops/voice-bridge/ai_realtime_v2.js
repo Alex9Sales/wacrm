@@ -179,9 +179,10 @@ async function handleCall(cid, session, payload){
     + 'JÁ CHAMOU? Se você já chamou notificar_pedido uma vez nesta ligação, NUNCA chame de novo — nem se o cliente corrigir algo depois. Nesse caso diga que vai ajustar e que um atendente confirma o acerto (ver seção CORREÇÕES).\n'
     + 'OUTRAS REGRAS: (a) NUNCA diga "vou registrar", "já encaminhei", "vou despachar" sem ter chamado a ferramenta. (b) Só DEPOIS que a ferramenta responder é que você confirma o pedido pro cliente — a despedida e o [DESLIGAR] seguem a seção FECHAMENTO. (c) NUNCA use [DESLIGAR] com um pedido em aberto sem ter chamado a ferramenta. (d) Nos DADOS da ferramenta, escreva valores e números em ALGARISMOS (ex: valor "R$ 125,00", troco "R$ 150,00", número da casa "53") — falar por extenso vale SÓ para a voz, NUNCA para a ferramenta.\n'
     + '\n--- FECHAMENTO (não atropele a despedida) ---\n'
-    + 'Depois que a ferramenta registrar o pedido, faça UMA fala curta: confirme o resumo do pedido e diga que já vai encaminhar pra entrega. E PARE — espere o cliente responder. NÃO emende "de nada", "por nada" nem "tenha um ótimo dia" nessa mesma fala, e NÃO use [DESLIGAR] ainda.\n'
+    + 'Depois que a ferramenta registrar o pedido, faça UMA fala curta que TERMINA COM UMA PERGUNTA: confirme que o pedido está encaminhado pra entrega e pergunte se ele precisa de mais alguma coisa. Ex.: "Prontinho, seu pedido já está encaminhado pra entrega! Precisa de mais alguma coisa?".\n'
+    + 'NESSE turno (o da confirmação do pedido) é TERMINANTEMENTE PROIBIDO dizer "de nada"/"por nada"/"tenha um ótimo dia" e PROIBIDO usar [DESLIGAR]. Você está PERGUNTANDO se ele precisa de mais algo — não se despedindo. Termine na pergunta e ESPERE o cliente responder.\n'
     + 'NUNCA diga "de nada"/"por nada" antes do cliente te agradecer — isso é RESPOSTA a um "obrigado". Só use depois que ele agradecer de verdade.\n'
-    + 'Quando o cliente se despedir ou agradecer (obrigado, valeu, ok, tá bom), aí sim feche a despedida e o [DESLIGAR] JUNTOS, numa fala SÓ: "Por nada! Qualquer coisa é só chamar, tenha um ótimo dia!" e no fim dessa MESMA fala o [DESLIGAR].\n'
+    + 'Depois que você perguntar "precisa de mais alguma coisa?", quando o cliente responder que NÃO precisa de mais nada (não, só isso, era só isso, mais nada) OU se despedir/agradecer (obrigado, valeu, ok, tá bom), AÍ SIM feche a despedida e o [DESLIGAR] JUNTOS, numa fala SÓ: "Por nada! Qualquer coisa é só chamar, tenha um ótimo dia!" e no fim dessa MESMA fala o [DESLIGAR].\n'
     + 'A despedida é dita UMA ÚNICA VEZ. Depois de dizer "por nada"/"tenha um ótimo dia", NÃO fale mais nada e NUNCA repita a despedida numa segunda fala. Se você já se despediu, é só [DESLIGAR] — sem repetir.\n'
     + 'NUNCA imagine ou responda uma fala que o cliente ainda não disse.\n'
     + '\n--- RITMO E CORREÇÕES (não atropele o cliente) ---\n'
@@ -549,9 +550,6 @@ async function handleCall(cid, session, payload){
       // viu). O barge-in só CORTA ela localmente — e exige som ALTO E SUSTENTADO
       // (BARGE_FRAMES frames seguidos), pra um estalo/ruído isolado não cortar.
       if(handoffStarted) return;                 // handoff cuida da própria saída
-      // DIAG (calibração do barge-in): loga entrada alta durante a fala dela, pra
-      // ver a energia real de uma interrupção vs o gate. Remover depois de afinar.
-      if(r>800) log('[barge?] r='+r+' gate='+ECHO_GATE+' run='+loudRun);
       if(r>ECHO_GATE) loudRun++; else loudRun=0;
       if(loudRun>=BARGE_FRAMES && !barged){
         barged=true; loudRun=0; log('[barge-in] cliente interrompeu → corta a IA');
