@@ -120,8 +120,8 @@ const TYPING_UNDER_GAIN = Number(process.env.TYPING_UNDER_GAIN||0.035);
 // ainda está enchendo a fila quando ela começa a falar, a fila esvazia e
 // engasga. Segurando ~200ms, a abertura sai inteira. PREROLL_MAX_MS é o teto:
 // falas curtas (ex.: "Sim!") que nunca juntam 200ms tocam assim mesmo.
-const PREROLL_BYTES = Math.floor(RATE*2*Number(process.env.PREROLL_MS||200)/1000);
-const PREROLL_MAX_MS = Number(process.env.PREROLL_MAX_MS||350);
+const PREROLL_BYTES = Math.floor(RATE*2*Number(process.env.PREROLL_MS||280)/1000);
+const PREROLL_MAX_MS = Number(process.env.PREROLL_MAX_MS||480);
 function makeTypingPcm(seconds){
   const n = RATE*seconds, buf = Buffer.alloc(n*2); let t = 0, keys = 0;
   const put=(i,v)=>{ if(i>=0&&i<n) buf.writeInt16LE(Math.max(-32768,Math.min(32767,Math.round(v))), i*2); };
