@@ -253,13 +253,26 @@ async function handleCall(cid, session, payload){
       r=>{ let s=''; r.on('data',d=>s+=d); r.on('end',()=>{ log('[tool] '+path,r.statusCode,s.slice(0,90)); try{res(JSON.parse(s))}catch{res({ok:r.statusCode<300})} }); });
     req.on('error',e=>{ log('[tool] err',e.message); res({ok:false}); }); req.write(data); req.end();
   }); }
+  let pedidoRegistrado=false;   // trava anti-duplicata: notificar_pedido 1x por ligação
   async function handleTool(name, callId, argsRaw){
     let args={}; try{ args=JSON.parse(argsRaw||'{}') }catch{}
     log('[tool] chamada', name, JSON.stringify(args).slice(0,140));
     let result={ ok:false, erro:'ferramenta desconhecida' };
     if(name==='notificar_pedido'){
-      if(!args.telefone && callerPhone) args.telefone='+'+callerPhone;
-      result = await callCrmTool('register-order', { from: callerPhone, order: args });
+      // TRAVA DETERMINÍSTICA: registra NO MÁXIMO UMA VEZ por ligação. O prompt
+      // sozinho não segura — o modelo já lançou o MESMO pedido 2x (crédito e
+      // depois débito) ao corrigir. Aqui o bridge recusa a 2ª e avisa o modelo.
+      // O flag sobe ANTES do await pra também matar o race de 2 chamadas quase
+      // simultâneas (a fila do OpenAI dispara a tool 2x antes da 1ª voltar).
+      if(pedidoRegistrado){
+        log('[tool] notificar_pedido BLOQUEADO — pedido já registrado nesta ligação (anti-duplicata)');
+        result = { ok:true, ja_registrado:true, aviso:'ESTE PEDIDO JÁ FOI REGISTRADO E ENVIADO nesta ligação. NÃO registre de novo (geraria pedido duplicado). Se o cliente corrigiu algo, diga que vai ajustar e que um atendente confirma o acerto — NÃO chame notificar_pedido outra vez.' };
+      } else {
+        pedidoRegistrado=true;
+        if(!args.telefone && callerPhone) args.telefone='+'+callerPhone;
+        result = await callCrmTool('register-order', { from: callerPhone, order: args });
+        if(result && result.ok===false) pedidoRegistrado=false;   // falhou de verdade → libera nova tentativa
+      }
     } else if(name==='marcar_sem_venda'){
       result = await callCrmTool('mark-status', { from: callerPhone, status: args.status, motivo: args.motivo });
     }
