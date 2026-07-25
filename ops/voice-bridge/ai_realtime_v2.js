@@ -144,7 +144,11 @@ function makeTypingPcm(seconds){
 }
 const TYPING_PCM = TYPING_ON ? makeTypingPcm(22) : Buffer.alloc(0);  // loop longo p/ não soar repetitivo
 
-const OVERFLOW_WAIT_MS = Number(process.env.OVERFLOW_WAIT_MS||15000);
+// Espera do transbordo antes da IA assumir. 15s era DEMAIS: a ligação WhatsApp
+// já tinha expirado quando a IA tentava o accept (motor devolvia 500 → "não
+// atendida" no CRM, mas o telefone seguia tocando). 8s dá uma janela pro humano
+// e ainda pega a ligação viva.
+const OVERFLOW_WAIT_MS = Number(process.env.OVERFLOW_WAIT_MS||8000);
 const HANDOFF_POLL_MS = Number(process.env.HANDOFF_POLL_MS||2000);
 // frase que a IA fala ao ser assumida por um humano, antes de soltar a perna
 const HANDOFF_LINE = process.env.HANDOFF_LINE||'Só um momento, tá? Vou te passar para um atendente agora.';
@@ -176,6 +180,8 @@ async function handleCall(cid, session, payload){
     + 'ORDEM OBRIGATÓRIA (nunca pule etapa): (1) COLETE tudo: produto, endereço completo (rua, número e bairro) e forma de pagamento. (2) FAÇA O RESUMO em voz alta — repita produto, endereço completo, pagamento e valor. (3) PERGUNTE explicitamente se está tudo certo: "Posso confirmar e já mandar pra entrega? Está tudo certo?". (4) ESPERE o cliente responder. (5) SÓ quando o cliente CONFIRMAR de forma clara (ex.: "sim", "está certo", "pode mandar", "isso") é que você chama notificar_pedido — UMA vez só.\n'
     + 'PROIBIDO: chamar notificar_pedido durante o resumo, antes da pergunta de confirmação, ou antes do cliente responder "sim/está certo". O RESUMO NÃO É REGISTRO — é só pra ele conferir. Registrar só depois do "sim" dele.\n'
     + 'SE O CLIENTE CORRIGIR qualquer coisa no resumo (bairro, número, produto, pagamento): NÃO chame a ferramenta. Ajuste o dado, refaça o resumo com a correção e pergunte de novo "agora está tudo certo?". Só chame notificar_pedido depois do "sim" final. Assim ela nunca é chamada duas vezes.\n'
+    + 'FORMA DE PAGAMENTO — NUNCA INVENTE: registre EXATAMENTE o que o cliente disse. Se ele disser só "cartão", você DEVE perguntar "é no débito ou no crédito?" e usar a resposta dele — NUNCA assuma crédito nem débito por conta própria. Se não entendeu direito, pergunte de novo. É PROIBIDO chamar notificar_pedido com uma forma de pagamento que o cliente não confirmou.\n'
+    + 'INFORMAR/TROCAR PAGAMENTO NÃO É O "SIM" FINAL: se, na hora da confirmação, o cliente disser ou mudar a forma de pagamento (ex.: "vai ser no cartão", "é no débito"), isso é um DADO, não a confirmação do pedido. Atualize o pagamento, refaça o resumo com o valor certo e pergunte "então está tudo certo?" — e só depois do "sim" claro é que chama a ferramenta.\n'
     + 'JÁ CHAMOU? Se você já chamou notificar_pedido uma vez nesta ligação, NUNCA chame de novo — nem se o cliente corrigir algo depois. Nesse caso diga que vai ajustar e que um atendente confirma o acerto (ver seção CORREÇÕES).\n'
     + 'OUTRAS REGRAS: (a) NUNCA diga "vou registrar", "já encaminhei", "vou despachar" sem ter chamado a ferramenta. (b) Só DEPOIS que a ferramenta responder é que você confirma o pedido pro cliente — a despedida e o [DESLIGAR] seguem a seção FECHAMENTO. (c) NUNCA use [DESLIGAR] com um pedido em aberto sem ter chamado a ferramenta. (d) Nos DADOS da ferramenta, escreva valores e números em ALGARISMOS (ex: valor "R$ 125,00", troco "R$ 150,00", número da casa "53") — falar por extenso vale SÓ para a voz, NUNCA para a ferramenta.\n'
     + '\n--- FECHAMENTO (não atropele a despedida) ---\n'
@@ -647,8 +653,15 @@ wss.on('connection',(ws,req)=>{
 });
 wss.on('error',e=>log('[relay] servidor erro:',e.message));
 
+// DEDUP: o waha às vezes entrega o MESMO call.received 2x (visto no log: dois
+// "modo TRANSBORDO" no mesmo id, dois accept → o 2º accept racea e o motor
+// devolve 500). Guardamos os ids em voo por 2 min e ignoramos repetição.
+const seenCalls=new Set();
 const srv=http.createServer((q,r)=>{let b='';q.on('data',c=>b+=c);q.on('end',()=>{r.writeHead(200);r.end('ok');let d={};try{d=JSON.parse(b)}catch{};
-  if(d.event==='call.received'){ const session=d.session||'default'; handleCall((d.payload||{}).id, session, d.payload||{}).catch(e=>log('handleCall err',e.message)); } });});
+  if(d.event==='call.received'){ const session=d.session||'default'; const cid=(d.payload||{}).id;
+    if(cid && seenCalls.has(cid)){ log('CALL',cid,'→ call.received DUPLICADO, ignoro'); return; }
+    if(cid){ seenCalls.add(cid); setTimeout(()=>seenCalls.delete(cid),120000); }
+    handleCall(cid, session, d.payload||{}).catch(e=>log('handleCall err',e.message)); } });});
 srv.listen(PORT,'127.0.0.1',()=>{ log('IA voz v2 ouvindo :'+PORT+' | relay ws '+WS_HOST+':'+WS_PORT+' | CRM='+CRM_BASE+(CHANNEL_OVERRIDE?(' | OVERRIDE canal '+CHANNEL_OVERRIDE.slice(0,8)):'')+(BRIDGE_TOKEN?'':' [SEM BRIDGE_TOKEN!]'));
   // self-test da leitura de config no boot
   fetchConfig('boot').then(c=>{ if(!c){ log('[selftest] config NULA (endpoint/token?)'); return; }
