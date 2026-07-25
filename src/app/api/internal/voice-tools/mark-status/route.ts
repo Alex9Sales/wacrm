@@ -61,6 +61,7 @@ export async function POST(request: Request) {
     dealId = await createVoiceDeal({
       accountId: ch.accountId,
       pipelineId: ch.pipelineId,
+      channelId: ch.id, // conversa do deal no MESMO canal da ligação (não Meta)
       stageName: map.stage,
       from,
       callerName,

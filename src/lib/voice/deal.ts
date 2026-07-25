@@ -145,6 +145,12 @@ export async function createVoiceDeal(opts: {
   title: string
   value?: string
   notes?: string
+  /** The CALL's channel. Passing it keeps the deal's conversation on the SAME
+   *  channel as the call (e.g. waha) — resolving on the same channel returns the
+   *  EXISTING conversation instead of creating a duplicate. Without it (null),
+   *  resolveConversationByPhone falls back to loadDefaultChannel (Meta) and
+   *  spawns an empty ghost conversation on the wrong channel. */
+  channelId?: string | null
 }): Promise<string | null> {
   const stageId = await resolveStageId(opts.pipelineId, opts.stageName)
   if (!stageId) return null
@@ -156,8 +162,7 @@ export async function createVoiceDeal(opts: {
       opts.accountId,
       opts.from,
       opts.callerName ?? null,
-      // channel is optional here — the deal only needs the contact
-      null,
+      opts.channelId ?? null,
     )
     contactId = resolved.contactId
     conversationId = resolved.conversationId
