@@ -144,11 +144,11 @@ function makeTypingPcm(seconds){
 }
 const TYPING_PCM = TYPING_ON ? makeTypingPcm(22) : Buffer.alloc(0);  // loop longo p/ não soar repetitivo
 
-// Espera do transbordo antes da IA assumir. 15s era DEMAIS: a ligação WhatsApp
-// já tinha expirado quando a IA tentava o accept (motor devolvia 500 → "não
-// atendida" no CRM, mas o telefone seguia tocando). 8s dá uma janela pro humano
-// e ainda pega a ligação viva.
-const OVERFLOW_WAIT_MS = Number(process.env.OVERFLOW_WAIT_MS||8000);
+// Espera do transbordo antes da IA assumir. 15s/8s era DEMAIS: a ligação
+// WhatsApp expirava antes do accept (motor devolvia 500 → "não atendida" no
+// CRM, mas o telefone seguia tocando). 3s ainda dá uma folga mínima e pega a
+// ligação bem viva. (Se o canal for 100% IA, dá pra tirar o modo overflow.)
+const OVERFLOW_WAIT_MS = Number(process.env.OVERFLOW_WAIT_MS||3000);
 const HANDOFF_POLL_MS = Number(process.env.HANDOFF_POLL_MS||2000);
 // frase que a IA fala ao ser assumida por um humano, antes de soltar a perna
 const HANDOFF_LINE = process.env.HANDOFF_LINE||'Só um momento, tá? Vou te passar para um atendente agora.';
@@ -177,7 +177,8 @@ async function handleCall(cid, session, payload){
   let PROMPT = BASE + (cfg.prompt ? `\n\n--- Persona e regras deste atendimento ---\n${cfg.prompt}` : '');
   PROMPT += '\n\n--- REGISTRO DO PEDIDO (OBRIGATÓRIO — use a FERRAMENTA, UMA ÚNICA VEZ) ---\n'
     + 'A ferramenta notificar_pedido é o ÚNICO jeito de registrar e despachar o pedido — falar que vai registrar NÃO registra nada. Cada chamada MANDA um pedido pro grupo da entrega, então chamar duas vezes gera pedido DUPLICADO. Por isso a ferramenta é chamada NO MÁXIMO UMA VEZ na ligação inteira.\n'
-    + 'ORDEM OBRIGATÓRIA (nunca pule etapa): (1) COLETE tudo: produto, endereço completo (rua, número e bairro) e forma de pagamento. (2) FAÇA O RESUMO em voz alta — repita produto, endereço completo, pagamento e valor. (3) PERGUNTE explicitamente se está tudo certo: "Posso confirmar e já mandar pra entrega? Está tudo certo?". (4) ESPERE o cliente responder. (5) SÓ quando o cliente CONFIRMAR de forma clara (ex.: "sim", "está certo", "pode mandar", "isso") é que você chama notificar_pedido — UMA vez só.\n'
+    + 'ORDEM OBRIGATÓRIA (nunca pule etapa): (1) COLETE tudo: produto, endereço completo (rua, número e bairro) e forma de pagamento. (2) FAÇA O RESUMO em voz alta — repita produto, endereço completo, pagamento e valor. (3) PERGUNTE explicitamente se está tudo certo: "Posso confirmar e já mandar pra entrega? Está tudo certo?". (4) ESPERE o cliente responder. (5) Quando o cliente CONFIRMAR de forma clara (ex.: "sim", "está certo", "pode mandar", "isso"), diga a FRASE-PONTE (abaixo) e SÓ ENTÃO chame notificar_pedido — UMA vez só.\n'
+    + 'FRASE-PONTE ANTES DA FERRAMENTA (OBRIGATÓRIA): assim que o cliente der o "sim", diga UMA frase curta pra cobrir o processamento ANTES de chamar notificar_pedido — ex.: "Perfeito! Só um instante que já tô confirmando seu pedido aqui..." — e SÓ DEPOIS chame a ferramenta. NUNCA chame a ferramenta em silêncio: sem essa frase fica um vazio de alguns segundos e o cliente acha que a ligação travou.\n'
     + 'PROIBIDO: chamar notificar_pedido durante o resumo, antes da pergunta de confirmação, ou antes do cliente responder "sim/está certo". O RESUMO NÃO É REGISTRO — é só pra ele conferir. Registrar só depois do "sim" dele.\n'
     + 'SE O CLIENTE CORRIGIR qualquer coisa no resumo (bairro, número, produto, pagamento): NÃO chame a ferramenta. Ajuste o dado, refaça o resumo com a correção e pergunte de novo "agora está tudo certo?". Só chame notificar_pedido depois do "sim" final. Assim ela nunca é chamada duas vezes.\n'
     + 'FORMA DE PAGAMENTO — NUNCA INVENTE: registre EXATAMENTE o que o cliente disse. Se ele disser só "cartão", você DEVE perguntar "é no débito ou no crédito?" e usar a resposta dele — NUNCA assuma crédito nem débito por conta própria. Se não entendeu direito, pergunte de novo. É PROIBIDO chamar notificar_pedido com uma forma de pagamento que o cliente não confirmou.\n'
