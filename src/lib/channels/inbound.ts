@@ -18,7 +18,7 @@
 // ============================================================
 
 import { randomUUID } from 'crypto';
-import { and, count, eq, gte, inArray, isNull } from 'drizzle-orm';
+import { and, count, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 
 import {
   db,
@@ -29,7 +29,11 @@ import {
   groupParticipantNames,
 } from '@/db';
 import { firstOrNull } from '@/db/helpers';
-import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
+import {
+  findExistingContact,
+  isUniqueViolation,
+  type ExistingContact,
+} from '@/lib/contacts/dedupe';
 import { publishEvent } from '@/lib/events/publish';
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
@@ -1223,8 +1227,10 @@ async function findOrCreateContact(
   name: string,
   opts?: { isGroup?: boolean },
 ): Promise<ContactOutcome | null> {
-  const existing = await findExistingContact(accountId, phone);
-  if (existing) {
+  // Shape an existing row into the outcome, updating the name when it changed.
+  const asExisting = async (
+    existing: ExistingContact,
+  ): Promise<ContactOutcome> => {
     if (name && name !== existing.name) {
       try {
         await db
@@ -1239,12 +1245,27 @@ async function findOrCreateContact(
       contact: {
         id: existing.id,
         userId: String(existing.userId),
-        name: existing.name,
+        name: existing.name ?? null,
         avatarUrl: (existing.avatarUrl ?? null) as string | null,
       },
       wasCreated: false,
     };
-  }
+  };
+
+  // FAST PATH (the common case): the contact already exists → no lock/tx.
+  const pre = await findExistingContact(accountId, phone);
+  if (pre) return asExisting(pre);
+
+  // SLOW PATH — creating. Serialize per-person so the Brazilian 9th-digit race
+  // can't spawn a duplicate: two near-simultaneous inbounds (one WITH the extra
+  // 9, one WITHOUT) both miss the fuzzy dedup and insert twice, because the
+  // unique index is on the EXACT phone_normalized. A Postgres advisory lock
+  // keyed on (account, last-8 digits) makes the 2nd creator wait for the 1st's
+  // transaction, so its re-check finds the freshly-created row. xact-scoped so
+  // it always releases at commit/rollback (safe with the connection pool).
+  const digits = phone.replace(/\D/g, '');
+  const last8 = digits.length >= 8 ? digits.slice(-8) : digits;
+  const lockKey = `contact:${accountId}:${last8}`;
 
   const ownerUserId = await resolveAccountOwnerUserId(accountId);
   if (!ownerUserId) {
@@ -1256,44 +1277,45 @@ async function findOrCreateContact(
   }
 
   try {
-    const created = firstOrNull(
-      await db
-        .insert(contacts)
-        .values({
-          accountId,
-          userId: ownerUserId,
-          phone,
-          name: name || phone,
-          isGroup: opts?.isGroup ?? false,
-        })
-        .returning(),
-    );
-    if (!created) {
-      console.error('[inbound] Error creating contact: no row returned');
-      return null;
-    }
-    return {
-      contact: {
-        id: created.id,
-        userId: created.userId,
-        name: created.name,
-        avatarUrl: created.avatarUrl ?? null,
-      },
-      wasCreated: true,
-    };
+    return await db.transaction(async (tx) => {
+      await tx.execute(
+        sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`,
+      );
+      // Re-check under the lock — a concurrent creator may have won the race.
+      const raced = await findExistingContact(accountId, phone);
+      if (raced) return asExisting(raced);
+
+      const created = firstOrNull(
+        await tx
+          .insert(contacts)
+          .values({
+            accountId,
+            userId: ownerUserId,
+            phone,
+            name: name || phone,
+            isGroup: opts?.isGroup ?? false,
+          })
+          .returning(),
+      );
+      if (!created) {
+        console.error('[inbound] Error creating contact: no row returned');
+        return null;
+      }
+      return {
+        contact: {
+          id: created.id,
+          userId: created.userId,
+          name: created.name,
+          avatarUrl: created.avatarUrl ?? null,
+        },
+        wasCreated: true,
+      };
+    });
   } catch (createError) {
+    // Backstop for an EXACT-normalized collision that still raced past the lock.
     if (isUniqueViolation(createError)) {
       const raced = await findExistingContact(accountId, phone);
-      if (raced) {
-        return {
-          contact: {
-            id: raced.id,
-            userId: String(raced.userId),
-            name: raced.name,
-          },
-          wasCreated: false,
-        };
-      }
+      if (raced) return asExisting(raced);
     }
     console.error('[inbound] Error creating contact:', createError);
     return null;
