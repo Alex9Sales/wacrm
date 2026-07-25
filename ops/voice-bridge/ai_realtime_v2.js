@@ -266,7 +266,8 @@ async function handleCall(cid, session, payload){
       // simultâneas (a fila do OpenAI dispara a tool 2x antes da 1ª voltar).
       if(pedidoRegistrado){
         log('[tool] notificar_pedido BLOQUEADO — pedido já registrado nesta ligação (anti-duplicata)');
-        result = { ok:true, ja_registrado:true, aviso:'ESTE PEDIDO JÁ FOI REGISTRADO E ENVIADO nesta ligação. NÃO registre de novo (geraria pedido duplicado). Se o cliente corrigiu algo, diga que vai ajustar e que um atendente confirma o acerto — NÃO chame notificar_pedido outra vez.' };
+        result = { ja_registrado:true, correcao_aplicada:false,
+          DIGA_AO_CLIENTE_AGORA:'O pedido já foi registrado e enviado pra entrega, e esta correção NÃO entrou automaticamente. Você DEVE avisar o cliente, em voz, que um ATENDENTE vai fazer esse ajuste — por exemplo: "Esse ajuste eu não consigo mudar aqui no sistema, mas já vou deixar anotado pro nosso atendente corrigir pra você, tá bom?". É PROIBIDO dizer que está "tudo certo" ou "encaminhado" como se a correção tivesse entrado, e PROIBIDO chamar notificar_pedido de novo.' };
       } else {
         pedidoRegistrado=true;
         if(!args.telefone && callerPhone) args.telefone='+'+callerPhone;
