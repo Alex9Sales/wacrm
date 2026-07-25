@@ -112,8 +112,8 @@ const TYPING_ON = (process.env.TYPING_SOUND||'on') !== 'off';
 // Leito de fundo (escritório) tocando a ligação INTEIRA. Dois volumes: sozinho
 // no silêncio (TYPING_GAIN) e mais baixo POR BAIXO da voz dela (TYPING_UNDER_GAIN),
 // pra não competir com a fala. Ambos ajustáveis por env, sem redeploy pesado.
-const TYPING_GAIN = Number(process.env.TYPING_GAIN||0.20);
-const TYPING_UNDER_GAIN = Number(process.env.TYPING_UNDER_GAIN||0.12);
+const TYPING_GAIN = Number(process.env.TYPING_GAIN||0.13);
+const TYPING_UNDER_GAIN = Number(process.env.TYPING_UNDER_GAIN||0.075);
 function makeTypingPcm(seconds){
   const n = RATE*seconds, buf = Buffer.alloc(n*2); let t = 0, keys = 0;
   const put=(i,v)=>{ if(i>=0&&i<n) buf.writeInt16LE(Math.max(-32768,Math.min(32767,Math.round(v))), i*2); };
