@@ -114,6 +114,14 @@ const TYPING_ON = (process.env.TYPING_SOUND||'on') !== 'off';
 // pra não competir com a fala. Ambos ajustáveis por env, sem redeploy pesado.
 const TYPING_GAIN = Number(process.env.TYPING_GAIN||0.06);
 const TYPING_UNDER_GAIN = Number(process.env.TYPING_UNDER_GAIN||0.035);
+
+// PRÉ-BUFFER da voz: no começo de CADA fala dela, segura um tiquinho de áudio
+// antes de tocar. Sem isso, a abertura sai em "câmera lenta" — a ElevenLabs
+// ainda está enchendo a fila quando ela começa a falar, a fila esvazia e
+// engasga. Segurando ~200ms, a abertura sai inteira. PREROLL_MAX_MS é o teto:
+// falas curtas (ex.: "Sim!") que nunca juntam 200ms tocam assim mesmo.
+const PREROLL_BYTES = Math.floor(RATE*2*Number(process.env.PREROLL_MS||200)/1000);
+const PREROLL_MAX_MS = Number(process.env.PREROLL_MAX_MS||350);
 function makeTypingPcm(seconds){
   const n = RATE*seconds, buf = Buffer.alloc(n*2); let t = 0, keys = 0;
   const put=(i,v)=>{ if(i>=0&&i<n) buf.writeInt16LE(Math.max(-32768,Math.min(32767,Math.round(v))), i*2); };
@@ -173,7 +181,8 @@ async function handleCall(cid, session, payload){
     + '\n--- FECHAMENTO (não atropele a despedida) ---\n'
     + 'Depois que a ferramenta registrar o pedido, faça UMA fala curta: confirme o resumo do pedido e diga que já vai encaminhar pra entrega. E PARE — espere o cliente responder. NÃO emende "de nada", "por nada" nem "tenha um ótimo dia" nessa mesma fala, e NÃO use [DESLIGAR] ainda.\n'
     + 'NUNCA diga "de nada"/"por nada" antes do cliente te agradecer — isso é RESPOSTA a um "obrigado". Só use depois que ele agradecer de verdade.\n'
-    + 'Quando o cliente se despedir ou agradecer (obrigado, valeu, ok, tá bom), aí sim feche: "Por nada! Qualquer coisa é só chamar, tenha um ótimo dia!" e SÓ ENTÃO use [DESLIGAR].\n'
+    + 'Quando o cliente se despedir ou agradecer (obrigado, valeu, ok, tá bom), aí sim feche a despedida e o [DESLIGAR] JUNTOS, numa fala SÓ: "Por nada! Qualquer coisa é só chamar, tenha um ótimo dia!" e no fim dessa MESMA fala o [DESLIGAR].\n'
+    + 'A despedida é dita UMA ÚNICA VEZ. Depois de dizer "por nada"/"tenha um ótimo dia", NÃO fale mais nada e NUNCA repita a despedida numa segunda fala. Se você já se despediu, é só [DESLIGAR] — sem repetir.\n'
     + 'NUNCA imagine ou responda uma fala que o cliente ainda não disse.\n'
     + '\n--- RITMO E CORREÇÕES (não atropele o cliente) ---\n'
     + 'Deixe o cliente TERMINAR de falar. Se ele pausar pensando, ESPERE — não emende pergunta nem ofereça produto no meio da fala dele.\n'
@@ -318,7 +327,7 @@ async function handleCall(cid, session, payload){
     }
     return out;
   }
-  let playStartAt=null, bytesSent=0, lastAiSentAt=0, lastVoiceAt=0, bedArmed=false;
+  let playStartAt=null, bytesSent=0, lastAiSentAt=0, lastVoiceAt=0, bedArmed=false, holdStartAt=null;
   const drainer=setInterval(()=>{ if(dc.readyState!=='open')return; const now=Date.now();
     // Atendente no comando: a IA não toca nada (o áudio dele já vai direto).
     if(relay.talk){ aiQ=Buffer.alloc(0); playStartAt=null; return; }
@@ -328,7 +337,15 @@ async function handleCall(cid, session, payload){
     const bed = TYPING_ON && !handoffStarted && bedArmed;
     const emit=(f)=>{ try{dc.send(f)}catch{}; if(relay.clients.size && aiEcho.length<AI_ECHO_MAX) aiEcho=Buffer.concat([aiEcho,f]); lastAiSentAt=now; };
     if(aiQ.length>=FRAME){
-      if(playStartAt===null){ playStartAt=now; bytesSent=0; }
+      if(playStartAt===null){
+        // PRÉ-BUFFER: no início da fala, segura até juntar PREROLL_BYTES (ou
+        // estourar PREROLL_MAX_MS). Enquanto segura, ainda toca o teclado no
+        // fundo se o escritório já estiver armado — só a VOZ espera encher.
+        if(holdStartAt===null) holdStartAt=now;
+        const ready = aiQ.length>=PREROLL_BYTES || (now-holdStartAt)>=PREROLL_MAX_MS;
+        if(!ready){ if(bed) emit(mixTyping(Buffer.alloc(FRAME), TYPING_UNDER_GAIN)); trackQ(); return; }
+        playStartAt=now; bytesSent=0; holdStartAt=null;
+      }
       const shouldBytes=Math.floor((now-playStartAt)/1000*RATE*2/FRAME)*FRAME;
       while(bytesSent<shouldBytes && aiQ.length>=FRAME){ let f=aiQ.subarray(0,FRAME); aiQ=aiQ.subarray(FRAME);
         if(bed) f=mixTyping(f, TYPING_UNDER_GAIN);   // voz da IA + teclado bem por baixo
@@ -339,7 +356,7 @@ async function handleCall(cid, session, payload){
       // e inseria uma lacuna a cada engasgo — a fala saía picada, com aquele
       // efeito de "câmera lenta". Mantendo o relógio, o que atrasou é enviado
       // em seguida (o receptor tem buffer) e a frase sai inteira.
-      if(aiQEmptiedAt && Date.now()-aiQEmptiedAt>300) playStartAt=null;
+      if(aiQEmptiedAt && Date.now()-aiQEmptiedAt>300){ playStartAt=null; holdStartAt=null; }
       // SILÊNCIO: mantém o escritório vivo — 1 frame de teclado a cada tick (20ms
       // = tempo real). Não entra em aiQ (não atrasa a voz) e não conta como "IA
       // falando", então não muta o cliente nem atrapalha o barge-in.
