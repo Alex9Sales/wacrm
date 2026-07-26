@@ -35,6 +35,8 @@ export async function POST(request: Request) {
     from?: unknown
     callerName?: unknown
     order?: unknown
+    amend?: unknown
+    correcao?: unknown
   }
   const session = typeof body.session === 'string' ? body.session : ''
   const channelId = typeof body.channelId === 'string' ? body.channelId : ''
@@ -47,6 +49,36 @@ export async function POST(request: Request) {
 
   const ch = await resolveVoiceChannel(session, channelId)
   if (!ch) return NextResponse.json({ ok: false, reason: 'channel not found' })
+
+  // MODO CORREÇÃO: o cliente mudou um dado DEPOIS do pedido já ter sido enviado.
+  // Não cria outro deal nem outro pedido — manda só uma mensagem curta pro número
+  // do gás com o que mudou, pra o entregador corrigir. O cliente não sabe disso.
+  if (body.amend === true) {
+    const correcao =
+      typeof body.correcao === 'string' ? body.correcao.trim() : ''
+    if (!correcao) return NextResponse.json({ ok: false, reason: 'no correcao' })
+    const notifyPhone = ch.notifyPhone?.replace(/\D/g, '') ?? ''
+    let sent = false
+    if (notifyPhone) {
+      try {
+        const channel = await loadChannel(ch.id)
+        if (channel) {
+          const provider = getProvider(channel.provider)
+          await provider.sendText(
+            channel,
+            notifyPhone,
+            `⚠️ *CORREÇÃO do último pedido*${
+              order.cliente ? ` — ${order.cliente}` : ''
+            }\n${correcao}`,
+          )
+          sent = true
+        }
+      } catch (err) {
+        console.error('[register-order] amend notify failed:', err)
+      }
+    }
+    return NextResponse.json({ ok: true, amended: true, notified: sent })
+  }
 
   // 1) Create the deal in the Funil ("Novo Pedido").
   let dealId: string | null = null

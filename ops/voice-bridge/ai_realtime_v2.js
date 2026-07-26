@@ -181,9 +181,10 @@ async function handleCall(cid, session, payload){
     + 'FRASE-PONTE ANTES DA FERRAMENTA (OBRIGATÓRIA): assim que o cliente der o "sim", diga UMA frase curta pra cobrir o processamento ANTES de chamar notificar_pedido — ex.: "Perfeito! Só um instante que já tô confirmando seu pedido aqui..." — e SÓ DEPOIS chame a ferramenta. NUNCA chame a ferramenta em silêncio: sem essa frase fica um vazio de alguns segundos e o cliente acha que a ligação travou.\n'
     + 'PROIBIDO: chamar notificar_pedido durante o resumo, antes da pergunta de confirmação, ou antes do cliente responder "sim/está certo". O RESUMO NÃO É REGISTRO — é só pra ele conferir. Registrar só depois do "sim" dele.\n'
     + 'SE O CLIENTE CORRIGIR qualquer coisa no resumo (bairro, número, produto, pagamento): NÃO chame a ferramenta. Ajuste o dado, refaça o resumo com a correção e pergunte de novo "agora está tudo certo?". Só chame notificar_pedido depois do "sim" final. Assim ela nunca é chamada duas vezes.\n'
-    + 'FORMA DE PAGAMENTO — NUNCA INVENTE: registre EXATAMENTE o que o cliente disse. Se ele disser só "cartão", você DEVE perguntar "é no débito ou no crédito?" e usar a resposta dele — NUNCA assuma crédito nem débito por conta própria. Se não entendeu direito, pergunte de novo. É PROIBIDO chamar notificar_pedido com uma forma de pagamento que o cliente não confirmou.\n'
+    + 'FORMA DE PAGAMENTO — NUNCA INVENTE: registre EXATAMENTE o que o cliente disse. Se ele disser só "cartão", você DEVE perguntar "é no débito ou no crédito?" e usar a resposta dele — NUNCA assuma crédito nem débito por conta própria. Se for DINHEIRO, pergunte "precisa de troco pra quanto?". Se não entendeu direito, pergunte de novo. É PROIBIDO chamar notificar_pedido com uma forma de pagamento que o cliente não confirmou.\n'
+    + 'CONFIRME O PAGAMENTO DUAS VEZES: uma quando ele informar (débito/crédito, ou o troco), e DE NOVO dentro do resumo final (ex.: "...pagamento no crédito, certo?"). Só depois dessa dupla confirmação, com o "sim" no resumo, é que você chama a ferramenta. É o dado que mais dá erro — confirme bem.\n'
     + 'INFORMAR/TROCAR PAGAMENTO NÃO É O "SIM" FINAL: se, na hora da confirmação, o cliente disser ou mudar a forma de pagamento (ex.: "vai ser no cartão", "é no débito"), isso é um DADO, não a confirmação do pedido. Atualize o pagamento, refaça o resumo com o valor certo e pergunte "então está tudo certo?" — e só depois do "sim" claro é que chama a ferramenta.\n'
-    + 'JÁ CHAMOU? Se você já chamou notificar_pedido uma vez nesta ligação, NUNCA chame de novo — nem se o cliente corrigir algo depois. Nesse caso diga que vai ajustar e que um atendente confirma o acerto (ver seção CORREÇÕES).\n'
+    + 'CORREÇÃO DEPOIS DE JÁ TER REGISTRADO: se o cliente mudar um dado (ex.: trocar a forma de pagamento) DEPOIS que o pedido já foi registrado, PODE sim chamar notificar_pedido de novo com o dado corrigido — o sistema entende como CORREÇÃO e NÃO duplica o pedido. Feito isso, apenas confirme de forma natural que está tudo certo. NUNCA diga ao cliente que houve erro, que um atendente vai ajustar, ou que o sistema não deixou — pra ele é como se já estivesse tudo certo desde o começo.\n'
     + 'OUTRAS REGRAS: (a) NUNCA diga "vou registrar", "já encaminhei", "vou despachar" sem ter chamado a ferramenta. (b) Só DEPOIS que a ferramenta responder é que você confirma o pedido pro cliente — a despedida e o [DESLIGAR] seguem a seção FECHAMENTO. (c) NUNCA use [DESLIGAR] com um pedido em aberto sem ter chamado a ferramenta. (d) Nos DADOS da ferramenta, escreva valores e números em ALGARISMOS (ex: valor "R$ 125,00", troco "R$ 150,00", número da casa "53") — falar por extenso vale SÓ para a voz, NUNCA para a ferramenta.\n'
     + '\n--- FECHAMENTO (não atropele a despedida) ---\n'
     + 'Depois que a ferramenta registrar o pedido, faça UMA fala curta que TERMINA COM UMA PERGUNTA: confirme que o pedido está encaminhado pra entrega e pergunte se ele precisa de mais alguma coisa. Ex.: "Prontinho, seu pedido já está encaminhado pra entrega! Precisa de mais alguma coisa?".\n'
@@ -198,7 +199,7 @@ async function handleCall(cid, session, payload){
     + 'Uma dúvida repetida NÃO é sinal de fechar — é sinal de que ele quer entender melhor. Responda com calma.\n'
     + 'NÃO chame notificar_pedido enquanto o cliente estiver corrigindo qualquer dado. Registre só quando ele confirmar que está tudo certo.\n'
     + 'NOME DE RUA: se o cliente corrigir a rua e você entender diferente do que ele disse, NÃO insista na sua versão — repita o que ELE falou. Se corrigir duas vezes, peça pra soletrar ("pode soletrar a rua pra mim?").\n'
-    + 'SE O CLIENTE CORRIGIR UM DADO DEPOIS DE VOCÊ JÁ TER REGISTRADO: NUNCA cancele o pedido e NUNCA desligue por causa disso. Diga que vai ajustar, confirme o dado certo com ele e avise que um atendente confirma o acerto. NUNCA use marcar_sem_venda com "cancelado" por causa de correção de endereço — cancelado é só quando o CLIENTE desiste da compra.\n'
+    + 'SE O CLIENTE CORRIGIR UM DADO DEPOIS DE VOCÊ JÁ TER REGISTRADO: NUNCA cancele o pedido e NUNCA desligue por causa disso. Confirme o dado certo com ele, chame notificar_pedido de novo com a correção (o sistema trata como correção, não duplica) e confirme naturalmente que está tudo certo — SEM mencionar atendente, sistema ou erro. NUNCA use marcar_sem_venda com "cancelado" por causa de correção — cancelado é só quando o CLIENTE desiste da compra.\n'
     + 'SEM VENDA: se a ligação terminar SEM fechar pedido, antes de se despedir chame a ferramenta marcar_sem_venda com o status certo (interessado = quis saber mas não fechou; cancelado = desistiu de um pedido; nao_quis = não quis comprar). Isso serve pra reativação depois. Só então use [DESLIGAR].';
   if(cfg.greeting) PROMPT += `\n\nComece a ligação dizendo exatamente: "${cfg.greeting}"`;
   log('CALL',cid,'canal',cfg.channelName,'→ atende | voz',VOICE_ID.slice(0,6),'| modo',cfg.mode);
@@ -253,7 +254,7 @@ async function handleCall(cid, session, payload){
       r=>{ let s=''; r.on('data',d=>s+=d); r.on('end',()=>{ log('[tool] '+path,r.statusCode,s.slice(0,90)); try{res(JSON.parse(s))}catch{res({ok:r.statusCode<300})} }); });
     req.on('error',e=>{ log('[tool] err',e.message); res({ok:false}); }); req.write(data); req.end();
   }); }
-  let pedidoRegistrado=false;   // trava anti-duplicata: notificar_pedido 1x por ligação
+  let pedidoRegistrado=false, primeiroPedido=null;   // trava anti-duplicata + base p/ correções
   async function handleTool(name, callId, argsRaw){
     let args={}; try{ args=JSON.parse(argsRaw||'{}') }catch{}
     log('[tool] chamada', name, JSON.stringify(args).slice(0,140));
@@ -265,14 +266,29 @@ async function handleCall(cid, session, payload){
       // O flag sobe ANTES do await pra também matar o race de 2 chamadas quase
       // simultâneas (a fila do OpenAI dispara a tool 2x antes da 1ª voltar).
       if(pedidoRegistrado){
-        log('[tool] notificar_pedido BLOQUEADO — pedido já registrado nesta ligação (anti-duplicata)');
-        result = { ja_registrado:true, correcao_aplicada:false,
-          DIGA_AO_CLIENTE_AGORA:'O pedido já foi registrado e enviado pra entrega, e esta correção NÃO entrou automaticamente. Você DEVE avisar o cliente, em voz, que um ATENDENTE vai fazer esse ajuste — por exemplo: "Esse ajuste eu não consigo mudar aqui no sistema, mas já vou deixar anotado pro nosso atendente corrigir pra você, tá bom?". É PROIBIDO dizer que está "tudo certo" ou "encaminhado" como se a correção tivesse entrado, e PROIBIDO chamar notificar_pedido de novo.' };
+        // JÁ REGISTRADO: isto NÃO é um novo pedido, é uma CORREÇÃO. Descobre o
+        // que mudou vs o 1º pedido e manda UMA mensagem de correção só pro número
+        // do gás (sem novo deal, sem duplicar). O cliente não fica sabendo — a
+        // Maria só confirma que está tudo certo.
+        const campos=[['pagamento','forma de pagamento'],['troco','troco'],['endereco','endereço'],['produto','produto'],['valor','valor']];
+        const mudou=[];
+        for(const [k,rot] of campos){ const novo=((args[k]??'')+'').trim(), velho=(((primeiroPedido&&primeiroPedido[k])??'')+'').trim();
+          if(novo && novo.toLowerCase()!==velho.toLowerCase()) mudou.push('• '+rot+': agora é '+novo+(velho?' (era '+velho+')':'')); }
+        if(mudou.length){
+          log('[tool] notificar_pedido = CORREÇÃO pós-lançamento →', mudou.join(' | '));
+          await callCrmTool('register-order', { from: callerPhone, amend:true, correcao:mudou.join('\n'), order:{ cliente: args.cliente||(primeiroPedido&&primeiroPedido.cliente)||null } });
+          if(primeiroPedido) for(const [k] of campos){ if(args[k]) primeiroPedido[k]=args[k]; }
+          result = { ok:true, correcao_enviada:true, INSTRUCAO:'A correção JÁ foi enviada pra entrega, internamente. Apenas confirme pro cliente, de forma natural, que está tudo certo (ex.: "Prontinho, já alterei aqui pra você, tá tudo certo!"). É PROIBIDO mencionar atendente, sistema, ajuste manual ou qualquer problema. NÃO chame notificar_pedido de novo a menos que ele corrija OUTRA coisa.' };
+        } else {
+          log('[tool] notificar_pedido repetido sem mudança — ignorado');
+          result = { ok:true, ja_registrado:true, INSTRUCAO:'O pedido já foi registrado e nada mudou. Apenas confirme naturalmente que está tudo certo. NÃO chame notificar_pedido de novo.' };
+        }
       } else {
         pedidoRegistrado=true;
         if(!args.telefone && callerPhone) args.telefone='+'+callerPhone;
         result = await callCrmTool('register-order', { from: callerPhone, order: args });
         if(result && result.ok===false) pedidoRegistrado=false;   // falhou de verdade → libera nova tentativa
+        else primeiroPedido={...args};                             // guarda o 1º pedido pra comparar correções
       }
     } else if(name==='marcar_sem_venda'){
       result = await callCrmTool('mark-status', { from: callerPhone, status: args.status, motivo: args.motivo });
