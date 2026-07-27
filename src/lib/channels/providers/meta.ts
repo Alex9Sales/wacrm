@@ -310,13 +310,20 @@ export const metaProvider: WhatsAppProvider = {
 
   async verifyWebhook(
     ctx: WebhookVerifyCtx,
-    _ch: ChannelCtx | null,
+    ch: ChannelCtx | null,
   ): Promise<boolean> {
-    // Meta signs the raw body with the GLOBAL app secret (META_APP_SECRET),
-    // not a per-channel secret — so `_ch` is unused here. The signature is
-    // in the `x-hub-signature-256` header as `sha256=<hex>`.
+    // Meta signs the raw body with the App Secret of the App the number is
+    // connected to. Multi-tenant: each client may run their OWN Meta App, so
+    // we verify with the PER-CHANNEL app secret when present (the route
+    // resolves `ch` by phone_number_id first), falling back to the global
+    // META_APP_SECRET for the instance's own app. Signature is in the
+    // `x-hub-signature-256` header as `sha256=<hex>`.
     const signature = ctx.headers.get('x-hub-signature-256');
-    return verifyMetaWebhookSignature(ctx.rawBody, signature);
+    const perChannelSecret =
+      typeof ch?.credentials?.appSecret === 'string'
+        ? ch.credentials.appSecret
+        : undefined;
+    return verifyMetaWebhookSignature(ctx.rawBody, signature, perChannelSecret);
   },
 
   parseWebhook(body: unknown): ParsedWebhook {

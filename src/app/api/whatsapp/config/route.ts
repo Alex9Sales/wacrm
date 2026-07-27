@@ -156,7 +156,7 @@ export async function POST(request: Request) {
     const accountId = ctx.accountId
 
     const body = await request.json()
-    const { phone_number_id, waba_id, access_token, verify_token, pin } = body
+    const { phone_number_id, waba_id, access_token, verify_token, app_secret, pin } = body
 
     if (!access_token || !phone_number_id) {
       return NextResponse.json(
@@ -295,6 +295,17 @@ export async function POST(request: Request) {
     const credentials = {
       accessToken: access_token,
       verifyToken: verify_token || null,
+      // Per-channel Meta App Secret (multi-tenant): when the client runs their
+      // OWN Meta App, their webhooks are HMAC-signed with THIS secret, and the
+      // webhook route verifies against it (falls back to global META_APP_SECRET
+      // when null — e.g. numbers on the instance's own app). The UI field loads
+      // blank for security, so a blank value here means "keep what's stored" —
+      // otherwise a routine token rotation would silently wipe the secret and
+      // break every inbound webhook for the channel.
+      appSecret:
+        typeof app_secret === 'string' && app_secret.trim()
+          ? app_secret.trim()
+          : ((claimed?.credentials?.appSecret as string | undefined) ?? null),
     }
     const providerMeta = {
       phone_number_id,

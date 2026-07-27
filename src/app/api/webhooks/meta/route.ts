@@ -164,20 +164,34 @@ export async function POST(request: Request) {
   // Read the raw body first so we HMAC-verify the exact bytes Meta signed.
   const rawBody = await request.text()
 
-  const verified = await metaProvider.verifyWebhook(
-    { rawBody, headers: request.headers },
-    null, // Meta signs with the GLOBAL app secret — no per-channel ctx.
-  )
-  if (!verified) {
-    console.warn('[webhooks/meta] rejected request with invalid signature')
-    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
-  }
-
+  // Parse BEFORE verifying so we can resolve the channel by phone_number_id
+  // and verify with THAT channel's App Secret (multi-tenant: a client running
+  // their own Meta App signs with their own secret; channels without a
+  // per-channel secret fall back to the global META_APP_SECRET). This is safe:
+  // we only read phone_number_id to PICK which secret to check — nothing in
+  // the body is trusted or acted on until the signature passes below. An
+  // attacker can't benefit from naming any phone_number_id, since they still
+  // can't produce a valid signature for that channel's secret.
   let body: MetaRawBody
   try {
     body = JSON.parse(rawBody)
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  const pnid =
+    body.entry?.[0]?.changes?.[0]?.value?.metadata?.phone_number_id
+  const sigChannel = pnid
+    ? await loadMetaChannelByPhoneNumberId(pnid)
+    : null
+
+  const verified = await metaProvider.verifyWebhook(
+    { rawBody, headers: request.headers },
+    sigChannel,
+  )
+  if (!verified) {
+    console.warn('[webhooks/meta] rejected request with invalid signature')
+    return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
   // Process AFTER the response so we ack Meta within their ~20s timeout.

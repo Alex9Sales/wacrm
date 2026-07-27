@@ -63,6 +63,7 @@ export function WhatsAppConfig() {
   const [wabaId, setWabaId] = useState('');
   const [accessToken, setAccessToken] = useState('');
   const [verifyToken, setVerifyToken] = useState('');
+  const [appSecret, setAppSecret] = useState('');
   const [pin, setPin] = useState('');
   const [tokenEdited, setTokenEdited] = useState(false);
 
@@ -111,6 +112,7 @@ export function WhatsAppConfig() {
         setWabaId(data.waba_id || '');
         setAccessToken(MASKED_TOKEN);
         setVerifyToken('');
+        setAppSecret('');
         setPin('');
         setTokenEdited(false);
       } else {
@@ -119,6 +121,7 @@ export function WhatsAppConfig() {
         setWabaId('');
         setAccessToken('');
         setVerifyToken('');
+        setAppSecret('');
         setPin('');
         setTokenEdited(false);
       }
@@ -195,6 +198,9 @@ export function WhatsAppConfig() {
         phone_number_id: phoneNumberId.trim(),
         waba_id: wabaId.trim() || null,
         verify_token: verifyToken.trim() || null,
+        // App Secret do cliente (multi-tenant) — só quando ele roda o PRÓPRIO
+        // app da Meta. Em branco = usa o app secret global da instância.
+        app_secret: appSecret.trim() || null,
         // Optional — only sent when the user filled it in. The server
         // requires it on first save or when changing numbers; for a
         // simple token rotation, leaving it blank skips re-register.
@@ -624,6 +630,27 @@ export function WhatsAppConfig() {
               />
               <p className="text-xs text-muted-foreground">
                 Uma string personalizada que você cria. Deve corresponder ao token definido nas configurações de webhook da Meta.
+              </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label className="text-muted-foreground">
+                App Secret
+                <span className="ml-1 text-muted-foreground">(só se o cliente usa o próprio App da Meta)</span>
+              </Label>
+              <Input
+                type="password"
+                placeholder="Deixe em branco se o número está sob o SEU App"
+                value={appSecret}
+                onChange={(e) => setAppSecret(e.target.value)}
+                className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
+              />
+              <p className="text-xs text-muted-foreground leading-relaxed">
+                O App Secret do App da Meta a que ESTE número pertence (Meta →
+                Configurações do App → Básico → Chave Secreta do App). Só
+                preencha quando o número roda num App próprio do cliente — assim
+                o CRM valida a assinatura dos webhooks dele com a chave certa. Em
+                branco, usa o App Secret padrão da instância.
               </p>
             </div>
 

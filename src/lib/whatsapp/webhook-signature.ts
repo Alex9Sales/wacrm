@@ -12,22 +12,26 @@ import crypto from 'node:crypto'
  *   https://developers.facebook.com/docs/graph-api/webhooks/getting-started#verify-payloads
  *
  * Contract:
- *   `META_APP_SECRET` is **required**. If it's missing we fail closed —
- *   every request is rejected until the operator configures the
- *   secret. A previous version fell open with a warning log, which is
- *   unsafe for a public template: anyone who forgets the env var would
- *   be running a fully spoofable webhook.
+ *   The secret is resolved as `secretOverride ?? META_APP_SECRET`.
+ *   `secretOverride` is the PER-CHANNEL App Secret (multi-tenant: each
+ *   client can run their own Meta App, so their webhooks are signed with
+ *   THEIR app secret — the caller resolves the channel by phone_number_id
+ *   and passes its secret here). Channels with no per-channel secret fall
+ *   back to the global `META_APP_SECRET` env (the instance's own app).
+ *   If neither is set we fail closed — every request is rejected until a
+ *   secret is configured. Failing open would run a fully spoofable webhook.
  */
 export function verifyMetaWebhookSignature(
   rawBody: string,
   signatureHeader: string | null,
+  secretOverride?: string | null,
 ): boolean {
-  const secret = process.env.META_APP_SECRET
+  const secret = secretOverride || process.env.META_APP_SECRET
   if (!secret) {
     console.error(
-      '[webhook] META_APP_SECRET is not set — rejecting request. ' +
-        'Configure the env var (Meta → App Settings → Basic → App Secret) ' +
-        'to enable signature verification.',
+      '[webhook] No app secret (per-channel nor META_APP_SECRET) — rejecting ' +
+        'request. Set the channel App Secret, or the META_APP_SECRET env ' +
+        '(Meta → App Settings → Basic → App Secret).',
     )
     return false
   }
