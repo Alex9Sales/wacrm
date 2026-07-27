@@ -135,16 +135,21 @@ export default function InboxPage() {
       setConversations((prev) => {
         const existing = prev.find((c) => c.id === fetchedConv.id);
         if (existing) {
-          // Already in state — keep its fields (a realtime UPDATE may
-          // have landed while the fetch was in flight and patched
-          // last_message_text / unread_count to fresher values than
-          // the row we just read). Only backfill `contact`, which the
-          // realtime payloads never carry.
-          return prev.map((c) =>
-            c.id === fetchedConv.id
-              ? { ...c, contact: c.contact ?? fetchedConv.contact }
-              : c,
-          );
+          // Already in state — APPLY the freshly-fetched row (its
+          // last_message_text / unread_count / last_message_at are the
+          // source of truth now: in the SSE world there is no separate
+          // postgres_changes UPDATE patching those columns, so the old
+          // "only backfill contact" behaviour left the list row stale —
+          // the notification fired but the preview/badge never moved).
+          // Reorder to the top by recency so the just-active conversation
+          // surfaces, and keep whichever contact object we already have if
+          // the fetch somehow came back without one.
+          const merged = {
+            ...existing,
+            ...fetchedConv,
+            contact: fetchedConv.contact ?? existing.contact,
+          };
+          return [merged, ...prev.filter((c) => c.id !== fetchedConv.id)];
         }
         return [fetchedConv, ...prev];
       });
@@ -338,47 +343,18 @@ export default function InboxPage() {
   const handleConversationsLoaded = useCallback(
     (loaded: Conversation[]) => {
       setConversations(loaded);
-      // Resolve a pending deep-link here rather than in an effect — this
-      // is an event handler, so the setState calls below are allowed by
-      // react-hooks/set-state-in-effect. Runs once per ?c=<id> URL value
-      // via the ref, so realtime refreshes of the list can't snap the
-      // user back to the deep-linked thread after they've navigated.
-      if (
-        deepLinkConvId &&
-        autoSelectedForDeepLinkRef.current !== deepLinkConvId &&
-        loaded.length > 0
-      ) {
-        autoSelectedForDeepLinkRef.current = deepLinkConvId;
-        // If the deep-linked conversation is already the active one
-        // (e.g. because the user clicked it in the list and we
-        // router.replace()'d the URL, which made the ConversationList
-        // refetch and land us back here), do NOT re-apply it. Doing so
-        // would setMessages([]) on a thread whose messages have
-        // already been loaded by MessageThread — and because
-        // conversationId didn't change, MessageThread wouldn't
-        // refetch. The thread would read "Nenhuma mensagem ainda" until a
-        // full page reload rehydrated state from scratch.
-        if (activeConversation?.id === deepLinkConvId) return;
-        const match = loaded.find((c) => c.id === deepLinkConvId);
-        if (match) {
-          setActiveConversation(match);
-          setActiveContact(match.contact ?? null);
-          setMessages([]);
-          // Mirror the optimistic unread reset that handleSelectConversation
-          // does — the user just deep-linked into this conv, treat that the
-          // same as a click. Leaves activeConversation.unread_count alone so
-          // the MessageThread reset effect still fires the server UPDATE.
-          if (match.unread_count > 0) {
-            setConversations((prev) =>
-              prev.map((c) =>
-                c.id === match.id ? { ...c, unread_count: 0 } : c,
-              ),
-            );
-          }
-        }
-      }
+      // NOTE: deep-link auto-selection is intentionally NOT done here.
+      // The effect keyed on `deepLinkConvId` (above) is the SINGLE owner of
+      // "?c= changed → select that thread". Doing it here too caused a
+      // focus-stealing race: a realtime resync refetches the list and calls
+      // this handler, and during the window between a list click (which sets
+      // the ref + router.replace's the URL) and the URL actually committing,
+      // `deepLinkConvId` still points at the PREVIOUS thread — so this block
+      // re-selected the old conversation and snapped the operator away from
+      // the one they'd just opened. The effect doesn't have that race (it
+      // reacts to the committed param, and self-fetches the target).
     },
-    [deepLinkConvId, activeConversation?.id]
+    []
   );
 
   const handleSelectConversation = useCallback(
