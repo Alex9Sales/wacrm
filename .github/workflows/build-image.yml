@@ -50,3 +50,24 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+
+      # Tell Coolify to PULL the just-pushed image and redeploy both apps
+      # (web + worker). Without this, Coolify never learns a new image
+      # exists and the running containers stay on the old build until a
+      # manual `docker compose pull && up -d`. The UUIDs are the Coolify
+      # application ids (== the /data/coolify/applications/<uuid> dir names).
+      # Safe no-op until the COOLIFY_TOKEN repo secret is added.
+      - name: Trigger Coolify redeploy (web + worker)
+        if: success()
+        env:
+          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+        run: |
+          if [ -z "$COOLIFY_TOKEN" ]; then
+            echo "COOLIFY_TOKEN not set — skipping auto-deploy."
+            echo "Add the repo secret (Settings → Secrets → Actions → COOLIFY_TOKEN) to enable."
+            exit 0
+          fi
+          curl -fsS -X GET \
+            "https://coolify.salestecnologia.com.br/api/v1/deploy?uuid=klqgmh23eh0mi72r6scqtdo2,i9edhxtdkqf5gi8b12zh2j0h&force=true" \
+            -H "Authorization: Bearer $COOLIFY_TOKEN" \
+          && echo "✓ Coolify deploy triggered for web + worker."
