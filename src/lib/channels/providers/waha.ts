@@ -1598,6 +1598,43 @@ export const wahaProvider: WhatsAppProvider = {
 };
 
 // ------------------------------------------------------------
+// Session health (for the background session-monitor). A WAHA/NOWEB session
+// can report status WORKING while its message stream is DEAD ("zombie") — the
+// device link went stale and WhatsApp stops routing messages, but auth still
+// succeeds. The tell is `timestamps.activity` going stale (no events for a
+// long time) on a session that should be busy. Exposed here so the monitor can
+// diff it and restart/alert. `activityAgeMs = null` means "no activity yet"
+// (a freshly (re)started or genuinely idle session) — the monitor treats that
+// as unknown, not stale, to avoid false alarms.
+// ------------------------------------------------------------
+export async function wahaSessionHealth(
+  ch: ChannelCtx,
+): Promise<{ wahaStatus: string; activityAgeMs: number | null }> {
+  const { ok, body } = await httpJson(
+    `${baseUrlOf(ch)}/api/sessions/${encodeURIComponent(sessionOf(ch))}`,
+    { method: 'GET', headers: headersOf(ch) },
+    10000,
+  );
+  if (!ok) return { wahaStatus: 'UNREACHABLE', activityAgeMs: null };
+  const b = body as { status?: unknown; timestamps?: { activity?: unknown } };
+  const wahaStatus = String(b.status || 'UNKNOWN');
+  const activity =
+    typeof b.timestamps?.activity === 'number' ? b.timestamps.activity : null;
+  return { wahaStatus, activityAgeMs: activity ? Date.now() - activity : null };
+}
+
+/** Soft-recover a zombie/broken session: POST /restart (reuses stored creds,
+ *  no QR). Fixes many stalls; a dead DEVICE LINK still needs a human re-pair. */
+export async function wahaRestartSession(ch: ChannelCtx): Promise<boolean> {
+  const { ok } = await httpJson(
+    `${baseUrlOf(ch)}/api/sessions/${encodeURIComponent(sessionOf(ch))}/restart`,
+    { method: 'POST', headers: headersOf(ch), body: '{}' },
+    15000,
+  );
+  return ok;
+}
+
+// ------------------------------------------------------------
 // media base64 resolution (outbound)
 // ------------------------------------------------------------
 

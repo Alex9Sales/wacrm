@@ -38,3 +38,12 @@ import('./sla-worker')
     // eslint-disable-next-line no-console
     console.error('[worker] sla-worker failed to start:', err);
   });
+
+// WAHA session health monitor — detects "zombie" sessions (connected but not
+// receiving) and restarts/alerts. Dynamic import (same env-ordering reason).
+import('./session-monitor-worker')
+  .then((m) => m.startSessionMonitor())
+  .catch((err) => {
+    // eslint-disable-next-line no-console
+    console.error('[worker] session-monitor failed to start:', err);
+  });
