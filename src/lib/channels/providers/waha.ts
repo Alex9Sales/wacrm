@@ -1453,6 +1453,26 @@ export const wahaProvider: WhatsAppProvider = {
     // applies the webhook config, so we skip the running-session restart.
     let startedFresh = false;
     if (cur.ok) {
+      // Already PAIRING → this is a QR REFRESH (the modal re-asks every ~18s
+      // because WhatsApp rotates the code). The webhook config was already
+      // applied when the session was first created, so DON'T restart — a
+      // restart churns the pairing state and briefly drops the QR. Just fetch
+      // the CURRENT (rotated) QR and return it. This makes the periodic
+      // refresh cheap and non-disruptive.
+      const curStatus = String((cur.body as { status?: unknown }).status || '');
+      if (curStatus === 'SCAN_QR_CODE') {
+        try {
+          const res = await fetch(`${base}/api/${enc}/auth/qr`, {
+            headers: { 'X-Api-Key': apiKeyOf(ch) },
+          });
+          if (res.ok) {
+            const buf = Buffer.from(await res.arrayBuffer());
+            return { qr: `data:image/png;base64,${buf.toString('base64')}` };
+          }
+        } catch {
+          /* fall through to the normal (re)start path below */
+        }
+      }
       // Already exists → refresh the webhook config first.
       await httpJson(`${base}/api/sessions/${enc}`, {
         method: 'PUT',

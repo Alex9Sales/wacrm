@@ -29,6 +29,11 @@ import {
 import { PROVIDER_LABELS, type ChannelSummary } from './channels-tab';
 
 const POLL_MS = 2000;
+// WhatsApp rotates the pairing QR roughly every 20s; a stale QR silently
+// stops scanning ("travado em Aguardando leitura"). Re-fetch a fresh one a
+// touch before it expires. The connect route returns the CURRENT WAHA QR
+// without restarting an already-pairing session, so this is cheap.
+const QR_REFRESH_MS = 18000;
 
 interface ChannelQrModalProps {
   channel: ChannelSummary;
@@ -56,6 +61,8 @@ export function ChannelQrModal({
   const closedRef = useRef(false);
   const pollTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const connectedTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const qrRefreshTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const phaseRef = useRef<Phase>('loading');
   const onConnectedRef = useRef(onConnected);
   useEffect(() => {
     onConnectedRef.current = onConnected;
@@ -105,6 +112,32 @@ export function ChannelQrModal({
     }
   }, [channel.id, resolveQr]);
 
+  // Mirror `phase` into a ref so the refresh loop can bail when we're no
+  // longer showing a QR, without re-subscribing.
+  useEffect(() => {
+    phaseRef.current = phase;
+  }, [phase]);
+
+  // Silently swap in a fresh QR (WhatsApp rotates it every ~20s). No 'loading'
+  // flash — only replaces the image once a new one arrives, and only while
+  // we're still in the 'ready' (awaiting-scan) phase.
+  const refreshQr = useCallback(async () => {
+    if (closedRef.current || phaseRef.current !== 'ready') return;
+    try {
+      const res = await fetch(`/api/channels/${channel.id}/connect`, {
+        method: 'POST',
+      });
+      if (!res.ok) return;
+      const data = (await res.json()) as { qr: string; qrIsImage: boolean };
+      if (closedRef.current || phaseRef.current !== 'ready' || !data.qr) return;
+      const dataUrl = await resolveQr(data.qr, !!data.qrIsImage);
+      if (closedRef.current || phaseRef.current !== 'ready') return;
+      setQrDataUrl(dataUrl);
+    } catch {
+      /* keep the current QR on screen; the next tick retries */
+    }
+  }, [channel.id, resolveQr]);
+
   // Poll the channel state on an interval. Self-reschedules so a slow
   // response never overlaps the next tick.
   const poll = useCallback(async () => {
@@ -145,6 +178,15 @@ export function ChannelQrModal({
     closedRef.current = false;
     void requestQr();
     pollTimerRef.current = setTimeout(() => void poll(), POLL_MS);
+    // Refresh the QR before WhatsApp rotates it, so it never goes stale on
+    // screen. Self-reschedules to avoid overlapping a slow fetch.
+    const scheduleRefresh = () => {
+      qrRefreshTimerRef.current = setTimeout(async () => {
+        await refreshQr();
+        if (!closedRef.current) scheduleRefresh();
+      }, QR_REFRESH_MS);
+    };
+    scheduleRefresh();
     return () => {
       closedRef.current = true;
       if (pollTimerRef.current !== null) {
@@ -154,6 +196,10 @@ export function ChannelQrModal({
       if (connectedTimerRef.current !== null) {
         clearTimeout(connectedTimerRef.current);
         connectedTimerRef.current = null;
+      }
+      if (qrRefreshTimerRef.current !== null) {
+        clearTimeout(qrRefreshTimerRef.current);
+        qrRefreshTimerRef.current = null;
       }
     };
     // Mount-once: requestQr/poll are stable for a given channel id.
