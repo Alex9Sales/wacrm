@@ -151,6 +151,7 @@ export async function POST(request: Request, { params }: RouteParams) {
         id?: string
         from?: string
         isGroup?: boolean
+        isVideo?: boolean
         _data?: {
           CallCreatorAlt?: string
           Data?: { Attrs?: { caller_pn?: string } }
@@ -159,7 +160,16 @@ export async function POST(request: Request, { params }: RouteParams) {
     }
     if (typeof ev?.event === 'string' && ev.event.startsWith('call.')) {
       const callId = ev.payload?.id ?? ''
-      if (ev.event === 'call.received' && callId && !ev.payload?.isGroup) {
+      // VÍDEO: o CRM só faz voz. Uma chamada de vídeo NÃO deve tocar o modal de
+      // voz (o operador atenderia numa ligação que nunca teria vídeo). Ignoramos
+      // aqui — a chamada segue tocando no WhatsApp do dono pra ele atender com
+      // vídeo de verdade. Mesma regra do bridge da IA (payload.isVideo).
+      if (
+        ev.event === 'call.received' &&
+        callId &&
+        !ev.payload?.isGroup &&
+        ev.payload?.isVideo !== true
+      ) {
         const rawFrom = String(ev.payload?.from ?? '')
         // gows hides the caller's real phone for @lid callers in
         // _data.CallCreatorAlt (or Data.Attrs.caller_pn), both
