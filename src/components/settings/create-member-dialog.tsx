@@ -34,6 +34,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { isStaleActionError, reloadForStaleAction } from "@/lib/stale-action";
 import { createTeamMember } from "./actions";
 
 type MemberRole = "admin" | "agent" | "viewer";
@@ -103,6 +104,11 @@ export function CreateMemberDialog({
       setResult({ name: name.trim(), email: email.trim().toLowerCase(), password, role });
       onCreated();
     } catch (err) {
+      if (isStaleActionError(err)) {
+        toast.info("Atualizando o sistema…");
+        reloadForStaleAction();
+        return;
+      }
       toast.error(err instanceof Error ? err.message : "Não foi possível criar o membro.");
     } finally {
       setSubmitting(false);

@@ -4,6 +4,7 @@ import Script from "next/script";
 import "./globals.css";
 import { ThemeProvider } from "@/hooks/use-theme";
 import { ThemedToaster } from "@/components/themed-toaster";
+import { StaleActionGuard } from "@/components/stale-action-guard";
 import {
   DEFAULT_MODE,
   DEFAULT_THEME,
@@ -106,6 +107,7 @@ export default function RootLayout({
         <ThemeProvider>
           {children}
           <ThemedToaster />
+          <StaleActionGuard />
         </ThemeProvider>
       </body>
     </html>
