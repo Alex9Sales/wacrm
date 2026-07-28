@@ -8,6 +8,7 @@ import {
   useMemo,
   KeyboardEvent,
   type DragEvent,
+  type ClipboardEvent,
 } from "react";
 import {
   Send,
@@ -531,6 +532,31 @@ export function MessageComposer({
     [inputsDisabled, busy, stageUpload],
   );
 
+  // ---- Paste an image from the clipboard (Win+Shift+S / print screen) -
+  // Windows users capture the screen and Ctrl+V into the input; WhatsApp Web
+  // stages the shot for sending, so mirror that here. Screenshots arrive as a
+  // nameless image blob, so we give them a real filename+ext before upload.
+  const handlePaste = useCallback(
+    (e: ClipboardEvent<HTMLTextAreaElement>) => {
+      if (inputsDisabled || busy || readOnly || sessionGated) return;
+      const items = Array.from(e.clipboardData?.items ?? []);
+      const imageItem = items.find(
+        (it) => it.kind === "file" && it.type.startsWith("image/"),
+      );
+      if (!imageItem) return; // no image → let normal text paste through
+      const file = imageItem.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      const ext = file.type.split("/")[1] || "png";
+      const named =
+        file.name && file.name.includes(".")
+          ? file
+          : new File([file], `captura-${Date.now()}.${ext}`, { type: file.type });
+      void stageUpload("image", named);
+    },
+    [inputsDisabled, busy, readOnly, sessionGated, stageUpload],
+  );
+
   // ---- Voice recording (client-side Ogg/Opus, no server transcode) ---
 
   // The encoded Ogg/Opus file from opus-recorder → upload as an audio
@@ -1025,6 +1051,7 @@ export function MessageComposer({
               ref={textareaRef}
               value={text}
               onChange={handleChange}
+              onPaste={handlePaste}
               onKeyDown={handleReplyKeyDown}
               onKeyUp={(e) =>
                 setMentionCaret(
