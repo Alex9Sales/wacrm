@@ -18,7 +18,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Avatar,
   AvatarFallback,
@@ -100,8 +99,8 @@ export function CreateChannelDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[88svh] flex-col sm:max-w-md">
+        <DialogHeader className="shrink-0">
           <DialogTitle>Novo canal</DialogTitle>
           <DialogDescription>
             Um espaço para a equipe conversar. Canais públicos aparecem para
@@ -109,7 +108,7 @@ export function CreateChannelDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="-mx-1 flex-1 space-y-4 overflow-y-auto px-1">
           <div className="space-y-1.5">
             <Label htmlFor="channel-name">Nome do canal</Label>
             <div className="relative">
@@ -156,7 +155,7 @@ export function CreateChannelDialog({
           {isPrivate && (
             <div className="space-y-1.5">
               <Label>Membros do canal</Label>
-              <ScrollArea className="max-h-48 rounded-lg border border-border">
+              <div className="max-h-56 overflow-y-auto overscroll-contain rounded-lg border border-border">
                 <ul className="divide-y divide-border">
                   {members.map((m) => (
                     <li key={m.id}>
@@ -197,7 +196,7 @@ export function CreateChannelDialog({
                     </li>
                   )}
                 </ul>
-              </ScrollArea>
+              </div>
               <p className="text-xs text-muted-foreground">
                 Você entra automaticamente no canal que criar.
               </p>
@@ -205,7 +204,7 @@ export function CreateChannelDialog({
           )}
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button
             variant="ghost"
             onClick={() => onOpenChange(false)}
