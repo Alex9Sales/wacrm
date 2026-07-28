@@ -136,6 +136,10 @@ interface MessageComposerProps {
   /** Group participants (name + avatar) for the reply @mention autocomplete —
    *  non-empty only in a group conversation. */
   groupMentions?: { id: string; name: string; avatarUrl: string | null }[];
+  /** A file dropped onto the whole conversation area (not just the composer).
+   *  The composer stages it as a draft, then calls `onDroppedFileConsumed`. */
+  droppedFile?: File | null;
+  onDroppedFileConsumed?: () => void;
 }
 
 function formatDuration(seconds: number): string {
@@ -149,6 +153,11 @@ function formatDuration(seconds: number): string {
  *  Meta-accepted format means no server ffmpeg / transcode step. */
 const OPUS_ENCODER_PATH = "/opus/encoderWorker.min.js";
 
+/** Reply textarea auto-grow bounds (px). Min opens the box ≈3 lines tall so
+ *  writing feels roomy (like WhatsApp) rather than a single cramped line. */
+const COMPOSER_MIN_H = 72;
+const COMPOSER_MAX_H = 168;
+
 export function MessageComposer({
   conversationId,
   sessionExpired,
@@ -160,6 +169,8 @@ export function MessageComposer({
   provider,
   mentionMembers,
   groupMentions,
+  droppedFile,
+  onDroppedFileConsumed,
 }: MessageComposerProps) {
   // Capability gating (Phase 4). No channel → default to Meta's full
   // capability set so legacy single-Meta accounts are unaffected.
@@ -250,8 +261,9 @@ export function MessageComposer({
     const el = textareaRef.current;
     if (!el) return;
     el.style.height = "auto";
-    // Max 4 lines (~96px)
-    el.style.height = `${Math.min(el.scrollHeight, 96)}px`;
+    // Grow with content between a comfortable min (≈3 lines, so the box opens
+    // big like WhatsApp) and a max (≈7 lines) before it scrolls internally.
+    el.style.height = `${Math.min(Math.max(el.scrollHeight, COMPOSER_MIN_H), COMPOSER_MAX_H)}px`;
   }, []);
 
   const handleSend = useCallback(async () => {
@@ -263,7 +275,7 @@ export function MessageComposer({
       onSend(trimmed, replyTo?.id);
       setText("");
       if (textareaRef.current) {
-        textareaRef.current.style.height = "auto";
+        textareaRef.current.style.height = `${COMPOSER_MIN_H}px`;
       }
     } finally {
       setSending(false);
@@ -526,6 +538,8 @@ export function MessageComposer({
       setDragOver(false);
       if (inputsDisabled || busy || !dragHasFiles(e)) return;
       e.preventDefault();
+      // Don't let the thread-level drop handler also stage this file.
+      e.stopPropagation();
       const file = e.dataTransfer.files?.[0];
       if (file) void stageUpload(kindFromFile(file), file);
     },
@@ -556,6 +570,17 @@ export function MessageComposer({
     },
     [inputsDisabled, busy, readOnly, sessionGated, stageUpload],
   );
+
+  // A file dropped anywhere on the conversation (handled by the thread) is
+  // handed down here and staged as a draft, so the user can drop far from the
+  // input — like dropping onto the WhatsApp chat area.
+  useEffect(() => {
+    if (!droppedFile) return;
+    if (!inputsDisabled && !busy) {
+      void stageUpload(kindFromFile(droppedFile), droppedFile);
+    }
+    onDroppedFileConsumed?.();
+  }, [droppedFile, inputsDisabled, busy, stageUpload, onDroppedFileConsumed]);
 
   // ---- Voice recording (client-side Ogg/Opus, no server transcode) ---
 
@@ -1071,13 +1096,13 @@ export function MessageComposer({
                     : "Digite uma mensagem... (Shift+Enter para nova linha)"
               }
               disabled={sessionGated || readOnly}
-              rows={1}
+              rows={3}
               // Textarea keeps its own inline title — the GatedButton
               // wrapping pattern doesn't apply to non-button inputs.
               // The placeholder text also surfaces the read-only state.
               title={readOnly ? "Somente leitura — seu perfil não pode enviar mensagens" : undefined}
               className={cn(
-                "w-full resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
+                "min-h-[72px] w-full resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
                 (sessionGated || readOnly) && "cursor-not-allowed opacity-50"
               )}
             />

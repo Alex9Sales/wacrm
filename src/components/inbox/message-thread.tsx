@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, useRef, useMemo } from "react";
+import { useState, useEffect, useCallback, useRef, useMemo, type DragEvent } from "react";
 import {
   deleteConversation,
   listGroupMentionNames,
@@ -48,6 +48,7 @@ import {
   ArrowRightLeft,
   PhoneCall,
   X,
+  UploadCloud,
 } from "lucide-react";
 import { startOutboundCall } from "@/components/calls/incoming-call-modal";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
@@ -241,9 +242,65 @@ export function MessageThread({
   // Deleting a conversation is admin/owner-only (matches the server-side
   // requireRole('admin') in deleteConversation) — hide the button otherwise.
   const canDeleteConversation = hasMinRole(accountRole ?? "viewer", "admin");
+  // Assigning a conversation is admin/owner-only (matches the server-side
+  // requireRole('admin') in updateConversationAssignment). Agents who are
+  // pulled into a thread by a private @mention can view/reply but must not
+  // be able to take over the conversation.
+  const canAssign = hasMinRole(accountRole ?? "viewer", "admin");
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  // Drop a file anywhere on the conversation (not just the composer) — the
+  // dropped file is handed to the composer, which stages it for sending.
+  const [droppedFile, setDroppedFile] = useState<File | null>(null);
+  const [dragOver, setDragOver] = useState(false);
+  const dragDepth = useRef(0);
+
+  const dragHasFiles = (e: DragEvent) =>
+    Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  const onThreadDragEnter = useCallback((e: DragEvent<HTMLDivElement>) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragOver(true);
+  }, []);
+  const onThreadDragOver = useCallback((e: DragEvent<HTMLDivElement>) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+  const onThreadDragLeave = useCallback((e: DragEvent<HTMLDivElement>) => {
+    if (!dragHasFiles(e)) return;
+    dragDepth.current -= 1;
+    if (dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragOver(false);
+    }
+  }, []);
+  const onThreadDrop = useCallback((e: DragEvent<HTMLDivElement>) => {
+    dragDepth.current = 0;
+    setDragOver(false);
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    const file = e.dataTransfer.files?.[0];
+    if (file) setDroppedFile(file);
+  }, []);
+
+  // Safety net: clear the drag overlay on any drop/dragend anywhere. Capture
+  // phase so it fires even when a child (the composer) stops propagation on its
+  // own drop — otherwise the overlay could get stuck after such a drop.
+  useEffect(() => {
+    const clear = () => {
+      dragDepth.current = 0;
+      setDragOver(false);
+    };
+    window.addEventListener("drop", clear, true);
+    window.addEventListener("dragend", clear, true);
+    return () => {
+      window.removeEventListener("drop", clear, true);
+      window.removeEventListener("dragend", clear, true);
+    };
+  }, []);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
@@ -958,7 +1015,24 @@ export function MessageThread({
     // clipped and the hover toolbar overlaps the Tags panel. Letting the
     // root shrink lets the bubbles' break-words / max-w caps apply.
     // Issue #257.
-    <div className={cn("flex min-w-0 flex-1 flex-col", DOODLE_BG_CLASSES)}>
+    <div
+      className={cn("relative flex min-w-0 flex-1 flex-col", DOODLE_BG_CLASSES)}
+      onDragEnter={onThreadDragEnter}
+      onDragOver={onThreadDragOver}
+      onDragLeave={onThreadDragLeave}
+      onDrop={onThreadDrop}
+    >
+      {dragOver && (
+        <div className="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm">
+          <UploadCloud className="h-10 w-10 text-primary" />
+          <p className="text-base font-medium text-primary">
+            Solte para enviar na conversa
+          </p>
+          <p className="text-xs text-primary/80">
+            Imagem, vídeo, áudio ou documento
+          </p>
+        </div>
+      )}
       {/* Header — solid card surface sits on top of the doodle so the
           name/avatar/dropdowns stay legible. */}
       <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
@@ -1147,7 +1221,8 @@ export function MessageThread({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Assign dropdown */}
+          {/* Assign dropdown — admin/owner only (agents can't take over) */}
+          {canAssign && (
           <DropdownMenu>
             <DropdownMenuTrigger
               className={cn(
@@ -1211,6 +1286,7 @@ export function MessageThread({
               )}
             </DropdownMenuContent>
           </DropdownMenu>
+          )}
 
           {/* Sector dropdown — routes/privacy */}
           <DropdownMenu>
@@ -1451,6 +1527,8 @@ export function MessageThread({
         provider={conversation.channel?.provider}
         mentionMembers={mentionMembers}
         groupMentions={groupMentions}
+        droppedFile={droppedFile}
+        onDroppedFileConsumed={() => setDroppedFile(null)}
       />
 
       <TemplatePicker
