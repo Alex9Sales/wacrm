@@ -6,11 +6,11 @@ import { Loader2, Plus, Trash2, Users, Pencil, Hash, Phone } from "lucide-react"
 
 import { useAuth } from "@/hooks/use-auth";
 import { cn } from "@/lib/utils";
+import { isStaleActionError, reloadForStaleAction } from "@/lib/stale-action";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Checkbox } from "@/components/ui/checkbox";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import {
   Select,
   SelectContent,
@@ -329,6 +329,11 @@ function SectorDialog({
       onSaved();
       onOpenChange(false);
     } catch (err) {
+      if (isStaleActionError(err)) {
+        toast.info("Atualizando o sistema…");
+        reloadForStaleAction();
+        return;
+      }
       toast.error(err instanceof Error ? err.message : "Não foi possível salvar.");
     } finally {
       setSaving(false);
@@ -337,8 +342,8 @@ function SectorDialog({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+      <DialogContent className="flex max-h-[88svh] flex-col sm:max-w-md">
+        <DialogHeader className="shrink-0">
           <DialogTitle>{sector ? "Editar setor" : "Novo setor"}</DialogTitle>
           <DialogDescription>
             Escolha um nome, uma cor e quem participa. Só os membros do setor
@@ -346,7 +351,7 @@ function SectorDialog({
           </DialogDescription>
         </DialogHeader>
 
-        <div className="space-y-4">
+        <div className="-mx-1 flex-1 space-y-4 overflow-y-auto px-1">
           <div className="space-y-1.5">
             <Label htmlFor="sector-name">Nome</Label>
             <Input
@@ -413,8 +418,15 @@ function SectorDialog({
           </label>
 
           <div className="space-y-1.5">
-            <Label>Atendentes do setor</Label>
-            <ScrollArea className="max-h-48 rounded-lg border border-border">
+            <div className="flex items-center justify-between">
+              <Label>Atendentes do setor</Label>
+              {selected.size > 0 && (
+                <span className="text-xs text-muted-foreground">
+                  {selected.size} selecionado{selected.size > 1 ? "s" : ""}
+                </span>
+              )}
+            </div>
+            <div className="max-h-56 overflow-y-auto overscroll-contain rounded-lg border border-border">
               <ul className="divide-y divide-border">
                 {members.map((m) => (
                   <li key={m.id}>
@@ -443,11 +455,11 @@ function SectorDialog({
                   </li>
                 )}
               </ul>
-            </ScrollArea>
+            </div>
           </div>
         </div>
 
-        <DialogFooter>
+        <DialogFooter className="shrink-0">
           <Button variant="ghost" onClick={() => onOpenChange(false)} disabled={saving}>
             Cancelar
           </Button>
