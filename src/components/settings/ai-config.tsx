@@ -64,6 +64,9 @@ export function AiConfig() {
   const [isActive, setIsActive] = useState(false);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(false);
   const [maxPerConversation, setMaxPerConversation] = useState(3);
+  // Model picker: the list of models the provider exposes for the current key.
+  const [models, setModels] = useState<string[]>([]);
+  const [loadingModels, setLoadingModels] = useState(false);
 
   // Guard keyed on the account (not a bare boolean) so an in-place
   // account switch — ownership transfer, multi-account membership —
@@ -121,6 +124,51 @@ export function AiConfig() {
 
   const keyPayload = () => (keyEdited ? apiKey.trim() : undefined);
 
+  // Pull the provider's available models for the current key (freshly-typed or
+  // stored). `silent` suppresses error toasts for the automatic load.
+  const fetchModels = useCallback(
+    async (silent = false) => {
+      setLoadingModels(true);
+      try {
+        const res = await fetch('/api/ai/models', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            provider,
+            api_key: keyEdited ? apiKey.trim() : undefined,
+          }),
+        });
+        const data = await res.json().catch(() => ({}));
+        if (res.ok && Array.isArray(data.models)) {
+          setModels(data.models);
+          if (!silent) {
+            toast.success(
+              data.models.length
+                ? `${data.models.length} modelos disponíveis.`
+                : 'O provedor não retornou modelos.',
+            );
+          }
+        } else if (!silent) {
+          toast.error(data.error ?? 'Não foi possível listar os modelos.');
+        }
+      } catch {
+        if (!silent) toast.error('Não foi possível acessar o provedor.');
+      } finally {
+        setLoadingModels(false);
+      }
+    },
+    [provider, keyEdited, apiKey],
+  );
+
+  // Auto-load the model list once a stored key is present (first load).
+  useEffect(() => {
+    if (configured && hasStoredKey && models.length === 0) {
+      void fetchModels(true);
+    }
+    // Intentionally not depending on fetchModels/models to run once on load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [configured, hasStoredKey]);
+
   // undefined = leave unchanged; '' typed = null (clear); text = set.
   const embeddingsKeyPayload = () =>
     embeddingsKeyEdited ? embeddingsKey.trim() || null : undefined;
@@ -149,8 +197,11 @@ export function AiConfig() {
         }),
       });
       const data = await res.json();
-      if (res.ok) toast.success('A chave funciona — o provedor respondeu.');
-      else toast.error(data.error ?? 'O provedor rejeitou a solicitação.');
+      if (res.ok) {
+        toast.success('A chave funciona — o provedor respondeu.');
+        // Key validated → refresh the model list for the picker.
+        void fetchModels(true);
+      } else toast.error(data.error ?? 'O provedor rejeitou a solicitação.');
     } catch {
       toast.error('Não foi possível acessar o provedor.');
     } finally {
@@ -268,14 +319,37 @@ export function AiConfig() {
               </div>
 
               <div className="space-y-2">
-                <Label htmlFor="ai-model">Modelo</Label>
+                <div className="flex items-center justify-between gap-2">
+                  <Label htmlFor="ai-model">Modelo</Label>
+                  <button
+                    type="button"
+                    onClick={() => void fetchModels(false)}
+                    disabled={disabled || loadingModels}
+                    className="inline-flex items-center gap-1 text-xs text-primary hover:underline disabled:opacity-50"
+                  >
+                    {loadingModels && <Loader2 className="h-3 w-3 animate-spin" />}
+                    {loadingModels ? 'Carregando…' : 'Atualizar lista'}
+                  </button>
+                </div>
                 <Input
                   id="ai-model"
+                  list="ai-model-options"
                   value={model}
                   onChange={(e) => setModel(e.target.value)}
                   placeholder={AI_PROVIDER_DEFAULT_MODEL[provider]}
                   disabled={disabled}
+                  autoComplete="off"
                 />
+                <datalist id="ai-model-options">
+                  {models.map((m) => (
+                    <option key={m} value={m} />
+                  ))}
+                </datalist>
+                <p className="text-xs text-muted-foreground">
+                  {models.length > 0
+                    ? `${models.length} modelos disponíveis — clique no campo para escolher (ou digite um).`
+                    : 'Clique em "Atualizar lista" (ou "Testar chave") para carregar os modelos da sua chave.'}
+                </p>
               </div>
             </div>
 
