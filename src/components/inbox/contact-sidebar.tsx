@@ -74,6 +74,7 @@ import { ContactForm } from "@/components/contacts/contact-form";
 import { DealForm } from "@/components/pipelines/deal-form";
 import { ContactAvatar } from "./contact-avatar";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/use-auth";
 import { toast } from "sonner";
 import { format } from "date-fns";
 
@@ -190,6 +191,10 @@ export function ContactSidebar({
   onPriorityChange,
   onConversationDeleted,
 }: ContactSidebarProps) {
+  // "Ações da conversa" (assign / status / priority) is a management panel —
+  // admin/owner only. Agents pulled into a thread by a private @mention can
+  // read/reply but must not manage or take over the conversation.
+  const { canManageMembers } = useAuth();
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
@@ -669,8 +674,8 @@ export function ContactSidebar({
               )}
             </Section>
 
-            {/* ---- Ações da conversa ---- */}
-            {conversation && (
+            {/* ---- Ações da conversa (admin/owner only) ---- */}
+            {conversation && canManageMembers && (
               <Section
                 icon={MessageSquareText}
                 title="Ações da conversa"

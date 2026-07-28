@@ -744,7 +744,10 @@ export async function updateConversationAssignment(
   conversationId: string,
   assignedAgentId: string | null,
 ): Promise<void> {
-  const ctx = await getCurrentAccount()
+  // Admin/owner only. Agents (incl. ones pulled in via a private @mention)
+  // must not be able to (re)assign — the UI hides the control, and this is the
+  // authoritative check behind it.
+  const ctx = await requireRole('admin')
   await db
     .update(conversations)
     .set({
