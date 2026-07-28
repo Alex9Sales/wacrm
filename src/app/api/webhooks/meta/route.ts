@@ -29,6 +29,7 @@ import { firstOrNull } from '@/db/helpers'
 import { decryptCredentials, loadMetaChannelByPhoneNumberId } from '@/lib/channels/channels'
 import { metaProvider } from '@/lib/channels/providers/meta'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
+import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { applyStatusUpdate } from '@/lib/channels/status'
 import { publishEvent } from '@/lib/events/publish'
 import type { ChannelCtx } from '@/lib/channels/provider'
@@ -81,12 +82,26 @@ interface MetaRawCall {
   session?: { sdp?: string; sdp_type?: string }
 }
 
+// COEXISTÊNCIA: mensagem que o NEGÓCIO enviou (do app WhatsApp Business no
+// celular ou de um aparelho vinculado). `from` = número do negócio, `to` =
+// cliente. Vem no campo `smb_message_echoes` (array `message_echoes`).
+interface MetaEchoMessage {
+  from?: string
+  to?: string
+  id?: string
+  timestamp?: string
+  type?: string
+  text?: { body?: string }
+  [key: string]: unknown
+}
+
 interface MetaRawValue {
-  metadata?: { phone_number_id?: string }
+  metadata?: { phone_number_id?: string; display_phone_number?: string }
   contacts?: MetaRawContact[]
   messages?: MetaRawMessage[]
   statuses?: MetaRawStatus[]
   calls?: MetaRawCall[]
+  message_echoes?: MetaEchoMessage[]
 }
 
 interface MetaRawChange {
@@ -223,6 +238,14 @@ async function processWebhook(body: MetaRawBody) {
 
       const value = change.value
       if (!value) continue
+
+      // ---- COEXISTÊNCIA: mensagens que o NEGÓCIO enviou (do celular/app) ----
+      // Sem isto, uma resposta feita pelo WhatsApp do celular não apareceria no
+      // CRM — que é justamente o ponto da coexistência (celular + CRM juntos).
+      if (change.field === 'smb_message_echoes') {
+        await handleMessageEchoes(value)
+        continue
+      }
 
       // ---- statuses ----
       if (Array.isArray(value.statuses)) {
@@ -536,4 +559,96 @@ async function handleMetaReaction(channel: ChannelCtx, msg: MetaRawMessage) {
   } catch (err) {
     console.error('[webhooks/meta] reaction upsert failed:', err)
   }
+}
+
+// ------------------------------------------------------------
+// COEXISTÊNCIA — espelha no CRM as mensagens que o negócio enviou pelo próprio
+// WhatsApp (celular/app). O echo chega para TODA mensagem do negócio, inclusive
+// as que o CRM mandou pela API — por isso deduplicamos pelo wamid (`message_id`):
+// se já existe, foi o CRM que enviou; se não, veio do celular e a gente insere
+// como mensagem de saída ('agent') na conversa do cliente.
+// ------------------------------------------------------------
+async function handleMessageEchoes(value: MetaRawValue) {
+  const phoneNumberId = value.metadata?.phone_number_id
+  const channel = phoneNumberId
+    ? await loadMetaChannelByPhoneNumberId(phoneNumberId)
+    : null
+  if (!channel) {
+    console.error('[webhooks/meta] echo sem canal p/ pnid', phoneNumberId)
+    return
+  }
+  for (const echo of value.message_echoes ?? []) {
+    try {
+      if (!echo.id || !echo.to) continue
+      // Dedupe: já temos esse wamid? (mensagem enviada pelo próprio CRM) → pula.
+      const existing = firstOrNull(
+        await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(eq(messages.messageId, echo.id))
+          .limit(1),
+      )
+      if (existing) continue
+
+      const digits = String(echo.to).replace(/\D/g, '')
+      if (!digits) continue
+      const resolved = await resolveConversationByPhone(
+        channel.accountId,
+        digits,
+        null,
+        channel.id,
+      ).catch(() => null)
+      if (!resolved) continue
+
+      const text = echoDisplayText(echo)
+      await db.insert(messages).values({
+        conversationId: resolved.conversationId,
+        senderType: 'agent', // saída: o negócio enviou (pelo celular)
+        contentType: 'text',
+        contentText: text,
+        messageId: echo.id, // wamid — segura o dedupe futuro (status/echo repetido)
+        status: 'sent',
+        createdAt: echo.timestamp
+          ? new Date(Number(echo.timestamp) * 1000).toISOString()
+          : new Date().toISOString(),
+      })
+      await db
+        .update(conversations)
+        .set({
+          lastMessageText: text.slice(0, 500),
+          lastMessageAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(conversations.id, resolved.conversationId))
+      // fromMe: true → atualiza o thread sem tocar som de notificação.
+      await publishEvent(channel.accountId, {
+        type: 'message.received',
+        conversationId: resolved.conversationId,
+        fromMe: true,
+      })
+    } catch (err) {
+      console.error('[webhooks/meta] echo insert failed:', err)
+    }
+  }
+}
+
+/** Texto de exibição de um echo. Texto vira o corpo; mídia vira um rótulo
+ *  (+ legenda se houver). V1 não baixa a mídia — o operador sabe o que enviou. */
+function echoDisplayText(echo: MetaEchoMessage): string {
+  const t = echo.type ?? 'text'
+  if (t === 'text') return echo.text?.body ?? ''
+  const media = echo[t] as { caption?: string; filename?: string } | undefined
+  const label: Record<string, string> = {
+    image: '📷 Imagem',
+    video: '🎬 Vídeo',
+    audio: '🎤 Áudio',
+    voice: '🎤 Áudio',
+    document: '📄 Documento',
+    sticker: 'Figurinha',
+    location: '📍 Localização',
+    contacts: '👤 Contato',
+  }
+  const base = label[t] ?? `[${t}]`
+  const extra = media?.caption || media?.filename
+  return extra ? `${base} — ${extra}` : base
 }
