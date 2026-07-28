@@ -13,6 +13,7 @@ import {
   Bell,
   Bot,
   Crown,
+  ShieldCheck,
   GitBranch,
   Gauge,
   LayoutDashboard,
@@ -58,6 +59,13 @@ const ROLE_CHIP: Record<
     className:
       "border-primary/40 bg-primary/10 text-primary",
   },
+  supervisor: {
+    icon: ShieldCheck,
+    label: "Supervisor",
+    // Sky-tinted: management role just under admin.
+    className:
+      "border-sky-500/40 bg-sky-500/10 text-sky-300",
+  },
   agent: {
     icon: UserCog,
     label: "Atendente",
@@ -97,10 +105,12 @@ interface NavItem {
   beta?: boolean;
   /** Only shown to admins/owner (the page itself also enforces this). */
   adminOnly?: boolean;
+  /** Only shown to supervisor+ (Painel/dashboard — the page also enforces it). */
+  supervisorOnly?: boolean;
 }
 
 const navItems: NavItem[] = [
-  { href: "/dashboard", label: "Painel", icon: LayoutDashboard },
+  { href: "/dashboard", label: "Painel", icon: LayoutDashboard, supervisorOnly: true },
   { href: "/inbox", label: "Conversas", icon: MessageSquare },
   { href: "/calls", label: "Ligações", icon: Phone },
   { href: "/internal-chat", label: "Chat Interno", icon: MessagesSquare },
@@ -129,7 +139,7 @@ const COLLAPSE_KEY = "fluxia-sidebar-collapsed";
 
 export function Sidebar({ open = false, onClose }: SidebarProps) {
   const pathname = usePathname();
-  const { profile, profileLoading, account, accountRole, canEditSettings, signOut } =
+  const { profile, profileLoading, account, accountRole, canEditSettings, canViewDashboard, signOut } =
     useAuth();
 
   // Desktop-only collapse (icon rail) — gives the chat more room. Persisted
@@ -262,6 +272,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
           <ul className="flex flex-col gap-1">
             {navItems
               .filter((item) => !item.adminOnly || canEditSettings)
+              .filter((item) => !item.supervisorOnly || canViewDashboard)
               .map((item) => {
               const isActive =
                 pathname === item.href ||

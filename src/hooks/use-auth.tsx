@@ -21,6 +21,9 @@ import {
   canEditSettings as canEditSettingsFor,
   canManageMembers as canManageMembersFor,
   canSendMessages as canSendMessagesFor,
+  canAssignConversations as canAssignConversationsFor,
+  canViewDashboard as canViewDashboardFor,
+  canSeeAllConversations as canSeeAllConversationsFor,
   isAccountRole,
   type AccountRole,
 } from "@/lib/auth/roles";
@@ -102,16 +105,24 @@ interface AuthContextValue {
   isOwner: boolean;
   /** True if `accountRole === 'admin'` (does NOT include owner — use canManageMembers for "admin or above"). */
   isAdmin: boolean;
+  /** True if `accountRole === 'supervisor'`. */
+  isSupervisor: boolean;
   /** True if `accountRole === 'agent'`. */
   isAgent: boolean;
   /** True if `accountRole === 'viewer'`. */
   isViewer: boolean;
-  /** True if the caller can manage members (admin+). */
+  /** True if the caller can manage members (supervisor+). */
   canManageMembers: boolean;
-  /** True if the caller can edit account-wide settings (admin+). */
+  /** True if the caller can edit account-wide settings (supervisor+). */
   canEditSettings: boolean;
   /** True if the caller can send messages and edit operational data (agent+). */
   canSendMessages: boolean;
+  /** True if the caller can assign/reassign conversations and manage sectors (supervisor+). */
+  canAssignConversations: boolean;
+  /** True if the caller can see the analytics dashboard / Painel (supervisor+). */
+  canViewDashboard: boolean;
+  /** True if the caller can see every conversation, incl. private (supervisor+). */
+  canSeeAllConversations: boolean;
   /** Phase 8: session email is a platform admin (Fluxia operator).
    *  Gates the /admin link. False while loading / outside the provider. */
   isPlatformAdmin: boolean;
@@ -250,11 +261,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       accountId: profile?.account_id ?? null,
       isOwner: role === "owner",
       isAdmin: role === "admin",
+      isSupervisor: role === "supervisor",
       isAgent: role === "agent",
       isViewer: role === "viewer",
       canManageMembers: role ? canManageMembersFor(role) : false,
       canEditSettings: role ? canEditSettingsFor(role) : false,
       canSendMessages: role ? canSendMessagesFor(role) : false,
+      canAssignConversations: role ? canAssignConversationsFor(role) : false,
+      canViewDashboard: role ? canViewDashboardFor(role) : false,
+      canSeeAllConversations: role ? canSeeAllConversationsFor(role) : false,
     };
   }, [profile?.account_role, profile?.account_id]);
 
@@ -305,11 +320,15 @@ export function useAuth(): AuthContextValue {
       accountRole: null,
       isOwner: false,
       isAdmin: false,
+      isSupervisor: false,
       isAgent: false,
       isViewer: false,
       canManageMembers: false,
       canEditSettings: false,
       canSendMessages: false,
+      canAssignConversations: false,
+      canViewDashboard: false,
+      canSeeAllConversations: false,
       isPlatformAdmin: false,
       suspended: false,
     };

@@ -1,6 +1,7 @@
 "use client"
 
 import { useCallback, useEffect, useState } from 'react'
+import { useRouter } from 'next/navigation'
 import { useAuth } from '@/hooks/use-auth'
 import { formatCurrency } from '@/lib/currency'
 import {
@@ -36,7 +37,18 @@ import { ActivityFeed } from '@/components/dashboard/activity-feed'
 type RangeDays = 7 | 30 | 90
 
 export default function DashboardPage() {
-  const { defaultCurrency } = useAuth()
+  const { defaultCurrency, canViewDashboard, profileLoading } = useAuth()
+  const router = useRouter()
+
+  // Agents/viewers don't get the analytics Painel — send them to the inbox
+  // once the profile resolves. The server actions below are also gated, so a
+  // forced navigation can't leak account metrics either.
+  useEffect(() => {
+    if (!profileLoading && !canViewDashboard) {
+      router.replace('/inbox')
+    }
+  }, [profileLoading, canViewDashboard, router])
+
   const [metrics, setMetrics] = useState<MetricsBundle | null>(null)
   const [metricsLoading, setMetricsLoading] = useState(true)
 

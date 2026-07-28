@@ -15,7 +15,7 @@
 //
 // Role-gating
 //   The tab itself is reachable by any member, but mutation buttons
-//   are wrapped in `<RequireRole min="admin">` / `useCan` so an
+//   are wrapped in `<RequireRole min="supervisor">` / `useCan` so an
 //   agent or viewer sees the roster read-only. The server-side
 //   RPCs (set_member_role, remove_account_member) double-check
 //   the role anyway.
@@ -87,7 +87,7 @@ interface Member {
 
 interface Invitation {
   id: string;
-  role: 'admin' | 'agent' | 'viewer';
+  role: 'admin' | 'supervisor' | 'agent' | 'viewer';
   label: string | null;
   created_at: string;
   expires_at: string;
@@ -97,7 +97,8 @@ interface Invitation {
 // promotions go through the (deferred) Transfer Ownership flow.
 const EDITABLE_ROLES: { value: AccountRole; label: string; hint: string }[] = [
   { value: 'admin', label: 'Admin', hint: 'Gerencia membros + tudo' },
-  { value: 'agent', label: 'Atendente', hint: 'Usa os recursos; sem configurações' },
+  { value: 'supervisor', label: 'Supervisor', hint: 'Setores, atribuição, membros, Painel' },
+  { value: 'agent', label: 'Atendente', hint: 'Usa os recursos; sem Painel/configurações' },
   { value: 'viewer', label: 'Visualizador', hint: 'Somente leitura em todo o app' },
 ];
 
@@ -290,7 +291,7 @@ export function MembersTab() {
         title="Membros da equipe"
         description="Pessoas com acesso a esta conta. Os perfis controlam o que cada membro pode fazer."
         action={
-          <RequireRole min="admin">
+          <RequireRole min="supervisor">
             <div className="flex flex-wrap gap-2">
               <Button onClick={() => setCreateOpen(true)}>
                 <Plus className="size-4" />
@@ -483,7 +484,7 @@ export function MembersTab() {
       </Card>
 
       {/* Pending invitations — admin+ only */}
-      <RequireRole min="admin">
+      <RequireRole min="supervisor">
         <div>
           <div className="mb-2 flex items-center gap-2">
             <UsersRound className="size-4 text-muted-foreground" />

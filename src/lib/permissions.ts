@@ -46,6 +46,14 @@ export const admin = ac.newRole({
   data: ["read", "write"],
 });
 
+/** Supervisor — admin-like for org operations (manage members/invitations)
+ *  + full data. The finer split from admin (can't grant admin, no ownership
+ *  transfer) lives in roles.ts / the API guards, not here. */
+export const supervisor = ac.newRole({
+  ...adminAc.statements,
+  data: ["read", "write"],
+});
+
 /** Agent — member-with-write: read the org, write operational data. */
 export const agent = ac.newRole({
   ...memberAc.statements,
@@ -59,4 +67,4 @@ export const viewer = ac.newRole({
 });
 
 /** Role map handed to both server (`auth.ts`) and client (`auth-client.ts`). */
-export const roles = { owner, admin, agent, viewer } as const;
+export const roles = { owner, admin, supervisor, agent, viewer } as const;

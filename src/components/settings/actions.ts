@@ -30,6 +30,7 @@ import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { isUniqueViolation } from '@/lib/contacts/dedupe'
 import { auth } from '@/lib/auth'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
+import { hasMinRole } from '@/lib/auth/roles'
 import {
   getAccountSettings,
   updateAccountSettings,
@@ -416,7 +417,7 @@ export interface CreateTeamMemberInput {
   name: string
   email: string
   password: string
-  role: 'admin' | 'agent' | 'viewer'
+  role: 'admin' | 'supervisor' | 'agent' | 'viewer'
 }
 
 /**
@@ -430,7 +431,10 @@ export interface CreateTeamMemberInput {
 export async function createTeamMember(
   input: CreateTeamMemberInput,
 ): Promise<{ email: string }> {
-  const ctx = await requireRole('admin')
+  // Supervisors can create members too, but only up to their own level — a
+  // supervisor cannot mint an admin/owner (privilege escalation). Admins can
+  // create any non-owner role.
+  const ctx = await requireRole('supervisor')
   const name = input.name.trim()
   const email = input.email.trim().toLowerCase()
   const password = input.password
@@ -443,9 +447,16 @@ export async function createTeamMember(
   if (password.length < 8) {
     throw new Error('A senha precisa ter ao menos 8 caracteres.')
   }
-  const role = (['admin', 'agent', 'viewer'] as const).includes(input.role)
+  let role = (['admin', 'supervisor', 'agent', 'viewer'] as const).includes(
+    input.role,
+  )
     ? input.role
     : 'agent'
+  // Only admin+ may grant admin/supervisor. A supervisor caller is capped at
+  // agent/viewer regardless of what the form sent.
+  if ((role === 'admin' || role === 'supervisor') && !hasMinRole(ctx.role, 'admin')) {
+    role = 'agent'
+  }
 
   const existing = firstOrNull(
     await db.select({ id: user.id }).from(user).where(eq(user.email, email)).limit(1),

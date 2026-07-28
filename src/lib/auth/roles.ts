@@ -15,12 +15,13 @@
 // changes a one-file diff.
 // ============================================================
 
-export type AccountRole = "owner" | "admin" | "agent" | "viewer";
+export type AccountRole = "owner" | "admin" | "supervisor" | "agent" | "viewer";
 
 /** Ordered list of every valid role, lowest privilege first. */
 export const ACCOUNT_ROLES: readonly AccountRole[] = [
   "viewer",
   "agent",
+  "supervisor",
   "admin",
   "owner",
 ] as const;
@@ -28,12 +29,19 @@ export const ACCOUNT_ROLES: readonly AccountRole[] = [
 /**
  * Numeric rank of a role. Higher = more privileged. Mirrors the
  * CASE expression in `is_account_member` so JS/SQL stay aligned.
+ *
+ * `supervisor` sits between agent and admin: it gets the operational
+ * management powers (sectors, assignment, members, settings, dashboard,
+ * seeing every conversation) but stays below admin so only admins/owner can
+ * grant the admin role, and owner keeps the irreversible account operations.
  */
 export function roleRank(role: AccountRole): number {
   switch (role) {
     case "owner":
-      return 4;
+      return 5;
     case "admin":
+      return 4;
+    case "supervisor":
       return 3;
     case "agent":
       return 2;
@@ -66,18 +74,38 @@ export function isAccountRole(value: unknown): value is AccountRole {
 // = one new predicate here + one call site change per consumer.
 // ============================================================
 
-/** Owner / admin: invite, remove, change roles. */
+/** Owner / admin / supervisor: invite, remove, change roles. (A supervisor
+ *  can only grant up to supervisor — the admin role is admin+ only; enforced
+ *  in createTeamMember.) */
 export function canManageMembers(role: AccountRole): boolean {
-  return hasMinRole(role, "admin");
+  return hasMinRole(role, "supervisor");
 }
 
 /**
- * Owner / admin: edit account-wide settings (WhatsApp config,
- * message templates, pipelines, tags, custom fields, account
- * name). Excludes per-user settings like avatar or own password.
+ * Owner / admin / supervisor: edit account-wide settings (WhatsApp/channel
+ * config, integrations, message templates, pipelines, tags, custom fields,
+ * account name). Excludes per-user settings like avatar or own password.
  */
 export function canEditSettings(role: AccountRole): boolean {
-  return hasMinRole(role, "admin");
+  return hasMinRole(role, "supervisor");
+}
+
+/** Owner / admin / supervisor: assign/reassign conversations and manage
+ *  sectors — the "distribuir atendimento" powers. */
+export function canAssignConversations(role: AccountRole): boolean {
+  return hasMinRole(role, "supervisor");
+}
+
+/** Owner / admin / supervisor: see the analytics dashboard (Painel). Agents
+ *  and viewers go straight to the inbox. */
+export function canViewDashboard(role: AccountRole): boolean {
+  return hasMinRole(role, "supervisor");
+}
+
+/** Owner / admin / supervisor: see every conversation, including ones marked
+ *  private and sectors they don't belong to. */
+export function canSeeAllConversations(role: AccountRole): boolean {
+  return hasMinRole(role, "supervisor");
 }
 
 /**

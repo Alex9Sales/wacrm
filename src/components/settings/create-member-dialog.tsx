@@ -35,15 +35,19 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { isStaleActionError, reloadForStaleAction } from "@/lib/stale-action";
+import { useAuth } from "@/hooks/use-auth";
+import { hasMinRole } from "@/lib/auth/roles";
 import { createTeamMember } from "./actions";
 
-type MemberRole = "admin" | "agent" | "viewer";
+type MemberRole = "admin" | "supervisor" | "agent" | "viewer";
 
 const ROLE_DESCRIPTIONS: Record<MemberRole, string> = {
   admin:
-    "Pode convidar/criar membros, gerenciar configurações, enviar mensagens e editar dados.",
+    "Controle total: configurações, canais/WhatsApp, membros, atribuição e todas as conversas.",
+  supervisor:
+    "Como o admin no dia a dia: cria setores, distribui atendimento, cria/exclui membros, vê o Painel e todas as conversas. Não transfere a posse da conta.",
   agent:
-    "Pode usar conversas, contatos, disparos, automações e fluxos. Sem acesso a configurações ou membros.",
+    "Pode usar conversas, contatos, disparos, automações e fluxos. Sem Painel, sem configurações ou membros.",
   viewer:
     "Acesso somente leitura em todas as páginas. Não pode enviar nem editar nada.",
 };
@@ -77,6 +81,11 @@ export function CreateMemberDialog({
   onOpenChange,
   onCreated,
 }: CreateMemberDialogProps) {
+  // Only admin/owner may grant the elevated roles (admin/supervisor). A
+  // supervisor creating members is capped at agent/viewer (server enforces it
+  // too); hide the options so the UI matches.
+  const { accountRole } = useAuth();
+  const canGrantElevated = hasMinRole(accountRole ?? "viewer", "admin");
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
@@ -272,7 +281,12 @@ export function CreateMemberDialog({
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
-                    <SelectItem value="admin">Admin</SelectItem>
+                    {canGrantElevated && (
+                      <>
+                        <SelectItem value="admin">Admin</SelectItem>
+                        <SelectItem value="supervisor">Supervisor</SelectItem>
+                      </>
+                    )}
                     <SelectItem value="agent">Atendente</SelectItem>
                     <SelectItem value="viewer">Visualizador</SelectItem>
                   </SelectContent>

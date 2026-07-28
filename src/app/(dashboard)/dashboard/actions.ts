@@ -7,7 +7,7 @@
 // Supabase client.
 // ============================================================
 
-import { getCurrentAccount } from '@/lib/auth/account'
+import { requireRole } from '@/lib/auth/account'
 import {
   loadActivity,
   loadConversationsSeries,
@@ -24,28 +24,28 @@ import type {
 } from '@/lib/dashboard/types'
 
 export async function fetchMetrics(): Promise<MetricsBundle> {
-  const ctx = await getCurrentAccount()
+  const ctx = await requireRole('supervisor')
   return loadMetrics(ctx.accountId)
 }
 
 export async function fetchConversationsSeries(
   rangeDays: number,
 ): Promise<ConversationsSeriesPoint[]> {
-  const ctx = await getCurrentAccount()
+  const ctx = await requireRole('supervisor')
   return loadConversationsSeries(ctx.accountId, rangeDays)
 }
 
 export async function fetchPipelineDonut(): Promise<PipelineDonutData> {
-  const ctx = await getCurrentAccount()
+  const ctx = await requireRole('supervisor')
   return loadPipelineDonut(ctx.accountId)
 }
 
 export async function fetchResponseTime(): Promise<ResponseTimeSummary> {
-  const ctx = await getCurrentAccount()
+  const ctx = await requireRole('supervisor')
   return loadResponseTime(ctx.accountId)
 }
 
 export async function fetchActivity(limit = 20): Promise<ActivityItem[]> {
-  const ctx = await getCurrentAccount()
+  const ctx = await requireRole('supervisor')
   return loadActivity(ctx.accountId, limit)
 }

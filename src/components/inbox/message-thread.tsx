@@ -242,11 +242,11 @@ export function MessageThread({
   // Deleting a conversation is admin/owner-only (matches the server-side
   // requireRole('admin') in deleteConversation) — hide the button otherwise.
   const canDeleteConversation = hasMinRole(accountRole ?? "viewer", "admin");
-  // Assigning a conversation is admin/owner-only (matches the server-side
-  // requireRole('admin') in updateConversationAssignment). Agents who are
+  // Assigning a conversation is supervisor+ only (matches the server-side
+  // requireRole('supervisor') in updateConversationAssignment). Agents who are
   // pulled into a thread by a private @mention can view/reply but must not
   // be able to take over the conversation.
-  const canAssign = hasMinRole(accountRole ?? "viewer", "admin");
+  const canAssign = hasMinRole(accountRole ?? "viewer", "supervisor");
   const { getPresence, getRow, now } = usePresence();
   const [loading, setLoading] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);

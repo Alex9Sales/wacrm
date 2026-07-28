@@ -20,26 +20,26 @@ import { db, member } from "@/db";
 import { firstOrNull } from "@/db/helpers";
 import { auth } from "@/lib/auth";
 import { requireRole, toErrorResponse } from "@/lib/auth/account";
-import { isAccountRole } from "@/lib/auth/roles";
+import { isAccountRole, hasMinRole } from "@/lib/auth/roles";
 
 /**
  * Resolve the `member` row id for a given user within an org.
  * Returns null when the user is not a member of that org.
  */
-async function resolveMemberId(
+async function resolveMember(
   userId: string,
   organizationId: string,
-): Promise<string | null> {
+): Promise<{ id: string; role: string } | null> {
   const row = firstOrNull(
     await db
-      .select({ id: member.id })
+      .select({ id: member.id, role: member.role })
       .from(member)
       .where(
         and(eq(member.userId, userId), eq(member.organizationId, organizationId)),
       )
       .limit(1),
   );
-  return row?.id ?? null;
+  return row ?? null;
 }
 
 export async function PATCH(
@@ -47,7 +47,7 @@ export async function PATCH(
   context: { params: Promise<{ userId: string }> },
 ) {
   try {
-    const ctx = await requireRole("admin");
+    const ctx = await requireRole("supervisor");
     const { userId } = await context.params;
 
     let body: unknown;
@@ -65,13 +65,29 @@ export async function PATCH(
       );
     }
 
-    const memberId = await resolveMemberId(userId, ctx.accountId);
-    if (!memberId) {
+    const target = await resolveMember(userId, ctx.accountId);
+    if (!target) {
       return NextResponse.json({ error: "Member not found" }, { status: 404 });
     }
 
+    // Only admin+ may touch elevated roles — a supervisor can't promote to
+    // admin/supervisor nor demote an existing admin/owner (privilege escalation).
+    const callerIsAdmin = hasMinRole(ctx.role, "admin");
+    const touchesElevated =
+      role === "admin" ||
+      role === "owner" ||
+      role === "supervisor" ||
+      target.role === "admin" ||
+      target.role === "owner";
+    if (touchesElevated && !callerIsAdmin) {
+      return NextResponse.json(
+        { error: "Só um admin pode alterar papéis de admin/supervisor." },
+        { status: 403 },
+      );
+    }
+
     const result = await auth.api.updateMemberRole({
-      body: { memberId, role, organizationId: ctx.accountId },
+      body: { memberId: target.id, role, organizationId: ctx.accountId },
       headers: request.headers,
     });
 
@@ -86,16 +102,27 @@ export async function DELETE(
   context: { params: Promise<{ userId: string }> },
 ) {
   try {
-    const ctx = await requireRole("admin");
+    const ctx = await requireRole("supervisor");
     const { userId } = await context.params;
 
-    const memberId = await resolveMemberId(userId, ctx.accountId);
-    if (!memberId) {
+    const target = await resolveMember(userId, ctx.accountId);
+    if (!target) {
       return NextResponse.json({ error: "Member not found" }, { status: 404 });
     }
 
+    // A supervisor may remove agents/viewers/supervisors but not an admin/owner.
+    if (
+      (target.role === "admin" || target.role === "owner") &&
+      !hasMinRole(ctx.role, "admin")
+    ) {
+      return NextResponse.json(
+        { error: "Só um admin pode remover um admin." },
+        { status: 403 },
+      );
+    }
+
     await auth.api.removeMember({
-      body: { memberIdOrEmail: memberId, organizationId: ctx.accountId },
+      body: { memberIdOrEmail: target.id, organizationId: ctx.accountId },
       headers: request.headers,
     });
 
