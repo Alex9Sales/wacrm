@@ -25,6 +25,10 @@ export const API_SCOPES = [
   'members:read',
   'deals:read',
   'deals:write',
+  'tasks:read',
+  'tasks:write',
+  'agent:read',
+  'agent:write',
   'broadcasts:send',
   'webhooks:manage',
 ] as const;
@@ -45,6 +49,10 @@ export const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   'members:read': 'List team members (ids, names) — to assign/transfer or post',
   'deals:read': 'List and read pipelines and deals (Kanban cards)',
   'deals:write': 'Create, update and move deals (Kanban cards)',
+  'tasks:read': 'List and read tasks',
+  'tasks:write': 'Create and update tasks',
+  'agent:read': "Read the AI text agent's configuration",
+  'agent:write': "Configure the AI text agent (provider, model, prompt, key)",
   'broadcasts:send': 'Launch broadcast campaigns',
   'webhooks:manage': 'Register and manage outbound event webhooks',
 };

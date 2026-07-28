@@ -43,13 +43,23 @@ it. Grant the minimum.
 
 | Scope                | Allows                                   |
 | -------------------- | ---------------------------------------- |
-| `messages:send`      | Send WhatsApp messages                   |
-| `messages:read`      | Read messages and delivery status        |
-| `contacts:read`      | List and read contacts                   |
-| `contacts:write`     | Create and update contacts               |
-| `conversations:read` | List and read conversations              |
-| `broadcasts:send`    | Launch broadcast campaigns               |
-| `webhooks:manage`    | Register and manage outbound webhooks    |
+| `messages:send`       | Send WhatsApp messages                       |
+| `messages:read`       | Read messages and delivery status            |
+| `contacts:read`       | List and read contacts                       |
+| `contacts:write`      | Create and update contacts                   |
+| `conversations:read`  | List and read conversations                  |
+| `conversations:write` | Assign / move / close conversations          |
+| `deals:read`          | List and read pipelines and deals            |
+| `deals:write`         | Create and move deals (Kanban cards)         |
+| `tasks:read`          | List and read tasks                          |
+| `tasks:write`         | Create and update tasks                      |
+| `agent:read`          | Read the AI text agent's configuration       |
+| `agent:write`         | Configure the AI text agent                  |
+| `members:read`        | List team members                            |
+| `internal:read`       | Read internal team channels                  |
+| `internal:write`      | Create internal channels and post messages   |
+| `broadcasts:send`     | Launch broadcast campaigns; list channels    |
+| `webhooks:manage`     | Register and manage outbound webhooks        |
 
 A key with **no scopes** still authenticates and can call
 `GET /api/v1/me` — useful for verifying a key works.
@@ -263,6 +273,64 @@ Broadcast status + counts. Scope: `broadcasts:send`. `status` moves
 `sending` → `sent`; `delivered_count` / `read_count` keep climbing as
 Meta delivery webhooks arrive. `404` for another account's broadcast.
 
+### `PATCH /api/v1/conversations/{id}`
+
+Assign, move, or close a conversation. Scope: `conversations:write`. Accepts
+any of: `assigned_agent_id` (member id, or `null` to unassign), `sector_id`
+(sector id, or `null` for the general queue), `status` (`open`/`pending`/`closed`).
+
+### Deals & pipelines
+
+Scopes: `deals:read` / `deals:write`.
+
+- `GET /api/v1/pipelines` — list pipelines and their ordered stages.
+- `GET /api/v1/deals` — list cards. Filters: `?pipeline_id=`, `?stage_id=`, `?contact_id=`, `?status=`.
+- `POST /api/v1/deals` — create a card. Only `title` is required (pipeline/stage default to the account's first). Optional: `value`, `currency`, `contact_id`, `notes`, `expected_close_date`.
+- `GET` / `PATCH /api/v1/deals/{id}` — read or update. **Moving a card** = `PATCH` with `stage_id` (and `pipeline_id` if changing board).
+
+### Tasks
+
+Scopes: `tasks:read` / `tasks:write`.
+
+- `GET /api/v1/tasks` — list tasks, newest first (paginated). Filters: `?status=` (`open`/`done`/`cancelled`), `?contact_id=`, `?deal_id=`, `?assigned_to=`.
+- `POST /api/v1/tasks` — create. Only `title` is required. Optional: `description`, `due_at` (ISO 8601), `type`, `contact_id`, `deal_id`, `assigned_to`, `status`.
+- `GET` / `PATCH /api/v1/tasks/{id}` — read or update. Mark done with `{ "status": "done" }`; PATCH touches only the fields you send.
+
+```bash
+curl -X POST https://your-crm.example.com/api/v1/tasks \
+  -H "Authorization: Bearer wacrm_live_xxx" -H "Content-Type: application/json" \
+  -d '{ "title": "Follow up with Jane", "due_at": "2026-08-01T14:00:00Z", "contact_id": "…" }'
+```
+
+### AI text agent
+
+Scopes: `agent:read` / `agent:write`. The account's single AI configuration
+(provider, model, system prompt, own API key) that powers AI-drafted replies,
+the auto-reply bot and the Playground.
+
+- `GET /api/v1/agent` — read the config (`configured:false` when none). The API key is never returned.
+- `PUT /api/v1/agent` — configure. Body: `provider` (`openai`/`anthropic`), `model`, `api_key` (omit to keep the stored one), and optional `system_prompt`, `is_active`, `auto_reply_enabled`, `auto_reply_max_per_conversation` (1–20). The key is **validated with the provider** before it's stored (AES-256-GCM encrypted).
+
+```bash
+curl -X PUT https://your-crm.example.com/api/v1/agent \
+  -H "Authorization: Bearer wacrm_live_xxx" -H "Content-Type: application/json" \
+  -d '{ "provider": "openai", "model": "gpt-4o-mini", "api_key": "sk-…",
+        "system_prompt": "Você é o atendente da Acme…", "is_active": true }'
+```
+
+### Channels, members & internal chat
+
+- `GET /api/v1/channels` · `GET /api/v1/channels/{id}` — list WhatsApp channels (id, name, provider, status). Scope: `broadcasts:send`.
+- `GET /api/v1/members` — list team members (id, name). Scope: `members:read`.
+- `GET` / `POST /api/v1/internal/channels` — list / create internal team channels (`{ name, is_private?, member_ids? }`). Scopes: `internal:read` / `internal:write`.
+- `GET` / `POST /api/v1/internal/channels/{id}/messages` — read / post internal messages.
+
+### More broadcasts
+
+- `POST /api/v1/broadcasts/text` — text/media campaign on a non-official (WAHA) channel. Body: `channel_id`, `name`, `body_text`, optional `media_url`/`media_type`/`media_filename`, and `recipients` (list of `to`) **or** `contact_ids`.
+- `GET /api/v1/broadcasts/{id}/recipients` — per-recipient status.
+- `POST /api/v1/broadcasts/{id}/pause` · `/resume` · `/cancel` — control a running campaign.
+
 ## Pagination
 
 Every list endpoint pages the same way. Request a page size with
@@ -376,8 +444,8 @@ internal targets are refused at delivery time.
 
 ## Roadmap
 
-The public API now covers messaging, contacts, conversations,
-broadcasts, and outbound webhooks — the full scope of
-[#245](https://github.com/ArnasDon/wacrm/issues/245). Future ideas
-(deals/pipelines, templates, flows, a delivery queue for webhooks) are
-not yet scheduled.
+The public API covers messaging, contacts, conversations, deals &
+pipelines, tasks, the AI text agent, channels, members, internal chat,
+broadcasts (template + text/WAHA), and outbound webhooks. Not yet
+exposed via the API (done in the dashboard for now): creating **flows**
+and **automations**, and a delivery queue for webhook retries.
