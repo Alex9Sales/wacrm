@@ -1107,3 +1107,78 @@ export async function dismissTransferNote(
       ),
     )
 }
+
+// ---- Nova conversa (start a thread with a brand-new number) --------------
+
+export interface SendableChannel {
+  id: string
+  name: string
+  provider: ChannelProvider
+  phoneNumber: string | null
+}
+
+/**
+ * Connected WhatsApp channels that can originate a conversation. The "Nova
+ * conversa" dialog uses this to let the agent choose which number sends when
+ * the account has more than one connected; with a single channel the picker is
+ * hidden and the resolver's default is used.
+ */
+export async function listSendableChannels(): Promise<SendableChannel[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: channels.id,
+      name: channels.name,
+      provider: channels.provider,
+      phoneNumber: channels.phoneNumber,
+    })
+    .from(channels)
+    .where(
+      and(
+        eq(channels.accountId, ctx.accountId),
+        eq(channels.status, 'connected'),
+      ),
+    )
+    .orderBy(asc(channels.name))
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    provider: r.provider as ChannelProvider,
+    phoneNumber: r.phoneNumber,
+  }))
+}
+
+/**
+ * Start (or reopen) a conversation with a number the agent typed by hand — the
+ * WhatsApp Web "nova conversa" flow. Finds-or-creates the contact and its
+ * conversation via the shared resolver, then hands back the conversation id so
+ * the inbox can deep-link to it (`?c=<id>`). `channelId` is optional; omitted,
+ * the account's default channel is used. Gated to agent+ (viewers can't send).
+ */
+export async function startNewConversation(input: {
+  phone: string
+  name?: string | null
+  channelId?: string | null
+}): Promise<{ conversationId: string; contactCreated: boolean }> {
+  const ctx = await requireRole('agent')
+  const { resolveConversationByPhone } = await import(
+    '@/lib/whatsapp/resolve-conversation'
+  )
+  try {
+    const res = await resolveConversationByPhone(
+      ctx.accountId,
+      input.phone,
+      input.name?.trim() || null,
+      input.channelId ?? null,
+    )
+    return {
+      conversationId: res.conversationId,
+      contactCreated: res.contactCreated,
+    }
+  } catch (err) {
+    // SendMessageError carries a user-safe message (bad phone / no channel).
+    throw new Error(
+      err instanceof Error ? err.message : 'Não foi possível iniciar a conversa.',
+    )
+  }
+}
