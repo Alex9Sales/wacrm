@@ -42,7 +42,10 @@ export async function POST(
 
     const conv = firstOrNull(
       await db
-        .select({ id: conversations.id })
+        .select({
+          id: conversations.id,
+          assignedAgentId: conversations.assignedAgentId,
+        })
         .from(conversations)
         .where(
           and(
@@ -106,6 +109,25 @@ export async function POST(
       }
     } catch (err) {
       console.error('[note] mention notify failed:', err)
+    }
+
+    // Mention access is one-shot: once a member who was pulled in by an
+    // @mention replies (posts this note), their temporary access ends and the
+    // conversation drops off their list. The owner (assigned agent) is never
+    // removed — they keep the thread regardless.
+    if (conv.assignedAgentId !== ctx.userId) {
+      try {
+        await db
+          .delete(conversationParticipants)
+          .where(
+            and(
+              eq(conversationParticipants.conversationId, conversationId),
+              eq(conversationParticipants.userId, ctx.userId),
+            ),
+          )
+      } catch (err) {
+        console.error('[note] participant revoke failed:', err)
+      }
     }
 
     // Refresh the thread (fromMe skips the notification sound).

@@ -2,7 +2,8 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { listConversations, listTags } from "@/app/(dashboard)/inbox/actions";
+import { listConversations, listTags, listSectors } from "@/app/(dashboard)/inbox/actions";
+import { useAuth } from "@/hooks/use-auth";
 import { matchesContactFilters } from "@/lib/inbox/conversations";
 import { formatConversationPreview } from "@/lib/inbox/preview";
 import { cn } from "@/lib/utils";
@@ -12,7 +13,7 @@ import type {
   ConversationStatus,
   Tag,
 } from "@/types";
-import { Search, ChevronDown, X, Radio, Inbox, Users, MessageSquarePlus } from "lucide-react";
+import { Search, ChevronDown, X, Radio, Inbox, Users, MessageSquarePlus, UserCheck, Layers } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { CHANNEL_PROVIDER_LABELS } from "./message-thread";
 import { ContactAvatar } from "./contact-avatar";
@@ -96,6 +97,11 @@ export function ConversationList({
   const [tags, setTags] = useState<Tag[]>([]);
   const [selectedTagIds, setSelectedTagIds] = useState<string[]>([]);
   const [selectedCompany, setSelectedCompany] = useState<string | null>(null);
+  // "Atribuídas a mim" toggle + sector filter (only shown when sectors exist).
+  const { user } = useAuth();
+  const [assignedToMe, setAssignedToMe] = useState(false);
+  const [sectors, setSectors] = useState<{ id: string; name: string; color: string }[]>([]);
+  const [selectedSectorId, setSelectedSectorId] = useState<string | null>(null);
 
   // Keep the latest callback in a ref so the fetch effect below can
   // have a stable, empty-dep identity. Previously the fetch useCallback
@@ -148,6 +154,23 @@ export function ConversationList({
         if (!cancelled) setTags(data);
       } catch (error) {
         if (!cancelled) console.error("Failed to fetch tags:", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Sector definitions for the sector filter — only surfaced when the account
+  // actually has sectors (otherwise everything is the general queue).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const data = await listSectors();
+        if (!cancelled) setSectors(data);
+      } catch (error) {
+        if (!cancelled) console.error("Failed to fetch sectors:", error);
       }
     })();
     return () => {
@@ -237,6 +260,18 @@ export function ConversationList({
       result = result.filter((c) => c.status === filter);
     }
 
+    // "Atribuídas a mim" — only conversations assigned to the current user.
+    if (assignedToMe && user?.id) {
+      result = result.filter((c) => c.assigned_agent_id === user.id);
+    }
+
+    // Sector filter — a specific sector, or "sem setor" (general queue).
+    if (selectedSectorId === "__none__") {
+      result = result.filter((c) => !c.sector_id);
+    } else if (selectedSectorId !== null) {
+      result = result.filter((c) => c.sector_id === selectedSectorId);
+    }
+
     // Contact-based filters (tags via OR logic, exact company match).
     if (selectedTagIds.length > 0 || selectedCompany !== null) {
       result = result.filter((c) =>
@@ -266,6 +301,9 @@ export function ConversationList({
     selectedTagIds,
     selectedCompany,
     selectedChannelId,
+    assignedToMe,
+    selectedSectorId,
+    user?.id,
   ]);
 
   // Only offer the Clientes/Grupos segmentation when the account actually has
@@ -275,6 +313,11 @@ export function ConversationList({
     [conversations],
   );
   const activeSegment = SEGMENT_OPTIONS.find((o) => o.value === segment);
+  const activeSector = sectors.find((s) => s.id === selectedSectorId) ?? null;
+  const sectorLabel =
+    selectedSectorId === "__none__"
+      ? "Sem setor"
+      : (activeSector?.name ?? "Setores");
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
@@ -422,6 +465,92 @@ export function ConversationList({
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
+
+          {/* Atribuídas a mim — toggle rápido */}
+          <button
+            type="button"
+            onClick={() => setAssignedToMe((v) => !v)}
+            title="Mostrar só conversas atribuídas a mim"
+            className={cn(
+              "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+              assignedToMe
+                ? "text-primary"
+                : "text-muted-foreground hover:text-foreground",
+            )}
+          >
+            <UserCheck className="h-3 w-3" />
+            Minhas
+          </button>
+
+          {/* Setor — só quando o workspace tem setores criados */}
+          {sectors.length > 0 && (
+            <DropdownMenu>
+              <DropdownMenuTrigger
+                className={cn(
+                  "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                  selectedSectorId !== null
+                    ? "text-primary"
+                    : "text-muted-foreground hover:text-foreground",
+                )}
+              >
+                {activeSector ? (
+                  <span
+                    className="h-2.5 w-2.5 shrink-0 rounded-full"
+                    style={{ backgroundColor: activeSector.color }}
+                  />
+                ) : (
+                  <Layers className="h-3 w-3" />
+                )}
+                <span className="max-w-24 truncate">{sectorLabel}</span>
+                <ChevronDown className="h-3 w-3" />
+              </DropdownMenuTrigger>
+              <DropdownMenuContent
+                align="start"
+                className="max-h-72 w-56 border-border bg-popover"
+              >
+                <DropdownMenuItem
+                  onClick={() => setSelectedSectorId(null)}
+                  className={cn(
+                    "text-sm",
+                    selectedSectorId === null
+                      ? "text-primary"
+                      : "text-popover-foreground",
+                  )}
+                >
+                  Todos os setores
+                </DropdownMenuItem>
+                <DropdownMenuItem
+                  onClick={() => setSelectedSectorId("__none__")}
+                  className={cn(
+                    "text-sm",
+                    selectedSectorId === "__none__"
+                      ? "text-primary"
+                      : "text-popover-foreground",
+                  )}
+                >
+                  Sem setor (fila geral)
+                </DropdownMenuItem>
+                {sectors.map((s) => (
+                  <DropdownMenuItem
+                    key={s.id}
+                    onClick={() => setSelectedSectorId(s.id)}
+                    className={cn(
+                      "flex items-center gap-2 text-sm",
+                      selectedSectorId === s.id
+                        ? "text-primary"
+                        : "text-popover-foreground",
+                    )}
+                  >
+                    <span
+                      className="h-2.5 w-2.5 shrink-0 rounded-full"
+                      style={{ backgroundColor: s.color }}
+                    />
+                    <span className="truncate">{s.name}</span>
+                  </DropdownMenuItem>
+                ))}
+              </DropdownMenuContent>
+            </DropdownMenu>
+          )}
 
           {hasGroups && (
             <DropdownMenu>

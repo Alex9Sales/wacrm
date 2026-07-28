@@ -14,6 +14,7 @@ import {
   updateConversationSector,
   transferConversation,
   dismissTransferNote,
+  setConversationPrivacy,
 } from "@/app/(dashboard)/inbox/actions";
 import { useAuth } from "@/hooks/use-auth";
 import { hasMinRole } from "@/lib/auth/roles";
@@ -49,6 +50,8 @@ import {
   PhoneCall,
   X,
   UploadCloud,
+  Lock,
+  LockOpen,
 } from "lucide-react";
 import { startOutboundCall } from "@/components/calls/incoming-call-modal";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
@@ -255,6 +258,11 @@ export function MessageThread({
   const [droppedFile, setDroppedFile] = useState<File | null>(null);
   const [dragOver, setDragOver] = useState(false);
   const dragDepth = useRef(0);
+  // Private-conversation toggle (optimistic; server is authoritative).
+  const [isPrivate, setIsPrivate] = useState(!!conversation?.is_private);
+  useEffect(() => {
+    setIsPrivate(!!conversation?.is_private);
+  }, [conversation?.id, conversation?.is_private]);
 
   const dragHasFiles = (e: DragEvent) =>
     Array.from(e.dataTransfer?.types ?? []).includes("Files");
@@ -301,6 +309,26 @@ export function MessageThread({
       window.removeEventListener("dragend", clear, true);
     };
   }, []);
+
+  // Only the assignee or a supervisor+ can privatize a conversation.
+  const canTogglePrivacy =
+    canAssign ||
+    (!!conversation?.assigned_agent_id &&
+      conversation.assigned_agent_id === user?.id);
+  const handleTogglePrivacy = useCallback(async () => {
+    if (!conversation) return;
+    const next = !isPrivate;
+    setIsPrivate(next); // optimistic
+    try {
+      await setConversationPrivacy(conversation.id, next);
+      toast.success(next ? "Conversa privada." : "Conversa liberada.");
+    } catch (err) {
+      setIsPrivate(!next); // revert
+      toast.error(
+        err instanceof Error ? err.message : "Não foi possível alterar a privacidade.",
+      );
+    }
+  }, [conversation, isPrivate, user?.id]);
   const [templateModalOpen, setTemplateModalOpen] = useState(false);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [reactions, setReactions] = useState<MessageReaction[]>([]);
@@ -1095,6 +1123,32 @@ export function MessageThread({
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Privar conversa — só o responsável ou supervisor+. Privada = só
+              o atribuído, supervisor/admin e participantes veem. */}
+          {canTogglePrivacy && (
+            <button
+              type="button"
+              onClick={handleTogglePrivacy}
+              aria-label={isPrivate ? "Tornar conversa pública" : "Privar conversa"}
+              title={
+                isPrivate
+                  ? "Conversa privada — só você, supervisão e mencionados veem. Clique para liberar."
+                  : "Privar conversa (só você, supervisão e mencionados)"
+              }
+              className={cn(
+                "inline-flex h-7 w-7 items-center justify-center rounded-md transition-colors",
+                isPrivate
+                  ? "text-amber-500 hover:bg-amber-500/10"
+                  : "text-muted-foreground hover:bg-muted hover:text-foreground",
+              )}
+            >
+              {isPrivate ? (
+                <Lock className="h-4 w-4" />
+              ) : (
+                <LockOpen className="h-4 w-4" />
+              )}
+            </button>
+          )}
           {/* Ligar (voz WhatsApp) — só no canal Meta (Business Calling API),
               e só com telefone. Abre o modal de chamada em modo outbound. */}
           {(conversation.channel?.provider ?? "meta") === "meta" &&

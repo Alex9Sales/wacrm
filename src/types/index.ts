@@ -180,6 +180,8 @@ export interface Conversation {
   priority?: ConversationPriority;
   assigned_agent_id?: string;
   sector_id?: string | null;
+  /** Private conversation — only the assignee, supervisor+ and participants see it. */
+  is_private?: boolean;
   /** Handoff note shown to the receiving agent after a sector transfer. */
   transfer_note?: string | null;
   transfer_note_at?: string | null;

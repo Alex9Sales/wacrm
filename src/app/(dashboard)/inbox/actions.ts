@@ -34,6 +34,7 @@ import {
   requireRole,
   type AccountContext,
 } from '@/lib/auth/account'
+import { hasMinRole } from '@/lib/auth/roles'
 import {
   conversationVisibility,
   canSeeConversation,
@@ -80,6 +81,7 @@ export async function getConversationWithContact(
         priority: conversations.priority,
         assigned_agent_id: conversations.assignedAgentId,
         sector_id: conversations.sectorId,
+        is_private: conversations.isPrivate,
         transfer_note: conversations.transferNote,
         transfer_note_at: conversations.transferNoteAt,
         transfer_note_by: conversations.transferNoteBy,
@@ -120,6 +122,7 @@ export async function getConversationWithContact(
       row.sector_id,
       row.assigned_agent_id,
       conversationId,
+      row.is_private,
     ))
   ) {
     return null
@@ -218,6 +221,7 @@ const conversationColumns = {
   priority: conversations.priority,
   assigned_agent_id: conversations.assignedAgentId,
   sector_id: conversations.sectorId,
+  is_private: conversations.isPrivate,
   last_message_text: conversations.lastMessageText,
   last_message_at: conversations.lastMessageAt,
   unread_count: conversations.unreadCount,
@@ -434,6 +438,7 @@ async function assertConversationInAccount(
         id: conversations.id,
         sectorId: conversations.sectorId,
         assignedAgentId: conversations.assignedAgentId,
+        isPrivate: conversations.isPrivate,
       })
       .from(conversations)
       .where(
@@ -451,6 +456,7 @@ async function assertConversationInAccount(
     row.sectorId,
     row.assignedAgentId,
     conversationId,
+    row.isPrivate,
   )
 }
 
@@ -976,6 +982,7 @@ export async function getConversationPreview(
       .select({
         sectorId: conversations.sectorId,
         assignedAgentId: conversations.assignedAgentId,
+        isPrivate: conversations.isPrivate,
         lastMessageText: conversations.lastMessageText,
         contactName: contacts.name,
         contactPhone: contacts.phone,
@@ -998,6 +1005,7 @@ export async function getConversationPreview(
       row.sectorId,
       row.assignedAgentId,
       conversationId,
+      row.isPrivate,
     ))
   )
     return null
@@ -1028,6 +1036,7 @@ export async function transferConversation(
         id: conversations.id,
         sectorId: conversations.sectorId,
         assignedAgentId: conversations.assignedAgentId,
+        isPrivate: conversations.isPrivate,
       })
       .from(conversations)
       .where(
@@ -1047,6 +1056,7 @@ export async function transferConversation(
       conv.sectorId,
       conv.assignedAgentId,
       conversationId,
+      conv.isPrivate,
     ))
   ) {
     throw new Error('Sem permissão para esta conversa.')
@@ -1092,6 +1102,49 @@ export async function transferConversation(
     type: 'message.received',
     conversationId,
     fromMe: true, // internal change — no notification sound/pop-up
+  })
+}
+
+/**
+ * Toggle a conversation's privacy. Private = only the assigned agent,
+ * supervisor+ and explicit @mention participants can see it. The assignee can
+ * privatize their own conversation; supervisor+ can privatize any.
+ */
+export async function setConversationPrivacy(
+  conversationId: string,
+  isPrivate: boolean,
+): Promise<void> {
+  const ctx = await getCurrentAccount()
+  const conv = firstOrNull(
+    await db
+      .select({ assignedAgentId: conversations.assignedAgentId })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      )
+      .limit(1),
+  )
+  if (!conv) throw new Error('Conversa não encontrada.')
+  if (!hasMinRole(ctx.role, 'supervisor') && conv.assignedAgentId !== ctx.userId) {
+    throw new Error('Só o responsável ou um supervisor pode privar a conversa.')
+  }
+  await db
+    .update(conversations)
+    .set({ isPrivate })
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.accountId, ctx.accountId),
+      ),
+    )
+  const { publishEvent } = await import('@/lib/events/publish')
+  await publishEvent(ctx.accountId, {
+    type: 'message.received',
+    conversationId,
+    fromMe: true,
   })
 }
 
