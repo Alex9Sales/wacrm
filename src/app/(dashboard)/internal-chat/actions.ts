@@ -211,12 +211,12 @@ export interface CreateInternalChannelInput {
   memberIds?: string[];
 }
 
-/** Create a channel (admins only). Private channels get member rows for the
+/** Create a channel (supervisor+). Private channels get member rows for the
  *  selected users plus the creator. */
 export async function createInternalChannel(
   input: CreateInternalChannelInput,
 ): Promise<InternalChannel> {
-  const ctx = await requireRole('admin');
+  const ctx = await requireRole('supervisor');
   const name = input.name.trim();
   if (!name) throw new Error('Dê um nome ao canal.');
 
@@ -260,6 +260,131 @@ export async function createInternalChannel(
   }
 
   return channel as InternalChannel;
+}
+
+export interface UpdateInternalChannelInput {
+  channelId: string;
+  name: string;
+  description?: string | null;
+  isPrivate: boolean;
+  /** User ids for a private channel (creator + editor always kept). */
+  memberIds?: string[];
+}
+
+/**
+ * Edit a channel's name/description, flip its privacy, and (for private
+ * channels) reset who participates. Supervisor+. Going public drops the member
+ * rows (everyone sees public channels); going private rebuilds them from the
+ * selected ids plus the creator and the editor.
+ */
+export async function updateInternalChannel(
+  input: UpdateInternalChannelInput,
+): Promise<InternalChannel> {
+  const ctx = await requireRole('supervisor');
+  const name = input.name.trim();
+  if (!name) throw new Error('Dê um nome ao canal.');
+
+  const existing = firstOrNull(
+    await db
+      .select({ id: internalChannels.id, createdBy: internalChannels.createdBy })
+      .from(internalChannels)
+      .where(
+        and(
+          eq(internalChannels.id, input.channelId),
+          eq(internalChannels.accountId, ctx.accountId),
+        ),
+      )
+      .limit(1),
+  );
+  if (!existing) throw new Error('Canal não encontrado.');
+
+  const updated = firstOrNull(
+    await db
+      .update(internalChannels)
+      .set({
+        name,
+        description: input.description?.trim() || null,
+        isPrivate: !!input.isPrivate,
+      })
+      .where(
+        and(
+          eq(internalChannels.id, input.channelId),
+          eq(internalChannels.accountId, ctx.accountId),
+        ),
+      )
+      .returning({
+        id: internalChannels.id,
+        name: internalChannels.name,
+        description: internalChannels.description,
+        is_private: internalChannels.isPrivate,
+        created_at: internalChannels.createdAt,
+      }),
+  );
+  if (!updated) throw new Error('Não foi possível atualizar o canal.');
+
+  // Rebuild membership to match the new privacy state.
+  await db
+    .delete(internalChannelMembers)
+    .where(eq(internalChannelMembers.channelId, input.channelId));
+  if (input.isPrivate) {
+    const memberRows = await db
+      .select({ id: user.id })
+      .from(member)
+      .innerJoin(user, eq(member.userId, user.id))
+      .where(eq(member.organizationId, ctx.accountId));
+    const validIds = new Set(memberRows.map((r) => r.id));
+    const ids = new Set<string>();
+    if (existing.createdBy) ids.add(existing.createdBy);
+    ids.add(ctx.userId);
+    for (const id of input.memberIds ?? []) if (validIds.has(id)) ids.add(id);
+    if (ids.size > 0) {
+      await db
+        .insert(internalChannelMembers)
+        .values([...ids].map((userId) => ({ channelId: input.channelId, userId })))
+        .onConflictDoNothing();
+    }
+  }
+  return updated as InternalChannel;
+}
+
+/** Delete a channel and everything in it (members/messages/reads cascade via
+ *  FK). Supervisor+. */
+export async function deleteInternalChannel(channelId: string): Promise<void> {
+  const ctx = await requireRole('supervisor');
+  await db
+    .delete(internalChannels)
+    .where(
+      and(
+        eq(internalChannels.id, channelId),
+        eq(internalChannels.accountId, ctx.accountId),
+      ),
+    );
+}
+
+/** Current member ids of a (private) channel — for the edit dialog. */
+export async function listInternalChannelMemberIds(
+  channelId: string,
+): Promise<string[]> {
+  const ctx = await getCurrentAccount();
+  // Scope by account via the channel row.
+  const ch = firstOrNull(
+    await db
+      .select({ id: internalChannels.id })
+      .from(internalChannels)
+      .where(
+        and(
+          eq(internalChannels.id, channelId),
+          eq(internalChannels.accountId, ctx.accountId),
+        ),
+      )
+      .limit(1),
+  );
+  if (!ch) return [];
+  const rows = await db
+    .select({ userId: internalChannelMembers.userId })
+    .from(internalChannelMembers)
+    .where(eq(internalChannelMembers.channelId, channelId));
+  return rows.map((r) => r.userId);
 }
 
 /** Messages in a channel (oldest first), access-checked. */

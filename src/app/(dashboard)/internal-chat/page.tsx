@@ -9,6 +9,9 @@ import {
   Send,
   Loader2,
   MessagesSquare,
+  MoreVertical,
+  Pencil,
+  Trash2,
 } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
@@ -22,6 +25,12 @@ import {
 } from "@/components/ui/avatar";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { CreateChannelDialog } from "@/components/internal-chat/create-channel-dialog";
+import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
 import { refreshInternalUnread } from "@/hooks/use-internal-unread";
 import {
   listInternalChannels,
@@ -29,6 +38,7 @@ import {
   sendInternalMessage,
   markInternalChannelRead,
   listTeamMembers,
+  deleteInternalChannel,
 } from "./actions";
 import type {
   InternalChannel,
@@ -54,6 +64,7 @@ export default function InternalChatPage() {
   const [text, setText] = useState("");
   const [sending, setSending] = useState(false);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editChannel, setEditChannel] = useState<InternalChannel | null>(null);
   const [members, setMembers] = useState<MentionMember[]>([]);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
@@ -159,6 +170,28 @@ export default function InternalChatPage() {
 
   const active = channels.find((c) => c.id === activeId) ?? null;
 
+  const handleDeleteChannel = useCallback(
+    async (ch: InternalChannel) => {
+      if (
+        !confirm(
+          `Excluir o canal "${ch.name}"? Todas as mensagens dele serão apagadas. Isso não pode ser desfeito.`,
+        )
+      )
+        return;
+      try {
+        await deleteInternalChannel(ch.id);
+        toast.success(`Canal "${ch.name}" excluído.`);
+        setChannels((cs) => cs.filter((c) => c.id !== ch.id));
+        setActiveId((cur) => (cur === ch.id ? null : cur));
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Não foi possível excluir o canal.",
+        );
+      }
+    },
+    [],
+  );
+
   const send = async () => {
     const body = text.trim();
     if (!body || !activeId || sending) return;
@@ -263,7 +296,7 @@ export default function InternalChatPage() {
               ) : (
                 <Hash className="h-4 w-4 text-muted-foreground" />
               )}
-              <div className="min-w-0">
+              <div className="min-w-0 flex-1">
                 <h2 className="truncate text-sm font-semibold text-foreground">
                   {active.name}
                 </h2>
@@ -273,6 +306,30 @@ export default function InternalChatPage() {
                   </p>
                 )}
               </div>
+              {canEditSettings && (
+                <DropdownMenu>
+                  <DropdownMenuTrigger
+                    title="Gerenciar canal"
+                    aria-label="Gerenciar canal"
+                    className="flex h-8 w-8 shrink-0 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <MoreVertical className="h-4 w-4" />
+                  </DropdownMenuTrigger>
+                  <DropdownMenuContent align="end" className="border-border bg-popover">
+                    <DropdownMenuItem onClick={() => setEditChannel(active)}>
+                      <Pencil className="mr-2 h-4 w-4" />
+                      Editar canal
+                    </DropdownMenuItem>
+                    <DropdownMenuItem
+                      onClick={() => void handleDeleteChannel(active)}
+                      className="text-destructive focus:text-destructive"
+                    >
+                      <Trash2 className="mr-2 h-4 w-4" />
+                      Excluir canal
+                    </DropdownMenuItem>
+                  </DropdownMenuContent>
+                </DropdownMenu>
+              )}
             </header>
 
             <div ref={scrollRef} className="flex-1 space-y-3 overflow-y-auto p-4">
@@ -387,6 +444,21 @@ export default function InternalChatPage() {
         onCreated={(ch) => {
           setChannels((cs) => [...cs, ch].sort((a, b) => a.name.localeCompare(b.name)));
           setActiveId(ch.id);
+        }}
+      />
+
+      <CreateChannelDialog
+        open={!!editChannel}
+        onOpenChange={(o) => !o && setEditChannel(null)}
+        channel={editChannel}
+        onCreated={() => {}}
+        onUpdated={(ch) => {
+          setChannels((cs) =>
+            cs
+              .map((c) => (c.id === ch.id ? { ...c, ...ch } : c))
+              .sort((a, b) => a.name.localeCompare(b.name)),
+          );
+          setEditChannel(null);
         }}
       />
     </div>

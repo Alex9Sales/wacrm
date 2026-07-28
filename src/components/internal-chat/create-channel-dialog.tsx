@@ -26,7 +26,9 @@ import {
 import { cn } from "@/lib/utils";
 import {
   createInternalChannel,
+  updateInternalChannel,
   listTeamMembers,
+  listInternalChannelMemberIds,
 } from "@/app/(dashboard)/internal-chat/actions";
 import type {
   InternalChannel,
@@ -37,13 +39,19 @@ interface CreateChannelDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: (channel: InternalChannel) => void;
+  /** When set, the dialog edits this channel instead of creating a new one. */
+  channel?: InternalChannel | null;
+  onUpdated?: (channel: InternalChannel) => void;
 }
 
 export function CreateChannelDialog({
   open,
   onOpenChange,
   onCreated,
+  channel,
+  onUpdated,
 }: CreateChannelDialogProps) {
+  const isEdit = !!channel;
   const [name, setName] = useState("");
   const [description, setDescription] = useState("");
   const [isPrivate, setIsPrivate] = useState(false);
@@ -52,19 +60,25 @@ export function CreateChannelDialog({
   const [selected, setSelected] = useState<Set<string>>(new Set());
   const [saving, setSaving] = useState(false);
 
-  // Reset each time it opens; lazy-load the team roster for the picker.
+  // Reset (or prefill in edit mode) each time it opens; lazy-load the team
+  // roster for the picker and, when editing a private channel, its members.
   useEffect(() => {
     if (!open) return;
-    setName("");
-    setDescription("");
-    setIsPrivate(false);
+    setName(channel?.name ?? "");
+    setDescription(channel?.description ?? "");
+    setIsPrivate(!!channel?.is_private);
     setSelected(new Set());
     setLoadingMembers(true);
     listTeamMembers()
       .then(setMembers)
       .catch(() => setMembers([]))
       .finally(() => setLoadingMembers(false));
-  }, [open]);
+    if (channel?.id && channel.is_private) {
+      listInternalChannelMemberIds(channel.id)
+        .then((ids) => setSelected(new Set(ids)))
+        .catch(() => {});
+    }
+  }, [open, channel]);
 
   const toggleMember = (id: string) =>
     setSelected((prev) => {
@@ -81,17 +95,33 @@ export function CreateChannelDialog({
     }
     setSaving(true);
     try {
-      const channel = await createInternalChannel({
-        name,
-        description,
-        isPrivate,
-        memberIds: [...selected],
-      });
-      toast.success(`Canal "${channel.name}" criado.`);
-      onCreated(channel);
+      if (isEdit && channel) {
+        const updated = await updateInternalChannel({
+          channelId: channel.id,
+          name,
+          description,
+          isPrivate,
+          memberIds: [...selected],
+        });
+        toast.success(`Canal "${updated.name}" atualizado.`);
+        onUpdated?.(updated);
+      } else {
+        const created = await createInternalChannel({
+          name,
+          description,
+          isPrivate,
+          memberIds: [...selected],
+        });
+        toast.success(`Canal "${created.name}" criado.`);
+        onCreated(created);
+      }
       onOpenChange(false);
     } catch (err) {
-      toast.error(err instanceof Error ? err.message : "Não foi possível criar o canal.");
+      toast.error(
+        err instanceof Error
+          ? err.message
+          : `Não foi possível ${isEdit ? "atualizar" : "criar"} o canal.`,
+      );
     } finally {
       setSaving(false);
     }
@@ -101,7 +131,7 @@ export function CreateChannelDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="flex max-h-[88svh] flex-col sm:max-w-md">
         <DialogHeader className="shrink-0">
-          <DialogTitle>Novo canal</DialogTitle>
+          <DialogTitle>{isEdit ? "Editar canal" : "Novo canal"}</DialogTitle>
           <DialogDescription>
             Um espaço para a equipe conversar. Canais públicos aparecem para
             todos; privados, só para quem você escolher.
@@ -214,7 +244,7 @@ export function CreateChannelDialog({
           </Button>
           <Button onClick={submit} disabled={saving || !name.trim()}>
             {saving && <Loader2 className={cn("mr-2 h-4 w-4 animate-spin")} />}
-            Criar canal
+            {isEdit ? "Salvar" : "Criar canal"}
           </Button>
         </DialogFooter>
       </DialogContent>
