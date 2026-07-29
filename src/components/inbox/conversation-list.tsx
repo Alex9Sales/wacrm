@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { listConversations, listTags, listSectors } from "@/app/(dashboard)/inbox/actions";
+import { listConversations, listTags, listSectors, listProfiles } from "@/app/(dashboard)/inbox/actions";
 import { useAuth } from "@/hooks/use-auth";
 import { matchesContactFilters } from "@/lib/inbox/conversations";
 import { formatConversationPreview } from "@/lib/inbox/preview";
@@ -106,6 +106,8 @@ export function ConversationList({
   const [assignedToMe, setAssignedToMe] = useState(false);
   const [sectors, setSectors] = useState<{ id: string; name: string; color: string }[]>([]);
   const [selectedSectorId, setSelectedSectorId] = useState<string | null>(null);
+  // Assigned-agent names for the per-card badge (user_id → name).
+  const [agentNameById, setAgentNameById] = useState<Map<string, string>>(new Map());
 
   // Keep the latest callback in a ref so the fetch effect below can
   // have a stable, empty-dep identity. Previously the fetch useCallback
@@ -175,6 +177,27 @@ export function ConversationList({
         if (!cancelled) setSectors(data);
       } catch (error) {
         if (!cancelled) console.error("Failed to fetch sectors:", error);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Team member names for the assigned-agent badge on each card.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const profiles = await listProfiles();
+        if (cancelled) return;
+        const m = new Map<string, string>();
+        for (const p of profiles) {
+          if (p.user_id && p.full_name) m.set(p.user_id, p.full_name);
+        }
+        setAgentNameById(m);
+      } catch (error) {
+        if (!cancelled) console.error("Failed to fetch profiles:", error);
       }
     })();
     return () => {
@@ -742,6 +765,11 @@ export function ConversationList({
                 conversation={conv}
                 isActive={conv.id === activeConversationId}
                 onSelect={handleSelect}
+                agentName={
+                  conv.assigned_agent_id
+                    ? agentNameById.get(conv.assigned_agent_id) ?? null
+                    : null
+                }
               />
             ))}
           </div>
@@ -767,12 +795,15 @@ interface ConversationItemProps {
   conversation: Conversation;
   isActive: boolean;
   onSelect: (conversation: Conversation) => void;
+  /** Name of the assigned agent (resolved from assigned_agent_id), or null. */
+  agentName?: string | null;
 }
 
 function ConversationItem({
   conversation,
   isActive,
   onSelect,
+  agentName,
 }: ConversationItemProps) {
   const contact = conversation.contact;
   const displayName = contact?.name || contact?.phone || "Desconhecido";
@@ -817,6 +848,15 @@ function ConversationItem({
             {formatConversationPreview(conversation.last_message_text)}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
+            {agentName && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary"
+                title={`Atribuída a ${agentName}`}
+              >
+                <UserCheck className="h-2.5 w-2.5" />
+                <span className="max-w-16 truncate">{agentName}</span>
+              </span>
+            )}
             {contact?.is_group && (
               <span
                 className="inline-flex items-center rounded-full bg-muted px-1 py-0.5 text-muted-foreground"

@@ -127,9 +127,13 @@ curl https://your-crm.example.com/api/v1/me \
 
 ### `POST /api/v1/messages`
 
-Send a WhatsApp message to a phone number. Scope: `messages:send`. You
-pass an **E.164 number**, not an internal id — the endpoint
-finds-or-creates the contact + conversation, then sends.
+Send a WhatsApp message. Scope: `messages:send`. Target it in one of two ways:
+
+- **`to`** — an **E.164 number**; the endpoint finds-or-creates the contact +
+  1:1 conversation, then sends.
+- **`conversation_id`** — send straight to an existing conversation. This is
+  the **only way to reply in a group** (groups have no phone number). Read the
+  group's `conversation_id` from `GET /api/v1/conversations`.
 
 ```bash
 curl -X POST https://your-crm.example.com/api/v1/messages \

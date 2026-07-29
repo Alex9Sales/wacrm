@@ -32,6 +32,10 @@
 //               "contact_id", "contact_created" } }
 // ============================================================
 
+import { and, eq } from 'drizzle-orm';
+
+import { db, conversations } from '@/db';
+import { firstOrNull } from '@/db/helpers';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation';
@@ -53,9 +57,15 @@ export async function POST(request: Request) {
       return fail('bad_request', 'Request body must be a JSON object', 400);
     }
 
+    // Two ways to target a send:
+    //   • `to`  — an E.164 phone (finds-or-creates the 1:1 conversation), OR
+    //   • `conversation_id` — send straight to an existing conversation. This
+    //     is the ONLY way to reply in a GROUP (groups have no phone number).
     const to = typeof body.to === 'string' ? body.to.trim() : '';
-    if (!to) {
-      return fail('bad_request', "'to' is required", 400);
+    const conversationIdIn =
+      typeof body.conversation_id === 'string' ? body.conversation_id.trim() : '';
+    if (!to && !conversationIdIn) {
+      return fail('bad_request', "'to' or 'conversation_id' is required", 400);
     }
 
     const type = typeof body.type === 'string' ? body.type : 'text';
@@ -96,17 +106,44 @@ export async function POST(request: Request) {
     // channel is used (loadDefaultChannel).
     const channelId =
       typeof body.channel_id === 'string' ? body.channel_id : null;
-    const resolved = await resolveConversationByPhone(
-      ctx.accountId,
-      to,
-      typeof body.name === 'string' ? body.name : null,
-      channelId
-    );
+
+    // Resolve the target conversation. `conversation_id` sends straight to an
+    // existing conversation (the group path); otherwise find-or-create by phone.
+    let targetConversationId: string;
+    let contactId: string | null = null;
+    let contactCreated = false;
+    if (conversationIdIn) {
+      const conv = firstOrNull(
+        await db
+          .select({ id: conversations.id, contactId: conversations.contactId })
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.id, conversationIdIn),
+              eq(conversations.accountId, ctx.accountId),
+            ),
+          )
+          .limit(1),
+      );
+      if (!conv) return fail('not_found', 'conversation_id not found', 404);
+      targetConversationId = conv.id;
+      contactId = conv.contactId ?? null;
+    } else {
+      const resolved = await resolveConversationByPhone(
+        ctx.accountId,
+        to,
+        typeof body.name === 'string' ? body.name : null,
+        channelId,
+      );
+      targetConversationId = resolved.conversationId;
+      contactId = resolved.contactId;
+      contactCreated = resolved.contactCreated;
+    }
 
     const result = await sendMessageToConversation(
       ctx.accountId,
       {
-        conversationId: resolved.conversationId,
+        conversationId: targetConversationId,
         messageType: type,
         contentText: typeof body.text === 'string' ? body.text : null,
         mediaUrl: typeof body.media_url === 'string' ? body.media_url : null,
@@ -127,9 +164,9 @@ export async function POST(request: Request) {
       {
         message_id: result.messageId,
         whatsapp_message_id: result.whatsappMessageId,
-        conversation_id: resolved.conversationId,
-        contact_id: resolved.contactId,
-        contact_created: resolved.contactCreated,
+        conversation_id: targetConversationId,
+        contact_id: contactId,
+        contact_created: contactCreated,
       },
       201
     );
