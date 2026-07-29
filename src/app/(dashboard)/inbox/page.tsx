@@ -404,6 +404,36 @@ export default function InboxPage() {
     [activeConversation?.id, router, searchParams]
   );
 
+  // A conversation just started from the "Nova conversa" dialog. The thread is
+  // brand-new (not in the loaded list), so relying on the ?c= deep-link effect
+  // alone left it invisible until a manual refresh. Here we do it explicitly:
+  // refetch the list (so it's present), hydrate the thread, open it, and set
+  // the URL — claiming the deep-link ref so that effect stays a no-op.
+  const handleConversationStarted = useCallback(
+    async (conversationId: string) => {
+      autoSelectedForDeepLinkRef.current = conversationId;
+      setResyncToken((n) => n + 1);
+      const fetched = await getConversationWithContact(conversationId).catch(
+        () => null,
+      );
+      if (!fetched) return;
+      setConversations((prev) =>
+        prev.some((c) => c.id === fetched.id)
+          ? prev.map((c) =>
+              c.id === fetched.id ? { ...c, unread_count: 0 } : c,
+            )
+          : [{ ...fetched, unread_count: 0 }, ...prev],
+      );
+      setActiveConversation(fetched);
+      setActiveContact(fetched.contact ?? null);
+      setMessages([]);
+      const params = new URLSearchParams(searchParams.toString());
+      params.set("c", conversationId);
+      router.replace(`/inbox?${params.toString()}`, { scroll: false });
+    },
+    [router, searchParams],
+  );
+
   // Mobile "back" — deselect the conversation so the list pane comes
   // back. Also clears the ?c= param so a refresh lands on the list
   // instead of re-opening the thread the user just backed out of.
@@ -567,6 +597,7 @@ export default function InboxPage() {
           <ConversationList
             activeConversationId={activeConversation?.id ?? null}
             onSelect={handleSelectConversation}
+            onConversationStarted={handleConversationStarted}
             conversations={conversations}
             onConversationsLoaded={handleConversationsLoaded}
             resyncToken={resyncToken}

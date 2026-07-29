@@ -31,6 +31,9 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 interface ConversationListProps {
   activeConversationId: string | null;
   onSelect: (conversation: Conversation) => void;
+  /** Called with the new conversation id after "Nova conversa" starts one, so
+   *  the parent can hydrate + open it immediately (no manual refresh). */
+  onConversationStarted?: (conversationId: string) => void;
   conversations: Conversation[];
   onConversationsLoaded: (conversations: Conversation[]) => void;
   /**
@@ -72,6 +75,7 @@ const SEGMENT_OPTIONS: { label: string; value: SegmentFilter }[] = [
 export function ConversationList({
   activeConversationId,
   onSelect,
+  onConversationStarted,
   conversations,
   onConversationsLoaded,
   resyncToken = 0,
@@ -748,9 +752,11 @@ export function ConversationList({
         open={newConvOpen}
         onOpenChange={setNewConvOpen}
         onStarted={(conversationId) => {
-          // Deep-link to the (possibly brand-new) thread; the inbox's ?c=
-          // handler hydrates + opens it even before the list refetches.
-          router.push(`/inbox?c=${conversationId}`);
+          // Hand off to the parent, which refetches the list + hydrates + opens
+          // the (brand-new) thread immediately. Falls back to a deep-link push
+          // if no handler was provided.
+          if (onConversationStarted) onConversationStarted(conversationId);
+          else router.push(`/inbox?c=${conversationId}`);
         }}
       />
     </div>
