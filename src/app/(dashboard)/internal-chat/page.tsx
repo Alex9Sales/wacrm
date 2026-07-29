@@ -12,6 +12,10 @@ import {
   MoreVertical,
   Pencil,
   Trash2,
+  Paperclip,
+  FileText,
+  Download,
+  UploadCloud,
 } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
@@ -46,6 +50,26 @@ import type {
 } from "@/lib/internal-chat/types";
 import { MentionComposer, MentionText } from "@/components/inbox/mention-composer";
 import type { MentionMember } from "@/lib/inbox/mentions";
+import { uploadAccountMedia } from "@/lib/storage/upload-media";
+import { CHAT_MEDIA_BUCKET } from "@/components/inbox/message-composer";
+import type { InternalMediaKind } from "@/lib/internal-chat/types";
+
+/** Map a file's MIME type to the internal media kind (image/video/audio/doc). */
+function internalKindFromFile(file: File): InternalMediaKind {
+  const t = file.type.toLowerCase();
+  if (t.startsWith("image/")) return "image";
+  if (t.startsWith("video/")) return "video";
+  if (t.startsWith("audio/")) return "audio";
+  return "document";
+}
+
+/** Per-kind ceilings (bytes) — mirror the WhatsApp composer caps. */
+const INTERNAL_MEDIA_MAX: Record<InternalMediaKind, number> = {
+  image: 5 * 1024 * 1024,
+  video: 16 * 1024 * 1024,
+  audio: 16 * 1024 * 1024,
+  document: 100 * 1024 * 1024,
+};
 import { setActiveInternalChannel } from "@/lib/internal-chat/active-channel";
 
 function timeOf(iso: string): string {
@@ -66,8 +90,12 @@ export default function InternalChatPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [editChannel, setEditChannel] = useState<InternalChannel | null>(null);
   const [members, setMembers] = useState<MentionMember[]>([]);
+  const [uploading, setUploading] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const composerRef = useRef<HTMLTextAreaElement>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
+  const dragDepth = useRef(0);
 
   const insertEmoji = useCallback((emoji: string) => {
     const el = composerRef.current;
@@ -208,6 +236,98 @@ export default function InternalChatPage() {
     }
   };
 
+  // Upload an attachment (from the paperclip, paste, or drag-drop) and post it
+  // as a message. Caption-less — the file IS the message.
+  const sendMedia = useCallback(
+    async (file: File) => {
+      if (!activeId || uploading) return;
+      const kind = internalKindFromFile(file);
+      if (file.size > INTERNAL_MEDIA_MAX[kind]) {
+        toast.error(
+          `Arquivo muito grande (${(file.size / 1024 / 1024).toFixed(1)} MB) — limite ${Math.round(
+            INTERNAL_MEDIA_MAX[kind] / 1024 / 1024,
+          )} MB para ${kind}.`,
+        );
+        return;
+      }
+      setUploading(true);
+      try {
+        const { publicUrl } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
+        const named =
+          file.name && file.name.includes(".")
+            ? file.name
+            : `${kind}-${Date.now()}`;
+        const msg = await sendInternalMessage(activeId, "", {
+          url: publicUrl,
+          type: kind,
+          name: named,
+        });
+        setMessages((m) => [...m, msg]);
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Falha ao enviar o anexo.",
+        );
+      } finally {
+        setUploading(false);
+      }
+    },
+    [activeId, uploading],
+  );
+
+  // Paste an image straight into the chat (Win+Shift+S → Ctrl+V, like WhatsApp).
+  const handlePaste = useCallback(
+    (e: React.ClipboardEvent) => {
+      const item = Array.from(e.clipboardData?.items ?? []).find(
+        (it) => it.kind === "file" && it.type.startsWith("image/"),
+      );
+      if (!item) return;
+      const file = item.getAsFile();
+      if (!file) return;
+      e.preventDefault();
+      const ext = file.type.split("/")[1] || "png";
+      const named =
+        file.name && file.name.includes(".")
+          ? file
+          : new File([file], `captura-${Date.now()}.${ext}`, { type: file.type });
+      void sendMedia(named);
+    },
+    [sendMedia],
+  );
+
+  // Drag a file from outside INTO the chat area.
+  const dragHasFiles = (e: React.DragEvent) =>
+    Array.from(e.dataTransfer?.types ?? []).includes("Files");
+  const onDragEnter = useCallback((e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    dragDepth.current += 1;
+    setDragOver(true);
+  }, []);
+  const onDragOver = useCallback((e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    e.preventDefault();
+    e.dataTransfer.dropEffect = "copy";
+  }, []);
+  const onDragLeave = useCallback((e: React.DragEvent) => {
+    if (!dragHasFiles(e)) return;
+    dragDepth.current -= 1;
+    if (dragDepth.current <= 0) {
+      dragDepth.current = 0;
+      setDragOver(false);
+    }
+  }, []);
+  const onDrop = useCallback(
+    (e: React.DragEvent) => {
+      dragDepth.current = 0;
+      setDragOver(false);
+      if (!dragHasFiles(e)) return;
+      e.preventDefault();
+      const file = e.dataTransfer.files?.[0];
+      if (file) void sendMedia(file);
+    },
+    [sendMedia],
+  );
+
   return (
     <div className="flex h-[calc(100dvh-7rem)] gap-4 overflow-hidden">
       {/* Channel list */}
@@ -287,7 +407,21 @@ export default function InternalChatPage() {
       </aside>
 
       {/* Thread */}
-      <section className="flex min-w-0 flex-1 flex-col rounded-xl border border-border bg-card">
+      <section
+        className="relative flex min-w-0 flex-1 flex-col rounded-xl border border-border bg-card"
+        onDragEnter={active ? onDragEnter : undefined}
+        onDragOver={active ? onDragOver : undefined}
+        onDragLeave={active ? onDragLeave : undefined}
+        onDrop={active ? onDrop : undefined}
+      >
+        {active && dragOver && (
+          <div className="pointer-events-none absolute inset-2 z-30 flex flex-col items-center justify-center gap-2 rounded-2xl border-2 border-dashed border-primary bg-primary/10 backdrop-blur-sm">
+            <UploadCloud className="h-10 w-10 text-primary" />
+            <p className="text-base font-medium text-primary">
+              Solte para enviar no #{active.name}
+            </p>
+          </div>
+        )}
         {active ? (
           <>
             <header className="flex shrink-0 items-center gap-2 border-b border-border px-4 py-3">
@@ -377,9 +511,54 @@ export default function InternalChatPage() {
                           {m.sender_name}
                         </p>
                       )}
-                      <p className="whitespace-pre-wrap break-words text-sm">
-                        <MentionText text={m.content} members={members} />
-                      </p>
+                      {/* Attachment (image = draggable out to the desktop). */}
+                      {m.media_url && m.media_type === "image" && (
+                        <a
+                          href={m.media_url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          className="block"
+                        >
+                          <img
+                            src={m.media_url}
+                            alt={m.media_name ?? "imagem"}
+                            className="max-h-64 max-w-full rounded-lg"
+                          />
+                        </a>
+                      )}
+                      {m.media_url && m.media_type === "video" && (
+                        <video
+                          src={m.media_url}
+                          controls
+                          className="max-h-64 max-w-full rounded-lg"
+                        />
+                      )}
+                      {m.media_url && m.media_type === "audio" && (
+                        <audio src={m.media_url} controls className="max-w-full" />
+                      )}
+                      {m.media_url && m.media_type === "document" && (
+                        <a
+                          href={m.media_url}
+                          target="_blank"
+                          rel="noreferrer noopener"
+                          download={m.media_name ?? undefined}
+                          className={cn(
+                            "flex items-center gap-2 rounded-lg px-2 py-1.5 text-sm underline-offset-2 hover:underline",
+                            m.is_mine ? "bg-primary-foreground/10" : "bg-background/60",
+                          )}
+                        >
+                          <FileText className="h-4 w-4 shrink-0" />
+                          <span className="max-w-48 truncate">
+                            {m.media_name ?? "documento"}
+                          </span>
+                          <Download className="h-3.5 w-3.5 shrink-0 opacity-70" />
+                        </a>
+                      )}
+                      {m.content && (
+                        <p className="whitespace-pre-wrap break-words text-sm">
+                          <MentionText text={m.content} members={members} />
+                        </p>
+                      )}
                       <p
                         className={cn(
                           "mt-0.5 text-right text-[10px]",
@@ -396,9 +575,34 @@ export default function InternalChatPage() {
               )}
             </div>
 
-            <div className="shrink-0 border-t border-border p-3">
+            <div className="shrink-0 border-t border-border p-3" onPaste={handlePaste}>
               <div className="flex items-end gap-2">
                 <EmojiPicker onPick={insertEmoji} />
+                <input
+                  ref={fileInputRef}
+                  type="file"
+                  className="hidden"
+                  accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void sendMedia(f);
+                    e.target.value = "";
+                  }}
+                />
+                <button
+                  type="button"
+                  onClick={() => fileInputRef.current?.click()}
+                  disabled={uploading}
+                  title="Anexar imagem, áudio ou documento"
+                  aria-label="Anexar arquivo"
+                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+                >
+                  {uploading ? (
+                    <Loader2 className="h-4 w-4 animate-spin" />
+                  ) : (
+                    <Paperclip className="h-4 w-4" />
+                  )}
+                </button>
                 <MentionComposer
                   value={text}
                   onChange={setText}

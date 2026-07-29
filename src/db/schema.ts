@@ -1385,6 +1385,10 @@ export const internalMessages = pgTable("internal_messages", {
 	channelId: uuid("channel_id").notNull(),
 	senderId: uuid("sender_id").notNull(),
 	content: text().notNull(),
+	// Optional attachment (migration 0033). media_type: image|video|audio|document.
+	mediaUrl: text("media_url"),
+	mediaType: text("media_type"),
+	mediaName: text("media_name"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("idx_internal_messages_channel").using("btree", table.channelId.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast().op("timestamptz_ops")),

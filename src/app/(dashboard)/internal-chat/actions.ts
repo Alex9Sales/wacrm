@@ -403,6 +403,9 @@ export async function getInternalMessages(
       sender_name: user.name,
       sender_image: user.image,
       content: internalMessages.content,
+      media_url: internalMessages.mediaUrl,
+      media_type: internalMessages.mediaType,
+      media_name: internalMessages.mediaName,
       created_at: internalMessages.createdAt,
     })
     .from(internalMessages)
@@ -418,14 +421,25 @@ export async function getInternalMessages(
 
 /** Post a message to a channel, access-checked. Emits a realtime event so
  *  other members' open clients refetch. */
+export interface InternalMediaInput {
+  url: string;
+  type: 'image' | 'video' | 'audio' | 'document';
+  name?: string | null;
+}
+
 export async function sendInternalMessage(
   channelId: string,
   content: string,
+  media?: InternalMediaInput | null,
 ): Promise<InternalChatMessage> {
   const ctx = await getCurrentAccount();
   const text = content.trim();
-  if (!text) throw new Error('Escreva uma mensagem.');
+  // A message needs either text OR an attachment (media can go caption-less).
+  if (!text && !media) throw new Error('Escreva uma mensagem.');
   if (text.length > 4000) throw new Error('Mensagem muito longa.');
+  if (media && !/^https?:\/\//.test(media.url)) {
+    throw new Error('Anexo inválido.');
+  }
   if (!(await canAccessChannel(ctx.accountId, ctx.userId, channelId))) {
     throw new Error('Canal não encontrado.');
   }
@@ -433,12 +447,22 @@ export async function sendInternalMessage(
   const inserted = firstOrNull(
     await db
       .insert(internalMessages)
-      .values({ channelId, senderId: ctx.userId, content: text })
+      .values({
+        channelId,
+        senderId: ctx.userId,
+        content: text,
+        mediaUrl: media?.url ?? null,
+        mediaType: media?.type ?? null,
+        mediaName: media?.name?.trim() || null,
+      })
       .returning({
         id: internalMessages.id,
         channel_id: internalMessages.channelId,
         sender_id: internalMessages.senderId,
         content: internalMessages.content,
+        media_url: internalMessages.mediaUrl,
+        media_type: internalMessages.mediaType,
+        media_name: internalMessages.mediaName,
         created_at: internalMessages.createdAt,
       }),
   );

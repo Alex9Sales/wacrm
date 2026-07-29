@@ -10,6 +10,8 @@ export interface InternalChannel {
   unread?: boolean;
 }
 
+export type InternalMediaKind = "image" | "video" | "audio" | "document";
+
 export interface InternalChatMessage {
   id: string;
   channel_id: string;
@@ -17,6 +19,10 @@ export interface InternalChatMessage {
   sender_name: string;
   sender_image: string | null;
   content: string;
+  /** Optional attachment (migration 0033). */
+  media_url: string | null;
+  media_type: InternalMediaKind | null;
+  media_name: string | null;
   created_at: string;
   /** True when the current user is the sender (computed server-side). */
   is_mine: boolean;
