@@ -272,6 +272,20 @@ export async function setDefaultCurrency(currency: string): Promise<void> {
 // Atendimento — workspace-wide inbox preferences (service-panel.tsx)
 // ------------------------------------------------------------
 
+/** Master switch: does the CRM ring/receive WhatsApp calls? Any member reads
+ *  it (the call modal gates on it); only supervisor+ can change it. */
+export async function getCrmCallingEnabled(): Promise<boolean> {
+  const ctx = await getCurrentAccount()
+  const settings = await getAccountSettings(ctx.accountId)
+  return settings.crmCallingEnabled
+}
+
+/** Toggle CRM call receiving (admin/supervisor only). Off = no browser rings. */
+export async function setCrmCallingEnabled(enabled: boolean): Promise<void> {
+  const ctx = await requireRole('supervisor')
+  await updateAccountSettings(ctx.accountId, { crmCallingEnabled: enabled })
+}
+
 /** Whether outbound agent messages are prefixed with the sender's name. */
 export async function getAgentSignatureEnabled(): Promise<boolean> {
   const ctx = await getCurrentAccount()

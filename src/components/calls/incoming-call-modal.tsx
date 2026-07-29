@@ -33,7 +33,8 @@ import {
 import { toast } from 'sonner';
 
 import { useServerEvents } from '@/hooks/use-server-events';
-import { getNotificationPrefs } from '@/lib/notifications/prefs';
+import { getCrmCallingEnabled } from '@/components/settings/actions';
+import { CRM_CALLING_CHANGED_EVENT } from '@/lib/notifications/prefs';
 import { floatToPcm, pcmToFloat } from '@/lib/calls/pcm';
 import { formatCallDuration } from '@/lib/inbox/call-log';
 import { routeCallStatus, type CallProvider } from './call-routing';
@@ -155,6 +156,27 @@ export function IncomingCallModal() {
   // read the current legs without being re-created on every state change.
   const legsRef = useRef<Leg[]>([]);
   legsRef.current = legs;
+
+  // Account master switch "Tocar ligações no CRM" (Configurações → Notificações,
+  // admin/supervisor). When off, inbound calls never ring. Held in a ref so the
+  // SSE handler reads the current value without re-subscribing. Fetched once and
+  // refetched when the toggle changes (same-tab event).
+  const crmCallingRef = useRef(true);
+  useEffect(() => {
+    let cancelled = false;
+    const load = () =>
+      getCrmCallingEnabled()
+        .then((v) => {
+          if (!cancelled) crmCallingRef.current = v;
+        })
+        .catch(() => {});
+    void load();
+    window.addEventListener(CRM_CALLING_CHANGED_EVENT, load);
+    return () => {
+      cancelled = true;
+      window.removeEventListener(CRM_CALLING_CHANGED_EVENT, load);
+    };
+  }, []);
 
   /** Media for a live leg, creating it on first use. Never call this for a leg
    *  that closeLeg already dropped — see `mediaOf` for the read-only path. */
@@ -928,11 +950,11 @@ export function IncomingCallModal() {
     }) => {
       const eventCallId = typeof e.callId === 'string' ? e.callId : '';
       if (e.type === 'call_incoming') {
-        // Opt-out (per browser, Configurações → Notificações): teammates who
-        // answer on the phone itself, not the CRM, can silence inbound rings
-        // here entirely. Outbound dialing (fluxia:outbound-call) is a
-        // separate path and is never affected by this flag.
-        if (!getNotificationPrefs().callRingEnabled) return;
+        // Account master switch (Configurações → Notificações, admin/supervisor):
+        // when a team answers on the phone itself, the admin turns CRM calling
+        // off and no inbound call rings any browser. Outbound dialing
+        // (fluxia:outbound-call) is a separate path, unaffected by this flag.
+        if (!crmCallingRef.current) return;
         // Dedup: waha/gows can redeliver call.received for one call.
         if (!eventCallId) return;
         if (isDuplicateIncoming(legsRef.current, eventCallId)) return;

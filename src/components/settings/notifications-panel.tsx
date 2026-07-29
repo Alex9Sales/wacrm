@@ -2,10 +2,12 @@
 
 import { useEffect, useState } from "react";
 import { Bell, Phone, Play, Volume2 } from "lucide-react";
+import { toast } from "sonner";
 
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/use-auth";
 import { SettingsPanelHead } from "./settings-panel-head";
 import {
   NOTIFICATION_SOUNDS,
@@ -14,24 +16,53 @@ import {
 import {
   getNotificationPrefs,
   setNotificationPrefs,
+  CRM_CALLING_CHANGED_EVENT,
   type NotificationPrefs,
 } from "@/lib/notifications/prefs";
+import { getCrmCallingEnabled, setCrmCallingEnabled } from "./actions";
 
 /**
- * Notificações — per-device alert preferences (sound + pop-up). These live in
- * localStorage (they control how THIS browser alerts), so there's no server
- * round-trip. The global listener reads the same prefs live.
+ * Notificações — per-device alert preferences (sound + pop-up), plus the
+ * account-level "Tocar ligações no CRM" master switch (admin/supervisor only,
+ * stored server-side so it applies to every browser).
  */
 export function NotificationsPanel() {
+  // canManageMembers = admin/owner; but call control is supervisor+, so we
+  // gate on the same predicate the server uses (hasMinRole 'supervisor').
+  const { canManageMembers } = useAuth();
   const [prefs, setPrefs] = useState<NotificationPrefs | null>(null);
+  const [crmCalling, setCrmCalling] = useState<boolean | null>(null);
+  const [savingCall, setSavingCall] = useState(false);
 
   useEffect(() => {
     setPrefs(getNotificationPrefs());
+    getCrmCallingEnabled()
+      .then(setCrmCalling)
+      .catch(() => setCrmCalling(true));
   }, []);
 
   const update = (patch: Partial<NotificationPrefs>) => {
     const next = setNotificationPrefs(patch);
     setPrefs(next);
+  };
+
+  const toggleCrmCalling = async (enabled: boolean) => {
+    setSavingCall(true);
+    setCrmCalling(enabled); // optimistic
+    try {
+      await setCrmCallingEnabled(enabled);
+      window.dispatchEvent(new CustomEvent(CRM_CALLING_CHANGED_EVENT));
+      toast.success(
+        enabled ? "Ligações no CRM ativadas." : "Ligações no CRM desativadas.",
+      );
+    } catch (err) {
+      setCrmCalling(!enabled); // revert
+      toast.error(
+        err instanceof Error ? err.message : "Não foi possível salvar.",
+      );
+    } finally {
+      setSavingCall(false);
+    }
   };
 
   if (!prefs) return null;
@@ -63,25 +94,29 @@ export function NotificationsPanel() {
           />
         </div>
 
-        {/* Calls */}
-        <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card p-4">
-          <div className="min-w-0">
-            <Label className="flex items-center gap-2 text-sm font-medium text-foreground">
-              <Phone className="h-4 w-4 text-primary" />
-              Tocar ligações no CRM
-            </Label>
-            <p className="mt-1 text-xs text-muted-foreground">
-              Desligue se você atende as ligações direto pelo celular/WhatsApp
-              — o CRM para de tocar ligações recebidas neste navegador (só
-              vale aqui, não afeta os outros atendentes).
-            </p>
+        {/* Calls — account-level, admin/supervisor only. */}
+        {canManageMembers && crmCalling !== null && (
+          <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card p-4">
+            <div className="min-w-0">
+              <Label className="flex items-center gap-2 text-sm font-medium text-foreground">
+                <Phone className="h-4 w-4 text-primary" />
+                Tocar ligações no CRM
+              </Label>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Desligue se a equipe atende as ligações direto pelo
+                celular/WhatsApp — o CRM para de tocar ligações recebidas{" "}
+                <span className="font-medium">para todos os atendentes</span>.
+                Só admin/supervisor controla isto.
+              </p>
+            </div>
+            <Switch
+              checked={crmCalling}
+              disabled={savingCall}
+              onCheckedChange={(v) => void toggleCrmCalling(v)}
+              aria-label="Tocar ligações no CRM"
+            />
           </div>
-          <Switch
-            checked={prefs.callRingEnabled}
-            onCheckedChange={(v) => update({ callRingEnabled: v })}
-            aria-label="Tocar ligações no CRM"
-          />
-        </div>
+        )}
 
         {/* Sound */}
         <div className="rounded-xl border border-border bg-card p-4">

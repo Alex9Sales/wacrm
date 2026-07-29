@@ -44,6 +44,11 @@ export interface AccountSettings {
   csatThanks: string
   /** Prompt asking for an optional free-text comment after the score. */
   csatCommentPrompt: string
+  /** Master switch for receiving WhatsApp calls in the CRM (the ringing
+   *  modal). On by default. When off, no inbound call rings any browser —
+   *  for teams that answer on the phone itself. Admin/supervisor-controlled
+   *  in Configurações → Notificações. */
+  crmCallingEnabled: boolean
 }
 
 /** Mon–Fri 08:00–18:00, weekend closed. Index 0=Sunday … 6=Saturday. */
@@ -73,6 +78,7 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   csatThanks: 'Obrigado pela sua avaliação! 💜',
   csatCommentPrompt:
     'Obrigado pela nota! Se quiser, deixe um comentário sobre o atendimento — é rapidinho. 🙏',
+  crmCallingEnabled: true,
 }
 
 /** Read an account's settings, merged over the defaults. */
