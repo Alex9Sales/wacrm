@@ -11,6 +11,7 @@ import {
   toErrorResponse,
   type AccountContext,
 } from '@/lib/auth/account'
+import { hasMinRole } from '@/lib/auth/roles'
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -174,6 +175,30 @@ export async function POST(request: Request) {
         { error: 'Conversation not found' },
         { status: 404 }
       )
+    }
+
+    // Reply lock: once a conversation is assigned, only the assignee (or a
+    // supervisor+) may send in it. Sector visibility still lets teammates
+    // READ it (shared queue), but a non-assignee sending was the exact gap
+    // Alex reported — "atribuída pra outra pessoa, mas outra pessoa está
+    // conseguindo responder". Skipped for supervisor+ (they can always help).
+    if (!hasMinRole(ctx.role, 'supervisor')) {
+      const lockRow = firstOrNull(
+        await db
+          .select({ assignedAgentId: conversations.assignedAgentId })
+          .from(conversations)
+          .where(eq(conversations.id, conversationId))
+          .limit(1)
+      )
+      if (lockRow?.assignedAgentId && lockRow.assignedAgentId !== ctx.userId) {
+        return NextResponse.json(
+          {
+            error: 'Esta conversa está atribuída a outro atendente.',
+            code: 'conversation_locked',
+          },
+          { status: 403 }
+        )
+      }
     }
 
     // Agent signature (workspace toggle): prefix the human agent's name in

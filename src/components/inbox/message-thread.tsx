@@ -1033,6 +1033,16 @@ export function MessageThread({
   const assignLabel = assignedAgentId
     ? (currentAssignee?.full_name ?? "Atribuída")
     : "Atribuir";
+  // Reply lock (mirrors the server-side check in /api/whatsapp/send): a
+  // sector teammate who ISN'T the assignee can still see this conversation
+  // (shared sector queue) but must not be able to reply to it. Supervisor+
+  // always can. Composer-level only — the server is the real enforcement.
+  const lockedByOtherAgentName =
+    assignedAgentId &&
+    assignedAgentId !== user?.id &&
+    !hasMinRole(accountRole ?? "viewer", "supervisor")
+      ? (currentAssignee?.full_name ?? "outro atendente")
+      : null;
 
   return (
     // `min-w-0` is load-bearing: the page already puts min-w-0 on the
@@ -1583,6 +1593,7 @@ export function MessageThread({
         groupMentions={groupMentions}
         droppedFile={droppedFile}
         onDroppedFileConsumed={() => setDroppedFile(null)}
+        lockedByOtherAgent={lockedByOtherAgentName}
       />
 
       <TemplatePicker

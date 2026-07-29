@@ -33,6 +33,7 @@ import {
 import { toast } from 'sonner';
 
 import { useServerEvents } from '@/hooks/use-server-events';
+import { getNotificationPrefs } from '@/lib/notifications/prefs';
 import { floatToPcm, pcmToFloat } from '@/lib/calls/pcm';
 import { formatCallDuration } from '@/lib/inbox/call-log';
 import { routeCallStatus, type CallProvider } from './call-routing';
@@ -927,6 +928,11 @@ export function IncomingCallModal() {
     }) => {
       const eventCallId = typeof e.callId === 'string' ? e.callId : '';
       if (e.type === 'call_incoming') {
+        // Opt-out (per browser, Configurações → Notificações): teammates who
+        // answer on the phone itself, not the CRM, can silence inbound rings
+        // here entirely. Outbound dialing (fluxia:outbound-call) is a
+        // separate path and is never affected by this flag.
+        if (!getNotificationPrefs().callRingEnabled) return;
         // Dedup: waha/gows can redeliver call.received for one call.
         if (!eventCallId) return;
         if (isDuplicateIncoming(legsRef.current, eventCallId)) return;

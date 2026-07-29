@@ -12,6 +12,10 @@ export interface NotificationPrefs {
   soundId: string;
   volume: number; // 0..1
   toastEnabled: boolean;
+  /** False = this browser never rings/pops an inbound call — for teammates
+   *  who answer on the phone itself and don't use CRM calling. Outbound
+   *  dialing from the CRM is unaffected; this only silences INBOUND rings. */
+  callRingEnabled: boolean;
 }
 
 const KEY = "fluxia.notifications.v1";
@@ -22,6 +26,7 @@ export const DEFAULT_PREFS: NotificationPrefs = {
   soundId: DEFAULT_SOUND_ID,
   volume: 0.8,
   toastEnabled: true,
+  callRingEnabled: true,
 };
 
 export function getNotificationPrefs(): NotificationPrefs {

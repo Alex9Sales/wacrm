@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { Bell, Play, Volume2 } from "lucide-react";
+import { Bell, Phone, Play, Volume2 } from "lucide-react";
 
 import { Switch } from "@/components/ui/switch";
 import { Label } from "@/components/ui/label";
@@ -60,6 +60,26 @@ export function NotificationsPanel() {
             checked={prefs.toastEnabled}
             onCheckedChange={(v) => update({ toastEnabled: v })}
             aria-label="Ativar pop-up de mensagem nova"
+          />
+        </div>
+
+        {/* Calls */}
+        <div className="flex items-center justify-between gap-4 rounded-xl border border-border bg-card p-4">
+          <div className="min-w-0">
+            <Label className="flex items-center gap-2 text-sm font-medium text-foreground">
+              <Phone className="h-4 w-4 text-primary" />
+              Tocar ligações no CRM
+            </Label>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Desligue se você atende as ligações direto pelo celular/WhatsApp
+              — o CRM para de tocar ligações recebidas neste navegador (só
+              vale aqui, não afeta os outros atendentes).
+            </p>
+          </div>
+          <Switch
+            checked={prefs.callRingEnabled}
+            onCheckedChange={(v) => update({ callRingEnabled: v })}
+            aria-label="Tocar ligações no CRM"
           />
         </div>
 

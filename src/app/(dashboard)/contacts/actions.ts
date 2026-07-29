@@ -20,6 +20,7 @@ import {
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
+import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils'
 import {
   findExistingContact,
   isExactMatch,
@@ -248,6 +249,18 @@ export async function saveContact(
   const ctx = await getCurrentAccount()
   const phone = input.phone.trim()
   if (!phone) return { ok: false, duplicate: false, error: 'Phone number is required' }
+  // Reject a malformed number at save time instead of letting it through and
+  // failing later (silently) at send time. Real incident: a contact saved as
+  // "01528999632794" (leading 0, 14 digits) passed here and only surfaced as
+  // "Invalid phone number format" when someone tried to message them.
+  if (!isValidE164(sanitizePhoneForMeta(phone))) {
+    return {
+      ok: false,
+      duplicate: false,
+      error:
+        'Telefone inválido. Use o formato internacional, ex.: +55 28 99999-9999.',
+    }
+  }
 
   const name = input.name.trim() || null
   const email = input.email.trim() || null

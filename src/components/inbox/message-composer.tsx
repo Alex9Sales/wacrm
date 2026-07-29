@@ -140,6 +140,10 @@ interface MessageComposerProps {
    *  The composer stages it as a draft, then calls `onDroppedFileConsumed`. */
   droppedFile?: File | null;
   onDroppedFileConsumed?: () => void;
+  /** Set to the assignee's name when this conversation is assigned to
+   *  someone else and the caller isn't supervisor+ — locks the composer
+   *  (the server enforces this too; this is just the UX-level mirror). */
+  lockedByOtherAgent?: string | null;
 }
 
 function formatDuration(seconds: number): string {
@@ -171,6 +175,7 @@ export function MessageComposer({
   groupMentions,
   droppedFile,
   onDroppedFileConsumed,
+  lockedByOtherAgent,
 }: MessageComposerProps) {
   // Capability gating (Phase 4). No channel → default to Meta's full
   // capability set so legacy single-Meta accounts are unaffected.
@@ -229,7 +234,8 @@ export function MessageComposer({
   // Media (like free-form text) is only allowed inside the 24h window —
   // but that window only exists for Meta, so `sessionGated` is false for
   // the QR providers and never disables their inputs.
-  const inputsDisabled = readOnly || sessionGated;
+  const locked = !!lockedByOtherAgent;
+  const inputsDisabled = readOnly || sessionGated || locked;
 
   // Drag-and-drop of files onto the composer. `dragDepth` counts enter/leave
   // across child elements so the overlay doesn't flicker when the cursor
@@ -268,7 +274,7 @@ export function MessageComposer({
 
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
-    if (!trimmed || sending || sessionGated) return;
+    if (!trimmed || sending || sessionGated || locked) return;
 
     setSending(true);
     try {
@@ -280,7 +286,7 @@ export function MessageComposer({
     } finally {
       setSending(false);
     }
-  }, [text, sending, sessionGated, onSend, replyTo?.id]);
+  }, [text, sending, sessionGated, locked, onSend, replyTo?.id]);
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -1091,19 +1097,27 @@ export function MessageComposer({
               placeholder={
                 readOnly
                   ? "Somente leitura — visualizadores podem navegar mas não responder"
-                  : sessionGated
-                    ? "Sessão expirada - use um template"
-                    : "Digite uma mensagem... (Shift+Enter para nova linha)"
+                  : locked
+                    ? `Atribuída a ${lockedByOtherAgent} — só ela(e) ou um supervisor pode responder`
+                    : sessionGated
+                      ? "Sessão expirada - use um template"
+                      : "Digite uma mensagem... (Shift+Enter para nova linha)"
               }
-              disabled={sessionGated || readOnly}
+              disabled={inputsDisabled}
               rows={3}
               // Textarea keeps its own inline title — the GatedButton
               // wrapping pattern doesn't apply to non-button inputs.
               // The placeholder text also surfaces the read-only state.
-              title={readOnly ? "Somente leitura — seu perfil não pode enviar mensagens" : undefined}
+              title={
+                readOnly
+                  ? "Somente leitura — seu perfil não pode enviar mensagens"
+                  : locked
+                    ? `Atribuída a ${lockedByOtherAgent} — só ela(e) ou um supervisor pode responder`
+                    : undefined
+              }
               className={cn(
                 "min-h-[72px] w-full resize-none rounded-xl border border-border bg-muted px-4 py-2.5 text-sm text-foreground placeholder-muted-foreground outline-none transition-colors focus:border-primary/50",
-                (sessionGated || readOnly) && "cursor-not-allowed opacity-50"
+                inputsDisabled && "cursor-not-allowed opacity-50"
               )}
             />
           </div>
@@ -1112,7 +1126,8 @@ export function MessageComposer({
             size="sm"
             canAct={!readOnly}
             gateReason="enviar mensagens"
-            disabled={!text.trim() || sessionGated || sending}
+            disabled={!text.trim() || sessionGated || locked || sending}
+            title={locked ? `Atribuída a ${lockedByOtherAgent}` : undefined}
             onClick={handleSend}
             className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
           >
