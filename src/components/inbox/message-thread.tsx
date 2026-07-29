@@ -1160,8 +1160,11 @@ export function MessageThread({
             </button>
           )}
           {/* Ligar (voz WhatsApp) — só no canal Meta (Business Calling API),
-              e só com telefone. Abre o modal de chamada em modo outbound. */}
-          {(conversation.channel?.provider ?? "meta") === "meta" &&
+              e só com telefone. Abre o modal de chamada em modo outbound.
+              Admin/supervisor+ only — times que atendem pelo celular (não
+              usam a ligação do CRM) pediram pra sumir esse botão pro agent. */}
+          {canAssign &&
+            (conversation.channel?.provider ?? "meta") === "meta" &&
             contact.phone && (
               <button
                 type="button"
@@ -1176,8 +1179,9 @@ export function MessageThread({
               </button>
             )}
           {/* Ligar via waha-voip (não-oficial) — canal WAHA com telefone.
-              Usa o motor de voz waha-voip; não exige permissão do cliente. */}
-          {conversation.channel?.provider === "waha" && contact.phone && (
+              Usa o motor de voz waha-voip; não exige permissão do cliente.
+              Admin/supervisor+ only (same gate as the Meta call button). */}
+          {canAssign && conversation.channel?.provider === "waha" && contact.phone && (
             <button
               type="button"
               onClick={() =>

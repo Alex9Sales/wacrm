@@ -400,6 +400,27 @@ export default function InboxPage() {
       const params = new URLSearchParams(searchParams.toString());
       params.set("c", conv.id);
       router.replace(`/inbox?${params.toString()}`, { scroll: false });
+
+      // Correct any stale metadata (assignee, status, sector, privacy) with a
+      // fresh fetch. There's no live push for these fields (Fase 3 realtime
+      // isn't built) — the list row can be minutes old. Real incident: a
+      // supervisor reassigned a conversation, and an agent who opened it from
+      // an already-loaded list still saw the OLD assignee (and the reply
+      // lock showed the wrong name). Background-only — the optimistic paint
+      // above keeps the click feeling instant.
+      void getConversationWithContact(conv.id)
+        .then((fresh) => {
+          if (!fresh) return;
+          setActiveConversation((cur) => (cur?.id === conv.id ? fresh : cur));
+          setConversations((prev) =>
+            prev.map((c) =>
+              c.id === fresh.id
+                ? { ...c, ...fresh, contact: fresh.contact ?? c.contact }
+                : c,
+            ),
+          );
+        })
+        .catch(() => {});
     },
     [activeConversation?.id, router, searchParams]
   );
