@@ -14,6 +14,7 @@ import { and, eq } from 'drizzle-orm'
 import { db, callLogs, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
+import { getAccountSettings } from '@/lib/settings/account-settings'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 import {
   wahaCallsForAccount,
@@ -25,6 +26,21 @@ import {
 export async function POST(request: Request) {
   try {
     const ctx = await getCurrentAccount()
+
+    // Master switch: when the admin disables CRM calling, block outbound too
+    // (not just the UI buttons — a stale tab must not be able to dial).
+    const settings = await getAccountSettings(ctx.accountId)
+    if (!settings.crmCallingEnabled) {
+      return NextResponse.json(
+        {
+          error:
+            'Ligações desativadas pelo administrador. Reative em Configurações → Notificações.',
+          code: 'calling_disabled',
+        },
+        { status: 403 },
+      )
+    }
+
     const body = (await request.json().catch(() => ({}))) as {
       to?: string
       channelId?: string

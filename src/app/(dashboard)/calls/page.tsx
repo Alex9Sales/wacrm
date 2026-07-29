@@ -139,6 +139,20 @@ export default function CallsPage() {
         </div>
       </div>
 
+      {!crmCallingEnabled && (
+        <div className="mb-4 flex items-start gap-2 rounded-xl border border-amber-500/40 bg-amber-500/10 px-4 py-3 text-sm text-amber-700 dark:text-amber-300">
+          <Phone className="mt-0.5 size-4 shrink-0" />
+          <p>
+            <span className="font-medium">
+              Ligações desativadas pelo administrador.
+            </span>{" "}
+            Este CRM não faz nem recebe ligações no momento — as chamadas tocam
+            direto no WhatsApp/celular. Um admin pode reativar em Configurações →
+            Notificações.
+          </p>
+        </div>
+      )}
+
       {dialerOpen && crmCallingEnabled && (
         <Dialer onClose={() => setDialerOpen(false)} />
       )}
@@ -220,7 +234,7 @@ export default function CallsPage() {
                 <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
                   {whenLabel(c.createdAt)}
                 </span>
-                {canCallBack && (
+                {canCallBack && crmCallingEnabled && (
                   <button
                     onClick={(e) => {
                       e.stopPropagation();

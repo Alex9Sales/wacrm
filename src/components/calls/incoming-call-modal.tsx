@@ -846,9 +846,12 @@ export function IncomingCallModal() {
           });
           const initData = (await initRes.json().catch(() => ({}))) as {
             callId?: string;
+            error?: string;
           };
-          if (!initRes.ok || !initData.callId)
-            throw new Error('waha initiate failed');
+          if (!initRes.ok || !initData.callId) {
+            if (initData.error) toast.error(initData.error);
+            throw new Error(initData.error || 'waha initiate failed');
+          }
           patchLeg(key, { callId: initData.callId, phase: 'connecting' });
           startRingback(key); // "tuuu… tuuu" until the customer actually answers
           await wahaConnectAudio(key, initData.callId, channelId, true);
@@ -867,6 +870,7 @@ export function IncomingCallModal() {
           ok?: boolean;
           callId?: string;
           needsPermission?: boolean;
+          error?: string;
         };
         if (!res.ok || !data.callId) {
           if (data.needsPermission) {
@@ -879,7 +883,8 @@ export function IncomingCallModal() {
             patchLeg(key, { phase: 'permission' });
             return;
           }
-          throw new Error('initiate failed');
+          if (data.error) toast.error(data.error);
+          throw new Error(data.error || 'initiate failed');
         }
         patchLeg(key, { callId: data.callId, phase: 'connecting' });
       } catch (err) {

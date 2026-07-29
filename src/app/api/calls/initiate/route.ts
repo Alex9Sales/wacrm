@@ -12,6 +12,7 @@
 import { NextResponse } from 'next/server'
 
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
+import { getAccountSettings } from '@/lib/settings/account-settings'
 import {
   metaChannelForAccount,
   graphPost,
@@ -20,6 +21,20 @@ import {
 export async function POST(request: Request) {
   try {
     const ctx = await getCurrentAccount()
+
+    // Master switch: block outbound when the admin disabled CRM calling.
+    const settings = await getAccountSettings(ctx.accountId)
+    if (!settings.crmCallingEnabled) {
+      return NextResponse.json(
+        {
+          error:
+            'Ligações desativadas pelo administrador. Reative em Configurações → Notificações.',
+          code: 'calling_disabled',
+        },
+        { status: 403 },
+      )
+    }
+
     const body = (await request.json().catch(() => ({}))) as {
       to?: string
       sdp?: string
