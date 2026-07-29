@@ -16,6 +16,8 @@ import {
   FileText,
   Download,
   UploadCloud,
+  Mic,
+  Trash,
 } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
@@ -52,6 +54,7 @@ import { MentionComposer, MentionText } from "@/components/inbox/mention-compose
 import type { MentionMember } from "@/lib/inbox/mentions";
 import { uploadAccountMedia } from "@/lib/storage/upload-media";
 import { CHAT_MEDIA_BUCKET } from "@/components/inbox/message-composer";
+import { useVoiceRecorder } from "@/hooks/use-voice-recorder";
 import type { InternalMediaKind } from "@/lib/internal-chat/types";
 
 /** Map a file's MIME type to the internal media kind (image/video/audio/doc). */
@@ -75,6 +78,13 @@ import { setActiveInternalChannel } from "@/lib/internal-chat/active-channel";
 function timeOf(iso: string): string {
   const d = new Date(iso);
   return d.toLocaleTimeString("pt-BR", { hour: "2-digit", minute: "2-digit" });
+}
+
+/** seconds → m:ss for the recording timer. */
+function fmtDur(total: number): string {
+  const m = Math.floor(total / 60);
+  const s = total % 60;
+  return `${m}:${s.toString().padStart(2, "0")}`;
 }
 
 export default function InternalChatPage() {
@@ -328,6 +338,9 @@ export default function InternalChatPage() {
     [sendMedia],
   );
 
+  // Voice notes — record in-browser and post as an audio message.
+  const recorder = useVoiceRecorder(sendMedia);
+
   return (
     <div className="flex h-[calc(100dvh-7rem)] gap-4 overflow-hidden">
       {/* Channel list */}
@@ -576,53 +589,89 @@ export default function InternalChatPage() {
             </div>
 
             <div className="shrink-0 border-t border-border p-3" onPaste={handlePaste}>
-              <div className="flex items-end gap-2">
-                <EmojiPicker onPick={insertEmoji} />
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  className="hidden"
-                  accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip"
-                  onChange={(e) => {
-                    const f = e.target.files?.[0];
-                    if (f) void sendMedia(f);
-                    e.target.value = "";
-                  }}
-                />
-                <button
-                  type="button"
-                  onClick={() => fileInputRef.current?.click()}
-                  disabled={uploading}
-                  title="Anexar imagem, áudio ou documento"
-                  aria-label="Anexar arquivo"
-                  className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
-                >
-                  {uploading ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
-                    <Paperclip className="h-4 w-4" />
-                  )}
-                </button>
-                <MentionComposer
-                  value={text}
-                  onChange={setText}
-                  onSubmit={() => void send()}
-                  members={members}
-                  placeholder={`Mensagem para #${active.name} · @ para mencionar`}
-                />
-                <Button
-                  size="sm"
-                  onClick={() => void send()}
-                  disabled={!text.trim() || sending}
-                  className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
-                >
-                  {sending ? (
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                  ) : (
+              <input
+                ref={fileInputRef}
+                type="file"
+                className="hidden"
+                accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.csv,.txt,.zip"
+                onChange={(e) => {
+                  const f = e.target.files?.[0];
+                  if (f) void sendMedia(f);
+                  e.target.value = "";
+                }}
+              />
+              {recorder.recording ? (
+                <div className="flex items-center gap-3">
+                  <span className="flex items-center gap-2 text-sm font-medium text-destructive">
+                    <span className="h-2.5 w-2.5 animate-pulse rounded-full bg-destructive" />
+                    Gravando… {fmtDur(recorder.seconds)}
+                  </span>
+                  <div className="flex-1" />
+                  <button
+                    type="button"
+                    onClick={recorder.cancel}
+                    title="Cancelar gravação"
+                    className="flex h-9 w-9 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-destructive"
+                  >
+                    <Trash className="h-4 w-4" />
+                  </button>
+                  <Button
+                    size="sm"
+                    onClick={recorder.stop}
+                    title="Enviar áudio"
+                    className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90"
+                  >
                     <Send className="h-4 w-4" />
-                  )}
-                </Button>
-              </div>
+                  </Button>
+                </div>
+              ) : (
+                <div className="flex items-end gap-2">
+                  <EmojiPicker onPick={insertEmoji} />
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    disabled={uploading}
+                    title="Anexar imagem, vídeo ou documento"
+                    aria-label="Anexar arquivo"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+                  >
+                    {uploading ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Paperclip className="h-4 w-4" />
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => void recorder.start()}
+                    disabled={uploading}
+                    title="Gravar áudio"
+                    aria-label="Gravar áudio"
+                    className="flex h-9 w-9 shrink-0 items-center justify-center rounded-md text-muted-foreground transition hover:bg-muted hover:text-foreground disabled:opacity-40"
+                  >
+                    <Mic className="h-4 w-4" />
+                  </button>
+                  <MentionComposer
+                    value={text}
+                    onChange={setText}
+                    onSubmit={() => void send()}
+                    members={members}
+                    placeholder={`Mensagem para #${active.name} · @ para mencionar`}
+                  />
+                  <Button
+                    size="sm"
+                    onClick={() => void send()}
+                    disabled={!text.trim() || sending}
+                    className="h-9 w-9 shrink-0 bg-primary p-0 hover:bg-primary/90 disabled:opacity-40"
+                  >
+                    {sending ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Send className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+              )}
             </div>
           </>
         ) : (
