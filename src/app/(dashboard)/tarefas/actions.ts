@@ -16,13 +16,20 @@
 // ============================================================
 
 import { and, asc, desc, eq, ilike, inArray, or, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import {
   db,
   tasks,
   contacts,
   deals,
   pipelines,
+  user,
 } from '@/db'
+
+// Aliased `user` joins so a task can carry BOTH its creator's and its
+// assignee's display name (who made it / whose it is) — Felipe's ask.
+const taskCreator = alias(user, 'task_creator')
+const taskAssignee = alias(user, 'task_assignee')
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 
@@ -52,6 +59,9 @@ export interface TaskRow {
   contact_phone: string | null
   deal_title: string | null
   pipeline_name: string | null
+  /** Who created the task / who it's assigned to (display names). */
+  created_by_name: string | null
+  assigned_to_name: string | null
   /** Computed server-side (due_at < now AND status='open'). */
   overdue: boolean
 }
@@ -97,6 +107,8 @@ const taskSelect = {
   contact_phone: contacts.phone,
   deal_title: deals.title,
   pipeline_name: pipelines.name,
+  created_by_name: taskCreator.name,
+  assigned_to_name: taskAssignee.name,
   overdue: sql<boolean>`(${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} < NOW() AND ${tasks.status} = 'open')`,
 }
 
@@ -119,6 +131,8 @@ function toTaskRow(r: Record<string, unknown>): TaskRow {
     contact_phone: (r.contact_phone as string | null) ?? null,
     deal_title: (r.deal_title as string | null) ?? null,
     pipeline_name: (r.pipeline_name as string | null) ?? null,
+    created_by_name: (r.created_by_name as string | null) ?? null,
+    assigned_to_name: (r.assigned_to_name as string | null) ?? null,
     overdue: Boolean(r.overdue),
   }
 }
@@ -165,6 +179,8 @@ export async function listTasks(input: ListTasksInput = {}): Promise<TaskRow[]> 
     .leftJoin(contacts, eq(tasks.contactId, contacts.id))
     .leftJoin(deals, eq(tasks.dealId, deals.id))
     .leftJoin(pipelines, eq(deals.pipelineId, pipelines.id))
+    .leftJoin(taskCreator, eq(tasks.createdBy, taskCreator.id))
+    .leftJoin(taskAssignee, eq(tasks.assignedTo, taskAssignee.id))
     .where(and(...conditions))
     .orderBy(
       // Overdue (open + past due) bubble to the top.
@@ -214,6 +230,8 @@ export async function getTask(id: string): Promise<TaskRow | null> {
     .leftJoin(contacts, eq(tasks.contactId, contacts.id))
     .leftJoin(deals, eq(tasks.dealId, deals.id))
     .leftJoin(pipelines, eq(deals.pipelineId, pipelines.id))
+    .leftJoin(taskCreator, eq(tasks.createdBy, taskCreator.id))
+    .leftJoin(taskAssignee, eq(tasks.assignedTo, taskAssignee.id))
     .where(and(eq(tasks.id, id), eq(tasks.accountId, ctx.accountId)))
     .limit(1)
   const row = firstOrNull(rows)

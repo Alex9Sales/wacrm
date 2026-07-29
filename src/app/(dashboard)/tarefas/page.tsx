@@ -305,6 +305,13 @@ export default function TarefasPage() {
                           Card: {row.deal_title}
                         </span>
                       )}
+                      {/* Quem é dono da tarefa: atribuída a X · criada por Y */}
+                      <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
+                        {row.assigned_to_name
+                          ? `Atribuída a ${row.assigned_to_name}`
+                          : 'Não atribuída'}
+                        {row.created_by_name && ` · criada por ${row.created_by_name}`}
+                      </span>
                     </TableCell>
                     <TableCell>
                       {row.type ? (

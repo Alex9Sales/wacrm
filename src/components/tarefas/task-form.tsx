@@ -40,6 +40,7 @@ import {
   type TaskStatus,
   type PickerOption,
 } from '@/app/(dashboard)/tarefas/actions'
+import { listProfiles } from '@/app/(dashboard)/inbox/actions'
 
 interface TaskFormProps {
   open: boolean
@@ -96,6 +97,8 @@ export function TaskForm({
   const [type, setType] = useState('')
   const [contactId, setContactId] = useState<string | null>(null)
   const [dealId, setDealId] = useState<string | null>(null)
+  const [assignedTo, setAssignedTo] = useState<string | null>(null)
+  const [members, setMembers] = useState<{ id: string; name: string }[]>([])
   const [saving, setSaving] = useState(false)
 
   // Reset the form whenever the dialog opens (or the target task changes).
@@ -110,6 +113,17 @@ export function TaskForm({
     // the inbox sidebar / Kanban card can pre-select the client/card.
     setContactId(task?.contact_id ?? prefillContactId ?? null)
     setDealId(task?.deal_id ?? prefillDealId ?? null)
+    setAssignedTo(task?.assigned_to ?? null)
+    // Load the team for the "Responsável" picker.
+    listProfiles()
+      .then((ps) =>
+        setMembers(
+          ps
+            .filter((p) => p.user_id && p.full_name)
+            .map((p) => ({ id: p.user_id as string, name: p.full_name as string })),
+        ),
+      )
+      .catch(() => setMembers([]))
   }, [open, task, prefillContactId, prefillDealId])
 
   async function handleSubmit(e: React.FormEvent) {
@@ -130,6 +144,7 @@ export function TaskForm({
         type: type.trim() || null,
         contactId,
         dealId,
+        assignedTo,
       }
       const res = isEdit
         ? await updateTask(task!.id, payload)
@@ -218,6 +233,29 @@ export function TaskForm({
                 </SelectContent>
               </Select>
             </div>
+          </div>
+
+          <div className="space-y-1.5">
+            <Label>Responsável</Label>
+            <Select
+              value={assignedTo ?? '__none__'}
+              onValueChange={(v) => setAssignedTo(v === '__none__' ? null : v)}
+            >
+              <SelectTrigger className="w-full bg-background border-border text-foreground">
+                <SelectValue placeholder="Ninguém (não atribuída)" />
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value="__none__">Ninguém (não atribuída)</SelectItem>
+                {members.map((m) => (
+                  <SelectItem key={m.id} value={m.id}>
+                    {m.name}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-xs text-muted-foreground">
+              Quem é responsável pela tarefa. Também fica gravado quem a criou.
+            </p>
           </div>
 
           <div className="space-y-1.5">
