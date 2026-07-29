@@ -17,6 +17,7 @@ import {
   setConversationPrivacy,
 } from "@/app/(dashboard)/inbox/actions";
 import { useAuth } from "@/hooks/use-auth";
+import { useCrmCallingEnabled } from "@/hooks/use-crm-calling";
 import { hasMinRole } from "@/lib/auth/roles";
 import { usePresence } from "@/hooks/use-presence";
 import { PresenceDot } from "@/components/presence/presence-dot";
@@ -242,6 +243,9 @@ export function MessageThread({
   onConversationDeleted,
 }: MessageThreadProps) {
   const { user, accountRole } = useAuth();
+  // Account master switch: when the admin turns "Tocar ligações no CRM" off,
+  // both receiving (modal) AND placing (these buttons) are disabled.
+  const crmCallingEnabled = useCrmCallingEnabled();
   // Deleting a conversation is admin/owner-only (matches the server-side
   // requireRole('admin') in deleteConversation) — hide the button otherwise.
   const canDeleteConversation = hasMinRole(accountRole ?? "viewer", "admin");
@@ -1161,9 +1165,10 @@ export function MessageThread({
           )}
           {/* Ligar (voz WhatsApp) — só no canal Meta (Business Calling API),
               e só com telefone. Abre o modal de chamada em modo outbound.
-              Visível pra todos; o master "Tocar ligações no CRM" (Configurações
-              → Notificações, admin/supervisor) é quem liga/desliga a voz. */}
-          {(conversation.channel?.provider ?? "meta") === "meta" &&
+              Some quando o admin desliga "Tocar ligações no CRM" (Configurações
+              → Notificações) — corta receber E discar. */}
+          {crmCallingEnabled &&
+            (conversation.channel?.provider ?? "meta") === "meta" &&
             contact.phone && (
               <button
                 type="button"
@@ -1178,8 +1183,11 @@ export function MessageThread({
               </button>
             )}
           {/* Ligar via waha-voip (não-oficial) — canal WAHA com telefone.
-              Usa o motor de voz waha-voip; não exige permissão do cliente. */}
-          {conversation.channel?.provider === "waha" && contact.phone && (
+              Usa o motor de voz waha-voip; não exige permissão do cliente.
+              Mesmo gate do master "Tocar ligações no CRM". */}
+          {crmCallingEnabled &&
+            conversation.channel?.provider === "waha" &&
+            contact.phone && (
             <button
               type="button"
               onClick={() =>

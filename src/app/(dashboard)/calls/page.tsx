@@ -22,6 +22,7 @@ import {
 
 import { startOutboundCall } from '@/components/calls/incoming-call-modal';
 import { Dialer } from '@/components/calls/dialer';
+import { useCrmCallingEnabled } from '@/hooks/use-crm-calling';
 import { useServerEvents } from '@/hooks/use-server-events';
 import { formatCallDuration } from '@/lib/inbox/call-log';
 
@@ -69,6 +70,7 @@ export default function CallsPage() {
   const [calls, setCalls] = useState<CallRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [dialerOpen, setDialerOpen] = useState(false);
+  const crmCallingEnabled = useCrmCallingEnabled();
 
   const load = useCallback(async () => {
     try {
@@ -114,14 +116,16 @@ export default function CallsPage() {
       <div className="mb-4 flex items-center justify-between">
         <h1 className="text-xl font-semibold text-foreground">Ligações</h1>
         <div className="flex items-center gap-2">
-          <button
-            onClick={() => setDialerOpen(true)}
-            title="Nova ligação"
-            className="flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600"
-          >
-            <Grid3x3 className="size-4" />
-            Discar
-          </button>
+          {crmCallingEnabled && (
+            <button
+              onClick={() => setDialerOpen(true)}
+              title="Nova ligação"
+              className="flex items-center gap-1.5 rounded-lg bg-emerald-500 px-3 py-1.5 text-sm font-medium text-white transition hover:bg-emerald-600"
+            >
+              <Grid3x3 className="size-4" />
+              Discar
+            </button>
+          )}
           <button
             onClick={() => {
               setLoading(true);
@@ -135,7 +139,9 @@ export default function CallsPage() {
         </div>
       </div>
 
-      {dialerOpen && <Dialer onClose={() => setDialerOpen(false)} />}
+      {dialerOpen && crmCallingEnabled && (
+        <Dialer onClose={() => setDialerOpen(false)} />
+      )}
 
       {loading && calls.length === 0 ? (
         <p className="py-12 text-center text-sm text-muted-foreground">
