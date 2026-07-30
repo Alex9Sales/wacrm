@@ -853,6 +853,7 @@ function ConversationItem({
   const displayName = contact?.name || contact?.phone || "Desconhecido";
   const prio = priorityMeta(conversation.priority);
   const isUrgent = conversation.priority === "urgent";
+  const contactTags = contact?.tags ?? [];
 
   const handleClick = useCallback(() => {
     onSelect(conversation);
@@ -960,6 +961,31 @@ function ConversationItem({
             />
           </div>
         </div>
+
+        {/* Etiquetas do contato — chips coloridos (até 3 + contador). */}
+        {contactTags.length > 0 && (
+          <div className="mt-1 flex flex-wrap items-center gap-1">
+            {contactTags.slice(0, 3).map((tag) => (
+              <span
+                key={tag.id}
+                className="inline-flex max-w-24 items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+                style={{ backgroundColor: `${tag.color}20`, color: tag.color }}
+                title={tag.name}
+              >
+                <span
+                  className="size-1.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: tag.color }}
+                />
+                <span className="truncate">{tag.name}</span>
+              </span>
+            ))}
+            {contactTags.length > 3 && (
+              <span className="text-[9px] font-medium text-muted-foreground">
+                +{contactTags.length - 3}
+              </span>
+            )}
+          </div>
+        )}
       </div>
     </button>
   );
