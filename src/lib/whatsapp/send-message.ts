@@ -80,6 +80,31 @@ export class SendMessageError extends Error {
   }
 }
 
+/**
+ * Turn a raw provider send error (WAHA/gows gRPC blobs) into a friendly
+ * pt-BR message for the operator's toast. The gows layer surfaces WhatsApp
+ * server rejections as `server returned error <N>` — the raw JSON/stack is
+ * useless to an atendente. Known throttle/reputation codes get a clear
+ * "aguarde e reenvie"; anything unmapped falls back to the raw. Felipe (cema)
+ * hit 463 mid-shift and saw the raw gRPC dump.
+ */
+export function friendlySendError(raw: string): string | null {
+  const m = raw.toLowerCase();
+  if (/error 463|"?463"?/.test(m)) {
+    return 'O WhatsApp recusou o envio agora (limite ou reputação do número). Aguarde alguns minutos e tente novamente.';
+  }
+  if (/error 479|rate|too many|flood/.test(m)) {
+    return 'Muitas mensagens em pouco tempo — o WhatsApp está limitando este número. Aguarde um pouco e reenvie.';
+  }
+  if (/not.*(on|registered).*whatsapp|não.*whatsapp|invalid.*(number|jid)|not-?found/.test(m)) {
+    return 'Este número não parece estar no WhatsApp.';
+  }
+  if (/timeout|timed out|deadline/.test(m)) {
+    return 'O envio demorou demais e não foi confirmado. Verifique a conexão do canal e tente de novo.';
+  }
+  return null;
+}
+
 export interface SendMessageParams {
   conversationId: string;
   messageType: string;
@@ -525,9 +550,11 @@ export async function sendMessageToConversation(
       `[send-message] ${provider.id} send failed:`,
       message
     );
+    // Show the atendente a clean message; keep the raw in the server log above.
+    const friendly = friendlySendError(message);
     throw new SendMessageError(
       'send_error',
-      `${provider.id} send error: ${message}`,
+      friendly ?? `${provider.id} send error: ${message}`,
       502
     );
   }
