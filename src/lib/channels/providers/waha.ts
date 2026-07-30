@@ -729,6 +729,24 @@ function isAlbumMessage(p: WahaMessagePayload): boolean {
   return 'albumMessage' in m || 'AlbumMessage' in m;
 }
 
+/** A WhatsApp COMMUNITY comment on an announcement (`encCommentMessage`). The
+ *  content is E2E-ENCRYPTED (encPayload/encIV) and the gows engine delivers it
+ *  cifrado — we have no key to read it, so it would otherwise store an empty
+ *  [text] row. Drop it (like reactions) until/unless we implement comment
+ *  decryption. Also matches a decrypted `commentMessage` shape defensively. */
+function isCommentMessage(p: WahaMessagePayload): boolean {
+  const m = (p._data?.message ?? p._data?.Message) as
+    | Record<string, unknown>
+    | undefined;
+  if (!m) return false;
+  return (
+    'encCommentMessage' in m ||
+    'EncCommentMessage' in m ||
+    'commentMessage' in m ||
+    'CommentMessage' in m
+  );
+}
+
 interface WahaWebhookBody {
   event?: string;
   session?: string;
@@ -1307,15 +1325,16 @@ export const wahaProvider: WhatsAppProvider = {
       }
 
       // A reaction (👍 etc — encrypted `encReactionMessage` or plain
-      // `reactionMessage`) or an album header (`albumMessage` — the photos it
-      // announces arrive as their own messages) comes in with no body/media.
-      // Drop it: it must NOT become an empty "[text]" row — in a monitored group
-      // it would spam the thread on every reaction / album.
+      // `reactionMessage`), an album header (`albumMessage` — the photos it
+      // announces arrive as their own messages), or a community comment
+      // (`encCommentMessage` — E2E-encrypted, we can't read it) comes in with no
+      // readable body/media. Drop it: it must NOT become an empty "[text]" row —
+      // in a monitored group it would spam the thread.
       if (
         !text &&
         !media &&
         !viewOnce &&
-        (isReactionMessage(p) || isAlbumMessage(p))
+        (isReactionMessage(p) || isAlbumMessage(p) || isCommentMessage(p))
       ) {
         return { messages, statuses };
       }

@@ -144,6 +144,27 @@ describe('wahaProvider.parseWebhook', () => {
     expect(plain.messages).toHaveLength(0);
   });
 
+  it('drops a community comment (encCommentMessage — encrypted, unreadable)', () => {
+    const { messages } = wahaProvider.parseWebhook({
+      event: 'message',
+      payload: {
+        id: 'cm_1_H',
+        from: '120363428050370478@g.us',
+        _data: {
+          Message: {
+            messageContextInfo: {},
+            encCommentMessage: {
+              targetMessageKey: { ID: '3EB0DA8AA79D7844EB4FA5' },
+              encPayload: 'lXrlsYlGH3e1kSBmYquwF3ZTJ',
+              encIV: 'Sc7iYRgs3ZplmHAt',
+            },
+          },
+        },
+      },
+    });
+    expect(messages).toHaveLength(0);
+  });
+
   it('drops an album header (photos arrive as their own messages)', () => {
     // GOWS album placeholder — announces N images/M videos, no body/media.
     const gows = wahaProvider.parseWebhook({
