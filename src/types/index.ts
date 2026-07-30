@@ -97,6 +97,9 @@ export interface Contact {
   name?: string;
   email?: string;
   company?: string;
+  /** Código(s) do cliente no ERP (múltiplos por contato). Mostrado ao lado
+   *  do nome, editável, e exportado/importado em CSV + API v1. */
+  customer_codes?: string[];
   avatar_url?: string;
   /** True when this "contact" is a monitored WhatsApp GROUP (not a person).
    *  Drives the inbox group segmentation + the group marker on the row. */

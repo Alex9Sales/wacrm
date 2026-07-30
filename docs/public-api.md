@@ -192,6 +192,7 @@ or phone) and `?tag=<tagId>`.
     {
       "id": "…", "phone": "+14155550123", "name": "Jane Doe",
       "email": null, "company": "Acme", "avatar_url": null,
+      "customer_codes": ["31768", "31770"],
       "tags": [{ "id": "…", "name": "vip", "color": "#3b82f6" }],
       "created_at": "…", "updated_at": "…"
     }
@@ -203,18 +204,19 @@ or phone) and `?tag=<tagId>`.
 ### `POST /api/v1/contacts`
 
 Create a contact. Scope: `contacts:write`. `phone` (E.164) is required;
-`name`, `email`, `company`, and `tags` (an array of tag names, created
-if missing) are optional. **Find-or-create by phone:** an existing
-match returns `200` with the existing contact; a new contact returns
-`201`. The response body is the serialized contact (same shape as the
-list rows above).
+`name`, `email`, `company`, `tags` (an array of tag names, created
+if missing) and `customer_codes` (an array of ERP codes — múltiplos por
+contato) are optional. **Find-or-create by phone:** an existing match
+returns `200` with the existing contact; a new contact returns `201`. The
+response body is the serialized contact (same shape as the list rows above).
 
 ### `GET` / `PATCH /api/v1/contacts/{id}`
 
 Read or update one contact. Scopes: `contacts:read` / `contacts:write`.
 `PATCH` updates only the fields you send (`name`, `email`, `company`);
-pass `tags` (an array of tag names) to replace the contact's tags. A
-contact in another account returns `404`.
+pass `tags` (an array of tag names) to replace the contact's tags, and
+`customer_codes` (an array of strings) to replace the ERP codes. A contact
+in another account returns `404`.
 
 ### `GET /api/v1/conversations`
 

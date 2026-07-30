@@ -178,6 +178,9 @@ export const contacts = pgTable("contacts", {
 	name: text(),
 	email: text(),
 	company: text(),
+	// Código(s) do cliente no ERP do cliente (múltiplos por contato). Exibido
+	// ao lado do nome, editável, exportável/importável em CSV e via API v1.
+	customerCodes: text("customer_codes").array().notNull().default(sql`'{}'::text[]`),
 	avatarUrl: text("avatar_url"),
 	// A "contact" that is actually a WhatsApp group (phone holds the group
 	// jid's digits, name the group name). Only set for monitored groups.

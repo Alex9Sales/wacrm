@@ -53,6 +53,7 @@ const contactColumns = {
   name: contacts.name,
   email: contacts.email,
   company: contacts.company,
+  customer_codes: contacts.customerCodes,
   avatar_url: contacts.avatarUrl,
   created_at: contacts.createdAt,
   updated_at: contacts.updatedAt,
@@ -73,6 +74,59 @@ export async function listTags(): Promise<Tag[]> {
     .from(tags)
     .where(eq(tags.accountId, ctx.accountId))
   return rows as unknown as Tag[]
+}
+
+export interface ContactExportRow {
+  phone: string
+  name: string
+  email: string
+  company: string
+  /** Customer codes joined by "; " (Felipe/cema — pra reimportar no ERP). */
+  codigo_cliente: string
+  /** Tag names joined by "; ". */
+  tags: string
+}
+
+/**
+ * All contacts in the account, flattened for a CSV export (Felipe/cema:
+ * levar o código de volta pro sistema deles). Includes the customer codes
+ * and tag names. Account-scoped.
+ */
+export async function exportContacts(): Promise<ContactExportRow[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: contacts.id,
+      phone: contacts.phone,
+      name: contacts.name,
+      email: contacts.email,
+      company: contacts.company,
+      codes: contacts.customerCodes,
+    })
+    .from(contacts)
+    .where(eq(contacts.accountId, ctx.accountId))
+    .orderBy(desc(contacts.createdAt))
+
+  const tagRows = await db
+    .select({ contactId: contactTags.contactId, name: tags.name })
+    .from(contactTags)
+    .innerJoin(tags, eq(contactTags.tagId, tags.id))
+    .where(eq(tags.accountId, ctx.accountId))
+  const tagsByContact = new Map<string, string[]>()
+  for (const t of tagRows) {
+    const arr = tagsByContact.get(t.contactId) ?? []
+    arr.push(t.name)
+    tagsByContact.set(t.contactId, arr)
+  }
+
+  return rows.map((r) => ({
+    phone: r.phone,
+    name: r.name ?? '',
+    email: r.email ?? '',
+    company: r.company ?? '',
+    codigo_cliente: (r.codes ?? []).join('; '),
+    tags: (tagsByContact.get(r.id) ?? []).join('; '),
+  }))
 }
 
 export interface ListContactsInput {
@@ -340,6 +394,8 @@ export interface ImportContactRow {
   email?: string
   company?: string
   tagNames: string[]
+  /** Customer codes from the código column (Felipe/cema). */
+  codes?: string[]
 }
 
 export interface ImportContactsResult {
@@ -421,6 +477,7 @@ export async function importContacts(
       name: row.name || null,
       email: row.email || null,
       company: row.company || null,
+      customerCodes: row.codes ?? [],
     }))
 
     try {

@@ -10,6 +10,8 @@ export interface ParsedContactRow {
   company?: string;
   /** Tag names from the optional `tags` column (comma/semicolon separated). */
   tagNames: string[];
+  /** Customer codes from the optional código column (comma/semicolon split). */
+  codes: string[];
 }
 
 /** Split a CSV cell into unique tag names (case-insensitive de-dupe). */
@@ -31,18 +33,49 @@ export function parseTagCell(value: string | undefined): string[] {
   return names;
 }
 
+/** Split a código cell into unique codes (case-SENSITIVE — codes may differ
+ *  only by case in some ERPs). One contact can carry several codes. */
+export function parseCodeCell(value: string | undefined): string[] {
+  if (!value?.trim()) return [];
+  const seen = new Set<string>();
+  const codes: string[] = [];
+  for (const part of value.split(/[,;]/)) {
+    const code = part.trim();
+    if (!code || seen.has(code)) continue;
+    seen.add(code);
+    codes.push(code);
+  }
+  return codes;
+}
+
+/** Header aliases accepted for the customer-code column (lowercased). */
+const CODE_HEADERS = [
+  'codigo_cliente',
+  'codigo',
+  'código',
+  'código do cliente',
+  'codigo do cliente',
+  'codigos',
+  'códigos',
+  'customer_code',
+  'customer_codes',
+  'code',
+];
+
 export interface ParseContactCsvResult {
   rows: ParsedContactRow[];
   /** True when the CSV header includes a `tags` column. */
   hasTagsColumn: boolean;
   /** True when the CSV header includes a `company` column. */
   hasCompanyColumn: boolean;
+  /** True when the CSV header includes a customer-code column. */
+  hasCodesColumn: boolean;
 }
 
 export function parseContactCsv(text: string): ParseContactCsvResult {
   const lines = text.trim().split(/\r?\n/);
   if (lines.length < 2) {
-    return { rows: [], hasTagsColumn: false, hasCompanyColumn: false };
+    return { rows: [], hasTagsColumn: false, hasCompanyColumn: false, hasCodesColumn: false };
   }
 
   const headers = lines[0]
@@ -51,13 +84,14 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
 
   const phoneIdx = headers.indexOf('phone');
   if (phoneIdx === -1) {
-    return { rows: [], hasTagsColumn: false, hasCompanyColumn: false };
+    return { rows: [], hasTagsColumn: false, hasCompanyColumn: false, hasCodesColumn: false };
   }
 
   const nameIdx = headers.indexOf('name');
   const emailIdx = headers.indexOf('email');
   const companyIdx = headers.indexOf('company');
   const tagsIdx = headers.indexOf('tags');
+  const codesIdx = headers.findIndex((h) => CODE_HEADERS.includes(h));
 
   const rows: ParsedContactRow[] = [];
 
@@ -85,6 +119,8 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
           : undefined,
       tagNames:
         tagsIdx >= 0 ? parseTagCell(values[tagsIdx]?.replace(/["']/g, '')) : [],
+      codes:
+        codesIdx >= 0 ? parseCodeCell(values[codesIdx]?.replace(/["']/g, '')) : [],
     });
   }
 
@@ -92,6 +128,7 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
     rows,
     hasTagsColumn: tagsIdx >= 0,
     hasCompanyColumn: companyIdx >= 0,
+    hasCodesColumn: codesIdx >= 0,
   };
 }
 

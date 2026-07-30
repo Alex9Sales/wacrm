@@ -28,6 +28,7 @@ describe('serializeContact', () => {
       name: 'Jane',
       email: null,
       company: 'Acme',
+      customer_codes: [],
       avatar_url: null,
       tags: [{ id: 't1', name: 'vip', color: '#fff' }],
       created_at: '2026-01-01T00:00:00Z',

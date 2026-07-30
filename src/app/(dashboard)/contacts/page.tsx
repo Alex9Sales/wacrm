@@ -3,6 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import {
   deleteContacts,
+  exportContacts,
   getContactTags,
   listContacts,
   listContactTagPairs,
@@ -44,6 +45,7 @@ import {
   Search,
   Plus,
   Upload,
+  Download,
   MoreHorizontal,
   Pencil,
   Trash2,
@@ -88,6 +90,7 @@ export default function ContactsPage() {
   const [detailOpen, setDetailOpen] = useState(false);
   const [detailContactId, setDetailContactId] = useState<string | null>(null);
   const [importOpen, setImportOpen] = useState(false);
+  const [exporting, setExporting] = useState(false);
   const [customFieldsOpen, setCustomFieldsOpen] = useState(false);
   const [deleteConfirmOpen, setDeleteConfirmOpen] = useState(false);
   const [deleteTarget, setDeleteTarget] = useState<Contact | null>(null);
@@ -120,6 +123,55 @@ export default function ContactsPage() {
       });
     } catch {
       // Non-fatal — the table still renders without tag chips.
+    }
+  }, []);
+
+  // Exporta TODOS os contatos como CSV (phone, name, email, company,
+  // codigo_cliente, tags) — Felipe/cema leva o código de volta pro ERP.
+  const handleExport = useCallback(async () => {
+    setExporting(true);
+    try {
+      const rows = await exportContacts();
+      const headers = [
+        'phone',
+        'name',
+        'email',
+        'company',
+        'codigo_cliente',
+        'tags',
+      ];
+      const escape = (v: string) =>
+        /[",\n;]/.test(v) ? `"${v.replace(/"/g, '""')}"` : v;
+      const csv = [
+        headers.join(','),
+        ...rows.map((r) =>
+          [
+            r.phone,
+            r.name,
+            r.email,
+            r.company,
+            r.codigo_cliente,
+            r.tags,
+          ]
+            .map((v) => escape(v ?? ''))
+            .join(','),
+        ),
+      ].join('\n');
+      // BOM so Excel (Windows dos atendentes) abre acentos corretamente.
+      const blob = new Blob(['﻿' + csv], {
+        type: 'text/csv;charset=utf-8;',
+      });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = 'contatos.csv';
+      a.click();
+      URL.revokeObjectURL(url);
+      toast.success(`${rows.length} contato(s) exportado(s).`);
+    } catch {
+      toast.error('Falha ao exportar os contatos.');
+    } finally {
+      setExporting(false);
     }
   }, []);
 
@@ -343,6 +395,15 @@ export default function ContactsPage() {
             <Upload className="size-4" />
             Importar
           </GatedButton>
+          <Button
+            variant="outline"
+            onClick={handleExport}
+            disabled={exporting}
+            className="border-border text-muted-foreground hover:bg-muted"
+          >
+            <Download className="size-4" />
+            {exporting ? 'Exportando…' : 'Exportar'}
+          </Button>
           <GatedButton
             canAct={canEdit}
             gateReason="adicionar ou importar contatos"

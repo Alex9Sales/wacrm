@@ -31,6 +31,7 @@ import {
 } from "@/app/(dashboard)/inbox/schedule-actions";
 import { ScheduleMessageForm } from "./schedule-message-form";
 import { ScheduleMiniList } from "./schedule-mini-list";
+import { CustomerCodesEditor } from "./customer-codes-editor";
 import type {
   Contact,
   Conversation,
@@ -529,6 +530,15 @@ export function ContactSidebar({
                 Adicionar nome
               </button>
             )}
+
+            {/* Código(s) do cliente — ao lado/abaixo do nome, editável na hora. */}
+            <CustomerCodesEditor
+              contactId={contact.id}
+              codes={contact.customer_codes ?? []}
+              onChange={(codes) =>
+                onContactUpdated?.({ ...contact, customer_codes: codes })
+              }
+            />
           </div>
 
           {/* Contact fields: phone (copy), email, empresa */}

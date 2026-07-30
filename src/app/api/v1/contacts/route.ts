@@ -22,6 +22,7 @@ import {
   setContactTags,
   getContactById,
   resolveAuditUserId,
+  normalizeCodes,
   ContactError,
 } from '@/lib/api/v1/contacts';
 
@@ -76,6 +77,7 @@ export async function GET(request: Request) {
       name: contacts.name,
       email: contacts.email,
       company: contacts.company,
+      customer_codes: contacts.customerCodes,
       avatar_url: contacts.avatarUrl,
       created_at: contacts.createdAt,
       updated_at: contacts.updatedAt,
@@ -161,6 +163,10 @@ export async function POST(request: Request) {
         name: typeof body.name === 'string' ? body.name : undefined,
         email: typeof body.email === 'string' ? body.email : undefined,
         company: typeof body.company === 'string' ? body.company : undefined,
+        customer_codes:
+          'customer_codes' in body
+            ? normalizeCodes(body.customer_codes)
+            : undefined,
       }
     );
 

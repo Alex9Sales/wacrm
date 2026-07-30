@@ -21,6 +21,8 @@ export interface ApiContact {
   name: string | null;
   email: string | null;
   company: string | null;
+  /** Customer codes (ERP) — múltiplos por contato. */
+  customer_codes: string[];
   avatar_url: string | null;
   tags: { id: string; name: string; color: string }[];
   created_at: string;
@@ -37,6 +39,17 @@ export class ContactError extends Error {
   }
 }
 
+/** Normalize a customer-codes input: strings only, trimmed, no blanks, unique. */
+export function normalizeCodes(input: unknown): string[] {
+  if (!Array.isArray(input)) return [];
+  const out: string[] = [];
+  for (const raw of input) {
+    const c = typeof raw === 'string' ? raw.trim() : '';
+    if (c && !out.includes(c)) out.push(c);
+  }
+  return out;
+}
+
 type RawTagJoin = { tags: { id: string; name: string; color: string } | null };
 
 /** Flatten a contact row + embedded tag joins into the public shape. */
@@ -48,6 +61,7 @@ export function serializeContact(row: Record<string, unknown>): ApiContact {
     name: (row.name as string | null) ?? null,
     email: (row.email as string | null) ?? null,
     company: (row.company as string | null) ?? null,
+    customer_codes: (row.customer_codes as string[] | null) ?? [],
     avatar_url: (row.avatar_url as string | null) ?? null,
     tags: joins
       .map((j) => j.tags)
@@ -115,6 +129,8 @@ export interface ContactInput {
   name?: string | null;
   email?: string | null;
   company?: string | null;
+  /** Customer codes (ERP) — múltiplos por contato. */
+  customer_codes?: string[];
 }
 
 /**
@@ -150,6 +166,7 @@ export async function findOrCreateContact(
           name: input.name ?? sanitized,
           email: input.email ?? null,
           company: input.company ?? null,
+          customerCodes: normalizeCodes(input.customer_codes),
         })
         .returning({ id: contacts.id })
     );
@@ -252,6 +269,7 @@ export async function getContactById(
     name: row.name ?? null,
     email: row.email ?? null,
     company: row.company ?? null,
+    customer_codes: row.customerCodes ?? [],
     avatar_url: row.avatarUrl ?? null,
     tags: tagsByContact.get(row.id) ?? [],
     created_at: row.createdAt ?? '',

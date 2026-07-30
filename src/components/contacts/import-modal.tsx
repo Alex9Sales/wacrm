@@ -216,6 +216,7 @@ export function ImportModal({
           email: row.email,
           company: row.company,
           tagNames: row.tagNames,
+          codes: row.codes,
         }))
       );
 
@@ -310,8 +311,12 @@ export function ImportModal({
               ,{' '}
               <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
                 tags
+              </code>
+              {' '}e{' '}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
+                codigo_cliente
               </code>{' '}
-              (separadas por vírgula; use aspas em células com várias etiquetas).
+              (separadas por vírgula; use aspas em células com vários valores).
             </DialogDescription>
           </DialogHeader>
 

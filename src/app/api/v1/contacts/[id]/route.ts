@@ -17,6 +17,7 @@ import {
   getContactById,
   setContactTags,
   resolveAuditUserId,
+  normalizeCodes,
   ContactError,
 } from '@/lib/api/v1/contacts';
 
@@ -63,6 +64,7 @@ export async function PATCH(
       name: string | null;
       email: string | null;
       company: string | null;
+      customerCodes: string[];
       updatedAt: string;
     }> = {};
     for (const field of ['name', 'email', 'company'] as const) {
@@ -73,6 +75,13 @@ export async function PATCH(
       } else {
         return fail('bad_request', `'${field}' must be a string or null`, 400);
       }
+    }
+    // customer_codes: replace the full set (array of strings).
+    if ('customer_codes' in body) {
+      if (body.customer_codes !== null && !Array.isArray(body.customer_codes)) {
+        return fail('bad_request', "'customer_codes' must be an array", 400);
+      }
+      updates.customerCodes = normalizeCodes(body.customer_codes);
     }
 
     if (Object.keys(updates).length > 0) {

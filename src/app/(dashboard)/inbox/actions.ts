@@ -240,6 +240,7 @@ const contactColumns = {
   name: contacts.name,
   email: contacts.email,
   company: contacts.company,
+  customer_codes: contacts.customerCodes,
   avatar_url: contacts.avatarUrl,
   is_group: contacts.isGroup,
   created_at: contacts.createdAt,
@@ -798,6 +799,29 @@ export async function removeContactTag(
     .where(
       and(eq(contactTags.contactId, contactId), eq(contactTags.tagId, tagId)),
     )
+}
+
+/**
+ * Replace a contact's customer codes (Felipe/cema: código de cadastro do ERP,
+ * múltiplos por contato, editável ao lado do nome). Trims, drops blanks and
+ * de-duplicates. Account-scoped.
+ */
+export async function updateContactCodes(
+  contactId: string,
+  codes: string[],
+): Promise<{ ok: boolean; codes: string[] }> {
+  const ctx = await getCurrentAccount()
+  const clean: string[] = []
+  for (const raw of codes) {
+    const c = typeof raw === 'string' ? raw.trim() : ''
+    if (c && !clean.includes(c)) clean.push(c)
+  }
+  const updated = await db
+    .update(contacts)
+    .set({ customerCodes: clean, updatedAt: new Date().toISOString() })
+    .where(and(eq(contacts.id, contactId), eq(contacts.accountId, ctx.accountId)))
+    .returning({ id: contacts.id })
+  return { ok: !!firstOrNull(updated), codes: clean }
 }
 
 /** Assign / unassign a conversation. Account-scoped. */

@@ -1103,7 +1103,19 @@ export function MessageThread({
             />
           </div>
           <div className="min-w-0">
-            <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
+            <div className="flex min-w-0 items-center gap-1.5">
+              <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
+              {/* Código(s) do cliente ao lado do nome (Felipe/cema). */}
+              {(contact.customer_codes ?? []).slice(0, 3).map((code) => (
+                <span
+                  key={code}
+                  className="inline-flex shrink-0 items-center rounded-full bg-primary/10 px-1.5 py-0.5 text-[10px] font-semibold text-primary"
+                  title="Código do cliente"
+                >
+                  #{code}
+                </span>
+              ))}
+            </div>
             <p className="truncate text-xs text-muted-foreground">{contact.phone}</p>
           </div>
           {/* Channel badge — which channel this thread is on (Phase 4).
