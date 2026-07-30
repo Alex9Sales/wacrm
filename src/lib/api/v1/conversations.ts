@@ -15,6 +15,7 @@ export interface ApiConversation {
   contact_id: string;
   channel_id: string | null;
   status: string;
+  priority: string;
   assigned_agent_id: string | null;
   last_message_text: string | null;
   last_message_at: string | null;
@@ -59,6 +60,7 @@ export function serializeConversation(conv: Conversation): ApiConversation {
     channel_id:
       (conv as { channel_id?: string | null }).channel_id ?? null,
     status: conv.status,
+    priority: conv.priority ?? 'none',
     assigned_agent_id: conv.assigned_agent_id ?? null,
     last_message_text: conv.last_message_text ?? null,
     last_message_at: conv.last_message_at ?? null,

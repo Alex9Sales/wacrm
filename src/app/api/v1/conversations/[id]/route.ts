@@ -18,6 +18,7 @@ const CONVERSATION_COLUMNS = {
   id: conversations.id,
   contact_id: conversations.contactId,
   status: conversations.status,
+  priority: conversations.priority,
   assigned_agent_id: conversations.assignedAgentId,
   last_message_text: conversations.lastMessageText,
   last_message_at: conversations.lastMessageAt,
@@ -83,7 +84,8 @@ export async function GET(
 // (scope: conversations:write). Reassigning is just changing the owner of the
 // SAME thread — the full history stays intact for whoever picks it up. Body
 // accepts any of: assigned_agent_id (member id | null to unassign), sector_id
-// (sector id | null for the general queue), status (open|pending|closed).
+// (sector id | null for the general queue), status (open|pending|closed),
+// priority (none|low|medium|high|urgent — so Hermes/n8n can flag urgency).
 // ============================================================
 export async function PATCH(
   request: Request,
@@ -198,10 +200,24 @@ export async function PATCH(
       changed = true;
     }
 
+    if ('priority' in body) {
+      const v = body.priority;
+      const allowed = ['none', 'low', 'medium', 'high', 'urgent'];
+      if (typeof v !== 'string' || !allowed.includes(v)) {
+        return fail(
+          'invalid_request',
+          "priority must be one of 'none', 'low', 'medium', 'high', 'urgent'",
+          422
+        );
+      }
+      patch.priority = v;
+      changed = true;
+    }
+
     if (!changed) {
       return fail(
         'invalid_request',
-        'Provide at least one of assigned_agent_id, sector_id, status',
+        'Provide at least one of assigned_agent_id, sector_id, status, priority',
         422
       );
     }

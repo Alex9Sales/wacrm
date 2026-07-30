@@ -20,6 +20,8 @@ export const API_SCOPES = [
   'contacts:write',
   'conversations:read',
   'conversations:write',
+  'tags:read',
+  'tags:write',
   'internal:read',
   'internal:write',
   'members:read',
@@ -43,7 +45,10 @@ export const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   'contacts:write': 'Create and update contacts',
   'conversations:read': 'List and read conversations',
   'conversations:write':
-    'Transfer/assign conversations (set agent, sector, or status)',
+    'Transfer/assign conversations (set agent, sector, status, or priority)',
+  'tags:read': 'List the account tags (labels)',
+  'tags:write':
+    'Create tags and add/remove them on conversations (contacts)',
   'internal:read': 'List internal team channels and read their messages',
   'internal:write': 'Create internal channels and post internal messages',
   'members:read': 'List team members (ids, names) — to assign/transfer or post',

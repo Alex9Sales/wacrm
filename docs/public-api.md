@@ -48,7 +48,9 @@ it. Grant the minimum.
 | `contacts:read`       | List and read contacts                       |
 | `contacts:write`      | Create and update contacts                   |
 | `conversations:read`  | List and read conversations                  |
-| `conversations:write` | Assign / move / close conversations          |
+| `conversations:write` | Assign / move / close / prioritize conversations |
+| `tags:read`           | List the account tags (labels)               |
+| `tags:write`          | Create tags; add/remove them on conversations |
 | `deals:read`          | List and read pipelines and deals            |
 | `deals:write`         | Create and move deals (Kanban cards)         |
 | `tasks:read`          | List and read tasks                          |
@@ -279,9 +281,44 @@ Meta delivery webhooks arrive. `404` for another account's broadcast.
 
 ### `PATCH /api/v1/conversations/{id}`
 
-Assign, move, or close a conversation. Scope: `conversations:write`. Accepts
-any of: `assigned_agent_id` (member id, or `null` to unassign), `sector_id`
-(sector id, or `null` for the general queue), `status` (`open`/`pending`/`closed`).
+Assign, move, close, or **prioritize** a conversation. Scope: `conversations:write`.
+Accepts any of: `assigned_agent_id` (member id, or `null` to unassign), `sector_id`
+(sector id, or `null` for the general queue), `status` (`open`/`pending`/`closed`),
+`priority` (`none`/`low`/`medium`/`high`/`urgent`).
+
+```bash
+# Flag a thread as urgent for the team
+curl -X PATCH https://<host>/api/v1/conversations/{id} \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "priority": "urgent" }'
+```
+
+`GET /api/v1/conversations` and `GET /api/v1/conversations/{id}` include the
+current `priority` and the contact's `tags` on each row.
+
+### Tags (labels)
+
+Account-level labels that live on the contact and show on the conversation card.
+Scopes: `tags:read` / `tags:write`.
+
+- `GET /api/v1/tags` — list the account's tags (`{ id, name, color }`).
+- `POST /api/v1/tags` — create a tag. Body: `{ "name": "pago", "color": "#10b981" }`
+  (`color` optional). **Idempotent by name** (case-insensitive): re-running an
+  n8n "setup" workflow returns the existing tag (`200`) instead of duplicating
+  it; a brand-new tag returns `201`.
+- `GET /api/v1/conversations/{id}/tags` — tags on this thread's contact.
+- `POST /api/v1/conversations/{id}/tags` — add a tag to the thread. Body is
+  either `{ "tag_id": "…" }` or `{ "name": "pago", "color"?: "#10b981" }` — a
+  name that doesn't exist yet is created, so Hermes can label freely. Returns
+  the contact's full tag set.
+- `DELETE /api/v1/conversations/{id}/tags/{tagId}` — remove a tag (idempotent).
+
+```bash
+# Hermes labels a thread (creating the tag if needed)
+curl -X POST https://<host>/api/v1/conversations/{id}/tags \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "name": "pago" }'
+```
 
 ### Deals & pipelines
 
