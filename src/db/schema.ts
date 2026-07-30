@@ -1399,6 +1399,20 @@ export const internalMessages = pgTable("internal_messages", {
 		}).onDelete("cascade"),
 ]);
 
+// Presence (Fase 3): one row per user, online/away + last heartbeat.
+// "offline" is derived client-side from staleness (see lib/presence.ts).
+export const memberPresence = pgTable("member_presence", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	userId: uuid("user_id").notNull(),
+	status: text().default('online').notNull(),
+	lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("member_presence_user_id_key").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
+	index("idx_member_presence_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	check("member_presence_status_check", sql`status = ANY (ARRAY['online'::text, 'away'::text])`),
+]);
+
 // Per-user read state for internal chat channels — drives the unread badge.
 export const internalChannelReads = pgTable("internal_channel_reads", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),

@@ -197,15 +197,28 @@ export async function createChannel(
 }
 
 /** Update a channel's status (and optionally its known phone number). */
+/** The only values channels.status allows (DB check `channels_status_check`). */
+const VALID_CHANNEL_STATUS = new Set([
+  'disconnected',
+  'qr_pending',
+  'connected',
+  'error',
+]);
+
 export async function updateChannelStatus(
   channelId: string,
   status: string,
   phoneNumber?: string | null,
 ): Promise<void> {
+  // Never write a value outside the DB enum — a provider reporting an
+  // unmapped state (e.g. WAHA 'STARTING') would otherwise throw
+  // channels_status_check and leave the row stale. Coerce the unknown to
+  // 'disconnected' (safe transient) so the write always succeeds.
+  const safeStatus = VALID_CHANNEL_STATUS.has(status) ? status : 'disconnected';
   await db
     .update(channels)
     .set({
-      status,
+      status: safeStatus,
       ...(phoneNumber !== undefined ? { phoneNumber } : {}),
       updatedAt: new Date().toISOString(),
     })

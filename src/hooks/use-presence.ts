@@ -1,47 +1,90 @@
 "use client";
 
-import { useCallback, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
-import { derivePresence, type PresenceRow, type PresenceStatus } from "@/lib/presence";
+import {
+  derivePresence,
+  HEARTBEAT_MS,
+  type PresenceRow,
+  type PresenceStatus,
+} from "@/lib/presence";
 
 interface UsePresenceResult {
-  /** Derived status for one member (defaults to offline if unseen). */
+  /** Derived status for one member (offline if unseen / stale). */
   getPresence: (userId: string) => PresenceStatus;
   /** Raw row for tooltips ("last seen …"). */
   getRow: (userId: string) => PresenceRow | undefined;
-  /**
-   * The clock value the hook is currently deriving against. Pass this
-   * to `presenceLabel` / `formatLastSeen` so labels stay in lockstep
-   * with the dots.
-   */
+  /** The clock the hook is deriving against — pass to presenceLabel so
+   *  labels stay in lockstep with the dots. */
   now: number;
 }
 
 /**
- * Live presence for every member of the caller's account —
- * NEUTRALIZED in Phase 1.
+ * Live presence for every member of the caller's account (Fase 3).
  *
- * Presence (the `member_presence` table + Realtime channel) is being
- * removed in Phase 1 per the migration plan. This hook now holds no
- * rows and never subscribes: every member reads back as offline and
- * `getRow` returns undefined. The signature is preserved so consumer
- * components still typecheck.
- *
- * TODO(fase-3): presence returns with SSE. When it does, restore the
- * initial fetch + subscription and the ~15s re-derive tick.
+ * Fetches the account's presence rows from GET /api/presence, polls to stay
+ * fresh, and re-derives every few seconds so a member whose heartbeat went
+ * stale flips to "offline" without a refetch. Reporting is done by
+ * <PresenceHeartbeat/>. No SSE yet — a poll is plenty for a presence dot.
  */
-export function usePresence(_enabled = true): UsePresenceResult {
-  // `now` is captured once; with no rows the derived status is always
-  // offline regardless, so we don't need the re-derive interval.
-  const [now] = useState(() => Date.now());
+export function usePresence(enabled = true): UsePresenceResult {
+  const [rows, setRows] = useState<Map<string, PresenceRow>>(new Map());
+  // `now` advances on a slow tick so derivePresence re-runs and stale rows
+  // decay to offline between fetches.
+  const [now, setNow] = useState(() => Date.now());
+  const enabledRef = useRef(enabled);
+  enabledRef.current = enabled;
 
-  const getRow = useCallback((_userId: string): PresenceRow | undefined => {
-    return undefined;
+  const refetch = useCallback(async () => {
+    if (!enabledRef.current) return;
+    try {
+      const res = await fetch("/api/presence", { cache: "no-store" });
+      if (!res.ok) return;
+      const body = (await res.json()) as {
+        presence: { user_id: string; status: string; last_seen_at: string }[];
+      };
+      const map = new Map<string, PresenceRow>();
+      for (const p of body.presence ?? []) {
+        map.set(p.user_id, {
+          status: p.status === "away" ? "away" : "online",
+          last_seen_at: p.last_seen_at,
+        });
+      }
+      setRows(map);
+      setNow(Date.now());
+    } catch {
+      /* best-effort */
+    }
   }, []);
 
+  useEffect(() => {
+    if (!enabled) return;
+    void refetch();
+    const onFocus = () => void refetch();
+    window.addEventListener("focus", onFocus);
+    // Poll for others' presence roughly in step with the heartbeat cadence.
+    const poll = window.setInterval(() => void refetch(), HEARTBEAT_MS);
+    // Faster re-derive tick so a member who stopped heartbeating decays to
+    // offline promptly (without hammering the network).
+    const tick = window.setInterval(() => setNow(Date.now()), 15_000);
+    return () => {
+      window.removeEventListener("focus", onFocus);
+      window.clearInterval(poll);
+      window.clearInterval(tick);
+    };
+  }, [enabled, refetch]);
+
+  const getRow = useCallback(
+    (userId: string): PresenceRow | undefined => rows.get(userId),
+    [rows],
+  );
+
   const getPresence = useCallback(
-    (_userId: string): PresenceStatus => derivePresence(undefined, undefined, now),
-    [now],
+    (userId: string): PresenceStatus => {
+      const row = rows.get(userId);
+      return derivePresence(row?.status, row?.last_seen_at, now);
+    },
+    [rows, now],
   );
 
   return { getPresence, getRow, now };

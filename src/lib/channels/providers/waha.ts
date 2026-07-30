@@ -1592,7 +1592,12 @@ export const wahaProvider: WhatsAppProvider = {
       case 'FAILED':
         return { status: 'error' };
       default:
-        return { status: st ? st.toLowerCase() : 'disconnected' };
+        // Any other WAHA state (e.g. STARTING while the session boots) is a
+        // transient "not ready yet". MUST map to a value in the DB enum
+        // (disconnected|qr_pending|connected|error) — returning the raw
+        // lowercased status violated channels_status_check. 'disconnected'
+        // is safe: it flips to 'connected' on the next WORKING.
+        return { status: 'disconnected' };
     }
   },
 };

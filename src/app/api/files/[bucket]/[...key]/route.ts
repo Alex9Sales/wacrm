@@ -120,22 +120,45 @@ export async function GET(_req: Request, { params }: RouteParams) {
  * pump otherwise.
  */
 function nodeToWebStream(nodeStream: Readable): ReadableStream<Uint8Array> {
-  const RS = nodeStream as unknown as {
-    constructor: { toWeb?: (s: Readable) => ReadableStream<Uint8Array> };
-  };
-  const toWeb = RS.constructor?.toWeb;
-  if (typeof toWeb === "function") {
-    return toWeb(nodeStream);
-  }
+  // A guarded manual pump (NOT Readable.toWeb): when the browser aborts a
+  // partial download — which it does constantly for <img>/<audio> — toWeb's
+  // internal pump can call enqueue on an already-closed controller and throw
+  // an UNCAUGHT `ERR_INVALID_STATE: Controller is already closed`. The `closed`
+  // flag + try/catch here make every controller op a no-op after teardown.
+  let closed = false;
   return new ReadableStream<Uint8Array>({
     start(controller) {
-      nodeStream.on("data", (chunk: Buffer) =>
-        controller.enqueue(new Uint8Array(chunk)),
-      );
-      nodeStream.on("end", () => controller.close());
-      nodeStream.on("error", (err) => controller.error(err));
+      nodeStream.on("data", (chunk: Buffer) => {
+        if (closed) return;
+        try {
+          controller.enqueue(new Uint8Array(chunk));
+        } catch {
+          // Consumer gone mid-chunk — stop reading.
+          closed = true;
+          nodeStream.destroy();
+        }
+      });
+      nodeStream.on("end", () => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.close();
+        } catch {
+          /* already closed */
+        }
+      });
+      nodeStream.on("error", (err) => {
+        if (closed) return;
+        closed = true;
+        try {
+          controller.error(err);
+        } catch {
+          /* already torn down */
+        }
+      });
     },
     cancel() {
+      closed = true;
       nodeStream.destroy();
     },
   });
