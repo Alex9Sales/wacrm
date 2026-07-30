@@ -102,10 +102,12 @@ export async function getConversationWithContact(
         // reload, ok after entering the conversation".
         contact: contactColumns,
         channel: channelColumns,
+        sector: sectorColumns,
       })
       .from(conversations)
       .leftJoin(contacts, eq(conversations.contactId, contacts.id))
       .leftJoin(channels, eq(conversations.channelId, channels.id))
+      .leftJoin(sectors, eq(conversations.sectorId, sectors.id))
       .where(
         and(
           eq(conversations.id, conversationId),
@@ -158,7 +160,7 @@ export async function getConversationWithContact(
     transferNoteByName = u?.name ?? null
   }
 
-  const { contact, channel, ...conv } = row
+  const { contact, channel, sector, ...conv } = row
   return {
     ...conv,
     status: conv.status as ConversationStatus,
@@ -169,6 +171,9 @@ export async function getConversationWithContact(
       ? ({ ...contact, tags: contactTagsList } as unknown as Contact)
       : undefined,
     channel: normalizeChannel(channel),
+    sector: sector?.id
+      ? { id: sector.id, name: sector.name, color: sector.color }
+      : null,
   } as unknown as Conversation
 }
 
@@ -254,6 +259,13 @@ const channelColumns = {
   id: channels.id,
   provider: channels.provider,
   name: channels.name,
+}
+
+// The conversation's sector — name + color for the inbox card badge.
+const sectorColumns = {
+  id: sectors.id,
+  name: sectors.name,
+  color: sectors.color,
 }
 
 const tagColumns = {
@@ -368,10 +380,12 @@ export async function listConversations(): Promise<Conversation[]> {
       ...conversationColumns,
       contact: contactColumns,
       channel: channelColumns,
+      sector: sectorColumns,
     })
     .from(conversations)
     .leftJoin(contacts, eq(conversations.contactId, contacts.id))
     .leftJoin(channels, eq(conversations.channelId, channels.id))
+    .leftJoin(sectors, eq(conversations.sectorId, sectors.id))
     .where(and(eq(conversations.accountId, ctx.accountId), visibility))
     .orderBy(desc(conversations.lastMessageAt))
 
@@ -395,7 +409,7 @@ export async function listConversations(): Promise<Conversation[]> {
   }
 
   return rows.map((row) => {
-    const { contact, channel, ...conv } = row
+    const { contact, channel, sector, ...conv } = row
     return {
       ...conv,
       status: conv.status as ConversationStatus,
@@ -408,6 +422,9 @@ export async function listConversations(): Promise<Conversation[]> {
           } as unknown as Contact)
         : undefined,
       channel: normalizeChannel(channel),
+      sector: sector?.id
+        ? { id: sector.id, name: sector.name, color: sector.color }
+        : null,
     } as unknown as Conversation
   })
 }

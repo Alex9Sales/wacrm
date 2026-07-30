@@ -935,6 +935,24 @@ function ConversationItem({
                 <Users className="h-2.5 w-2.5" />
               </span>
             )}
+            {conversation.sector && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-medium"
+                style={{
+                  backgroundColor: `${conversation.sector.color}20`,
+                  color: conversation.sector.color,
+                }}
+                title={`Setor: ${conversation.sector.name}`}
+              >
+                <span
+                  className="size-1.5 rounded-full"
+                  style={{ backgroundColor: conversation.sector.color }}
+                />
+                <span className="max-w-20 truncate">
+                  {conversation.sector.name}
+                </span>
+              </span>
+            )}
             {conversation.channel && (
               <span
                 className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground"

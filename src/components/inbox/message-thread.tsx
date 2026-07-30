@@ -599,6 +599,12 @@ export function MessageThread({
         // with the real DB row. If realtime hasn't arrived yet, at least
         // flip status to 'sent' so the UI stops showing "sending".
         onUpdateMessage(tempId, { status: "sent" });
+        // Claim-on-reply: the server assigns an UNassigned thread to whoever
+        // answers. Mirror it in the UI right away (senão fica "Não atribuído"
+        // até dar refresh — foi o que o Felipe viu).
+        if (!conversation.assigned_agent_id && user?.id) {
+          onAssignChange(conversation.id, user.id);
+        }
       } catch (err) {
         console.error("Failed to send message:", err);
         const reason = err instanceof Error ? err.message : "erro de rede";
@@ -606,7 +612,7 @@ export function MessageThread({
         onUpdateMessage(tempId, { status: "failed" });
       }
     },
-    [conversation, onNewMessage, onUpdateMessage]
+    [conversation, onNewMessage, onUpdateMessage, onAssignChange, user?.id]
   );
 
   const handleSendMedia = useCallback(
@@ -664,6 +670,9 @@ export function MessageThread({
         }
 
         onUpdateMessage(tempId, { status: "sent" });
+        if (!conversation.assigned_agent_id && user?.id) {
+          onAssignChange(conversation.id, user.id);
+        }
       } catch (err) {
         console.error("Failed to send media:", err);
         const reason = err instanceof Error ? err.message : "erro de rede";
@@ -672,7 +681,7 @@ export function MessageThread({
         void deleteAccountMedia(CHAT_MEDIA_BUCKET, payload.path).catch(() => {});
       }
     },
-    [conversation, onNewMessage, onUpdateMessage],
+    [conversation, onNewMessage, onUpdateMessage, onAssignChange, user?.id],
   );
 
   const handleStatusChange = useCallback(
@@ -756,6 +765,9 @@ export function MessageThread({
         }
 
         onUpdateMessage(tempId, { status: "sent" });
+        if (!conversation.assigned_agent_id && user?.id) {
+          onAssignChange(conversation.id, user.id);
+        }
       } catch (err) {
         console.error("Failed to send template:", err);
         const reason = err instanceof Error ? err.message : "erro de rede";
@@ -763,7 +775,7 @@ export function MessageThread({
         onUpdateMessage(tempId, { status: "failed" });
       }
     },
-    [conversation, onNewMessage, onUpdateMessage],
+    [conversation, onNewMessage, onUpdateMessage, onAssignChange, user?.id],
   );
 
   // Build a quick id → Message map so reply quotes can be rendered without

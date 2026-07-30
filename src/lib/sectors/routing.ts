@@ -107,11 +107,11 @@ export async function routeNewConversation(params: {
   try {
     const accountSectors = await loadAccountSectors(accountId);
 
-    // 1) Keyword match wins.
-    let chosen = matchKeyword(accountSectors, firstText);
-
-    // 2) Else the channel's default sector.
-    if (!chosen && channelId) {
+    // 1) The channel's default sector wins — a dedicated number (ex.: cema tem
+    // um número por setor) é AUTORITATIVO. Assim uma palavra-chave solta ("nota")
+    // não joga a conversa desse número pra outro setor.
+    let chosen: Chosen | null = null;
+    if (channelId) {
       const ch = firstOrNull(
         await db
           .select({ defaultSectorId: channels.defaultSectorId })
@@ -124,6 +124,10 @@ export async function routeNewConversation(params: {
         if (s) chosen = { id: s.id, autoAssign: s.autoAssign };
       }
     }
+
+    // 2) Else (canal sem setor padrão — número compartilhado) a palavra-chave
+    // da 1ª mensagem decide.
+    if (!chosen) chosen = matchKeyword(accountSectors, firstText);
 
     // 3) Else the general queue.
     if (!chosen) return { sectorId: null, assignedAgentId: null };

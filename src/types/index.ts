@@ -199,6 +199,9 @@ export interface Conversation {
   /** The channel this conversation is on. Undefined for legacy rows with
    *  a NULL channel_id (pre-Phase-4 / single-Meta accounts). */
   channel?: ConversationChannel;
+  /** The sector this conversation belongs to (name + color for the card
+   *  badge). Null when it's in the general queue. */
+  sector?: { id: string; name: string; color: string } | null;
 }
 
 // ============================================================
