@@ -26,6 +26,7 @@ import {
   user,
   channels,
   sectors,
+  sectorMembers,
   quickReplies,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -841,6 +842,97 @@ export async function updateConversationAssignment(
       // full window before auto-reassign can consider it again.
       assignedAt: assignedAgentId ? new Date().toISOString() : null,
     })
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.accountId, ctx.accountId),
+      ),
+    )
+}
+
+/**
+ * Transferir o ATENDIMENTO pra outro atendente (Felipe/cema). Diferente de
+ * updateConversationAssignment (supervisor-only, "distribuir"): aqui QUEM
+ * ATENDE passa a conversa adiante. Pode transferir quem consegue ver a
+ * conversa (o atribuído, colega do mesmo setor, ou supervisor+). Se a conversa
+ * tem setor, o destino precisa ser membro DESSE setor. Notifica o novo agente
+ * (não suprime o trigger de atribuição).
+ */
+export async function transferConversationToAgent(
+  conversationId: string,
+  targetUserId: string,
+): Promise<void> {
+  const ctx = await getCurrentAccount()
+
+  const conv = firstOrNull(
+    await db
+      .select({
+        id: conversations.id,
+        sectorId: conversations.sectorId,
+        assignedAgentId: conversations.assignedAgentId,
+        isPrivate: conversations.isPrivate,
+      })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      )
+      .limit(1),
+  )
+  if (!conv) throw new Error('Conversa não encontrada.')
+
+  if (
+    !(await canSeeConversation(
+      ctx.role,
+      ctx.userId,
+      conv.sectorId,
+      conv.assignedAgentId,
+      conversationId,
+      conv.isPrivate,
+    ))
+  ) {
+    throw new Error('Sem permissão para esta conversa.')
+  }
+
+  // The target must be a member of the account.
+  const targetMember = firstOrNull(
+    await db
+      .select({ id: member.id })
+      .from(member)
+      .where(
+        and(
+          eq(member.userId, targetUserId),
+          eq(member.organizationId, ctx.accountId),
+        ),
+      )
+      .limit(1),
+  )
+  if (!targetMember) throw new Error('Atendente inválido.')
+
+  // If the conversation belongs to a sector, transfers stay inside it.
+  if (conv.sectorId) {
+    const inSector = firstOrNull(
+      await db
+        .select({ id: sectorMembers.id })
+        .from(sectorMembers)
+        .where(
+          and(
+            eq(sectorMembers.sectorId, conv.sectorId),
+            eq(sectorMembers.userId, targetUserId),
+          ),
+        )
+        .limit(1),
+    )
+    if (!inSector) {
+      throw new Error('Esse atendente não está no setor desta conversa.')
+    }
+  }
+
+  await db
+    .update(conversations)
+    .set({ assignedAgentId: targetUserId, assignedAt: new Date().toISOString() })
     .where(
       and(
         eq(conversations.id, conversationId),

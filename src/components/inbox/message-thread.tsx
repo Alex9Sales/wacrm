@@ -9,6 +9,7 @@ import {
   listReactions,
   markConversationRead,
   updateConversationAssignment,
+  transferConversationToAgent,
   updateConversationStatus,
   listSectors,
   updateConversationSector,
@@ -960,6 +961,26 @@ export function MessageThread({
     [conversation, onAssignChange],
   );
 
+  // Transferir atendimento (Felipe): quem atende passa a conversa pra outro
+  // atendente do mesmo setor. Diferente do assign (supervisor) — o servidor
+  // valida permissão + setor e notifica o novo agente.
+  const handleTransferToAgent = useCallback(
+    async (targetUserId: string) => {
+      if (!conversation || targetUserId === conversation.assigned_agent_id) return;
+      try {
+        await transferConversationToAgent(conversation.id, targetUserId);
+      } catch (err) {
+        toast.error(
+          err instanceof Error ? err.message : "Falha ao transferir o atendimento",
+        );
+        return;
+      }
+      onAssignChange(conversation.id, targetUserId);
+      toast.success("Atendimento transferido");
+    },
+    [conversation, onAssignChange],
+  );
+
   const handleDeleteConversation = useCallback(async () => {
     if (!conversation || deleteBusy) return;
     setDeleteBusy(true);
@@ -1037,6 +1058,9 @@ export function MessageThread({
   const assignLabel = assignedAgentId
     ? (currentAssignee?.full_name ?? "Atribuída")
     : "Atribuir";
+  // O atendente atribuído (não-supervisor) pode TRANSFERIR o atendimento —
+  // supervisor+ tem o assign completo; o assignee ganha um "Transferir".
+  const isAssignee = !!assignedAgentId && assignedAgentId === user?.id;
   // Reply lock (mirrors the server-side check in /api/whatsapp/send): a
   // sector teammate who ISN'T the assignee can still see this conversation
   // (shared sector queue) but must not be able to reply to it. Supervisor+
@@ -1311,8 +1335,9 @@ export function MessageThread({
             </DropdownMenuContent>
           </DropdownMenu>
 
-          {/* Assign dropdown — admin/owner only (agents can't take over) */}
-          {canAssign && (
+          {/* Assign (supervisor+) OU Transferir (o atendente atribuído passa
+              a conversa pra outro do mesmo setor). */}
+          {(canAssign || isAssignee) && (
           <DropdownMenu>
             <DropdownMenuTrigger
               className={cn(
@@ -1321,13 +1346,20 @@ export function MessageThread({
               )}
             >
               <UserPlus className="h-3 w-3" />
-              <span className="hidden sm:inline">{assignLabel}</span>
+              <span className="hidden sm:inline">
+                {canAssign ? assignLabel : "Transferir"}
+              </span>
               <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="end"
               className="border-border bg-popover"
             >
+              {!canAssign && (
+                <div className="px-2 py-1.5 text-[11px] text-muted-foreground">
+                  Transferir atendimento para:
+                </div>
+              )}
               {profiles.length === 0 ? (
                 <DropdownMenuItem disabled className="text-sm text-muted-foreground">
                   Nenhum colega disponível
@@ -1339,7 +1371,11 @@ export function MessageThread({
                   return (
                     <DropdownMenuItem
                       key={p.id}
-                      onClick={() => handleAssignChange(p.user_id)}
+                      onClick={() =>
+                        canAssign
+                          ? handleAssignChange(p.user_id)
+                          : handleTransferToAgent(p.user_id)
+                      }
                       className={cn(
                         "text-sm",
                         isSelected ? "text-primary" : "text-popover-foreground"

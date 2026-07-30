@@ -109,7 +109,14 @@ export function CreateMemberDialog({
     }
     setSubmitting(true);
     try {
-      await createTeamMember({ name, email, password, role });
+      const res = await createTeamMember({ name, email, password, role });
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      if (res.reactivated) {
+        toast.success("Membro reativado — a senha foi atualizada.");
+      }
       setResult({ name: name.trim(), email: email.trim().toLowerCase(), password, role });
       onCreated();
     } catch (err) {

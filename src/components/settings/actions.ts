@@ -21,6 +21,7 @@ import {
   organization,
   user,
   member,
+  account,
   sectors,
   sectorMembers,
   conversations,
@@ -442,41 +443,103 @@ export interface CreateTeamMemberInput {
  * them to the current account. The caller hands the credentials over
  * out-of-band (WhatsApp, etc.); the person can change the password later.
  */
+export type CreateTeamMemberResult =
+  | { ok: true; email: string; reactivated: boolean }
+  | { ok: false; error: string }
+
 export async function createTeamMember(
   input: CreateTeamMemberInput,
-): Promise<{ email: string }> {
+): Promise<CreateTeamMemberResult> {
+  // NOTE: this RETURNS errors instead of throwing them. A server action that
+  // throws surfaces on the client (in production) as the generic "An error
+  // occurred in the Server Components render" digest — the real message is
+  // stripped. Felipe hit exactly that re-adding a deleted agent. Returning the
+  // message keeps it visible.
+  //
   // Supervisors can create members too, but only up to their own level — a
-  // supervisor cannot mint an admin/owner (privilege escalation). Admins can
-  // create any non-owner role.
+  // supervisor cannot mint an admin/owner (privilege escalation).
   const ctx = await requireRole('supervisor')
   const name = input.name.trim()
   const email = input.email.trim().toLowerCase()
   const password = input.password
   if (!name || !email || !password) {
-    throw new Error('Preencha nome, e-mail e senha.')
+    return { ok: false, error: 'Preencha nome, e-mail e senha.' }
   }
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-    throw new Error('E-mail inválido.')
+    return { ok: false, error: 'E-mail inválido.' }
   }
   if (password.length < 8) {
-    throw new Error('A senha precisa ter ao menos 8 caracteres.')
+    return { ok: false, error: 'A senha precisa ter ao menos 8 caracteres.' }
   }
   let role = (['admin', 'supervisor', 'agent', 'viewer'] as const).includes(
     input.role,
   )
     ? input.role
     : 'agent'
-  // Only admin+ may grant admin/supervisor. A supervisor caller is capped at
-  // agent/viewer regardless of what the form sent.
   if ((role === 'admin' || role === 'supervisor') && !hasMinRole(ctx.role, 'admin')) {
     role = 'agent'
   }
 
+  // An existing user with this email may be (a) already a member of THIS
+  // account → real conflict; or (b) a leftover from a prior "excluir membro"
+  // (removeMember drops the membership but NOT the user/email) → re-attach and
+  // reset the password to the one just typed, so re-adding a deleted agent
+  // "just works" instead of erroring.
   const existing = firstOrNull(
     await db.select({ id: user.id }).from(user).where(eq(user.email, email)).limit(1),
   )
   if (existing) {
-    throw new Error('Já existe um usuário com esse e-mail.')
+    const alreadyMember = firstOrNull(
+      await db
+        .select({ id: member.id })
+        .from(member)
+        .where(
+          and(
+            eq(member.userId, existing.id),
+            eq(member.organizationId, ctx.accountId),
+          ),
+        )
+        .limit(1),
+    )
+    if (alreadyMember) {
+      return { ok: false, error: 'Este e-mail já é membro do time.' }
+    }
+    try {
+      const authCtx = await auth.$context
+      const hashed = await authCtx.password.hash(password)
+      await db
+        .update(user)
+        .set({ name, updatedAt: new Date().toISOString() })
+        .where(eq(user.id, existing.id))
+      const updatedPw = await db
+        .update(account)
+        .set({ password: hashed, updatedAt: new Date().toISOString() })
+        .where(
+          and(
+            eq(account.userId, existing.id),
+            eq(account.providerId, 'credential'),
+          ),
+        )
+        .returning({ id: account.id })
+      if (updatedPw.length === 0) {
+        // No credential row (e.g. was OAuth-only) — create one.
+        await db.insert(account).values({
+          userId: existing.id,
+          accountId: existing.id,
+          providerId: 'credential',
+          password: hashed,
+        })
+      }
+      await db.insert(member).values({
+        userId: existing.id,
+        organizationId: ctx.accountId,
+        role,
+      })
+      return { ok: true, email, reactivated: true }
+    } catch (err) {
+      console.error('[createTeamMember] re-attach failed:', err)
+      return { ok: false, error: 'Não foi possível reativar esse e-mail.' }
+    }
   }
 
   let newUserId: string
@@ -489,13 +552,13 @@ export async function createTeamMember(
         ? String((err as { message: unknown }).message)
         : ''
     if (/exist|taken|unique|duplicate/i.test(message)) {
-      throw new Error('Já existe um usuário com esse e-mail.')
+      return { ok: false, error: 'Já existe um usuário com esse e-mail.' }
     }
     if (/password|weak|short|8|character/i.test(message)) {
-      throw new Error('Senha muito fraca — use ao menos 8 caracteres.')
+      return { ok: false, error: 'Senha muito fraca — use ao menos 8 caracteres.' }
     }
     console.error('[createTeamMember] signUpEmail failed:', err)
-    throw new Error('Não foi possível criar o membro.')
+    return { ok: false, error: 'Não foi possível criar o membro.' }
   }
 
   await db.insert(member).values({
@@ -504,7 +567,7 @@ export async function createTeamMember(
     role,
   })
 
-  return { email }
+  return { ok: true, email, reactivated: false }
 }
 
 // ------------------------------------------------------------
