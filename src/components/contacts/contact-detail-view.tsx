@@ -1,7 +1,9 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
+import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/use-auth';
+import { startNewConversation } from '@/app/(dashboard)/inbox/actions';
 import { formatCurrency } from '@/lib/currency';
 import { toast } from 'sonner';
 import type { Contact, Tag, ContactNote, CustomField, Deal, MessageTemplate } from '@/types';
@@ -51,6 +53,7 @@ import {
   X,
   DollarSign,
   LayoutTemplate,
+  MessageSquare,
 } from 'lucide-react';
 
 interface ContactDetailViewProps {
@@ -67,10 +70,12 @@ export function ContactDetailView({
   onUpdated,
 }: ContactDetailViewProps) {
   const { defaultCurrency } = useAuth();
+  const router = useRouter();
 
   const [contact, setContact] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
   const [copiedPhone, setCopiedPhone] = useState(false);
+  const [openingChat, setOpeningChat] = useState(false);
 
   // Send template — lets the business initiate (or re-open) a conversation
   // with this contact by sending an approved template. The send route
@@ -201,6 +206,27 @@ export function ContactDetailView({
     await navigator.clipboard.writeText(contact.phone);
     setCopiedPhone(true);
     setTimeout(() => setCopiedPhone(false), 2000);
+  }
+
+  // Abrir a conversa direto (não-oficial): resolve/cria a conversa desse
+  // contato e navega pra ela. Felipe: cliente já cadastrado que só quer
+  // continuar a conversa, sem precisar de template oficial.
+  async function openConversation() {
+    if (!contact || openingChat) return;
+    setOpeningChat(true);
+    try {
+      const { conversationId } = await startNewConversation({
+        phone: contact.phone,
+        name: contact.name ?? null,
+      });
+      router.push(`/inbox?c=${conversationId}`);
+    } catch (err) {
+      toast.error(
+        err instanceof Error ? err.message : 'Não foi possível abrir a conversa.',
+      );
+    } finally {
+      setOpeningChat(false);
+    }
   }
 
   async function saveDetails() {
@@ -389,12 +415,26 @@ export function ContactDetailView({
                   </div>
                 </div>
               </div>
-              <div className="mt-3">
+              <div className="mt-3 flex flex-wrap gap-2">
                 <Button
                   size="sm"
+                  onClick={openConversation}
+                  disabled={openingChat}
+                  className="bg-primary text-primary-foreground hover:bg-primary/90"
+                >
+                  {openingChat ? (
+                    <Loader2 className="size-4 animate-spin" />
+                  ) : (
+                    <MessageSquare className="size-4" />
+                  )}
+                  Abrir conversa
+                </Button>
+                <Button
+                  size="sm"
+                  variant="outline"
                   onClick={() => setTemplatePickerOpen(true)}
                   disabled={sendingTemplate}
-                  className="bg-primary text-primary-foreground hover:bg-primary/90"
+                  className="border-border text-muted-foreground hover:bg-muted"
                 >
                   {sendingTemplate ? (
                     <Loader2 className="size-4 animate-spin" />

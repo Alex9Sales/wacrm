@@ -10,7 +10,7 @@
 // channel, a picker chooses which number sends.
 // ============================================================
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { toast } from "sonner";
 import { Loader2, MessageSquarePlus } from "lucide-react";
 
@@ -33,6 +33,7 @@ import {
   SelectTrigger,
   SelectValue,
 } from "@/components/ui/select";
+import { listContacts } from "@/app/(dashboard)/contacts/actions";
 import {
   listSendableChannels,
   startNewConversation,
@@ -81,12 +82,20 @@ export function NewConversationDialog({
   const [channelId, setChannelId] = useState<string>("");
   const [loadingChannels, setLoadingChannels] = useState(false);
   const [submitting, setSubmitting] = useState(false);
+  // Busca de contato salvo (Felipe): digitar o NOME e puxar quem já está nos
+  // contatos, sem precisar do número. `justSelected` evita re-buscar logo após
+  // escolher um contato (o valor do input vira o telefone dele).
+  const [matches, setMatches] = useState<
+    { id: string; name: string; phone: string }[]
+  >([]);
+  const justSelectedRef = useRef(false);
 
   useEffect(() => {
     if (!open) return;
     setPhone("");
     setName("");
     setChannelId("");
+    setMatches([]);
     setLoadingChannels(true);
     listSendableChannels()
       .then((list) => {
@@ -96,6 +105,45 @@ export function NewConversationDialog({
       .catch(() => setChannels([]))
       .finally(() => setLoadingChannels(false));
   }, [open]);
+
+  // Debounced search of SAVED contacts as the agent types (name or number).
+  useEffect(() => {
+    if (!open) return;
+    if (justSelectedRef.current) {
+      justSelectedRef.current = false;
+      return;
+    }
+    const term = phone.trim();
+    if (term.length < 2) {
+      setMatches([]);
+      return;
+    }
+    const t = setTimeout(async () => {
+      try {
+        const { contacts } = await listContacts({
+          offset: 0,
+          limit: 6,
+          search: term,
+          tagIds: [],
+        });
+        setMatches(
+          contacts
+            .filter((c) => !c.is_group)
+            .map((c) => ({ id: c.id, name: c.name ?? "", phone: c.phone })),
+        );
+      } catch {
+        setMatches([]);
+      }
+    }, 250);
+    return () => clearTimeout(t);
+  }, [phone, open]);
+
+  const selectContact = (m: { name: string; phone: string }) => {
+    justSelectedRef.current = true;
+    setPhone(m.phone);
+    if (m.name) setName(m.name);
+    setMatches([]);
+  };
 
   // Com mais de um canal, ESCOLHER o canal é obrigatório — senão a conversa
   // sairia por um canal qualquer (padrão). Felipe/cema: forçar a seleção.
@@ -145,26 +193,47 @@ export function NewConversationDialog({
             Nova conversa
           </DialogTitle>
           <DialogDescription>
-            Envie a primeira mensagem para um número que ainda não tem conversa.
-            Digite o número com DDD (o país 55 é adicionado automaticamente no
-            Brasil).
+            Digite um número novo (com DDD — o 55 é adicionado no Brasil) ou
+            busque um contato já salvo pelo nome.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="nc-phone">Número de telefone</Label>
-            <Input
-              id="nc-phone"
-              value={phone}
-              onChange={(e) => setPhone(e.target.value)}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" && canSubmit) handleStart();
-              }}
-              placeholder="(67) 99220-9091 ou +55 67 99220-9091"
-              inputMode="tel"
-              autoFocus
-            />
+            <Label htmlFor="nc-phone">Número ou nome do contato</Label>
+            <div className="relative">
+              <Input
+                id="nc-phone"
+                value={phone}
+                onChange={(e) => setPhone(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && matches.length === 0 && canSubmit)
+                    handleStart();
+                }}
+                placeholder="Digite o número novo ou busque um contato salvo"
+                autoFocus
+                autoComplete="off"
+              />
+              {matches.length > 0 && (
+                <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg">
+                  {matches.map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => selectContact(m)}
+                      className="flex w-full flex-col items-start rounded-md px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground"
+                    >
+                      <span className="text-sm font-medium text-foreground">
+                        {m.name || m.phone}
+                      </span>
+                      <span className="text-xs text-muted-foreground">
+                        {m.phone}
+                      </span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
           </div>
 
           <div className="space-y-1.5">
