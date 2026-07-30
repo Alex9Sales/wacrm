@@ -18,6 +18,9 @@ import { formatDistanceToNow } from "date-fns";
 import { CHANNEL_PROVIDER_LABELS } from "./message-thread";
 import { ContactAvatar } from "./contact-avatar";
 import { NewConversationDialog } from "./new-conversation-dialog";
+import { ConversationContextMenu } from "./conversation-context-menu";
+import { priorityMeta } from "@/lib/inbox/priority";
+import type { ConversationPriority } from "@/types";
 import { Input } from "@/components/ui/input";
 import {
   DropdownMenu,
@@ -43,6 +46,12 @@ interface ConversationListProps {
    * or the tab was throttled. Optional so existing callers keep working.
    */
   resyncToken?: number;
+  /** Right-click menu actions — mirror the page-level handlers so the list
+   *  reflects priority/status/tag/delete changes without a refetch. */
+  onStatusChange?: (id: string, status: ConversationStatus) => void;
+  onPriorityChange?: (id: string, priority: ConversationPriority) => void;
+  onConversationDeleted?: (id: string) => void;
+  onContactTagsChange?: (contactId: string, tags: Tag[]) => void;
 }
 
 const STATUS_COLORS: Record<ConversationStatus, string> = {
@@ -79,8 +88,18 @@ export function ConversationList({
   conversations,
   onConversationsLoaded,
   resyncToken = 0,
+  onStatusChange,
+  onPriorityChange,
+  onConversationDeleted,
+  onContactTagsChange,
 }: ConversationListProps) {
   const router = useRouter();
+  // Right-click quick-actions menu: which conversation + cursor position.
+  const [ctxMenu, setCtxMenu] = useState<{
+    conversation: Conversation;
+    x: number;
+    y: number;
+  } | null>(null);
   const searchParams = useSearchParams();
   const [search, setSearch] = useState("");
   const [newConvOpen, setNewConvOpen] = useState(false);
@@ -765,6 +784,9 @@ export function ConversationList({
                 conversation={conv}
                 isActive={conv.id === activeConversationId}
                 onSelect={handleSelect}
+                onContextMenu={(conversation, x, y) =>
+                  setCtxMenu({ conversation, x, y })
+                }
                 agentName={
                   conv.assigned_agent_id
                     ? agentNameById.get(conv.assigned_agent_id) ?? null
@@ -775,6 +797,20 @@ export function ConversationList({
           </div>
         )}
       </ScrollArea>
+
+      {ctxMenu && (
+        <ConversationContextMenu
+          conversation={ctxMenu.conversation}
+          x={ctxMenu.x}
+          y={ctxMenu.y}
+          tags={tags}
+          onClose={() => setCtxMenu(null)}
+          onStatusChange={onStatusChange}
+          onPriorityChange={onPriorityChange}
+          onDeleted={onConversationDeleted}
+          onContactTagsChange={onContactTagsChange}
+        />
+      )}
 
       <NewConversationDialog
         open={newConvOpen}
@@ -795,6 +831,8 @@ interface ConversationItemProps {
   conversation: Conversation;
   isActive: boolean;
   onSelect: (conversation: Conversation) => void;
+  /** Open the right-click quick-actions menu at the cursor. */
+  onContextMenu: (conversation: Conversation, x: number, y: number) => void;
   /** Name of the assigned agent (resolved from assigned_agent_id), or null. */
   agentName?: string | null;
 }
@@ -803,14 +841,25 @@ function ConversationItem({
   conversation,
   isActive,
   onSelect,
+  onContextMenu,
   agentName,
 }: ConversationItemProps) {
   const contact = conversation.contact;
   const displayName = contact?.name || contact?.phone || "Desconhecido";
+  const prio = priorityMeta(conversation.priority);
+  const isUrgent = conversation.priority === "urgent";
 
   const handleClick = useCallback(() => {
     onSelect(conversation);
   }, [onSelect, conversation]);
+
+  const handleContextMenu = useCallback(
+    (e: React.MouseEvent) => {
+      e.preventDefault();
+      onContextMenu(conversation, e.clientX, e.clientY);
+    },
+    [onContextMenu, conversation],
+  );
 
   const timeAgo = conversation.last_message_at
     ? formatDistanceToNow(new Date(conversation.last_message_at), {
@@ -821,8 +870,11 @@ function ConversationItem({
   return (
     <button
       onClick={handleClick}
+      onContextMenu={handleContextMenu}
       className={cn(
         "flex w-full items-start gap-3 px-3 py-3 text-left transition-colors hover:bg-muted/50",
+        // Urgent gets a soft red wash so it jumps out of the list.
+        isUrgent && "bg-red-500/5 hover:bg-red-500/10",
         isActive && "border-l-2 border-primary bg-muted/70"
       )}
     >
@@ -848,6 +900,18 @@ function ConversationItem({
             {formatConversationPreview(conversation.last_message_text)}
           </p>
           <div className="flex shrink-0 items-center gap-1.5">
+            {prio && (
+              <span
+                className={cn(
+                  "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 text-[9px] font-semibold",
+                  prio.badge,
+                )}
+                title={`Prioridade: ${prio.label}`}
+              >
+                <span className={cn("size-1.5 rounded-full", prio.dot)} />
+                {prio.label}
+              </span>
+            )}
             {agentName && (
               <span
                 className="inline-flex items-center gap-1 rounded-full bg-primary/10 px-1.5 py-0.5 text-[9px] font-medium text-primary"

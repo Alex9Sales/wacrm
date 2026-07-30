@@ -69,7 +69,6 @@ import {
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { ContactForm } from "@/components/contacts/contact-form";
 import { DealForm } from "@/components/pipelines/deal-form";
 import { ContactAvatar } from "./contact-avatar";
@@ -493,7 +492,10 @@ export function ContactSidebar({
 
   return (
     <div className="flex h-full w-70 flex-col border-l border-border bg-card">
-      <ScrollArea className="flex-1">
+      {/* Native overflow (not the custom ScrollArea) so the scrollbar is
+          always visible — the atendentes on Windows expect a real bar, and
+          the panel is long (Negócio + Ações + Etiquetas + Atributos + …). */}
+      <div className="flex-1 overflow-y-auto">
         <div className="p-4">
           {/* ---- Contato (always visible) ---- */}
           <div className="flex flex-col items-center text-center">
@@ -940,7 +942,7 @@ export function ContactSidebar({
             </Section>
           </div>
         </div>
-      </ScrollArea>
+      </div>
 
       {/* Inline contact editor — the full Contacts-page form reused in a
           dialog (name, phone, email, company, tags). */}

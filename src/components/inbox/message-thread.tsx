@@ -1041,10 +1041,14 @@ export function MessageThread({
   // sector teammate who ISN'T the assignee can still see this conversation
   // (shared sector queue) but must not be able to reply to it. Supervisor+
   // always can. Composer-level only — the server is the real enforcement.
+  // The lock lifts when the assignee is offline/away — a teammate covers
+  // (Alex: "se o atendente tiver offline, outro agente atende"). Answering
+  // reassigns the thread to the cover agent (server-side, in the send route).
   const lockedByOtherAgentName =
     assignedAgentId &&
     assignedAgentId !== user?.id &&
-    !hasMinRole(accountRole ?? "viewer", "supervisor")
+    !hasMinRole(accountRole ?? "viewer", "supervisor") &&
+    getPresence(assignedAgentId) === "online"
       ? (currentAssignee?.full_name ?? "outro atendente")
       : null;
 

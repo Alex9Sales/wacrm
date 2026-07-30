@@ -745,6 +745,61 @@ export async function updateConversationPriority(
     )
 }
 
+/**
+ * Add a tag to a contact (quick toggle from the conversation card's
+ * right-click menu). Account-scoped and idempotent — a duplicate is a
+ * no-op (unique(contact_id, tag_id)). Verifies both the contact and the
+ * tag belong to the caller's account before wiring them together.
+ */
+export async function addContactTag(
+  contactId: string,
+  tagId: string,
+): Promise<void> {
+  const ctx = await getCurrentAccount()
+  const contact = firstOrNull(
+    await db
+      .select({ id: contacts.id })
+      .from(contacts)
+      .where(and(eq(contacts.id, contactId), eq(contacts.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  const tag = firstOrNull(
+    await db
+      .select({ id: tags.id })
+      .from(tags)
+      .where(and(eq(tags.id, tagId), eq(tags.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  if (!contact || !tag) return
+  await db
+    .insert(contactTags)
+    .values({ contactId, tagId })
+    .onConflictDoNothing({
+      target: [contactTags.contactId, contactTags.tagId],
+    })
+}
+
+/** Remove a tag from a contact (quick toggle). Account-scoped. */
+export async function removeContactTag(
+  contactId: string,
+  tagId: string,
+): Promise<void> {
+  const ctx = await getCurrentAccount()
+  const contact = firstOrNull(
+    await db
+      .select({ id: contacts.id })
+      .from(contacts)
+      .where(and(eq(contacts.id, contactId), eq(contacts.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  if (!contact) return
+  await db
+    .delete(contactTags)
+    .where(
+      and(eq(contactTags.contactId, contactId), eq(contactTags.tagId, tagId)),
+    )
+}
+
 /** Assign / unassign a conversation. Account-scoped. */
 export async function updateConversationAssignment(
   conversationId: string,

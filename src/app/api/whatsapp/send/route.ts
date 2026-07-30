@@ -1,8 +1,9 @@
 import { NextResponse, after } from 'next/server'
 import { and, eq, isNull, sql } from 'drizzle-orm'
 
-import { db, contacts, conversations, messages, user } from '@/db'
+import { db, contacts, conversations, messages, memberPresence, user } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { derivePresence, type StoredPresence } from '@/lib/presence'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { transcribeAudioFromUrl } from '@/lib/ai/transcribe'
 import { publishEvent } from '@/lib/events/publish'
@@ -177,28 +178,61 @@ export async function POST(request: Request) {
       )
     }
 
+    // Current assignee — drives both the reply lock and the cover-reassign
+    // after a successful send. Fetched once so both use the same value.
+    const lockRow = firstOrNull(
+      await db
+        .select({ assignedAgentId: conversations.assignedAgentId })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .limit(1)
+    )
+    const assignedAgentId = lockRow?.assignedAgentId ?? null
+    const assignedToOther = !!assignedAgentId && assignedAgentId !== ctx.userId
+
+    // Is that assignee offline/away right now? If so, any teammate may cover
+    // (Alex: "se o atendente tiver offline, outro agente atende") and the
+    // thread reassigns to whoever answers, below. Fail-open: a presence
+    // lookup hiccup treats the assignee as away so a client isn't left waiting.
+    let assigneeAway = false
+    if (assignedToOther) {
+      try {
+        const presenceRow = firstOrNull(
+          await db
+            .select({
+              status: memberPresence.status,
+              lastSeenAt: memberPresence.lastSeenAt,
+            })
+            .from(memberPresence)
+            .where(eq(memberPresence.userId, assignedAgentId!))
+            .limit(1)
+        )
+        assigneeAway =
+          derivePresence(
+            presenceRow?.status as StoredPresence | undefined,
+            presenceRow?.lastSeenAt ?? null,
+            Date.now()
+          ) !== 'online'
+      } catch (err) {
+        console.error('[send] presence lookup failed, allowing cover:', err)
+        assigneeAway = true
+      }
+    }
+
     // Reply lock: once a conversation is assigned, only the assignee (or a
     // supervisor+) may send in it. Sector visibility still lets teammates
     // READ it (shared queue), but a non-assignee sending was the exact gap
     // Alex reported — "atribuída pra outra pessoa, mas outra pessoa está
-    // conseguindo responder". Skipped for supervisor+ (they can always help).
-    if (!hasMinRole(ctx.role, 'supervisor')) {
-      const lockRow = firstOrNull(
-        await db
-          .select({ assignedAgentId: conversations.assignedAgentId })
-          .from(conversations)
-          .where(eq(conversations.id, conversationId))
-          .limit(1)
+    // conseguindo responder". Skipped for supervisor+ (they can always help)
+    // and lifted while the assignee is offline/away (a teammate covering).
+    if (!hasMinRole(ctx.role, 'supervisor') && assignedToOther && !assigneeAway) {
+      return NextResponse.json(
+        {
+          error: 'Esta conversa está atribuída a outro atendente.',
+          code: 'conversation_locked',
+        },
+        { status: 403 }
       )
-      if (lockRow?.assignedAgentId && lockRow.assignedAgentId !== ctx.userId) {
-        return NextResponse.json(
-          {
-            error: 'Esta conversa está atribuída a outro atendente.',
-            code: 'conversation_locked',
-          },
-          { status: 403 }
-        )
-      }
     }
 
     // Agent signature (workspace toggle): prefix the human agent's name in
@@ -281,12 +315,18 @@ export async function POST(request: Request) {
         })
       }
 
-      // Claim-on-reply: a human answering an UNASSIGNED thread takes ownership
-      // of it (keeps the sector as-is). The `isNull` guard means we never
-      // clobber an existing assignee, and the SET LOCAL suppresses the
-      // assignment-notification trigger for this self-claim (no point pinging
-      // the agent about a conversation they're actively handling). Best-effort
-      // — a claim hiccup must never fail the send that already went out.
+      // Claim / cover on reply. Two cases, both best-effort (a hiccup must
+      // never fail the send that already went out) and both suppress the
+      // assignment-notification trigger:
+      //   • Claim: a human answering an UNASSIGNED thread takes ownership
+      //     (isNull guard → never clobbers an existing assignee).
+      //   • Cover: a non-supervisor answering a thread whose assignee is
+      //     offline/away takes it over — "ao responder, reatribui pra quem
+      //     respondeu". Guarded on the assignee still being that agent so two
+      //     concurrent covers don't fight. Supervisors keep the old behavior
+      //     (help without stealing).
+      const coverReassign =
+        assignedToOther && assigneeAway && !hasMinRole(ctx.role, 'supervisor')
       try {
         await db.transaction(async (tx) => {
           await tx.execute(sql`SET LOCAL app.suppress_assign_notify = 'on'`)
@@ -300,12 +340,14 @@ export async function POST(request: Request) {
               and(
                 eq(conversations.id, conversationId!),
                 eq(conversations.accountId, accountId),
-                isNull(conversations.assignedAgentId),
+                coverReassign
+                  ? eq(conversations.assignedAgentId, assignedAgentId!)
+                  : isNull(conversations.assignedAgentId),
               ),
             )
         })
       } catch (err) {
-        console.error('[send] claim-on-reply failed:', err)
+        console.error('[send] claim/cover-on-reply failed:', err)
       }
 
       return NextResponse.json({

@@ -9,6 +9,7 @@ import type {
   Contact,
   ConversationStatus,
   ConversationPriority,
+  Tag,
 } from "@/types";
 import { useRealtime } from "@/hooks/use-realtime";
 import { ConversationList } from "@/components/inbox/conversation-list";
@@ -518,6 +519,27 @@ export default function InboxPage() {
     [],
   );
 
+  // Contact tags changed from the card's right-click menu — patch the
+  // embedded contact on every conversation for that contact so the list
+  // (and the sidebar's Etiquetas) reflect it without a refetch.
+  const handleContactTagsChange = useCallback(
+    (contactId: string, tags: Tag[]) => {
+      setConversations((prev) =>
+        prev.map((c) =>
+          c.contact?.id === contactId
+            ? { ...c, contact: { ...c.contact, tags } }
+            : c,
+        ),
+      );
+      setActiveConversation((prev) =>
+        prev && prev.contact?.id === contactId
+          ? { ...prev, contact: { ...prev.contact, tags } }
+          : prev,
+      );
+    },
+    [],
+  );
+
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
     setMessages(loaded);
   }, []);
@@ -622,6 +644,10 @@ export default function InboxPage() {
             conversations={conversations}
             onConversationsLoaded={handleConversationsLoaded}
             resyncToken={resyncToken}
+            onStatusChange={handleStatusChange}
+            onPriorityChange={handlePriorityChange}
+            onConversationDeleted={handleConversationDeleted}
+            onContactTagsChange={handleContactTagsChange}
           />
         </div>
 
