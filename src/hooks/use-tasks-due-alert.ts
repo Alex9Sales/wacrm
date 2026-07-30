@@ -3,9 +3,9 @@
 import { useCallback, useEffect, useState } from "react";
 
 /**
- * Count of OPEN tasks that need attention (overdue + due today) for
- * the current account. Powers the red badge on the sidebar's
- * "Tarefas" entry.
+ * Count of OPEN tasks that are OVERDUE (past due) for the current account.
+ * Powers the RED badge on the sidebar's "Tarefas" entry — red = late only,
+ * so a task due later today doesn't trigger it.
  *
  * Kept lightweight: fetches once on mount, refetches on window focus,
  * and polls on a slow interval (60s) so the badge stays roughly fresh
