@@ -1,0 +1,124 @@
+:root {
+  --brand: #7c3aed;
+  --brand-dark: #5b21b6;
+  --brand-soft: #faf5ff;
+  --ink: #1f2937;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --code-bg: #f6f8fa;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.65;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Headings ---- */
+h1 {
+  color: var(--brand-dark);
+  font-size: 27px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+  padding-bottom: 10px;
+  border-bottom: 3px solid var(--brand);
+}
+h2 {
+  color: var(--brand-dark);
+  font-size: 18px;
+  font-weight: 700;
+  margin: 30px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+h3 {
+  color: var(--brand);
+  font-size: 14px;
+  font-weight: 700;
+  margin: 22px 0 8px;
+}
+
+/* ---- Text ---- */
+p { margin: 9px 0; }
+a { color: var(--brand); text-decoration: none; font-weight: 600; }
+strong { color: var(--ink); font-weight: 700; }
+ul, ol { margin: 8px 0; padding-left: 22px; }
+li { margin: 4px 0; }
+
+blockquote {
+  margin: 14px 0;
+  padding: 10px 16px;
+  background: var(--brand-soft);
+  border-left: 4px solid var(--brand);
+  color: #4b5563;
+  border-radius: 0 6px 6px 0;
+}
+blockquote p { margin: 4px 0; }
+
+/* ---- Tables ---- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0;
+  font-size: 11px;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px var(--line);
+}
+thead th {
+  background: var(--brand);
+  color: #fff;
+  text-align: left;
+  padding: 9px 11px;
+  font-weight: 600;
+  font-size: 11px;
+}
+tbody td {
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+tbody tr:nth-child(even) td { background: #faf7ff; }
+tbody tr:last-child td { border-bottom: none; }
+
+/* ---- Code ---- */
+code {
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  background: #f3e8ff;
+  color: #7e22ce;
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--brand);
+  padding: 14px 16px;
+  border-radius: 8px;
+  overflow: auto;
+  font-size: 10.5px;
+  line-height: 1.55;
+  margin: 12px 0;
+}
+pre code {
+  background: transparent;
+  color: #24292e;
+  padding: 0;
+  font-size: 10.5px;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 24px 0;
+}
+
+/* First block = cover header emphasis */
+h1:first-of-type + p { font-size: 13px; color: var(--muted); }

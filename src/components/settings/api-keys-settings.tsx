@@ -351,7 +351,7 @@ function CreateKeyDialog({
         onOpenChange(next);
       }}
     >
-      <DialogContent className="border-border bg-popover sm:max-w-md">
+      <DialogContent className="border-border bg-popover flex max-h-[85vh] flex-col sm:max-w-md">
         {createdKey ? (
           <>
             <DialogHeader>
@@ -393,7 +393,7 @@ function CreateKeyDialog({
           </>
         ) : (
           <>
-            <DialogHeader>
+            <DialogHeader className="shrink-0">
               <DialogTitle className="text-popover-foreground">
                 Nova chave de API
               </DialogTitle>
@@ -403,7 +403,9 @@ function CreateKeyDialog({
               </DialogDescription>
             </DialogHeader>
 
-            <div className="space-y-4">
+            {/* Rolável: a lista de escopos é longa e empurrava o rodapé
+                (botão Criar) pra fora da tela. Corpo scrolla, footer fica fixo. */}
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1">
               <div className="space-y-1.5">
                 <Label htmlFor="api-key-name" className="text-muted-foreground">
                   Nome
@@ -451,7 +453,7 @@ function CreateKeyDialog({
               </div>
             </div>
 
-            <DialogFooter>
+            <DialogFooter className="shrink-0">
               <Button
                 variant="outline"
                 onClick={() => {
