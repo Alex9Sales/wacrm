@@ -49,6 +49,9 @@ import {
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { QuickReplyPicker } from "@/components/inbox/quick-reply-picker";
 import { ReplyQuote } from "./reply-quote";
+import { useMyStatus } from "@/hooks/use-my-status";
+import { presenceStatusPt } from "@/lib/presence";
+import { PresenceDot } from "@/components/presence/presence-dot";
 
 /** Media content types an agent can send from the composer. */
 export type ComposerMediaKind = "image" | "video" | "document" | "audio";
@@ -235,6 +238,13 @@ export function MessageComposer({
   // but that window only exists for Meta, so `sessionGated` is false for
   // the QR providers and never disables their inputs.
   const locked = !!lockedByOtherAgent;
+
+  // Presença manual (Fase 3.1): quem está Ausente/Offline não deve atender.
+  // Ao voltar sem reativar o status, mostramos um aviso e travamos o envio —
+  // "reative para responder os clientes". Um clique volta pra Online.
+  const { status: myStatus, setStatus: setMyStatus } = useMyStatus();
+  const presenceBlocked = myStatus !== "online";
+
   const inputsDisabled = readOnly || sessionGated || locked;
 
   // Drag-and-drop of files onto the composer. `dragDepth` counts enter/leave
@@ -275,6 +285,12 @@ export function MessageComposer({
   const handleSend = useCallback(async () => {
     const trimmed = text.trim();
     if (!trimmed || sending || sessionGated || locked) return;
+    if (presenceBlocked) {
+      toast.warning(
+        `Você está ${presenceStatusPt(myStatus)}. Reative seu status para responder.`,
+      );
+      return;
+    }
 
     setSending(true);
     try {
@@ -286,7 +302,16 @@ export function MessageComposer({
     } finally {
       setSending(false);
     }
-  }, [text, sending, sessionGated, locked, onSend, replyTo?.id]);
+  }, [
+    text,
+    sending,
+    sessionGated,
+    locked,
+    presenceBlocked,
+    myStatus,
+    onSend,
+    replyTo?.id,
+  ]);
 
   const handleChange = useCallback(
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
@@ -677,6 +702,12 @@ export function MessageComposer({
 
   const sendDraft = useCallback(() => {
     if (!draft || busy) return;
+    if (presenceBlocked) {
+      toast.warning(
+        `Você está ${presenceStatusPt(myStatus)}. Reative seu status para responder.`,
+      );
+      return;
+    }
     onSendMedia({
       kind: draft.kind,
       mediaUrl: draft.mediaUrl,
@@ -691,7 +722,15 @@ export function MessageComposer({
     // The object is now owned by the sent message — clear without GC.
     setDraft(null);
     onClearReply?.();
-  }, [draft, busy, onSendMedia, replyTo?.id, onClearReply]);
+  }, [
+    draft,
+    busy,
+    presenceBlocked,
+    myStatus,
+    onSendMedia,
+    replyTo?.id,
+    onClearReply,
+  ]);
 
   // Discard GCs the staged object — it was uploaded but never sent.
   const discardDraft = useCallback(() => {
@@ -800,6 +839,24 @@ export function MessageComposer({
           />
         </div>
       )}
+      {/* Presença: Ausente/Offline trava o atendimento até reativar. */}
+      {presenceBlocked && !readOnly && (
+        <div className="mb-2 flex items-center justify-between gap-3 rounded-lg bg-amber-500/10 px-3 py-2">
+          <p className="text-xs text-amber-500 dark:text-amber-400">
+            Você está <strong>{presenceStatusPt(myStatus)}</strong>. Reative
+            seu status para responder os clientes.
+          </p>
+          <Button
+            size="sm"
+            className="h-7 shrink-0 gap-1.5 bg-emerald-600 text-xs text-white hover:bg-emerald-700"
+            onClick={() => setMyStatus("online")}
+          >
+            <PresenceDot status="online" className="bg-white" />
+            Ficar online
+          </Button>
+        </div>
+      )}
+
       {sessionGated && (
         <div className="mb-2 flex items-center justify-between rounded-lg bg-amber-500/10 px-3 py-2">
           <p className="text-xs text-amber-400">

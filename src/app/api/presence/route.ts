@@ -37,7 +37,11 @@ export async function POST(request: Request) {
   try {
     const ctx = await getCurrentAccount()
     const body = (await request.json().catch(() => ({}))) as { status?: unknown }
-    const status = body.status === 'away' ? 'away' : 'online'
+    // Manual presence (Fase 3.1): the member picks online / away / offline.
+    const status =
+      body.status === 'away' || body.status === 'offline'
+        ? body.status
+        : 'online'
     const now = new Date().toISOString()
     await db
       .insert(memberPresence)

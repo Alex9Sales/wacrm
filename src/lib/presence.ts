@@ -25,10 +25,14 @@ export const OFFLINE_AFTER_MS = 75_000;
 /** No input / hidden tab for this long flips the client to 'away'. */
 export const IDLE_AFTER_MS = 5 * 60_000;
 
-/** What the active client reports (and what the DB stores). */
-export type StoredPresence = "online" | "away";
+/**
+ * What the active client reports (and what the DB stores). Since Fase 3.1
+ * presence is MANUAL: the member picks their own status, so 'offline' is a
+ * storable, explicit choice (e.g. "saí pro almoço") — not only a derived one.
+ */
+export type StoredPresence = "online" | "away" | "offline";
 
-/** What a viewer sees — adds the derived 'offline' state. */
+/** What a viewer sees. Same set — 'offline' is also derived from staleness. */
 export type PresenceStatus = "online" | "away" | "offline";
 
 /** Raw presence row as read from the `member_presence` table. */
@@ -39,8 +43,9 @@ export interface PresenceRow {
 
 /**
  * Derive the user-facing presence for a member. A missing row, or a
- * heartbeat staler than OFFLINE_AFTER_MS, reads as offline; otherwise
- * the member's last reported status (online / away) stands.
+ * heartbeat staler than OFFLINE_AFTER_MS, reads as offline (a closed tab
+ * stopped beating); otherwise the member's last reported status stands —
+ * including an explicit 'offline' they set by hand while the tab is open.
  */
 export function derivePresence(
   stored: StoredPresence | undefined,
@@ -52,6 +57,18 @@ export function derivePresence(
   if (Number.isNaN(last)) return "offline";
   if (now - last > OFFLINE_AFTER_MS) return "offline";
   return stored;
+}
+
+/** Portuguese label for the status control / roster (Online / Ausente / Offline). */
+export function presenceStatusPt(status: PresenceStatus): string {
+  switch (status) {
+    case "online":
+      return "Online";
+    case "away":
+      return "Ausente";
+    case "offline":
+      return "Offline";
+  }
 }
 
 /**

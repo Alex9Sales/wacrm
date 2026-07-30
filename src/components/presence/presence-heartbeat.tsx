@@ -1,19 +1,22 @@
 "use client";
 
-// PresenceHeartbeat — headless. Reports THIS tab's presence (online / away) so
-// teammates see who's around. Mounted once in the dashboard shell.
+// PresenceHeartbeat — headless. The SINGLE writer of this tab's presence to
+// /api/presence, so teammates see who's around. Mounted once in the shell.
 //
-//  • Reports 'online' on mount, then every HEARTBEAT_MS.
-//  • Flips to 'away' after IDLE_AFTER_MS with no input, or while the tab is
-//    hidden; back to 'online' on any activity / re-focus (reported promptly).
-//  • Never reports 'offline' — that's derived from staleness (a closed tab
-//    stops heartbeating and its row goes stale → offline). See lib/presence.ts.
+// Since Fase 3.1 presence is MANUAL: the member picks Online / Ausente /
+// Offline in the header control (see use-my-status). This component just keeps
+// the DB row fresh with whatever they chose:
+//   • reports the chosen status on mount and whenever it changes (snappy for
+//     other viewers), and
+//   • re-reports every HEARTBEAT_MS so the row never goes stale while the tab
+//     is open — a closed tab stops beating and derives to offline on its own.
 
-import { useEffect, useRef } from "react";
+import { useEffect } from "react";
 
-import { HEARTBEAT_MS, IDLE_AFTER_MS } from "@/lib/presence";
+import { HEARTBEAT_MS, type StoredPresence } from "@/lib/presence";
+import { useMyStatus } from "@/hooks/use-my-status";
 
-async function report(status: "online" | "away") {
+async function report(status: StoredPresence) {
   try {
     await fetch("/api/presence", {
       method: "POST",
@@ -28,42 +31,13 @@ async function report(status: "online" | "away") {
 }
 
 export function PresenceHeartbeat() {
-  const lastActivityRef = useRef<number>(Date.now());
+  const { status } = useMyStatus();
 
   useEffect(() => {
-    const bump = () => {
-      lastActivityRef.current = Date.now();
-    };
-    const events = ["mousedown", "keydown", "mousemove", "touchstart", "scroll"];
-    events.forEach((e) => window.addEventListener(e, bump, { passive: true }));
-
-    const currentStatus = (): "online" | "away" => {
-      if (document.hidden) return "away";
-      return Date.now() - lastActivityRef.current > IDLE_AFTER_MS
-        ? "away"
-        : "online";
-    };
-
-    const beat = () => void report(currentStatus());
-
-    beat(); // initial
-    const interval = window.setInterval(beat, HEARTBEAT_MS);
-
-    // React promptly to focus/visibility changes (don't wait for the tick).
-    const onVisibility = () => {
-      if (!document.hidden) lastActivityRef.current = Date.now();
-      beat();
-    };
-    document.addEventListener("visibilitychange", onVisibility);
-    window.addEventListener("focus", onVisibility);
-
-    return () => {
-      window.clearInterval(interval);
-      events.forEach((e) => window.removeEventListener(e, bump));
-      document.removeEventListener("visibilitychange", onVisibility);
-      window.removeEventListener("focus", onVisibility);
-    };
-  }, []);
+    void report(status); // immediate on mount + on every status change
+    const interval = window.setInterval(() => void report(status), HEARTBEAT_MS);
+    return () => window.clearInterval(interval);
+  }, [status]);
 
   return null;
 }

@@ -1410,7 +1410,7 @@ export const memberPresence = pgTable("member_presence", {
 }, (table) => [
 	uniqueIndex("member_presence_user_id_key").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
 	index("idx_member_presence_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
-	check("member_presence_status_check", sql`status = ANY (ARRAY['online'::text, 'away'::text])`),
+	check("member_presence_status_check", sql`status = ANY (ARRAY['online'::text, 'away'::text, 'offline'::text])`),
 ]);
 
 // Per-user read state for internal chat channels — drives the unread badge.
