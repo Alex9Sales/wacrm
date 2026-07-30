@@ -138,10 +138,10 @@ export function TagManager() {
       <CardHeader>
         <CardTitle className="flex items-center gap-2 text-foreground">
           <TagIcon className="size-4 text-primary" />
-          Tags
+          Etiquetas
         </CardTitle>
         <CardDescription className="text-muted-foreground">
-          Colour-coded labels for grouping and filtering contacts.
+          Etiquetas coloridas para agrupar e filtrar contatos.
         </CardDescription>
       </CardHeader>
       <CardContent className="space-y-4">

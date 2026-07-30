@@ -6,7 +6,7 @@
 // cursor; closes on outside click / Esc.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Tag as TagIcon, Trash2 } from "lucide-react";
+import { Check, Loader2, Plus, Tag as TagIcon, Trash2 } from "lucide-react";
 import { toast } from "sonner";
 
 import type { Conversation, ConversationPriority, ConversationStatus, Tag } from "@/types";
@@ -21,6 +21,19 @@ import {
   addContactTag,
   removeContactTag,
 } from "@/app/(dashboard)/inbox/actions";
+import { createTag } from "@/components/settings/actions";
+
+// Same palette the Tags settings uses, so a tag created here looks native.
+const TAG_COLORS = [
+  "#ef4444",
+  "#f97316",
+  "#f59e0b",
+  "#10b981",
+  "#06b6d4",
+  "#3b82f6",
+  "#8b5cf6",
+  "#ec4899",
+];
 
 const STATUS_OPTIONS: { value: ConversationStatus; label: string; dot: string }[] = [
   { value: "open", label: "Aberta", dot: "bg-primary" },
@@ -41,6 +54,9 @@ interface Props {
   onPriorityChange?: (id: string, priority: ConversationPriority) => void;
   onDeleted?: (id: string) => void;
   onContactTagsChange?: (contactId: string, tags: Tag[]) => void;
+  /** A brand-new tag was created inline — bubble it up so the account's
+   *  tag list (filters, other menus) picks it up without a refetch. */
+  onTagCreated?: (tag: Tag) => void;
 }
 
 export function ConversationContextMenu({
@@ -53,11 +69,16 @@ export function ConversationContextMenu({
   onPriorityChange,
   onDeleted,
   onContactTagsChange,
+  onTagCreated,
 }: Props) {
   const { accountRole } = useAuth();
   const canDelete = hasMinRole(accountRole ?? "viewer", "admin");
   const ref = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
+  // Inline "criar etiqueta" form.
+  const [creating, setCreating] = useState(false);
+  const [newTagName, setNewTagName] = useState("");
+  const [newTagColor, setNewTagColor] = useState(TAG_COLORS[3]);
 
   const contactId = conversation.contact?.id ?? null;
   const currentPriority = conversation.priority ?? "none";
@@ -131,6 +152,35 @@ export function ConversationContextMenu({
     },
     [busy, contactId, currentTagIds, conversation.contact?.tags, onContactTagsChange],
   );
+
+  const handleCreateTag = useCallback(async () => {
+    const name = newTagName.trim();
+    if (busy || !contactId || !name) return;
+    setBusy(true);
+    try {
+      const tag = await createTag({ name, color: newTagColor });
+      await addContactTag(contactId, tag.id);
+      onTagCreated?.(tag);
+      onContactTagsChange?.(contactId, [
+        ...(conversation.contact?.tags ?? []),
+        tag,
+      ]);
+      setNewTagName("");
+      setCreating(false);
+    } catch {
+      toast.error("Falha ao criar a etiqueta");
+    } finally {
+      setBusy(false);
+    }
+  }, [
+    busy,
+    contactId,
+    newTagName,
+    newTagColor,
+    conversation.contact?.tags,
+    onTagCreated,
+    onContactTagsChange,
+  ]);
 
   const handleDelete = useCallback(async () => {
     if (busy) return;
@@ -215,13 +265,19 @@ export function ConversationContextMenu({
           );
         })}
 
-        {/* Etiquetas */}
-        {contactId && tags.length > 0 && (
+        {/* Etiquetas — toggle existentes (clicar numa marcada remove) e
+            criar uma nova inline pelo "+". */}
+        {contactId && (
           <>
             <div className="mt-1 flex items-center gap-1.5 border-t border-border px-2 pb-1 pt-2 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">
               <TagIcon className="size-3" />
               Etiquetas
             </div>
+            {tags.length === 0 && !creating && (
+              <p className="px-2 py-1 text-xs text-muted-foreground">
+                Nenhuma etiqueta ainda.
+              </p>
+            )}
             {tags.map((tag) => {
               const has = currentTagIds.has(tag.id);
               return (
@@ -241,6 +297,74 @@ export function ConversationContextMenu({
                 </button>
               );
             })}
+
+            {creating ? (
+              <div className="px-2 py-1.5">
+                <input
+                  autoFocus
+                  value={newTagName}
+                  onChange={(e) => setNewTagName(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void handleCreateTag();
+                    if (e.key === "Escape") {
+                      setCreating(false);
+                      setNewTagName("");
+                    }
+                  }}
+                  placeholder="Nome da etiqueta"
+                  className="h-8 w-full rounded-md border border-border bg-muted px-2 text-sm text-foreground outline-none focus:border-primary"
+                />
+                <div className="mt-2 flex items-center gap-1.5">
+                  {TAG_COLORS.map((c) => (
+                    <button
+                      key={c}
+                      type="button"
+                      onClick={() => setNewTagColor(c)}
+                      aria-label={`Cor ${c}`}
+                      className={cn(
+                        "size-4 rounded-full",
+                        newTagColor === c &&
+                          "ring-2 ring-foreground ring-offset-1 ring-offset-popover",
+                      )}
+                      style={{ backgroundColor: c }}
+                    />
+                  ))}
+                </div>
+                <div className="mt-2 flex gap-1.5">
+                  <button
+                    type="button"
+                    disabled={busy || !newTagName.trim()}
+                    onClick={() => void handleCreateTag()}
+                    className="inline-flex h-7 flex-1 items-center justify-center gap-1 rounded-md bg-primary text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                  >
+                    {busy ? (
+                      <Loader2 className="size-3.5 animate-spin" />
+                    ) : (
+                      "Criar e aplicar"
+                    )}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setCreating(false);
+                      setNewTagName("");
+                    }}
+                    className="inline-flex h-7 items-center justify-center rounded-md px-2 text-xs text-muted-foreground hover:bg-accent"
+                  >
+                    Cancelar
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <button
+                type="button"
+                onClick={() => setCreating(true)}
+                className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm text-primary hover:bg-accent"
+              >
+                <Plus className="size-4" />
+                Criar etiqueta
+              </button>
+            )}
           </>
         )}
 

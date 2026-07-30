@@ -809,6 +809,11 @@ export function ConversationList({
           onPriorityChange={onPriorityChange}
           onDeleted={onConversationDeleted}
           onContactTagsChange={onContactTagsChange}
+          onTagCreated={(tag) =>
+            setTags((prev) =>
+              prev.some((t) => t.id === tag.id) ? prev : [...prev, tag],
+            )
+          }
         />
       )}
 
