@@ -3,7 +3,7 @@
 import { useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { MessageSquare, Users } from "lucide-react";
+import { MessageSquare, Users, CheckCheck } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
 import { useServerEvents } from "@/hooks/use-server-events";
@@ -33,6 +33,48 @@ export function NotificationListener() {
     return false;
   }, []);
 
+  // Live pop-up notifications pile up on a busy inbox (each lasts 12s). Track
+  // them so we can offer a "Limpar todas" card at the top of the stack — Felipe
+  // (cema): sem isso, só saía clicando um por um (o que abre a conversa).
+  const activeIds = useRef<Set<string | number>>(new Set());
+  const CLEAR_ALL_ID = "notif-clear-all";
+
+  const dismissAllNotifs = useCallback(() => {
+    for (const id of activeIds.current) toast.dismiss(id);
+    activeIds.current.clear();
+    toast.dismiss(CLEAR_ALL_ID);
+  }, []);
+
+  const syncClearAll = useCallback(() => {
+    const n = activeIds.current.size;
+    if (n >= 2) {
+      // Same id → sonner updates the card in place (count) instead of piling up.
+      toast.custom(
+        () => (
+          <button
+            type="button"
+            onClick={dismissAllNotifs}
+            className="flex w-full items-center justify-center gap-2 rounded-xl border border-border bg-muted/90 px-3 py-2 text-sm font-medium text-foreground shadow-lg shadow-black/10 backdrop-blur transition-colors hover:bg-muted"
+          >
+            <CheckCheck className="size-4 text-primary" />
+            Limpar todas ({n})
+          </button>
+        ),
+        { id: CLEAR_ALL_ID, duration: Infinity },
+      );
+    } else {
+      toast.dismiss(CLEAR_ALL_ID);
+    }
+  }, [dismissAllNotifs]);
+
+  const untrack = useCallback(
+    (id: string | number) => {
+      activeIds.current.delete(id);
+      syncClearAll();
+    },
+    [syncClearAll],
+  );
+
   // A fully clickable pop-up (sonner's toast body isn't clickable — only an
   // action button is — so we render our own card via toast.custom).
   const popup = useCallback(
@@ -42,12 +84,13 @@ export function NotificationListener() {
       href: string;
       variant: "chat" | "internal";
     }) => {
-      toast.custom(
+      const newId = toast.custom(
         (id) => (
           <button
             type="button"
             onClick={() => {
               toast.dismiss(id);
+              untrack(id);
               // Same-page SPA nav when possible; otherwise a normal navigation.
               // Both reliably land on the right conversation (the inbox reads
               // ?c= on mount and on change).
@@ -89,10 +132,16 @@ export function NotificationListener() {
             </span>
           </button>
         ),
-        { duration: 12000 },
+        {
+          duration: 12000,
+          onDismiss: (t) => untrack(t.id),
+          onAutoClose: (t) => untrack(t.id),
+        },
       );
+      activeIds.current.add(newId);
+      syncClearAll();
     },
-    [router],
+    [router, untrack, syncClearAll],
   );
 
   const onEvent = useCallback(

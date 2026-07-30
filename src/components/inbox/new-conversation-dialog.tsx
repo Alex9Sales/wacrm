@@ -17,6 +17,7 @@ import { Loader2, MessageSquarePlus } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import {
   Dialog,
   DialogContent,
@@ -96,7 +97,10 @@ export function NewConversationDialog({
       .finally(() => setLoadingChannels(false));
   }, [open]);
 
-  const canSubmit = phone.trim().length > 0 && !submitting;
+  // Com mais de um canal, ESCOLHER o canal é obrigatório — senão a conversa
+  // sairia por um canal qualquer (padrão). Felipe/cema: forçar a seleção.
+  const needsChannel = channels.length > 1 && !channelId;
+  const canSubmit = phone.trim().length > 0 && !submitting && !needsChannel;
 
   async function handleStart() {
     const normalized = toE164(phone);
@@ -176,9 +180,16 @@ export function NewConversationDialog({
 
           {channels.length > 1 && (
             <div className="space-y-1.5">
-              <Label>Enviar pelo número</Label>
+              <Label>
+                Enviar pelo número <span className="text-destructive">*</span>
+              </Label>
               <Select value={channelId} onValueChange={(v) => v && setChannelId(v)}>
-                <SelectTrigger className="w-full">
+                <SelectTrigger
+                  className={cn(
+                    "w-full",
+                    needsChannel && "border-destructive/60",
+                  )}
+                >
                   <SelectValue placeholder="Escolha o canal" />
                 </SelectTrigger>
                 <SelectContent>
@@ -190,6 +201,11 @@ export function NewConversationDialog({
                   ))}
                 </SelectContent>
               </Select>
+              {needsChannel && (
+                <p className="text-xs text-muted-foreground">
+                  Escolha por qual número a conversa vai sair.
+                </p>
+              )}
             </div>
           )}
 
