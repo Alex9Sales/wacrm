@@ -1009,6 +1009,7 @@ export const notifications = pgTable("notifications", {
 	userId: uuid("user_id").notNull(),
 	type: text().default('conversation_assigned').notNull(),
 	conversationId: uuid("conversation_id"),
+	channelId: uuid("channel_id"),
 	contactId: uuid("contact_id"),
 	actorUserId: uuid("actor_user_id"),
 	title: text().notNull(),

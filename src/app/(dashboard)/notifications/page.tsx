@@ -78,8 +78,10 @@ export default function NotificationsPage() {
       if (!n.read_at) markRead(n.id);
       if (n.conversation_id) {
         router.push(`/inbox?c=${n.conversation_id}`);
+      } else if (n.channel_id) {
+        // Menção num canal do chat interno → abre direto naquele canal.
+        router.push(`/internal-chat?channel=${n.channel_id}`);
       } else if (n.type === "mention") {
-        // A chat-interno mention carries no conversation — go to the chat.
         router.push(`/internal-chat`);
       }
     },

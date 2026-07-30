@@ -238,7 +238,9 @@ export function NotificationListener() {
           popup({
             title: `${who} · Chat interno`,
             description: "Nova mensagem no chat interno.",
-            href: `/internal-chat`,
+            // Deep-link direto pro canal (Felipe: clicar tem que abrir o grupo,
+            // não o chat geral).
+            href: `/internal-chat?channel=${channelId}`,
             variant: "internal",
           }),
         );
@@ -253,11 +255,14 @@ export function NotificationListener() {
           typeof e.senderName === "string" && e.senderName
             ? e.senderName
             : "Alguém";
-        // A conversation mention deep-links to the thread; else the chat.
+        // A conversation mention deep-links to the thread; a chat-interno
+        // mention deep-links to the specific channel; else the chat.
         const href =
           typeof e.conversationId === "string" && e.conversationId
             ? `/inbox?c=${e.conversationId}`
-            : `/internal-chat`;
+            : typeof e.channelId === "string" && e.channelId
+              ? `/internal-chat?channel=${e.channelId}`
+              : `/internal-chat`;
         alert(true, () =>
           popup({
             title: `${who} mencionou você`,

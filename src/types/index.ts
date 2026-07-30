@@ -220,6 +220,8 @@ export interface Notification {
   user_id: string;
   type: NotificationType;
   conversation_id?: string;
+  /** Internal-chat channel of the mention (for the group deep-link). */
+  channel_id?: string;
   contact_id?: string;
   /** Who triggered it. Null when an automation/system assigned it. */
   actor_user_id?: string;

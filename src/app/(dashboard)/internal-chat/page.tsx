@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
 import {
   Hash,
@@ -123,17 +124,34 @@ export default function InternalChatPage() {
     });
   }, []);
 
+  // Deep-link: uma notificação/menção abre /internal-chat?channel=<id> e a
+  // gente seleciona esse canal direto (Felipe: clicar tem que abrir o grupo).
+  const searchParams = useSearchParams();
+  const channelParam = searchParams.get("channel");
+
   const loadChannels = useCallback(async () => {
     try {
       const list = await listInternalChannels();
       setChannels(list);
-      setActiveId((cur) => cur ?? list[0]?.id ?? null);
+      const wanted =
+        channelParam && list.some((c) => c.id === channelParam)
+          ? channelParam
+          : null;
+      setActiveId((cur) => wanted ?? cur ?? list[0]?.id ?? null);
     } catch {
       setChannels([]);
     } finally {
       setLoadingChannels(false);
     }
-  }, []);
+  }, [channelParam]);
+
+  // Honor a ?channel= change while already on the page (clicking another
+  // notification without a full reload).
+  useEffect(() => {
+    if (channelParam && channels.some((c) => c.id === channelParam)) {
+      setActiveId(channelParam);
+    }
+  }, [channelParam, channels]);
 
   useEffect(() => {
     void loadChannels();

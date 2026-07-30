@@ -505,13 +505,24 @@ export async function sendInternalMessage(
       (id) => id !== ctx.userId,
     );
     if (mentionedIds.length > 0) {
+      // Channel name so the notification says WHERE (Felipe: "mencionou você
+      // onde? mostra o grupo") and can deep-link to it.
+      const chan = firstOrNull(
+        await db
+          .select({ name: internalChannels.name })
+          .from(internalChannels)
+          .where(eq(internalChannels.id, channelId))
+          .limit(1),
+      );
+      const where = chan?.name ? ` em #${chan.name}` : '';
       await db.insert(notifications).values(
         mentionedIds.map((uid) => ({
           accountId: ctx.accountId,
           userId: uid,
           type: 'mention' as const,
+          channelId,
           actorUserId: ctx.userId,
-          title: `${me?.name ?? 'Alguém'} mencionou você`,
+          title: `${me?.name ?? 'Alguém'} mencionou você${where}`,
           body: text.length > 140 ? `${text.slice(0, 140)}…` : text,
         })),
       );
