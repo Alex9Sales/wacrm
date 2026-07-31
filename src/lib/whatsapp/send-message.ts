@@ -352,12 +352,16 @@ export async function sendMessageToConversation(
   // belong to this same conversation — otherwise a caller could quote
   // messages they can't see by guessing UUIDs.
   let contextMessageId: string | undefined;
+  let contextFromMe = false;
   if (replyToMessageId) {
-    let parent: { messageId: string | null } | null = null;
+    let parent: { messageId: string | null; senderType: string } | null = null;
     try {
       parent = firstOrNull(
         await db
-          .select({ messageId: messages.messageId })
+          .select({
+            messageId: messages.messageId,
+            senderType: messages.senderType,
+          })
           .from(messages)
           .where(
             and(
@@ -384,6 +388,9 @@ export async function sendMessageToConversation(
       );
     } else {
       contextMessageId = parent.messageId;
+      // WAHA needs to know if the quoted message was ours to rebuild reply_to.
+      contextFromMe =
+        parent.senderType === 'agent' || parent.senderType === 'bot';
     }
   }
 
@@ -501,6 +508,7 @@ export async function sendMessageToConversation(
     }
     const result = await provider.sendText(channel, phone, waText!, {
       contextExternalId: contextMessageId,
+      contextFromMe,
       mentions: mentionJids.length ? mentionJids : undefined,
     });
     return result.externalMessageId;

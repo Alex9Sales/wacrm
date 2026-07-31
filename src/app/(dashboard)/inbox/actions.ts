@@ -1215,7 +1215,7 @@ export async function transferConversation(
   conversationId: string,
   sectorId: string,
   note?: string,
-): Promise<void> {
+): Promise<{ assignedAgentId: string | null }> {
   const ctx = await getCurrentAccount()
 
   const conv = firstOrNull(
@@ -1291,6 +1291,10 @@ export async function transferConversation(
     conversationId,
     fromMe: true, // internal change — no notification sound/pop-up
   })
+
+  // Return the resolved assignee so the caller can reflect it in the header
+  // immediately (no manual refresh to see "quem ficou responsável").
+  return { assignedAgentId }
 }
 
 /**

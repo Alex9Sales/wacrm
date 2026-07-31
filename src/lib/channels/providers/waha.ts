@@ -216,6 +216,61 @@ function normalizeSerializedId(id: string): string {
   return parts.pop() || id;
 }
 
+/** Rebuild the SERIALIZED id WAHA needs for `reply_to` from the HASH we store.
+ *  1:1 chats only (`@c.us`): `<fromMe>_<chatId>_<HASH>`. Returns null to skip
+ *  quoting — group chat (id also needs the author jid we don't have here), no
+ *  context, or an id that's already serialized (leave as-is). */
+function buildWahaReplyTo(chatId: string, opts?: SendOptions): string | null {
+  const hash = opts?.contextExternalId;
+  if (!hash) return null;
+  if (hash.includes('_')) return hash;
+  if (!chatId.endsWith('@c.us')) return null;
+  return `${opts?.contextFromMe ? 'true' : 'false'}_${chatId}_${hash}`;
+}
+
+/** Find a `contextInfo.stanzaId` (the quoted message's id) anywhere one level
+ *  under a raw message node — it hangs off whatever message-type wrapper is
+ *  present (extendedTextMessage, imageMessage, …). Handles Baileys (`stanzaId`)
+ *  and GOWS (`StanzaID`) casings. */
+function findStanzaId(node: Record<string, unknown>): string | null {
+  const pick = (ci: unknown): string | null => {
+    if (!ci || typeof ci !== 'object') return null;
+    const c = ci as Record<string, unknown>;
+    const sid = c.stanzaId ?? c.stanzaID ?? c.StanzaID ?? c.StanzaId;
+    return typeof sid === 'string' && sid ? sid : null;
+  };
+  const asRec = (v: unknown): Record<string, unknown> =>
+    v as Record<string, unknown>;
+  const top = pick(asRec(node).contextInfo ?? asRec(node).ContextInfo);
+  if (top) return top;
+  for (const v of Object.values(node)) {
+    if (v && typeof v === 'object') {
+      const found = pick(asRec(v).contextInfo ?? asRec(v).ContextInfo);
+      if (found) return found;
+    }
+  }
+  return null;
+}
+
+/** External id of the message THIS one quotes (swipe-reply), normalized to the
+ *  same HASH we store as `messages.message_id` — or undefined. Baileys/NOWEB
+ *  keep it at `_data.message.<type>.contextInfo.stanzaId`; GOWS at
+ *  `_data.Message.<type>.contextInfo`; some WAHA builds also expose a top-level
+ *  `replyTo`/`quotedMsgId`. */
+function quotedExternalId(p: WahaMessagePayload): string | undefined {
+  const rec = p as unknown as Record<string, unknown>;
+  const top =
+    (typeof rec.replyTo === 'string' && rec.replyTo) ||
+    (typeof rec.quotedMsgId === 'string' && rec.quotedMsgId) ||
+    (typeof rec.quotedMessageId === 'string' && rec.quotedMessageId) ||
+    '';
+  const node = (p._data?.message ?? p._data?.Message) as
+    | Record<string, unknown>
+    | undefined;
+  const raw = String(top || (node ? findStanzaId(node) : '') || '');
+  return raw ? normalizeSerializedId(raw) : undefined;
+}
+
 /** Strip a `data:...;base64,` prefix — WAHA wants raw base64. */
 function rawBase64(b64: string): string {
   return String(b64 || '').replace(/^data:[^;]+;base64,/, '');
@@ -887,7 +942,20 @@ export const wahaProvider: WhatsAppProvider = {
     // Real WhatsApp @mentions (group): the text carries the @<user> tokens and
     // `mentions` the jids to ping. gows accepts a `mentions` array of jids.
     if (opts?.mentions?.length) payload.mentions = opts.mentions;
-    const { ok, status, body } = await sendWithRetry(ch, 'sendText', payload);
+    // Quoted reply → mirror the "responder" context into WhatsApp. WAHA keys a
+    // message by its SERIALIZED id `<fromMe>_<chatId>_<HASH>` but we store only
+    // the HASH, so rebuild it here (1:1 only — a group id also carries the
+    // author jid we don't have at send time, so we skip groups for now).
+    const replyTo = buildWahaReplyTo(chatId, opts);
+    if (replyTo) payload.reply_to = replyTo;
+    let { ok, status, body } = await sendWithRetry(ch, 'sendText', payload);
+    // Safety net: never let a malformed reply_to swallow the message. If the
+    // send failed WITH a reply_to, retry once without it so the text still goes
+    // out (the quote is best-effort, delivery is not).
+    if (!ok && payload.reply_to) {
+      delete payload.reply_to;
+      ({ ok, status, body } = await sendWithRetry(ch, 'sendText', payload));
+    }
     if (!ok) {
       throw new Error(`waha sendText failed: ${wahaError(body, status)}`);
     }
@@ -1366,6 +1434,7 @@ export const wahaProvider: WhatsAppProvider = {
         viewOnce,
         group: group ?? undefined,
         senderLid: senderLid || undefined,
+        replyToExternalId: quotedExternalId(p),
       });
     }
 

@@ -276,6 +276,32 @@ export async function dispatchInboundMessage(
   }
   const isFirstInbound = priorCustomerMsgCount === 0;
 
+  // Quoted reply (swipe-reply from WhatsApp): map the quoted external id to the
+  // internal message so the CRM thread renders + links the citation, matching
+  // WhatsApp. Best-effort — a quote of a message we never stored just renders
+  // without the link. The stored external id is the normalized HASH, which is
+  // exactly what the provider put in replyToExternalId.
+  let replyToMessageId: string | null = null;
+  if (ev.replyToExternalId) {
+    try {
+      const parent = firstOrNull(
+        await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, conversation.id),
+              eq(messages.messageId, ev.replyToExternalId),
+            ),
+          )
+          .limit(1),
+      );
+      replyToMessageId = parent?.id ?? null;
+    } catch (err) {
+      console.error('[inbound] reply-to lookup failed:', err);
+    }
+  }
+
   // 5) Insert the message (agent bubble when fromMe, else customer). A fromMe
   // echo is the operator's own outgoing message (see isFromMe above): render
   // it as an agent bubble, don't bump unread, and skip every customer-triggered
@@ -291,6 +317,7 @@ export async function dispatchInboundMessage(
       transcription,
       viewOnce: isViewOnce,
       messageId: ev.externalMessageId || null,
+      replyToMessageId,
       status: isFromMe ? 'sent' : 'delivered',
       createdAt: new Date().toISOString(),
       interactiveReplyId: ev.interactiveReplyId ?? null,

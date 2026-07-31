@@ -967,12 +967,16 @@ export function MessageThread({
     if (!conversation || !transferSector) return;
     setTransferring(true);
     try {
-      await transferConversation(
+      const { assignedAgentId } = await transferConversation(
         conversation.id,
         transferSector.id,
         transferNote,
       );
       setSectorId(transferSector.id);
+      // Reflect the resolved assignee in the header + list right away — the
+      // server picks the least-loaded ONLINE agent of the target sector, so
+      // the operator sees "quem ficou responsável" without a manual refresh.
+      onAssignChange(conversation.id, assignedAgentId);
       toast.success(`Transferida para ${transferSector.name}.`);
       setTransferSector(null);
       setTransferNote("");
@@ -983,7 +987,7 @@ export function MessageThread({
     } finally {
       setTransferring(false);
     }
-  }, [conversation, transferSector, transferNote]);
+  }, [conversation, transferSector, transferNote, onAssignChange]);
 
   // Handoff-note banner (shown to the receiving agent). Dismiss clears it.
   const [noteDismissed, setNoteDismissed] = useState(false);

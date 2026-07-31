@@ -16,8 +16,17 @@
 
 import { and, eq, isNotNull, inArray } from 'drizzle-orm';
 
-import { db, conversations, channels, sectors, sectorMembers, member } from '@/db';
+import {
+  db,
+  conversations,
+  channels,
+  sectors,
+  sectorMembers,
+  member,
+  memberPresence,
+} from '@/db';
 import { firstOrNull } from '@/db/helpers';
+import { derivePresence, type PresenceStatus } from '@/lib/presence';
 
 /** Roles that actually handle conversations (viewers are read-only). */
 const HANDLING_ROLES = ['owner', 'admin', 'agent'];
@@ -189,8 +198,45 @@ export async function pickLeastLoadedSectorAgent(
   if (eligible.length === 0) return null;
   if (eligible.length === 1) return eligible[0];
 
-  // Current open-conversation load per eligible agent.
-  const load = new Map<string, number>(eligible.map((id) => [id, 0]));
+  // Presence-first: an auto-assign/transfer must land on someone who's
+  // actually there. Rank by availability tier (online > away > offline) and
+  // only consider the BEST tier that has anyone — so a transfer to Vendas goes
+  // to the online agent, never to a colleague who's offline while an online one
+  // sits idle. If nobody reports presence (account not using it), everyone is
+  // "offline" → the tier collapses and this degrades to pure least-loaded, so
+  // there's no regression for accounts that don't track presence.
+  const presRows = await db
+    .select({
+      userId: memberPresence.userId,
+      status: memberPresence.status,
+      lastSeenAt: memberPresence.lastSeenAt,
+    })
+    .from(memberPresence)
+    .where(
+      and(
+        eq(memberPresence.accountId, accountId),
+        inArray(memberPresence.userId, eligible),
+      ),
+    );
+  const presenceOf = new Map<string, PresenceStatus>();
+  const now = Date.now();
+  for (const r of presRows) {
+    presenceOf.set(
+      r.userId,
+      derivePresence(r.status as PresenceStatus, r.lastSeenAt, now),
+    );
+  }
+  const tierOf = (id: string): number => {
+    const p = presenceOf.get(id) ?? 'offline';
+    return p === 'online' ? 0 : p === 'away' ? 1 : 2;
+  };
+  const bestTier = Math.min(...eligible.map(tierOf));
+  const pool = eligible.filter((id) => tierOf(id) === bestTier);
+  if (pool.length === 1) return pool[0];
+
+  // Current open-conversation load per candidate — least-loaded within the
+  // chosen availability tier wins.
+  const load = new Map<string, number>(pool.map((id) => [id, 0]));
   const openConvs = await db
     .select({ agentId: conversations.assignedAgentId })
     .from(conversations)
@@ -199,12 +245,12 @@ export async function pickLeastLoadedSectorAgent(
         eq(conversations.accountId, accountId),
         eq(conversations.status, 'open'),
         isNotNull(conversations.assignedAgentId),
-        inArray(conversations.assignedAgentId, eligible),
+        inArray(conversations.assignedAgentId, pool),
       ),
     );
   for (const c of openConvs) {
     if (c.agentId) load.set(c.agentId, (load.get(c.agentId) ?? 0) + 1);
   }
 
-  return eligible.sort((a, b) => (load.get(a) ?? 0) - (load.get(b) ?? 0))[0];
+  return pool.sort((a, b) => (load.get(a) ?? 0) - (load.get(b) ?? 0))[0];
 }

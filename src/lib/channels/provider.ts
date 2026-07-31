@@ -156,6 +156,10 @@ export interface ChannelCtx {
 export interface SendOptions {
   /** External id of a message to quote (swipe-reply). */
   contextExternalId?: string;
+  /** Whether the quoted message was ours (agent/bot) vs the customer's. WAHA
+   *  keys messages by a SERIALIZED id `<fromMe>_<chatId>_<HASH>` but we store
+   *  only the HASH, so the adapter needs this to reconstruct `reply_to`. */
+  contextFromMe?: boolean;
   /**
    * Group @mentions: the jids to ping (e.g. `["146…@lid"]`). The text must
    * already carry the matching `@<user>` tokens. Providers that support it send
