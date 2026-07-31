@@ -1016,7 +1016,11 @@ function ConversationItem({
                 </span>
               </span>
             )}
-            {conversation.unread_count > 0 && (
+            {/* Never show the unread badge on the conversation you're actively
+                viewing — you're reading it, so it's read. The DB reset is
+                fired in handleMessageEvent; hiding it here also removes any
+                flash during the reset round-trip. */}
+            {!isActive && conversation.unread_count > 0 && (
               <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
                 {conversation.unread_count}
               </span>

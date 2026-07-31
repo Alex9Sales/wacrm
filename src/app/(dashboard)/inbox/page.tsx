@@ -2,7 +2,11 @@
 
 import { useState, useCallback, useEffect, useRef } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { getConversationWithContact, getWhatsappConnected } from "./actions";
+import {
+  getConversationWithContact,
+  getWhatsappConnected,
+  markConversationRead,
+} from "./actions";
 import type {
   Conversation,
   Message,
@@ -254,6 +258,16 @@ export default function InboxPage() {
         // No id to target — fall back to a full resync.
         setResyncToken((n) => n + 1);
         return;
+      }
+
+      // If the message is for the thread the user is currently viewing, mark
+      // it read in the DB FIRST. The webhook server-bumps unread_count, and the
+      // resync below refetches the whole list from the DB — so without an
+      // authoritative reset the "1" badge resurrects on the active thread the
+      // moment you're already replying to it. (Masking it only in `hydrate`
+      // wasn't enough: the full-list resync bypasses that mask.)
+      if (activeConversation?.id === convId) {
+        void markConversationRead(convId).catch(() => {});
       }
 
       // Refresh the conversation row (preview text, unread_count, contact).
