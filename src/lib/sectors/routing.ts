@@ -51,6 +51,27 @@ interface SectorRow {
 }
 type Chosen = { id: string; autoAssign: boolean };
 
+/**
+ * The sector a channel routes to by default, or null. Used to stamp a NEW
+ * conversation with its channel's sector at creation time — so a thread whose
+ * FIRST message is outbound (fromMe, agent-initiated) still belongs to the
+ * channel's sector instead of landing in the open general queue, where it would
+ * leak to every sector. A channel with no default sector returns null (that
+ * account is intentionally using the general queue).
+ */
+export async function channelDefaultSectorId(
+  channelId: string,
+): Promise<string | null> {
+  const ch = firstOrNull(
+    await db
+      .select({ s: channels.defaultSectorId })
+      .from(channels)
+      .where(eq(channels.id, channelId))
+      .limit(1),
+  );
+  return ch?.s ?? null;
+}
+
 /** All sectors of an account, with their keywords + auto-assign flag. */
 async function loadAccountSectors(accountId: string): Promise<SectorRow[]> {
   return db

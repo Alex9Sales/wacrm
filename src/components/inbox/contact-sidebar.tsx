@@ -999,6 +999,9 @@ export function ContactSidebar({
           deal={editingDeal}
           pipelineId={dealPipelineId}
           stages={dealStages}
+          // Opened from a conversation → pre-fill the client so the agent
+          // doesn't have to hunt for the number (only for a NEW deal).
+          defaultContactId={contact.id}
           onSaved={handleDealSaved}
         />
       )}

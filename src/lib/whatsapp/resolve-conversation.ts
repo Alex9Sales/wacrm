@@ -27,6 +27,7 @@ import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
 import { SendMessageError } from '@/lib/whatsapp/send-message';
 import { resolveAuditUserId, ContactError } from '@/lib/api/v1/contacts';
+import { channelDefaultSectorId } from '@/lib/sectors/routing';
 
 export interface ResolvedConversation {
   conversationId: string;
@@ -169,6 +170,12 @@ export async function resolveConversationByPhone(
     return { conversationId: conv.id, contactId: contactId!, contactCreated };
   }
 
+  // Inherit the channel's default sector at creation (same as the inbound
+  // pipeline) — an agent- or API-started conversation on a sector-owned channel
+  // must belong to that sector, not the open general queue (which everyone
+  // sees). Null when the channel has no default sector.
+  const bornSectorId = await channelDefaultSectorId(resolvedChannelId);
+
   let newConv: { id: string };
   try {
     newConv = firstOrThrow(
@@ -179,6 +186,7 @@ export async function resolveConversationByPhone(
           userId: ownerUserId,
           contactId: contactId!,
           channelId: resolvedChannelId,
+          sectorId: bornSectorId,
         })
         .returning({ id: conversations.id })
     );

@@ -44,7 +44,11 @@ import { getAccountSettings } from '@/lib/settings/account-settings';
 import { isWithinBusinessHours } from '@/lib/settings/business-hours';
 import { engineSendText } from '@/lib/flows/meta-send';
 import { maybeRecordCsat } from '@/lib/csat/csat';
-import { routeNewConversation, rerouteByKeyword } from '@/lib/sectors/routing';
+import {
+  routeNewConversation,
+  rerouteByKeyword,
+  channelDefaultSectorId,
+} from '@/lib/sectors/routing';
 import { putObject, publicUrl } from '@/lib/storage/s3';
 import { CALL_PERM_PREFIX } from '@/lib/inbox/call-log';
 import {
@@ -1406,6 +1410,13 @@ async function findOrCreateConversation(
 
   if (existing) return { conversation: existing, created: false };
 
+  // Stamp the channel's default sector at birth so a conversation is NEVER
+  // created in the open general queue when its channel belongs to a sector.
+  // The keyword/inbound routing below only runs for customer (non-fromMe)
+  // messages, so an agent-STARTED thread (first message outbound) used to stay
+  // sector-less and leak to every sector. Null when the channel has no sector.
+  const bornSectorId = await channelDefaultSectorId(channelId);
+
   try {
     const created = firstOrNull(
       await db
@@ -1415,6 +1426,7 @@ async function findOrCreateConversation(
           userId,
           contactId,
           channelId,
+          sectorId: bornSectorId,
         })
         .returning(),
     );

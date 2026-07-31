@@ -47,6 +47,10 @@ interface DealFormProps {
   pipelineId: string;
   stages: PipelineStage[];
   defaultStageId?: string;
+  /** Pre-select this contact on a NEW deal (e.g. opened from a conversation —
+   *  the client is already known, so don't make the agent search for them). The
+   *  field shows the contact locked, with an "Alterar" to switch it. */
+  defaultContactId?: string;
   onSaved: () => void;
 }
 
@@ -57,6 +61,7 @@ export function DealForm({
   pipelineId,
   stages,
   defaultStageId,
+  defaultContactId,
   onSaved,
 }: DealFormProps) {
   const { accountId, defaultCurrency } = useAuth();
@@ -79,6 +84,10 @@ export function DealForm({
   const [statusAction, setStatusAction] = useState<DealStatus | null>(null);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // When opened from a conversation the contact is known — show it locked
+  // (just the client) instead of an empty "Selecione um contato". "Alterar"
+  // flips this to the full picker.
+  const [contactLocked, setContactLocked] = useState(false);
 
   // Reset the form fields every time the sheet opens or its input
   // props change. This is a legitimate prop-driven sync; the rule is
@@ -98,17 +107,20 @@ export function DealForm({
       setAssignedTo(deal.assigned_to ?? "");
       setExpectedCloseDate(deal.expected_close_date ?? "");
       setNotes(deal.notes ?? "");
+      setContactLocked(false);
     } else {
       setTitle("");
       setValue("");
       setCurrency(defaultCurrency);
-      setContactId("");
+      setContactId(defaultContactId ?? "");
       setStageId(defaultStageId || stages[0]?.id || "");
       setAssignedTo("");
       setExpectedCloseDate("");
       setNotes("");
+      // Opened from a conversation → start with the contact locked-in.
+      setContactLocked(!!defaultContactId);
     }
-  }, [open, deal, defaultStageId, stages, defaultCurrency]);
+  }, [open, deal, defaultStageId, defaultContactId, stages, defaultCurrency]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Load supporting data once the sheet is open
@@ -252,18 +264,36 @@ export function DealForm({
 
             <div className="grid gap-2">
               <Label className="text-muted-foreground">Contato</Label>
-              <select
-                value={contactId}
-                onChange={(e) => setContactId(e.target.value)}
-                className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-              >
-                <option value="">Selecione um contato</option>
-                {contacts.map((c) => (
-                  <option key={c.id} value={c.id}>
-                    {c.name || c.phone}
-                  </option>
-                ))}
-              </select>
+              {contactLocked && contactId ? (
+                <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-muted px-2.5 py-2 text-sm text-foreground">
+                  <span className="truncate">
+                    {(() => {
+                      const c = contacts.find((x) => x.id === contactId);
+                      return c?.name || c?.phone || "Contato da conversa";
+                    })()}
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => setContactLocked(false)}
+                    className="shrink-0 text-xs text-primary underline-offset-2 hover:underline"
+                  >
+                    Alterar
+                  </button>
+                </div>
+              ) : (
+                <select
+                  value={contactId}
+                  onChange={(e) => setContactId(e.target.value)}
+                  className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                >
+                  <option value="">Selecione um contato</option>
+                  {contacts.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name || c.phone}
+                    </option>
+                  ))}
+                </select>
+              )}
 
               {linkedConversation && (
                 <Link
