@@ -67,7 +67,20 @@ jobs:
             echo "Add the repo secret (Settings → Secrets → Actions → COOLIFY_TOKEN) to enable."
             exit 0
           fi
-          curl -fsS -X GET \
-            "https://coolify.salestecnologia.com.br/api/v1/deploy?uuid=klqgmh23eh0mi72r6scqtdo2,i9edhxtdkqf5gi8b12zh2j0h&force=true" \
-            -H "Authorization: Bearer $COOLIFY_TOKEN" \
-          && echo "✓ Coolify deploy triggered for web + worker."
+          # Coolify's box is on a 2-vCPU VPS and its https endpoint sometimes
+          # takes a few seconds to answer — the bare curl was hitting `curl (28)
+          # timeout` intermittently and the auto-deploy silently didn't fire.
+          # Retry hard (connect + total timeouts, up to 6 attempts with backoff,
+          # retrying on ANY error incl. timeouts). If it still fails, the image
+          # is already in GHCR — click "Redeploy" on BOTH apps in Coolify.
+          if curl -fsS -X GET \
+              --connect-timeout 15 --max-time 90 \
+              --retry 6 --retry-delay 10 --retry-all-errors \
+              "https://coolify.salestecnologia.com.br/api/v1/deploy?uuid=klqgmh23eh0mi72r6scqtdo2,i9edhxtdkqf5gi8b12zh2j0h&force=true" \
+              -H "Authorization: Bearer $COOLIFY_TOKEN"; then
+            echo "✓ Coolify deploy triggered for web + worker."
+          else
+            echo "::warning::Coolify auto-deploy trigger failed after retries."
+            echo "Image IS pushed to GHCR — open Coolify and click Redeploy on BOTH apps (web + worker)."
+            exit 1
+          fi
