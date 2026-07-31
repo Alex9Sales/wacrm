@@ -96,8 +96,8 @@ export default function SupervisaoPage() {
         <ShieldAlert className="h-10 w-10 text-muted-foreground/40" />
         <p className="text-sm font-medium text-foreground">Acesso restrito</p>
         <p className="max-w-xs text-xs text-muted-foreground">
-          A Supervisão é visível apenas para administradores e o proprietário
-          da conta.
+          A Supervisão é visível para supervisores, administradores e o
+          proprietário da conta.
         </p>
       </div>
     );
