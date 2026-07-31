@@ -4,6 +4,7 @@ import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import { Loader2, Sparkles, CheckCircle2, Trash2, Eye, EyeOff } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
+import { cn } from '@/lib/utils';
 import { canEditSettings } from '@/lib/auth/roles';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -67,6 +68,10 @@ export function AiConfig() {
   // Model picker: the list of models the provider exposes for the current key.
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
+  // Custom combobox open state — replaces the native <datalist>, which Chrome
+  // rendered unreliably (the password-manager autofill overlapped it and it
+  // wouldn't list all models on a plain click).
+  const [modelOpen, setModelOpen] = useState(false);
 
   // Guard keyed on the account (not a bare boolean) so an in-place
   // account switch — ownership transfer, multi-account membership —
@@ -331,20 +336,66 @@ export function AiConfig() {
                     {loadingModels ? 'Carregando…' : 'Atualizar lista'}
                   </button>
                 </div>
-                <Input
-                  id="ai-model"
-                  list="ai-model-options"
-                  value={model}
-                  onChange={(e) => setModel(e.target.value)}
-                  placeholder={AI_PROVIDER_DEFAULT_MODEL[provider]}
-                  disabled={disabled}
-                  autoComplete="off"
-                />
-                <datalist id="ai-model-options">
-                  {models.map((m) => (
-                    <option key={m} value={m} />
-                  ))}
-                </datalist>
+                <div className="relative">
+                  <Input
+                    id="ai-model"
+                    value={model}
+                    onChange={(e) => {
+                      setModel(e.target.value);
+                      setModelOpen(true);
+                    }}
+                    onFocus={() => setModelOpen(true)}
+                    // Delay the close so a click on an option (mousedown below)
+                    // still registers before blur tears the list down.
+                    onBlur={() => window.setTimeout(() => setModelOpen(false), 120)}
+                    placeholder={AI_PROVIDER_DEFAULT_MODEL[provider]}
+                    disabled={disabled}
+                    autoComplete="off"
+                    role="combobox"
+                    aria-expanded={modelOpen}
+                    // Keep password managers (1Password / Chrome) off this field —
+                    // it sits next to the API-key input, so they'd try to autofill.
+                    data-1p-ignore="true"
+                    data-lpignore="true"
+                  />
+                  {modelOpen &&
+                    models.length > 0 &&
+                    (() => {
+                      const q = model.trim().toLowerCase();
+                      const matches = models.filter((m) =>
+                        m.toLowerCase().includes(q),
+                      );
+                      // If the query matches nothing (or is a full exact value),
+                      // still show the whole list so a click always has options.
+                      const list = matches.length ? matches : models;
+                      return (
+                        <ul className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md border border-border bg-popover py-1 shadow-md">
+                          {list.map((m) => (
+                            <li key={m}>
+                              <button
+                                type="button"
+                                // mousedown (not click) so it fires before the
+                                // input's blur closes the list.
+                                onMouseDown={(e) => {
+                                  e.preventDefault();
+                                  setModel(m);
+                                  setModelOpen(false);
+                                }}
+                                className={cn(
+                                  'flex w-full items-center px-3 py-1.5 text-left text-sm hover:bg-muted',
+                                  m === model
+                                    ? 'text-primary'
+                                    : 'text-popover-foreground',
+                                )}
+                              >
+                                {m}
+                              </button>
+                            </li>
+                          ))}
+                        </ul>
+                      );
+                    })()}
+                </div>
                 <p className="text-xs text-muted-foreground">
                   {models.length > 0
                     ? `${models.length} modelos disponíveis — clique no campo para escolher (ou digite um).`
