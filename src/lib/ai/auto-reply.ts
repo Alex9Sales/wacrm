@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql } from 'drizzle-orm'
-import { db, automations, conversations } from '@/db'
+import { db, automations, conversations, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfig } from './config'
 import { buildConversationContext } from './context'
@@ -77,12 +77,19 @@ export async function dispatchInboundToAiReply(
           assignedAgentId: conversations.assignedAgentId,
           aiAutoreplyDisabled: conversations.aiAutoreplyDisabled,
           aiReplyCount: conversations.aiReplyCount,
+          isGroup: contacts.isGroup,
         })
         .from(conversations)
+        .innerJoin(contacts, eq(conversations.contactId, contacts.id))
         .where(eq(conversations.id, conversationId))
         .limit(1),
     )
     if (!conv) return
+    // NEVER auto-reply in a GROUP thread. The bot answering inside a WhatsApp
+    // group is almost always wrong (it would reply to every member's message,
+    // spamming the group) and risky for the number's reputation — so it's a
+    // hard lock, not a per-account toggle. 1:1 threads are unaffected.
+    if (conv.isGroup) return
     if (conv.assignedAgentId) return // a human owns this thread
     if (conv.aiAutoreplyDisabled) return // handed off / turned off here
     // Cheap early-out; the authoritative cap check is the atomic claim

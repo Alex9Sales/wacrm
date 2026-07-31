@@ -76,6 +76,19 @@ export function ApiKeysSettings() {
   const [createOpen, setCreateOpen] = useState(false);
   const [revoking, setRevoking] = useState<string | null>(null);
 
+  // Lead-intake endpoint URL — same origin as the CRM. Resolved on the client
+  // so the shown URL matches whatever domain the account is on.
+  const [leadUrl, setLeadUrl] = useState('/api/v1/leads');
+  useEffect(() => {
+    setLeadUrl(`${window.location.origin}/api/v1/leads`);
+  }, []);
+  const copy = useCallback((text: string, label: string) => {
+    void navigator.clipboard
+      .writeText(text)
+      .then(() => toast.success(`${label} copiado`))
+      .catch(() => toast.error('Não foi possível copiar'));
+  }, []);
+
   const load = useCallback(async () => {
     try {
       const res = await fetch('/api/account/api-keys', { cache: 'no-store' });
@@ -263,6 +276,81 @@ export function ApiKeysSettings() {
           </CardContent>
         </Card>
       )}
+
+      {/* Lead-intake helper — turn any site/landing form into CRM leads. */}
+      <Card>
+        <CardContent className="space-y-4 p-5">
+          <div>
+            <h3 className="text-sm font-semibold text-foreground">
+              Formulário de leads (site / campanha)
+            </h3>
+            <p className="mt-1 text-xs text-muted-foreground">
+              Ponha um formulário no seu site, blog ou landing e o lead cai
+              direto aqui — <span className="text-foreground">contato + card no
+              funil + tarefa</span>, automático (igual RD Station).
+            </p>
+          </div>
+
+          <ol className="space-y-3 text-xs text-muted-foreground">
+            <li>
+              <span className="font-medium text-foreground">1.</span> Crie uma
+              chave acima com o escopo{' '}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-foreground">
+                contacts:write
+              </code>{' '}
+              (só esse — a chave fica visível no site, então mantenha o poder
+              dela no mínimo).
+            </li>
+            <li>
+              <span className="font-medium text-foreground">2.</span> Aponte o
+              formulário para este endereço:
+              <div className="mt-1.5 flex items-center gap-2">
+                <code className="flex-1 truncate rounded-md border border-border bg-muted px-2 py-1.5 text-[11px] text-foreground">
+                  {leadUrl}
+                </code>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() => copy(leadUrl, 'Endereço')}
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </li>
+            <li>
+              <span className="font-medium text-foreground">3.</span> Exemplo de
+              envio (troque a chave):
+              <div className="mt-1.5 flex items-start gap-2">
+                <pre className="flex-1 overflow-x-auto rounded-md border border-border bg-muted px-2 py-1.5 text-[11px] leading-relaxed text-foreground">{`curl -X POST "${leadUrl}" \\
+  -H "Authorization: Bearer SUA_CHAVE" \\
+  -H "Content-Type: application/json" \\
+  -d '{"nome":"João","telefone":"67999998888","email":"joao@x.com","empresa":"Loja do João","origem":"site"}'`}</pre>
+                <Button
+                  type="button"
+                  size="sm"
+                  variant="outline"
+                  onClick={() =>
+                    copy(
+                      `curl -X POST "${leadUrl}" -H "Authorization: Bearer SUA_CHAVE" -H "Content-Type: application/json" -d '{"nome":"João","telefone":"67999998888","email":"joao@x.com","empresa":"Loja do João","origem":"site"}'`,
+                      'Exemplo',
+                    )
+                  }
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </li>
+          </ol>
+
+          <p className="text-[11px] text-muted-foreground">
+            Aceita apelidos de campo (nome/name, telefone/phone/whatsapp,
+            empresa/company…), normaliza o telefone e captura utm_source/campaign
+            da URL. Retorna os IDs criados. Para criar o card no funil, a conta
+            precisa de ao menos 1 funil com 1 etapa.
+          </p>
+        </CardContent>
+      </Card>
 
       <CreateKeyDialog
         open={createOpen}

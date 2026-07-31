@@ -43,16 +43,26 @@ vi.mock('@/db', async (importOriginal) => {
       // conversations (eligibility read). Distinguished by the table
       // passed to .from() — real table objects survive via importOriginal.
       select: () => ({
-        from: (table: unknown) => ({
-          where: () => ({
-            limit: () => {
-              if (table === actual.automations) {
-                return Promise.resolve(h.state.autoResponders)
-              }
-              return Promise.resolve(h.state.conv ? [h.state.conv] : [])
-            },
-          }),
-        }),
+        from: (table: unknown) => {
+          // The eligibility read joins contacts (for is_group); the automations
+          // guard doesn't. `innerJoin` returns the same chain so both shapes
+          // resolve through the same where().limit().
+          const chain: {
+            innerJoin: () => typeof chain
+            where: () => { limit: () => Promise<unknown[]> }
+          } = {
+            innerJoin: () => chain,
+            where: () => ({
+              limit: () => {
+                if (table === actual.automations) {
+                  return Promise.resolve(h.state.autoResponders)
+                }
+                return Promise.resolve(h.state.conv ? [h.state.conv] : [])
+              },
+            }),
+          }
+          return chain
+        },
       }),
       update: () => ({
         set: (payload: Record<string, unknown>) => ({
@@ -99,6 +109,7 @@ beforeEach(() => {
     assignedAgentId: null,
     aiAutoreplyDisabled: false,
     aiReplyCount: 0,
+    isGroup: false,
   }
   h.state.autoResponders = []
   h.state.claim = true
@@ -156,6 +167,19 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     h.loadAiConfig.mockResolvedValue(aiConfig({ autoReplyEnabled: false }))
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('NEVER replies in a group thread (hard lock)', async () => {
+    h.state.conv = {
+      assignedAgentId: null,
+      aiAutoreplyDisabled: false,
+      aiReplyCount: 0,
+      isGroup: true,
+    }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.state.sqlCalls).toHaveLength(0)
   })
 
   it('skips when a human agent is assigned', async () => {

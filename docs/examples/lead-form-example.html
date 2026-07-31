@@ -1,0 +1,118 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Formulário de Lead — FluxiaCRM</title>
+  <style>
+    :root { --brand: #7c3aed; --bg: #f8f7fb; --border: #e5e3ee; --text: #1f2430; }
+    * { box-sizing: border-box; }
+    body { margin: 0; font-family: system-ui, -apple-system, Segoe UI, Roboto, sans-serif;
+           background: var(--bg); color: var(--text); display: flex; min-height: 100vh;
+           align-items: center; justify-content: center; padding: 24px; }
+    .card { background: #fff; border: 1px solid var(--border); border-radius: 16px;
+            padding: 28px; width: 100%; max-width: 440px; box-shadow: 0 10px 40px rgba(30,20,60,.08); }
+    h1 { font-size: 20px; margin: 0 0 4px; }
+    p.sub { margin: 0 0 20px; color: #6b7280; font-size: 14px; }
+    label { display: block; font-size: 13px; font-weight: 600; margin: 12px 0 6px; }
+    input, textarea { width: 100%; padding: 10px 12px; border: 1px solid var(--border);
+            border-radius: 10px; font-size: 14px; font-family: inherit; }
+    input:focus, textarea:focus { outline: none; border-color: var(--brand); }
+    button { width: 100%; margin-top: 20px; padding: 12px; border: 0; border-radius: 10px;
+             background: var(--brand); color: #fff; font-size: 15px; font-weight: 600; cursor: pointer; }
+    button:disabled { opacity: .6; cursor: default; }
+    .msg { margin-top: 14px; font-size: 14px; text-align: center; min-height: 20px; }
+    .msg.ok { color: #059669; } .msg.err { color: #dc2626; }
+  </style>
+</head>
+<body>
+  <form class="card" id="lead-form">
+    <h1>Fale com a gente</h1>
+    <p class="sub">Preencha e nosso time entra em contato pelo WhatsApp.</p>
+
+    <label for="nome">Nome *</label>
+    <input id="nome" name="nome" required autocomplete="name" />
+
+    <label for="telefone">WhatsApp *</label>
+    <input id="telefone" name="telefone" required inputmode="tel"
+           placeholder="(67) 99999-8888" autocomplete="tel" />
+
+    <label for="email">E-mail</label>
+    <input id="email" name="email" type="email" autocomplete="email" />
+
+    <label for="empresa">Empresa</label>
+    <input id="empresa" name="empresa" />
+
+    <label for="mensagem">Mensagem</label>
+    <textarea id="mensagem" name="mensagem" rows="3"></textarea>
+
+    <button type="submit" id="submit-btn">Enviar</button>
+    <div class="msg" id="msg"></div>
+  </form>
+
+  <script>
+    // ============================================================
+    // Aponte para o SEU CRM e cole a chave de API (scope contacts:write).
+    // ⚠️ Esta chave FICA VISÍVEL no código da página. Use uma chave criada
+    //    SÓ com o scope `contacts:write` — assim, mesmo que alguém a veja,
+    //    só consegue criar leads (nada é lido ou apagado). Rotacione quando quiser.
+    // ============================================================
+    const CRM_ENDPOINT = "https://crm.salestecnologia.com.br/api/v1/leads";
+    const API_KEY = "COLE_SUA_CHAVE_contacts_write_AQUI";
+
+    // Puxa utm_source/medium/campaign da URL da página (?utm_source=instagram…)
+    function utmParams() {
+      const p = new URLSearchParams(location.search);
+      const out = {};
+      for (const k of ["utm_source","utm_medium","utm_campaign","utm_content"]) {
+        const v = p.get(k); if (v) out[k] = v;
+      }
+      return out;
+    }
+
+    const form = document.getElementById("lead-form");
+    const btn = document.getElementById("submit-btn");
+    const msg = document.getElementById("msg");
+
+    form.addEventListener("submit", async (e) => {
+      e.preventDefault();
+      btn.disabled = true; msg.className = "msg"; msg.textContent = "Enviando…";
+
+      const payload = {
+        nome: form.nome.value.trim(),
+        telefone: form.telefone.value.trim(),
+        email: form.email.value.trim(),
+        empresa: form.empresa.value.trim(),
+        mensagem: form.mensagem.value.trim(),
+        origem: "site",
+        ...utmParams(),
+      };
+
+      try {
+        const res = await fetch(CRM_ENDPOINT, {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            "Authorization": "Bearer " + API_KEY,
+          },
+          body: JSON.stringify(payload),
+        });
+        const data = await res.json();
+        if (res.ok && data.ok) {
+          msg.className = "msg ok";
+          msg.textContent = "Recebido! Já já a gente te chama. 🎉";
+          form.reset();
+        } else {
+          msg.className = "msg err";
+          msg.textContent = data.message || "Não foi possível enviar. Tente de novo.";
+        }
+      } catch (_) {
+        msg.className = "msg err";
+        msg.textContent = "Erro de conexão. Tente de novo.";
+      } finally {
+        btn.disabled = false;
+      }
+    });
+  </script>
+</body>
+</html>
