@@ -20,7 +20,11 @@ import {
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
-import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils'
+import {
+  sanitizePhoneForMeta,
+  isValidE164,
+  normalizeInboundPhoneBR,
+} from '@/lib/whatsapp/phone-utils'
 import {
   findExistingContact,
   isExactMatch,
@@ -427,8 +431,20 @@ export async function importContacts(
   let skipped = 0
   let failed = 0
 
+  // 0) Normalize each phone to E.164 up front — a CSV of Brazilian numbers in
+  //    national-dialing form ("0 + operadora + DDD + número") would otherwise be
+  //    imported unsendable (leading 0 fails isValidE164), exactly like the
+  //    inbound path used to. Doing it here (before dedupe + the "already in
+  //    account" check) also makes those checks compare the right digits, so an
+  //    imported number correctly matches an existing 55… contact. Only touches
+  //    numbers starting with 0, so clean numbers pass through unchanged.
+  const normalizedRows = rows.map((r) => ({
+    ...r,
+    phone: normalizeInboundPhoneBR(r.phone),
+  }))
+
   // 1) In-file dedupe by normalized phone (keep first).
-  const { unique, duplicates: inFileDupes } = dedupeByPhone(rows)
+  const { unique, duplicates: inFileDupes } = dedupeByPhone(normalizedRows)
   skipped += inFileDupes
 
   // 2) Skip numbers already in this account.
