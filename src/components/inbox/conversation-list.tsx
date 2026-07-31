@@ -60,10 +60,11 @@ const STATUS_COLORS: Record<ConversationStatus, string> = {
   closed: "bg-muted-foreground",
 };
 
-type InboxFilter = ConversationStatus | "all" | "unread";
+// Status filter chips. MULTI-SELECT (Felipe/Alex): marcar quantos quiser e
+// ver todos juntos (ex.: não lidas + abertas). Conjunto vazio = todas.
+type StatusChip = "unread" | ConversationStatus;
 
-const FILTER_OPTIONS: { label: string; value: InboxFilter }[] = [
-  { label: "Todas", value: "all" },
+const CHIP_OPTIONS: { label: string; value: StatusChip }[] = [
   { label: "Não lidas", value: "unread" },
   { label: "Aberta", value: "open" },
   { label: "Pendente", value: "pending" },
@@ -103,7 +104,10 @@ export function ConversationList({
   const searchParams = useSearchParams();
   const [search, setSearch] = useState("");
   const [newConvOpen, setNewConvOpen] = useState(false);
-  const [filter, setFilter] = useState<InboxFilter>("all");
+  // Empty set = todas. Otherwise a conversation shows if it matches ANY chip.
+  const [statusFilters, setStatusFilters] = useState<Set<StatusChip>>(
+    () => new Set(),
+  );
   const [segment, setSegment] = useState<SegmentFilter>("all");
   const [loading, setLoading] = useState(true);
   // Channel ("caixa") filter — null means "Todas as conversas" (all
@@ -300,10 +304,19 @@ export function ConversationList({
       result = result.filter((c) => !c.contact?.is_group);
     }
 
-    if (filter === "unread") {
-      result = result.filter((c) => c.unread_count > 0);
-    } else if (filter !== "all") {
-      result = result.filter((c) => c.status === filter);
+    // Multi-select status filter (OR): empty set = todas; senão a conversa
+    // aparece se casar com QUALQUER chip marcado.
+    if (statusFilters.size > 0) {
+      result = result.filter((c) => {
+        for (const f of statusFilters) {
+          if (f === "unread") {
+            if (c.unread_count > 0) return true;
+          } else if (c.status === f) {
+            return true;
+          }
+        }
+        return false;
+      });
     }
 
     // "Atribuídas a mim" — only conversations assigned to the current user.
@@ -341,7 +354,7 @@ export function ConversationList({
     return result;
   }, [
     conversations,
-    filter,
+    statusFilters,
     segment,
     search,
     selectedTagIds,
@@ -356,6 +369,12 @@ export function ConversationList({
   // a monitored group in the list — keeps the toolbar clean otherwise.
   const hasGroups = useMemo(
     () => conversations.some((c) => c.contact?.is_group === true),
+    [conversations],
+  );
+  // "Sem setor (fila geral)" só faz sentido quando há conversa sem setor
+  // (Felipe: se todo canal tem setor, não mostrar a opção vazia).
+  const hasGeneralQueue = useMemo(
+    () => conversations.some((c) => !c.sector_id),
     [conversations],
   );
   const activeSegment = SEGMENT_OPTIONS.find((o) => o.value === segment);
@@ -392,7 +411,22 @@ export function ConversationList({
     [onSelect]
   );
 
-  const activeFilter = FILTER_OPTIONS.find((o) => o.value === filter);
+  const toggleStatusFilter = useCallback((v: StatusChip) => {
+    setStatusFilters((prev) => {
+      const next = new Set(prev);
+      if (next.has(v)) next.delete(v);
+      else next.add(v);
+      return next;
+    });
+  }, []);
+
+  const filterLabel =
+    statusFilters.size === 0
+      ? "Todas"
+      : statusFilters.size === 1
+        ? (CHIP_OPTIONS.find((o) => statusFilters.has(o.value))?.label ??
+          "Filtro")
+        : `${statusFilters.size} filtros`;
 
   return (
     // w-full on mobile so the list occupies the whole viewport when it's
@@ -487,27 +521,42 @@ export function ConversationList({
 
         <div className="flex flex-wrap items-center gap-1">
           <DropdownMenu>
-            <DropdownMenuTrigger className="inline-flex items-center justify-center h-7 gap-1 px-2 text-xs text-muted-foreground hover:text-foreground rounded-md hover:bg-muted">
-                {activeFilter?.label ?? "Todas"}
-                <ChevronDown className="h-3 w-3" />
+            <DropdownMenuTrigger
+              className={cn(
+                "inline-flex items-center justify-center h-7 gap-1 px-2 text-xs rounded-md hover:bg-muted",
+                statusFilters.size > 0
+                  ? "text-primary"
+                  : "text-muted-foreground hover:text-foreground",
+              )}
+            >
+              {filterLabel}
+              <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
             <DropdownMenuContent
               align="start"
               className="border-border bg-popover"
             >
-              {FILTER_OPTIONS.map((opt) => (
-                <DropdownMenuItem
+              {/* "Todas" limpa a seleção (nenhum chip = todas). */}
+              <DropdownMenuItem
+                onClick={() => setStatusFilters(new Set())}
+                className={cn(
+                  "text-sm",
+                  statusFilters.size === 0
+                    ? "text-primary"
+                    : "text-popover-foreground",
+                )}
+              >
+                Todas
+              </DropdownMenuItem>
+              {CHIP_OPTIONS.map((opt) => (
+                <DropdownMenuCheckboxItem
                   key={opt.value}
-                  onClick={() => setFilter(opt.value)}
-                  className={cn(
-                    "text-sm",
-                    filter === opt.value
-                      ? "text-primary"
-                      : "text-popover-foreground"
-                  )}
+                  checked={statusFilters.has(opt.value)}
+                  onCheckedChange={() => toggleStatusFilter(opt.value)}
+                  className="text-sm text-popover-foreground"
                 >
                   {opt.label}
-                </DropdownMenuItem>
+                </DropdownMenuCheckboxItem>
               ))}
             </DropdownMenuContent>
           </DropdownMenu>
@@ -565,17 +614,19 @@ export function ConversationList({
                 >
                   Todos os setores
                 </DropdownMenuItem>
-                <DropdownMenuItem
-                  onClick={() => setSelectedSectorId("__none__")}
-                  className={cn(
-                    "text-sm",
-                    selectedSectorId === "__none__"
-                      ? "text-primary"
-                      : "text-popover-foreground",
-                  )}
-                >
-                  Sem setor (fila geral)
-                </DropdownMenuItem>
+                {(hasGeneralQueue || selectedSectorId === "__none__") && (
+                  <DropdownMenuItem
+                    onClick={() => setSelectedSectorId("__none__")}
+                    className={cn(
+                      "text-sm",
+                      selectedSectorId === "__none__"
+                        ? "text-primary"
+                        : "text-popover-foreground",
+                    )}
+                  >
+                    Sem setor (fila geral)
+                  </DropdownMenuItem>
+                )}
                 {sectors.map((s) => (
                   <DropdownMenuItem
                     key={s.id}

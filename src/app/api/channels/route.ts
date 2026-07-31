@@ -25,8 +25,16 @@ import type { ProviderId } from '@/lib/channels/provider'
 // name the channel and the platform fills the connection from here and
 // auto-generates a unique session/instance name. Falls back to any explicit
 // config the caller passed (advanced / self-hosted use).
+// WAHA default = a engine COM VOZ (waha-calls, :3999). Antes o default vinha
+// só da env; se ela derivasse pro :3010 (só-mensagens), todo canal novo nascia
+// SEM voz (furo de onboarding do Felipe). Agora o :3999 é o piso, e a env só
+// sobrepõe se apontar pra outro lugar de propósito. Ver [[crmfluxia-waha-voice-engine-3999]].
+const WAHA_VOICE_BASE_URL = 'http://72.60.137.234:3999'
 const MANAGED = {
-  waha: { baseUrl: process.env.WAHA_BASE_URL, apiKey: process.env.WAHA_API_KEY },
+  waha: {
+    baseUrl: process.env.WAHA_BASE_URL || WAHA_VOICE_BASE_URL,
+    apiKey: process.env.WAHA_API_KEY,
+  },
   evolution: {
     baseUrl: process.env.EVOLUTION_BASE_URL,
     apiKey: process.env.EVOLUTION_API_KEY,
