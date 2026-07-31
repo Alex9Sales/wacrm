@@ -18,6 +18,10 @@ interface ReplyQuoteProps {
    *  quote must read against the primary surface rather than the neutral
    *  foreground — otherwise it goes low-contrast in light mode. */
   onPrimary?: boolean;
+  /** Embedded variant only: when set, the quote becomes clickable and calls
+   *  this to jump to the original message (WhatsApp-style). Ignored for the
+   *  composer chip. */
+  onNavigate?: () => void;
 }
 
 export function ReplyQuote({
@@ -25,10 +29,36 @@ export function ReplyQuote({
   preview,
   onDismiss,
   onPrimary = false,
+  onNavigate,
 }: ReplyQuoteProps) {
   const isChip = !!onDismiss;
+  const clickable = !isChip && !!onNavigate;
   return (
     <div
+      role={clickable ? "button" : undefined}
+      tabIndex={clickable ? 0 : undefined}
+      title={clickable ? "Ir para a mensagem original" : undefined}
+      onClick={
+        clickable
+          ? (e) => {
+              // The bubble wrapper has its own click/long-press handlers —
+              // don't let the jump bubble up and trigger them too.
+              e.stopPropagation();
+              onNavigate!();
+            }
+          : undefined
+      }
+      onKeyDown={
+        clickable
+          ? (e) => {
+              if (e.key === "Enter" || e.key === " ") {
+                e.preventDefault();
+                e.stopPropagation();
+                onNavigate!();
+              }
+            }
+          : undefined
+      }
       className={cn(
         "flex items-start gap-2 border-l-2 px-2 py-1",
         onPrimary ? "border-primary-foreground/50" : "border-primary",
@@ -37,6 +67,8 @@ export function ReplyQuote({
           : onPrimary
             ? "mb-1.5 rounded-md bg-primary-foreground/15"
             : "mb-1.5 rounded-md bg-background/20",
+        clickable &&
+          "cursor-pointer transition-colors hover:brightness-95 dark:hover:brightness-110",
       )}
     >
       <div className="min-w-0 flex-1 overflow-hidden">

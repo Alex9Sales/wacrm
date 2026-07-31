@@ -369,8 +369,13 @@ function captionNode(
 
 interface MessageBubbleProps {
   message: Message;
-  /** Pre-computed quote info for messages that reply to another. */
-  reply?: { authorLabel: string; preview: string } | null;
+  /** Pre-computed quote info for messages that reply to another. `parentId` is
+   *  the quoted message's id — present when the original is somewhere in the
+   *  loaded thread, so the quote can jump to it. */
+  reply?: { authorLabel: string; preview: string; parentId?: string | null } | null;
+  /** Jump-to-original handler for the reply quote (WhatsApp-style). Called with
+   *  the quoted message's id when the user clicks the embedded quote. */
+  onNavigateToParent?: (parentId: string) => void;
   reactions?: MessageReaction[];
   currentUserId?: string;
   onToggleReaction?: (emoji: string) => void;
@@ -1047,6 +1052,7 @@ function MessageContent({
 export function MessageBubble({
   message,
   reply,
+  onNavigateToParent,
   reactions,
   currentUserId,
   onToggleReaction,
@@ -1108,6 +1114,11 @@ export function MessageBubble({
             authorLabel={reply.authorLabel}
             preview={reply.preview}
             onPrimary={isAgent}
+            onNavigate={
+              reply.parentId && onNavigateToParent
+                ? () => onNavigateToParent(reply.parentId!)
+                : undefined
+            }
           />
         )}
         <MessageContent

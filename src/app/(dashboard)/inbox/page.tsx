@@ -110,6 +110,14 @@ export default function InboxPage() {
     knownConvIdsRef.current = next;
   }, [conversations]);
 
+  // Mirror the active conversation id into a ref so the []-deps hydrate
+  // callback can tell whether the row it's refreshing is the one the user is
+  // currently looking at (see hydrateConversation) without re-creating itself.
+  const activeConvIdRef = useRef<string | null>(null);
+  useEffect(() => {
+    activeConvIdRef.current = activeConversation?.id ?? null;
+  }, [activeConversation?.id]);
+
   // Pull the conversation row with its `contact` joined and merge it
   // into state. Needed because Supabase Realtime payloads only carry the
   // row's own columns — a brand-new conversation arrives without a
@@ -149,6 +157,15 @@ export default function InboxPage() {
             ...existing,
             ...fetchedConv,
             contact: fetchedConv.contact ?? existing.contact,
+            // Don't light the unread dot on the conversation the user is
+            // actively viewing: the webhook server-bumps unread_count and this
+            // hydrate would surface it for a beat before MessageThread's reset
+            // effect zeroes it — a visible flicker while you're mid-reply. The
+            // thread is open, so it's already read.
+            unread_count:
+              fetchedConv.id === activeConvIdRef.current
+                ? 0
+                : fetchedConv.unread_count,
           };
           return [merged, ...prev.filter((c) => c.id !== fetchedConv.id)];
         }
@@ -196,23 +213,29 @@ export default function InboxPage() {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [deepLinkConvId]);
 
-  // Check WhatsApp connection status on mount
-  useEffect(() => {
-    const checkConnection = async () => {
-      try {
-        // whatsapp_config is one-row-per-account post-multi-user; the
-        // server action resolves the caller's account and queries by it,
-        // so the banner stays correct for teammates who didn't
-        // personally save the config.
-        setWhatsappConnected(await getWhatsappConnected());
-      } catch {
-        // No session / no account — treat as not connected.
-        setWhatsappConnected(false);
-      }
-    };
-
-    checkConnection();
+  // Check WhatsApp connection status. Re-runnable: fired on mount, on realtime
+  // reconnect, and on tab refocus so a transient blip self-heals WITHOUT a
+  // manual page refresh.
+  //
+  // whatsapp_config is one-row-per-account post-multi-user; the server action
+  // resolves the caller's account and queries by it, so the banner stays
+  // correct for teammates who didn't personally save the config.
+  const checkConnection = useCallback(async () => {
+    try {
+      setWhatsappConnected(await getWhatsappConnected());
+    } catch {
+      // A transient failure of the server action (network blip, session
+      // hiccup) is NOT proof the number is disconnected — asserting `false`
+      // here is exactly what stuck the scary "não conectado" banner on screen
+      // until the user hit F5. Leave the last known state untouched; the next
+      // re-check (reconnect / focus) resolves it authoritatively.
+      console.error("checkConnection failed (keeping last known state)");
+    }
   }, []);
+
+  useEffect(() => {
+    void checkConnection();
+  }, [checkConnection]);
 
   // Handle realtime message events.
   //
@@ -306,12 +329,15 @@ export default function InboxPage() {
       // false → true transition
       if (initialConnectDoneRef.current) {
         setResyncToken((n) => n + 1);
+        // Reconnect is also the moment to re-verify the WhatsApp banner: a
+        // blip that flipped it stale clears itself here instead of on F5.
+        void checkConnection();
       } else {
         initialConnectDoneRef.current = true;
       }
     }
     wasConnectedRef.current = isConnected;
-  }, [isConnected]);
+  }, [isConnected, checkConnection]);
 
   /**
    * Refetch when the tab regains focus. Background tabs may have their
@@ -323,13 +349,15 @@ export default function InboxPage() {
     const onVisibility = () => {
       if (document.visibilityState === "visible") {
         setResyncToken((n) => n + 1);
+        // Re-verify the connection banner on refocus too — same self-heal.
+        void checkConnection();
       }
     };
     document.addEventListener("visibilitychange", onVisibility);
     return () => {
       document.removeEventListener("visibilitychange", onVisibility);
     };
-  }, []);
+  }, [checkConnection]);
 
   /**
    * Manual refresh trigger for the thread-header refresh button.
@@ -541,7 +569,26 @@ export default function InboxPage() {
   );
 
   const handleMessagesLoaded = useCallback((loaded: Message[]) => {
-    setMessages(loaded);
+    setMessages((prev) => {
+      // Conversation switch / first load: `prev` was cleared to [] on select,
+      // so just adopt the fetched list.
+      if (prev.length === 0) return loaded;
+      // Silent resync of the OPEN thread (a new message landed): MERGE by id
+      // instead of replacing. The fetched list is authoritative for anything
+      // that reached the DB; we only re-add optimistic messages still in
+      // flight (temp ids not yet persisted) so a "sending" bubble doesn't
+      // blink out. Merging (a) stops the whole thread from re-mounting on
+      // every incoming message and (b) dedupes, killing the double-render.
+      const loadedIds = new Set(loaded.map((m) => m.id));
+      const pending = prev.filter(
+        (m) => m.id.startsWith("temp-") && !loadedIds.has(m.id),
+      );
+      if (pending.length === 0) return loaded;
+      return [...loaded, ...pending].sort(
+        (a, b) =>
+          new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
+      );
+    });
   }, []);
 
   const handleNewMessage = useCallback((msg: Message) => {

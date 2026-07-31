@@ -463,22 +463,32 @@ export function MessageThread({
   // separate from the unread-reset effect so that incoming messages
   // arriving while the thread is open don't trigger a full refetch —
   // they only flip hasUnread, which only the reset effect listens to.
+  //
+  // The blanking spinner is shown ONLY on a genuine conversation switch. A
+  // `resyncToken` bump (a new message landed on the OPEN thread, tab refocus,
+  // manual refresh) refetches SILENTLY and the parent merges by id — so an
+  // incoming message just appends instead of tearing the thread down and
+  // rebuilding it ("fica carregando a cada mensagem"). Tracked via a ref so a
+  // resync doesn't flash loading just because the effect re-ran.
+  const loadedConvRef = useRef<string | null>(null);
   useEffect(() => {
     if (!conversationId) return;
 
+    const isSwitch = loadedConvRef.current !== conversationId;
     let cancelled = false;
 
     (async () => {
-      setLoading(true);
+      if (isSwitch) setLoading(true);
       try {
         const data = await listMessages(conversationId);
         if (cancelled) return;
+        loadedConvRef.current = conversationId;
         onMessagesLoadedRef.current(data);
       } catch (error) {
         if (cancelled) return;
         console.error("Failed to fetch messages:", error);
       } finally {
-        if (!cancelled) setLoading(false);
+        if (!cancelled && isSwitch) setLoading(false);
       }
     })();
 
@@ -821,6 +831,20 @@ export function MessageThread({
     [authorLabelFor],
   );
 
+  // Jump to the original message when its reply-quote is clicked (WhatsApp
+  // behaviour). Each message row carries `id="msg-<id>"`; we scroll it into
+  // view and flash a ring so the eye lands on it. No-op when the original is
+  // outside the loaded window (nothing to scroll to).
+  const scrollToMessage = useCallback((id: string) => {
+    if (typeof document === "undefined") return;
+    const el = document.getElementById(`msg-${id}`);
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    const flash = ["ring-2", "ring-primary", "rounded-2xl"];
+    el.classList.add(...flash);
+    window.setTimeout(() => el.classList.remove(...flash), 1600);
+  }, []);
+
   // Single reaction-set primitive. emoji === "" removes; otherwise adds/swaps.
   // The "toggle" semantic (pill click) is computed at the call site where the
   // current reactions for the bubble are already in scope — keeps this
@@ -898,6 +922,17 @@ export function MessageThread({
   useEffect(() => {
     setSectorId(conversation?.sector_id ?? null);
   }, [conversation?.id, conversation?.sector_id]);
+
+  // The sector shown in the header. Prefer the freshly-fetched `sectors` list
+  // (so an optimistic sector change reflects immediately), and fall back to the
+  // sector object embedded on the conversation row — that's present the instant
+  // the thread opens, whereas `listSectors()` resolves a beat later, which is
+  // why the header used to flash the bare "Setor" fallback.
+  const currentSector =
+    sectors.find((s) => s.id === sectorId) ??
+    (conversation?.sector && conversation.sector.id === sectorId
+      ? conversation.sector
+      : null);
 
   const handleSectorChange = useCallback(
     async (nextSectorId: string | null) => {
@@ -1434,9 +1469,16 @@ export function MessageThread({
                 sectorId ? "text-primary" : "text-muted-foreground",
               )}
             >
-              <Building2 className="h-3 w-3" />
+              {currentSector?.color ? (
+                <span
+                  className="h-2.5 w-2.5 shrink-0 rounded-full"
+                  style={{ backgroundColor: currentSector.color }}
+                />
+              ) : (
+                <Building2 className="h-3 w-3" />
+              )}
               <span className="hidden sm:inline">
-                {sectors.find((s) => s.id === sectorId)?.name ?? "Setor"}
+                {currentSector?.name ?? "Setor"}
               </span>
               <ChevronDown className="h-3 w-3" />
             </DropdownMenuTrigger>
@@ -1593,6 +1635,7 @@ export function MessageThread({
                       ? {
                           authorLabel: authorLabelFor(parent),
                           preview: buildReplyPreview(parent),
+                          parentId: parent.id,
                         }
                       : null;
                     const msgReactions = reactionsByMessageId.get(msg.id);
@@ -1608,8 +1651,15 @@ export function MessageThread({
                       void postReaction(msg.id, next);
                     };
                     return (
-                      <MessageActions
+                      // `id` anchors the row so a reply-quote elsewhere can
+                      // scroll to it (scrollToMessage). `scroll-mt` keeps it
+                      // clear of the sticky header when jumped to.
+                      <div
                         key={msg.id}
+                        id={`msg-${msg.id}`}
+                        className="scroll-mt-24 transition-shadow"
+                      >
+                      <MessageActions
                         message={msg}
                         onReply={() => handleStartReply(msg)}
                         onReact={(emoji) => {
@@ -1629,6 +1679,7 @@ export function MessageThread({
                         <MessageBubble
                           message={msg}
                           reply={reply}
+                          onNavigateToParent={scrollToMessage}
                           reactions={msgReactions}
                           currentUserId={user?.id}
                           onToggleReaction={handlePillToggle}
@@ -1644,6 +1695,7 @@ export function MessageThread({
                           onQuickReply={(text) => void handleSend(text)}
                         />
                       </MessageActions>
+                      </div>
                     );
                   })}
                 </div>

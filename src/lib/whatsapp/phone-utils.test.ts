@@ -2,6 +2,7 @@ import { describe, expect, it } from "vitest";
 import {
   isRecipientNotAllowedError,
   isValidE164,
+  normalizeInboundPhoneBR,
   normalizePhone,
   phoneVariants,
   phonesMatch,
@@ -133,6 +134,47 @@ describe("phoneVariants", () => {
   it("returns just the original when the number is too short for any CC slice", () => {
     // 1-char input is shorter than all ccLen values; both loops skip.
     expect(phoneVariants("1")).toEqual(["1"]);
+  });
+});
+
+describe("normalizeInboundPhoneBR", () => {
+  it("fixes the '0 + carrier code + DDD + número' national-dial format", () => {
+    // Ronaldo: 0 + CSP 15 + DDD 27 + 999438466 → 55 27 99943 8466
+    expect(normalizeInboundPhoneBR("01527999438466")).toBe("5527999438466");
+    // Geovane: 0 + CSP 15 + DDD 28 + 999632794
+    expect(normalizeInboundPhoneBR("01528999632794")).toBe("5528999632794");
+  });
+
+  it("fixes a trunk-0-only national number (0 + DDD + número)", () => {
+    expect(normalizeInboundPhoneBR("027999438466")).toBe("5527999438466"); // mobile (11)
+    expect(normalizeInboundPhoneBR("02733334444")).toBe("552733334444"); // landline (10)
+  });
+
+  it("leaves clean E.164 numbers completely untouched (never corrupts them)", () => {
+    expect(normalizeInboundPhoneBR("5527999438466")).toBe("5527999438466");
+    expect(normalizeInboundPhoneBR("12025550181")).toBe("12025550181"); // US
+    expect(normalizeInboundPhoneBR("37063949836")).toBe("37063949836"); // LT
+  });
+
+  it("strips formatting noise", () => {
+    expect(normalizeInboundPhoneBR("+55 27 99943-8466")).toBe("5527999438466");
+    expect(normalizeInboundPhoneBR("0 15 27 99943 8466")).toBe("5527999438466");
+  });
+
+  it("does not mangle a foreign number that happens to carry a trunk 0", () => {
+    // UK "+44 20 7946 0958" delivered with a trunk 0 → 44 not a CSP → left as
+    // digits (zeros stripped) rather than turned into a fake 55… number.
+    expect(normalizeInboundPhoneBR("0442079460958")).toBe("442079460958");
+  });
+
+  it("is idempotent", () => {
+    const once = normalizeInboundPhoneBR("01527999438466");
+    expect(normalizeInboundPhoneBR(once)).toBe(once);
+  });
+
+  it("handles empty / falsy input", () => {
+    expect(normalizeInboundPhoneBR("")).toBe("");
+    expect(normalizeInboundPhoneBR(undefined as unknown as string)).toBe("");
   });
 });
 

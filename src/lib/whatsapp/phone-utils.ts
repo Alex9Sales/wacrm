@@ -40,6 +40,56 @@ export function isValidE164(phone: string): boolean {
   return /^\+?[1-9]\d{6,14}$/.test(phone)
 }
 
+/** Brazilian carrier-selection codes (CSP) seen prefixed onto national-dialed
+ *  numbers ("0 + CSP + DDD + número"). Used to tell a CSP apart from a DDD when
+ *  the digit count is ambiguous. Not exhaustive — just the common operators. */
+const BR_CSP = new Set(['12', '14', '15', '17', '21', '23', '25', '31', '32', '41', '43'])
+
+/** A plausible Brazilian area code (DDD): 11–99, first digit non-zero. */
+function isPlausibleDDD(dd: string): boolean {
+  const n = Number(dd)
+  return Number.isInteger(n) && n >= 11 && n <= 99
+}
+
+/**
+ * Normalize an inbound WhatsApp phone to E.164 digits, fixing the Brazilian
+ * national-dialing artifacts some engines (gows/NOWEB) deliver: a leading trunk
+ * `0`, and the long-distance "0 + carrier-selection-code + DDD + number" format.
+ *
+ * SAFE BY DESIGN: only acts when the number starts with `0`. A leading `0` is
+ * never valid in E.164, so a clean international number — INCLUDING any 55… BR
+ * number that already works — is returned untouched and can never be corrupted.
+ * Idempotent.
+ *
+ *   "01527999438466" (0 + CSP 15 + DDD 27 + 999438466) → "5527999438466"
+ *   "027999438466"   (0 + DDD 27 + 999438466)          → "5527999438466"
+ *   "5527999438466"  (already E.164)                    → "5527999438466" (untouched)
+ *   "+1 202 555 0181"                                   → "12025550181" (untouched)
+ */
+export function normalizeInboundPhoneBR(raw: string): string {
+  const digits = (raw || '').replace(/\D/g, '')
+  // Clean numbers (no trunk 0) are already E.164-shaped — never touch them.
+  if (!digits || digits[0] !== '0') return digits
+  const d = digits.replace(/^0+/, '') // strip the trunk zero(s)
+  if (d.startsWith('55')) return d // "0 + 55…" already carries the country code
+  // National number reached with the trunk 0:
+  //   10–11 digits = DDD(2) + local(8–9)          → just prefix 55
+  if ((d.length === 10 || d.length === 11) && isPlausibleDDD(d.slice(0, 2))) {
+    return '55' + d
+  }
+  //   12–13 digits = CSP(2) + DDD(2) + local(8–9) → drop the CSP, prefix 55.
+  //   Gated on a known CSP + a plausible DDD so a foreign 0-prefixed number
+  //   isn't mangled into a fake BR one.
+  if (d.length === 12 || d.length === 13) {
+    const csp = d.slice(0, 2)
+    const rest = d.slice(2)
+    if (BR_CSP.has(csp) && isPlausibleDDD(rest.slice(0, 2))) {
+      return '55' + rest
+    }
+  }
+  return d // fallback: at least the leading zeros are gone
+}
+
 /**
  * Generate plausible phone number variants for retry when Meta's
  * sandbox rejects a number with error #131030 ("not in allowed list").

@@ -52,6 +52,7 @@ import {
   prefixGroupAuthor,
   resolveGroupMentions,
 } from '@/lib/whatsapp/group';
+import { normalizeInboundPhoneBR } from '@/lib/whatsapp/phone-utils';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
 
@@ -103,7 +104,13 @@ export async function dispatchInboundMessage(
   // stay compatible with the existing schema we reuse the account's
   // creator via the contact's own userId when it already exists, and for
   // brand-new rows we need SOME member id. We resolve it lazily below.
-  const senderPhone = ev.fromPhoneE164;
+  // Normalize the inbound number to E.164 up front. Some engines deliver a
+  // Brazilian number in national-dialing form ("0 + carrier code + DDD +
+  // número", e.g. "01527999438466"), whose leading 0 fails isValidE164 → the
+  // contact is created unsendable and replying errors with "Invalid phone
+  // number format" until the agent hand-edits it. normalizeInboundPhoneBR only
+  // touches numbers that start with 0, so clean 55… numbers pass through as-is.
+  const senderPhone = normalizeInboundPhoneBR(ev.fromPhoneE164);
 
   // 1) Dedup by externalMessageId — skip if a message with that id already
   //    exists on THIS CHANNEL (messages have no account_id column, so we
