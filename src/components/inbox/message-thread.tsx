@@ -605,10 +605,17 @@ export function MessageThread({
           return;
         }
 
-        // Success — the realtime INSERT event will replace the temp bubble
-        // with the real DB row. If realtime hasn't arrived yet, at least
-        // flip status to 'sent' so the UI stops showing "sending".
-        onUpdateMessage(tempId, { status: "sent" });
+        // Success — reconcile the optimistic bubble with the REAL row: adopt
+        // the persisted message id so the realtime resync dedupes it by id
+        // instead of leaving the temp bubble alongside the refetched one (the
+        // duplicate-until-reload the user saw when sending a document). Falls
+        // back to a plain status flip if the id didn't come back.
+        const realId =
+          typeof payload.message_id === "string" ? payload.message_id : null;
+        onUpdateMessage(
+          tempId,
+          realId ? { status: "sent", id: realId } : { status: "sent" },
+        );
         // Claim-on-reply: the server assigns an UNassigned thread to whoever
         // answers. Mirror it in the UI right away (senão fica "Não atribuído"
         // até dar refresh — foi o que o Felipe viu).
@@ -679,7 +686,15 @@ export function MessageThread({
           return;
         }
 
-        onUpdateMessage(tempId, { status: "sent" });
+        // Adopt the real message id so the realtime resync dedupes by id — the
+        // temp bubble no longer lingers next to the refetched row (the
+        // document-duplicated-until-reload bug).
+        const realMediaId =
+          typeof data.message_id === "string" ? data.message_id : null;
+        onUpdateMessage(
+          tempId,
+          realMediaId ? { status: "sent", id: realMediaId } : { status: "sent" },
+        );
         if (!conversation.assigned_agent_id && user?.id) {
           onAssignChange(conversation.id, user.id);
         }
@@ -774,7 +789,12 @@ export function MessageThread({
           return;
         }
 
-        onUpdateMessage(tempId, { status: "sent" });
+        const realTplId =
+          typeof payload.message_id === "string" ? payload.message_id : null;
+        onUpdateMessage(
+          tempId,
+          realTplId ? { status: "sent", id: realTplId } : { status: "sent" },
+        );
         if (!conversation.assigned_agent_id && user?.id) {
           onAssignChange(conversation.id, user.id);
         }
