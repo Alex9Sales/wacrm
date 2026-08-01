@@ -22,6 +22,7 @@ import {
   ParticipantActionSheet,
   type GroupParticipant,
 } from "./participant-action-sheet";
+import { ContactForm } from "@/components/contacts/contact-form";
 import { useAuth } from "@/hooks/use-auth";
 import { useCrmCallingEnabled } from "@/hooks/use-crm-calling";
 import { hasMinRole } from "@/lib/auth/roles";
@@ -258,10 +259,22 @@ export function MessageThread({
   const [participant, setParticipant] = useState<GroupParticipant | null>(null);
   const [participantOpen, setParticipantOpen] = useState(false);
   const [participantBusy, setParticipantBusy] = useState(false);
+  // "Adicionar" → formulário de contato pré-preenchido (modo criar).
+  const [addContactOpen, setAddContactOpen] = useState(false);
+  const [addContactInitial, setAddContactInitial] = useState<{
+    phone: string;
+    name: string;
+  } | null>(null);
 
   const openParticipant = useCallback((p: GroupParticipant) => {
     setParticipant(p);
     setParticipantOpen(true);
+  }, []);
+
+  const handleParticipantAdicionar = useCallback((p: GroupParticipant) => {
+    setParticipantOpen(false);
+    setAddContactInitial({ phone: p.phone, name: p.name });
+    setAddContactOpen(true);
   }, []);
 
   // Toda ação do painel converge em ABRIR O 1:1 da pessoa — lá está tudo: o
@@ -1904,6 +1917,21 @@ export function MessageThread({
         onOpenChange={setParticipantOpen}
         busy={participantBusy}
         onOpen={handleParticipantOpen}
+        onAdicionar={handleParticipantAdicionar}
+      />
+
+      {/* "Adicionar" abre o formulário de contato (modo criar) pré-preenchido
+          com o número + nome do participante do grupo. */}
+      <ContactForm
+        open={addContactOpen}
+        onOpenChange={setAddContactOpen}
+        contact={null}
+        initialPhone={addContactInitial?.phone}
+        initialName={addContactInitial?.name}
+        onSaved={() => {
+          setAddContactOpen(false);
+          toast.success("Contato adicionado.");
+        }}
       />
     </div>
   );

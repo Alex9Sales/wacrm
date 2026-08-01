@@ -33,6 +33,10 @@ interface ContactFormProps {
   /** Open an existing contact's detail view — used by the duplicate
    *  notice to jump to the contact that already owns this number. */
   onViewExisting?: (contactId: string) => void;
+  /** Pre-fill a NEW contact (create mode, `contact` stays null) — e.g. adding
+   *  a group participant from the inbox. Ignored when editing. */
+  initialPhone?: string;
+  initialName?: string;
 }
 
 export function ContactForm({
@@ -42,6 +46,8 @@ export function ContactForm({
   contactTags = [],
   onSaved,
   onViewExisting,
+  initialPhone,
+  initialName,
 }: ContactFormProps) {
   const { accountId } = useAuth();
   const isEdit = !!contact;
@@ -67,15 +73,15 @@ export function ContactForm({
 
   useEffect(() => {
     if (open) {
-      setName(contact?.name ?? '');
-      setPhone(contact?.phone ?? '');
+      setName(contact?.name ?? initialName ?? '');
+      setPhone(contact?.phone ?? initialPhone ?? '');
       setEmail(contact?.email ?? '');
       setCompany(contact?.company ?? '');
       setSelectedTagIds(contactTags.map((ct) => ct.tag_id));
       setDupMatch(null);
       fetchTags();
     }
-  }, [open, contact]);
+  }, [open, contact, initialPhone, initialName]);
 
   // Look up an existing contact with this number (new contacts only).
   // Runs on blur so we don't query on every keystroke.

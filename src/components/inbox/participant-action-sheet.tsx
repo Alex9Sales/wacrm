@@ -35,6 +35,8 @@ interface ParticipantActionSheetProps {
   busy: boolean;
   /** Abre o 1:1 da pessoa (cria a conversa+contato se preciso). */
   onOpen: (p: GroupParticipant) => void;
+  /** Abre o formulário de contato pré-preenchido (adicionar aos contatos). */
+  onAdicionar: (p: GroupParticipant) => void;
 }
 
 /** "+55 67 99187-5477" a partir de "556791875477" (best-effort BR). */
@@ -96,6 +98,7 @@ export function ParticipantActionSheet({
   onOpenChange,
   busy,
   onOpen,
+  onAdicionar,
 }: ParticipantActionSheetProps) {
   const p = participant;
   return (
@@ -147,8 +150,8 @@ export function ParticipantActionSheet({
                   <ActionButton
                     icon={<UserPlus className="size-4" />}
                     label="Adicionar"
-                    onClick={() => onOpen(p)}
-                    hint="Abre o 1:1 pra adicionar info e criar negócio"
+                    onClick={() => onAdicionar(p)}
+                    hint="Preencher os dados e salvar como contato"
                   />
                   <ActionButton
                     icon={<Video className="size-4" />}
@@ -158,8 +161,8 @@ export function ParticipantActionSheet({
                   />
                 </div>
                 <p className="text-center text-[11px] leading-relaxed text-muted-foreground">
-                  Abre o 1:1 desta pessoa — lá você conversa, adiciona ao
-                  contato, cria negócio e liga.
+                  <b>Conversar</b> abre o 1:1 (com chat, negócio e ligação).{" "}
+                  <b>Adicionar</b> salva nos contatos.
                 </p>
               </>
             )}
