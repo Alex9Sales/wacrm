@@ -59,6 +59,11 @@ export const auth = betterAuth({
       ac,
       roles,
       creatorRole: "owner",
+      // Cadastro fechado: ninguém cria organização (tenant) pelo cliente.
+      // Clientes são provisionados no /admin (insert direto, não passa por
+      // aqui) e atendentes entram por convite (acceptInvitation, não cria org).
+      // Isso corta o cadastro "frio" — um estranho não vira um cliente novo.
+      allowUserToCreateOrganization: false,
       schema: {
         organization: {
           additionalFields: {

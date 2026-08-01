@@ -16,32 +16,17 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { MessageSquare, UsersRound } from "lucide-react";
+import { UsersRound, Lock } from "lucide-react";
 
-// Fase 2: signup real via Better Auth. Fluxo:
-//   1. signUp.email({ name, email, password }) — cria user + sessão.
-//   2. organization.create({ name, slug }) — o criador vira member owner.
-//   3. organization.setActive({ organizationId }) — seta a org na sessão.
-// Depois redireciona para /dashboard (ou de volta ao convite).
+// Cadastro FECHADO (só por convite). Clientes (donos de org) são
+// provisionados no /admin; atendentes entram por convite. Não existe mais
+// cadastro "frio" que cria um tenant novo — um estranho não vira cliente.
+//
+// Com token de convite → cria só o login (signUp.email) e manda pro
+// /join/<token>, onde a pessoa aceita e entra na org existente (sem criar
+// empresa — o Better Auth já bloqueia isso via allowUserToCreateOrganization).
+// Sem token → tela de "cadastro por convite".
 
-// Deriva um slug amigável e razoavelmente único a partir do nome da
-// empresa: normaliza acentos, troca não-alfanuméricos por hífen e
-// concatena um sufixo curto para reduzir colisões entre workspaces
-// com o mesmo nome.
-function deriveSlug(name: string): string {
-  const base = name
-    .normalize("NFD")
-    .replace(/[\u0300-\u036f]/g, "")
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 32);
-  const suffix = Math.random().toString(36).slice(2, 8);
-  return base ? `${base}-${suffix}` : `workspace-${suffix}`;
-}
-
-// `useSearchParams` opts the component out of static prerendering
-// unless wrapped in Suspense — same pattern as /login.
 export default function SignupPage() {
   return (
     <Suspense fallback={null}>
@@ -52,16 +37,43 @@ export default function SignupPage() {
 
 function SignupPageInner() {
   const searchParams = useSearchParams();
-  // Carried through from `/join/<token>`; after signup we bounce back
-  // to the invite so the new user can accept it.
+  // Vem do /join/<token>; depois do signup voltamos pro convite pra aceitar.
   const inviteToken = searchParams.get("invite");
 
   const [fullName, setFullName] = useState("");
-  const [companyName, setCompanyName] = useState("");
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+
+  // Sem convite → cadastro fechado. Nada de formulário.
+  if (!inviteToken) {
+    return (
+      <div className="flex min-h-screen items-center justify-center bg-background px-4">
+        <Card className="w-full max-w-md border-border bg-card">
+          <CardHeader className="items-center text-center">
+            <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
+              <Lock className="h-6 w-6 text-primary" />
+            </div>
+            <CardTitle className="text-xl text-foreground">
+              Cadastro por convite
+            </CardTitle>
+            <CardDescription className="text-muted-foreground">
+              O acesso ao Fluxia é liberado pela sua empresa. Peça um convite a
+              quem administra sua conta, ou fale com a Fluxia para contratar.
+            </CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Link href="/login">
+              <Button className="h-10 w-full bg-primary text-primary-foreground hover:bg-primary/90">
+                Já tenho conta — Entrar
+              </Button>
+            </Link>
+          </CardContent>
+        </Card>
+      </div>
+    );
+  }
 
   const handleSignup = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -74,52 +86,21 @@ function SignupPageInner() {
 
     setSubmitting(true);
 
-    // 1. Create the user + session.
+    // Cria só o login. A org NÃO é criada aqui — o atendente entra na org do
+    // convite via /join (acceptInvitation).
     const signUpRes = await authClient.signUp.email({
       name: fullName,
       email,
       password,
     });
     if (signUpRes.error) {
-      toast.error(
-        signUpRes.error.message ?? "Não foi possível criar a conta.",
-      );
+      toast.error(signUpRes.error.message ?? "Não foi possível criar a conta.");
       setSubmitting(false);
       return;
     }
 
-    // 2. Create the organization (tenant). The creator automatically
-    //    becomes the owner member.
-    const orgRes = await authClient.organization.create({
-      name: companyName,
-      slug: deriveSlug(companyName),
-    });
-    if (orgRes.error || !orgRes.data) {
-      toast.error(
-        orgRes.error?.message ??
-          "Conta criada, mas não foi possível criar a empresa. Tente novamente ao entrar.",
-      );
-      setSubmitting(false);
-      return;
-    }
-
-    // 3. Set the new org as active on the session.
-    const activeRes = await authClient.organization.setActive({
-      organizationId: orgRes.data.id,
-    });
-    if (activeRes.error) {
-      // Non-fatal: the server session hook also sets the active org to
-      // the first membership, so we proceed to the dashboard anyway.
-      console.error(
-        "[signup] setActive failed:",
-        activeRes.error.message,
-      );
-    }
-
-    // Full navigation so AuthProvider re-hydrates from /api/me.
-    window.location.href = inviteToken
-      ? `/join/${encodeURIComponent(inviteToken)}`
-      : "/dashboard";
+    // Navegação completa pro convite: re-hidrata a sessão e aceita o convite.
+    window.location.href = `/join/${encodeURIComponent(inviteToken)}`;
   };
 
   return (
@@ -127,19 +108,13 @@ function SignupPageInner() {
       <Card className="w-full max-w-md border-border bg-card">
         <CardHeader className="items-center text-center">
           <div className="mb-2 flex h-12 w-12 items-center justify-center rounded-xl bg-primary/10">
-            {inviteToken ? (
-              <UsersRound className="h-6 w-6 text-primary" />
-            ) : (
-              <MessageSquare className="h-6 w-6 text-primary" />
-            )}
+            <UsersRound className="h-6 w-6 text-primary" />
           </div>
           <CardTitle className="text-xl text-foreground">
-            {inviteToken ? "Criar conta e entrar" : "Criar conta"}
+            Criar conta e entrar
           </CardTitle>
           <CardDescription className="text-muted-foreground">
-            {inviteToken
-              ? "Crie sua conta e depois aceite o convite para entrar no time."
-              : "Comece a usar o CRM para WhatsApp"}
+            Crie sua conta e depois aceite o convite para entrar no time.
           </CardDescription>
         </CardHeader>
         <CardContent>
@@ -154,22 +129,6 @@ function SignupPageInner() {
                 placeholder="João da Silva"
                 value={fullName}
                 onChange={(e) => setFullName(e.target.value)}
-                required
-                disabled={submitting}
-                className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
-              />
-            </div>
-
-            <div className="flex flex-col gap-2">
-              <Label htmlFor="companyName" className="text-muted-foreground">
-                Nome da empresa
-              </Label>
-              <Input
-                id="companyName"
-                type="text"
-                placeholder="Minha Empresa"
-                value={companyName}
-                onChange={(e) => setCompanyName(e.target.value)}
                 required
                 disabled={submitting}
                 className="border-border bg-muted text-foreground placeholder:text-muted-foreground focus-visible:border-primary focus-visible:ring-primary/20"
@@ -227,18 +186,14 @@ function SignupPageInner() {
               disabled={submitting}
               className="mt-2 h-10 w-full bg-primary text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
             >
-              {submitting ? "Criando conta..." : "Criar conta"}
+              {submitting ? "Criando conta..." : "Criar conta e entrar"}
             </Button>
           </form>
 
           <p className="mt-6 text-center text-sm text-muted-foreground">
             Já tem uma conta?{" "}
             <Link
-              href={
-                inviteToken
-                  ? `/login?invite=${encodeURIComponent(inviteToken)}`
-                  : "/login"
-              }
+              href={`/login?invite=${encodeURIComponent(inviteToken)}`}
               className="text-primary hover:text-primary/80"
             >
               Entrar
