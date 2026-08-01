@@ -34,6 +34,13 @@ interface MessageActionsProps {
   onEdit?: () => void;
   /** Group conversation → show the sender's avatar in the left gutter. */
   isGroup?: boolean;
+  /** Group: clicking a participant's avatar opens the participant panel
+   *  (Conversar/Voz/Vídeo/Adicionar). Absent → avatar stays decorative. */
+  onAuthorClick?: (p: {
+    phone: string;
+    name: string;
+    avatarUrl?: string | null;
+  }) => void;
   children: ReactNode;
 }
 
@@ -42,20 +49,46 @@ interface MessageActionsProps {
  * Photo when known (`author_avatar_url`), else the author's first letter over
  * their stable group color — matching how the name is colored in the bubble.
  */
-function GroupAuthorAvatar({ message }: { message: Message }) {
+function GroupAuthorAvatar({
+  message,
+  onClick,
+}: {
+  message: Message;
+  onClick?: () => void;
+}) {
   const name = parseGroupAuthor(message.content_text ?? "") ?? "?";
+  const cls =
+    "mb-0.5 flex size-7 shrink-0 items-center justify-center self-end overflow-hidden rounded-full text-xs font-semibold text-white";
+  const inner = (
+    <ContactAvatar
+      avatarUrl={message.author_avatar_url}
+      displayName={name}
+      className="size-7"
+    />
+  );
+  // Clickable only when the parent wired a handler AND we know the sender's
+  // number (author_key). Otherwise the avatar stays a decorative gutter dot.
+  if (onClick) {
+    return (
+      <button
+        type="button"
+        onClick={onClick}
+        className={cn(cls, "cursor-pointer transition hover:ring-2 hover:ring-primary/60")}
+        style={{ backgroundColor: groupColor(name) }}
+        title={`Ver ${name === "?" ? "participante" : name}`}
+      >
+        {inner}
+      </button>
+    );
+  }
   return (
     <div
-      className="mb-0.5 flex size-7 shrink-0 items-center justify-center self-end overflow-hidden rounded-full text-xs font-semibold text-white"
+      className={cls}
       style={{ backgroundColor: groupColor(name) }}
       title={name === "?" ? undefined : name}
       aria-hidden
     >
-      <ContactAvatar
-        avatarUrl={message.author_avatar_url}
-        displayName={name}
-        className="size-7"
-      />
+      {inner}
     </div>
   );
 }
@@ -72,6 +105,7 @@ export function MessageActions({
   onForward,
   onEdit,
   isGroup,
+  onAuthorClick,
   children,
 }: MessageActionsProps) {
   // Touch devices have no hover. Long-press fires `contextmenu`; we capture
@@ -144,7 +178,21 @@ export function MessageActions({
       onContextMenu={handleContextMenu}
       onBlur={() => setTouchOpen(false)}
     >
-      {showAuthorAvatar && <GroupAuthorAvatar message={message} />}
+      {showAuthorAvatar && (
+        <GroupAuthorAvatar
+          message={message}
+          onClick={
+            onAuthorClick && message.author_key
+              ? () =>
+                  onAuthorClick({
+                    phone: message.author_key!,
+                    name: parseGroupAuthor(message.content_text ?? "") ?? "",
+                    avatarUrl: message.author_avatar_url,
+                  })
+              : undefined
+          }
+        />
+      )}
       {/* `min-w-0` lets this flex child actually respect the 75% cap.
        *  Default `min-width: auto` lets content (a long quote preview,
        *  an unbroken URL) push past the cap and shove the row past
