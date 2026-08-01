@@ -362,11 +362,15 @@ export function AiConfig() {
                     models.length > 0 &&
                     (() => {
                       const q = model.trim().toLowerCase();
-                      const matches = models.filter((m) =>
-                        m.toLowerCase().includes(q),
-                      );
-                      // If the query matches nothing (or is a full exact value),
-                      // still show the whole list so a click always has options.
+                      // Browse-first: show the FULL list when the field is empty
+                      // OR already holds one of the models (a current selection —
+                      // clicking should reveal ALL 69, not just that one). Only
+                      // narrow when the user typed a partial that isn't a model.
+                      const isSelection =
+                        q === "" || models.some((m) => m.toLowerCase() === q);
+                      const matches = isSelection
+                        ? models
+                        : models.filter((m) => m.toLowerCase().includes(q));
                       const list = matches.length ? matches : models;
                       return (
                         <ul className="absolute z-50 mt-1 max-h-60 w-full overflow-auto rounded-md border border-border bg-popover py-1 shadow-md">
