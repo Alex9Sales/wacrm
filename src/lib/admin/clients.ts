@@ -10,6 +10,7 @@
 // ============================================================
 
 import { eq, sql, asc } from "drizzle-orm";
+import { alias } from "drizzle-orm/pg-core";
 
 import {
   db,
@@ -37,6 +38,8 @@ export interface ClientListRow {
   lastReminderAt: string | null;
   /** Owner member's user (first owner by membership order), if any. */
   owner: { email: string; name: string } | null;
+  /** Platform admin (Alex/Rafael) responsible for this client, if assigned. */
+  responsible: { id: string; email: string; name: string } | null;
   memberCount: number;
   channelCount: number;
 }
@@ -61,6 +64,10 @@ export async function listClients(): Promise<ClientListRow[]> {
     LIMIT 1
   )`;
 
+  // Second `user` join for the responsible platform admin (distinct from the
+  // client's owner join above).
+  const respUser = alias(user, "resp_user");
+
   const rows = await db
     .select({
       id: organization.id,
@@ -76,6 +83,9 @@ export async function listClients(): Promise<ClientListRow[]> {
       lastReminderAt: organizationBilling.lastReminderAt,
       ownerEmail: user.email,
       ownerName: user.name,
+      responsibleId: respUser.id,
+      responsibleEmail: respUser.email,
+      responsibleName: respUser.name,
       memberCount,
       channelCount,
     })
@@ -85,6 +95,7 @@ export async function listClients(): Promise<ClientListRow[]> {
       eq(organizationBilling.organizationId, organization.id),
     )
     .leftJoin(user, eq(user.id, ownerUserId))
+    .leftJoin(respUser, eq(respUser.id, organizationBilling.responsibleAdminId))
     // Nulls (no due date) sort last so overdue / soon-due lead.
     .orderBy(sql`${organizationBilling.dueAt} ASC NULLS LAST`, asc(organization.createdAt));
 
@@ -101,6 +112,13 @@ export async function listClients(): Promise<ClientListRow[]> {
     notes: r.notes,
     lastReminderAt: r.lastReminderAt,
     owner: r.ownerEmail ? { email: r.ownerEmail, name: r.ownerName ?? "" } : null,
+    responsible: r.responsibleId
+      ? {
+          id: r.responsibleId,
+          email: r.responsibleEmail ?? "",
+          name: r.responsibleName ?? "",
+        }
+      : null,
     memberCount: Number(r.memberCount ?? 0),
     channelCount: Number(r.channelCount ?? 0),
   }));

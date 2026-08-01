@@ -23,7 +23,7 @@ import { db, organization, member, organizationBilling, user } from "@/db";
 import { firstOrNull } from "@/db/helpers";
 import { auth } from "@/lib/auth";
 import { toErrorResponse } from "@/lib/auth/account";
-import { requirePlatformAdmin } from "@/lib/auth/platform";
+import { requirePlatformAdmin, listPlatformAdmins } from "@/lib/auth/platform";
 import { listClients, getClientOverview } from "@/lib/admin/clients";
 
 /**
@@ -34,11 +34,12 @@ import { listClients, getClientOverview } from "@/lib/admin/clients";
 export async function GET() {
   try {
     await requirePlatformAdmin();
-    const [clients, overview] = await Promise.all([
+    const [clients, overview, admins] = await Promise.all([
       listClients(),
       getClientOverview(),
+      listPlatformAdmins(),
     ]);
-    return NextResponse.json({ clients, overview });
+    return NextResponse.json({ clients, overview, admins });
   } catch (err) {
     return toErrorResponse(err);
   }
@@ -80,8 +81,9 @@ function asTrimmedString(v: unknown): string | null {
 
 export async function POST(request: Request) {
   try {
-    // Gate: platform admin only. Throws Unauthorized/Forbidden.
-    await requirePlatformAdmin();
+    // Gate: platform admin only. Throws Unauthorized/Forbidden. We keep the
+    // resolved admin so the new client is attributed to whoever provisioned it.
+    const admin = await requirePlatformAdmin();
 
     const body = (await request.json().catch(() => ({}))) as ProvisionBody;
 
@@ -180,6 +182,8 @@ export async function POST(request: Request) {
       dueAt,
       plan,
       billingPhone,
+      // Attribute the client to the admin who provisioned it.
+      responsibleAdminId: admin.userId,
     });
 
     return NextResponse.json(

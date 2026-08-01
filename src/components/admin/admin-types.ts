@@ -17,8 +17,16 @@ export interface ClientListRow {
   notes: string | null;
   lastReminderAt: string | null;
   owner: { email: string; name: string } | null;
+  responsible: { id: string; email: string; name: string } | null;
   memberCount: number;
   channelCount: number;
+}
+
+/** A platform admin (Alex/Rafael) that can own clients — for the picker. */
+export interface PlatformAdminUser {
+  id: string;
+  name: string;
+  email: string;
 }
 
 export interface ClientOverview {
@@ -32,4 +40,5 @@ export interface ClientOverview {
 export interface AdminClientsResponse {
   clients: ClientListRow[];
   overview: ClientOverview;
+  admins: PlatformAdminUser[];
 }

@@ -25,6 +25,7 @@ import {
   Users,
   Radio,
   AlertTriangle,
+  ShieldCheck,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -39,10 +40,12 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
+import { useAuth } from "@/hooks/use-auth";
 import type {
   AdminClientsResponse,
   ClientListRow,
   ClientOverview,
+  PlatformAdminUser,
 } from "./admin-types";
 import {
   formatDate,
@@ -109,11 +112,17 @@ function OverviewCard({
 }
 
 export function AdminClients() {
+  const { profile } = useAuth();
+  const myId = profile?.id ?? null;
+
   const [clients, setClients] = useState<ClientListRow[]>([]);
   const [overview, setOverview] = useState<ClientOverview>(EMPTY_OVERVIEW);
+  const [admins, setAdmins] = useState<PlatformAdminUser[]>([]);
   const [loading, setLoading] = useState(true);
   // Per-row in-flight state so a toggle/reminder disables only that row.
   const [busyId, setBusyId] = useState<string | null>(null);
+  // "Meus" vs "Todos": both admins see everything; this just focuses the list.
+  const [onlyMine, setOnlyMine] = useState(false);
 
   const [provisionOpen, setProvisionOpen] = useState(false);
   const [editClient, setEditClient] = useState<ClientListRow | null>(null);
@@ -129,6 +138,7 @@ export function AdminClients() {
       const data = (await res.json()) as AdminClientsResponse;
       setClients(data.clients ?? []);
       setOverview(data.overview ?? EMPTY_OVERVIEW);
+      setAdmins(data.admins ?? []);
     } catch (err) {
       console.error("[AdminClients] load error:", err);
       toast.error("Não foi possível conectar ao servidor.");
@@ -193,6 +203,14 @@ export function AdminClients() {
     setEditOpen(true);
   }
 
+  const mineCount = myId
+    ? clients.filter((c) => c.responsible?.id === myId).length
+    : 0;
+  const visibleClients =
+    onlyMine && myId
+      ? clients.filter((c) => c.responsible?.id === myId)
+      : clients;
+
   return (
     <div className="space-y-6">
       {/* Header */}
@@ -206,6 +224,33 @@ export function AdminClients() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          {/* Meus / Todos — both admins see everything; this focuses the list. */}
+          <div className="flex overflow-hidden rounded-lg border border-border">
+            <button
+              type="button"
+              onClick={() => setOnlyMine(false)}
+              className={cn(
+                "px-3 py-1.5 text-sm transition-colors",
+                !onlyMine
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Todos ({clients.length})
+            </button>
+            <button
+              type="button"
+              onClick={() => setOnlyMine(true)}
+              className={cn(
+                "px-3 py-1.5 text-sm transition-colors",
+                onlyMine
+                  ? "bg-primary text-primary-foreground"
+                  : "bg-muted text-muted-foreground hover:text-foreground",
+              )}
+            >
+              Meus ({mineCount})
+            </button>
+          </div>
           <Button variant="outline" onClick={() => void load()}>
             <RefreshCw className="size-4" />
             Atualizar
@@ -233,9 +278,11 @@ export function AdminClients() {
               <Loader2 className="size-4 animate-spin" />
               Carregando clientes…
             </div>
-          ) : clients.length === 0 ? (
+          ) : visibleClients.length === 0 ? (
             <div className="py-16 text-center text-sm text-muted-foreground">
-              Nenhum cliente ainda. Use “Provisionar cliente”.
+              {clients.length === 0
+                ? "Nenhum cliente ainda. Use “Provisionar cliente”."
+                : "Você ainda não é responsável por nenhum cliente. Veja em “Todos”."}
             </div>
           ) : (
             <Table>
@@ -243,6 +290,7 @@ export function AdminClients() {
                 <TableRow>
                   <TableHead>Cliente</TableHead>
                   <TableHead>Dono</TableHead>
+                  <TableHead>Responsável</TableHead>
                   <TableHead>Status</TableHead>
                   <TableHead>Plano</TableHead>
                   <TableHead>Entrada</TableHead>
@@ -253,9 +301,10 @@ export function AdminClients() {
                 </TableRow>
               </TableHeader>
               <TableBody>
-                {clients.map((c) => {
+                {visibleClients.map((c) => {
                   const overdue = isOverdue(c.dueAt, c.status);
                   const rowBusy = busyId === c.id;
+                  const mine = !!myId && c.responsible?.id === myId;
                   return (
                     <TableRow key={c.id}>
                       <TableCell className="font-medium text-foreground">
@@ -266,6 +315,26 @@ export function AdminClients() {
                           <span className="text-xs">{c.owner.email}</span>
                         ) : (
                           <span className="text-xs italic">sem dono</span>
+                        )}
+                      </TableCell>
+                      <TableCell>
+                        {c.responsible ? (
+                          <span
+                            className={cn(
+                              "inline-flex items-center gap-1.5 text-xs",
+                              mine
+                                ? "font-medium text-primary"
+                                : "text-muted-foreground",
+                            )}
+                          >
+                            <ShieldCheck className="size-3.5" />
+                            {c.responsible.name || c.responsible.email}
+                            {mine ? " (você)" : ""}
+                          </span>
+                        ) : (
+                          <span className="text-xs italic text-muted-foreground">
+                            —
+                          </span>
                         )}
                       </TableCell>
                       <TableCell>
@@ -376,6 +445,7 @@ export function AdminClients() {
       />
       <EditBillingDialog
         client={editClient}
+        admins={admins}
         open={editOpen}
         onOpenChange={setEditOpen}
         onSaved={() => void load()}

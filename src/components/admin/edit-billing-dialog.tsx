@@ -24,11 +24,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { ClientListRow } from "./admin-types";
+import type { ClientListRow, PlatformAdminUser } from "./admin-types";
 import { toDateInput } from "./admin-format";
 
 interface EditBillingDialogProps {
   client: ClientListRow | null;
+  admins: PlatformAdminUser[];
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onSaved: () => void;
@@ -36,6 +37,7 @@ interface EditBillingDialogProps {
 
 export function EditBillingDialog({
   client,
+  admins,
   open,
   onOpenChange,
   onSaved,
@@ -45,6 +47,7 @@ export function EditBillingDialog({
   const [plan, setPlan] = useState("");
   const [billingPhone, setBillingPhone] = useState("");
   const [notes, setNotes] = useState("");
+  const [responsibleAdminId, setResponsibleAdminId] = useState("");
   const [submitting, setSubmitting] = useState(false);
   // Track the client id we last hydrated from so re-opening for a
   // different row refreshes the fields.
@@ -57,6 +60,7 @@ export function EditBillingDialog({
     setPlan(client.plan ?? "");
     setBillingPhone(client.billingPhone ?? "");
     setNotes(client.notes ?? "");
+    setResponsibleAdminId(client.responsible?.id ?? "");
     setHydratedId(client.id);
   }
 
@@ -73,6 +77,7 @@ export function EditBillingDialog({
           plan: plan.trim() || null,
           billing_phone: billingPhone.trim() || null,
           notes: notes.trim() || null,
+          responsible_admin_id: responsibleAdminId || null,
         }),
       });
       if (!res.ok) {
@@ -135,6 +140,25 @@ export function EditBillingDialog({
               value={plan}
               onChange={(e) => setPlan(e.target.value)}
             />
+          </div>
+
+          <div className="space-y-2">
+            <Label className="text-muted-foreground">Responsável</Label>
+            <select
+              value={responsibleAdminId}
+              onChange={(e) => setResponsibleAdminId(e.target.value)}
+              className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+            >
+              <option value="">— (nenhum)</option>
+              {admins.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name || a.email}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Qual admin da plataforma é dono deste cliente.
+            </p>
           </div>
 
           <div className="space-y-2">

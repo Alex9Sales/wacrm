@@ -13,7 +13,7 @@
 // read the DB or the allowlist reliably at the edge).
 // ============================================================
 
-import { eq } from "drizzle-orm";
+import { eq, inArray, sql } from "drizzle-orm";
 
 import { db, user } from "@/db";
 import { firstOrNull } from "@/db/helpers";
@@ -48,6 +48,30 @@ export function isPlatformAdmin(email: string | null | undefined): boolean {
 export interface PlatformAdminContext {
   userId: string;
   email: string;
+}
+
+/** A platform admin resolved to a real user row (for the /admin "Responsável"
+ *  picker). Only allowlisted emails that actually have a user account appear. */
+export interface PlatformAdminUser {
+  id: string;
+  name: string;
+  email: string;
+}
+
+/**
+ * Every platform admin that has a real user account, resolved from the
+ * `PLATFORM_ADMIN_EMAILS` allowlist. Used to populate the "Responsável"
+ * dropdown and to validate reassignment. An allowlisted email with no user
+ * row (never logged in) is simply omitted.
+ */
+export async function listPlatformAdmins(): Promise<PlatformAdminUser[]> {
+  const emails = [...allowlist()];
+  if (emails.length === 0) return [];
+  const rows = await db
+    .select({ id: user.id, name: user.name, email: user.email })
+    .from(user)
+    .where(inArray(sql`lower(${user.email})`, emails));
+  return rows.map((r) => ({ id: r.id, name: r.name ?? "", email: r.email }));
 }
 
 /**

@@ -158,6 +158,10 @@ export const organizationBilling = pgTable("organization_billing", {
 	billingPhone: text("billing_phone"),
 	notes: text(),
 	lastReminderAt: timestamp("last_reminder_at", { withTimezone: true, mode: 'string' }),
+	// Platform admin (Alex/Rafael) responsible for this client. Set on
+	// provision, editable to transfer. Nullable, no FK (a removed admin just
+	// makes the row show "—"). Drives the /admin "Responsável" column + filter.
+	responsibleAdminId: uuid("responsible_admin_id"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

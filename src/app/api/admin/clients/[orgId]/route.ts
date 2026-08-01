@@ -16,7 +16,7 @@ import { eq } from "drizzle-orm";
 import { db, organization, organizationBilling } from "@/db";
 import { firstOrNull } from "@/db/helpers";
 import { toErrorResponse } from "@/lib/auth/account";
-import { requirePlatformAdmin } from "@/lib/auth/platform";
+import { requirePlatformAdmin, listPlatformAdmins } from "@/lib/auth/platform";
 
 const VALID_STATUS = new Set(["active", "suspended", "trial"]);
 
@@ -27,6 +27,7 @@ interface PatchBody {
   plan?: unknown;
   billing_phone?: unknown;
   notes?: unknown;
+  responsible_admin_id?: unknown;
 }
 
 /**
@@ -96,6 +97,29 @@ export async function PATCH(
     const billingPhone = optionalText(body.billing_phone);
     const notes = optionalText(body.notes);
 
+    // Responsible admin (tri-state): undefined = untouched, null = clear,
+    // string = must be a real platform admin's user id (else 400).
+    let responsibleAdminId: string | null | undefined;
+    if (body.responsible_admin_id !== undefined) {
+      if (body.responsible_admin_id === null || body.responsible_admin_id === "") {
+        responsibleAdminId = null;
+      } else if (typeof body.responsible_admin_id === "string") {
+        const admins = await listPlatformAdmins();
+        if (!admins.some((a) => a.id === body.responsible_admin_id)) {
+          return NextResponse.json(
+            { error: "Responsável inválido (precisa ser um admin da plataforma)." },
+            { status: 400 },
+          );
+        }
+        responsibleAdminId = body.responsible_admin_id;
+      } else {
+        return NextResponse.json(
+          { error: "responsible_admin_id inválido." },
+          { status: 400 },
+        );
+      }
+    }
+
     // Org must exist.
     const org = firstOrNull(
       await db
@@ -122,6 +146,8 @@ export async function PATCH(
     if (plan !== undefined) updates.plan = plan;
     if (billingPhone !== undefined) updates.billingPhone = billingPhone;
     if (notes !== undefined) updates.notes = notes;
+    if (responsibleAdminId !== undefined)
+      updates.responsibleAdminId = responsibleAdminId;
 
     const existing = firstOrNull(
       await db
@@ -151,6 +177,7 @@ export async function PATCH(
           plan: plan ?? null,
           billingPhone: billingPhone ?? null,
           notes: notes ?? null,
+          responsibleAdminId: responsibleAdminId ?? null,
         })
         .returning();
     }
