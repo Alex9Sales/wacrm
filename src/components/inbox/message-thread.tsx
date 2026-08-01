@@ -18,7 +18,6 @@ import {
   setConversationPrivacy,
   startNewConversation,
 } from "@/app/(dashboard)/inbox/actions";
-import { useRouter } from "next/navigation";
 import {
   ParticipantActionSheet,
   type GroupParticipant,
@@ -255,8 +254,7 @@ export function MessageThread({
   const crmCallingEnabled = useCrmCallingEnabled();
 
   // Group participant panel (WhatsApp-style): clicking a sender's avatar opens
-  // Conversar/Voz/Vídeo/Adicionar for that number (`author_key`).
-  const router = useRouter();
+  // a card for that number (`author_key`) → jump into their 1:1.
   const [participant, setParticipant] = useState<GroupParticipant | null>(null);
   const [participantOpen, setParticipantOpen] = useState(false);
   const [participantBusy, setParticipantBusy] = useState(false);
@@ -266,7 +264,12 @@ export function MessageThread({
     setParticipantOpen(true);
   }, []);
 
-  const handleParticipantConversar = useCallback(
+  // Toda ação do painel converge em ABRIR O 1:1 da pessoa — lá está tudo: o
+  // chat, a lateral (adicionar info + criar negócio) e o botão de ligar (que
+  // funciona, pois tem a conversa+canal). Ligar/adicionar direto de um
+  // participante de grupo, sem o 1:1, travava (Voz) e dava feedback fraco.
+  // Navegação COMPLETA porque router.push não carrega a conversa recém-criada.
+  const handleParticipantOpen = useCallback(
     async (p: GroupParticipant) => {
       setParticipantBusy(true);
       try {
@@ -274,40 +277,14 @@ export function MessageThread({
           phone: p.phone,
           channelId: conversation?.channel?.id ?? null,
         });
-        setParticipantOpen(false);
-        router.push(`/inbox?c=${conversationId}`);
+        window.location.href = `/inbox?c=${conversationId}`;
       } catch {
         toast.error("Não foi possível abrir a conversa.");
-      } finally {
-        setParticipantBusy(false);
-      }
-    },
-    [conversation?.channel?.id, router],
-  );
-
-  const handleParticipantAdicionar = useCallback(
-    async (p: GroupParticipant) => {
-      setParticipantBusy(true);
-      try {
-        await startNewConversation({
-          phone: p.phone,
-          channelId: conversation?.channel?.id ?? null,
-        });
-        toast.success("Contato adicionado.");
-        setParticipantOpen(false);
-      } catch {
-        toast.error("Não foi possível adicionar o contato.");
-      } finally {
         setParticipantBusy(false);
       }
     },
     [conversation?.channel?.id],
   );
-
-  const handleParticipantVoz = useCallback((p: GroupParticipant) => {
-    setParticipantOpen(false);
-    startOutboundCall(p.phone, p.name || undefined);
-  }, []);
 
   // Deleting a conversation is admin/owner-only (matches the server-side
   // requireRole('admin') in deleteConversation) — hide the button otherwise.
@@ -1925,11 +1902,8 @@ export function MessageThread({
         participant={participant}
         open={participantOpen}
         onOpenChange={setParticipantOpen}
-        callingEnabled={crmCallingEnabled}
         busy={participantBusy}
-        onConversar={handleParticipantConversar}
-        onVoz={handleParticipantVoz}
-        onAdicionar={handleParticipantAdicionar}
+        onOpen={handleParticipantOpen}
       />
     </div>
   );

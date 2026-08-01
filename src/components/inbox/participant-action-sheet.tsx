@@ -2,12 +2,14 @@
 
 // ============================================================
 // ParticipantActionSheet — clicar no avatar de um participante num thread de
-// GRUPO abre este painel (tipo WhatsApp): foto + nome + número, com as ações
-// Conversar / Voz / Vídeo / Adicionar. O telefone vem do `author_key` da
-// mensagem (a CRM já guarda o número puro do remetente do grupo).
+// GRUPO abre este painel (tipo WhatsApp): foto + nome + número. Todas as ações
+// levam ao 1:1 daquela pessoa (via `onOpen`), porque é lá que está TUDO: o
+// chat, a lateral pra adicionar info + criar negócio, e o botão de ligar (que
+// só funciona com a conversa+canal). O telefone vem do `author_key` (a CRM já
+// guarda o número puro do remetente do grupo).
 // ============================================================
 
-import { MessageSquare, Phone, Video, UserPlus, Copy, Loader2 } from "lucide-react";
+import { MessageSquare, Video, UserPlus, Copy, Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import {
@@ -30,12 +32,9 @@ interface ParticipantActionSheetProps {
   participant: GroupParticipant | null;
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  /** Ligações só aparecem habilitadas quando o CRM calling está ligado. */
-  callingEnabled: boolean;
   busy: boolean;
-  onConversar: (p: GroupParticipant) => void;
-  onVoz: (p: GroupParticipant) => void;
-  onAdicionar: (p: GroupParticipant) => void;
+  /** Abre o 1:1 da pessoa (cria a conversa+contato se preciso). */
+  onOpen: (p: GroupParticipant) => void;
 }
 
 /** "+55 67 99187-5477" a partir de "556791875477" (best-effort BR). */
@@ -44,7 +43,10 @@ function formatPhone(raw: string): string {
   if (d.startsWith("55") && (d.length === 12 || d.length === 13)) {
     const ddd = d.slice(2, 4);
     const rest = d.slice(4);
-    const mid = rest.length === 9 ? `${rest.slice(0, 5)}-${rest.slice(5)}` : `${rest.slice(0, 4)}-${rest.slice(4)}`;
+    const mid =
+      rest.length === 9
+        ? `${rest.slice(0, 5)}-${rest.slice(5)}`
+        : `${rest.slice(0, 4)}-${rest.slice(4)}`;
     return `+55 ${ddd} ${mid}`;
   }
   return `+${d}`;
@@ -92,11 +94,8 @@ export function ParticipantActionSheet({
   participant,
   open,
   onOpenChange,
-  callingEnabled,
   busy,
-  onConversar,
-  onVoz,
-  onAdicionar,
+  onOpen,
 }: ParticipantActionSheetProps) {
   const p = participant;
   return (
@@ -132,42 +131,38 @@ export function ParticipantActionSheet({
             </div>
 
             {busy ? (
-              <div className="flex items-center gap-2 py-3 text-sm text-muted-foreground">
+              <div className="flex items-center gap-2 py-5 text-sm text-muted-foreground">
                 <Loader2 className="size-4 animate-spin" />
-                Abrindo…
+                Abrindo conversa…
               </div>
             ) : (
-              <div className="mt-1 grid w-full grid-cols-4 gap-2">
-                <ActionButton
-                  primary
-                  icon={<MessageSquare className="size-4" />}
-                  label="Conversar"
-                  onClick={() => onConversar(p)}
-                />
-                <ActionButton
-                  icon={<Phone className="size-4" />}
-                  label="Voz"
-                  onClick={callingEnabled ? () => onVoz(p) : undefined}
-                  disabled={!callingEnabled}
-                  hint={callingEnabled ? "Ligar" : "Ligações não habilitadas nesta conta"}
-                />
-                <ActionButton
-                  icon={<Video className="size-4" />}
-                  label="Vídeo"
-                  disabled
-                  hint="Em breve"
-                />
-                <ActionButton
-                  icon={<UserPlus className="size-4" />}
-                  label="Adicionar"
-                  onClick={() => onAdicionar(p)}
-                  hint="Adicionar aos contatos"
-                />
-              </div>
+              <>
+                <div className="mt-1 grid w-full grid-cols-3 gap-2">
+                  <ActionButton
+                    primary
+                    icon={<MessageSquare className="size-4" />}
+                    label="Conversar"
+                    onClick={() => onOpen(p)}
+                  />
+                  <ActionButton
+                    icon={<UserPlus className="size-4" />}
+                    label="Adicionar"
+                    onClick={() => onOpen(p)}
+                    hint="Abre o 1:1 pra adicionar info e criar negócio"
+                  />
+                  <ActionButton
+                    icon={<Video className="size-4" />}
+                    label="Vídeo"
+                    disabled
+                    hint="Em breve"
+                  />
+                </div>
+                <p className="text-center text-[11px] leading-relaxed text-muted-foreground">
+                  Abre o 1:1 desta pessoa — lá você conversa, adiciona ao
+                  contato, cria negócio e liga.
+                </p>
+              </>
             )}
-            <p className="text-center text-[11px] text-muted-foreground">
-              &quot;Conversar&quot; abre um 1:1 pelo mesmo canal e já cria o contato.
-            </p>
           </div>
         )}
       </DialogContent>
