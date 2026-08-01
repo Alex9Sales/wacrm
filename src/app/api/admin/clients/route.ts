@@ -33,13 +33,20 @@ import { listClients, getClientOverview } from "@/lib/admin/clients";
  */
 export async function GET() {
   try {
-    await requirePlatformAdmin();
+    // Keep the caller id so the client can drive the "Meus" filter — the
+    // /admin route group has no AuthProvider, so useAuth() is empty there.
+    const admin = await requirePlatformAdmin();
     const [clients, overview, admins] = await Promise.all([
       listClients(),
       getClientOverview(),
       listPlatformAdmins(),
     ]);
-    return NextResponse.json({ clients, overview, admins });
+    return NextResponse.json({
+      clients,
+      overview,
+      admins,
+      currentAdminId: admin.userId,
+    });
   } catch (err) {
     return toErrorResponse(err);
   }

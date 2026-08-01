@@ -41,4 +41,7 @@ export interface AdminClientsResponse {
   clients: ClientListRow[];
   overview: ClientOverview;
   admins: PlatformAdminUser[];
+  /** The requesting admin's own user id — drives the "Meus" filter (the /admin
+   *  route has no AuthProvider, so the client can't read it from useAuth). */
+  currentAdminId: string;
 }

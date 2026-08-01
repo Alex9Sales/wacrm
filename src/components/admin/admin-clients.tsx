@@ -40,7 +40,6 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { cn } from "@/lib/utils";
-import { useAuth } from "@/hooks/use-auth";
 import type {
   AdminClientsResponse,
   ClientListRow,
@@ -112,12 +111,11 @@ function OverviewCard({
 }
 
 export function AdminClients() {
-  const { profile } = useAuth();
-  const myId = profile?.id ?? null;
-
   const [clients, setClients] = useState<ClientListRow[]>([]);
   const [overview, setOverview] = useState<ClientOverview>(EMPTY_OVERVIEW);
   const [admins, setAdmins] = useState<PlatformAdminUser[]>([]);
+  // The logged-in admin's own id, from the API (no AuthProvider under /admin).
+  const [myId, setMyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   // Per-row in-flight state so a toggle/reminder disables only that row.
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -139,6 +137,7 @@ export function AdminClients() {
       setClients(data.clients ?? []);
       setOverview(data.overview ?? EMPTY_OVERVIEW);
       setAdmins(data.admins ?? []);
+      setMyId(data.currentAdminId ?? null);
     } catch (err) {
       console.error("[AdminClients] load error:", err);
       toast.error("Não foi possível conectar ao servidor.");
