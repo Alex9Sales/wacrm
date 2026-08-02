@@ -693,6 +693,7 @@ const ADD_NODE_TYPES: NodeType[] = [
   'condition',
   'set_tag',
   'delay',
+  'jump',
   'handoff',
   'end',
 ];

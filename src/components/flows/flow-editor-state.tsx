@@ -201,6 +201,8 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
       return { mode: "add", tag_id: "", next_node_key: "" };
     case "delay":
       return { duration: { value: 1, unit: "days" }, next_node_key: "" };
+    case "jump":
+      return { target_node_key: "" };
     case "handoff":
       return {
         customer_message:

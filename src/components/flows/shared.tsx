@@ -26,6 +26,7 @@ import {
   MessageCircle,
   Paperclip,
   PlayCircle,
+  Repeat,
   Tag,
   UserPlus,
   Workflow,
@@ -51,6 +52,7 @@ export type NodeType =
   | 'condition'
   | 'set_tag'
   | 'delay'
+  | 'jump'
   | 'handoff'
   | 'end';
 
@@ -161,6 +163,13 @@ export const NODE_META: Record<
     blurb: 'Aguarda um tempo (min/horas/dias) antes de seguir',
     category: 'flow',
   },
+  jump: {
+    label: 'Pular para',
+    icon: Repeat,
+    color: 'text-orange-400',
+    blurb: 'Salta para outro nó (permite loops/reinício)',
+    category: 'flow',
+  },
   handoff: {
     label: 'Transferir para atendente',
     icon: UserPlus,
@@ -215,6 +224,7 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   condition: { l: 0.72, c: 0.15, h: 65 }, // amber — a fork in the road
   set_tag: { l: 0.65, c: 0.15, h: 350 }, // pink
   delay: { l: 0.62, c: 0.04, h: 250 }, // slate — a quiet pause
+  jump: { l: 0.68, c: 0.15, h: 45 }, // orange — a loop back
   handoff: { l: 0.65, c: 0.17, h: 16 }, // rose — hands off
   end: { l: 0.55, c: 0.01, h: 260 }, // neutral grey — terminal
 };
@@ -441,6 +451,11 @@ export function summarizeNode(node: BuilderNode): string | null {
               ? 'minuto'
               : 'minutos';
       return `Esperar ${value} ${unitLabel}`;
+    }
+    case 'jump': {
+      const target =
+        typeof cfg.target_node_key === 'string' ? cfg.target_node_key : '';
+      return target ? `Pular para ${target}` : 'Pular para (nenhum nó)';
     }
     case 'handoff': {
       const note = typeof cfg.note === 'string' ? cfg.note : '';

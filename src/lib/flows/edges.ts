@@ -62,6 +62,21 @@ export function deriveCanvasEdges(nodes: BuilderNode[]): CanvasEdge[] {
         break;
       }
 
+      case "jump": {
+        // Jump's edge points at target_node_key (its loop target), not
+        // next_node_key. Same "next" handle so the card renders one port.
+        const next = (cfg as { target_node_key?: string }).target_node_key;
+        if (next && knownKeys.has(next)) {
+          edges.push({
+            id: `${node.node_key}--next--${next}`,
+            source: node.node_key,
+            target: next,
+            sourceHandle: "next",
+          });
+        }
+        break;
+      }
+
       case "condition": {
         const trueNext = (cfg as { true_next?: string }).true_next;
         const falseNext = (cfg as { false_next?: string }).false_next;
@@ -181,6 +196,7 @@ export function outgoingSlots(node: BuilderNode): OutgoingSlot[] {
     case "collect_input":
     case "set_tag":
     case "delay":
+    case "jump":
       return [{ id: "next", label: "Next" }];
 
     case "condition":
@@ -257,6 +273,10 @@ export function applyEdgeConnection(
     case "set_tag":
     case "delay":
       if (sourceHandle === "next") return { next_node_key: targetKey };
+      return null;
+
+    case "jump":
+      if (sourceHandle === "next") return { target_node_key: targetKey };
       return null;
 
     case "condition":
@@ -354,6 +374,12 @@ function patchedConfigWithoutKey(
       const next = (cfg as { next_node_key?: string }).next_node_key;
       if (next !== deletedKey) return null;
       return { ...cfg, next_node_key: "" };
+    }
+
+    case "jump": {
+      const next = (cfg as { target_node_key?: string }).target_node_key;
+      if (next !== deletedKey) return null;
+      return { ...cfg, target_node_key: "" };
     }
 
     case "condition": {

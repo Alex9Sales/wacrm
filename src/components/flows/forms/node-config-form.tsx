@@ -264,6 +264,26 @@ export function NodeConfigForm({
       );
     }
 
+    case "jump": {
+      const jcfg = cfg as { target_node_key?: string };
+      return (
+        <div className="flex flex-col gap-2">
+          <NextNodeRow
+            value={jcfg.target_node_key ?? ""}
+            allNodes={allNodes}
+            currentKey={node.node_key}
+            onChange={(v) => onUpdateConfig({ target_node_key: v })}
+            label="Pular para o nó"
+          />
+          <p className="text-[11px] text-muted-foreground">
+            O fluxo continua a partir desse nó. Bom para loops (com um
+            <span className="font-medium"> Esperar</span> antes, pra não repetir
+            sem parar). Limite de segurança: 25 saltos por execução.
+          </p>
+        </div>
+      );
+    }
+
     case "handoff": {
       const hcfg = cfg as {
         note?: string;

@@ -761,6 +761,28 @@ function validateNode(
       break;
     }
 
+    case "jump": {
+      const cfg = node.config as { target_node_key?: string };
+      if (!cfg.target_node_key) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "target_node_key",
+          message: "O nó de pular precisa apontar para um nó de destino.",
+        });
+      } else if (!knownKeys.has(cfg.target_node_key)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "target_node_key",
+          message: `O pular aponta para um nó inexistente "${cfg.target_node_key}".`,
+        });
+      }
+      break;
+    }
+
     case "handoff":
     case "end":
       // Terminal nodes have no outgoing edges; nothing to validate
@@ -825,6 +847,10 @@ function outgoingEdges(node: NodeInput): string[] {
       if (cfg.true_next) out.push(cfg.true_next);
       if (cfg.false_next) out.push(cfg.false_next);
       return out;
+    }
+    case "jump": {
+      const cfg = node.config as { target_node_key?: string };
+      return cfg.target_node_key ? [cfg.target_node_key] : [];
     }
     case "send_buttons": {
       const cfg = node.config as {

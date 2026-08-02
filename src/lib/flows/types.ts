@@ -192,6 +192,17 @@ export interface DelayNodeConfig {
   next_node_key: string;
 }
 
+/**
+ * Jumps the run to another node — used for loops (e.g. "wait 30 days →
+ * jump back to the entry check"). Anti-loop: the engine caps total jumps per
+ * run (MAX_JUMPS_PER_RUN) and fails the run past that, so a drip cycle can't
+ * spin forever.
+ */
+export interface JumpNodeConfig {
+  /** node_key to continue the run from. */
+  target_node_key: string;
+}
+
 // Terminal nodes carry no config — they just stop the run.
 export type EndNodeConfig = Record<string, never>;
 
@@ -213,6 +224,7 @@ export type FlowNodeConfig =
   | { node_type: "condition"; config: ConditionNodeConfig }
   | { node_type: "set_tag"; config: SetTagNodeConfig }
   | { node_type: "delay"; config: DelayNodeConfig }
+  | { node_type: "jump"; config: JumpNodeConfig }
   | { node_type: "handoff"; config: HandoffNodeConfig }
   | { node_type: "end"; config: EndNodeConfig };
 

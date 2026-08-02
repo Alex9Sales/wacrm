@@ -57,6 +57,7 @@ import {
   type CollectInputNodeConfig,
   type ConditionNodeConfig,
   type DelayNodeConfig,
+  type JumpNodeConfig,
   type DispatchInboundInput,
   type DispatchInboundResult,
   type FlowNodeRow,
@@ -788,6 +789,11 @@ async function endRun(
 // new current_node_key before returning.
 // ============================================================
 
+/** Anti-loop cap: total `jump` node traversals allowed per run before we fail
+ *  it. Generous enough for legit drip cycles (adiar→30d→jump), low enough that
+ *  a misconfigured loop can't run forever. */
+const MAX_JUMPS_PER_RUN = 25;
+
 async function advanceFromNodeKey(
   run: FlowRunRow,
   startNodeKey: string,
@@ -965,6 +971,42 @@ async function advanceFromNodeKey(
         });
       }
       currentKey = cfg.next_node_key;
+      continue;
+    }
+    if (node.node_type === "jump") {
+      const cfg = node.config as unknown as JumpNodeConfig;
+      // Anti-loop: cap total jumps per run. A drip cycle (…→ delay → jump back)
+      // is legit, but must not spin forever. Counter lives in vars so it
+      // survives the delays/suspensions between jumps.
+      const jumps =
+        (typeof run.vars.__jump_count === "number" ? run.vars.__jump_count : 0) +
+        1;
+      if (jumps > MAX_JUMPS_PER_RUN) {
+        await logEvent(run.id, "error", node.node_key, {
+          reason: "jump_limit_exceeded",
+          jumps,
+        });
+        await endRun(run.id, "failed", "jump_limit_exceeded");
+        return { outcome: "completed" };
+      }
+      const newVars = { ...run.vars, __jump_count: jumps };
+      try {
+        await db
+          .update(flowRuns)
+          .set({ vars: newVars })
+          .where(eq(flowRuns.id, run.id));
+        run.vars = newVars;
+      } catch (err) {
+        await logEvent(run.id, "error", node.node_key, {
+          reason: "jump_counter_persist_failed",
+          detail: err instanceof Error ? err.message : String(err),
+        });
+      }
+      await logEvent(run.id, "node_entered", node.node_key, {
+        jump_to: cfg.target_node_key,
+        jump_count: jumps,
+      });
+      currentKey = cfg.target_node_key;
       continue;
     }
     if (node.node_type === "delay") {
