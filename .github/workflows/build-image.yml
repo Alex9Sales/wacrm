@@ -51,36 +51,29 @@ jobs:
           cache-from: type=gha
           cache-to: type=gha,mode=max
 
-      # Tell Coolify to PULL the just-pushed image and redeploy both apps
-      # (web + worker). Without this, Coolify never learns a new image
-      # exists and the running containers stay on the old build until a
-      # manual `docker compose pull && up -d`. The UUIDs are the Coolify
-      # application ids (== the /data/coolify/applications/<uuid> dir names).
-      # Safe no-op until the COOLIFY_TOKEN repo secret is added.
-      - name: Trigger Coolify redeploy (web + worker)
+      # Deploy over SSH: pull the just-pushed image and recreate both apps
+      # (web + worker). Replaces the flaky Coolify /api/v1/deploy trigger
+      # (timed out OR returned OK-but-didn't-pull repeatedly). The SSH key
+      # (VPS_DEPLOY_SSH_KEY secret) is LOCKED on the VPS to a forced command
+      # in authorized_keys — it can ONLY run /root/deploy-crm.sh (docker pull
+      # + compose up --force-recreate for both apps), no shell, no arbitrary
+      # commands. SSH (22) is already open; no firewall/port change. Coolify
+      # still owns the apps — this just does the same recreate it would.
+      - name: Deploy via SSH (pull + recreate web + worker)
         if: success()
         env:
-          COOLIFY_TOKEN: ${{ secrets.COOLIFY_TOKEN }}
+          VPS_DEPLOY_SSH_KEY: ${{ secrets.VPS_DEPLOY_SSH_KEY }}
         run: |
-          if [ -z "$COOLIFY_TOKEN" ]; then
-            echo "COOLIFY_TOKEN not set — skipping auto-deploy."
-            echo "Add the repo secret (Settings → Secrets → Actions → COOLIFY_TOKEN) to enable."
+          if [ -z "$VPS_DEPLOY_SSH_KEY" ]; then
+            echo "VPS_DEPLOY_SSH_KEY not set — skipping auto-deploy."
+            echo "Image IS pushed to GHCR; deploy manually with docker compose pull && up -d."
             exit 0
           fi
-          # Coolify's box is on a 2-vCPU VPS and its https endpoint sometimes
-          # takes a few seconds to answer — the bare curl was hitting `curl (28)
-          # timeout` intermittently and the auto-deploy silently didn't fire.
-          # Retry hard (connect + total timeouts, up to 6 attempts with backoff,
-          # retrying on ANY error incl. timeouts). If it still fails, the image
-          # is already in GHCR — click "Redeploy" on BOTH apps in Coolify.
-          if curl -fsS -X GET \
-              --connect-timeout 15 --max-time 90 \
-              --retry 6 --retry-delay 10 --retry-all-errors \
-              "https://coolify.salestecnologia.com.br/api/v1/deploy?uuid=klqgmh23eh0mi72r6scqtdo2,i9edhxtdkqf5gi8b12zh2j0h&force=true" \
-              -H "Authorization: Bearer $COOLIFY_TOKEN"; then
-            echo "✓ Coolify deploy triggered for web + worker."
-          else
-            echo "::warning::Coolify auto-deploy trigger failed after retries."
-            echo "Image IS pushed to GHCR — open Coolify and click Redeploy on BOTH apps (web + worker)."
-            exit 1
-          fi
+          mkdir -p ~/.ssh
+          printf '%s\n' "$VPS_DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
+          chmod 600 ~/.ssh/deploy_key
+          # Pin the host key (no blind accept-new → no MITM on first connect).
+          ssh-keyscan -t ed25519 72.60.137.234 >> ~/.ssh/known_hosts 2>/dev/null
+          # The forced command on the VPS ignores this arg and runs the deploy.
+          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=20 \
+            -o StrictHostKeyChecking=yes root@72.60.137.234 deploy
