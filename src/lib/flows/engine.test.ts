@@ -1,6 +1,7 @@
 import { describe, it, expect } from "vitest";
 import {
   matchReplyId,
+  matchTextToButton,
   matchesKeywordTrigger,
   isAutoAdvancing,
   isSuspending,
@@ -94,6 +95,91 @@ describe("matchReplyId", () => {
         "x",
       ),
     ).toBeNull();
+  });
+});
+
+describe("matchTextToButton (WAHA numbered-text fallback)", () => {
+  const buttonsNode = {
+    node_type: "send_buttons",
+    config: {
+      text: "Ainda faz sentido?",
+      buttons: [
+        { reply_id: "btn_sim", title: "Faz sentido", next_node_key: "reativado" },
+        { reply_id: "btn_depois", title: "Mais pra frente", next_node_key: "adiar" },
+        { reply_id: "btn_nao", title: "Não, obrigado", next_node_key: "descartar" },
+      ],
+    },
+  };
+
+  it("matches a typed number (1-based, array order)", () => {
+    expect(matchTextToButton(buttonsNode, "1")).toBe("reativado");
+    expect(matchTextToButton(buttonsNode, "2")).toBe("adiar");
+    expect(matchTextToButton(buttonsNode, "3")).toBe("descartar");
+  });
+
+  it("tolerates punctuation/whitespace around the number", () => {
+    expect(matchTextToButton(buttonsNode, " 2. ")).toBe("adiar");
+    expect(matchTextToButton(buttonsNode, "3)")).toBe("descartar");
+    expect(matchTextToButton(buttonsNode, "1 -")).toBe("reativado");
+  });
+
+  it("matches the visible label case-insensitively", () => {
+    expect(matchTextToButton(buttonsNode, "Faz sentido")).toBe("reativado");
+    expect(matchTextToButton(buttonsNode, "não, obrigado")).toBe("descartar");
+  });
+
+  it("returns null for out-of-range numbers and unknown labels", () => {
+    expect(matchTextToButton(buttonsNode, "0")).toBeNull();
+    expect(matchTextToButton(buttonsNode, "9")).toBeNull();
+    expect(matchTextToButton(buttonsNode, "talvez")).toBeNull();
+    expect(matchTextToButton(buttonsNode, "")).toBeNull();
+  });
+
+  it("label wins over number so a digit-leading label resolves to itself", () => {
+    const node = {
+      node_type: "send_buttons",
+      config: {
+        text: "Prazo?",
+        buttons: [
+          { reply_id: "a", title: "Agora", next_node_key: "now" },
+          { reply_id: "b", title: "3 meses", next_node_key: "later" },
+        ],
+      },
+    };
+    // "3 meses" is the 2nd button but its label starts with "3":
+    // label match must win over the number-index interpretation.
+    expect(matchTextToButton(node, "3 meses")).toBe("later");
+    // A bare "2" still indexes to the 2nd button.
+    expect(matchTextToButton(node, "2")).toBe("later");
+  });
+
+  it("numbers list rows 1..N flattened across sections", () => {
+    const listNode = {
+      node_type: "send_list",
+      config: {
+        text: "Escolha",
+        button_label: "Ver",
+        sections: [
+          { title: "Recentes", rows: [{ reply_id: "o1", title: "Pedido 1", next_node_key: "p1" }] },
+          {
+            title: "Antigos",
+            rows: [
+              { reply_id: "o2", title: "Pedido 2", next_node_key: "p2" },
+              { reply_id: "o3", title: "Pedido 3", next_node_key: "p3" },
+            ],
+          },
+        ],
+      },
+    };
+    expect(matchTextToButton(listNode, "1")).toBe("p1");
+    expect(matchTextToButton(listNode, "3")).toBe("p3");
+    expect(matchTextToButton(listNode, "Pedido 2")).toBe("p2");
+    expect(matchTextToButton(listNode, "4")).toBeNull();
+  });
+
+  it("returns null on non-option node types", () => {
+    expect(matchTextToButton({ node_type: "collect_input", config: {} }, "1")).toBeNull();
+    expect(matchTextToButton({ node_type: "send_message", config: {} }, "1")).toBeNull();
   });
 });
 

@@ -152,6 +152,52 @@ export function matchReplyId(
 }
 
 /**
+ * Text→option matcher for channels that can't render real interactive
+ * buttons (WAHA & other unofficial providers). Those prompts go out as
+ * numbered plain text (meta-send.ts `renderOptionsAsText`), so the
+ * customer replies with a number ("2", "2.", "2)") or the option's
+ * visible label. This maps that reply back to the option's
+ * `next_node_key`. Label match wins over number so a label that happens
+ * to start with a digit ("3 meses") still resolves to itself. Numbering
+ * MUST stay in lockstep with the renderer: buttons 1..N in array order;
+ * list rows 1..N flattened across sections in order. Returns null if
+ * nothing matches.
+ */
+export function matchTextToButton(
+  node: { node_type: string; config: Record<string, unknown> },
+  text: string,
+): string | null {
+  const raw = text.trim();
+  if (!raw) return null;
+  const lower = raw.toLowerCase();
+  // Leading number, tolerating "2", "2.", "2)", "2 -" etc.
+  const numMatch = raw.match(/^(\d{1,3})\b/);
+  const idx = numMatch ? parseInt(numMatch[1], 10) : NaN;
+
+  if (node.node_type === "send_buttons") {
+    const buttons = (node.config as unknown as SendButtonsNodeConfig).buttons ?? [];
+    const byLabel = buttons.find((b) => b.title.trim().toLowerCase() === lower);
+    if (byLabel) return byLabel.next_node_key;
+    if (Number.isInteger(idx) && idx >= 1 && idx <= buttons.length) {
+      return buttons[idx - 1].next_node_key;
+    }
+    return null;
+  }
+  if (node.node_type === "send_list") {
+    const rows = ((node.config as unknown as SendListNodeConfig).sections ?? []).flatMap(
+      (s) => s.rows ?? [],
+    );
+    const byLabel = rows.find((r) => r.title.trim().toLowerCase() === lower);
+    if (byLabel) return byLabel.next_node_key;
+    if (Number.isInteger(idx) && idx >= 1 && idx <= rows.length) {
+      return rows[idx - 1].next_node_key;
+    }
+    return null;
+  }
+  return null;
+}
+
+/**
  * Case-insensitive contains/exact match against a list of keywords.
  * Used by the trigger evaluator. Stable enough that the v3 builder
  * UI can preview matches by passing canned strings.
@@ -1002,18 +1048,24 @@ async function handleReplyForActiveRun(
     return { consumed: true, flow_run_id: run.id, outcome: "no_match" };
   }
 
-  // Two ways a reply can advance:
+  // Ways a reply can advance:
   //   1. Interactive button/list tap on a send_buttons/send_list node.
-  //   2. Text reply on a collect_input node — capture into vars.
+  //   2. Text reply on a send_buttons/send_list node — the WAHA/unofficial
+  //      fallback, where the prompt went out as numbered text and the
+  //      customer typed a number or the option's label.
+  //   3. Text reply on a collect_input node — capture into vars.
   //
   // Everything else falls through to the fallback policy below.
   let matched: string | null = null;
   if (
-    message.kind === "interactive_reply" &&
-    (currentNode.node_type === "send_buttons" ||
-      currentNode.node_type === "send_list")
+    currentNode.node_type === "send_buttons" ||
+    currentNode.node_type === "send_list"
   ) {
-    matched = matchReplyId(currentNode, message.reply_id);
+    if (message.kind === "interactive_reply") {
+      matched = matchReplyId(currentNode, message.reply_id);
+    } else if (message.kind === "text") {
+      matched = matchTextToButton(currentNode, message.text);
+    }
   } else if (
     message.kind === "text" &&
     currentNode.node_type === "collect_input"

@@ -296,6 +296,45 @@ type SendInput =
   | (SendInteractiveButtonsEngineArgs & { kind: 'buttons' })
   | (SendInteractiveListEngineArgs & { kind: 'list' })
 
+/**
+ * Render an interactive prompt as numbered plain text, for channels that
+ * can't send real WhatsApp buttons/lists (WAHA & other unofficial
+ * providers). The numbering here MUST stay in lockstep with
+ * `matchTextToButton()` in engine.ts: buttons are numbered 1..N in array
+ * order; list rows are numbered 1..N flattened across sections in order,
+ * so a customer who types "2" lands on the same option either side.
+ */
+function renderOptionsAsText(input: SendInput): string {
+  const lines: string[] = []
+  if (input.headerText?.trim()) lines.push(`*${input.headerText.trim()}*`)
+  lines.push(input.bodyText.trim())
+  lines.push('')
+
+  if (input.kind === 'buttons') {
+    input.buttons.forEach((b, i) => {
+      lines.push(`${i + 1}. ${b.title}`)
+    })
+  } else {
+    let n = 0
+    for (const section of input.sections) {
+      if (section.title?.trim()) lines.push(`*${section.title.trim()}*`)
+      for (const row of section.rows) {
+        n += 1
+        lines.push(
+          row.description?.trim()
+            ? `${n}. ${row.title} — ${row.description.trim()}`
+            : `${n}. ${row.title}`,
+        )
+      }
+    }
+  }
+
+  lines.push('')
+  if (input.footerText?.trim()) lines.push(input.footerText.trim())
+  lines.push('_Responda com o número da opção._')
+  return lines.join('\n')
+}
+
 async function sendInteractiveViaProvider(
   input: SendInput,
 ): Promise<{ whatsapp_message_id: string }> {
@@ -306,10 +345,19 @@ async function sendInteractiveViaProvider(
   )
   const provider = getProvider(channel.provider)
 
-  // Interactive button/list messages only exist on the official Meta
-  // channel — fail with a clear error on any other provider.
+  // Real interactive button/list messages only exist on the official Meta
+  // channel. On any other provider (WAHA & unofficial), fall back to a
+  // numbered plain-text prompt — the reply side (engine's
+  // `matchTextToButton`) maps the typed number/label back to the option,
+  // so conversational flows still branch correctly off a WhatsApp channel.
   if (!provider.capabilities.interactive || !provider.sendInteractive) {
-    throw new Error('Botões/listas interativas só no canal oficial (Meta)')
+    return engineSendText({
+      accountId: input.accountId,
+      userId: input.userId,
+      conversationId: input.conversationId,
+      contactId: input.contactId,
+      text: renderOptionsAsText(input),
+    })
   }
 
   const waMessageId = await dispatchWithRetry(
