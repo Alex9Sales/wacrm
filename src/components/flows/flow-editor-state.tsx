@@ -220,6 +220,11 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
         next_node_key: "",
         error_node_key: "",
       };
+    case "action":
+      return {
+        operations: [{ type: "set_field", field: "name", value: "" }],
+        next_node_key: "",
+      };
     case "handoff":
       return {
         customer_message:

@@ -944,7 +944,7 @@ export const flowNodes = pgTable("flow_nodes", {
 			name: "flow_nodes_flow_id_fkey"
 		}).onDelete("cascade"),
 	unique("flow_nodes_flow_id_node_key_key").on(table.flowId, table.nodeKey),
-	check("flow_nodes_node_type_check", sql`node_type = ANY (ARRAY['start'::text, 'send_buttons'::text, 'send_list'::text, 'send_message'::text, 'send_media'::text, 'collect_input'::text, 'condition'::text, 'set_tag'::text, 'delay'::text, 'jump'::text, 'randomizer'::text, 'handoff'::text, 'http_fetch'::text, 'end'::text])`),
+	check("flow_nodes_node_type_check", sql`node_type = ANY (ARRAY['start'::text, 'send_buttons'::text, 'send_list'::text, 'send_message'::text, 'send_media'::text, 'collect_input'::text, 'condition'::text, 'set_tag'::text, 'delay'::text, 'jump'::text, 'randomizer'::text, 'action'::text, 'handoff'::text, 'http_fetch'::text, 'end'::text])`),
 ]);
 
 export const flowRuns = pgTable("flow_runs", {

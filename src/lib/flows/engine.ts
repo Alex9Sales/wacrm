@@ -61,6 +61,7 @@ import {
   type RandomizerNodeConfig,
   type HttpFetchNodeConfig,
   type WaitTimeoutConfig,
+  type ActionNodeConfig,
   type DispatchInboundInput,
   type DispatchInboundResult,
   type FlowNodeRow,
@@ -976,6 +977,96 @@ async function advanceFromNodeKey(
           detail: err instanceof Error ? err.message : String(err),
         });
       }
+      currentKey = cfg.next_node_key;
+      continue;
+    }
+    if (node.node_type === "action") {
+      const cfg = node.config as unknown as ActionNodeConfig;
+      for (const op of cfg.operations ?? []) {
+        try {
+          if (op.type === "set_field") {
+            // Only the standard editable fields — never phone (the identity
+            // key) or arbitrary columns.
+            if (
+              run.contact_id &&
+              (op.field === "name" ||
+                op.field === "email" ||
+                op.field === "company")
+            ) {
+              const value = interpolateVars(op.value ?? "", run.vars);
+              const patch: Partial<typeof contacts.$inferInsert> = {
+                updatedAt: new Date().toISOString(),
+              };
+              if (op.field === "name") patch.name = value;
+              else if (op.field === "email") patch.email = value;
+              else patch.company = value;
+              await db
+                .update(contacts)
+                .set(patch)
+                .where(eq(contacts.id, run.contact_id));
+            }
+          } else if (op.type === "add_tag") {
+            // No tag_added dispatch here — same as set_tag, avoids
+            // flow-triggers-flow recursion.
+            if (run.contact_id && op.tag_id) {
+              await db
+                .insert(contactTags)
+                .values({ contactId: run.contact_id, tagId: op.tag_id })
+                .onConflictDoNothing({
+                  target: [contactTags.contactId, contactTags.tagId],
+                });
+            }
+          } else if (op.type === "remove_tag") {
+            if (run.contact_id && op.tag_id) {
+              await db
+                .delete(contactTags)
+                .where(
+                  and(
+                    eq(contactTags.contactId, run.contact_id),
+                    eq(contactTags.tagId, op.tag_id),
+                  ),
+                );
+            }
+          } else if (op.type === "notify") {
+            // Recipient: the chosen agent, else the conversation's current
+            // assignee. No assignee + no pick → skip (no team-wide target).
+            let recipient = op.assign_to || null;
+            if (!recipient && run.conversation_id) {
+              const conv = firstOrNull(
+                await db
+                  .select({ assignedAgentId: conversations.assignedAgentId })
+                  .from(conversations)
+                  .where(eq(conversations.id, run.conversation_id))
+                  .limit(1),
+              );
+              recipient = conv?.assignedAgentId ?? null;
+            }
+            if (recipient) {
+              await db.insert(notifications).values({
+                accountId: run.account_id,
+                userId: recipient,
+                type: "flow_notification",
+                conversationId: run.conversation_id ?? undefined,
+                contactId: run.contact_id ?? undefined,
+                title: "Aviso do fluxo",
+                body:
+                  interpolateVars(op.message ?? "", run.vars) ||
+                  "Um fluxo pediu sua atenção.",
+              });
+            }
+          }
+        } catch (err) {
+          // Non-fatal — one bad op shouldn't strand the run. Log + continue.
+          await logEvent(run.id, "error", node.node_key, {
+            reason: "action_op_failed",
+            op_type: op.type,
+            detail: err instanceof Error ? err.message : String(err),
+          });
+        }
+      }
+      await logEvent(run.id, "node_entered", node.node_key, {
+        ops: (cfg.operations ?? []).length,
+      });
       currentKey = cfg.next_node_key;
       continue;
     }

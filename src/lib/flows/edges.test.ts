@@ -209,6 +209,30 @@ describe("deriveCanvasEdges — http_fetch (ok/error branches)", () => {
   });
 });
 
+describe("deriveCanvasEdges — action (single next)", () => {
+  it("emits one next edge and connects/unlinks it", () => {
+    const node: BuilderNode = {
+      node_key: "a",
+      node_type: "action",
+      config: {
+        operations: [{ type: "add_tag", tag_id: "t1" }],
+        next_node_key: "done",
+      },
+    };
+    const edges = deriveCanvasEdges(
+      nodes(node, { node_key: "done", node_type: "end", config: {} }),
+    );
+    expect(edges).toHaveLength(1);
+    expect(edges[0]).toMatchObject({ target: "done", sourceHandle: "next" });
+    expect(outgoingSlots(node).map((s) => s.id)).toEqual(["next"]);
+    expect(applyEdgeConnection(node, "next", "x")).toEqual({
+      next_node_key: "x",
+    });
+    const [cleared] = unlinkNodeReferences([node], "done");
+    expect(cleared.config).toMatchObject({ next_node_key: "" });
+  });
+});
+
 describe("no-reply timeout edges (send_buttons / collect_input)", () => {
   it("emits an additive timeout edge alongside the reply edges", () => {
     const edges = deriveCanvasEdges(

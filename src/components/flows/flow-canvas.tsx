@@ -696,6 +696,7 @@ const ADD_NODE_TYPES: NodeType[] = [
   'jump',
   'randomizer',
   'http_fetch',
+  'action',
   'handoff',
   'end',
 ];

@@ -797,6 +797,82 @@ function validateNode(
       break;
     }
 
+    case "action": {
+      const cfg = node.config as {
+        operations?: Array<Record<string, unknown>>;
+        next_node_key?: string;
+      };
+      const ops = cfg.operations ?? [];
+      if (ops.length === 0) {
+        issues.push({
+          severity: "warning",
+          scope: "node",
+          node_key: node.node_key,
+          field: "operations",
+          message: "O nó de ação está sem nenhuma operação (não faz nada).",
+        });
+      }
+      ops.forEach((op, i) => {
+        const type = op.type;
+        if (
+          type !== "set_field" &&
+          type !== "add_tag" &&
+          type !== "remove_tag" &&
+          type !== "notify"
+        ) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: `operations.${i}.type`,
+            message: `Operação ${i + 1} tem um tipo inválido.`,
+          });
+          return;
+        }
+        if (type === "set_field") {
+          if (!["name", "email", "company"].includes(op.field as string)) {
+            issues.push({
+              severity: "error",
+              scope: "node",
+              node_key: node.node_key,
+              field: `operations.${i}.field`,
+              message: `A operação ${i + 1} precisa de um campo válido (nome, email ou empresa).`,
+            });
+          }
+        } else if (type === "add_tag" || type === "remove_tag") {
+          if (!op.tag_id) {
+            issues.push({
+              severity: "error",
+              scope: "node",
+              node_key: node.node_key,
+              field: `operations.${i}.tag_id`,
+              message: `A operação ${i + 1} precisa de uma etiqueta.`,
+            });
+          }
+        }
+        // `notify` needs nothing required — an empty message + no agent
+        // just falls back to the assignee / a default body.
+      });
+      if (!cfg.next_node_key) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: "O nó de ação precisa apontar para um próximo nó.",
+        });
+      } else if (!knownKeys.has(cfg.next_node_key)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: `A ação aponta para um nó inexistente "${cfg.next_node_key}".`,
+        });
+      }
+      break;
+    }
+
     case "delay": {
       const cfg = node.config as {
         duration?: { value?: number; unit?: string };
@@ -1160,6 +1236,7 @@ function baseOutgoingEdges(node: NodeInput): string[] {
     case "send_media":
     case "collect_input":
     case "set_tag":
+    case "action":
     case "delay": {
       const cfg = node.config as { next_node_key?: string };
       return cfg.next_node_key ? [cfg.next_node_key] : [];

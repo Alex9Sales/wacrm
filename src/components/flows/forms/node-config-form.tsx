@@ -252,6 +252,16 @@ export function NodeConfigForm({
         />
       );
 
+    case "action":
+      return (
+        <ActionForm
+          cfg={cfg as ActionCfg}
+          allNodes={allNodes}
+          currentKey={node.node_key}
+          onUpdateConfig={onUpdateConfig}
+        />
+      );
+
     case "handoff": {
       const hcfg = cfg as {
         note?: string;
@@ -1270,6 +1280,229 @@ function HttpFetchForm({
           label="Se erro → avançar para (opcional)"
         />
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// action (Ações multi-op — set_field / add_tag / remove_tag / notify)
+// ============================================================
+
+type ActionOp =
+  | { type: "set_field"; field?: "name" | "email" | "company"; value?: string }
+  | { type: "add_tag"; tag_id?: string }
+  | { type: "remove_tag"; tag_id?: string }
+  | { type: "notify"; message?: string; assign_to?: string };
+
+interface ActionCfg {
+  operations?: ActionOp[];
+  next_node_key?: string;
+}
+
+// Base UI Select can't use an empty string value — this maps to
+// assign_to = undefined (notify the conversation's current assignee).
+const ACTION_NOTIFY_ASSIGNEE = "__conversation_assignee__";
+
+const ACTION_OP_LABELS: { value: ActionOp["type"]; label: string }[] = [
+  { value: "set_field", label: "Definir campo do contato" },
+  { value: "add_tag", label: "Adicionar etiqueta" },
+  { value: "remove_tag", label: "Remover etiqueta" },
+  { value: "notify", label: "Avisar atendente" },
+];
+
+function ActionForm({
+  cfg,
+  allNodes,
+  currentKey,
+  onUpdateConfig,
+}: {
+  cfg: ActionCfg;
+  allNodes: BuilderNode[];
+  currentKey: string;
+  onUpdateConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const { members } = useFlowEditor();
+  const tags = useUserTags();
+  const ops = cfg.operations ?? [];
+
+  const updateOp = (i: number, next: ActionOp) =>
+    onUpdateConfig({ operations: ops.map((o, j) => (j === i ? next : o)) });
+  const changeType = (i: number, type: ActionOp["type"]) => {
+    const fresh: ActionOp =
+      type === "set_field"
+        ? { type, field: "name", value: "" }
+        : type === "notify"
+          ? { type, message: "" }
+          : { type, tag_id: "" };
+    updateOp(i, fresh);
+  };
+  const addOp = () =>
+    onUpdateConfig({
+      operations: [...ops, { type: "set_field", field: "name", value: "" }],
+    });
+  const removeOp = (i: number) =>
+    onUpdateConfig({ operations: ops.filter((_, j) => j !== i) });
+
+  const opTypeLabel = (t: ActionOp["type"]) =>
+    ACTION_OP_LABELS.find((o) => o.value === t)?.label ?? t;
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-[11px] text-muted-foreground">
+        Executa as ações em ordem, sem enviar mensagem ao cliente. Valores
+        aceitam <code className="rounded bg-muted px-1">{"{{vars.x}}"}</code>.
+      </p>
+      <div className="flex flex-col gap-3">
+        {ops.map((op, i) => (
+          <div
+            key={i}
+            className="rounded-md border border-border bg-muted/40 p-3"
+          >
+            <div className="mb-2 flex items-center gap-2">
+              <Select
+                value={op.type}
+                onValueChange={(v) => changeType(i, v as ActionOp["type"])}
+              >
+                <SelectTrigger className="bg-muted">
+                  <span className="truncate">{opTypeLabel(op.type)}</span>
+                </SelectTrigger>
+                <SelectContent>
+                  {ACTION_OP_LABELS.map((o) => (
+                    <SelectItem key={o.value} value={o.value}>
+                      {o.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => removeOp(i)}
+                aria-label="Remover ação"
+                className="shrink-0 text-red-400 hover:bg-red-500/10 hover:text-red-300"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+
+            {op.type === "set_field" && (
+              <div className="grid grid-cols-[9rem_1fr] gap-2">
+                <Select
+                  value={op.field ?? "name"}
+                  onValueChange={(v) =>
+                    updateOp(i, {
+                      ...op,
+                      field: v as "name" | "email" | "company",
+                    })
+                  }
+                >
+                  <SelectTrigger className="bg-muted">
+                    <span className="truncate">
+                      {op.field === "email"
+                        ? "Email"
+                        : op.field === "company"
+                          ? "Empresa"
+                          : "Nome"}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="name">Nome</SelectItem>
+                    <SelectItem value="email">Email</SelectItem>
+                    <SelectItem value="company">Empresa</SelectItem>
+                  </SelectContent>
+                </Select>
+                <Input
+                  value={op.value ?? ""}
+                  onChange={(e) => updateOp(i, { ...op, value: e.target.value })}
+                  placeholder="Valor (ex.: {{vars.nome}})"
+                  className="bg-muted"
+                />
+              </div>
+            )}
+
+            {(op.type === "add_tag" || op.type === "remove_tag") &&
+              (tags.length > 0 ? (
+                <Select
+                  value={op.tag_id ?? ""}
+                  onValueChange={(v) => updateOp(i, { ...op, tag_id: v ?? "" })}
+                >
+                  <SelectTrigger className="bg-muted">
+                    <SelectValue placeholder="Escolha uma etiqueta…" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {tags.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              ) : (
+                <Input
+                  value={op.tag_id ?? ""}
+                  onChange={(e) => updateOp(i, { ...op, tag_id: e.target.value })}
+                  placeholder="Tag UUID"
+                  className="bg-muted font-mono text-xs"
+                />
+              ))}
+
+            {op.type === "notify" && (
+              <div className="flex flex-col gap-2">
+                <Input
+                  value={op.message ?? ""}
+                  onChange={(e) =>
+                    updateOp(i, { ...op, message: e.target.value })
+                  }
+                  placeholder="Mensagem do aviso (ex.: Lead quente: {{vars.nome}})"
+                  className="bg-muted"
+                />
+                <Select
+                  value={op.assign_to ?? ACTION_NOTIFY_ASSIGNEE}
+                  onValueChange={(v) =>
+                    updateOp(i, {
+                      ...op,
+                      assign_to:
+                        v && v !== ACTION_NOTIFY_ASSIGNEE ? v : undefined,
+                    })
+                  }
+                >
+                  <SelectTrigger className="bg-muted">
+                    <span className="truncate">
+                      {!op.assign_to
+                        ? "Responsável da conversa"
+                        : members.find((m) => m.user_id === op.assign_to)
+                            ?.full_name || "Atendente"}
+                    </span>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value={ACTION_NOTIFY_ASSIGNEE}>
+                      Responsável da conversa
+                    </SelectItem>
+                    {members.map((m) => (
+                      <SelectItem key={m.user_id} value={m.user_id}>
+                        {m.full_name || "(sem nome)"}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+      <div>
+        <Button variant="ghost" size="sm" onClick={addOp}>
+          <Plus className="h-3.5 w-3.5" />
+          Adicionar ação
+        </Button>
+      </div>
+      <NextNodeRow
+        value={cfg.next_node_key ?? ""}
+        allNodes={allNodes}
+        currentKey={currentKey}
+        onChange={(v) => onUpdateConfig({ next_node_key: v })}
+        label="Depois avançar para"
+      />
     </div>
   );
 }

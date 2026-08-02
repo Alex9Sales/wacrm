@@ -289,6 +289,40 @@ export interface HttpFetchNodeConfig {
   error_node_key?: string;
 }
 
+/**
+ * A single contact-side operation performed by an `action` node.
+ * `set_field` writes a standard contact field; add/remove_tag toggle a
+ * tag (WITHOUT firing tag_added flow triggers — same as set_tag, to
+ * avoid flow-triggers-flow recursion); `notify` drops an in-app
+ * notification for an agent. Values interpolate `{{vars.x}}`.
+ */
+export type ActionOperation =
+  | { type: "set_field"; field: "name" | "email" | "company"; value: string }
+  | { type: "add_tag"; tag_id: string }
+  | { type: "remove_tag"; tag_id: string }
+  | {
+      type: "notify";
+      /** Notification body (interpolated). */
+      message: string;
+      /**
+       * Recipient agent user_id. When unset, falls back to the
+       * conversation's currently-assigned agent; if there's none, the
+       * op is skipped (there's no team-wide notification target).
+       */
+      assign_to?: string;
+    };
+
+/**
+ * Runs a list of contact-side operations (set field / tag / notify) in
+ * order, then auto-advances. The "faça X sem mandar mensagem" node —
+ * ManyChat's "Ações". Complements `set_tag` (single tag) by batching
+ * several ops in one node.
+ */
+export interface ActionNodeConfig {
+  operations: ActionOperation[];
+  next_node_key: string;
+}
+
 // Terminal nodes carry no config — they just stop the run.
 export type EndNodeConfig = Record<string, never>;
 
@@ -313,6 +347,7 @@ export type FlowNodeConfig =
   | { node_type: "jump"; config: JumpNodeConfig }
   | { node_type: "randomizer"; config: RandomizerNodeConfig }
   | { node_type: "http_fetch"; config: HttpFetchNodeConfig }
+  | { node_type: "action"; config: ActionNodeConfig }
   | { node_type: "handoff"; config: HandoffNodeConfig }
   | { node_type: "end"; config: EndNodeConfig };
 

@@ -32,6 +32,7 @@ import {
   Tag,
   UserPlus,
   Workflow,
+  Zap,
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
@@ -57,6 +58,7 @@ export type NodeType =
   | 'jump'
   | 'randomizer'
   | 'http_fetch'
+  | 'action'
   | 'handoff'
   | 'end';
 
@@ -188,6 +190,13 @@ export const NODE_META: Record<
     blurb: 'Chama uma API externa e guarda a resposta',
     category: 'logic',
   },
+  action: {
+    label: 'Ação',
+    icon: Zap,
+    color: 'text-yellow-400',
+    blurb: 'Faz várias ações no contato (campo, etiqueta, avisar) sem mensagem',
+    category: 'logic',
+  },
   handoff: {
     label: 'Transferir para atendente',
     icon: UserPlus,
@@ -245,6 +254,7 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   jump: { l: 0.68, c: 0.15, h: 45 }, // orange — a loop back
   randomizer: { l: 0.62, c: 0.18, h: 300 }, // violet — a roll of the dice
   http_fetch: { l: 0.66, c: 0.12, h: 195 }, // cyan — reaches out to the web
+  action: { l: 0.75, c: 0.15, h: 95 }, // yellow-green — does the work
   handoff: { l: 0.65, c: 0.17, h: 16 }, // rose — hands off
   end: { l: 0.55, c: 0.01, h: 260 }, // neutral grey — terminal
 };
@@ -506,6 +516,22 @@ export function summarizeNode(node: BuilderNode): string | null {
         typeof cfg.method === 'string' ? cfg.method.toUpperCase() : 'GET';
       const url = typeof cfg.url === 'string' ? cfg.url : '';
       return url ? `${method} ${truncate(url, 48)}` : `${method} (sem URL)`;
+    }
+    case 'action': {
+      const ops = Array.isArray(cfg.operations)
+        ? (cfg.operations as Array<{ type?: string }>)
+        : [];
+      if (ops.length === 0) return 'Nenhuma ação';
+      const labels: Record<string, string> = {
+        set_field: 'campo',
+        add_tag: '+etiqueta',
+        remove_tag: '−etiqueta',
+        notify: 'avisar',
+      };
+      const parts = ops
+        .map((o) => labels[o.type ?? ''] ?? o.type)
+        .filter(Boolean);
+      return truncate(parts.join(', '), 60);
     }
     case 'handoff': {
       const note = typeof cfg.note === 'string' ? cfg.note : '';
