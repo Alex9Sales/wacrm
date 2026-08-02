@@ -74,11 +74,30 @@ export default function NotificationsPage() {
   );
 
   const handleClick = useCallback(
-    (n: Notification) => {
-      if (!n.read_at) markRead(n.id);
+    async (n: Notification) => {
       if (n.conversation_id) {
-        router.push(`/inbox?c=${n.conversation_id}`);
-      } else if (n.channel_id) {
+        // FULL navigation (not router.push): the client-side push wasn't
+        // reliably re-triggering the inbox's `?c=` deep-link effect, so the
+        // wrong thread opened. window.location guarantees a fresh inbox mount
+        // that selects the right conversation. Persist the "read" FIRST —
+        // the page unloads immediately and would cancel a fire-and-forget
+        // request.
+        if (!n.read_at) {
+          setNotifications(
+            (prev) =>
+              prev?.map((x) =>
+                x.id === n.id && !x.read_at
+                  ? { ...x, read_at: new Date().toISOString() }
+                  : x,
+              ) ?? prev,
+          );
+          await markNotificationRead(n.id).catch(() => {});
+        }
+        window.location.href = `/inbox?c=${n.conversation_id}`;
+        return;
+      }
+      if (!n.read_at) markRead(n.id);
+      if (n.channel_id) {
         // Menção num canal do chat interno → abre direto naquele canal.
         router.push(`/internal-chat?channel=${n.channel_id}`);
       } else if (n.type === "mention") {
