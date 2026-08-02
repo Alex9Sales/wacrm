@@ -901,7 +901,7 @@ export const flows = pgTable("flows", {
 			name: "flows_account_id_fkey"
 		}).onDelete("cascade"),
 	check("flows_status_check", sql`status = ANY (ARRAY['draft'::text, 'active'::text, 'archived'::text])`),
-	check("flows_trigger_type_check", sql`trigger_type = ANY (ARRAY['keyword'::text, 'first_inbound_message'::text, 'manual'::text])`),
+	check("flows_trigger_type_check", sql`trigger_type = ANY (ARRAY['keyword'::text, 'first_inbound_message'::text, 'tag_added'::text, 'manual'::text])`),
 ]);
 
 export const apiKeys = pgTable("api_keys", {

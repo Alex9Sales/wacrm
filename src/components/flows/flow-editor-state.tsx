@@ -55,6 +55,7 @@ import type {
   FlowRow,
   FlowChannelOption,
   FlowMemberOption,
+  FlowTagOption,
 } from "@/lib/flows/types";
 import { NODE_META, slugify, type BuilderNode, type NodeType } from "./shared";
 
@@ -65,7 +66,7 @@ import { NODE_META, slugify, type BuilderNode, type NodeType } from "./shared";
 export interface BuilderState {
   name: string;
   description: string;
-  trigger_type: "keyword" | "first_inbound_message" | "manual";
+  trigger_type: "keyword" | "first_inbound_message" | "tag_added" | "manual";
   trigger_config: Record<string, unknown>;
   entry_node_id: string | null;
   /** null = todos os canais (legado); id = fluxo preso a esse canal. */
@@ -83,6 +84,9 @@ export interface FlowEditorContextValue {
 
   /** Account's members for the handoff "Atribuir a" picker (names only). */
   members: FlowMemberOption[];
+
+  /** Account's tags for the tag_added trigger + set_tag pickers. */
+  tags: FlowTagOption[];
 
   // Authored state
   state: BuilderState;
@@ -249,6 +253,7 @@ interface ProviderProps {
   initialNodes: FlowNodeRow[];
   channels: FlowChannelOption[];
   members: FlowMemberOption[];
+  tags: FlowTagOption[];
   children: ReactNode;
 }
 
@@ -257,6 +262,7 @@ export function FlowEditorProvider({
   initialNodes,
   channels,
   members,
+  tags,
   children,
 }: ProviderProps) {
   const router = useRouter();
@@ -546,6 +552,7 @@ export function FlowEditorProvider({
       flow: initialFlow,
       channels,
       members,
+      tags,
       state,
       setState,
       dirty,
@@ -569,6 +576,7 @@ export function FlowEditorProvider({
       initialFlow,
       channels,
       members,
+      tags,
       state,
       setState,
       dirty,

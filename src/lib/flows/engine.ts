@@ -1202,6 +1202,134 @@ export async function resumeSleepingRuns(
 }
 
 // ============================================================
+// tag_added trigger — event-driven flow start (Fase 2, Etapa 2)
+// ============================================================
+
+/**
+ * Resolve a conversation to send a tag-triggered flow on: the contact's
+ * most-recent conversation, restricted to the flow's channel when it's bound.
+ * Returns null when the contact has no conversation (nothing to message on).
+ */
+async function resolveContactConversation(
+  accountId: string,
+  contactId: string,
+  channelId: string | null,
+): Promise<string | null> {
+  const conds = [
+    eq(conversations.accountId, accountId),
+    eq(conversations.contactId, contactId),
+  ];
+  if (channelId) conds.push(eq(conversations.channelId, channelId));
+  const row = firstOrNull(
+    await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(...conds))
+      .orderBy(desc(conversations.updatedAt))
+      .limit(1),
+  );
+  return row?.id ?? null;
+}
+
+/** Start a run for a contact from an EVENT (no inbound message). Mirrors
+ *  startNewRun's insert/log/advance; the one-run-per-contact unique index
+ *  (active+sleeping) makes a concurrent/duplicate start a safe no-op. */
+async function startRunForContact(
+  flow: FlowRow,
+  contactId: string,
+  conversationId: string,
+  nodes: Map<string, FlowNodeRow>,
+): Promise<boolean> {
+  let run: FlowRunRow;
+  try {
+    run = firstOrThrow(
+      await db
+        .insert(flowRuns)
+        .values({
+          flowId: flow.id,
+          accountId: flow.account_id,
+          userId: flow.user_id,
+          contactId,
+          conversationId,
+          status: "active",
+          currentNodeKey: flow.entry_node_id,
+        })
+        .returning(flowRunSelection),
+    ) as unknown as FlowRunRow;
+  } catch (insErr) {
+    // 23505 → the contact already has a live run; don't stack another.
+    if (isUniqueViolation(insErr)) return false;
+    console.error(
+      "[flows] startRunForContact insert error:",
+      insErr instanceof Error ? insErr.message : insErr,
+    );
+    return false;
+  }
+  await logEvent(run.id, "started", flow.entry_node_id, {
+    flow_id: flow.id,
+    trigger_type: flow.trigger_type,
+  });
+  try {
+    await db.execute(sql`SELECT increment_flow_execution_count(${flow.id})`);
+  } catch {
+    // Non-fatal — the counter is cosmetic.
+  }
+  await advanceFromNodeKey(run, flow.entry_node_id!, nodes);
+  return true;
+}
+
+/**
+ * Fire tag_added flows for a contact. Called (best-effort) wherever a tag is
+ * added to a contact — inbox/contacts UI, public API, automations, and the
+ * set_tag node. Starts the first matching flow that has a conversation to
+ * send on; the contact's one-live-run rule keeps this to a single flow.
+ */
+export async function dispatchTagAddedToFlows(
+  accountId: string,
+  contactId: string,
+  tagId: string,
+): Promise<void> {
+  try {
+    const all = (await db
+      .select(flowSelection)
+      .from(flowsTable)
+      .where(
+        and(
+          eq(flowsTable.accountId, accountId),
+          eq(flowsTable.status, "active"),
+        ),
+      )) as unknown as FlowRow[];
+    const matches = all.filter(
+      (f) =>
+        f.trigger_type === "tag_added" &&
+        f.entry_node_id &&
+        (f.trigger_config as { tag_id?: string })?.tag_id === tagId,
+    );
+    if (matches.length === 0) return;
+
+    for (const flow of matches) {
+      const conversationId = await resolveContactConversation(
+        accountId,
+        contactId,
+        flow.channel_id,
+      );
+      // No conversation → can't send WhatsApp; try the next matching flow.
+      if (!conversationId) continue;
+      const nodes = await loadAllNodes(flow.id);
+      await startRunForContact(flow, contactId, conversationId, nodes);
+      // The contact can only hold one live run, so stop after the first
+      // flow that had a conversation to start on.
+      break;
+    }
+  } catch (err) {
+    console.error(
+      "[flows] dispatchTagAddedToFlows error:",
+      err instanceof Error ? err.message : err,
+    );
+  }
+}
+
+// ============================================================
 // Public entry point — the webhook calls this on every inbound.
 // ============================================================
 

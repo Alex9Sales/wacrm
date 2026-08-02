@@ -32,6 +32,7 @@ import {
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { and, asc, count, eq, gte, isNull, sql } from 'drizzle-orm'
 import { engineSendText, engineSendTemplate } from './meta-send'
+import { dispatchTagAddedToFlows } from '@/lib/flows/engine'
 
 // ------------------------------------------------------------
 // Row mappings — the engine's public types (src/types) are
@@ -458,10 +459,21 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
       // runAutomationsForTrigger.
       const cfg = step.step_config as TagStepConfig
       if (!args.contactId || !cfg.tag_id) throw new Error('add_tag needs contact + tag_id')
-      await db
+      const inserted = await db
         .insert(contactTags)
         .values({ contactId: args.contactId, tagId: cfg.tag_id })
         .onConflictDoNothing({ target: [contactTags.contactId, contactTags.tagId] })
+        .returning({ contactId: contactTags.contactId })
+      // Genuine new add → fire tag_added flows (best-effort; never blocks).
+      if (inserted.length > 0) {
+        void dispatchTagAddedToFlows(
+          args.automation.account_id,
+          args.contactId,
+          cfg.tag_id,
+        ).catch((err) =>
+          console.error('[flows] tag_added dispatch failed:', err),
+        )
+      }
       return `tag ${cfg.tag_id} added`
     }
 

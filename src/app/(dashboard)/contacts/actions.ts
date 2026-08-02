@@ -20,6 +20,7 @@ import {
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
+import { dispatchTagAddedToFlows } from '@/lib/flows/engine'
 import {
   sanitizePhoneForMeta,
   isValidE164,
@@ -635,10 +636,17 @@ export async function toggleContactTag(
     if (!tagOwned) return { error: 'Tag not found' }
 
     if (add) {
-      await db
+      const inserted = await db
         .insert(contactTags)
         .values({ contactId, tagId })
         .onConflictDoNothing({ target: [contactTags.contactId, contactTags.tagId] })
+        .returning({ contactId: contactTags.contactId })
+      // Genuine new add → fire tag_added flows (best-effort).
+      if (inserted.length > 0) {
+        void dispatchTagAddedToFlows(ctx.accountId, contactId, tagId).catch(
+          (err) => console.error('[flows] tag_added dispatch failed:', err),
+        )
+      }
     } else {
       await db
         .delete(contactTags)

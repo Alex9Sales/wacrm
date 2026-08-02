@@ -257,6 +257,9 @@ function KeywordsInput({
 // Sentinel value for the "todos os canais" option — Radix Select can't use
 // an empty string as an item value, so we map this to channel_id=null.
 const ALL_CHANNELS = '__all__';
+// Sentinel for the "no tag chosen yet" option in the tag_added trigger picker
+// (Base UI Select forbids an empty-string item value).
+const TAG_NONE = '__none__';
 
 const TRIGGER_PANEL_KEY = 'wacrm.flowEditor.trigger.open';
 
@@ -269,7 +272,7 @@ const TRIGGER_PANEL_KEY = 'wacrm.flowEditor.trigger.open';
 // choice persists per-browser; a compact summary + error count show while
 // collapsed so nothing is hidden.
 export function TriggerPanel() {
-  const { state, setState, channels, issues } = useFlowEditor();
+  const { state, setState, channels, tags, issues } = useFlowEditor();
   const triggerIssues = issues.filter((i) => i.scope === 'trigger');
 
   // Read the persisted choice in the initializer (not an effect). Safe: the
@@ -311,6 +314,13 @@ export function TriggerPanel() {
   const keywords = Array.isArray(state.trigger_config.keywords)
     ? (state.trigger_config.keywords as string[])
     : [];
+  const tagId =
+    typeof state.trigger_config.tag_id === 'string'
+      ? state.trigger_config.tag_id
+      : '';
+  const selectedTagLabel = !tagId
+    ? 'Escolha uma etiqueta…'
+    : (tags.find((t) => t.id === tagId)?.name ?? 'Etiqueta removida');
   const triggerSummary =
     state.trigger_type === 'keyword'
       ? keywords.length
@@ -318,7 +328,9 @@ export function TriggerPanel() {
         : 'sem palavra-chave'
       : state.trigger_type === 'first_inbound_message'
         ? 'Primeira mensagem do cliente'
-        : 'Manual';
+        : state.trigger_type === 'tag_added'
+          ? `Etiqueta: ${selectedTagLabel}`
+          : 'Manual';
 
   return (
     <section className="border-border bg-card rounded-lg border">
@@ -362,7 +374,11 @@ export function TriggerPanel() {
                 ...s,
                 trigger_type: v as BuilderState['trigger_type'],
                 trigger_config:
-                  v === 'keyword' ? { keywords: [] } : v === 'manual' ? {} : {},
+                  v === 'keyword'
+                    ? { keywords: [] }
+                    : v === 'tag_added'
+                      ? { tag_id: '' }
+                      : {},
               }))
             }
           >
@@ -375,6 +391,9 @@ export function TriggerPanel() {
               </SelectItem>
               <SelectItem value="first_inbound_message">
                 Primeira mensagem recebida do cliente
+              </SelectItem>
+              <SelectItem value="tag_added">
+                Uma etiqueta é adicionada ao contato
               </SelectItem>
               <SelectItem value="manual">
                 Apenas manual (sem acionamento automático)
@@ -437,6 +456,46 @@ export function TriggerPanel() {
                 }))
               }
             />
+          </div>
+        )}
+        {state.trigger_type === 'tag_added' && (
+          <div>
+            <label className="text-muted-foreground mb-1 block text-xs">
+              Etiqueta que dispara o fluxo
+            </label>
+            <Select
+              value={tagId || TAG_NONE}
+              onValueChange={(v) =>
+                setState((s) => ({
+                  ...s,
+                  trigger_config: {
+                    ...s.trigger_config,
+                    tag_id: v === TAG_NONE ? '' : v,
+                  },
+                }))
+              }
+            >
+              <SelectTrigger className="bg-muted">
+                <span className="truncate">{selectedTagLabel}</span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={TAG_NONE}>Escolha uma etiqueta…</SelectItem>
+                {tags.map((t) => (
+                  <SelectItem key={t.id} value={t.id}>
+                    {t.name}
+                  </SelectItem>
+                ))}
+                {tagId && !tags.some((t) => t.id === tagId) && (
+                  <SelectItem value={tagId}>
+                    Etiqueta removida — escolha outra
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+            <p className="text-muted-foreground mt-1 text-[11px]">
+              Quando essa etiqueta for adicionada a um contato, o fluxo inicia
+              na conversa mais recente dele.
+            </p>
           </div>
         )}
       </div>

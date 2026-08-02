@@ -11,6 +11,7 @@ import type {
   FlowNodeRow,
   FlowChannelOption,
   FlowMemberOption,
+  FlowTagOption,
 } from "@/lib/flows/types";
 
 /**
@@ -33,6 +34,7 @@ export default function FlowEditorPage() {
   const [nodes, setNodes] = useState<FlowNodeRow[]>([]);
   const [channels, setChannels] = useState<FlowChannelOption[]>([]);
   const [members, setMembers] = useState<FlowMemberOption[]>([]);
+  const [tags, setTags] = useState<FlowTagOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
@@ -52,12 +54,14 @@ export default function FlowEditorPage() {
           nodes: FlowNodeRow[];
           channels?: FlowChannelOption[];
           members?: FlowMemberOption[];
+          tags?: FlowTagOption[];
         };
         if (!cancelled) {
           setFlow(json.flow);
           setNodes(json.nodes ?? []);
           setChannels(json.channels ?? []);
           setMembers(json.members ?? []);
+          setTags(json.tags ?? []);
         }
       } catch (err) {
         if (!cancelled) {
@@ -101,6 +105,7 @@ export default function FlowEditorPage() {
       initialNodes={nodes}
       channels={channels}
       members={members}
+      tags={tags}
     />
   );
 }

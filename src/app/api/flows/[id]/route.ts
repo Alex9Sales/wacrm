@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { and, asc, eq } from 'drizzle-orm'
-import { db, flows, flowNodes, channels, member, user } from '@/db'
+import { db, flows, flowNodes, channels, member, user, tags } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 
@@ -71,7 +71,7 @@ export async function GET(
     const { id } = await context.params
     const ctx = await getCurrentAccount()
 
-    const [flow, nodes, channelList, memberList] = await Promise.all([
+    const [flow, nodes, channelList, memberList, tagList] = await Promise.all([
       db
         .select(flowColumns)
         .from(flows)
@@ -108,6 +108,12 @@ export async function GET(
         .innerJoin(user, eq(member.userId, user.id))
         .where(eq(member.organizationId, ctx.accountId))
         .orderBy(asc(user.name)),
+      // Tags for the tag_added trigger picker + set_tag node.
+      db
+        .select({ id: tags.id, name: tags.name, color: tags.color })
+        .from(tags)
+        .where(eq(tags.accountId, ctx.accountId))
+        .orderBy(asc(tags.name)),
     ])
     if (!flow) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
@@ -117,6 +123,7 @@ export async function GET(
       nodes,
       channels: channelList,
       members: memberList,
+      tags: tagList,
     })
   } catch (err) {
     return toErrorResponse(err)
@@ -126,7 +133,7 @@ export async function GET(
 interface PutBody {
   name?: string
   description?: string | null
-  trigger_type?: 'keyword' | 'first_inbound_message' | 'manual'
+  trigger_type?: 'keyword' | 'first_inbound_message' | 'tag_added' | 'manual'
   trigger_config?: Record<string, unknown>
   entry_node_id?: string | null
   /** Optional channel binding. null = todos os canais. */

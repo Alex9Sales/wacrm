@@ -42,6 +42,7 @@ import {
 } from '@/lib/sectors/access'
 import { formatConversationPreview } from '@/lib/inbox/preview'
 import { loadChannel } from '@/lib/channels/channels'
+import { dispatchTagAddedToFlows } from '@/lib/flows/engine'
 import { getProvider } from '@/lib/channels/registry'
 import { groupJidDigits } from '@/lib/whatsapp/group'
 import type {
@@ -790,12 +791,20 @@ export async function addContactTag(
       .limit(1),
   )
   if (!contact || !tag) return
-  await db
+  const inserted = await db
     .insert(contactTags)
     .values({ contactId, tagId })
     .onConflictDoNothing({
       target: [contactTags.contactId, contactTags.tagId],
     })
+    .returning({ contactId: contactTags.contactId })
+  // Fire tag_added flows only on a GENUINE new add (onConflict returns nothing
+  // when the tag was already there). Best-effort — never block the tagging.
+  if (inserted.length > 0) {
+    void dispatchTagAddedToFlows(ctx.accountId, contactId, tagId).catch((err) =>
+      console.error('[flows] tag_added dispatch failed:', err),
+    )
+  }
 }
 
 /** Remove a tag from a contact (quick toggle). Account-scoped. */

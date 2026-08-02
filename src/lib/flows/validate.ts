@@ -37,7 +37,7 @@ export interface ValidationIssue {
 
 interface FlowInput {
   name: string;
-  trigger_type: "keyword" | "first_inbound_message" | "manual";
+  trigger_type: "keyword" | "first_inbound_message" | "tag_added" | "manual";
   trigger_config: Record<string, unknown>;
   entry_node_id: string | null;
 }
@@ -171,6 +171,19 @@ function validateTrigger(
           message: `${blanks} ${blanks === 1 ? "palavra-chave está" : "palavras-chave estão"} em branco — não casam com nada.`,
         });
       }
+    }
+  }
+
+  if (trigger_type === "tag_added") {
+    const tagId =
+      typeof trigger_config.tag_id === "string" ? trigger_config.tag_id : "";
+    if (!tagId.trim()) {
+      issues.push({
+        severity: "error",
+        scope: "trigger",
+        field: "trigger_config.tag_id",
+        message: "Escolha a etiqueta que dispara o fluxo.",
+      });
     }
   }
   // first_inbound_message / manual have no config; nothing to validate.

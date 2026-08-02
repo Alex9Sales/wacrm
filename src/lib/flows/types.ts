@@ -234,9 +234,21 @@ export interface KeywordTriggerConfig {
 // the no-empty-object-type lint rule.
 export type FirstInboundTriggerConfig = Record<string, never>;
 
+/**
+ * Fires when a specific tag is ADDED to a contact (via the inbox/contacts UI,
+ * the public API, an automation, or a flow's set_tag node). Event trigger —
+ * not tied to an inbound message. The flow runs on the contact's most-recent
+ * conversation (respecting the flow's channel binding when set).
+ */
+export interface TagAddedTriggerConfig {
+  /** The tag UUID whose addition starts this flow. */
+  tag_id: string;
+}
+
 export type FlowTriggerConfig =
   | { trigger_type: "keyword"; config: KeywordTriggerConfig }
   | { trigger_type: "first_inbound_message"; config: FirstInboundTriggerConfig }
+  | { trigger_type: "tag_added"; config: TagAddedTriggerConfig }
   | { trigger_type: "manual"; config: Record<string, never> };
 
 // ============================================================
@@ -254,7 +266,7 @@ export interface FlowRow {
   name: string;
   description: string | null;
   status: "draft" | "active" | "archived";
-  trigger_type: "keyword" | "first_inbound_message" | "manual";
+  trigger_type: "keyword" | "first_inbound_message" | "tag_added" | "manual";
   trigger_config: KeywordTriggerConfig | FirstInboundTriggerConfig | Record<string, unknown>;
   entry_node_id: string | null;
   /** Optional channel binding. null = todos os canais da conta (legado);
@@ -342,6 +354,13 @@ export interface FlowMemberOption {
   user_id: string;
   full_name: string;
   avatar_url: string | null;
+}
+
+/** Minimal tag shape the tag_added trigger + set_tag node pickers need. */
+export interface FlowTagOption {
+  id: string;
+  name: string;
+  color: string | null;
 }
 
 // ============================================================

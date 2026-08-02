@@ -60,7 +60,7 @@ export async function POST(request: Request) {
       | {
           name?: string
           description?: string | null
-          trigger_type?: 'keyword' | 'first_inbound_message' | 'manual'
+          trigger_type?: 'keyword' | 'first_inbound_message' | 'tag_added' | 'manual'
           trigger_config?: Record<string, unknown>
           /** Optional channel binding (null/omitted = todos os canais). */
           channel_id?: string | null
