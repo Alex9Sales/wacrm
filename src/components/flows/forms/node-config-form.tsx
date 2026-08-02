@@ -196,73 +196,15 @@ export function NodeConfigForm({
         />
       );
 
-    case "delay": {
-      const dcfg = cfg as {
-        duration?: { value?: number; unit?: "minutes" | "hours" | "days" };
-        next_node_key?: string;
-      };
-      const value =
-        typeof dcfg.duration?.value === "number" ? dcfg.duration.value : 1;
-      const unit = dcfg.duration?.unit ?? "days";
-      const unitLabel =
-        unit === "days" ? "Dias" : unit === "hours" ? "Horas" : "Minutos";
+    case "delay":
       return (
-        <div className="flex flex-col gap-3">
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="mb-1 block text-xs text-muted-foreground">
-                Esperar
-              </label>
-              <Input
-                type="number"
-                min={0}
-                value={String(value)}
-                onChange={(e) =>
-                  onUpdateConfig({
-                    duration: {
-                      value: Math.max(0, Number(e.target.value) || 0),
-                      unit,
-                    },
-                  })
-                }
-                className="bg-muted"
-              />
-            </div>
-            <div>
-              <label className="mb-1 block text-xs text-muted-foreground">
-                Unidade
-              </label>
-              <Select
-                value={unit}
-                onValueChange={(v) =>
-                  onUpdateConfig({ duration: { value, unit: v } })
-                }
-              >
-                <SelectTrigger className="bg-muted">
-                  <span className="truncate">{unitLabel}</span>
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="minutes">Minutos</SelectItem>
-                  <SelectItem value="hours">Horas</SelectItem>
-                  <SelectItem value="days">Dias</SelectItem>
-                </SelectContent>
-              </Select>
-            </div>
-          </div>
-          <p className="text-[11px] text-muted-foreground">
-            O fluxo pausa e continua sozinho após esse tempo (sobrevive a
-            reinício do servidor).
-          </p>
-          <NextNodeRow
-            value={dcfg.next_node_key ?? ""}
-            allNodes={allNodes}
-            currentKey={node.node_key}
-            onChange={(v) => onUpdateConfig({ next_node_key: v })}
-            label="Depois de esperar, ir para"
-          />
-        </div>
+        <DelayForm
+          cfg={cfg as DelayCfg}
+          allNodes={allNodes}
+          currentKey={node.node_key}
+          onUpdateConfig={onUpdateConfig}
+        />
       );
-    }
 
     case "jump": {
       const jcfg = cfg as { target_node_key?: string };
@@ -737,6 +679,251 @@ function SendListForm({
         )}
       </div>
     </>
+  );
+}
+
+// ============================================================
+// delay ("Esperar" + optional Atraso Inteligente / business hours)
+// ============================================================
+
+interface DelayCfg {
+  duration?: { value?: number; unit?: "minutes" | "hours" | "days" };
+  next_node_key?: string;
+  business_hours?: {
+    timezone?: string;
+    start?: string;
+    end?: string;
+    days?: number[];
+  };
+}
+
+const BH_TIMEZONES: { value: string; label: string }[] = [
+  { value: "America/Sao_Paulo", label: "Brasília (GMT-3)" },
+  { value: "America/Fortaleza", label: "Fortaleza / NE (GMT-3)" },
+  { value: "America/Manaus", label: "Manaus / AM (GMT-4)" },
+  { value: "America/Cuiaba", label: "Cuiabá / MT (GMT-4)" },
+  { value: "America/Rio_Branco", label: "Rio Branco / AC (GMT-5)" },
+  { value: "America/Noronha", label: "F. de Noronha (GMT-2)" },
+];
+
+const BH_DAYS: { value: number; label: string }[] = [
+  { value: 0, label: "Dom" },
+  { value: 1, label: "Seg" },
+  { value: 2, label: "Ter" },
+  { value: 3, label: "Qua" },
+  { value: 4, label: "Qui" },
+  { value: 5, label: "Sex" },
+  { value: 6, label: "Sáb" },
+];
+
+const BH_DEFAULT = {
+  timezone: "America/Sao_Paulo",
+  start: "09:00",
+  end: "18:00",
+  days: [1, 2, 3, 4, 5],
+};
+
+function DelayForm({
+  cfg,
+  allNodes,
+  currentKey,
+  onUpdateConfig,
+}: {
+  cfg: DelayCfg;
+  allNodes: BuilderNode[];
+  currentKey: string;
+  onUpdateConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const value =
+    typeof cfg.duration?.value === "number" ? cfg.duration.value : 1;
+  const unit = cfg.duration?.unit ?? "days";
+  const unitLabel =
+    unit === "days" ? "Dias" : unit === "hours" ? "Horas" : "Minutos";
+  const bh = cfg.business_hours;
+  const bhOn = !!bh;
+  const tzLabel =
+    BH_TIMEZONES.find((t) => t.value === bh?.timezone)?.label ??
+    bh?.timezone ??
+    "";
+
+  const toggleDay = (d: number) => {
+    const cur = Array.isArray(bh?.days) ? bh.days : [];
+    const next = cur.includes(d)
+      ? cur.filter((x) => x !== d)
+      : [...cur, d].sort((a, b) => a - b);
+    onUpdateConfig({ business_hours: { ...(bh ?? BH_DEFAULT), days: next } });
+  };
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground">
+            Esperar
+          </label>
+          <Input
+            type="number"
+            min={0}
+            value={String(value)}
+            onChange={(e) =>
+              onUpdateConfig({
+                duration: {
+                  value: Math.max(0, Number(e.target.value) || 0),
+                  unit,
+                },
+              })
+            }
+            className="bg-muted"
+          />
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground">
+            Unidade
+          </label>
+          <Select
+            value={unit}
+            onValueChange={(v) =>
+              onUpdateConfig({ duration: { value, unit: v } })
+            }
+          >
+            <SelectTrigger className="bg-muted">
+              <span className="truncate">{unitLabel}</span>
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value="minutes">Minutos</SelectItem>
+              <SelectItem value="hours">Horas</SelectItem>
+              <SelectItem value="days">Dias</SelectItem>
+            </SelectContent>
+          </Select>
+        </div>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        O fluxo pausa e continua sozinho após esse tempo (sobrevive a reinício
+        do servidor).
+      </p>
+
+      {/* Atraso Inteligente — optional daily business-hours window. */}
+      <div className="rounded-md border border-border bg-muted/40 p-3">
+        <label className="flex items-center gap-2 text-xs font-medium text-foreground">
+          <input
+            type="checkbox"
+            checked={bhOn}
+            onChange={(e) =>
+              onUpdateConfig({
+                business_hours: e.target.checked ? BH_DEFAULT : undefined,
+              })
+            }
+            className="h-3.5 w-3.5 accent-primary"
+          />
+          Só entregar em horário comercial (Atraso Inteligente)
+        </label>
+        {bhOn && (
+          <div className="mt-3 flex flex-col gap-3">
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="mb-1 block text-[10px] text-muted-foreground">
+                  Início
+                </label>
+                <Input
+                  type="time"
+                  value={bh?.start ?? "09:00"}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      business_hours: {
+                        ...(bh ?? BH_DEFAULT),
+                        start: e.target.value,
+                      },
+                    })
+                  }
+                  className="bg-muted"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] text-muted-foreground">
+                  Fim
+                </label>
+                <Input
+                  type="time"
+                  value={bh?.end ?? "18:00"}
+                  onChange={(e) =>
+                    onUpdateConfig({
+                      business_hours: {
+                        ...(bh ?? BH_DEFAULT),
+                        end: e.target.value,
+                      },
+                    })
+                  }
+                  className="bg-muted"
+                />
+              </div>
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] text-muted-foreground">
+                Fuso horário
+              </label>
+              <Select
+                value={bh?.timezone ?? "America/Sao_Paulo"}
+                onValueChange={(v) =>
+                  onUpdateConfig({
+                    business_hours: { ...(bh ?? BH_DEFAULT), timezone: v },
+                  })
+                }
+              >
+                <SelectTrigger className="bg-muted">
+                  <span className="truncate">{tzLabel}</span>
+                </SelectTrigger>
+                <SelectContent>
+                  {BH_TIMEZONES.map((t) => (
+                    <SelectItem key={t.value} value={t.value}>
+                      {t.label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] text-muted-foreground">
+                Dias da semana
+              </label>
+              <div className="flex flex-wrap gap-1.5">
+                {BH_DAYS.map((d) => {
+                  const on =
+                    Array.isArray(bh?.days) && bh.days.includes(d.value);
+                  return (
+                    <button
+                      key={d.value}
+                      type="button"
+                      onClick={() => toggleDay(d.value)}
+                      className={cn(
+                        "rounded-md border px-2 py-1 text-[11px] transition-colors",
+                        on
+                          ? "border-primary bg-primary/15 text-foreground"
+                          : "border-border bg-muted text-muted-foreground hover:text-foreground",
+                      )}
+                    >
+                      {d.label}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+            <p className="text-[10px] text-muted-foreground">
+              Depois de esperar, se cair fora da janela, o fluxo segura até a
+              próxima abertura. Ex.: uma espera que venceria às 3h da manhã só
+              continua às {bh?.start ?? "09:00"}.
+            </p>
+          </div>
+        )}
+      </div>
+
+      <NextNodeRow
+        value={cfg.next_node_key ?? ""}
+        allNodes={allNodes}
+        currentKey={currentKey}
+        onChange={(v) => onUpdateConfig({ next_node_key: v })}
+        label="Depois de esperar, ir para"
+      />
+    </div>
   );
 }
 

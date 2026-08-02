@@ -190,6 +190,23 @@ export interface DelayNodeConfig {
   };
   /** Node to advance to once the delay elapses. */
   next_node_key: string;
+  /**
+   * Optional "smart delay" (ManyChat's Atraso Inteligente): after the
+   * duration elapses, hold the resume until it lands inside a daily
+   * business-hours window. E.g. a delay that would wake at 3am rolls
+   * forward to the next window opening — so drip messages never arrive
+   * in the middle of the night. Omit for a plain wall-clock delay.
+   */
+  business_hours?: {
+    /** IANA timezone, e.g. "America/Sao_Paulo". */
+    timezone: string;
+    /** Window open, "HH:MM" 24h (local to `timezone`). */
+    start: string;
+    /** Window close, "HH:MM" 24h (local to `timezone`). */
+    end: string;
+    /** Allowed weekdays: 0=Sun … 6=Sat. Empty = never (treated as off). */
+    days: number[];
+  };
 }
 
 /**

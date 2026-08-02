@@ -460,7 +460,11 @@ export function summarizeNode(node: BuilderNode): string | null {
             : value === 1
               ? 'minuto'
               : 'minutos';
-      return `Esperar ${value} ${unitLabel}`;
+      const hasBusinessHours =
+        !!cfg.business_hours &&
+        typeof cfg.business_hours === 'object' &&
+        Array.isArray((cfg.business_hours as { days?: unknown }).days);
+      return `Esperar ${value} ${unitLabel}${hasBusinessHours ? ' · hor. comercial' : ''}`;
     }
     case 'jump': {
       const target =

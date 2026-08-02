@@ -718,6 +718,12 @@ function validateNode(
       const cfg = node.config as {
         duration?: { value?: number; unit?: string };
         next_node_key?: string;
+        business_hours?: {
+          timezone?: string;
+          start?: string;
+          end?: string;
+          days?: number[];
+        };
       };
       const value = cfg.duration?.value;
       if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
@@ -757,6 +763,58 @@ function validateNode(
           field: "next_node_key",
           message: `A espera aponta para um nó inexistente "${cfg.next_node_key}".`,
         });
+      }
+      // Optional business-hours window ("Atraso Inteligente"). Only
+      // validated when present (the toggle is off by default).
+      const bh = cfg.business_hours;
+      if (bh) {
+        const hhmm = /^\d{1,2}:\d{2}$/;
+        const toMin = (s?: string) => {
+          if (!s || !hhmm.test(s)) return null;
+          const [h, m] = s.split(":").map(Number);
+          if (h < 0 || h > 23 || m < 0 || m > 59) return null;
+          return h * 60 + m;
+        };
+        const sMin = toMin(bh.start);
+        const eMin = toMin(bh.end);
+        if (sMin === null || eMin === null) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: "business_hours",
+            message:
+              "O horário comercial precisa de início e fim válidos (HH:MM).",
+          });
+        } else if (eMin <= sMin) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: "business_hours.end",
+            message:
+              "O fim do horário comercial precisa ser depois do início (janelas que viram a noite não são suportadas).",
+          });
+        }
+        const days = Array.isArray(bh.days) ? bh.days : [];
+        if (days.length === 0) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: "business_hours.days",
+            message: "Escolha pelo menos um dia da semana no horário comercial.",
+          });
+        }
+        if (!bh.timezone?.trim()) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: "business_hours.timezone",
+            message: "Escolha o fuso horário do horário comercial.",
+          });
+        }
       }
       break;
     }

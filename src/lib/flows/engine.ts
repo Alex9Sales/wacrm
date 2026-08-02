@@ -1043,7 +1043,7 @@ async function advanceFromNodeKey(
     }
     if (node.node_type === "delay") {
       const cfg = node.config as unknown as DelayNodeConfig;
-      const resumeAtIso = computeResumeAtIso(cfg.duration);
+      const resumeAtIso = computeResumeAtIso(cfg);
       // Persist WHERE to resume (the delay's next node) + WHEN, then sleep.
       // The scheduler worker (resumeSleepingRuns) wakes it once due — so a
       // delay of days survives restarts. Optimistic on current_node_key so a
@@ -1157,13 +1157,141 @@ async function advanceCurrentNodeKey(
   }
 }
 
-/** Wall-clock ISO of when a delay should wake. Clamps negatives to now. */
-function computeResumeAtIso(duration: DelayNodeConfig["duration"]): string {
+/**
+ * Wall-clock ISO of when a delay should wake. Clamps negatives to now.
+ * When the node has `business_hours`, the base (now + duration) is then
+ * rolled forward to the next moment inside the daily window — so a drip
+ * message that would land at 3am waits until the window opens.
+ */
+function computeResumeAtIso(cfg: DelayNodeConfig): string {
+  const duration = cfg?.duration;
   const value = Number(duration?.value);
   const unit = duration?.unit ?? "minutes";
   const perUnitSeconds = unit === "days" ? 86400 : unit === "hours" ? 3600 : 60;
-  const ms = Math.max(0, Number.isFinite(value) ? value : 0) * perUnitSeconds * 1000;
-  return new Date(Date.now() + ms).toISOString();
+  const ms =
+    Math.max(0, Number.isFinite(value) ? value : 0) * perUnitSeconds * 1000;
+  const base = new Date(Date.now() + ms);
+  const bh = cfg?.business_hours;
+  if (!bh) return base.toISOString();
+  return rollIntoBusinessHours(base, bh).toISOString();
+}
+
+// ---- business-hours ("Atraso Inteligente") helpers ----
+
+const DOW_MAP: Record<string, number> = {
+  Sun: 0,
+  Mon: 1,
+  Tue: 2,
+  Wed: 3,
+  Thu: 4,
+  Fri: 5,
+  Sat: 6,
+};
+
+/** Local calendar parts of an instant, as seen in `tz`. */
+function getZonedParts(
+  date: Date,
+  tz: string,
+): {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  dow: number;
+} {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: tz,
+    hourCycle: "h23",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    weekday: "short",
+  }).formatToParts(date);
+  const m: Record<string, string> = {};
+  for (const p of parts) m[p.type] = p.value;
+  return {
+    year: Number(m.year),
+    month: Number(m.month),
+    day: Number(m.day),
+    hour: Number(m.hour),
+    minute: Number(m.minute),
+    dow: DOW_MAP[m.weekday] ?? 0,
+  };
+}
+
+/**
+ * UTC instant for a given wall-clock (year/month/day + minutes-of-day) in
+ * `tz`. Uses the tz offset at that instant, so it's DST-correct except
+ * within the ~1h transition overlap — fine for scheduling a drip resume.
+ */
+function zonedWallToUtc(
+  year: number,
+  month: number,
+  day: number,
+  minutesOfDay: number,
+  tz: string,
+): Date {
+  const h = Math.floor(minutesOfDay / 60);
+  const mi = minutesOfDay % 60;
+  const asUtc = Date.UTC(year, month - 1, day, h, mi, 0);
+  // Offset between the tz wall-clock and UTC at (approximately) this instant.
+  const p = getZonedParts(new Date(asUtc), tz);
+  const wallAsUtc = Date.UTC(p.year, p.month - 1, p.day, p.hour, p.minute, 0);
+  const offset = wallAsUtc - asUtc;
+  return new Date(asUtc - offset);
+}
+
+/** "HH:MM" → minutes-of-day, or null when malformed / out of range. */
+function parseHHMM(s: string | undefined): number | null {
+  const m = /^(\d{1,2}):(\d{2})$/.exec((s ?? "").trim());
+  if (!m) return null;
+  const h = Number(m[1]);
+  const mi = Number(m[2]);
+  if (h < 0 || h > 23 || mi < 0 || mi > 59) return null;
+  return h * 60 + mi;
+}
+
+/**
+ * Roll `base` forward to the next instant inside the business-hours
+ * window. Fails open (returns `base` unchanged) for a degenerate config
+ * — invalid times, end ≤ start (no overnight windows), or no days — so a
+ * misconfigured window never traps a run.
+ */
+export function rollIntoBusinessHours(
+  base: Date,
+  bh: NonNullable<DelayNodeConfig["business_hours"]>,
+): Date {
+  const tz = bh.timezone || "America/Sao_Paulo";
+  const sMin = parseHHMM(bh.start);
+  const eMin = parseHHMM(bh.end);
+  const days = Array.isArray(bh.days)
+    ? bh.days.filter((d) => Number.isInteger(d) && d >= 0 && d <= 6)
+    : [];
+  if (sMin === null || eMin === null || eMin <= sMin || days.length === 0) {
+    return base;
+  }
+  let cursor = base;
+  // At most 21 hops (3 weeks) — a safety cap; valid configs converge in ≤7.
+  for (let i = 0; i < 21; i += 1) {
+    const p = getZonedParts(cursor, tz);
+    const localMin = p.hour * 60 + p.minute;
+    const dayOk = days.includes(p.dow);
+    if (dayOk && localMin >= sMin && localMin < eMin) {
+      return cursor; // already inside a window
+    }
+    if (dayOk && localMin < sMin) {
+      return zonedWallToUtc(p.year, p.month, p.day, sMin, tz); // opens later today
+    }
+    // Day not allowed, or today's window already closed → jump to the
+    // start of the next calendar day and re-evaluate. Anchoring on sMin
+    // then +24h side-steps month/DST rollover; the loop self-corrects.
+    const anchor = zonedWallToUtc(p.year, p.month, p.day, sMin, tz);
+    cursor = new Date(anchor.getTime() + 24 * 3600 * 1000);
+  }
+  return base;
 }
 
 /**

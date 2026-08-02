@@ -7,6 +7,7 @@ import {
   isSuspending,
   isTerminal,
   evaluateConditionPredicate,
+  rollIntoBusinessHours,
 } from "./engine";
 
 describe("matchReplyId", () => {
@@ -381,5 +382,66 @@ describe("evaluateConditionPredicate", () => {
         configValue: "anything",
       }),
     ).toBe(false);
+  });
+});
+
+describe("rollIntoBusinessHours (Atraso Inteligente)", () => {
+  // Brazil abolished DST in 2019, so São Paulo is a stable GMT-3 — these
+  // fixed instants stay deterministic across the year.
+  const bh = {
+    timezone: "America/Sao_Paulo",
+    start: "09:00",
+    end: "18:00",
+    days: [1, 2, 3, 4, 5], // Mon–Fri
+  };
+
+  it("keeps an instant already inside the window", () => {
+    // Wed 2024-06-05 14:00 local = 17:00Z
+    const base = new Date("2024-06-05T17:00:00.000Z");
+    expect(rollIntoBusinessHours(base, bh).toISOString()).toBe(
+      "2024-06-05T17:00:00.000Z",
+    );
+  });
+
+  it("rolls a pre-dawn resume to the window opening the same day", () => {
+    // Wed 03:00 local (06:00Z) → 09:00 local (12:00Z)
+    const base = new Date("2024-06-05T06:00:00.000Z");
+    expect(rollIntoBusinessHours(base, bh).toISOString()).toBe(
+      "2024-06-05T12:00:00.000Z",
+    );
+  });
+
+  it("rolls a post-close resume to the next day's opening", () => {
+    // Wed 20:00 local (23:00Z) → Thu 09:00 local (2024-06-06 12:00Z)
+    const base = new Date("2024-06-05T23:00:00.000Z");
+    expect(rollIntoBusinessHours(base, bh).toISOString()).toBe(
+      "2024-06-06T12:00:00.000Z",
+    );
+  });
+
+  it("skips the weekend to Monday's opening", () => {
+    // Sat 10:00 local (13:00Z) → Mon 09:00 local (2024-06-10 12:00Z)
+    const base = new Date("2024-06-08T13:00:00.000Z");
+    expect(rollIntoBusinessHours(base, bh).toISOString()).toBe(
+      "2024-06-10T12:00:00.000Z",
+    );
+  });
+
+  it("fails open (returns base unchanged) for a degenerate config", () => {
+    const base = new Date("2024-06-08T13:00:00.000Z");
+    const iso = base.toISOString();
+    expect(rollIntoBusinessHours(base, { ...bh, days: [] }).toISOString()).toBe(
+      iso,
+    );
+    expect(
+      rollIntoBusinessHours(base, {
+        ...bh,
+        start: "18:00",
+        end: "09:00",
+      }).toISOString(),
+    ).toBe(iso);
+    expect(
+      rollIntoBusinessHours(base, { ...bh, start: "nope" }).toISOString(),
+    ).toBe(iso);
   });
 });
