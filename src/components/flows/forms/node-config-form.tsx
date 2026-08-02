@@ -196,6 +196,74 @@ export function NodeConfigForm({
         />
       );
 
+    case "delay": {
+      const dcfg = cfg as {
+        duration?: { value?: number; unit?: "minutes" | "hours" | "days" };
+        next_node_key?: string;
+      };
+      const value =
+        typeof dcfg.duration?.value === "number" ? dcfg.duration.value : 1;
+      const unit = dcfg.duration?.unit ?? "days";
+      const unitLabel =
+        unit === "days" ? "Dias" : unit === "hours" ? "Horas" : "Minutos";
+      return (
+        <div className="flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Esperar
+              </label>
+              <Input
+                type="number"
+                min={0}
+                value={String(value)}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    duration: {
+                      value: Math.max(0, Number(e.target.value) || 0),
+                      unit,
+                    },
+                  })
+                }
+                className="bg-muted"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-xs text-muted-foreground">
+                Unidade
+              </label>
+              <Select
+                value={unit}
+                onValueChange={(v) =>
+                  onUpdateConfig({ duration: { value, unit: v } })
+                }
+              >
+                <SelectTrigger className="bg-muted">
+                  <span className="truncate">{unitLabel}</span>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="minutes">Minutos</SelectItem>
+                  <SelectItem value="hours">Horas</SelectItem>
+                  <SelectItem value="days">Dias</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            O fluxo pausa e continua sozinho após esse tempo (sobrevive a
+            reinício do servidor).
+          </p>
+          <NextNodeRow
+            value={dcfg.next_node_key ?? ""}
+            allNodes={allNodes}
+            currentKey={node.node_key}
+            onChange={(v) => onUpdateConfig({ next_node_key: v })}
+            label="Depois de esperar, ir para"
+          />
+        </div>
+      );
+    }
+
     case "handoff": {
       const hcfg = cfg as {
         note?: string;

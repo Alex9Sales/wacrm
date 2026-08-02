@@ -195,6 +195,8 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
       };
     case "set_tag":
       return { mode: "add", tag_id: "", next_node_key: "" };
+    case "delay":
+      return { duration: { value: 1, unit: "days" }, next_node_key: "" };
     case "handoff":
       return {
         customer_message:

@@ -177,6 +177,21 @@ export interface SetTagNodeConfig {
   next_node_key: string;
 }
 
+/**
+ * Pauses the run for a fixed duration, then auto-advances. The run is
+ * PERSISTED as sleeping (flow_runs.status='sleeping' + resume_at) and a
+ * background worker wakes it when due — so a delay of days survives
+ * restarts. This is the backbone of drip/nurture flows.
+ */
+export interface DelayNodeConfig {
+  duration: {
+    value: number;
+    unit: "minutes" | "hours" | "days";
+  };
+  /** Node to advance to once the delay elapses. */
+  next_node_key: string;
+}
+
 // Terminal nodes carry no config — they just stop the run.
 export type EndNodeConfig = Record<string, never>;
 
@@ -197,6 +212,7 @@ export type FlowNodeConfig =
   | { node_type: "collect_input"; config: CollectInputNodeConfig }
   | { node_type: "condition"; config: ConditionNodeConfig }
   | { node_type: "set_tag"; config: SetTagNodeConfig }
+  | { node_type: "delay"; config: DelayNodeConfig }
   | { node_type: "handoff"; config: HandoffNodeConfig }
   | { node_type: "end"; config: EndNodeConfig };
 
@@ -273,6 +289,7 @@ export interface FlowRunRow {
   conversation_id: string | null;
   status:
     | "active"
+    | "sleeping"
     | "completed"
     | "handed_off"
     | "timed_out"
@@ -383,6 +400,7 @@ export interface DispatchInboundResult {
     | "fallback_fired"
     | "duplicate_inbound_ignored"
     | "suppressed_human_owned"
+    | "sleeping"
     | "no_match";
 }
 

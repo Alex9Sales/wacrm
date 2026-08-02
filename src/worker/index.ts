@@ -47,3 +47,11 @@ import('./session-monitor-worker')
     // eslint-disable-next-line no-console
     console.error('[worker] session-monitor failed to start:', err);
   });
+
+// Flows drip scheduler — resumes flow runs whose `delay` node has elapsed.
+// Dynamic import (same env-ordering reason as above).
+import('./flow-scheduler-worker')
+  .then((m) => m.startFlowSchedulerWorker())
+  .catch((err) => {
+    console.error('[worker] flow-scheduler failed to start:', err);
+  });

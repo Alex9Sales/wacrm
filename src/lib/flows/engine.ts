@@ -45,7 +45,7 @@ import {
   notifications,
 } from "@/db";
 import { firstOrNull, firstOrThrow } from "@/db/helpers";
-import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
+import { and, asc, count, desc, eq, inArray, isNull, lte, sql } from "drizzle-orm";
 import {
   engineSendInteractiveButtons,
   engineSendInteractiveList,
@@ -56,6 +56,7 @@ import { decideFallback, resolveFallbackPolicy } from "./fallback";
 import {
   type CollectInputNodeConfig,
   type ConditionNodeConfig,
+  type DelayNodeConfig,
   type DispatchInboundInput,
   type DispatchInboundResult,
   type FlowNodeRow,
@@ -299,7 +300,10 @@ async function loadActiveRunForContact(
         and(
           eq(flowRuns.accountId, accountId),
           eq(flowRuns.contactId, contactId),
-          eq(flowRuns.status, "active"),
+          // 'sleeping' (mid-drip) counts as a live run too: it must block a
+          // NEW flow and must NOT be advanced as a reply — the caller branches
+          // on `status`.
+          inArray(flowRuns.status, ["active", "sleeping"]),
         ),
       )
       .orderBy(desc(flowRuns.startedAt))
@@ -373,6 +377,7 @@ async function logEvent(
     | "fallback_fired"
     | "handoff"
     | "timeout"
+    | "delay_sleep"
     | "error"
     | "completed",
   node_key: string | null,
@@ -787,7 +792,7 @@ async function advanceFromNodeKey(
   run: FlowRunRow,
   startNodeKey: string,
   nodes: Map<string, FlowNodeRow>,
-): Promise<{ outcome: "advanced" | "completed" | "handed_off" }> {
+): Promise<{ outcome: "advanced" | "completed" | "handed_off" | "sleeping" }> {
   let currentKey: string | null = startNodeKey;
   // Defensive cap — if a flow has a cycle (which the validator
   // SHOULD catch but doesn't yet in v1), we bail rather than loop.
@@ -962,6 +967,31 @@ async function advanceFromNodeKey(
       currentKey = cfg.next_node_key;
       continue;
     }
+    if (node.node_type === "delay") {
+      const cfg = node.config as unknown as DelayNodeConfig;
+      const resumeAtIso = computeResumeAtIso(cfg.duration);
+      // Persist WHERE to resume (the delay's next node) + WHEN, then sleep.
+      // The scheduler worker (resumeSleepingRuns) wakes it once due — so a
+      // delay of days survives restarts. Optimistic on current_node_key so a
+      // racing dispatch doesn't double-sleep.
+      const slept = await sleepRun(
+        run.id,
+        run.current_node_key,
+        cfg.next_node_key,
+        resumeAtIso,
+      );
+      if (!slept) {
+        await logEvent(run.id, "error", node.node_key, {
+          reason: "lost_race_during_sleep",
+        });
+        return { outcome: "advanced" };
+      }
+      await logEvent(run.id, "delay_sleep", node.node_key, {
+        resume_at: resumeAtIso,
+        duration: cfg.duration,
+      });
+      return { outcome: "sleeping" };
+    }
     if (node.node_type === "send_buttons") {
       await sendButtonsAndSuspend(run, node);
       // Persist the new current_node_key via optimistic UPDATE.
@@ -1053,6 +1083,124 @@ async function advanceCurrentNodeKey(
   }
 }
 
+/** Wall-clock ISO of when a delay should wake. Clamps negatives to now. */
+function computeResumeAtIso(duration: DelayNodeConfig["duration"]): string {
+  const value = Number(duration?.value);
+  const unit = duration?.unit ?? "minutes";
+  const perUnitSeconds = unit === "days" ? 86400 : unit === "hours" ? 3600 : 60;
+  const ms = Math.max(0, Number.isFinite(value) ? value : 0) * perUnitSeconds * 1000;
+  return new Date(Date.now() + ms).toISOString();
+}
+
+/**
+ * Put a run to sleep on a `delay` node: status → 'sleeping', stamp resume_at,
+ * and move current_node_key to the delay's next node so the worker resumes
+ * PAST the delay (not back into it). Optimistic on (status='active',
+ * current_node_key) so a concurrent dispatch can't double-sleep the run.
+ */
+async function sleepRun(
+  runId: string,
+  expectedOldKey: string | null,
+  nextKey: string,
+  resumeAtIso: string,
+): Promise<boolean> {
+  try {
+    const rows = await db
+      .update(flowRuns)
+      .set({
+        status: "sleeping",
+        currentNodeKey: nextKey,
+        resumeAt: resumeAtIso,
+        lastAdvancedAt: new Date().toISOString(),
+      })
+      .where(
+        and(
+          eq(flowRuns.id, runId),
+          eq(flowRuns.status, "active"),
+          expectedOldKey === null
+            ? isNull(flowRuns.currentNodeKey)
+            : eq(flowRuns.currentNodeKey, expectedOldKey),
+        ),
+      )
+      .returning({ id: flowRuns.id });
+    return rows.length > 0;
+  } catch (error) {
+    console.error(
+      "[flows] sleepRun error:",
+      error instanceof Error ? error.message : error,
+    );
+    return false;
+  }
+}
+
+/**
+ * Resume every drip run whose delay has elapsed. Called on a timer by the
+ * flows scheduler worker. Claims each due run atomically (sleeping → active
+ * via a conditional UPDATE) so overlapping ticks never double-process, then
+ * walks it forward from where the delay left off.
+ */
+export async function resumeSleepingRuns(
+  limit = 100,
+): Promise<{ resumed: number }> {
+  const nowIso = new Date().toISOString();
+  let due: FlowRunRow[];
+  try {
+    due = (await db
+      .select(flowRunSelection)
+      .from(flowRuns)
+      .where(and(eq(flowRuns.status, "sleeping"), lte(flowRuns.resumeAt, nowIso)))
+      .orderBy(asc(flowRuns.resumeAt))
+      .limit(limit)) as unknown as FlowRunRow[];
+  } catch (err) {
+    console.error(
+      "[flows] resumeSleepingRuns query error:",
+      err instanceof Error ? err.message : err,
+    );
+    return { resumed: 0 };
+  }
+
+  let resumed = 0;
+  for (const run of due) {
+    // Claim: only one worker/tick wins the sleeping → active flip.
+    let claimed = false;
+    try {
+      const rows = await db
+        .update(flowRuns)
+        .set({
+          status: "active",
+          resumeAt: null,
+          lastAdvancedAt: new Date().toISOString(),
+        })
+        .where(and(eq(flowRuns.id, run.id), eq(flowRuns.status, "sleeping")))
+        .returning({ id: flowRuns.id });
+      claimed = rows.length > 0;
+    } catch {
+      claimed = false;
+    }
+    if (!claimed) continue;
+
+    try {
+      if (!run.current_node_key) {
+        await endRun(run.id, "failed", "resume_missing_current_node");
+        continue;
+      }
+      const nodes = await loadAllNodes(run.flow_id);
+      await advanceFromNodeKey(
+        { ...run, status: "active" },
+        run.current_node_key,
+        nodes,
+      );
+      resumed += 1;
+    } catch (err) {
+      console.error(
+        "[flows] resume advance failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return { resumed };
+}
+
 // ============================================================
 // Public entry point — the webhook calls this on every inbound.
 // ============================================================
@@ -1065,6 +1213,18 @@ export async function dispatchInboundToFlows(
       input.accountId,
       input.contactId,
     );
+
+    // Mid-drip: the contact has a run SLEEPING between delayed steps. An
+    // inbound isn't a reply to a timer, and we mustn't start a second flow on
+    // top of the drip. Leave the message to AI/human (consumed:false) — the
+    // drip keeps advancing on its own schedule via the scheduler worker.
+    if (activeRun && activeRun.status === "sleeping") {
+      return {
+        consumed: false,
+        flow_run_id: activeRun.id,
+        outcome: "no_match",
+      };
+    }
 
     // Idempotency — only matters if there's already a run for this
     // contact. For new runs, the partial unique index catches duplicate

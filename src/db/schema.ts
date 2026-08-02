@@ -944,7 +944,7 @@ export const flowNodes = pgTable("flow_nodes", {
 			name: "flow_nodes_flow_id_fkey"
 		}).onDelete("cascade"),
 	unique("flow_nodes_flow_id_node_key_key").on(table.flowId, table.nodeKey),
-	check("flow_nodes_node_type_check", sql`node_type = ANY (ARRAY['start'::text, 'send_buttons'::text, 'send_list'::text, 'send_message'::text, 'send_media'::text, 'collect_input'::text, 'condition'::text, 'set_tag'::text, 'handoff'::text, 'http_fetch'::text, 'end'::text])`),
+	check("flow_nodes_node_type_check", sql`node_type = ANY (ARRAY['start'::text, 'send_buttons'::text, 'send_list'::text, 'send_message'::text, 'send_media'::text, 'collect_input'::text, 'condition'::text, 'set_tag'::text, 'delay'::text, 'handoff'::text, 'http_fetch'::text, 'end'::text])`),
 ]);
 
 export const flowRuns = pgTable("flow_runs", {
@@ -963,11 +963,18 @@ export const flowRuns = pgTable("flow_runs", {
 	lastAdvancedAt: timestamp("last_advanced_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	endedAt: timestamp("ended_at", { withTimezone: true, mode: 'string' }),
 	endReason: text("end_reason"),
+	// Drip: when a run hits a `delay` node it sleeps (status='sleeping') with
+	// resume_at = the wake time; the flows scheduler worker resumes it once due.
+	resumeAt: timestamp("resume_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
 	index("idx_flow_runs_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	index("idx_flow_runs_active_advanced").using("btree", table.lastAdvancedAt.asc().nullsLast().op("timestamptz_ops")).where(sql`(status = 'active'::text)`),
 	index("idx_flow_runs_flow_started").using("btree", table.flowId.asc().nullsLast().op("uuid_ops"), table.startedAt.desc().nullsFirst().op("timestamptz_ops")),
-	uniqueIndex("idx_one_active_run_per_contact").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops")).where(sql`(status = 'active'::text)`),
+	// Due-sleeping-run lookup for the scheduler worker.
+	index("idx_flow_runs_sleeping_resume").using("btree", table.resumeAt.asc().nullsLast().op("timestamptz_ops")).where(sql`(status = 'sleeping'::text)`),
+	// One live run per contact — now covers BOTH active and sleeping so a
+	// contact mid-drip can't start a second flow.
+	uniqueIndex("idx_one_active_run_per_contact").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops")).where(sql`(status = ANY (ARRAY['active'::text, 'sleeping'::text]))`),
 	foreignKey({
 			columns: [table.flowId],
 			foreignColumns: [flows.id],
@@ -993,7 +1000,7 @@ export const flowRuns = pgTable("flow_runs", {
 			foreignColumns: [messages.id],
 			name: "flow_runs_last_prompt_message_id_fkey"
 		}).onDelete("set null"),
-	check("flow_runs_status_check", sql`status = ANY (ARRAY['active'::text, 'completed'::text, 'handed_off'::text, 'timed_out'::text, 'paused_by_agent'::text, 'failed'::text])`),
+	check("flow_runs_status_check", sql`status = ANY (ARRAY['active'::text, 'sleeping'::text, 'completed'::text, 'handed_off'::text, 'timed_out'::text, 'paused_by_agent'::text, 'failed'::text])`),
 ]);
 
 export const flowRunEvents = pgTable("flow_run_events", {

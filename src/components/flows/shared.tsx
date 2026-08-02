@@ -17,6 +17,7 @@
  */
 
 import {
+  Clock,
   Flag,
   GitFork,
   Inbox,
@@ -49,6 +50,7 @@ export type NodeType =
   | 'collect_input'
   | 'condition'
   | 'set_tag'
+  | 'delay'
   | 'handoff'
   | 'end';
 
@@ -152,6 +154,13 @@ export const NODE_META: Record<
     blurb: 'Adiciona ou remove uma etiqueta do contato',
     category: 'logic',
   },
+  delay: {
+    label: 'Esperar',
+    icon: Clock,
+    color: 'text-slate-400',
+    blurb: 'Aguarda um tempo (min/horas/dias) antes de seguir',
+    category: 'flow',
+  },
   handoff: {
     label: 'Transferir para atendente',
     icon: UserPlus,
@@ -205,6 +214,7 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   collect_input: { l: 0.65, c: 0.1, h: 185 }, // teal — capture
   condition: { l: 0.72, c: 0.15, h: 65 }, // amber — a fork in the road
   set_tag: { l: 0.65, c: 0.15, h: 350 }, // pink
+  delay: { l: 0.62, c: 0.04, h: 250 }, // slate — a quiet pause
   handoff: { l: 0.65, c: 0.17, h: 16 }, // rose — hands off
   end: { l: 0.55, c: 0.01, h: 260 }, // neutral grey — terminal
 };
@@ -414,6 +424,23 @@ export function summarizeNode(node: BuilderNode): string | null {
       return tagId
         ? `${mode} etiqueta ${tagId.slice(0, 8)}…`
         : `${mode} etiqueta (nenhuma escolhida)`;
+    }
+    case 'delay': {
+      const dur = (cfg.duration ?? {}) as { value?: number; unit?: string };
+      const value = typeof dur.value === 'number' ? dur.value : 0;
+      const unitLabel =
+        dur.unit === 'days'
+          ? value === 1
+            ? 'dia'
+            : 'dias'
+          : dur.unit === 'hours'
+            ? value === 1
+              ? 'hora'
+              : 'horas'
+            : value === 1
+              ? 'minuto'
+              : 'minutos';
+      return `Esperar ${value} ${unitLabel}`;
     }
     case 'handoff': {
       const note = typeof cfg.note === 'string' ? cfg.note : '';

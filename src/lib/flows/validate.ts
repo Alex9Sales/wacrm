@@ -701,6 +701,53 @@ function validateNode(
       break;
     }
 
+    case "delay": {
+      const cfg = node.config as {
+        duration?: { value?: number; unit?: string };
+        next_node_key?: string;
+      };
+      const value = cfg.duration?.value;
+      if (typeof value !== "number" || !Number.isFinite(value) || value < 0) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "duration.value",
+          message: "O tempo de espera precisa ser um número maior ou igual a 0.",
+        });
+      }
+      if (
+        !cfg.duration?.unit ||
+        !["minutes", "hours", "days"].includes(cfg.duration.unit)
+      ) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "duration.unit",
+          message: "Escolha a unidade da espera (minutos, horas ou dias).",
+        });
+      }
+      if (!cfg.next_node_key) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: "O nó de espera precisa apontar para um próximo nó.",
+        });
+      } else if (!knownKeys.has(cfg.next_node_key)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: `A espera aponta para um nó inexistente "${cfg.next_node_key}".`,
+        });
+      }
+      break;
+    }
+
     case "handoff":
     case "end":
       // Terminal nodes have no outgoing edges; nothing to validate
@@ -751,7 +798,8 @@ function outgoingEdges(node: NodeInput): string[] {
     case "send_message":
     case "send_media":
     case "collect_input":
-    case "set_tag": {
+    case "set_tag":
+    case "delay": {
       const cfg = node.config as { next_node_key?: string };
       return cfg.next_node_key ? [cfg.next_node_key] : [];
     }
