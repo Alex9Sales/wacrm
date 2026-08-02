@@ -928,6 +928,86 @@ function validateNode(
       break;
     }
 
+    case "http_fetch": {
+      const cfg = node.config as {
+        method?: string;
+        url?: string;
+        next_node_key?: string;
+        error_node_key?: string;
+      };
+      const methods = ["GET", "POST", "PUT", "PATCH", "DELETE"];
+      if (!cfg.method || !methods.includes(cfg.method)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "method",
+          message: "Escolha o método HTTP (GET, POST, …).",
+        });
+      }
+      const url = cfg.url?.trim() ?? "";
+      if (!url) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "url",
+          message: "A requisição HTTP precisa de uma URL.",
+        });
+      } else if (!/\{\{vars\./.test(url)) {
+        // Static-check only when there's no interpolation — an
+        // interpolated URL is unknown until run time.
+        try {
+          const u = new URL(url);
+          if (u.protocol !== "https:" && u.protocol !== "http:") {
+            issues.push({
+              severity: "error",
+              scope: "node",
+              node_key: node.node_key,
+              field: "url",
+              message: "A URL precisa começar com http:// ou https://.",
+            });
+          }
+        } catch {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: "url",
+            message: "A URL não é válida.",
+          });
+        }
+      }
+      if (!cfg.next_node_key) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message:
+            "A requisição HTTP precisa apontar para um próximo nó (sucesso).",
+        });
+      } else if (!knownKeys.has(cfg.next_node_key)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "next_node_key",
+          message: `O sucesso aponta para um nó inexistente "${cfg.next_node_key}".`,
+        });
+      }
+      if (cfg.error_node_key && !knownKeys.has(cfg.error_node_key)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "error_node_key",
+          message: `O caminho de erro aponta para um nó inexistente "${cfg.error_node_key}".`,
+        });
+      }
+      break;
+    }
+
     case "handoff":
     case "end":
       // Terminal nodes have no outgoing edges; nothing to validate
@@ -1004,6 +1084,16 @@ function outgoingEdges(node: NodeInput): string[] {
       return (cfg.branches ?? [])
         .map((b) => b.next_node_key)
         .filter((k): k is string => !!k);
+    }
+    case "http_fetch": {
+      const cfg = node.config as {
+        next_node_key?: string;
+        error_node_key?: string;
+      };
+      const out: string[] = [];
+      if (cfg.next_node_key) out.push(cfg.next_node_key);
+      if (cfg.error_node_key) out.push(cfg.error_node_key);
+      return out;
     }
     case "send_buttons": {
       const cfg = node.config as {

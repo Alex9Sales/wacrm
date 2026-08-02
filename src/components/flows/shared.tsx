@@ -20,6 +20,7 @@ import {
   Clock,
   Flag,
   GitFork,
+  Globe,
   Inbox,
   ListChecks,
   ListPlus,
@@ -55,6 +56,7 @@ export type NodeType =
   | 'delay'
   | 'jump'
   | 'randomizer'
+  | 'http_fetch'
   | 'handoff'
   | 'end';
 
@@ -179,6 +181,13 @@ export const NODE_META: Record<
     blurb: 'Divide o fluxo em ramos por porcentagem (teste A/B)',
     category: 'logic',
   },
+  http_fetch: {
+    label: 'Requisição HTTP',
+    icon: Globe,
+    color: 'text-cyan-400',
+    blurb: 'Chama uma API externa e guarda a resposta',
+    category: 'logic',
+  },
   handoff: {
     label: 'Transferir para atendente',
     icon: UserPlus,
@@ -235,6 +244,7 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   delay: { l: 0.62, c: 0.04, h: 250 }, // slate — a quiet pause
   jump: { l: 0.68, c: 0.15, h: 45 }, // orange — a loop back
   randomizer: { l: 0.62, c: 0.18, h: 300 }, // violet — a roll of the dice
+  http_fetch: { l: 0.66, c: 0.12, h: 195 }, // cyan — reaches out to the web
   handoff: { l: 0.65, c: 0.17, h: 16 }, // rose — hands off
   end: { l: 0.55, c: 0.01, h: 260 }, // neutral grey — terminal
 };
@@ -490,6 +500,12 @@ export function summarizeNode(node: BuilderNode): string | null {
         })
         .join('/');
       return `${linked.length} ramos · ${pcts}%`;
+    }
+    case 'http_fetch': {
+      const method =
+        typeof cfg.method === 'string' ? cfg.method.toUpperCase() : 'GET';
+      const url = typeof cfg.url === 'string' ? cfg.url : '';
+      return url ? `${method} ${truncate(url, 48)}` : `${method} (sem URL)`;
     }
     case 'handoff': {
       const note = typeof cfg.note === 'string' ? cfg.note : '';

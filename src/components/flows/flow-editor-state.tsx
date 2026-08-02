@@ -210,6 +210,16 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
           { id: "b", weight: 50, next_node_key: "" },
         ],
       };
+    case "http_fetch":
+      return {
+        method: "GET",
+        url: "",
+        headers: [],
+        body: "",
+        save_to: "http",
+        next_node_key: "",
+        error_node_key: "",
+      };
     case "handoff":
       return {
         customer_message:

@@ -236,6 +236,16 @@ export function NodeConfigForm({
         />
       );
 
+    case "http_fetch":
+      return (
+        <HttpFetchForm
+          cfg={cfg as HttpFetchCfg}
+          allNodes={allNodes}
+          currentKey={node.node_key}
+          onUpdateConfig={onUpdateConfig}
+        />
+      );
+
     case "handoff": {
       const hcfg = cfg as {
         note?: string;
@@ -1046,6 +1056,199 @@ function RandomizerForm({
           <Plus className="h-3.5 w-3.5" />
           Adicionar ramo
         </Button>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================
+// http_fetch (chamar API externa; guarda SSRF roda no servidor)
+// ============================================================
+
+interface HttpFetchCfg {
+  method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  url?: string;
+  headers?: Array<{ key: string; value: string }>;
+  body?: string;
+  save_to?: string;
+  next_node_key?: string;
+  error_node_key?: string;
+}
+
+const HTTP_METHODS: HttpFetchCfg["method"][] = [
+  "GET",
+  "POST",
+  "PUT",
+  "PATCH",
+  "DELETE",
+];
+
+function HttpFetchForm({
+  cfg,
+  allNodes,
+  currentKey,
+  onUpdateConfig,
+}: {
+  cfg: HttpFetchCfg;
+  allNodes: BuilderNode[];
+  currentKey: string;
+  onUpdateConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const method = cfg.method ?? "GET";
+  const headers = cfg.headers ?? [];
+  const hasBody = method !== "GET";
+  const saveTo = cfg.save_to || "http";
+
+  const updateHeader = (
+    i: number,
+    patch: Partial<{ key: string; value: string }>,
+  ) =>
+    onUpdateConfig({
+      headers: headers.map((h, j) => (j === i ? { ...h, ...patch } : h)),
+    });
+  const addHeader = () =>
+    onUpdateConfig({ headers: [...headers, { key: "", value: "" }] });
+  const removeHeader = (i: number) =>
+    onUpdateConfig({ headers: headers.filter((_, j) => j !== i) });
+
+  return (
+    <div className="flex flex-col gap-3">
+      <div className="grid grid-cols-[7rem_1fr] gap-2">
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground">
+            Método
+          </label>
+          <Select
+            value={method}
+            onValueChange={(v) => onUpdateConfig({ method: v })}
+          >
+            <SelectTrigger className="bg-muted">
+              <span className="truncate">{method}</span>
+            </SelectTrigger>
+            <SelectContent>
+              {HTTP_METHODS.map((m) => (
+                <SelectItem key={m} value={m as string}>
+                  {m}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground">URL</label>
+          <Input
+            value={cfg.url ?? ""}
+            onChange={(e) => onUpdateConfig({ url: e.target.value })}
+            placeholder="https://api.exemplo.com/leads/{{vars.email}}"
+            className="bg-muted font-mono text-xs"
+          />
+        </div>
+      </div>
+      <p className="text-[10px] text-muted-foreground">
+        Só URLs públicas http/https — endereços internos (localhost, IP privado,
+        metadados de nuvem) são bloqueados no servidor. Timeout de 10s, resposta
+        até 256 KB. Use{" "}
+        <code className="rounded bg-muted px-1">{"{{vars.x}}"}</code> na URL,
+        cabeçalhos e corpo.
+      </p>
+
+      <div>
+        <label className="mb-1 block text-xs text-muted-foreground">
+          Cabeçalhos (opcional)
+        </label>
+        <div className="flex flex-col gap-2">
+          {headers.map((h, i) => (
+            <div
+              key={i}
+              className="grid grid-cols-[1fr_1fr_auto] gap-2"
+            >
+              <Input
+                value={h.key}
+                onChange={(e) => updateHeader(i, { key: e.target.value })}
+                placeholder="Authorization"
+                className="bg-muted font-mono text-xs"
+              />
+              <Input
+                value={h.value}
+                onChange={(e) => updateHeader(i, { value: e.target.value })}
+                placeholder="Bearer {{vars.token}}"
+                className="bg-muted font-mono text-xs"
+              />
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => removeHeader(i)}
+                className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                aria-label="Remover cabeçalho"
+              >
+                <Trash2 className="h-3.5 w-3.5" />
+              </Button>
+            </div>
+          ))}
+        </div>
+        <Button variant="ghost" size="sm" onClick={addHeader} className="mt-2">
+          <Plus className="h-3.5 w-3.5" />
+          Adicionar cabeçalho
+        </Button>
+      </div>
+
+      {hasBody && (
+        <TextRow
+          label="Corpo (JSON ou texto — interpolado)"
+          value={cfg.body ?? ""}
+          onChange={(v) => onUpdateConfig({ body: v })}
+          rows={4}
+          placeholder={'{"nome": "{{vars.name}}"}'}
+        />
+      )}
+
+      <div>
+        <label className="mb-1 block text-xs text-muted-foreground">
+          Guardar resposta em (prefixo da variável)
+        </label>
+        <Input
+          value={cfg.save_to ?? ""}
+          onChange={(e) =>
+            onUpdateConfig({
+              save_to: e.target.value.replace(/[^a-zA-Z0-9_]/g, ""),
+            })
+          }
+          placeholder="http"
+          className="bg-muted font-mono text-xs"
+        />
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          Guarda o corpo em{" "}
+          <code className="rounded bg-muted px-1">
+            {"{{vars."}
+            {saveTo}
+            {"}}"}
+          </code>{" "}
+          e o status em{" "}
+          <code className="rounded bg-muted px-1">
+            {"{{vars."}
+            {saveTo}
+            {"_status}}"}
+          </code>
+          . Um <span className="font-medium">Se / senão</span> pode ramificar
+          por <code className="rounded bg-muted px-1">{saveTo}_status</code>.
+        </p>
+      </div>
+
+      <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
+        <NextNodeRow
+          value={cfg.next_node_key ?? ""}
+          allNodes={allNodes}
+          currentKey={currentKey}
+          onChange={(v) => onUpdateConfig({ next_node_key: v })}
+          label="Se OK (2xx) → avançar para"
+        />
+        <NextNodeRow
+          value={cfg.error_node_key ?? ""}
+          allNodes={allNodes}
+          currentKey={currentKey}
+          onChange={(v) => onUpdateConfig({ error_node_key: v })}
+          label="Se erro → avançar para (opcional)"
+        />
       </div>
     </div>
   );

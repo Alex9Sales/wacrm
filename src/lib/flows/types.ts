@@ -236,6 +236,36 @@ export interface RandomizerNodeConfig {
   }>;
 }
 
+/**
+ * Calls an external HTTP API mid-flow, stores the response in the run's
+ * vars, then auto-advances. URL / headers / body support `{{vars.x}}`
+ * interpolation. The engine fetches through an SSRF guard (public https
+ * only; private / loopback / cloud-metadata hosts are refused), a
+ * timeout, and a response-size cap. On a network error / non-2xx /
+ * refused target it routes to `error_node_key` when set, else falls
+ * through to `next_node_key` (the flow continues; the error is logged +
+ * stored in `<save_to>_error`).
+ */
+export interface HttpFetchNodeConfig {
+  method: "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
+  /** Public https (or http) URL. Interpolated. */
+  url: string;
+  /** Optional request headers. Values interpolated. */
+  headers?: Array<{ key: string; value: string }>;
+  /** Optional request body (raw string, interpolated). Ignored for GET. */
+  body?: string;
+  /**
+   * Var-key prefix for the stored response. Defaults to "http". Writes
+   * `<save_to>` (body text), `<save_to>_status` (HTTP status), and, on
+   * failure, `<save_to>_error`.
+   */
+  save_to?: string;
+  /** Node to advance to on success (2xx). */
+  next_node_key: string;
+  /** Optional node to advance to on failure. Falls back to next_node_key. */
+  error_node_key?: string;
+}
+
 // Terminal nodes carry no config — they just stop the run.
 export type EndNodeConfig = Record<string, never>;
 
@@ -259,6 +289,7 @@ export type FlowNodeConfig =
   | { node_type: "delay"; config: DelayNodeConfig }
   | { node_type: "jump"; config: JumpNodeConfig }
   | { node_type: "randomizer"; config: RandomizerNodeConfig }
+  | { node_type: "http_fetch"; config: HttpFetchNodeConfig }
   | { node_type: "handoff"; config: HandoffNodeConfig }
   | { node_type: "end"; config: EndNodeConfig };
 

@@ -1018,7 +1018,7 @@ export const flowRunEvents = pgTable("flow_run_events", {
 			foreignColumns: [flowRuns.id],
 			name: "flow_run_events_flow_run_id_fkey"
 		}).onDelete("cascade"),
-	check("flow_run_events_event_type_check", sql`event_type = ANY (ARRAY['started'::text, 'node_entered'::text, 'message_sent'::text, 'reply_received'::text, 'fallback_fired'::text, 'handoff'::text, 'timeout'::text, 'error'::text, 'completed'::text])`),
+	check("flow_run_events_event_type_check", sql`event_type = ANY (ARRAY['started'::text, 'node_entered'::text, 'message_sent'::text, 'reply_received'::text, 'fallback_fired'::text, 'handoff'::text, 'timeout'::text, 'delay_sleep'::text, 'http_request'::text, 'error'::text, 'completed'::text])`),
 ]);
 
 export const notifications = pgTable("notifications", {

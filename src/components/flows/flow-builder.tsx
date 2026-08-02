@@ -758,6 +758,7 @@ function AddNodeButton({ onAdd }: { onAdd: (type: NodeType) => void }) {
     'delay',
     'jump',
     'randomizer',
+    'http_fetch',
     'handoff',
     'end',
   ];

@@ -146,6 +146,69 @@ describe("deriveCanvasEdges — condition (true/false branches)", () => {
   });
 });
 
+describe("deriveCanvasEdges — http_fetch (ok/error branches)", () => {
+  it("emits an ok edge and an error edge", () => {
+    const edges = deriveCanvasEdges(
+      nodes(
+        {
+          node_key: "h",
+          node_type: "http_fetch",
+          config: {
+            method: "GET",
+            url: "https://api.x/y",
+            next_node_key: "ok",
+            error_node_key: "err",
+          },
+        },
+        { node_key: "ok", node_type: "end", config: {} },
+        { node_key: "err", node_type: "end", config: {} },
+      ),
+    );
+    expect(edges).toHaveLength(2);
+    expect(edges.find((e) => e.sourceHandle === "next")).toMatchObject({
+      target: "ok",
+      label: "ok",
+    });
+    expect(edges.find((e) => e.sourceHandle === "error")).toMatchObject({
+      target: "err",
+      label: "erro",
+    });
+  });
+
+  it("connects and unlinks the ok/error handles", () => {
+    const node: BuilderNode = {
+      node_key: "h",
+      node_type: "http_fetch",
+      config: { method: "GET", url: "https://api.x", next_node_key: "" },
+    };
+    expect(applyEdgeConnection(node, "next", "ok")).toEqual({
+      next_node_key: "ok",
+    });
+    expect(applyEdgeConnection(node, "error", "err")).toEqual({
+      error_node_key: "err",
+    });
+    // Deleting "err" clears only the error handle.
+    const [cleared] = unlinkNodeReferences(
+      [
+        {
+          ...node,
+          config: {
+            method: "GET",
+            url: "https://api.x",
+            next_node_key: "ok",
+            error_node_key: "err",
+          },
+        },
+      ],
+      "err",
+    );
+    expect(cleared.config).toMatchObject({
+      next_node_key: "ok",
+      error_node_key: "",
+    });
+  });
+});
+
 describe("deriveCanvasEdges — send_buttons (per-button)", () => {
   it("emits one edge per button, labeled with the button title", () => {
     const edges = deriveCanvasEdges(

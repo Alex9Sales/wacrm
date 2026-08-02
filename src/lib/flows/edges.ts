@@ -106,6 +106,30 @@ export function deriveCanvasEdges(nodes: BuilderNode[]): CanvasEdge[] {
         break;
       }
 
+      case "http_fetch": {
+        const next = (cfg as { next_node_key?: string }).next_node_key;
+        const errNext = (cfg as { error_node_key?: string }).error_node_key;
+        if (next && knownKeys.has(next)) {
+          edges.push({
+            id: `${node.node_key}--next--${next}`,
+            source: node.node_key,
+            target: next,
+            sourceHandle: "next",
+            label: "ok",
+          });
+        }
+        if (errNext && knownKeys.has(errNext)) {
+          edges.push({
+            id: `${node.node_key}--error--${errNext}`,
+            source: node.node_key,
+            target: errNext,
+            sourceHandle: "error",
+            label: "erro",
+          });
+        }
+        break;
+      }
+
       case "condition": {
         const trueNext = (cfg as { true_next?: string }).true_next;
         const falseNext = (cfg as { false_next?: string }).false_next;
@@ -234,6 +258,12 @@ export function outgoingSlots(node: BuilderNode): OutgoingSlot[] {
         { id: "false", label: "false" },
       ];
 
+    case "http_fetch":
+      return [
+        { id: "next", label: "OK" },
+        { id: "error", label: "Erro" },
+      ];
+
     case "randomizer": {
       const branches = Array.isArray((cfg as { branches?: unknown }).branches)
         ? ((cfg as { branches: Array<Record<string, unknown>> }).branches)
@@ -330,6 +360,11 @@ export function applyEdgeConnection(
     case "condition":
       if (sourceHandle === "true") return { true_next: targetKey };
       if (sourceHandle === "false") return { false_next: targetKey };
+      return null;
+
+    case "http_fetch":
+      if (sourceHandle === "next") return { next_node_key: targetKey };
+      if (sourceHandle === "error") return { error_node_key: targetKey };
       return null;
 
     case "randomizer": {
@@ -470,6 +505,18 @@ function patchedConfigWithoutKey(
         ...cfg,
         ...(trueMatch ? { true_next: "" } : {}),
         ...(falseMatch ? { false_next: "" } : {}),
+      };
+    }
+
+    case "http_fetch": {
+      const c = cfg as { next_node_key?: string; error_node_key?: string };
+      const nMatch = c.next_node_key === deletedKey;
+      const eMatch = c.error_node_key === deletedKey;
+      if (!nMatch && !eMatch) return null;
+      return {
+        ...cfg,
+        ...(nMatch ? { next_node_key: "" } : {}),
+        ...(eMatch ? { error_node_key: "" } : {}),
       };
     }
 

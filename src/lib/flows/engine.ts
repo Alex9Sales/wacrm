@@ -59,6 +59,7 @@ import {
   type DelayNodeConfig,
   type JumpNodeConfig,
   type RandomizerNodeConfig,
+  type HttpFetchNodeConfig,
   type DispatchInboundInput,
   type DispatchInboundResult,
   type FlowNodeRow,
@@ -73,6 +74,7 @@ import {
   type StartNodeConfig,
   type KeywordTriggerConfig,
 } from "./types";
+import { runHttpFetch } from "./http-fetch";
 
 // ============================================================
 // Row mappings — the runner's row types (types.ts) are snake_case
@@ -380,6 +382,7 @@ async function logEvent(
     | "handoff"
     | "timeout"
     | "delay_sleep"
+    | "http_request"
     | "error"
     | "completed",
   node_key: string | null,
@@ -1039,6 +1042,42 @@ async function advanceFromNodeKey(
         branch: chosen.id,
       });
       currentKey = chosen.next_node_key;
+      continue;
+    }
+    if (node.node_type === "http_fetch") {
+      const cfg = node.config as unknown as HttpFetchNodeConfig;
+      const result = await runHttpFetch(cfg, run.vars);
+      // Store the response under a var prefix so later nodes can branch
+      // on the status / interpolate the body. Reject unsafe var keys.
+      const saveTo =
+        cfg.save_to && /^[a-zA-Z_][a-zA-Z0-9_]*$/.test(cfg.save_to)
+          ? cfg.save_to
+          : "http";
+      const newVars: Record<string, unknown> = {
+        ...run.vars,
+        [saveTo]: result.bodyText,
+        [`${saveTo}_status`]: result.status,
+      };
+      if (result.ok) {
+        delete newVars[`${saveTo}_error`];
+      } else {
+        newVars[`${saveTo}_error`] = result.error ?? "erro";
+      }
+      await db
+        .update(flowRuns)
+        .set({ vars: newVars })
+        .where(eq(flowRuns.id, run.id));
+      run.vars = newVars;
+      await logEvent(run.id, "http_request", node.node_key, {
+        status: result.status,
+        ok: result.ok,
+        error: result.error,
+      });
+      // Success → next; failure → error branch when wired, else fall
+      // through to next so an optional enrichment call can't dead-end.
+      currentKey = result.ok
+        ? cfg.next_node_key
+        : cfg.error_node_key || cfg.next_node_key;
       continue;
     }
     if (node.node_type === "delay") {
