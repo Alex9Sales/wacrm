@@ -258,12 +258,43 @@ function KeywordsInput({
 // an empty string as an item value, so we map this to channel_id=null.
 const ALL_CHANNELS = '__all__';
 
+const TRIGGER_PANEL_KEY = 'wacrm.flowEditor.trigger.open';
+
 // Reads straight from the editor context so it can render in BOTH views —
 // the shell mounts it above the stage so the Acionamento (gatilho + canal) is
 // visible/editable no Diagrama e na Lista, não só na Lista.
+//
+// COLLAPSIBLE + collapsed by default: expanded it ate the canvas's vertical
+// space (the trigger is set once, so it shouldn't hog the workspace). The
+// choice persists per-browser; a compact summary + error count show while
+// collapsed so nothing is hidden.
 export function TriggerPanel() {
   const { state, setState, channels, issues } = useFlowEditor();
   const triggerIssues = issues.filter((i) => i.scope === 'trigger');
+
+  // Read the persisted choice in the initializer (not an effect). Safe: the
+  // editor is client-only (mounted after a client fetch), so there's no SSR
+  // pass for this subtree and no hydration mismatch — same as the shell's
+  // view toggle.
+  const [open, setOpen] = useState<boolean>(() => {
+    try {
+      return window.localStorage.getItem(TRIGGER_PANEL_KEY) === 'open';
+    } catch {
+      return false; // private browsing — collapsed default.
+    }
+  });
+  const toggle = () => {
+    setOpen((o) => {
+      const next = !o;
+      try {
+        window.localStorage.setItem(TRIGGER_PANEL_KEY, next ? 'open' : 'closed');
+      } catch {
+        // ignore
+      }
+      return next;
+    });
+  };
+
   // A flow bound to a channel that no longer exists (soft-ref): keep the id
   // so the picker doesn't silently reset it, but flag it so the admin re-picks.
   const boundMissing =
@@ -276,9 +307,49 @@ export function TriggerPanel() {
     ? 'Todos os canais'
     : (channels.find((c) => c.id === state.channel_id)?.name ??
       'Canal removido — escolha outro');
+
+  const keywords = Array.isArray(state.trigger_config.keywords)
+    ? (state.trigger_config.keywords as string[])
+    : [];
+  const triggerSummary =
+    state.trigger_type === 'keyword'
+      ? keywords.length
+        ? keywords.join(', ')
+        : 'sem palavra-chave'
+      : state.trigger_type === 'first_inbound_message'
+        ? 'Primeira mensagem do cliente'
+        : 'Manual';
+
   return (
-    <section className="border-border bg-card rounded-lg border p-4">
-      <h2 className="text-foreground mb-3 text-sm font-semibold">Acionamento</h2>
+    <section className="border-border bg-card rounded-lg border">
+      <button
+        type="button"
+        onClick={toggle}
+        aria-expanded={open}
+        className="hover:bg-muted/40 flex w-full items-center gap-2 rounded-lg px-4 py-2.5 text-left transition-colors"
+      >
+        <span className="text-foreground shrink-0 text-sm font-semibold">
+          Acionamento
+        </span>
+        {!open && (
+          <span className="text-muted-foreground min-w-0 flex-1 truncate text-xs">
+            {triggerSummary} · {selectedChannelLabel}
+          </span>
+        )}
+        {triggerIssues.length > 0 && (
+          <span className="inline-flex shrink-0 items-center gap-1 text-[11px] font-medium text-red-400">
+            <CircleAlert className="h-3 w-3" />
+            {triggerIssues.length}
+          </span>
+        )}
+        {open ? (
+          <ChevronUp className="text-muted-foreground ml-auto h-4 w-4 shrink-0" />
+        ) : (
+          <ChevronDown className="text-muted-foreground h-4 w-4 shrink-0" />
+        )}
+      </button>
+      {!open ? null : (
+      <div className="px-4 pb-4">
       <div className="grid grid-cols-1 gap-3 md:grid-cols-2">
         <div>
           <label className="text-muted-foreground mb-1 block text-xs">
@@ -375,6 +446,8 @@ export function TriggerPanel() {
             <IssueLine key={ix} issue={i} />
           ))}
         </div>
+      )}
+      </div>
       )}
     </section>
   );

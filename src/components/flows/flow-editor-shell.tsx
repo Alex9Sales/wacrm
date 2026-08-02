@@ -154,13 +154,16 @@ export function FlowEditorShell({
         )}
 
         {/* ---- Acionamento (gatilho + canal): shared above the stage so it
-            shows in BOTH the Diagrama and Lista views (was list-only). ---- */}
-        <div className="px-6 pb-3">
+            shows in BOTH the Diagrama and Lista views. Collapsible + collapsed
+            by default so it doesn't steal the canvas's vertical space. ---- */}
+        <div className="px-6 pb-2">
           <TriggerPanel />
         </div>
 
-        {/* ---- stage: the active view, owning its own overflow ---- */}
-        <div className="relative mx-6 min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card-2">
+        {/* ---- stage: the active view, owning its own overflow. A tall
+            min-height guarantees a usable canvas even if the flex height chain
+            can't fully resolve; flex-1 lets it grow to fill when there's room. */}
+        <div className="relative mx-6 min-h-[62vh] flex-1 overflow-hidden rounded-xl border border-border bg-card-2">
           {effectiveView === "canvas" ? (
             <FlowCanvas />
           ) : (
