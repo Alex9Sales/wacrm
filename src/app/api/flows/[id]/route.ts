@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { and, asc, eq } from 'drizzle-orm'
-import { db, flows, flowNodes } from '@/db'
+import { db, flows, flowNodes, channels } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 
@@ -31,6 +31,7 @@ const flowColumns = {
   trigger_type: flows.triggerType,
   trigger_config: flows.triggerConfig,
   entry_node_id: flows.entryNodeId,
+  channel_id: flows.channelId,
   fallback_policy: flows.fallbackPolicy,
   execution_count: flows.executionCount,
   last_executed_at: flows.lastExecutedAt,
@@ -70,7 +71,7 @@ export async function GET(
     const { id } = await context.params
     const ctx = await getCurrentAccount()
 
-    const [flow, nodes] = await Promise.all([
+    const [flow, nodes, channelList] = await Promise.all([
       db
         .select(flowColumns)
         .from(flows)
@@ -82,11 +83,24 @@ export async function GET(
         .from(flowNodes)
         .where(eq(flowNodes.flowId, id))
         .orderBy(asc(flowNodes.createdAt)),
+      // Channels for the builder's "Canal" picker. Served here (account-scoped,
+      // SAFE fields only) so the client doesn't hit the admin-gated
+      // /api/channels — the flow editor is open to every authed user.
+      db
+        .select({
+          id: channels.id,
+          name: channels.name,
+          provider: channels.provider,
+          phone_number: channels.phoneNumber,
+        })
+        .from(channels)
+        .where(eq(channels.accountId, ctx.accountId))
+        .orderBy(asc(channels.name)),
     ])
     if (!flow) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
-    return NextResponse.json({ flow, nodes })
+    return NextResponse.json({ flow, nodes, channels: channelList })
   } catch (err) {
     return toErrorResponse(err)
   }
@@ -98,6 +112,8 @@ interface PutBody {
   trigger_type?: 'keyword' | 'first_inbound_message' | 'manual'
   trigger_config?: Record<string, unknown>
   entry_node_id?: string | null
+  /** Optional channel binding. null = todos os canais. */
+  channel_id?: string | null
   fallback_policy?: Record<string, unknown>
   nodes?: Array<{
     node_key: string
@@ -144,6 +160,9 @@ export async function PUT(
       flowPatch.triggerConfig = body.trigger_config
     if (body.entry_node_id !== undefined)
       flowPatch.entryNodeId = body.entry_node_id
+    if (body.channel_id !== undefined)
+      flowPatch.channelId =
+        typeof body.channel_id === 'string' ? body.channel_id : null
     if (body.fallback_policy !== undefined)
       flowPatch.fallbackPolicy = body.fallback_policy
 

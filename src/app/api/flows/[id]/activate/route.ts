@@ -30,6 +30,7 @@ const flowColumns = {
   trigger_type: flows.triggerType,
   trigger_config: flows.triggerConfig,
   entry_node_id: flows.entryNodeId,
+  channel_id: flows.channelId,
   fallback_policy: flows.fallbackPolicy,
   execution_count: flows.executionCount,
   last_executed_at: flows.lastExecutedAt,

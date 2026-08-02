@@ -50,7 +50,11 @@ import {
   type ValidationIssue,
 } from "@/lib/flows/validate";
 import { unlinkNodeReferences } from "@/lib/flows/edges";
-import type { FlowNodeRow, FlowRow } from "@/lib/flows/types";
+import type {
+  FlowNodeRow,
+  FlowRow,
+  FlowChannelOption,
+} from "@/lib/flows/types";
 import { NODE_META, slugify, type BuilderNode, type NodeType } from "./shared";
 
 // ============================================================
@@ -63,6 +67,8 @@ export interface BuilderState {
   trigger_type: "keyword" | "first_inbound_message" | "manual";
   trigger_config: Record<string, unknown>;
   entry_node_id: string | null;
+  /** null = todos os canais (legado); id = fluxo preso a esse canal. */
+  channel_id: string | null;
   status: FlowRow["status"];
   nodes: BuilderNode[];
 }
@@ -70,6 +76,9 @@ export interface BuilderState {
 export interface FlowEditorContextValue {
   /** Immutable post-load envelope: id, created_at, fallback_policy, etc. */
   flow: FlowRow;
+
+  /** Account's channels for the "Canal" picker (SAFE fields only). */
+  channels: FlowChannelOption[];
 
   // Authored state
   state: BuilderState;
@@ -228,12 +237,14 @@ export function useFlowEditor(): FlowEditorContextValue {
 interface ProviderProps {
   initialFlow: FlowRow;
   initialNodes: FlowNodeRow[];
+  channels: FlowChannelOption[];
   children: ReactNode;
 }
 
 export function FlowEditorProvider({
   initialFlow,
   initialNodes,
+  channels,
   children,
 }: ProviderProps) {
   const router = useRouter();
@@ -244,6 +255,7 @@ export function FlowEditorProvider({
     trigger_type: initialFlow.trigger_type,
     trigger_config: initialFlow.trigger_config as Record<string, unknown>,
     entry_node_id: initialFlow.entry_node_id,
+    channel_id: initialFlow.channel_id ?? null,
     status: initialFlow.status,
     nodes: initialNodes.map((n) => ({
       node_key: n.node_key,
@@ -339,17 +351,18 @@ export function FlowEditorProvider({
           trigger_type: state.trigger_type,
           trigger_config: state.trigger_config,
           entry_node_id: state.entry_node_id,
+          channel_id: state.channel_id,
           nodes: state.nodes,
         }),
       });
       if (!res.ok) {
         const json = await res.json().catch(() => ({}));
-        throw new Error(json.error ?? `Save failed: ${res.status}`);
+        throw new Error(json.error ?? `Falha ao salvar: ${res.status}`);
       }
       setDirty(false);
-      toast.success("Saved.");
+      toast.success("Salvo.");
     } catch (err) {
-      const msg = err instanceof Error ? err.message : "Save failed";
+      const msg = err instanceof Error ? err.message : "Falha ao salvar";
       toast.error(msg);
     } finally {
       setSaving(false);
@@ -519,6 +532,7 @@ export function FlowEditorProvider({
   const value = useMemo<FlowEditorContextValue>(
     () => ({
       flow: initialFlow,
+      channels,
       state,
       setState,
       dirty,
@@ -540,6 +554,7 @@ export function FlowEditorProvider({
     }),
     [
       initialFlow,
+      channels,
       state,
       setState,
       dirty,

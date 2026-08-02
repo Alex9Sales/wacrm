@@ -6,7 +6,11 @@ import { Loader2 } from "lucide-react";
 import { toast } from "sonner";
 
 import { FlowEditorShell } from "@/components/flows/flow-editor-shell";
-import type { FlowRow, FlowNodeRow } from "@/lib/flows/types";
+import type {
+  FlowRow,
+  FlowNodeRow,
+  FlowChannelOption,
+} from "@/lib/flows/types";
 
 /**
  * Flow editor shell.
@@ -26,6 +30,7 @@ export default function FlowEditorPage() {
 
   const [flow, setFlow] = useState<FlowRow | null>(null);
   const [nodes, setNodes] = useState<FlowNodeRow[]>([]);
+  const [channels, setChannels] = useState<FlowChannelOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
@@ -43,15 +48,17 @@ export default function FlowEditorPage() {
         const json = (await res.json()) as {
           flow: FlowRow;
           nodes: FlowNodeRow[];
+          channels?: FlowChannelOption[];
         };
         if (!cancelled) {
           setFlow(json.flow);
           setNodes(json.nodes ?? []);
+          setChannels(json.channels ?? []);
         }
       } catch (err) {
         if (!cancelled) {
           console.error(err);
-          toast.error("Couldn't load flow.");
+          toast.error("Não foi possível carregar o fluxo.");
         }
       } finally {
         if (!cancelled) setLoading(false);
@@ -72,17 +79,23 @@ export default function FlowEditorPage() {
   if (notFound || !flow) {
     return (
       <div className="flex h-full flex-col items-center justify-center gap-3">
-        <p className="text-sm text-muted-foreground">Flow not found.</p>
+        <p className="text-sm text-muted-foreground">Fluxo não encontrado.</p>
         <button
           type="button"
           onClick={() => router.push("/flows")}
           className="text-sm text-primary hover:opacity-80"
         >
-          ← Back to flows
+          ← Voltar para Fluxos
         </button>
       </div>
     );
   }
 
-  return <FlowEditorShell initialFlow={flow} initialNodes={nodes} />;
+  return (
+    <FlowEditorShell
+      initialFlow={flow}
+      initialNodes={nodes}
+      channels={channels}
+    />
+  );
 }

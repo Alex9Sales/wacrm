@@ -34,7 +34,11 @@ import { EditorHeader } from "./header";
 import { ValidationPanel } from "./validation-panel";
 import { NODE_META, nodeColors, type NodeType } from "./shared";
 import { cn } from "@/lib/utils";
-import type { FlowRow, FlowNodeRow } from "@/lib/flows/types";
+import type {
+  FlowRow,
+  FlowNodeRow,
+  FlowChannelOption,
+} from "@/lib/flows/types";
 
 /**
  * Below this viewport width we force list view and hide the toggle.
@@ -56,9 +60,10 @@ const LEGEND_TYPES = Object.keys(NODE_META) as NodeType[];
 interface Props {
   initialFlow: FlowRow;
   initialNodes: FlowNodeRow[];
+  channels: FlowChannelOption[];
 }
 
-export function FlowEditorShell({ initialFlow, initialNodes }: Props) {
+export function FlowEditorShell({ initialFlow, initialNodes, channels }: Props) {
   // Read the persisted choice in the useState initializer. Safe even
   // though this is a client component because the parent page only
   // mounts us AFTER a client-side fetch resolves — there's no SSR
@@ -91,7 +96,11 @@ export function FlowEditorShell({ initialFlow, initialNodes }: Props) {
   };
 
   return (
-    <FlowEditorProvider initialFlow={initialFlow} initialNodes={initialNodes}>
+    <FlowEditorProvider
+      initialFlow={initialFlow}
+      initialNodes={initialNodes}
+      channels={channels}
+    >
       <div className="flex h-full min-h-0 flex-col">
         <EditorHeader />
 

@@ -26,6 +26,7 @@ const flowColumns = {
   trigger_type: flows.triggerType,
   trigger_config: flows.triggerConfig,
   entry_node_id: flows.entryNodeId,
+  channel_id: flows.channelId,
   fallback_policy: flows.fallbackPolicy,
   execution_count: flows.executionCount,
   last_executed_at: flows.lastExecutedAt,
@@ -61,6 +62,8 @@ export async function POST(request: Request) {
           description?: string | null
           trigger_type?: 'keyword' | 'first_inbound_message' | 'manual'
           trigger_config?: Record<string, unknown>
+          /** Optional channel binding (null/omitted = todos os canais). */
+          channel_id?: string | null
           /**
            * If set, clone the matching template's name + trigger +
            * entry_node_id + nodes[] into a fresh draft for this user.
@@ -95,6 +98,7 @@ export async function POST(request: Request) {
             triggerType: template.trigger_type,
             triggerConfig: template.trigger_config,
             entryNodeId: template.entry_node_id,
+            channelId: typeof body.channel_id === 'string' ? body.channel_id : null,
           })
           .returning(flowColumns),
         'flow insert failed',
@@ -140,6 +144,7 @@ export async function POST(request: Request) {
           status: 'draft',
           triggerType: trigger_type,
           triggerConfig: body.trigger_config ?? {},
+          channelId: typeof body.channel_id === 'string' ? body.channel_id : null,
         })
         .returning(flowColumns),
       'insert failed',

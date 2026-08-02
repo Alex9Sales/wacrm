@@ -46,6 +46,7 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { type ValidationIssue } from '@/lib/flows/validate';
+import { type FlowChannelOption } from '@/lib/flows/types';
 import {
   NODE_META,
   NodeIconChip,
@@ -75,6 +76,7 @@ export function FlowBuilder() {
   const {
     state,
     setState,
+    channels,
     issues,
     flashKey,
     addNode: addNodeCtx,
@@ -156,6 +158,7 @@ export function FlowBuilder() {
       <TriggerPanel
         state={state}
         setState={setState}
+        channels={channels}
         triggerIssues={issues.filter((i) => i.scope === 'trigger')}
       />
 
@@ -257,15 +260,25 @@ function KeywordsInput({
 // Trigger panel
 // ============================================================
 
+// Sentinel value for the "todos os canais" option — Radix Select can't use
+// an empty string as an item value, so we map this to channel_id=null.
+const ALL_CHANNELS = '__all__';
+
 function TriggerPanel({
   state,
   setState,
+  channels,
   triggerIssues,
 }: {
   state: BuilderState;
   setState: React.Dispatch<React.SetStateAction<BuilderState>>;
+  channels: FlowChannelOption[];
   triggerIssues: ValidationIssue[];
 }) {
+  // A flow bound to a channel that no longer exists (soft-ref): keep the id
+  // so the picker doesn't silently reset it, but flag it so the admin re-picks.
+  const boundMissing =
+    !!state.channel_id && !channels.some((c) => c.id === state.channel_id);
   return (
     <section className="border-border bg-card rounded-lg border p-4">
       <h2 className="text-foreground mb-3 text-sm font-semibold">Acionamento</h2>
@@ -300,6 +313,43 @@ function TriggerPanel({
               </SelectItem>
             </SelectContent>
           </Select>
+        </div>
+        <div>
+          <label className="text-muted-foreground mb-1 block text-xs">
+            Canal
+          </label>
+          <Select
+            value={state.channel_id ?? ALL_CHANNELS}
+            onValueChange={(v) =>
+              setState((s) => ({
+                ...s,
+                channel_id: v === ALL_CHANNELS ? null : v,
+              }))
+            }
+          >
+            <SelectTrigger className="bg-muted">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              <SelectItem value={ALL_CHANNELS}>Todos os canais</SelectItem>
+              {channels.map((c) => (
+                <SelectItem key={c.id} value={c.id}>
+                  {c.name}
+                  {c.phone_number ? ` · ${c.phone_number}` : ''}
+                </SelectItem>
+              ))}
+              {boundMissing && (
+                <SelectItem value={state.channel_id!}>
+                  Canal removido — escolha outro
+                </SelectItem>
+              )}
+            </SelectContent>
+          </Select>
+          <p className="text-muted-foreground mt-1 text-[11px]">
+            {state.channel_id
+              ? 'O fluxo só responde neste canal.'
+              : 'O fluxo responde em qualquer canal que receber a mensagem.'}
+          </p>
         </div>
         {state.trigger_type === 'keyword' && (
           <div>

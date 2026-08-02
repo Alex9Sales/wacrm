@@ -879,6 +879,13 @@ export const flows = pgTable("flows", {
 	triggerType: text("trigger_type").notNull(),
 	triggerConfig: jsonb("trigger_config").default({}).notNull(),
 	entryNodeId: text("entry_node_id"),
+	// Optional channel binding. NULL = "todos os canais" (roda em qualquer
+	// número/canal da conta, comportamento legado). Quando setado, o fluxo só
+	// dispara em inbounds que chegam por ESSE canal — permite fluxos distintos
+	// por canal (suporte, financeiro, Instagram…). Soft-ref (sem FK): se o
+	// canal for excluído, o fluxo simplesmente para de casar (nenhum inbound
+	// tem esse channel_id) em vez de silenciosamente virar "todos os canais".
+	channelId: uuid("channel_id"),
 	fallbackPolicy: jsonb("fallback_policy").default({"on_exhaust":"handoff","max_reprompts":2,"on_timeout_hours":24,"on_unknown_reply":"reprompt"}).notNull(),
 	executionCount: integer("execution_count").default(0).notNull(),
 	lastExecutedAt: timestamp("last_executed_at", { withTimezone: true, mode: 'string' }),

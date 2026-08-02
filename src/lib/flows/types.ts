@@ -237,6 +237,9 @@ export interface FlowRow {
   trigger_type: "keyword" | "first_inbound_message" | "manual";
   trigger_config: KeywordTriggerConfig | FirstInboundTriggerConfig | Record<string, unknown>;
   entry_node_id: string | null;
+  /** Optional channel binding. null = todos os canais da conta (legado);
+   *  quando setado, o fluxo só dispara em inbounds desse canal. */
+  channel_id: string | null;
   fallback_policy: FlowFallbackPolicy;
   execution_count: number;
   last_executed_at: string | null;
@@ -302,6 +305,15 @@ export const DEFAULT_FALLBACK_POLICY: FlowFallbackPolicy = {
   on_timeout_hours: 24,
   on_exhaust: "handoff",
 };
+
+/** Minimal channel shape the builder's "Canal" picker needs. Served by
+ *  GET /api/flows/[id] alongside the flow (account-scoped, SAFE fields). */
+export interface FlowChannelOption {
+  id: string;
+  name: string;
+  provider: string;
+  phone_number: string | null;
+}
 
 // ============================================================
 // Engine input — what `dispatchInboundToFlows` accepts

@@ -104,6 +104,7 @@ const flowSelection = {
   trigger_type: flowsTable.triggerType,
   trigger_config: flowsTable.triggerConfig,
   entry_node_id: flowsTable.entryNodeId,
+  channel_id: flowsTable.channelId,
   fallback_policy: flowsTable.fallbackPolicy,
   execution_count: flowsTable.executionCount,
   last_executed_at: flowsTable.lastExecutedAt,
@@ -448,6 +449,7 @@ async function findEntryFlow(
   accountId: string,
   message: ParsedInbound,
   isFirstInbound: boolean,
+  conversationChannelId: string | null,
 ): Promise<FlowRow | null> {
   // Only text messages can match an entry trigger. Interactive replies
   // are responses to existing prompts; they never start a new flow.
@@ -470,6 +472,13 @@ async function findEntryFlow(
   }
 
   for (const flow of typed) {
+    // Channel binding gate: a flow with channel_id set only fires on
+    // inbounds that arrived on THAT channel. channel_id null = todos os
+    // canais (legacy). If we couldn't resolve the conversation's channel,
+    // only unbound flows may match (a bound flow can't be confirmed).
+    if (flow.channel_id && flow.channel_id !== conversationChannelId) {
+      continue;
+    }
     if (flow.trigger_type === "keyword") {
       if (matchesKeywordTrigger(
         message.text,
@@ -993,10 +1002,21 @@ export async function dispatchInboundToFlows(
     }
 
     // No active run → look for a flow whose entry trigger matches.
+    // Resolve which channel this conversation arrived on so channel-bound
+    // flows only fire on their channel. Null (legacy conv w/o channel_id)
+    // → only unbound "todos os canais" flows will match.
+    const convChannel = firstOrNull(
+      await db
+        .select({ channelId: conversations.channelId })
+        .from(conversations)
+        .where(eq(conversations.id, input.conversationId))
+        .limit(1),
+    );
     const flow = await findEntryFlow(
       input.accountId,
       input.message,
       input.isFirstInboundMessage,
+      convChannel?.channelId ?? null,
     );
     if (!flow || !flow.entry_node_id) {
       return { consumed: false, outcome: "no_match" };
