@@ -58,6 +58,7 @@ import {
   type ConditionNodeConfig,
   type DelayNodeConfig,
   type JumpNodeConfig,
+  type RandomizerNodeConfig,
   type DispatchInboundInput,
   type DispatchInboundResult,
   type FlowNodeRow,
@@ -1007,6 +1008,37 @@ async function advanceFromNodeKey(
         jump_count: jumps,
       });
       currentKey = cfg.target_node_key;
+      continue;
+    }
+    if (node.node_type === "randomizer") {
+      const cfg = node.config as unknown as RandomizerNodeConfig;
+      const branches = (cfg.branches ?? []).filter((b) => b.next_node_key);
+      const total = branches.reduce(
+        (s, b) => s + Math.max(0, Number(b.weight) || 0),
+        0,
+      );
+      if (branches.length === 0 || total <= 0) {
+        await logEvent(run.id, "error", node.node_key, {
+          reason: "randomizer_no_branches",
+        });
+        await endRun(run.id, "failed", "randomizer_no_branches");
+        return { outcome: "completed" };
+      }
+      // Weighted pick. Math.random() is fine here (engine runs in the app,
+      // not the deterministic workflow sandbox).
+      let r = Math.random() * total;
+      let chosen = branches[branches.length - 1];
+      for (const b of branches) {
+        r -= Math.max(0, Number(b.weight) || 0);
+        if (r <= 0) {
+          chosen = b;
+          break;
+        }
+      }
+      await logEvent(run.id, "node_entered", node.node_key, {
+        branch: chosen.id,
+      });
+      currentKey = chosen.next_node_key;
       continue;
     }
     if (node.node_type === "delay") {

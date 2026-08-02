@@ -757,6 +757,7 @@ function AddNodeButton({ onAdd }: { onAdd: (type: NodeType) => void }) {
     'set_tag',
     'delay',
     'jump',
+    'randomizer',
     'handoff',
     'end',
   ];

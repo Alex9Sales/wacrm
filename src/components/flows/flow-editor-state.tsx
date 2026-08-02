@@ -203,6 +203,13 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
       return { duration: { value: 1, unit: "days" }, next_node_key: "" };
     case "jump":
       return { target_node_key: "" };
+    case "randomizer":
+      return {
+        branches: [
+          { id: "a", weight: 50, next_node_key: "" },
+          { id: "b", weight: 50, next_node_key: "" },
+        ],
+      };
     case "handoff":
       return {
         customer_message:

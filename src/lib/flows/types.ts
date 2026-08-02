@@ -203,6 +203,22 @@ export interface JumpNodeConfig {
   target_node_key: string;
 }
 
+/**
+ * Splits the run randomly across N weighted branches (ManyChat's
+ * "Randomizador"). Great for A/B testing messages. Weights are relative —
+ * the engine normalizes them, so they don't have to sum to 100.
+ */
+export interface RandomizerNodeConfig {
+  branches: Array<{
+    /** Stable id (for the canvas edge handle). */
+    id: string;
+    /** Relative weight; the engine picks proportionally. */
+    weight: number;
+    /** node_key this branch advances to. */
+    next_node_key: string;
+  }>;
+}
+
 // Terminal nodes carry no config — they just stop the run.
 export type EndNodeConfig = Record<string, never>;
 
@@ -225,6 +241,7 @@ export type FlowNodeConfig =
   | { node_type: "set_tag"; config: SetTagNodeConfig }
   | { node_type: "delay"; config: DelayNodeConfig }
   | { node_type: "jump"; config: JumpNodeConfig }
+  | { node_type: "randomizer"; config: RandomizerNodeConfig }
   | { node_type: "handoff"; config: HandoffNodeConfig }
   | { node_type: "end"; config: EndNodeConfig };
 

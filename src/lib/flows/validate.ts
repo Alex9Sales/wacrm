@@ -783,6 +783,93 @@ function validateNode(
       break;
     }
 
+    case "randomizer": {
+      const cfg = node.config as {
+        branches?: Array<{
+          id?: string;
+          weight?: number;
+          next_node_key?: string;
+        }>;
+      };
+      const branches = cfg.branches ?? [];
+      if (branches.length < 2) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "branches",
+          message: "O randomizador precisa de pelo menos 2 ramos.",
+        });
+      }
+      const totalWeight = branches.reduce(
+        (s, b) =>
+          s + (typeof b.weight === "number" ? Math.max(0, b.weight) : 0),
+        0,
+      );
+      if (totalWeight <= 0) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "branches",
+          message: "Ao menos um ramo precisa de porcentagem maior que 0.",
+        });
+      }
+      const seenIds = new Set<string>();
+      branches.forEach((b, i) => {
+        const field = `branches.${i}`;
+        if (!b.id?.trim()) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: `${field}.id`,
+            message: `O ramo ${i + 1} precisa de um id.`,
+          });
+        } else if (seenIds.has(b.id)) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: `${field}.id`,
+            message: `Id de ramo duplicado "${b.id}".`,
+          });
+        }
+        if (b.id) seenIds.add(b.id);
+        if (
+          typeof b.weight !== "number" ||
+          !Number.isFinite(b.weight) ||
+          b.weight < 0
+        ) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: `${field}.weight`,
+            message: `O ramo ${i + 1} precisa de uma porcentagem maior ou igual a 0.`,
+          });
+        }
+        if (!b.next_node_key) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: `${field}.next_node_key`,
+            message: `O ramo ${i + 1} precisa apontar para um próximo nó.`,
+          });
+        } else if (!knownKeys.has(b.next_node_key)) {
+          issues.push({
+            severity: "error",
+            scope: "node",
+            node_key: node.node_key,
+            field: `${field}.next_node_key`,
+            message: `O ramo ${i + 1} aponta para um nó inexistente "${b.next_node_key}".`,
+          });
+        }
+      });
+      break;
+    }
+
     case "handoff":
     case "end":
       // Terminal nodes have no outgoing edges; nothing to validate
@@ -851,6 +938,14 @@ function outgoingEdges(node: NodeInput): string[] {
     case "jump": {
       const cfg = node.config as { target_node_key?: string };
       return cfg.target_node_key ? [cfg.target_node_key] : [];
+    }
+    case "randomizer": {
+      const cfg = node.config as {
+        branches?: Array<{ next_node_key?: string }>;
+      };
+      return (cfg.branches ?? [])
+        .map((b) => b.next_node_key)
+        .filter((k): k is string => !!k);
     }
     case "send_buttons": {
       const cfg = node.config as {

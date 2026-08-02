@@ -284,6 +284,16 @@ export function NodeConfigForm({
       );
     }
 
+    case "randomizer":
+      return (
+        <RandomizerForm
+          cfg={cfg as RandomizerCfg}
+          allNodes={allNodes}
+          currentKey={node.node_key}
+          onUpdateConfig={onUpdateConfig}
+        />
+      );
+
     case "handoff": {
       const hcfg = cfg as {
         note?: string;
@@ -727,6 +737,130 @@ function SendListForm({
         )}
       </div>
     </>
+  );
+}
+
+// ============================================================
+// randomizer (ManyChat-style A/B split)
+// ============================================================
+
+interface RandomizerCfg {
+  branches?: Array<{ id: string; weight: number; next_node_key: string }>;
+}
+
+function RandomizerForm({
+  cfg,
+  allNodes,
+  currentKey,
+  onUpdateConfig,
+}: {
+  cfg: RandomizerCfg;
+  allNodes: BuilderNode[];
+  currentKey: string;
+  onUpdateConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const branches = cfg.branches ?? [];
+  const total = branches.reduce(
+    (s, b) => s + (typeof b.weight === "number" ? Math.max(0, b.weight) : 0),
+    0,
+  );
+
+  const updateBranch = (
+    idx: number,
+    patch: Partial<NonNullable<RandomizerCfg["branches"]>[number]>,
+  ) => {
+    onUpdateConfig({
+      branches: branches.map((b, i) => (i === idx ? { ...b, ...patch } : b)),
+    });
+  };
+  const addBranch = () => {
+    // Stable, human-friendly ids (a, b, c…) — reused by the canvas edge
+    // handles (`branch:<id>`), so they must stay unique within the node.
+    const used = new Set(branches.map((b) => b.id));
+    let id = "";
+    for (let c = 0; c < 26; c += 1) {
+      const cand = String.fromCharCode(97 + c);
+      if (!used.has(cand)) {
+        id = cand;
+        break;
+      }
+    }
+    if (!id) id = `r${branches.length + 1}`;
+    onUpdateConfig({
+      branches: [...branches, { id, weight: 0, next_node_key: "" }],
+    });
+  };
+  const removeBranch = (idx: number) =>
+    onUpdateConfig({ branches: branches.filter((_, i) => i !== idx) });
+
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-[11px] text-muted-foreground">
+        Divide as execuções entre os ramos por sorteio. Bom para testar
+        mensagens diferentes (teste A/B). Os pesos são relativos — não precisam
+        somar 100.
+      </p>
+      <div className="flex flex-col gap-3">
+        {branches.map((b, i) => {
+          const w = typeof b.weight === "number" ? Math.max(0, b.weight) : 0;
+          const pct = total > 0 ? Math.round((w / total) * 100) : 0;
+          return (
+            <div
+              key={i}
+              className="grid grid-cols-1 gap-2 rounded-md border border-border bg-muted/40 p-3 md:grid-cols-[7rem_1fr_auto]"
+            >
+              <div>
+                <label className="mb-1 block text-[10px] text-muted-foreground">
+                  Peso ({pct}%)
+                </label>
+                <Input
+                  type="number"
+                  min={0}
+                  value={String(w)}
+                  onChange={(e) =>
+                    updateBranch(i, {
+                      weight: Math.max(0, Number(e.target.value) || 0),
+                    })
+                  }
+                  className="bg-muted"
+                />
+              </div>
+              <div>
+                <label className="mb-1 block text-[10px] text-muted-foreground">
+                  Ramo {(b.id ?? "").toUpperCase()} → próximo nó
+                </label>
+                <NodeKeySelect
+                  value={b.next_node_key || null}
+                  nodes={allNodes}
+                  excludeKey={currentKey}
+                  onChange={(v) => updateBranch(i, { next_node_key: v ?? "" })}
+                  placeholder="Próximo nó…"
+                />
+              </div>
+              <div className="flex items-end">
+                {branches.length > 2 && (
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => removeBranch(i)}
+                    className="text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                    aria-label="Remover ramo"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                )}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+      <div>
+        <Button variant="ghost" size="sm" onClick={addBranch}>
+          <Plus className="h-3.5 w-3.5" />
+          Adicionar ramo
+        </Button>
+      </div>
+    </div>
   );
 }
 

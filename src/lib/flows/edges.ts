@@ -77,6 +77,35 @@ export function deriveCanvasEdges(nodes: BuilderNode[]): CanvasEdge[] {
         break;
       }
 
+      case "randomizer": {
+        const branches = Array.isArray(
+          (cfg as { branches?: unknown }).branches,
+        )
+          ? ((cfg as { branches: Array<Record<string, unknown>> }).branches)
+          : [];
+        const total = branches.reduce<number>(
+          (s, b) =>
+            s + (typeof b.weight === "number" ? Math.max(0, b.weight) : 0),
+          0,
+        );
+        for (const br of branches) {
+          const id = typeof br.id === "string" ? br.id : null;
+          const next =
+            typeof br.next_node_key === "string" ? br.next_node_key : null;
+          if (!id || !next || !knownKeys.has(next)) continue;
+          const w = typeof br.weight === "number" ? Math.max(0, br.weight) : 0;
+          const pct = total > 0 ? Math.round((w / total) * 100) : 0;
+          edges.push({
+            id: `${node.node_key}--branch:${id}--${next}`,
+            source: node.node_key,
+            target: next,
+            sourceHandle: `branch:${id}`,
+            label: `${pct}%`,
+          });
+        }
+        break;
+      }
+
       case "condition": {
         const trueNext = (cfg as { true_next?: string }).true_next;
         const falseNext = (cfg as { false_next?: string }).false_next;
@@ -205,6 +234,25 @@ export function outgoingSlots(node: BuilderNode): OutgoingSlot[] {
         { id: "false", label: "false" },
       ];
 
+    case "randomizer": {
+      const branches = Array.isArray((cfg as { branches?: unknown }).branches)
+        ? ((cfg as { branches: Array<Record<string, unknown>> }).branches)
+        : [];
+      const total = branches.reduce<number>(
+        (s, b) =>
+          s + (typeof b.weight === "number" ? Math.max(0, b.weight) : 0),
+        0,
+      );
+      return branches
+        .filter((b) => typeof b.id === "string" && b.id)
+        .map((b) => {
+          const id = b.id as string;
+          const w = typeof b.weight === "number" ? Math.max(0, b.weight) : 0;
+          const pct = total > 0 ? Math.round((w / total) * 100) : 0;
+          return { id: `branch:${id}`, label: `${pct}%` };
+        });
+    }
+
     case "send_buttons": {
       const buttons = Array.isArray((cfg as { buttons?: unknown }).buttons)
         ? ((cfg as { buttons: Array<Record<string, unknown>> }).buttons)
@@ -283,6 +331,24 @@ export function applyEdgeConnection(
       if (sourceHandle === "true") return { true_next: targetKey };
       if (sourceHandle === "false") return { false_next: targetKey };
       return null;
+
+    case "randomizer": {
+      if (!sourceHandle.startsWith("branch:")) return null;
+      const branchId = sourceHandle.slice("branch:".length);
+      const branches = Array.isArray(
+        (node.config as { branches?: unknown }).branches,
+      )
+        ? (node.config as {
+            branches: Array<Record<string, unknown>>;
+          }).branches
+        : [];
+      if (!branches.some((b) => b.id === branchId)) return null;
+      return {
+        branches: branches.map((b) =>
+          b.id === branchId ? { ...b, next_node_key: targetKey } : b,
+        ),
+      };
+    }
 
     case "send_buttons": {
       if (!sourceHandle.startsWith("button:")) return null;
@@ -380,6 +446,19 @@ function patchedConfigWithoutKey(
       const next = (cfg as { target_node_key?: string }).target_node_key;
       if (next !== deletedKey) return null;
       return { ...cfg, target_node_key: "" };
+    }
+
+    case "randomizer": {
+      const branches = Array.isArray((cfg as { branches?: unknown }).branches)
+        ? (cfg as { branches: Array<Record<string, unknown>> }).branches
+        : [];
+      if (!branches.some((b) => b.next_node_key === deletedKey)) return null;
+      return {
+        ...cfg,
+        branches: branches.map((b) =>
+          b.next_node_key === deletedKey ? { ...b, next_node_key: "" } : b,
+        ),
+      };
     }
 
     case "condition": {

@@ -27,6 +27,7 @@ import {
   Paperclip,
   PlayCircle,
   Repeat,
+  Shuffle,
   Tag,
   UserPlus,
   Workflow,
@@ -53,6 +54,7 @@ export type NodeType =
   | 'set_tag'
   | 'delay'
   | 'jump'
+  | 'randomizer'
   | 'handoff'
   | 'end';
 
@@ -170,6 +172,13 @@ export const NODE_META: Record<
     blurb: 'Salta para outro nó (permite loops/reinício)',
     category: 'flow',
   },
+  randomizer: {
+    label: 'Randomizador',
+    icon: Shuffle,
+    color: 'text-violet-400',
+    blurb: 'Divide o fluxo em ramos por porcentagem (teste A/B)',
+    category: 'logic',
+  },
   handoff: {
     label: 'Transferir para atendente',
     icon: UserPlus,
@@ -225,6 +234,7 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   set_tag: { l: 0.65, c: 0.15, h: 350 }, // pink
   delay: { l: 0.62, c: 0.04, h: 250 }, // slate — a quiet pause
   jump: { l: 0.68, c: 0.15, h: 45 }, // orange — a loop back
+  randomizer: { l: 0.62, c: 0.18, h: 300 }, // violet — a roll of the dice
   handoff: { l: 0.65, c: 0.17, h: 16 }, // rose — hands off
   end: { l: 0.55, c: 0.01, h: 260 }, // neutral grey — terminal
 };
@@ -456,6 +466,26 @@ export function summarizeNode(node: BuilderNode): string | null {
       const target =
         typeof cfg.target_node_key === 'string' ? cfg.target_node_key : '';
       return target ? `Pular para ${target}` : 'Pular para (nenhum nó)';
+    }
+    case 'randomizer': {
+      const branches = Array.isArray(cfg.branches)
+        ? (cfg.branches as Array<Record<string, unknown>>)
+        : [];
+      const linked = branches.filter(
+        (b) => typeof b.next_node_key === 'string' && b.next_node_key
+      );
+      if (linked.length === 0) return 'Divide o fluxo (nenhum ramo)';
+      const total = branches.reduce<number>(
+        (s, b) => s + (typeof b.weight === 'number' ? Math.max(0, b.weight) : 0),
+        0
+      );
+      const pcts = branches
+        .map((b) => {
+          const w = typeof b.weight === 'number' ? Math.max(0, b.weight) : 0;
+          return total > 0 ? Math.round((w / total) * 100) : 0;
+        })
+        .join('/');
+      return `${linked.length} ramos · ${pcts}%`;
     }
     case 'handoff': {
       const note = typeof cfg.note === 'string' ? cfg.note : '';

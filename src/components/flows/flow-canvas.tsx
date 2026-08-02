@@ -694,6 +694,7 @@ const ADD_NODE_TYPES: NodeType[] = [
   'set_tag',
   'delay',
   'jump',
+  'randomizer',
   'handoff',
   'end',
 ];
