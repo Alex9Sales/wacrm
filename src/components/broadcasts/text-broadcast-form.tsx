@@ -21,7 +21,6 @@ import {
   SelectContent,
   SelectItem,
   SelectTrigger,
-  SelectValue,
 } from '@/components/ui/select'
 import {
   listTextBroadcastChannels,
@@ -436,7 +435,15 @@ export function TextBroadcastForm() {
           <Label>Canal</Label>
           <Select value={channelId} onValueChange={(v) => v && setChannelId(v)}>
             <SelectTrigger className="w-full bg-muted border-border">
-              <SelectValue placeholder="Escolha o canal" />
+              {/* Render the label ourselves (name only) instead of Radix's
+                  auto-capture, which can fall back to the raw channel id. */}
+              {channelId ? (
+                <span className="truncate">
+                  {channels.find((c) => c.id === channelId)?.name ?? 'Canal'}
+                </span>
+              ) : (
+                <span className="text-muted-foreground">Escolha o canal</span>
+              )}
             </SelectTrigger>
             <SelectContent>
               {channels.map((c) => (

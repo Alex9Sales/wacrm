@@ -27,7 +27,7 @@
 import { useEffect, useState } from "react";
 import { GitFork, List } from "lucide-react";
 
-import { FlowBuilder } from "./flow-builder";
+import { FlowBuilder, TriggerPanel } from "./flow-builder";
 import { FlowCanvas } from "./flow-canvas";
 import { FlowEditorProvider } from "./flow-editor-state";
 import { EditorHeader } from "./header";
@@ -144,6 +144,12 @@ export function FlowEditorShell({ initialFlow, initialNodes, channels }: Props) 
             </div>
           </div>
         )}
+
+        {/* ---- Acionamento (gatilho + canal): shared above the stage so it
+            shows in BOTH the Diagrama and Lista views (was list-only). ---- */}
+        <div className="px-6 pb-3">
+          <TriggerPanel />
+        </div>
 
         {/* ---- stage: the active view, owning its own overflow ---- */}
         <div className="relative mx-6 min-h-0 flex-1 overflow-hidden rounded-xl border border-border bg-card-2">

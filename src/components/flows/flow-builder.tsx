@@ -46,7 +46,6 @@ import {
 } from '@/components/ui/dropdown-menu';
 import { cn } from '@/lib/utils';
 import { type ValidationIssue } from '@/lib/flows/validate';
-import { type FlowChannelOption } from '@/lib/flows/types';
 import {
   NODE_META,
   NodeIconChip,
@@ -76,7 +75,6 @@ export function FlowBuilder() {
   const {
     state,
     setState,
-    channels,
     issues,
     flashKey,
     addNode: addNodeCtx,
@@ -155,13 +153,8 @@ export function FlowBuilder() {
 
   return (
     <div className="mx-auto flex max-w-3xl flex-col gap-6 px-6 py-7">
-      <TriggerPanel
-        state={state}
-        setState={setState}
-        channels={channels}
-        triggerIssues={issues.filter((i) => i.scope === 'trigger')}
-      />
-
+      {/* Acionamento (gatilho + canal) agora é montado pelo shell, acima da
+          área do editor, pra aparecer no Diagrama e na Lista. */}
       <EntryPicker state={state} setState={setState} />
 
       <section className="flex flex-col gap-3">
@@ -264,21 +257,24 @@ function KeywordsInput({
 // an empty string as an item value, so we map this to channel_id=null.
 const ALL_CHANNELS = '__all__';
 
-function TriggerPanel({
-  state,
-  setState,
-  channels,
-  triggerIssues,
-}: {
-  state: BuilderState;
-  setState: React.Dispatch<React.SetStateAction<BuilderState>>;
-  channels: FlowChannelOption[];
-  triggerIssues: ValidationIssue[];
-}) {
+// Reads straight from the editor context so it can render in BOTH views —
+// the shell mounts it above the stage so the Acionamento (gatilho + canal) is
+// visible/editable no Diagrama e na Lista, não só na Lista.
+export function TriggerPanel() {
+  const { state, setState, channels, issues } = useFlowEditor();
+  const triggerIssues = issues.filter((i) => i.scope === 'trigger');
   // A flow bound to a channel that no longer exists (soft-ref): keep the id
   // so the picker doesn't silently reset it, but flag it so the admin re-picks.
   const boundMissing =
     !!state.channel_id && !channels.some((c) => c.id === state.channel_id);
+  // We render the trigger's label ourselves (name only) instead of relying on
+  // Radix's <SelectValue> auto-capture: the flow editor re-renders hard on
+  // every edit (dirty/validation), which made Radix drop the cached item text
+  // and fall back to showing the raw channel UUID.
+  const selectedChannelLabel = !state.channel_id
+    ? 'Todos os canais'
+    : (channels.find((c) => c.id === state.channel_id)?.name ??
+      'Canal removido — escolha outro');
   return (
     <section className="border-border bg-card rounded-lg border p-4">
       <h2 className="text-foreground mb-3 text-sm font-semibold">Acionamento</h2>
@@ -328,7 +324,7 @@ function TriggerPanel({
             }
           >
             <SelectTrigger className="bg-muted">
-              <SelectValue />
+              <span className="truncate">{selectedChannelLabel}</span>
             </SelectTrigger>
             <SelectContent>
               <SelectItem value={ALL_CHANNELS}>Todos os canais</SelectItem>
