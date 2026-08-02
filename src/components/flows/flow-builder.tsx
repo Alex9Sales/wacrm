@@ -39,6 +39,7 @@ import {
 import {
   DropdownMenu,
   DropdownMenuContent,
+  DropdownMenuGroup,
   DropdownMenuItem,
   DropdownMenuLabel,
   DropdownMenuSeparator,
@@ -636,20 +637,26 @@ function AddNodeButton({ onAdd }: { onAdd: (type: NodeType) => void }) {
       </DropdownMenuTrigger>
       <DropdownMenuContent align="end" className="border-border bg-popover">
         {groupNodeTypesByCategory(types).map((group, i) => (
+          // GroupLabel (DropdownMenuLabel) is a Base UI Menu group part and
+          // MUST sit inside a Menu.Group (DropdownMenuGroup) or it throws
+          // "MenuGroupContext is missing" (#31). The separator stays between
+          // groups, outside the group.
           <div key={group.id}>
             {i > 0 && <DropdownMenuSeparator />}
-            <DropdownMenuLabel className="text-muted-foreground text-[11px] font-semibold tracking-wider uppercase">
-              {group.label}
-            </DropdownMenuLabel>
-            {group.types.map((t) => {
-              const meta = NODE_META[t];
-              return (
-                <DropdownMenuItem key={t} onClick={() => onAdd(t)}>
-                  <meta.icon className={cn('h-3.5 w-3.5', meta.color)} />
-                  {meta.label}
-                </DropdownMenuItem>
-              );
-            })}
+            <DropdownMenuGroup>
+              <DropdownMenuLabel className="text-muted-foreground text-[11px] font-semibold tracking-wider uppercase">
+                {group.label}
+              </DropdownMenuLabel>
+              {group.types.map((t) => {
+                const meta = NODE_META[t];
+                return (
+                  <DropdownMenuItem key={t} onClick={() => onAdd(t)}>
+                    <meta.icon className={cn('h-3.5 w-3.5', meta.color)} />
+                    {meta.label}
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuGroup>
           </div>
         ))}
       </DropdownMenuContent>
