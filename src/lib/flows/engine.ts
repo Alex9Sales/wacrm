@@ -1089,21 +1089,35 @@ export async function dispatchInboundToFlows(
     }
 
     // No active run → look for a flow whose entry trigger matches.
-    // Resolve which channel this conversation arrived on so channel-bound
-    // flows only fire on their channel. Null (legacy conv w/o channel_id)
-    // → only unbound "todos os canais" flows will match.
-    const convChannel = firstOrNull(
+    // Resolve the conversation's channel (channel-bound flows only fire on
+    // their channel) AND status. Null channel (legacy conv) → only unbound
+    // "todos os canais" flows match.
+    const conv = firstOrNull(
       await db
-        .select({ channelId: conversations.channelId })
+        .select({
+          channelId: conversations.channelId,
+          status: conversations.status,
+        })
         .from(conversations)
         .where(eq(conversations.id, input.conversationId))
         .limit(1),
     );
+
+    // Don't (re)START a flow when a human already owns the conversation. After
+    // a handoff (or an exhausted/timed-out fallback) the status is 'pending'
+    // and an attendant is handling it — the bot resending its menu would
+    // steamroll them. A flow should only auto-start on an OPEN conversation.
+    // Active runs are handled ABOVE this point, so an in-progress flow is never
+    // affected — this only blocks brand-new auto-starts.
+    if (conv?.status === "pending") {
+      return { consumed: false, outcome: "suppressed_human_owned" };
+    }
+
     const flow = await findEntryFlow(
       input.accountId,
       input.message,
       input.isFirstInboundMessage,
-      convChannel?.channelId ?? null,
+      conv?.channelId ?? null,
     );
     if (!flow || !flow.entry_node_id) {
       return { consumed: false, outcome: "no_match" };

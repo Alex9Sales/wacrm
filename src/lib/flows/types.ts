@@ -382,6 +382,7 @@ export interface DispatchInboundResult {
     | "handed_off"
     | "fallback_fired"
     | "duplicate_inbound_ignored"
+    | "suppressed_human_owned"
     | "no_match";
 }
 
