@@ -197,7 +197,11 @@ export function NodeConfigForm({
       );
 
     case "handoff": {
-      const hcfg = cfg as { note?: string; assign_to?: string };
+      const hcfg = cfg as {
+        note?: string;
+        assign_to?: string;
+        customer_message?: string;
+      };
       const assignMissing =
         !!hcfg.assign_to &&
         !members.some((m) => m.user_id === hcfg.assign_to);
@@ -210,6 +214,13 @@ export function NodeConfigForm({
           "Atendente removido");
       return (
         <div className="flex flex-col gap-3">
+          <TextRow
+            label="Mensagem para o cliente (opcional)"
+            value={hcfg.customer_message ?? ""}
+            onChange={(v) => onUpdateConfig({ customer_message: v })}
+            rows={2}
+            placeholder="Ex.: Perfeito! Vou te transferir para um atendente. Um instante 🙂"
+          />
           <div>
             <label className="mb-1 block text-xs text-muted-foreground">
               Atribuir a

@@ -98,7 +98,11 @@ export interface SendMediaNodeConfig {
 }
 
 export interface HandoffNodeConfig {
-  /** Optional internal note written to flow_run_events.payload.note. */
+  /** Optional message SENT TO THE CUSTOMER when handing off, so they get a
+   *  reply instead of silence after picking an option. */
+  customer_message?: string;
+  /** Optional internal note — posted as an internal note in the conversation
+   *  (visible to the team, never to the customer). */
   note?: string;
   /**
    * Optional agent user_id to assign on the conversation when this

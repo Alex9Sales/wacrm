@@ -112,6 +112,8 @@ const WELCOME_MENU: FlowTemplate = {
       node_key: "existing_handoff",
       node_type: "handoff",
       config: {
+        customer_message:
+          "Perfeito! Já estou te encaminhando para um atendente. Um instante 🙂",
         note: "Cliente já cadastrado precisa de ajuda — confira o histórico da conta antes de responder.",
       } as HandoffNodeConfig,
     },
@@ -119,6 +121,8 @@ const WELCOME_MENU: FlowTemplate = {
       node_key: "new_handoff",
       node_type: "handoff",
       config: {
+        customer_message:
+          "Que bom te ver por aqui! Já estou te passando para um atendente. Um instante 🙂",
         note: "Cliente novo — enviar preços + link de boas-vindas.",
       } as HandoffNodeConfig,
     },
@@ -214,6 +218,8 @@ const FAQ_BOT: FlowTemplate = {
       node_key: "human_handoff",
       node_type: "handoff",
       config: {
+        customer_message:
+          "Claro! Já estou te passando para um atendente. Um instante 🙂",
         note: "Cliente pediu para falar com um atendente pelo bot de perguntas frequentes.",
       } as HandoffNodeConfig,
     },

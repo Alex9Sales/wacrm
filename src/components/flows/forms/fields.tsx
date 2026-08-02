@@ -35,11 +35,13 @@ export function TextRow({
   value,
   onChange,
   rows = 1,
+  placeholder,
 }: {
   label: string;
   value: string;
   onChange: (v: string) => void;
   rows?: number;
+  placeholder?: string;
 }) {
   return (
     <div>
@@ -49,12 +51,14 @@ export function TextRow({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           rows={rows}
+          placeholder={placeholder}
           className="bg-muted"
         />
       ) : (
         <Input
           value={value}
           onChange={(e) => onChange(e.target.value)}
+          placeholder={placeholder}
           className="bg-muted"
         />
       )}

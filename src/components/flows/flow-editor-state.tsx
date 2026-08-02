@@ -196,7 +196,11 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
     case "set_tag":
       return { mode: "add", tag_id: "", next_node_key: "" };
     case "handoff":
-      return { note: "" };
+      return {
+        customer_message:
+          "Perfeito! Vou te transferir para um atendente. Um instante 🙂",
+        note: "",
+      };
     case "end":
       return {};
   }

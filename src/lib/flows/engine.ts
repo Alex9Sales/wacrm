@@ -42,6 +42,7 @@ import {
   flowRuns,
   flows as flowsTable,
   messages,
+  notifications,
 } from "@/db";
 import { firstOrNull, firstOrThrow } from "@/db/helpers";
 import { and, asc, count, desc, eq, inArray, isNull, sql } from "drizzle-orm";
@@ -576,12 +577,32 @@ async function sendListAndSuspend(
 }
 
 async function executeHandoff(run: FlowRunRow, node: FlowNodeRow): Promise<void> {
-  const cfg = node.config as { assign_to?: string; note?: string };
+  const cfg = node.config as {
+    assign_to?: string;
+    note?: string;
+    customer_message?: string;
+  };
   if (run.conversation_id) {
-    // Post the internal note INTO the conversation thread so the attendant
-    // who picks it up actually reads it. Before, the note only landed in
-    // flow_run_events (the runs viewer) and was invisible in the inbox.
-    // isInternal=true → shown to the team, never sent to the customer.
+    // 1) Optional customer-facing message so the person isn't left hanging
+    //    after picking an option ("Vou te transferir pra um atendente…").
+    const customerMsg = cfg.customer_message?.trim();
+    if (customerMsg) {
+      try {
+        await engineSendText({
+          accountId: run.account_id,
+          userId: run.user_id,
+          conversationId: run.conversation_id,
+          contactId: run.contact_id!,
+          text: customerMsg,
+        });
+      } catch (err) {
+        console.error("[flows] handoff customer message failed:", err);
+      }
+    }
+
+    // 2) Post the internal note INTO the conversation thread so the attendant
+    //    who picks it up actually reads it (was only in flow_run_events).
+    //    isInternal=true → shown to the team, never sent to the customer.
     const note = cfg.note?.trim();
     if (note) {
       try {
@@ -597,19 +618,62 @@ async function executeHandoff(run: FlowRunRow, node: FlowNodeRow): Promise<void>
         console.error("[flows] handoff internal note insert failed:", err);
       }
     }
+
+    // 3) Assign + notify. The `notify_conversation_assigned` DB trigger only
+    //    fires when assigned_agent_id actually CHANGES, so a flow handing a
+    //    conversation to the agent already on it wouldn't notify. Read the
+    //    current assignee first: if our assignment is a no-op for the trigger,
+    //    insert the notification ourselves so a handoff ALWAYS alerts the agent.
+    const assignTo = cfg.assign_to || null;
     const convUpdate: Partial<typeof conversations.$inferInsert> = {
       status: "pending",
       updatedAt: new Date().toISOString(),
     };
-    // Assigning fires the `notify_conversation_assigned` DB trigger → the
-    // agent gets a "Nova conversa atribuída" notification that deep-links to
-    // this conversation (where the note now sits). No assignee → the
-    // conversation just goes pending in the sector's queue.
-    if (cfg.assign_to) convUpdate.assignedAgentId = cfg.assign_to;
+    if (assignTo) convUpdate.assignedAgentId = assignTo;
+
+    let triggerWillNotify = false;
+    if (assignTo) {
+      const current = firstOrNull(
+        await db
+          .select({ assignedAgentId: conversations.assignedAgentId })
+          .from(conversations)
+          .where(eq(conversations.id, run.conversation_id))
+          .limit(1),
+      );
+      // Trigger fires only when the new assignee differs from the old one.
+      triggerWillNotify = current?.assignedAgentId !== assignTo;
+    }
+
     await db
       .update(conversations)
       .set(convUpdate)
       .where(eq(conversations.id, run.conversation_id));
+
+    if (assignTo && !triggerWillNotify && run.contact_id) {
+      // Trigger skipped (agent was already the assignee) — notify explicitly.
+      try {
+        const contact = firstOrNull(
+          await db
+            .select({ name: contacts.name, phone: contacts.phone })
+            .from(contacts)
+            .where(eq(contacts.id, run.contact_id))
+            .limit(1),
+        );
+        const contactName =
+          contact?.name?.trim() || contact?.phone || "um contato";
+        await db.insert(notifications).values({
+          accountId: run.account_id,
+          userId: assignTo,
+          type: "conversation_assigned",
+          conversationId: run.conversation_id,
+          contactId: run.contact_id,
+          title: "Nova conversa atribuída",
+          body: `Você recebeu uma conversa com ${contactName}`,
+        });
+      } catch (err) {
+        console.error("[flows] handoff notification insert failed:", err);
+      }
+    }
   }
   await logEvent(run.id, "handoff", node.node_key, {
     note: cfg.note ?? null,
