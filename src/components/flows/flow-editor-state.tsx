@@ -54,6 +54,7 @@ import type {
   FlowNodeRow,
   FlowRow,
   FlowChannelOption,
+  FlowMemberOption,
 } from "@/lib/flows/types";
 import { NODE_META, slugify, type BuilderNode, type NodeType } from "./shared";
 
@@ -79,6 +80,9 @@ export interface FlowEditorContextValue {
 
   /** Account's channels for the "Canal" picker (SAFE fields only). */
   channels: FlowChannelOption[];
+
+  /** Account's members for the handoff "Atribuir a" picker (names only). */
+  members: FlowMemberOption[];
 
   // Authored state
   state: BuilderState;
@@ -238,6 +242,7 @@ interface ProviderProps {
   initialFlow: FlowRow;
   initialNodes: FlowNodeRow[];
   channels: FlowChannelOption[];
+  members: FlowMemberOption[];
   children: ReactNode;
 }
 
@@ -245,6 +250,7 @@ export function FlowEditorProvider({
   initialFlow,
   initialNodes,
   channels,
+  members,
   children,
 }: ProviderProps) {
   const router = useRouter();
@@ -533,6 +539,7 @@ export function FlowEditorProvider({
     () => ({
       flow: initialFlow,
       channels,
+      members,
       state,
       setState,
       dirty,
@@ -555,6 +562,7 @@ export function FlowEditorProvider({
     [
       initialFlow,
       channels,
+      members,
       state,
       setState,
       dirty,

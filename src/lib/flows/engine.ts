@@ -578,10 +578,33 @@ async function sendListAndSuspend(
 async function executeHandoff(run: FlowRunRow, node: FlowNodeRow): Promise<void> {
   const cfg = node.config as { assign_to?: string; note?: string };
   if (run.conversation_id) {
+    // Post the internal note INTO the conversation thread so the attendant
+    // who picks it up actually reads it. Before, the note only landed in
+    // flow_run_events (the runs viewer) and was invisible in the inbox.
+    // isInternal=true → shown to the team, never sent to the customer.
+    const note = cfg.note?.trim();
+    if (note) {
+      try {
+        await db.insert(messages).values({
+          conversationId: run.conversation_id,
+          senderType: "bot",
+          contentType: "text",
+          contentText: note,
+          isInternal: true,
+          status: "sent",
+        });
+      } catch (err) {
+        console.error("[flows] handoff internal note insert failed:", err);
+      }
+    }
     const convUpdate: Partial<typeof conversations.$inferInsert> = {
       status: "pending",
       updatedAt: new Date().toISOString(),
     };
+    // Assigning fires the `notify_conversation_assigned` DB trigger → the
+    // agent gets a "Nova conversa atribuída" notification that deep-links to
+    // this conversation (where the note now sits). No assignee → the
+    // conversation just goes pending in the sector's queue.
     if (cfg.assign_to) convUpdate.assignedAgentId = cfg.assign_to;
     await db
       .update(conversations)

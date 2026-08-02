@@ -47,7 +47,12 @@ import {
 import { cn } from "@/lib/utils";
 import { uploadAccountMedia, MEDIA_MAX_BYTES } from "@/lib/storage/upload-media";
 import { slugify, type BuilderNode } from "../shared";
+import { useFlowEditor } from "../flow-editor-state";
 import { NextNodeRow, NodeKeySelect, TextRow } from "./fields";
+
+// Sentinel for the handoff "Atribuir a" picker — Base UI Select can't use an
+// empty string as an item value, so this maps to assign_to = null (sector queue).
+const SECTOR_QUEUE = "__sector_queue__";
 
 interface NodeConfigFormProps {
   node: BuilderNode;
@@ -62,6 +67,9 @@ export function NodeConfigForm({
   showAdvanced,
   onUpdateConfig,
 }: NodeConfigFormProps) {
+  // Members drive the handoff "Atribuir a" picker. Always inside the editor
+  // provider (both list card + canvas sheet), so this is safe.
+  const { members } = useFlowEditor();
   const cfg = node.config;
   switch (node.node_type) {
     case "start":
@@ -188,15 +196,64 @@ export function NodeConfigForm({
         />
       );
 
-    case "handoff":
+    case "handoff": {
+      const hcfg = cfg as { note?: string; assign_to?: string };
+      const assignMissing =
+        !!hcfg.assign_to &&
+        !members.some((m) => m.user_id === hcfg.assign_to);
+      // Render the label ourselves (name only) rather than Base UI's
+      // <SelectValue>, which drops the cached text on the editor's heavy
+      // re-renders and falls back to the raw user id.
+      const assignedLabel = !hcfg.assign_to
+        ? "Fila do setor (quem pegar primeiro)"
+        : (members.find((m) => m.user_id === hcfg.assign_to)?.full_name ||
+          "Atendente removido");
       return (
-        <TextRow
-          label="Nota interna (para o atendente que assumir)"
-          value={(cfg as { note?: string }).note ?? ""}
-          onChange={(v) => onUpdateConfig({ note: v })}
-          rows={2}
-        />
+        <div className="flex flex-col gap-3">
+          <div>
+            <label className="mb-1 block text-xs text-muted-foreground">
+              Atribuir a
+            </label>
+            <Select
+              value={hcfg.assign_to ?? SECTOR_QUEUE}
+              onValueChange={(v) =>
+                onUpdateConfig({ assign_to: v === SECTOR_QUEUE ? null : v })
+              }
+            >
+              <SelectTrigger className="bg-muted">
+                <span className="truncate">{assignedLabel}</span>
+              </SelectTrigger>
+              <SelectContent>
+                <SelectItem value={SECTOR_QUEUE}>
+                  Fila do setor (quem pegar primeiro)
+                </SelectItem>
+                {members.map((m) => (
+                  <SelectItem key={m.user_id} value={m.user_id}>
+                    {m.full_name || "(sem nome)"}
+                  </SelectItem>
+                ))}
+                {assignMissing && (
+                  <SelectItem value={hcfg.assign_to!}>
+                    Atendente removido — escolha outro
+                  </SelectItem>
+                )}
+              </SelectContent>
+            </Select>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              {hcfg.assign_to
+                ? "A conversa vai pra esse atendente e ele recebe uma notificação."
+                : "A conversa fica pendente no setor para a equipe pegar."}
+            </p>
+          </div>
+          <TextRow
+            label="Nota interna (aparece na conversa para o atendente)"
+            value={hcfg.note ?? ""}
+            onChange={(v) => onUpdateConfig({ note: v })}
+            rows={2}
+          />
+        </div>
       );
+    }
 
     case "end":
       return (

@@ -38,6 +38,7 @@ import type {
   FlowRow,
   FlowNodeRow,
   FlowChannelOption,
+  FlowMemberOption,
 } from "@/lib/flows/types";
 
 /**
@@ -61,9 +62,15 @@ interface Props {
   initialFlow: FlowRow;
   initialNodes: FlowNodeRow[];
   channels: FlowChannelOption[];
+  members: FlowMemberOption[];
 }
 
-export function FlowEditorShell({ initialFlow, initialNodes, channels }: Props) {
+export function FlowEditorShell({
+  initialFlow,
+  initialNodes,
+  channels,
+  members,
+}: Props) {
   // Read the persisted choice in the useState initializer. Safe even
   // though this is a client component because the parent page only
   // mounts us AFTER a client-side fetch resolves — there's no SSR
@@ -100,6 +107,7 @@ export function FlowEditorShell({ initialFlow, initialNodes, channels }: Props) 
       initialFlow={initialFlow}
       initialNodes={initialNodes}
       channels={channels}
+      members={members}
     >
       <div className="flex h-full min-h-0 flex-col">
         <EditorHeader />

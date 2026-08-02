@@ -315,6 +315,14 @@ export interface FlowChannelOption {
   phone_number: string | null;
 }
 
+/** Minimal member shape the handoff node's "Atribuir a" picker needs.
+ *  Served by GET /api/flows/[id] alongside the flow. */
+export interface FlowMemberOption {
+  user_id: string;
+  full_name: string;
+  avatar_url: string | null;
+}
+
 // ============================================================
 // Engine input — what `dispatchInboundToFlows` accepts
 // ============================================================

@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { and, asc, eq } from 'drizzle-orm'
-import { db, flows, flowNodes, channels } from '@/db'
+import { db, flows, flowNodes, channels, member, user } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 
@@ -71,7 +71,7 @@ export async function GET(
     const { id } = await context.params
     const ctx = await getCurrentAccount()
 
-    const [flow, nodes, channelList] = await Promise.all([
+    const [flow, nodes, channelList, memberList] = await Promise.all([
       db
         .select(flowColumns)
         .from(flows)
@@ -96,11 +96,28 @@ export async function GET(
         .from(channels)
         .where(eq(channels.accountId, ctx.accountId))
         .orderBy(asc(channels.name)),
+      // Members for the handoff node's "Atribuir a" picker. Names only
+      // (no emails) — matches the agent/viewer visibility of the members API.
+      db
+        .select({
+          user_id: member.userId,
+          full_name: user.name,
+          avatar_url: user.image,
+        })
+        .from(member)
+        .innerJoin(user, eq(member.userId, user.id))
+        .where(eq(member.organizationId, ctx.accountId))
+        .orderBy(asc(user.name)),
     ])
     if (!flow) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
     }
-    return NextResponse.json({ flow, nodes, channels: channelList })
+    return NextResponse.json({
+      flow,
+      nodes,
+      channels: channelList,
+      members: memberList,
+    })
   } catch (err) {
     return toErrorResponse(err)
   }

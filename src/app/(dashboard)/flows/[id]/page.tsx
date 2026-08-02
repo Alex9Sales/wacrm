@@ -10,6 +10,7 @@ import type {
   FlowRow,
   FlowNodeRow,
   FlowChannelOption,
+  FlowMemberOption,
 } from "@/lib/flows/types";
 
 /**
@@ -31,6 +32,7 @@ export default function FlowEditorPage() {
   const [flow, setFlow] = useState<FlowRow | null>(null);
   const [nodes, setNodes] = useState<FlowNodeRow[]>([]);
   const [channels, setChannels] = useState<FlowChannelOption[]>([]);
+  const [members, setMembers] = useState<FlowMemberOption[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
 
@@ -49,11 +51,13 @@ export default function FlowEditorPage() {
           flow: FlowRow;
           nodes: FlowNodeRow[];
           channels?: FlowChannelOption[];
+          members?: FlowMemberOption[];
         };
         if (!cancelled) {
           setFlow(json.flow);
           setNodes(json.nodes ?? []);
           setChannels(json.channels ?? []);
+          setMembers(json.members ?? []);
         }
       } catch (err) {
         if (!cancelled) {
@@ -96,6 +100,7 @@ export default function FlowEditorPage() {
       initialFlow={flow}
       initialNodes={nodes}
       channels={channels}
+      members={members}
     />
   );
 }
