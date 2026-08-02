@@ -1,14 +1,16 @@
 // ============================================================
-// Flow scheduler worker — a 1-minute repeatable tick that resumes drip flow
-// runs whose `delay` node has elapsed. Kept tiny: the actual logic lives in
-// lib/flows/engine.ts (resumeSleepingRuns) so it stays testable and
-// web-importable. Mirrors sla-worker's shape.
+// Flow scheduler worker — a 1-minute repeatable tick that (a) resumes drip
+// flow runs whose `delay` node has elapsed and (b) fires the no-reply timeout
+// on runs parked at a suspending node past their deadline. Kept tiny: the
+// actual logic lives in lib/flows/engine.ts (resumeSleepingRuns /
+// resumeTimedOutRuns) so it stays testable and web-importable. Mirrors
+// sla-worker's shape.
 // ============================================================
 
 import { Queue, Worker } from 'bullmq';
 
 import { bullConnection } from '@/lib/queue/connection';
-import { resumeSleepingRuns } from '@/lib/flows/engine';
+import { resumeSleepingRuns, resumeTimedOutRuns } from '@/lib/flows/engine';
 
 const FLOW_SCHEDULER_QUEUE = 'flow-scheduler';
 
@@ -37,6 +39,10 @@ export function startFlowSchedulerWorker(): Worker {
       const { resumed } = await resumeSleepingRuns();
       if (resumed > 0) {
         console.log(`[flow-scheduler] resumed ${resumed} drip run(s)`);
+      }
+      const { fired } = await resumeTimedOutRuns();
+      if (fired > 0) {
+        console.log(`[flow-scheduler] fired ${fired} no-reply timeout(s)`);
       }
     },
     { connection: bullConnection(), concurrency: 1 },

@@ -209,6 +209,94 @@ describe("deriveCanvasEdges — http_fetch (ok/error branches)", () => {
   });
 });
 
+describe("no-reply timeout edges (send_buttons / collect_input)", () => {
+  it("emits an additive timeout edge alongside the reply edges", () => {
+    const edges = deriveCanvasEdges(
+      nodes(
+        {
+          node_key: "b",
+          node_type: "send_buttons",
+          config: {
+            text: "?",
+            buttons: [{ reply_id: "y", title: "Sim", next_node_key: "ok" }],
+            timeout: {
+              duration: { value: 2, unit: "hours" },
+              timeout_node_key: "nudge",
+            },
+          },
+        },
+        { node_key: "ok", node_type: "end", config: {} },
+        { node_key: "nudge", node_type: "end", config: {} },
+      ),
+    );
+    expect(edges).toHaveLength(2);
+    expect(edges.find((e) => e.sourceHandle === "timeout")).toMatchObject({
+      target: "nudge",
+      label: "sem resposta",
+    });
+  });
+
+  it("exposes a timeout slot only when a timeout is configured", () => {
+    const withTimeout: BuilderNode = {
+      node_key: "c",
+      node_type: "collect_input",
+      config: {
+        prompt_text: "?",
+        var_key: "x",
+        next_node_key: "ok",
+        timeout: {
+          duration: { value: 1, unit: "days" },
+          timeout_node_key: "t",
+        },
+      },
+    };
+    expect(outgoingSlots(withTimeout).map((s) => s.id)).toEqual([
+      "next",
+      "timeout",
+    ]);
+    const without: BuilderNode = {
+      node_key: "c",
+      node_type: "collect_input",
+      config: { prompt_text: "?", var_key: "x", next_node_key: "ok" },
+    };
+    expect(outgoingSlots(without).map((s) => s.id)).toEqual(["next"]);
+  });
+
+  it("connects the timeout handle and unlinks its target on delete", () => {
+    const node: BuilderNode = {
+      node_key: "c",
+      node_type: "collect_input",
+      config: { prompt_text: "?", var_key: "x", next_node_key: "ok" },
+    };
+    // Connecting arms a default duration + the dragged target.
+    expect(applyEdgeConnection(node, "timeout", "t")).toEqual({
+      timeout: { duration: { value: 1, unit: "hours" }, timeout_node_key: "t" },
+    });
+    // Deleting the timeout target clears only timeout_node_key.
+    const [cleared] = unlinkNodeReferences(
+      [
+        {
+          ...node,
+          config: {
+            prompt_text: "?",
+            var_key: "x",
+            next_node_key: "ok",
+            timeout: {
+              duration: { value: 3, unit: "hours" },
+              timeout_node_key: "t",
+            },
+          },
+        },
+      ],
+      "t",
+    );
+    expect(cleared.config).toMatchObject({
+      next_node_key: "ok",
+      timeout: { duration: { value: 3, unit: "hours" }, timeout_node_key: "" },
+    });
+  });
+});
+
 describe("deriveCanvasEdges — send_buttons (per-button)", () => {
   it("emits one edge per button, labeled with the button title", () => {
     const edges = deriveCanvasEdges(

@@ -173,6 +173,12 @@ export function NodeConfigForm({
             onChange={(v) => onUpdateConfig({ next_node_key: v })}
             label="Após capturar, avançar para"
           />
+          <TimeoutSection
+            timeout={(cfg as { timeout?: TimeoutCfg }).timeout}
+            allNodes={allNodes}
+            currentKey={node.node_key}
+            onUpdateConfig={onUpdateConfig}
+          />
         </>
       );
 
@@ -334,6 +340,7 @@ interface SendButtonsCfg {
   text?: string;
   footer_text?: string;
   buttons?: Array<{ reply_id: string; title: string; next_node_key: string }>;
+  timeout?: TimeoutCfg;
 }
 
 function SendButtonsForm({
@@ -451,6 +458,12 @@ function SendButtonsForm({
           </Button>
         )}
       </div>
+      <TimeoutSection
+        timeout={cfg.timeout}
+        allNodes={allNodes}
+        currentKey={currentKey}
+        onUpdateConfig={onUpdateConfig}
+      />
     </>
   );
 }
@@ -472,6 +485,7 @@ interface SendListCfg {
       next_node_key: string;
     }>;
   }>;
+  timeout?: TimeoutCfg;
 }
 
 function SendListForm({
@@ -688,6 +702,12 @@ function SendListForm({
           </Button>
         )}
       </div>
+      <TimeoutSection
+        timeout={cfg.timeout}
+        allNodes={allNodes}
+        currentKey={currentKey}
+        onUpdateConfig={onUpdateConfig}
+      />
     </>
   );
 }
@@ -1250,6 +1270,126 @@ function HttpFetchForm({
           label="Se erro → avançar para (opcional)"
         />
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// Shared no-reply timeout section (send_buttons / send_list /
+// collect_input) — the "se o cliente sumir, faz X" path.
+// ============================================================
+
+interface TimeoutCfg {
+  duration?: { value?: number; unit?: "minutes" | "hours" | "days" };
+  timeout_node_key?: string;
+}
+
+const TIMEOUT_DEFAULT: TimeoutCfg = {
+  duration: { value: 1, unit: "hours" },
+  timeout_node_key: "",
+};
+
+function TimeoutSection({
+  timeout,
+  allNodes,
+  currentKey,
+  onUpdateConfig,
+}: {
+  timeout?: TimeoutCfg;
+  allNodes: BuilderNode[];
+  currentKey: string;
+  onUpdateConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const on = !!timeout;
+  const value =
+    typeof timeout?.duration?.value === "number" ? timeout.duration.value : 1;
+  const unit = timeout?.duration?.unit ?? "hours";
+  const unitLabel =
+    unit === "days" ? "Dias" : unit === "minutes" ? "Minutos" : "Horas";
+  return (
+    <div className="rounded-md border border-border bg-muted/40 p-3">
+      <label className="flex items-center gap-2 text-xs font-medium text-foreground">
+        <input
+          type="checkbox"
+          checked={on}
+          onChange={(e) =>
+            onUpdateConfig({
+              timeout: e.target.checked ? TIMEOUT_DEFAULT : undefined,
+            })
+          }
+          className="h-3.5 w-3.5 accent-primary"
+        />
+        Se o cliente não responder em…
+      </label>
+      {on && (
+        <div className="mt-3 flex flex-col gap-3">
+          <div className="grid grid-cols-2 gap-3">
+            <div>
+              <label className="mb-1 block text-[10px] text-muted-foreground">
+                Tempo
+              </label>
+              <Input
+                type="number"
+                min={1}
+                value={String(value)}
+                onChange={(e) =>
+                  onUpdateConfig({
+                    timeout: {
+                      ...(timeout ?? TIMEOUT_DEFAULT),
+                      duration: {
+                        value: Math.max(1, Number(e.target.value) || 1),
+                        unit,
+                      },
+                    },
+                  })
+                }
+                className="bg-muted"
+              />
+            </div>
+            <div>
+              <label className="mb-1 block text-[10px] text-muted-foreground">
+                Unidade
+              </label>
+              <Select
+                value={unit}
+                onValueChange={(v) =>
+                  onUpdateConfig({
+                    timeout: {
+                      ...(timeout ?? TIMEOUT_DEFAULT),
+                      duration: { value, unit: v },
+                    },
+                  })
+                }
+              >
+                <SelectTrigger className="bg-muted">
+                  <span className="truncate">{unitLabel}</span>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="minutes">Minutos</SelectItem>
+                  <SelectItem value="hours">Horas</SelectItem>
+                  <SelectItem value="days">Dias</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+          <NextNodeRow
+            value={timeout?.timeout_node_key ?? ""}
+            allNodes={allNodes}
+            currentKey={currentKey}
+            onChange={(v) =>
+              onUpdateConfig({
+                timeout: { ...(timeout ?? TIMEOUT_DEFAULT), timeout_node_key: v },
+              })
+            }
+            label="…seguir por aqui (caminho “sem resposta”)"
+          />
+          <p className="text-[10px] text-muted-foreground">
+            Prazo contado a partir do envio. Bom para um lembrete ou transferir
+            se o cliente sumir. Se ele responder antes, o prazo é cancelado.
+            (Verificado a cada ~1 min.)
+          </p>
+        </div>
+      )}
     </div>
   );
 }

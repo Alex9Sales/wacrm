@@ -212,9 +212,46 @@ export function deriveCanvasEdges(nodes: BuilderNode[]): CanvasEdge[] {
         // Terminal nodes — no outgoing edges.
         break;
     }
+
+    // Optional no-reply timeout edge — additive on the suspending node
+    // types (send_buttons / send_list / collect_input).
+    const timeoutTarget = (
+      node.config as { timeout?: { timeout_node_key?: string } }
+    ).timeout?.timeout_node_key;
+    if (
+      (node.node_type === "send_buttons" ||
+        node.node_type === "send_list" ||
+        node.node_type === "collect_input") &&
+      timeoutTarget &&
+      knownKeys.has(timeoutTarget)
+    ) {
+      edges.push({
+        id: `${node.node_key}--timeout--${timeoutTarget}`,
+        source: node.node_key,
+        target: timeoutTarget,
+        sourceHandle: "timeout",
+        label: "sem resposta",
+      });
+    }
   }
 
   return edges;
+}
+
+/** True for node types that can carry an optional no-reply timeout path. */
+function canHaveTimeout(nodeType: BuilderNode["node_type"]): boolean {
+  return (
+    nodeType === "send_buttons" ||
+    nodeType === "send_list" ||
+    nodeType === "collect_input"
+  );
+}
+
+/** The `timeout` outgoing slot when a node has a timeout configured. */
+function timeoutSlots(node: BuilderNode): OutgoingSlot[] {
+  if (!canHaveTimeout(node.node_type)) return [];
+  const t = (node.config as { timeout?: unknown }).timeout;
+  return t ? [{ id: "timeout", label: "Sem resposta" }] : [];
 }
 
 // ============================================================
@@ -246,11 +283,14 @@ export function outgoingSlots(node: BuilderNode): OutgoingSlot[] {
     case "start":
     case "send_message":
     case "send_media":
-    case "collect_input":
     case "set_tag":
     case "delay":
     case "jump":
       return [{ id: "next", label: "Next" }];
+
+    case "collect_input":
+      // Own case so the optional timeout slot can be appended.
+      return [{ id: "next", label: "Next" }, ...timeoutSlots(node)];
 
     case "condition":
       return [
@@ -287,16 +327,19 @@ export function outgoingSlots(node: BuilderNode): OutgoingSlot[] {
       const buttons = Array.isArray((cfg as { buttons?: unknown }).buttons)
         ? ((cfg as { buttons: Array<Record<string, unknown>> }).buttons)
         : [];
-      return buttons
-        .filter((b) => typeof b.reply_id === "string" && b.reply_id)
-        .map((b) => {
-          const replyId = b.reply_id as string;
-          const title = typeof b.title === "string" ? b.title : null;
-          return {
-            id: `button:${replyId}`,
-            label: title ?? replyId,
-          };
-        });
+      return [
+        ...buttons
+          .filter((b) => typeof b.reply_id === "string" && b.reply_id)
+          .map((b) => {
+            const replyId = b.reply_id as string;
+            const title = typeof b.title === "string" ? b.title : null;
+            return {
+              id: `button:${replyId}`,
+              label: title ?? replyId,
+            };
+          }),
+        ...timeoutSlots(node),
+      ];
     }
 
     case "send_list": {
@@ -319,7 +362,7 @@ export function outgoingSlots(node: BuilderNode): OutgoingSlot[] {
           });
         }
       }
-      return slots;
+      return [...slots, ...timeoutSlots(node)];
     }
 
     case "handoff":
@@ -343,6 +386,22 @@ export function applyEdgeConnection(
   sourceHandle: string,
   targetKey: string,
 ): Record<string, unknown> | null {
+  // The no-reply timeout handle is shared across the suspending node
+  // types — patch it here so each case below stays focused on its own
+  // reply-driven edges. Preserve any existing duration.
+  if (sourceHandle === "timeout" && canHaveTimeout(node.node_type)) {
+    const existing = (
+      node.config as {
+        timeout?: { duration?: unknown };
+      }
+    ).timeout;
+    return {
+      timeout: {
+        duration: existing?.duration ?? { value: 1, unit: "hours" },
+        timeout_node_key: targetKey,
+      },
+    };
+  }
   switch (node.node_type) {
     case "start":
     case "send_message":
@@ -461,6 +520,25 @@ export function unlinkNodeReferences(
 }
 
 function patchedConfigWithoutKey(
+  node: BuilderNode,
+  deletedKey: string,
+): Record<string, unknown> | null {
+  const base = basePatchWithoutKey(node, deletedKey);
+  // Also clear a no-reply timeout target that points at the deleted node.
+  // Merges on top of `base` so a node that references `deletedKey` from BOTH
+  // a reply edge and its timeout gets both cleared.
+  const to = (node.config as { timeout?: { timeout_node_key?: string } })
+    .timeout;
+  if (to && to.timeout_node_key === deletedKey) {
+    return {
+      ...(base ?? node.config),
+      timeout: { ...to, timeout_node_key: "" },
+    };
+  }
+  return base;
+}
+
+function basePatchWithoutKey(
   node: BuilderNode,
   deletedKey: string,
 ): Record<string, unknown> | null {

@@ -195,6 +195,65 @@ function validateTrigger(
 // Per-node
 // ============================================================
 
+/**
+ * Validate an optional no-reply `timeout` on a suspending node
+ * (send_buttons / send_list / collect_input). Only runs when present.
+ */
+function validateWaitTimeout(
+  nodeKey: string,
+  timeout:
+    | {
+        duration?: { value?: number; unit?: string };
+        timeout_node_key?: string;
+      }
+    | undefined,
+  knownKeys: Set<string>,
+): ValidationIssue[] {
+  if (!timeout) return [];
+  const issues: ValidationIssue[] = [];
+  const value = timeout.duration?.value;
+  if (typeof value !== "number" || !Number.isFinite(value) || value <= 0) {
+    issues.push({
+      severity: "error",
+      scope: "node",
+      node_key: nodeKey,
+      field: "timeout.duration.value",
+      message: "O tempo do timeout precisa ser um número maior que 0.",
+    });
+  }
+  if (
+    !timeout.duration?.unit ||
+    !["minutes", "hours", "days"].includes(timeout.duration.unit)
+  ) {
+    issues.push({
+      severity: "error",
+      scope: "node",
+      node_key: nodeKey,
+      field: "timeout.duration.unit",
+      message: "Escolha a unidade do timeout (minutos, horas ou dias).",
+    });
+  }
+  if (!timeout.timeout_node_key) {
+    issues.push({
+      severity: "error",
+      scope: "node",
+      node_key: nodeKey,
+      field: "timeout.timeout_node_key",
+      message:
+        'O timeout precisa apontar para um nó (o caminho de "sem resposta").',
+    });
+  } else if (!knownKeys.has(timeout.timeout_node_key)) {
+    issues.push({
+      severity: "error",
+      scope: "node",
+      node_key: nodeKey,
+      field: "timeout.timeout_node_key",
+      message: `O timeout aponta para um nó inexistente "${timeout.timeout_node_key}".`,
+    });
+  }
+  return issues;
+}
+
 function validateNode(
   node: NodeInput,
   knownKeys: Set<string>,
@@ -409,6 +468,14 @@ function validateNode(
           });
         }
       });
+      issues.push(
+        ...validateWaitTimeout(
+          node.node_key,
+          (node.config as { timeout?: Parameters<typeof validateWaitTimeout>[1] })
+            .timeout,
+          knownKeys,
+        ),
+      );
       break;
     }
 
@@ -542,6 +609,14 @@ function validateNode(
           }
         });
       });
+      issues.push(
+        ...validateWaitTimeout(
+          node.node_key,
+          (node.config as { timeout?: Parameters<typeof validateWaitTimeout>[1] })
+            .timeout,
+          knownKeys,
+        ),
+      );
       break;
     }
 
@@ -594,6 +669,14 @@ function validateNode(
           message: `A coleta aponta para um nó inexistente "${cfg.next_node_key}".`,
         });
       }
+      issues.push(
+        ...validateWaitTimeout(
+          node.node_key,
+          (node.config as { timeout?: Parameters<typeof validateWaitTimeout>[1] })
+            .timeout,
+          knownKeys,
+        ),
+      );
       break;
     }
 
@@ -1053,6 +1136,24 @@ export function reachableFromEntry(
 }
 
 function outgoingEdges(node: NodeInput): string[] {
+  const base = baseOutgoingEdges(node);
+  // Include the optional no-reply timeout target so a node reachable ONLY
+  // via a timeout path isn't wrongly flagged unreachable.
+  const timeoutTarget = (
+    node.config as { timeout?: { timeout_node_key?: string } }
+  ).timeout?.timeout_node_key;
+  if (
+    timeoutTarget &&
+    (node.node_type === "send_buttons" ||
+      node.node_type === "send_list" ||
+      node.node_type === "collect_input")
+  ) {
+    return [...base, timeoutTarget];
+  }
+  return base;
+}
+
+function baseOutgoingEdges(node: NodeInput): string[] {
   switch (node.node_type) {
     case "start":
     case "send_message":

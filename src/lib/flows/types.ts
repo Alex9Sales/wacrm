@@ -34,6 +34,23 @@ export interface SendMessageNodeConfig {
   next_node_key: string;
 }
 
+/**
+ * Optional "no-reply timeout" on a node that suspends awaiting the
+ * customer (send_buttons / send_list / collect_input). When set, the run
+ * parks with a deadline; if no reply lands before it, the flows scheduler
+ * routes the run down `timeout_node_key` instead of leaving it stuck
+ * forever. This is the "se o cliente sumir, faz X" path (a follow-up
+ * nudge, a handoff, or ending the flow).
+ */
+export interface WaitTimeoutConfig {
+  duration: {
+    value: number;
+    unit: "minutes" | "hours" | "days";
+  };
+  /** node_key to advance to when the reply window elapses. */
+  timeout_node_key: string;
+}
+
 export interface SendButtonsNodeConfig {
   text: string;
   /** Optional header / footer lines around the buttons. */
@@ -48,6 +65,8 @@ export interface SendButtonsNodeConfig {
     /** node_key the runner advances to when this button is tapped. */
     next_node_key: string;
   }>;
+  /** Optional no-reply timeout path. */
+  timeout?: WaitTimeoutConfig;
 }
 
 export interface SendListNodeConfig {
@@ -66,6 +85,8 @@ export interface SendListNodeConfig {
       next_node_key: string;
     }>;
   }>;
+  /** Optional no-reply timeout path. */
+  timeout?: WaitTimeoutConfig;
 }
 
 /**
@@ -138,6 +159,8 @@ export interface CollectInputNodeConfig {
   regex?: string;
   /** Node to advance to after capture. */
   next_node_key: string;
+  /** Optional no-reply timeout path. */
+  timeout?: WaitTimeoutConfig;
 }
 
 export type ConditionOperator =

@@ -966,12 +966,18 @@ export const flowRuns = pgTable("flow_runs", {
 	// Drip: when a run hits a `delay` node it sleeps (status='sleeping') with
 	// resume_at = the wake time; the flows scheduler worker resumes it once due.
 	resumeAt: timestamp("resume_at", { withTimezone: true, mode: 'string' }),
+	// No-reply timeout: when a run parks at a suspending node with a `timeout`
+	// config, timeout_at holds the reply deadline. The scheduler routes the run
+	// down the node's timeout path once it passes (if no reply cleared it first).
+	timeoutAt: timestamp("timeout_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
 	index("idx_flow_runs_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	index("idx_flow_runs_active_advanced").using("btree", table.lastAdvancedAt.asc().nullsLast().op("timestamptz_ops")).where(sql`(status = 'active'::text)`),
 	index("idx_flow_runs_flow_started").using("btree", table.flowId.asc().nullsLast().op("uuid_ops"), table.startedAt.desc().nullsFirst().op("timestamptz_ops")),
 	// Due-sleeping-run lookup for the scheduler worker.
 	index("idx_flow_runs_sleeping_resume").using("btree", table.resumeAt.asc().nullsLast().op("timestamptz_ops")).where(sql`(status = 'sleeping'::text)`),
+	// Due-timeout lookup for the scheduler worker (active runs awaiting a reply).
+	index("idx_flow_runs_timeout").using("btree", table.timeoutAt.asc().nullsLast().op("timestamptz_ops")).where(sql`((status = 'active'::text) AND (timeout_at IS NOT NULL))`),
 	// One live run per contact — now covers BOTH active and sleeping so a
 	// contact mid-drip can't start a second flow.
 	uniqueIndex("idx_one_active_run_per_contact").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops")).where(sql`(status = ANY (ARRAY['active'::text, 'sleeping'::text]))`),

@@ -60,6 +60,7 @@ import {
   type JumpNodeConfig,
   type RandomizerNodeConfig,
   type HttpFetchNodeConfig,
+  type WaitTimeoutConfig,
   type DispatchInboundInput,
   type DispatchInboundResult,
   type FlowNodeRow,
@@ -915,6 +916,7 @@ async function advanceFromNodeKey(
         run.id,
         run.current_node_key,
         node.node_key,
+        computeTimeoutAtIso(cfg.timeout),
       );
       if (!advanced) {
         await logEvent(run.id, "error", node.node_key, {
@@ -1107,11 +1109,15 @@ async function advanceFromNodeKey(
     }
     if (node.node_type === "send_buttons") {
       await sendButtonsAndSuspend(run, node);
-      // Persist the new current_node_key via optimistic UPDATE.
+      // Persist the new current_node_key via optimistic UPDATE, arming the
+      // no-reply timeout deadline (null when the node has no timeout).
       const advanced = await advanceCurrentNodeKey(
         run.id,
         run.current_node_key,
         node.node_key,
+        computeTimeoutAtIso(
+          (node.config as unknown as SendButtonsNodeConfig).timeout,
+        ),
       );
       if (!advanced) {
         await logEvent(run.id, "error", node.node_key, {
@@ -1126,6 +1132,9 @@ async function advanceFromNodeKey(
         run.id,
         run.current_node_key,
         node.node_key,
+        computeTimeoutAtIso(
+          (node.config as unknown as SendListNodeConfig).timeout,
+        ),
       );
       if (!advanced) {
         await logEvent(run.id, "error", node.node_key, {
@@ -1168,6 +1177,7 @@ async function advanceCurrentNodeKey(
   runId: string,
   expectedOldKey: string | null,
   newKey: string,
+  timeoutAtIso: string | null = null,
 ): Promise<boolean> {
   try {
     const rows = await db
@@ -1175,6 +1185,9 @@ async function advanceCurrentNodeKey(
       .set({
         currentNodeKey: newKey,
         lastAdvancedAt: new Date().toISOString(),
+        // Always (re)stamp the timeout so a run parking at a new suspending
+        // node never inherits the previous node's stale deadline.
+        timeoutAt: timeoutAtIso,
       })
       .where(
         and(
@@ -1194,6 +1207,22 @@ async function advanceCurrentNodeKey(
     );
     return false;
   }
+}
+
+/**
+ * Deadline ISO for a suspending node's no-reply timeout, or null when the
+ * node has no (valid) timeout. A non-positive / malformed duration yields
+ * null so a mis-authored timeout never traps the run instantly.
+ */
+function computeTimeoutAtIso(
+  timeout: WaitTimeoutConfig | undefined,
+): string | null {
+  if (!timeout || !timeout.timeout_node_key) return null;
+  const value = Number(timeout.duration?.value);
+  const unit = timeout.duration?.unit ?? "minutes";
+  if (!Number.isFinite(value) || value <= 0) return null;
+  const perUnitSeconds = unit === "days" ? 86400 : unit === "hours" ? 3600 : 60;
+  return new Date(Date.now() + value * perUnitSeconds * 1000).toISOString();
 }
 
 /**
@@ -1352,6 +1381,8 @@ async function sleepRun(
         status: "sleeping",
         currentNodeKey: nextKey,
         resumeAt: resumeAtIso,
+        // A sleeping (drip) run isn't awaiting a reply — drop any timeout.
+        timeoutAt: null,
         lastAdvancedAt: new Date().toISOString(),
       })
       .where(
@@ -1410,6 +1441,9 @@ export async function resumeSleepingRuns(
         .set({
           status: "active",
           resumeAt: null,
+          // Defensive: a re-suspend downstream re-arms it; never resume with
+          // a stale deadline.
+          timeoutAt: null,
           lastAdvancedAt: new Date().toISOString(),
         })
         .where(and(eq(flowRuns.id, run.id), eq(flowRuns.status, "sleeping")))
@@ -1440,6 +1474,103 @@ export async function resumeSleepingRuns(
     }
   }
   return { resumed };
+}
+
+/**
+ * Fire the no-reply timeout on every active run whose deadline has passed.
+ * Runs on the same scheduler tick as resumeSleepingRuns. For each due run:
+ * re-read the parked node's timeout target, atomically claim the transition
+ * (CAS on current_node_key so a reply that landed first wins the race and
+ * this becomes a no-op), then walk forward down the timeout path.
+ */
+export async function resumeTimedOutRuns(
+  limit = 100,
+): Promise<{ fired: number }> {
+  const nowIso = new Date().toISOString();
+  let due: FlowRunRow[];
+  try {
+    due = (await db
+      .select(flowRunSelection)
+      .from(flowRuns)
+      .where(
+        and(eq(flowRuns.status, "active"), lte(flowRuns.timeoutAt, nowIso)),
+      )
+      .orderBy(asc(flowRuns.timeoutAt))
+      .limit(limit)) as unknown as FlowRunRow[];
+  } catch (err) {
+    console.error(
+      "[flows] resumeTimedOutRuns query error:",
+      err instanceof Error ? err.message : err,
+    );
+    return { fired: 0 };
+  }
+
+  let fired = 0;
+  for (const run of due) {
+    const parkedKey = run.current_node_key;
+    if (!parkedKey) {
+      // Malformed — clear the deadline so it stops being re-selected.
+      try {
+        await db
+          .update(flowRuns)
+          .set({ timeoutAt: null })
+          .where(eq(flowRuns.id, run.id));
+      } catch {
+        // ignore
+      }
+      continue;
+    }
+    try {
+      const nodes = await loadAllNodes(run.flow_id);
+      const node = nodes.get(parkedKey) ?? null;
+      const cfg = node?.config as { timeout?: WaitTimeoutConfig } | undefined;
+      const timeoutTarget = cfg?.timeout?.timeout_node_key ?? null;
+
+      if (!timeoutTarget) {
+        // Stale deadline (node lost its timeout or changed type) — clear it.
+        await db
+          .update(flowRuns)
+          .set({ timeoutAt: null })
+          .where(eq(flowRuns.id, run.id));
+        continue;
+      }
+
+      // Atomic claim: only fire while the run is STILL parked at this node.
+      // If a reply advanced current_node_key first, the CAS matches nothing.
+      const claimed = await db
+        .update(flowRuns)
+        .set({
+          currentNodeKey: timeoutTarget,
+          timeoutAt: null,
+          lastAdvancedAt: new Date().toISOString(),
+        })
+        .where(
+          and(
+            eq(flowRuns.id, run.id),
+            eq(flowRuns.status, "active"),
+            eq(flowRuns.currentNodeKey, parkedKey),
+          ),
+        )
+        .returning({ id: flowRuns.id });
+      if (claimed.length === 0) continue;
+
+      await logEvent(run.id, "timeout", parkedKey, {
+        timeout_node_key: timeoutTarget,
+      });
+      await advanceFromNodeKey(
+        { ...run, status: "active", current_node_key: timeoutTarget },
+        timeoutTarget,
+        nodes,
+      );
+      fired += 1;
+    } catch (err) {
+      console.error(
+        "[flows] timeout advance failed:",
+        err instanceof Error ? err.message : err,
+      );
+    }
+  }
+  return { fired };
 }
 
 // ============================================================
@@ -1751,6 +1882,19 @@ async function handleReplyForActiveRun(
   }
 
   if (matched) {
+    // The customer replied → cancel this node's no-reply timeout so the
+    // scheduler can't also fire it. A downstream re-suspend re-arms a
+    // fresh one; the terminal case (no re-suspend) just leaves it clear.
+    try {
+      await db
+        .update(flowRuns)
+        .set({ timeoutAt: null })
+        .where(eq(flowRuns.id, run.id));
+    } catch {
+      // Non-fatal — a stale deadline on a run that advances past its
+      // node is harmless (the scheduler's claim CAS on current_node_key
+      // fails once the node moves).
+    }
     // Reset reprompt count on a successful match. Skip the write when
     // already 0 — the collect_input capture branch above already
     // zeroed it, and interactive-reply matches against a fresh run
