@@ -1398,6 +1398,33 @@ export const wahaProvider: WhatsAppProvider = {
       // (`encCommentMessage` — E2E-encrypted, we can't read it) comes in with no
       // readable body/media. Drop it: it must NOT become an empty "[text]" row —
       // in a monitored group it would spam the thread.
+      // TEMP diagnostic (community-comment decryption PoC): dump the full
+      // encrypted-comment context so we can prove the decrypt offline before
+      // wiring it in. Remove after the PoC.
+      if (isCommentMessage(p)) {
+        const cm = ((p._data?.message ?? p._data?.Message) as
+          | Record<string, unknown>
+          | undefined) ?? {};
+        const enc = (cm.encCommentMessage ?? cm.EncCommentMessage) as
+          | Record<string, unknown>
+          | undefined;
+        const tk = (enc?.targetMessageKey ?? enc?.TargetMessageKey) as
+          | Record<string, unknown>
+          | undefined;
+        console.log(
+          '[waha parse] COMMENTPOC',
+          JSON.stringify({
+            commentSender: info?.Sender ?? p.participant ?? p.author ?? '',
+            targetID: tk?.ID ?? tk?.id ?? '',
+            targetParticipant: tk?.participant ?? tk?.Participant ?? '',
+            targetRemoteJID: tk?.remoteJID ?? tk?.RemoteJID ?? '',
+            targetFromMe: tk?.fromMe ?? tk?.FromMe ?? '',
+            encIV: enc?.encIV ?? enc?.EncIV ?? '',
+            encPayload: enc?.encPayload ?? enc?.EncPayload ?? '',
+          }),
+        );
+      }
+
       if (
         !text &&
         !media &&
