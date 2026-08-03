@@ -1265,11 +1265,22 @@ async function findOrCreateContact(
   name: string,
   opts?: { isGroup?: boolean },
 ): Promise<ContactOutcome | null> {
-  // Shape an existing row into the outcome, updating the name when it changed.
+  // Shape an existing row into the outcome. We only *fill* the name from the
+  // WhatsApp pushName while the contact still has no real name yet (empty, or
+  // still the bare phone from creation). Once a real name exists — whether the
+  // first pushName or a name the operator typed in the CRM — WhatsApp must NOT
+  // overwrite it, otherwise every new message reverts a CRM-edited name back to
+  // the WhatsApp one. (WhatsApp name changes after that point are ignored on
+  // purpose: the CRM is the source of truth for a saved contact's name.)
   const asExisting = async (
     existing: ExistingContact,
   ): Promise<ContactOutcome> => {
-    if (name && name !== existing.name) {
+    const isBarePhone = (s: string) => /^\+?\d[\d\s()\-]{4,}$/.test(s.trim());
+    const hasRealName =
+      !!existing.name &&
+      existing.name !== phone &&
+      !isBarePhone(existing.name);
+    if (name && name !== existing.name && !hasRealName) {
       try {
         await db
           .update(contacts)
