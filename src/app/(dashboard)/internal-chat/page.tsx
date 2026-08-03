@@ -587,7 +587,11 @@ export default function InternalChatPage() {
                       )}
                       {m.content && (
                         <p className="whitespace-pre-wrap break-words text-sm">
-                          <MentionText text={m.content} members={members} />
+                          <MentionText
+                            text={m.content}
+                            members={members}
+                            onPrimary={m.is_mine}
+                          />
                         </p>
                       )}
                       <p

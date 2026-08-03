@@ -25,9 +25,14 @@ function escapeRegex(s: string): string {
 export function MentionText({
   text,
   members,
+  onPrimary,
 }: {
   text: string;
   members: MentionMember[];
+  /** Rendered inside a filled primary bubble (own internal-chat message).
+   *  `text-primary` on a purple bubble is nearly invisible, so switch to a
+   *  contrasting chip that reads on the filled background. */
+  onPrimary?: boolean;
 }) {
   const names = members
     .map((m) => m.name)
@@ -38,13 +43,16 @@ export function MentionText({
     `@(?:${names.map(escapeRegex).join("|")})(?![\\p{L}\\p{N}])`,
     "giu",
   );
+  const mentionCls = onPrimary
+    ? "rounded bg-primary-foreground/25 px-1 font-semibold text-primary-foreground"
+    : "font-semibold text-primary";
   const parts: React.ReactNode[] = [];
   let last = 0;
   for (const m of text.matchAll(re)) {
     const i = m.index ?? 0;
     if (i > last) parts.push(text.slice(last, i));
     parts.push(
-      <span key={i} className="font-semibold text-primary">
+      <span key={i} className={mentionCls}>
         {m[0]}
       </span>,
     );

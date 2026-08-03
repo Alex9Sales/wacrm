@@ -279,7 +279,7 @@ export default function SupervisaoPage() {
                   Atendentes
                 </h2>
               </div>
-              <div className="divide-y divide-border">
+              <div className="max-h-[70vh] divide-y divide-border overflow-y-auto">
                 {overview.agents.map((a) => (
                   <button
                     key={a.id}
@@ -349,7 +349,7 @@ export default function SupervisaoPage() {
                   Nenhuma conversa aberta atribuída a este atendente.
                 </p>
               ) : (
-                <div className="divide-y divide-border">
+                <div className="max-h-[70vh] divide-y divide-border overflow-y-auto">
                   {convs.map((c) => (
                     <Link
                       key={c.id}

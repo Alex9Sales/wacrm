@@ -8,6 +8,7 @@ import {
   SmilePlus,
   Pencil,
   Trash2,
+  Plus,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -16,6 +17,7 @@ import {
   PopoverContent,
   PopoverTrigger,
 } from "@/components/ui/popover";
+import { EMOJIS } from "@/components/ui/emoji-picker";
 import { ContactAvatar } from "./contact-avatar";
 import { groupColor, parseGroupAuthor } from "@/lib/inbox/group-color";
 import type { Message } from "@/types";
@@ -119,6 +121,8 @@ export function MessageActions({
   // interacts elsewhere.
   const [touchOpen, setTouchOpen] = useState(false);
   const [pickerOpen, setPickerOpen] = useState(false);
+  // The "+" inside the quick-reaction bar opens the full emoji grid.
+  const [morePickerOpen, setMorePickerOpen] = useState(false);
 
   const isAgent =
     message.sender_type === "agent" || message.sender_type === "bot";
@@ -146,6 +150,7 @@ export function MessageActions({
   const handlePickEmoji = (emoji: string) => {
     onReact(emoji);
     setPickerOpen(false);
+    setMorePickerOpen(false);
     setTouchOpen(false);
   };
 
@@ -213,7 +218,7 @@ export function MessageActions({
       <div className="group/actions relative min-w-0 max-w-[75%]">
         {children}
       <div
-        data-touch-open={touchOpen || pickerOpen ? "true" : undefined}
+        data-touch-open={touchOpen || pickerOpen || morePickerOpen ? "true" : undefined}
         className={cn(
           "absolute -top-3 z-10 flex h-7 items-center gap-0.5 rounded-full border border-border bg-popover/95 px-1 shadow-md backdrop-blur-sm transition-opacity",
           "opacity-0 group-hover/actions:opacity-100 group-focus-within/actions:opacity-100",
@@ -229,7 +234,7 @@ export function MessageActions({
             <SmilePlus className="h-3.5 w-3.5" />
           </PopoverTrigger>
           <PopoverContent
-            className="flex w-auto flex-row gap-1 p-1.5"
+            className="flex w-auto flex-row items-center gap-1 p-1.5"
             sideOffset={6}
           >
             {QUICK_EMOJIS.map((e) => (
@@ -243,6 +248,34 @@ export function MessageActions({
                 {e}
               </button>
             ))}
+            {/* "+" opens the full emoji grid, WhatsApp-style. */}
+            <Popover open={morePickerOpen} onOpenChange={setMorePickerOpen}>
+              <PopoverTrigger
+                className="flex h-8 w-8 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                aria-label="Mais emojis"
+              >
+                <Plus className="h-4 w-4" />
+              </PopoverTrigger>
+              <PopoverContent
+                className="w-72 p-2"
+                sideOffset={6}
+                aria-label="Escolher emoji"
+              >
+                <div className="grid max-h-56 grid-cols-8 gap-0.5 overflow-y-auto">
+                  {EMOJIS.map((emoji, i) => (
+                    <button
+                      key={`${emoji}-${i}`}
+                      type="button"
+                      onClick={() => handlePickEmoji(emoji)}
+                      className="flex h-8 w-8 items-center justify-center rounded-md text-lg leading-none transition-transform hover:scale-125 hover:bg-muted"
+                      aria-label={`Reagir com ${emoji}`}
+                    >
+                      {emoji}
+                    </button>
+                  ))}
+                </div>
+              </PopoverContent>
+            </Popover>
           </PopoverContent>
         </Popover>
         <button
