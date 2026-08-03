@@ -124,11 +124,20 @@ export async function conversationVisibility(
   // mention is a dead link.
   const participant = sql`${conversations.id} IN (SELECT conversation_id FROM conversation_participants WHERE user_id = ${userId})`;
   const notPrivate = eq(conversations.isPrivate, false);
-  return or(
+  const base = or(
     mine,
     participant,
     and(notPrivate, unassignedQueue(sectorIds)) as SQL,
-  );
+  ) as SQL;
+  // "Ninguém vê as do admin": a conversation assigned to an admin/owner is
+  // never visible to an agent — not even one they were @mentioned into.
+  const adminIds = await getAdminUserIds(accountId);
+  if (adminIds.length === 0) return base;
+  const notAdminAssigned = or(
+    isNull(conversations.assignedAgentId),
+    notInArray(conversations.assignedAgentId, adminIds),
+  ) as SQL;
+  return and(notAdminAssigned, base);
 }
 
 /** Whether the caller may open a specific conversation. Pass `conversationId`
@@ -156,6 +165,12 @@ export async function canSeeConversation(
     return true;
   }
 
+  // "Ninguém vê as do admin": a conversation assigned to an admin/owner is
+  // never visible to an agent — checked before the @mention exception so a
+  // stray mention can't expose it.
+  if (assignedAgentId && (await isAdminUser(accountId, assignedAgentId))) {
+    return false;
+  }
   // @mention participant — access to this one conversation regardless of
   // owner/sector/private.
   if (conversationId && (await isParticipant(conversationId, userId))) {

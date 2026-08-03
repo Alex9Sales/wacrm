@@ -545,6 +545,24 @@ async function applyInboundReaction(
     }
   }
 
+  // Reflect the reaction in the conversation-list preview, like WhatsApp
+  // ("Reagiu com 👍" / "Você reagiu com 👍"). Only on a real emoji — an
+  // unreact leaves the last real message preview alone. No last_message_at
+  // bump: the card stays put but shows the reaction line.
+  if (rx.emoji) {
+    const label = rx.fromMe
+      ? `↩️ Você reagiu com ${rx.emoji}`
+      : `↩️ Reagiu com ${rx.emoji}`
+    try {
+      await db
+        .update(conversations)
+        .set({ lastMessageText: label })
+        .where(eq(conversations.id, target.conversationId))
+    } catch (err) {
+      console.error('[webhook] reaction preview update failed:', err)
+    }
+  }
+
   // Bump the open thread (refetches messages + reactions). fromMe avoids the
   // unread/notification side effects of a real inbound.
   await publishEvent(channel.accountId, {

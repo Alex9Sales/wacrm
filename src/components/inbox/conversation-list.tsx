@@ -901,7 +901,11 @@ function ConversationItem({
   agentName,
 }: ConversationItemProps) {
   const contact = conversation.contact;
-  const displayName = contact?.name || contact?.phone || "Desconhecido";
+  const baseName = contact?.name || contact?.phone || "Desconhecido";
+  // Código do cliente (quando houver) vai NA FRENTE do nome no card, ex.:
+  // "20583 Construsul". Sem código, mostra só o nome.
+  const code = contact?.customer_codes?.[0]?.trim();
+  const displayName = code ? `${code} ${baseName}` : baseName;
   const prio = priorityMeta(conversation.priority);
   const isUrgent = conversation.priority === "urgent";
   const contactTags = contact?.tags ?? [];

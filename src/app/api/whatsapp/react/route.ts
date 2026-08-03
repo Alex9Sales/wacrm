@@ -16,6 +16,7 @@ import {
 } from '@/lib/auth/account';
 import { loadChannel } from '@/lib/channels/channels';
 import { getProvider } from '@/lib/channels/registry';
+import { publishEvent } from '@/lib/events/publish';
 import { sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils';
 import {
   checkRateLimit,
@@ -240,6 +241,29 @@ export async function POST(request: Request) {
         return NextResponse.json(
           { error: 'Reaction sent to Meta but DB upsert failed' },
           { status: 500 },
+        );
+      }
+    }
+
+    // Reflect the reaction in the conversation-list preview, like WhatsApp
+    // ("Você reagiu com 👍"). Only for a real emoji — removing a reaction
+    // leaves the last real message preview alone. We do NOT bump
+    // last_message_at, so the card stays put but shows the reaction line.
+    if (emoji) {
+      try {
+        await db
+          .update(conversations)
+          .set({ lastMessageText: `↩️ Você reagiu com ${emoji}` })
+          .where(eq(conversations.id, targetMessage.conversationId));
+        await publishEvent(accountId, {
+          type: 'message.received',
+          conversationId: targetMessage.conversationId,
+          fromMe: true,
+        });
+      } catch (previewErr) {
+        console.error(
+          '[whatsapp/react] preview update failed:',
+          previewErr instanceof Error ? previewErr.message : previewErr,
         );
       }
     }
