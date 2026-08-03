@@ -65,6 +65,7 @@ export async function POST(request: Request) {
       id: string;
       messageId: string | null;
       conversationId: string;
+      senderType: string;
     } | null = null;
     try {
       targetMessage = firstOrNull(
@@ -73,6 +74,7 @@ export async function POST(request: Request) {
             id: messages.id,
             messageId: messages.messageId,
             conversationId: messages.conversationId,
+            senderType: messages.senderType,
           })
           .from(messages)
           .where(eq(messages.id, message_id))
@@ -156,10 +158,19 @@ export async function POST(request: Request) {
 
     // The unified sendReaction signature carries only the target message
     // id + emoji; the recipient phone is threaded through
-    // providerMeta.reaction_to (the Meta adapter reads it there).
+    // providerMeta.reaction_to (the Meta adapter reads it there). The WAHA/gows
+    // adapter also needs the target's DIRECTION to rebuild the serialized id
+    // (`<fromMe>_<chatId>_<HASH>`) — threaded as reaction_from_me.
+    const targetFromMe =
+      targetMessage.senderType === 'agent' ||
+      targetMessage.senderType === 'bot';
     const channelWithRecipient = {
       ...channel,
-      providerMeta: { ...channel.providerMeta, reaction_to: sanitizedPhone },
+      providerMeta: {
+        ...channel.providerMeta,
+        reaction_to: sanitizedPhone,
+        reaction_from_me: targetFromMe,
+      },
     };
 
     try {

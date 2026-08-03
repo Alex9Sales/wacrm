@@ -1038,23 +1038,39 @@ export const wahaProvider: WhatsAppProvider = {
     targetExternalId: string,
     emoji: string,
   ): Promise<void> {
-    // Best-effort: WAHA exposes PUT /api/reaction { session, messageId,
-    // reaction }. Reactions are non-critical, so we swallow errors.
-    try {
-      await httpJson(`${baseUrlOf(ch)}/api/reaction`, {
+    // WAHA/gows: PUT /api/reaction { session, messageId, reaction }. The
+    // `messageId` must be the SERIALIZED id (`<fromMe>_<chatId>_<HASH>`), NOT
+    // the bare HASH we store — otherwise gows silently no-ops (reaction shows
+    // in the CRM but never reaches WhatsApp). Rebuild it from the recipient
+    // phone (providerMeta.reaction_to) + the target's direction
+    // (providerMeta.reaction_from_me), the same shape buildWahaReplyTo uses.
+    const meta = ch.providerMeta ?? {};
+    const toE164 =
+      typeof meta.reaction_to === 'string' ? meta.reaction_to : '';
+    const fromMe = meta.reaction_from_me ? 'true' : 'false';
+    let messageId = targetExternalId;
+    if (!targetExternalId.includes('_') && toE164) {
+      const chatId = await resolveChatId(ch, toE164);
+      // 1:1 (`@c.us`) rebuilds cleanly. A group id also needs the author jid we
+      // don't have here — send the bare hash as a best-effort fallback.
+      messageId = chatId.endsWith('@c.us')
+        ? `${fromMe}_${chatId}_${targetExternalId}`
+        : targetExternalId;
+    }
+    const { ok, status, body } = await httpJson(
+      `${baseUrlOf(ch)}/api/reaction`,
+      {
         method: 'PUT',
         headers: headersOf(ch),
         body: JSON.stringify({
           session: sessionOf(ch),
-          messageId: targetExternalId,
+          messageId,
           reaction: emoji,
         }),
-      });
-    } catch (err) {
-      console.error(
-        `[waha] sendReaction failed for ${targetExternalId}:`,
-        err instanceof Error ? err.message : err,
-      );
+      },
+    );
+    if (!ok) {
+      throw new Error(`waha sendReaction failed: ${wahaError(body, status)}`);
     }
   },
 
