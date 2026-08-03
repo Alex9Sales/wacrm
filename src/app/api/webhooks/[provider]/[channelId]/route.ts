@@ -349,6 +349,18 @@ async function processInbound(
   const channel = await loadChannel(channelId)
   if (!channel) return
 
+  // TEMP DIAG (reactions/deletions on GOWS): the engine may deliver these
+  // inside a plain `message` event rather than message.reaction/.revoked.
+  // Log the raw shape once so we can implement the real parse, then remove.
+  try {
+    const rawStr = JSON.stringify(body)
+    if (/reactionMessage|protocolMessage|revoke|REVOKE/i.test(rawStr)) {
+      console.log('[DIAG rx/del]', rawStr.slice(0, 3500))
+    }
+  } catch {
+    // ignore
+  }
+
   const {
     messages: inbound,
     statuses,
