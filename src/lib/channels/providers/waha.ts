@@ -1398,6 +1398,25 @@ export const wahaProvider: WhatsAppProvider = {
       // (`encCommentMessage` — E2E-encrypted, we can't read it) comes in with no
       // readable body/media. Drop it: it must NOT become an empty "[text]" row —
       // in a monitored group it would spam the thread.
+      // TEMP diagnostic (PoC): log the id→messageSecret of every announcement in
+      // the Pixel group, so a captured comment can be matched to its target's
+      // secret (the history API doesn't return older/pinned announcements).
+      if (chat.includes('120363428050370478')) {
+        const mnode = (p._data?.message ?? p._data?.Message) as
+          | Record<string, unknown>
+          | undefined;
+        const mci = (mnode?.messageContextInfo ?? mnode?.MessageContextInfo) as
+          | Record<string, unknown>
+          | undefined;
+        const secret = mci?.messageSecret ?? mci?.MessageSecret;
+        if (typeof secret === 'string' && secret) {
+          console.log(
+            '[waha parse] SECRETMAP',
+            JSON.stringify({ id: externalMessageId, secret }),
+          );
+        }
+      }
+
       // TEMP diagnostic (community-comment decryption PoC): dump the full
       // encrypted-comment context so we can prove the decrypt offline before
       // wiring it in. Remove after the PoC.
