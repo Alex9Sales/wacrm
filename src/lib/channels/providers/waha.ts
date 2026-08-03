@@ -1065,12 +1065,34 @@ export const wahaProvider: WhatsAppProvider = {
     //   POST /api/startTyping|stopTyping { session, chatId }.
     // Non-critical — a failed presence must never affect the send.
     try {
+      const base = baseUrlOf(ch);
+      const session = sessionOf(ch);
       const chatId = await resolveChatId(ch, toE164);
-      await httpJson(`${baseUrlOf(ch)}/api/${on ? 'startTyping' : 'stopTyping'}`, {
-        method: 'POST',
-        headers: headersOf(ch),
-        body: JSON.stringify({ session: sessionOf(ch), chatId }),
-      });
+      if (on) {
+        // GOWS/whatsmeow only DELIVERS chat presence ("typing") when the
+        // account is marked available. Without this, startTyping returns
+        // 201 but WhatsApp shows nothing. Set presence online first.
+        await httpJson(`${base}/api/${encodeURIComponent(session)}/presence`, {
+          method: 'POST',
+          headers: headersOf(ch),
+          body: JSON.stringify({ presence: 'online' }),
+        });
+      }
+      const r = await httpJson(
+        `${base}/api/${on ? 'startTyping' : 'stopTyping'}`,
+        {
+          method: 'POST',
+          headers: headersOf(ch),
+          body: JSON.stringify({ session, chatId }),
+        },
+      );
+      if (!r.ok) {
+        console.warn(
+          `[waha] sendTyping ${on ? 'start' : 'stop'} not ok:`,
+          r.status,
+          JSON.stringify(r.body).slice(0, 200),
+        );
+      }
     } catch (err) {
       console.error(
         '[waha] sendTyping failed:',
