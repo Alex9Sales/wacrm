@@ -75,5 +75,20 @@ jobs:
           # Pin the host key (no blind accept-new → no MITM on first connect).
           ssh-keyscan -t ed25519 72.60.137.234 >> ~/.ssh/known_hosts 2>/dev/null
           # The forced command on the VPS ignores this arg and runs the deploy.
-          ssh -i ~/.ssh/deploy_key -o ConnectTimeout=20 \
-            -o StrictHostKeyChecking=yes root@72.60.137.234 deploy
+          # Retry: the deploy fires right after the push, so the VPS's
+          # `docker pull` can briefly race GHCR (fresh manifest not yet
+          # available) and fail fast with `set -e`. A couple of retries makes
+          # the auto-deploy robust instead of needing a manual re-run.
+          n=0
+          until [ "$n" -ge 3 ]; do
+            if ssh -i ~/.ssh/deploy_key -o ConnectTimeout=20 \
+                 -o StrictHostKeyChecking=yes root@72.60.137.234 deploy; then
+              echo "[deploy] succeeded on attempt $((n + 1))"
+              exit 0
+            fi
+            n=$((n + 1))
+            echo "[deploy] attempt $n failed; retrying in 20s..."
+            sleep 20
+          done
+          echo "[deploy] all attempts failed"
+          exit 1
