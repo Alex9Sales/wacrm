@@ -17,6 +17,7 @@
  */
 
 import {
+  Bot,
   Clock,
   Flag,
   GitFork,
@@ -59,6 +60,7 @@ export type NodeType =
   | 'randomizer'
   | 'http_fetch'
   | 'action'
+  | 'ai'
   | 'handoff'
   | 'end';
 
@@ -197,6 +199,13 @@ export const NODE_META: Record<
     blurb: 'Faz várias ações no contato (campo, etiqueta, avisar) sem mensagem',
     category: 'logic',
   },
+  ai: {
+    label: 'Etapa de IA',
+    icon: Bot,
+    color: 'text-fuchsia-400',
+    blurb: 'Conversa com o agente de IA (prompt + base de conhecimento)',
+    category: 'messaging',
+  },
   handoff: {
     label: 'Transferir para atendente',
     icon: UserPlus,
@@ -255,6 +264,7 @@ const NODE_HUE: Record<NodeType, { l: number; c: number; h: number }> = {
   randomizer: { l: 0.62, c: 0.18, h: 300 }, // violet — a roll of the dice
   http_fetch: { l: 0.66, c: 0.12, h: 195 }, // cyan — reaches out to the web
   action: { l: 0.75, c: 0.15, h: 95 }, // yellow-green — does the work
+  ai: { l: 0.62, c: 0.2, h: 320 }, // fuchsia — the AI brain
   handoff: { l: 0.65, c: 0.17, h: 16 }, // rose — hands off
   end: { l: 0.55, c: 0.01, h: 260 }, // neutral grey — terminal
 };
@@ -532,6 +542,12 @@ export function summarizeNode(node: BuilderNode): string | null {
         .map((o) => labels[o.type ?? ''] ?? o.type)
         .filter(Boolean);
       return truncate(parts.join(', '), 60);
+    }
+    case 'ai': {
+      const prompt = typeof cfg.prompt === 'string' ? cfg.prompt : '';
+      return prompt.length > 0
+        ? truncate(prompt)
+        : 'Conversa com o agente de IA';
     }
     case 'handoff': {
       const note = typeof cfg.note === 'string' ? cfg.note : '';

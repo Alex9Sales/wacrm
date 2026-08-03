@@ -14,24 +14,38 @@ import { resumeSleepingRuns, resumeTimedOutRuns } from '@/lib/flows/engine';
 
 const FLOW_SCHEDULER_QUEUE = 'flow-scheduler';
 
+/**
+ * Tick interval. Short (10s) because the same tick fires the `ai` node's
+ * message-buffer debounce — a chat reply that waits a full minute feels
+ * broken. Drip delays (hours/days) and no-reply timeouts don't need the
+ * granularity but the extra indexed queries are cheap.
+ */
+const TICK_MS = 10_000;
+
 export function startFlowSchedulerWorker(): Worker {
   const queue = new Queue(FLOW_SCHEDULER_QUEUE, { connection: bullConnection() });
 
-  // Recurring tick. Repeatable jobs are keyed by (name + repeat opts), so
-  // calling this on every startup is idempotent (no duplicate schedules).
-  void queue
-    .add(
-      'flow-scheduler-tick',
-      {},
-      {
-        repeat: { every: 60_000 },
-        removeOnComplete: true,
-        removeOnFail: 20,
-      },
-    )
-    .catch((err) =>
-      console.error('[flow-scheduler] schedule failed:', err),
-    );
+  // Recurring tick. Clear any prior repeatable first so changing TICK_MS
+  // doesn't leave the old schedule (a different `every` is a NEW repeat
+  // key — both would otherwise fire).
+  void (async () => {
+    try {
+      for (const r of await queue.getRepeatableJobs()) {
+        await queue.removeRepeatableByKey(r.key);
+      }
+      await queue.add(
+        'flow-scheduler-tick',
+        {},
+        {
+          repeat: { every: TICK_MS },
+          removeOnComplete: true,
+          removeOnFail: 20,
+        },
+      );
+    } catch (err) {
+      console.error('[flow-scheduler] schedule failed:', err);
+    }
+  })();
 
   const worker = new Worker(
     FLOW_SCHEDULER_QUEUE,
@@ -51,6 +65,6 @@ export function startFlowSchedulerWorker(): Worker {
   worker.on('failed', (_job, err) =>
     console.error('[flow-scheduler] tick failed:', err),
   );
-  console.log('[flow-scheduler] started — drip resume tick every 60s');
+  console.log(`[flow-scheduler] started — tick every ${TICK_MS / 1000}s`);
   return worker;
 }

@@ -1000,6 +1000,57 @@ function validateNode(
       break;
     }
 
+    case "ai": {
+      const cfg = node.config as {
+        exit_node_key?: string;
+        buffer_seconds?: number;
+        max_turns?: number;
+      };
+      if (!cfg.exit_node_key) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "exit_node_key",
+          message:
+            "O nó de IA precisa de um nó de saída (para onde ir ao transferir ou encerrar).",
+        });
+      } else if (!knownKeys.has(cfg.exit_node_key)) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "exit_node_key",
+          message: `A saída da IA aponta para um nó inexistente "${cfg.exit_node_key}".`,
+        });
+      }
+      if (
+        cfg.buffer_seconds !== undefined &&
+        (typeof cfg.buffer_seconds !== "number" || cfg.buffer_seconds < 0)
+      ) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "buffer_seconds",
+          message: "O tempo de espera (buffer) precisa ser um número ≥ 0.",
+        });
+      }
+      if (
+        cfg.max_turns !== undefined &&
+        (typeof cfg.max_turns !== "number" || cfg.max_turns < 1)
+      ) {
+        issues.push({
+          severity: "error",
+          scope: "node",
+          node_key: node.node_key,
+          field: "max_turns",
+          message: "O limite de respostas da IA precisa ser ≥ 1.",
+        });
+      }
+      break;
+    }
+
     case "randomizer": {
       const cfg = node.config as {
         branches?: Array<{
@@ -1254,6 +1305,10 @@ function baseOutgoingEdges(node: NodeInput): string[] {
     case "jump": {
       const cfg = node.config as { target_node_key?: string };
       return cfg.target_node_key ? [cfg.target_node_key] : [];
+    }
+    case "ai": {
+      const cfg = node.config as { exit_node_key?: string };
+      return cfg.exit_node_key ? [cfg.exit_node_key] : [];
     }
     case "randomizer": {
       const cfg = node.config as {

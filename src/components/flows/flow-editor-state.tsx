@@ -225,6 +225,14 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
         operations: [{ type: "set_field", field: "name", value: "" }],
         next_node_key: "",
       };
+    case "ai":
+      return {
+        prompt: "",
+        use_knowledge: true,
+        buffer_seconds: 6,
+        max_turns: 6,
+        exit_node_key: "",
+      };
     case "handoff":
       return {
         customer_message:

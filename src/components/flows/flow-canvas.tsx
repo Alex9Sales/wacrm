@@ -697,6 +697,7 @@ const ADD_NODE_TYPES: NodeType[] = [
   'randomizer',
   'http_fetch',
   'action',
+  'ai',
   'handoff',
   'end',
 ];

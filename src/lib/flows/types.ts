@@ -323,6 +323,32 @@ export interface ActionNodeConfig {
   next_node_key: string;
 }
 
+/**
+ * Hands the conversation to the account's AI agent for a live,
+ * multi-turn chat (ManyChat's "Etapa de IA"). Reuses the Agentes IA
+ * brain: the account's system prompt + RAG knowledge base + provider.
+ * The node layers an extra per-node `prompt` on top.
+ *
+ * Humanized behavior: it BUFFERS the customer's messages — when several
+ * land in a burst, it waits `buffer_seconds` of quiet before replying
+ * once (the engine reuses the timeout/scheduler infra as a debounce),
+ * and it SPLITS the reply into short separate messages. It loops
+ * (keeps chatting) until the AI decides to hand off, or `max_turns` is
+ * hit — then the run leaves via `exit_node_key`.
+ */
+export interface AiNodeConfig {
+  /** Extra instructions for this node, layered on the agent's prompt. */
+  prompt?: string;
+  /** Ground answers in the account knowledge base (RAG). Default true. */
+  use_knowledge?: boolean;
+  /** Quiet-time (s) to wait after the last customer message before replying. */
+  buffer_seconds?: number;
+  /** Max AI replies before forcing an exit (anti-loop). */
+  max_turns?: number;
+  /** Node to advance to when the AI hands off / max_turns is reached. */
+  exit_node_key: string;
+}
+
 // Terminal nodes carry no config — they just stop the run.
 export type EndNodeConfig = Record<string, never>;
 
@@ -348,6 +374,7 @@ export type FlowNodeConfig =
   | { node_type: "randomizer"; config: RandomizerNodeConfig }
   | { node_type: "http_fetch"; config: HttpFetchNodeConfig }
   | { node_type: "action"; config: ActionNodeConfig }
+  | { node_type: "ai"; config: AiNodeConfig }
   | { node_type: "handoff"; config: HandoffNodeConfig }
   | { node_type: "end"; config: EndNodeConfig };
 

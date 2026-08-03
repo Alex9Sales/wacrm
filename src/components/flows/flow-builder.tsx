@@ -760,6 +760,7 @@ function AddNodeButton({ onAdd }: { onAdd: (type: NodeType) => void }) {
     'randomizer',
     'http_fetch',
     'action',
+    'ai',
     'handoff',
     'end',
   ];

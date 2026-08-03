@@ -262,6 +262,16 @@ export function NodeConfigForm({
         />
       );
 
+    case "ai":
+      return (
+        <AiForm
+          cfg={cfg as AiCfg}
+          allNodes={allNodes}
+          currentKey={node.node_key}
+          onUpdateConfig={onUpdateConfig}
+        />
+      );
+
     case "handoff": {
       const hcfg = cfg as {
         note?: string;
@@ -1280,6 +1290,114 @@ function HttpFetchForm({
           label="Se erro → avançar para (opcional)"
         />
       </div>
+    </div>
+  );
+}
+
+// ============================================================
+// ai (Etapa de IA — conversa com o agente da conta)
+// ============================================================
+
+interface AiCfg {
+  prompt?: string;
+  use_knowledge?: boolean;
+  buffer_seconds?: number;
+  max_turns?: number;
+  exit_node_key?: string;
+}
+
+function AiForm({
+  cfg,
+  allNodes,
+  currentKey,
+  onUpdateConfig,
+}: {
+  cfg: AiCfg;
+  allNodes: BuilderNode[];
+  currentKey: string;
+  onUpdateConfig: (patch: Record<string, unknown>) => void;
+}) {
+  const useKnowledge = cfg.use_knowledge !== false;
+  const bufferSeconds =
+    typeof cfg.buffer_seconds === "number" ? cfg.buffer_seconds : 6;
+  const maxTurns = typeof cfg.max_turns === "number" ? cfg.max_turns : 6;
+  return (
+    <div className="flex flex-col gap-3">
+      <p className="text-[11px] text-muted-foreground">
+        Entrega a conversa pro agente de IA da conta (o mesmo dos{" "}
+        <span className="font-medium">Agentes IA</span>: prompt + base de
+        conhecimento). Ela conversa em várias trocas até resolver ou transferir.
+        Espera o cliente terminar de escrever antes de responder e quebra a
+        resposta em mensagens curtas.
+      </p>
+
+      <TextRow
+        label="Instruções do nó (somadas ao prompt do agente)"
+        value={cfg.prompt ?? ""}
+        onChange={(v) => onUpdateConfig({ prompt: v })}
+        rows={4}
+        placeholder="Ex.: Você é o SDR da Fluxia. Foco em qualificar e agendar uma reunião. Seja breve e simpático."
+      />
+
+      <label className="flex items-center gap-2 text-xs font-medium text-foreground">
+        <input
+          type="checkbox"
+          checked={useKnowledge}
+          onChange={(e) => onUpdateConfig({ use_knowledge: e.target.checked })}
+          className="h-3.5 w-3.5 accent-primary"
+        />
+        Consultar a base de conhecimento (RAG)
+      </label>
+
+      <div className="grid grid-cols-2 gap-3">
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground">
+            Espera antes de responder (s)
+          </label>
+          <Input
+            type="number"
+            min={0}
+            value={String(bufferSeconds)}
+            onChange={(e) =>
+              onUpdateConfig({
+                buffer_seconds: Math.max(0, Number(e.target.value) || 0),
+              })
+            }
+            className="bg-muted"
+          />
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            Junta as mensagens do cliente nesse tempo antes de responder (fica
+            humano).
+          </p>
+        </div>
+        <div>
+          <label className="mb-1 block text-xs text-muted-foreground">
+            Máx. de respostas
+          </label>
+          <Input
+            type="number"
+            min={1}
+            value={String(maxTurns)}
+            onChange={(e) =>
+              onUpdateConfig({
+                max_turns: Math.max(1, Number(e.target.value) || 1),
+              })
+            }
+            className="bg-muted"
+          />
+          <p className="mt-1 text-[10px] text-muted-foreground">
+            Depois disso, transfere pro caminho de saída.
+          </p>
+        </div>
+      </div>
+
+      <NextNodeRow
+        value={cfg.exit_node_key ?? ""}
+        allNodes={allNodes}
+        currentKey={currentKey}
+        onChange={(v) => onUpdateConfig({ exit_node_key: v })}
+        label="Ao transferir / encerrar → ir para"
+      />
     </div>
   );
 }

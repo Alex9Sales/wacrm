@@ -62,6 +62,7 @@ import {
   type HttpFetchNodeConfig,
   type WaitTimeoutConfig,
   type ActionNodeConfig,
+  type AiNodeConfig,
   type DispatchInboundInput,
   type DispatchInboundResult,
   type FlowNodeRow,
@@ -77,6 +78,20 @@ import {
   type KeywordTriggerConfig,
 } from "./types";
 import { runHttpFetch } from "./http-fetch";
+import { generateFlowAiReply, splitIntoMessages } from "@/lib/ai/flow-agent";
+
+/** Default quiet-time (s) before the AI node replies to a burst. */
+const AI_DEFAULT_BUFFER_SECONDS = 6;
+/** Default cap on AI replies per run before forcing a handoff. */
+const AI_DEFAULT_MAX_TURNS = 6;
+
+/** Debounce deadline ISO for an AI node's message buffer. */
+function aiDebounceAtIso(cfg: AiNodeConfig): string {
+  const raw = Number(cfg?.buffer_seconds);
+  const seconds =
+    Number.isFinite(raw) && raw > 0 ? raw : AI_DEFAULT_BUFFER_SECONDS;
+  return new Date(Date.now() + seconds * 1000).toISOString();
+}
 
 // ============================================================
 // Row mappings — the runner's row types (types.ts) are snake_case
@@ -1070,6 +1085,27 @@ async function advanceFromNodeKey(
       currentKey = cfg.next_node_key;
       continue;
     }
+    if (node.node_type === "ai") {
+      // Hand the conversation to the AI agent. Park here and arm the
+      // debounce; the scheduler's AI branch generates + sends the reply
+      // once the buffer goes quiet, then loops (re-parks) or exits.
+      const cfg = node.config as unknown as AiNodeConfig;
+      const advanced = await advanceCurrentNodeKey(
+        run.id,
+        run.current_node_key,
+        node.node_key,
+        aiDebounceAtIso(cfg),
+      );
+      if (!advanced) {
+        await logEvent(run.id, "error", node.node_key, {
+          reason: "lost_race_during_advance",
+        });
+      }
+      await logEvent(run.id, "node_entered", node.node_key, {
+        node_type: "ai",
+      });
+      return { outcome: "advanced" };
+    }
     if (node.node_type === "jump") {
       const cfg = node.config as unknown as JumpNodeConfig;
       // Anti-loop: cap total jumps per run. A drip cycle (…→ delay → jump back)
@@ -1614,6 +1650,30 @@ export async function resumeTimedOutRuns(
     try {
       const nodes = await loadAllNodes(run.flow_id);
       const node = nodes.get(parkedKey) ?? null;
+
+      // AI node: the deadline is a message-buffer debounce, not a no-reply
+      // timeout. Claim it (CAS on current_node_key AND that the deadline is
+      // still due — a fresh inbound that re-armed it into the future loses
+      // here and re-fires next tick) then generate the reply.
+      if (node?.node_type === "ai") {
+        const claimed = await db
+          .update(flowRuns)
+          .set({ timeoutAt: null, lastAdvancedAt: new Date().toISOString() })
+          .where(
+            and(
+              eq(flowRuns.id, run.id),
+              eq(flowRuns.status, "active"),
+              eq(flowRuns.currentNodeKey, parkedKey),
+              lte(flowRuns.timeoutAt, nowIso),
+            ),
+          )
+          .returning({ id: flowRuns.id });
+        if (claimed.length === 0) continue;
+        await runAiTurn({ ...run, status: "active" }, node, nodes);
+        fired += 1;
+        continue;
+      }
+
       const cfg = node?.config as { timeout?: WaitTimeoutConfig } | undefined;
       const timeoutTarget = cfg?.timeout?.timeout_node_key ?? null;
 
@@ -1662,6 +1722,111 @@ export async function resumeTimedOutRuns(
     }
   }
   return { fired };
+}
+
+/**
+ * One conversational turn of an `ai` node: generate a reply from the
+ * account's AI agent (prompt + RAG, via generateFlowAiReply), send it as
+ * a few short messages, then either loop (re-park, waiting for the next
+ * customer message) or leave via `exit_node_key` (the AI handed off, hit
+ * the turn cap, or couldn't answer). Called from the scheduler when the
+ * message-buffer debounce fires.
+ */
+async function runAiTurn(
+  run: FlowRunRow,
+  node: FlowNodeRow,
+  nodes: Map<string, FlowNodeRow>,
+): Promise<void> {
+  const cfg = node.config as unknown as AiNodeConfig;
+  const exitTo = cfg.exit_node_key || null;
+  const maxTurns =
+    typeof cfg.max_turns === "number" && cfg.max_turns > 0
+      ? cfg.max_turns
+      : AI_DEFAULT_MAX_TURNS;
+  const turns =
+    (typeof run.vars.__ai_turns === "number" ? run.vars.__ai_turns : 0) + 1;
+
+  // Persist the turn counter so it survives across debounce cycles.
+  const newVars = { ...run.vars, __ai_turns: turns };
+  try {
+    await db
+      .update(flowRuns)
+      .set({ vars: newVars })
+      .where(eq(flowRuns.id, run.id));
+    run.vars = newVars;
+  } catch {
+    // Non-fatal.
+  }
+
+  const leave = async (reason: string, kind: "handoff" | "error") => {
+    await logEvent(run.id, kind, node.node_key, { reason });
+    if (exitTo && nodes.has(exitTo)) {
+      await advanceFromNodeKey(run, exitTo, nodes);
+    } else {
+      await endRun(
+        run.id,
+        kind === "error" ? "failed" : "completed",
+        reason,
+      );
+    }
+  };
+
+  if (!run.conversation_id || !run.contact_id) {
+    await leave("ai_no_conversation", "error");
+    return;
+  }
+
+  const result = await generateFlowAiReply({
+    accountId: run.account_id,
+    conversationId: run.conversation_id,
+    nodePrompt: cfg.prompt,
+    useKnowledge: cfg.use_knowledge !== false,
+  });
+
+  // No usable config / nothing to answer / provider error → human.
+  if (!result.ok) {
+    await leave(`ai_turn_failed:${result.reason ?? "erro"}`, "error");
+    return;
+  }
+  // AI defers to a human, or produced nothing → exit path.
+  if (result.handoff || !result.text.trim()) {
+    await leave("ai_handoff", "handoff");
+    return;
+  }
+
+  // Send the reply as a few short, human-sized messages.
+  const parts = splitIntoMessages(result.text);
+  for (const part of parts) {
+    try {
+      await engineSendText({
+        accountId: run.account_id,
+        userId: run.user_id,
+        conversationId: run.conversation_id,
+        contactId: run.contact_id,
+        text: part,
+      });
+    } catch (err) {
+      await logEvent(run.id, "error", node.node_key, {
+        reason: "ai_send_failed",
+        detail: err instanceof Error ? err.message : String(err),
+      });
+    }
+  }
+  await logEvent(run.id, "message_sent", node.node_key, {
+    node_type: "ai",
+    parts: parts.length,
+    turn: turns,
+  });
+
+  // Anti-loop: too many AI turns → hand to a human.
+  if (turns >= maxTurns) {
+    await leave("ai_max_turns", "handoff");
+    return;
+  }
+
+  // Keep chatting: re-park at the AI node with NO timer — the customer's
+  // next message re-arms the debounce (handleReplyForActiveRun).
+  await advanceCurrentNodeKey(run.id, run.current_node_key, node.node_key, null);
 }
 
 // ============================================================
@@ -1918,6 +2083,23 @@ async function handleReplyForActiveRun(
   if (!currentNode) {
     await endRun(run.id, "failed", "current_node_not_found");
     return { consumed: true, flow_run_id: run.id, outcome: "no_match" };
+  }
+
+  // AI node: the customer is chatting with the agent. Don't match a
+  // reply_id — just (re)arm the debounce so a burst of messages collapses
+  // into one reply once they go quiet. The message is already persisted,
+  // so the scheduler's AI turn will read it from the conversation history.
+  if (currentNode.node_type === "ai") {
+    const cfg = currentNode.config as unknown as AiNodeConfig;
+    try {
+      await db
+        .update(flowRuns)
+        .set({ timeoutAt: aiDebounceAtIso(cfg) })
+        .where(eq(flowRuns.id, run.id));
+    } catch {
+      // Non-fatal — the existing deadline still fires eventually.
+    }
+    return { consumed: true, flow_run_id: run.id, outcome: "advanced" };
   }
 
   // Ways a reply can advance:

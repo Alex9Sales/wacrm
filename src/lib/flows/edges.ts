@@ -78,6 +78,21 @@ export function deriveCanvasEdges(nodes: BuilderNode[]): CanvasEdge[] {
         break;
       }
 
+      case "ai": {
+        // AI loops in place; its single edge is the exit (handoff / done).
+        const next = (cfg as { exit_node_key?: string }).exit_node_key;
+        if (next && knownKeys.has(next)) {
+          edges.push({
+            id: `${node.node_key}--exit--${next}`,
+            source: node.node_key,
+            target: next,
+            sourceHandle: "exit",
+            label: "ao sair",
+          });
+        }
+        break;
+      }
+
       case "randomizer": {
         const branches = Array.isArray(
           (cfg as { branches?: unknown }).branches,
@@ -306,6 +321,9 @@ export function outgoingSlots(node: BuilderNode): OutgoingSlot[] {
         { id: "error", label: "Erro" },
       ];
 
+    case "ai":
+      return [{ id: "exit", label: "Ao sair" }];
+
     case "randomizer": {
       const branches = Array.isArray((cfg as { branches?: unknown }).branches)
         ? ((cfg as { branches: Array<Record<string, unknown>> }).branches)
@@ -427,6 +445,10 @@ export function applyEdgeConnection(
     case "http_fetch":
       if (sourceHandle === "next") return { next_node_key: targetKey };
       if (sourceHandle === "error") return { error_node_key: targetKey };
+      return null;
+
+    case "ai":
+      if (sourceHandle === "exit") return { exit_node_key: targetKey };
       return null;
 
     case "randomizer": {
@@ -563,6 +585,12 @@ function basePatchWithoutKey(
       const next = (cfg as { target_node_key?: string }).target_node_key;
       if (next !== deletedKey) return null;
       return { ...cfg, target_node_key: "" };
+    }
+
+    case "ai": {
+      const next = (cfg as { exit_node_key?: string }).exit_node_key;
+      if (next !== deletedKey) return null;
+      return { ...cfg, exit_node_key: "" };
     }
 
     case "randomizer": {
