@@ -22,6 +22,7 @@ import {
   Copy,
   User,
   Lock,
+  Ban,
 } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
@@ -827,6 +828,16 @@ function MessageContent({
   isGroup?: boolean;
   onQuickReply?: (text: string) => void;
 }) {
+  // Deleted on WhatsApp → hide the original content, show the placeholder
+  // (mirrors WhatsApp's own "Esta mensagem foi apagada").
+  if (message.deleted_at) {
+    return (
+      <span className="flex items-center gap-1.5 text-sm italic text-muted-foreground">
+        <Ban className="h-3.5 w-3.5 shrink-0" />
+        Mensagem apagada
+      </span>
+    );
+  }
   switch (message.content_type) {
     case "text": {
       const txt = message.content_text ?? "";

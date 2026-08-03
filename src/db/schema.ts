@@ -467,6 +467,10 @@ export const messages = pgTable("messages", {
 	// group_participant_names.wa_key. Lets the inbox render a per-author avatar
 	// next to each group bubble. Null for 1:1 and for our own (fromMe) echoes.
 	authorKey: text("author_key"),
+	// Set when the message was DELETED on WhatsApp (revoked/"apagar para todos").
+	// The bubble renders a "Mensagem apagada" placeholder; the original content
+	// stays in the row for audit but is hidden in the UI.
+	deletedAt: timestamp("deleted_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_messages_conversation").using("btree", table.conversationId.asc().nullsLast().op("uuid_ops")),

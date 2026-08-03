@@ -295,6 +295,7 @@ const messageColumns = {
   view_once: messages.viewOnce,
   is_internal: messages.isInternal,
   author_key: messages.authorKey,
+  deleted_at: messages.deletedAt,
   created_at: messages.createdAt,
 }
 

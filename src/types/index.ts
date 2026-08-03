@@ -271,6 +271,12 @@ export interface Message {
   /** WhatsApp "view once" media — shown behind a tap-to-reveal cover. */
   view_once?: boolean;
   /**
+   * Set when the message was DELETED on WhatsApp (revoke / "apagar para
+   * todos"). The bubble hides the original content and shows a
+   * "Mensagem apagada" placeholder.
+   */
+  deleted_at?: string | null;
+  /**
    * GROUP messages only: the stable key (phone digits or LID user-part) of the
    * participant who sent this message. Used to render their avatar per bubble.
    */

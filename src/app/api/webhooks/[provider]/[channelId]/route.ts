@@ -31,13 +31,20 @@ import crypto from 'crypto'
 import { NextResponse, after } from 'next/server'
 import { and, eq, isNull, ne } from 'drizzle-orm'
 
-import { db, callLogs, contacts } from '@/db'
+import { db, callLogs, contacts, conversations, messages, messageReactions } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadChannel, updateChannelStatus } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
+import { findExistingContact } from '@/lib/contacts/dedupe'
 import { applyStatusUpdate, levelToStatus } from '@/lib/channels/status'
-import type { ProviderId, WhatsAppProvider } from '@/lib/channels/provider'
+import type {
+  ChannelCtx,
+  NormalizedDeletion,
+  NormalizedReaction,
+  ProviderId,
+  WhatsAppProvider,
+} from '@/lib/channels/provider'
 import { publishEvent } from '@/lib/events/publish'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
 
@@ -342,7 +349,12 @@ async function processInbound(
   const channel = await loadChannel(channelId)
   if (!channel) return
 
-  const { messages, statuses } = provider.parseWebhook(body)
+  const {
+    messages: inbound,
+    statuses,
+    reactions,
+    deletions,
+  } = provider.parseWebhook(body)
 
   // ---- statuses (delivered/read) ----
   for (const st of statuses) {
@@ -352,8 +364,26 @@ async function processInbound(
     })
   }
 
+  // ---- customer reactions ----
+  for (const rx of reactions ?? []) {
+    try {
+      await applyInboundReaction(channel, rx)
+    } catch (err) {
+      console.error('[webhooks/generic] reaction failed:', err)
+    }
+  }
+
+  // ---- deletions (revoked on WhatsApp) ----
+  for (const del of deletions ?? []) {
+    try {
+      await applyInboundDeletion(channel, del)
+    } catch (err) {
+      console.error('[webhooks/generic] deletion failed:', err)
+    }
+  }
+
   // ---- inbound messages ----
-  for (const ev of messages) {
+  for (const ev of inbound) {
     // A 1:1 message addressed only by @lid carries no phone — resolve it to the
     // real phone via the provider's LID→PN map so it lands in the right contact
     // thread instead of being lost. If it can't be resolved, skip (the old drop
@@ -401,6 +431,101 @@ async function processInbound(
       console.error('[webhooks/generic] dispatchInboundMessage failed:', err)
     }
   }
+}
+
+/** Resolve a reacted-to / deleted message to its internal row, account-scoped. */
+async function findTargetMessage(
+  accountId: string,
+  externalId: string,
+): Promise<{ id: string; conversationId: string } | null> {
+  return firstOrNull(
+    await db
+      .select({ id: messages.id, conversationId: messages.conversationId })
+      .from(messages)
+      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+      .where(
+        and(
+          eq(messages.messageId, externalId),
+          eq(conversations.accountId, accountId),
+        ),
+      )
+      .limit(1),
+  )
+}
+
+/**
+ * Persist a customer's emoji reaction (upsert; empty emoji removes it), then
+ * ping the open thread to refresh. Skips our own reaction echoes (fromMe) —
+ * the agent-side path already stored those.
+ */
+async function applyInboundReaction(
+  channel: ChannelCtx,
+  rx: NormalizedReaction,
+) {
+  if (rx.fromMe) return
+  const target = await findTargetMessage(channel.accountId, rx.targetExternalId)
+  if (!target) return
+
+  const actor = rx.fromPhoneE164
+    ? await findExistingContact(channel.accountId, normalizePhone(rx.fromPhoneE164))
+    : null
+  if (!actor) return // can't attribute the reaction to a contact
+
+  if (!rx.emoji) {
+    await db
+      .delete(messageReactions)
+      .where(
+        and(
+          eq(messageReactions.messageId, target.id),
+          eq(messageReactions.actorType, 'customer'),
+          eq(messageReactions.actorId, actor.id),
+        ),
+      )
+  } else {
+    await db
+      .insert(messageReactions)
+      .values({
+        messageId: target.id,
+        conversationId: target.conversationId,
+        actorType: 'customer',
+        actorId: actor.id,
+        emoji: rx.emoji,
+      })
+      .onConflictDoUpdate({
+        target: [
+          messageReactions.messageId,
+          messageReactions.actorType,
+          messageReactions.actorId,
+        ],
+        set: { emoji: rx.emoji },
+      })
+  }
+
+  // Bump the open thread (refetches messages + reactions). fromMe avoids the
+  // unread/notification side effects of a real inbound.
+  await publishEvent(channel.accountId, {
+    type: 'message.received',
+    conversationId: target.conversationId,
+    fromMe: true,
+  })
+}
+
+/** Mark a message deleted (revoked on WhatsApp) so the CRM shows "apagada". */
+async function applyInboundDeletion(
+  channel: ChannelCtx,
+  del: NormalizedDeletion,
+) {
+  const target = await findTargetMessage(channel.accountId, del.targetExternalId)
+  if (!target) return
+  await db
+    .update(messages)
+    .set({ deletedAt: new Date().toISOString() })
+    .where(eq(messages.id, target.id))
+  await publishEvent(channel.accountId, {
+    type: 'message.received',
+    conversationId: target.conversationId,
+    fromMe: true,
+  })
 }
 
 /**

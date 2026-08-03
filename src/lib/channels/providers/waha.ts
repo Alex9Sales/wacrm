@@ -43,7 +43,9 @@
 import { CAPABILITIES } from '../provider';
 import type {
   ChannelCtx,
+  NormalizedDeletion,
   NormalizedInbound,
+  NormalizedReaction,
   NormalizedStatus,
   OutboundMedia,
   ParsedWebhook,
@@ -1299,6 +1301,63 @@ export const wahaProvider: WhatsAppProvider = {
       return { messages, statuses };
     }
 
+    // ---- customer emoji reaction (WAHA fires a decrypted event) ----
+    // payload: { from, fromMe, reaction: { text, messageId } }. `text: ''`
+    // means the reaction was removed. `messageId` is the serialized id of the
+    // reacted-to message → normalize to our stored HASH form.
+    if (event === 'message.reaction') {
+      const reactions: NormalizedReaction[] = [];
+      const fromMe = !!p.fromMe;
+      const r =
+        (p as { reaction?: { text?: unknown; messageId?: unknown } })
+          .reaction ??
+        (
+          p._data as
+            | { reaction?: { text?: unknown; messageId?: unknown } }
+            | undefined
+        )?.reaction;
+      const targetRaw = serializedIdToString(r?.messageId);
+      const target = targetRaw ? normalizeSerializedId(targetRaw) : null;
+      if (target) {
+        const info = p._data?.Info;
+        const alt = String(
+          p._data?.key?.remoteJidAlt ||
+            (fromMe ? info?.RecipientAlt : info?.SenderAlt) ||
+            '',
+        );
+        let jid = String(p.from || '');
+        if (LID_RE.test(jid) && WA_NET_RE.test(alt)) jid = alt;
+        const phone = !LID_RE.test(jid)
+          ? normalizePhone(jid.split('@')[0].split(':')[0])
+          : '';
+        reactions.push({
+          targetExternalId: target,
+          fromPhoneE164: phone,
+          fromMe,
+          emoji: typeof r?.text === 'string' ? r.text : '',
+        });
+      }
+      return { messages, statuses, reactions };
+    }
+
+    // ---- message deleted on WhatsApp (revoke / "apagar para todos") ----
+    // Shape varies by engine: payload.before.id (original) is what we want;
+    // fall back to id / after.id defensively.
+    if (event === 'message.revoked') {
+      const deletions: NormalizedDeletion[] = [];
+      const rev = p as {
+        before?: { id?: unknown };
+        after?: { id?: unknown };
+        id?: unknown;
+      };
+      const idRaw = serializedIdToString(
+        rev.before?.id ?? rev.id ?? rev.after?.id,
+      );
+      const target = idRaw ? normalizeSerializedId(idRaw) : null;
+      if (target) deletions.push({ targetExternalId: target });
+      return { messages, statuses, deletions };
+    }
+
     // ---- inbound messages: 'message' (incoming) + 'message.any' (all) ----
     if (event === 'message' || event === 'message.any') {
       const fromMe = !!p.fromMe;
@@ -1614,6 +1673,8 @@ export const wahaProvider: WhatsAppProvider = {
             'message',
             'message.any',
             'message.ack',
+            'message.reaction',
+            'message.revoked',
             'session.status',
             'call.received',
             'call.accepted',

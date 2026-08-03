@@ -201,10 +201,35 @@ export interface OutboundInteractive {
   [key: string]: unknown;
 }
 
+/**
+ * A customer's emoji reaction to a message, normalized across providers.
+ * `emoji === ''` means the reaction was REMOVED (unreact).
+ */
+export interface NormalizedReaction {
+  /** External id of the reacted-to message (already normalized to our form). */
+  targetExternalId: string;
+  /** Reactor's phone in E.164 digits. */
+  fromPhoneE164: string;
+  /** True when WE reacted (echo of an agent reaction) — the route skips these. */
+  fromMe: boolean;
+  /** The emoji, or '' when the reaction was removed. */
+  emoji: string;
+}
+
+/** A message DELETED on WhatsApp (revoke / "apagar para todos"). */
+export interface NormalizedDeletion {
+  /** External id of the deleted message (already normalized to our form). */
+  targetExternalId: string;
+}
+
 /** The shape `parseWebhook` returns. */
 export interface ParsedWebhook {
   messages: NormalizedInbound[];
   statuses: NormalizedStatus[];
+  /** Customer reactions (non-official engines emit these as their own event). */
+  reactions?: NormalizedReaction[];
+  /** Messages deleted on WhatsApp. */
+  deletions?: NormalizedDeletion[];
 }
 
 /**
