@@ -349,18 +349,6 @@ async function processInbound(
   const channel = await loadChannel(channelId)
   if (!channel) return
 
-  // TEMP DIAG (reactions/deletions on GOWS): the engine may deliver these
-  // inside a plain `message` event rather than message.reaction/.revoked.
-  // Log the raw shape once so we can implement the real parse, then remove.
-  try {
-    const rawStr = JSON.stringify(body)
-    if (/message\.reaction|"reaction":/i.test(rawStr)) {
-      console.log('[DIAG reaction]', rawStr.slice(0, 2500))
-    }
-  } catch {
-    // ignore
-  }
-
   const {
     messages: inbound,
     statuses,
@@ -445,14 +433,23 @@ async function processInbound(
   }
 }
 
-/** Resolve a reacted-to / deleted message to its internal row, account-scoped. */
+/** Resolve a reacted-to / deleted message to its internal row + the
+ *  conversation's contact, account-scoped. */
 async function findTargetMessage(
   accountId: string,
   externalId: string,
-): Promise<{ id: string; conversationId: string } | null> {
+): Promise<{
+  id: string
+  conversationId: string
+  contactId: string | null
+} | null> {
   return firstOrNull(
     await db
-      .select({ id: messages.id, conversationId: messages.conversationId })
+      .select({
+        id: messages.id,
+        conversationId: messages.conversationId,
+        contactId: conversations.contactId,
+      })
       .from(messages)
       .innerJoin(conversations, eq(messages.conversationId, conversations.id))
       .where(
@@ -478,10 +475,19 @@ async function applyInboundReaction(
   const target = await findTargetMessage(channel.accountId, rx.targetExternalId)
   if (!target) return
 
-  const actor = rx.fromPhoneE164
-    ? await findExistingContact(channel.accountId, normalizePhone(rx.fromPhoneE164))
-    : null
-  if (!actor) return // can't attribute the reaction to a contact
+  // A fromMe=false reaction in a 1:1 is the conversation's contact — attribute
+  // it there directly. GOWS identifies the reactor only by @lid (no phone), so
+  // resolving by phone wouldn't work anyway; the conversation contact is both
+  // simpler and correct for direct chats.
+  const actorId =
+    target.contactId ??
+    (rx.fromPhoneE164
+      ? (await findExistingContact(
+          channel.accountId,
+          normalizePhone(rx.fromPhoneE164),
+        ))?.id ?? null
+      : null)
+  if (!actorId) return // can't attribute the reaction to a contact
 
   if (!rx.emoji) {
     await db
@@ -490,7 +496,7 @@ async function applyInboundReaction(
         and(
           eq(messageReactions.messageId, target.id),
           eq(messageReactions.actorType, 'customer'),
-          eq(messageReactions.actorId, actor.id),
+          eq(messageReactions.actorId, actorId),
         ),
       )
   } else {
@@ -500,7 +506,7 @@ async function applyInboundReaction(
         messageId: target.id,
         conversationId: target.conversationId,
         actorType: 'customer',
-        actorId: actor.id,
+        actorId,
         emoji: rx.emoji,
       })
       .onConflictDoUpdate({
