@@ -1426,7 +1426,12 @@ function ActionForm({
                   onValueChange={(v) => updateOp(i, { ...op, tag_id: v ?? "" })}
                 >
                   <SelectTrigger className="bg-muted">
-                    <SelectValue placeholder="Escolha uma etiqueta…" />
+                    <span className="truncate">
+                      {op.tag_id
+                        ? (tags.find((t) => t.id === op.tag_id)?.name ??
+                          "Etiqueta removida")
+                        : "Escolha uma etiqueta…"}
+                    </span>
                   </SelectTrigger>
                   <SelectContent>
                     {tags.map((t) => (
@@ -1691,7 +1696,12 @@ function ConditionForm({
               onValueChange={(v) => onUpdateConfig({ subject_key: v })}
             >
               <SelectTrigger className="bg-muted">
-                <SelectValue placeholder="Escolha uma etiqueta…" />
+                <span className="truncate">
+                  {cfg.subject_key
+                    ? (tags.find((t) => t.id === cfg.subject_key)?.name ??
+                      "Etiqueta removida")
+                    : "Escolha uma etiqueta…"}
+                </span>
               </SelectTrigger>
               <SelectContent>
                 {tags.map((t) => (
@@ -1837,7 +1847,12 @@ function SetTagForm({
               onValueChange={(v) => onUpdateConfig({ tag_id: v })}
             >
               <SelectTrigger className="bg-muted">
-                <SelectValue placeholder="Escolha uma etiqueta…" />
+                <span className="truncate">
+                  {cfg.tag_id
+                    ? (tags.find((t) => t.id === cfg.tag_id)?.name ??
+                      "Etiqueta removida")
+                    : "Escolha uma etiqueta…"}
+                </span>
               </SelectTrigger>
               <SelectContent>
                 {tags.map((t) => (
