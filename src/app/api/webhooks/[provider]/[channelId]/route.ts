@@ -442,6 +442,7 @@ async function findTargetMessage(
   id: string
   conversationId: string
   contactId: string | null
+  ownerUserId: string
 } | null> {
   return firstOrNull(
     await db
@@ -449,6 +450,7 @@ async function findTargetMessage(
         id: messages.id,
         conversationId: messages.conversationId,
         contactId: conversations.contactId,
+        ownerUserId: conversations.userId,
       })
       .from(messages)
       .innerJoin(conversations, eq(messages.conversationId, conversations.id))
@@ -463,60 +465,84 @@ async function findTargetMessage(
 }
 
 /**
- * Persist a customer's emoji reaction (upsert; empty emoji removes it), then
- * ping the open thread to refresh. Skips our own reaction echoes (fromMe) —
- * the agent-side path already stored those.
+ * Persist an emoji reaction and ping the open thread to refresh. Shows BOTH
+ * sides, like WhatsApp:
+ *   - customer (fromMe=false) → one 'customer' reaction, attributed to the
+ *     conversation's contact (GOWS only gives the reactor's @lid, no phone, so
+ *     the conversation contact is both simpler and correct for a 1:1).
+ *   - business (fromMe=true — from the agent's phone OR an echo of a CRM click)
+ *     → WhatsApp keeps ONE reaction per number per message, so REPLACE any
+ *     existing 'agent' reaction on this message with this one (clears on an
+ *     unreact). This also dedups the echo of a CRM-initiated reaction.
  */
 async function applyInboundReaction(
   channel: ChannelCtx,
   rx: NormalizedReaction,
 ) {
-  if (rx.fromMe) return
   const target = await findTargetMessage(channel.accountId, rx.targetExternalId)
   if (!target) return
 
-  // A fromMe=false reaction in a 1:1 is the conversation's contact — attribute
-  // it there directly. GOWS identifies the reactor only by @lid (no phone), so
-  // resolving by phone wouldn't work anyway; the conversation contact is both
-  // simpler and correct for direct chats.
-  const actorId =
-    target.contactId ??
-    (rx.fromPhoneE164
-      ? (await findExistingContact(
-          channel.accountId,
-          normalizePhone(rx.fromPhoneE164),
-        ))?.id ?? null
-      : null)
-  if (!actorId) return // can't attribute the reaction to a contact
-
-  if (!rx.emoji) {
+  if (rx.fromMe) {
     await db
       .delete(messageReactions)
       .where(
         and(
           eq(messageReactions.messageId, target.id),
-          eq(messageReactions.actorType, 'customer'),
-          eq(messageReactions.actorId, actorId),
+          eq(messageReactions.actorType, 'agent'),
         ),
       )
+    if (rx.emoji) {
+      await db
+        .insert(messageReactions)
+        .values({
+          messageId: target.id,
+          conversationId: target.conversationId,
+          actorType: 'agent',
+          actorId: target.ownerUserId,
+          emoji: rx.emoji,
+        })
+        .onConflictDoNothing()
+    }
   } else {
-    await db
-      .insert(messageReactions)
-      .values({
-        messageId: target.id,
-        conversationId: target.conversationId,
-        actorType: 'customer',
-        actorId,
-        emoji: rx.emoji,
-      })
-      .onConflictDoUpdate({
-        target: [
-          messageReactions.messageId,
-          messageReactions.actorType,
-          messageReactions.actorId,
-        ],
-        set: { emoji: rx.emoji },
-      })
+    const actorId =
+      target.contactId ??
+      (rx.fromPhoneE164
+        ? (await findExistingContact(
+            channel.accountId,
+            normalizePhone(rx.fromPhoneE164),
+          ))?.id ?? null
+        : null)
+    if (!actorId) return // can't attribute the reaction to a contact
+
+    if (!rx.emoji) {
+      await db
+        .delete(messageReactions)
+        .where(
+          and(
+            eq(messageReactions.messageId, target.id),
+            eq(messageReactions.actorType, 'customer'),
+            eq(messageReactions.actorId, actorId),
+          ),
+        )
+    } else {
+      await db
+        .insert(messageReactions)
+        .values({
+          messageId: target.id,
+          conversationId: target.conversationId,
+          actorType: 'customer',
+          actorId,
+          emoji: rx.emoji,
+        })
+        .onConflictDoUpdate({
+          target: [
+            messageReactions.messageId,
+            messageReactions.actorType,
+            messageReactions.actorId,
+          ],
+          set: { emoji: rx.emoji },
+        })
+    }
   }
 
   // Bump the open thread (refetches messages + reactions). fromMe avoids the
