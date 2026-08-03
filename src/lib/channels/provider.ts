@@ -312,6 +312,18 @@ export interface WhatsAppProvider {
     newText: string,
   ): Promise<void>;
 
+  /**
+   * Delete a message WE previously sent, FOR EVERYONE ("apagar para todos" /
+   * revoke). Optional — only engines whose API exposes revoke implement it
+   * (WAHA/gows). WhatsApp only allows this within a time window and only for
+   * own messages; the caller enforces that and a late/invalid revoke throws.
+   */
+  deleteMessage?(
+    ch: ChannelCtx,
+    toE164: string,
+    targetExternalId: string,
+  ): Promise<void>;
+
   /** Send a location pin (map card). Optional — only providers whose engine
    *  exposes it implement it (waha-voip/gows does; Meta does not here). */
   sendLocation?(

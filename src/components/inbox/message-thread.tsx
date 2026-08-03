@@ -215,6 +215,23 @@ function isMessageEditable(msg: Message, now: number): boolean {
   return now - sentMs <= EDIT_WINDOW_MS;
 }
 
+/** WhatsApp's "delete for everyone" window (currently ~2 days). */
+const DELETE_EVERYONE_WINDOW_MS = 2 * 24 * 60 * 60_000;
+
+/** UI-side "apagar para todos" eligibility: an own (agent/bot) message, already
+ *  sent, within WhatsApp's revoke window. Any message can still be deleted
+ *  "para mim" (CRM-only) — that has no eligibility gate. The server re-checks,
+ *  so a slightly stale clock just yields a clean toast. */
+function canDeleteForEveryone(msg: Message, now: number): boolean {
+  if (msg.sender_type !== "agent" && msg.sender_type !== "bot") return false;
+  if (msg.is_internal) return false;
+  if (msg.status === "sending" || msg.status === "failed") return false;
+  if (msg.id.startsWith("temp-")) return false;
+  const sentMs = msg.created_at ? new Date(msg.created_at).getTime() : 0;
+  if (!sentMs) return false;
+  return now - sentMs <= DELETE_EVERYONE_WINDOW_MS;
+}
+
 const STATUS_OPTIONS: { label: string; value: ConversationStatus; color: string }[] = [
   { label: "Aberta", value: "open", color: "text-primary" },
   { label: "Pendente", value: "pending", color: "text-amber-400" },
@@ -451,6 +468,12 @@ export function MessageThread({
   const [editingMsg, setEditingMsg] = useState<Message | null>(null);
   const [editText, setEditText] = useState("");
   const [editBusy, setEditBusy] = useState(false);
+  // Delete-message dialog (WhatsApp "Apagar para todos / para mim"): the target
+  // message and which scope is currently in flight.
+  const [deletingMsg, setDeletingMsg] = useState<Message | null>(null);
+  const [msgDeleteBusy, setMsgDeleteBusy] = useState<"everyone" | "me" | null>(
+    null,
+  );
 
   // Profiles are scoped to the caller's account by the server action —
   // the assignee dropdown lists every teammate in the workspace.
@@ -1152,6 +1175,43 @@ export function MessageThread({
     }
   }, [editingMsg, editText, editBusy, onUpdateMessage]);
 
+  // Apagar mensagem — scope 'everyone' revoga no WhatsApp, 'me' só esconde no
+  // CRM. Em ambos a mensagem passa a exibir "Mensagem apagada" no thread.
+  const handleDeleteMessage = useCallback(
+    async (scope: "everyone" | "me") => {
+      if (!deletingMsg || msgDeleteBusy) return;
+      setMsgDeleteBusy(scope);
+      try {
+        const res = await fetch(
+          `/api/messages/${deletingMsg.id}?scope=${scope}`,
+          { method: "DELETE" },
+        );
+        const payload = (await res.json().catch(() => ({}))) as {
+          error?: string;
+        };
+        if (!res.ok) {
+          toast.error(payload.error || "Não foi possível apagar a mensagem");
+          return;
+        }
+        onUpdateMessage(deletingMsg.id, {
+          deleted_at: new Date().toISOString(),
+        });
+        toast.success(
+          scope === "everyone"
+            ? "Mensagem apagada para todos"
+            : "Mensagem apagada",
+        );
+        setDeletingMsg(null);
+      } catch (err) {
+        console.error("Failed to delete message:", err);
+        toast.error("Não foi possível apagar a mensagem");
+      } finally {
+        setMsgDeleteBusy(null);
+      }
+    },
+    [deletingMsg, msgDeleteBusy, onUpdateMessage],
+  );
+
   // Empty state — same WhatsApp-style doodle background as the active
   // thread below, so swapping between empty/selected doesn't change the
   // pattern under the user's eye.
@@ -1750,6 +1810,11 @@ export function MessageThread({
                               }
                             : undefined
                         }
+                        onDelete={
+                          !msg.id.startsWith("temp-") && !msg.deleted_at
+                            ? () => setDeletingMsg(msg)
+                            : undefined
+                        }
                         isGroup={contact.is_group ?? false}
                         onAuthorClick={openParticipant}
                       >
@@ -1812,6 +1877,58 @@ export function MessageThread({
           onClose={() => setForwarding(null)}
         />
       )}
+
+      {/* Apagar mensagem — estilo WhatsApp: "Apagar para todos" (só mensagem
+          nossa e dentro da janela), "Apagar para mim" (sempre), "Cancelar". */}
+      <Dialog
+        open={!!deletingMsg}
+        onOpenChange={(next) => {
+          if (!next && !msgDeleteBusy) setDeletingMsg(null);
+        }}
+      >
+        <DialogContent className="border-border bg-popover sm:max-w-sm">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground">
+              Apagar mensagem?
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {deletingMsg && canDeleteForEveryone(deletingMsg, now)
+                ? 'Você pode apagar esta mensagem para todos no WhatsApp ou apenas escondê-la aqui no CRM.'
+                : 'Esta mensagem será escondida apenas aqui no CRM (a janela do WhatsApp para "apagar para todos" já passou ou não é uma mensagem sua).'}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="flex flex-col gap-2">
+            {deletingMsg && canDeleteForEveryone(deletingMsg, now) && (
+              <Button
+                variant="destructive"
+                onClick={() => void handleDeleteMessage("everyone")}
+                disabled={!!msgDeleteBusy}
+                className="w-full"
+              >
+                {msgDeleteBusy === "everyone"
+                  ? "Apagando…"
+                  : "Apagar para todos"}
+              </Button>
+            )}
+            <Button
+              variant="outline"
+              onClick={() => void handleDeleteMessage("me")}
+              disabled={!!msgDeleteBusy}
+              className="w-full border-border text-foreground hover:bg-muted"
+            >
+              {msgDeleteBusy === "me" ? "Apagando…" : "Apagar para mim"}
+            </Button>
+            <Button
+              variant="ghost"
+              onClick={() => setDeletingMsg(null)}
+              disabled={!!msgDeleteBusy}
+              className="w-full text-muted-foreground hover:bg-muted"
+            >
+              Cancelar
+            </Button>
+          </div>
+        </DialogContent>
+      </Dialog>
 
       {/* Delete-conversation confirmation. */}
       <Dialog

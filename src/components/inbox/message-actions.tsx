@@ -7,6 +7,7 @@ import {
   Copy,
   SmilePlus,
   Pencil,
+  Trash2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -32,6 +33,10 @@ interface MessageActionsProps {
    *  editability (own text msg, not internal, inside WhatsApp's ~15min window)
    *  and only passes this when editable — absent → the button is hidden. */
   onEdit?: () => void;
+  /** Delete a message (WhatsApp "Apagar"). Opens the parent's scope dialog
+   *  (para todos / para mim). The PARENT only passes this for a real (non-temp)
+   *  message — absent → the button is hidden. */
+  onDelete?: () => void;
   /** Group conversation → show the sender's avatar in the left gutter. */
   isGroup?: boolean;
   /** Group: clicking a participant's avatar opens the participant panel
@@ -104,6 +109,7 @@ export function MessageActions({
   onReact,
   onForward,
   onEdit,
+  onDelete,
   isGroup,
   onAuthorClick,
   children,
@@ -158,8 +164,14 @@ export function MessageActions({
     setTouchOpen(false);
   };
 
+  const handleDelete = () => {
+    onDelete?.();
+    setTouchOpen(false);
+  };
+
   // The parent only wires up onEdit for an editable message, so this is enough.
   const canEdit = !!onEdit;
+  const canDelete = !!onDelete;
 
   // Row alignment lives here (not in MessageBubble) so the `group/actions`
   // hover region matches the bubble's content width — hovering empty space
@@ -267,6 +279,16 @@ export function MessageActions({
         >
           <Copy className="h-3.5 w-3.5" />
         </button>
+        {canDelete && (
+          <button
+            type="button"
+            onClick={handleDelete}
+            className="flex h-5 w-5 items-center justify-center rounded-full text-popover-foreground hover:bg-destructive/10 hover:text-destructive"
+            aria-label="Apagar"
+          >
+            <Trash2 className="h-3.5 w-3.5" />
+          </button>
+        )}
       </div>
       </div>
     </div>

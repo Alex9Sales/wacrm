@@ -1133,6 +1133,32 @@ export const wahaProvider: WhatsAppProvider = {
     }
   },
 
+  /** Revoke an own message ("apagar para todos"). WAHA/gows:
+   *  DELETE /api/{session}/chats/{chatId}/messages/{serializedId}. Same
+   *  serialized-id reconstruction as editMessage (fromMe=true — only own
+   *  messages are revocable). Throws on failure (expired window / not ours). */
+  async deleteMessage(
+    ch: ChannelCtx,
+    toE164: string,
+    targetExternalId: string,
+  ): Promise<void> {
+    const chatId = await resolveChatId(ch, toE164);
+    const serialized = targetExternalId.includes('_')
+      ? targetExternalId
+      : `true_${chatId}_${targetExternalId}`;
+    const url = `${baseUrlOf(ch)}/api/${sessionOf(ch)}/chats/${encodeURIComponent(
+      chatId,
+    )}/messages/${encodeURIComponent(serialized)}`;
+    const { ok, status, body } = await httpJson(url, {
+      method: 'DELETE',
+      headers: headersOf(ch),
+      body: JSON.stringify({ session: sessionOf(ch) }),
+    });
+    if (!ok) {
+      throw new Error(`waha deleteMessage failed: ${wahaError(body, status)}`);
+    }
+  },
+
   // sendTemplate / sendInteractive intentionally omitted:
   // capabilities.templates and capabilities.interactive are both false.
 
