@@ -354,8 +354,8 @@ async function processInbound(
   // Log the raw shape once so we can implement the real parse, then remove.
   try {
     const rawStr = JSON.stringify(body)
-    if (/reactionMessage|protocolMessage|revoke|REVOKE/i.test(rawStr)) {
-      console.log('[DIAG rx/del]', rawStr.slice(0, 3500))
+    if (/message\.reaction|"reaction":/i.test(rawStr)) {
+      console.log('[DIAG reaction]', rawStr.slice(0, 2500))
     }
   } catch {
     // ignore

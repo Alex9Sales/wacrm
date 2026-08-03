@@ -1341,17 +1341,27 @@ export const wahaProvider: WhatsAppProvider = {
     }
 
     // ---- message deleted on WhatsApp (revoke / "apagar para todos") ----
-    // Shape varies by engine: payload.before.id (original) is what we want;
-    // fall back to id / after.id defensively.
+    // GOWS: payload.revokedMessageId is the bare KEY.ID of the deleted
+    // message — SAME format we store in messages.message_id (confirmed on a
+    // real event). Fall back to the protocolMessage key id / before.id.
     if (event === 'message.revoked') {
       const deletions: NormalizedDeletion[] = [];
       const rev = p as {
+        revokedMessageId?: unknown;
         before?: { id?: unknown };
-        after?: { id?: unknown };
+        after?: {
+          id?: unknown;
+          _data?: {
+            Message?: { protocolMessage?: { key?: { ID?: unknown } } };
+          };
+        };
         id?: unknown;
       };
       const idRaw = serializedIdToString(
-        rev.before?.id ?? rev.id ?? rev.after?.id,
+        rev.revokedMessageId ??
+          rev.after?._data?.Message?.protocolMessage?.key?.ID ??
+          rev.before?.id ??
+          rev.id,
       );
       const target = idRaw ? normalizeSerializedId(idRaw) : null;
       if (target) deletions.push({ targetExternalId: target });
