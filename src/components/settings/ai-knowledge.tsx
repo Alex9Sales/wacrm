@@ -2,7 +2,15 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Plus, Trash2, Pencil, RefreshCw, BookOpen } from 'lucide-react';
+import {
+  Loader2,
+  Plus,
+  Trash2,
+  Pencil,
+  RefreshCw,
+  BookOpen,
+  Upload,
+} from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -39,8 +47,10 @@ export function AiKnowledgeCard({
   const [title, setTitle] = useState('');
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
+  const [importing, setImporting] = useState(false);
   const [reindexing, setReindexing] = useState(false);
   const loadedAccountIdRef = useRef<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const fetchDocs = useCallback(async () => {
     setLoading(true);
@@ -88,6 +98,34 @@ export function AiKnowledgeCard({
     setEditing(null);
     setTitle('');
     setContent('');
+  };
+
+  const importFile = async (file: File) => {
+    setImporting(true);
+    try {
+      const fd = new FormData();
+      fd.append('file', file);
+      const res = await fetch('/api/ai/knowledge/extract', {
+        method: 'POST',
+        body: fd,
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        toast.error(data.error ?? 'Falha ao importar o arquivo.');
+        return;
+      }
+      setContent(data.content ?? '');
+      setTitle((t) => (t.trim() ? t : (data.title ?? '')));
+      toast.success(
+        `Texto importado (${data.chars} caracteres).` +
+          (data.truncated ? ' Cortado no limite de tamanho.' : '') +
+          ' Revise e salve.',
+      );
+    } catch {
+      toast.error('Falha ao importar o arquivo.');
+    } finally {
+      setImporting(false);
+    }
   };
 
   const save = async () => {
@@ -233,14 +271,43 @@ export function AiKnowledgeCard({
                   />
                 </div>
                 <div className="space-y-2">
-                  <Label htmlFor="kb-content">Conteúdo</Label>
+                  <div className="flex items-center justify-between">
+                    <Label htmlFor="kb-content">Conteúdo</Label>
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="h-7"
+                      onClick={() => fileInputRef.current?.click()}
+                      disabled={saving || importing}
+                      title="Importar de um arquivo PDF, Word (.docx) ou texto"
+                    >
+                      {importing ? (
+                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Upload className="mr-2 h-3.5 w-3.5" />
+                      )}
+                      Importar arquivo
+                    </Button>
+                    <input
+                      ref={fileInputRef}
+                      type="file"
+                      accept=".pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,.html,.htm,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                      className="hidden"
+                      onChange={(e) => {
+                        const f = e.target.files?.[0];
+                        if (f) void importFile(f);
+                        e.target.value = '';
+                      }}
+                    />
+                  </div>
                   <Textarea
                     id="kb-content"
                     value={content}
                     onChange={(e) => setContent(e.target.value)}
-                    placeholder="Cole a resposta do FAQ, texto de política ou detalhes do produto…"
+                    placeholder="Cole o texto, ou use “Importar arquivo” (PDF, Word ou texto)…"
                     rows={8}
-                    disabled={saving}
+                    disabled={saving || importing}
                   />
                 </div>
                 <div className="flex justify-end gap-2">
