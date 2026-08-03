@@ -16,6 +16,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { format, formatDistanceToNow } from "date-fns";
+import { ptBR } from "date-fns/locale";
 
 import { Badge } from "@/components/ui/badge";
 import { cn } from "@/lib/utils";
@@ -226,6 +227,7 @@ function RunCard({
   const duration = run.ended_at
     ? formatDistanceToNow(new Date(run.ended_at), {
         addSuffix: false,
+        locale: ptBR,
       })
     : null;
   return (
@@ -256,7 +258,10 @@ function RunCard({
             )}
           </div>
           <div className="mt-0.5 flex flex-wrap items-center gap-2 text-[11px] text-muted-foreground">
-            <span>Iniciado {format(new Date(run.started_at), "PP p")}</span>
+            <span>
+              Iniciado{" "}
+              {format(new Date(run.started_at), "PP p", { locale: ptBR })}
+            </span>
             {run.reprompt_count > 0 && (
               <span>· {run.reprompt_count} reperguntas</span>
             )}
@@ -299,8 +304,25 @@ const EVENT_COLOR: Record<string, string> = {
   fallback_fired: "text-amber-300",
   handoff: "text-amber-300",
   timeout: "text-muted-foreground",
+  delay_sleep: "text-muted-foreground",
+  http_request: "text-cyan-300",
   error: "text-red-300",
   completed: "text-emerald-300",
+};
+
+// PT labels for the engine's event types (shown in the step-by-step log).
+const EVENT_LABEL: Record<string, string> = {
+  started: "iniciado",
+  node_entered: "entrou no nó",
+  message_sent: "mensagem enviada",
+  reply_received: "resposta recebida",
+  fallback_fired: "fallback",
+  handoff: "transferido",
+  timeout: "tempo esgotado",
+  delay_sleep: "aguardando",
+  http_request: "requisição http",
+  error: "erro",
+  completed: "concluído",
 };
 
 function EventLine({ ev }: { ev: EventRow }) {
@@ -310,8 +332,11 @@ function EventLine({ ev }: { ev: EventRow }) {
       <span className="w-32 shrink-0 text-[10px] text-muted-foreground">
         {format(new Date(ev.created_at), "HH:mm:ss")}
       </span>
-      <span className={cn("w-32 shrink-0 font-mono text-[10px]", cls)}>
-        {ev.event_type}
+      <span
+        className={cn("w-32 shrink-0 text-[10px]", cls)}
+        title={ev.event_type}
+      >
+        {EVENT_LABEL[ev.event_type] ?? ev.event_type}
       </span>
       {ev.node_key && (
         <code className="shrink-0 rounded bg-muted px-1 py-0.5 text-[10px] text-muted-foreground">

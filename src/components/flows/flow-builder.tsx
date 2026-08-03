@@ -385,7 +385,7 @@ export function TriggerPanel() {
             <SelectTrigger className="bg-muted">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent alignItemWithTrigger={false}>
               <SelectItem value="keyword">
                 Uma mensagem contém uma palavra-chave
               </SelectItem>

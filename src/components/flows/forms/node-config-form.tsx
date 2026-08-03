@@ -1366,7 +1366,7 @@ function ActionForm({
                 <SelectTrigger className="bg-muted">
                   <span className="truncate">{opTypeLabel(op.type)}</span>
                 </SelectTrigger>
-                <SelectContent>
+                <SelectContent alignItemWithTrigger={false}>
                   {ACTION_OP_LABELS.map((o) => (
                     <SelectItem key={o.value} value={o.value}>
                       {o.label}
@@ -1677,7 +1677,7 @@ function ConditionForm({
             <SelectTrigger className="bg-muted">
               <SelectValue />
             </SelectTrigger>
-            <SelectContent>
+            <SelectContent alignItemWithTrigger={false}>
               <SelectItem value="var">Variável capturada</SelectItem>
               <SelectItem value="tag">Contato tem a etiqueta</SelectItem>
               <SelectItem value="contact_field">Campo do contato</SelectItem>
@@ -2000,7 +2000,7 @@ function SendMediaForm({
           <SelectTrigger className="bg-muted">
             <SelectValue />
           </SelectTrigger>
-          <SelectContent>
+          <SelectContent alignItemWithTrigger={false}>
             <SelectItem value="image">Imagem (PNG, JPEG, WebP)</SelectItem>
             <SelectItem value="video">Vídeo (MP4, 3GP)</SelectItem>
             <SelectItem value="document">

@@ -140,7 +140,7 @@ export function deriveCanvasEdges(nodes: BuilderNode[]): CanvasEdge[] {
             source: node.node_key,
             target: trueNext,
             sourceHandle: "true",
-            label: "true",
+            label: "verdadeiro",
           });
         }
         if (falseNext && knownKeys.has(falseNext)) {
@@ -149,7 +149,7 @@ export function deriveCanvasEdges(nodes: BuilderNode[]): CanvasEdge[] {
             source: node.node_key,
             target: falseNext,
             sourceHandle: "false",
-            label: "false",
+            label: "falso",
           });
         }
         break;
@@ -288,16 +288,16 @@ export function outgoingSlots(node: BuilderNode): OutgoingSlot[] {
     case "action":
     case "delay":
     case "jump":
-      return [{ id: "next", label: "Next" }];
+      return [{ id: "next", label: "Próximo" }];
 
     case "collect_input":
       // Own case so the optional timeout slot can be appended.
-      return [{ id: "next", label: "Next" }, ...timeoutSlots(node)];
+      return [{ id: "next", label: "Próximo" }, ...timeoutSlots(node)];
 
     case "condition":
       return [
-        { id: "true", label: "true" },
-        { id: "false", label: "false" },
+        { id: "true", label: "verdadeiro" },
+        { id: "false", label: "falso" },
       ];
 
     case "http_fetch":
