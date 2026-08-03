@@ -51,7 +51,19 @@ import {
   engineSendInteractiveList,
   engineSendMedia,
   engineSendText,
+  engineSendTyping,
 } from "./meta-send";
+
+/** Small awaitable delay (AI-node typing pacing). */
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms));
+
+/**
+ * Human-like "typing" pause before a message, scaled to its length and
+ * clamped so a long reply doesn't stall the scheduler tick.
+ */
+function humanTypingDelayMs(text: string): number {
+  return Math.min(2500, Math.max(600, text.length * 35));
+}
 import { decideFallback, resolveFallbackPolicy } from "./fallback";
 import {
   type CollectInputNodeConfig,
@@ -1794,10 +1806,22 @@ async function runAiTurn(
     return;
   }
 
-  // Send the reply as a few short, human-sized messages.
+  // Send the reply as a few short, human-sized messages. When typing is on
+  // (default), show "digitando…" and pause a beat before each one so it
+  // reads like a person, not a bot dumping text.
   const parts = splitIntoMessages(result.text);
+  const typing = cfg.typing !== false;
   for (const part of parts) {
     try {
+      if (typing) {
+        await engineSendTyping({
+          accountId: run.account_id,
+          conversationId: run.conversation_id,
+          contactId: run.contact_id,
+          on: true,
+        });
+        await sleep(humanTypingDelayMs(part));
+      }
       await engineSendText({
         accountId: run.account_id,
         userId: run.user_id,
@@ -1811,6 +1835,15 @@ async function runAiTurn(
         detail: err instanceof Error ? err.message : String(err),
       });
     }
+  }
+  if (typing) {
+    // Clear the indicator (a sent message already clears it, but be tidy).
+    await engineSendTyping({
+      accountId: run.account_id,
+      conversationId: run.conversation_id,
+      contactId: run.contact_id,
+      on: false,
+    });
   }
   await logEvent(run.id, "message_sent", node.node_key, {
     node_type: "ai",

@@ -1303,6 +1303,7 @@ interface AiCfg {
   use_knowledge?: boolean;
   buffer_seconds?: number;
   max_turns?: number;
+  typing?: boolean;
   exit_node_key?: string;
 }
 
@@ -1347,6 +1348,16 @@ function AiForm({
           className="h-3.5 w-3.5 accent-primary"
         />
         Consultar a base de conhecimento (RAG)
+      </label>
+
+      <label className="flex items-center gap-2 text-xs font-medium text-foreground">
+        <input
+          type="checkbox"
+          checked={cfg.typing !== false}
+          onChange={(e) => onUpdateConfig({ typing: e.target.checked })}
+          className="h-3.5 w-3.5 accent-primary"
+        />
+        Mostrar “digitando…” e responder no ritmo humano
       </label>
 
       <div className="grid grid-cols-2 gap-3">

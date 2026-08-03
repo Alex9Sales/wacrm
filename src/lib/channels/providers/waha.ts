@@ -1056,6 +1056,29 @@ export const wahaProvider: WhatsAppProvider = {
     }
   },
 
+  async sendTyping(
+    ch: ChannelCtx,
+    toE164: string,
+    on: boolean,
+  ): Promise<void> {
+    // Best-effort "digitando…" presence. WAHA:
+    //   POST /api/startTyping|stopTyping { session, chatId }.
+    // Non-critical — a failed presence must never affect the send.
+    try {
+      const chatId = await resolveChatId(ch, toE164);
+      await httpJson(`${baseUrlOf(ch)}/api/${on ? 'startTyping' : 'stopTyping'}`, {
+        method: 'POST',
+        headers: headersOf(ch),
+        body: JSON.stringify({ session: sessionOf(ch), chatId }),
+      });
+    } catch (err) {
+      console.error(
+        '[waha] sendTyping failed:',
+        err instanceof Error ? err.message : err,
+      );
+    }
+  },
+
   /** Edit an own message's text. WAHA/gows:
    *  PUT /api/{session}/chats/{chatId}/messages/{messageId} { text }.
    *  gows keys messages by the SERIALIZED id (`true_<chatId>_<HASH>`) while we

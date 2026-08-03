@@ -179,6 +179,39 @@ export async function engineSendText(
   return { whatsapp_message_id: waMessageId }
 }
 
+interface SendTypingEngineArgs {
+  accountId: string
+  conversationId: string
+  contactId: string
+  /** true = start "digitando…", false = stop. */
+  on: boolean
+}
+
+/**
+ * Best-effort "digitando…" presence for the Flows engine (AI node
+ * humanization). No-op on providers without typing support (e.g. Meta);
+ * never throws — presence is cosmetic and must not affect the flow.
+ */
+export async function engineSendTyping(
+  args: SendTypingEngineArgs,
+): Promise<void> {
+  try {
+    const { sanitized, channel } = await loadContactAndChannel(
+      args.accountId,
+      args.contactId,
+      args.conversationId,
+    )
+    const provider = getProvider(channel.provider)
+    if (!provider.sendTyping || !provider.capabilities.typing) return
+    await provider.sendTyping(channel, sanitized, args.on)
+  } catch (err) {
+    console.error(
+      '[flows] engineSendTyping failed:',
+      err instanceof Error ? err.message : err,
+    )
+  }
+}
+
 interface SendMediaEngineArgs {
   accountId: string
   userId: string

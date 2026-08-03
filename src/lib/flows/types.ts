@@ -345,6 +345,8 @@ export interface AiNodeConfig {
   buffer_seconds?: number;
   /** Max AI replies before forcing an exit (anti-loop). */
   max_turns?: number;
+  /** Show "digitando…" + a human pace before each reply. Default true. */
+  typing?: boolean;
   /** Node to advance to when the AI hands off / max_turns is reached. */
   exit_node_key: string;
 }

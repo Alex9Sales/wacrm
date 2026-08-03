@@ -30,6 +30,8 @@ export interface Capabilities {
   interactive: boolean;
   /** Emoji reactions. */
   reactions: boolean;
+  /** "digitando…" presence (start/stop typing). Non-official engines only. */
+  typing: boolean;
   /** QR-code pairing to bind a session — the non-official providers. */
   qrPairing: boolean;
   /**
@@ -264,6 +266,13 @@ export interface WhatsAppProvider {
   ): Promise<void>;
 
   /**
+   * Toggle the "digitando…" presence in a chat (`on` = start, false = stop).
+   * Best-effort and non-critical: implementations swallow errors. Optional —
+   * only the non-official engines expose presence (WAHA does; Meta does not).
+   */
+  sendTyping?(ch: ChannelCtx, toE164: string, on: boolean): Promise<void>;
+
+  /**
    * Edit the text of a message WE previously sent (WhatsApp "Editar"). Optional
    * — only engines whose API exposes edit implement it (gows/WAHA). WhatsApp
    * only allows editing within ~15 min and only own messages; the caller
@@ -384,6 +393,7 @@ export const CAPABILITIES: Record<ProviderId, Capabilities> = {
     session24hWindow: true,
     interactive: true,
     reactions: true,
+    typing: false,
     qrPairing: false,
     inboundMedia: true,
     needsChatIdResolve: false,
@@ -394,6 +404,7 @@ export const CAPABILITIES: Record<ProviderId, Capabilities> = {
     session24hWindow: false,
     interactive: false,
     reactions: true,
+    typing: true,
     qrPairing: true,
     inboundMedia: true,
     needsChatIdResolve: true,
@@ -404,6 +415,7 @@ export const CAPABILITIES: Record<ProviderId, Capabilities> = {
     session24hWindow: false,
     interactive: false,
     reactions: true,
+    typing: false,
     qrPairing: true,
     // Media arrives via a mandatory fetch (getBase64FromMediaMessage),
     // not inline — still available, so true.
@@ -416,6 +428,7 @@ export const CAPABILITIES: Record<ProviderId, Capabilities> = {
     session24hWindow: false,
     interactive: false,
     reactions: true,
+    typing: false,
     qrPairing: true,
     // Structural limitation: no inline base64, no fetch API.
     inboundMedia: false,

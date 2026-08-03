@@ -231,6 +231,7 @@ export function defaultConfigFor(type: NodeType): Record<string, unknown> {
         use_knowledge: true,
         buffer_seconds: 6,
         max_turns: 6,
+        typing: true,
         exit_node_key: "",
       };
     case "handoff":
