@@ -229,6 +229,10 @@ export async function engineSendMedia(
       senderType: 'bot',
       contentType: args.kind,
       contentText: args.caption ?? null,
+      // Persist the media URL so the CRM thread can render it — without
+      // this the bubble has contentType='image' but no source and shows
+      // "Imagem indisponível" (the media still reaches WhatsApp fine).
+      mediaUrl: args.link,
       messageId: waMessageId,
       status: 'sent',
     })
