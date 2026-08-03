@@ -8,6 +8,8 @@
 // block that left a supervisor seeing an empty/broken Supervisão.
 
 import { requireRole } from '@/lib/auth/account';
+import { hasMinRole } from '@/lib/auth/roles';
+import { isAdminUser } from '@/lib/sectors/access';
 import {
   loadSupervision,
   loadAgentConversations,
@@ -21,13 +23,22 @@ import type {
 
 export async function getSupervisionOverview(): Promise<SupervisionOverview> {
   const ctx = await requireRole('supervisor');
-  return loadSupervision(ctx.accountId);
+  // A supervisor (not admin/owner) never sees the admin/owner's workload.
+  const hideAdmins = !hasMinRole(ctx.role, 'admin');
+  return loadSupervision(ctx.accountId, hideAdmins);
 }
 
 export async function getAgentConversations(
   agentId: string,
 ): Promise<AgentConversationRow[]> {
   const ctx = await requireRole('supervisor');
+  // Block a supervisor from drilling into an admin/owner's conversations.
+  if (
+    !hasMinRole(ctx.role, 'admin') &&
+    (await isAdminUser(ctx.accountId, agentId))
+  ) {
+    return [];
+  }
   return loadAgentConversations(ctx.accountId, agentId);
 }
 

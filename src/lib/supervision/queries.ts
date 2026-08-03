@@ -8,7 +8,7 @@
 // "waiting" state (a conversation whose last message is from the customer).
 // ============================================================
 
-import { and, asc, desc, eq, gte, inArray } from 'drizzle-orm';
+import { and, asc, desc, eq, gte, notInArray } from 'drizzle-orm';
 
 import {
   db,
@@ -94,9 +94,12 @@ export async function walkAccountMessages(accountId: string): Promise<{
   return { pendingByConv, responseSumByAgent, agentRepliedConvs };
 }
 
-/** Per-agent workload overview for the supervision panel (admins). */
+/** Per-agent workload overview for the supervision panel. When `hideAdmins`
+ *  (caller is a supervisor, not an admin/owner), admin/owner teammates are
+ *  omitted from the agent list — "ninguém vê as do admin". */
 export async function loadSupervision(
   accountId: string,
+  hideAdmins = false,
 ): Promise<SupervisionOverview> {
   const now = Date.now();
 
@@ -109,7 +112,14 @@ export async function loadSupervision(
     })
     .from(member)
     .innerJoin(user, eq(member.userId, user.id))
-    .where(eq(member.organizationId, accountId))
+    .where(
+      hideAdmins
+        ? and(
+            eq(member.organizationId, accountId),
+            notInArray(member.role, ['admin', 'owner']),
+          )
+        : eq(member.organizationId, accountId),
+    )
     .orderBy(asc(user.name));
 
   const openConvs = await db

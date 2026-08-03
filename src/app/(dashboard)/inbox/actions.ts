@@ -123,6 +123,7 @@ export async function getConversationWithContact(
     !(await canSeeConversation(
       ctx.role,
       ctx.userId,
+      ctx.accountId,
       row.sector_id,
       row.assigned_agent_id,
       conversationId,
@@ -375,7 +376,11 @@ export async function listConversations(): Promise<Conversation[]> {
 
   // Sector privacy: non-admins only see general (null-sector) conversations
   // plus the ones in sectors they belong to.
-  const visibility = await conversationVisibility(ctx.role, ctx.userId)
+  const visibility = await conversationVisibility(
+    ctx.role,
+    ctx.userId,
+    ctx.accountId,
+  )
 
   const rows = await db
     .select({
@@ -474,6 +479,7 @@ async function assertConversationInAccount(
   return canSeeConversation(
     ctx.role,
     ctx.userId,
+    ctx.accountId,
     row.sectorId,
     row.assignedAgentId,
     conversationId,
@@ -914,6 +920,7 @@ export async function transferConversationToAgent(
     !(await canSeeConversation(
       ctx.role,
       ctx.userId,
+      ctx.accountId,
       conv.sectorId,
       conv.assignedAgentId,
       conversationId,
@@ -1200,6 +1207,7 @@ export async function getConversationPreview(
     !(await canSeeConversation(
       ctx.role,
       ctx.userId,
+      ctx.accountId,
       row.sectorId,
       row.assignedAgentId,
       conversationId,
@@ -1251,6 +1259,7 @@ export async function transferConversation(
     !(await canSeeConversation(
       ctx.role,
       ctx.userId,
+      ctx.accountId,
       conv.sectorId,
       conv.assignedAgentId,
       conversationId,
