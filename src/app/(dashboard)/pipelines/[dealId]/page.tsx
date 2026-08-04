@@ -80,6 +80,12 @@ function fmtCurrency(value: number, currency?: string): string {
   }
 }
 
+const TEMPERATURE_LABEL: Record<string, string> = {
+  frio: "🧊 Frio",
+  morno: "🌤️ Morno",
+  quente: "🔥 Quente",
+};
+
 const STATUS_META: Record<string, { label: string; className: string }> = {
   open: { label: "Aberto", className: "bg-muted text-muted-foreground" },
   won: { label: "Venda ganha", className: "bg-emerald-500/15 text-emerald-600" },
@@ -401,6 +407,16 @@ export default function DealDetailPage() {
             <Field label="Valor" value={fmtCurrency(deal.value, deal.currency)} />
             <Field label="Contato" value={deal.contact?.name || deal.contact?.phone} />
             <Field label="Responsável" value={deal.assignee?.full_name} />
+            <Field
+              label="Temperatura"
+              value={
+                deal.temperature
+                  ? (TEMPERATURE_LABEL[deal.temperature] ?? deal.temperature)
+                  : null
+              }
+            />
+            <Field label="Fonte" value={deal.source} />
+            <Field label="Origem" value={deal.origin} />
             <Field label="Previsão de fechamento" value={fmtDate(deal.expected_close_date)} />
             <Field label="Criado em" value={fmtDateTime(deal.created_at)} />
             <Field label="Status" value={statusMeta.label} />

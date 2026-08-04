@@ -492,6 +492,9 @@ export interface DealInput {
   assigned_to: string | null
   notes: string | null
   expected_close_date: string | null
+  temperature?: string | null
+  source?: string | null
+  origin?: string | null
 }
 
 /**
@@ -518,6 +521,9 @@ export async function createDeal(
           assignedTo: input.assigned_to,
           notes: input.notes,
           expectedCloseDate: input.expected_close_date,
+          temperature: input.temperature ?? null,
+          source: input.source ?? null,
+          origin: input.origin ?? null,
           status: 'open',
         })
         .returning({ id: deals.id }),
@@ -561,6 +567,9 @@ export async function updateDeal(
     if (patch.assigned_to !== undefined) set.assignedTo = patch.assigned_to
     if (patch.notes !== undefined) set.notes = patch.notes
     if (patch.expected_close_date !== undefined) set.expectedCloseDate = patch.expected_close_date
+    if (patch.temperature !== undefined) set.temperature = patch.temperature
+    if (patch.source !== undefined) set.source = patch.source
+    if (patch.origin !== undefined) set.origin = patch.origin
     if (patch.status !== undefined) set.status = patch.status
 
     await db
@@ -638,6 +647,9 @@ export async function getDeal(id: string): Promise<Deal | null> {
         currency: deals.currency,
         notes: deals.notes,
         expected_close_date: deals.expectedCloseDate,
+        temperature: deals.temperature,
+        source: deals.source,
+        origin: deals.origin,
         status: deals.status,
         created_at: deals.createdAt,
         updated_at: deals.updatedAt,

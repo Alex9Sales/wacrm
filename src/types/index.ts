@@ -409,6 +409,12 @@ export interface Deal {
   currency?: string;
   notes?: string;
   expected_close_date?: string;
+  /** Temperatura do lead (frio / morno / quente). */
+  temperature?: string | null;
+  /** Fonte do lead (de onde veio: Instagram, Indicação, Site…). */
+  source?: string | null;
+  /** Origem / campanha. */
+  origin?: string | null;
   status?: DealStatus;
   created_at: string;
   updated_at?: string;

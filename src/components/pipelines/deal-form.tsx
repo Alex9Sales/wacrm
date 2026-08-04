@@ -74,6 +74,9 @@ export function DealForm({
   const [assignedTo, setAssignedTo] = useState("");
   const [expectedCloseDate, setExpectedCloseDate] = useState("");
   const [notes, setNotes] = useState("");
+  const [temperature, setTemperature] = useState("");
+  const [source, setSource] = useState("");
+  const [origin, setOrigin] = useState("");
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -107,6 +110,9 @@ export function DealForm({
       setAssignedTo(deal.assigned_to ?? "");
       setExpectedCloseDate(deal.expected_close_date ?? "");
       setNotes(deal.notes ?? "");
+      setTemperature(deal.temperature ?? "");
+      setSource(deal.source ?? "");
+      setOrigin(deal.origin ?? "");
       setContactLocked(false);
     } else {
       setTitle("");
@@ -117,6 +123,9 @@ export function DealForm({
       setAssignedTo("");
       setExpectedCloseDate("");
       setNotes("");
+      setTemperature("");
+      setSource("");
+      setOrigin("");
       // Opened from a conversation → start with the contact locked-in.
       setContactLocked(!!defaultContactId);
     }
@@ -178,6 +187,9 @@ export function DealForm({
       assigned_to: assignedTo || null,
       notes: notes.trim() || null,
       expected_close_date: expectedCloseDate || null,
+      temperature: temperature || null,
+      source: source.trim() || null,
+      origin: origin.trim() || null,
     };
 
     if (deal) {
@@ -375,6 +387,41 @@ export function DealForm({
                   </option>
                 ))}
               </select>
+            </div>
+
+            <div className="grid gap-2">
+              <Label className="text-muted-foreground">Temperatura do lead</Label>
+              <select
+                value={temperature}
+                onChange={(e) => setTemperature(e.target.value)}
+                className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary"
+              >
+                <option value="">Não definida</option>
+                <option value="frio">🧊 Frio</option>
+                <option value="morno">🌤️ Morno</option>
+                <option value="quente">🔥 Quente</option>
+              </select>
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="grid gap-2">
+                <Label className="text-muted-foreground">Fonte</Label>
+                <Input
+                  value={source}
+                  onChange={(e) => setSource(e.target.value)}
+                  placeholder="Ex.: Instagram, Indicação"
+                  className="border-border bg-muted text-foreground"
+                />
+              </div>
+              <div className="grid gap-2">
+                <Label className="text-muted-foreground">Origem</Label>
+                <Input
+                  value={origin}
+                  onChange={(e) => setOrigin(e.target.value)}
+                  placeholder="Ex.: Campanha, Site"
+                  className="border-border bg-muted text-foreground"
+                />
+              </div>
             </div>
 
             <div className="grid gap-2">

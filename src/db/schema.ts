@@ -609,6 +609,10 @@ export const deals = pgTable("deals", {
 	notes: text(),
 	expectedCloseDate: date("expected_close_date"),
 	status: text().default('open'),
+	// Campos extras do lead (estilo RD) — migração 0050.
+	temperature: text(),
+	source: text(),
+	origin: text(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
