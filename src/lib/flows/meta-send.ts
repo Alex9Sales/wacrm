@@ -224,6 +224,9 @@ interface SendMediaEngineArgs {
   caption?: string
   /** Document-only; ignored by Meta for image/video. */
   filename?: string
+  /** For AI voice notes: the text that was spoken, stored so the CRM
+   *  thread shows a "Transcrição" under the bubble (same as inbound audio). */
+  transcription?: string
 }
 
 /**
@@ -266,6 +269,7 @@ export async function engineSendMedia(
       // this the bubble has contentType='image' but no source and shows
       // "Imagem indisponível" (the media still reaches WhatsApp fine).
       mediaUrl: args.link,
+      transcription: args.transcription ?? null,
       messageId: waMessageId,
       status: 'sent',
     })

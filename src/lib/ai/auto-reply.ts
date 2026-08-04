@@ -201,6 +201,8 @@ export async function dispatchInboundToAiReply(
             contactId,
             kind: 'audio',
             link: publicUrl(TTS_BUCKET, key),
+            // O texto falado vira a transcrição do áudio no CRM (igual inbound).
+            transcription: clean,
           })
           continue // enviou como áudio; não manda o texto também
         } catch (err) {

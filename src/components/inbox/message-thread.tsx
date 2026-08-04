@@ -1346,7 +1346,7 @@ export function MessageThread({
       {/* Header — solid card surface sits on top of the doodle so the
           name/avatar/dropdowns stay legible. */}
       <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
-        <div className="flex min-w-0 items-center gap-2 sm:gap-3">
+        <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           {/* Back-to-list button — mobile only. Hidden on lg+ where the
               conversation list is always visible next to the thread. */}
           {onBack && (
@@ -1388,7 +1388,7 @@ export function MessageThread({
           {conversation.channel && (
             <Badge
               variant="secondary"
-              className="ml-1 hidden gap-1 text-[10px] sm:inline-flex sm:ml-2"
+              className="ml-1 hidden gap-1 text-[10px] lg:inline-flex lg:ml-2"
               title={`Canal: ${conversation.channel.name} (${CHANNEL_PROVIDER_LABELS[conversation.channel.provider]})`}
             >
               <Radio className="h-3 w-3" />
@@ -1406,7 +1406,7 @@ export function MessageThread({
             <Badge
               variant="outline"
               className={cn(
-                "ml-1 hidden gap-1 border-border text-[10px] sm:inline-flex sm:ml-2",
+                "ml-1 hidden gap-1 border-border text-[10px] lg:inline-flex lg:ml-2",
                 sessionInfo.expired ? "text-red-400" : "text-primary"
               )}
             >
@@ -1416,7 +1416,7 @@ export function MessageThread({
           )}
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-shrink-0 flex-wrap items-center justify-end gap-1.5">
           {/* Privar conversa — só o responsável ou supervisor+. Privada = só
               o atribuído, supervisor/admin e participantes veem. */}
           {canTogglePrivacy && (

@@ -74,7 +74,9 @@ export function buildSystemPrompt(args: {
 
   if (mode === 'auto_reply') {
     parts.push(
-      `You are replying automatically with no human in the loop. If you cannot confidently and safely help — the customer explicitly asks for a human, is upset or complaining, or the request needs information you do not have — reply with exactly ${HANDOFF_SENTINEL} and nothing else. A human agent will then take over. Prefer handing off over guessing.`,
+      `You are replying automatically with no human in the loop. Your job is to keep the conversation going and move it forward — greet, answer, ask, and qualify. ` +
+        `Hand off to a human ONLY when the customer explicitly asks to talk to a person/attendant, or is clearly upset, complaining, or wants to cancel/refund. In those cases reply with exactly ${HANDOFF_SENTINEL} and nothing else. ` +
+        `Do NOT hand off just because you lack a specific detail: if you don't know a price, availability, or a fact, do not invent it — instead ask a clarifying question, collect the customer's need, or say you'll check and get back to them, and keep the conversation moving. Never go silent.`,
     )
     // Voz (TTS): a IA decide texto vs áudio pelo padrão da conversa.
     parts.push(
@@ -89,7 +91,7 @@ export function buildSystemPrompt(args: {
   if (knowledge && knowledge.length > 0) {
     const fallback =
       mode === 'auto_reply'
-        ? `if they don't cover the question, do not guess — reply with exactly ${HANDOFF_SENTINEL} so a human can help`
+        ? "if they don't cover the question, do not guess — ask a clarifying question or say you'll check and follow up, and keep the conversation going"
         : "if they don't cover the question, don't guess — say you'll check and follow up"
     parts.push(
       'Knowledge base — excerpts from the business\'s own documentation, retrieved for this question. ' +
