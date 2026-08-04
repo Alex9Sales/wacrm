@@ -1231,6 +1231,35 @@ export function MessageThread({
     );
   }
 
+  // Listed-but-not-readable: a teammate's assigned thread in the agent's sector.
+  // Show a centered notice instead of the messages/composer (server already
+  // withholds the messages).
+  if (conversation.read_blocked) {
+    const blockedAssignee = profiles.find(
+      (p) => p.user_id === conversation.assigned_agent_id,
+    );
+    const who = blockedAssignee?.full_name?.trim() || "outro atendente";
+    return (
+      <div
+        className={cn(
+          "flex flex-1 flex-col items-center justify-center gap-2 px-6 text-center",
+          DOODLE_BG_CLASSES,
+        )}
+      >
+        <div className="flex h-16 w-16 items-center justify-center rounded-full bg-muted">
+          <Lock className="h-8 w-8 text-muted-foreground" />
+        </div>
+        <h3 className="mt-4 text-sm font-medium text-foreground">
+          Conversa atribuída a {who}
+        </h3>
+        <p className="mt-1 max-w-sm text-xs text-muted-foreground">
+          Você não pode ver esta conversa porque ela está atribuída a outro
+          atendente da equipe.
+        </p>
+      </div>
+    );
+  }
+
   const displayName = contact.name || contact.phone;
   const messageGroups = groupMessagesByDate(messages);
   const currentStatus = STATUS_OPTIONS.find(

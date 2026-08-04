@@ -1,17 +1,22 @@
 // ============================================================
-// Sector-based conversation visibility (privacy).
+// Sector-based conversation visibility (privacy). TWO tiers (owner's spec):
 //
-// The model (per owner's spec):
-//   • agent/viewer: sees a conversation ONLY when it's assigned to THEM, they
-//     were @mentioned into it, or it's an UNASSIGNED queue item they could pick
-//     up (open general queue, or unassigned in one of their sectors). An
-//     ASSIGNED conversation is private to its assignee — teammates in the same
-//     sector no longer see each other's assigned threads.
-//   • supervisor: sees everything EXCEPT conversations assigned to an
-//     admin/owner ("ninguém vê as do admin").
-//   • admin/owner: sees everything.
-// This module builds the reusable WHERE condition and the single-conversation
-// access check. `accountId` scopes the admin/owner lookup.
+//   • LIST (conversationVisibility): what shows in the inbox list.
+//       - agent/viewer: every NON-private conversation in their sectors (ANY
+//         assignee — so they see the sector's volume + who's handling what),
+//         plus their own, plus @mentions, plus the open general queue. NEVER a
+//         conversation assigned to an admin/owner.
+//       - supervisor: everything EXCEPT admin/owner-assigned.
+//       - admin/owner: everything.
+//   • READ (canReadConversation): whether the caller may OPEN the thread /
+//     act on it. STRICT — an agent may read only their own, @mentions, and
+//     unassigned queue items. A teammate's assigned thread is LISTED but not
+//     readable (the UI shows a "atribuída a outro atendente" notice), and the
+//     message loader returns nothing for it.
+//
+// "Ninguém vê as do admin" is absolute at BOTH tiers: an admin/owner-assigned
+// conversation is never listed nor readable by a non-admin — not even via an
+// @mention. `accountId` scopes the admin/owner lookup.
 // ============================================================
 
 import {
@@ -44,10 +49,9 @@ export async function getUserSectorIds(userId: string): Promise<string[]> {
   return rows.map((r) => r.sectorId);
 }
 
-/** User ids that are admin/owner in the account. Their assigned conversations
- *  are visible only to other admins/owners — supervisors and agents never see
- *  them. */
-async function getAdminUserIds(accountId: string): Promise<string[]> {
+/** User ids that are admin/owner in the account. Their conversations are never
+ *  visible to a non-admin (list or read). */
+export async function getAdminUserIds(accountId: string): Promise<string[]> {
   const rows = await db
     .select({ userId: member.userId })
     .from(member)
@@ -81,23 +85,20 @@ export async function isAdminUser(
   return !!row;
 }
 
-/** Unassigned queue an agent may pick up: no assignee AND (no sector, or one of
- *  the agent's sectors). */
-function unassignedQueue(sectorIds: string[]): SQL {
-  const inScope =
-    sectorIds.length === 0
-      ? isNull(conversations.sectorId)
-      : (or(
-          isNull(conversations.sectorId),
-          inArray(conversations.sectorId, sectorIds),
-        ) as SQL);
-  return and(isNull(conversations.assignedAgentId), inScope) as SQL;
+/** Conversation ids the user is an explicit participant of (@mentioned). */
+export async function getParticipantConversationIds(
+  userId: string,
+): Promise<string[]> {
+  const rows = await db
+    .select({ conversationId: conversationParticipants.conversationId })
+    .from(conversationParticipants)
+    .where(eq(conversationParticipants.userId, userId));
+  return rows.map((r) => r.conversationId);
 }
 
 /**
- * A WHERE condition restricting `conversations` to what the caller may see,
- * or `undefined` for admins/owner (no restriction). Callers `and()` it with
- * their account scope.
+ * LIST tier — a WHERE condition restricting `conversations` to what the caller
+ * may see in the inbox list, or `undefined` for admins/owner (no restriction).
  */
 export async function conversationVisibility(
   role: AccountRole,
@@ -117,20 +118,26 @@ export async function conversationVisibility(
     );
   }
 
-  // Agent/viewer: only their own, @mentions, or an unassigned queue item.
+  // Agent/viewer LIST: their own, @mentions, the open general queue, and every
+  // non-private conversation in their sectors (any assignee).
   const sectorIds = await getUserSectorIds(userId);
   const mine = eq(conversations.assignedAgentId, userId);
-  // Conversations you were @mentioned into (a participant) — otherwise a
-  // mention is a dead link.
   const participant = sql`${conversations.id} IN (SELECT conversation_id FROM conversation_participants WHERE user_id = ${userId})`;
   const notPrivate = eq(conversations.isPrivate, false);
+  const openQueue = and(
+    isNull(conversations.sectorId),
+    isNull(conversations.assignedAgentId),
+  ) as SQL;
+  const sectorScope =
+    sectorIds.length === 0
+      ? openQueue
+      : (or(inArray(conversations.sectorId, sectorIds), openQueue) as SQL);
   const base = or(
     mine,
     participant,
-    and(notPrivate, unassignedQueue(sectorIds)) as SQL,
+    and(notPrivate, sectorScope) as SQL,
   ) as SQL;
-  // "Ninguém vê as do admin": a conversation assigned to an admin/owner is
-  // never visible to an agent — not even one they were @mentioned into.
+  // "Ninguém vê as do admin": exclude admin/owner-assigned entirely.
   const adminIds = await getAdminUserIds(accountId);
   if (adminIds.length === 0) return base;
   const notAdminAssigned = or(
@@ -140,9 +147,12 @@ export async function conversationVisibility(
   return and(notAdminAssigned, base);
 }
 
-/** Whether the caller may open a specific conversation. Pass `conversationId`
- *  so an @mention participant is granted access even to a private thread. */
-export async function canSeeConversation(
+/**
+ * READ tier — whether the caller may OPEN / act on a specific conversation.
+ * Strict: an agent reads only their own, @mentions, and unassigned queue items;
+ * a teammate's assigned thread is not readable (blocked notice in the UI).
+ */
+export async function canReadConversation(
   role: AccountRole,
   userId: string,
   accountId: string,
@@ -151,40 +161,100 @@ export async function canSeeConversation(
   conversationId?: string,
   isPrivate = false,
 ): Promise<boolean> {
-  // Admin/owner see all.
+  // Admin/owner read all.
   if (hasMinRole(role, 'admin')) return true;
-
-  // The assignee always sees their own thread.
+  // The assignee always reads their own thread.
   if (assignedAgentId && assignedAgentId === userId) return true;
-
-  // Supervisor: everything except a conversation assigned to an admin/owner.
+  // Supervisor: everything except an admin/owner-assigned thread.
   if (hasMinRole(role, 'supervisor')) {
     if (assignedAgentId && (await isAdminUser(accountId, assignedAgentId))) {
       return false;
     }
     return true;
   }
-
-  // "Ninguém vê as do admin": a conversation assigned to an admin/owner is
-  // never visible to an agent — checked before the @mention exception so a
-  // stray mention can't expose it.
+  // "Ninguém vê as do admin" — before the @mention exception.
   if (assignedAgentId && (await isAdminUser(accountId, assignedAgentId))) {
     return false;
   }
-  // @mention participant — access to this one conversation regardless of
-  // owner/sector/private.
+  // @mention participant — reads this one thread regardless of owner/sector.
   if (conversationId && (await isParticipant(conversationId, userId))) {
     return true;
   }
-  // Private beyond this point is not visible to anyone else.
   if (isPrivate) return false;
-  // Assigned to someone else — private to that assignee now.
+  // Assigned to another (non-admin) agent — listed, but not readable.
   if (assignedAgentId) return false;
-  // Unassigned: open general queue is visible to all; a sector queue only to
+  // Unassigned: open general queue is readable by all; a sector queue only by
   // that sector's members.
   if (!conversationSectorId) return true;
   const sectorIds = await getUserSectorIds(userId);
   return sectorIds.includes(conversationSectorId);
+}
+
+/**
+ * LIST tier for a SINGLE conversation — mirrors `conversationVisibility`. Lets
+ * the deep-link loader tell "blocked" (listed but not readable → show notice)
+ * apart from "hidden" (not listed → 404/null).
+ */
+export async function canListConversation(
+  role: AccountRole,
+  userId: string,
+  accountId: string,
+  conversationSectorId: string | null,
+  assignedAgentId: string | null = null,
+  conversationId?: string,
+  isPrivate = false,
+): Promise<boolean> {
+  if (hasMinRole(role, 'admin')) return true;
+  // Admin/owner conversations are never listed to a non-admin.
+  if (assignedAgentId && (await isAdminUser(accountId, assignedAgentId))) {
+    return false;
+  }
+  if (hasMinRole(role, 'supervisor')) return true;
+  if (assignedAgentId && assignedAgentId === userId) return true;
+  if (conversationId && (await isParticipant(conversationId, userId))) {
+    return true;
+  }
+  if (isPrivate) return false;
+  // Sector member: sees every conversation in their sectors (any assignee).
+  if (conversationSectorId) {
+    const sectorIds = await getUserSectorIds(userId);
+    return sectorIds.includes(conversationSectorId);
+  }
+  // No sector: only the open (unassigned) queue.
+  return !assignedAgentId;
+}
+
+/**
+ * Pure READ check for a list row already fetched, using pre-loaded sets (no
+ * per-row queries). Must mirror `canReadConversation` for an agent/viewer.
+ */
+export function agentCanReadRow(args: {
+  userId: string;
+  conversationId: string;
+  sectorId: string | null;
+  assignedAgentId: string | null;
+  isPrivate: boolean;
+  sectorIds: Set<string>;
+  adminIds: Set<string>;
+  participantIds: Set<string>;
+}): boolean {
+  const {
+    userId,
+    conversationId,
+    sectorId,
+    assignedAgentId,
+    isPrivate,
+    sectorIds,
+    adminIds,
+    participantIds,
+  } = args;
+  if (assignedAgentId && assignedAgentId === userId) return true;
+  if (assignedAgentId && adminIds.has(assignedAgentId)) return false;
+  if (participantIds.has(conversationId)) return true;
+  if (isPrivate) return false;
+  if (assignedAgentId) return false;
+  if (!sectorId) return true;
+  return sectorIds.has(sectorId);
 }
 
 /** True when the user is an explicit participant of the conversation. */

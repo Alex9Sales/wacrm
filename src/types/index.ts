@@ -185,6 +185,10 @@ export interface Conversation {
   sector_id?: string | null;
   /** Private conversation — only the assignee, supervisor+ and participants see it. */
   is_private?: boolean;
+  /** Listed but not readable (a teammate's assigned thread in the agent's
+   *  sector). The thread shows an "atribuída a outro atendente" notice and the
+   *  composer is disabled; messages/preview are withheld server-side. */
+  read_blocked?: boolean;
   /** Handoff note shown to the receiving agent after a sector transfer. */
   transfer_note?: string | null;
   transfer_note_at?: string | null;

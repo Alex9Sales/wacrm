@@ -950,17 +950,47 @@ function ConversationItem({
 
       {/* Content */}
       <div className="min-w-0 flex-1">
+        {/* Linha 1: nome + horário / não-lidas / status. O cluster da direita é
+            `shrink-0` e o nome trunca — nunca se sobrepõem. */}
         <div className="flex items-center justify-between gap-2">
           <span className="truncate text-sm font-medium text-foreground">
             {displayName}
           </span>
-          <span className="shrink-0 text-[10px] text-muted-foreground">{timeAgo}</span>
-        </div>
-        <div className="mt-0.5 flex items-center justify-between gap-2">
-          <p className="truncate text-xs text-muted-foreground">
-            {formatConversationPreview(conversation.last_message_text)}
-          </p>
           <div className="flex shrink-0 items-center gap-1.5">
+            <span className="text-[10px] text-muted-foreground">{timeAgo}</span>
+            {/* Não mostra o badge de não-lidas na conversa aberta (você está
+                lendo). O reset no banco é disparado em handleMessageEvent. */}
+            {!isActive && conversation.unread_count > 0 && (
+              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
+                {conversation.unread_count}
+              </span>
+            )}
+            <span
+              className={cn(
+                "h-2 w-2 rounded-full",
+                STATUS_COLORS[conversation.status],
+              )}
+              title={conversation.status}
+            />
+          </div>
+        </div>
+
+        {/* Linha 2: prévia da última mensagem — largura total, SEMPRE visível
+            (não disputa espaço com os badges, que agora quebram abaixo). */}
+        <p className="mt-0.5 truncate text-xs text-muted-foreground">
+          {formatConversationPreview(conversation.last_message_text)}
+        </p>
+
+        {/* Linha 3: badges (prioridade, atribuído, grupo, setor, canal) +
+            etiquetas do contato, todos numa faixa que QUEBRA conforme precisa —
+            o card cresce pra baixo e fica alinhado. */}
+        {(prio ||
+          agentName ||
+          contact?.is_group ||
+          conversation.sector ||
+          conversation.channel ||
+          contactTags.length > 0) && (
+          <div className="mt-1 flex flex-wrap items-center gap-1">
             {prio && (
               <span
                 className={cn(
@@ -979,7 +1009,7 @@ function ConversationItem({
                 title={`Atribuída a ${agentName}`}
               >
                 <UserCheck className="h-2.5 w-2.5" />
-                <span className="max-w-16 truncate">{agentName}</span>
+                <span className="max-w-24 truncate">{agentName}</span>
               </span>
             )}
             {contact?.is_group && (
@@ -1020,28 +1050,6 @@ function ConversationItem({
                 </span>
               </span>
             )}
-            {/* Never show the unread badge on the conversation you're actively
-                viewing — you're reading it, so it's read. The DB reset is
-                fired in handleMessageEvent; hiding it here also removes any
-                flash during the reset round-trip. */}
-            {!isActive && conversation.unread_count > 0 && (
-              <span className="flex h-4 min-w-4 items-center justify-center rounded-full bg-primary px-1 text-[10px] font-bold text-primary-foreground">
-                {conversation.unread_count}
-              </span>
-            )}
-            <span
-              className={cn(
-                "h-2 w-2 rounded-full",
-                STATUS_COLORS[conversation.status]
-              )}
-              title={conversation.status}
-            />
-          </div>
-        </div>
-
-        {/* Etiquetas do contato — chips coloridos (até 3 + contador). */}
-        {contactTags.length > 0 && (
-          <div className="mt-1 flex flex-wrap items-center gap-1">
             {contactTags.slice(0, 3).map((tag) => (
               <span
                 key={tag.id}

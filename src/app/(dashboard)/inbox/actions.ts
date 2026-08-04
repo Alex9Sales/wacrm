@@ -38,7 +38,12 @@ import {
 import { hasMinRole } from '@/lib/auth/roles'
 import {
   conversationVisibility,
-  canSeeConversation,
+  canReadConversation,
+  canListConversation,
+  agentCanReadRow,
+  getAdminUserIds,
+  getParticipantConversationIds,
+  getUserSectorIds,
 } from '@/lib/sectors/access'
 import { formatConversationPreview } from '@/lib/inbox/preview'
 import { loadChannel } from '@/lib/channels/channels'
@@ -118,9 +123,23 @@ export async function getConversationWithContact(
       .limit(1),
   )
   if (!row) return null
-  // Sector privacy: hide a conversation an agent isn't allowed to see.
-  if (
-    !(await canSeeConversation(
+  // Two-tier sector privacy. READ = can open the thread. If they can't read but
+  // CAN list it (a teammate's assigned thread in their sector), return a
+  // header-only "blocked" state so the UI shows the "atribuída a outro
+  // atendente" notice. If they can't even list it (admin's, or outside their
+  // sectors) → 404/null.
+  const canRead = await canReadConversation(
+    ctx.role,
+    ctx.userId,
+    ctx.accountId,
+    row.sector_id,
+    row.assigned_agent_id,
+    conversationId,
+    row.is_private,
+  )
+  let readBlocked = false
+  if (!canRead) {
+    const canList = await canListConversation(
       ctx.role,
       ctx.userId,
       ctx.accountId,
@@ -128,9 +147,9 @@ export async function getConversationWithContact(
       row.assigned_agent_id,
       conversationId,
       row.is_private,
-    ))
-  ) {
-    return null
+    )
+    if (!canList) return null
+    readBlocked = true
   }
 
   let contactTagsList: Tag[] = []
@@ -165,12 +184,18 @@ export async function getConversationWithContact(
   const { contact, channel, sector, ...conv } = row
   return {
     ...conv,
+    // When blocked, blank the content preview so the thread's last message
+    // doesn't leak in a header/preview — the messages themselves are already
+    // withheld by listMessages (strict read check).
+    last_message_text: readBlocked ? '' : conv.last_message_text,
+    transfer_note: readBlocked ? null : conv.transfer_note,
+    read_blocked: readBlocked,
     status: conv.status as ConversationStatus,
     priority: (conv.priority ?? 'none') as ConversationPriority,
     unread_count: conv.unread_count ?? 0,
-    transfer_note_by_name: transferNoteByName,
+    transfer_note_by_name: readBlocked ? null : transferNoteByName,
     contact: contact?.id
-      ? ({ ...contact, tags: contactTagsList } as unknown as Contact)
+      ? ({ ...contact, tags: readBlocked ? [] : contactTagsList } as unknown as Contact)
       : undefined,
     channel: normalizeChannel(channel),
     sector: sector?.id
@@ -415,10 +440,38 @@ export async function listConversations(): Promise<Conversation[]> {
     }
   }
 
+  // Agents/viewers see teammates' sector conversations in the list (volume +
+  // who's handling what) but may not READ them. Blank the preview and flag
+  // read_blocked for those rows so no message content leaks in the list.
+  const isAgentTier = !hasMinRole(ctx.role, 'supervisor')
+  const adminIds = isAgentTier
+    ? new Set(await getAdminUserIds(ctx.accountId))
+    : new Set<string>()
+  const sectorIds = isAgentTier
+    ? new Set(await getUserSectorIds(ctx.userId))
+    : new Set<string>()
+  const participantIds = isAgentTier
+    ? new Set(await getParticipantConversationIds(ctx.userId))
+    : new Set<string>()
+
   return rows.map((row) => {
     const { contact, channel, sector, ...conv } = row
+    const readable =
+      !isAgentTier ||
+      agentCanReadRow({
+        userId: ctx.userId,
+        conversationId: conv.id,
+        sectorId: conv.sector_id,
+        assignedAgentId: conv.assigned_agent_id,
+        isPrivate: conv.is_private,
+        sectorIds,
+        adminIds,
+        participantIds,
+      })
     return {
       ...conv,
+      last_message_text: readable ? conv.last_message_text : '[locked]',
+      read_blocked: !readable,
       status: conv.status as ConversationStatus,
       priority: (conv.priority ?? 'none') as ConversationPriority,
       unread_count: conv.unread_count ?? 0,
@@ -476,7 +529,7 @@ async function assertConversationInAccount(
       .limit(1),
   )
   if (!row) return false
-  return canSeeConversation(
+  return canReadConversation(
     ctx.role,
     ctx.userId,
     ctx.accountId,
@@ -917,7 +970,7 @@ export async function transferConversationToAgent(
   if (!conv) throw new Error('Conversa não encontrada.')
 
   if (
-    !(await canSeeConversation(
+    !(await canReadConversation(
       ctx.role,
       ctx.userId,
       ctx.accountId,
@@ -1204,7 +1257,7 @@ export async function getConversationPreview(
   )
   if (!row) return null
   if (
-    !(await canSeeConversation(
+    !(await canReadConversation(
       ctx.role,
       ctx.userId,
       ctx.accountId,
@@ -1256,7 +1309,7 @@ export async function transferConversation(
   if (!conv) throw new Error('Conversa não encontrada.')
   // Only someone who can see the conversation may transfer it.
   if (
-    !(await canSeeConversation(
+    !(await canReadConversation(
       ctx.role,
       ctx.userId,
       ctx.accountId,

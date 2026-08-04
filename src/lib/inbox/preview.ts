@@ -34,6 +34,9 @@ const MEDIA_PREVIEW_LABELS: Record<string, string> = {
 export function formatConversationPreview(text?: string | null): string {
   const trimmed = text?.trim();
   if (!trimmed) return 'Nenhuma mensagem ainda';
+  // A conversation the agent may LIST but not READ (teammate's assigned thread):
+  // the server blanks the preview to this sentinel so no content leaks.
+  if (trimmed === '[locked]') return '🔒 Conversa de outro atendente';
   // Call markers → friendly labels (never show the raw sentinel).
   const call = parseCallLog(text);
   if (call) return call.answered ? '📞 Ligação de voz' : '📞 Ligação perdida';
