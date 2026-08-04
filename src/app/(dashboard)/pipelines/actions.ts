@@ -7,10 +7,11 @@
 // ============================================================
 
 import { and, asc, count, desc, eq, sql } from 'drizzle-orm'
-import { db, contacts, conversations, dealAttachments, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, pipelines, pipelineStages, user } from '@/db'
+import { db, contacts, conversations, dealAttachments, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, notifications, pipelines, pipelineStages, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
+import { getAdminUserIds } from '@/lib/sectors/access'
 import type { Contact, Conversation, Deal, Pipeline, PipelineStage, Profile } from '@/types'
 
 const contactColumns = {
@@ -239,12 +240,16 @@ export async function moveDealToStage(
     // Grab the current stage first so the timeline can show from → to.
     const before = firstOrNull(
       await db
-        .select({ stageId: deals.stageId })
+        .select({ stageId: deals.stageId, assignedTo: deals.assignedTo })
         .from(deals)
         .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
         .limit(1),
     )
     if (!before) return { error: 'Deal not found' }
+    // Funil aberto: agente não move deal atribuído a outro.
+    if (!dealReadable(ctx.role, ctx.userId, before.assignedTo)) {
+      return { error: 'Este negócio está atribuído a outro atendente.' }
+    }
     if (before.stageId === stageId) return { error: null }
     await db
       .update(deals)
@@ -257,6 +262,101 @@ export async function moveDealToStage(
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Failed to move deal' }
+  }
+}
+
+/**
+ * Transferir lead (spec Alex 05/08): reatribui o deal a outro membro MANTENDO a
+ * etapa (só troca o responsável). Grava evento no histórico + notifica.
+ * Regra de notificação: admin→agente avisa SÓ o receptor; não-admin
+ * (agente/supervisor)→outro avisa o receptor + os admins. Nunca avisa quem fez.
+ */
+export async function transferDeal(
+  dealId: string,
+  toUserId: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    if (!toUserId) return { error: 'Escolha para quem transferir.' }
+
+    const row = firstOrNull(
+      await db
+        .select({ assignedTo: deals.assignedTo, contactId: deals.contactId })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!row) return { error: 'Negócio não encontrado.' }
+    // Só quem já pode agir no deal transfere (dono, admin ou supervisor).
+    if (!dealReadable(ctx.role, ctx.userId, row.assignedTo)) {
+      return { error: 'Este negócio está atribuído a outro atendente.' }
+    }
+    if (row.assignedTo === toUserId) return { error: null } // já é do destino
+
+    const nameOf = async (uid: string | null): Promise<string | null> => {
+      if (!uid) return null
+      const u = firstOrNull(
+        await db.select({ name: user.name }).from(user).where(eq(user.id, uid)).limit(1),
+      )
+      return u?.name?.trim() || null
+    }
+    const [toName, byName] = await Promise.all([nameOf(toUserId), nameOf(ctx.userId)])
+
+    // A ETAPA NÃO MUDA — só o responsável.
+    await db
+      .update(deals)
+      .set({ assignedTo: toUserId })
+      .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+
+    await recordDealEvent(ctx.accountId, ctx.userId, dealId, 'transferred', {
+      to: toName,
+      by: byName,
+      by_role: ctx.role,
+    })
+
+    // Nome do lead p/ a mensagem da notificação.
+    let contactName = 'um lead'
+    if (row.contactId) {
+      const c = firstOrNull(
+        await db
+          .select({ name: contacts.name, phone: contacts.phone })
+          .from(contacts)
+          .where(eq(contacts.id, row.contactId))
+          .limit(1),
+      )
+      contactName = c?.name?.trim() || c?.phone || 'um lead'
+    }
+
+    // Destinatários: sempre o receptor; se quem fez NÃO é admin/owner, os admins.
+    const recipients = new Set<string>([toUserId])
+    if (!hasMinRole(ctx.role, 'admin')) {
+      for (const a of await getAdminUserIds(ctx.accountId)) recipients.add(a)
+    }
+    recipients.delete(ctx.userId) // nunca notifica quem transferiu
+
+    const notifRows = [...recipients].map((uid) => ({
+      accountId: ctx.accountId,
+      userId: uid,
+      type: 'deal_transferred' as const,
+      dealId,
+      contactId: row.contactId,
+      actorUserId: ctx.userId,
+      title: uid === toUserId ? 'Lead transferido para você' : 'Lead transferido',
+      body:
+        uid === toUserId
+          ? `${byName ?? 'Alguém'} transferiu o lead "${contactName}" para você.`
+          : `${byName ?? 'Um atendente'} transferiu o lead "${contactName}" para ${toName ?? 'outro atendente'}.`,
+    }))
+    if (notifRows.length) {
+      try {
+        await db.insert(notifications).values(notifRows)
+      } catch (err) {
+        console.error('[transferDeal] notify failed:', err)
+      }
+    }
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao transferir.' }
   }
 }
 

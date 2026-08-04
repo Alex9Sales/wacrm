@@ -39,6 +39,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DealForm } from "@/components/pipelines/deal-form";
 import { TaskForm } from "@/components/tarefas/task-form";
+import { TransferDealButton } from "@/components/pipelines/transfer-deal-button";
 import {
   getDeal,
   listStages,
@@ -176,6 +177,13 @@ function describeEvent(e: DealEvent): { icon: React.ReactNode; text: string } {
       return {
         icon: <StickyNote className="h-4 w-4 text-amber-500" />,
         text: String(d.text ?? ""),
+      };
+    case "transferred":
+      return {
+        icon: <ArrowRightLeft className="h-4 w-4 text-primary" />,
+        text: d.to
+          ? `transferiu o lead para ${String(d.to)}`
+          : "transferiu o lead",
       };
     default:
       return { icon: <Clock className="h-4 w-4 text-muted-foreground" />, text: e.type };
@@ -632,7 +640,18 @@ export default function DealDetailPage() {
             <Field label="Nome" value={deal.title} />
             <Field label="Valor" value={fmtCurrency(deal.value, deal.currency)} />
             <Field label="Contato" value={deal.contact?.name || deal.contact?.phone} />
-            <Field label="Responsável" value={deal.assignee?.full_name} />
+            <div>
+              <Field label="Responsável" value={deal.assignee?.full_name} />
+              <div className="mt-1.5">
+                <TransferDealButton
+                  dealId={deal.id}
+                  currentAssigneeId={deal.assigned_to ?? null}
+                  onTransferred={() => {
+                    window.location.href = "/pipelines";
+                  }}
+                />
+              </div>
+            </div>
             <Field
               label="Temperatura"
               value={

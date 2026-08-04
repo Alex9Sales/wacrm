@@ -1132,6 +1132,8 @@ export const notifications = pgTable("notifications", {
 	conversationId: uuid("conversation_id"),
 	channelId: uuid("channel_id"),
 	contactId: uuid("contact_id"),
+	// Transferir lead: deep-link pro negócio na notificação (migração 0056).
+	dealId: uuid("deal_id"),
 	actorUserId: uuid("actor_user_id"),
 	title: text().notNull(),
 	body: text(),
@@ -1155,7 +1157,7 @@ export const notifications = pgTable("notifications", {
 			foreignColumns: [contacts.id],
 			name: "notifications_contact_id_fkey"
 		}).onDelete("set null"),
-	check("notifications_type_check", sql`type = ANY (ARRAY['conversation_assigned'::text, 'sla_alert'::text, 'mention'::text, 'broadcast_halted'::text])`),
+	check("notifications_type_check", sql`type = ANY (ARRAY['conversation_assigned'::text, 'sla_alert'::text, 'mention'::text, 'broadcast_halted'::text, 'deal_transferred'::text])`),
 ]);
 
 export const webhookEndpoints = pgTable("webhook_endpoints", {

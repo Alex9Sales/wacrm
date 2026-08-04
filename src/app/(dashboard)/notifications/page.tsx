@@ -8,7 +8,7 @@ import {
   markNotificationRead,
 } from "./actions";
 import type { Notification } from "@/types";
-import { Bell, CheckCheck, Loader2, UserPlus, Clock, AtSign } from "lucide-react";
+import { Bell, CheckCheck, Loader2, UserPlus, Clock, AtSign, ArrowRightLeft } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
@@ -20,6 +20,7 @@ const TYPE_ICON: Record<Notification["type"], typeof Bell> = {
   conversation_assigned: UserPlus,
   sla_alert: Clock,
   mention: AtSign,
+  deal_transferred: ArrowRightLeft,
 };
 
 export default function NotificationsPage() {
@@ -75,6 +76,23 @@ export default function NotificationsPage() {
 
   const handleClick = useCallback(
     async (n: Notification) => {
+      if (n.deal_id) {
+        // Transferência de lead → abre o negócio. Persiste "lido" antes (a
+        // navegação descarrega a página e cancelaria um fire-and-forget).
+        if (!n.read_at) {
+          setNotifications(
+            (prev) =>
+              prev?.map((x) =>
+                x.id === n.id && !x.read_at
+                  ? { ...x, read_at: new Date().toISOString() }
+                  : x,
+              ) ?? prev,
+          );
+          await markNotificationRead(n.id).catch(() => {});
+        }
+        window.location.href = `/pipelines/${n.deal_id}`;
+        return;
+      }
       if (n.conversation_id) {
         // FULL navigation (not router.push): the client-side push wasn't
         // reliably re-triggering the inbox's `?c=` deep-link effect, so the

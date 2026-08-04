@@ -20,6 +20,7 @@ const notificationColumns = {
   conversation_id: notifications.conversationId,
   channel_id: notifications.channelId,
   contact_id: notifications.contactId,
+  deal_id: notifications.dealId,
   actor_user_id: notifications.actorUserId,
   title: notifications.title,
   body: notifications.body,

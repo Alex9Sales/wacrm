@@ -218,7 +218,8 @@ export interface Conversation {
 export type NotificationType =
   | 'conversation_assigned'
   | 'sla_alert'
-  | 'mention';
+  | 'mention'
+  | 'deal_transferred';
 
 export interface Notification {
   id: string;
@@ -230,6 +231,8 @@ export interface Notification {
   /** Internal-chat channel of the mention (for the group deep-link). */
   channel_id?: string;
   contact_id?: string;
+  /** Deal this notification points to (deal_transferred) — deep-links to it. */
+  deal_id?: string;
   /** Who triggered it. Null when an automation/system assigned it. */
   actor_user_id?: string;
   title: string;
