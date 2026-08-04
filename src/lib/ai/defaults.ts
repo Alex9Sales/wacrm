@@ -48,6 +48,14 @@ export function aiContextMessageLimit(): number {
   return Number.isFinite(raw) && raw > 0 ? Math.floor(raw) : DEFAULT_CONTEXT_MESSAGE_LIMIT
 }
 
+/** Message buffer: how long the AI waits (debounced, per conversation) after
+ *  the LAST inbound before replying — so a burst of messages gets one answer.
+ *  Seconds via `AI_REPLY_BUFFER_SECONDS` (0 disables the wait). Default 8s. */
+export function aiReplyBufferMs(): number {
+  const raw = Number(process.env.AI_REPLY_BUFFER_SECONDS)
+  return Number.isFinite(raw) && raw >= 0 ? Math.floor(raw * 1000) : 8_000
+}
+
 /**
  * Build the system prompt shared by draft + auto-reply. The account's
  * own `system_prompt` (business context / persona / tone) is appended

@@ -55,3 +55,11 @@ import('./flow-scheduler-worker')
   .catch((err) => {
     console.error('[worker] flow-scheduler failed to start:', err);
   });
+
+// AI auto-reply — the message buffer: fires the debounced reply once the
+// customer stops sending (see enqueueAiReplyDebounced in the webhook).
+import('./ai-reply-worker')
+  .then((m) => m.startAiReplyWorker())
+  .catch((err) => {
+    console.error('[worker] ai-reply failed to start:', err);
+  });

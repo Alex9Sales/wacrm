@@ -38,7 +38,8 @@ import { publishEvent } from '@/lib/events/publish';
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
-import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
+import { enqueueAiReplyDebounced } from '@/lib/queue/queues';
+import { aiReplyBufferMs } from '@/lib/ai/defaults';
 import { transcribeInboundAudio } from '@/lib/ai/transcribe';
 import { describeImage } from '@/lib/ai/vision';
 import { loadAiConfig } from '@/lib/ai/config';
@@ -540,14 +541,26 @@ export async function dispatchInboundMessage(
   }
 
   // AI auto-reply — plain-text, not consumed by a flow, and not already
-  // handled by the out-of-hours notice.
+  // handled by the out-of-hours notice. BUFFER DE MENSAGENS: em vez de
+  // responder na hora, agenda a resposta com um debounce por conversa — cada
+  // nova mensagem RESETA o timer, então a IA só responde quando o cliente para
+  // de mandar (junta a rajada numa resposta só). Os gates de elegibilidade são
+  // re-checados no worker, na hora de disparar. Best-effort: nunca quebra o
+  // inbound. `AI_REPLY_BUFFER_SECONDS=0` volta ao comportamento imediato.
   if (!flowConsumed && !outOfHoursSent && !ev.interactiveReplyId && inboundText.trim()) {
-    await dispatchInboundToAiReply({
-      accountId,
-      conversationId: conversation.id,
-      contactId,
-      configOwnerUserId: contactOutcome.contact.userId,
-    });
+    try {
+      await enqueueAiReplyDebounced(
+        {
+          accountId,
+          conversationId: conversation.id,
+          contactId,
+          configOwnerUserId: contactOutcome.contact.userId,
+        },
+        aiReplyBufferMs(),
+      );
+    } catch (err) {
+      console.error('[inbound] failed to enqueue AI reply:', err);
+    }
   }
 
   // message.received webhook (public API).

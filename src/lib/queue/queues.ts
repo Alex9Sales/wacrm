@@ -26,6 +26,7 @@ import { bullConnection } from './connection';
 
 export const BROADCAST_DISPATCH_QUEUE = 'broadcast-dispatch';
 export const SCHEDULED_MESSAGE_QUEUE = 'scheduled-message';
+export const AI_REPLY_QUEUE = 'ai-reply';
 
 /** Payload of a dispatch job. */
 export interface BroadcastDispatchJob {
@@ -41,6 +42,14 @@ export interface RecipientJob {
 /** Payload of a scheduled 1:1 message job. */
 export interface ScheduledMessageJob {
   scheduledMessageId: string;
+}
+
+/** Payload of a debounced AI auto-reply job (message buffer). */
+export interface AiReplyJob {
+  accountId: string;
+  conversationId: string;
+  contactId: string;
+  configOwnerUserId: string;
 }
 
 /** Name of the per-channel outbound queue. (BullMQ forbids ':' in queue
@@ -85,6 +94,54 @@ export function scheduledMessageQueue(): Queue<ScheduledMessageJob> {
     });
   }
   return _scheduledQueue;
+}
+
+let _aiReplyQueue: Queue<AiReplyJob> | null = null;
+
+/** The single AI auto-reply queue (debounced per conversation). */
+export function aiReplyQueue(): Queue<AiReplyJob> {
+  if (!_aiReplyQueue) {
+    _aiReplyQueue = new Queue<AiReplyJob>(AI_REPLY_QUEUE, {
+      connection: bullConnection(),
+      defaultJobOptions: {
+        attempts: 2,
+        backoff: { type: 'fixed', delay: 5_000 },
+        removeOnComplete: { count: 200 },
+        removeOnFail: { count: 500 },
+      },
+    });
+  }
+  return _aiReplyQueue;
+}
+
+/**
+ * Message buffer: (re)schedule the AI reply for `delayMs` in the future, keyed
+ * per conversation. Every new inbound RESETS the timer (remove + re-add), so
+ * the AI only replies once the customer STOPS sending — joining a burst of
+ * messages into a single, contextful answer instead of replying to each.
+ *
+ * The eligibility gates (assigned agent, AI paused, per-conv cap) are re-checked
+ * at fire time inside the worker, so a human taking over during the buffer
+ * window correctly cancels the pending reply.
+ *
+ * Best-effort by contract — a failure here must never break the inbound path.
+ */
+export async function enqueueAiReplyDebounced(
+  job: AiReplyJob,
+  delayMs: number,
+): Promise<void> {
+  const jobId = `ai-reply-${job.conversationId}`;
+  const q = aiReplyQueue();
+  try {
+    // Reset the timer: drop the still-delayed job so the re-add below starts a
+    // fresh countdown. An already-running job is left to finish (its dispatch
+    // reads the live history, so the newest message is included anyway).
+    const existing = await q.getJob(jobId);
+    if (existing) await existing.remove().catch(() => {});
+  } catch {
+    /* ignore — still try to add below */
+  }
+  await q.add('ai-reply', job, { jobId, delay: Math.max(0, delayMs) });
 }
 
 const _outboundQueues = new Map<string, Queue<RecipientJob>>();
