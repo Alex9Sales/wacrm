@@ -268,8 +268,8 @@ export function PipelineSettings({
                   </SortableContext>
                 </DndContext>
 
-                {/* Add new stage */}
-                <div className="mt-1 flex flex-wrap gap-1">
+                {/* Add new stage — presets + cor personalizada (seletor completo) */}
+                <div className="mt-1 flex flex-wrap items-center gap-1">
                   {STAGE_COLORS.map((color) => (
                     <button
                       key={color}
@@ -286,6 +286,18 @@ export function PipelineSettings({
                       aria-label={`Escolher cor ${color}`}
                     />
                   ))}
+                  <input
+                    type="color"
+                    value={
+                      /^#[0-9a-fA-F]{6}$/.test(newStageColor)
+                        ? newStageColor
+                        : "#6d28d9"
+                    }
+                    onChange={(e) => setNewStageColor(e.target.value)}
+                    className="ml-1 h-5 w-6 cursor-pointer rounded border border-border bg-transparent p-0"
+                    aria-label="Cor personalizada"
+                    title="Cor personalizada"
+                  />
                 </div>
                 <div className="flex items-center gap-2">
                   <Input
@@ -427,23 +439,37 @@ function ColorSwatch({
       {open && (
         <>
           <div className="fixed inset-0 z-10" onClick={() => setOpen(false)} />
-          <div className="absolute left-0 top-6 z-20 flex flex-wrap gap-1 rounded-lg border border-border bg-popover p-2 shadow-lg w-36">
-            {colors.map((c) => (
-              <button
-                key={c}
-                type="button"
-                onClick={() => {
-                  onChange(c);
-                  setOpen(false);
-                }}
-                className="h-5 w-5 rounded-full border-2 transition-transform hover:scale-110"
-                style={{
-                  backgroundColor: c,
-                  borderColor:
-                    c === value ? "var(--foreground)" : "transparent",
-                }}
+          <div className="absolute left-0 top-6 z-20 w-44 space-y-2 rounded-lg border border-border bg-popover p-2 shadow-lg">
+            <div className="flex flex-wrap gap-1">
+              {colors.map((c) => (
+                <button
+                  key={c}
+                  type="button"
+                  onClick={() => {
+                    onChange(c);
+                    setOpen(false);
+                  }}
+                  className="h-5 w-5 rounded-full border-2 transition-transform hover:scale-110"
+                  style={{
+                    backgroundColor: c,
+                    borderColor:
+                      c === value ? "var(--foreground)" : "transparent",
+                  }}
+                />
+              ))}
+            </div>
+            {/* Cor personalizada — seletor completo (arrasta no espectro/gradiente
+                e escolhe qualquer tom). */}
+            <label className="flex items-center gap-2 border-t border-border pt-2 text-xs text-muted-foreground">
+              <input
+                type="color"
+                value={/^#[0-9a-fA-F]{6}$/.test(value) ? value : "#6d28d9"}
+                onChange={(e) => onChange(e.target.value)}
+                className="h-6 w-8 cursor-pointer rounded border border-border bg-transparent p-0"
+                aria-label="Cor personalizada"
               />
-            ))}
+              Personalizada
+            </label>
           </div>
         </>
       )}

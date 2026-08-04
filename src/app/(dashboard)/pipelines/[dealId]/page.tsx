@@ -19,12 +19,17 @@ import {
   ArrowRightLeft,
   Sparkles,
   Clock,
+  Plus,
+  CheckCircle2,
+  Circle,
+  CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { DealForm } from "@/components/pipelines/deal-form";
+import { TaskForm } from "@/components/tarefas/task-form";
 import {
   getDeal,
   listStages,
@@ -34,6 +39,14 @@ import {
   addDealNote,
   type DealEvent,
 } from "@/app/(dashboard)/pipelines/actions";
+import {
+  listTasksByDeal,
+  toggleTaskDone,
+  listContactsForPicker,
+  listDealsForPicker,
+  type TaskLite,
+  type PickerOption,
+} from "@/app/(dashboard)/tarefas/actions";
 import type { Deal, PipelineStage } from "@/types";
 
 function fmtDateTime(iso?: string | null): string {
@@ -136,9 +149,13 @@ export default function DealDetailPage() {
   const [deal, setDeal] = useState<Deal | null>(null);
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [events, setEvents] = useState<DealEvent[]>([]);
+  const [tasks, setTasks] = useState<TaskLite[]>([]);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
+  const [taskFormOpen, setTaskFormOpen] = useState(false);
+  const [pickerContacts, setPickerContacts] = useState<PickerOption[]>([]);
+  const [pickerDeals, setPickerDeals] = useState<PickerOption[]>([]);
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [savingNote, setSavingNote] = useState(false);
@@ -152,13 +169,43 @@ export default function DealDetailPage() {
       return;
     }
     setDeal(d);
-    const [st, ev] = await Promise.all([
+    const [st, ev, tk] = await Promise.all([
       listStages(d.pipeline_id).catch(() => [] as PipelineStage[]),
       listDealEvents(dealId).catch(() => [] as DealEvent[]),
+      listTasksByDeal(dealId).catch(() => [] as TaskLite[]),
     ]);
     setStages(st);
     setEvents(ev);
+    setTasks(tk);
   }, [dealId]);
+
+  // Picker options for the TaskForm (loaded once).
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const [c, d] = await Promise.all([
+        listContactsForPicker().catch(() => [] as PickerOption[]),
+        listDealsForPicker().catch(() => [] as PickerOption[]),
+      ]);
+      if (cancelled) return;
+      setPickerContacts(c);
+      setPickerDeals(d);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  const toggleTask = useCallback(async (taskId: string) => {
+    const res = await toggleTaskDone(taskId);
+    if (!res.ok) {
+      toast.error(res.error);
+      return;
+    }
+    setTasks((prev) =>
+      prev.map((t) => (t.id === taskId ? { ...t, status: res.status } : t)),
+    );
+  }, []);
 
   useEffect(() => {
     let cancelled = false;
@@ -389,6 +436,76 @@ export default function DealDetailPage() {
             </div>
           </div>
 
+          {/* Tarefas do lead */}
+          <div className="rounded-xl border border-border bg-card">
+            <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+              <h2 className="text-sm font-semibold text-foreground">Tarefas</h2>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={() => setTaskFormOpen(true)}
+              >
+                <Plus className="mr-1.5 h-4 w-4" /> Criar tarefa
+              </Button>
+            </div>
+            {tasks.length === 0 ? (
+              <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+                Nenhuma tarefa neste negócio ainda.
+              </p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {tasks.map((t) => {
+                  const done = t.status === "done";
+                  return (
+                    <li key={t.id} className="flex items-center gap-3 px-4 py-2.5">
+                      <button
+                        type="button"
+                        onClick={() => void toggleTask(t.id)}
+                        className="shrink-0 text-muted-foreground transition-colors hover:text-primary"
+                        aria-label={done ? "Reabrir tarefa" : "Concluir tarefa"}
+                      >
+                        {done ? (
+                          <CheckCircle2 className="h-5 w-5 text-emerald-500" />
+                        ) : (
+                          <Circle className="h-5 w-5" />
+                        )}
+                      </button>
+                      <div className="min-w-0 flex-1">
+                        <p
+                          className={cn(
+                            "truncate text-sm text-foreground",
+                            done && "text-muted-foreground line-through",
+                          )}
+                        >
+                          {t.title}
+                        </p>
+                        {t.due_at && (
+                          <p
+                            className={cn(
+                              "mt-0.5 flex items-center gap-1 text-[11px]",
+                              t.overdue
+                                ? "text-red-500"
+                                : "text-muted-foreground",
+                            )}
+                          >
+                            <CalendarClock className="h-3 w-3" />
+                            {fmtDateTime(t.due_at)}
+                            {t.overdue && " · atrasada"}
+                          </p>
+                        )}
+                      </div>
+                      {t.type && (
+                        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[10px] font-medium text-muted-foreground">
+                          {t.type}
+                        </span>
+                      )}
+                    </li>
+                  );
+                })}
+              </ul>
+            )}
+          </div>
+
           {/* Timeline */}
           <div className="rounded-xl border border-border bg-card">
             <h2 className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
@@ -443,6 +560,22 @@ export default function DealDetailPage() {
           stages={stages}
           onSaved={() => {
             setEditOpen(false);
+            void reload();
+          }}
+        />
+      )}
+
+      {/* Criar tarefa já vinculada a este lead (reaproveita o TaskForm). */}
+      {taskFormOpen && (
+        <TaskForm
+          open={taskFormOpen}
+          onOpenChange={setTaskFormOpen}
+          contacts={pickerContacts}
+          deals={pickerDeals}
+          prefillContactId={deal.contact_id ?? undefined}
+          prefillDealId={deal.id}
+          onSaved={() => {
+            setTaskFormOpen(false);
             void reload();
           }}
         />
