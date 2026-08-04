@@ -2,7 +2,8 @@
 
 import type { Deal, PipelineStage } from "@/types";
 import type { DealTaskCount } from "@/app/(dashboard)/tarefas/actions";
-import { Calendar, Check, X, ListTodo, Plus, Lock } from "lucide-react";
+import type { SyntheticEvent } from "react";
+import { Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 
 interface DealCardProps {
@@ -41,6 +42,18 @@ export function DealCard({
   const assigneeLabel = deal.assignee?.full_name || null;
   const openTasks = taskCount?.open ?? 0;
   const hasOverdue = (taskCount?.overdue ?? 0) > 0;
+
+  // Canal de origem do lead (via conversa vinculada). Só WhatsApp e Instagram
+  // por enquanto — o resto cai no ícone de WhatsApp (default do produto).
+  const provider = (deal.channel_provider || "").toLowerCase();
+  const isInstagram = provider === "instagram";
+  const ChannelIcon = isInstagram ? AtSign : MessageCircle;
+  const channelLabel = isInstagram ? "Instagram" : "WhatsApp";
+  const channelColor = isInstagram ? "text-pink-500" : "text-emerald-600";
+  const openConversation = (e: SyntheticEvent) => {
+    e.stopPropagation();
+    if (deal.conversation_id) window.location.href = `/inbox?c=${deal.conversation_id}`;
+  };
 
   // Funil aberto: deal atribuído a OUTRA pessoa aparece TRAVADO (igual conversa)
   // — sem título/contato/valor, não abre. Só "atribuído a X" + a cor da etapa.
@@ -200,14 +213,38 @@ export function DealCard({
         )}
       </div>
 
-      {assigneeLabel && (
-        <div className="mt-2 flex items-center justify-end">
-          <span
-            title={assigneeLabel}
-            className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary"
-          >
-            {initials(assigneeLabel)}
-          </span>
+      {(deal.conversation_id || assigneeLabel) && (
+        <div className="mt-2 flex items-center justify-between">
+          {/* Canal de origem (esquerda) — clicar abre a conversa vinculada. */}
+          {deal.conversation_id ? (
+            <span
+              role="button"
+              tabIndex={0}
+              aria-label={`Abrir conversa (${channelLabel})`}
+              title={`Abrir conversa (${channelLabel})`}
+              onClick={openConversation}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  openConversation(e);
+                }
+              }}
+              className={`inline-flex h-5 w-5 items-center justify-center rounded-md transition-colors hover:bg-background ${channelColor}`}
+            >
+              <ChannelIcon className="h-3.5 w-3.5" />
+            </span>
+          ) : (
+            <span />
+          )}
+          {/* Responsável (direita). */}
+          {assigneeLabel && (
+            <span
+              title={assigneeLabel}
+              className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary"
+            >
+              {initials(assigneeLabel)}
+            </span>
+          )}
         </div>
       )}
     </button>

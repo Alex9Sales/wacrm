@@ -7,7 +7,7 @@
 // ============================================================
 
 import { and, asc, count, desc, eq, sql } from 'drizzle-orm'
-import { db, contacts, conversations, dealAttachments, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, notifications, pipelines, pipelineStages, user } from '@/db'
+import { db, channels, contacts, conversations, dealAttachments, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, notifications, pipelines, pipelineStages, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
@@ -135,10 +135,15 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
       updated_at: deals.updatedAt,
       contact: contactColumns,
       assignee: assigneeColumns,
+      // Canal de onde veio o lead (via conversa vinculada) — o card mostra o
+      // ícone (WhatsApp/Instagram…) e clicar abre a conversa.
+      channel_provider: channels.provider,
     })
     .from(deals)
     .leftJoin(contacts, eq(deals.contactId, contacts.id))
     .leftJoin(user, eq(deals.assignedTo, user.id))
+    .leftJoin(conversations, eq(deals.conversationId, conversations.id))
+    .leftJoin(channels, eq(conversations.channelId, channels.id))
     .where(await dealsVisibilityWhere(ctx, pipelineId))
     .orderBy(desc(deals.createdAt))
 
@@ -156,6 +161,7 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
       value: Number(r.value),
       contact: r.contact?.id ? (r.contact as unknown as Contact) : undefined,
       assignee,
+      channel_provider: r.channel_provider ?? null,
       read_blocked: false,
     }
   }) as unknown as Deal[]

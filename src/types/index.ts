@@ -437,6 +437,9 @@ export interface Deal {
    *  usuário não pode ver/abrir/editar — o card aparece travado ("atribuído a
    *  X"), sem título/contato/valor. */
   read_blocked?: boolean;
+  /** Provider do canal da conversa vinculada (whatsapp/meta/waha/instagram…),
+   *  pro card mostrar o ícone do canal + link pra conversa. */
+  channel_provider?: string | null;
 }
 
 export type BroadcastStatus =
