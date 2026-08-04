@@ -8,6 +8,7 @@ import {
   listProfiles,
   listReactions,
   markConversationRead,
+  markConversationUnread,
   updateConversationAssignment,
   transferConversationToAgent,
   updateConversationStatus,
@@ -49,6 +50,7 @@ import {
   Clock,
   ArrowLeft,
   RefreshCw,
+  MailOpen,
   PanelRightOpen,
   PanelRightClose,
   Radio,
@@ -454,6 +456,20 @@ export function MessageThread({
       refreshTimerRef.current = null;
     }, 700);
   }, [isRefreshing, onRefresh]);
+
+  // Marcar como NÃO LIDA (ideia do Felipe): entrar na conversa já some a
+  // bolinha, mas dá pra marcá-la de volta como não lida pra voltar depois.
+  // Ao responder, o envio zera o unread (volta a lida) automaticamente.
+  const handleMarkUnread = useCallback(async () => {
+    if (!conversation) return;
+    try {
+      await markConversationUnread(conversation.id);
+      toast.success("Marcada como não lida.");
+      onRefresh?.();
+    } catch {
+      toast.error("Não foi possível marcar como não lida.");
+    }
+  }, [conversation, onRefresh]);
 
   // IA pausada nesta conversa (o atendente assumiu). Otimista; sincroniza com a
   // conversa carregada.
@@ -1550,8 +1566,23 @@ export function MessageThread({
             </button>
           )}
 
+          {/* Marcar como não lida (Felipe): volta a bolinha pra revisitar depois.
+              Já está após o early-return de read_blocked, então sempre visível. */}
+          <button
+            type="button"
+            onClick={() => void handleMarkUnread()}
+            aria-label="Marcar como não lida"
+            title="Marcar como não lida"
+            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+          >
+            <MailOpen className="h-3.5 w-3.5" />
+          </button>
+
           {/* Pausar / ativar a IA nesta conversa. Pausada = o atendente
-              assumiu; ao reativar, a IA volta a responder já com o contexto. */}
+              assumiu; ao reativar, a IA volta a responder já com o contexto.
+              SÓ aparece nas conversas cujo canal a IA atende (senão o botão
+              não faz sentido — a IA não responde ali). */}
+          {conversation.ai_active_channel && (
           <button
             type="button"
             onClick={() => void handleToggleAi()}
@@ -1577,6 +1608,7 @@ export function MessageThread({
               {aiPaused ? "IA off" : "IA on"}
             </span>
           </button>
+          )}
 
           {/* Status dropdown */}
           <DropdownMenu>

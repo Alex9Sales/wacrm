@@ -17,6 +17,7 @@ import {
   deals,
   member,
   groupParticipantNames,
+  aiConfigs,
   monitoredGroups,
   messageReactions,
   messageTemplates,
@@ -72,6 +73,33 @@ import type {
  * `normalizeConversation` pipeline produced. Returns null when the
  * conversation doesn't exist or belongs to another account.
  */
+/**
+ * A IA responde automaticamente NESTE canal? (mesma regra do auto-reply:
+ * assistente ativo + resposta automática ligada + canal na lista, ou lista
+ * vazia = todos). Usado pra mostrar o botão "IA on/off" SÓ nas conversas que a
+ * IA de fato atende — nas outras o botão nem aparece.
+ */
+async function aiRepliesOnChannel(
+  accountId: string,
+  channelId: string | null | undefined,
+): Promise<boolean> {
+  const row = firstOrNull(
+    await db
+      .select({
+        isActive: aiConfigs.isActive,
+        autoReplyEnabled: aiConfigs.autoReplyEnabled,
+        channelIds: aiConfigs.autoReplyChannelIds,
+      })
+      .from(aiConfigs)
+      .where(eq(aiConfigs.accountId, accountId))
+      .limit(1),
+  )
+  if (!row || !row.isActive || !row.autoReplyEnabled) return false
+  const ids = row.channelIds ?? []
+  if (ids.length === 0) return true // vazio = todos os canais
+  return !!channelId && ids.includes(channelId)
+}
+
 export async function getConversationWithContact(
   conversationId: string,
 ): Promise<Conversation | null> {
@@ -182,6 +210,8 @@ export async function getConversationWithContact(
   }
 
   const { contact, channel, sector, ...conv } = row
+  // Botão "IA on/off": só aparece nas conversas cujo canal a IA atende.
+  const aiActiveChannel = await aiRepliesOnChannel(ctx.accountId, channel?.id)
   return {
     ...conv,
     // When blocked, blank the content preview so the thread's last message
@@ -190,6 +220,7 @@ export async function getConversationWithContact(
     last_message_text: readBlocked ? '' : conv.last_message_text,
     transfer_note: readBlocked ? null : conv.transfer_note,
     read_blocked: readBlocked,
+    ai_active_channel: aiActiveChannel,
     status: conv.status as ConversationStatus,
     priority: (conv.priority ?? 'none') as ConversationPriority,
     unread_count: conv.unread_count ?? 0,
@@ -751,6 +782,54 @@ export async function markConversationRead(
   await db
     .update(conversations)
     .set({ unreadCount: 0 })
+    .where(
+      and(
+        eq(conversations.id, conversationId),
+        eq(conversations.accountId, ctx.accountId),
+      ),
+    )
+}
+
+/**
+ * Marcar como NÃO LIDA (ideia do Felipe): o atendente entra na conversa (que já
+ * some a bolinha), mas pode marcá-la de volta como não lida pra voltar depois.
+ * Só faz sentido enquanto não respondeu — ao responder, a conversa vira lida
+ * (o envio zera o unread). Account-scoped; só quem PODE ler a conversa marca.
+ */
+export async function markConversationUnread(
+  conversationId: string,
+): Promise<void> {
+  const ctx = await getCurrentAccount()
+  const row = firstOrNull(
+    await db
+      .select({
+        sectorId: conversations.sectorId,
+        assignedAgentId: conversations.assignedAgentId,
+        isPrivate: conversations.isPrivate,
+      })
+      .from(conversations)
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      )
+      .limit(1),
+  )
+  if (!row) return
+  const canRead = await canReadConversation(
+    ctx.role,
+    ctx.userId,
+    ctx.accountId,
+    row.sectorId,
+    row.assignedAgentId,
+    conversationId,
+    row.isPrivate,
+  )
+  if (!canRead) return
+  await db
+    .update(conversations)
+    .set({ unreadCount: 1 })
     .where(
       and(
         eq(conversations.id, conversationId),

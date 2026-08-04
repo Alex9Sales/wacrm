@@ -192,6 +192,9 @@ export interface Conversation {
   /** IA pausada nesta conversa (o atendente assumiu). Quando false, a IA volta
    *  a responder — já com o contexto do histórico. */
   ai_autoreply_disabled?: boolean;
+  /** A IA atende automaticamente o canal desta conversa? O botão "IA on/off" só
+   *  aparece quando true (nas outras conversas a IA não responde). */
+  ai_active_channel?: boolean;
   /** Handoff note shown to the receiving agent after a sector transfer. */
   transfer_note?: string | null;
   transfer_note_at?: string | null;
