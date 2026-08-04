@@ -29,6 +29,7 @@ import {
   type ControlResult,
 } from '@/lib/queue/broadcast-controls'
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels'
+import { resolveOrCreateContactIdsByPhone } from '@/lib/contacts/dedupe'
 import { getProvider } from '@/lib/channels/registry'
 import type { ProviderId } from '@/lib/channels/provider'
 import { rescheduleRecipient } from '@/lib/queue/queues'
@@ -606,45 +607,38 @@ async function upsertCsvContacts(
 ): Promise<Contact[]> {
   if (csvRows.length === 0) return []
 
-  // De-duplicate by phone within the CSV (users can paste duplicates).
-  const uniqueByPhone = new Map<string, { phone: string; name?: string }>()
-  for (const row of csvRows) {
-    if (row.phone) uniqueByPhone.set(row.phone, row)
-  }
-  const phones = [...uniqueByPhone.keys()]
-  if (phones.length === 0) return []
+  // Resolve/create with the SHARED fuzzy dedup (last-8), so a Brazilian
+  // 9th-digit / trunk variant maps to the existing contact instead of spawning
+  // a duplicate. (Was: exact contacts.phone match → dup whenever the CSV used a
+  // different format, e.g. "+55DDD9…" vs the webhook's "55DDD…".)
+  const idByPhone = await resolveOrCreateContactIdsByPhone(
+    accountId,
+    userId,
+    csvRows.map((r) => ({ phone: r.phone, name: r.name ?? null })),
+  )
+  const ids = [...new Set(idByPhone.values())]
+  if (ids.length === 0) return []
 
-  const existing = (await db
+  const rows = (await db
     .select(contactColumns)
     .from(contacts)
     .where(
-      and(eq(contacts.accountId, accountId), inArray(contacts.phone, phones)),
+      and(eq(contacts.accountId, accountId), inArray(contacts.id, ids)),
     )) as unknown as Contact[]
+  const byId = new Map<string, Contact>()
+  for (const c of rows) byId.set(c.id, c)
 
-  const byPhone = new Map<string, Contact>()
-  for (const c of existing) if (c.phone) byPhone.set(c.phone, c)
-
-  const missing = phones
-    .filter((p) => !byPhone.has(p))
-    .map((phone) => ({
-      userId,
-      accountId,
-      phone,
-      name: uniqueByPhone.get(phone)?.name ?? null,
-    }))
-
-  if (missing.length > 0) {
-    const inserted = (await db
-      .insert(contacts)
-      .values(missing)
-      .returning(contactColumns)) as unknown as Contact[]
-    for (const c of inserted) if (c.phone) byPhone.set(c.phone, c)
+  // Preserve input order (first occurrence) so analytics roughly matches the CSV.
+  const seen = new Set<string>()
+  const out: Contact[] = []
+  for (const r of csvRows) {
+    const id = r.phone ? idByPhone.get(r.phone.trim()) : undefined
+    if (!id || seen.has(id)) continue
+    seen.add(id)
+    const c = byId.get(id)
+    if (c) out.push(c)
   }
-
-  // Preserve input order so analytics roughly matches the CSV.
-  return phones
-    .map((p) => byPhone.get(p))
-    .filter((c): c is Contact => Boolean(c))
+  return out
 }
 
 /**

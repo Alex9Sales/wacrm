@@ -5,6 +5,7 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 const state = vi.hoisted(() => ({
   rows: [] as Array<{ id: string; phone: string }>,
   queried: false,
+  inserted: [] as Array<{ phone: string }>,
 }));
 
 vi.mock("@/db", async (importOriginal) => {
@@ -20,6 +21,16 @@ vi.mock("@/db", async (importOriginal) => {
           },
         }),
       }),
+      insert: () => ({
+        values: (vals: unknown) => {
+          const arr = (Array.isArray(vals) ? vals : [vals]) as { phone: string }[];
+          state.inserted.push(...arr);
+          return {
+            returning: async () =>
+              arr.map((v, i) => ({ id: `new-${i}`, phone: v.phone })),
+          };
+        },
+      }),
     },
   };
 });
@@ -30,11 +41,46 @@ import {
   isExactMatch,
   isUniqueViolation,
   normalizeKey,
+  resolveOrCreateContactIdsByPhone,
 } from "./dedupe";
 
 beforeEach(() => {
   state.rows = [];
   state.queried = false;
+  state.inserted = [];
+});
+
+describe("resolveOrCreateContactIdsByPhone", () => {
+  it("maps a Brazilian 9th-digit variant to the existing contact (no dup)", async () => {
+    // Existing contact stored WITHOUT the extra 9; CSV imports it WITH the 9.
+    state.rows = [{ id: "existing-davi", phone: "556792753945" }];
+    const out = await resolveOrCreateContactIdsByPhone("acct", "user", [
+      { phone: "+5567992753945", name: "Davi Cliente" },
+    ]);
+    expect(out.get("+5567992753945")).toBe("existing-davi");
+    expect(state.inserted).toHaveLength(0); // never created a duplicate
+  });
+
+  it("collapses with/without-9 variants that appear in the same batch", async () => {
+    state.rows = []; // neither exists yet
+    const out = await resolveOrCreateContactIdsByPhone("acct", "user", [
+      { phone: "556792753945" },
+      { phone: "+5567992753945" },
+    ]);
+    // One insert, both input phones resolve to the same id.
+    expect(state.inserted).toHaveLength(1);
+    expect(out.get("556792753945")).toBe(out.get("+5567992753945"));
+  });
+
+  it("creates genuinely-different numbers separately", async () => {
+    state.rows = [];
+    const out = await resolveOrCreateContactIdsByPhone("acct", "user", [
+      { phone: "556792753945" },
+      { phone: "556792754325" },
+    ]);
+    expect(state.inserted).toHaveLength(2);
+    expect(out.get("556792753945")).not.toBe(out.get("556792754325"));
+  });
 });
 
 describe("normalizeKey", () => {

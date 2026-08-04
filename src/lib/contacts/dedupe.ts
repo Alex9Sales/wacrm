@@ -1,7 +1,13 @@
-import { and, eq, like } from "drizzle-orm";
+import { and, eq, inArray, like, sql } from "drizzle-orm";
 
 import { db, contacts } from "@/db";
 import { normalizePhone, phonesMatch } from "@/lib/whatsapp/phone-utils";
+
+/** Last-8 suffix — the fuzzy (9th-digit / trunk-tolerant) match key. */
+function last8(phone: string): string {
+  const n = normalizePhone(phone);
+  return n.length >= 8 ? n.slice(-8) : n;
+}
 
 /**
  * Contact de-duplication helpers, shared by the WhatsApp webhook, the
@@ -81,6 +87,90 @@ export function isUniqueViolation(error: unknown): boolean {
     return (cause as { code?: string }).code === "23505";
   }
   return false;
+}
+
+/**
+ * Resolve a batch of phones to contact ids in `accountId`, creating the ones
+ * that don't already exist — using the SAME fuzzy (last-8) dedup the WhatsApp
+ * webhook uses. This is the fix for CSV/broadcast imports spawning a duplicate
+ * when a Brazilian 9th-digit / trunk variant ("+55DDD9XXXXXXXX") is imported
+ * against an existing "55DDDXXXXXXXX" (or vice-versa): exact-phone matching
+ * missed it, fuzzy matching finds it. Also collapses variants that appear
+ * within the same batch, so importing both forms at once creates one contact.
+ *
+ * Returns a Map keyed by the ORIGINAL phone string → contact id (only phones
+ * that resolved/created; blanks are skipped). `userId` fills the NOT NULL
+ * contacts.user_id on rows this creates.
+ */
+export async function resolveOrCreateContactIdsByPhone(
+  accountId: string,
+  userId: string,
+  rows: { phone: string; name?: string | null }[],
+): Promise<Map<string, string>> {
+  const byInputPhone = new Map<string, string>();
+
+  // Unique input phones (raw string), first name-per-phone wins.
+  const nameByPhone = new Map<string, string | null>();
+  const phones: string[] = [];
+  for (const r of rows) {
+    const phone = (r.phone ?? "").trim();
+    if (!phone || !normalizePhone(phone)) continue;
+    if (!nameByPhone.has(phone)) {
+      nameByPhone.set(phone, r.name ?? null);
+      phones.push(phone);
+    }
+  }
+  if (phones.length === 0) return byInputPhone;
+
+  // One query: pull every account contact sharing a last-8 suffix with the
+  // batch, then match with the shared fuzzy rule (keeps it 9th-digit tolerant).
+  const suffixes = [...new Set(phones.map(last8).filter(Boolean))];
+  let existing: { id: string; phone: string }[] = [];
+  try {
+    existing = (await db
+      .select({ id: contacts.id, phone: contacts.phone })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.accountId, accountId),
+          inArray(sql`right(${contacts.phoneNormalized}, 8)`, suffixes),
+        ),
+      )) as { id: string; phone: string }[];
+  } catch {
+    existing = [];
+  }
+  const resolve = (phone: string) =>
+    existing.find((c) => c.phone && phonesMatch(c.phone, phone)) ?? null;
+
+  // Insert the genuinely-missing, deduped by last-8 within the batch so two
+  // forms of the same person imported together don't both insert.
+  const seenNew = new Set<string>();
+  const toCreate: {
+    userId: string;
+    accountId: string;
+    phone: string;
+    name: string | null;
+  }[] = [];
+  for (const phone of phones) {
+    if (resolve(phone)) continue;
+    const key = last8(phone);
+    if (!key || seenNew.has(key)) continue;
+    seenNew.add(key);
+    toCreate.push({ userId, accountId, phone, name: nameByPhone.get(phone) ?? null });
+  }
+  if (toCreate.length > 0) {
+    const inserted = await db
+      .insert(contacts)
+      .values(toCreate)
+      .returning({ id: contacts.id, phone: contacts.phone });
+    existing.push(...inserted);
+  }
+
+  for (const phone of phones) {
+    const hit = resolve(phone);
+    if (hit) byInputPhone.set(phone, hit.id);
+  }
+  return byInputPhone;
 }
 
 /**
