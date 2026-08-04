@@ -10,6 +10,7 @@ function config(overrides: Partial<AiConfig> = {}): AiConfig {
     systemPrompt: null,
     isActive: true,
     autoReplyEnabled: false,
+    autoReplyChannelIds: [],
     autoReplyMaxPerConversation: 3,
     embeddingsApiKey: null,
     ...overrides,

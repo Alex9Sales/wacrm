@@ -26,6 +26,7 @@ export async function loadAiConfig(
         systemPrompt: aiConfigs.systemPrompt,
         isActive: aiConfigs.isActive,
         autoReplyEnabled: aiConfigs.autoReplyEnabled,
+        autoReplyChannelIds: aiConfigs.autoReplyChannelIds,
         autoReplyMaxPerConversation: aiConfigs.autoReplyMaxPerConversation,
         embeddingsApiKey: aiConfigs.embeddingsApiKey,
       })
@@ -68,6 +69,7 @@ export async function loadAiConfig(
     systemPrompt: row.systemPrompt,
     isActive: row.isActive,
     autoReplyEnabled: row.autoReplyEnabled,
+    autoReplyChannelIds: row.autoReplyChannelIds ?? [],
     autoReplyMaxPerConversation: row.autoReplyMaxPerConversation,
     embeddingsApiKey,
   }

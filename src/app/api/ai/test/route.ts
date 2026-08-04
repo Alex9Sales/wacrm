@@ -75,6 +75,7 @@ export async function POST(request: Request) {
         systemPrompt: null,
         isActive: true,
         autoReplyEnabled: false,
+        autoReplyChannelIds: [],
         autoReplyMaxPerConversation: 3,
         embeddingsApiKey: null,
       })

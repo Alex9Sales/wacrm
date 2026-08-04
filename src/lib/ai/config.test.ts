@@ -37,6 +37,7 @@ const ROW = {
   systemPrompt: null,
   isActive: false,
   autoReplyEnabled: false,
+  autoReplyChannelIds: [],
   autoReplyMaxPerConversation: 3,
   embeddingsApiKey: null,
 }

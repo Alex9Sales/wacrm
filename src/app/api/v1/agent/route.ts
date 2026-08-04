@@ -141,6 +141,7 @@ export async function PUT(request: Request) {
           systemPrompt,
           isActive,
           autoReplyEnabled,
+          autoReplyChannelIds: [],
           autoReplyMaxPerConversation: maxPer,
           embeddingsApiKey: null,
         });

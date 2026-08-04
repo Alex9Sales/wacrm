@@ -1189,6 +1189,8 @@ export const aiConfigs = pgTable("ai_configs", {
 	systemPrompt: text("system_prompt"),
 	isActive: boolean("is_active").default(false).notNull(),
 	autoReplyEnabled: boolean("auto_reply_enabled").default(false).notNull(),
+	// Canais onde a IA responde (multi). Vazio = todos. Migração 0054.
+	autoReplyChannelIds: uuid("auto_reply_channel_ids").array().default(sql`'{}'::uuid[]`).notNull(),
 	autoReplyMaxPerConversation: integer("auto_reply_max_per_conversation").default(3).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),

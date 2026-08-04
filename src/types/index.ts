@@ -189,6 +189,9 @@ export interface Conversation {
    *  sector). The thread shows an "atribuída a outro atendente" notice and the
    *  composer is disabled; messages/preview are withheld server-side. */
   read_blocked?: boolean;
+  /** IA pausada nesta conversa (o atendente assumiu). Quando false, a IA volta
+   *  a responder — já com o contexto do histórico. */
+  ai_autoreply_disabled?: boolean;
   /** Handoff note shown to the receiving agent after a sector transfer. */
   transfer_note?: string | null;
   transfer_note_at?: string | null;

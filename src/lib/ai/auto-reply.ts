@@ -77,6 +77,7 @@ export async function dispatchInboundToAiReply(
           assignedAgentId: conversations.assignedAgentId,
           aiAutoreplyDisabled: conversations.aiAutoreplyDisabled,
           aiReplyCount: conversations.aiReplyCount,
+          channelId: conversations.channelId,
           isGroup: contacts.isGroup,
         })
         .from(conversations)
@@ -85,6 +86,14 @@ export async function dispatchInboundToAiReply(
         .limit(1),
     )
     if (!conv) return
+    // Channel scope: when the admin picked specific channels, the AI only
+    // auto-replies on those. Empty list = all channels (backward compat).
+    if (
+      config.autoReplyChannelIds.length > 0 &&
+      (!conv.channelId || !config.autoReplyChannelIds.includes(conv.channelId))
+    ) {
+      return
+    }
     // NEVER auto-reply in a GROUP thread. The bot answering inside a WhatsApp
     // group is almost always wrong (it would reply to every member's message,
     // spamming the group) and risky for the number's reputation — so it's a

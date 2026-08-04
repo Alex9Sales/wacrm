@@ -16,6 +16,7 @@ import {
   transferConversation,
   dismissTransferNote,
   setConversationPrivacy,
+  setConversationAiPaused,
   startNewConversation,
 } from "@/app/(dashboard)/inbox/actions";
 import {
@@ -60,6 +61,8 @@ import {
   UploadCloud,
   Lock,
   LockOpen,
+  Bot,
+  BotOff,
 } from "lucide-react";
 import { startOutboundCall } from "@/components/calls/incoming-call-modal";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
@@ -451,6 +454,30 @@ export function MessageThread({
       refreshTimerRef.current = null;
     }, 700);
   }, [isRefreshing, onRefresh]);
+
+  // IA pausada nesta conversa (o atendente assumiu). Otimista; sincroniza com a
+  // conversa carregada.
+  const [aiPaused, setAiPaused] = useState(false);
+  useEffect(() => {
+    setAiPaused(!!conversation?.ai_autoreply_disabled);
+  }, [conversation?.id, conversation?.ai_autoreply_disabled]);
+
+  const handleToggleAi = useCallback(async () => {
+    if (!conversation) return;
+    const next = !aiPaused;
+    setAiPaused(next); // otimista
+    const { error } = await setConversationAiPaused(conversation.id, next);
+    if (error) {
+      toast.error(error);
+      setAiPaused(!next);
+    } else {
+      toast.success(
+        next
+          ? "IA pausada — você assumiu a conversa"
+          : "IA reativada — ela continua com o contexto",
+      );
+    }
+  }, [conversation, aiPaused]);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
   // The message being forwarded (opens the ForwardDialog).
   const [forwarding, setForwarding] = useState<Message | null>(null);
@@ -1522,6 +1549,34 @@ export function MessageThread({
               />
             </button>
           )}
+
+          {/* Pausar / ativar a IA nesta conversa. Pausada = o atendente
+              assumiu; ao reativar, a IA volta a responder já com o contexto. */}
+          <button
+            type="button"
+            onClick={() => void handleToggleAi()}
+            aria-label={aiPaused ? "Ativar IA" : "Pausar IA"}
+            title={
+              aiPaused
+                ? "IA pausada — clique para reativar (ela continua com o contexto)"
+                : "IA ativa — clique para pausar e assumir a conversa"
+            }
+            className={cn(
+              "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
+              aiPaused
+                ? "text-muted-foreground hover:bg-muted hover:text-foreground"
+                : "bg-primary/10 text-primary hover:bg-primary/20",
+            )}
+          >
+            {aiPaused ? (
+              <BotOff className="h-3.5 w-3.5" />
+            ) : (
+              <Bot className="h-3.5 w-3.5" />
+            )}
+            <span className="hidden sm:inline">
+              {aiPaused ? "IA off" : "IA on"}
+            </span>
+          </button>
 
           {/* Status dropdown */}
           <DropdownMenu>

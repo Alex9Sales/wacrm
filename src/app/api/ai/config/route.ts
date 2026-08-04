@@ -38,6 +38,7 @@ export async function GET() {
           system_prompt: aiConfigs.systemPrompt,
           is_active: aiConfigs.isActive,
           auto_reply_enabled: aiConfigs.autoReplyEnabled,
+          auto_reply_channel_ids: aiConfigs.autoReplyChannelIds,
           auto_reply_max_per_conversation: aiConfigs.autoReplyMaxPerConversation,
           api_key: aiConfigs.apiKey,
           embeddings_api_key: aiConfigs.embeddingsApiKey,
@@ -94,6 +95,12 @@ export async function POST(request: Request) {
         : null
     const isActive = body.is_active === true
     const autoReplyEnabled = body.auto_reply_enabled === true
+    // Canais onde a IA responde (multi). Vazio = todos os canais.
+    const autoReplyChannelIds = Array.isArray(body.auto_reply_channel_ids)
+      ? (body.auto_reply_channel_ids as unknown[]).filter(
+          (x): x is string => typeof x === 'string' && !!x,
+        )
+      : []
 
     let maxPer = Number(body.auto_reply_max_per_conversation)
     if (!Number.isFinite(maxPer)) maxPer = 3
@@ -156,6 +163,7 @@ export async function POST(request: Request) {
           systemPrompt,
           isActive,
           autoReplyEnabled,
+          autoReplyChannelIds: [],
           autoReplyMaxPerConversation: maxPer,
           embeddingsApiKey: null,
         })
@@ -195,6 +203,7 @@ export async function POST(request: Request) {
       systemPrompt: string | null
       isActive: boolean
       autoReplyEnabled: boolean
+      autoReplyChannelIds: string[]
       autoReplyMaxPerConversation: number
       embeddingsApiKey?: string | null
     } = {
@@ -203,6 +212,7 @@ export async function POST(request: Request) {
       systemPrompt,
       isActive,
       autoReplyEnabled,
+      autoReplyChannelIds,
       autoReplyMaxPerConversation: maxPer,
     }
     if (rawEmbeddingsKey) {

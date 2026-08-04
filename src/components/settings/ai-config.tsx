@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Sparkles, CheckCircle2, Trash2, Eye, EyeOff } from 'lucide-react';
+import { Loader2, Sparkles, CheckCircle2, Trash2, Eye, EyeOff, Check } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { cn } from '@/lib/utils';
 import { canEditSettings } from '@/lib/auth/roles';
@@ -65,6 +65,11 @@ export function AiConfig() {
   const [isActive, setIsActive] = useState(false);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(false);
   const [maxPerConversation, setMaxPerConversation] = useState(3);
+  // Canais onde a IA responde (multi). Vazio = todos.
+  const [channels, setChannels] = useState<
+    { id: string; name: string; provider: string }[]
+  >([]);
+  const [channelIds, setChannelIds] = useState<string[]>([]);
   // Model picker: the list of models the provider exposes for the current key.
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -95,6 +100,11 @@ export function AiConfig() {
         setSystemPrompt(data.system_prompt ?? '');
         setIsActive(data.is_active);
         setAutoReplyEnabled(data.auto_reply_enabled);
+        setChannelIds(
+          Array.isArray(data.auto_reply_channel_ids)
+            ? data.auto_reply_channel_ids
+            : [],
+        );
         setMaxPerConversation(data.auto_reply_max_per_conversation ?? 3);
         setHasStoredKey(Boolean(data.has_key));
         setApiKey(data.has_key ? MASKED_KEY : '');
@@ -115,6 +125,27 @@ export function AiConfig() {
     loadedAccountIdRef.current = accountId;
     void fetchConfig();
   }, [accountId, fetchConfig]);
+
+  // Load the account's channels for the "canais onde a IA responde" picker.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/channels');
+        const data = (await res.json().catch(() => ({}))) as {
+          channels?: { id: string; name: string; provider: string }[];
+        };
+        if (!cancelled && Array.isArray(data.channels)) {
+          setChannels(data.channels);
+        }
+      } catch {
+        /* best-effort — sem canais o picker só some */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   // Swap the model default when the provider changes, unless the user
   // typed a custom model.
@@ -186,6 +217,7 @@ export function AiConfig() {
     system_prompt: systemPrompt.trim() || null,
     is_active: isActive,
     auto_reply_enabled: autoReplyEnabled,
+    auto_reply_channel_ids: channelIds,
     auto_reply_max_per_conversation: maxPerConversation,
   });
 
@@ -551,6 +583,61 @@ export function AiConfig() {
                 disabled={disabled || !isActive}
               />
             </div>
+
+            {/* Canais onde a IA responde (multi). Vazio = todos os canais. */}
+            {autoReplyEnabled && channels.length > 0 && (
+              <div className="rounded-md border border-border p-3">
+                <p className="text-sm font-medium text-foreground">
+                  Canais onde a IA responde
+                </p>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Marque um ou mais canais. Se não marcar nenhum, a IA responde
+                  em <strong>todos</strong> os canais.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {channels.map((ch) => {
+                    const checked = channelIds.includes(ch.id);
+                    return (
+                      <button
+                        key={ch.id}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() =>
+                          setChannelIds((prev) =>
+                            prev.includes(ch.id)
+                              ? prev.filter((id) => id !== ch.id)
+                              : [...prev, ch.id],
+                          )
+                        }
+                        className={cn(
+                          'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                          checked
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : 'border-border text-muted-foreground hover:bg-muted',
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'flex h-3.5 w-3.5 items-center justify-center rounded-[4px] border',
+                            checked
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border',
+                          )}
+                        >
+                          {checked && <Check className="h-2.5 w-2.5" />}
+                        </span>
+                        {ch.name || ch.provider}
+                      </button>
+                    );
+                  })}
+                </div>
+                {channelIds.length === 0 && (
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    Respondendo em <strong>todos</strong> os canais.
+                  </p>
+                )}
+              </div>
+            )}
 
             <div className="flex items-center justify-between gap-4">
               <div>

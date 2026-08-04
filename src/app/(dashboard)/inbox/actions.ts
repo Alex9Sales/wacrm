@@ -204,6 +204,30 @@ export async function getConversationWithContact(
   } as unknown as Conversation
 }
 
+/** Pausar (paused=true) ou reativar (false) a IA numa conversa. Ao reativar, o
+ *  auto-reply volta a responder — buildConversationContext já lê o histórico,
+ *  então a IA continua de onde o atendente parou quando chegar nova mensagem. */
+export async function setConversationAiPaused(
+  conversationId: string,
+  paused: boolean,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .update(conversations)
+      .set({ aiAutoreplyDisabled: paused, updatedAt: new Date().toISOString() })
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      )
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao alterar a IA' }
+  }
+}
+
 /** Shape the joined `channels` row into the client `ConversationChannel`,
  *  or `undefined` for a legacy NULL channel_id. A leftJoin yields every
  *  column null (typed non-null per column by Drizzle) when there's no

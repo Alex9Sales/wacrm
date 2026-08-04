@@ -20,6 +20,8 @@ export interface AiConfig {
   systemPrompt: string | null
   isActive: boolean
   autoReplyEnabled: boolean
+  /** Canais onde a IA responde automaticamente. Vazio = todos os canais. */
+  autoReplyChannelIds: string[]
   autoReplyMaxPerConversation: number
   /** Optional OpenAI-compatible key for embeddings. When set, the
    *  knowledge base is embedded and semantic retrieval turns on; when
