@@ -23,6 +23,11 @@ import {
   CheckCircle2,
   Circle,
   CalendarClock,
+  Package,
+  Paperclip,
+  Trash2,
+  Download,
+  Upload,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -47,6 +52,16 @@ import {
   type TaskLite,
   type PickerOption,
 } from "@/app/(dashboard)/tarefas/actions";
+import {
+  listDealProducts,
+  addDealProduct,
+  removeDealProduct,
+  listDealAttachments,
+  addDealAttachment,
+  removeDealAttachment,
+  type DealProduct,
+  type DealAttachment,
+} from "@/app/(dashboard)/pipelines/actions";
 import type { Deal, PipelineStage } from "@/types";
 
 function fmtDateTime(iso?: string | null): string {
@@ -156,6 +171,13 @@ export default function DealDetailPage() {
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [events, setEvents] = useState<DealEvent[]>([]);
   const [tasks, setTasks] = useState<TaskLite[]>([]);
+  const [products, setProducts] = useState<DealProduct[]>([]);
+  const [attachments, setAttachments] = useState<DealAttachment[]>([]);
+  const [prodName, setProdName] = useState("");
+  const [prodQty, setProdQty] = useState("1");
+  const [prodPrice, setProdPrice] = useState("");
+  const [addingProduct, setAddingProduct] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -175,15 +197,98 @@ export default function DealDetailPage() {
       return;
     }
     setDeal(d);
-    const [st, ev, tk] = await Promise.all([
+    const [st, ev, tk, pr, at] = await Promise.all([
       listStages(d.pipeline_id).catch(() => [] as PipelineStage[]),
       listDealEvents(dealId).catch(() => [] as DealEvent[]),
       listTasksByDeal(dealId).catch(() => [] as TaskLite[]),
+      listDealProducts(dealId).catch(() => [] as DealProduct[]),
+      listDealAttachments(dealId).catch(() => [] as DealAttachment[]),
     ]);
     setStages(st);
     setEvents(ev);
     setTasks(tk);
+    setProducts(pr);
+    setAttachments(at);
   }, [dealId]);
+
+  const submitProduct = useCallback(async () => {
+    if (!deal || addingProduct) return;
+    const name = prodName.trim();
+    if (!name) return;
+    setAddingProduct(true);
+    const { error } = await addDealProduct(deal.id, {
+      name,
+      quantity: parseFloat(prodQty) || 1,
+      unit_price: parseFloat(prodPrice) || 0,
+    });
+    if (error) toast.error(error);
+    else {
+      setProdName("");
+      setProdQty("1");
+      setProdPrice("");
+      setProducts(await listDealProducts(deal.id).catch(() => products));
+    }
+    setAddingProduct(false);
+  }, [deal, addingProduct, prodName, prodQty, prodPrice, products]);
+
+  const deleteProduct = useCallback(
+    async (id: string) => {
+      if (!deal) return;
+      const { error } = await removeDealProduct(id);
+      if (error) toast.error(error);
+      else setProducts((prev) => prev.filter((p) => p.id !== id));
+    },
+    [deal],
+  );
+
+  const uploadFile = useCallback(
+    async (file: File) => {
+      if (!deal || uploading) return;
+      setUploading(true);
+      try {
+        const fd = new FormData();
+        fd.append("file", file);
+        fd.append("bucket", "media");
+        const res = await fetch("/api/media/upload", {
+          method: "POST",
+          body: fd,
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          publicUrl?: string;
+          error?: string;
+        };
+        if (!res.ok || !data.publicUrl) {
+          toast.error(data.error || "Falha no upload do arquivo");
+          return;
+        }
+        const { error } = await addDealAttachment(deal.id, {
+          name: file.name,
+          url: data.publicUrl,
+          mime: file.type,
+          size: file.size,
+        });
+        if (error) toast.error(error);
+        else setAttachments(await listDealAttachments(deal.id).catch(() => attachments));
+      } finally {
+        setUploading(false);
+      }
+    },
+    [deal, uploading, attachments],
+  );
+
+  const deleteAttachment = useCallback(
+    async (id: string) => {
+      const { error } = await removeDealAttachment(id);
+      if (error) toast.error(error);
+      else setAttachments((prev) => prev.filter((a) => a.id !== id));
+    },
+    [],
+  );
+
+  const productsTotal = useMemo(
+    () => products.reduce((sum, p) => sum + p.quantity * p.unit_price, 0),
+    [products],
+  );
 
   // Picker options for the TaskForm (loaded once).
   useEffect(() => {
@@ -518,6 +623,156 @@ export default function DealDetailPage() {
                     </li>
                   );
                 })}
+              </ul>
+            )}
+          </div>
+
+          {/* Produtos */}
+          <div className="rounded-xl border border-border bg-card">
+            <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+              <Package className="h-4 w-4 text-primary" />
+              <h2 className="text-sm font-semibold text-foreground">Produtos</h2>
+            </div>
+            {products.length > 0 && (
+              <ul className="divide-y divide-border">
+                {products.map((p) => (
+                  <li key={p.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm text-foreground">{p.name}</p>
+                      <p className="mt-0.5 text-[11px] text-muted-foreground">
+                        {p.quantity} × {fmtCurrency(p.unit_price, deal.currency)}
+                      </p>
+                    </div>
+                    <span className="shrink-0 text-sm font-medium text-foreground">
+                      {fmtCurrency(p.quantity * p.unit_price, deal.currency)}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={() => void deleteProduct(p.id)}
+                      className="shrink-0 text-muted-foreground transition-colors hover:text-red-500"
+                      aria-label="Remover produto"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </li>
+                ))}
+              </ul>
+            )}
+            {/* Adicionar item */}
+            <div className="flex flex-wrap items-end gap-2 border-t border-border px-4 py-3">
+              <input
+                value={prodName}
+                onChange={(e) => setProdName(e.target.value)}
+                placeholder="Produto/serviço"
+                className="min-w-40 flex-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+              />
+              <input
+                value={prodQty}
+                onChange={(e) => setProdQty(e.target.value)}
+                type="number"
+                min="0"
+                step="1"
+                placeholder="Qtd"
+                className="w-16 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+              />
+              <input
+                value={prodPrice}
+                onChange={(e) => setProdPrice(e.target.value)}
+                type="number"
+                min="0"
+                step="0.01"
+                placeholder="Preço un."
+                className="w-24 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter") void submitProduct();
+                }}
+              />
+              <Button
+                size="sm"
+                disabled={!prodName.trim() || addingProduct}
+                onClick={() => void submitProduct()}
+              >
+                <Plus className="mr-1 h-4 w-4" /> Adicionar
+              </Button>
+            </div>
+            {products.length > 0 && (
+              <div className="flex items-center justify-between border-t border-border px-4 py-2.5">
+                <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                  Total dos produtos
+                </span>
+                <span className="text-sm font-bold text-primary">
+                  {fmtCurrency(productsTotal, deal.currency)}
+                </span>
+              </div>
+            )}
+          </div>
+
+          {/* Arquivos / anexos */}
+          <div className="rounded-xl border border-border bg-card">
+            <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+              <div className="flex items-center gap-2">
+                <Paperclip className="h-4 w-4 text-primary" />
+                <h2 className="text-sm font-semibold text-foreground">Arquivos</h2>
+              </div>
+              <label
+                className={cn(
+                  "inline-flex cursor-pointer items-center gap-1.5 rounded-lg border border-border px-2.5 py-1.5 text-xs font-medium text-foreground transition-colors hover:bg-muted",
+                  uploading && "pointer-events-none opacity-60",
+                )}
+              >
+                <Upload className="h-3.5 w-3.5" />
+                {uploading ? "Enviando…" : "Anexar"}
+                <input
+                  type="file"
+                  className="hidden"
+                  disabled={uploading}
+                  onChange={(e) => {
+                    const f = e.target.files?.[0];
+                    if (f) void uploadFile(f);
+                    e.target.value = "";
+                  }}
+                />
+              </label>
+            </div>
+            {attachments.length === 0 ? (
+              <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+                Nenhum arquivo anexado.
+              </p>
+            ) : (
+              <ul className="divide-y divide-border">
+                {attachments.map((a) => (
+                  <li key={a.id} className="flex items-center gap-3 px-4 py-2.5">
+                    <Paperclip className="h-4 w-4 shrink-0 text-muted-foreground" />
+                    <a
+                      href={a.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      download={a.name}
+                      className="min-w-0 flex-1 truncate text-sm text-foreground hover:underline"
+                      title={a.name}
+                    >
+                      {a.name}
+                    </a>
+                    <a
+                      href={a.url}
+                      target="_blank"
+                      rel="noreferrer noopener"
+                      download={a.name}
+                      className="shrink-0 text-muted-foreground transition-colors hover:text-primary"
+                      aria-label="Baixar"
+                    >
+                      <Download className="h-4 w-4" />
+                    </a>
+                    <button
+                      type="button"
+                      onClick={() => void deleteAttachment(a.id)}
+                      className="shrink-0 text-muted-foreground transition-colors hover:text-red-500"
+                      aria-label="Remover arquivo"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </li>
+                ))}
               </ul>
             )}
           </div>

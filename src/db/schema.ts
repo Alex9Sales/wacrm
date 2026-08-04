@@ -679,6 +679,38 @@ export const dealEvents = pgTable("deal_events", {
 	}).onDelete("cascade"),
 ]);
 
+// Produtos (itens) de um negócio — nome × qtd × preço unitário. Migração 0051.
+export const dealProducts = pgTable("deal_products", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	dealId: uuid("deal_id").notNull(),
+	name: text().notNull(),
+	quantity: numeric({ precision: 12, scale: 2 }).default('1').notNull(),
+	unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).default('0').notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_deal_products_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "deal_products_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "deal_products_deal_id_fkey" }).onDelete("cascade"),
+]);
+
+// Arquivos/anexos de um negócio — metadados (binário no MinIO). Migração 0051.
+export const dealAttachments = pgTable("deal_attachments", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	dealId: uuid("deal_id").notNull(),
+	name: text().notNull(),
+	url: text().notNull(),
+	mime: text(),
+	size: integer(),
+	uploadedBy: uuid("uploaded_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_deal_attachments_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "deal_attachments_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "deal_attachments_deal_id_fkey" }).onDelete("cascade"),
+]);
+
 export const broadcasts = pgTable("broadcasts", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),

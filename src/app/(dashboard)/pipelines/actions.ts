@@ -7,7 +7,7 @@
 // ============================================================
 
 import { and, asc, count, desc, eq, isNull, notInArray, or, sql } from 'drizzle-orm'
-import { db, contacts, conversations, dealEvents, deals, member, pipelines, pipelineStages, user } from '@/db'
+import { db, contacts, conversations, dealAttachments, dealEvents, dealProducts, deals, member, pipelines, pipelineStages, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
@@ -726,6 +726,166 @@ export async function listDealEvents(dealId: string): Promise<DealEvent[]> {
     actor_name: r.actor_name ?? null,
     created_at: r.created_at as unknown as string,
   }))
+}
+
+/** True when the deal belongs to the caller's account. */
+async function assertDealInAccount(
+  ctx: AccountContext,
+  dealId: string,
+): Promise<boolean> {
+  const owned = firstOrNull(
+    await db
+      .select({ id: deals.id })
+      .from(deals)
+      .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  return !!owned
+}
+
+// ============================================================
+// Produtos (itens) do negócio
+// ============================================================
+export interface DealProduct {
+  id: string
+  name: string
+  quantity: number
+  unit_price: number
+}
+
+export async function listDealProducts(dealId: string): Promise<DealProduct[]> {
+  const ctx = await getCurrentAccount()
+  if (!(await assertDealInAccount(ctx, dealId))) return []
+  const rows = await db
+    .select({
+      id: dealProducts.id,
+      name: dealProducts.name,
+      quantity: dealProducts.quantity,
+      unit_price: dealProducts.unitPrice,
+    })
+    .from(dealProducts)
+    .where(eq(dealProducts.dealId, dealId))
+    .orderBy(asc(dealProducts.createdAt))
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    quantity: Number(r.quantity),
+    unit_price: Number(r.unit_price),
+  }))
+}
+
+export async function addDealProduct(
+  dealId: string,
+  input: { name: string; quantity: number; unit_price: number },
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    if (!(await assertDealInAccount(ctx, dealId)))
+      return { error: 'Negócio não encontrado.' }
+    const name = input.name.trim()
+    if (!name) return { error: 'Informe o nome do produto.' }
+    await db.insert(dealProducts).values({
+      accountId: ctx.accountId,
+      dealId,
+      name,
+      quantity: String(input.quantity > 0 ? input.quantity : 1),
+      unitPrice: String(input.unit_price >= 0 ? input.unit_price : 0),
+    })
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao adicionar produto' }
+  }
+}
+
+export async function removeDealProduct(
+  id: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .delete(dealProducts)
+      .where(and(eq(dealProducts.id, id), eq(dealProducts.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao remover produto' }
+  }
+}
+
+// ============================================================
+// Arquivos/anexos do negócio (binário no MinIO via /api/media/upload)
+// ============================================================
+export interface DealAttachment {
+  id: string
+  name: string
+  url: string
+  mime: string | null
+  size: number | null
+  created_at: string
+}
+
+export async function listDealAttachments(
+  dealId: string,
+): Promise<DealAttachment[]> {
+  const ctx = await getCurrentAccount()
+  if (!(await assertDealInAccount(ctx, dealId))) return []
+  const rows = await db
+    .select({
+      id: dealAttachments.id,
+      name: dealAttachments.name,
+      url: dealAttachments.url,
+      mime: dealAttachments.mime,
+      size: dealAttachments.size,
+      created_at: dealAttachments.createdAt,
+    })
+    .from(dealAttachments)
+    .where(eq(dealAttachments.dealId, dealId))
+    .orderBy(desc(dealAttachments.createdAt))
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    url: r.url,
+    mime: r.mime ?? null,
+    size: r.size ?? null,
+    created_at: r.created_at as unknown as string,
+  }))
+}
+
+export async function addDealAttachment(
+  dealId: string,
+  input: { name: string; url: string; mime?: string | null; size?: number | null },
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    if (!(await assertDealInAccount(ctx, dealId)))
+      return { error: 'Negócio não encontrado.' }
+    if (!input.url) return { error: 'Arquivo inválido.' }
+    await db.insert(dealAttachments).values({
+      accountId: ctx.accountId,
+      dealId,
+      uploadedBy: ctx.userId,
+      name: input.name || 'arquivo',
+      url: input.url,
+      mime: input.mime ?? null,
+      size: input.size ?? null,
+    })
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao anexar arquivo' }
+  }
+}
+
+export async function removeDealAttachment(
+  id: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .delete(dealAttachments)
+      .where(and(eq(dealAttachments.id, id), eq(dealAttachments.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao remover arquivo' }
+  }
 }
 
 /** Delete a deal the caller owns. */
