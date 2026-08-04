@@ -7,7 +7,14 @@ import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
 import { latestUserMessage } from './query'
-import { engineSendText } from '@/lib/flows/meta-send'
+import { engineSendText, engineSendTyping } from '@/lib/flows/meta-send'
+import { splitIntoMessages } from '@/lib/ai/flow-agent'
+
+/** Pausa "digitando…" antes de cada mensagem, escalada pelo tamanho. */
+function humanTypingDelayMs(text: string): number {
+  return Math.min(2500, Math.max(600, text.length * 35))
+}
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
 interface DispatchArgs {
   /** Tenancy key — drives config, contact, and whatsapp_config lookups. */
@@ -149,13 +156,25 @@ export async function dispatchInboundToAiReply(
     const claimed = (res.rows[0] as { claimed?: boolean } | undefined)?.claimed
     if (claimed !== true) return
 
-    await engineSendText({
-      accountId,
-      userId: configOwnerUserId,
-      conversationId,
-      contactId,
-      text,
-    })
+    // Responde como algumas mensagens curtas e humanas (quebra de linha),
+    // mostrando "digitando…" e uma pausa antes de cada uma — igual ao nó de IA
+    // dos fluxos, pra não parecer um bot despejando texto.
+    const parts = splitIntoMessages(text)
+    for (const part of parts) {
+      try {
+        await engineSendTyping({ accountId, conversationId, contactId, on: true })
+        await sleep(humanTypingDelayMs(part))
+      } catch {
+        /* presença é best-effort — nunca bloqueia o envio */
+      }
+      await engineSendText({
+        accountId,
+        userId: configOwnerUserId,
+        conversationId,
+        contactId,
+        text: part,
+      })
+    }
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
   }

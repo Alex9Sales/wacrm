@@ -2,11 +2,17 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Sparkles, CheckCircle2, Trash2, Eye, EyeOff, Check } from 'lucide-react';
+import { Loader2, Sparkles, CheckCircle2, Trash2, Eye, EyeOff, Check, Maximize2 } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { cn } from '@/lib/utils';
 import { canEditSettings } from '@/lib/auth/roles';
 import { Button } from '@/components/ui/button';
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+} from '@/components/ui/dialog';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Textarea } from '@/components/ui/textarea';
@@ -62,6 +68,7 @@ export function AiConfig() {
   const [embeddingsKeyEdited, setEmbeddingsKeyEdited] = useState(false);
   const [hasStoredEmbeddingsKey, setHasStoredEmbeddingsKey] = useState(false);
   const [systemPrompt, setSystemPrompt] = useState('');
+  const [promptExpanded, setPromptExpanded] = useState(false);
   const [isActive, setIsActive] = useState(false);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(false);
   const [maxPerConversation, setMaxPerConversation] = useState(3);
@@ -537,7 +544,18 @@ export function AiConfig() {
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="ai-prompt">Contexto do negócio e instruções</Label>
+              <div className="flex items-center justify-between gap-2">
+                <Label htmlFor="ai-prompt">Contexto do negócio e instruções</Label>
+                <button
+                  type="button"
+                  onClick={() => setPromptExpanded(true)}
+                  className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  title="Expandir editor"
+                >
+                  <Maximize2 className="h-3.5 w-3.5" />
+                  Expandir
+                </button>
+              </div>
               <Textarea
                 id="ai-prompt"
                 value={systemPrompt}
@@ -547,6 +565,25 @@ export function AiConfig() {
                 disabled={disabled}
               />
             </div>
+
+            {/* Editor expandido do prompt (igual n8n) — mesma state, tela cheia. */}
+            <Dialog open={promptExpanded} onOpenChange={setPromptExpanded}>
+              <DialogContent className="flex h-[85vh] max-w-3xl flex-col">
+                <DialogHeader>
+                  <DialogTitle>Contexto do negócio e instruções</DialogTitle>
+                </DialogHeader>
+                <Textarea
+                  value={systemPrompt}
+                  onChange={(e) => setSystemPrompt(e.target.value)}
+                  placeholder="Escreva o prompt do seu agente com calma aqui…"
+                  disabled={disabled}
+                  className="min-h-0 flex-1 resize-none font-mono text-sm"
+                />
+                <div className="flex justify-end">
+                  <Button onClick={() => setPromptExpanded(false)}>Concluir</Button>
+                </div>
+              </DialogContent>
+            </Dialog>
 
             <div className="flex items-center justify-between gap-4 rounded-md border border-border p-3">
               <div>
