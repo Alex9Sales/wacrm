@@ -13,6 +13,7 @@ import {
   type AccountContext,
 } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
+import { getUserSectorIds } from '@/lib/sectors/access'
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -189,6 +190,7 @@ export async function POST(request: Request) {
       await db
         .select({
           assignedAgentId: conversations.assignedAgentId,
+          sectorId: conversations.sectorId,
           isGroup: contacts.isGroup,
         })
         .from(conversations)
@@ -197,6 +199,7 @@ export async function POST(request: Request) {
         .limit(1)
     )
     const assignedAgentId = lockRow?.assignedAgentId ?? null
+    const currentSectorId = lockRow?.sectorId ?? null
     // Grupo é LIVRE: responder num grupo NÃO atribui a ninguém (Felipe).
     const isGroupConversation = lockRow?.isGroup === true
     const assignedToOther = !!assignedAgentId && assignedAgentId !== ctx.userId
@@ -362,6 +365,32 @@ export async function POST(request: Request) {
           })
         } catch (err) {
           console.error('[send] claim/cover-on-reply failed:', err)
+        }
+
+        // Setor no reply (Alex: "responder atribui a ele e ao setor dele"): se a
+        // conversa está SEM setor, cai no setor do agente que respondeu. Cobre
+        // tanto o claim (recém-atribuída) quanto a conversa que já é dele mas
+        // ficou sem setor (ex.: canal sem setor default). Guard isNull(sector)
+        // → nunca sobrescreve um setor existente. Grupos ficam de fora (bloco).
+        if (!currentSectorId) {
+          try {
+            const agentSectors = await getUserSectorIds(ctx.userId)
+            const agentSectorId = agentSectors[0]
+            if (agentSectorId) {
+              await db
+                .update(conversations)
+                .set({ sectorId: agentSectorId })
+                .where(
+                  and(
+                    eq(conversations.id, conversationId!),
+                    eq(conversations.accountId, accountId),
+                    isNull(conversations.sectorId),
+                  ),
+                )
+            }
+          } catch (err) {
+            console.error('[send] sector-on-reply failed:', err)
+          }
         }
       }
 
