@@ -89,6 +89,7 @@ export async function listPipelines(): Promise<Pipeline[]> {
       user_id: pipelines.userId,
       account_id: pipelines.accountId,
       name: pipelines.name,
+      stepper_style: pipelines.stepperStyle,
       created_at: pipelines.createdAt,
     })
     .from(pipelines)
@@ -274,6 +275,7 @@ export async function savePipelineSettings(
   pipelineId: string,
   name: string,
   stages: { id: string; name: string; color: string; position: number }[],
+  stepperStyle?: string,
 ): Promise<{ error: string | null }> {
   try {
     const ctx = await getCurrentAccount()
@@ -290,7 +292,12 @@ export async function savePipelineSettings(
 
     await db
       .update(pipelines)
-      .set({ name: name.trim() })
+      .set({
+        name: name.trim(),
+        ...(stepperStyle === 'pills' || stepperStyle === 'chevrons'
+          ? { stepperStyle }
+          : {}),
+      })
       .where(and(eq(pipelines.id, pipelineId), eq(pipelines.accountId, ctx.accountId)))
 
     if (stages.length > 0) {
@@ -656,6 +663,7 @@ export async function getDeal(id: string): Promise<Deal | null> {
         contact: contactColumns,
         assignee: assigneeColumns,
         pipeline_name: pipelines.name,
+        pipeline_stepper_style: pipelines.stepperStyle,
       })
       .from(deals)
       .leftJoin(contacts, eq(deals.contactId, contacts.id))

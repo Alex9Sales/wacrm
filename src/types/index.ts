@@ -378,6 +378,8 @@ export interface Pipeline {
   id: string;
   user_id: string;
   name: string;
+  /** Estilo da barra de etapas no detalhe: 'pills' | 'chevrons'. */
+  stepper_style?: string;
   created_at: string;
 }
 
@@ -423,6 +425,8 @@ export interface Deal {
   assignee?: Profile;
   /** Parent pipeline's name — filled by getDeal for the detail page header. */
   pipeline_name?: string;
+  /** Parent pipeline's stepper style ('pills' | 'chevrons'). */
+  pipeline_stepper_style?: string;
 }
 
 export type BroadcastStatus =

@@ -558,37 +558,70 @@ export default function DealDetailPage() {
         </div>
       </header>
 
-      {/* Barra de etapas (stepper) */}
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-border bg-background px-4 py-2">
-        {stages.map((s, i) => {
-          const active = s.id === deal.stage_id;
-          const done = currentStageIndex >= 0 && i < currentStageIndex;
-          return (
-            <button
-              key={s.id}
-              type="button"
-              disabled={busy}
-              onClick={() => void changeStage(s.id)}
-              className={cn(
-                "flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
-                active
-                  ? "border-transparent text-white"
-                  : done
-                    ? "border-transparent bg-primary/10 text-primary hover:bg-primary/20"
-                    : "border-border text-muted-foreground hover:bg-muted",
-              )}
-              style={active ? { backgroundColor: s.color || "#6d28d9" } : undefined}
-              title={`Mover para "${s.name}"`}
-            >
-              <span
-                className="size-1.5 rounded-full"
-                style={{ backgroundColor: active ? "#ffffff" : s.color || "#6d28d9" }}
-              />
-              {s.name}
-            </button>
-          );
-        })}
-      </div>
+      {/* Barra de etapas (stepper) — "setas" (RD) ou "pílulas" conforme o funil. */}
+      {deal.pipeline_stepper_style === "chevrons" ? (
+        <div className="flex overflow-x-auto border-b border-border bg-background px-2 py-2">
+          {stages.map((s, i) => {
+            const active = s.id === deal.stage_id;
+            const reached = currentStageIndex >= 0 && i <= currentStageIndex;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                disabled={busy}
+                onClick={() => void changeStage(s.id)}
+                title={`Mover para "${s.name}"`}
+                className={cn(
+                  "relative flex h-8 shrink-0 items-center whitespace-nowrap pl-5 pr-4 text-xs transition-opacity hover:opacity-90",
+                  reached ? "font-medium text-white" : "bg-muted text-muted-foreground",
+                  active && "font-semibold",
+                )}
+                style={{
+                  backgroundColor: reached ? s.color || "#6d28d9" : undefined,
+                  marginLeft: i === 0 ? 0 : -10,
+                  clipPath:
+                    i === 0
+                      ? "polygon(0 0, calc(100% - 11px) 0, 100% 50%, calc(100% - 11px) 100%, 0 100%)"
+                      : "polygon(0 0, calc(100% - 11px) 0, 100% 50%, calc(100% - 11px) 100%, 0 100%, 11px 50%)",
+                }}
+              >
+                {s.name}
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="flex items-center gap-1 overflow-x-auto border-b border-border bg-background px-4 py-2">
+          {stages.map((s, i) => {
+            const active = s.id === deal.stage_id;
+            const done = currentStageIndex >= 0 && i < currentStageIndex;
+            return (
+              <button
+                key={s.id}
+                type="button"
+                disabled={busy}
+                onClick={() => void changeStage(s.id)}
+                className={cn(
+                  "flex shrink-0 items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors",
+                  active
+                    ? "border-transparent text-white"
+                    : done
+                      ? "border-transparent bg-primary/10 text-primary hover:bg-primary/20"
+                      : "border-border text-muted-foreground hover:bg-muted",
+                )}
+                style={active ? { backgroundColor: s.color || "#6d28d9" } : undefined}
+                title={`Mover para "${s.name}"`}
+              >
+                <span
+                  className="size-1.5 rounded-full"
+                  style={{ backgroundColor: active ? "#ffffff" : s.color || "#6d28d9" }}
+                />
+                {s.name}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Corpo: campos | histórico */}
       <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-start">

@@ -34,6 +34,7 @@ import {
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
+import { cn } from "@/lib/utils";
 import {
   Trash2,
   Plus,
@@ -78,6 +79,9 @@ export function PipelineSettings({
   const [localStages, setLocalStages] = useState<PipelineStage[]>(stages);
   const [newStageName, setNewStageName] = useState("");
   const [newStageColor, setNewStageColor] = useState(STAGE_COLORS[0]);
+  const [stepperStyle, setStepperStyle] = useState<"pills" | "chevrons">(
+    pipeline.stepper_style === "chevrons" ? "chevrons" : "pills",
+  );
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
@@ -89,6 +93,7 @@ export function PipelineSettings({
     if (!open) return;
     setName(pipeline.name);
     setLocalStages([...stages].sort((a, b) => a.position - b.position));
+    setStepperStyle(pipeline.stepper_style === "chevrons" ? "chevrons" : "pills");
     setShowDeleteConfirm(false);
   }, [open, pipeline, stages]);
   /* eslint-enable react-hooks/set-state-in-effect */
@@ -123,6 +128,7 @@ export function PipelineSettings({
       pipeline.id,
       name.trim(),
       stageRows,
+      stepperStyle,
     );
 
     setSaving(false);
@@ -322,6 +328,86 @@ export function PipelineSettings({
                 </div>
               </div>
 
+              {/* Estilo da barra de etapas (no detalhe do negócio) + prévia */}
+              <div className="space-y-2">
+                <Label className="text-muted-foreground">
+                  Estilo das etapas (no detalhe do negócio)
+                </Label>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setStepperStyle("pills")}
+                    className={cn(
+                      "flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-colors",
+                      stepperStyle === "pills"
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    Pílulas
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setStepperStyle("chevrons")}
+                    className={cn(
+                      "flex-1 rounded-lg border px-3 py-2 text-xs font-medium transition-colors",
+                      stepperStyle === "chevrons"
+                        ? "border-primary bg-primary/10 text-primary"
+                        : "border-border text-muted-foreground hover:bg-muted",
+                    )}
+                  >
+                    Setas (estilo RD)
+                  </button>
+                </div>
+                {/* Prévia */}
+                <div className="rounded-lg border border-border bg-muted/40 p-3">
+                  <p className="mb-2 text-[10px] uppercase tracking-wide text-muted-foreground">
+                    Prévia
+                  </p>
+                  {stepperStyle === "pills" ? (
+                    <div className="flex flex-wrap gap-1">
+                      {localStages.map((s, i) => (
+                        <span
+                          key={s.id}
+                          className={cn(
+                            "inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-xs font-medium",
+                            i === 0
+                              ? "text-white"
+                              : "border border-border bg-background text-muted-foreground",
+                          )}
+                          style={i === 0 ? { backgroundColor: s.color } : undefined}
+                        >
+                          <span
+                            className="size-1.5 rounded-full"
+                            style={{ backgroundColor: i === 0 ? "#fff" : s.color }}
+                          />
+                          {s.name}
+                        </span>
+                      ))}
+                    </div>
+                  ) : (
+                    <div className="flex overflow-x-auto pb-1">
+                      {localStages.map((s, i) => (
+                        <div
+                          key={s.id}
+                          className="relative flex h-7 shrink-0 items-center whitespace-nowrap pl-4 pr-3 text-xs font-medium text-white"
+                          style={{
+                            backgroundColor: s.color,
+                            marginLeft: i === 0 ? 0 : -9,
+                            clipPath:
+                              i === 0
+                                ? "polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%)"
+                                : "polygon(0 0, calc(100% - 10px) 0, 100% 50%, calc(100% - 10px) 100%, 0 100%, 10px 50%)",
+                          }}
+                        >
+                          {s.name}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              </div>
+
               <Button
                 variant="outline"
                 onClick={onCreateNewPipeline}
@@ -336,7 +422,7 @@ export function PipelineSettings({
               <Button
                 variant="destructive"
                 onClick={() => setShowDeleteConfirm(true)}
-                className="mr-auto bg-red-600 hover:bg-red-700"
+                className="mr-auto bg-red-600 text-white hover:bg-red-700"
               >
                 Excluir funil
               </Button>

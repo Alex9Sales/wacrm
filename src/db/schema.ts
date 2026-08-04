@@ -521,6 +521,8 @@ export const pipelines = pgTable("pipelines", {
 	userId: uuid("user_id").notNull(),
 	accountId: uuid("account_id").notNull(),
 	name: text().notNull(),
+	// Estilo da barra de etapas no detalhe: 'pills' | 'chevrons'. Migração 0053.
+	stepperStyle: text("stepper_style").default('pills').notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_pipelines_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
