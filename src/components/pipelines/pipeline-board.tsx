@@ -294,6 +294,8 @@ function DraggableDealCard({
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: deal.id,
+    // Funil aberto: não dá pra arrastar deal atribuído a outra pessoa (travado).
+    disabled: deal.read_blocked,
   });
 
   return (

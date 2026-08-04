@@ -2,7 +2,7 @@
 
 import type { Deal, PipelineStage } from "@/types";
 import type { DealTaskCount } from "@/app/(dashboard)/tarefas/actions";
-import { Calendar, Check, X, ListTodo, Plus } from "lucide-react";
+import { Calendar, Check, X, ListTodo, Plus, Lock } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 
 interface DealCardProps {
@@ -41,6 +41,32 @@ export function DealCard({
   const assigneeLabel = deal.assignee?.full_name || null;
   const openTasks = taskCount?.open ?? 0;
   const hasOverdue = (taskCount?.overdue ?? 0) > 0;
+
+  // Funil aberto: deal atribuído a OUTRA pessoa aparece TRAVADO (igual conversa)
+  // — sem título/contato/valor, não abre. Só "atribuído a X" + a cor da etapa.
+  if (deal.read_blocked) {
+    return (
+      <div
+        className="relative w-full rounded-xl border border-dashed border-border/60 bg-muted/40 pl-4 pr-3 py-3 text-left"
+        title={assigneeLabel ? `Atribuído a ${assigneeLabel}` : "Atribuído a outro atendente"}
+      >
+        <span
+          aria-hidden
+          className="absolute left-0 top-0 h-full w-1 rounded-l-xl opacity-60"
+          style={{ backgroundColor: stage?.color ?? "#94a3b8" }}
+        />
+        <div className="flex items-center gap-2 text-muted-foreground">
+          <Lock className="h-3.5 w-3.5 shrink-0" />
+          <span className="truncate text-xs font-medium">
+            {assigneeLabel ? `Atribuído a ${assigneeLabel}` : "Atribuído a outro atendente"}
+          </span>
+        </div>
+        <p className="mt-1 text-[11px] text-muted-foreground/70">
+          Atendimento de outro atendente
+        </p>
+      </div>
+    );
+  }
 
   return (
     <button

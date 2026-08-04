@@ -430,6 +430,10 @@ export interface Deal {
   pipeline_name?: string;
   /** Parent pipeline's stepper style ('pills' | 'chevrons'). */
   pipeline_stepper_style?: string;
+  /** Funil aberto: true quando o deal está atribuído a OUTRA pessoa e este
+   *  usuário não pode ver/abrir/editar — o card aparece travado ("atribuído a
+   *  X"), sem título/contato/valor. */
+  read_blocked?: boolean;
 }
 
 export type BroadcastStatus =

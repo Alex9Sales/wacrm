@@ -6,12 +6,11 @@
 // scoped to the caller's account — there is no RLS anymore.
 // ============================================================
 
-import { and, asc, count, desc, eq, isNull, notInArray, or, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, sql } from 'drizzle-orm'
 import { db, contacts, conversations, dealAttachments, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, pipelines, pipelineStages, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
-import { getAdminUserIds, isAdminUser } from '@/lib/sectors/access'
 import type { Contact, Conversation, Deal, Pipeline, PipelineStage, Profile } from '@/types'
 
 const contactColumns = {
@@ -41,48 +40,39 @@ const assigneeColumns = {
   created_at: user.createdAt,
 }
 
-/** The account's pipelines, oldest first (matches the old `.order('created_at')`). */
-/** WHERE p/ os deals de um funil, na mesma hierarquia: admin vê todos; supervisor
- *  vê os da equipe (menos admin/owner); agente só os criados por ele OU
- *  atribuídos a ele. */
+/**
+ * Funil ABERTO (05/08, spec Alex/Rafael): quem pode VER/ABRIR/EDITAR o card
+ * completo de um deal.
+ *   - admin / supervisor → tudo (supervisão).
+ *   - agente → deal SEM dono (todos veem, pra poder pegar) OU atribuído a ele.
+ *     Atribuído a OUTRO = travado ("atribuído a outra pessoa"), igual conversa.
+ * (Antes: agente só via os DELE — a vendedora do Rafael perdeu acesso aos leads
+ * sem dono; este modelo abre o funil e trava só o que é de outro.)
+ */
+function dealReadable(
+  role: AccountContext['role'],
+  userId: string,
+  assignedTo: string | null | undefined,
+): boolean {
+  if (hasMinRole(role, 'supervisor')) return true
+  if (!assignedTo) return true
+  return assignedTo === userId
+}
+
+/** WHERE dos deals de um funil. Funil aberto: a query traz TODOS os deals; o
+ *  bloqueio de "atribuído a outro" é por-card (dealReadable) na listagem — o
+ *  card aparece TRAVADO, não some (igual a lista de conversas). */
 async function dealsVisibilityWhere(ctx: AccountContext, pipelineId: string) {
-  let where = and(
+  return and(
     eq(deals.pipelineId, pipelineId),
     eq(deals.accountId, ctx.accountId),
   ) as ReturnType<typeof and>
-  if (hasMinRole(ctx.role, 'admin')) return where
-  if (hasMinRole(ctx.role, 'supervisor')) {
-    const adminIds = await getAdminUserIds(ctx.accountId)
-    if (adminIds.length) {
-      where = and(
-        where,
-        notInArray(deals.userId, adminIds),
-        or(isNull(deals.assignedTo), notInArray(deals.assignedTo, adminIds)),
-      )
-    }
-    return where
-  }
-  return and(
-    where,
-    or(eq(deals.assignedTo, ctx.userId), eq(deals.userId, ctx.userId)),
-  )
 }
 
 export async function listPipelines(): Promise<Pipeline[]> {
   const ctx = await getCurrentAccount()
-  // Mesma hierarquia das conversas: admin/owner vê todos os funis; supervisor
-  // vê os dele + da equipe (menos os do admin/owner); agente só os DELE.
-  let where = eq(pipelines.accountId, ctx.accountId) as ReturnType<typeof and>
-  if (!hasMinRole(ctx.role, 'admin')) {
-    if (hasMinRole(ctx.role, 'supervisor')) {
-      const adminIds = await getAdminUserIds(ctx.accountId)
-      if (adminIds.length) {
-        where = and(where, notInArray(pipelines.userId, adminIds))
-      }
-    } else {
-      where = and(where, eq(pipelines.userId, ctx.userId))
-    }
-  }
+  // Funil ABERTO: todos os membros veem todos os funis da conta.
+  const where = eq(pipelines.accountId, ctx.accountId)
   const rows = await db
     .select({
       id: pipelines.id,
@@ -151,14 +141,23 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
     .where(await dealsVisibilityWhere(ctx, pipelineId))
     .orderBy(desc(deals.createdAt))
 
-  return rows.map((r) => ({
-    ...r,
-    // numeric comes back as a string from node-postgres; the UI (and the
-    // old PostgREST payload) expects a number.
-    value: Number(r.value),
-    contact: r.contact?.id ? (r.contact as unknown as Contact) : undefined,
-    assignee: r.assignee?.id ? (r.assignee as unknown as Profile) : undefined,
-  })) as unknown as Deal[]
+  return rows.map((r) => {
+    const assignee = r.assignee?.id ? (r.assignee as unknown as Profile) : undefined
+    // Atribuído a OUTRA pessoa (e não sou supervisor+) → card TRAVADO: não vaza
+    // título/contato/valor; o board mostra só "atribuído a X" + a etapa.
+    if (!dealReadable(ctx.role, ctx.userId, r.assigned_to)) {
+      return { ...r, title: '', value: 0, notes: undefined, contact: undefined, assignee, read_blocked: true }
+    }
+    return {
+      ...r,
+      // numeric comes back as a string from node-postgres; the UI (and the
+      // old PostgREST payload) expects a number.
+      value: Number(r.value),
+      contact: r.contact?.id ? (r.contact as unknown as Contact) : undefined,
+      assignee,
+      read_blocked: false,
+    }
+  }) as unknown as Deal[]
 }
 
 /**
@@ -557,12 +556,16 @@ export async function updateDeal(
     // Load current stage/status to detect meaningful changes for the timeline.
     const before = firstOrNull(
       await db
-        .select({ stageId: deals.stageId, status: deals.status })
+        .select({ stageId: deals.stageId, status: deals.status, assignedTo: deals.assignedTo })
         .from(deals)
         .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
         .limit(1),
     )
     if (!before) return { error: 'Deal not found' }
+    // Funil aberto: agente só mexe em deal SEM dono ou atribuído a ele.
+    if (!dealReadable(ctx.role, ctx.userId, before.assignedTo)) {
+      return { error: 'Este negócio está atribuído a outro atendente.' }
+    }
 
     const set: Record<string, unknown> = {}
     if (patch.title !== undefined) set.title = patch.title
@@ -621,12 +624,15 @@ export async function addDealNote(
     if (!trimmed) return { error: 'A anotação não pode ficar vazia.' }
     const owned = firstOrNull(
       await db
-        .select({ id: deals.id })
+        .select({ id: deals.id, assignedTo: deals.assignedTo })
         .from(deals)
         .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
         .limit(1),
     )
     if (!owned) return { error: 'Negócio não encontrado.' }
+    if (!dealReadable(ctx.role, ctx.userId, owned.assignedTo)) {
+      return { error: 'Este negócio está atribuído a outro atendente.' }
+    }
     await recordDealEvent(ctx.accountId, ctx.userId, dealId, 'note', { text: trimmed })
     return { error: null }
   } catch (err) {
@@ -673,20 +679,9 @@ export async function getDeal(id: string): Promise<Deal | null> {
       .limit(1),
   )
   if (!row) return null
-  // Mesma hierarquia da lista: agente só o dele/atribuído; supervisor não vê os
-  // do admin/owner; admin tudo.
-  if (!hasMinRole(ctx.role, 'admin')) {
-    const mine = row.user_id === ctx.userId || row.assigned_to === ctx.userId
-    if (hasMinRole(ctx.role, 'supervisor')) {
-      const ownerAdmin = await isAdminUser(ctx.accountId, row.user_id)
-      const assigneeAdmin = row.assigned_to
-        ? await isAdminUser(ctx.accountId, row.assigned_to)
-        : false
-      if (!mine && (ownerAdmin || assigneeAdmin)) return null
-    } else if (!mine) {
-      return null
-    }
-  }
+  // Funil aberto: agente abre deal SEM dono ou atribuído a ele; atribuído a
+  // outro = bloqueado. admin/supervisor veem tudo.
+  if (!dealReadable(ctx.role, ctx.userId, row.assigned_to)) return null
   return {
     ...row,
     value: Number(row.value),
