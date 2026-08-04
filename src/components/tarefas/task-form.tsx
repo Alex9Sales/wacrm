@@ -224,7 +224,9 @@ export function TaskForm({
                 onValueChange={(v) => v && setStatus(v as TaskStatus)}
               >
                 <SelectTrigger className="w-full bg-background border-border text-foreground">
-                  <SelectValue />
+                  {/* Base UI <SelectValue> mostra o valor cru em re-render pesado;
+                      renderiza o rótulo manualmente. */}
+                  <SelectValue>{STATUS_LABELS[status]}</SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   <SelectItem value="open">{STATUS_LABELS.open}</SelectItem>
@@ -242,7 +244,13 @@ export function TaskForm({
               onValueChange={(v) => setAssignedTo(v === '__none__' ? null : v)}
             >
               <SelectTrigger className="w-full bg-background border-border text-foreground">
-                <SelectValue placeholder="Ninguém (não atribuída)" />
+                {/* Rótulo manual — o <SelectValue> do Base UI mostrava o ID cru. */}
+                <SelectValue placeholder="Ninguém (não atribuída)">
+                  {assignedTo
+                    ? (members.find((m) => m.id === assignedTo)?.name ??
+                      "Ninguém (não atribuída)")
+                    : "Ninguém (não atribuída)"}
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="__none__">Ninguém (não atribuída)</SelectItem>
