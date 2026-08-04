@@ -1,7 +1,6 @@
 "use client";
 
 import { useState, useEffect } from "react";
-import Link from "next/link";
 import {
   listContactsForDeal,
   listAssignees,
@@ -308,13 +307,20 @@ export function DealForm({
               )}
 
               {linkedConversation && (
-                <Link
-                  href="/inbox"
+                <button
+                  type="button"
+                  onClick={() => {
+                    // Navegação COMPLETA (não Link/router.push) pro deep-link
+                    // `?c=` remontar a inbox e abrir a conversa certa — o push
+                    // client-side não reativava o efeito (mesmo caso das
+                    // notificações). ANTES ia pra "/inbox" sem o id → abria vazio.
+                    window.location.href = `/inbox?c=${linkedConversation.id}`;
+                  }}
                   className="mt-1 inline-flex items-center gap-1.5 self-start rounded-md bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-primary/20"
                 >
                   <MessageSquare className="h-3 w-3" />
                   Ir para a conversa
-                </Link>
+                </button>
               )}
             </div>
 
