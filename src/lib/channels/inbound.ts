@@ -675,11 +675,13 @@ async function ingestGroupMessage(
   }
 
   // 4) Resolve/create the single group conversation for this channel.
+  // isGroup → nasce SEM setor (livre pra toda a equipe).
   const convResult = await findOrCreateConversation(
     accountId,
     contactOutcome.contact.userId,
     contactId,
     channel.id,
+    { isGroup: true },
   );
   if (!convResult) return null;
   const conversation = convResult.conversation;
@@ -1434,6 +1436,7 @@ async function findOrCreateConversation(
   userId: string,
   contactId: string,
   channelId: string,
+  opts?: { isGroup?: boolean },
 ) {
   let existing: typeof conversations.$inferSelect | null = null;
   try {
@@ -1461,7 +1464,11 @@ async function findOrCreateConversation(
   // The keyword/inbound routing below only runs for customer (non-fromMe)
   // messages, so an agent-STARTED thread (first message outbound) used to stay
   // sector-less and leak to every sector. Null when the channel has no sector.
-  const bornSectorId = await channelDefaultSectorId(channelId);
+  // EXCEÇÃO: GRUPOS nascem SEM setor (Felipe) — grupo é livre pra toda a equipe
+  // (setor null + sem dono = fila geral, visível e respondível por todos).
+  const bornSectorId = opts?.isGroup
+    ? null
+    : await channelDefaultSectorId(channelId);
 
   try {
     const created = firstOrNull(

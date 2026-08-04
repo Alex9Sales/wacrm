@@ -183,12 +183,18 @@ export async function POST(request: Request) {
     // after a successful send. Fetched once so both use the same value.
     const lockRow = firstOrNull(
       await db
-        .select({ assignedAgentId: conversations.assignedAgentId })
+        .select({
+          assignedAgentId: conversations.assignedAgentId,
+          isGroup: contacts.isGroup,
+        })
         .from(conversations)
+        .leftJoin(contacts, eq(conversations.contactId, contacts.id))
         .where(eq(conversations.id, conversationId))
         .limit(1)
     )
     const assignedAgentId = lockRow?.assignedAgentId ?? null
+    // Grupo é LIVRE: responder num grupo NÃO atribui a ninguém (Felipe).
+    const isGroupConversation = lockRow?.isGroup === true
     const assignedToOther = !!assignedAgentId && assignedAgentId !== ctx.userId
 
     // Is that assignee offline/away right now? If so, any teammate may cover
@@ -329,27 +335,30 @@ export async function POST(request: Request) {
       //     (help without stealing).
       const coverReassign =
         assignedToOther && assigneeAway && !hasMinRole(ctx.role, 'supervisor')
-      try {
-        await db.transaction(async (tx) => {
-          await tx.execute(sql`SET LOCAL app.suppress_assign_notify = 'on'`)
-          await tx
-            .update(conversations)
-            .set({
-              assignedAgentId: ctx.userId,
-              assignedAt: new Date().toISOString(),
-            })
-            .where(
-              and(
-                eq(conversations.id, conversationId!),
-                eq(conversations.accountId, accountId),
-                coverReassign
-                  ? eq(conversations.assignedAgentId, assignedAgentId!)
-                  : isNull(conversations.assignedAgentId),
-              ),
-            )
-        })
-      } catch (err) {
-        console.error('[send] claim/cover-on-reply failed:', err)
+      // Grupo NUNCA é atribuído (livre pra toda a equipe) — pula claim/cover.
+      if (!isGroupConversation) {
+        try {
+          await db.transaction(async (tx) => {
+            await tx.execute(sql`SET LOCAL app.suppress_assign_notify = 'on'`)
+            await tx
+              .update(conversations)
+              .set({
+                assignedAgentId: ctx.userId,
+                assignedAt: new Date().toISOString(),
+              })
+              .where(
+                and(
+                  eq(conversations.id, conversationId!),
+                  eq(conversations.accountId, accountId),
+                  coverReassign
+                    ? eq(conversations.assignedAgentId, assignedAgentId!)
+                    : isNull(conversations.assignedAgentId),
+                ),
+              )
+          })
+        } catch (err) {
+          console.error('[send] claim/cover-on-reply failed:', err)
+        }
       }
 
       return NextResponse.json({
