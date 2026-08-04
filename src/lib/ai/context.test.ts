@@ -57,4 +57,28 @@ describe('buildConversationContext', () => {
     const out = await buildConversationContext('conv-1')
     expect(out).toEqual([{ role: 'user', content: 'real' }])
   })
+
+  it('includes a customer image via its vision description, prefixed [imagem]', async () => {
+    fakeDb([
+      {
+        senderType: 'customer',
+        contentType: 'image',
+        contentText: '[image]',
+        transcription: 'Foto de um botijão de gás P13 azul.',
+      },
+    ])
+    const out = await buildConversationContext('conv-1')
+    expect(out).toEqual([
+      { role: 'user', content: '[imagem] Foto de um botijão de gás P13 azul.' },
+    ])
+  })
+
+  it('drops an image with no description (not yet understood)', async () => {
+    fakeDb([
+      { senderType: 'customer', contentType: 'image', contentText: '[image]', transcription: null },
+      { senderType: 'customer', contentType: 'text', contentText: 'oi' },
+    ])
+    const out = await buildConversationContext('conv-1')
+    expect(out).toEqual([{ role: 'user', content: 'oi' }])
+  })
 })

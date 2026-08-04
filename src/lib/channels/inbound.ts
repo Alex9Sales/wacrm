@@ -40,6 +40,8 @@ import { runAutomationsForTrigger } from '@/lib/automations/engine';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
 import { dispatchInboundToAiReply } from '@/lib/ai/auto-reply';
 import { transcribeInboundAudio } from '@/lib/ai/transcribe';
+import { describeImage } from '@/lib/ai/vision';
+import { loadAiConfig } from '@/lib/ai/config';
 import { getAccountSettings } from '@/lib/settings/account-settings';
 import { isWithinBusinessHours } from '@/lib/settings/business-hours';
 import { engineSendText } from '@/lib/flows/meta-send';
@@ -246,6 +248,26 @@ export async function dispatchInboundMessage(
       }
     } catch (err) {
       console.error('[inbound] transcription failed:', err);
+    }
+  }
+
+  // Entender IMAGEM (a IA "vê" a foto). Só para imagens do cliente e quando a
+  // IA está ativa — a descrição usa o modelo de visão com a chave OpenAI do
+  // cliente e é guardada como transcrição: a IA usa pra responder e o atendente
+  // vê no card o que ela entendeu. Best-effort: null em qualquer falha.
+  if (contentType === 'image' && mediaUrl && !isFromMe) {
+    try {
+      const cfg = await loadAiConfig(accountId);
+      const visionKey = cfg
+        ? cfg.provider === 'openai'
+          ? cfg.apiKey
+          : cfg.embeddingsApiKey
+        : null;
+      if (visionKey) {
+        transcription = await describeImage(visionKey, mediaUrl);
+      }
+    } catch (err) {
+      console.error('[inbound] image describe failed:', err);
     }
   }
 

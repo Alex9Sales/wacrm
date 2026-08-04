@@ -901,6 +901,17 @@ function MessageContent({
           {cap != null && (
             <p className="mt-1 whitespace-pre-wrap break-words text-sm">{cap}</p>
           )}
+          {message.transcription && (
+            <div className="mt-1.5 max-w-60 rounded-lg bg-muted/50 px-2.5 py-1.5">
+              <p className="mb-0.5 flex items-center gap-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                <Sparkles className="h-3 w-3" />
+                Descrição da IA
+              </p>
+              <p className="whitespace-pre-wrap text-sm leading-snug text-foreground/90">
+                {message.transcription}
+              </p>
+            </div>
+          )}
         </div>
       );
     }

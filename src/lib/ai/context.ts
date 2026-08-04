@@ -4,16 +4,18 @@ import type { ChatMessage } from './types'
 import { aiContextMessageLimit } from './defaults'
 
 const AUDIO_KINDS = ['audio', 'voice', 'ptt']
+const IMAGE_KINDS = ['image']
 
 /**
- * Fetch the last N text/audio messages of a conversation and map them to the
- * provider-neutral chat shape. Customer messages become `user`; agent and bot
- * messages become `assistant`.
+ * Fetch the last N text/audio/image messages of a conversation and map them to
+ * the provider-neutral chat shape. Customer messages become `user`; agent and
+ * bot messages become `assistant`.
  *
  * Áudio: usa a TRANSCRIÇÃO (quando a transcrição de áudio está ligada nas
  * configurações), prefixada com "[áudio]" nas mensagens do cliente para a IA
- * saber que a pessoa mandou áudio. Outras mídias (imagem/vídeo/doc) ficam de
- * fora — não carregam texto. Notas internas nunca entram (vazariam na resposta).
+ * saber que a pessoa mandou áudio. Imagem: usa a DESCRIÇÃO de visão (guardada na
+ * transcrição no recebimento), prefixada com "[imagem]" — só entra quando há
+ * descrição. Vídeo/doc ficam de fora. Notas internas nunca entram (vazariam).
  *
  * Ordered oldest-first (chronological) so the transcript reads naturally and
  * the most recent customer message lands last.
@@ -33,7 +35,7 @@ export async function buildConversationContext(
     .where(
       and(
         eq(messages.conversationId, conversationId),
-        inArray(messages.contentType, ['text', ...AUDIO_KINDS]),
+        inArray(messages.contentType, ['text', ...AUDIO_KINDS, ...IMAGE_KINDS]),
         eq(messages.isInternal, false),
       ),
     )
@@ -44,16 +46,19 @@ export async function buildConversationContext(
     .reverse()
     .map((m) => {
       const isAudio = AUDIO_KINDS.includes(m.contentType)
-      // Áudio → transcrição; texto → o próprio texto.
-      const raw = (isAudio ? m.transcription : m.contentText) ?? ''
+      const isImage = IMAGE_KINDS.includes(m.contentType)
+      // Áudio/imagem → transcrição (descrição de visão p/ imagem); texto → texto.
+      const raw = (isAudio || isImage ? m.transcription : m.contentText) ?? ''
       const trimmed = raw.trim()
       if (!trimmed) return null
       const isCustomer = m.senderType === 'customer'
+      // Marca o canal p/ a IA reconhecer (útil p/ decidir responder em áudio
+      // quando a pessoa mandou áudio, e p/ saber que a pessoa mandou uma foto).
+      const prefix =
+        isCustomer && isAudio ? '[áudio] ' : isCustomer && isImage ? '[imagem] ' : ''
       return {
         role: isCustomer ? ('user' as const) : ('assistant' as const),
-        // Marca o áudio do cliente pra IA reconhecer o canal (útil pra decidir
-        // responder em áudio quando a pessoa mandou áudio).
-        content: isAudio && isCustomer ? `[áudio] ${trimmed}` : trimmed,
+        content: `${prefix}${trimmed}`,
       }
     })
     .filter((m): m is ChatMessage => m !== null)
