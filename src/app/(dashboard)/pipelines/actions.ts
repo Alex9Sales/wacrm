@@ -6,10 +6,12 @@
 // scoped to the caller's account — there is no RLS anymore.
 // ============================================================
 
-import { and, asc, count, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, isNull, notInArray, or, sql } from 'drizzle-orm'
 import { db, contacts, conversations, deals, member, pipelines, pipelineStages, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
-import { getCurrentAccount } from '@/lib/auth/account'
+import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
+import { hasMinRole } from '@/lib/auth/roles'
+import { getAdminUserIds } from '@/lib/sectors/access'
 import type { Contact, Conversation, Deal, Pipeline, PipelineStage, Profile } from '@/types'
 
 const contactColumns = {
@@ -40,8 +42,47 @@ const assigneeColumns = {
 }
 
 /** The account's pipelines, oldest first (matches the old `.order('created_at')`). */
+/** WHERE p/ os deals de um funil, na mesma hierarquia: admin vê todos; supervisor
+ *  vê os da equipe (menos admin/owner); agente só os criados por ele OU
+ *  atribuídos a ele. */
+async function dealsVisibilityWhere(ctx: AccountContext, pipelineId: string) {
+  let where = and(
+    eq(deals.pipelineId, pipelineId),
+    eq(deals.accountId, ctx.accountId),
+  ) as ReturnType<typeof and>
+  if (hasMinRole(ctx.role, 'admin')) return where
+  if (hasMinRole(ctx.role, 'supervisor')) {
+    const adminIds = await getAdminUserIds(ctx.accountId)
+    if (adminIds.length) {
+      where = and(
+        where,
+        notInArray(deals.userId, adminIds),
+        or(isNull(deals.assignedTo), notInArray(deals.assignedTo, adminIds)),
+      )
+    }
+    return where
+  }
+  return and(
+    where,
+    or(eq(deals.assignedTo, ctx.userId), eq(deals.userId, ctx.userId)),
+  )
+}
+
 export async function listPipelines(): Promise<Pipeline[]> {
   const ctx = await getCurrentAccount()
+  // Mesma hierarquia das conversas: admin/owner vê todos os funis; supervisor
+  // vê os dele + da equipe (menos os do admin/owner); agente só os DELE.
+  let where = eq(pipelines.accountId, ctx.accountId) as ReturnType<typeof and>
+  if (!hasMinRole(ctx.role, 'admin')) {
+    if (hasMinRole(ctx.role, 'supervisor')) {
+      const adminIds = await getAdminUserIds(ctx.accountId)
+      if (adminIds.length) {
+        where = and(where, notInArray(pipelines.userId, adminIds))
+      }
+    } else {
+      where = and(where, eq(pipelines.userId, ctx.userId))
+    }
+  }
   const rows = await db
     .select({
       id: pipelines.id,
@@ -51,7 +92,7 @@ export async function listPipelines(): Promise<Pipeline[]> {
       created_at: pipelines.createdAt,
     })
     .from(pipelines)
-    .where(eq(pipelines.accountId, ctx.accountId))
+    .where(where)
     .orderBy(asc(pipelines.createdAt))
   return rows as unknown as Pipeline[]
 }
@@ -106,7 +147,7 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
     .from(deals)
     .leftJoin(contacts, eq(deals.contactId, contacts.id))
     .leftJoin(user, eq(deals.assignedTo, user.id))
-    .where(and(eq(deals.pipelineId, pipelineId), eq(deals.accountId, ctx.accountId)))
+    .where(await dealsVisibilityWhere(ctx, pipelineId))
     .orderBy(desc(deals.createdAt))
 
   return rows.map((r) => ({
