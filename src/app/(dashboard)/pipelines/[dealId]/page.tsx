@@ -473,7 +473,7 @@ export default function DealDetailPage() {
 
   if (loading) {
     return (
-      <div className="flex flex-1 items-center justify-center">
+      <div className="flex min-h-[60vh] items-center justify-center">
         <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
       </div>
     );
@@ -481,7 +481,7 @@ export default function DealDetailPage() {
 
   if (notFound || !deal) {
     return (
-      <div className="flex flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <div className="flex min-h-[60vh] flex-col items-center justify-center gap-3 px-6 text-center">
         <p className="text-sm text-muted-foreground">
           Negócio não encontrado ou você não tem acesso a ele.
         </p>
@@ -493,9 +493,9 @@ export default function DealDetailPage() {
   }
 
   return (
-    <div className="flex h-full flex-1 flex-col overflow-hidden">
-      {/* Header */}
-      <header className="flex flex-wrap items-center gap-3 border-b border-border px-4 py-3">
+    <div className="flex flex-col">
+      {/* Header — sticky no topo enquanto rola o conteúdo. */}
+      <header className="sticky top-0 z-20 flex flex-wrap items-center gap-3 border-b border-border bg-background/95 px-4 py-3 backdrop-blur">
         <button
           type="button"
           onClick={() => (window.location.href = "/pipelines")}
@@ -559,7 +559,7 @@ export default function DealDetailPage() {
       </header>
 
       {/* Barra de etapas (stepper) */}
-      <div className="flex items-center gap-1 overflow-x-auto border-b border-border px-4 py-2">
+      <div className="flex items-center gap-1 overflow-x-auto border-b border-border bg-background px-4 py-2">
         {stages.map((s, i) => {
           const active = s.id === deal.stage_id;
           const done = currentStageIndex >= 0 && i < currentStageIndex;
@@ -591,9 +591,9 @@ export default function DealDetailPage() {
       </div>
 
       {/* Corpo: campos | histórico */}
-      <div className="flex flex-1 flex-col gap-4 overflow-auto p-4 lg:flex-row">
-        {/* Painel de campos */}
-        <aside className="w-full shrink-0 space-y-4 rounded-xl border border-border bg-card p-4 lg:w-72">
+      <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-start">
+        {/* Painel de campos — cola no topo no desktop enquanto rola as abas. */}
+        <aside className="w-full shrink-0 space-y-4 rounded-xl border border-border bg-card p-4 lg:sticky lg:top-20 lg:w-72">
           <h2 className="text-sm font-semibold text-foreground">Negócio</h2>
           <div className="space-y-3">
             <Field label="Nome" value={deal.title} />
