@@ -7,11 +7,11 @@
 // ============================================================
 
 import { and, asc, count, desc, eq, isNull, notInArray, or, sql } from 'drizzle-orm'
-import { db, contacts, conversations, deals, member, pipelines, pipelineStages, user } from '@/db'
+import { db, contacts, conversations, dealEvents, deals, member, pipelines, pipelineStages, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
-import { getAdminUserIds } from '@/lib/sectors/access'
+import { getAdminUserIds, isAdminUser } from '@/lib/sectors/access'
 import type { Contact, Conversation, Deal, Pipeline, PipelineStage, Profile } from '@/types'
 
 const contactColumns = {
@@ -202,16 +202,58 @@ export async function createPipelineWithStages(
 }
 
 /** Persist a drag-and-drop stage move. Returns an error message or null. */
+/** Append one timeline event for a deal (best-effort — never throws). */
+async function recordDealEvent(
+  accountId: string,
+  actorUserId: string | null,
+  dealId: string,
+  type: string,
+  data: Record<string, unknown> = {},
+): Promise<void> {
+  try {
+    await db.insert(dealEvents).values({ accountId, actorUserId, dealId, type, data })
+  } catch (err) {
+    console.error('[deal-events] insert failed:', err)
+  }
+}
+
+/** Stage name for a stage id (for the timeline payload). */
+async function stageName(stageId: string | null): Promise<string | null> {
+  if (!stageId) return null
+  const row = firstOrNull(
+    await db
+      .select({ name: pipelineStages.name })
+      .from(pipelineStages)
+      .where(eq(pipelineStages.id, stageId))
+      .limit(1),
+  )
+  return row?.name ?? null
+}
+
 export async function moveDealToStage(
   dealId: string,
   stageId: string,
 ): Promise<{ error: string | null }> {
   try {
     const ctx = await getCurrentAccount()
+    // Grab the current stage first so the timeline can show from → to.
+    const before = firstOrNull(
+      await db
+        .select({ stageId: deals.stageId })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!before) return { error: 'Deal not found' }
+    if (before.stageId === stageId) return { error: null }
     await db
       .update(deals)
       .set({ stageId })
       .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+    await recordDealEvent(ctx.accountId, ctx.userId, dealId, 'stage_changed', {
+      from: await stageName(before.stageId),
+      to: await stageName(stageId),
+    })
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Failed to move deal' }
@@ -458,36 +500,57 @@ export interface DealInput {
  */
 export async function createDeal(
   input: DealInput,
-): Promise<{ error: string | null }> {
+): Promise<{ error: string | null; id?: string }> {
   try {
     const ctx = await getCurrentAccount()
-    await db.insert(deals).values({
-      userId: ctx.userId,
-      accountId: ctx.accountId,
-      title: input.title,
-      value: String(input.value),
-      currency: input.currency,
-      contactId: input.contact_id,
-      pipelineId: input.pipeline_id,
-      stageId: input.stage_id,
-      assignedTo: input.assigned_to,
-      notes: input.notes,
-      expectedCloseDate: input.expected_close_date,
-      status: 'open',
-    })
-    return { error: null }
+    const created = firstOrNull(
+      await db
+        .insert(deals)
+        .values({
+          userId: ctx.userId,
+          accountId: ctx.accountId,
+          title: input.title,
+          value: String(input.value),
+          currency: input.currency,
+          contactId: input.contact_id,
+          pipelineId: input.pipeline_id,
+          stageId: input.stage_id,
+          assignedTo: input.assigned_to,
+          notes: input.notes,
+          expectedCloseDate: input.expected_close_date,
+          status: 'open',
+        })
+        .returning({ id: deals.id }),
+    )
+    if (created?.id) {
+      await recordDealEvent(ctx.accountId, ctx.userId, created.id, 'created', {
+        stage: await stageName(input.stage_id),
+      })
+    }
+    return { error: null, id: created?.id }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Failed to create deal' }
   }
 }
 
-/** Patch a deal the caller owns. Accepts a partial snake_case patch. */
+/** Patch a deal the caller owns. Accepts a partial snake_case patch. Records a
+ *  timeline event for stage/status changes. */
 export async function updateDeal(
   id: string,
   patch: Partial<DealInput> & { status?: string },
 ): Promise<{ error: string | null }> {
   try {
     const ctx = await getCurrentAccount()
+    // Load current stage/status to detect meaningful changes for the timeline.
+    const before = firstOrNull(
+      await db
+        .select({ stageId: deals.stageId, status: deals.status })
+        .from(deals)
+        .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!before) return { error: 'Deal not found' }
+
     const set: Record<string, unknown> = {}
     if (patch.title !== undefined) set.title = patch.title
     if (patch.value !== undefined) set.value = String(patch.value)
@@ -504,10 +567,153 @@ export async function updateDeal(
       .update(deals)
       .set(set)
       .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
+
+    if (patch.stage_id !== undefined && patch.stage_id !== before.stageId) {
+      await recordDealEvent(ctx.accountId, ctx.userId, id, 'stage_changed', {
+        from: await stageName(before.stageId),
+        to: await stageName(patch.stage_id),
+      })
+    }
+    if (patch.status !== undefined && patch.status !== before.status) {
+      await recordDealEvent(ctx.accountId, ctx.userId, id, 'status_changed', {
+        from: before.status,
+        to: patch.status,
+      })
+    }
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Failed to update deal' }
   }
+}
+
+/** Mark a deal as won ('venda') / lost ('perda') / reopen ('open'). */
+export async function setDealStatus(
+  id: string,
+  status: 'open' | 'won' | 'lost',
+): Promise<{ error: string | null }> {
+  return updateDeal(id, { status })
+}
+
+/** Add a free-text note to a deal's timeline. */
+export async function addDealNote(
+  dealId: string,
+  text: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const trimmed = text.trim()
+    if (!trimmed) return { error: 'A anotação não pode ficar vazia.' }
+    const owned = firstOrNull(
+      await db
+        .select({ id: deals.id })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!owned) return { error: 'Negócio não encontrado.' }
+    await recordDealEvent(ctx.accountId, ctx.userId, dealId, 'note', { text: trimmed })
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Failed to add note' }
+  }
+}
+
+/** One deal with contact/assignee/stage/pipeline embedded, for the detail page.
+ *  Account-scoped; returns null when missing or in another account. */
+export async function getDeal(id: string): Promise<Deal | null> {
+  const ctx = await getCurrentAccount()
+  const row = firstOrNull(
+    await db
+      .select({
+        id: deals.id,
+        user_id: deals.userId,
+        account_id: deals.accountId,
+        pipeline_id: deals.pipelineId,
+        stage_id: deals.stageId,
+        contact_id: deals.contactId,
+        conversation_id: deals.conversationId,
+        assigned_to: deals.assignedTo,
+        title: deals.title,
+        value: deals.value,
+        currency: deals.currency,
+        notes: deals.notes,
+        expected_close_date: deals.expectedCloseDate,
+        status: deals.status,
+        created_at: deals.createdAt,
+        updated_at: deals.updatedAt,
+        contact: contactColumns,
+        assignee: assigneeColumns,
+        pipeline_name: pipelines.name,
+      })
+      .from(deals)
+      .leftJoin(contacts, eq(deals.contactId, contacts.id))
+      .leftJoin(user, eq(deals.assignedTo, user.id))
+      .leftJoin(pipelines, eq(deals.pipelineId, pipelines.id))
+      .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  if (!row) return null
+  // Mesma hierarquia da lista: agente só o dele/atribuído; supervisor não vê os
+  // do admin/owner; admin tudo.
+  if (!hasMinRole(ctx.role, 'admin')) {
+    const mine = row.user_id === ctx.userId || row.assigned_to === ctx.userId
+    if (hasMinRole(ctx.role, 'supervisor')) {
+      const ownerAdmin = await isAdminUser(ctx.accountId, row.user_id)
+      const assigneeAdmin = row.assigned_to
+        ? await isAdminUser(ctx.accountId, row.assigned_to)
+        : false
+      if (!mine && (ownerAdmin || assigneeAdmin)) return null
+    } else if (!mine) {
+      return null
+    }
+  }
+  return {
+    ...row,
+    value: Number(row.value),
+    contact: row.contact?.id ? (row.contact as unknown as Contact) : undefined,
+    assignee: row.assignee?.id ? (row.assignee as unknown as Profile) : undefined,
+  } as unknown as Deal
+}
+
+export interface DealEvent {
+  id: string
+  type: string
+  data: Record<string, unknown>
+  actor_name: string | null
+  created_at: string
+}
+
+/** A deal's timeline (newest first), with the actor's display name resolved. */
+export async function listDealEvents(dealId: string): Promise<DealEvent[]> {
+  const ctx = await getCurrentAccount()
+  // Scope through the parent deal's account.
+  const owned = firstOrNull(
+    await db
+      .select({ id: deals.id })
+      .from(deals)
+      .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  if (!owned) return []
+  const rows = await db
+    .select({
+      id: dealEvents.id,
+      type: dealEvents.type,
+      data: dealEvents.data,
+      created_at: dealEvents.createdAt,
+      actor_name: user.name,
+    })
+    .from(dealEvents)
+    .leftJoin(user, eq(dealEvents.actorUserId, user.id))
+    .where(eq(dealEvents.dealId, dealId))
+    .orderBy(desc(dealEvents.createdAt))
+  return rows.map((r) => ({
+    id: r.id,
+    type: r.type,
+    data: (r.data ?? {}) as Record<string, unknown>,
+    actor_name: r.actor_name ?? null,
+    created_at: r.created_at as unknown as string,
+  }))
 }
 
 /** Delete a deal the caller owns. */

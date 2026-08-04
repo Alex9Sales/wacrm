@@ -649,6 +649,32 @@ export const deals = pgTable("deals", {
 	check("deals_status_check", sql`status = ANY (ARRAY['open'::text, 'won'::text, 'lost'::text])`),
 ]);
 
+// Histórico do lead (timeline estilo RD): created / stage_changed / status_changed
+// (won|lost|reopened) / note. `data` carrega o payload por tipo (nomes das
+// etapas, texto da anotação, etc.). Migração 0049.
+export const dealEvents = pgTable("deal_events", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	dealId: uuid("deal_id").notNull(),
+	actorUserId: uuid("actor_user_id"),
+	type: text().notNull(),
+	data: jsonb().default(sql`'{}'::jsonb`).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_deal_events_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast()),
+	index("idx_deal_events_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+		columns: [table.accountId],
+		foreignColumns: [organization.id],
+		name: "deal_events_account_id_fkey",
+	}).onDelete("cascade"),
+	foreignKey({
+		columns: [table.dealId],
+		foreignColumns: [deals.id],
+		name: "deal_events_deal_id_fkey",
+	}).onDelete("cascade"),
+]);
+
 export const broadcasts = pgTable("broadcasts", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),

@@ -415,6 +415,8 @@ export interface Deal {
   contact?: Contact;
   stage?: PipelineStage;
   assignee?: Profile;
+  /** Parent pipeline's name — filled by getDeal for the detail page header. */
+  pipeline_name?: string;
 }
 
 export type BroadcastStatus =

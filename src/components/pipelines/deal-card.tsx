@@ -33,7 +33,6 @@ function initials(name?: string, fallback?: string) {
 export function DealCard({
   deal,
   stage,
-  onEdit,
   isOverlay,
   taskCount,
   onCreateTask,
@@ -48,10 +47,11 @@ export function DealCard({
       type="button"
       onClick={(e) => {
         // `onClick` still fires after a non-drag tap because the PointerSensor
-        // requires 5px movement before it counts as a drag.
+        // requires 5px movement before it counts as a drag. Abre a página de
+        // detalhe do negócio (estilo RD), não mais o mini-diálogo.
         if (isOverlay) return;
         e.stopPropagation();
-        onEdit(deal);
+        window.location.href = `/pipelines/${deal.id}`;
       }}
       className={`group relative w-full cursor-pointer rounded-xl border border-border/50 bg-muted/70 pl-4 pr-3 py-3 text-left shadow-sm transition-all ${
         isOverlay
