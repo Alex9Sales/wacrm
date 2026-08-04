@@ -1073,6 +1073,12 @@ export const wahaProvider: WhatsAppProvider = {
     if (mimetype === 'application/octet-stream') {
       mimetype = sniffMimeFromBase64(data) || defaultMime;
     }
+    // Nota de voz (endpoint sendVoice) precisa ser Opus. O composer grava
+    // .ogg/opus e a IA (TTS) também, mas o mimetype pode chegar como
+    // "audio/ogg" (sem "codecs=opus") — normaliza p/ garantir a entrega do PTT.
+    if (kind === 'audio' && /^audio\/ogg/i.test(mimetype)) {
+      mimetype = 'audio/ogg; codecs=opus';
+    }
     let filename = rawName || 'arquivo';
     if (
       kind === 'document' &&
@@ -1102,6 +1108,14 @@ export const wahaProvider: WhatsAppProvider = {
     }
 
     const { ok, status, body } = await sendWithRetry(ch, endpoint, payload);
+    // Diagnóstico de nota de voz: o gows pode ACEITAR (200 + id) e mesmo assim
+    // o WhatsApp não entregar (fica preso em "sent"). Loga chatId/mime/resposta
+    // p/ rastrear. Só p/ áudio, pra não poluir.
+    if (kind === 'audio') {
+      console.log(
+        `[waha sendVoice] chatId=${chatId} mime="${mimetype}" file="${filename}" ok=${ok} status=${status} resp=${JSON.stringify(body).slice(0, 500)}`,
+      );
+    }
     if (!ok) {
       throw new Error(`waha sendMedia failed: ${wahaError(body, status)}`);
     }
