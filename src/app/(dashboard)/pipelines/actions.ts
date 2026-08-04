@@ -7,7 +7,7 @@
 // ============================================================
 
 import { and, asc, count, desc, eq, isNull, notInArray, or, sql } from 'drizzle-orm'
-import { db, contacts, conversations, dealAttachments, dealEvents, dealProducts, deals, member, pipelines, pipelineStages, user } from '@/db'
+import { db, contacts, conversations, dealAttachments, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, pipelines, pipelineStages, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
@@ -917,6 +917,144 @@ export async function removeDealAttachment(
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao remover arquivo' }
+  }
+}
+
+// ============================================================
+// Questionários (perguntas de qualificação) do negócio
+// ============================================================
+export interface DealQuestion {
+  id: string
+  question: string
+  answer: string | null
+}
+
+export async function listDealQuestions(dealId: string): Promise<DealQuestion[]> {
+  const ctx = await getCurrentAccount()
+  if (!(await assertDealInAccount(ctx, dealId))) return []
+  const rows = await db
+    .select({ id: dealQuestions.id, question: dealQuestions.question, answer: dealQuestions.answer })
+    .from(dealQuestions)
+    .where(eq(dealQuestions.dealId, dealId))
+    .orderBy(asc(dealQuestions.createdAt))
+  return rows.map((r) => ({ id: r.id, question: r.question, answer: r.answer ?? null }))
+}
+
+export async function addDealQuestion(
+  dealId: string,
+  input: { question: string; answer?: string | null },
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    if (!(await assertDealInAccount(ctx, dealId))) return { error: 'Negócio não encontrado.' }
+    const question = input.question.trim()
+    if (!question) return { error: 'Informe a pergunta.' }
+    await db.insert(dealQuestions).values({
+      accountId: ctx.accountId,
+      dealId,
+      question,
+      answer: input.answer?.trim() || null,
+    })
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao adicionar pergunta' }
+  }
+}
+
+export async function updateDealQuestionAnswer(
+  id: string,
+  answer: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .update(dealQuestions)
+      .set({ answer: answer.trim() || null })
+      .where(and(eq(dealQuestions.id, id), eq(dealQuestions.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao salvar resposta' }
+  }
+}
+
+export async function removeDealQuestion(id: string): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .delete(dealQuestions)
+      .where(and(eq(dealQuestions.id, id), eq(dealQuestions.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao remover pergunta' }
+  }
+}
+
+// ============================================================
+// E-mails registrados/anexados ao negócio (registro, não envio)
+// ============================================================
+export interface DealEmail {
+  id: string
+  subject: string
+  body: string | null
+  actor_name: string | null
+  created_at: string
+}
+
+export async function listDealEmails(dealId: string): Promise<DealEmail[]> {
+  const ctx = await getCurrentAccount()
+  if (!(await assertDealInAccount(ctx, dealId))) return []
+  const rows = await db
+    .select({
+      id: dealEmails.id,
+      subject: dealEmails.subject,
+      body: dealEmails.body,
+      created_at: dealEmails.createdAt,
+      actor_name: user.name,
+    })
+    .from(dealEmails)
+    .leftJoin(user, eq(dealEmails.actorUserId, user.id))
+    .where(eq(dealEmails.dealId, dealId))
+    .orderBy(desc(dealEmails.createdAt))
+  return rows.map((r) => ({
+    id: r.id,
+    subject: r.subject,
+    body: r.body ?? null,
+    actor_name: r.actor_name ?? null,
+    created_at: r.created_at as unknown as string,
+  }))
+}
+
+export async function addDealEmail(
+  dealId: string,
+  input: { subject: string; body?: string | null },
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    if (!(await assertDealInAccount(ctx, dealId))) return { error: 'Negócio não encontrado.' }
+    const subject = input.subject.trim()
+    if (!subject) return { error: 'Informe o assunto.' }
+    await db.insert(dealEmails).values({
+      accountId: ctx.accountId,
+      dealId,
+      actorUserId: ctx.userId,
+      subject,
+      body: input.body?.trim() || null,
+    })
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao registrar e-mail' }
+  }
+}
+
+export async function removeDealEmail(id: string): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .delete(dealEmails)
+      .where(and(eq(dealEmails.id, id), eq(dealEmails.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao remover e-mail' }
   }
 }
 

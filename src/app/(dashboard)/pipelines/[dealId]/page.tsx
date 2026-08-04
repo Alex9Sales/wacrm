@@ -28,6 +28,10 @@ import {
   Trash2,
   Download,
   Upload,
+  ClipboardList,
+  FileText,
+  Mail,
+  Printer,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -59,10 +63,38 @@ import {
   listDealAttachments,
   addDealAttachment,
   removeDealAttachment,
+  listDealQuestions,
+  addDealQuestion,
+  updateDealQuestionAnswer,
+  removeDealQuestion,
+  listDealEmails,
+  addDealEmail,
+  removeDealEmail,
   type DealProduct,
   type DealAttachment,
+  type DealQuestion,
+  type DealEmail,
 } from "@/app/(dashboard)/pipelines/actions";
 import type { Deal, PipelineStage } from "@/types";
+
+type DealTab =
+  | "historico"
+  | "tarefas"
+  | "produtos"
+  | "arquivos"
+  | "questionarios"
+  | "propostas"
+  | "email";
+
+const DEAL_TABS: { key: DealTab; label: string; icon: typeof Package }[] = [
+  { key: "historico", label: "Histórico", icon: Clock },
+  { key: "tarefas", label: "Tarefas", icon: CheckCircle2 },
+  { key: "produtos", label: "Produtos", icon: Package },
+  { key: "arquivos", label: "Arquivos", icon: Paperclip },
+  { key: "questionarios", label: "Questionários", icon: ClipboardList },
+  { key: "propostas", label: "Propostas", icon: FileText },
+  { key: "email", label: "E-mail", icon: Mail },
+];
 
 function fmtDateTime(iso?: string | null): string {
   if (!iso) return "—";
@@ -173,11 +205,17 @@ export default function DealDetailPage() {
   const [tasks, setTasks] = useState<TaskLite[]>([]);
   const [products, setProducts] = useState<DealProduct[]>([]);
   const [attachments, setAttachments] = useState<DealAttachment[]>([]);
+  const [questions, setQuestions] = useState<DealQuestion[]>([]);
+  const [emails, setEmails] = useState<DealEmail[]>([]);
+  const [tab, setTab] = useState<DealTab>("historico");
   const [prodName, setProdName] = useState("");
   const [prodQty, setProdQty] = useState("1");
   const [prodPrice, setProdPrice] = useState("");
   const [addingProduct, setAddingProduct] = useState(false);
   const [uploading, setUploading] = useState(false);
+  const [newQuestion, setNewQuestion] = useState("");
+  const [emailSubject, setEmailSubject] = useState("");
+  const [emailBody, setEmailBody] = useState("");
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -197,19 +235,68 @@ export default function DealDetailPage() {
       return;
     }
     setDeal(d);
-    const [st, ev, tk, pr, at] = await Promise.all([
+    const [st, ev, tk, pr, at, qs, em] = await Promise.all([
       listStages(d.pipeline_id).catch(() => [] as PipelineStage[]),
       listDealEvents(dealId).catch(() => [] as DealEvent[]),
       listTasksByDeal(dealId).catch(() => [] as TaskLite[]),
       listDealProducts(dealId).catch(() => [] as DealProduct[]),
       listDealAttachments(dealId).catch(() => [] as DealAttachment[]),
+      listDealQuestions(dealId).catch(() => [] as DealQuestion[]),
+      listDealEmails(dealId).catch(() => [] as DealEmail[]),
     ]);
     setStages(st);
     setEvents(ev);
     setTasks(tk);
     setProducts(pr);
     setAttachments(at);
+    setQuestions(qs);
+    setEmails(em);
   }, [dealId]);
+
+  const submitQuestion = useCallback(async () => {
+    if (!deal) return;
+    const q = newQuestion.trim();
+    if (!q) return;
+    const { error } = await addDealQuestion(deal.id, { question: q });
+    if (error) toast.error(error);
+    else {
+      setNewQuestion("");
+      setQuestions(await listDealQuestions(deal.id).catch(() => questions));
+    }
+  }, [deal, newQuestion, questions]);
+
+  const saveAnswer = useCallback(
+    async (id: string, answer: string) => {
+      const { error } = await updateDealQuestionAnswer(id, answer);
+      if (error) toast.error(error);
+    },
+    [],
+  );
+
+  const deleteQuestion = useCallback(async (id: string) => {
+    const { error } = await removeDealQuestion(id);
+    if (error) toast.error(error);
+    else setQuestions((prev) => prev.filter((q) => q.id !== id));
+  }, []);
+
+  const submitEmail = useCallback(async () => {
+    if (!deal) return;
+    const subject = emailSubject.trim();
+    if (!subject) return;
+    const { error } = await addDealEmail(deal.id, { subject, body: emailBody });
+    if (error) toast.error(error);
+    else {
+      setEmailSubject("");
+      setEmailBody("");
+      setEmails(await listDealEmails(deal.id).catch(() => emails));
+    }
+  }, [deal, emailSubject, emailBody, emails]);
+
+  const deleteEmail = useCallback(async (id: string) => {
+    const { error } = await removeDealEmail(id);
+    if (error) toast.error(error);
+    else setEmails((prev) => prev.filter((e) => e.id !== id));
+  }, []);
 
   const submitProduct = useCallback(async () => {
     if (!deal || addingProduct) return;
@@ -532,6 +619,32 @@ export default function DealDetailPage() {
 
         {/* Histórico */}
         <section className="flex min-w-0 flex-1 flex-col gap-4">
+          {/* Abas estilo RD */}
+          <div className="-mx-1 flex flex-wrap gap-1 border-b border-border px-1 pb-2">
+            {DEAL_TABS.map((t) => {
+              const Icon = t.icon;
+              const active = tab === t.key;
+              return (
+                <button
+                  key={t.key}
+                  type="button"
+                  onClick={() => setTab(t.key)}
+                  className={cn(
+                    "inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-xs font-medium transition-colors",
+                    active
+                      ? "bg-primary text-primary-foreground"
+                      : "text-muted-foreground hover:bg-muted",
+                  )}
+                >
+                  <Icon className="h-3.5 w-3.5" />
+                  {t.label}
+                </button>
+              );
+            })}
+          </div>
+
+          {tab === "historico" && (
+            <>
           {/* Nova anotação */}
           <div className="rounded-xl border border-border bg-card p-3">
             <textarea
@@ -558,7 +671,11 @@ export default function DealDetailPage() {
             </div>
           </div>
 
-          {/* Tarefas do lead */}
+            </>
+          )}
+
+          {tab === "tarefas" && (
+          /* Tarefas do lead */
           <div className="rounded-xl border border-border bg-card">
             <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
               <h2 className="text-sm font-semibold text-foreground">Tarefas</h2>
@@ -628,7 +745,10 @@ export default function DealDetailPage() {
             )}
           </div>
 
-          {/* Produtos */}
+          )}
+
+          {tab === "produtos" && (
+          /* Produtos */
           <div className="rounded-xl border border-border bg-card">
             <div className="flex items-center gap-2 border-b border-border px-4 py-3">
               <Package className="h-4 w-4 text-primary" />
@@ -708,7 +828,10 @@ export default function DealDetailPage() {
             )}
           </div>
 
-          {/* Arquivos / anexos */}
+          )}
+
+          {tab === "arquivos" && (
+          /* Arquivos / anexos */
           <div className="rounded-xl border border-border bg-card">
             <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
               <div className="flex items-center gap-2">
@@ -778,7 +901,10 @@ export default function DealDetailPage() {
             )}
           </div>
 
-          {/* Timeline */}
+          )}
+
+          {tab === "historico" && (
+          /* Timeline */
           <div className="rounded-xl border border-border bg-card">
             <h2 className="border-b border-border px-4 py-3 text-sm font-semibold text-foreground">
               Histórico
@@ -819,6 +945,207 @@ export default function DealDetailPage() {
               </ol>
             )}
           </div>
+          )}
+
+          {tab === "questionarios" && (
+            <div className="rounded-xl border border-border bg-card">
+              <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+                <ClipboardList className="h-4 w-4 text-primary" />
+                <h2 className="text-sm font-semibold text-foreground">
+                  Questionários
+                </h2>
+              </div>
+              {questions.length === 0 ? (
+                <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+                  Nenhuma pergunta de qualificação ainda.
+                </p>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {questions.map((q) => (
+                    <li key={q.id} className="px-4 py-3">
+                      <div className="flex items-start gap-2">
+                        <p className="min-w-0 flex-1 text-sm font-medium text-foreground">
+                          {q.question}
+                        </p>
+                        <button
+                          type="button"
+                          onClick={() => void deleteQuestion(q.id)}
+                          className="shrink-0 text-muted-foreground transition-colors hover:text-red-500"
+                          aria-label="Remover pergunta"
+                        >
+                          <Trash2 className="h-4 w-4" />
+                        </button>
+                      </div>
+                      <textarea
+                        defaultValue={q.answer ?? ""}
+                        onBlur={(e) => void saveAnswer(q.id, e.target.value)}
+                        placeholder="Resposta…"
+                        rows={1}
+                        className="mt-1.5 w-full resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                      />
+                    </li>
+                  ))}
+                </ul>
+              )}
+              <div className="flex items-end gap-2 border-t border-border px-4 py-3">
+                <input
+                  value={newQuestion}
+                  onChange={(e) => setNewQuestion(e.target.value)}
+                  placeholder="Nova pergunta (ex.: Qual o orçamento?)"
+                  className="min-w-0 flex-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter") void submitQuestion();
+                  }}
+                />
+                <Button
+                  size="sm"
+                  disabled={!newQuestion.trim()}
+                  onClick={() => void submitQuestion()}
+                >
+                  <Plus className="mr-1 h-4 w-4" /> Adicionar
+                </Button>
+              </div>
+            </div>
+          )}
+
+          {tab === "propostas" && (
+            <div className="rounded-xl border border-border bg-card">
+              <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-4 w-4 text-primary" />
+                  <h2 className="text-sm font-semibold text-foreground">Proposta</h2>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => window.print()}
+                  disabled={products.length === 0}
+                >
+                  <Printer className="mr-1.5 h-4 w-4" /> Imprimir / PDF
+                </Button>
+              </div>
+              {products.length === 0 ? (
+                <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+                  Adicione itens na aba &quot;Produtos&quot; para gerar a proposta.
+                </p>
+              ) : (
+                <div className="p-4">
+                  <p className="text-base font-semibold text-foreground">
+                    Proposta — {deal.title}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Cliente: {deal.contact?.name || deal.contact?.phone || "—"}
+                  </p>
+                  <div className="mt-3 overflow-x-auto">
+                    <table className="w-full text-sm">
+                      <thead>
+                        <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                          <th className="py-1.5 pr-2 font-medium">Produto</th>
+                          <th className="py-1.5 px-2 text-right font-medium">Qtd</th>
+                          <th className="py-1.5 px-2 text-right font-medium">
+                            Preço un.
+                          </th>
+                          <th className="py-1.5 pl-2 text-right font-medium">
+                            Subtotal
+                          </th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {products.map((p) => (
+                          <tr key={p.id} className="border-b border-border/60">
+                            <td className="py-1.5 pr-2 text-foreground">{p.name}</td>
+                            <td className="py-1.5 px-2 text-right text-muted-foreground">
+                              {p.quantity}
+                            </td>
+                            <td className="py-1.5 px-2 text-right text-muted-foreground">
+                              {fmtCurrency(p.unit_price, deal.currency)}
+                            </td>
+                            <td className="py-1.5 pl-2 text-right text-foreground">
+                              {fmtCurrency(p.quantity * p.unit_price, deal.currency)}
+                            </td>
+                          </tr>
+                        ))}
+                      </tbody>
+                    </table>
+                  </div>
+                  <div className="mt-3 flex items-center justify-between border-t border-border pt-2">
+                    <span className="text-sm font-medium text-foreground">Total</span>
+                    <span className="text-base font-bold text-primary">
+                      {fmtCurrency(productsTotal, deal.currency)}
+                    </span>
+                  </div>
+                </div>
+              )}
+            </div>
+          )}
+
+          {tab === "email" && (
+            <div className="rounded-xl border border-border bg-card">
+              <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+                <Mail className="h-4 w-4 text-primary" />
+                <h2 className="text-sm font-semibold text-foreground">E-mails</h2>
+              </div>
+              <div className="space-y-2 border-b border-border px-4 py-3">
+                <input
+                  value={emailSubject}
+                  onChange={(e) => setEmailSubject(e.target.value)}
+                  placeholder="Assunto do e-mail"
+                  className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                />
+                <textarea
+                  value={emailBody}
+                  onChange={(e) => setEmailBody(e.target.value)}
+                  placeholder="Cole ou anote o conteúdo do e-mail trocado com o lead…"
+                  rows={3}
+                  className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                />
+                <div className="flex justify-end">
+                  <Button
+                    size="sm"
+                    disabled={!emailSubject.trim()}
+                    onClick={() => void submitEmail()}
+                  >
+                    <Plus className="mr-1 h-4 w-4" /> Registrar e-mail
+                  </Button>
+                </div>
+              </div>
+              {emails.length === 0 ? (
+                <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+                  Nenhum e-mail registrado. Registre aqui os e-mails trocados com
+                  o lead.
+                </p>
+              ) : (
+                <ul className="divide-y divide-border">
+                  {emails.map((em) => (
+                    <li key={em.id} className="flex items-start gap-2 px-4 py-3">
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-medium text-foreground">
+                          {em.subject}
+                        </p>
+                        {em.body && (
+                          <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-muted-foreground">
+                            {em.body}
+                          </p>
+                        )}
+                        <p className="mt-1 text-[11px] text-muted-foreground">
+                          {em.actor_name ? `${em.actor_name} · ` : ""}
+                          {fmtDateTime(em.created_at)}
+                        </p>
+                      </div>
+                      <button
+                        type="button"
+                        onClick={() => void deleteEmail(em.id)}
+                        className="shrink-0 text-muted-foreground transition-colors hover:text-red-500"
+                        aria-label="Remover e-mail"
+                      >
+                        <Trash2 className="h-4 w-4" />
+                      </button>
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </div>
+          )}
         </section>
       </div>
 

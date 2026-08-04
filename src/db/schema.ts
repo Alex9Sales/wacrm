@@ -711,6 +711,35 @@ export const dealAttachments = pgTable("deal_attachments", {
 	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "deal_attachments_deal_id_fkey" }).onDelete("cascade"),
 ]);
 
+// Questionários (perguntas de qualificação) do negócio. Migração 0052.
+export const dealQuestions = pgTable("deal_questions", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	dealId: uuid("deal_id").notNull(),
+	question: text().notNull(),
+	answer: text(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_deal_questions_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "deal_questions_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "deal_questions_deal_id_fkey" }).onDelete("cascade"),
+]);
+
+// E-mails registrados/anexados ao negócio (registro, não envio). Migração 0052.
+export const dealEmails = pgTable("deal_emails", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	dealId: uuid("deal_id").notNull(),
+	subject: text().notNull(),
+	body: text(),
+	actorUserId: uuid("actor_user_id"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_deal_emails_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "deal_emails_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "deal_emails_deal_id_fkey" }).onDelete("cascade"),
+]);
+
 export const broadcasts = pgTable("broadcasts", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),
