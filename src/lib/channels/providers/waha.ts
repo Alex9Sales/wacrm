@@ -921,6 +921,49 @@ function kindOfMime(mimetype: string): string {
   return 'document';
 }
 
+/** Extensão ↔ MIME comuns, para consertar documentos que chegam sem mimetype
+ *  ou sem extensão (senão o WhatsApp manda como octet-stream e o celular não
+ *  abre — ex.: PDF virando "arquivo"/"dados"). */
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  txt: 'text/plain',
+  csv: 'text/csv',
+  zip: 'application/zip',
+  rar: 'application/vnd.rar',
+  json: 'application/json',
+  xml: 'application/xml',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  png: 'image/png',
+  webp: 'image/webp',
+  gif: 'image/gif',
+  mp4: 'video/mp4',
+  mp3: 'audio/mpeg',
+  ogg: 'audio/ogg',
+};
+
+/** MIME a partir da extensão do nome do arquivo (ou null). */
+function mimeFromFilename(name: string): string | null {
+  const m = /\.([A-Za-z0-9]{1,8})$/.exec((name || '').trim());
+  if (!m) return null;
+  return MIME_BY_EXT[m[1].toLowerCase()] ?? null;
+}
+
+/** Extensão (com ponto) a partir do MIME (ou null). */
+function extFromMime(mime: string): string | null {
+  const base = (mime || '').split(';')[0].trim().toLowerCase();
+  for (const [ext, mt] of Object.entries(MIME_BY_EXT)) {
+    if (mt === base) return `.${ext}`;
+  }
+  return null;
+}
+
 // ------------------------------------------------------------
 // Provider implementation
 // ------------------------------------------------------------
@@ -1003,6 +1046,27 @@ export const wahaProvider: WhatsAppProvider = {
       );
     }
 
+    // Documento precisa de mimetype REAL + extensão no nome, senão o WhatsApp
+    // manda como octet-stream ("dados") e o celular não abre. Deriva o que
+    // faltar (mimetype pelo nome, extensão pelo mimetype).
+    const rawName = (media.filename || '').trim();
+    let mimetype =
+      media.mimetype && media.mimetype !== 'application/octet-stream'
+        ? media.mimetype
+        : mimeFromFilename(rawName) || defaultMime;
+    let filename = rawName || 'arquivo';
+    if (
+      kind === 'document' &&
+      !/\.[A-Za-z0-9]{1,8}$/.test(filename) // sem extensão?
+    ) {
+      const ext = extFromMime(mimetype);
+      if (ext) filename = `${filename}${ext}`;
+    }
+    // Se ainda não temos mimetype útil mas o nome tem extensão, tenta pelo nome.
+    if (mimetype === 'application/octet-stream') {
+      mimetype = mimeFromFilename(filename) || mimetype;
+    }
+
     const payload: {
       session: string;
       chatId: string;
@@ -1012,8 +1076,8 @@ export const wahaProvider: WhatsAppProvider = {
       session: sessionOf(ch),
       chatId,
       file: {
-        mimetype: media.mimetype || defaultMime,
-        filename: media.filename || 'arquivo',
+        mimetype,
+        filename,
         data,
       },
     };

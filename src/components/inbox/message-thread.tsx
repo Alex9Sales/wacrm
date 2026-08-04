@@ -744,6 +744,7 @@ export function MessageThread({
             media_url: payload.mediaUrl,
             content_text: contentText,
             filename: payload.filename,
+            mimetype: payload.mimetype,
             reply_to_message_id: payload.replyToId,
           }),
         });

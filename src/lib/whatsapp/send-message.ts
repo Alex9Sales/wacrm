@@ -111,6 +111,9 @@ export interface SendMessageParams {
   contentText?: string | null;
   mediaUrl?: string | null;
   filename?: string | null;
+  /** Original MIME type (ex.: application/pdf). Sem isso o documento sai como
+   *  octet-stream e o celular não abre. */
+  mimetype?: string | null;
   templateName?: string | null;
   templateLanguage?: string | null;
   /** Legacy positional body params (only used if messageParams.body unset). */
@@ -212,6 +215,7 @@ export async function sendMessageToConversation(
     contentText,
     mediaUrl,
     filename,
+    mimetype,
     templateName,
     templateLanguage,
     templateParams,
@@ -502,6 +506,7 @@ export async function sendMessageToConversation(
         url: mediaUrl!,
         caption: contentText || undefined,
         filename: filename || undefined,
+        mimetype: mimetype || undefined,
       };
       const result = await provider.sendMedia(channel, phone, media);
       return result.externalMessageId;

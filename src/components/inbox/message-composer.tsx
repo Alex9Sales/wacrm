@@ -76,6 +76,9 @@ export interface SendMediaPayload {
   caption?: string;
   /** Original file name — surfaced to the recipient for documents. */
   filename?: string;
+  /** Original MIME type (ex.: application/pdf) — sem isso o documento vai como
+   *  octet-stream e o celular não abre. */
+  mimetype?: string;
   replyToId?: string;
 }
 
@@ -114,6 +117,8 @@ interface MediaDraft {
   /** Storage path — used to GC the object if the draft is discarded. */
   path: string;
   filename: string;
+  /** Original MIME type (ex.: application/pdf). */
+  mimetype: string;
   caption: string;
 }
 
@@ -514,7 +519,7 @@ export function MessageComposer({
         const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
         // Replacing an existing draft? GC the previous object first.
         removeStaged(draftRef.current?.path);
-        setDraft({ kind, mediaUrl: publicUrl, path, filename: file.name, caption: "" });
+        setDraft({ kind, mediaUrl: publicUrl, path, filename: file.name, mimetype: file.type, caption: "" });
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Falha no upload.");
       } finally {
@@ -633,7 +638,7 @@ export function MessageComposer({
       try {
         const { publicUrl, path } = await uploadAccountMedia(CHAT_MEDIA_BUCKET, file);
         removeStaged(draftRef.current?.path);
-        setDraft({ kind: "audio", mediaUrl: publicUrl, path, filename: file.name, caption: "" });
+        setDraft({ kind: "audio", mediaUrl: publicUrl, path, filename: file.name, mimetype: file.type, caption: "" });
       } catch (err) {
         toast.error(err instanceof Error ? err.message : "Falha no upload.");
       } finally {
@@ -717,6 +722,7 @@ export function MessageComposer({
       caption:
         draft.kind === "audio" ? undefined : draft.caption.trim() || undefined,
       filename: draft.kind === "document" ? draft.filename : undefined,
+      mimetype: draft.mimetype || undefined,
       replyToId: replyTo?.id,
     });
     // The object is now owned by the sent message — clear without GC.
