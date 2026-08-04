@@ -774,6 +774,28 @@ export async function listDealProducts(dealId: string): Promise<DealProduct[]> {
   }))
 }
 
+/** Recompute a deal's value from its products (nome × qtd × preço). Keeps the
+ *  deal value in sync with the products total. Only overwrites when there IS at
+ *  least one product — removing the last one preserves the manual value. */
+async function syncDealValueToProducts(
+  accountId: string,
+  dealId: string,
+): Promise<void> {
+  const rows = await db
+    .select({ quantity: dealProducts.quantity, unit_price: dealProducts.unitPrice })
+    .from(dealProducts)
+    .where(eq(dealProducts.dealId, dealId))
+  if (rows.length === 0) return
+  const total = rows.reduce(
+    (sum, r) => sum + Number(r.quantity) * Number(r.unit_price),
+    0,
+  )
+  await db
+    .update(deals)
+    .set({ value: String(total) })
+    .where(and(eq(deals.id, dealId), eq(deals.accountId, accountId)))
+}
+
 export async function addDealProduct(
   dealId: string,
   input: { name: string; quantity: number; unit_price: number },
@@ -791,6 +813,7 @@ export async function addDealProduct(
       quantity: String(input.quantity > 0 ? input.quantity : 1),
       unitPrice: String(input.unit_price >= 0 ? input.unit_price : 0),
     })
+    await syncDealValueToProducts(ctx.accountId, dealId)
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao adicionar produto' }
@@ -802,9 +825,18 @@ export async function removeDealProduct(
 ): Promise<{ error: string | null }> {
   try {
     const ctx = await getCurrentAccount()
+    // Grab the deal id first so we can resync its value after removal.
+    const prod = firstOrNull(
+      await db
+        .select({ dealId: dealProducts.dealId })
+        .from(dealProducts)
+        .where(and(eq(dealProducts.id, id), eq(dealProducts.accountId, ctx.accountId)))
+        .limit(1),
+    )
     await db
       .delete(dealProducts)
       .where(and(eq(dealProducts.id, id), eq(dealProducts.accountId, ctx.accountId)))
+    if (prod) await syncDealValueToProducts(ctx.accountId, prod.dealId)
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao remover produto' }

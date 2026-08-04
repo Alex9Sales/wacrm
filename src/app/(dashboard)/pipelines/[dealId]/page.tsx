@@ -226,19 +226,20 @@ export default function DealDetailPage() {
       setProdName("");
       setProdQty("1");
       setProdPrice("");
-      setProducts(await listDealProducts(deal.id).catch(() => products));
+      // reload() refetches the deal too, so the synced VALOR updates.
+      await reload();
     }
     setAddingProduct(false);
-  }, [deal, addingProduct, prodName, prodQty, prodPrice, products]);
+  }, [deal, addingProduct, prodName, prodQty, prodPrice, reload]);
 
   const deleteProduct = useCallback(
     async (id: string) => {
       if (!deal) return;
       const { error } = await removeDealProduct(id);
       if (error) toast.error(error);
-      else setProducts((prev) => prev.filter((p) => p.id !== id));
+      else await reload();
     },
-    [deal],
+    [deal, reload],
   );
 
   const uploadFile = useCallback(
@@ -416,12 +417,12 @@ export default function DealDetailPage() {
         >
           <ArrowLeft className="h-4 w-4" />
         </button>
-        <div className="min-w-0 flex-1">
-          <h1 className="truncate text-lg font-semibold text-foreground">
+        <div className="min-w-0 flex-1 basis-full sm:basis-0">
+          <h1 className="line-clamp-2 text-base font-semibold leading-snug text-foreground sm:text-lg">
             {deal.title}
           </h1>
-          <div className="mt-0.5 flex items-center gap-2 text-xs text-muted-foreground">
-            <span>{deal.pipeline_name ?? "Funil"}</span>
+          <div className="mt-0.5 flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+            <span className="truncate">{deal.pipeline_name ?? "Funil"}</span>
             <span
               className={cn(
                 "rounded-full px-2 py-0.5 text-[11px] font-medium",
