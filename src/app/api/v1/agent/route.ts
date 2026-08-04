@@ -144,6 +144,8 @@ export async function PUT(request: Request) {
           autoReplyChannelIds: [],
           autoReplyMaxPerConversation: maxPer,
           embeddingsApiKey: null,
+          signatureName: null,
+          signatureEnabled: false,
         });
       } catch (err) {
         if (err instanceof AiError) return fail('bad_request', err.message, 400);

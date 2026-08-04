@@ -29,6 +29,8 @@ export async function loadAiConfig(
         autoReplyChannelIds: aiConfigs.autoReplyChannelIds,
         autoReplyMaxPerConversation: aiConfigs.autoReplyMaxPerConversation,
         embeddingsApiKey: aiConfigs.embeddingsApiKey,
+        signatureName: aiConfigs.signatureName,
+        signatureEnabled: aiConfigs.signatureEnabled,
       })
       .from(aiConfigs)
       .where(eq(aiConfigs.accountId, accountId))
@@ -72,6 +74,8 @@ export async function loadAiConfig(
     autoReplyChannelIds: row.autoReplyChannelIds ?? [],
     autoReplyMaxPerConversation: row.autoReplyMaxPerConversation,
     embeddingsApiKey,
+    signatureName: row.signatureName,
+    signatureEnabled: row.signatureEnabled,
   }
 }
 

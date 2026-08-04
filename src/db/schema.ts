@@ -1192,6 +1192,9 @@ export const aiConfigs = pgTable("ai_configs", {
 	// Canais onde a IA responde (multi). Vazio = todos. Migração 0054.
 	autoReplyChannelIds: uuid("auto_reply_channel_ids").array().default(sql`'{}'::uuid[]`).notNull(),
 	autoReplyMaxPerConversation: integer("auto_reply_max_per_conversation").default(3).notNull(),
+	// Assinatura da IA: nome do atendente/agente + se assina as mensagens. Migração 0055.
+	signatureName: text("signature_name"),
+	signatureEnabled: boolean("signature_enabled").default(false).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

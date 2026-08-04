@@ -72,6 +72,8 @@ export function AiConfig() {
   const [isActive, setIsActive] = useState(false);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(false);
   const [maxPerConversation, setMaxPerConversation] = useState(3);
+  const [signatureName, setSignatureName] = useState('');
+  const [signatureEnabled, setSignatureEnabled] = useState(false);
   // Canais onde a IA responde (multi). Vazio = todos.
   const [channels, setChannels] = useState<
     { id: string; name: string; provider: string }[]
@@ -113,6 +115,8 @@ export function AiConfig() {
             : [],
         );
         setMaxPerConversation(data.auto_reply_max_per_conversation ?? 3);
+        setSignatureName(data.signature_name ?? '');
+        setSignatureEnabled(Boolean(data.signature_enabled));
         setHasStoredKey(Boolean(data.has_key));
         setApiKey(data.has_key ? MASKED_KEY : '');
         setKeyEdited(false);
@@ -226,6 +230,8 @@ export function AiConfig() {
     auto_reply_enabled: autoReplyEnabled,
     auto_reply_channel_ids: channelIds,
     auto_reply_max_per_conversation: maxPerConversation,
+    signature_name: signatureName.trim() || null,
+    signature_enabled: signatureEnabled && signatureName.trim().length > 0,
   });
 
   const handleTest = async () => {
@@ -698,6 +704,45 @@ export function AiConfig() {
                 disabled={disabled || !autoReplyEnabled}
                 className="w-20"
               />
+            </div>
+
+            {/* Assinatura do atendente — a IA assina as mensagens com o nome
+                do atendente que ela representa (padrão *Nome* do WhatsApp). */}
+            <div className="rounded-md border border-border p-3">
+              <div className="flex items-center justify-between gap-4">
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    Assinar mensagens com o nome do atendente
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Quando ligado, a IA assina a primeira mensagem com o nome
+                    abaixo (ex.: <strong>*Danyela*</strong>), como um atendente.
+                  </p>
+                </div>
+                <Switch
+                  checked={signatureEnabled}
+                  onCheckedChange={setSignatureEnabled}
+                  disabled={disabled || !autoReplyEnabled}
+                />
+              </div>
+              {signatureEnabled && (
+                <div className="mt-3">
+                  <Label htmlFor="ai-signature">Nome do atendente</Label>
+                  <Input
+                    id="ai-signature"
+                    value={signatureName}
+                    onChange={(e) => setSignatureName(e.target.value.slice(0, 60))}
+                    placeholder="Ex.: Danyela"
+                    disabled={disabled || !autoReplyEnabled}
+                    className="mt-1 max-w-xs"
+                  />
+                  {signatureName.trim().length === 0 && (
+                    <p className="mt-1 text-xs text-amber-600">
+                      Informe um nome para a assinatura ficar ativa.
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </CardContent>
         </Card>

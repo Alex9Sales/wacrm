@@ -40,6 +40,8 @@ export async function GET() {
           auto_reply_enabled: aiConfigs.autoReplyEnabled,
           auto_reply_channel_ids: aiConfigs.autoReplyChannelIds,
           auto_reply_max_per_conversation: aiConfigs.autoReplyMaxPerConversation,
+          signature_name: aiConfigs.signatureName,
+          signature_enabled: aiConfigs.signatureEnabled,
           api_key: aiConfigs.apiKey,
           embeddings_api_key: aiConfigs.embeddingsApiKey,
         })
@@ -106,6 +108,13 @@ export async function POST(request: Request) {
     if (!Number.isFinite(maxPer)) maxPer = 3
     maxPer = Math.min(20, Math.max(1, Math.floor(maxPer)))
 
+    // Assinatura: nome do atendente que a IA representa + se assina as msgs.
+    const signatureName =
+      typeof body.signature_name === 'string' && body.signature_name.trim()
+        ? body.signature_name.trim().slice(0, 60)
+        : null
+    const signatureEnabled = body.signature_enabled === true && !!signatureName
+
     const rawKey = typeof body.api_key === 'string' ? body.api_key.trim() : ''
 
     // Embeddings key (optional, for semantic KB search): a non-empty
@@ -166,6 +175,8 @@ export async function POST(request: Request) {
           autoReplyChannelIds: [],
           autoReplyMaxPerConversation: maxPer,
           embeddingsApiKey: null,
+          signatureName: null,
+          signatureEnabled: false,
         })
       } catch (err) {
         if (err instanceof AiError) {
@@ -205,6 +216,8 @@ export async function POST(request: Request) {
       autoReplyEnabled: boolean
       autoReplyChannelIds: string[]
       autoReplyMaxPerConversation: number
+      signatureName: string | null
+      signatureEnabled: boolean
       embeddingsApiKey?: string | null
     } = {
       provider,
@@ -214,6 +227,8 @@ export async function POST(request: Request) {
       autoReplyEnabled,
       autoReplyChannelIds,
       autoReplyMaxPerConversation: maxPer,
+      signatureName,
+      signatureEnabled,
     }
     if (rawEmbeddingsKey) {
       shared.embeddingsApiKey = encrypt(rawEmbeddingsKey)

@@ -101,6 +101,8 @@ function aiConfig(overrides: Partial<AiConfig> = {}): AiConfig {
     autoReplyChannelIds: [],
     autoReplyMaxPerConversation: 3,
     embeddingsApiKey: null,
+    signatureName: null,
+    signatureEnabled: false,
     ...overrides,
   }
 }

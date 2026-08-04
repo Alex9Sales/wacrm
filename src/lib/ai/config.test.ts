@@ -40,6 +40,8 @@ const ROW = {
   autoReplyChannelIds: [],
   autoReplyMaxPerConversation: 3,
   embeddingsApiKey: null,
+  signatureName: null,
+  signatureEnabled: false,
 }
 
 describe('loadAiConfig requireActive', () => {

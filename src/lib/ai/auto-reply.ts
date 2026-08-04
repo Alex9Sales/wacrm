@@ -176,6 +176,14 @@ export async function dispatchInboundToAiReply(
         ? config.apiKey
         : config.embeddingsApiKey || null
 
+    // Assinatura do atendente: quando ligada, a 1ª mensagem de TEXTO vai
+    // prefixada com "*Nome*" (padrão WhatsApp). Áudio não leva assinatura.
+    const signature =
+      config.signatureEnabled && config.signatureName
+        ? config.signatureName.trim()
+        : null
+    let signed = false
+
     const parts = splitIntoMessages(text)
     for (const rawPart of parts) {
       const wantsAudio = rawPart.trimStart().startsWith(AUDIO_MARKER)
@@ -211,12 +219,14 @@ export async function dispatchInboundToAiReply(
         }
       }
 
+      const textToSend = signature && !signed ? `*${signature}*\n${clean}` : clean
+      signed = true
       await engineSendText({
         accountId,
         userId: configOwnerUserId,
         conversationId,
         contactId,
-        text: clean,
+        text: textToSend,
       })
     }
   } catch (err) {

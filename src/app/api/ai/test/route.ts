@@ -78,6 +78,8 @@ export async function POST(request: Request) {
         autoReplyChannelIds: [],
         autoReplyMaxPerConversation: 3,
         embeddingsApiKey: null,
+        signatureName: null,
+        signatureEnabled: false,
       })
     } catch (err) {
       if (err instanceof AiError) {

@@ -27,6 +27,10 @@ export interface AiConfig {
    *  knowledge base is embedded and semantic retrieval turns on; when
    *  null, retrieval falls back to lexical full-text search. */
   embeddingsApiKey: string | null
+  /** Nome do atendente/agente que a IA representa (ex.: "Danyela"). */
+  signatureName: string | null
+  /** Quando true, as mensagens da IA vão assinadas com `signatureName`. */
+  signatureEnabled: boolean
 }
 
 /** A single conversation turn in the shape both providers accept. */
