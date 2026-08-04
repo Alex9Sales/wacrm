@@ -60,6 +60,9 @@ export async function POST(request: Request) {
       // yet (Contact detail → Send template) — we find-or-create one below.
       conversation_id: conversationIdInput,
       contact_id,
+      // Canal escolhido no "Abrir conversa/Enviar modelo" quando a conta tem
+      // 2+ números oficiais — o find-or-create abre a conversa NESSE canal.
+      channel_id,
       message_type,
       content_text,
       media_url,
@@ -161,7 +164,8 @@ export async function POST(request: Request) {
       const resolved = await findOrCreateConversation(
         accountId,
         ctx.userId,
-        contact_id
+        contact_id,
+        typeof channel_id === 'string' && channel_id ? channel_id : null,
       )
       if (!resolved) {
         return NextResponse.json(
@@ -401,7 +405,10 @@ async function findOrCreateConversation(
   accountId: string,
   userId: string,
   contactId: string,
+  channelId?: string | null,
 ): Promise<string | null> {
+  // Com channel escolhido (conta com 2+ números oficiais), a conversa é
+  // procurada/criada NAQUELE canal — senão pega qualquer uma do contato.
   const existing = firstOrNull(
     await db
       .select({ id: conversations.id })
@@ -409,7 +416,8 @@ async function findOrCreateConversation(
       .where(
         and(
           eq(conversations.accountId, accountId),
-          eq(conversations.contactId, contactId)
+          eq(conversations.contactId, contactId),
+          channelId ? eq(conversations.channelId, channelId) : undefined,
         )
       )
       .limit(1)
@@ -425,6 +433,7 @@ async function findOrCreateConversation(
           accountId,
           userId,
           contactId,
+          ...(channelId ? { channelId } : {}),
         })
         .returning({ id: conversations.id })
     )

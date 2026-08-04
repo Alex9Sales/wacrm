@@ -2,7 +2,11 @@
 
 import { useState, useEffect, useCallback } from 'react';
 import { useAuth } from '@/hooks/use-auth';
-import { startNewConversation } from '@/app/(dashboard)/inbox/actions';
+import {
+  startNewConversation,
+  listSendableChannels,
+  type SendableChannel,
+} from '@/app/(dashboard)/inbox/actions';
 import { formatCurrency } from '@/lib/currency';
 import { toast } from 'sonner';
 import type { Contact, Tag, ContactNote, CustomField, Deal, MessageTemplate } from '@/types';
@@ -74,6 +78,20 @@ export function ContactDetailView({
   const [loading, setLoading] = useState(false);
   const [copiedPhone, setCopiedPhone] = useState(false);
   const [openingChat, setOpeningChat] = useState(false);
+
+  // Canais oficiais que podem originar a conversa. Com 2+, aparece um seletor
+  // pro atendente escolher de qual número abre a conversa / manda o modelo.
+  const [channels, setChannels] = useState<SendableChannel[]>([]);
+  const [selectedChannelId, setSelectedChannelId] = useState<string>('');
+  useEffect(() => {
+    if (!open) return;
+    listSendableChannels()
+      .then((cs) => {
+        setChannels(cs);
+        setSelectedChannelId((prev) => prev || cs[0]?.id || '');
+      })
+      .catch(() => setChannels([]));
+  }, [open]);
 
   // Send template — lets the business initiate (or re-open) a conversation
   // with this contact by sending an approved template. The send route
@@ -216,6 +234,7 @@ export function ContactDetailView({
       const { conversationId } = await startNewConversation({
         phone: contact.phone,
         name: contact.name ?? null,
+        channelId: selectedChannelId || null,
       });
       // Navegação COMPLETA (não router.push): remonta a inbox e reativa o
       // deep-link `?c=`, e é robusta contra bundle velho (aba desatualizada
@@ -320,8 +339,9 @@ export function ContactDetailView({
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           // No conversation_id — the route find-or-creates one for this
-          // contact, mirroring the inbox template-send payload otherwise.
+          // contact (no canal escolhido), mirroring the inbox template-send.
           contact_id: contactId,
+          channel_id: selectedChannelId || undefined,
           message_type: 'template',
           template_name: template.name,
           template_language: template.language,
@@ -416,6 +436,28 @@ export function ContactDetailView({
                   </div>
                 </div>
               </div>
+              {/* Seletor de canal — só quando a conta tem 2+ números oficiais.
+                  Os dois botões (abrir conversa / enviar modelo) usam o canal
+                  escolhido aqui. Com 1 canal, some (usa o default). */}
+              {channels.length > 1 && (
+                <div className="mt-3">
+                  <label className="mb-1 block text-xs text-muted-foreground">
+                    Canal
+                  </label>
+                  <select
+                    value={selectedChannelId}
+                    onChange={(e) => setSelectedChannelId(e.target.value)}
+                    className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                  >
+                    {channels.map((c) => (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                        {c.phoneNumber ? ` · ${c.phoneNumber}` : ''}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              )}
               <div className="mt-3 flex flex-wrap gap-2">
                 <Button
                   size="sm"
