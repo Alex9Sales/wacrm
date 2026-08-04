@@ -19,6 +19,45 @@ import {
   MEDIA_KINDS,
 } from '@/lib/whatsapp/send-message'
 
+const MIME_BY_EXT: Record<string, string> = {
+  pdf: 'application/pdf',
+  doc: 'application/msword',
+  docx: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+  xls: 'application/vnd.ms-excel',
+  xlsx: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+  ppt: 'application/vnd.ms-powerpoint',
+  pptx: 'application/vnd.openxmlformats-officedocument.presentationml.presentation',
+  txt: 'text/plain',
+  csv: 'text/csv',
+  zip: 'application/zip',
+  rar: 'application/vnd.rar',
+  json: 'application/json',
+  xml: 'application/xml',
+}
+
+/**
+ * Encaminhar um documento perde nome/tipo se só reenviarmos a URL (o objeto de
+ * entrada tem nome UUID, sem extensão). O nome real do doc fica no
+ * `content_text` (ex.: "DANIELA: 352…nfe.pdf"). Extrai o nome (tira prefixo
+ * "Autor: " e placeholders) e deduz o mimetype pela extensão (do nome ou da
+ * URL), pra o WhatsApp mandar como PDF/etc. e o celular abrir.
+ */
+function deriveDocMeta(
+  contentText: string | null,
+  mediaUrl: string | null,
+): { filename?: string; mimetype?: string } {
+  let name = (contentText || '').trim()
+  const prefix = /^[^\n:]{1,40}:\s*(.+)$/.exec(name)
+  if (prefix) name = prefix[1].trim()
+  if (/^\[[a-z]+\]$/i.test(name)) name = '' // placeholder "[document]"
+  let ext = (/\.([A-Za-z0-9]{1,8})$/.exec(name)?.[1] || '').toLowerCase()
+  if (!ext && mediaUrl) {
+    ext = (/\.([A-Za-z0-9]{1,8})(?:\?|$)/.exec(mediaUrl)?.[1] || '').toLowerCase()
+  }
+  const mimetype = ext ? MIME_BY_EXT[ext] : undefined
+  return { filename: name || undefined, mimetype }
+}
+
 export async function POST(
   request: Request,
   { params }: { params: Promise<{ id: string }> },
@@ -77,6 +116,12 @@ export async function POST(
       )
     }
 
+    // Documento: recupera nome/tipo pra não chegar como "arquivo"/octet-stream.
+    const docMeta =
+      isMedia && src.contentType === 'document'
+        ? deriveDocMeta(src.contentText, src.mediaUrl)
+        : {}
+
     let sent = 0
     const failed: string[] = []
     for (const conversationId of targets) {
@@ -103,6 +148,8 @@ export async function POST(
           messageType: isMedia ? src.contentType : 'text',
           contentText: src.contentText ?? undefined,
           mediaUrl: isMedia ? (src.mediaUrl ?? undefined) : undefined,
+          filename: docMeta.filename,
+          mimetype: docMeta.mimetype,
         })
         sent += 1
       } catch (err) {

@@ -964,6 +964,20 @@ function extFromMime(mime: string): string | null {
   return null;
 }
 
+/** Detecta o MIME pelos primeiros bytes do arquivo (magic number), lendo o
+ *  prefixo do base64. Resolve documentos sem nome/extensão (ex.: recebido com
+ *  nome UUID) — sniffa PDF/PNG/JPEG/GIF/ZIP(office). Null se não reconhecer. */
+function sniffMimeFromBase64(b64: string): string | null {
+  const p = (b64 || '').slice(0, 12);
+  if (p.startsWith('JVBERi')) return 'application/pdf'; // "%PDF-"
+  if (p.startsWith('iVBORw')) return 'image/png';
+  if (p.startsWith('/9j/')) return 'image/jpeg';
+  if (p.startsWith('R0lGOD')) return 'image/gif';
+  if (p.startsWith('UklGR')) return 'image/webp'; // "RIFF"
+  if (p.startsWith('PK')) return 'application/zip'; // zip/docx/xlsx/pptx
+  return null;
+}
+
 // ------------------------------------------------------------
 // Provider implementation
 // ------------------------------------------------------------
@@ -1048,12 +1062,17 @@ export const wahaProvider: WhatsAppProvider = {
 
     // Documento precisa de mimetype REAL + extensão no nome, senão o WhatsApp
     // manda como octet-stream ("dados") e o celular não abre. Deriva o que
-    // faltar (mimetype pelo nome, extensão pelo mimetype).
+    // faltar: (1) mimetype informado; (2) pela extensão do nome; (3) pelos
+    // BYTES do arquivo (magic number — resolve o caso do doto recebido, cujo
+    // nome é um UUID sem extensão). E garante a extensão no nome.
     const rawName = (media.filename || '').trim();
     let mimetype =
       media.mimetype && media.mimetype !== 'application/octet-stream'
         ? media.mimetype
-        : mimeFromFilename(rawName) || defaultMime;
+        : mimeFromFilename(rawName) || 'application/octet-stream';
+    if (mimetype === 'application/octet-stream') {
+      mimetype = sniffMimeFromBase64(data) || defaultMime;
+    }
     let filename = rawName || 'arquivo';
     if (
       kind === 'document' &&
@@ -1061,10 +1080,6 @@ export const wahaProvider: WhatsAppProvider = {
     ) {
       const ext = extFromMime(mimetype);
       if (ext) filename = `${filename}${ext}`;
-    }
-    // Se ainda não temos mimetype útil mas o nome tem extensão, tenta pelo nome.
-    if (mimetype === 'application/octet-stream') {
-      mimetype = mimeFromFilename(filename) || mimetype;
     }
 
     const payload: {
