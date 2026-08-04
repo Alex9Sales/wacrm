@@ -359,6 +359,12 @@ export async function POST(request: Request) {
       })
     } catch (err) {
       if (err instanceof SendMessageError) {
+        // Log it. The client gets a toast, but until now these failures were
+        // invisible in the server logs — which made intermittent media/voice
+        // send failures impossible to diagnose. Include enough to trace it.
+        console.error(
+          `[send] SendMessageError conv=${conversationId} type=${message_type} media=${media_url ? 'yes' : 'no'} status=${err.status}: ${err.message}`,
+        )
         return NextResponse.json(
           { error: err.message },
           { status: err.status }
