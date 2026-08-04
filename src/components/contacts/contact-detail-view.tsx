@@ -1,7 +1,6 @@
 'use client';
 
 import { useState, useEffect, useCallback } from 'react';
-import { useRouter } from 'next/navigation';
 import { useAuth } from '@/hooks/use-auth';
 import { startNewConversation } from '@/app/(dashboard)/inbox/actions';
 import { formatCurrency } from '@/lib/currency';
@@ -70,7 +69,6 @@ export function ContactDetailView({
   onUpdated,
 }: ContactDetailViewProps) {
   const { defaultCurrency } = useAuth();
-  const router = useRouter();
 
   const [contact, setContact] = useState<Contact | null>(null);
   const [loading, setLoading] = useState(false);
@@ -219,7 +217,10 @@ export function ContactDetailView({
         phone: contact.phone,
         name: contact.name ?? null,
       });
-      router.push(`/inbox?c=${conversationId}`);
+      // Navegação COMPLETA (não router.push): remonta a inbox e reativa o
+      // deep-link `?c=`, e é robusta contra bundle velho (aba desatualizada
+      // depois de deploy) — o client-side push podia falhar ao carregar chunk.
+      window.location.href = `/inbox?c=${conversationId}`;
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : 'Não foi possível abrir a conversa.',

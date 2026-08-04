@@ -106,8 +106,12 @@ export default function DashboardPage() {
   }, [])
 
   useEffect(() => {
+    // Só busca as stats quando o usuário PODE ver o Painel — senão um agente
+    // (que é redirecionado acima) dispararia 5 server actions de supervisor que
+    // estouram ForbiddenError e poluem o log. Espera o profile resolver.
+    if (profileLoading || !canViewDashboard) return
     loadAll()
-  }, [loadAll])
+  }, [loadAll, profileLoading, canViewDashboard])
 
   // Range switch handler — kept in an event callback (not an effect)
   // so the setState calls stay out of the react-hooks/set-state-in-effect
