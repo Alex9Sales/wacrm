@@ -22,6 +22,12 @@ export const AI_PROVIDER_DEFAULT_MODEL: Record<AiProvider, string> = {
  */
 export const HANDOFF_SENTINEL = '[[HANDOFF]]'
 
+/**
+ * Marker the model prefixes a message with to have it delivered as a VOICE
+ * note (TTS) instead of text. Parsed + stripped by the auto-reply sender.
+ */
+export const AUDIO_MARKER = '[[AUDIO]]'
+
 /** Cap on generated reply length — keeps WhatsApp replies short and
  *  bounds token spend on the caller's own key. */
 export const MAX_OUTPUT_TOKENS = 1024
@@ -69,6 +75,10 @@ export function buildSystemPrompt(args: {
   if (mode === 'auto_reply') {
     parts.push(
       `You are replying automatically with no human in the loop. If you cannot confidently and safely help — the customer explicitly asks for a human, is upset or complaining, or the request needs information you do not have — reply with exactly ${HANDOFF_SENTINEL} and nothing else. A human agent will then take over. Prefer handing off over guessing.`,
+    )
+    // Voz (TTS): a IA decide texto vs áudio pelo padrão da conversa.
+    parts.push(
+      `You can reply with a VOICE message when it fits. To send a message as audio, start THAT message with the exact marker ${AUDIO_MARKER} at the very beginning. Use AUDIO when: the customer sent you a voice message (their message is shown prefixed with "[áudio]"), the customer asked you to answer by audio, or you are explaining a procedure or something longer that is easier to listen to. Use TEXT (no marker) for confirmations and for any data the customer must read exactly — scheduled appointment/consultation details, dates, times, addresses, numbers, prices. When you confirm an appointment/consultation, send the explanation/confirmation as an audio message (starting with ${AUDIO_MARKER}) and then send the exact data as a separate TEXT message right after. Separate distinct messages with a blank line, and keep each one short.`,
     )
   }
 

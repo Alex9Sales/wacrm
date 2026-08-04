@@ -7,8 +7,18 @@ import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
 import { latestUserMessage } from './query'
-import { engineSendText, engineSendTyping } from '@/lib/flows/meta-send'
+import { randomUUID } from 'crypto'
+import {
+  engineSendText,
+  engineSendTyping,
+  engineSendMedia,
+} from '@/lib/flows/meta-send'
 import { splitIntoMessages } from '@/lib/ai/flow-agent'
+import { AUDIO_MARKER } from '@/lib/ai/defaults'
+import { synthesizeSpeech } from '@/lib/ai/tts'
+import { putObject, publicUrl } from '@/lib/storage/s3'
+
+const TTS_BUCKET = 'media'
 
 /** Pausa "digitando…" antes de cada mensagem, escalada pelo tamanho. */
 function humanTypingDelayMs(text: string): number {
@@ -157,22 +167,54 @@ export async function dispatchInboundToAiReply(
     if (claimed !== true) return
 
     // Responde como algumas mensagens curtas e humanas (quebra de linha),
-    // mostrando "digitando…" e uma pausa antes de cada uma — igual ao nó de IA
-    // dos fluxos, pra não parecer um bot despejando texto.
+    // mostrando "digitando…" e uma pausa antes de cada uma. A IA decide texto
+    // vs ÁUDIO: uma mensagem que começa com AUDIO_MARKER vira nota de voz (TTS).
+    // Chave do TTS: OpenAI (a de chat quando provider=openai, senão a de
+    // embeddings). Sem chave OpenAI → o marcador é removido e vai como texto.
+    const ttsKey =
+      config.provider === 'openai'
+        ? config.apiKey
+        : config.embeddingsApiKey || null
+
     const parts = splitIntoMessages(text)
-    for (const part of parts) {
+    for (const rawPart of parts) {
+      const wantsAudio = rawPart.trimStart().startsWith(AUDIO_MARKER)
+      const clean = rawPart.replace(AUDIO_MARKER, '').trim()
+      if (!clean) continue
+
       try {
         await engineSendTyping({ accountId, conversationId, contactId, on: true })
-        await sleep(humanTypingDelayMs(part))
+        await sleep(humanTypingDelayMs(clean))
       } catch {
         /* presença é best-effort — nunca bloqueia o envio */
       }
+
+      if (wantsAudio && ttsKey) {
+        try {
+          const bytes = await synthesizeSpeech(ttsKey, clean)
+          const key = `ai-audio/${randomUUID()}.ogg`
+          await putObject(TTS_BUCKET, key, bytes, 'audio/ogg; codecs=opus')
+          await engineSendMedia({
+            accountId,
+            userId: configOwnerUserId,
+            conversationId,
+            contactId,
+            kind: 'audio',
+            link: publicUrl(TTS_BUCKET, key),
+          })
+          continue // enviou como áudio; não manda o texto também
+        } catch (err) {
+          console.error('[ai auto-reply] TTS falhou, enviando como texto:', err)
+          // cai pro envio de texto abaixo
+        }
+      }
+
       await engineSendText({
         accountId,
         userId: configOwnerUserId,
         conversationId,
         contactId,
-        text: part,
+        text: clean,
       })
     }
   } catch (err) {
