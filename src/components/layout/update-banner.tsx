@@ -3,29 +3,67 @@
 import { useEffect, useRef, useState } from "react";
 import { Sparkles, RotateCw, X } from "lucide-react";
 
+// After the tab has been hidden this long, a RETURN with a new build in the
+// air auto-recovers the stale bundle (reload) instead of only nudging with the
+// banner. This is the "opened the laptop / came back after a while" case —
+// where a stale tab otherwise hits "Failed to find Server Action" and looks
+// frozen. A short alt-tab (below this) still just shows the banner.
+const AUTO_RELOAD_AFTER_HIDDEN_MS = 30_000;
+
+/** True when the user is mid-typing in a field with content — don't yank the
+ *  page out from under a draft; show the banner instead. */
+function isEditingDirtyText(): boolean {
+  const el = document.activeElement as HTMLElement | null;
+  if (!el) return false;
+  if (el.isContentEditable) return true;
+  const tag = el.tagName;
+  if (tag === "TEXTAREA" || tag === "INPUT") {
+    return !!(el as HTMLInputElement | HTMLTextAreaElement).value;
+  }
+  return false;
+}
+
 // "Nova versão disponível" banner. The server rendered this page from build
 // `initialBuildId`; we poll /api/version and, when the running server reports
 // a newer id, surface a one-click refresh so clients pick up new features
 // without a manual hard-reload. Dismiss hides it until an even newer build
-// ships.
+// ships. If a new build lands while the tab is away and the user then returns,
+// we reload automatically (see AUTO_RELOAD_AFTER_HIDDEN_MS) so they never land
+// on a stale, frozen page.
 export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
   const [latest, setLatest] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const checking = useRef(false);
+  // When the tab last went hidden — to size how long the user was away.
+  const hiddenSinceRef = useRef<number | null>(null);
 
   useEffect(() => {
     // Dormant in dev (no BUILD_ID) — nothing to compare against.
     if (!initialBuildId || initialBuildId === "dev") return;
     let stopped = false;
 
-    const check = async () => {
+    const check = async (canAutoReload = false) => {
       if (checking.current || document.hidden) return;
       checking.current = true;
       try {
         const res = await fetch("/api/version", { cache: "no-store" });
         if (!res.ok) return;
         const data = (await res.json()) as { buildId?: string };
-        if (!stopped && typeof data.buildId === "string") setLatest(data.buildId);
+        if (stopped || typeof data.buildId !== "string") return;
+        const build = data.buildId;
+        const isNew = build !== initialBuildId;
+        // Auto-recover on return-from-away with a fresh build: reload straight
+        // to the new bundle (guarded once-per-build so a mismatched
+        // /api/version can never loop; skipped mid-draft).
+        if (isNew && canAutoReload && !isEditingDirtyText()) {
+          const guardKey = "fluxia:autoReloadedFor";
+          if (sessionStorage.getItem(guardKey) !== build) {
+            sessionStorage.setItem(guardKey, build);
+            window.location.reload();
+            return;
+          }
+        }
+        setLatest(build);
       } catch {
         // offline / transient — try again on the next tick.
       } finally {
@@ -34,17 +72,26 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
     };
 
     void check();
-    const id = window.setInterval(check, 60_000);
-    const onVisible = () => {
-      if (!document.hidden) void check();
+    const id = window.setInterval(() => void check(), 60_000);
+    const onVisibility = () => {
+      if (document.hidden) {
+        hiddenSinceRef.current = Date.now();
+        return;
+      }
+      const awayMs = hiddenSinceRef.current
+        ? Date.now() - hiddenSinceRef.current
+        : 0;
+      hiddenSinceRef.current = null;
+      void check(awayMs >= AUTO_RELOAD_AFTER_HIDDEN_MS);
     };
-    document.addEventListener("visibilitychange", onVisible);
-    window.addEventListener("focus", check);
+    const onFocus = () => void check();
+    document.addEventListener("visibilitychange", onVisibility);
+    window.addEventListener("focus", onFocus);
     return () => {
       stopped = true;
       window.clearInterval(id);
-      document.removeEventListener("visibilitychange", onVisible);
-      window.removeEventListener("focus", check);
+      document.removeEventListener("visibilitychange", onVisibility);
+      window.removeEventListener("focus", onFocus);
     };
   }, [initialBuildId]);
 

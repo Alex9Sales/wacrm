@@ -34,6 +34,11 @@ export interface Leg {
   muted: boolean; // mic muted by the agent
   ringMuted: boolean; // this leg's ringtone silenced, still ringing
   seconds: number;
+  /** Wall-clock ms (Date.now()) when an INBOUND leg started ringing. Used to
+   *  auto-dismiss a ring that never got answered/cancelled — e.g. the tab was
+   *  asleep when the call came/ended, so on wake the ring must NOT resume for a
+   *  call that's long over (the "phantom ring" bug). Unset for outbound legs. */
+  ringStartedAt?: number;
 }
 
 /** A leg fully up: the only kind eligible to be auto-resumed. */

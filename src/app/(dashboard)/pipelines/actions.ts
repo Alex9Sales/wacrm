@@ -751,9 +751,16 @@ export async function addDealNote(
   }
 }
 
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 /** One deal with contact/assignee/stage/pipeline embedded, for the detail page.
  *  Account-scoped; returns null when missing or in another account. */
 export async function getDeal(id: string): Promise<Deal | null> {
+  // A non-UUID id (e.g. a stray link landing on /pipelines/pipelines) must not
+  // crash the detail page with a raw Postgres "invalid input syntax for uuid" —
+  // treat it as not-found so the UI shows its empty state instead of a 500.
+  if (!UUID_RE.test(id)) return null
   const ctx = await getCurrentAccount()
   const row = firstOrNull(
     await db

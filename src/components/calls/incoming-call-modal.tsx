@@ -88,6 +88,12 @@ export function takeOverVoiceCall(
  *  just past it — long enough for the goodbye, short enough not to feel stuck. */
 const HANDOFF_WAIT_MS = 7000;
 
+/** A ringing inbound call that's never answered/cancelled auto-dismisses after
+ *  this much WALL-CLOCK time. Kills the "phantom ring" (tab asleep during the
+ *  call → ring resumes on wake for a call from an hour ago). A real WhatsApp/
+ *  Meta call rings ~30-45s, so 60s is safely past a live ring. */
+const RING_TIMEOUT_MS = 60_000;
+
 /** Per-leg media. Lives in a ref (never in state): these are imperative
  *  objects and re-rendering must not recreate them. */
 interface LegMedia {
@@ -433,6 +439,44 @@ export function IncomingCallModal() {
     }, 1000);
     return () => clearInterval(t);
   }, [anyActive]);
+
+  // Phantom-ring guard. A ringing INBOUND leg that's never answered/cancelled
+  // must not ring forever — auto-dismiss after RING_TIMEOUT_MS of WALL-CLOCK
+  // time. Using Date.now() (not the setInterval tick, which freezes with the
+  // tab) means that when the laptop wakes an hour later, the sweep fires and
+  // kills the phantom ring instead of resuming it. Also sweeps on tab focus/
+  // visibility, so waking the machine dismisses it immediately.
+  const anyRingingIn = legs.some(
+    (l) => l.dir === 'in' && l.phase === 'ringing',
+  );
+  useEffect(() => {
+    if (!anyRingingIn) return;
+    const sweep = () => {
+      const now = Date.now();
+      for (const l of legsRef.current) {
+        if (
+          l.dir === 'in' &&
+          l.phase === 'ringing' &&
+          l.ringStartedAt &&
+          now - l.ringStartedAt > RING_TIMEOUT_MS
+        ) {
+          closeLeg(l.key);
+        }
+      }
+    };
+    sweep(); // catch an already-stale ring right away (e.g. on wake)
+    const t = setInterval(sweep, 3000);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') sweep();
+    };
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      clearInterval(t);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [anyRingingIn, closeLeg]);
 
   // ---- media wiring ----
 
@@ -1002,6 +1046,7 @@ export function IncomingCallModal() {
             held: false,
             ringMuted: false,
             seconds: 0,
+            ringStartedAt: Date.now(),
           },
         ]);
         startRingtone(key);
