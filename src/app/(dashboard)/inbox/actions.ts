@@ -892,7 +892,23 @@ export async function deleteConversation(
 ): Promise<{ ok: true }> {
   // Only admins/owners may delete a conversation — it wipes the whole thread and
   // can't be undone. (Agents/viewers get a 403 from requireRole.)
-  const ctx = await requireRole('admin')
+  // Diagnóstico do "conversa volta sozinha" (conta do Rafael): loga a entrada
+  // e, se `requireRole` barrar, loga o motivo — antes o 403 saía SEM log e o
+  // reaparecimento parecia mágico. Assim o próximo repro mostra na hora se o
+  // delete rodou, com qual conta/role e quantas linhas casou.
+  let ctx
+  try {
+    ctx = await requireRole('admin')
+  } catch (err) {
+    console.error(
+      `[deleteConversation] DENIED conv=${conversationId}:`,
+      err instanceof Error ? err.message : err,
+    )
+    throw err
+  }
+  console.log(
+    `[deleteConversation] start conv=${conversationId} user=${ctx.userId} role=${ctx.role} account=${ctx.accountId}`,
+  )
   // A linked deal FK-blocks the delete (deals.conversation_id has no ON DELETE
   // rule). Detach any deals first — the deal itself stays, just loses the
   // thread link — so the conversation (and its cascade-deleted messages/
@@ -919,7 +935,7 @@ export async function deleteConversation(
   // se o delete REALMENTE removeu (rows>0) ou se casou 0 linhas (então o
   // reaparecimento é re-criação/re-add, não falha no delete).
   console.log(
-    `[deleteConversation] conv=${conversationId} deletedRows=${deleted.length}`,
+    `[deleteConversation] conv=${conversationId} deletedRows=${deleted.length} account=${ctx.accountId}`,
   )
   return { ok: true }
 }
