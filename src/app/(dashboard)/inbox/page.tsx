@@ -95,6 +95,10 @@ export default function InboxPage() {
   // hydrateConversation; the dedupe here keeps it at one refetch per
   // new conversation even when both events arrive within milliseconds.
   const hydratingConvIdsRef = useRef<Set<string>>(new Set());
+  // Conversas recém-deletadas nesta sessão. Impede que uma corrida de evento
+  // realtime (um hydrate/deep-link já em voo, um ack/status tardio) RE-ADICIONE
+  // a conversa que o atendente acabou de excluir — o "conversa volta sozinha".
+  const deletedConvIdsRef = useRef<Set<string>>(new Set());
 
   /**
    * Synchronous mirror of the conversation ids currently in `conversations`
@@ -131,6 +135,9 @@ export default function InboxPage() {
   // Also self-heals if a realtime event was missed: callers can invoke
   // this whenever they reference a conversation id they don't recognise.
   const hydrateConversation = useCallback(async (convId: string) => {
+    // Nunca re-hidrata uma conversa que foi excluída aqui — mata a corrida que
+    // fazia a conversa deletada reaparecer sozinha.
+    if (deletedConvIdsRef.current.has(convId)) return;
     if (hydratingConvIdsRef.current.has(convId)) return;
     hydratingConvIdsRef.current.add(convId);
     try {
@@ -192,6 +199,7 @@ export default function InboxPage() {
   useEffect(() => {
     const target = deepLinkConvId;
     if (!target) return;
+    if (deletedConvIdsRef.current.has(target)) return;
     if (autoSelectedForDeepLinkRef.current === target) return;
     autoSelectedForDeepLinkRef.current = target;
     let cancelled = false;
@@ -523,6 +531,7 @@ export default function InboxPage() {
   // re-open a conversation that no longer exists).
   const handleConversationDeleted = useCallback(
     (conversationId: string) => {
+      deletedConvIdsRef.current.add(conversationId);
       setConversations((prev) => prev.filter((c) => c.id !== conversationId));
       if (activeConversation?.id === conversationId) {
         setActiveConversation(null);

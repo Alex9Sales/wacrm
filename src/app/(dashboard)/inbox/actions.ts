@@ -900,7 +900,7 @@ export async function deleteConversation(
         eq(deals.accountId, ctx.accountId),
       ),
     )
-  await db
+  const deleted = await db
     .delete(conversations)
     .where(
       and(
@@ -908,6 +908,13 @@ export async function deleteConversation(
         eq(conversations.accountId, ctx.accountId),
       ),
     )
+    .returning({ id: conversations.id })
+  // Diagnóstico do "conversa deletada volta sozinha" (conta do Rafael): loga
+  // se o delete REALMENTE removeu (rows>0) ou se casou 0 linhas (então o
+  // reaparecimento é re-criação/re-add, não falha no delete).
+  console.log(
+    `[deleteConversation] conv=${conversationId} deletedRows=${deleted.length}`,
+  )
   return { ok: true }
 }
 
