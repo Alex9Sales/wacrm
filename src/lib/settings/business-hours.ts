@@ -60,7 +60,7 @@ export function isWithinBusinessHours(
   now: Date = new Date(),
 ): boolean {
   if (!settings.businessHoursEnabled) return true
-  const tz = settings.businessTimezone || 'America/Campo_Grande'
+  const tz = settings.businessTimezone || 'America/Sao_Paulo'
   let day: number
   let minutes: number
   try {

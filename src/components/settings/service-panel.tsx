@@ -280,6 +280,24 @@ const WEEKDAYS = [
   "Sábado",
 ];
 
+// Fusos do Brasil (o horário de atendimento é avaliado NESTE fuso, não no do
+// navegador de quem configurou). Cada conta escolhe o da sua região — ex.: o
+// CEMA fica no Rio (GMT-3), não em Campo Grande (GMT-4).
+const TIMEZONE_OPTIONS: { value: string; label: string }[] = [
+  { value: "America/Sao_Paulo", label: "Brasília · SP · RJ · Sul/Sudeste/NE (GMT-3)" },
+  { value: "America/Campo_Grande", label: "Mato Grosso do Sul (GMT-4)" },
+  { value: "America/Cuiaba", label: "Mato Grosso (GMT-4)" },
+  { value: "America/Manaus", label: "Amazonas · Roraima (GMT-4)" },
+  { value: "America/Porto_Velho", label: "Rondônia (GMT-4)" },
+  { value: "America/Boa_Vista", label: "Roraima (GMT-4)" },
+  { value: "America/Belem", label: "Pará · Amapá (GMT-3)" },
+  { value: "America/Fortaleza", label: "Ceará · Nordeste (GMT-3)" },
+  { value: "America/Recife", label: "Pernambuco (GMT-3)" },
+  { value: "America/Bahia", label: "Bahia (GMT-3)" },
+  { value: "America/Rio_Branco", label: "Acre (GMT-5)" },
+  { value: "America/Noronha", label: "Fernando de Noronha (GMT-2)" },
+];
+
 function BusinessHoursCard({
   initial,
   canEdit,
@@ -292,6 +310,7 @@ function BusinessHoursCard({
   const [enabled, setEnabled] = useState(false);
   const [days, setDays] = useState<BusinessHoursConfig["days"]>([]);
   const [message, setMessage] = useState("");
+  const [timezone, setTimezone] = useState("America/Sao_Paulo");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -299,6 +318,7 @@ function BusinessHoursCard({
     setEnabled(initial.enabled);
     setDays(initial.days);
     setMessage(initial.message);
+    setTimezone(initial.timezone || "America/Sao_Paulo");
   }, [initial]);
 
   const setDay = (
@@ -318,7 +338,7 @@ function BusinessHoursCard({
       await setBusinessHoursConfig({
         enabled,
         days,
-        timezone: initial?.timezone || "America/Campo_Grande",
+        timezone,
         message,
       });
       toast.success("Horário de atendimento salvo.");
@@ -362,6 +382,34 @@ function BusinessHoursCard({
 
         {enabled && (
           <>
+            {/* Fuso horário — o horário abaixo é avaliado NESTE fuso, não no do
+                navegador. Cada conta escolhe o da sua região (o CEMA no Rio,
+                GMT-3; não em Campo Grande). */}
+            <div className="space-y-1.5">
+              <Label htmlFor="ooh-tz">Fuso horário do atendimento</Label>
+              <select
+                id="ooh-tz"
+                value={timezone}
+                onChange={(e) => setTimezone(e.target.value)}
+                disabled={!canEdit}
+                className="h-9 w-full rounded-lg border border-border bg-background px-2.5 text-sm text-foreground outline-none focus:border-primary/50 disabled:opacity-50"
+              >
+                {TIMEZONE_OPTIONS.some((o) => o.value === timezone) ? null : (
+                  <option value={timezone}>{timezone}</option>
+                )}
+                {TIMEZONE_OPTIONS.map((o) => (
+                  <option key={o.value} value={o.value}>
+                    {o.label}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Os horários abaixo valem neste fuso. Ajuste pra região da sua
+                empresa — assim o cliente não recebe &quot;fora do horário&quot;
+                por diferença de fuso.
+              </p>
+            </div>
+
             <div className="space-y-2">
               {days.map((d, i) => {
                 const isOpen = !!(d.open && d.close);

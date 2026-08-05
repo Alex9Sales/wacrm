@@ -380,7 +380,7 @@ export async function setBusinessHoursConfig(
   await updateAccountSettings(ctx.accountId, {
     businessHoursEnabled: input.enabled,
     businessDays: days,
-    businessTimezone: input.timezone?.trim() || 'America/Campo_Grande',
+    businessTimezone: input.timezone?.trim() || 'America/Sao_Paulo',
     outOfHoursMessage:
       input.message?.trim() ||
       'Olá! No momento estamos fora do horário de atendimento.',

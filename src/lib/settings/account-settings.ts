@@ -69,7 +69,9 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   autoReassignMinutes: 5,
   businessHoursEnabled: false,
   businessDays: DEFAULT_BUSINESS_DAYS,
-  businessTimezone: 'America/Campo_Grande',
+  // Horário de Brasília — padrão nacional (cobre a maioria). Cada conta troca
+  // pelo fuso da sua região em Configurações → Atendimento.
+  businessTimezone: 'America/Sao_Paulo',
   outOfHoursMessage:
     'Olá! No momento estamos fora do horário de atendimento. Assim que abrirmos, retornamos sua mensagem. 🙏',
   csatEnabled: false,
