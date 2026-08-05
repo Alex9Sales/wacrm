@@ -51,6 +51,9 @@ interface DealFormProps {
    *  the client is already known, so don't make the agent search for them). The
    *  field shows the contact locked, with an "Alterar" to switch it. */
   defaultContactId?: string;
+  /** Vincula o negócio NOVO a esta conversa (quando o form abre PELA conversa),
+   *  pra o card do funil já mostrar a bolinha de chat. */
+  defaultConversationId?: string | null;
   onSaved: () => void;
 }
 
@@ -62,6 +65,7 @@ export function DealForm({
   stages,
   defaultStageId,
   defaultContactId,
+  defaultConversationId,
   onSaved,
 }: DealFormProps) {
   const { accountId, defaultCurrency } = useAuth();
@@ -205,7 +209,13 @@ export function DealForm({
         setSaving(false);
         return;
       }
-      const { error } = await createDeal(payload);
+      // Vincula a conversa ao negócio NOVO: a conversa de onde o form foi
+      // aberto tem prioridade; senão, a conversa vinculada do contato. Assim o
+      // card do funil já nasce com a bolinha de chat.
+      const { error } = await createDeal({
+        ...payload,
+        conversation_id: defaultConversationId ?? linkedConversation?.id ?? null,
+      });
       if (error) {
         toast.error("Falha ao criar negócio");
         setSaving(false);

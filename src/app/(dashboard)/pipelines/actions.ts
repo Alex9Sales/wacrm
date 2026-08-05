@@ -607,6 +607,9 @@ export interface DealInput {
   temperature?: string | null
   source?: string | null
   origin?: string | null
+  /** Conversa vinculada — quando o negócio nasce PELA conversa, guardamos o id
+   *  aqui pra o card do funil mostrar a bolinha de chat (abre a conversa). */
+  conversation_id?: string | null
 }
 
 /**
@@ -628,6 +631,7 @@ export async function createDeal(
           value: String(input.value),
           currency: input.currency,
           contactId: input.contact_id,
+          conversationId: input.conversation_id ?? null,
           pipelineId: input.pipeline_id,
           stageId: input.stage_id,
           assignedTo: input.assigned_to,
@@ -678,6 +682,7 @@ export async function updateDeal(
     if (patch.value !== undefined) set.value = String(patch.value)
     if (patch.currency !== undefined) set.currency = patch.currency
     if (patch.contact_id !== undefined) set.contactId = patch.contact_id
+    if (patch.conversation_id !== undefined) set.conversationId = patch.conversation_id
     if (patch.pipeline_id !== undefined) set.pipelineId = patch.pipeline_id
     if (patch.stage_id !== undefined) set.stageId = patch.stage_id
     if (patch.assigned_to !== undefined) set.assignedTo = patch.assigned_to

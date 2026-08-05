@@ -1030,6 +1030,9 @@ export function ContactSidebar({
           // Opened from a conversation → pre-fill the client so the agent
           // doesn't have to hunt for the number (only for a NEW deal).
           defaultContactId={contact.id}
+          // ...e vincula a conversa atual, pra o card do funil nascer com a
+          // bolinha de chat (bug do Felipe/Vin: negócio criado sem o vínculo).
+          defaultConversationId={conversationId}
           onSaved={handleDealSaved}
         />
       )}
