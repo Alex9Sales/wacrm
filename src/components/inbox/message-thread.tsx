@@ -544,7 +544,7 @@ export function MessageThread({
       .reverse()
       .find((m) => m.sender_type === "customer");
 
-    if (!lastCustomerMsg) return { expired: true, remaining: "Nenhuma mensagem do cliente" };
+    if (!lastCustomerMsg) return { expired: true, remaining: "Sem resposta do cliente" };
 
     const hoursSince = differenceInHours(new Date(), new Date(lastCustomerMsg.created_at));
     const expired = hoursSince >= 24;
@@ -1361,7 +1361,7 @@ export function MessageThread({
       )}
       {/* Header — solid card surface sits on top of the doodle so the
           name/avatar/dropdowns stay legible. */}
-      <div className="flex items-center justify-between gap-2 border-b border-border bg-card px-3 py-3 sm:px-4">
+      <div className="flex flex-wrap items-center justify-between gap-x-2 gap-y-1.5 border-b border-border bg-card px-3 py-3 sm:px-4">
         <div className="flex min-w-0 flex-1 items-center gap-2 sm:gap-3">
           {/* Back-to-list button — mobile only. Hidden on lg+ where the
               conversation list is always visible next to the thread. */}
@@ -1404,10 +1404,10 @@ export function MessageThread({
           {conversation.channel && (
             <Badge
               variant="secondary"
-              className="ml-1 hidden gap-1 text-[10px] lg:inline-flex lg:ml-2"
+              className="ml-1 hidden min-w-0 shrink gap-1 text-[10px] lg:inline-flex lg:ml-2"
               title={`Canal: ${conversation.channel.name} (${CHANNEL_PROVIDER_LABELS[conversation.channel.provider]})`}
             >
-              <Radio className="h-3 w-3" />
+              <Radio className="h-3 w-3 shrink-0" />
               <span className="max-w-28 truncate">
                 {conversation.channel.name ||
                   CHANNEL_PROVIDER_LABELS[conversation.channel.provider]}
@@ -1421,13 +1421,14 @@ export function MessageThread({
           {(conversation.channel?.provider ?? "meta") === "meta" && (
             <Badge
               variant="outline"
+              title={sessionInfo.remaining}
               className={cn(
-                "ml-1 hidden gap-1 border-border text-[10px] lg:inline-flex lg:ml-2",
+                "ml-1 hidden min-w-0 shrink gap-1 border-border text-[10px] lg:inline-flex lg:ml-2",
                 sessionInfo.expired ? "text-red-400" : "text-primary"
               )}
             >
-              <Clock className="h-3 w-3" />
-              {sessionInfo.remaining}
+              <Clock className="h-3 w-3 shrink-0" />
+              <span className="truncate">{sessionInfo.remaining}</span>
             </Badge>
           )}
         </div>

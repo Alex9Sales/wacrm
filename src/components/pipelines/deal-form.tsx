@@ -36,6 +36,7 @@ import {
   MessageSquare,
   DollarSign,
   Loader2,
+  ExternalLink,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -260,6 +261,20 @@ export function DealForm({
             <SheetTitle className="text-popover-foreground">
               {deal ? "Editar negócio" : "Novo negócio"}
             </SheetTitle>
+            {/* Ver no funil — atalho pro detalhe do negócio (mostra a etapa
+                atual no topo). Só ao editar um negócio já existente. */}
+            {deal && (
+              <button
+                type="button"
+                onClick={() => {
+                  window.location.href = `/pipelines/${deal.id}`;
+                }}
+                className="mt-1 inline-flex items-center gap-1.5 self-start rounded-md bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-primary/20"
+              >
+                <ExternalLink className="h-3 w-3" />
+                Ver no funil
+              </button>
+            )}
           </SheetHeader>
 
           <div className="flex-1 overflow-y-auto p-4 space-y-4">

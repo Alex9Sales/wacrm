@@ -647,39 +647,67 @@ export function ContactSidebar({
                     const agent = profiles.find(
                       (p) => p.user_id === deal.assigned_to,
                     );
+                    const fonteOrigem = [deal.source, deal.origin]
+                      .filter(Boolean)
+                      .join(" • ");
                     return (
-                      <button
-                        type="button"
+                      <div
                         key={deal.id}
-                        onClick={() => void openDealEditor(deal)}
-                        className="w-full rounded-lg bg-muted px-3 py-2 text-left transition-colors hover:bg-muted/70"
+                        className="rounded-lg bg-muted transition-colors hover:bg-muted/70"
                       >
-                        <p className="text-sm font-medium text-foreground">
-                          {deal.title}
-                        </p>
-                        <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
-                          <span>
-                            {deal.currency ?? "$"}
-                            {deal.value.toLocaleString()}
-                          </span>
-                          {deal.stage && (
-                            <span
-                              className="rounded-full px-1.5 py-0.5 text-[10px]"
-                              style={{
-                                backgroundColor: `${deal.stage.color}20`,
-                                color: deal.stage.color,
-                              }}
-                            >
-                              {deal.stage.name}
-                            </span>
-                          )}
-                        </div>
-                        {agent && (
-                          <p className="mt-1 text-[10px] text-muted-foreground">
-                            {agent.full_name || agent.email}
+                        <button
+                          type="button"
+                          onClick={() => void openDealEditor(deal)}
+                          className="block w-full px-3 py-2 text-left"
+                        >
+                          <p className="text-sm font-medium text-foreground">
+                            {deal.title}
                           </p>
-                        )}
-                      </button>
+                          <div className="mt-1 flex items-center justify-between text-xs text-muted-foreground">
+                            <span>
+                              {deal.currency ?? "$"}
+                              {deal.value.toLocaleString()}
+                            </span>
+                            {deal.stage && (
+                              <span
+                                className="rounded-full px-1.5 py-0.5 text-[10px]"
+                                style={{
+                                  backgroundColor: `${deal.stage.color}20`,
+                                  color: deal.stage.color,
+                                }}
+                              >
+                                {deal.stage.name}
+                              </span>
+                            )}
+                          </div>
+                          {/* Fonte • Origem gravadas no negócio (estilo RD) —
+                              agora carregam ao reabrir pela conversa. */}
+                          {fonteOrigem && (
+                            <p className="mt-1 truncate text-[10px] text-muted-foreground">
+                              {fonteOrigem}
+                            </p>
+                          )}
+                          {agent && (
+                            <p className="mt-1 text-[10px] text-muted-foreground">
+                              {agent.full_name || agent.email}
+                            </p>
+                          )}
+                        </button>
+                        {/* Ver no funil — leva direto pro detalhe do negócio,
+                            que mostra a etapa atual no topo (pedido do Alex). */}
+                        <div className="border-t border-border/50 px-3 py-1.5">
+                          <button
+                            type="button"
+                            onClick={() => {
+                              window.location.href = `/pipelines/${deal.id}`;
+                            }}
+                            className="inline-flex items-center gap-1 text-[11px] text-primary transition-colors hover:underline"
+                          >
+                            <ExternalLink className="h-3 w-3" />
+                            Ver no funil
+                          </button>
+                        </div>
+                      </div>
                     );
                   })}
                 </div>

@@ -413,6 +413,12 @@ const dealColumns = {
   notes: deals.notes,
   expected_close_date: deals.expectedCloseDate,
   status: deals.status,
+  // Campos extras do lead (estilo RD, migração 0050). Sem eles o editor
+  // aberto PELA conversa carregava Fonte/Origem/Temperatura vazios e, ao
+  // re-salvar, mandava null e APAGAVA o que já estava gravado (bug do Alex).
+  temperature: deals.temperature,
+  source: deals.source,
+  origin: deals.origin,
   created_at: deals.createdAt,
   updated_at: deals.updatedAt,
 }
