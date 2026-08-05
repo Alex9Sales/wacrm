@@ -5,6 +5,7 @@ import type { DealTaskCount } from "@/app/(dashboard)/tarefas/actions";
 import type { SyntheticEvent } from "react";
 import { Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
+import { ContactAvatar } from "@/components/inbox/contact-avatar";
 
 interface DealCardProps {
   deal: Deal;
@@ -23,12 +24,6 @@ function formatDate(dateStr: string) {
     day: "numeric",
     year: "numeric",
   });
-}
-
-function initials(name?: string, fallback?: string) {
-  const source = (name || fallback || "?").trim();
-  if (!source) return "?";
-  return source.charAt(0).toUpperCase();
 }
 
 export function DealCard({
@@ -70,9 +65,22 @@ export function DealCard({
         />
         <div className="flex items-center gap-2 text-muted-foreground">
           <Lock className="h-3.5 w-3.5 shrink-0" />
-          <span className="truncate text-xs font-medium">
+          <span className="flex-1 truncate text-xs font-medium">
             {assigneeLabel ? `Atribuído a ${assigneeLabel}` : "Atribuído a outro atendente"}
           </span>
+          {/* Avatar do responsável (com foto se tiver) — mostra de quem é. */}
+          {assigneeLabel && (
+            <span
+              title={assigneeLabel}
+              className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/15 text-[10px] font-semibold text-primary"
+            >
+              <ContactAvatar
+                avatarUrl={deal.assignee?.avatar_url}
+                displayName={assigneeLabel}
+                className="h-5 w-5"
+              />
+            </span>
+          )}
         </div>
         <p className="mt-1 text-[11px] text-muted-foreground/70">
           Atendimento de outro atendente
@@ -106,9 +114,19 @@ export function DealCard({
       />
 
       <div className="flex items-start justify-between gap-2">
-        <h4 className="flex-1 text-sm font-semibold leading-snug text-foreground break-words">
-          {deal.title}
-        </h4>
+        <div className="flex min-w-0 flex-1 items-start gap-2">
+          {/* Avatar do LEAD no topo — foto do contato se tiver, senão a inicial. */}
+          <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-[10px] font-semibold text-foreground">
+            <ContactAvatar
+              avatarUrl={deal.contact?.avatar_url}
+              displayName={contactLabel}
+              className="h-6 w-6"
+            />
+          </span>
+          <h4 className="min-w-0 flex-1 text-sm font-semibold leading-snug text-foreground break-words">
+            {deal.title}
+          </h4>
+        </div>
         <div className="flex shrink-0 items-center gap-1.5">
           {/* Open-task indicator — count + red dot when any is overdue.
               Clicking it opens the same create-task dialog (a lightweight
@@ -193,12 +211,9 @@ export function DealCard({
         </div>
       </div>
 
-      {/* Contact row */}
-      <div className="mt-2 flex items-center gap-2">
-        <span className="flex h-5 w-5 items-center justify-center rounded-full bg-muted text-[10px] font-semibold text-foreground">
-          {initials(deal.contact?.name, deal.contact?.phone)}
-        </span>
-        <span className="truncate text-xs text-muted-foreground">{contactLabel}</span>
+      {/* Nome do contato (o avatar do lead já está no topo). */}
+      <div className="mt-1.5 truncate text-xs text-muted-foreground">
+        {contactLabel}
       </div>
 
       <div className="mt-2 flex items-center justify-between">
@@ -236,13 +251,17 @@ export function DealCard({
           ) : (
             <span />
           )}
-          {/* Responsável (direita). */}
+          {/* Responsável (direita) — foto do perfil se tiver, senão a inicial. */}
           {assigneeLabel && (
             <span
               title={assigneeLabel}
-              className="flex h-5 w-5 items-center justify-center rounded-full bg-primary/15 text-[10px] font-semibold text-primary"
+              className="flex h-5 w-5 shrink-0 items-center justify-center overflow-hidden rounded-full bg-primary/15 text-[10px] font-semibold text-primary"
             >
-              {initials(assigneeLabel)}
+              <ContactAvatar
+                avatarUrl={deal.assignee?.avatar_url}
+                displayName={assigneeLabel}
+                className="h-5 w-5"
+              />
             </span>
           )}
         </div>
