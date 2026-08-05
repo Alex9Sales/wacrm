@@ -71,6 +71,32 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
       }
     };
 
+    // Belt-and-suspenders for the stale bundle: if a click fires a Server
+    // Action whose id changed across a deploy, Next throws "Failed to find
+    // Server Action … older or newer deployment" and the page looks frozen.
+    // The version poll only catches this on its 60s tick / on return-from-away;
+    // a tab that stayed VISIBLE and gets clicked FIRST would still freeze. So
+    // we also catch that exact error globally and reload immediately — time-
+    // guarded (60s) so a non-bundle cause can never loop us.
+    const STALE_ACTION_RE =
+      /Failed to find Server Action|older or newer deployment/i;
+    const reloadForStaleAction = (msg: unknown) => {
+      if (typeof msg !== "string" || !STALE_ACTION_RE.test(msg)) return;
+      const KEY = "fluxia:staleActionReloadAt";
+      const last = Number(sessionStorage.getItem(KEY) || 0);
+      if (Date.now() - last < 60_000) return; // just reloaded — don't loop
+      sessionStorage.setItem(KEY, String(Date.now()));
+      window.location.reload();
+    };
+    const onError = (e: ErrorEvent) =>
+      reloadForStaleAction(e.message || (e.error as { message?: string })?.message);
+    const onRejection = (e: PromiseRejectionEvent) => {
+      const r = e.reason as { message?: string } | string | undefined;
+      reloadForStaleAction(typeof r === "string" ? r : r?.message);
+    };
+    window.addEventListener("error", onError);
+    window.addEventListener("unhandledrejection", onRejection);
+
     void check();
     const id = window.setInterval(() => void check(), 60_000);
     const onVisibility = () => {
@@ -92,6 +118,8 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", onFocus);
+      window.removeEventListener("error", onError);
+      window.removeEventListener("unhandledrejection", onRejection);
     };
   }, [initialBuildId]);
 

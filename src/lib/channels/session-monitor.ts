@@ -18,7 +18,7 @@
 // restart it re-evaluates from scratch, which at worst re-alerts once — fine.
 // ============================================================
 
-import { and, eq } from 'drizzle-orm';
+import { and, eq, inArray } from 'drizzle-orm';
 
 import { db, channels, member, notifications } from '@/db';
 import { loadChannel } from '@/lib/channels/channels';
@@ -54,7 +54,17 @@ export async function runSessionHealthCheck(): Promise<void> {
         name: channels.name,
       })
       .from(channels)
-      .where(and(eq(channels.provider, 'waha'), eq(channels.status, 'connected')));
+      // Watch channels that SHOULD be live: 'connected' (catch the zombie) AND
+      // 'error' (a session that already dropped). Before, 'error' channels were
+      // skipped → a dead session (ex.: Comercial1) NUNCA gerava alerta, o dono
+      // só descobria quando a vendedora reclamava. 'disconnected'/'pending'
+      // (desligado/nunca pareado de propósito) ficam de fora pra não spammar.
+      .where(
+        and(
+          eq(channels.provider, 'waha'),
+          inArray(channels.status, ['connected', 'error']),
+        ),
+      );
   } catch (err) {
     console.error('[session-monitor] load channels failed:', err);
     return;
