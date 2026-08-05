@@ -1,0 +1,754 @@
+<!doctype html>
+<html lang="pt-BR">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FluxiaCRM — API Pública v1</title>
+<style>
+html{background:#eef0f4;}
+:root {
+  --brand: #7c3aed;
+  --brand-dark: #5b21b6;
+  --brand-soft: #faf5ff;
+  --ink: #1f2937;
+  --muted: #6b7280;
+  --line: #e5e7eb;
+  --code-bg: #f6f8fa;
+}
+
+* { box-sizing: border-box; }
+
+body {
+  font-family: -apple-system, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+  color: var(--ink);
+  font-size: 12px;
+  line-height: 1.65;
+  margin: 0;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* ---- Headings ---- */
+h1 {
+  color: var(--brand-dark);
+  font-size: 27px;
+  font-weight: 800;
+  letter-spacing: -0.02em;
+  margin: 0 0 10px;
+  padding-bottom: 10px;
+  border-bottom: 3px solid var(--brand);
+}
+h2 {
+  color: var(--brand-dark);
+  font-size: 18px;
+  font-weight: 700;
+  margin: 30px 0 12px;
+  padding-bottom: 6px;
+  border-bottom: 1px solid var(--line);
+}
+h3 {
+  color: var(--brand);
+  font-size: 14px;
+  font-weight: 700;
+  margin: 22px 0 8px;
+}
+
+/* ---- Text ---- */
+p { margin: 9px 0; }
+a { color: var(--brand); text-decoration: none; font-weight: 600; }
+strong { color: var(--ink); font-weight: 700; }
+ul, ol { margin: 8px 0; padding-left: 22px; }
+li { margin: 4px 0; }
+
+blockquote {
+  margin: 14px 0;
+  padding: 10px 16px;
+  background: var(--brand-soft);
+  border-left: 4px solid var(--brand);
+  color: #4b5563;
+  border-radius: 0 6px 6px 0;
+}
+blockquote p { margin: 4px 0; }
+
+/* ---- Tables ---- */
+table {
+  width: 100%;
+  border-collapse: collapse;
+  margin: 14px 0;
+  font-size: 11px;
+  border-radius: 8px;
+  overflow: hidden;
+  box-shadow: 0 0 0 1px var(--line);
+}
+thead th {
+  background: var(--brand);
+  color: #fff;
+  text-align: left;
+  padding: 9px 11px;
+  font-weight: 600;
+  font-size: 11px;
+}
+tbody td {
+  padding: 8px 11px;
+  border-bottom: 1px solid var(--line);
+  vertical-align: top;
+}
+tbody tr:nth-child(even) td { background: #faf7ff; }
+tbody tr:last-child td { border-bottom: none; }
+
+/* ---- Code ---- */
+code {
+  font-family: "SF Mono", "JetBrains Mono", Menlo, Consolas, monospace;
+  font-size: 10.5px;
+  background: #f3e8ff;
+  color: #7e22ce;
+  padding: 2px 6px;
+  border-radius: 5px;
+}
+pre {
+  background: var(--code-bg);
+  border: 1px solid var(--line);
+  border-left: 4px solid var(--brand);
+  padding: 14px 16px;
+  border-radius: 8px;
+  overflow: auto;
+  font-size: 10.5px;
+  line-height: 1.55;
+  margin: 12px 0;
+}
+pre code {
+  background: transparent;
+  color: #24292e;
+  padding: 0;
+  font-size: 10.5px;
+}
+
+hr {
+  border: none;
+  border-top: 1px solid var(--line);
+  margin: 24px 0;
+}
+
+/* First block = cover header emphasis */
+h1:first-of-type + p { font-size: 13px; color: var(--muted); }
+
+body{background:#ffffff;color:#1f2937;max-width:860px;margin:24px auto;padding:40px 48px;border-radius:10px;box-shadow:0 1px 8px rgba(0,0,0,.08);}
+@media print{html{background:#fff;}body{margin:0;box-shadow:none;border-radius:0;max-width:none;padding:0;}}
+</style>
+</head>
+<body class="api-doc">
+<h1 id="public-api-apiv1">Public API (<code>/api/v1</code>)</h1>
+<p>The public API lets you drive your wacrm instance from your own
+scripts and automations — send messages, manage contacts, launch
+broadcasts — without going through the dashboard UI.</p>
+<blockquote>
+<p><strong>Status:</strong> stable. Authentication, scopes, rate limiting, the
+messages / contacts / conversations / broadcasts endpoints, and
+outbound event <a href="#webhooks">webhooks</a> all ship now.</p>
+</blockquote>
+<h2 id="authentication">Authentication</h2>
+<p>Every request authenticates with an <strong>API key</strong>, sent as a bearer
+token:</p>
+<pre><code>Authorization: Bearer wacrm_live_xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx
+</code></pre>
+<p>Keys are <strong>account-scoped</strong>: a key acts on exactly one account, the
+one it was created in. There is no cross-account access.</p>
+<h3 id="creating-a-key">Creating a key</h3>
+<p>In the dashboard: <strong>Settings → API keys → New API key</strong>. Only
+<strong>admins and owners</strong> can create keys.</p>
+<ol>
+<li>Give the key a name (after the integration that will use it).</li>
+<li>Grant the <strong>scopes</strong> it needs — nothing more (see below).</li>
+<li>Copy the key. <strong>The full key is shown exactly once.</strong> wacrm
+stores only a SHA-256 hash, so it can never be shown again. If you
+lose it, revoke it and create a new one.</li>
+</ol>
+<h3 id="revoking-a-key">Revoking a key</h3>
+<p><strong>Settings → API keys → Revoke.</strong> Revocation is effective on the
+key&#39;s next request. Revoked keys stay in the list as an audit trail.</p>
+<h2 id="scopes">Scopes</h2>
+<p>A key can do only what its scopes allow — independent of who created
+it. Grant the minimum.</p>
+<table>
+<thead>
+<tr>
+<th>Scope</th>
+<th>Allows</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>messages:send</code></td>
+<td>Send WhatsApp messages</td>
+</tr>
+<tr>
+<td><code>messages:read</code></td>
+<td>Read messages and delivery status</td>
+</tr>
+<tr>
+<td><code>contacts:read</code></td>
+<td>List and read contacts</td>
+</tr>
+<tr>
+<td><code>contacts:write</code></td>
+<td>Create and update contacts</td>
+</tr>
+<tr>
+<td><code>conversations:read</code></td>
+<td>List and read conversations (incl. <strong>groups</strong>)</td>
+</tr>
+<tr>
+<td><code>conversations:write</code></td>
+<td>Assign / move / close / prioritize conversations</td>
+</tr>
+<tr>
+<td><code>tags:read</code></td>
+<td>List the account tags (labels)</td>
+</tr>
+<tr>
+<td><code>tags:write</code></td>
+<td>Create tags; add/remove them on conversations</td>
+</tr>
+<tr>
+<td><code>deals:read</code></td>
+<td>List and read pipelines, deals and history</td>
+</tr>
+<tr>
+<td><code>deals:write</code></td>
+<td>Create, <strong>move</strong> (stage) and <strong>assign</strong> deals — <strong>not</strong> edit/delete</td>
+</tr>
+<tr>
+<td><code>deals:edit</code></td>
+<td>Edit deal fields (title, value, notes, status, dates, contact)</td>
+</tr>
+<tr>
+<td><code>deals:delete</code></td>
+<td><strong>Delete</strong> deals (permanent)</td>
+</tr>
+<tr>
+<td><code>tasks:read</code></td>
+<td>List and read tasks</td>
+</tr>
+<tr>
+<td><code>tasks:write</code></td>
+<td>Create and update tasks</td>
+</tr>
+<tr>
+<td><code>agent:read</code></td>
+<td>Read the AI text agent&#39;s configuration</td>
+</tr>
+<tr>
+<td><code>agent:write</code></td>
+<td>Configure the AI text agent</td>
+</tr>
+<tr>
+<td><code>members:read</code></td>
+<td>List team members</td>
+</tr>
+<tr>
+<td><code>internal:read</code></td>
+<td>Read internal team channels</td>
+</tr>
+<tr>
+<td><code>internal:write</code></td>
+<td>Create internal channels and post messages</td>
+</tr>
+<tr>
+<td><code>broadcasts:send</code></td>
+<td>Launch broadcast campaigns; list channels</td>
+</tr>
+<tr>
+<td><code>webhooks:manage</code></td>
+<td>Register and manage outbound webhooks</td>
+</tr>
+</tbody></table>
+<p>A key with <strong>no scopes</strong> still authenticates and can call
+<code>GET /api/v1/me</code> — useful for verifying a key works.</p>
+<h2 id="response-envelope">Response envelope</h2>
+<p>Every response uses one of two shapes:</p>
+<pre><code class="language-jsonc">// success
+{ &quot;data&quot;: { /* ... */ } }
+
+// failure
+{ &quot;error&quot;: { &quot;code&quot;: &quot;forbidden&quot;, &quot;message&quot;: &quot;This API key is missing the &#39;messages:send&#39; scope&quot; } }
+</code></pre>
+<p>Branch on <code>error.code</code> (stable); <code>error.message</code> is for humans and
+may be reworded.</p>
+<table>
+<thead>
+<tr>
+<th>Status</th>
+<th><code>code</code></th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>401</td>
+<td><code>unauthorized</code></td>
+<td>Missing / malformed / unknown / revoked / expired key</td>
+</tr>
+<tr>
+<td>403</td>
+<td><code>forbidden</code></td>
+<td>Valid key, but missing the required scope</td>
+</tr>
+<tr>
+<td>429</td>
+<td><code>rate_limited</code></td>
+<td>Per-key rate limit exceeded</td>
+</tr>
+<tr>
+<td>400</td>
+<td><code>bad_request</code></td>
+<td>Malformed input</td>
+</tr>
+<tr>
+<td>404</td>
+<td><code>not_found</code></td>
+<td>No such resource</td>
+</tr>
+<tr>
+<td>500</td>
+<td><code>internal</code></td>
+<td>Server error</td>
+</tr>
+</tbody></table>
+<h2 id="rate-limits">Rate limits</h2>
+<p>Requests are limited <strong>per key</strong>: <strong>120 requests per minute</strong>. On a
+<code>429</code>, these headers tell you when to retry:</p>
+<ul>
+<li><code>Retry-After</code> — seconds until the window resets</li>
+<li><code>X-RateLimit-Limit</code>, <code>X-RateLimit-Remaining</code>, <code>X-RateLimit-Reset</code></li>
+</ul>
+<blockquote>
+<p>The limiter is in-memory and <strong>per process</strong>. A single-instance
+deploy (the common case for a self-hosted fork) is fine as-is. If
+you scale to multiple instances, swap the limiter for a shared
+store (Redis/Upstash) — see the note at the top of
+<code>src/lib/rate-limit.ts</code>. The limit is otherwise unenforced across
+instances.</p>
+</blockquote>
+<h2 id="endpoints">Endpoints</h2>
+<h3 id="get-apiv1me"><code>GET /api/v1/me</code></h3>
+<p>Returns the account a key is bound to and the scopes it carries.
+Requires only a valid key (no scope). Use it to verify a key works
+and to discover its scopes.</p>
+<pre><code class="language-bash">curl https://your-crm.example.com/api/v1/me \
+  -H &quot;Authorization: Bearer wacrm_live_xxx&quot;
+</code></pre>
+<pre><code class="language-json">{
+  &quot;data&quot;: {
+    &quot;account&quot;: { &quot;id&quot;: &quot;…&quot;, &quot;name&quot;: &quot;Acme Inc&quot; },
+    &quot;key&quot;: { &quot;id&quot;: &quot;…&quot;, &quot;scopes&quot;: [&quot;messages:send&quot;] }
+  }
+}
+</code></pre>
+<h3 id="post-apiv1messages"><code>POST /api/v1/messages</code></h3>
+<p>Send a WhatsApp message. Scope: <code>messages:send</code>. Target it in one of two ways:</p>
+<ul>
+<li><strong><code>to</code></strong> — an <strong>E.164 number</strong>; the endpoint finds-or-creates the contact +
+1:1 conversation, then sends.</li>
+<li><strong><code>conversation_id</code></strong> — send straight to an existing conversation. This is
+the <strong>only way to reply in a group</strong> (groups have no phone number). Read the
+group&#39;s <code>conversation_id</code> from <code>GET /api/v1/conversations</code>.</li>
+</ul>
+<pre><code class="language-bash">curl -X POST https://your-crm.example.com/api/v1/messages \
+  -H &quot;Authorization: Bearer wacrm_live_xxx&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{ &quot;to&quot;: &quot;+14155550123&quot;, &quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;Hi 👋&quot; }&#39;
+</code></pre>
+<p><code>type</code> is <code>text</code> (default), <code>template</code>, or a media kind (<code>image</code> /
+<code>video</code> / <code>document</code> / <code>audio</code>). Media needs <code>media_url</code> (and optional
+<code>filename</code>); <code>text</code> doubles as the caption. <code>template</code> needs a
+<code>template</code> object:</p>
+<pre><code class="language-jsonc">{
+  &quot;to&quot;: &quot;+14155550123&quot;,
+  &quot;type&quot;: &quot;template&quot;,
+  &quot;template&quot;: {
+    &quot;name&quot;: &quot;order_update&quot;,
+    &quot;language&quot;: &quot;en_US&quot;,
+    &quot;params&quot;: [&quot;A123&quot;]        // positional body vars, or a structured object
+  },
+  &quot;reply_to_message_id&quot;: &quot;&lt;uuid&gt;&quot;   // optional; must be in the same conversation
+}
+</code></pre>
+<p>Response (201):</p>
+<pre><code class="language-json">{
+  &quot;data&quot;: {
+    &quot;message_id&quot;: &quot;…&quot;,
+    &quot;whatsapp_message_id&quot;: &quot;wamid.…&quot;,
+    &quot;conversation_id&quot;: &quot;…&quot;,
+    &quot;contact_id&quot;: &quot;…&quot;,
+    &quot;contact_created&quot;: true
+  }
+}
+</code></pre>
+<p>Domain error codes beyond the table above: <code>whatsapp_not_configured</code>
+(400), <code>meta_error</code> (502 — the request reached Meta and it rejected the
+send), <code>template_malformed</code> (500).</p>
+<h3 id="get-apiv1contacts"><code>GET /api/v1/contacts</code></h3>
+<p>List contacts, newest first. Scope: <code>contacts:read</code>. Paginated (see
+<a href="#pagination">Pagination</a>). Optional filters: <code>?search=</code> (matches name
+or phone) and <code>?tag=&lt;tagId&gt;</code>.</p>
+<pre><code class="language-json">{
+  &quot;data&quot;: [
+    {
+      &quot;id&quot;: &quot;…&quot;, &quot;phone&quot;: &quot;+14155550123&quot;, &quot;name&quot;: &quot;Jane Doe&quot;,
+      &quot;email&quot;: null, &quot;company&quot;: &quot;Acme&quot;, &quot;avatar_url&quot;: null,
+      &quot;customer_codes&quot;: [&quot;31768&quot;, &quot;31770&quot;],
+      &quot;tags&quot;: [{ &quot;id&quot;: &quot;…&quot;, &quot;name&quot;: &quot;vip&quot;, &quot;color&quot;: &quot;#3b82f6&quot; }],
+      &quot;created_at&quot;: &quot;…&quot;, &quot;updated_at&quot;: &quot;…&quot;
+    }
+  ],
+  &quot;meta&quot;: { &quot;next_cursor&quot;: &quot;…&quot; }
+}
+</code></pre>
+<h3 id="post-apiv1contacts"><code>POST /api/v1/contacts</code></h3>
+<p>Create a contact. Scope: <code>contacts:write</code>. <code>phone</code> (E.164) is required;
+<code>name</code>, <code>email</code>, <code>company</code>, <code>tags</code> (an array of tag names, created
+if missing) and <code>customer_codes</code> (an array of ERP codes — múltiplos por
+contato) are optional. <strong>Find-or-create by phone:</strong> an existing match
+returns <code>200</code> with the existing contact; a new contact returns <code>201</code>. The
+response body is the serialized contact (same shape as the list rows above).</p>
+<h3 id="get--patch-apiv1contactsid"><code>GET</code> / <code>PATCH /api/v1/contacts/{id}</code></h3>
+<p>Read or update one contact. Scopes: <code>contacts:read</code> / <code>contacts:write</code>.
+<code>PATCH</code> updates only the fields you send (<code>name</code>, <code>email</code>, <code>company</code>);
+pass <code>tags</code> (an array of tag names) to replace the contact&#39;s tags, and
+<code>customer_codes</code> (an array of strings) to replace the ERP codes. A contact
+in another account returns <code>404</code>.</p>
+<h3 id="get-apiv1conversations"><code>GET /api/v1/conversations</code></h3>
+<p>List conversations, newest first. Scope: <code>conversations:read</code>.
+Paginated. Optional filters: <code>?status=</code> (<code>open</code> / <code>pending</code> / <code>closed</code>),
+<code>?contact_id=</code>, <code>?channel_id=</code>, <code>?contact_phone=</code>, <code>?created_after=</code> (ISO),
+and <strong><code>?is_group=true</code></strong> (only WhatsApp groups) / <code>?is_group=false</code> (only 1:1).
+Each conversation embeds its contact + tags; the contact carries
+<strong><code>is_group</code></strong> (<code>true</code> when the &quot;contact&quot; is a monitored group, not a person)
+so an agent can tell groups apart. The group&#39;s <code>id</code> is its
+<code>conversation_id</code> — pass it to <code>POST /api/v1/messages</code> to reply in the group.</p>
+<h3 id="get-apiv1conversationsid"><code>GET /api/v1/conversations/{id}</code></h3>
+<p>Read one conversation. Scope: <code>conversations:read</code>. <code>404</code> if it belongs
+to another account.</p>
+<h3 id="get-apiv1conversationsidmessages"><code>GET /api/v1/conversations/{id}/messages</code></h3>
+<p>List a conversation&#39;s messages, newest first. Scope: <code>messages:read</code>.
+Paginated. Each message includes its <code>direction</code> (<code>inbound</code> /
+<code>outbound</code>), <code>status</code> (delivery state), <code>whatsapp_message_id</code>, and
+<code>content_*</code>. The conversation is verified to belong to your account
+first (<code>404</code> otherwise).</p>
+<h3 id="groups--monitor--reply-on-request">Groups — monitor &amp; reply on request</h3>
+<p>An imported WhatsApp <strong>group</strong> is a conversation whose contact has
+<code>is_group: true</code>. An agent can watch the groups and only speak when asked:</p>
+<ol>
+<li><strong>List the groups</strong> — <code>GET /api/v1/conversations?is_group=true</code>
+(scope <code>conversations:read</code>). Each row&#39;s <code>id</code> is the group&#39;s
+<code>conversation_id</code>.</li>
+<li><strong>Read what&#39;s being said</strong> — <code>GET /api/v1/conversations/{id}/messages</code>
+(scope <code>messages:read</code>), newest first. Poll this, or subscribe to the
+<code>message.received</code> webhook (see <a href="#webhooks">Webhooks</a>) to react in
+real time.</li>
+<li><strong>Reply in the group only when requested</strong> — <code>POST /api/v1/messages</code>
+with <strong><code>conversation_id</code></strong> (scope <code>messages:send</code>). A group has no phone,
+so <code>conversation_id</code> is the only way in:</li>
+</ol>
+<pre><code class="language-bash">curl -X POST https://&lt;host&gt;/api/v1/messages \
+  -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{ &quot;conversation_id&quot;: &quot;&lt;group-conversation-id&gt;&quot;,
+        &quot;type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;Opa! Já verifico e te retorno aqui no grupo.&quot; }&#39;
+</code></pre>
+<blockquote>
+<p>Keep the agent quiet by default: reply only when a group message
+explicitly asks for it (mention/keyword). The API never auto-replies in
+groups on its own — every send is an explicit call you make.</p>
+</blockquote>
+<h3 id="post-apiv1broadcasts"><code>POST /api/v1/broadcasts</code></h3>
+<p>Launch a template broadcast to a list of recipients. Scope:
+<code>broadcasts:send</code>. The broadcast + its recipient rows are persisted
+immediately and the sends fan out in the background, so the call
+returns fast — poll <code>GET /api/v1/broadcasts/{id}</code> for progress.</p>
+<pre><code class="language-bash">curl -X POST https://your-crm.example.com/api/v1/broadcasts \
+  -H &quot;Authorization: Bearer wacrm_live_xxx&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{
+        &quot;name&quot;: &quot;July promo&quot;,
+        &quot;template_name&quot;: &quot;promo_july&quot;,
+        &quot;template_language&quot;: &quot;en_US&quot;,
+        &quot;recipients&quot;: [
+          { &quot;to&quot;: &quot;+14155550123&quot;, &quot;params&quot;: [&quot;Jane&quot;] },
+          { &quot;to&quot;: &quot;+14155550124&quot; }
+        ]
+      }&#39;
+</code></pre>
+<p>Recipients are capped at <strong>1000 per request</strong> — split larger sends.
+Invalid phone numbers are dropped and counted as <code>rejected</code>. Response
+(202):</p>
+<pre><code class="language-json">{
+  &quot;data&quot;: {
+    &quot;broadcast_id&quot;: &quot;…&quot;,
+    &quot;status&quot;: &quot;sending&quot;,
+    &quot;total_recipients&quot;: 2,
+    &quot;accepted&quot;: 2,
+    &quot;rejected&quot;: 0
+  }
+}
+</code></pre>
+<h3 id="get-apiv1broadcastsid"><code>GET /api/v1/broadcasts/{id}</code></h3>
+<p>Broadcast status + counts. Scope: <code>broadcasts:send</code>. <code>status</code> moves
+<code>sending</code> → <code>sent</code>; <code>delivered_count</code> / <code>read_count</code> keep climbing as
+Meta delivery webhooks arrive. <code>404</code> for another account&#39;s broadcast.</p>
+<h3 id="patch-apiv1conversationsid"><code>PATCH /api/v1/conversations/{id}</code></h3>
+<p>Assign, move, close, or <strong>prioritize</strong> a conversation. Scope: <code>conversations:write</code>.
+Accepts any of: <code>assigned_agent_id</code> (member id, or <code>null</code> to unassign), <code>sector_id</code>
+(sector id, or <code>null</code> for the general queue), <code>status</code> (<code>open</code>/<code>pending</code>/<code>closed</code>),
+<code>priority</code> (<code>none</code>/<code>low</code>/<code>medium</code>/<code>high</code>/<code>urgent</code>).</p>
+<pre><code class="language-bash"># Flag a thread as urgent for the team
+curl -X PATCH https://&lt;host&gt;/api/v1/conversations/{id} \
+  -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{ &quot;priority&quot;: &quot;urgent&quot; }&#39;
+</code></pre>
+<p><code>GET /api/v1/conversations</code> and <code>GET /api/v1/conversations/{id}</code> include the
+current <code>priority</code> and the contact&#39;s <code>tags</code> on each row.</p>
+<h3 id="tags-labels">Tags (labels)</h3>
+<p>Account-level labels that live on the contact and show on the conversation card.
+Scopes: <code>tags:read</code> / <code>tags:write</code>.</p>
+<ul>
+<li><code>GET /api/v1/tags</code> — list the account&#39;s tags (<code>{ id, name, color }</code>).</li>
+<li><code>POST /api/v1/tags</code> — create a tag. Body: <code>{ &quot;name&quot;: &quot;pago&quot;, &quot;color&quot;: &quot;#10b981&quot; }</code>
+(<code>color</code> optional). <strong>Idempotent by name</strong> (case-insensitive): re-running an
+n8n &quot;setup&quot; workflow returns the existing tag (<code>200</code>) instead of duplicating
+it; a brand-new tag returns <code>201</code>.</li>
+<li><code>GET /api/v1/conversations/{id}/tags</code> — tags on this thread&#39;s contact.</li>
+<li><code>POST /api/v1/conversations/{id}/tags</code> — add a tag to the thread. Body is
+either <code>{ &quot;tag_id&quot;: &quot;…&quot; }</code> or <code>{ &quot;name&quot;: &quot;pago&quot;, &quot;color&quot;?: &quot;#10b981&quot; }</code> — a
+name that doesn&#39;t exist yet is created, so Hermes can label freely. Returns
+the contact&#39;s full tag set.</li>
+<li><code>DELETE /api/v1/conversations/{id}/tags/{tagId}</code> — remove a tag (idempotent).</li>
+</ul>
+<pre><code class="language-bash"># Hermes labels a thread (creating the tag if needed)
+curl -X POST https://&lt;host&gt;/api/v1/conversations/{id}/tags \
+  -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{ &quot;name&quot;: &quot;pago&quot; }&#39;
+</code></pre>
+<h3 id="deals--pipelines-kanban--funil">Deals &amp; pipelines (Kanban / funil)</h3>
+<p>The Kanban is a set of <strong>pipelines</strong>, each with ordered <strong>stages</strong>; a <strong>deal</strong>
+is a card sitting in one stage. The scopes are split on purpose so an agent can
+<strong>run</strong> the funnel (create, move, assign) without being able to <strong>edit fields</strong>
+or <strong>delete</strong> — those need their own scope, granted only when you want it.</p>
+<table>
+<thead>
+<tr>
+<th>Action</th>
+<th>Scope needed</th>
+</tr>
+</thead>
+<tbody><tr>
+<td>List / read pipelines, deals, history</td>
+<td><code>deals:read</code></td>
+</tr>
+<tr>
+<td>Create a card, <strong>move</strong> it, <strong>assign</strong> it</td>
+<td><code>deals:write</code></td>
+</tr>
+<tr>
+<td><strong>Edit</strong> fields (title/value/notes/…)</td>
+<td><code>deals:edit</code></td>
+</tr>
+<tr>
+<td><strong>Delete</strong> a card (permanent)</td>
+<td><code>deals:delete</code></td>
+</tr>
+</tbody></table>
+<p><strong>Read</strong></p>
+<ul>
+<li><code>GET /api/v1/pipelines</code> — every pipeline with its ordered stages (<code>id</code>, <code>name</code>,
+<code>color</code>, <code>position</code>). Use these ids to place/move cards.</li>
+<li><code>GET /api/v1/deals</code> — list cards. Paginated. Filters: <code>?pipeline_id=</code>,
+<code>?stage_id=</code>, <code>?contact_id=</code>, <code>?status=</code> (<code>open</code>/<code>won</code>/<code>lost</code>).</li>
+<li><code>GET /api/v1/deals/{id}</code> — one card. Fields include <code>title</code>, <code>value</code>,
+<code>currency</code>, <code>status</code>, <code>pipeline_id</code>, <code>stage_id</code>, <code>contact_id</code>,
+<code>conversation_id</code>, <code>assigned_to</code>, <code>notes</code>, <code>source</code>, <code>origin</code>,
+<code>temperature</code>, <code>expected_close_date</code>.</li>
+<li><code>GET /api/v1/deals/{id}/events</code> — the card&#39;s <strong>history</strong> (newest first):
+<code>created</code>, <code>stage_changed</code>, <code>status_changed</code>, <code>transferred</code>, <code>note</code>.</li>
+</ul>
+<p><strong>Create</strong> — <code>POST /api/v1/deals</code> (scope <code>deals:write</code>). Only <code>title</code> is
+required (pipeline/stage default to the account&#39;s first, so an agent can drop a
+card with just a title). Optional: <code>value</code>, <code>currency</code>, <code>contact_id</code>,
+<code>conversation_id</code> (links the card to a chat — shows the chat bubble),
+<code>stage_id</code>, <code>pipeline_id</code>, <code>notes</code>, <code>expected_close_date</code>, <code>status</code>.</p>
+<pre><code class="language-bash">curl -X POST https://&lt;host&gt;/api/v1/deals \
+  -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{ &quot;title&quot;: &quot;Troca de botijão P13&quot;, &quot;value&quot;: 135, &quot;currency&quot;: &quot;BRL&quot;,
+        &quot;contact_id&quot;: &quot;…&quot;, &quot;stage_id&quot;: &quot;…&quot; }&#39;
+</code></pre>
+<p><strong>Move / assign</strong> — <code>PATCH /api/v1/deals/{id}</code> (scope <code>deals:write</code>):</p>
+<ul>
+<li><strong>Move</strong> a card: send <code>stage_id</code> (and <code>pipeline_id</code> if changing board).</li>
+<li><strong>Assign / transfer</strong>: send <code>assigned_to</code> (a member id, or <code>null</code> to
+unassign). Assigning records a <code>transferred</code> event and notifies the new owner.</li>
+</ul>
+<pre><code class="language-bash"># Move a card to another stage
+curl -X PATCH https://&lt;host&gt;/api/v1/deals/{id} \
+  -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{ &quot;stage_id&quot;: &quot;&lt;stage-id&gt;&quot; }&#39;
+</code></pre>
+<p><strong>Edit fields</strong> — <code>PATCH /api/v1/deals/{id}</code> with any of <code>title</code>, <code>value</code>,
+<code>currency</code>, <code>notes</code>, <code>status</code> (<code>open</code>/<code>won</code>/<code>lost</code>), <code>expected_close_date</code>,
+<code>contact_id</code>. <strong>Requires the <code>deals:edit</code> scope.</strong> A single <code>PATCH</code> that both
+moves and edits needs <strong>both</strong> <code>deals:write</code> and <code>deals:edit</code>.</p>
+<p><strong>Delete</strong> — <code>DELETE /api/v1/deals/{id}</code>. <strong>Requires the <code>deals:delete</code> scope</strong>
+and is <strong>permanent</strong>. Grant this scope only to a key you trust to remove cards;
+leave it off (the default) so an agent can never delete without explicit,
+separate authorization.</p>
+<h3 id="tasks">Tasks</h3>
+<p>Scopes: <code>tasks:read</code> / <code>tasks:write</code>.</p>
+<ul>
+<li><code>GET /api/v1/tasks</code> — list tasks, newest first (paginated). Filters: <code>?status=</code> (<code>open</code>/<code>done</code>/<code>cancelled</code>), <code>?contact_id=</code>, <code>?deal_id=</code>, <code>?assigned_to=</code>.</li>
+<li><code>POST /api/v1/tasks</code> — create. Only <code>title</code> is required. Optional: <code>description</code>, <code>due_at</code> (ISO 8601), <code>type</code>, <code>contact_id</code>, <code>deal_id</code>, <code>assigned_to</code>, <code>status</code>.</li>
+<li><code>GET</code> / <code>PATCH /api/v1/tasks/{id}</code> — read or update. Mark done with <code>{ &quot;status&quot;: &quot;done&quot; }</code>; PATCH touches only the fields you send.</li>
+</ul>
+<pre><code class="language-bash">curl -X POST https://your-crm.example.com/api/v1/tasks \
+  -H &quot;Authorization: Bearer wacrm_live_xxx&quot; -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{ &quot;title&quot;: &quot;Follow up with Jane&quot;, &quot;due_at&quot;: &quot;2026-08-01T14:00:00Z&quot;, &quot;contact_id&quot;: &quot;…&quot; }&#39;
+</code></pre>
+<h3 id="leads--one-call-intake-campaign--landing-page">Leads — one-call intake (campaign / landing page)</h3>
+<p><code>POST /api/v1/leads</code> (scope <code>contacts:write</code>). Turns a form submission into a
+fully-formed lead in one call: find-or-create the <strong>contact</strong>, open a <strong>deal</strong>
+in the Kanban, create a follow-up <strong>task</strong>, apply <strong>tags</strong> (campaign/utm/
+interest), and optionally fire an intro WhatsApp + an internal-chat alert.
+Steps after the contact are best-effort — the response reports what landed.
+Mint a key with <strong>only</strong> <code>contacts:write</code> for public forms.</p>
+<pre><code class="language-bash">curl -X POST https://&lt;host&gt;/api/v1/leads \
+  -H &quot;Authorization: Bearer $KEY&quot; -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{ &quot;name&quot;: &quot;Jane&quot;, &quot;phone&quot;: &quot;+5567999990000&quot;,
+        &quot;interest&quot;: &quot;Botijão P13&quot;, &quot;campaign&quot;: &quot;instagram-ago&quot; }&#39;
+</code></pre>
+<h3 id="ai-text-agent">AI text agent</h3>
+<p>Scopes: <code>agent:read</code> / <code>agent:write</code>. The account&#39;s single AI configuration
+(provider, model, system prompt, own API key) that powers AI-drafted replies,
+the auto-reply bot and the Playground.</p>
+<ul>
+<li><code>GET /api/v1/agent</code> — read the config (<code>configured:false</code> when none). The API key is never returned.</li>
+<li><code>PUT /api/v1/agent</code> — configure. Body: <code>provider</code> (<code>openai</code>/<code>anthropic</code>), <code>model</code>, <code>api_key</code> (omit to keep the stored one), and optional <code>system_prompt</code>, <code>is_active</code>, <code>auto_reply_enabled</code>, <code>auto_reply_max_per_conversation</code> (1–20). The key is <strong>validated with the provider</strong> before it&#39;s stored (AES-256-GCM encrypted).</li>
+</ul>
+<pre><code class="language-bash">curl -X PUT https://your-crm.example.com/api/v1/agent \
+  -H &quot;Authorization: Bearer wacrm_live_xxx&quot; -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{ &quot;provider&quot;: &quot;openai&quot;, &quot;model&quot;: &quot;gpt-4o-mini&quot;, &quot;api_key&quot;: &quot;sk-…&quot;,
+        &quot;system_prompt&quot;: &quot;Você é o atendente da Acme…&quot;, &quot;is_active&quot;: true }&#39;
+</code></pre>
+<h3 id="channels-members--internal-chat">Channels, members &amp; internal chat</h3>
+<ul>
+<li><code>GET /api/v1/channels</code> · <code>GET /api/v1/channels/{id}</code> — list WhatsApp channels (id, name, provider, status). Scope: <code>broadcasts:send</code>.</li>
+<li><code>GET /api/v1/members</code> — list team members (id, name). Scope: <code>members:read</code>.</li>
+<li><code>GET</code> / <code>POST /api/v1/internal/channels</code> — list / create internal team channels (<code>{ name, is_private?, member_ids? }</code>). Scopes: <code>internal:read</code> / <code>internal:write</code>.</li>
+<li><code>GET</code> / <code>POST /api/v1/internal/channels/{id}/messages</code> — read / post internal messages.</li>
+</ul>
+<h3 id="more-broadcasts">More broadcasts</h3>
+<ul>
+<li><code>POST /api/v1/broadcasts/text</code> — text/media campaign on a non-official (WAHA) channel. Body: <code>channel_id</code>, <code>name</code>, <code>body_text</code>, optional <code>media_url</code>/<code>media_type</code>/<code>media_filename</code>, and <code>recipients</code> (list of <code>to</code>) <strong>or</strong> <code>contact_ids</code>.</li>
+<li><code>GET /api/v1/broadcasts/{id}/recipients</code> — per-recipient status.</li>
+<li><code>POST /api/v1/broadcasts/{id}/pause</code> · <code>/resume</code> · <code>/cancel</code> — control a running campaign.</li>
+</ul>
+<h2 id="pagination">Pagination</h2>
+<p>Every list endpoint pages the same way. Request a page size with
+<code>?limit=</code> (default 50, max 100) and read the next page with the opaque
+<code>meta.next_cursor</code> from the previous response:</p>
+<pre><code>GET /api/v1/contacts?limit=50
+→ { &quot;data&quot;: [ … ], &quot;meta&quot;: { &quot;next_cursor&quot;: &quot;eyJ…&quot; } }
+
+GET /api/v1/contacts?limit=50&amp;cursor=eyJ…
+→ { &quot;data&quot;: [ … ], &quot;meta&quot;: { &quot;next_cursor&quot;: null } }   // last page
+</code></pre>
+<p>Cursors are keyset-based (stable under concurrent inserts). Pass the
+cursor back verbatim — don&#39;t parse it. <code>next_cursor: null</code> means the
+last page.</p>
+<h2 id="webhooks">Webhooks</h2>
+<p>Rather than polling, register an endpoint and wacrm will POST to it when
+things happen in your account. <strong>Migration required:</strong> apply
+<code>supabase/migrations/028_webhook_endpoints.sql</code>.</p>
+<h3 id="events">Events</h3>
+<table>
+<thead>
+<tr>
+<th>Event</th>
+<th>Fires when</th>
+</tr>
+</thead>
+<tbody><tr>
+<td><code>message.received</code></td>
+<td>An inbound message arrives from a contact</td>
+</tr>
+<tr>
+<td><code>message.status_updated</code></td>
+<td>A message you sent changed delivery status</td>
+</tr>
+<tr>
+<td><code>conversation.created</code></td>
+<td>A new conversation is opened for a contact</td>
+</tr>
+</tbody></table>
+<h3 id="managing-endpoints">Managing endpoints</h3>
+<p>All under scope <code>webhooks:manage</code>.</p>
+<ul>
+<li><code>POST /api/v1/webhooks</code> — register <code>{ &quot;url&quot;: &quot;https://…&quot;, &quot;events&quot;: [&quot;message.received&quot;] }</code>. <code>url</code> must be <code>https://</code>. <strong>The response includes <code>secret</code> exactly once</strong> — store it to verify signatures; wacrm keeps only an encrypted copy.</li>
+<li><code>GET /api/v1/webhooks</code> — list your endpoints (never returns the secret).</li>
+<li><code>GET /api/v1/webhooks/{id}</code> — read one.</li>
+<li><code>PATCH /api/v1/webhooks/{id}</code> — update <code>url</code>, <code>events</code>, or <code>is_active</code> (re-enabling clears the failure counter).</li>
+<li><code>DELETE /api/v1/webhooks/{id}</code> — remove one.</li>
+</ul>
+<pre><code class="language-bash">curl -X POST https://your-crm.example.com/api/v1/webhooks \
+  -H &quot;Authorization: Bearer wacrm_live_xxx&quot; \
+  -H &quot;Content-Type: application/json&quot; \
+  -d &#39;{ &quot;url&quot;: &quot;https://example.com/hooks/wacrm&quot;, &quot;events&quot;: [&quot;message.received&quot;] }&#39;
+# → 201 { &quot;data&quot;: { &quot;id&quot;: &quot;…&quot;, &quot;url&quot;: &quot;…&quot;, &quot;events&quot;: [...], &quot;secret&quot;: &quot;whsec_…&quot; } }
+</code></pre>
+<h3 id="delivery-payload">Delivery payload</h3>
+<p>Every delivery is a POST with this envelope; <code>id</code> is a unique per-
+delivery uuid you can dedupe on, and <code>data</code> varies by <code>event</code>:</p>
+<pre><code class="language-json">{
+  &quot;id&quot;: &quot;8f3c…&quot;,
+  &quot;event&quot;: &quot;message.received&quot;,
+  &quot;occurred_at&quot;: &quot;2026-07-01T12:00:00.000Z&quot;,
+  &quot;account_id&quot;: &quot;…&quot;,
+  &quot;data&quot;: { /* per-event, see below */ }
+}
+</code></pre>
+<p><code>data</code> by event:</p>
+<pre><code class="language-jsonc">// message.received
+{ &quot;conversation_id&quot;: &quot;…&quot;, &quot;contact_id&quot;: &quot;…&quot;, &quot;whatsapp_message_id&quot;: &quot;wamid.…&quot;, &quot;content_type&quot;: &quot;text&quot;, &quot;text&quot;: &quot;Hi 👋&quot; }
+// conversation.created
+{ &quot;conversation_id&quot;: &quot;…&quot;, &quot;contact_id&quot;: &quot;…&quot; }
+// message.status_updated
+{ &quot;whatsapp_message_id&quot;: &quot;wamid.…&quot;, &quot;conversation_id&quot;: &quot;…&quot;, &quot;status&quot;: &quot;delivered&quot; }
+</code></pre>
+<p>Headers: <code>X-Wacrm-Event</code>, <code>X-Wacrm-Webhook-Id</code>, and <code>X-Wacrm-Signature</code>.</p>
+<h3 id="verifying-the-signature">Verifying the signature</h3>
+<p><code>X-Wacrm-Signature: t=&lt;unix_seconds&gt;,v1=&lt;hex&gt;</code> where <code>v1 = HMAC-SHA256(secret, &quot;${t}.${rawBody}&quot;)</code>. Recompute it over the <strong>raw
+request body</strong> and compare in constant time; reject if <code>t</code> is more than
+a few minutes old (replay protection).</p>
+<pre><code class="language-js">const [, t, v1] = header.match(/t=(\d+),v1=([0-9a-f]+)/);
+const expected = crypto.createHmac(&#39;sha256&#39;, secret)
+  .update(`${t}.${rawBody}`).digest(&#39;hex&#39;);
+const ok = crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(v1));
+</code></pre>
+<h3 id="delivery-semantics">Delivery semantics</h3>
+<p>Delivery is <strong>best-effort</strong>: a single attempt per event with a short
+timeout, and <strong>redirects are not followed</strong>. <code>message.status_updated</code>
+covers messages wacrm stores (inbox + API sends), not broadcast-only
+sends, and — because providers re-send and re-order status callbacks —
+the same status may arrive more than once or out of order; <strong>dedupe on
+<code>id</code> and don&#39;t assume ordering</strong>. Each consecutive failure increments
+<code>failure_count</code>; after enough consecutive failures the endpoint is
+auto-disabled (<code>is_active: false</code>) — re-enable it with <code>PATCH</code> (which
+resets the counter). Durable retry-with-backoff (a delivery queue) is a
+future enhancement; today, treat missed deliveries as possible and
+reconcile with the read endpoints when it matters.</p>
+<p><strong>Target restrictions (SSRF).</strong> The <code>url</code> must be <code>https://</code> and must
+resolve to a public address — requests to <code>localhost</code>, private/RFC1918
+ranges, link-local (incl. cloud metadata <code>169.254.169.254</code>), and similar
+internal targets are refused at delivery time.</p>
+<h2 id="roadmap">Roadmap</h2>
+<p>The public API covers messaging, contacts, conversations, deals &amp;
+pipelines, tasks, the AI text agent, channels, members, internal chat,
+broadcasts (template + text/WAHA), and outbound webhooks. Not yet
+exposed via the API (done in the dashboard for now): creating <strong>flows</strong>
+and <strong>automations</strong>, and a delivery queue for webhook retries.</p>
+
+</body>
+</html>

@@ -28,6 +28,9 @@ export interface ApiConversation {
     name: string | null;
     email: string | null;
     company: string | null;
+    /** True when this "contact" is a monitored WhatsApp GROUP (not a person).
+     *  Lets an agent identify/filter groups to monitor + reply to. */
+    is_group: boolean;
     tags: { id: string; name: string; color: string }[];
   } | null;
 }
@@ -74,6 +77,7 @@ export function serializeConversation(conv: Conversation): ApiConversation {
           name: c.name ?? null,
           email: c.email ?? null,
           company: c.company ?? null,
+          is_group: c.is_group ?? false,
           tags: (c.tags ?? []).map((t) => ({
             id: t.id,
             name: t.name,

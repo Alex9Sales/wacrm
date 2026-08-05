@@ -31,6 +31,7 @@ const CONVERSATION_COLUMNS = {
     name: contacts.name,
     email: contacts.email,
     company: contacts.company,
+    is_group: contacts.isGroup,
   },
 } as const;
 

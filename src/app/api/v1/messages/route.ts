@@ -11,9 +11,11 @@
 // comes from `requireApiKey`; queries run on the shared Drizzle
 // client inside the lib helpers, always account-scoped.
 //
-// Body:
+// Body: target with EITHER `to` (phone) OR `conversation_id` — the latter is
+// the only way to reply into a GROUP (groups have no phone number).
 //   {
-//     "to": "+14155550123",                 // required, E.164
+//     "to": "+14155550123",                 // required UNLESS conversation_id
+//     "conversation_id": "<uuid>",           // send straight to a conversation/GROUP
 //     "type": "text",                        // text|template|image|video|document|audio (default: text)
 //     "text": "Hello!",                      // text body, or media caption
 //     "media_url": "https://…/file.pdf",     // required for image/video/document/audio

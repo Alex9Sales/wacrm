@@ -2,9 +2,10 @@
 // GET /api/v1/conversations — list conversations (scope: conversations:read)
 //
 // Keyset-paginated (newest first). Filters: `?status=` (open/pending/
-// closed) and `?contact_id=`. Each conversation embeds its contact +
-// tags (loaded in a second bounded query, replacing the old PostgREST
-// `contact:contacts(*, contact_tags(tags(*)))` embed).
+// closed), `?contact_id=`, `?channel_id=`, `?contact_phone=`,
+// `?created_after=` (ISO), and `?is_group=true|false` (só grupos / só 1:1 —
+// pra um agente monitorar os grupos). Each conversation embeds its contact
+// (with `is_group`) + tags (loaded in a second bounded query).
 // ============================================================
 
 import { and, desc, eq, gte, lt, or } from 'drizzle-orm';
@@ -28,11 +29,16 @@ export async function GET(request: Request) {
     const channelId = url.searchParams.get('channel_id');
     const contactPhone = url.searchParams.get('contact_phone');
     const createdAfter = url.searchParams.get('created_after');
+    // `?is_group=true` → só grupos (pra o agente monitorar); `false` → só 1:1.
+    const isGroupParam = url.searchParams.get('is_group');
 
     const conditions = [eq(conversations.accountId, ctx.accountId)];
     if (status) conditions.push(eq(conversations.status, status));
     if (contactId) conditions.push(eq(conversations.contactId, contactId));
     if (channelId) conditions.push(eq(conversations.channelId, channelId));
+    if (isGroupParam === 'true' || isGroupParam === 'false') {
+      conditions.push(eq(contacts.isGroup, isGroupParam === 'true'));
+    }
     if (contactPhone) {
       conditions.push(
         eq(contacts.phoneNormalized, normalizePhone(contactPhone)),
@@ -74,6 +80,7 @@ export async function GET(request: Request) {
             name: contacts.name,
             email: contacts.email,
             company: contacts.company,
+            is_group: contacts.isGroup,
           },
         })
         .from(conversations)

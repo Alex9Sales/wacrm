@@ -47,12 +47,14 @@ it. Grant the minimum.
 | `messages:read`       | Read messages and delivery status            |
 | `contacts:read`       | List and read contacts                       |
 | `contacts:write`      | Create and update contacts                   |
-| `conversations:read`  | List and read conversations                  |
+| `conversations:read`  | List and read conversations (incl. **groups**) |
 | `conversations:write` | Assign / move / close / prioritize conversations |
 | `tags:read`           | List the account tags (labels)               |
 | `tags:write`          | Create tags; add/remove them on conversations |
-| `deals:read`          | List and read pipelines and deals            |
-| `deals:write`         | Create and move deals (Kanban cards)         |
+| `deals:read`          | List and read pipelines, deals and history   |
+| `deals:write`         | Create, **move** (stage) and **assign** deals — **not** edit/delete |
+| `deals:edit`          | Edit deal fields (title, value, notes, status, dates, contact) |
+| `deals:delete`        | **Delete** deals (permanent)                 |
 | `tasks:read`          | List and read tasks                          |
 | `tasks:write`         | Create and update tasks                      |
 | `agent:read`          | Read the AI text agent's configuration       |
@@ -221,8 +223,13 @@ in another account returns `404`.
 ### `GET /api/v1/conversations`
 
 List conversations, newest first. Scope: `conversations:read`.
-Paginated. Optional filters: `?status=` (`open` / `pending` / `closed`)
-and `?contact_id=`. Each conversation embeds its contact + tags.
+Paginated. Optional filters: `?status=` (`open` / `pending` / `closed`),
+`?contact_id=`, `?channel_id=`, `?contact_phone=`, `?created_after=` (ISO),
+and **`?is_group=true`** (only WhatsApp groups) / `?is_group=false` (only 1:1).
+Each conversation embeds its contact + tags; the contact carries
+**`is_group`** (`true` when the "contact" is a monitored group, not a person)
+so an agent can tell groups apart. The group's `id` is its
+`conversation_id` — pass it to `POST /api/v1/messages` to reply in the group.
 
 ### `GET /api/v1/conversations/{id}`
 
@@ -236,6 +243,33 @@ Paginated. Each message includes its `direction` (`inbound` /
 `outbound`), `status` (delivery state), `whatsapp_message_id`, and
 `content_*`. The conversation is verified to belong to your account
 first (`404` otherwise).
+
+### Groups — monitor & reply on request
+
+An imported WhatsApp **group** is a conversation whose contact has
+`is_group: true`. An agent can watch the groups and only speak when asked:
+
+1. **List the groups** — `GET /api/v1/conversations?is_group=true`
+   (scope `conversations:read`). Each row's `id` is the group's
+   `conversation_id`.
+2. **Read what's being said** — `GET /api/v1/conversations/{id}/messages`
+   (scope `messages:read`), newest first. Poll this, or subscribe to the
+   `message.received` webhook (see [Webhooks](#webhooks)) to react in
+   real time.
+3. **Reply in the group only when requested** — `POST /api/v1/messages`
+   with **`conversation_id`** (scope `messages:send`). A group has no phone,
+   so `conversation_id` is the only way in:
+
+```bash
+curl -X POST https://<host>/api/v1/messages \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "conversation_id": "<group-conversation-id>",
+        "type": "text", "text": "Opa! Já verifico e te retorno aqui no grupo." }'
+```
+
+> Keep the agent quiet by default: reply only when a group message
+> explicitly asks for it (mention/keyword). The API never auto-replies in
+> groups on its own — every send is an explicit call you make.
 
 ### `POST /api/v1/broadcasts`
 
@@ -322,14 +356,68 @@ curl -X POST https://<host>/api/v1/conversations/{id}/tags \
   -d '{ "name": "pago" }'
 ```
 
-### Deals & pipelines
+### Deals & pipelines (Kanban / funil)
 
-Scopes: `deals:read` / `deals:write`.
+The Kanban is a set of **pipelines**, each with ordered **stages**; a **deal**
+is a card sitting in one stage. The scopes are split on purpose so an agent can
+**run** the funnel (create, move, assign) without being able to **edit fields**
+or **delete** — those need their own scope, granted only when you want it.
 
-- `GET /api/v1/pipelines` — list pipelines and their ordered stages.
-- `GET /api/v1/deals` — list cards. Filters: `?pipeline_id=`, `?stage_id=`, `?contact_id=`, `?status=`.
-- `POST /api/v1/deals` — create a card. Only `title` is required (pipeline/stage default to the account's first). Optional: `value`, `currency`, `contact_id`, `notes`, `expected_close_date`.
-- `GET` / `PATCH /api/v1/deals/{id}` — read or update. **Moving a card** = `PATCH` with `stage_id` (and `pipeline_id` if changing board).
+| Action                                   | Scope needed   |
+| ---------------------------------------- | -------------- |
+| List / read pipelines, deals, history    | `deals:read`   |
+| Create a card, **move** it, **assign** it | `deals:write`  |
+| **Edit** fields (title/value/notes/…)    | `deals:edit`   |
+| **Delete** a card (permanent)            | `deals:delete` |
+
+**Read**
+
+- `GET /api/v1/pipelines` — every pipeline with its ordered stages (`id`, `name`,
+  `color`, `position`). Use these ids to place/move cards.
+- `GET /api/v1/deals` — list cards. Paginated. Filters: `?pipeline_id=`,
+  `?stage_id=`, `?contact_id=`, `?status=` (`open`/`won`/`lost`).
+- `GET /api/v1/deals/{id}` — one card. Fields include `title`, `value`,
+  `currency`, `status`, `pipeline_id`, `stage_id`, `contact_id`,
+  `conversation_id`, `assigned_to`, `notes`, `source`, `origin`,
+  `temperature`, `expected_close_date`.
+- `GET /api/v1/deals/{id}/events` — the card's **history** (newest first):
+  `created`, `stage_changed`, `status_changed`, `transferred`, `note`.
+
+**Create** — `POST /api/v1/deals` (scope `deals:write`). Only `title` is
+required (pipeline/stage default to the account's first, so an agent can drop a
+card with just a title). Optional: `value`, `currency`, `contact_id`,
+`conversation_id` (links the card to a chat — shows the chat bubble),
+`stage_id`, `pipeline_id`, `notes`, `expected_close_date`, `status`.
+
+```bash
+curl -X POST https://<host>/api/v1/deals \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "title": "Troca de botijão P13", "value": 135, "currency": "BRL",
+        "contact_id": "…", "stage_id": "…" }'
+```
+
+**Move / assign** — `PATCH /api/v1/deals/{id}` (scope `deals:write`):
+
+- **Move** a card: send `stage_id` (and `pipeline_id` if changing board).
+- **Assign / transfer**: send `assigned_to` (a member id, or `null` to
+  unassign). Assigning records a `transferred` event and notifies the new owner.
+
+```bash
+# Move a card to another stage
+curl -X PATCH https://<host>/api/v1/deals/{id} \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "stage_id": "<stage-id>" }'
+```
+
+**Edit fields** — `PATCH /api/v1/deals/{id}` with any of `title`, `value`,
+`currency`, `notes`, `status` (`open`/`won`/`lost`), `expected_close_date`,
+`contact_id`. **Requires the `deals:edit` scope.** A single `PATCH` that both
+moves and edits needs **both** `deals:write` and `deals:edit`.
+
+**Delete** — `DELETE /api/v1/deals/{id}`. **Requires the `deals:delete` scope**
+and is **permanent**. Grant this scope only to a key you trust to remove cards;
+leave it off (the default) so an agent can never delete without explicit,
+separate authorization.
 
 ### Tasks
 
@@ -343,6 +431,22 @@ Scopes: `tasks:read` / `tasks:write`.
 curl -X POST https://your-crm.example.com/api/v1/tasks \
   -H "Authorization: Bearer wacrm_live_xxx" -H "Content-Type: application/json" \
   -d '{ "title": "Follow up with Jane", "due_at": "2026-08-01T14:00:00Z", "contact_id": "…" }'
+```
+
+### Leads — one-call intake (campaign / landing page)
+
+`POST /api/v1/leads` (scope `contacts:write`). Turns a form submission into a
+fully-formed lead in one call: find-or-create the **contact**, open a **deal**
+in the Kanban, create a follow-up **task**, apply **tags** (campaign/utm/
+interest), and optionally fire an intro WhatsApp + an internal-chat alert.
+Steps after the contact are best-effort — the response reports what landed.
+Mint a key with **only** `contacts:write` for public forms.
+
+```bash
+curl -X POST https://<host>/api/v1/leads \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{ "name": "Jane", "phone": "+5567999990000",
+        "interest": "Botijão P13", "campaign": "instagram-ago" }'
 ```
 
 ### AI text agent
