@@ -25,6 +25,8 @@
 // permissions approved (App Review). In dev mode it works for admins/testers.
 // ============================================================
 
+import { randomInt } from 'node:crypto'
+
 import { NextResponse } from 'next/server'
 import { eq } from 'drizzle-orm'
 
@@ -43,6 +45,7 @@ import {
   exchangeEmbeddedSignupCode,
   verifyPhoneNumber,
   subscribeWabaToApp,
+  registerPhoneNumber,
 } from '@/lib/whatsapp/meta-api'
 
 export async function POST(request: Request) {
@@ -130,14 +133,38 @@ export async function POST(request: Request) {
     }
   }
 
+  // 4) register the number for our app's webhook. Subscribing the WABA is not
+  //    enough on its own — /register binds THIS number to our app so inbound
+  //    events actually reach us. ES-verified numbers are usually already
+  //    registered (idempotent: "already registered" counts as success), and
+  //    when 2FA isn't set yet, /register sets the PIN we generate. Best-effort:
+  //    a number still under Meta review ("Em análise") may reject this — the
+  //    channel is created either way and the number registers once approved.
+  const regPin = String(randomInt(100000, 1000000))
+  let registeredAt: string | null = null
+  let registrationError: string | null = null
+  try {
+    await registerPhoneNumber({ phoneNumberId, accessToken, pin: regPin })
+    registeredAt = new Date().toISOString()
+  } catch (err) {
+    registrationError = err instanceof Error ? err.message : String(err)
+    console.warn(
+      '[embedded-signup] register failed (non-fatal):',
+      registrationError,
+    )
+  }
+
   // Secrets encrypted in `credentials`; routing/progress in `provider_meta`.
   // verifyToken/appSecret stay null: ES numbers ride OUR app's webhook config
   // (the webhook route falls back to the global META_APP_SECRET for them).
-  const credentials = { accessToken, verifyToken: null, appSecret: null }
+  // `regPin` is the 2FA PIN we set on /register, kept for re-registration.
+  const credentials = { accessToken, verifyToken: null, appSecret: null, regPin }
   const providerMeta = {
     phone_number_id: phoneNumberId,
     waba_id: wabaId,
     subscribed_apps_at: subscribedAppsAt,
+    registered_at: registeredAt,
+    last_registration_error: registrationError,
     connected_at: new Date().toISOString(),
     onboarded_via: 'embedded_signup',
   }
@@ -177,7 +204,7 @@ export async function POST(request: Request) {
   }
 
   console.log(
-    `[embedded-signup] connected account=${ctx.accountId} phone_number_id=${phoneNumberId} waba_id=${wabaId} subscribed=${subscribedAppsAt != null}`,
+    `[embedded-signup] connected account=${ctx.accountId} phone_number_id=${phoneNumberId} waba_id=${wabaId} subscribed=${subscribedAppsAt != null} registered=${registeredAt != null}${registrationError ? ` regError="${registrationError}"` : ''}`,
   )
 
   return NextResponse.json({
