@@ -347,7 +347,7 @@ export function IncomingCallModal() {
    *  un-closed row makes the channel read BUSY for 30 minutes, silently
    *  auto-rejecting real customers. Only ever fires once per leg. */
   const finalizeLeg = useCallback(
-    (leg: Leg) => {
+    (leg: Leg, answeredOverride?: boolean) => {
       const m = mediaOf(leg.key);
       if (!m || m.logged) return;
       if (leg.provider !== 'waha') return;
@@ -355,13 +355,19 @@ export function IncomingCallModal() {
       if (!id && !leg.conversationId) return;
       m.logged = true;
       const cid = leg.conversationId;
+      // Normally "answered" = the agent picked up IN the CRM (leg went active).
+      // `answeredOverride` covers the inbound call answered ELSEWHERE (on the
+      // agent's phone): it never goes active here, but it WAS answered — so the
+      // thread must log it as answered, matching the Ligações panel (which the
+      // call.accepted webhook already promotes). Without this the bubble reads
+      // "Perdida" while the panel reads answered — the exact bug Alex hit.
       fetch('/api/calls/waha/log', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           conversationId: cid,
           durationSec: leg.seconds,
-          answered: leg.phase === 'active',
+          answered: answeredOverride ?? leg.phase === 'active',
           callId: id,
         }),
       })
@@ -1097,7 +1103,13 @@ export function IncomingCallModal() {
           return;
         }
         // The peer ended it — close the row out before dropping the leg.
-        finalizeLeg(leg);
+        // Exception: an INBOUND call answered ELSEWHERE (the agent's phone) is
+        // NOT a miss — log it answered so the thread matches the panel.
+        const answeredElsewhere =
+          e.status === 'ACCEPTED_ELSEWHERE' &&
+          leg.dir === 'in' &&
+          leg.phase === 'ringing';
+        finalizeLeg(leg, answeredElsewhere ? true : undefined);
         closeLeg(leg.key);
       }
     },
