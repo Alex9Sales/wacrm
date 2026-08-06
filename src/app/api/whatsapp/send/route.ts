@@ -13,7 +13,7 @@ import {
   type AccountContext,
 } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
-import { getUserSectorIds } from '@/lib/sectors/access'
+import { getUserSectorIds, isAdminUser } from '@/lib/sectors/access'
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -191,6 +191,7 @@ export async function POST(request: Request) {
         .select({
           assignedAgentId: conversations.assignedAgentId,
           sectorId: conversations.sectorId,
+          isPrivate: conversations.isPrivate,
           isGroup: contacts.isGroup,
         })
         .from(conversations)
@@ -200,6 +201,7 @@ export async function POST(request: Request) {
     )
     const assignedAgentId = lockRow?.assignedAgentId ?? null
     const currentSectorId = lockRow?.sectorId ?? null
+    const conversationIsPrivate = lockRow?.isPrivate === true
     // Grupo é LIVRE: responder num grupo NÃO atribui a ninguém (Felipe).
     const isGroupConversation = lockRow?.isGroup === true
     const assignedToOther = !!assignedAgentId && assignedAgentId !== ctx.userId
@@ -233,13 +235,36 @@ export async function POST(request: Request) {
       }
     }
 
-    // Reply lock: once a conversation is assigned, only the assignee (or a
-    // supervisor+) may send in it. Sector visibility still lets teammates
-    // READ it (shared queue), but a non-assignee sending was the exact gap
-    // Alex reported — "atribuída pra outra pessoa, mas outra pessoa está
-    // conseguindo responder". Skipped for supervisor+ (they can always help)
-    // and lifted while the assignee is offline/away (a teammate covering).
-    if (!hasMinRole(ctx.role, 'supervisor') && assignedToOther && !assigneeAway) {
+    // Reply lock (sector model — Felipe's spec). Once assigned, a thread is
+    // normally the owner's to answer. EXCEPTION: inside a sector the caller
+    // belongs to, teammates reply freely to each other's threads — assignment
+    // just marks "who picked it up first" and answering never steals it (the
+    // claim below only fires on an UNASSIGNED thread). The private lock and
+    // admin-owned threads stay locked; a NO-sector assigned thread also stays
+    // the owner's (only they + supervisor+, or a teammate covering when away).
+    let sectorTeammateMayReply = false
+    if (
+      assignedToOther &&
+      !assigneeAway &&
+      !hasMinRole(ctx.role, 'supervisor') &&
+      currentSectorId &&
+      !conversationIsPrivate
+    ) {
+      const callerSectorIds = await getUserSectorIds(ctx.userId)
+      if (callerSectorIds.includes(currentSectorId)) {
+        // Never open an admin/owner's thread to a regular agent.
+        sectorTeammateMayReply = !(await isAdminUser(
+          ctx.accountId,
+          assignedAgentId!,
+        ))
+      }
+    }
+    if (
+      !hasMinRole(ctx.role, 'supervisor') &&
+      assignedToOther &&
+      !assigneeAway &&
+      !sectorTeammateMayReply
+    ) {
       return NextResponse.json(
         {
           error: 'Esta conversa está atribuída a outro atendente.',
@@ -340,8 +365,15 @@ export async function POST(request: Request) {
       //     respondeu". Guarded on the assignee still being that agent so two
       //     concurrent covers don't fight. Supervisors keep the old behavior
       //     (help without stealing).
+      // A sector teammate answering a colleague's thread must NEVER steal it
+      // (Felipe's spec) — even if the owner is away, it stays the owner's until
+      // an explicit transfer. Cover-reassign only applies OUTSIDE the shared
+      // sector (e.g. a no-sector queue thread being covered for an away owner).
       const coverReassign =
-        assignedToOther && assigneeAway && !hasMinRole(ctx.role, 'supervisor')
+        assignedToOther &&
+        assigneeAway &&
+        !hasMinRole(ctx.role, 'supervisor') &&
+        !sectorTeammateMayReply
       // Grupo NUNCA é atribuído (livre pra toda a equipe) — pula claim/cover.
       if (!isGroupConversation) {
         try {

@@ -1317,18 +1317,20 @@ export function MessageThread({
   // O atendente atribuído (não-supervisor) pode TRANSFERIR o atendimento —
   // supervisor+ tem o assign completo; o assignee ganha um "Transferir".
   const isAssignee = !!assignedAgentId && assignedAgentId === user?.id;
-  // Reply lock (mirrors the server-side check in /api/whatsapp/send): a
-  // sector teammate who ISN'T the assignee can still see this conversation
-  // (shared sector queue) but must not be able to reply to it. Supervisor+
-  // always can. Composer-level only — the server is the real enforcement.
-  // The lock lifts when the assignee is offline/away — a teammate covers
-  // (Alex: "se o atendente tiver offline, outro agente atende"). Answering
-  // reassigns the thread to the cover agent (server-side, in the send route).
+  // Reply lock (mirrors the server-side check in /api/whatsapp/send).
+  // Sector model (Felipe's spec): a thread that belongs to a SECTOR never locks
+  // the composer — teammates in the sector reply to each other's threads
+  // freely (assignment just marks who's first; answering never steals it). The
+  // lock survives only on a NO-sector (open/general) thread: once an agent takes
+  // it, other agents can't reply (only the owner + supervisor+, or a teammate
+  // covering while the owner is offline). Private/admin threads never reach here
+  // (read_blocked hides them). Composer-level only — the server is authoritative.
   const lockedByOtherAgentName =
     assignedAgentId &&
     assignedAgentId !== user?.id &&
     !hasMinRole(accountRole ?? "viewer", "supervisor") &&
-    getPresence(assignedAgentId) === "online"
+    getPresence(assignedAgentId) === "online" &&
+    !conversation.sector_id
       ? (currentAssignee?.full_name ?? "outro atendente")
       : null;
 

@@ -9,14 +9,20 @@
 //       - supervisor: everything EXCEPT admin/owner-assigned.
 //       - admin/owner: everything.
 //   • READ (canReadConversation): whether the caller may OPEN the thread /
-//     act on it. STRICT — an agent may read only their own, @mentions, and
-//     unassigned queue items. A teammate's assigned thread is LISTED but not
-//     readable (the UI shows a "atribuída a outro atendente" notice), and the
-//     message loader returns nothing for it.
+//     act on it. Sector model (Felipe's spec): inside a sector the agent
+//     belongs to, teammates READ and reply to each other's threads even when
+//     assigned to someone else — assignment just marks "who picked it up
+//     first", it no longer locks the sector out. The private lock (isPrivate)
+//     is what hides a thread: a private thread is readable only by its owner +
+//     admin + supervisor. On a NO-sector (open/general) channel, an unassigned
+//     thread is readable by all agents, but once taken it becomes the owner's
+//     (only they + admin/supervisor read it).
 //
 // "Ninguém vê as do admin" is absolute at BOTH tiers: an admin/owner-assigned
 // conversation is never listed nor readable by a non-admin — not even via an
-// @mention. `accountId` scopes the admin/owner lookup.
+// @mention or a shared sector. Because an admin's own thread is assigned to the
+// admin, its private lock is also honored against the SUPERVISOR (admin-
+// assigned → supervisor can't read). `accountId` scopes the admin/owner lookup.
 // ============================================================
 
 import {
@@ -181,13 +187,19 @@ export async function canReadConversation(
     return true;
   }
   if (isPrivate) return false;
-  // Assigned to another (non-admin) agent — listed, but not readable.
-  if (assignedAgentId) return false;
-  // Unassigned: open general queue is readable by all; a sector queue only by
-  // that sector's members.
-  if (!conversationSectorId) return true;
-  const sectorIds = await getUserSectorIds(userId);
-  return sectorIds.includes(conversationSectorId);
+  // Sector team (Felipe's spec): inside a sector the caller belongs to, agents
+  // READ (and reply to) each other's threads even when assigned to a teammate.
+  // Assignment now just marks "who picked it up first" — it no longer locks the
+  // sector out; only the private lock (isPrivate, above) does. (Admin-assigned
+  // already returned false above.)
+  if (conversationSectorId) {
+    const sectorIds = await getUserSectorIds(userId);
+    return sectorIds.includes(conversationSectorId);
+  }
+  // No sector (open/general queue): an UNASSIGNED thread is readable by everyone;
+  // once an agent takes it, it becomes the owner's (only they + admin/supervisor
+  // read it), so a non-owner agent can't open an assigned no-sector thread.
+  return !assignedAgentId;
 }
 
 /**
@@ -252,9 +264,10 @@ export function agentCanReadRow(args: {
   if (assignedAgentId && adminIds.has(assignedAgentId)) return false;
   if (participantIds.has(conversationId)) return true;
   if (isPrivate) return false;
-  if (assignedAgentId) return false;
-  if (!sectorId) return true;
-  return sectorIds.has(sectorId);
+  // Sector-mate reads teammates' threads (assigned or not); a no-sector thread
+  // is readable only while unassigned (open queue), then becomes the owner's.
+  if (sectorId) return sectorIds.has(sectorId);
+  return !assignedAgentId;
 }
 
 /** True when the user is an explicit participant of the conversation. */
