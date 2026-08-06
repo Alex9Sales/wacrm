@@ -99,12 +99,22 @@ export function TaskForm({
   const [dealId, setDealId] = useState<string | null>(null)
   const [assigneeIds, setAssigneeIds] = useState<string[]>([])
   const [members, setMembers] = useState<{ id: string; name: string }[]>([])
+  const [memberFilter, setMemberFilter] = useState('')
   const [saving, setSaving] = useState(false)
 
   const toggleAssignee = (id: string) =>
     setAssigneeIds((prev) =>
       prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
     )
+
+  // Só mostra o campo de busca quando a equipe é grande (senão é ruído para
+  // 3-4 pessoas). Filtra por nome, sem mexer na seleção já feita.
+  const SHOW_MEMBER_SEARCH_FROM = 7
+  const filteredMembers = memberFilter.trim()
+    ? members.filter((m) =>
+        m.name.toLowerCase().includes(memberFilter.trim().toLowerCase()),
+      )
+    : members
 
   // Reset the form whenever the dialog opens (or the target task changes).
   useEffect(() => {
@@ -125,6 +135,7 @@ export function TaskForm({
           ? [task.assigned_to]
           : [],
     )
+    setMemberFilter('')
     // Load the team for the "Responsáveis" picker.
     listProfiles()
       .then((ps) =>
@@ -253,24 +264,44 @@ export function TaskForm({
             {members.length === 0 ? (
               <p className="text-xs text-muted-foreground">Carregando equipe…</p>
             ) : (
-              <div className="max-h-44 space-y-0.5 overflow-y-auto rounded-md border border-border bg-background p-1">
-                {members.map((m) => {
-                  const checked = assigneeIds.includes(m.id)
-                  return (
-                    <label
-                      key={m.id}
-                      className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-muted"
-                    >
-                      <input
-                        type="checkbox"
-                        checked={checked}
-                        onChange={() => toggleAssignee(m.id)}
-                        className="size-3.5 shrink-0 accent-primary"
-                      />
-                      <span className="truncate">{m.name}</span>
-                    </label>
-                  )
-                })}
+              <div className="space-y-1.5">
+                {members.length >= SHOW_MEMBER_SEARCH_FROM && (
+                  <Input
+                    value={memberFilter}
+                    onChange={(e) => setMemberFilter(e.target.value)}
+                    // Enter na busca não deve enviar o formulário.
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter') e.preventDefault()
+                    }}
+                    placeholder="Buscar membro pelo nome…"
+                    className="h-8 text-sm"
+                  />
+                )}
+                <div className="max-h-44 space-y-0.5 overflow-y-auto rounded-md border border-border bg-background p-1">
+                  {filteredMembers.length === 0 ? (
+                    <p className="px-2 py-1.5 text-sm text-muted-foreground">
+                      Ninguém encontrado.
+                    </p>
+                  ) : (
+                    filteredMembers.map((m) => {
+                      const checked = assigneeIds.includes(m.id)
+                      return (
+                        <label
+                          key={m.id}
+                          className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-muted"
+                        >
+                          <input
+                            type="checkbox"
+                            checked={checked}
+                            onChange={() => toggleAssignee(m.id)}
+                            className="size-3.5 shrink-0 accent-primary"
+                          />
+                          <span className="truncate">{m.name}</span>
+                        </label>
+                      )
+                    })
+                  )}
+                </div>
               </div>
             )}
             <p className="text-xs text-muted-foreground">
