@@ -94,7 +94,7 @@ export default function TermosPage() {
 
       <h2>10. Contato</h2>
       <p>
-        Sales Tecnologia — FluxiaCRM · <strong>suporte@salestecnologia.com.br</strong>
+        Sales Tecnologia — FluxiaCRM · <strong>servicos@salestecnologia.com.br</strong>
       </p>
     </>
   );

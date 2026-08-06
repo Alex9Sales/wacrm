@@ -24,7 +24,7 @@ export default function ExclusaoDeDadosPage() {
       <ul>
         <li>
           <strong>Por e-mail:</strong> envie uma mensagem para{' '}
-          <strong>suporte@salestecnologia.com.br</strong> com o assunto{' '}
+          <strong>servicos@salestecnologia.com.br</strong> com o assunto{' '}
           &quot;Exclusão de dados&quot;, informando o e-mail da conta e/ou o número de
           WhatsApp associado, para que possamos localizar e remover seus dados.
         </li>
@@ -60,7 +60,7 @@ export default function ExclusaoDeDadosPage() {
 
       <h2>Contato</h2>
       <p>
-        Sales Tecnologia — FluxiaCRM · <strong>suporte@salestecnologia.com.br</strong>
+        Sales Tecnologia — FluxiaCRM · <strong>servicos@salestecnologia.com.br</strong>
       </p>
     </>
   );

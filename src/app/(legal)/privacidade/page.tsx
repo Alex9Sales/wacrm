@@ -22,7 +22,7 @@ export default function PrivacidadePage() {
       <h2>1. Quem somos</h2>
       <p>
         O FluxiaCRM é operado pela Sales Tecnologia. Para questões de privacidade,
-        entre em contato em <strong>suporte@salestecnologia.com.br</strong>.
+        entre em contato em <strong>servicos@salestecnologia.com.br</strong>.
       </p>
 
       <h2>2. Dados que coletamos</h2>
@@ -104,7 +104,7 @@ export default function PrivacidadePage() {
         Você pode solicitar acesso, correção, portabilidade ou{' '}
         <strong>exclusão</strong> dos seus dados. Consulte nossas{' '}
         <a href="/exclusao-de-dados">Instruções de Exclusão de Dados</a> ou escreva
-        para <strong>suporte@salestecnologia.com.br</strong>.
+        para <strong>servicos@salestecnologia.com.br</strong>.
       </p>
 
       <h2>8. Cookies</h2>
@@ -121,7 +121,7 @@ export default function PrivacidadePage() {
 
       <h2>10. Contato</h2>
       <p>
-        Sales Tecnologia — FluxiaCRM · <strong>suporte@salestecnologia.com.br</strong>
+        Sales Tecnologia — FluxiaCRM · <strong>servicos@salestecnologia.com.br</strong>
       </p>
     </>
   );
