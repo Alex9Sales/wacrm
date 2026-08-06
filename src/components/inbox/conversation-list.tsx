@@ -52,6 +52,7 @@ interface ConversationListProps {
   onPriorityChange?: (id: string, priority: ConversationPriority) => void;
   onConversationDeleted?: (id: string) => void;
   onContactTagsChange?: (contactId: string, tags: Tag[]) => void;
+  onMarkedUnread?: (id: string) => void;
 }
 
 const STATUS_COLORS: Record<ConversationStatus, string> = {
@@ -93,6 +94,7 @@ export function ConversationList({
   onPriorityChange,
   onConversationDeleted,
   onContactTagsChange,
+  onMarkedUnread,
 }: ConversationListProps) {
   const router = useRouter();
   // Right-click quick-actions menu: which conversation + cursor position.
@@ -428,6 +430,13 @@ export function ConversationList({
           "Filtro")
         : `${statusFilters.size} filtros`;
 
+  // Running tally of UNREAD conversations (Felipe) — how many threads have the
+  // dot right now, across the loaded set.
+  const unreadCount = conversations.reduce(
+    (n, c) => n + ((c.unread_count ?? 0) > 0 ? 1 : 0),
+    0,
+  );
+
   return (
     // w-full on mobile so the list occupies the whole viewport when it's
     // the single pane showing; fixed 320px on desktop where it shares the
@@ -455,6 +464,19 @@ export function ConversationList({
             <MessageSquarePlus className="h-4 w-4" />
           </button>
         </div>
+
+        {/* Contador de conversas não lidas (Felipe) — soma viva das que estão
+            com a bolinha; some quando zera. */}
+        {unreadCount > 0 && (
+          <div className="flex items-center gap-1.5 px-0.5 text-xs text-muted-foreground">
+            <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground">
+              {unreadCount}
+            </span>
+            {unreadCount === 1
+              ? "conversa não lida"
+              : "conversas não lidas"}
+          </div>
+        )}
 
         {/* Caixa de entrada (channel) selector — Chatwoot-style. Filters
             the list to a single channel's conversations, or shows all.
@@ -860,6 +882,7 @@ export function ConversationList({
           onPriorityChange={onPriorityChange}
           onDeleted={onConversationDeleted}
           onContactTagsChange={onContactTagsChange}
+          onMarkedUnread={onMarkedUnread}
           onTagCreated={(tag) =>
             setTags((prev) =>
               prev.some((t) => t.id === tag.id) ? prev : [...prev, tag],

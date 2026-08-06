@@ -214,10 +214,17 @@ export async function getConversationWithContact(
   const aiActiveChannel = await aiRepliesOnChannel(ctx.accountId, channel?.id)
   return {
     ...conv,
-    // When blocked, blank the content preview so the thread's last message
-    // doesn't leak in a header/preview — the messages themselves are already
-    // withheld by listMessages (strict read check).
-    last_message_text: readBlocked ? '' : conv.last_message_text,
+    // When blocked, mask the preview with the SAME sentinel the list uses
+    // ('[private]' / '[locked]') — not a blank. A blank here would overwrite
+    // the list's lock label when this single-loaded row is merged back into the
+    // list on navigation/realtime, making a private thread read "Nenhuma
+    // mensagem ainda" until a refresh (Felipe's bug). The sentinel leaks no
+    // content; listMessages still withholds the messages themselves.
+    last_message_text: readBlocked
+      ? conv.is_private
+        ? '[private]'
+        : '[locked]'
+      : conv.last_message_text,
     transfer_note: readBlocked ? null : conv.transfer_note,
     read_blocked: readBlocked,
     ai_active_channel: aiActiveChannel,

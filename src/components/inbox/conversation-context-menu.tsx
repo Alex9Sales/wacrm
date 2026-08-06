@@ -6,7 +6,14 @@
 // cursor; closes on outside click / Esc.
 
 import { useCallback, useEffect, useRef, useState } from "react";
-import { Check, Loader2, Plus, Tag as TagIcon, Trash2 } from "lucide-react";
+import {
+  Check,
+  Loader2,
+  MailOpen,
+  Plus,
+  Tag as TagIcon,
+  Trash2,
+} from "lucide-react";
 import { toast } from "sonner";
 
 import type { Conversation, ConversationPriority, ConversationStatus, Tag } from "@/types";
@@ -18,6 +25,7 @@ import {
   updateConversationPriority,
   updateConversationStatus,
   deleteConversation,
+  markConversationUnread,
   addContactTag,
   removeContactTag,
 } from "@/app/(dashboard)/inbox/actions";
@@ -53,6 +61,7 @@ interface Props {
   onStatusChange?: (id: string, status: ConversationStatus) => void;
   onPriorityChange?: (id: string, priority: ConversationPriority) => void;
   onDeleted?: (id: string) => void;
+  onMarkedUnread?: (id: string) => void;
   onContactTagsChange?: (contactId: string, tags: Tag[]) => void;
   /** A brand-new tag was created inline — bubble it up so the account's
    *  tag list (filters, other menus) picks it up without a refetch. */
@@ -68,6 +77,7 @@ export function ConversationContextMenu({
   onStatusChange,
   onPriorityChange,
   onDeleted,
+  onMarkedUnread,
   onContactTagsChange,
   onTagCreated,
 }: Props) {
@@ -182,6 +192,21 @@ export function ConversationContextMenu({
     onContactTagsChange,
   ]);
 
+  const handleMarkUnread = useCallback(async () => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      await markConversationUnread(conversation.id);
+      onMarkedUnread?.(conversation.id);
+      toast.success("Marcada como não lida.");
+    } catch {
+      toast.error("Não foi possível marcar como não lida.");
+    } finally {
+      setBusy(false);
+      onClose();
+    }
+  }, [busy, conversation.id, onMarkedUnread, onClose]);
+
   const handleDelete = useCallback(async () => {
     if (busy) return;
     if (!confirm("Excluir esta conversa? Esta ação não pode ser desfeita.")) return;
@@ -211,6 +236,20 @@ export function ConversationContextMenu({
         <div className="truncate px-2 py-1.5 text-xs font-medium text-muted-foreground">
           {conversation.contact?.name || conversation.contact?.phone || "Conversa"}
         </div>
+
+        {/* Marcar como não lida (Felipe) — mesma ação do botão no cabeçalho,
+            agora acessível direto no botão-direito do card. */}
+        <button
+          type="button"
+          disabled={busy}
+          onClick={handleMarkUnread}
+          className="flex items-center gap-2 rounded-md px-2 py-1.5 text-sm hover:bg-accent hover:text-accent-foreground disabled:opacity-50"
+        >
+          <MailOpen className="size-4 shrink-0 text-muted-foreground" />
+          <span className="flex-1 text-left">Marcar como não lida</span>
+        </button>
+
+        <div className="my-1 h-px bg-border" />
 
         {/* Prioridade */}
         <div className="px-2 pb-1 pt-1.5 text-[10px] font-semibold uppercase tracking-wider text-muted-foreground">

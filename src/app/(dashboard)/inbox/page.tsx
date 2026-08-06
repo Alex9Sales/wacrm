@@ -524,6 +524,28 @@ export default function InboxPage() {
     router.replace(qs ? `/inbox?${qs}` : "/inbox", { scroll: false });
   }, [router, searchParams]);
 
+  // Esc leaves the open conversation (WhatsApp Web-style) — Felipe's pedido.
+  // Ignored while typing in a field (search/dropdown), and a composer with a
+  // draft is preserved (only an EMPTY composer lets Esc through) so no reply
+  // is lost. Also a no-op when no conversation is open.
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key !== "Escape" || !activeConversation) return;
+      const el = document.activeElement as HTMLElement | null;
+      const tag = el?.tagName;
+      if (tag === "INPUT" || tag === "SELECT") return;
+      if (
+        (tag === "TEXTAREA" || el?.isContentEditable) &&
+        (el as HTMLTextAreaElement | null)?.value?.trim()
+      ) {
+        return;
+      }
+      handleCloseConversation();
+    };
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [activeConversation, handleCloseConversation]);
+
 
   // A conversation was deleted from the thread header. Drop it from the
   // list and, if it's the open thread, clear the center pane back to the
@@ -642,6 +664,18 @@ export default function InboxPage() {
     [activeConversation]
   );
 
+  // Marked unread from the list's right-click menu (Felipe). Bump the dot
+  // optimistically; the server persisted unread_count = 1.
+  const handleMarkedUnread = useCallback((conversationId: string) => {
+    setConversations((prev) =>
+      prev.map((c) =>
+        c.id === conversationId
+          ? { ...c, unread_count: Math.max(1, c.unread_count ?? 0) }
+          : c,
+      ),
+    );
+  }, []);
+
   const handleAssignChange = useCallback(
     (conversationId: string, assignedAgentId: string | null) => {
       setConversations((prev) =>
@@ -718,6 +752,7 @@ export default function InboxPage() {
             onPriorityChange={handlePriorityChange}
             onConversationDeleted={handleConversationDeleted}
             onContactTagsChange={handleContactTagsChange}
+            onMarkedUnread={handleMarkedUnread}
           />
         </div>
 
