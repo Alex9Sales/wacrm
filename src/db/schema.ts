@@ -1278,12 +1278,17 @@ export const tasks = pgTable("tasks", {
 	type: text(),
 	contactId: uuid("contact_id"),
 	dealId: uuid("deal_id"),
+	// Responsável PRIMÁRIO (compat com telas/joins antigos). A lista completa
+	// de responsáveis vive em `assigneeIds` (multi-responsável, spec Alex);
+	// `assignedTo` = assigneeIds[0].
 	assignedTo: uuid("assigned_to"),
+	assigneeIds: uuid("assignee_ids").array().default(sql`'{}'::uuid[]`).notNull(),
 	createdBy: uuid("created_by"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("idx_tasks_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	index("idx_tasks_assignee_ids").using("gin", table.assigneeIds.asc().nullsLast().op("array_ops")),
 	index("idx_tasks_account_status").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.status.asc().nullsLast().op("text_ops")),
 	index("idx_tasks_due_at").using("btree", table.dueAt.asc().nullsLast().op("timestamptz_ops")),
 	index("idx_tasks_contact").using("btree", table.contactId.asc().nullsLast().op("uuid_ops")),

@@ -222,7 +222,8 @@ export type NotificationType =
   | 'conversation_assigned'
   | 'sla_alert'
   | 'mention'
-  | 'deal_transferred';
+  | 'deal_transferred'
+  | 'task_assigned';
 
 export interface Notification {
   id: string;

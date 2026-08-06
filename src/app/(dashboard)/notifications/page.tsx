@@ -8,7 +8,7 @@ import {
   markNotificationRead,
 } from "./actions";
 import type { Notification } from "@/types";
-import { Bell, CheckCheck, Loader2, UserPlus, Clock, AtSign, ArrowRightLeft } from "lucide-react";
+import { Bell, CheckCheck, Loader2, UserPlus, Clock, AtSign, ArrowRightLeft, ListChecks } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
@@ -21,6 +21,7 @@ const TYPE_ICON: Record<Notification["type"], typeof Bell> = {
   sla_alert: Clock,
   mention: AtSign,
   deal_transferred: ArrowRightLeft,
+  task_assigned: ListChecks,
 };
 
 export default function NotificationsPage() {
@@ -76,6 +77,12 @@ export default function NotificationsPage() {
 
   const handleClick = useCallback(
     async (n: Notification) => {
+      // Tarefa atribuída → abre a lista de tarefas (independe de ter negócio).
+      if (n.type === "task_assigned") {
+        if (!n.read_at) markRead(n.id);
+        router.push("/tarefas");
+        return;
+      }
       if (n.deal_id) {
         // Transferência de lead → abre o negócio. Persiste "lido" antes (a
         // navegação descarrega a página e cancelaria um fire-and-forget).

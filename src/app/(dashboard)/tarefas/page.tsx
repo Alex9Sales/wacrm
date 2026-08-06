@@ -305,10 +305,10 @@ export default function TarefasPage() {
                           Card: {row.deal_title}
                         </span>
                       )}
-                      {/* Quem é dono da tarefa: atribuída a X · criada por Y */}
+                      {/* Quem é dono da tarefa: atribuída a X (, Y, …) · criada por Z */}
                       <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
-                        {row.assigned_to_name
-                          ? `Atribuída a ${row.assigned_to_name}`
+                        {row.assignee_names.length > 0
+                          ? `Atribuída a ${row.assignee_names.join(', ')}`
                           : 'Não atribuída'}
                         {row.created_by_name && ` · criada por ${row.created_by_name}`}
                       </span>

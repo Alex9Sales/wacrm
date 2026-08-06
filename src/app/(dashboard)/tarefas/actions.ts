@@ -24,6 +24,7 @@ import {
   deals,
   pipelines,
   user,
+  notifications,
 } from '@/db'
 
 // Aliased `user` joins so a task can carry BOTH its creator's and its
@@ -45,7 +46,12 @@ function taskVisibilityFor(ctx: {
   userId: string
 }) {
   if (hasMinRole(ctx.role, 'supervisor')) return undefined
-  return or(eq(tasks.assignedTo, ctx.userId), eq(tasks.createdBy, ctx.userId))
+  // Agente/viewer vê a tarefa se a CRIOU ou se é UM dos responsáveis (lista
+  // multi-responsável). `@>` casa o id dentro do array (usa o GIN index).
+  return or(
+    eq(tasks.createdBy, ctx.userId),
+    sql`${tasks.assigneeIds} @> ARRAY[${ctx.userId}]::uuid[]`,
+  )
 }
 
 // ------------------------------------------------------------
@@ -66,6 +72,8 @@ export interface TaskRow {
   contact_id: string | null
   deal_id: string | null
   assigned_to: string | null
+  /** Full responsible set (multi-assignee). `assigned_to` is assignee_ids[0]. */
+  assignee_ids: string[]
   created_by: string | null
   created_at: string
   updated_at: string
@@ -77,6 +85,8 @@ export interface TaskRow {
   /** Who created the task / who it's assigned to (display names). */
   created_by_name: string | null
   assigned_to_name: string | null
+  /** Display names of every responsável (ordered), for the multi-assignee UI. */
+  assignee_names: string[]
   /** Computed server-side (due_at < now AND status='open'). */
   overdue: boolean
 }
@@ -115,6 +125,7 @@ const taskSelect = {
   contact_id: tasks.contactId,
   deal_id: tasks.dealId,
   assigned_to: tasks.assignedTo,
+  assignee_ids: tasks.assigneeIds,
   created_by: tasks.createdBy,
   created_at: tasks.createdAt,
   updated_at: tasks.updatedAt,
@@ -124,6 +135,11 @@ const taskSelect = {
   pipeline_name: pipelines.name,
   created_by_name: taskCreator.name,
   assigned_to_name: taskAssignee.name,
+  // Nomes de todos os responsáveis (subquery correlata — array_agg dos
+  // membros cujo id está em assignee_ids). '{}' quando não há nenhum.
+  assignee_names: sql<
+    string[]
+  >`COALESCE((SELECT array_agg(au.name ORDER BY au.name) FROM "user" au WHERE au.id = ANY(${tasks.assigneeIds})), '{}'::text[])`,
   overdue: sql<boolean>`(${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} < NOW() AND ${tasks.status} = 'open')`,
 }
 
@@ -139,6 +155,7 @@ function toTaskRow(r: Record<string, unknown>): TaskRow {
     contact_id: (r.contact_id as string | null) ?? null,
     deal_id: (r.deal_id as string | null) ?? null,
     assigned_to: (r.assigned_to as string | null) ?? null,
+    assignee_ids: (r.assignee_ids as string[] | null) ?? [],
     created_by: (r.created_by as string | null) ?? null,
     created_at: r.created_at as string,
     updated_at: r.updated_at as string,
@@ -148,6 +165,7 @@ function toTaskRow(r: Record<string, unknown>): TaskRow {
     pipeline_name: (r.pipeline_name as string | null) ?? null,
     created_by_name: (r.created_by_name as string | null) ?? null,
     assigned_to_name: (r.assigned_to_name as string | null) ?? null,
+    assignee_names: (r.assignee_names as string[] | null) ?? [],
     overdue: Boolean(r.overdue),
   }
 }
@@ -452,8 +470,66 @@ export interface CreateTaskInput {
   status?: TaskStatus
   type?: string | null
   contactId?: string | null
-  dealId?: string | null
+  /** @deprecated Responsável único — use `assigneeIds`. Mantido p/ callers antigos. */
   assignedTo?: string | null
+  /** Lista de responsáveis (multi). Vazio = sem responsável. */
+  assigneeIds?: string[]
+  dealId?: string | null
+}
+
+/**
+ * Sanitiza a lista de responsáveis: aceita a nova `assigneeIds` ou cai no
+ * `assignedTo` legado; tira brancos/duplicados preservando a ordem. O
+ * primeiro vira o responsável PRIMÁRIO (`assigned_to`, compat).
+ */
+function normalizeAssignees(input: {
+  assigneeIds?: string[]
+  assignedTo?: string | null
+}): string[] {
+  const raw =
+    input.assigneeIds ?? (input.assignedTo ? [input.assignedTo] : [])
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const id of raw) {
+    const v = cleanText(id)
+    if (!v || seen.has(v)) continue
+    seen.add(v)
+    out.push(v)
+  }
+  return out
+}
+
+/**
+ * Notifica cada responsável marcado numa tarefa (delegação — spec Alex): o
+ * agente pode criar tarefa e marcar admin/supervisor/outro agente, e a pessoa
+ * recebe o aviso. Best-effort — uma falha aqui não derruba a criação/edição.
+ * `assigneeIds` já vem SEM o próprio ator (ninguém se auto-notifica).
+ */
+async function notifyTaskAssignees(args: {
+  accountId: string
+  actorUserId: string
+  taskTitle: string
+  dealId: string | null
+  contactId: string | null
+  assigneeIds: string[]
+}): Promise<void> {
+  if (args.assigneeIds.length === 0) return
+  try {
+    await db.insert(notifications).values(
+      args.assigneeIds.map((uid) => ({
+        accountId: args.accountId,
+        userId: uid,
+        type: 'task_assigned',
+        title: 'Nova tarefa atribuída a você',
+        body: args.taskTitle,
+        actorUserId: args.actorUserId,
+        dealId: args.dealId,
+        contactId: args.contactId,
+      })),
+    )
+  } catch (err) {
+    console.error('[tasks] notifyTaskAssignees failed:', err)
+  }
 }
 
 /** Normalize a datetime-local (or ISO) string into a value pg accepts. */
@@ -525,6 +601,7 @@ export async function createTask(
     const status: TaskStatus = input.status ?? 'open'
     const contactId = await assertOwnedContact(ctx.accountId, input.contactId)
     const dealId = await assertOwnedDeal(ctx.accountId, input.dealId)
+    const assigneeIds = normalizeAssignees(input)
 
     const inserted = await db
       .insert(tasks)
@@ -537,11 +614,21 @@ export async function createTask(
         type: cleanText(input.type),
         contactId,
         dealId,
-        assignedTo: cleanText(input.assignedTo),
+        assignedTo: assigneeIds[0] ?? null,
+        assigneeIds,
         createdBy: ctx.userId,
       })
       .returning({ id: tasks.id })
     const id = firstOrThrow(inserted).id
+    // Avisa cada responsável marcado (menos quem criou — não notifica a si).
+    await notifyTaskAssignees({
+      accountId: ctx.accountId,
+      actorUserId: ctx.userId,
+      taskTitle: title,
+      dealId,
+      contactId,
+      assigneeIds: assigneeIds.filter((uid) => uid !== ctx.userId),
+    })
     const task = await getTask(id)
     if (!task) return { ok: false, error: 'Falha ao criar a tarefa.' }
     return { ok: true, task }
@@ -561,7 +648,10 @@ export interface UpdateTaskPatch {
   type?: string | null
   contactId?: string | null
   dealId?: string | null
+  /** @deprecated use `assigneeIds`. */
   assignedTo?: string | null
+  /** Lista completa de responsáveis (substitui a atual quando presente). */
+  assigneeIds?: string[]
 }
 
 /**
@@ -589,7 +679,26 @@ export async function updateTask(
       set.contactId = await assertOwnedContact(ctx.accountId, patch.contactId)
     if (patch.dealId !== undefined)
       set.dealId = await assertOwnedDeal(ctx.accountId, patch.dealId)
-    if (patch.assignedTo !== undefined) set.assignedTo = cleanText(patch.assignedTo)
+    // Responsáveis: a nova `assigneeIds` (ou o `assignedTo` legado) SUBSTITUI a
+    // lista. Grava a lista + o primário. Guarda a lista anterior p/ notificar
+    // só quem foi ADICIONADO agora.
+    const changingAssignees =
+      patch.assigneeIds !== undefined || patch.assignedTo !== undefined
+    let prevAssignees: string[] = []
+    let nextAssignees: string[] = []
+    if (changingAssignees) {
+      nextAssignees = normalizeAssignees(patch)
+      prevAssignees =
+        firstOrNull(
+          await db
+            .select({ ids: tasks.assigneeIds })
+            .from(tasks)
+            .where(and(eq(tasks.id, id), eq(tasks.accountId, ctx.accountId)))
+            .limit(1),
+        )?.ids ?? []
+      set.assigneeIds = nextAssignees
+      set.assignedTo = nextAssignees[0] ?? null
+    }
 
     if (Object.keys(set).length === 0) {
       const current = await getTask(id)
@@ -609,6 +718,22 @@ export async function updateTask(
       )
       .returning({ id: tasks.id })
     if (!firstOrNull(updated)) return { ok: false, error: 'Tarefa não encontrada.' }
+
+    if (changingAssignees) {
+      const prev = new Set(prevAssignees)
+      const added = nextAssignees.filter(
+        (uid) => !prev.has(uid) && uid !== ctx.userId,
+      )
+      const task = await getTask(id)
+      await notifyTaskAssignees({
+        accountId: ctx.accountId,
+        actorUserId: ctx.userId,
+        taskTitle: task?.title ?? patch.title ?? 'Tarefa',
+        dealId: task?.deal_id ?? null,
+        contactId: task?.contact_id ?? null,
+        assigneeIds: added,
+      })
+    }
 
     const task = await getTask(id)
     if (!task) return { ok: false, error: 'Tarefa não encontrada.' }

@@ -97,9 +97,14 @@ export function TaskForm({
   const [type, setType] = useState('')
   const [contactId, setContactId] = useState<string | null>(null)
   const [dealId, setDealId] = useState<string | null>(null)
-  const [assignedTo, setAssignedTo] = useState<string | null>(null)
+  const [assigneeIds, setAssigneeIds] = useState<string[]>([])
   const [members, setMembers] = useState<{ id: string; name: string }[]>([])
   const [saving, setSaving] = useState(false)
+
+  const toggleAssignee = (id: string) =>
+    setAssigneeIds((prev) =>
+      prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id],
+    )
 
   // Reset the form whenever the dialog opens (or the target task changes).
   useEffect(() => {
@@ -113,8 +118,14 @@ export function TaskForm({
     // the inbox sidebar / Kanban card can pre-select the client/card.
     setContactId(task?.contact_id ?? prefillContactId ?? null)
     setDealId(task?.deal_id ?? prefillDealId ?? null)
-    setAssignedTo(task?.assigned_to ?? null)
-    // Load the team for the "Responsável" picker.
+    setAssigneeIds(
+      task?.assignee_ids?.length
+        ? task.assignee_ids
+        : task?.assigned_to
+          ? [task.assigned_to]
+          : [],
+    )
+    // Load the team for the "Responsáveis" picker.
     listProfiles()
       .then((ps) =>
         setMembers(
@@ -144,7 +155,7 @@ export function TaskForm({
         type: type.trim() || null,
         contactId,
         dealId,
-        assignedTo,
+        assigneeIds,
       }
       const res = isEdit
         ? await updateTask(task!.id, payload)
@@ -238,31 +249,34 @@ export function TaskForm({
           </div>
 
           <div className="space-y-1.5">
-            <Label>Responsável</Label>
-            <Select
-              value={assignedTo ?? '__none__'}
-              onValueChange={(v) => setAssignedTo(v === '__none__' ? null : v)}
-            >
-              <SelectTrigger className="w-full bg-background border-border text-foreground">
-                {/* Rótulo manual — o <SelectValue> do Base UI mostrava o ID cru. */}
-                <SelectValue placeholder="Ninguém (não atribuída)">
-                  {assignedTo
-                    ? (members.find((m) => m.id === assignedTo)?.name ??
-                      "Ninguém (não atribuída)")
-                    : "Ninguém (não atribuída)"}
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="__none__">Ninguém (não atribuída)</SelectItem>
-                {members.map((m) => (
-                  <SelectItem key={m.id} value={m.id}>
-                    {m.name}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Label>Responsáveis</Label>
+            {members.length === 0 ? (
+              <p className="text-xs text-muted-foreground">Carregando equipe…</p>
+            ) : (
+              <div className="max-h-44 space-y-0.5 overflow-y-auto rounded-md border border-border bg-background p-1">
+                {members.map((m) => {
+                  const checked = assigneeIds.includes(m.id)
+                  return (
+                    <label
+                      key={m.id}
+                      className="flex cursor-pointer items-center gap-2 rounded px-2 py-1.5 text-sm text-foreground hover:bg-muted"
+                    >
+                      <input
+                        type="checkbox"
+                        checked={checked}
+                        onChange={() => toggleAssignee(m.id)}
+                        className="size-3.5 shrink-0 accent-primary"
+                      />
+                      <span className="truncate">{m.name}</span>
+                    </label>
+                  )
+                })}
+              </div>
+            )}
             <p className="text-xs text-muted-foreground">
-              Quem é responsável pela tarefa. Também fica gravado quem a criou.
+              {assigneeIds.length === 0
+                ? 'Marque um ou mais responsáveis. Cada um vê a tarefa no painel dele e é avisado. Também fica gravado quem criou.'
+                : `${assigneeIds.length} ${assigneeIds.length === 1 ? 'responsável marcado' : 'responsáveis marcados'} — cada um vê a tarefa e é avisado.`}
             </p>
           </div>
 
