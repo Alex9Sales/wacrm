@@ -6,6 +6,7 @@ import {
   parseContactCsv,
   type ParsedContactRow,
 } from '@/lib/contacts/parse-contact-csv';
+import { parseVCard } from '@/lib/contacts/parse-vcard';
 import {
   importContacts,
   previewImportContacts,
@@ -165,11 +166,17 @@ export function ImportModal({
     setResult(null);
 
     const text = await selected.text();
+    // vCard (.vcf) ou CSV — decide pela extensão/tipo, com fallback pro
+    // conteúdo (um .vcf sempre começa com "BEGIN:VCARD").
+    const isVCard =
+      /\.vcf$/i.test(selected.name) ||
+      selected.type === 'text/vcard' ||
+      /^\s*BEGIN:VCARD/i.test(text);
     const {
       rows,
       hasTagsColumn: csvHasTags,
       hasCompanyColumn: csvHasCompany,
-    } = parseContactCsv(text);
+    } = isVCard ? parseVCard(text) : parseContactCsv(text);
 
     if (rows.length === 0) {
       toast.error(
@@ -364,7 +371,12 @@ export function ImportModal({
               <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
                 codigo_cliente
               </code>{' '}
-              (separadas por vírgula; use aspas em células com vários valores).
+              (separadas por vírgula; use aspas em células com vários valores).{' '}
+              Também aceita{' '}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
+                .vcf
+              </code>{' '}
+              (agenda exportada do celular) — nome e telefone são lidos direto.
             </DialogDescription>
           </DialogHeader>
 
@@ -405,10 +417,10 @@ export function ImportModal({
                   <Upload className="size-5 text-muted-foreground group-hover:text-foreground" />
                 </div>
                 <p className="text-sm text-muted-foreground">
-                  Clique para escolher um arquivo CSV
+                  Clique para escolher um arquivo CSV ou vCard (.vcf)
                 </p>
                 <p className="text-[11px] text-muted-foreground">
-                  .csv até o limite do seu navegador
+                  .csv ou .vcf (agenda do celular) até o limite do navegador
                 </p>
               </>
             )}
@@ -417,7 +429,7 @@ export function ImportModal({
           <input
             ref={fileInputRef}
             type="file"
-            accept=".csv,text/csv"
+            accept=".csv,text/csv,.vcf,text/vcard"
             onChange={handleFileChange}
             className="hidden"
           />
