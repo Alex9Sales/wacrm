@@ -4,7 +4,7 @@ import { db, contacts } from "@/db";
 import { normalizePhone, phonesMatch } from "@/lib/whatsapp/phone-utils";
 
 /** Last-8 suffix — the fuzzy (9th-digit / trunk-tolerant) match key. */
-function last8(phone: string): string {
+export function last8(phone: string): string {
   const n = normalizePhone(phone);
   return n.length >= 8 ? n.slice(-8) : n;
 }

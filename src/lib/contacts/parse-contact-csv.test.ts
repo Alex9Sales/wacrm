@@ -76,6 +76,58 @@ describe('parseContactCsv', () => {
     });
   });
 
+  it('accepts Portuguese headers (Telefone/Nome/E-mail/Empresa)', () => {
+    const csv = `Nome,Telefone,E-mail,Empresa
+Alice,+15551234567,alice@ex.com,ACME
+Bob,+15559876543,,`;
+
+    const result = parseContactCsv(csv);
+    expect(result.hasCompanyColumn).toBe(true);
+    expect(result.rows).toEqual([
+      {
+        phone: '+15551234567',
+        name: 'Alice',
+        email: 'alice@ex.com',
+        company: 'ACME',
+        tagNames: [],
+        codes: [],
+      },
+      {
+        // Optional cells left blank still import (só o telefone é obrigatório).
+        phone: '+15559876543',
+        name: 'Bob',
+        email: undefined,
+        company: undefined,
+        tagNames: [],
+        codes: [],
+      },
+    ]);
+  });
+
+  it('skips a leading title line before the header row', () => {
+    const csv = `clientes-ddd11
+Telefone,Nome
+5511947650435,Carla`;
+
+    const result = parseContactCsv(csv);
+    expect(result.rows).toEqual([
+      {
+        phone: '5511947650435',
+        name: 'Carla',
+        email: undefined,
+        company: undefined,
+        tagNames: [],
+        codes: [],
+      },
+    ]);
+  });
+
+  it('returns no rows when there is no recognizable phone column', () => {
+    const csv = `foo,bar
+1,2`;
+    expect(parseContactCsv(csv).rows).toEqual([]);
+  });
+
   it('parses the customer-code column (aliases + multiple codes)', () => {
     const csv = `phone,name,codigo_cliente
 +15551234567,Alice,"31768; 31770"

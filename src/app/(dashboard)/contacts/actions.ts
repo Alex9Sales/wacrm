@@ -25,13 +25,14 @@ import {
   sanitizePhoneForMeta,
   isValidE164,
   normalizeInboundPhoneBR,
+  phonesMatch,
 } from '@/lib/whatsapp/phone-utils'
 import {
   findExistingContact,
   isExactMatch,
   isUniqueViolation,
   dedupeByPhone,
-  normalizeKey,
+  last8,
   type ExistingContact,
 } from '@/lib/contacts/dedupe'
 import {
@@ -405,13 +406,28 @@ export interface ImportContactRow {
 
 export interface ImportContactsResult {
   imported: number
+  /** Duplicates left untouched (only when `overwrite` is false). */
   skipped: number
+  /** Existing contacts whose data was overwritten (only when `overwrite`). */
+  overwritten: number
   failed: number
   tagsAssigned: number
   /** Tag names that could not be matched/created (non-admin callers). */
   skippedTagNames: string[]
   /** True if a tag-assignment step failed after contacts were created. */
   tagAssignmentFailed: boolean
+}
+
+export interface ImportContactsOptions {
+  /**
+   * When true, a CSV row matching an EXISTING contact (9th-digit tolerant)
+   * overwrites that contact's data — name/email/company/codes the file
+   * provides win; blank cells keep the current value (so a sparse sheet
+   * doesn't wipe fields). Tags in the row are (re)assigned. Default false:
+   * duplicates are counted in `skipped` and left as-is (the two-step flow —
+   * import first, then the user confirms "sobrescrever N").
+   */
+  overwrite?: boolean
 }
 
 /**
@@ -423,13 +439,16 @@ export interface ImportContactsResult {
  */
 export async function importContacts(
   rows: ImportContactRow[],
+  opts: ImportContactsOptions = {},
 ): Promise<ImportContactsResult> {
   const ctx = await getCurrentAccount()
   // admin+ may auto-create missing tags.
   const canCreateTags = ctx.role === 'owner' || ctx.role === 'admin'
+  const overwrite = opts.overwrite === true
 
   let imported = 0
   let skipped = 0
+  let overwritten = 0
   let failed = 0
 
   // 0) Normalize each phone to E.164 up front — a CSV of Brazilian numbers in
@@ -448,27 +467,50 @@ export async function importContacts(
   const { unique, duplicates: inFileDupes } = dedupeByPhone(normalizedRows)
   skipped += inFileDupes
 
-  // 2) Skip numbers already in this account.
-  const existingRows = await db
-    .select({ phoneNormalized: contacts.phoneNormalized })
-    .from(contacts)
-    .where(eq(contacts.accountId, ctx.accountId))
-  const existing = new Set(
-    existingRows
-      .map((r) => r.phoneNormalized)
-      .filter((p): p is string => !!p),
-  )
+  // 2) Match against numbers already in this account using the SAME
+  //    9th-digit / trunk-tolerant rule the webhook + contact form use
+  //    (last-8 suffix + phonesMatch), NOT an exact-digits set — otherwise a
+  //    "5511947650435" in the file would miss an existing "551147650435"
+  //    (or vice-versa) and slip through as a fresh duplicate. Pre-filter in
+  //    SQL by suffix so we don't pull the whole account.
+  const suffixes = [
+    ...new Set(unique.map((r) => last8(r.phone)).filter(Boolean)),
+  ]
+  let existingContacts: { id: string; phone: string }[] = []
+  if (suffixes.length > 0) {
+    existingContacts = (await db
+      .select({ id: contacts.id, phone: contacts.phone })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.accountId, ctx.accountId),
+          inArray(sql`right(${contacts.phoneNormalized}, 8)`, suffixes),
+        ),
+      )) as { id: string; phone: string }[]
+  }
+  const matchExisting = (phone: string) =>
+    existingContacts.find((c) => c.phone && phonesMatch(c.phone, phone)) ?? null
 
-  const toInsert = unique.filter((row) => {
-    if (existing.has(normalizeKey(row.phone))) {
-      skipped++
-      return false
+  // Classify each unique row: brand-new → insert; already-present →
+  // overwrite (when asked) or skip.
+  const toInsert: typeof unique = []
+  const toOverwrite: { id: string; row: (typeof unique)[number] }[] = []
+  for (const row of unique) {
+    const hit = matchExisting(row.phone)
+    if (hit) {
+      if (overwrite) toOverwrite.push({ id: hit.id, row })
+      else skipped++
+    } else {
+      toInsert.push(row)
     }
-    return true
-  })
+  }
 
-  // 3) Resolve tag names → ids (admin+ auto-creates missing).
-  const allTagNames = toInsert.flatMap((row) => row.tagNames)
+  // 3) Resolve tag names → ids (admin+ auto-creates missing). Include the
+  //    overwrite rows so their tags resolve too.
+  const allTagNames = [
+    ...toInsert.flatMap((row) => row.tagNames),
+    ...toOverwrite.flatMap((o) => o.row.tagNames),
+  ]
   let tagIdByKey = new Map<string, string>()
   let skippedTagNames: string[] = []
   if (allTagNames.length > 0) {
@@ -538,6 +580,32 @@ export async function importContacts(
     }
   }
 
+  // 4b) Overwrite the matched existing contacts (opt-in). "Sobrescrever" =
+  //     the file's values win, but a blank cell keeps the current value so a
+  //     sparse sheet can't wipe an email/name that's already there. Tags in
+  //     the row are (re)assigned via the same tagAssignments path.
+  for (const { id, row } of toOverwrite) {
+    const set: Record<string, unknown> = {}
+    if (row.name) set.name = row.name
+    if (row.email) set.email = row.email
+    if (row.company) set.company = row.company
+    if (row.codes && row.codes.length > 0) set.customerCodes = row.codes
+    try {
+      if (Object.keys(set).length > 0) {
+        await db
+          .update(contacts)
+          .set(set)
+          .where(and(eq(contacts.id, id), eq(contacts.accountId, ctx.accountId)))
+      }
+      overwritten++
+      if (row.tagNames.length > 0) {
+        tagAssignments.push({ contactId: id, tagNames: row.tagNames })
+      }
+    } catch {
+      failed++
+    }
+  }
+
   // 5) Wire tags; a failure here must not mask a successful import.
   let tagsAssigned = 0
   let tagAssignmentFailed = false
@@ -550,11 +618,62 @@ export async function importContacts(
   return {
     imported,
     skipped,
+    overwritten,
     failed,
     tagsAssigned,
     skippedTagNames,
     tagAssignmentFailed,
   }
+}
+
+export interface ImportContactsPreview {
+  /** Rows that would create a NEW contact. */
+  newCount: number
+  /** Rows that match an EXISTING contact (9th-digit tolerant). */
+  duplicateCount: number
+}
+
+/**
+ * Dry-run of the import: classifies the parsed rows into new vs.
+ * already-present WITHOUT writing, so the modal can tell the user
+ * "X novos · Y já cadastrados" and offer to overwrite the Y before
+ * committing. Uses the exact same normalize + dedupe + 9th-digit-tolerant
+ * matching as {@link importContacts}, so the numbers line up.
+ */
+export async function previewImportContacts(
+  rows: ImportContactRow[],
+): Promise<ImportContactsPreview> {
+  const ctx = await getCurrentAccount()
+
+  const normalizedRows = rows.map((r) => ({
+    ...r,
+    phone: normalizeInboundPhoneBR(r.phone),
+  }))
+  const { unique } = dedupeByPhone(normalizedRows)
+
+  const suffixes = [
+    ...new Set(unique.map((r) => last8(r.phone)).filter(Boolean)),
+  ]
+  let existingContacts: { phone: string }[] = []
+  if (suffixes.length > 0) {
+    existingContacts = (await db
+      .select({ phone: contacts.phone })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.accountId, ctx.accountId),
+          inArray(sql`right(${contacts.phoneNormalized}, 8)`, suffixes),
+        ),
+      )) as { phone: string }[]
+  }
+
+  let duplicateCount = 0
+  for (const row of unique) {
+    if (existingContacts.some((c) => c.phone && phonesMatch(c.phone, row.phone))) {
+      duplicateCount++
+    }
+  }
+  return { newCount: unique.length - duplicateCount, duplicateCount }
 }
 
 // ============================================================

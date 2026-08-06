@@ -8,6 +8,7 @@ import {
 } from '@/lib/contacts/parse-contact-csv';
 import {
   importContacts,
+  previewImportContacts,
   listTagColors,
 } from '@/app/(dashboard)/contacts/actions';
 import { cn } from '@/lib/utils';
@@ -127,9 +128,14 @@ export function ImportModal({
     new Map()
   );
   const [importing, setImporting] = useState(false);
+  // Dry-run counts (how many rows are new vs. already in the account) + the
+  // user's choice to overwrite the duplicates instead of skipping them.
+  const [dupCount, setDupCount] = useState(0);
+  const [overwriteDuplicates, setOverwriteDuplicates] = useState(false);
   const [result, setResult] = useState<{
     imported: number;
     skipped: number;
+    overwritten: number;
     failed: number;
     tagsAssigned: number;
   } | null>(null);
@@ -140,6 +146,8 @@ export function ImportModal({
     setHasTagsColumn(false);
     setHasCompanyColumn(false);
     setTagColorByKey(new Map());
+    setDupCount(0);
+    setOverwriteDuplicates(false);
     setResult(null);
     if (fileInputRef.current) fileInputRef.current.value = '';
   }
@@ -165,18 +173,22 @@ export function ImportModal({
 
     if (rows.length === 0) {
       toast.error(
-        'Nenhuma linha válida encontrada. Verifique se o CSV tem uma coluna com o cabeçalho "phone".'
+        'Nenhuma linha válida encontrada. Confirme se há uma coluna de telefone (aceita "Telefone", "Celular", "WhatsApp"…).'
       );
       setParsedRows([]);
       setHasTagsColumn(false);
       setHasCompanyColumn(false);
       setTagColorByKey(new Map());
+      setDupCount(0);
+      setOverwriteDuplicates(false);
       return;
     }
 
     setParsedRows(rows);
     setHasTagsColumn(csvHasTags);
     setHasCompanyColumn(csvHasCompany);
+    setDupCount(0);
+    setOverwriteDuplicates(false);
 
     if (csvHasTags && accountId) {
       try {
@@ -187,6 +199,26 @@ export function ImportModal({
       }
     } else {
       setTagColorByKey(new Map());
+    }
+
+    // Dry-run against the account so we can tell the user how many rows
+    // already exist (and offer to overwrite them) before they commit.
+    if (accountId) {
+      try {
+        const { duplicateCount } = await previewImportContacts(
+          rows.map((row) => ({
+            phone: row.phone,
+            name: row.name,
+            email: row.email,
+            company: row.company,
+            tagNames: row.tagNames,
+            codes: row.codes,
+          }))
+        );
+        setDupCount(duplicateCount);
+      } catch {
+        setDupCount(0);
+      }
     }
   }
 
@@ -205,6 +237,7 @@ export function ImportModal({
       const {
         imported,
         skipped,
+        overwritten,
         failed,
         tagsAssigned,
         skippedTagNames,
@@ -217,17 +250,24 @@ export function ImportModal({
           company: row.company,
           tagNames: row.tagNames,
           codes: row.codes,
-        }))
+        })),
+        { overwrite: overwriteDuplicates }
       );
 
       if (tagAssignmentFailed) {
         toast.warning('Contatos importados, mas algumas atribuições de etiquetas falharam.');
       }
 
-      setResult({ imported, skipped, failed, tagsAssigned });
+      setResult({ imported, skipped, overwritten, failed, tagsAssigned });
       if (imported > 0) {
         toast.success(
           `${imported} contato${imported !== 1 ? 's' : ''} importado${imported !== 1 ? 's' : ''}`
+        );
+        onImported();
+      }
+      if (overwritten > 0) {
+        toast.success(
+          `${overwritten} contato${overwritten !== 1 ? 's' : ''} sobrescrito${overwritten !== 1 ? 's' : ''}`
         );
         onImported();
       }
@@ -292,7 +332,15 @@ export function ImportModal({
               Importar contatos
             </DialogTitle>
             <DialogDescription className="leading-relaxed text-muted-foreground">
-              Envie um CSV com uma coluna obrigatória{' '}
+              Envie um CSV com uma coluna obrigatória de telefone —{' '}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
+                Telefone
+              </code>
+              ,{' '}
+              <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
+                Celular
+              </code>{' '}
+              ou{' '}
               <code className="rounded bg-muted px-1 py-0.5 text-[11px] text-muted-foreground">
                 phone
               </code>
@@ -394,6 +442,40 @@ export function ImportModal({
                 </div>
               </div>
 
+              {/* Duplicados já cadastrados — informa e deixa a pessoa escolher
+                  sobrescrever (senão são ignorados). Só do que estiver
+                  duplicado; tratação do 9º dígito é feita no servidor. */}
+              {dupCount > 0 && (
+                <div className="rounded-xl border border-amber-500/30 bg-amber-500/[0.06] p-3">
+                  <div className="flex items-start gap-2">
+                    <AlertTriangle className="mt-0.5 size-4 shrink-0 text-amber-500" />
+                    <div className="space-y-2">
+                      <p className="text-xs text-foreground">
+                        <span className="font-semibold">
+                          {dupCount} de {parsedRows.length}
+                        </span>{' '}
+                        já {dupCount !== 1 ? 'estão' : 'está'} cadastrado
+                        {dupCount !== 1 ? 's' : ''}. Por padrão{' '}
+                        {dupCount !== 1 ? 'eles são ignorados' : 'ele é ignorado'}{' '}
+                        e só os novos entram.
+                      </p>
+                      <label className="flex cursor-pointer items-center gap-2 text-xs text-muted-foreground">
+                        <input
+                          type="checkbox"
+                          checked={overwriteDuplicates}
+                          onChange={(e) =>
+                            setOverwriteDuplicates(e.target.checked)
+                          }
+                          className="size-3.5 accent-amber-500"
+                        />
+                        Sobrescrever {dupCount !== 1 ? 'os' : 'o'} {dupCount} com os
+                        dados do arquivo (mantém campos em branco)
+                      </label>
+                    </div>
+                  </div>
+                </div>
+              )}
+
               <div className="overflow-hidden rounded-xl border border-border ring-1 ring-border/50">
                 <div className="overflow-x-auto">
                   <table className="w-full min-w-[32rem] text-xs">
@@ -488,6 +570,13 @@ export function ImportModal({
                     {result.imported} importado{result.imported !== 1 ? 's' : ''}
                   </div>
                 )}
+                {result.overwritten > 0 && (
+                  <div className="flex items-center gap-1.5 text-sm text-amber-400">
+                    <CheckCircle className="size-4 shrink-0" />
+                    {result.overwritten} sobrescrito
+                    {result.overwritten !== 1 ? 's' : ''}
+                  </div>
+                )}
                 {result.tagsAssigned > 0 && (
                   <div className="flex items-center gap-1.5 text-sm text-cyan-400">
                     <CheckCircle className="size-4 shrink-0" />
@@ -530,8 +619,9 @@ export function ImportModal({
               className="bg-primary hover:bg-primary/90 text-primary-foreground"
             >
               {importing && <Loader2 className="size-4 animate-spin" />}
-              Importar {parsedRows.length > 0 ? parsedRows.length : ''} contato
-              {parsedRows.length !== 1 ? 's' : ''}
+              {overwriteDuplicates && dupCount > 0
+                ? `Importar e sobrescrever ${dupCount}`
+                : `Importar ${parsedRows.length > 0 ? parsedRows.length : ''} contato${parsedRows.length !== 1 ? 's' : ''}`}
             </Button>
           )}
         </DialogFooter>
