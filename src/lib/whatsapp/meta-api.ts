@@ -66,6 +66,54 @@ export async function verifyPhoneNumber(
 }
 
 // ============================================================
+// Embedded Signup — exchange the ES `code` for a business token
+// ============================================================
+
+export interface ExchangeEmbeddedSignupCodeArgs {
+  /** The `authResponse.code` returned to FB.login by Embedded Signup. */
+  code: string
+}
+
+export interface ExchangeEmbeddedSignupCodeResult {
+  accessToken: string
+}
+
+/**
+ * Exchange the Embedded Signup authorization `code` for a business access
+ * token, server-to-server. This is the token you then use to call the Cloud
+ * API on behalf of the onboarded customer's WABA (subscribe, verify, send).
+ *
+ * Uses the app's OWN credentials — `META_APP_ID` + `META_APP_SECRET` (the same
+ * app that hosts the Embedded Signup flow). The secret must never reach the
+ * browser, so this only runs server-side.
+ */
+export async function exchangeEmbeddedSignupCode(
+  args: ExchangeEmbeddedSignupCodeArgs,
+): Promise<ExchangeEmbeddedSignupCodeResult> {
+  const appId = process.env.META_APP_ID
+  const appSecret = process.env.META_APP_SECRET
+  if (!appId || !appSecret) {
+    throw new Error(
+      'Embedded Signup indisponível: defina META_APP_ID e META_APP_SECRET no ambiente.',
+    )
+  }
+  const url =
+    `${META_API_BASE}/oauth/access_token` +
+    `?client_id=${encodeURIComponent(appId)}` +
+    `&client_secret=${encodeURIComponent(appSecret)}` +
+    `&code=${encodeURIComponent(args.code)}`
+  const response = await fetch(url, { method: 'GET' })
+  if (!response.ok) {
+    await throwMetaError(response, `Meta OAuth error: ${response.status}`)
+  }
+  const data = (await response.json()) as { access_token?: string }
+  if (!data.access_token) {
+    throw new Error('A Meta não retornou access_token na troca do código.')
+  }
+  return { accessToken: data.access_token }
+}
+
+// ============================================================
 // Cloud API registration (subscription for inbound webhooks)
 // ============================================================
 //

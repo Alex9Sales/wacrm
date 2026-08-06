@@ -30,6 +30,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 
 import { PROVIDER_LABELS, type ChannelSummary } from './channels-tab';
+import { EmbeddedSignupButton } from './embedded-signup-button';
 
 interface AddChannelDialogProps {
   open: boolean;
@@ -105,18 +106,12 @@ export function AddChannelDialog({
     [onOpenChange, reset],
   );
 
-  const handlePickProvider = useCallback(
-    (p: ProviderId) => {
-      if (p === 'meta') {
-        reset();
-        onPickMeta();
-        return;
-      }
-      setProvider(p);
-      setConfig({});
-    },
-    [onPickMeta, reset],
-  );
+  const handlePickProvider = useCallback((p: ProviderId) => {
+    // Meta now shows a choice (Embedded Signup vs manual editor) instead of
+    // jumping straight to the manual form.
+    setProvider(p);
+    setConfig({});
+  }, []);
 
   const handleCreate = useCallback(async () => {
     if (!provider || provider === 'meta') return;
@@ -188,13 +183,45 @@ export function AddChannelDialog({
           <DialogDescription className="text-muted-foreground">
             {!provider
               ? 'Escolha o provedor do canal de WhatsApp.'
-              : provider !== 'meta' && fields.length === 0
-                ? `Conexão ${PROVIDER_LABELS[provider]} gerenciada pela Fluxia — só dê um nome e clique em Criar canal.`
-                : `Configure as credenciais do ${PROVIDER_LABELS[provider]}.`}
+              : provider === 'meta'
+                ? 'Conecte o WhatsApp oficial em 1 clique, ou configure manualmente.'
+                : fields.length === 0
+                  ? `Conexão ${PROVIDER_LABELS[provider]} gerenciada pela Fluxia — só dê um nome e clique em Criar canal.`
+                  : `Configure as credenciais do ${PROVIDER_LABELS[provider]}.`}
           </DialogDescription>
         </DialogHeader>
 
-        {!provider ? (
+        {provider === 'meta' ? (
+          <div className="space-y-3 py-2">
+            {/* Embedded Signup — one-click; hides itself until env is wired. */}
+            <EmbeddedSignupButton
+              onConnected={() => {
+                // Close + refresh the list (same path as a non-Meta create).
+                onCreated(null);
+                reset();
+              }}
+            />
+            <div className="flex items-center gap-2 text-[11px] text-muted-foreground">
+              <span className="h-px flex-1 bg-border" />
+              ou
+              <span className="h-px flex-1 bg-border" />
+            </div>
+            <Button
+              variant="outline"
+              onClick={() => {
+                reset();
+                onPickMeta();
+              }}
+              className="w-full border-border text-muted-foreground hover:bg-muted"
+            >
+              Configurar manualmente
+            </Button>
+            <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-[11px] text-muted-foreground">
+              No modo automático o cliente entra com o Facebook dele, conecta o
+              número e cadastra o próprio pagamento — sem criar app na Meta.
+            </p>
+          </div>
+        ) : !provider ? (
           <div className="grid gap-2 py-2">
             {PROVIDER_ORDER.map((p) => (
               <button
@@ -223,7 +250,7 @@ export function AddChannelDialog({
                 className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
               />
             </div>
-            {provider !== 'meta' && fields.length === 0 && (
+            {fields.length === 0 && (
               <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                 A URL e a chave do servidor são preenchidas automaticamente pela
                 Fluxia. Depois de criar, clique em <strong>Parear</strong> para
@@ -253,7 +280,23 @@ export function AddChannelDialog({
         )}
 
         <DialogFooter className="border-border bg-popover">
-          {provider ? (
+          {!provider ? (
+            <Button
+              variant="outline"
+              onClick={() => handleClose(false)}
+              className="border-border text-muted-foreground hover:bg-muted"
+            >
+              Cancelar
+            </Button>
+          ) : provider === 'meta' ? (
+            <Button
+              variant="outline"
+              onClick={() => setProvider(null)}
+              className="border-border text-muted-foreground hover:bg-muted"
+            >
+              Voltar
+            </Button>
+          ) : (
             <>
               <Button
                 variant="outline"
@@ -277,14 +320,6 @@ export function AddChannelDialog({
                 )}
               </Button>
             </>
-          ) : (
-            <Button
-              variant="outline"
-              onClick={() => handleClose(false)}
-              className="border-border text-muted-foreground hover:bg-muted"
-            >
-              Cancelar
-            </Button>
           )}
         </DialogFooter>
       </DialogContent>
