@@ -90,11 +90,13 @@ export interface ExchangeEmbeddedSignupCodeResult {
 export async function exchangeEmbeddedSignupCode(
   args: ExchangeEmbeddedSignupCodeArgs,
 ): Promise<ExchangeEmbeddedSignupCodeResult> {
-  const appId = process.env.META_APP_ID
+  // app_id is public (defaults to the Fluxia app); the SECRET must come from
+  // the environment and never ship in code.
+  const appId = process.env.META_APP_ID || '1920154046039310'
   const appSecret = process.env.META_APP_SECRET
-  if (!appId || !appSecret) {
+  if (!appSecret) {
     throw new Error(
-      'Embedded Signup indisponível: defina META_APP_ID e META_APP_SECRET no ambiente.',
+      'Embedded Signup indisponível: defina META_APP_SECRET no ambiente.',
     )
   }
   const url =

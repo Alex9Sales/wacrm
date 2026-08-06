@@ -22,8 +22,13 @@ import { Loader2, MessageCircle } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 
-const APP_ID = process.env.NEXT_PUBLIC_META_APP_ID;
-const CONFIG_ID = process.env.NEXT_PUBLIC_META_ES_CONFIG_ID;
+// app_id + ES config id are PUBLIC (they show in the browser/URL), so we ship
+// the Fluxia app's values as defaults — `NEXT_PUBLIC_*` are inlined at BUILD
+// time (in CI), not at Coolify runtime, so a runtime env var wouldn't reach
+// the browser anyway. Override at build time if you fork onto another app.
+const APP_ID = process.env.NEXT_PUBLIC_META_APP_ID || '1920154046039310';
+const CONFIG_ID =
+  process.env.NEXT_PUBLIC_META_ES_CONFIG_ID || '968765662879149';
 const GRAPH_VERSION = 'v21.0';
 
 // Minimal shape of the bits of the FB SDK we call.
