@@ -249,7 +249,13 @@ export async function getTask(id: string): Promise<TaskRow | null> {
     .leftJoin(pipelines, eq(deals.pipelineId, pipelines.id))
     .leftJoin(taskCreator, eq(tasks.createdBy, taskCreator.id))
     .leftJoin(taskAssignee, eq(tasks.assignedTo, taskAssignee.id))
-    .where(and(eq(tasks.id, id), eq(tasks.accountId, ctx.accountId)))
+    .where(
+      and(
+        eq(tasks.id, id),
+        eq(tasks.accountId, ctx.accountId),
+        taskVisibilityFor(ctx),
+      ),
+    )
     .limit(1)
   const row = firstOrNull(rows)
   return row ? toTaskRow(row as Record<string, unknown>) : null
@@ -314,7 +320,13 @@ export async function listTasksByContact(contactId: string): Promise<TaskLite[]>
   const rows = await db
     .select(taskLiteSelect)
     .from(tasks)
-    .where(and(eq(tasks.accountId, ctx.accountId), eq(tasks.contactId, id)))
+    .where(
+      and(
+        eq(tasks.accountId, ctx.accountId),
+        eq(tasks.contactId, id),
+        taskVisibilityFor(ctx),
+      ),
+    )
     .orderBy(...liteOrderBy)
   return rows.map((r) => toTaskLite(r as Record<string, unknown>))
 }
@@ -330,7 +342,13 @@ export async function listTasksByDeal(dealId: string): Promise<TaskLite[]> {
   const rows = await db
     .select(taskLiteSelect)
     .from(tasks)
-    .where(and(eq(tasks.accountId, ctx.accountId), eq(tasks.dealId, id)))
+    .where(
+      and(
+        eq(tasks.accountId, ctx.accountId),
+        eq(tasks.dealId, id),
+        taskVisibilityFor(ctx),
+      ),
+    )
     .orderBy(...liteOrderBy)
   return rows.map((r) => toTaskLite(r as Record<string, unknown>))
 }
@@ -368,6 +386,7 @@ export async function getDealTaskCounts(
         eq(tasks.accountId, ctx.accountId),
         inArray(tasks.dealId, ids),
         eq(tasks.status, 'open'),
+        taskVisibilityFor(ctx),
       ),
     )
     .groupBy(tasks.dealId)
@@ -581,7 +600,13 @@ export async function updateTask(
     const updated = await db
       .update(tasks)
       .set(set)
-      .where(and(eq(tasks.id, id), eq(tasks.accountId, ctx.accountId)))
+      .where(
+        and(
+          eq(tasks.id, id),
+          eq(tasks.accountId, ctx.accountId),
+          taskVisibilityFor(ctx),
+        ),
+      )
       .returning({ id: tasks.id })
     if (!firstOrNull(updated)) return { ok: false, error: 'Tarefa não encontrada.' }
 
@@ -602,7 +627,13 @@ export async function deleteTask(id: string): Promise<{ error: string | null }> 
     const ctx = await requireRole('agent')
     await db
       .delete(tasks)
-      .where(and(eq(tasks.id, id), eq(tasks.accountId, ctx.accountId)))
+      .where(
+        and(
+          eq(tasks.id, id),
+          eq(tasks.accountId, ctx.accountId),
+          taskVisibilityFor(ctx),
+        ),
+      )
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao excluir a tarefa.' }
@@ -622,7 +653,13 @@ export async function toggleTaskDone(
       await db
         .select({ status: tasks.status })
         .from(tasks)
-        .where(and(eq(tasks.id, id), eq(tasks.accountId, ctx.accountId)))
+        .where(
+          and(
+            eq(tasks.id, id),
+            eq(tasks.accountId, ctx.accountId),
+            taskVisibilityFor(ctx),
+          ),
+        )
         .limit(1),
     )
     if (!current) return { ok: false, error: 'Tarefa não encontrada.' }
@@ -630,7 +667,13 @@ export async function toggleTaskDone(
     await db
       .update(tasks)
       .set({ status: next })
-      .where(and(eq(tasks.id, id), eq(tasks.accountId, ctx.accountId)))
+      .where(
+        and(
+          eq(tasks.id, id),
+          eq(tasks.accountId, ctx.accountId),
+          taskVisibilityFor(ctx),
+        ),
+      )
     return { ok: true, status: next }
   } catch (err) {
     return {
