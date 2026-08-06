@@ -65,6 +65,14 @@ export async function POST(request: Request) {
     typeof body?.phone_number_id === 'string' ? body.phone_number_id : ''
   const wabaId = typeof body?.waba_id === 'string' && body.waba_id ? body.waba_id : null
 
+  // Observability (no secrets): confirms the browser POST actually reached us
+  // and which ids the ES session-info message carried.
+  console.log(
+    `[embedded-signup] received account=${ctx.accountId} hasCode=${Boolean(
+      code,
+    )} phone_number_id=${phoneNumberId || '(missing)'} waba_id=${wabaId || '(missing)'}`,
+  )
+
   if (!code || !phoneNumberId) {
     return NextResponse.json(
       { error: 'code e phone_number_id são obrigatórios' },
@@ -167,6 +175,10 @@ export async function POST(request: Request) {
       { status: 500 },
     )
   }
+
+  console.log(
+    `[embedded-signup] connected account=${ctx.accountId} phone_number_id=${phoneNumberId} waba_id=${wabaId} subscribed=${subscribedAppsAt != null}`,
+  )
 
   return NextResponse.json({
     success: true,

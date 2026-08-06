@@ -3,6 +3,8 @@
 import { useEffect, useRef, useState } from "react";
 import { Sparkles, RotateCw, X } from "lucide-react";
 
+import { isEmbeddedSignupActive } from "@/lib/embedded-signup-flag";
+
 // After the tab has been hidden this long, a RETURN with a new build in the
 // air auto-recovers the stale bundle (reload) instead of only nudging with the
 // banner. This is the "opened the laptop / came back after a while" case —
@@ -54,8 +56,14 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
         const isNew = build !== initialBuildId;
         // Auto-recover on return-from-away with a fresh build: reload straight
         // to the new bundle (guarded once-per-build so a mismatched
-        // /api/version can never loop; skipped mid-draft).
-        if (isNew && canAutoReload && !isEditingDirtyText()) {
+        // /api/version can never loop; skipped mid-draft; skipped while an
+        // Embedded Signup popup is mid-flow so we don't drop its callback).
+        if (
+          isNew &&
+          canAutoReload &&
+          !isEditingDirtyText() &&
+          !isEmbeddedSignupActive()
+        ) {
           const guardKey = "fluxia:autoReloadedFor";
           if (sessionStorage.getItem(guardKey) !== build) {
             sessionStorage.setItem(guardKey, build);
@@ -82,6 +90,8 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
       /Failed to find Server Action|older or newer deployment/i;
     const reloadForStaleAction = (msg: unknown) => {
       if (typeof msg !== "string" || !STALE_ACTION_RE.test(msg)) return;
+      // Never yank the page out from under an in-flight Embedded Signup popup.
+      if (isEmbeddedSignupActive()) return;
       const KEY = "fluxia:staleActionReloadAt";
       const last = Number(sessionStorage.getItem(KEY) || 0);
       if (Date.now() - last < 60_000) return; // just reloaded — don't loop

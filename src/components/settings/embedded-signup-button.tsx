@@ -21,6 +21,7 @@ import { toast } from 'sonner';
 import { Loader2, MessageCircle } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { setEmbeddedSignupActive } from '@/lib/embedded-signup-flag';
 
 // app_id + ES config id are PUBLIC (they show in the browser/URL), so we ship
 // the Fluxia app's values as defaults — `NEXT_PUBLIC_*` are inlined at BUILD
@@ -116,6 +117,10 @@ export function EmbeddedSignupButton({
     }
     setBusy(true);
     sessionRef.current = {};
+    // Suppress the stale-bundle auto-reload while the (multi-minute) ES popup
+    // is open — a reload here would kill this FB.login callback before it POSTs
+    // the one-time code, silently dropping the whole connection.
+    setEmbeddedSignupActive(true);
     try {
       const FB = await loadFbSdk();
       FB.login(
@@ -123,6 +128,7 @@ export function EmbeddedSignupButton({
           const code = response?.authResponse?.code;
           if (!code) {
             setBusy(false);
+            setEmbeddedSignupActive(false);
             toast.error('Conexão cancelada.');
             return;
           }
@@ -147,6 +153,7 @@ export function EmbeddedSignupButton({
               toast.error('Falha ao conectar o WhatsApp oficial.');
             } finally {
               setBusy(false);
+              setEmbeddedSignupActive(false);
             }
           })();
         },
@@ -160,6 +167,7 @@ export function EmbeddedSignupButton({
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao iniciar a conexão.');
       setBusy(false);
+      setEmbeddedSignupActive(false);
     }
   }, [onConnected]);
 
