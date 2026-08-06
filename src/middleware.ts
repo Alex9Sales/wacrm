@@ -24,6 +24,10 @@ const PUBLIC_API_PREFIXES = [
   '/api/webhooks', // inbound provider webhooks (verified by signature)
   '/api/invitations', // public invite peek; redeem self-guards the session
   '/api/health', // liveness/readiness probe (Docker HEALTHCHECK, Traefik)
+  '/api/version', // build-id poll for the "nova versão"/auto-reload banner —
+  //                must answer even a lapsed-session tab so it can still detect
+  //                a new deploy and self-recover from a stale bundle (returns
+  //                only an opaque build id; no data).
   '/api/files', // public media proxy (browser + Meta fetch media by URL)
   '/api/v1', // public API — auths per-request via API key (requireApiKey),
   //            not the session cookie, so the middleware must let it through

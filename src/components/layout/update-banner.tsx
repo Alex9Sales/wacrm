@@ -54,16 +54,19 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
         if (stopped || typeof data.buildId !== "string") return;
         const build = data.buildId;
         const isNew = build !== initialBuildId;
-        // Auto-recover on return-from-away with a fresh build: reload straight
-        // to the new bundle (guarded once-per-build so a mismatched
-        // /api/version can never loop; skipped mid-draft; skipped while an
-        // Embedded Signup popup is mid-flow so we don't drop its callback).
-        if (
-          isNew &&
-          canAutoReload &&
-          !isEditingDirtyText() &&
-          !isEmbeddedSignupActive()
-        ) {
+        // Auto-recover a stale bundle: reload straight to the new build. A
+        // stale tab is effectively BROKEN — every Server Action it fires hits
+        // "Failed to find Server Action" and silently no-ops (delete, send,
+        // etc. look like they "come back"), and most handlers catch that error
+        // so the global listener below never sees it. So we don't wait for the
+        // user to click the banner: any visible, idle tab that sees a newer
+        // build reloads itself within the poll interval. Guarded so it's safe —
+        // once per build (a mismatched /api/version can't loop), never while
+        // typing a draft, never mid Embedded-Signup popup. `canAutoReload`
+        // (return-from-away ≥30s) is kept only to force the check even in the
+        // rare paths that pass it; the reload no longer depends on it.
+        void canAutoReload;
+        if (isNew && !isEditingDirtyText() && !isEmbeddedSignupActive()) {
           const guardKey = "fluxia:autoReloadedFor";
           if (sessionStorage.getItem(guardKey) !== build) {
             sessionStorage.setItem(guardKey, build);
@@ -71,6 +74,8 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
             return;
           }
         }
+        // Reached only when we deliberately DIDN'T auto-reload (mid-draft or
+        // mid-ES) — fall back to the manual "Nova versão" banner.
         setLatest(build);
       } catch {
         // offline / transient — try again on the next tick.
