@@ -37,6 +37,8 @@ export function formatConversationPreview(text?: string | null): string {
   // A conversation the agent may LIST but not READ (teammate's assigned thread):
   // the server blanks the preview to this sentinel so no content leaks.
   if (trimmed === '[locked]') return '🔒 Conversa de outro atendente';
+  // A PRIVATE thread (cadeado) — listed as locked to sector-mates, not readable.
+  if (trimmed === '[private]') return '🔒 Conversa privada';
   // Call markers → friendly labels (never show the raw sentinel).
   const call = parseCallLog(text);
   if (call) return call.answered ? '📞 Ligação de voz' : '📞 Ligação perdida';

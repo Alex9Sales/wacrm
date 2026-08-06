@@ -531,7 +531,14 @@ export async function listConversations(): Promise<Conversation[]> {
       })
     return {
       ...conv,
-      last_message_text: readable ? conv.last_message_text : '[locked]',
+      // Blocked rows mask the preview. A PRIVATE thread shows a distinct lock
+      // label ("Conversa privada") vs a teammate's assigned thread ("de outro
+      // atendente"), so the team knows it's locked by choice (Felipe's tweak).
+      last_message_text: readable
+        ? conv.last_message_text
+        : conv.is_private
+          ? '[private]'
+          : '[locked]',
       read_blocked: !readable,
       status: conv.status as ConversationStatus,
       priority: (conv.priority ?? 'none') as ConversationPriority,

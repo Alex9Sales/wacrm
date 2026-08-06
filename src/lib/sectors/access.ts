@@ -129,7 +129,6 @@ export async function conversationVisibility(
   const sectorIds = await getUserSectorIds(userId);
   const mine = eq(conversations.assignedAgentId, userId);
   const participant = sql`${conversations.id} IN (SELECT conversation_id FROM conversation_participants WHERE user_id = ${userId})`;
-  const notPrivate = eq(conversations.isPrivate, false);
   const openQueue = and(
     isNull(conversations.sectorId),
     isNull(conversations.assignedAgentId),
@@ -138,11 +137,12 @@ export async function conversationVisibility(
     sectorIds.length === 0
       ? openQueue
       : (or(inArray(conversations.sectorId, sectorIds), openQueue) as SQL);
-  const base = or(
-    mine,
-    participant,
-    and(notPrivate, sectorScope) as SQL,
-  ) as SQL;
+  // Private threads in the caller's sector are still LISTED (shown as a locked
+  // row so the team knows one's being handled), just not readable — Felipe's
+  // tweak. A private thread has no sector match only when it's outside the
+  // caller's sectors, and openQueue never matches a private (always assigned),
+  // so a no-sector private stays hidden. read_blocked masks the preview.
+  const base = or(mine, participant, sectorScope) as SQL;
   // "Ninguém vê as do admin": exclude admin/owner-assigned entirely.
   const adminIds = await getAdminUserIds(accountId);
   if (adminIds.length === 0) return base;
@@ -226,13 +226,17 @@ export async function canListConversation(
   if (conversationId && (await isParticipant(conversationId, userId))) {
     return true;
   }
-  if (isPrivate) return false;
-  // Sector member: sees every conversation in their sectors (any assignee).
+  // Sector member: sees every conversation in their sectors (any assignee) —
+  // INCLUDING private ones, which show as a locked row (read is still blocked
+  // by canReadConversation). Felipe's tweak: a private thread must appear
+  // locked, not vanish.
   if (conversationSectorId) {
     const sectorIds = await getUserSectorIds(userId);
     return sectorIds.includes(conversationSectorId);
   }
-  // No sector: only the open (unassigned) queue.
+  // No sector: a private or assigned thread is hidden — only the open
+  // (unassigned) queue is listed.
+  if (isPrivate) return false;
   return !assignedAgentId;
 }
 

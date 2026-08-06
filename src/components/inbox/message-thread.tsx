@@ -1283,6 +1283,8 @@ export function MessageThread({
       (p) => p.user_id === conversation.assigned_agent_id,
     );
     const who = blockedAssignee?.full_name?.trim() || "outro atendente";
+    // A PRIVATE thread reads as "private" (owner locked it), not "assigned to X".
+    const blockedPrivate = !!conversation.is_private;
     return (
       <div
         className={cn(
@@ -1294,11 +1296,14 @@ export function MessageThread({
           <Lock className="h-8 w-8 text-muted-foreground" />
         </div>
         <h3 className="mt-4 text-sm font-medium text-foreground">
-          Conversa atribuída a {who}
+          {blockedPrivate
+            ? "Conversa privada"
+            : `Conversa atribuída a ${who}`}
         </h3>
         <p className="mt-1 max-w-sm text-xs text-muted-foreground">
-          Você não pode ver esta conversa porque ela está atribuída a outro
-          atendente da equipe.
+          {blockedPrivate
+            ? "Esta conversa foi marcada como privada pelo atendente — só ele, a supervisão e o admin podem vê-la."
+            : "Você não pode ver esta conversa porque ela está atribuída a outro atendente da equipe."}
         </p>
       </div>
     );
