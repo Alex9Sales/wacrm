@@ -437,6 +437,15 @@ export function ConversationList({
     0,
   );
 
+  // Reflete o total de não lidas no TÍTULO da aba do navegador — "(N) CRM
+  // Fluxia", estilo WhatsApp Web (Felipe). Preserva o nome-base (tira um "(n)"
+  // que já esteja lá) e some quando zera. Ao sair da inbox, o Next re-seta o
+  // título pela metadata da próxima página.
+  useEffect(() => {
+    const base = document.title.replace(/^\(\d+\)\s*/, "") || "FluxiaCRM";
+    document.title = unreadCount > 0 ? `(${unreadCount}) ${base}` : base;
+  }, [unreadCount]);
+
   return (
     // w-full on mobile so the list occupies the whole viewport when it's
     // the single pane showing; fixed 320px on desktop where it shares the
@@ -466,16 +475,29 @@ export function ConversationList({
         </div>
 
         {/* Contador de conversas não lidas (Felipe) — soma viva das que estão
-            com a bolinha; some quando zera. */}
+            com a bolinha; some quando zera. Clicável: filtra só as não lidas
+            (mesmo chip "Não lidas" do filtro abaixo). */}
         {unreadCount > 0 && (
-          <div className="flex items-center gap-1.5 px-0.5 text-xs text-muted-foreground">
+          <button
+            type="button"
+            onClick={() => toggleStatusFilter("unread")}
+            title={
+              statusFilters.has("unread")
+                ? "Mostrar todas as conversas"
+                : "Ver só as não lidas"
+            }
+            className={cn(
+              "flex items-center gap-1.5 rounded-md px-1 py-0.5 text-xs transition-colors hover:bg-muted",
+              statusFilters.has("unread")
+                ? "text-primary"
+                : "text-muted-foreground",
+            )}
+          >
             <span className="inline-flex h-5 min-w-[20px] items-center justify-center rounded-full bg-primary px-1.5 text-[11px] font-semibold text-primary-foreground">
               {unreadCount}
             </span>
-            {unreadCount === 1
-              ? "conversa não lida"
-              : "conversas não lidas"}
-          </div>
+            {unreadCount === 1 ? "conversa não lida" : "conversas não lidas"}
+          </button>
         )}
 
         {/* Caixa de entrada (channel) selector — Chatwoot-style. Filters

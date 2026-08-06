@@ -259,11 +259,21 @@ export async function dispatchInboundMessage(
   if (contentType === 'image' && mediaUrl && !isFromMe) {
     try {
       const cfg = await loadAiConfig(accountId);
-      const visionKey = cfg
-        ? cfg.provider === 'openai'
-          ? cfg.apiKey
-          : cfg.embeddingsApiKey
-        : null;
+      // Só descreve a imagem quando a IA está ATIVA NESTE CANAL (spec Alex):
+      // isActive + autoReplyEnabled + (lista de canais vazia = todos, ou inclui
+      // este canal). Fora disso não gasta visão — o canal sem IA fica intacto.
+      const aiOnChannel =
+        !!cfg &&
+        cfg.isActive &&
+        cfg.autoReplyEnabled &&
+        ((cfg.autoReplyChannelIds ?? []).length === 0 ||
+          cfg.autoReplyChannelIds.includes(channel.id));
+      const visionKey =
+        cfg && aiOnChannel
+          ? cfg.provider === 'openai'
+            ? cfg.apiKey
+            : cfg.embeddingsApiKey
+          : null;
       if (visionKey) {
         transcription = await describeImage(visionKey, mediaUrl);
       }

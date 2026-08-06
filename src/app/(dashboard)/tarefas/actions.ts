@@ -32,6 +32,21 @@ const taskCreator = alias(user, 'task_creator')
 const taskAssignee = alias(user, 'task_assignee')
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
+import { hasMinRole } from '@/lib/auth/roles'
+
+/**
+ * Task visibility (spec Alex): an agent/viewer sees ONLY their own tasks —
+ * assigned to them OR created by them. Admin/supervisor see every task in the
+ * account. Returns undefined (no extra filter) for admin+; a WHERE clause
+ * otherwise. `and(accountCond, taskVisibilityFor(ctx))` tolerates undefined.
+ */
+function taskVisibilityFor(ctx: {
+  role: import('@/lib/auth/roles').AccountRole
+  userId: string
+}) {
+  if (hasMinRole(ctx.role, 'supervisor')) return undefined
+  return or(eq(tasks.assignedTo, ctx.userId), eq(tasks.createdBy, ctx.userId))
+}
 
 // ------------------------------------------------------------
 // Public shapes
@@ -152,6 +167,8 @@ export async function listTasks(input: ListTasksInput = {}): Promise<TaskRow[]> 
   const term = (input.search ?? '').trim()
 
   const conditions = [eq(tasks.accountId, ctx.accountId)]
+  const vis = taskVisibilityFor(ctx)
+  if (vis) conditions.push(vis)
 
   if (input.status === 'overdue') {
     conditions.push(
@@ -211,7 +228,7 @@ export async function getTasksOverview(): Promise<TaskOverview> {
         dueToday: sql<number>`COUNT(*) FILTER (WHERE ${tasks.status} = 'open' AND ${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt}::date = CURRENT_DATE)::int`,
       })
       .from(tasks)
-      .where(eq(tasks.accountId, ctx.accountId)),
+      .where(and(eq(tasks.accountId, ctx.accountId), taskVisibilityFor(ctx))),
   )
   return {
     total: Number(row.total ?? 0),

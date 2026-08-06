@@ -48,6 +48,42 @@ export function parseCodeCell(value: string | undefined): string[] {
   return codes;
 }
 
+// Header aliases (lowercased) so a planilha em PT-BR ("Telefone", "Nome",
+// "E-mail", "Empresa") importa sem renomear a coluna pra inglês — mesma dor do
+// disparo. Só a coluna de telefone é obrigatória.
+const PHONE_HEADERS = [
+  'phone',
+  'phone_normalized',
+  'telefone',
+  'telephone',
+  'celular',
+  'cel',
+  'whatsapp',
+  'fone',
+  'numero',
+  'número',
+  'tel',
+  'mobile',
+];
+const NAME_HEADERS = [
+  'name',
+  'nome',
+  'cliente',
+  'nome do cliente',
+  'razao social',
+  'razão social',
+];
+const EMAIL_HEADERS = ['email', 'e-mail', 'e_mail', 'mail', 'correio'];
+const COMPANY_HEADERS = [
+  'company',
+  'empresa',
+  'companhia',
+  'compania',
+  'organizacao',
+  'organização',
+];
+const TAGS_HEADERS = ['tags', 'tag', 'etiquetas', 'etiqueta'];
+
 /** Header aliases accepted for the customer-code column (lowercased). */
 const CODE_HEADERS = [
   'codigo_cliente',
@@ -78,24 +114,38 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
     return { rows: [], hasTagsColumn: false, hasCompanyColumn: false, hasCodesColumn: false };
   }
 
-  const headers = lines[0]
-    .split(',')
-    .map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
+  const normHeaders = (line: string): string[] =>
+    parseCsvLine(line).map((h) => h.trim().toLowerCase().replace(/["']/g, ''));
+  const findCol = (hs: string[], aliases: string[]): number =>
+    hs.findIndex((h) => aliases.includes(h));
 
-  const phoneIdx = headers.indexOf('phone');
-  if (phoneIdx === -1) {
+  // Find the header row. Tolerate a leading title line (Numbers/Excel exports
+  // sometimes put the sheet name on line 0) by scanning the first few lines for
+  // the first one that carries a recognizable phone column.
+  let headerLineIdx = -1;
+  let headers: string[] = [];
+  for (let i = 0; i < Math.min(lines.length, 5); i++) {
+    const hs = normHeaders(lines[i]);
+    if (findCol(hs, PHONE_HEADERS) !== -1) {
+      headerLineIdx = i;
+      headers = hs;
+      break;
+    }
+  }
+  if (headerLineIdx === -1) {
     return { rows: [], hasTagsColumn: false, hasCompanyColumn: false, hasCodesColumn: false };
   }
 
-  const nameIdx = headers.indexOf('name');
-  const emailIdx = headers.indexOf('email');
-  const companyIdx = headers.indexOf('company');
-  const tagsIdx = headers.indexOf('tags');
+  const phoneIdx = findCol(headers, PHONE_HEADERS);
+  const nameIdx = findCol(headers, NAME_HEADERS);
+  const emailIdx = findCol(headers, EMAIL_HEADERS);
+  const companyIdx = findCol(headers, COMPANY_HEADERS);
+  const tagsIdx = findCol(headers, TAGS_HEADERS);
   const codesIdx = headers.findIndex((h) => CODE_HEADERS.includes(h));
 
   const rows: ParsedContactRow[] = [];
 
-  for (let i = 1; i < lines.length; i++) {
+  for (let i = headerLineIdx + 1; i < lines.length; i++) {
     const line = lines[i].trim();
     if (!line) continue;
 
