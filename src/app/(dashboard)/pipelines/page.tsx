@@ -16,6 +16,7 @@ import {
 } from "@/app/(dashboard)/tarefas/actions";
 import { TaskForm } from "@/components/tarefas/task-form";
 import { PipelineBoard } from "@/components/pipelines/pipeline-board";
+import { PipelineList } from "@/components/pipelines/pipeline-list";
 import { PipelineSettings } from "@/components/pipelines/pipeline-settings";
 import { DealForm } from "@/components/pipelines/deal-form";
 import { PipelineAnalytics } from "@/components/pipelines/pipeline-analytics";
@@ -52,6 +53,8 @@ import {
   User as UserIcon,
   CircleDot,
   ArrowDownUp,
+  LayoutGrid,
+  List,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useCan } from "@/hooks/use-can";
@@ -102,6 +105,8 @@ export default function PipelinesPage() {
     "recent" | "value_desc" | "value_asc" | "close" | "name"
   >("recent");
   const [search, setSearch] = useState("");
+  // Kanban (board) ⇄ Lista (tabela) — toggle estilo RD.
+  const [viewMode, setViewMode] = useState<"board" | "list">("board");
 
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
@@ -505,6 +510,36 @@ export default function PipelinesPage() {
           {/* Barra de filtros do funil (estilo RD): busca, dono, status,
               ordenação + contador. Roda no cliente sobre os deals carregados. */}
           <div className="mb-3 flex flex-wrap items-center gap-2">
+            {/* Toggle Kanban ⇄ Lista */}
+            <div className="flex items-center rounded-md border border-border bg-card p-0.5">
+              <button
+                type="button"
+                onClick={() => setViewMode("board")}
+                aria-label="Visão Kanban"
+                title="Kanban"
+                className={`flex h-8 w-8 items-center justify-center rounded transition-colors ${
+                  viewMode === "board"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                <LayoutGrid className="h-4 w-4" />
+              </button>
+              <button
+                type="button"
+                onClick={() => setViewMode("list")}
+                aria-label="Visão Lista"
+                title="Lista"
+                className={`flex h-8 w-8 items-center justify-center rounded transition-colors ${
+                  viewMode === "list"
+                    ? "bg-primary text-primary-foreground"
+                    : "text-muted-foreground hover:bg-muted"
+                }`}
+              >
+                <List className="h-4 w-4" />
+              </button>
+            </div>
+
             <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
               <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
               <Input
@@ -588,15 +623,23 @@ export default function PipelinesPage() {
           </div>
 
           <PipelineAnalytics stages={stages} deals={deals} />
-          <PipelineBoard
-            stages={stages}
-            deals={visibleDeals}
-            onDealMoved={handleDealMoved}
-            onAddDeal={handleAddDeal}
-            onEditDeal={handleEditDeal}
-            taskCounts={taskCounts}
-            onCreateTask={handleCreateTask}
-          />
+          {viewMode === "list" ? (
+            <PipelineList
+              stages={stages}
+              deals={visibleDeals}
+              taskCounts={taskCounts}
+            />
+          ) : (
+            <PipelineBoard
+              stages={stages}
+              deals={visibleDeals}
+              onDealMoved={handleDealMoved}
+              onAddDeal={handleAddDeal}
+              onEditDeal={handleEditDeal}
+              taskCounts={taskCounts}
+              onCreateTask={handleCreateTask}
+            />
+          )}
         </>
       )}
 
