@@ -1,11 +1,18 @@
 "use client";
 
-import type { Deal, PipelineStage } from "@/types";
+import type { Deal, PipelineStage, Profile } from "@/types";
 import type { DealTaskCount } from "@/app/(dashboard)/tarefas/actions";
-import type { SyntheticEvent } from "react";
-import { Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign } from "lucide-react";
+import { useEffect, useState, type SyntheticEvent } from "react";
+import { useRouter } from "next/navigation";
+import { toast } from "sonner";
+import {
+  Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign,
+  Pencil, Trash2, ArrowRightLeft, ChevronRight,
+} from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
+import { deleteDeal, transferDeal } from "@/app/(dashboard)/pipelines/actions";
+import { listProfiles } from "@/app/(dashboard)/inbox/actions";
 
 interface DealCardProps {
   deal: Deal;
@@ -31,12 +38,84 @@ export function DealCard({
   stage,
   isOverlay,
   taskCount,
+  onEdit,
   onCreateTask,
 }: DealCardProps) {
+  const router = useRouter();
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
   const assigneeLabel = deal.assignee?.full_name || null;
   const openTasks = taskCount?.open ?? 0;
   const hasOverdue = (taskCount?.overdue ?? 0) > 0;
+
+  // Menu de clique-direito no card: Editar / Transferir / Excluir sem precisar
+  // abrir a tela inteira. Guardamos a posição do cursor pra abrir ali.
+  const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
+  const [members, setMembers] = useState<Profile[] | null>(null);
+  const [showTransfer, setShowTransfer] = useState(false);
+  const [busy, setBusy] = useState(false);
+
+  useEffect(() => {
+    if (!menuPos) return;
+    const close = () => {
+      setMenuPos(null);
+      setShowTransfer(false);
+    };
+    const onKey = (e: KeyboardEvent) => e.key === "Escape" && close();
+    window.addEventListener("click", close);
+    window.addEventListener("keydown", onKey);
+    window.addEventListener("scroll", close, true);
+    return () => {
+      window.removeEventListener("click", close);
+      window.removeEventListener("keydown", onKey);
+      window.removeEventListener("scroll", close, true);
+    };
+  }, [menuPos]);
+
+  const openMenu = (e: SyntheticEvent & { clientX?: number; clientY?: number }) => {
+    if (isOverlay) return;
+    e.preventDefault();
+    e.stopPropagation();
+    const me = e as unknown as MouseEvent;
+    setMenuPos({ x: me.clientX, y: me.clientY });
+  };
+
+  const loadMembers = () => {
+    if (members !== null) return;
+    listProfiles()
+      .then((ps) =>
+        setMembers(ps.filter((p) => p.user_id && p.full_name)),
+      )
+      .catch(() => setMembers([]));
+  };
+
+  const doDelete = async () => {
+    if (busy) return;
+    if (!confirm(`Excluir o negócio "${deal.title}"? Esta ação não pode ser desfeita.`))
+      return;
+    setBusy(true);
+    const { error } = await deleteDeal(deal.id);
+    setBusy(false);
+    setMenuPos(null);
+    if (error) toast.error(error);
+    else {
+      toast.success("Negócio excluído");
+      router.refresh();
+    }
+  };
+
+  const doTransfer = async (userId: string) => {
+    if (busy) return;
+    setBusy(true);
+    const { error } = await transferDeal(deal.id, userId);
+    setBusy(false);
+    setMenuPos(null);
+    setShowTransfer(false);
+    if (error) toast.error(error);
+    else {
+      toast.success("Negócio transferido");
+      router.refresh();
+    }
+  };
 
   // Canal de origem do lead (via conversa vinculada). Só WhatsApp e Instagram
   // por enquanto — o resto cai no ícone de WhatsApp (default do produto).
@@ -90,8 +169,10 @@ export function DealCard({
   }
 
   return (
+    <>
     <button
       type="button"
+      onContextMenu={openMenu}
       onClick={(e) => {
         // `onClick` still fires after a non-drag tap because the PointerSensor
         // requires 5px movement before it counts as a drag. Abre a página de
@@ -267,5 +348,82 @@ export function DealCard({
         </div>
       )}
     </button>
+
+    {menuPos && (
+      <div
+        className="fixed z-[100] min-w-[168px] rounded-lg border border-border bg-popover py-1 text-sm text-popover-foreground shadow-xl"
+        style={{ left: menuPos.x, top: menuPos.y }}
+        onClick={(e) => e.stopPropagation()}
+        onContextMenu={(e) => e.preventDefault()}
+      >
+        <button
+          type="button"
+          onClick={() => {
+            setMenuPos(null);
+            onEdit(deal);
+          }}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted"
+        >
+          <Pencil className="h-3.5 w-3.5 text-muted-foreground" /> Editar
+        </button>
+
+        <div
+          className="relative"
+          onMouseEnter={() => {
+            setShowTransfer(true);
+            loadMembers();
+          }}
+          onMouseLeave={() => setShowTransfer(false)}
+        >
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-muted"
+          >
+            <span className="flex items-center gap-2">
+              <ArrowRightLeft className="h-3.5 w-3.5 text-muted-foreground" />
+              Transferir
+            </span>
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+          </button>
+          {showTransfer && (
+            <div className="absolute left-full top-0 ml-0.5 max-h-64 min-w-[168px] overflow-y-auto rounded-lg border border-border bg-popover py-1 shadow-xl">
+              {members === null ? (
+                <div className="px-3 py-1.5 text-xs text-muted-foreground">
+                  Carregando…
+                </div>
+              ) : members.length === 0 ? (
+                <div className="px-3 py-1.5 text-xs text-muted-foreground">
+                  Sem membros
+                </div>
+              ) : (
+                members.map((m) => (
+                  <button
+                    key={m.user_id}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => doTransfer(m.user_id as string)}
+                    className="block w-full truncate px-3 py-1.5 text-left hover:bg-muted disabled:opacity-50"
+                  >
+                    {m.full_name}
+                  </button>
+                ))
+              )}
+            </div>
+          )}
+        </div>
+
+        <div className="my-1 h-px bg-border" />
+
+        <button
+          type="button"
+          disabled={busy}
+          onClick={doDelete}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left text-red-500 hover:bg-red-500/10 disabled:opacity-50"
+        >
+          <Trash2 className="h-3.5 w-3.5" /> Excluir
+        </button>
+      </div>
+    )}
+    </>
   );
 }
