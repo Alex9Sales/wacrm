@@ -77,7 +77,13 @@ import {
   type DealQuestion,
   type DealEmail,
 } from "@/app/(dashboard)/pipelines/actions";
-import type { Deal, PipelineStage } from "@/types";
+import type { Deal, PipelineStage, CustomField } from "@/types";
+import {
+  listCustomFields,
+  listContactCustomValues,
+  saveContactCustomValues,
+} from "@/app/(dashboard)/contacts/actions";
+import { CustomFieldInput } from "@/components/contacts/custom-field-input";
 
 type DealTab =
   | "historico"
@@ -238,6 +244,11 @@ export default function DealDetailPage() {
   const [busy, setBusy] = useState(false);
   const [note, setNote] = useState("");
   const [savingNote, setSavingNote] = useState(false);
+  // Campos personalizados (do contato) mostrados no negócio — paridade RD.
+  const [customFields, setCustomFields] = useState<CustomField[]>([]);
+  const [customValues, setCustomValues] = useState<Record<string, string>>({});
+  const [customDirty, setCustomDirty] = useState(false);
+  const [savingCustom, setSavingCustom] = useState(false);
 
   const reload = useCallback(async () => {
     if (!dealId) return;
@@ -264,7 +275,36 @@ export default function DealDetailPage() {
     setAttachments(at);
     setQuestions(qs);
     setEmails(em);
+
+    // Campos personalizados (definição da conta + valores do contato do deal).
+    const [cf, cv] = await Promise.all([
+      listCustomFields().catch(() => [] as CustomField[]),
+      d.contact_id
+        ? listContactCustomValues(d.contact_id).catch(() => [])
+        : Promise.resolve([]),
+    ]);
+    setCustomFields(cf);
+    const map: Record<string, string> = {};
+    for (const row of cv) map[row.custom_field_id] = row.value ?? "";
+    setCustomValues(map);
+    setCustomDirty(false);
   }, [dealId]);
+
+  const handleSaveCustom = useCallback(async () => {
+    if (!deal?.contact_id) return;
+    setSavingCustom(true);
+    const { error } = await saveContactCustomValues(
+      deal.contact_id,
+      customValues,
+    );
+    setSavingCustom(false);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    toast.success("Campos salvos");
+    setCustomDirty(false);
+  }, [deal?.contact_id, customValues]);
 
   const submitQuestion = useCallback(async () => {
     if (!deal) return;
@@ -733,6 +773,40 @@ export default function DealDetailPage() {
             <Field label="Status" value={statusMeta.label} />
             {deal.notes?.trim() && <Field label="Observações" value={deal.notes} />}
           </div>
+
+          {/* Campos personalizados (do contato) — editáveis, estilo RD. */}
+          {deal.contact_id && customFields.length > 0 && (
+            <div className="mt-4 space-y-2 border-t border-border pt-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Campos personalizados
+              </p>
+              {customFields.map((field) => (
+                <div key={field.id} className="space-y-1">
+                  <label className="text-[11px] font-medium text-muted-foreground">
+                    {field.field_name}
+                  </label>
+                  <CustomFieldInput
+                    field={field}
+                    value={customValues[field.id] ?? ""}
+                    onChange={(val) => {
+                      setCustomValues((prev) => ({ ...prev, [field.id]: val }));
+                      setCustomDirty(true);
+                    }}
+                  />
+                </div>
+              ))}
+              {customDirty && (
+                <Button
+                  size="sm"
+                  onClick={() => void handleSaveCustom()}
+                  disabled={savingCustom}
+                  className="mt-1 w-full bg-primary text-primary-foreground hover:bg-primary/90"
+                >
+                  {savingCustom ? "Salvando…" : "Salvar campos"}
+                </Button>
+              )}
+            </div>
+          )}
         </aside>
 
         {/* Histórico */}

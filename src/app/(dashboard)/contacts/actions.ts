@@ -1028,9 +1028,18 @@ export async function listContactDeals(contactId: string): Promise<Deal[]> {
 /** Create a custom field definition. Admin+ only. */
 export async function createCustomField(
   fieldName: string,
+  // 'text' (input livre) ou 'select' (opções pré-definidas, estilo RD).
+  fieldType: 'text' | 'select' = 'text',
+  options: string[] = [],
 ): Promise<{ error: string | null }> {
   const name = fieldName.trim()
   if (!name) return { error: 'Field name is required' }
+  const cleanOptions = Array.from(
+    new Set(options.map((o) => o.trim()).filter(Boolean)),
+  )
+  if (fieldType === 'select' && cleanOptions.length === 0) {
+    return { error: 'Um campo de seleção precisa de pelo menos uma opção.' }
+  }
   try {
     const ctx = await getCurrentAccount()
     if (ctx.role !== 'owner' && ctx.role !== 'admin') {
@@ -1051,7 +1060,8 @@ export async function createCustomField(
     if (clash) return { error: `A field named "${name}" already exists.` }
     await db.insert(customFields).values({
       fieldName: name,
-      fieldType: 'text',
+      fieldType,
+      fieldOptions: fieldType === 'select' ? { options: cleanOptions } : null,
       userId: ctx.userId,
       accountId: ctx.accountId,
     })

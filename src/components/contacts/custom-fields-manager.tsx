@@ -65,6 +65,8 @@ export function CustomFieldsPanel() {
   const [fields, setFields] = useState<CustomField[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
+  const [newType, setNewType] = useState<'text' | 'select'>('text');
+  const [newOptions, setNewOptions] = useState('');
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
 
@@ -110,8 +112,20 @@ export function CustomFieldsPanel() {
       return;
     }
 
+    const options =
+      newType === 'select'
+        ? newOptions
+            .split(/[\n,]/)
+            .map((o) => o.trim())
+            .filter(Boolean)
+        : [];
+    if (newType === 'select' && options.length === 0) {
+      toast.error('Adicione ao menos uma opção para o campo de seleção.');
+      return;
+    }
+
     setCreating(true);
-    const { error } = await createCustomField(name);
+    const { error } = await createCustomField(name, newType, options);
     setCreating(false);
 
     if (error) {
@@ -120,6 +134,8 @@ export function CustomFieldsPanel() {
     }
     toast.success(`"${name}" criado.`);
     setNewName('');
+    setNewOptions('');
+    setNewType('text');
     await fetchFields();
   }
 
@@ -168,31 +184,65 @@ export function CustomFieldsPanel() {
   return (
     <div className="space-y-4">
       {/* Create */}
-      <div className="flex items-center gap-2">
-        <Input
-          value={newName}
-          onChange={(e) => setNewName(e.target.value)}
-          onKeyDown={(e) => {
-            if (e.key === 'Enter') {
-              e.preventDefault();
-              void handleCreate();
-            }
-          }}
-          placeholder="Nome do novo campo…"
-          className="bg-muted text-foreground"
-        />
-        <Button
-          onClick={handleCreate}
-          disabled={creating || !newName.trim()}
-          className="bg-primary hover:bg-primary/90 text-primary-foreground shrink-0"
-        >
-          {creating ? (
-            <Loader2 className="size-4 animate-spin" />
-          ) : (
-            <Plus className="size-4" />
-          )}
-          Adicionar
-        </Button>
+      <div className="space-y-2 rounded-md border border-border bg-muted/30 p-3">
+        <div className="flex items-center gap-2">
+          <Input
+            value={newName}
+            onChange={(e) => setNewName(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter' && newType === 'text') {
+                e.preventDefault();
+                void handleCreate();
+              }
+            }}
+            placeholder="Nome do novo campo…"
+            className="bg-muted text-foreground"
+          />
+          <div className="flex shrink-0 rounded-md border border-border">
+            <button
+              type="button"
+              onClick={() => setNewType('text')}
+              className={`px-2.5 py-1.5 text-xs transition-colors ${
+                newType === 'text'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-muted'
+              }`}
+            >
+              Texto
+            </button>
+            <button
+              type="button"
+              onClick={() => setNewType('select')}
+              className={`px-2.5 py-1.5 text-xs transition-colors ${
+                newType === 'select'
+                  ? 'bg-primary text-primary-foreground'
+                  : 'text-muted-foreground hover:bg-muted'
+              }`}
+            >
+              Seleção
+            </button>
+          </div>
+          <Button
+            onClick={handleCreate}
+            disabled={creating || !newName.trim()}
+            className="bg-primary hover:bg-primary/90 text-primary-foreground shrink-0"
+          >
+            {creating ? (
+              <Loader2 className="size-4 animate-spin" />
+            ) : (
+              <Plus className="size-4" />
+            )}
+            Adicionar
+          </Button>
+        </div>
+        {newType === 'select' && (
+          <Input
+            value={newOptions}
+            onChange={(e) => setNewOptions(e.target.value)}
+            placeholder="Opções separadas por vírgula (ex.: Achou caro, Não responde, Comprou concorrente)"
+            className="bg-muted text-foreground text-sm"
+          />
+        )}
       </div>
 
       {/* List */}

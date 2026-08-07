@@ -33,6 +33,7 @@ import {
 import { ScheduleMessageForm } from "./schedule-message-form";
 import { ScheduleMiniList } from "./schedule-mini-list";
 import { CustomerCodesEditor } from "./customer-codes-editor";
+import { CustomFieldInput } from "@/components/contacts/custom-field-input";
 import type {
   Contact,
   Conversation,
@@ -876,18 +877,16 @@ export function ContactSidebar({
                       <label className="text-[11px] font-medium text-muted-foreground">
                         {field.field_name}
                       </label>
-                      <input
+                      <CustomFieldInput
+                        field={field}
                         value={customValues[field.id] ?? ""}
-                        onChange={(e) => {
-                          const val = e.target.value;
+                        onChange={(val) => {
                           setCustomValues((prev) => ({
                             ...prev,
                             [field.id]: val,
                           }));
                           setCustomDirty(true);
                         }}
-                        placeholder="—"
-                        className="h-8 w-full rounded-lg border border-border bg-muted px-2.5 text-xs text-foreground placeholder-muted-foreground outline-none focus:border-primary"
                       />
                     </div>
                   ))}
