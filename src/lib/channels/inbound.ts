@@ -493,16 +493,34 @@ export async function dispatchInboundMessage(
   // Flag broadcast reply, if any.
   await flagBroadcastReplyIfAny(accountId, contactId);
 
+  // Config da IA (carregado uma vez): decide se a IA é o respondente de
+  // fora-do-horário e serve o buffer abaixo. requireActive default → null
+  // quando a IA está desligada/inativa.
+  const aiCfg = await loadAiConfig(accountId).catch(() => null);
+  // A IA "cobre" o fora-do-horário quando está com auto-resposta ligada, no
+  // modo que atende fora (outside/always) e cobre ESTE canal. Nesse caso a
+  // mensagem padrão de fora-do-horário cede a vez pra ela — senão as duas
+  // brigam e a padrão BLOQUEAVA a IA (bug do "só fora do horário").
+  const aiHandlesOffHours =
+    !!aiCfg &&
+    aiCfg.autoReplyEnabled &&
+    aiCfg.autoReplyHoursMode !== 'inside' &&
+    (aiCfg.autoReplyChannelIds.length === 0 ||
+      aiCfg.autoReplyChannelIds.includes(channel.id));
+
   // Out-of-hours auto-reply. When the customer writes outside business hours
   // (and we haven't already sent a closed-notice recently), send the account's
   // configured message and skip the AI auto-reply below — a human isn't
-  // available, so the closed notice stands in for it.
-  const outOfHoursSent = await maybeSendOutOfHoursReply(
-    accountId,
-    conversation.id,
-    contactId,
-    contactOutcome.contact.userId,
-  );
+  // available, so the closed notice stands in for it. Pulado quando a IA vai
+  // atender o fora-do-horário (ela É o respondente).
+  const outOfHoursSent = aiHandlesOffHours
+    ? false
+    : await maybeSendOutOfHoursReply(
+        accountId,
+        conversation.id,
+        contactId,
+        contactOutcome.contact.userId,
+      );
 
   // ---- Flows / automations / AI dispatch (identical to the Meta webhook) ----
   const inboundText = ev.contentText ?? '';
@@ -559,16 +577,11 @@ export async function dispatchInboundMessage(
   // inbound. `AI_REPLY_BUFFER_SECONDS=0` volta ao comportamento imediato.
   if (!flowConsumed && !outOfHoursSent && !ev.interactiveReplyId && inboundText.trim()) {
     try {
-      // Buffer por conta (config do Agente IA); cai no env global se a IA
-      // não estiver configurada/ativa nessa conta.
+      // Buffer por conta (config da IA já carregado acima); cai no env global
+      // se a IA não estiver configurada/ativa nessa conta.
       let bufferMs = aiReplyBufferMs();
-      try {
-        const aiCfg = await loadAiConfig(accountId);
-        if (aiCfg && typeof aiCfg.autoReplyBufferSeconds === 'number') {
-          bufferMs = Math.max(0, Math.floor(aiCfg.autoReplyBufferSeconds * 1000));
-        }
-      } catch {
-        // mantém o default do env
+      if (aiCfg && typeof aiCfg.autoReplyBufferSeconds === 'number') {
+        bufferMs = Math.max(0, Math.floor(aiCfg.autoReplyBufferSeconds * 1000));
       }
       await enqueueAiReplyDebounced(
         {
