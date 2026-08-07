@@ -48,6 +48,10 @@ import {
   extractVariableIndices,
   TEMPLATE_LIMITS,
 } from '@/lib/whatsapp/template-validators';
+import {
+  WhatsAppPhonePreview,
+  substituteVars,
+} from '@/components/inbox/whatsapp-phone-preview';
 
 const CATEGORIES = ['Marketing', 'Utility', 'Authentication'] as const;
 type HeaderFormat = 'none' | 'text' | 'image' | 'video' | 'document';
@@ -652,7 +656,7 @@ export function TemplateManager() {
           }
         }}
       >
-        <DialogContent className="bg-popover border-border sm:max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="bg-popover border-border sm:max-w-4xl max-h-[90vh] overflow-y-auto">
           <DialogHeader>
             <DialogTitle className="text-popover-foreground">
               {editingId ? 'Editar template de mensagem' : 'Novo template de mensagem'}
@@ -676,7 +680,9 @@ export function TemplateManager() {
             </div>
           )}
 
-          <div className="space-y-4 py-2">
+          <div className="grid gap-6 py-2 md:grid-cols-[minmax(0,1fr)_296px]">
+            {/* Coluna esquerda: campos do template */}
+            <div className="space-y-4">
             <div className="space-y-2">
               <Label className="text-muted-foreground">Nome do template</Label>
               <Input
@@ -1068,7 +1074,34 @@ export function TemplateManager() {
                 </div>
               )}
             </div>
-          </div>
+            </div>{/* fim coluna esquerda */}
+
+            {/* Coluna direita: prévia no celular (estilo WhatsApp), fixa no scroll */}
+            <div className="hidden md:block">
+              <div className="sticky top-2">
+                <p className="mb-2 text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                  Prévia
+                </p>
+                <WhatsAppPhonePreview
+                  contactName="Cliente"
+                  headerType={form.header_format}
+                  headerText={
+                    form.header_format === 'text'
+                      ? substituteVars(
+                          form.header_content,
+                          form.header_sample.trim()
+                            ? [form.header_sample.trim()]
+                            : [],
+                        )
+                      : undefined
+                  }
+                  bodyText={substituteVars(form.body_text, form.body_samples)}
+                  footerText={form.footer_text}
+                  buttons={form.buttons}
+                />
+              </div>
+            </div>
+          </div>{/* fim grid */}
 
           <DialogFooter className="bg-popover border-border">
             <Button

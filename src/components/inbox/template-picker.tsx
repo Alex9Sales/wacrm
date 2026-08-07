@@ -1,8 +1,8 @@
 "use client";
 
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { listApprovedTemplates } from "@/app/(dashboard)/inbox/actions";
-import type { MessageTemplate, TemplateButton } from "@/types";
+import type { MessageTemplate } from "@/types";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -15,20 +15,12 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Badge } from "@/components/ui/badge";
-import {
-  ArrowLeft,
-  ChevronRight,
-  LayoutTemplate,
-  Loader2,
-  Phone,
-  ExternalLink,
-  Reply,
-  Copy,
-  Image as ImageIcon,
-  FileText,
-  Video,
-} from "lucide-react";
+import { ArrowLeft, ChevronRight, LayoutTemplate, Loader2 } from "lucide-react";
 import { extractVariableIndices } from "@/lib/whatsapp/template-validators";
+import {
+  WhatsAppPhonePreview,
+  substituteVars,
+} from "@/components/inbox/whatsapp-phone-preview";
 
 export interface TemplateSendValues {
   body: string[];
@@ -45,175 +37,9 @@ interface TemplatePickerProps {
   contactName?: string | null;
 }
 
-function renderBodyPreview(body: string, params: string[]): string {
-  return body.replace(/\{\{(\d+)\}\}/g, (_, raw) => {
-    const idx = Number(raw) - 1;
-    const value = params[idx];
-    return value && value.trim().length > 0 ? value : `{{${raw}}}`;
-  });
-}
-
 // Primeiro nome, para o auto-preenchimento amigável do {{1}} ("Oi João").
 function firstNameOf(name?: string | null): string {
   return (name ?? "").trim().split(/\s+/)[0] ?? "";
-}
-
-// ------------------------------------------------------------
-// Formatação estilo WhatsApp para a PRÉVIA: *negrito*, _itálico_,
-// ~tachado~, ```mono``` e destaque das variáveis {{n}} ainda vazias.
-// (Só visual — o texto enviado à Meta continua o cru.)
-// ------------------------------------------------------------
-function formatWhatsApp(text: string): ReactNode[] {
-  const nodes: ReactNode[] = [];
-  const regex = /(\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|```[^`]+```|\{\{\d+\}\})/g;
-  let last = 0;
-  let key = 0;
-  let m: RegExpExecArray | null;
-  while ((m = regex.exec(text)) !== null) {
-    if (m.index > last) nodes.push(text.slice(last, m.index));
-    const tok = m[0];
-    if (tok.startsWith("```")) {
-      nodes.push(
-        <code key={key++} className="rounded bg-black/25 px-1 font-mono text-[11px]">
-          {tok.slice(3, -3)}
-        </code>,
-      );
-    } else if (tok.startsWith("*")) {
-      nodes.push(<strong key={key++}>{tok.slice(1, -1)}</strong>);
-    } else if (tok.startsWith("_")) {
-      nodes.push(<em key={key++}>{tok.slice(1, -1)}</em>);
-    } else if (tok.startsWith("~")) {
-      nodes.push(<s key={key++}>{tok.slice(1, -1)}</s>);
-    } else {
-      // Variável ainda não preenchida — realça em âmbar para saltar aos olhos.
-      nodes.push(
-        <span
-          key={key++}
-          className="rounded bg-amber-400/25 px-1 font-medium text-amber-200"
-        >
-          {tok}
-        </span>,
-      );
-    }
-    last = m.index + tok.length;
-  }
-  if (last < text.length) nodes.push(text.slice(last));
-  return nodes;
-}
-
-function ButtonIcon({ type }: { type: TemplateButton["type"] }) {
-  const cls = "h-3.5 w-3.5 flex-shrink-0";
-  if (type === "URL") return <ExternalLink className={cls} />;
-  if (type === "PHONE_NUMBER") return <Phone className={cls} />;
-  if (type === "COPY_CODE") return <Copy className={cls} />;
-  return <Reply className={cls} />;
-}
-
-// ------------------------------------------------------------
-// Mockup de celular (estilo WhatsApp) com a prévia ao vivo do template,
-// como o CLIENTE recebe: bolha recebida, header/mídia, rodapé e botões.
-// Cores fixas do WhatsApp (não seguem o tema do app — é uma "tela de celular").
-// ------------------------------------------------------------
-function TemplatePhonePreview({
-  template,
-  bodyParams,
-  headerText,
-  contactName,
-}: {
-  template: MessageTemplate;
-  bodyParams: string[];
-  headerText: string;
-  contactName?: string | null;
-}) {
-  const body = renderBodyPreview(template.body_text, bodyParams);
-  const headerTextResolved =
-    template.header_type === "text" && template.header_content
-      ? template.header_content.replace(
-          /\{\{1\}\}/g,
-          headerText.trim() || "{{1}}",
-        )
-      : null;
-  const mediaType =
-    template.header_type && template.header_type !== "text"
-      ? template.header_type
-      : null;
-  const buttons = template.buttons ?? [];
-  const initial = (contactName ?? "").trim().charAt(0).toUpperCase() || "?";
-
-  return (
-    <div className="mx-auto w-full max-w-[264px]">
-      <div className="overflow-hidden rounded-[1.9rem] border-[7px] border-neutral-900 bg-[#0b141a] shadow-xl">
-        {/* Barra superior do WhatsApp */}
-        <div className="flex items-center gap-2 bg-[#008069] px-3 py-2 text-white">
-          <ArrowLeft className="h-4 w-4 opacity-90" />
-          <div className="flex h-7 w-7 items-center justify-center rounded-full bg-white/25 text-[11px] font-semibold">
-            {initial}
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-xs font-medium leading-tight">
-              {contactName?.trim() || "Contato"}
-            </p>
-            <p className="text-[9px] leading-tight text-white/70">online</p>
-          </div>
-        </div>
-
-        {/* Área da conversa */}
-        <div className="min-h-[220px] space-y-1.5 bg-[#0b141a] px-2.5 py-3">
-          <div className="flex justify-start">
-            <div className="relative max-w-[88%] rounded-lg rounded-tl-sm bg-[#202c33] px-2.5 py-1.5 text-[12px] leading-snug text-neutral-100 shadow">
-              {mediaType && (
-                <div className="mb-1.5 flex h-20 flex-col items-center justify-center gap-1 rounded bg-black/30 text-neutral-400">
-                  {mediaType === "image" && <ImageIcon className="h-6 w-6" />}
-                  {mediaType === "video" && <Video className="h-6 w-6" />}
-                  {mediaType === "document" && <FileText className="h-6 w-6" />}
-                  <span className="text-[9px] uppercase tracking-wide">
-                    {mediaType === "image"
-                      ? "Imagem"
-                      : mediaType === "video"
-                        ? "Vídeo"
-                        : "Documento"}
-                  </span>
-                </div>
-              )}
-              {headerTextResolved && (
-                <p className="mb-1 font-semibold">
-                  {formatWhatsApp(headerTextResolved)}
-                </p>
-              )}
-              <p className="whitespace-pre-wrap break-words">
-                {formatWhatsApp(body)}
-              </p>
-              {template.footer_text && (
-                <p className="mt-1 text-[11px] text-neutral-400">
-                  {template.footer_text}
-                </p>
-              )}
-              <span className="mt-0.5 block text-right text-[9px] text-neutral-400">
-                12:00
-              </span>
-            </div>
-          </div>
-
-          {/* Botões do template (abaixo da bolha, como no WhatsApp) */}
-          {buttons.length > 0 && (
-            <div className="flex justify-start">
-              <div className="w-[88%] overflow-hidden rounded-lg bg-[#202c33] text-[12px] font-medium">
-                {buttons.map((b, i) => (
-                  <div
-                    key={i}
-                    className="flex items-center justify-center gap-1.5 border-t border-white/10 py-2 text-[#00a5f4] first:border-t-0"
-                  >
-                    <ButtonIcon type={b.type} />
-                    <span className="truncate">{b.text}</span>
-                  </div>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-      </div>
-    </div>
-  );
 }
 
 interface UrlButtonSlot {
@@ -349,6 +175,15 @@ export function TemplatePicker({
       (s) => (buttonParams[s.index] ?? "").trim().length > 0,
     );
 
+  // Cabeçalho de texto resolvido para a prévia (substitui o seu {{1}}).
+  const resolvedHeader =
+    selected && selected.header_type === "text" && selected.header_content
+      ? substituteVars(
+          selected.header_content,
+          headerText.trim() ? [headerText.trim()] : [],
+        )
+      : undefined;
+
   return (
     <Dialog open={open} onOpenChange={handleOpenChange}>
       <DialogContent
@@ -421,11 +256,13 @@ export function TemplatePicker({
           <div className="grid gap-4 md:grid-cols-[264px_minmax(0,1fr)]">
             {/* Mockup de celular — em cima no mobile, à esquerda no desktop */}
             <div className="order-first">
-              <TemplatePhonePreview
-                template={selected}
-                bodyParams={params}
-                headerText={headerText}
+              <WhatsAppPhonePreview
                 contactName={contactName}
+                headerType={selected.header_type ?? "none"}
+                headerText={resolvedHeader}
+                bodyText={substituteVars(selected.body_text, params)}
+                footerText={selected.footer_text}
+                buttons={selected.buttons ?? []}
               />
             </div>
 
