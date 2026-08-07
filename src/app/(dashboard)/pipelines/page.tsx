@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import {
   createPipelineWithStages,
   listDeals,
@@ -36,9 +36,26 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
-import { GitBranch, Plus, ChevronDown, Settings } from "lucide-react";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select";
+import {
+  GitBranch,
+  Plus,
+  ChevronDown,
+  Settings,
+  Search,
+  User as UserIcon,
+  CircleDot,
+  ArrowDownUp,
+} from "lucide-react";
 import { toast } from "sonner";
 import { useCan } from "@/hooks/use-can";
+import { useAuth } from "@/hooks/use-auth";
 import { GatedButton } from "@/components/ui/gated-button";
 
 // Pipeline creation is admin-class (settings-tier write under
@@ -55,15 +72,80 @@ const SPEC_DEFAULT_STAGES = [
   { name: "Ganho", color: "#22c55e", position: 4 }, // green
 ];
 
+// Rótulos dos filtros do funil (usados na prévia do Select + itens).
+const STATUS_LABELS = {
+  all: "Todos os status",
+  open: "Em andamento",
+  won: "Ganhas",
+  lost: "Perdidas",
+} as const;
+const SORT_LABELS = {
+  recent: "Mais recentes",
+  value_desc: "Maior valor",
+  value_asc: "Menor valor",
+  close: "Fechamento previsto",
+  name: "Título (A–Z)",
+} as const;
+
 export default function PipelinesPage() {
   const canEditSettings = useCan("edit-settings");
   const canCreateDeals = useCan("send-messages");
+  const { user } = useAuth();
+
+  // Filtros do funil (estilo RD) — dono / status / ordenação / busca. Rodam no
+  // cliente sobre os deals já carregados (instantâneo, sem nova query).
+  const [ownerFilter, setOwnerFilter] = useState<"all" | "mine">("all");
+  const [statusFilter, setStatusFilter] = useState<
+    "all" | "open" | "won" | "lost"
+  >("all");
+  const [sortBy, setSortBy] = useState<
+    "recent" | "value_desc" | "value_asc" | "close" | "name"
+  >("recent");
+  const [search, setSearch] = useState("");
 
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Aplica os filtros/ordenação no cliente. O board (contagem + soma por
+  // etapa), drag-drop e mutações continuam operando sobre `deals`; só a
+  // exibição usa `visibleDeals`.
+  const visibleDeals = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    const filtered = deals.filter((d) => {
+      if (ownerFilter === "mine" && d.assigned_to !== user?.id) return false;
+      if (statusFilter !== "all" && (d.status ?? "open") !== statusFilter)
+        return false;
+      if (q) {
+        const hay = `${d.title ?? ""} ${d.contact?.name ?? ""} ${
+          d.contact?.phone ?? ""
+        }`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+    const val = (d: Deal) => Number(d.value || 0);
+    const time = (s?: string) => (s ? new Date(s).getTime() : Infinity);
+    return [...filtered].sort((a, b) => {
+      switch (sortBy) {
+        case "value_desc":
+          return val(b) - val(a);
+        case "value_asc":
+          return val(a) - val(b);
+        case "close":
+          return time(a.expected_close_date) - time(b.expected_close_date);
+        case "name":
+          return (a.title || "").localeCompare(b.title || "");
+        case "recent":
+        default:
+          return (
+            new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+          );
+      }
+    });
+  }, [deals, ownerFilter, statusFilter, sortBy, search, user?.id]);
 
   // Batched open-task counts keyed by deal id — one query per board load
   // (no N+1). Drives the per-card task indicator.
@@ -420,10 +502,95 @@ export default function PipelinesPage() {
         </div>
       ) : (
         <>
+          {/* Barra de filtros do funil (estilo RD): busca, dono, status,
+              ordenação + contador. Roda no cliente sobre os deals carregados. */}
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <div className="relative min-w-[200px] flex-1 sm:max-w-xs">
+              <Search className="pointer-events-none absolute left-2.5 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />
+              <Input
+                value={search}
+                onChange={(e) => setSearch(e.target.value)}
+                placeholder="Buscar negócio ou contato…"
+                className="h-9 border-border bg-card pl-8 text-sm"
+              />
+            </div>
+
+            <Select
+              value={ownerFilter}
+              onValueChange={(v) => v && setOwnerFilter(v as "all" | "mine")}
+            >
+              <SelectTrigger className="h-9 w-[190px] border-border bg-card text-sm text-foreground">
+                <UserIcon className="h-4 w-4 text-muted-foreground" />
+                <SelectValue>
+                  {(v) =>
+                    v === "mine" ? "Minhas negociações" : "Todas as negociações"
+                  }
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="border-border bg-popover">
+                <SelectItem value="all">Todas as negociações</SelectItem>
+                <SelectItem value="mine">Minhas negociações</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={statusFilter}
+              onValueChange={(v) =>
+                v && setStatusFilter(v as "all" | "open" | "won" | "lost")
+              }
+            >
+              <SelectTrigger className="h-9 w-[165px] border-border bg-card text-sm text-foreground">
+                <CircleDot className="h-4 w-4 text-muted-foreground" />
+                <SelectValue>
+                  {(v) => STATUS_LABELS[v as keyof typeof STATUS_LABELS]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="border-border bg-popover">
+                <SelectItem value="all">{STATUS_LABELS.all}</SelectItem>
+                <SelectItem value="open">{STATUS_LABELS.open}</SelectItem>
+                <SelectItem value="won">{STATUS_LABELS.won}</SelectItem>
+                <SelectItem value="lost">{STATUS_LABELS.lost}</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <Select
+              value={sortBy}
+              onValueChange={(v) =>
+                v &&
+                setSortBy(
+                  v as "recent" | "value_desc" | "value_asc" | "close" | "name",
+                )
+              }
+            >
+              <SelectTrigger className="h-9 w-[185px] border-border bg-card text-sm text-foreground">
+                <ArrowDownUp className="h-4 w-4 text-muted-foreground" />
+                <SelectValue>
+                  {(v) => SORT_LABELS[v as keyof typeof SORT_LABELS]}
+                </SelectValue>
+              </SelectTrigger>
+              <SelectContent className="border-border bg-popover">
+                <SelectItem value="recent">{SORT_LABELS.recent}</SelectItem>
+                <SelectItem value="value_desc">
+                  {SORT_LABELS.value_desc}
+                </SelectItem>
+                <SelectItem value="value_asc">
+                  {SORT_LABELS.value_asc}
+                </SelectItem>
+                <SelectItem value="close">{SORT_LABELS.close}</SelectItem>
+                <SelectItem value="name">{SORT_LABELS.name}</SelectItem>
+              </SelectContent>
+            </Select>
+
+            <span className="ml-auto shrink-0 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-muted-foreground">
+              {visibleDeals.length}{" "}
+              {visibleDeals.length === 1 ? "negócio" : "negócios"}
+            </span>
+          </div>
+
           <PipelineAnalytics stages={stages} deals={deals} />
           <PipelineBoard
             stages={stages}
-            deals={deals}
+            deals={visibleDeals}
             onDealMoved={handleDealMoved}
             onAddDeal={handleAddDeal}
             onEditDeal={handleEditDeal}
