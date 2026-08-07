@@ -55,11 +55,13 @@ import {
   ArrowDownUp,
   LayoutGrid,
   List,
+  Check,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useCan } from "@/hooks/use-can";
 import { useAuth } from "@/hooks/use-auth";
 import { GatedButton } from "@/components/ui/gated-button";
+import { cn } from "@/lib/utils";
 
 // Pipeline creation is admin-class (settings-tier write under
 // the new RLS); deal creation is operational and only requires
@@ -97,7 +99,11 @@ export default function PipelinesPage() {
 
   // Filtros do funil (estilo RD) — dono / status / ordenação / busca. Rodam no
   // cliente sobre os deals já carregados (instantâneo, sem nova query).
-  const [ownerFilter, setOwnerFilter] = useState<"all" | "mine">("all");
+  // 'all' | 'mine' | lista de user ids (multi-seleção por responsável, RD).
+  const [ownerFilter, setOwnerFilter] = useState<"all" | "mine" | string[]>(
+    "all",
+  );
+  const [ownerMenuOpen, setOwnerMenuOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<
     "all" | "open" | "won" | "lost"
   >("all");
@@ -120,7 +126,11 @@ export default function PipelinesPage() {
   const visibleDeals = useMemo(() => {
     const q = search.trim().toLowerCase();
     const filtered = deals.filter((d) => {
-      if (ownerFilter === "mine" && d.assigned_to !== user?.id) return false;
+      if (ownerFilter === "mine") {
+        if (d.assigned_to !== user?.id) return false;
+      } else if (Array.isArray(ownerFilter) && ownerFilter.length > 0) {
+        if (!d.assigned_to || !ownerFilter.includes(d.assigned_to)) return false;
+      }
       if (statusFilter !== "all" && (d.status ?? "open") !== statusFilter)
         return false;
       if (q) {
@@ -151,6 +161,39 @@ export default function PipelinesPage() {
       }
     });
   }, [deals, ownerFilter, statusFilter, sortBy, search, user?.id]);
+
+  // Responsáveis presentes nos deals (alimenta o filtro multi-seleção — RD).
+  const owners = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const d of deals) {
+      if (d.assignee?.id)
+        m.set(d.assignee.id, d.assignee.full_name || "Sem nome");
+    }
+    return Array.from(m, ([id, name]) => ({ id, name })).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+  }, [deals]);
+
+  const ownerLabel =
+    ownerFilter === "all"
+      ? "Todas as negociações"
+      : ownerFilter === "mine"
+        ? "Minhas negociações"
+        : ownerFilter.length === 0
+          ? "Todas as negociações"
+          : ownerFilter.length === 1
+            ? (owners.find((o) => o.id === ownerFilter[0])?.name ??
+              "1 responsável")
+            : `${ownerFilter.length} responsáveis`;
+
+  const toggleOwner = (id: string) =>
+    setOwnerFilter((prev) => {
+      const arr = Array.isArray(prev) ? [...prev] : [];
+      const i = arr.indexOf(id);
+      if (i >= 0) arr.splice(i, 1);
+      else arr.push(id);
+      return arr;
+    });
 
   // Batched open-task counts keyed by deal id — one query per board load
   // (no N+1). Drives the per-card task indicator.
@@ -550,23 +593,99 @@ export default function PipelinesPage() {
               />
             </div>
 
-            <Select
-              value={ownerFilter}
-              onValueChange={(v) => v && setOwnerFilter(v as "all" | "mine")}
-            >
-              <SelectTrigger className="h-9 w-[190px] border-border bg-card text-sm text-foreground">
-                <UserIcon className="h-4 w-4 text-muted-foreground" />
-                <SelectValue>
-                  {(v) =>
-                    v === "mine" ? "Minhas negociações" : "Todas as negociações"
-                  }
-                </SelectValue>
-              </SelectTrigger>
-              <SelectContent className="border-border bg-popover">
-                <SelectItem value="all">Todas as negociações</SelectItem>
-                <SelectItem value="mine">Minhas negociações</SelectItem>
-              </SelectContent>
-            </Select>
+            {/* Dono: multi-seleção por responsável (estilo RD). */}
+            <div className="relative">
+              <button
+                type="button"
+                onClick={() => setOwnerMenuOpen((v) => !v)}
+                className="flex h-9 w-[200px] items-center gap-2 rounded-lg border border-border bg-card px-2.5 text-sm text-foreground hover:bg-muted"
+              >
+                <UserIcon className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <span className="flex-1 truncate text-left">{ownerLabel}</span>
+                <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+              </button>
+              {ownerMenuOpen && (
+                <>
+                  <div
+                    className="fixed inset-0 z-40"
+                    onClick={() => setOwnerMenuOpen(false)}
+                  />
+                  <div className="absolute left-0 z-50 mt-1 w-64 rounded-md border border-border bg-popover p-1 text-sm shadow-xl">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOwnerFilter("all");
+                        setOwnerMenuOpen(false);
+                      }}
+                      className={cn(
+                        "flex w-full items-center rounded px-2 py-1.5 text-left hover:bg-muted",
+                        ownerFilter === "all" && "text-primary",
+                      )}
+                    >
+                      Todas as negociações
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setOwnerFilter("mine");
+                        setOwnerMenuOpen(false);
+                      }}
+                      className={cn(
+                        "flex w-full items-center rounded px-2 py-1.5 text-left hover:bg-muted",
+                        ownerFilter === "mine" && "text-primary",
+                      )}
+                    >
+                      Minhas negociações
+                    </button>
+                    {owners.length > 0 && (
+                      <>
+                        <div className="my-1 border-t border-border" />
+                        <p className="px-2 py-1 text-[10px] font-medium uppercase tracking-wide text-muted-foreground">
+                          Responsáveis
+                        </p>
+                        <div className="max-h-52 overflow-y-auto">
+                          {owners.map((o) => {
+                            const sel =
+                              Array.isArray(ownerFilter) &&
+                              ownerFilter.includes(o.id);
+                            return (
+                              <button
+                                key={o.id}
+                                type="button"
+                                onClick={() => toggleOwner(o.id)}
+                                className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-muted"
+                              >
+                                <span
+                                  className={cn(
+                                    "flex h-4 w-4 shrink-0 items-center justify-center rounded border",
+                                    sel
+                                      ? "border-primary bg-primary text-primary-foreground"
+                                      : "border-border",
+                                  )}
+                                >
+                                  {sel && <Check className="h-3 w-3" />}
+                                </span>
+                                <span className="truncate">{o.name}</span>
+                              </button>
+                            );
+                          })}
+                        </div>
+                        {Array.isArray(ownerFilter) &&
+                          ownerFilter.length > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => setOwnerFilter("all")}
+                              className="mt-1 w-full rounded px-2 py-1 text-left text-xs text-muted-foreground hover:bg-muted hover:text-foreground"
+                            >
+                              Limpar seleção
+                            </button>
+                          )}
+                      </>
+                    )}
+                  </div>
+                </>
+              )}
+            </div>
 
             <Select
               value={statusFilter}
