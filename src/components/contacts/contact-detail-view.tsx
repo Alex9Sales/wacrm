@@ -793,6 +793,7 @@ export function ContactDetailView({
       open={templatePickerOpen}
       onOpenChange={setTemplatePickerOpen}
       onSelect={handleSendTemplate}
+      contactName={contact?.name}
     />
     </>
   );

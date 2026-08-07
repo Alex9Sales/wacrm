@@ -2001,6 +2001,7 @@ export function MessageThread({
         open={templateModalOpen}
         onOpenChange={setTemplateModalOpen}
         onSelect={handleSendTemplate}
+        contactName={contact.name}
       />
 
       {forwarding && (
