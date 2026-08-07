@@ -87,15 +87,6 @@ export async function GET() {
       !(err instanceof ForbiddenError || err instanceof UnauthorizedError)
     ) {
       throw err;
-    } else {
-      // Capturador temporário: quando o role fica NULL (sem org ativa /
-      // membership), o botão de excluir some no cliente. Loga o e-mail + o
-      // motivo pra diagnosticar o "não apaga" da conta do Rafael. REMOVER.
-      console.log(
-        `[api/me] no-account role=null email=${userRow.email} reason=${
-          err instanceof Error ? err.message : String(err)
-        }`,
-      );
     }
     // No active org / membership — leave account fields null.
   }

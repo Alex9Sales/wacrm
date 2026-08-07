@@ -1174,22 +1174,8 @@ export function MessageThread({
   const handleDeleteConversation = useCallback(async () => {
     if (!conversation || deleteBusy) return;
     setDeleteBusy(true);
-    // Capturador temporário (diagnóstico do "não apaga" da conta do Rafael).
-    const probe = (data: Record<string, unknown>) =>
-      fetch("/api/debug/delete-probe", {
-        method: "POST",
-        headers: { "content-type": "application/json" },
-        body: JSON.stringify({
-          from: "header",
-          role: accountRole ?? "null",
-          conversationId: conversation.id,
-          ...data,
-        }),
-      }).catch(() => {});
-    void probe({ stage: "click" });
     try {
       const res = await deleteConversation(conversation.id);
-      void probe({ stage: "result", deleted: res.deleted });
       // Só some da lista quando o servidor CONFIRMA a exclusão — senão avisa
       // (evita o "some e volta").
       if (res.deleted) {
@@ -1200,10 +1186,6 @@ export function MessageThread({
         toast.error("Conversa não encontrada ou já removida.");
       }
     } catch (err) {
-      void probe({
-        stage: "error",
-        message: err instanceof Error ? err.message : String(err),
-      });
       console.error("Failed to delete conversation:", err);
       toast.error(
         err instanceof Error ? err.message : "Não foi possível excluir a conversa",
@@ -1211,7 +1193,7 @@ export function MessageThread({
     } finally {
       setDeleteBusy(false);
     }
-  }, [conversation, deleteBusy, onConversationDeleted, accountRole]);
+  }, [conversation, deleteBusy, onConversationDeleted]);
 
   const handleEditMessage = useCallback(async () => {
     if (!editingMsg || editBusy) return;

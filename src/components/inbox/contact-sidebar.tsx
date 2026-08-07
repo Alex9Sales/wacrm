@@ -10,6 +10,7 @@ import {
   updateConversationStatus,
   updateConversationAssignment,
   updateConversationPriority,
+  deleteConversation,
 } from "@/app/(dashboard)/inbox/actions";
 import {
   getContact,
@@ -75,6 +76,7 @@ import { DealForm } from "@/components/pipelines/deal-form";
 import { ContactAvatar } from "./contact-avatar";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
+import { hasMinRole } from "@/lib/auth/roles";
 import { toast } from "sonner";
 import { format } from "date-fns";
 
@@ -194,7 +196,10 @@ export function ContactSidebar({
   // "Ações da conversa" (assign / status / priority) is a management panel —
   // admin/owner only. Agents pulled into a thread by a private @mention can
   // read/reply but must not manage or take over the conversation.
-  const { canManageMembers } = useAuth();
+  const { canManageMembers, accountRole } = useAuth();
+  // Excluir conversa: mesma regra do cabeçalho da thread (supervisor+).
+  const canDeleteConversation = hasMinRole(accountRole ?? "viewer", "supervisor");
+  const [deletingConv, setDeletingConv] = useState(false);
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
@@ -594,20 +599,43 @@ export function ContactSidebar({
               <ExternalLink className="h-3 w-3" />
               Contato
             </Link>
-            {conversationId && onConversationDeleted && (
+            {conversationId && onConversationDeleted && canDeleteConversation && (
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => {
+                disabled={deletingConv}
+                onClick={async () => {
+                  if (deletingConv) return;
                   if (
-                    window.confirm(
+                    !window.confirm(
                       "Excluir esta conversa? As mensagens serão removidas. Esta ação não pode ser desfeita.",
                     )
                   ) {
-                    onConversationDeleted(conversationId);
+                    return;
+                  }
+                  setDeletingConv(true);
+                  try {
+                    // Apaga no SERVIDOR primeiro; só some da UI quando confirmado
+                    // (senão "some e volta" no próximo reload).
+                    const res = await deleteConversation(conversationId);
+                    if (res.deleted) {
+                      toast.success("Conversa excluída");
+                      onConversationDeleted(conversationId);
+                    } else {
+                      toast.error("Conversa não encontrada ou já removida.");
+                    }
+                  } catch (err) {
+                    console.error("Failed to delete conversation:", err);
+                    toast.error(
+                      err instanceof Error
+                        ? err.message
+                        : "Não foi possível excluir a conversa",
+                    );
+                  } finally {
+                    setDeletingConv(false);
                   }
                 }}
-                className="h-7 flex-1 border-border bg-transparent text-xs text-red-400 hover:bg-red-500/10 hover:text-red-300"
+                className="h-7 flex-1 border-border bg-transparent text-xs text-red-400 hover:bg-red-500/10 hover:text-red-300 disabled:opacity-50"
               >
                 <Trash2 className="h-3 w-3" />
                 Excluir
