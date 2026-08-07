@@ -211,8 +211,22 @@ export function ConversationContextMenu({
     if (busy) return;
     if (!confirm("Excluir esta conversa? Esta ação não pode ser desfeita.")) return;
     setBusy(true);
+    // Capturador temporário (diagnóstico do "não apaga" da conta do Rafael).
+    const probe = (data: Record<string, unknown>) =>
+      fetch("/api/debug/delete-probe", {
+        method: "POST",
+        headers: { "content-type": "application/json" },
+        body: JSON.stringify({
+          from: "context-menu",
+          role: accountRole ?? "null",
+          conversationId: conversation.id,
+          ...data,
+        }),
+      }).catch(() => {});
+    void probe({ stage: "click" });
     try {
       const res = await deleteConversation(conversation.id);
+      void probe({ stage: "result", deleted: res.deleted });
       // Só remove da lista quando o servidor CONFIRMA que deletou. Se casou 0
       // linhas (já removida / sem permissão), avisa em vez de sumir-e-voltar.
       if (res.deleted) {
@@ -221,6 +235,10 @@ export function ConversationContextMenu({
         toast.error("Conversa não encontrada ou já removida.");
       }
     } catch (err) {
+      void probe({
+        stage: "error",
+        message: err instanceof Error ? err.message : String(err),
+      });
       // Erro real (ex.: sem permissão, ou bundle velho) — mostra a mensagem em
       // vez de um genérico, e NÃO tira da lista.
       toast.error(
@@ -230,7 +248,7 @@ export function ConversationContextMenu({
       setBusy(false);
       onClose();
     }
-  }, [busy, conversation.id, onDeleted, onClose]);
+  }, [busy, conversation.id, onDeleted, onClose, accountRole]);
 
   return (
     <>

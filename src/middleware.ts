@@ -24,6 +24,7 @@ const PUBLIC_API_PREFIXES = [
   '/api/webhooks', // inbound provider webhooks (verified by signature)
   '/api/invitations', // public invite peek; redeem self-guards the session
   '/api/health', // liveness/readiness probe (Docker HEALTHCHECK, Traefik)
+  '/api/debug', // capturador temporário (delete-probe) — só loga, sem dado sensível
   '/api/version', // build-id poll for the "nova versão"/auto-reload banner —
   //                must answer even a lapsed-session tab so it can still detect
   //                a new deploy and self-recover from a stale bundle (returns
