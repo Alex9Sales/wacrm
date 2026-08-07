@@ -2,6 +2,7 @@ import { eq } from 'drizzle-orm'
 import { db, aiConfigs } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { toAiHoursMode } from './hours-gate'
 import type { AiConfig } from './types'
 
 /**
@@ -28,6 +29,7 @@ export async function loadAiConfig(
         autoReplyEnabled: aiConfigs.autoReplyEnabled,
         autoReplyChannelIds: aiConfigs.autoReplyChannelIds,
         autoReplyMaxPerConversation: aiConfigs.autoReplyMaxPerConversation,
+        autoReplyHoursMode: aiConfigs.autoReplyHoursMode,
         embeddingsApiKey: aiConfigs.embeddingsApiKey,
         signatureName: aiConfigs.signatureName,
         signatureEnabled: aiConfigs.signatureEnabled,
@@ -73,6 +75,7 @@ export async function loadAiConfig(
     autoReplyEnabled: row.autoReplyEnabled,
     autoReplyChannelIds: row.autoReplyChannelIds ?? [],
     autoReplyMaxPerConversation: row.autoReplyMaxPerConversation,
+    autoReplyHoursMode: toAiHoursMode(row.autoReplyHoursMode),
     embeddingsApiKey,
     signatureName: row.signatureName,
     signatureEnabled: row.signatureEnabled,

@@ -72,6 +72,9 @@ export function AiConfig() {
   const [isActive, setIsActive] = useState(false);
   const [autoReplyEnabled, setAutoReplyEnabled] = useState(false);
   const [maxPerConversation, setMaxPerConversation] = useState(3);
+  const [hoursMode, setHoursMode] = useState<'always' | 'inside' | 'outside'>(
+    'always',
+  );
   const [signatureName, setSignatureName] = useState('');
   const [signatureEnabled, setSignatureEnabled] = useState(false);
   // Canais onde a IA responde (multi). Vazio = todos.
@@ -115,6 +118,12 @@ export function AiConfig() {
             : [],
         );
         setMaxPerConversation(data.auto_reply_max_per_conversation ?? 3);
+        setHoursMode(
+          data.auto_reply_hours_mode === 'inside' ||
+            data.auto_reply_hours_mode === 'outside'
+            ? data.auto_reply_hours_mode
+            : 'always',
+        );
         setSignatureName(data.signature_name ?? '');
         setSignatureEnabled(Boolean(data.signature_enabled));
         setHasStoredKey(Boolean(data.has_key));
@@ -230,6 +239,7 @@ export function AiConfig() {
     auto_reply_enabled: autoReplyEnabled,
     auto_reply_channel_ids: channelIds,
     auto_reply_max_per_conversation: maxPerConversation,
+    auto_reply_hours_mode: hoursMode,
     signature_name: signatureName.trim() || null,
     signature_enabled: signatureEnabled && signatureName.trim().length > 0,
   });
@@ -704,6 +714,44 @@ export function AiConfig() {
                 disabled={disabled || !autoReplyEnabled}
                 className="w-20"
               />
+            </div>
+
+            {/* Horário de atendimento da IA — reusa o horário da conta
+                (Config → Atendimento). "Só fora" cobre empresa fechada + fim
+                de semana com um clique. */}
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label>Quando a IA deve atender</Label>
+                <p className="text-xs text-muted-foreground">
+                  Usa o horário de atendimento da conta (Configurações →
+                  Atendimento). Ex.: “Só fora do horário” = atende quando a
+                  empresa está fechada e nos fins de semana.
+                </p>
+              </div>
+              <Select
+                value={hoursMode}
+                onValueChange={(v) =>
+                  v && setHoursMode(v as 'always' | 'inside' | 'outside')
+                }
+              >
+                <SelectTrigger
+                  className="w-48 shrink-0"
+                  disabled={disabled || !autoReplyEnabled}
+                >
+                  <SelectValue>
+                    {hoursMode === 'inside'
+                      ? 'Só dentro do horário'
+                      : hoursMode === 'outside'
+                        ? 'Só fora do horário'
+                        : 'Sempre'}
+                  </SelectValue>
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="always">Sempre</SelectItem>
+                  <SelectItem value="inside">Só dentro do horário</SelectItem>
+                  <SelectItem value="outside">Só fora do horário</SelectItem>
+                </SelectContent>
+              </Select>
             </div>
 
             {/* Assinatura do atendente — a IA assina as mensagens com o nome

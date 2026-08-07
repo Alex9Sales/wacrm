@@ -12,6 +12,7 @@ import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
 import { validateAiCredentials } from '@/lib/ai/validate'
 import { embedTexts } from '@/lib/ai/embeddings'
 import { AiError, type AiProvider } from '@/lib/ai/types'
+import { toAiHoursMode } from '@/lib/ai/hours-gate'
 
 function bad(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
@@ -40,6 +41,7 @@ export async function GET() {
           auto_reply_enabled: aiConfigs.autoReplyEnabled,
           auto_reply_channel_ids: aiConfigs.autoReplyChannelIds,
           auto_reply_max_per_conversation: aiConfigs.autoReplyMaxPerConversation,
+          auto_reply_hours_mode: aiConfigs.autoReplyHoursMode,
           signature_name: aiConfigs.signatureName,
           signature_enabled: aiConfigs.signatureEnabled,
           api_key: aiConfigs.apiKey,
@@ -108,6 +110,9 @@ export async function POST(request: Request) {
     if (!Number.isFinite(maxPer)) maxPer = 3
     maxPer = Math.min(20, Math.max(1, Math.floor(maxPer)))
 
+    // Horário de atendimento da IA: always | inside | outside.
+    const autoReplyHoursMode = toAiHoursMode(body.auto_reply_hours_mode)
+
     // Assinatura: nome do atendente que a IA representa + se assina as msgs.
     const signatureName =
       typeof body.signature_name === 'string' && body.signature_name.trim()
@@ -174,6 +179,7 @@ export async function POST(request: Request) {
           autoReplyEnabled,
           autoReplyChannelIds: [],
           autoReplyMaxPerConversation: maxPer,
+          autoReplyHoursMode: 'always',
           embeddingsApiKey: null,
           signatureName: null,
           signatureEnabled: false,
@@ -216,6 +222,7 @@ export async function POST(request: Request) {
       autoReplyEnabled: boolean
       autoReplyChannelIds: string[]
       autoReplyMaxPerConversation: number
+      autoReplyHoursMode: string
       signatureName: string | null
       signatureEnabled: boolean
       embeddingsApiKey?: string | null
@@ -227,6 +234,7 @@ export async function POST(request: Request) {
       autoReplyEnabled,
       autoReplyChannelIds,
       autoReplyMaxPerConversation: maxPer,
+      autoReplyHoursMode,
       signatureName,
       signatureEnabled,
     }

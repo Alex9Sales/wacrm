@@ -2,6 +2,8 @@ import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db, automations, conversations, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfig } from './config'
+import { aiHoursAllows } from './hours-gate'
+import { getAccountSettings } from '@/lib/settings/account-settings'
 import { buildConversationContext } from './context'
 import { retrieveKnowledge } from './knowledge'
 import { generateReply } from './generate'
@@ -110,6 +112,13 @@ export async function dispatchInboundToAiReply(
       (!conv.channelId || !config.autoReplyChannelIds.includes(conv.channelId))
     ) {
       return
+    }
+    // Horário de atendimento da IA: só responde conforme o modo
+    // (sempre / só dentro / só fora do horário da conta). Fora da janela
+    // permitida, fica muda (um humano cuida no horário certo).
+    if (config.autoReplyHoursMode !== 'always') {
+      const settings = await getAccountSettings(accountId)
+      if (!aiHoursAllows(config.autoReplyHoursMode, settings)) return
     }
     // NEVER auto-reply in a GROUP thread. The bot answering inside a WhatsApp
     // group is almost always wrong (it would reply to every member's message,

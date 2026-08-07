@@ -1304,6 +1304,7 @@ interface AiCfg {
   buffer_seconds?: number;
   max_turns?: number;
   typing?: boolean;
+  hours_mode?: "always" | "inside" | "outside";
   exit_node_key?: string;
 }
 
@@ -1400,6 +1401,25 @@ function AiForm({
             Depois disso, transfere pro caminho de saída.
           </p>
         </div>
+      </div>
+
+      <div>
+        <label className="mb-1 block text-xs text-muted-foreground">
+          Quando a IA atende
+        </label>
+        <select
+          value={cfg.hours_mode ?? "always"}
+          onChange={(e) => onUpdateConfig({ hours_mode: e.target.value })}
+          className="w-full rounded-md border border-border bg-muted px-2 py-1.5 text-xs text-foreground"
+        >
+          <option value="always">Sempre</option>
+          <option value="inside">Só dentro do horário</option>
+          <option value="outside">Só fora do horário</option>
+        </select>
+        <p className="mt-1 text-[10px] text-muted-foreground">
+          Reusa o horário de atendimento da conta (Config → Atendimento). Fora
+          da janela, entrega pro caminho de saída (humano).
+        </p>
       </div>
 
       <NextNodeRow

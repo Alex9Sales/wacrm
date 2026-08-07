@@ -77,6 +77,7 @@ export async function POST(request: Request) {
         autoReplyEnabled: false,
         autoReplyChannelIds: [],
         autoReplyMaxPerConversation: 3,
+        autoReplyHoursMode: 'always',
         embeddingsApiKey: null,
         signatureName: null,
         signatureEnabled: false,

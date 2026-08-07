@@ -23,6 +23,9 @@ export interface AiConfig {
   /** Canais onde a IA responde automaticamente. Vazio = todos os canais. */
   autoReplyChannelIds: string[]
   autoReplyMaxPerConversation: number
+  /** Horário de atendimento da IA: always | inside | outside (reusa o
+   *  horário da conta). Fora da janela permitida, a IA não auto-responde. */
+  autoReplyHoursMode: import('./hours-gate').AiHoursMode
   /** Optional OpenAI-compatible key for embeddings. When set, the
    *  knowledge base is embedded and semantic retrieval turns on; when
    *  null, retrieval falls back to lexical full-text search. */

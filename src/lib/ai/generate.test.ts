@@ -12,6 +12,7 @@ function config(overrides: Partial<AiConfig> = {}): AiConfig {
     autoReplyEnabled: false,
     autoReplyChannelIds: [],
     autoReplyMaxPerConversation: 3,
+    autoReplyHoursMode: 'always',
     embeddingsApiKey: null,
     signatureName: null,
     signatureEnabled: false,

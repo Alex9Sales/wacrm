@@ -1194,6 +1194,9 @@ export const aiConfigs = pgTable("ai_configs", {
 	// Canais onde a IA responde (multi). Vazio = todos. Migração 0054.
 	autoReplyChannelIds: uuid("auto_reply_channel_ids").array().default(sql`'{}'::uuid[]`).notNull(),
 	autoReplyMaxPerConversation: integer("auto_reply_max_per_conversation").default(3).notNull(),
+	// Horário de atendimento da IA: always | inside | outside (reusa o horário
+	// da conta). Migração 0058.
+	autoReplyHoursMode: text("auto_reply_hours_mode").default('always').notNull(),
 	// Assinatura da IA: nome do atendente/agente + se assina as mensagens. Migração 0055.
 	signatureName: text("signature_name"),
 	signatureEnabled: boolean("signature_enabled").default(false).notNull(),
@@ -1207,6 +1210,7 @@ export const aiConfigs = pgTable("ai_configs", {
 		}).onDelete("cascade"),
 	unique("ai_configs_account_id_key").on(table.accountId),
 	check("ai_configs_auto_reply_max_per_conversation_check", sql`(auto_reply_max_per_conversation >= 1) AND (auto_reply_max_per_conversation <= 20)`),
+	check("ai_configs_auto_reply_hours_mode_check", sql`auto_reply_hours_mode = ANY (ARRAY['always'::text, 'inside'::text, 'outside'::text])`),
 	check("ai_configs_provider_check", sql`provider = ANY (ARRAY['openai'::text, 'anthropic'::text])`),
 ]);
 

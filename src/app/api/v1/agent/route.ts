@@ -143,6 +143,7 @@ export async function PUT(request: Request) {
           autoReplyEnabled,
           autoReplyChannelIds: [],
           autoReplyMaxPerConversation: maxPer,
+          autoReplyHoursMode: 'always',
           embeddingsApiKey: null,
           signatureName: null,
           signatureEnabled: false,

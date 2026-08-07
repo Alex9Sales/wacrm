@@ -347,6 +347,9 @@ export interface AiNodeConfig {
   max_turns?: number;
   /** Show "digitando…" + a human pace before each reply. Default true. */
   typing?: boolean;
+  /** Horário de atendimento da IA: always | inside | outside (reusa o horário
+   *  da conta). Fora da janela, o nó entrega pro caminho de saída. Default always. */
+  hours_mode?: 'always' | 'inside' | 'outside';
   /** Node to advance to when the AI hands off / max_turns is reached. */
   exit_node_key: string;
 }

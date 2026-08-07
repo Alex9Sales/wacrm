@@ -91,6 +91,8 @@ import {
 } from "./types";
 import { runHttpFetch } from "./http-fetch";
 import { generateFlowAiReply, splitIntoMessages } from "@/lib/ai/flow-agent";
+import { getAccountSettings } from "@/lib/settings/account-settings";
+import { aiHoursAllows } from "@/lib/ai/hours-gate";
 
 /** Default quiet-time (s) before the AI node replies to a burst. */
 const AI_DEFAULT_BUFFER_SECONDS = 6;
@@ -1786,6 +1788,17 @@ async function runAiTurn(
   if (!run.conversation_id || !run.contact_id) {
     await leave("ai_no_conversation", "error");
     return;
+  }
+
+  // Horário de atendimento da IA: a etapa só atende conforme o modo
+  // (sempre / só dentro / só fora do horário da conta). Fora da janela
+  // permitida, entrega pro caminho de saída (humano) em vez de responder.
+  if (cfg.hours_mode && cfg.hours_mode !== "always") {
+    const settings = await getAccountSettings(run.account_id);
+    if (!aiHoursAllows(cfg.hours_mode, settings)) {
+      await leave("ai_outside_configured_hours", "handoff");
+      return;
+    }
   }
 
   const result = await generateFlowAiReply({
