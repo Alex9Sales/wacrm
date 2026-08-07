@@ -7,7 +7,7 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign,
-  Pencil, Trash2, ArrowRightLeft, ChevronRight,
+  Pencil, Trash2, ArrowRightLeft, ChevronRight, Star,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
@@ -72,6 +72,15 @@ export function DealCard({
   const NextTaskIcon = isContactTask(taskCount?.next_type ?? null, nextTitle)
     ? MessageCircle
     : ListTodo;
+  // Qualificação (estrela ★N) + dias na etapa atual (estilo RD).
+  const qualification = deal.qualification ?? 0;
+  const stageSince = deal.stage_changed_at ?? deal.created_at;
+  const daysInStage = stageSince
+    ? Math.max(
+        0,
+        Math.floor((Date.now() - new Date(stageSince).getTime()) / 86400000),
+      )
+    : null;
 
   // Menu de clique-direito no card: Editar / Transferir / Excluir sem precisar
   // abrir a tela inteira. Guardamos a posição do cursor pra abrir ali.
@@ -322,6 +331,31 @@ export function DealCard({
       <div className="mt-1.5 truncate text-xs text-muted-foreground">
         {contactLabel}
       </div>
+
+      {/* Qualificação (★N) + dias na etapa — estilo RD. */}
+      {(qualification > 0 || daysInStage !== null) && (
+        <div className="mt-1.5 flex items-center justify-between gap-2">
+          {qualification > 0 ? (
+            <span
+              className="flex items-center gap-0.5 text-[11px] font-medium text-amber-400"
+              title={`Qualificação: ${qualification}/5`}
+            >
+              <Star className="h-3 w-3 fill-amber-400" />
+              {qualification}
+            </span>
+          ) : (
+            <span />
+          )}
+          {daysInStage !== null && (
+            <span
+              className="text-[10px] text-muted-foreground"
+              title="Tempo na etapa atual"
+            >
+              {daysInStage === 0 ? "hoje" : `${daysInStage}d na etapa`}
+            </span>
+          )}
+        </div>
+      )}
 
       <div className="mt-2 flex items-center justify-between">
         <span className="text-sm font-bold text-primary">

@@ -37,6 +37,7 @@ import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { DealForm } from "@/components/pipelines/deal-form";
 import { TaskForm } from "@/components/tarefas/task-form";
 import { TransferDealButton } from "@/components/pipelines/transfer-deal-button";
@@ -163,11 +164,15 @@ function describeEvent(e: DealEvent): { icon: React.ReactNode; text: string } {
           icon: <Trophy className="h-4 w-4 text-emerald-600" />,
           text: "marcou como venda ganha 🏆",
         };
-      if (to === "lost")
+      if (to === "lost") {
+        const reason = d.reason ? String(d.reason).trim() : "";
         return {
           icon: <XCircle className="h-4 w-4 text-red-600" />,
-          text: "marcou como perdido",
+          text: reason
+            ? `marcou como perdido · motivo: ${reason}`
+            : "marcou como perdido",
         };
+      }
       return {
         icon: <RotateCcw className="h-4 w-4 text-muted-foreground" />,
         text: "reabriu o negócio",
@@ -438,13 +443,17 @@ export default function DealDetailPage() {
     [deal, busy, reload],
   );
 
+  // Motivo de perda (estilo RD): "Marcar perda" abre o campo do porquê.
+  const [lostOpen, setLostOpen] = useState(false);
+  const [lostReason, setLostReason] = useState("");
+
   const markStatus = useCallback(
-    async (status: "open" | "won" | "lost") => {
+    async (status: "open" | "won" | "lost", reason?: string) => {
       if (!deal || busy) return;
       setBusy(true);
-      const { error } = await setDealStatus(deal.id, status);
+      const { error } = await setDealStatus(deal.id, status, reason);
       if (error) toast.error(error);
-      else
+      else {
         toast.success(
           status === "won"
             ? "Marcado como venda 🏆"
@@ -452,6 +461,8 @@ export default function DealDetailPage() {
               ? "Marcado como perdido"
               : "Negócio reaberto",
         );
+        setLostOpen(false);
+      }
       await reload();
       setBusy(false);
     },
@@ -544,7 +555,7 @@ export default function DealDetailPage() {
               size="sm"
               variant="outline"
               disabled={busy}
-              onClick={() => void markStatus("lost")}
+              onClick={() => setLostOpen((v) => !v)}
               className="border-red-300 text-red-600 hover:bg-red-50 dark:hover:bg-red-950/30"
             >
               <XCircle className="mr-1.5 h-4 w-4" /> Marcar perda
@@ -565,6 +576,61 @@ export default function DealDetailPage() {
           </Button>
         </div>
       </header>
+
+      {/* Motivo da perda (estilo RD) — aparece ao clicar "Marcar perda". */}
+      {lostOpen && status !== "lost" && (
+        <div className="space-y-2 border-b border-red-500/30 bg-red-500/5 px-4 py-3">
+          <p className="text-xs font-medium text-muted-foreground">
+            Por que este negócio foi perdido?
+          </p>
+          <div className="flex flex-wrap gap-1.5">
+            {[
+              "Não responde",
+              "Achou caro",
+              "Comprou concorrente",
+              "Sem orçamento agora",
+              "Preferiu esperar",
+            ].map((r) => (
+              <button
+                key={r}
+                type="button"
+                onClick={() => setLostReason(r)}
+                className={cn(
+                  "rounded-full border px-2.5 py-0.5 text-xs transition-colors",
+                  lostReason === r
+                    ? "border-red-500 bg-red-500/20 text-red-500"
+                    : "border-border text-muted-foreground hover:bg-muted",
+                )}
+              >
+                {r}
+              </button>
+            ))}
+          </div>
+          <div className="flex items-center gap-2">
+            <Input
+              value={lostReason}
+              onChange={(e) => setLostReason(e.target.value)}
+              placeholder="Ou escreva o motivo…"
+              className="h-8 flex-1 border-border bg-background text-sm"
+            />
+            <Button
+              size="sm"
+              disabled={busy}
+              onClick={() => void markStatus("lost", lostReason)}
+              className="bg-red-600 text-white hover:bg-red-700"
+            >
+              Confirmar perda
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              onClick={() => setLostOpen(false)}
+            >
+              Cancelar
+            </Button>
+          </div>
+        </div>
+      )}
 
       {/* Barra de etapas (stepper) — "setas" (RD) ou "pílulas" conforme o funil. */}
       {deal.pipeline_stepper_style === "chevrons" ? (

@@ -1,4 +1,4 @@
-import { pgTable, uniqueIndex, check, uuid, text, timestamp, index, foreignKey, unique, primaryKey, jsonb, integer, boolean, numeric, date, vector, customType } from "drizzle-orm/pg-core"
+import { pgTable, uniqueIndex, check, uuid, text, timestamp, index, foreignKey, unique, primaryKey, jsonb, integer, smallint, boolean, numeric, date, vector, customType } from "drizzle-orm/pg-core"
 import { sql } from "drizzle-orm"
 
 // tsvector is not a built-in drizzle column type; the column is a
@@ -615,6 +615,10 @@ export const deals = pgTable("deals", {
 	temperature: text(),
 	source: text(),
 	origin: text(),
+	// Paridade RD — migração 0060.
+	lostReason: text("lost_reason"),
+	qualification: smallint("qualification"),
+	stageChangedAt: timestamp("stage_changed_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [

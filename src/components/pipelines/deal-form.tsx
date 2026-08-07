@@ -37,6 +37,7 @@ import {
   DollarSign,
   Loader2,
   ExternalLink,
+  Star,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -81,6 +82,7 @@ export function DealForm({
   const [temperature, setTemperature] = useState("");
   const [source, setSource] = useState("");
   const [origin, setOrigin] = useState("");
+  const [qualification, setQualification] = useState(0);
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -89,6 +91,9 @@ export function DealForm({
 
   const [saving, setSaving] = useState(false);
   const [statusAction, setStatusAction] = useState<DealStatus | null>(null);
+  // Motivo de perda (estilo RD): ao marcar perda, pede o porquê.
+  const [lostReasonOpen, setLostReasonOpen] = useState(false);
+  const [lostReason, setLostReason] = useState("");
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // When opened from a conversation the contact is known — show it locked
@@ -117,6 +122,9 @@ export function DealForm({
       setTemperature(deal.temperature ?? "");
       setSource(deal.source ?? "");
       setOrigin(deal.origin ?? "");
+      setQualification(deal.qualification ?? 0);
+      setLostReason(deal.lost_reason ?? "");
+      setLostReasonOpen(false);
       setContactLocked(false);
     } else {
       setTitle("");
@@ -194,6 +202,7 @@ export function DealForm({
       temperature: temperature || null,
       source: source.trim() || null,
       origin: origin.trim() || null,
+      qualification: qualification || null,
     };
 
     if (deal) {
@@ -229,15 +238,21 @@ export function DealForm({
     onSaved();
   }
 
-  async function handleStatusChange(status: DealStatus) {
+  async function handleStatusChange(status: DealStatus, reason?: string) {
     if (!deal) return;
     setStatusAction(status);
-    const { error } = await updateDeal(deal.id, { status });
+    const { error } = await updateDeal(deal.id, {
+      status,
+      ...(status === "lost"
+        ? { lost_reason: (reason ?? "").trim() || null }
+        : {}),
+    });
     setStatusAction(null);
     if (error) {
       toast.error("Falha ao atualizar o status do negócio");
       return;
     }
+    setLostReasonOpen(false);
     toast.success(
       status === "won" ? "Marcado como ganho" : status === "lost" ? "Marcado como perdido" : "Negócio reaberto",
     );
@@ -434,6 +449,41 @@ export function DealForm({
               </select>
             </div>
 
+            <div className="grid gap-2">
+              <Label className="text-muted-foreground">Qualificação</Label>
+              <div className="flex items-center gap-1">
+                {[1, 2, 3, 4, 5].map((n) => (
+                  <button
+                    key={n}
+                    type="button"
+                    onClick={() =>
+                      setQualification(qualification === n ? 0 : n)
+                    }
+                    aria-label={`Qualificação ${n} de 5`}
+                    title={`${n} de 5`}
+                    className="transition-transform hover:scale-110"
+                  >
+                    <Star
+                      className={`h-5 w-5 ${
+                        n <= qualification
+                          ? "fill-amber-400 text-amber-400"
+                          : "fill-transparent text-muted-foreground"
+                      }`}
+                    />
+                  </button>
+                ))}
+                {qualification > 0 && (
+                  <button
+                    type="button"
+                    onClick={() => setQualification(0)}
+                    className="ml-1 text-[11px] text-muted-foreground hover:text-foreground"
+                  >
+                    limpar
+                  </button>
+                )}
+              </div>
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div className="grid gap-2">
                 <Label className="text-muted-foreground">Fonte</Label>
@@ -488,7 +538,7 @@ export function DealForm({
                   </Button>
                   <Button
                     type="button"
-                    onClick={() => handleStatusChange("lost")}
+                    onClick={() => setLostReasonOpen((v) => !v)}
                     disabled={!!statusAction || deal.status === "lost"}
                     className="flex-1 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
                   >
@@ -502,6 +552,56 @@ export function DealForm({
                     )}
                   </Button>
                 </div>
+
+                {/* Motivo da perda (estilo RD) — aparece ao clicar "perdido". */}
+                {lostReasonOpen && (
+                  <div className="space-y-2 rounded-md border border-red-500/30 bg-red-500/5 p-2.5">
+                    <Label className="text-xs text-muted-foreground">
+                      Motivo da perda
+                    </Label>
+                    <div className="flex flex-wrap gap-1.5">
+                      {[
+                        "Não responde",
+                        "Achou caro",
+                        "Comprou concorrente",
+                        "Sem orçamento agora",
+                        "Preferiu esperar",
+                      ].map((r) => (
+                        <button
+                          key={r}
+                          type="button"
+                          onClick={() => setLostReason(r)}
+                          className={`rounded-full border px-2 py-0.5 text-[11px] transition-colors ${
+                            lostReason === r
+                              ? "border-red-500 bg-red-500/20 text-red-300"
+                              : "border-border text-muted-foreground hover:bg-muted"
+                          }`}
+                        >
+                          {r}
+                        </button>
+                      ))}
+                    </div>
+                    <Input
+                      value={lostReason}
+                      onChange={(e) => setLostReason(e.target.value)}
+                      placeholder="Ou escreva o motivo…"
+                      className="h-8 border-border bg-muted text-sm text-foreground"
+                    />
+                    <Button
+                      type="button"
+                      onClick={() => handleStatusChange("lost", lostReason)}
+                      disabled={!!statusAction}
+                      className="w-full bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+                    >
+                      {statusAction === "lost" ? (
+                        <Loader2 className="h-4 w-4 animate-spin" />
+                      ) : (
+                        "Confirmar perda"
+                      )}
+                    </Button>
+                  </div>
+                )}
+
                 {deal.status && deal.status !== "open" && (
                   <Button
                     type="button"

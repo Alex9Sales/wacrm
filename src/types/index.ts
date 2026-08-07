@@ -427,6 +427,12 @@ export interface Deal {
   source?: string | null;
   /** Origem / campanha. */
   origin?: string | null;
+  /** Motivo registrado ao marcar PERDA (estilo RD). */
+  lost_reason?: string | null;
+  /** Nota de qualificação 1..5 (estrela do card, estilo RD). */
+  qualification?: number | null;
+  /** Quando o negócio entrou na etapa ATUAL — p/ "dias na etapa". */
+  stage_changed_at?: string | null;
   status?: DealStatus;
   created_at: string;
   updated_at?: string;

@@ -131,6 +131,9 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
       notes: deals.notes,
       expected_close_date: deals.expectedCloseDate,
       status: deals.status,
+      temperature: deals.temperature,
+      qualification: deals.qualification,
+      stage_changed_at: deals.stageChangedAt,
       created_at: deals.createdAt,
       updated_at: deals.updatedAt,
       contact: contactColumns,
@@ -259,7 +262,8 @@ export async function moveDealToStage(
     if (before.stageId === stageId) return { error: null }
     await db
       .update(deals)
-      .set({ stageId })
+      // stage_changed_at reinicia o contador de "dias na etapa" (estilo RD).
+      .set({ stageId, stageChangedAt: sql`now()` })
       .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
     await recordDealEvent(ctx.accountId, ctx.userId, dealId, 'stage_changed', {
       from: await stageName(before.stageId),
@@ -607,6 +611,8 @@ export interface DealInput {
   temperature?: string | null
   source?: string | null
   origin?: string | null
+  /** Nota de qualificação 1..5 (estrela do card, estilo RD). */
+  qualification?: number | null
   /** Conversa vinculada — quando o negócio nasce PELA conversa, guardamos o id
    *  aqui pra o card do funil mostrar a bolinha de chat (abre a conversa). */
   conversation_id?: string | null
@@ -640,6 +646,7 @@ export async function createDeal(
           temperature: input.temperature ?? null,
           source: input.source ?? null,
           origin: input.origin ?? null,
+          qualification: input.qualification ?? null,
           status: 'open',
         })
         .returning({ id: deals.id }),
@@ -659,7 +666,11 @@ export async function createDeal(
  *  timeline event for stage/status changes. */
 export async function updateDeal(
   id: string,
-  patch: Partial<DealInput> & { status?: string },
+  patch: Partial<DealInput> & {
+    status?: string
+    lost_reason?: string | null
+    qualification?: number | null
+  },
 ): Promise<{ error: string | null }> {
   try {
     const ctx = await getCurrentAccount()
@@ -691,23 +702,40 @@ export async function updateDeal(
     if (patch.temperature !== undefined) set.temperature = patch.temperature
     if (patch.source !== undefined) set.source = patch.source
     if (patch.origin !== undefined) set.origin = patch.origin
+    if (patch.qualification !== undefined) set.qualification = patch.qualification
     if (patch.status !== undefined) set.status = patch.status
+    // Motivo de perda: guarda ao marcar 'lost'; limpa ao reabrir/ganhar.
+    if (patch.status === 'lost' && patch.lost_reason !== undefined) {
+      set.lostReason = patch.lost_reason
+    } else if (patch.status === 'open' || patch.status === 'won') {
+      set.lostReason = null
+    } else if (patch.lost_reason !== undefined) {
+      set.lostReason = patch.lost_reason
+    }
+    // Mudou de etapa → reinicia o "dias na etapa".
+    const stageChanged =
+      patch.stage_id !== undefined && patch.stage_id !== before.stageId
+    if (stageChanged) set.stageChangedAt = sql`now()`
 
     await db
       .update(deals)
       .set(set)
       .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
 
-    if (patch.stage_id !== undefined && patch.stage_id !== before.stageId) {
+    if (stageChanged) {
       await recordDealEvent(ctx.accountId, ctx.userId, id, 'stage_changed', {
         from: await stageName(before.stageId),
-        to: await stageName(patch.stage_id),
+        to: await stageName(patch.stage_id!),
       })
     }
     if (patch.status !== undefined && patch.status !== before.status) {
       await recordDealEvent(ctx.accountId, ctx.userId, id, 'status_changed', {
         from: before.status,
         to: patch.status,
+        // Motivo aparece na timeline: "marcou como perdida, motivo: X".
+        ...(patch.status === 'lost' && patch.lost_reason
+          ? { reason: patch.lost_reason }
+          : {}),
       })
     }
     return { error: null }
@@ -716,12 +744,17 @@ export async function updateDeal(
   }
 }
 
-/** Mark a deal as won ('venda') / lost ('perda') / reopen ('open'). */
+/** Mark a deal as won ('venda') / lost ('perda') / reopen ('open').
+ *  Ao marcar PERDA, `reason` registra o motivo (estilo RD). */
 export async function setDealStatus(
   id: string,
   status: 'open' | 'won' | 'lost',
+  reason?: string | null,
 ): Promise<{ error: string | null }> {
-  return updateDeal(id, { status })
+  return updateDeal(id, {
+    status,
+    ...(status === 'lost' ? { lost_reason: (reason ?? '').trim() || null } : {}),
+  })
 }
 
 /** Add a free-text note to a deal's timeline. */
