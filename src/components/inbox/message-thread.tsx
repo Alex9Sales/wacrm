@@ -1175,13 +1175,21 @@ export function MessageThread({
     if (!conversation || deleteBusy) return;
     setDeleteBusy(true);
     try {
-      await deleteConversation(conversation.id);
-      toast.success("Conversa excluída");
-      setDeleteOpen(false);
-      onConversationDeleted?.(conversation.id);
+      const res = await deleteConversation(conversation.id);
+      // Só some da lista quando o servidor CONFIRMA a exclusão — senão avisa
+      // (evita o "some e volta").
+      if (res.deleted) {
+        toast.success("Conversa excluída");
+        setDeleteOpen(false);
+        onConversationDeleted?.(conversation.id);
+      } else {
+        toast.error("Conversa não encontrada ou já removida.");
+      }
     } catch (err) {
       console.error("Failed to delete conversation:", err);
-      toast.error("Não foi possível excluir a conversa");
+      toast.error(
+        err instanceof Error ? err.message : "Não foi possível excluir a conversa",
+      );
     } finally {
       setDeleteBusy(false);
     }

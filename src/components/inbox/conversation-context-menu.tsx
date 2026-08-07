@@ -212,10 +212,20 @@ export function ConversationContextMenu({
     if (!confirm("Excluir esta conversa? Esta ação não pode ser desfeita.")) return;
     setBusy(true);
     try {
-      await deleteConversation(conversation.id);
-      onDeleted?.(conversation.id);
-    } catch {
-      toast.error("Falha ao excluir a conversa");
+      const res = await deleteConversation(conversation.id);
+      // Só remove da lista quando o servidor CONFIRMA que deletou. Se casou 0
+      // linhas (já removida / sem permissão), avisa em vez de sumir-e-voltar.
+      if (res.deleted) {
+        onDeleted?.(conversation.id);
+      } else {
+        toast.error("Conversa não encontrada ou já removida.");
+      }
+    } catch (err) {
+      // Erro real (ex.: sem permissão, ou bundle velho) — mostra a mensagem em
+      // vez de um genérico, e NÃO tira da lista.
+      toast.error(
+        err instanceof Error ? err.message : "Falha ao excluir a conversa",
+      );
     } finally {
       setBusy(false);
       onClose();

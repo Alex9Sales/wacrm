@@ -903,7 +903,7 @@ export async function updateConversationStatus(
  */
 export async function deleteConversation(
   conversationId: string,
-): Promise<{ ok: true }> {
+): Promise<{ ok: true; deleted: boolean }> {
   // Only admins/owners may delete a conversation — it wipes the whole thread and
   // can't be undone. (Agents/viewers get a 403 from requireRole.)
   // Diagnóstico do "conversa volta sozinha" (conta do Rafael): loga a entrada
@@ -951,7 +951,10 @@ export async function deleteConversation(
   console.log(
     `[deleteConversation] conv=${conversationId} deletedRows=${deleted.length} account=${ctx.accountId}`,
   )
-  return { ok: true }
+  // `deleted` diz se REALMENTE removeu (>=1 linha). O cliente só tira da lista
+  // quando é true — assim uma exclusão que casou 0 linhas (já removida / conta
+  // errada) não some-e-volta.
+  return { ok: true as const, deleted: deleted.length > 0 }
 }
 
 /** Update a conversation's priority. Account-scoped. */
