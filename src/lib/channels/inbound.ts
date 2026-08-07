@@ -559,6 +559,17 @@ export async function dispatchInboundMessage(
   // inbound. `AI_REPLY_BUFFER_SECONDS=0` volta ao comportamento imediato.
   if (!flowConsumed && !outOfHoursSent && !ev.interactiveReplyId && inboundText.trim()) {
     try {
+      // Buffer por conta (config do Agente IA); cai no env global se a IA
+      // não estiver configurada/ativa nessa conta.
+      let bufferMs = aiReplyBufferMs();
+      try {
+        const aiCfg = await loadAiConfig(accountId);
+        if (aiCfg && typeof aiCfg.autoReplyBufferSeconds === 'number') {
+          bufferMs = Math.max(0, Math.floor(aiCfg.autoReplyBufferSeconds * 1000));
+        }
+      } catch {
+        // mantém o default do env
+      }
       await enqueueAiReplyDebounced(
         {
           accountId,
@@ -566,7 +577,7 @@ export async function dispatchInboundMessage(
           contactId,
           configOwnerUserId: contactOutcome.contact.userId,
         },
-        aiReplyBufferMs(),
+        bufferMs,
       );
     } catch (err) {
       console.error('[inbound] failed to enqueue AI reply:', err);

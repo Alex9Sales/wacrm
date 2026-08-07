@@ -42,6 +42,7 @@ export async function GET() {
           auto_reply_channel_ids: aiConfigs.autoReplyChannelIds,
           auto_reply_max_per_conversation: aiConfigs.autoReplyMaxPerConversation,
           auto_reply_hours_mode: aiConfigs.autoReplyHoursMode,
+          auto_reply_buffer_seconds: aiConfigs.autoReplyBufferSeconds,
           signature_name: aiConfigs.signatureName,
           signature_enabled: aiConfigs.signatureEnabled,
           api_key: aiConfigs.apiKey,
@@ -112,6 +113,11 @@ export async function POST(request: Request) {
 
     // Horário de atendimento da IA: always | inside | outside.
     const autoReplyHoursMode = toAiHoursMode(body.auto_reply_hours_mode)
+
+    // Buffer (s) do Agente IA — espera antes de responder (0..300).
+    let bufferSeconds = Number(body.auto_reply_buffer_seconds)
+    if (!Number.isFinite(bufferSeconds)) bufferSeconds = 8
+    bufferSeconds = Math.min(300, Math.max(0, Math.floor(bufferSeconds)))
 
     // Assinatura: nome do atendente que a IA representa + se assina as msgs.
     const signatureName =
@@ -223,6 +229,7 @@ export async function POST(request: Request) {
       autoReplyChannelIds: string[]
       autoReplyMaxPerConversation: number
       autoReplyHoursMode: string
+      autoReplyBufferSeconds: number
       signatureName: string | null
       signatureEnabled: boolean
       embeddingsApiKey?: string | null
@@ -235,6 +242,7 @@ export async function POST(request: Request) {
       autoReplyChannelIds,
       autoReplyMaxPerConversation: maxPer,
       autoReplyHoursMode,
+      autoReplyBufferSeconds: bufferSeconds,
       signatureName,
       signatureEnabled,
     }

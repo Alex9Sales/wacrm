@@ -75,6 +75,7 @@ export function AiConfig() {
   const [hoursMode, setHoursMode] = useState<'always' | 'inside' | 'outside'>(
     'always',
   );
+  const [bufferSeconds, setBufferSeconds] = useState(8);
   const [signatureName, setSignatureName] = useState('');
   const [signatureEnabled, setSignatureEnabled] = useState(false);
   // Canais onde a IA responde (multi). Vazio = todos.
@@ -123,6 +124,11 @@ export function AiConfig() {
             data.auto_reply_hours_mode === 'outside'
             ? data.auto_reply_hours_mode
             : 'always',
+        );
+        setBufferSeconds(
+          typeof data.auto_reply_buffer_seconds === 'number'
+            ? data.auto_reply_buffer_seconds
+            : 8,
         );
         setSignatureName(data.signature_name ?? '');
         setSignatureEnabled(Boolean(data.signature_enabled));
@@ -240,6 +246,7 @@ export function AiConfig() {
     auto_reply_channel_ids: channelIds,
     auto_reply_max_per_conversation: maxPerConversation,
     auto_reply_hours_mode: hoursMode,
+    auto_reply_buffer_seconds: bufferSeconds,
     signature_name: signatureName.trim() || null,
     signature_enabled: signatureEnabled && signatureName.trim().length > 0,
   });
@@ -709,6 +716,32 @@ export function AiConfig() {
                 onChange={(e) =>
                   setMaxPerConversation(
                     Math.min(20, Math.max(1, Number(e.target.value) || 1)),
+                  )
+                }
+                disabled={disabled || !autoReplyEnabled}
+                className="w-20"
+              />
+            </div>
+
+            {/* Buffer — junta a rajada de mensagens do cliente nesse tempo
+                antes de responder (fica humano). 0 = responde na hora. */}
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="ai-buffer">Espera antes de responder (s)</Label>
+                <p className="text-xs text-muted-foreground">
+                  Junta as mensagens que o cliente manda em sequência e responde
+                  uma vez só. 0 = na hora.
+                </p>
+              </div>
+              <Input
+                id="ai-buffer"
+                type="number"
+                min={0}
+                max={300}
+                value={bufferSeconds}
+                onChange={(e) =>
+                  setBufferSeconds(
+                    Math.min(300, Math.max(0, Number(e.target.value) || 0)),
                   )
                 }
                 disabled={disabled || !autoReplyEnabled}

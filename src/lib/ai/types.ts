@@ -26,6 +26,9 @@ export interface AiConfig {
   /** Horário de atendimento da IA: always | inside | outside (reusa o
    *  horário da conta). Fora da janela permitida, a IA não auto-responde. */
   autoReplyHoursMode: import('./hours-gate').AiHoursMode
+  /** Buffer (s): espera após a última msg do cliente antes de responder.
+   *  Opcional (default 8) para não quebrar construções sintéticas. */
+  autoReplyBufferSeconds?: number
   /** Optional OpenAI-compatible key for embeddings. When set, the
    *  knowledge base is embedded and semantic retrieval turns on; when
    *  null, retrieval falls back to lexical full-text search. */
