@@ -228,7 +228,17 @@ export async function dispatchInboundToAiReply(
         }
       }
 
-      const textToSend = signature && !signed ? `*${signature}*\n${clean}` : clean
+      // O modelo às vezes IMITA a assinatura (o histórico tem msgs da IA já
+      // prefixadas com "*Nome*"), então checa se o texto JÁ começa com ela —
+      // senão a gente prefixava de novo e saía "*Danyela*\n*Danyela*".
+      const startsWithSig =
+        !!signature &&
+        new RegExp(
+          `^\\*${signature.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\*`,
+          'i',
+        ).test(clean)
+      const textToSend =
+        signature && !signed && !startsWithSig ? `*${signature}*\n${clean}` : clean
       signed = true
       await engineSendText({
         accountId,
