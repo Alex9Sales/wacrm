@@ -66,6 +66,15 @@ const headerFormatLabels: Record<HeaderFormat, string> = {
   document: 'Documento',
 };
 
+// Rótulos pt-BR dos tipos de botão (espelham a nomenclatura da Meta). O
+// backend só submete estes 4 tipos à Meta (ver template-components.ts).
+const buttonTypeLabels: Record<TemplateButton['type'], string> = {
+  QUICK_REPLY: 'Resposta rápida',
+  URL: 'Acessar o site',
+  PHONE_NUMBER: 'Ligar',
+  COPY_CODE: 'Copiar código',
+};
+
 const categoryColors: Record<string, string> = {
   Marketing: 'bg-purple-600/20 text-purple-400 border-purple-600/30',
   Utility: 'bg-blue-600/20 text-blue-400 border-blue-600/30',
@@ -776,7 +785,11 @@ export function TemplateManager() {
                 }
               >
                 <SelectTrigger className="w-full bg-muted border-border text-foreground">
-                  <SelectValue />
+                  <SelectValue>
+                    {(v) =>
+                      v ? headerFormatLabels[v as HeaderFormat] : 'Nenhum'
+                    }
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent className="bg-popover border-border">
                   {HEADER_FORMATS.map((type) => (
@@ -979,32 +992,38 @@ export function TemplateManager() {
                           }}
                         >
                           <SelectTrigger className="w-40 bg-muted border-border text-foreground h-8 text-xs">
-                            <SelectValue />
+                            <SelectValue>
+                              {(v) =>
+                                v
+                                  ? buttonTypeLabels[v as TemplateButton['type']]
+                                  : 'Resposta rápida'
+                              }
+                            </SelectValue>
                           </SelectTrigger>
                           <SelectContent className="bg-popover border-border">
                             <SelectItem
                               value="QUICK_REPLY"
                               className="text-popover-foreground focus:bg-muted focus:text-popover-foreground"
                             >
-                              Resposta rápida
+                              {buttonTypeLabels.QUICK_REPLY}
                             </SelectItem>
                             <SelectItem
                               value="URL"
                               className="text-popover-foreground focus:bg-muted focus:text-popover-foreground"
                             >
-                              URL
+                              {buttonTypeLabels.URL}
                             </SelectItem>
                             <SelectItem
                               value="PHONE_NUMBER"
                               className="text-popover-foreground focus:bg-muted focus:text-popover-foreground"
                             >
-                              Telefone
+                              {buttonTypeLabels.PHONE_NUMBER}
                             </SelectItem>
                             <SelectItem
                               value="COPY_CODE"
                               className="text-popover-foreground focus:bg-muted focus:text-popover-foreground"
                             >
-                              Copiar código
+                              {buttonTypeLabels.COPY_CODE}
                             </SelectItem>
                           </SelectContent>
                         </Select>
