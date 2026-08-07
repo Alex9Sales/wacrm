@@ -33,6 +33,23 @@ function formatDate(dateStr: string) {
   });
 }
 
+// dd/MM/yyyy HH:mm — formato da barrinha "próxima ação" (estilo RD).
+function formatDateTime(dateStr: string) {
+  const d = new Date(dateStr);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(
+    d.getHours(),
+  )}:${p(d.getMinutes())}`;
+}
+
+// Tarefas de "ligar/entrar em contato" ganham o ícone de mensagem (estilo o
+// WhatsApp do RD); as demais, o ícone de tarefa.
+function isContactTask(type: string | null, title: string | null) {
+  return /lig|contat|whats|call|telefone/.test(
+    `${type ?? ""} ${title ?? ""}`.toLowerCase(),
+  );
+}
+
 export function DealCard({
   deal,
   stage,
@@ -46,6 +63,15 @@ export function DealCard({
   const assigneeLabel = deal.assignee?.full_name || null;
   const openTasks = taskCount?.open ?? 0;
   const hasOverdue = (taskCount?.overdue ?? 0) > 0;
+  // Próxima ação (barrinha estilo RD): a próxima tarefa aberta do negócio.
+  const nextTitle = taskCount?.next_title ?? null;
+  const nextDueAt = taskCount?.next_due_at ?? null;
+  const nextOverdue = nextDueAt
+    ? new Date(nextDueAt).getTime() < Date.now()
+    : false;
+  const NextTaskIcon = isContactTask(taskCount?.next_type ?? null, nextTitle)
+    ? MessageCircle
+    : ListTodo;
 
   // Menu de clique-direito no card: Editar / Transferir / Excluir sem precisar
   // abrir a tela inteira. Guardamos a posição do cursor pra abrir ali.
@@ -343,6 +369,31 @@ export function DealCard({
                 displayName={assigneeLabel}
                 className="h-5 w-5"
               />
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Próxima ação (barrinha estilo RD): próxima tarefa aberta + data/hora,
+          vermelha quando atrasada. */}
+      {nextTitle && (
+        <div
+          title={
+            nextDueAt
+              ? `Próxima tarefa: ${nextTitle} · ${formatDateTime(nextDueAt)}`
+              : `Próxima tarefa: ${nextTitle}`
+          }
+          className={`mt-2 flex items-center gap-1.5 rounded-md px-2 py-1 text-[11px] ${
+            nextOverdue
+              ? "bg-red-500/15 text-red-300"
+              : "bg-muted/70 text-muted-foreground"
+          }`}
+        >
+          <NextTaskIcon className="h-3 w-3 shrink-0" />
+          <span className="truncate">{nextTitle}</span>
+          {nextDueAt && (
+            <span className="ml-auto shrink-0 tabular-nums">
+              {formatDateTime(nextDueAt)}
             </span>
           )}
         </div>

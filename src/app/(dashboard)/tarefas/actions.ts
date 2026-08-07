@@ -376,6 +376,11 @@ export interface DealTaskCount {
   open: number
   /** Of the open ones, how many are overdue. */
   overdue: number
+  /** A PRÓXIMA tarefa aberta (menor due_at, sem-data por último) — alimenta
+   *  a barrinha "próxima ação" no card do funil (estilo RD). */
+  next_title?: string | null
+  next_type?: string | null
+  next_due_at?: string | null
 }
 
 /**
@@ -392,11 +397,19 @@ export async function getDealTaskCounts(
   )
   if (ids.length === 0) return {}
 
+  // Só tarefas ABERTAS entram (WHERE status='open'), então os array_agg abaixo
+  // ordenam as abertas por vencimento (menor due_at primeiro, sem-data por
+  // último) e pegam [1] = a PRÓXIMA. As três agregações usam a MESMA ordenação,
+  // então [1] refere-se sempre à mesma tarefa.
+  const nextOrder = sql`ORDER BY ${tasks.dueAt} ASC NULLS LAST, ${tasks.createdAt} DESC`
   const rows = await db
     .select({
       deal_id: tasks.dealId,
       open: sql<number>`COUNT(*) FILTER (WHERE ${tasks.status} = 'open')::int`,
       overdue: sql<number>`COUNT(*) FILTER (WHERE ${tasks.status} = 'open' AND ${tasks.dueAt} IS NOT NULL AND ${tasks.dueAt} < NOW())::int`,
+      next_title: sql<string | null>`(array_agg(${tasks.title} ${nextOrder}))[1]`,
+      next_type: sql<string | null>`(array_agg(${tasks.type} ${nextOrder}))[1]`,
+      next_due_at: sql<string | null>`(array_agg(${tasks.dueAt} ${nextOrder}))[1]`,
     })
     .from(tasks)
     .where(
@@ -414,7 +427,13 @@ export async function getDealTaskCounts(
     if (!r.deal_id) continue
     const open = Number(r.open ?? 0)
     if (open === 0) continue
-    map[r.deal_id] = { open, overdue: Number(r.overdue ?? 0) }
+    map[r.deal_id] = {
+      open,
+      overdue: Number(r.overdue ?? 0),
+      next_title: (r.next_title as string | null) ?? null,
+      next_type: (r.next_type as string | null) ?? null,
+      next_due_at: (r.next_due_at as string | null) ?? null,
+    }
   }
   return map
 }
