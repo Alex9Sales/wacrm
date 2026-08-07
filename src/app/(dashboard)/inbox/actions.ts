@@ -1132,7 +1132,7 @@ export async function transferConversationToAgent(
   // The target must be a member of the account.
   const targetMember = firstOrNull(
     await db
-      .select({ id: member.id })
+      .select({ id: member.id, role: member.role })
       .from(member)
       .where(
         and(
@@ -1144,8 +1144,15 @@ export async function transferConversationToAgent(
   )
   if (!targetMember) throw new Error('Atendente inválido.')
 
-  // If the conversation belongs to a sector, transfers stay inside it.
-  if (conv.sectorId) {
+  // If the conversation belongs to a sector, transfers stay inside it —
+  // EXCETO admin/owner, que têm acesso a TODOS os setores (não ficam presos a
+  // um). Assim o dono/admin pode ser atribuído a qualquer conversa, mesmo sem
+  // estar listado como membro daquele setor.
+  const targetIsAdmin = hasMinRole(
+    targetMember.role as import('@/lib/auth/roles').AccountRole,
+    'admin',
+  )
+  if (conv.sectorId && !targetIsAdmin) {
     const inSector = firstOrNull(
       await db
         .select({ id: sectorMembers.id })
