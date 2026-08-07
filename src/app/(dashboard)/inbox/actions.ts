@@ -904,15 +904,15 @@ export async function updateConversationStatus(
 export async function deleteConversation(
   conversationId: string,
 ): Promise<{ ok: true; deleted: boolean }> {
-  // Only admins/owners may delete a conversation — it wipes the whole thread and
-  // can't be undone. (Agents/viewers get a 403 from requireRole.)
+  // Supervisor+ pode excluir uma conversa (apaga o thread todo, sem desfazer).
+  // (Agente/viewer levam 403 do requireRole.)
   // Diagnóstico do "conversa volta sozinha" (conta do Rafael): loga a entrada
   // e, se `requireRole` barrar, loga o motivo — antes o 403 saía SEM log e o
   // reaparecimento parecia mágico. Assim o próximo repro mostra na hora se o
   // delete rodou, com qual conta/role e quantas linhas casou.
   let ctx
   try {
-    ctx = await requireRole('admin')
+    ctx = await requireRole('supervisor')
   } catch (err) {
     console.error(
       `[deleteConversation] DENIED conv=${conversationId}:`,

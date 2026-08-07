@@ -82,7 +82,7 @@ export function ConversationContextMenu({
   onTagCreated,
 }: Props) {
   const { accountRole } = useAuth();
-  const canDelete = hasMinRole(accountRole ?? "viewer", "admin");
+  const canDelete = hasMinRole(accountRole ?? "viewer", "supervisor");
   const ref = useRef<HTMLDivElement>(null);
   const [busy, setBusy] = useState(false);
   // Inline "criar etiqueta" form.

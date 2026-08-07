@@ -321,9 +321,9 @@ export function MessageThread({
     [conversation?.channel?.id],
   );
 
-  // Deleting a conversation is admin/owner-only (matches the server-side
-  // requireRole('admin') in deleteConversation) — hide the button otherwise.
-  const canDeleteConversation = hasMinRole(accountRole ?? "viewer", "admin");
+  // Excluir conversa é supervisor+ (bate com o requireRole('supervisor') no
+  // servidor) — esconde o botão pra agente/viewer.
+  const canDeleteConversation = hasMinRole(accountRole ?? "viewer", "supervisor");
   // Assigning a conversation is supervisor+ only (matches the server-side
   // requireRole('supervisor') in updateConversationAssignment). Agents who are
   // pulled into a thread by a private @mention can view/reply but must not
