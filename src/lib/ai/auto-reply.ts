@@ -186,14 +186,28 @@ export async function dispatchInboundToAiReply(
         : config.embeddingsApiKey || null
 
     // Assinatura do atendente: quando ligada, a 1ª mensagem de TEXTO vai
-    // prefixada com "*Nome*" (padrão WhatsApp). Áudio não leva assinatura.
+    // prefixada com "*Nome:*\n…" — MESMO formato do atendente humano
+    // (send/route.ts), na mesma bolha do texto. Áudio não leva assinatura.
     const signature =
       config.signatureEnabled && config.signatureName
         ? config.signatureName.trim()
         : null
+    // O modelo às vezes IMITA a assinatura no começo da resposta (o histórico
+    // tem msgs da IA já prefixadas), o que fazia o nome sair DOBRADO ou numa
+    // bolha separada. Remove uma assinatura logo no início (com ou sem ":") e
+    // a gente reaplica limpa junto da 1ª mensagem.
+    const body = signature
+      ? text.replace(
+          new RegExp(
+            `^\\s*\\*${signature.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:?\\*\\s*\\n?`,
+            'i',
+          ),
+          '',
+        )
+      : text
     let signed = false
 
-    const parts = splitIntoMessages(text)
+    const parts = splitIntoMessages(body)
     for (const rawPart of parts) {
       const wantsAudio = rawPart.trimStart().startsWith(AUDIO_MARKER)
       const clean = rawPart.replace(AUDIO_MARKER, '').trim()
@@ -228,17 +242,10 @@ export async function dispatchInboundToAiReply(
         }
       }
 
-      // O modelo às vezes IMITA a assinatura (o histórico tem msgs da IA já
-      // prefixadas com "*Nome*"), então checa se o texto JÁ começa com ela —
-      // senão a gente prefixava de novo e saía "*Danyela*\n*Danyela*".
-      const startsWithSig =
-        !!signature &&
-        new RegExp(
-          `^\\*${signature.replace(/[.*+?^${}()|[\\]\\\\]/g, '\\$&')}\\*`,
-          'i',
-        ).test(clean)
+      // Assina só a 1ª mensagem, no formato do atendente ("*Nome:*\n…"), na
+      // MESMA bolha do texto (a mimética já foi removida acima).
       const textToSend =
-        signature && !signed && !startsWithSig ? `*${signature}*\n${clean}` : clean
+        signature && !signed ? `*${signature}:*\n${clean}` : clean
       signed = true
       await engineSendText({
         accountId,
