@@ -45,6 +45,8 @@ export function PipelineBoard({
 }: PipelineBoardProps) {
   const { defaultCurrency } = useAuth();
   const [activeDealId, setActiveDealId] = useState<string | null>(null);
+  // Estatísticas por coluna (estilo RD) — toggle global mostra/esconde.
+  const [showStats, setShowStats] = useState(false);
 
   const sortedStages = useMemo(
     () => [...stages].sort((a, b) => a.position - b.position),
@@ -103,6 +105,17 @@ export function PipelineBoard({
       onDragEnd={handleDragEnd}
       onDragCancel={handleDragCancel}
     >
+      {/* Toggle das estatísticas por coluna (estilo RD). */}
+      <div className="mb-2 flex justify-end">
+        <button
+          type="button"
+          onClick={() => setShowStats((v) => !v)}
+          className="rounded-md border border-border bg-card px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted"
+        >
+          {showStats ? "Esconder estatísticas" : "Estatísticas por etapa"}
+        </button>
+      </div>
+
       {/* snap-x + snap-mandatory on mobile so swipes land the next
           stage cleanly at the viewport edge instead of mid-column.
           Disabled on lg+ where snapping would interfere with the
@@ -127,6 +140,7 @@ export function PipelineBoard({
               onEditDeal={onEditDeal}
               taskCounts={taskCounts}
               onCreateTask={onCreateTask}
+              showStats={showStats}
             />
           );
         })}
@@ -203,6 +217,7 @@ function StageColumn({
   onEditDeal,
   taskCounts,
   onCreateTask,
+  showStats,
 }: {
   stage: PipelineStage;
   deals: Deal[];
@@ -212,8 +227,30 @@ function StageColumn({
   onEditDeal: (deal: Deal) => void;
   taskCounts?: Record<string, DealTaskCount>;
   onCreateTask?: (deal: Deal) => void;
+  showStats?: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
+
+  // Estatísticas por coluna (estilo RD) — calculadas dos deals + taskCounts.
+  const stats = useMemo(() => {
+    const open = deals.filter((d) => (d.status ?? "open") === "open");
+    const daysInStage = (d: Deal) => {
+      const s = d.stage_changed_at ?? d.created_at;
+      return s
+        ? Math.floor((Date.now() - new Date(s).getTime()) / 86400000)
+        : 0;
+    };
+    return {
+      emAndamento: open.length,
+      semTarefas: open.filter((d) => !(taskCounts?.[d.id]?.open ?? 0)).length,
+      atrasadas: open.filter((d) => (taskCounts?.[d.id]?.overdue ?? 0) > 0)
+        .length,
+      // "Esfriando": aberto, parado há 7+ dias na etapa e sem tarefa aberta.
+      esfriando: open.filter(
+        (d) => daysInStage(d) >= 7 && !(taskCounts?.[d.id]?.open ?? 0),
+      ).length,
+    };
+  }, [deals, taskCounts]);
 
   return (
     // On mobile each column is `w-[85vw]` (with a reasonable min/max)
@@ -239,6 +276,20 @@ function StageColumn({
       <p className="text-xs text-muted-foreground">
         {formatCurrency(totalValue, currency)}
       </p>
+
+      {/* Estatísticas da etapa (estilo RD) — toggle global. */}
+      {showStats && (
+        <div className="mt-2 space-y-0.5 rounded-md border border-border bg-background/60 p-2 text-[11px]">
+          <StatRow label="Em andamento" value={stats.emAndamento} />
+          <StatRow label="Esfriando" value={stats.esfriando} warn />
+          <StatRow label="Sem tarefas" value={stats.semTarefas} warn />
+          <StatRow
+            label="Com tarefas atrasadas"
+            value={stats.atrasadas}
+            danger
+          />
+        </div>
+      )}
 
       <div
         ref={setNodeRef}
@@ -312,6 +363,36 @@ function DraggableDealCard({
         taskCount={taskCount}
         onCreateTask={onCreateTask}
       />
+    </div>
+  );
+}
+
+// Uma linha do painel de estatísticas por etapa (label · valor colorido).
+function StatRow({
+  label,
+  value,
+  warn,
+  danger,
+}: {
+  label: string;
+  value: number;
+  warn?: boolean;
+  danger?: boolean;
+}) {
+  const color =
+    value === 0
+      ? "text-muted-foreground/50"
+      : danger
+        ? "text-red-500"
+        : warn
+          ? "text-amber-500"
+          : "text-foreground";
+  return (
+    <div className="flex items-center justify-between">
+      <span className="text-muted-foreground">{label}</span>
+      <span className={`font-medium tabular-nums ${color}`}>
+        {value || "–"}
+      </span>
     </div>
   );
 }
