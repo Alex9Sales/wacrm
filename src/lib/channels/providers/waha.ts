@@ -44,6 +44,7 @@ import { CAPABILITIES } from '../provider';
 import type {
   ChannelCtx,
   NormalizedDeletion,
+  NormalizedEdit,
   NormalizedInbound,
   NormalizedReaction,
   NormalizedStatus,
@@ -1503,6 +1504,44 @@ export const wahaProvider: WhatsAppProvider = {
       return { messages, statuses, deletions };
     }
 
+    // ---- message EDITED on WhatsApp (cliente editou o texto) ----
+    // O gows entrega a edição como protocolMessage (key.ID = alvo, editedMessage
+    // = novo conteúdo). O NOWEB costuma decodificar o novo texto no topo (body).
+    if (event === 'message.edited') {
+      const edits: NormalizedEdit[] = [];
+      // LOG TEMPORÁRIO p/ cravar o formato real do evento — REMOVER depois.
+      try {
+        console.log(
+          '[waha message.edited] shape:',
+          JSON.stringify({
+            id: (p as { id?: unknown }).id,
+            body: (p as { body?: unknown }).body,
+            editedMessageId: (p as { editedMessageId?: unknown }).editedMessageId,
+            proto: p._data?.Message?.protocolMessage,
+            dataKeys: p._data ? Object.keys(p._data) : null,
+          }).slice(0, 1200),
+        );
+      } catch {}
+      const pe = p as {
+        id?: unknown;
+        editedMessageId?: unknown;
+        body?: unknown;
+        _data?: {
+          Message?: { protocolMessage?: { key?: { ID?: unknown } } };
+        };
+      };
+      const idRaw = serializedIdToString(
+        pe.editedMessageId ??
+          pe._data?.Message?.protocolMessage?.key?.ID ??
+          pe.id,
+      );
+      const target = idRaw ? normalizeSerializedId(idRaw) : null;
+      let newText = textOfPayload(p);
+      if (!newText && typeof pe.body === 'string') newText = pe.body;
+      if (target && newText) edits.push({ targetExternalId: target, newText });
+      return { messages, statuses, edits };
+    }
+
     // ---- inbound messages: 'message' (incoming) + 'message.any' (all) ----
     if (event === 'message' || event === 'message.any') {
       const fromMe = !!p.fromMe;
@@ -1820,6 +1859,7 @@ export const wahaProvider: WhatsAppProvider = {
             'message.ack',
             'message.reaction',
             'message.revoked',
+            'message.edited',
             'session.status',
             'call.received',
             'call.accepted',

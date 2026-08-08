@@ -222,6 +222,14 @@ export interface NormalizedDeletion {
   targetExternalId: string;
 }
 
+/** A message EDITED on WhatsApp (cliente/usuário editou o texto). */
+export interface NormalizedEdit {
+  /** External id of the edited message (already normalized to our form). */
+  targetExternalId: string;
+  /** The NEW text after the edit. */
+  newText: string;
+}
+
 /** The shape `parseWebhook` returns. */
 export interface ParsedWebhook {
   messages: NormalizedInbound[];
@@ -230,6 +238,8 @@ export interface ParsedWebhook {
   reactions?: NormalizedReaction[];
   /** Messages deleted on WhatsApp. */
   deletions?: NormalizedDeletion[];
+  /** Messages edited on WhatsApp (novo texto). */
+  edits?: NormalizedEdit[];
 }
 
 /**

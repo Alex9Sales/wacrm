@@ -41,6 +41,7 @@ import { applyStatusUpdate, levelToStatus } from '@/lib/channels/status'
 import type {
   ChannelCtx,
   NormalizedDeletion,
+  NormalizedEdit,
   NormalizedReaction,
   ProviderId,
   WhatsAppProvider,
@@ -354,6 +355,7 @@ async function processInbound(
     statuses,
     reactions,
     deletions,
+    edits,
   } = provider.parseWebhook(body)
 
   // ---- statuses (delivered/read) ----
@@ -379,6 +381,15 @@ async function processInbound(
       await applyInboundDeletion(channel, del)
     } catch (err) {
       console.error('[webhooks/generic] deletion failed:', err)
+    }
+  }
+
+  // ---- edits (cliente editou a mensagem no WhatsApp) ----
+  for (const ed of edits ?? []) {
+    try {
+      await applyInboundEdit(channel, ed)
+    } catch (err) {
+      console.error('[webhooks/generic] edit failed:', err)
     }
   }
 
@@ -582,6 +593,21 @@ async function applyInboundDeletion(
   await db
     .update(messages)
     .set({ deletedAt: new Date().toISOString() })
+    .where(eq(messages.id, target.id))
+  await publishEvent(channel.accountId, {
+    type: 'message.received',
+    conversationId: target.conversationId,
+    fromMe: true,
+  })
+}
+
+/** Reflect an edit made on WhatsApp (cliente editou o texto) into the CRM. */
+async function applyInboundEdit(channel: ChannelCtx, ed: NormalizedEdit) {
+  const target = await findTargetMessage(channel.accountId, ed.targetExternalId)
+  if (!target) return
+  await db
+    .update(messages)
+    .set({ contentText: ed.newText })
     .where(eq(messages.id, target.id))
   await publishEvent(channel.accountId, {
     type: 'message.received',
