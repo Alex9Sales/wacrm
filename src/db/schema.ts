@@ -717,6 +717,8 @@ export const dealSuggestions = pgTable("deal_suggestions", {
 	label: text().notNull(),
 	value: text().notNull(),
 	evidence: text(),
+	// Fase 2 (kind='task'): quando o follow-up sugerido deve vencer.
+	dueAt: timestamp("due_at", { withTimezone: true, mode: 'string' }),
 	status: text().default('pending').notNull(),
 	createdBy: uuid("created_by"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),

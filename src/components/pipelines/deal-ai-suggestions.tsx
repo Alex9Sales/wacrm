@@ -8,8 +8,14 @@ import {
   dismissDealSuggestion,
   type DealSuggestion,
 } from "@/app/(dashboard)/pipelines/actions";
-import { Sparkles, Loader2, Check, X } from "lucide-react";
+import { Sparkles, Loader2, Check, X, CalendarClock } from "lucide-react";
 import { toast } from "sonner";
+
+function fmtDate(iso: string) {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}`;
+}
 
 /**
  * IA para Negociações v2 — Fase 1: sugestões por evidência.
@@ -111,16 +117,41 @@ export function DealAISuggestions({
             >
               <div className="flex items-start justify-between gap-2">
                 <div className="min-w-0">
-                  <p className="text-xs">
-                    <span className="text-muted-foreground">{s.label}: </span>
-                    <span className="font-medium text-foreground">
-                      {s.value}
-                    </span>
-                  </p>
-                  {s.evidence && (
-                    <p className="mt-0.5 text-[10px] italic text-muted-foreground">
-                      “{s.evidence}”
-                    </p>
+                  {s.kind === "task" ? (
+                    <>
+                      <p className="flex items-center gap-1 text-xs">
+                        <CalendarClock className="h-3 w-3 shrink-0 text-amber-500" />
+                        <span className="font-medium text-foreground">
+                          {s.value}
+                        </span>
+                        {s.due_at && (
+                          <span className="text-muted-foreground">
+                            · vence {fmtDate(s.due_at)}
+                          </span>
+                        )}
+                      </p>
+                      {s.evidence && (
+                        <p className="mt-0.5 text-[10px] italic text-muted-foreground">
+                          motivo: {s.evidence}
+                        </p>
+                      )}
+                    </>
+                  ) : (
+                    <>
+                      <p className="text-xs">
+                        <span className="text-muted-foreground">
+                          {s.label}:{" "}
+                        </span>
+                        <span className="font-medium text-foreground">
+                          {s.value}
+                        </span>
+                      </p>
+                      {s.evidence && (
+                        <p className="mt-0.5 text-[10px] italic text-muted-foreground">
+                          “{s.evidence}”
+                        </p>
+                      )}
+                    </>
                   )}
                 </div>
                 <div className="flex shrink-0 gap-1">

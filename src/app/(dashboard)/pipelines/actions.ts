@@ -22,6 +22,7 @@ import {
   listContactCustomValues,
   saveContactCustomValues,
 } from '@/app/(dashboard)/contacts/actions'
+import { createTask } from '@/app/(dashboard)/tarefas/actions'
 import { dealSuggestions } from '@/db'
 
 const contactColumns = {
@@ -1512,6 +1513,7 @@ export interface DealSuggestion {
   label: string
   value: string
   evidence: string | null
+  due_at: string | null
   status: string
   created_at: string
 }
@@ -1574,6 +1576,7 @@ export async function listDealSuggestions(
       label: dealSuggestions.label,
       value: dealSuggestions.value,
       evidence: dealSuggestions.evidence,
+      due_at: dealSuggestions.dueAt,
       status: dealSuggestions.status,
       created_at: dealSuggestions.createdAt,
     })
@@ -1623,18 +1626,28 @@ Campos que você pode preencher (use exatamente o "target"):
 ${dealTargets}
 ${customTargets || '(sem campos personalizados)'}
 
-Responda SOMENTE com um array JSON, sem texto fora dele, no formato:
-[{"target":"<target>","value":"<valor>","evidence":"<trecho curto da conversa que prova isso>"}]
-Se não houver nada com evidência, responda [].
+Responda SOMENTE com um array JSON, sem texto fora dele. Cada item é UM destes:
+- Campo: {"kind":"field","target":"<target>","value":"<valor>","evidence":"<trecho curto da conversa que prova>"}
+- Follow-up (NO MÁXIMO 1): {"kind":"task","title":"<o que fazer, curto>","due_days":<inteiro: dias a partir de hoje>,"reason":"<por que, baseado na conversa>"}
+Só inclua o follow-up se a conversa indicar um próximo passo/retorno claro. Se não houver nada, responda [].
 
 ## Conversa
 ${transcript || '(sem conversa)'}`
 }
 
+interface ParsedSuggestion {
+  kind: 'field' | 'task'
+  target: string
+  label: string
+  value: string
+  evidence: string
+  dueAt: string | null
+}
+
 function parseSuggestions(
   raw: string,
   customFields: CustomField[],
-): { target: string; label: string; value: string; evidence: string }[] {
+): ParsedSuggestion[] {
   // Extrai o array JSON (tolera ```json ... ``` ou texto ao redor).
   const start = raw.indexOf('[')
   const end = raw.lastIndexOf(']')
@@ -1647,17 +1660,50 @@ function parseSuggestions(
   }
   if (!Array.isArray(parsed)) return []
   const cfById = new Map(customFields.map((c) => [c.id, c]))
-  const out: { target: string; label: string; value: string; evidence: string }[] = []
+  const out: ParsedSuggestion[] = []
+  let taskCount = 0
   for (const item of parsed) {
     if (!item || typeof item !== 'object') continue
-    const target = String((item as Record<string, unknown>).target ?? '')
-    const rawValue = String((item as Record<string, unknown>).value ?? '')
-    const evidence = String((item as Record<string, unknown>).evidence ?? '')
+    const o = item as Record<string, unknown>
+    const kind = String(o.kind ?? 'field')
+
+    // ---- Follow-up (tarefa) ----
+    if (kind === 'task') {
+      if (taskCount >= 1) continue // no máximo 1 follow-up
+      const title = String(o.title ?? '').trim()
+      const reason = String(o.reason ?? '').trim()
+      if (!title) continue
+      const days = Math.max(0, Math.min(365, parseInt(String(o.due_days ?? 1), 10) || 1))
+      const due = new Date(Date.now() + days * 86400000).toISOString()
+      out.push({
+        kind: 'task',
+        target: 'task',
+        label: 'Follow-up',
+        value: title,
+        evidence: reason,
+        dueAt: due,
+      })
+      taskCount++
+      continue
+    }
+
+    // ---- Campo ----
+    const target = String(o.target ?? '')
+    const rawValue = String(o.value ?? '')
+    const evidence = String(o.evidence ?? '')
     if (!target || !rawValue) continue
     const dealField = DEAL_FIELD_TARGETS.find((t) => t.target === target)
     if (dealField) {
       const v = dealField.normalize(rawValue)
-      if (v) out.push({ target, label: dealField.label, value: v, evidence })
+      if (v)
+        out.push({
+          kind: 'field',
+          target,
+          label: dealField.label,
+          value: v,
+          evidence,
+          dueAt: null,
+        })
       continue
     }
     if (target.startsWith('custom:')) {
@@ -1665,7 +1711,14 @@ function parseSuggestions(
       if (!cf) continue
       const opts = customOptions(cf)
       if (opts.length && !opts.includes(rawValue)) continue // select fora das opções
-      out.push({ target, label: cf.field_name, value: rawValue.trim(), evidence })
+      out.push({
+        kind: 'field',
+        target,
+        label: cf.field_name,
+        value: rawValue.trim(),
+        evidence,
+        dueAt: null,
+      })
     }
   }
   return out
@@ -1726,11 +1779,12 @@ export async function generateDealSuggestions(
         items.map((it) => ({
           accountId: ctx.accountId,
           dealId,
-          kind: 'field',
+          kind: it.kind,
           target: it.target,
           label: it.label,
           value: it.value,
           evidence: it.evidence || null,
+          dueAt: it.dueAt,
           createdBy: ctx.userId,
         })),
       )
@@ -1756,9 +1810,12 @@ export async function acceptDealSuggestion(
         .select({
           id: dealSuggestions.id,
           dealId: dealSuggestions.dealId,
+          kind: dealSuggestions.kind,
           target: dealSuggestions.target,
           label: dealSuggestions.label,
           value: dealSuggestions.value,
+          evidence: dealSuggestions.evidence,
+          dueAt: dealSuggestions.dueAt,
         })
         .from(dealSuggestions)
         .where(
@@ -1772,7 +1829,23 @@ export async function acceptDealSuggestion(
     )
     if (!sug) return { error: 'Sugestão não encontrada.' }
 
-    if (sug.target === 'deal:temperature') {
+    if (sug.kind === 'task') {
+      // Follow-up: cria a tarefa (value=título, evidence=motivo, dueAt=quando),
+      // atribuída ao dono do negócio.
+      const deal = await getDeal(sug.dealId)
+      const res = await createTask({
+        title: sug.value,
+        description: sug.evidence
+          ? `Sugerido pela IA — motivo: ${sug.evidence}`
+          : 'Sugerido pela IA.',
+        dueAt: sug.dueAt,
+        type: 'follow_up',
+        dealId: sug.dealId,
+        contactId: deal?.contact_id ?? null,
+        assigneeIds: deal?.assigned_to ? [deal.assigned_to] : [],
+      })
+      if (!res.ok) return { error: res.error }
+    } else if (sug.target === 'deal:temperature') {
       await updateDeal(sug.dealId, { temperature: sug.value })
     } else if (sug.target === 'deal:qualification') {
       await updateDeal(sug.dealId, { qualification: parseInt(sug.value, 10) })
@@ -1802,7 +1875,10 @@ export async function acceptDealSuggestion(
       .set({ status: 'accepted' })
       .where(eq(dealSuggestions.id, suggestionId))
     await recordDealEvent(ctx.accountId, ctx.userId, sug.dealId, 'note', {
-      text: `IA preencheu "${sug.label}": ${sug.value}`,
+      text:
+        sug.kind === 'task'
+          ? `IA criou follow-up: ${sug.value}`
+          : `IA preencheu "${sug.label}": ${sug.value}`,
     })
     return { error: null }
   } catch (err) {
