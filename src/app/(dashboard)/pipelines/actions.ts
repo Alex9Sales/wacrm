@@ -1618,18 +1618,41 @@ function buildSuggestionsPrompt(
       }`
     })
     .join('\n')
-  return `Você é um assistente de vendas que EXTRAI FATOS de uma conversa de WhatsApp para preencher o CRM.
+  // Contexto atual do negócio: ancora o próximo passo e evita re-sugerir um
+  // campo que já tem o mesmo valor (a nota "de novo", por ex.).
+  const isOpen = (deal.status ?? 'open') === 'open'
+  const atuais = [
+    `- Título: ${deal.title || '(sem título)'}`,
+    `- Situação: ${
+      isOpen ? 'ABERTO (em negociação)' : `FECHADO (${deal.status})`
+    }`,
+    deal.temperature ? `- Temperatura atual: ${deal.temperature}` : null,
+    deal.value ? `- Valor atual: R$ ${deal.value}` : null,
+    deal.notes ? `- Observações atuais: ${deal.notes}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n')
+  return `Você é um assistente de vendas. A partir de uma conversa de WhatsApp, você faz DUAS coisas independentes para o CRM.
 
-REGRA ABSOLUTA: só proponha um valor quando a CONVERSA der evidência CLARA. Nada de adivinhar. Se não houver evidência, NÃO inclua o campo. Um fato errado é pior que um campo vazio.
-
-Campos que você pode preencher (use exatamente o "target"):
+## 1) FATOS (campos) — seja CONSERVADOR
+Só proponha um valor de campo quando a CONVERSA der evidência CLARA. Nada de adivinhar. Sem evidência → NÃO inclua o campo. Um fato errado é pior que um campo vazio.
+Também NÃO re-sugira um campo cujo valor atual já é igual/equivalente ao que você proporia (veja "Situação atual" abaixo).
+Campos disponíveis (use exatamente o "target"):
 ${dealTargets}
 ${customTargets || '(sem campos personalizados)'}
 
+## 2) PRÓXIMO PASSO (follow-up) — seja PROATIVO
+Isto é uma RECOMENDAÇÃO DE AÇÃO do vendedor, não um fato sobre o cliente — então NÃO exige "evidência dura".
+Se o negócio está ABERTO e existe qualquer próximo passo plausível (confirmar escopo/valor, enviar proposta, cobrar retorno de algo enviado, agendar reunião, tirar dúvida pendente), proponha SEMPRE exatamente 1 follow-up.
+NÃO proponha follow-up se o negócio estiver FECHADO, ou se o último passo já está claramente com o cliente e não há nada a fazer agora.
+
 Responda SOMENTE com um array JSON, sem texto fora dele. Cada item é UM destes:
 - Campo: {"kind":"field","target":"<target>","value":"<valor>","evidence":"<trecho curto da conversa que prova>"}
-- Follow-up (NO MÁXIMO 1): {"kind":"task","title":"<o que fazer, curto>","due_days":<inteiro: dias a partir de hoje>,"reason":"<por que, baseado na conversa>"}
-Só inclua o follow-up se a conversa indicar um próximo passo/retorno claro. Se não houver nada, responda [].
+- Follow-up (NO MÁXIMO 1): {"kind":"task","title":"<o que fazer, curto e acionável>","due_days":<inteiro: dias a partir de hoje>,"reason":"<por que agora, baseado na conversa>"}
+Se realmente não houver nada a propor, responda [].
+
+## Situação atual do negócio
+${atuais}
 
 ## Conversa
 ${transcript || '(sem conversa)'}`
