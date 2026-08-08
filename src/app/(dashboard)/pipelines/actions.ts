@@ -6,7 +6,7 @@
 // scoped to the caller's account — there is no RLS anymore.
 // ============================================================
 
-import { and, asc, count, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
 import { db, channels, contacts, conversations, dealAttachments, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, notifications, pipelines, pipelineStages, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
@@ -110,6 +110,26 @@ export async function listStages(pipelineId: string): Promise<PipelineStage[]> {
   return rows as unknown as PipelineStage[]
 }
 
+/** IDs dos negócios (dentre os passados) que TÊM ao menos 1 produto — alimenta
+ *  a métrica "Sem produtos" das estatísticas por etapa (uma query pro board). */
+export async function getDealsWithProducts(
+  dealIds: string[],
+): Promise<string[]> {
+  const ctx = await getCurrentAccount()
+  const ids = Array.from(new Set(dealIds.filter((d): d is string => !!d)))
+  if (ids.length === 0) return []
+  const rows = await db
+    .selectDistinct({ deal_id: dealProducts.dealId })
+    .from(dealProducts)
+    .where(
+      and(
+        eq(dealProducts.accountId, ctx.accountId),
+        inArray(dealProducts.dealId, ids),
+      ),
+    )
+  return rows.map((r) => r.deal_id).filter((d): d is string => !!d)
+}
+
 /**
  * Deals of one pipeline with `contact` and `assignee` embedded, newest
  * first. Mirrors the old
@@ -136,6 +156,7 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
       temperature: deals.temperature,
       qualification: deals.qualification,
       stage_changed_at: deals.stageChangedAt,
+      paused_at: deals.pausedAt,
       created_at: deals.createdAt,
       updated_at: deals.updatedAt,
       contact: contactColumns,
@@ -853,6 +874,34 @@ export async function setDealStatus(
     status,
     ...(status === 'lost' ? { lost_reason: (reason ?? '').trim() || null } : {}),
   })
+}
+
+/** Pausar / retomar um negócio (estilo RD). Fica na etapa; só marca paused_at. */
+export async function setDealPaused(
+  id: string,
+  paused: boolean,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const owned = firstOrNull(
+      await db
+        .select({ assignedTo: deals.assignedTo })
+        .from(deals)
+        .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!owned) return { error: 'Negócio não encontrado' }
+    if (!dealReadable(ctx.role, ctx.userId, owned.assignedTo)) {
+      return { error: 'Este negócio está atribuído a outro atendente.' }
+    }
+    await db
+      .update(deals)
+      .set({ pausedAt: paused ? sql`now()` : null })
+      .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Failed to pause deal' }
+  }
 }
 
 /** Add a free-text note to a deal's timeline. */

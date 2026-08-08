@@ -33,6 +33,8 @@ import {
   Mail,
   Printer,
   Copy,
+  Pause,
+  Play,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -48,6 +50,7 @@ import {
   listDealEvents,
   moveDealToStage,
   setDealStatus,
+  setDealPaused,
   duplicateDeal,
   addDealNote,
   type DealEvent,
@@ -524,6 +527,20 @@ export default function DealDetailPage() {
     window.location.href = `/pipelines/${id}`;
   }, [deal, busy]);
 
+  const handlePause = useCallback(async () => {
+    if (!deal || busy) return;
+    const paused = !deal.paused_at;
+    setBusy(true);
+    const { error } = await setDealPaused(deal.id, paused);
+    setBusy(false);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    toast.success(paused ? "Negócio pausado" : "Negócio retomado");
+    await reload();
+  }, [deal, busy, reload]);
+
   const submitNote = useCallback(async () => {
     if (!deal || savingNote) return;
     const text = note.trim();
@@ -637,6 +654,23 @@ export default function DealDetailPage() {
             title="Duplicar negócio"
           >
             <Copy className="mr-1.5 h-4 w-4" /> Duplicar
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void handlePause()}
+            title={deal.paused_at ? "Retomar negócio" : "Pausar negócio"}
+          >
+            {deal.paused_at ? (
+              <>
+                <Play className="mr-1.5 h-4 w-4" /> Retomar
+              </>
+            ) : (
+              <>
+                <Pause className="mr-1.5 h-4 w-4" /> Pausar
+              </>
+            )}
           </Button>
         </div>
       </header>

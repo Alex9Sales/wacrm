@@ -7,6 +7,7 @@ import {
   listPipelines,
   listStages,
   moveDealToStage,
+  getDealsWithProducts,
 } from "./actions";
 import type { Pipeline, PipelineStage, Deal } from "@/types";
 import {
@@ -200,6 +201,10 @@ export default function PipelinesPage() {
   const [taskCounts, setTaskCounts] = useState<Record<string, DealTaskCount>>(
     {},
   );
+  // Negócios que TÊM produtos — p/ a métrica "Sem produtos" das estatísticas.
+  const [dealsWithProducts, setDealsWithProducts] = useState<Set<string>>(
+    new Set(),
+  );
 
   // Reused Tarefas create dialog, prefilled with a deal (+ its contact).
   const [taskFormOpen, setTaskFormOpen] = useState(false);
@@ -245,10 +250,16 @@ export default function PipelinesPage() {
     const ids = dealList.map((d) => d.id);
     if (ids.length === 0) {
       setTaskCounts({});
+      setDealsWithProducts(new Set());
       return;
     }
     try {
-      setTaskCounts(await getDealTaskCounts(ids));
+      const [counts, withProds] = await Promise.all([
+        getDealTaskCounts(ids),
+        getDealsWithProducts(ids),
+      ]);
+      setTaskCounts(counts);
+      setDealsWithProducts(new Set(withProds));
     } catch (err) {
       console.error("Failed to load task counts:", err);
     }
@@ -756,6 +767,7 @@ export default function PipelinesPage() {
               onAddDeal={handleAddDeal}
               onEditDeal={handleEditDeal}
               taskCounts={taskCounts}
+              dealsWithProducts={dealsWithProducts}
               onCreateTask={handleCreateTask}
             />
           )}

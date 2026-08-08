@@ -624,6 +624,8 @@ export const deals = pgTable("deals", {
 	lostReason: text("lost_reason"),
 	qualification: smallint("qualification"),
 	stageChangedAt: timestamp("stage_changed_at", { withTimezone: true, mode: 'string' }),
+	// Pausar negociação (estilo RD) — migração 0063.
+	pausedAt: timestamp("paused_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [

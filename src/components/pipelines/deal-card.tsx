@@ -7,11 +7,11 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign,
-  Pencil, Trash2, ArrowRightLeft, ChevronRight, Star, Copy,
+  Pencil, Trash2, ArrowRightLeft, ChevronRight, Star, Copy, Pause, Play,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
-import { deleteDeal, transferDeal, duplicateDeal } from "@/app/(dashboard)/pipelines/actions";
+import { deleteDeal, transferDeal, duplicateDeal, setDealPaused } from "@/app/(dashboard)/pipelines/actions";
 import { listProfiles } from "@/app/(dashboard)/inbox/actions";
 
 interface DealCardProps {
@@ -324,6 +324,12 @@ export function DealCard({
               Lost
             </span>
           )}
+          {deal.paused_at && (
+            <span className="inline-flex items-center gap-1 rounded-full bg-amber-500/15 px-2 py-0.5 text-[10px] font-semibold text-amber-500">
+              <Pause className="h-3 w-3" />
+              Pausado
+            </span>
+          )}
         </div>
       </div>
 
@@ -467,6 +473,32 @@ export function DealCard({
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted"
         >
           <Copy className="h-3.5 w-3.5 text-muted-foreground" /> Duplicar
+        </button>
+
+        <button
+          type="button"
+          onClick={async () => {
+            setMenuPos(null);
+            const paused = !deal.paused_at;
+            const { error } = await setDealPaused(deal.id, paused);
+            if (error) {
+              toast.error(error);
+              return;
+            }
+            toast.success(paused ? "Negócio pausado" : "Negócio retomado");
+            router.refresh();
+          }}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted"
+        >
+          {deal.paused_at ? (
+            <>
+              <Play className="h-3.5 w-3.5 text-muted-foreground" /> Retomar
+            </>
+          ) : (
+            <>
+              <Pause className="h-3.5 w-3.5 text-muted-foreground" /> Pausar
+            </>
+          )}
         </button>
 
         <div

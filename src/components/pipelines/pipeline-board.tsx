@@ -30,6 +30,8 @@ interface PipelineBoardProps {
   onEditDeal: (deal: Deal) => void;
   /** Batched open-task counts keyed by deal id (for the card indicator). */
   taskCounts?: Record<string, DealTaskCount>;
+  /** IDs dos negócios que têm produtos — p/ a métrica "Sem produtos". */
+  dealsWithProducts?: Set<string>;
   /** Open the reused TaskForm prefilled with a deal (+ its contact). */
   onCreateTask?: (deal: Deal) => void;
 }
@@ -41,6 +43,7 @@ export function PipelineBoard({
   onAddDeal,
   onEditDeal,
   taskCounts,
+  dealsWithProducts,
   onCreateTask,
 }: PipelineBoardProps) {
   const { defaultCurrency } = useAuth();
@@ -139,6 +142,7 @@ export function PipelineBoard({
               onAddDeal={onAddDeal}
               onEditDeal={onEditDeal}
               taskCounts={taskCounts}
+              dealsWithProducts={dealsWithProducts}
               onCreateTask={onCreateTask}
               showStats={showStats}
             />
@@ -216,6 +220,7 @@ function StageColumn({
   onAddDeal,
   onEditDeal,
   taskCounts,
+  dealsWithProducts,
   onCreateTask,
   showStats,
 }: {
@@ -226,6 +231,7 @@ function StageColumn({
   onAddDeal: (stageId: string) => void;
   onEditDeal: (deal: Deal) => void;
   taskCounts?: Record<string, DealTaskCount>;
+  dealsWithProducts?: Set<string>;
   onCreateTask?: (deal: Deal) => void;
   showStats?: boolean;
 }) {
@@ -249,8 +255,9 @@ function StageColumn({
       esfriando: open.filter(
         (d) => daysInStage(d) >= 7 && !(taskCounts?.[d.id]?.open ?? 0),
       ).length,
+      semProdutos: open.filter((d) => !dealsWithProducts?.has(d.id)).length,
     };
-  }, [deals, taskCounts]);
+  }, [deals, taskCounts, dealsWithProducts]);
 
   return (
     // On mobile each column is `w-[85vw]` (with a reasonable min/max)
@@ -288,6 +295,7 @@ function StageColumn({
             value={stats.atrasadas}
             danger
           />
+          <StatRow label="Sem produtos" value={stats.semProdutos} warn />
         </div>
       )}
 

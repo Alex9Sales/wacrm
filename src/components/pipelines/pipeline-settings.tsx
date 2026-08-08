@@ -194,8 +194,8 @@ export function PipelineSettings({
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
-      <DialogContent className="sm:max-w-md bg-popover border-border max-h-[85vh] overflow-y-auto">
-        <DialogHeader>
+      <DialogContent className="sm:max-w-2xl bg-popover border-border max-h-[88vh] flex flex-col overflow-hidden">
+        <DialogHeader className="shrink-0">
           <DialogTitle className="text-popover-foreground">Gerenciar funil</DialogTitle>
         </DialogHeader>
 
@@ -232,7 +232,7 @@ export function PipelineSettings({
           </div>
         ) : (
           <>
-            <div className="grid gap-4 py-2">
+            <div className="grid gap-4 overflow-y-auto py-2 pr-1 flex-1 min-h-0">
               <div className="grid gap-2">
                 <Label className="text-muted-foreground">Nome do funil</Label>
                 <Input
@@ -430,7 +430,7 @@ export function PipelineSettings({
               </Button>
             </div>
 
-            <DialogFooter className="border-border bg-popover/50">
+            <DialogFooter className="shrink-0 border-t border-border bg-popover/50 pt-3">
               <Button
                 variant="destructive"
                 onClick={() => setShowDeleteConfirm(true)}
