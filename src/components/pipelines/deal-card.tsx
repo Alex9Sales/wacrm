@@ -7,11 +7,11 @@ import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
   Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign,
-  Pencil, Trash2, ArrowRightLeft, ChevronRight, Star,
+  Pencil, Trash2, ArrowRightLeft, ChevronRight, Star, Copy,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
-import { deleteDeal, transferDeal } from "@/app/(dashboard)/pipelines/actions";
+import { deleteDeal, transferDeal, duplicateDeal } from "@/app/(dashboard)/pipelines/actions";
 import { listProfiles } from "@/app/(dashboard)/inbox/actions";
 
 interface DealCardProps {
@@ -450,6 +450,23 @@ export function DealCard({
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted"
         >
           <Pencil className="h-3.5 w-3.5 text-muted-foreground" /> Editar
+        </button>
+
+        <button
+          type="button"
+          onClick={async () => {
+            setMenuPos(null);
+            const { error } = await duplicateDeal(deal.id);
+            if (error) {
+              toast.error(error);
+              return;
+            }
+            toast.success("Negócio duplicado");
+            router.refresh();
+          }}
+          className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted"
+        >
+          <Copy className="h-3.5 w-3.5 text-muted-foreground" /> Duplicar
         </button>
 
         <div

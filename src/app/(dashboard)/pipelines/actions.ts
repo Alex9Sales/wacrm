@@ -662,6 +662,91 @@ export async function createDeal(
   }
 }
 
+/** Duplica um negócio (estilo RD): copia os campos + os produtos numa nova
+ *  negociação "(cópia)" na MESMA etapa. Não copia tarefas/histórico. */
+export async function duplicateDeal(
+  id: string,
+): Promise<{ error: string | null; id?: string }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const src = firstOrNull(
+      await db
+        .select({
+          title: deals.title,
+          value: deals.value,
+          currency: deals.currency,
+          contactId: deals.contactId,
+          pipelineId: deals.pipelineId,
+          stageId: deals.stageId,
+          assignedTo: deals.assignedTo,
+          notes: deals.notes,
+          expectedCloseDate: deals.expectedCloseDate,
+          temperature: deals.temperature,
+          source: deals.source,
+          origin: deals.origin,
+          qualification: deals.qualification,
+        })
+        .from(deals)
+        .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!src) return { error: 'Negócio não encontrado' }
+    if (!dealReadable(ctx.role, ctx.userId, src.assignedTo)) {
+      return { error: 'Este negócio está atribuído a outro atendente.' }
+    }
+    const created = firstOrNull(
+      await db
+        .insert(deals)
+        .values({
+          userId: ctx.userId,
+          accountId: ctx.accountId,
+          title: `${src.title} (cópia)`,
+          value: src.value,
+          currency: src.currency,
+          contactId: src.contactId,
+          pipelineId: src.pipelineId,
+          stageId: src.stageId,
+          assignedTo: src.assignedTo,
+          notes: src.notes,
+          expectedCloseDate: src.expectedCloseDate,
+          temperature: src.temperature,
+          source: src.source,
+          origin: src.origin,
+          qualification: src.qualification,
+          status: 'open',
+        })
+        .returning({ id: deals.id }),
+    )
+    if (!created?.id) return { error: 'Falha ao duplicar' }
+    await recordDealEvent(ctx.accountId, ctx.userId, created.id, 'created', {
+      stage: await stageName(src.stageId),
+    })
+    // Copia os produtos (itens) da negociação original.
+    const prods = await db
+      .select({
+        name: dealProducts.name,
+        quantity: dealProducts.quantity,
+        unitPrice: dealProducts.unitPrice,
+      })
+      .from(dealProducts)
+      .where(eq(dealProducts.dealId, id))
+    if (prods.length > 0) {
+      await db.insert(dealProducts).values(
+        prods.map((p) => ({
+          accountId: ctx.accountId,
+          dealId: created.id,
+          name: p.name,
+          quantity: p.quantity,
+          unitPrice: p.unitPrice,
+        })),
+      )
+    }
+    return { error: null, id: created.id }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Failed to duplicate deal' }
+  }
+}
+
 /** Patch a deal the caller owns. Accepts a partial snake_case patch. Records a
  *  timeline event for stage/status changes. */
 export async function updateDeal(

@@ -32,6 +32,7 @@ import {
   FileText,
   Mail,
   Printer,
+  Copy,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -47,6 +48,7 @@ import {
   listDealEvents,
   moveDealToStage,
   setDealStatus,
+  duplicateDeal,
   addDealNote,
   type DealEvent,
 } from "@/app/(dashboard)/pipelines/actions";
@@ -509,6 +511,19 @@ export default function DealDetailPage() {
     [deal, busy, reload],
   );
 
+  const handleDuplicate = useCallback(async () => {
+    if (!deal || busy) return;
+    setBusy(true);
+    const { error, id } = await duplicateDeal(deal.id);
+    setBusy(false);
+    if (error || !id) {
+      toast.error(error || "Falha ao duplicar");
+      return;
+    }
+    toast.success("Negócio duplicado");
+    window.location.href = `/pipelines/${id}`;
+  }, [deal, busy]);
+
   const submitNote = useCallback(async () => {
     if (!deal || savingNote) return;
     const text = note.trim();
@@ -613,6 +628,15 @@ export default function DealDetailPage() {
           )}
           <Button size="sm" variant="outline" onClick={() => setEditOpen(true)}>
             <Pencil className="mr-1.5 h-4 w-4" /> Editar
+          </Button>
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={() => void handleDuplicate()}
+            title="Duplicar negócio"
+          >
+            <Copy className="mr-1.5 h-4 w-4" /> Duplicar
           </Button>
         </div>
       </header>
