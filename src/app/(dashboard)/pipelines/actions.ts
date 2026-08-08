@@ -13,6 +13,10 @@ import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
 import { getAdminUserIds } from '@/lib/sectors/access'
 import type { Contact, Conversation, Deal, Pipeline, PipelineStage, Profile } from '@/types'
+import { loadAiConfig } from '@/lib/ai/config'
+import { generateReply } from '@/lib/ai/generate'
+import { buildConversationContext } from '@/lib/ai/context'
+import type { ChatMessage } from '@/lib/ai/types'
 
 const contactColumns = {
   id: contacts.id,
@@ -1367,5 +1371,123 @@ export async function deleteDeal(id: string): Promise<{ error: string | null }> 
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Failed to delete deal' }
+  }
+}
+
+// ------------------------------------------------------------
+// IA para Negociações v2 — Fase 0: "Pergunte à IA" sobre o negócio.
+// Read-only: monta o contexto (campos + histórico + conversa vinculada) e
+// responde a pergunta do vendedor. NÃO grava nada (as fases 1+ trazem as
+// sugestões por evidência). Reusa a plataforma de IA (loadAiConfig/generateReply).
+// ------------------------------------------------------------
+function describeDealEvent(e: DealEvent): string {
+  const d = e.data as Record<string, unknown>
+  switch (e.type) {
+    case 'created':
+      return `negócio criado${d.stage ? ` na etapa "${String(d.stage)}"` : ''}`
+    case 'stage_changed':
+      return `mudou de etapa "${String(d.from ?? '—')}" → "${String(d.to ?? '—')}"`
+    case 'status_changed':
+      if (d.to === 'won') return 'marcado como VENDA (ganho)'
+      if (d.to === 'lost')
+        return `marcado como PERDIDO${d.reason ? ` · motivo: ${String(d.reason)}` : ''}`
+      return 'negócio reaberto'
+    case 'note':
+      return `anotação: ${String(d.text ?? '')}`
+    case 'transferred':
+      return `transferido${d.to ? ` para ${String(d.to)}` : ''}`
+    default:
+      return e.type
+  }
+}
+
+function buildDealAskPrompt(
+  deal: Deal,
+  events: DealEvent[],
+  convo: ChatMessage[],
+): string {
+  const fields = [
+    `Título: ${deal.title}`,
+    `Etapa: ${deal.stage?.name ?? '—'}`,
+    `Status: ${deal.status ?? 'open'}${deal.paused_at ? ' (PAUSADO)' : ''}`,
+    `Valor: ${deal.value} ${deal.currency ?? ''}`.trim(),
+    deal.contact?.name
+      ? `Contato: ${deal.contact.name}${deal.contact.phone ? ` (${deal.contact.phone})` : ''}`
+      : null,
+    deal.temperature ? `Temperatura: ${deal.temperature}` : null,
+    deal.qualification ? `Qualificação: ${deal.qualification}/5` : null,
+    deal.source ? `Fonte: ${deal.source}` : null,
+    deal.expected_close_date
+      ? `Fechamento previsto: ${deal.expected_close_date}`
+      : null,
+    deal.lost_reason ? `Motivo de perda: ${deal.lost_reason}` : null,
+    deal.notes ? `Observações: ${deal.notes}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n')
+  // events vêm do mais novo pro mais antigo; invertemos p/ ordem cronológica.
+  const timeline = events
+    .slice(0, 20)
+    .reverse()
+    .map((e) => `- ${describeDealEvent(e)}`)
+    .join('\n')
+  const transcript = convo
+    .slice(-40)
+    .map((m) => `${m.role === 'user' ? 'Cliente' : 'Atendente'}: ${m.content}`)
+    .join('\n')
+  return `Você é um assistente de vendas dentro de um CRM de WhatsApp. Responda à pergunta do vendedor SOBRE ESTE NEGÓCIO usando SOMENTE as informações abaixo (campos, histórico e a conversa com o cliente). Seja direto, prático e em português do Brasil. Se algo não estiver nos dados, diga que não há essa informação — NUNCA invente fatos sobre o cliente.
+
+## Negócio
+${fields}
+
+## Histórico
+${timeline || '(sem eventos)'}
+
+## Conversa com o cliente (mais recente por último)
+${transcript || '(nenhuma conversa vinculada)'}`
+}
+
+export async function askDealAI(
+  dealId: string,
+  question: string,
+): Promise<{ answer?: string; error?: string }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const q = (question ?? '').trim()
+    if (!q) return { error: 'Escreva uma pergunta.' }
+    // requireActive:false — o "Pergunte à IA" funciona mesmo com o agente de
+    // auto-resposta desligado; só precisa da chave de IA da conta.
+    const cfg = await loadAiConfig(ctx.accountId, { requireActive: false }).catch(
+      () => null,
+    )
+    if (!cfg) {
+      return {
+        error:
+          'IA não configurada nesta conta. Configure em Configurações → Agente IA.',
+      }
+    }
+    const deal = await getDeal(dealId)
+    if (!deal) return { error: 'Negócio não encontrado.' }
+    if (!dealReadable(ctx.role, ctx.userId, deal.assigned_to ?? null)) {
+      return { error: 'Este negócio está atribuído a outro atendente.' }
+    }
+    const [events, convo] = await Promise.all([
+      listDealEvents(dealId).catch(() => [] as DealEvent[]),
+      deal.conversation_id
+        ? buildConversationContext(deal.conversation_id).catch(
+            () => [] as ChatMessage[],
+          )
+        : Promise.resolve([] as ChatMessage[]),
+    ])
+    const result = await generateReply({
+      config: cfg,
+      systemPrompt: buildDealAskPrompt(deal, events, convo),
+      messages: [{ role: 'user', content: q }],
+    })
+    return { answer: result.text?.trim() || 'Não consegui gerar uma resposta.' }
+  } catch (err) {
+    return {
+      error: err instanceof Error ? err.message : 'Falha ao consultar a IA.',
+    }
   }
 }
