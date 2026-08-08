@@ -588,6 +588,9 @@ export const pipelineStages = pgTable("pipeline_stages", {
 	name: text().notNull(),
 	position: integer().default(0).notNull(),
 	color: text().default('#3b82f6').notNull(),
+	// Orientações por etapa (estilo RD) — migração 0062.
+	objective: text(),
+	guidance: text(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_pipeline_stages_pipeline").using("btree", table.pipelineId.asc().nullsLast().op("uuid_ops")),

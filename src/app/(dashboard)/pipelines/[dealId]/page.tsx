@@ -761,6 +761,33 @@ export default function DealDetailPage() {
         </div>
       )}
 
+      {/* Orientações da etapa ATUAL (estilo RD) — só aparece se a etapa tiver. */}
+      {(() => {
+        const cs = stages.find((s) => s.id === deal.stage_id);
+        if (!cs || (!cs.objective?.trim() && !cs.guidance?.trim())) return null;
+        return (
+          <div className="mx-4 mt-1 rounded-lg border border-primary/25 bg-primary/5 p-3">
+            <p className="mb-1 flex items-center gap-1.5 text-xs font-semibold text-primary">
+              <ClipboardList className="h-3.5 w-3.5" />
+              Orientações — {cs.name}
+            </p>
+            {cs.objective?.trim() && (
+              <p className="text-xs text-foreground">
+                <span className="font-medium text-muted-foreground">
+                  Objetivo:{" "}
+                </span>
+                {cs.objective}
+              </p>
+            )}
+            {cs.guidance?.trim() && (
+              <p className="mt-1 whitespace-pre-wrap text-xs text-muted-foreground">
+                {cs.guidance}
+              </p>
+            )}
+          </div>
+        );
+      })()}
+
       {/* Corpo: campos | histórico */}
       <div className="flex flex-col gap-4 p-4 lg:flex-row lg:items-start">
         {/* Painel de campos — cola no topo no desktop enquanto rola as abas. */}

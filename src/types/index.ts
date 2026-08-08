@@ -401,6 +401,9 @@ export interface PipelineStage {
   name: string;
   position: number;
   color: string;
+  /** Orientações por etapa (estilo RD): objetivo + descrição/orientação. */
+  objective?: string | null;
+  guidance?: string | null;
   created_at: string;
 }
 

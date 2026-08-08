@@ -122,6 +122,8 @@ export function PipelineSettings({
       name: s.name,
       color: s.color,
       position: i,
+      objective: s.objective ?? null,
+      guidance: s.guidance ?? null,
     }));
 
     const { error } = await savePipelineSettings(
@@ -264,6 +266,16 @@ export function PipelineSettings({
                           onColorChange={(v) => {
                             const updated = [...localStages];
                             updated[index] = { ...updated[index], color: v };
+                            setLocalStages(updated);
+                          }}
+                          onObjectiveChange={(v) => {
+                            const updated = [...localStages];
+                            updated[index] = { ...updated[index], objective: v };
+                            setLocalStages(updated);
+                          }}
+                          onGuidanceChange={(v) => {
+                            const updated = [...localStages];
+                            updated[index] = { ...updated[index], guidance: v };
                             setLocalStages(updated);
                           }}
                           onRemove={() => handleRemoveStage(stage.id)}
@@ -452,17 +464,23 @@ function SortableStageRow({
   stage,
   onNameChange,
   onColorChange,
+  onObjectiveChange,
+  onGuidanceChange,
   onRemove,
   colors,
 }: {
   stage: PipelineStage;
   onNameChange: (v: string) => void;
   onColorChange: (v: string) => void;
+  onObjectiveChange: (v: string) => void;
+  onGuidanceChange: (v: string) => void;
   onRemove: () => void;
   colors: string[];
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: stage.id });
+  const [showGuide, setShowGuide] = useState(false);
+  const hasGuide = !!(stage.objective?.trim() || stage.guidance?.trim());
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -474,31 +492,74 @@ function SortableStageRow({
     <div
       ref={setNodeRef}
       style={style}
-      className="flex items-center gap-2 rounded-lg border border-border bg-muted p-2"
+      className="rounded-lg border border-border bg-muted p-2"
     >
-      <button
-        type="button"
-        {...attributes}
-        {...listeners}
-        className="cursor-grab touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing"
-        aria-label="Arraste para reordenar"
-      >
-        <GripVertical className="h-4 w-4" />
-      </button>
-      <ColorSwatch value={stage.color} onChange={onColorChange} colors={colors} />
-      <Input
-        value={stage.name}
-        onChange={(e) => onNameChange(e.target.value)}
-        className="h-7 flex-1 border-transparent bg-transparent text-sm text-foreground focus:border-border"
-      />
-      <Button
-        variant="ghost"
-        size="icon-xs"
-        onClick={onRemove}
-        className="text-muted-foreground hover:text-red-400"
-      >
-        <Trash2 className="h-3 w-3" />
-      </Button>
+      <div className="flex items-center gap-2">
+        <button
+          type="button"
+          {...attributes}
+          {...listeners}
+          className="cursor-grab touch-none text-muted-foreground hover:text-foreground active:cursor-grabbing"
+          aria-label="Arraste para reordenar"
+        >
+          <GripVertical className="h-4 w-4" />
+        </button>
+        <ColorSwatch value={stage.color} onChange={onColorChange} colors={colors} />
+        <Input
+          value={stage.name}
+          onChange={(e) => onNameChange(e.target.value)}
+          className="h-7 flex-1 border-transparent bg-transparent text-sm text-foreground focus:border-border"
+        />
+        <button
+          type="button"
+          onClick={() => setShowGuide((v) => !v)}
+          title="Orientações da etapa (objetivo + descrição)"
+          className={`rounded px-1.5 py-0.5 text-[11px] transition-colors ${
+            hasGuide || showGuide
+              ? "text-primary hover:bg-primary/10"
+              : "text-muted-foreground hover:bg-background"
+          }`}
+        >
+          Orientações{hasGuide ? " ✓" : ""}
+        </button>
+        <Button
+          variant="ghost"
+          size="icon-xs"
+          onClick={onRemove}
+          className="text-muted-foreground hover:text-red-400"
+        >
+          <Trash2 className="h-3 w-3" />
+        </Button>
+      </div>
+
+      {showGuide && (
+        <div className="mt-2 space-y-2 border-t border-border pt-2">
+          <div className="space-y-1">
+            <label className="text-[11px] font-medium text-muted-foreground">
+              Objetivo da etapa
+            </label>
+            <textarea
+              value={stage.objective ?? ""}
+              onChange={(e) => onObjectiveChange(e.target.value)}
+              placeholder="Ex.: Registrar leads que já receberam contato e precisam avançar."
+              rows={2}
+              className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary"
+            />
+          </div>
+          <div className="space-y-1">
+            <label className="text-[11px] font-medium text-muted-foreground">
+              Descrição / orientação
+            </label>
+            <textarea
+              value={stage.guidance ?? ""}
+              onChange={(e) => onGuidanceChange(e.target.value)}
+              placeholder="Ex.: Usar quando já iniciou contato. Próximo passo: obter resposta e contexto."
+              rows={2}
+              className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary"
+            />
+          </div>
+        </div>
+      )}
     </div>
   );
 }

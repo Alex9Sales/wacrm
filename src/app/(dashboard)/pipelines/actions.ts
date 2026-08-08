@@ -99,6 +99,8 @@ export async function listStages(pipelineId: string): Promise<PipelineStage[]> {
       name: pipelineStages.name,
       position: pipelineStages.position,
       color: pipelineStages.color,
+      objective: pipelineStages.objective,
+      guidance: pipelineStages.guidance,
       created_at: pipelineStages.createdAt,
     })
     .from(pipelineStages)
@@ -383,7 +385,14 @@ export async function transferDeal(
 export async function savePipelineSettings(
   pipelineId: string,
   name: string,
-  stages: { id: string; name: string; color: string; position: number }[],
+  stages: {
+    id: string
+    name: string
+    color: string
+    position: number
+    objective?: string | null
+    guidance?: string | null
+  }[],
   stepperStyle?: string,
 ): Promise<{ error: string | null }> {
   try {
@@ -419,6 +428,8 @@ export async function savePipelineSettings(
             name: s.name,
             color: s.color,
             position: s.position,
+            objective: s.objective ?? null,
+            guidance: s.guidance ?? null,
           })),
         )
         .onConflictDoUpdate({
@@ -427,6 +438,8 @@ export async function savePipelineSettings(
             name: sql`excluded.name`,
             color: sql`excluded.color`,
             position: sql`excluded.position`,
+            objective: sql`excluded.objective`,
+            guidance: sql`excluded.guidance`,
           },
         })
     }
