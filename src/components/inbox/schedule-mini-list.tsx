@@ -11,7 +11,7 @@
 
 import { useState } from 'react'
 import { toast } from 'sonner'
-import { CalendarClock, Trash2, Loader2, Check, X, AlertTriangle } from 'lucide-react'
+import { CalendarClock, Trash2, Loader2, Check, X, AlertTriangle, Pencil } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import {
   cancelScheduledMessage,
@@ -41,12 +41,15 @@ interface ScheduleMiniListProps {
   items: ScheduledMessageLite[]
   onChanged: () => void
   emptyLabel?: string
+  /** Abre a edição de um agendamento pendente (o form fica no componente pai). */
+  onEdit?: (item: ScheduledMessageLite) => void
 }
 
 export function ScheduleMiniList({
   items,
   onChanged,
   emptyLabel = 'Nenhuma mensagem agendada.',
+  onEdit,
 }: ScheduleMiniListProps) {
   const [busyId, setBusyId] = useState<string | null>(null)
 
@@ -103,20 +106,34 @@ export function ScheduleMiniList({
             </div>
 
             {item.status === 'pending' && (
-              <button
-                type="button"
-                onClick={() => void handleCancel(item.id)}
-                disabled={busy}
-                aria-label="Cancelar agendamento"
-                title="Cancelar"
-                className="mt-0.5 flex h-5 w-5 shrink-0 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
-              >
-                {busy ? (
-                  <Loader2 className="h-3 w-3 animate-spin" />
-                ) : (
-                  <Trash2 className="h-3 w-3" />
+              <div className="mt-0.5 flex shrink-0 items-center gap-0.5">
+                {onEdit && (
+                  <button
+                    type="button"
+                    onClick={() => onEdit(item)}
+                    disabled={busy}
+                    aria-label="Editar agendamento"
+                    title="Editar"
+                    className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-foreground group-hover:opacity-100"
+                  >
+                    <Pencil className="h-3 w-3" />
+                  </button>
                 )}
-              </button>
+                <button
+                  type="button"
+                  onClick={() => void handleCancel(item.id)}
+                  disabled={busy}
+                  aria-label="Cancelar agendamento"
+                  title="Cancelar"
+                  className="flex h-5 w-5 items-center justify-center rounded text-muted-foreground opacity-0 transition-opacity hover:text-red-400 group-hover:opacity-100"
+                >
+                  {busy ? (
+                    <Loader2 className="h-3 w-3 animate-spin" />
+                  ) : (
+                    <Trash2 className="h-3 w-3" />
+                  )}
+                </button>
+              </div>
             )}
           </div>
         )

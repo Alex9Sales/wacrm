@@ -210,6 +210,9 @@ export function ContactSidebar({
   // Mensagens agendadas — this conversation's schedule + create dialog.
   const [scheduled, setScheduled] = useState<ScheduledMessageLite[]>([]);
   const [scheduleFormOpen, setScheduleFormOpen] = useState(false);
+  // Agendamento em edição (null = criar novo).
+  const [editingSchedule, setEditingSchedule] =
+    useState<ScheduledMessageLite | null>(null);
   const [tags, setTags] = useState<(Tag & { contact_tag_id: string })[]>([]);
   const [newNote, setNewNote] = useState("");
   const [addingNote, setAddingNote] = useState(false);
@@ -961,10 +964,17 @@ export function ContactSidebar({
                   items={scheduled}
                   onChanged={refreshScheduled}
                   emptyLabel="Nenhuma mensagem agendada."
+                  onEdit={(item) => {
+                    setEditingSchedule(item);
+                    setScheduleFormOpen(true);
+                  }}
                 />
                 <button
                   type="button"
-                  onClick={() => setScheduleFormOpen(true)}
+                  onClick={() => {
+                    setEditingSchedule(null);
+                    setScheduleFormOpen(true);
+                  }}
                   className="mt-2 w-full rounded-lg border border-dashed border-border px-3 py-2 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
                 >
                   + Agendar mensagem
@@ -1039,9 +1049,13 @@ export function ContactSidebar({
       {conversation && (
         <ScheduleMessageForm
           open={scheduleFormOpen}
-          onOpenChange={setScheduleFormOpen}
+          onOpenChange={(o) => {
+            setScheduleFormOpen(o);
+            if (!o) setEditingSchedule(null);
+          }}
           conversationId={conversation.id}
           onSaved={refreshScheduled}
+          editing={editingSchedule}
         />
       )}
 

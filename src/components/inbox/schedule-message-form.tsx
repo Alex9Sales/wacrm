@@ -23,13 +23,19 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
-import { scheduleMessage } from '@/app/(dashboard)/inbox/schedule-actions'
+import {
+  scheduleMessage,
+  updateScheduledMessage,
+  type ScheduledMessageLite,
+} from '@/app/(dashboard)/inbox/schedule-actions'
 
 interface ScheduleMessageFormProps {
   open: boolean
   onOpenChange: (open: boolean) => void
   conversationId: string
   onSaved: () => void
+  /** Quando setado, o form edita este agendamento (pendente) em vez de criar. */
+  editing?: ScheduledMessageLite | null
 }
 
 const pad = (n: number) => String(n).padStart(2, '0')
@@ -63,17 +69,24 @@ export function ScheduleMessageForm({
   onOpenChange,
   conversationId,
   onSaved,
+  editing,
 }: ScheduleMessageFormProps) {
   const [text, setText] = useState('')
   const [when, setWhen] = useState('')
   const [saving, setSaving] = useState(false)
 
-  // Reset on open; default to one hour from now.
+  // Ao abrir: se estiver editando, prefill com o agendamento; senão, novo
+  // (padrão daqui a 1 hora).
   useEffect(() => {
     if (!open) return
-    setText('')
-    setWhen(toLocalInput(new Date(Date.now() + 60 * 60 * 1000)))
-  }, [open])
+    if (editing) {
+      setText(editing.content_text ?? '')
+      setWhen(toLocalInput(new Date(editing.scheduled_at)))
+    } else {
+      setText('')
+      setWhen(toLocalInput(new Date(Date.now() + 60 * 60 * 1000)))
+    }
+  }, [open, editing])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -98,17 +111,22 @@ export function ScheduleMessageForm({
 
     setSaving(true)
     try {
-      const res = await scheduleMessage({
-        conversationId,
-        contentText: body,
-        // Absolute instant — local wall-clock converted to UTC ISO.
-        scheduledAt: local.toISOString(),
-      })
+      const res = editing
+        ? await updateScheduledMessage(editing.id, {
+            contentText: body,
+            scheduledAt: local.toISOString(),
+          })
+        : await scheduleMessage({
+            conversationId,
+            contentText: body,
+            // Absolute instant — local wall-clock converted to UTC ISO.
+            scheduledAt: local.toISOString(),
+          })
       if (!res.ok) {
         toast.error(res.error)
         return
       }
-      toast.success('Mensagem agendada.')
+      toast.success(editing ? 'Agendamento atualizado.' : 'Mensagem agendada.')
       onOpenChange(false)
       onSaved()
     } catch (err) {
@@ -125,7 +143,7 @@ export function ScheduleMessageForm({
       <DialogContent className="max-h-[90vh] overflow-y-auto border-border bg-popover text-popover-foreground sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="text-popover-foreground">
-            Agendar mensagem
+            {editing ? 'Editar mensagem agendada' : 'Agendar mensagem'}
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
             A mensagem será enviada automaticamente nesta conversa no horário
@@ -188,8 +206,10 @@ export function ScheduleMessageForm({
               {saving ? (
                 <>
                   <Loader2 className="mr-2 h-4 w-4 animate-spin" />
-                  Agendando…
+                  {editing ? 'Salvando…' : 'Agendando…'}
                 </>
+              ) : editing ? (
+                'Salvar'
               ) : (
                 'Agendar'
               )}

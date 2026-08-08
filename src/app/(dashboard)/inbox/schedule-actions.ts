@@ -221,3 +221,86 @@ export async function cancelScheduledMessage(
     return { error: 'Falha ao cancelar o agendamento.' }
   }
 }
+
+/**
+ * Edita um agendamento AINDA pendente: muda o texto e/ou o horário. O worker
+ * lê o `content_text` do banco na hora do envio, então uma edição SÓ de texto
+ * não precisa re-agendar o job; quando o HORÁRIO muda, o job é dropado e
+ * re-enfileirado com o novo atraso.
+ */
+export async function updateScheduledMessage(
+  id: string,
+  input: { contentText?: string; scheduledAt?: string },
+): Promise<
+  { ok: true; scheduled: ScheduledMessageLite } | { ok: false; error: string }
+> {
+  try {
+    const ctx = await requireRole('agent')
+    const rowId = id?.trim()
+    if (!rowId) return { ok: false, error: 'Agendamento inválido.' }
+
+    const set: Record<string, unknown> = {
+      updatedAt: new Date().toISOString(),
+    }
+    let delayMs: number | null = null
+
+    if (input.contentText !== undefined) {
+      const t = input.contentText.trim()
+      if (!t) return { ok: false, error: 'Escreva a mensagem.' }
+      set.contentText = t
+    }
+    if (input.scheduledAt !== undefined) {
+      const when = new Date(input.scheduledAt)
+      if (Number.isNaN(when.getTime())) {
+        return { ok: false, error: 'Data/hora inválida.' }
+      }
+      delayMs = when.getTime() - Date.now()
+      if (delayMs < 30_000) {
+        return {
+          ok: false,
+          error: 'Escolha um horário pelo menos 1 min à frente.',
+        }
+      }
+      set.scheduledAt = when.toISOString()
+    }
+
+    const updated = firstOrNull(
+      await db
+        .update(scheduledMessages)
+        .set(set)
+        .where(
+          and(
+            eq(scheduledMessages.id, rowId),
+            eq(scheduledMessages.accountId, ctx.accountId),
+            eq(scheduledMessages.status, 'pending'),
+          ),
+        )
+        .returning(liteSelect),
+    )
+    if (!updated) {
+      return {
+        ok: false,
+        error: 'Este agendamento já foi enviado ou cancelado.',
+      }
+    }
+
+    // Só re-agenda o job quando o HORÁRIO mudou (conteúdo é lido do banco).
+    if (delayMs !== null) {
+      await removeScheduledMessageJob(rowId)
+      try {
+        await enqueueScheduledMessage(rowId, { delayMs })
+      } catch (err) {
+        console.error('[schedule] re-enqueue failed:', err)
+        return {
+          ok: false,
+          error: 'Não foi possível reagendar (fila indisponível).',
+        }
+      }
+    }
+
+    return { ok: true, scheduled: toLite(updated as Record<string, unknown>) }
+  } catch (err) {
+    console.error('[schedule] updateScheduledMessage failed:', err)
+    return { ok: false, error: 'Falha ao editar o agendamento.' }
+  }
+}
