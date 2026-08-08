@@ -110,6 +110,9 @@ interface MetaWebhookMessage {
     address?: string;
   };
   reaction?: { message_id: string; emoji: string };
+  // Resposta a um botão de RESPOSTA RÁPIDA de TEMPLATE (o cliente tocou nele).
+  // A Meta manda type:'button' com { text: rótulo, payload }.
+  button?: { text?: string; payload?: string };
   interactive?: {
     type: 'button_reply' | 'list_reply' | 'call_permission_reply';
     button_reply?: { id: string; title: string };
@@ -429,6 +432,7 @@ export const metaProvider: WhatsAppProvider = {
  *   sticker     → 'image',  media {kind:'sticker', fetchKey: id}   (rendered as image)
  *   location    → 'location', contentText = "name - address - lat,lng"
  *   interactive → 'interactive', interactiveReplyId = reply.id, contentText = reply.title
+ *   button      → 'interactive' (resposta rápida de TEMPLATE), contentText = button.text
  *   reaction    → null (reactions aren't messages; handled elsewhere)
  *   unknown     → 'text', contentText = "[Unsupported message type: X]"
  */
@@ -546,6 +550,19 @@ function normalizeInboundMessage(
         ...base,
         contentType: 'interactive',
         contentText: '[Interactive reply]',
+      };
+    }
+
+    case 'button': {
+      // O cliente tocou num botão de RESPOSTA RÁPIDA de um TEMPLATE. Renderiza
+      // como resposta interativa (mostra o rótulo tocado) e guarda o payload
+      // pra casar em fluxos (igual ao button_reply do interactive).
+      const b = msg.button;
+      return {
+        ...base,
+        contentType: 'interactive',
+        contentText: b?.text || b?.payload || '[Botão]',
+        interactiveReplyId: b?.payload,
       };
     }
 
