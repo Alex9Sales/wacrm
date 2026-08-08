@@ -90,6 +90,7 @@ import {
 } from "@/app/(dashboard)/contacts/actions";
 import { CustomFieldInput } from "@/components/contacts/custom-field-input";
 import { DealAskAI } from "@/components/pipelines/deal-ask-ai";
+import { DealAISuggestions } from "@/components/pipelines/deal-ai-suggestions";
 
 type DealTab =
   | "historico"
@@ -894,6 +895,8 @@ export default function DealDetailPage() {
             </div>
           )}
 
+          {/* IA para Negociações v2 — Fase 1: sugestões por evidência. */}
+          <DealAISuggestions dealId={deal.id} onApplied={() => void reload()} />
           {/* IA para Negociações v2 — Fase 0: pergunte à IA sobre o negócio. */}
           <DealAskAI dealId={deal.id} />
         </aside>

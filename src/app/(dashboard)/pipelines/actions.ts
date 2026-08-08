@@ -12,11 +12,17 @@ import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
 import { getAdminUserIds } from '@/lib/sectors/access'
-import type { Contact, Conversation, Deal, Pipeline, PipelineStage, Profile } from '@/types'
+import type { Contact, Conversation, Deal, Pipeline, PipelineStage, Profile, CustomField } from '@/types'
 import { loadAiConfig } from '@/lib/ai/config'
 import { generateReply } from '@/lib/ai/generate'
 import { buildConversationContext } from '@/lib/ai/context'
 import type { ChatMessage } from '@/lib/ai/types'
+import {
+  listCustomFields,
+  listContactCustomValues,
+  saveContactCustomValues,
+} from '@/app/(dashboard)/contacts/actions'
+import { dealSuggestions } from '@/db'
 
 const contactColumns = {
   id: contacts.id,
@@ -1489,5 +1495,338 @@ export async function askDealAI(
     return {
       error: err instanceof Error ? err.message : 'Falha ao consultar a IA.',
     }
+  }
+}
+
+// ------------------------------------------------------------
+// IA para Negociações v2 — Fase 1: SUGESTÕES POR EVIDÊNCIA.
+// A IA lê a conversa + campos e PROPÕE valores (campos do negócio + campos
+// personalizados do contato) COM a evidência. Nada é gravado sozinho: vira
+// sugestão 'pending' que o humano aceita (aplica) ou descarta.
+// ------------------------------------------------------------
+export interface DealSuggestion {
+  id: string
+  deal_id: string
+  kind: string
+  target: string
+  label: string
+  value: string
+  evidence: string | null
+  status: string
+  created_at: string
+}
+
+// Campos do NEGÓCIO que a IA pode sugerir, com validação do valor.
+const DEAL_FIELD_TARGETS: {
+  target: string
+  label: string
+  hint: string
+  normalize: (v: string) => string | null
+}[] = [
+  {
+    target: 'deal:temperature',
+    label: 'Temperatura',
+    hint: 'um de: frio | morno | quente',
+    normalize: (v) => {
+      const s = v.toLowerCase().trim()
+      return ['frio', 'morno', 'quente'].includes(s) ? s : null
+    },
+  },
+  {
+    target: 'deal:qualification',
+    label: 'Qualificação (1-5)',
+    hint: 'número inteiro de 1 a 5',
+    normalize: (v) => {
+      const n = parseInt(String(v), 10)
+      return n >= 1 && n <= 5 ? String(n) : null
+    },
+  },
+  {
+    target: 'deal:value',
+    label: 'Valor',
+    hint: 'número em R$ (ex.: 1500)',
+    normalize: (v) => {
+      const n = parseFloat(
+        String(v).replace(/[^\d.,]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.'),
+      )
+      return isFinite(n) && n > 0 ? String(n) : null
+    },
+  },
+  {
+    target: 'deal:notes',
+    label: 'Observações',
+    hint: 'texto curto',
+    normalize: (v) => (v.trim() ? v.trim() : null),
+  },
+]
+
+/** Sugestões PENDENTES de um negócio (mais novas primeiro). */
+export async function listDealSuggestions(
+  dealId: string,
+): Promise<DealSuggestion[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: dealSuggestions.id,
+      deal_id: dealSuggestions.dealId,
+      kind: dealSuggestions.kind,
+      target: dealSuggestions.target,
+      label: dealSuggestions.label,
+      value: dealSuggestions.value,
+      evidence: dealSuggestions.evidence,
+      status: dealSuggestions.status,
+      created_at: dealSuggestions.createdAt,
+    })
+    .from(dealSuggestions)
+    .where(
+      and(
+        eq(dealSuggestions.dealId, dealId),
+        eq(dealSuggestions.accountId, ctx.accountId),
+        eq(dealSuggestions.status, 'pending'),
+      ),
+    )
+    .orderBy(desc(dealSuggestions.createdAt))
+  return rows as unknown as DealSuggestion[]
+}
+
+function customOptions(cf: CustomField): string[] {
+  return cf.field_type === 'select'
+    ? ((cf.field_options?.options as string[] | undefined) ?? [])
+    : []
+}
+
+function buildSuggestionsPrompt(
+  deal: Deal,
+  convo: ChatMessage[],
+  customFields: CustomField[],
+): string {
+  const transcript = convo
+    .slice(-50)
+    .map((m) => `${m.role === 'user' ? 'Cliente' : 'Atendente'}: ${m.content}`)
+    .join('\n')
+  const dealTargets = DEAL_FIELD_TARGETS.map(
+    (t) => `- "${t.target}" (${t.label}) → ${t.hint}`,
+  ).join('\n')
+  const customTargets = customFields
+    .map((cf) => {
+      const opts = customOptions(cf)
+      return `- "custom:${cf.id}" (${cf.field_name}) → ${
+        opts.length ? `um de: ${opts.join(' | ')}` : 'texto curto'
+      }`
+    })
+    .join('\n')
+  return `Você é um assistente de vendas que EXTRAI FATOS de uma conversa de WhatsApp para preencher o CRM.
+
+REGRA ABSOLUTA: só proponha um valor quando a CONVERSA der evidência CLARA. Nada de adivinhar. Se não houver evidência, NÃO inclua o campo. Um fato errado é pior que um campo vazio.
+
+Campos que você pode preencher (use exatamente o "target"):
+${dealTargets}
+${customTargets || '(sem campos personalizados)'}
+
+Responda SOMENTE com um array JSON, sem texto fora dele, no formato:
+[{"target":"<target>","value":"<valor>","evidence":"<trecho curto da conversa que prova isso>"}]
+Se não houver nada com evidência, responda [].
+
+## Conversa
+${transcript || '(sem conversa)'}`
+}
+
+function parseSuggestions(
+  raw: string,
+  customFields: CustomField[],
+): { target: string; label: string; value: string; evidence: string }[] {
+  // Extrai o array JSON (tolera ```json ... ``` ou texto ao redor).
+  const start = raw.indexOf('[')
+  const end = raw.lastIndexOf(']')
+  if (start === -1 || end === -1 || end < start) return []
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(raw.slice(start, end + 1))
+  } catch {
+    return []
+  }
+  if (!Array.isArray(parsed)) return []
+  const cfById = new Map(customFields.map((c) => [c.id, c]))
+  const out: { target: string; label: string; value: string; evidence: string }[] = []
+  for (const item of parsed) {
+    if (!item || typeof item !== 'object') continue
+    const target = String((item as Record<string, unknown>).target ?? '')
+    const rawValue = String((item as Record<string, unknown>).value ?? '')
+    const evidence = String((item as Record<string, unknown>).evidence ?? '')
+    if (!target || !rawValue) continue
+    const dealField = DEAL_FIELD_TARGETS.find((t) => t.target === target)
+    if (dealField) {
+      const v = dealField.normalize(rawValue)
+      if (v) out.push({ target, label: dealField.label, value: v, evidence })
+      continue
+    }
+    if (target.startsWith('custom:')) {
+      const cf = cfById.get(target.slice('custom:'.length))
+      if (!cf) continue
+      const opts = customOptions(cf)
+      if (opts.length && !opts.includes(rawValue)) continue // select fora das opções
+      out.push({ target, label: cf.field_name, value: rawValue.trim(), evidence })
+    }
+  }
+  return out
+}
+
+/** Roda a IA sobre a conversa e cria sugestões PENDENTES (substitui as antigas
+ *  pendentes deste negócio). Retorna quantas criou. */
+export async function generateDealSuggestions(
+  dealId: string,
+): Promise<{ count: number; error?: string }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const cfg = await loadAiConfig(ctx.accountId, { requireActive: false }).catch(
+      () => null,
+    )
+    if (!cfg) {
+      return {
+        count: 0,
+        error:
+          'IA não configurada nesta conta (Configurações → Agente IA).',
+      }
+    }
+    const deal = await getDeal(dealId)
+    if (!deal) return { count: 0, error: 'Negócio não encontrado.' }
+    if (!dealReadable(ctx.role, ctx.userId, deal.assigned_to ?? null)) {
+      return { count: 0, error: 'Este negócio está atribuído a outro atendente.' }
+    }
+    if (!deal.conversation_id) {
+      return { count: 0, error: 'Sem conversa vinculada para analisar.' }
+    }
+    const [convo, customFields] = await Promise.all([
+      buildConversationContext(deal.conversation_id).catch(
+        () => [] as ChatMessage[],
+      ),
+      listCustomFields().catch(() => [] as CustomField[]),
+    ])
+    if (convo.length === 0) {
+      return { count: 0, error: 'A conversa ainda não tem mensagens.' }
+    }
+    const result = await generateReply({
+      config: cfg,
+      systemPrompt: buildSuggestionsPrompt(deal, convo, customFields),
+      messages: [{ role: 'user', content: 'Analise a conversa e proponha.' }],
+    })
+    const items = parseSuggestions(result.text ?? '', customFields)
+    // Regenera: limpa as pendentes antigas deste negócio antes de inserir.
+    await db
+      .delete(dealSuggestions)
+      .where(
+        and(
+          eq(dealSuggestions.dealId, dealId),
+          eq(dealSuggestions.accountId, ctx.accountId),
+          eq(dealSuggestions.status, 'pending'),
+        ),
+      )
+    if (items.length > 0) {
+      await db.insert(dealSuggestions).values(
+        items.map((it) => ({
+          accountId: ctx.accountId,
+          dealId,
+          kind: 'field',
+          target: it.target,
+          label: it.label,
+          value: it.value,
+          evidence: it.evidence || null,
+          createdBy: ctx.userId,
+        })),
+      )
+    }
+    return { count: items.length }
+  } catch (err) {
+    return {
+      count: 0,
+      error: err instanceof Error ? err.message : 'Falha ao gerar sugestões.',
+    }
+  }
+}
+
+/** Aceita uma sugestão: APLICA o valor no campo certo + marca 'accepted' +
+ *  registra na timeline. */
+export async function acceptDealSuggestion(
+  suggestionId: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const sug = firstOrNull(
+      await db
+        .select({
+          id: dealSuggestions.id,
+          dealId: dealSuggestions.dealId,
+          target: dealSuggestions.target,
+          label: dealSuggestions.label,
+          value: dealSuggestions.value,
+        })
+        .from(dealSuggestions)
+        .where(
+          and(
+            eq(dealSuggestions.id, suggestionId),
+            eq(dealSuggestions.accountId, ctx.accountId),
+            eq(dealSuggestions.status, 'pending'),
+          ),
+        )
+        .limit(1),
+    )
+    if (!sug) return { error: 'Sugestão não encontrada.' }
+
+    if (sug.target === 'deal:temperature') {
+      await updateDeal(sug.dealId, { temperature: sug.value })
+    } else if (sug.target === 'deal:qualification') {
+      await updateDeal(sug.dealId, { qualification: parseInt(sug.value, 10) })
+    } else if (sug.target === 'deal:value') {
+      await updateDeal(sug.dealId, { value: Number(sug.value) })
+    } else if (sug.target === 'deal:notes') {
+      await updateDeal(sug.dealId, { notes: sug.value })
+    } else if (sug.target.startsWith('custom:')) {
+      const fieldId = sug.target.slice('custom:'.length)
+      const deal = await getDeal(sug.dealId)
+      if (!deal?.contact_id) return { error: 'Negócio sem contato para preencher.' }
+      // Mescla com os valores atuais (saveContactCustomValues substitui TUDO).
+      const existing = await listContactCustomValues(deal.contact_id).catch(
+        () => [],
+      )
+      const map: Record<string, string> = {}
+      for (const row of existing) map[row.custom_field_id] = row.value ?? ''
+      map[fieldId] = sug.value
+      const { error } = await saveContactCustomValues(deal.contact_id, map)
+      if (error) return { error }
+    } else {
+      return { error: 'Tipo de sugestão desconhecido.' }
+    }
+
+    await db
+      .update(dealSuggestions)
+      .set({ status: 'accepted' })
+      .where(eq(dealSuggestions.id, suggestionId))
+    await recordDealEvent(ctx.accountId, ctx.userId, sug.dealId, 'note', {
+      text: `IA preencheu "${sug.label}": ${sug.value}`,
+    })
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao aceitar.' }
+  }
+}
+
+/** Descarta uma sugestão (marca 'dismissed'). */
+export async function dismissDealSuggestion(
+  suggestionId: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .update(dealSuggestions)
+      .set({ status: 'dismissed' })
+      .where(
+        and(
+          eq(dealSuggestions.id, suggestionId),
+          eq(dealSuggestions.accountId, ctx.accountId),
+        ),
+      )
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao descartar.' }
   }
 }

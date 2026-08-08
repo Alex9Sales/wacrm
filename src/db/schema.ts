@@ -707,6 +707,24 @@ export const dealProducts = pgTable("deal_products", {
 	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "deal_products_deal_id_fkey" }).onDelete("cascade"),
 ]);
 
+// IA para Negociações v2 — Fase 1: sugestões por evidência. Migração 0064.
+export const dealSuggestions = pgTable("deal_suggestions", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	dealId: uuid("deal_id").notNull(),
+	kind: text().default('field').notNull(),
+	target: text().notNull(),
+	label: text().notNull(),
+	value: text().notNull(),
+	evidence: text(),
+	status: text().default('pending').notNull(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_deal_suggestions_deal").using("btree", table.dealId.asc().nullsLast(), table.status.asc().nullsLast()),
+	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "deal_suggestions_deal_id_fkey" }).onDelete("cascade"),
+]);
+
 // Arquivos/anexos de um negócio — metadados (binário no MinIO). Migração 0051.
 export const dealAttachments = pgTable("deal_attachments", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
