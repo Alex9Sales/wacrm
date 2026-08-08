@@ -145,7 +145,7 @@ export async function PATCH(
 
     await db
       .update(messages)
-      .set({ contentText: newText })
+      .set({ contentText: newText, editedAt: new Date().toISOString() })
       .where(eq(messages.id, messageId))
 
     return NextResponse.json({ ok: true, content_text: newText })

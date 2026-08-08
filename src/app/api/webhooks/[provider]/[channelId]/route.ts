@@ -29,7 +29,7 @@
 import crypto from 'crypto'
 
 import { NextResponse, after } from 'next/server'
-import { and, eq, isNull, ne } from 'drizzle-orm'
+import { and, eq, inArray, isNull, ne } from 'drizzle-orm'
 
 import { db, callLogs, contacts, conversations, messages, messageReactions } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -601,19 +601,37 @@ async function applyInboundDeletion(
   })
 }
 
-/** Reflect an edit made on WhatsApp (cliente editou o texto) into the CRM. */
+/** Reflect an edit made on WhatsApp (cliente editou o texto) into the CRM.
+ *  A MESMA mensagem pode existir em VÁRias conversas (ex.: dois números da conta
+ *  falando entre si) — atualiza TODAS as cópias daquele message_id, não só a 1ª. */
 async function applyInboundEdit(channel: ChannelCtx, ed: NormalizedEdit) {
-  const target = await findTargetMessage(channel.accountId, ed.targetExternalId)
-  if (!target) return
+  const rows = await db
+    .select({ id: messages.id, conversationId: messages.conversationId })
+    .from(messages)
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .where(
+      and(
+        eq(messages.messageId, ed.targetExternalId),
+        eq(conversations.accountId, channel.accountId),
+      ),
+    )
+  if (rows.length === 0) return
   await db
     .update(messages)
-    .set({ contentText: ed.newText })
-    .where(eq(messages.id, target.id))
-  await publishEvent(channel.accountId, {
-    type: 'message.received',
-    conversationId: target.conversationId,
-    fromMe: true,
-  })
+    .set({ contentText: ed.newText, editedAt: new Date().toISOString() })
+    .where(
+      inArray(
+        messages.id,
+        rows.map((r) => r.id),
+      ),
+    )
+  for (const convId of [...new Set(rows.map((r) => r.conversationId))]) {
+    await publishEvent(channel.accountId, {
+      type: 'message.received',
+      conversationId: convId,
+      fromMe: true,
+    })
+  }
 }
 
 /**

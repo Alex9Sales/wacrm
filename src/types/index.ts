@@ -270,6 +270,8 @@ export interface Message {
   message_id?: string;
   status: MessageStatus;
   created_at: string;
+  /** Setado quando a mensagem foi editada (mostra o selo "Editada"). */
+  edited_at?: string | null;
   reply_to_message_id?: string;
   /**
    * Only set when `content_type === 'interactive'` — the stable id of

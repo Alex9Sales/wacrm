@@ -453,6 +453,8 @@ export const messages = pgTable("messages", {
 	templateName: text("template_name"),
 	messageId: text("message_id"),
 	status: text().default('sent').notNull(),
+	// Setado quando a mensagem foi EDITADA (WhatsApp "Editada"). Migração 0061.
+	editedAt: timestamp("edited_at", { withTimezone: true, mode: 'string' }),
 	replyToMessageId: uuid("reply_to_message_id"),
 	interactiveReplyId: text("interactive_reply_id"),
 	// Speech-to-text of an inbound audio/voice note (null until transcribed).

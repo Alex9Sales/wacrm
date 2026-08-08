@@ -1157,6 +1157,18 @@ export function MessageBubble({
             isAgent ? "justify-end" : "justify-start",
           )}
         >
+          {message.edited_at && (
+            <span
+              className={cn(
+                "text-[10px] italic",
+                isAgent
+                  ? "text-primary-foreground/60"
+                  : "text-muted-foreground/80",
+              )}
+            >
+              Editada
+            </span>
+          )}
           <span
             className={cn(
               "text-[10px]",

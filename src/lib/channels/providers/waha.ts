@@ -1508,20 +1508,9 @@ export const wahaProvider: WhatsAppProvider = {
     // O gows entrega a edição como protocolMessage (key.ID = alvo, editedMessage
     // = novo conteúdo). O NOWEB costuma decodificar o novo texto no topo (body).
     if (event === 'message.edited') {
+      // Formato confirmado (gows): p.editedMessageId = id da mensagem editada
+      // (hash puro, = o que guardamos em message_id) e p.body = o novo texto.
       const edits: NormalizedEdit[] = [];
-      // LOG TEMPORÁRIO p/ cravar o formato real do evento — REMOVER depois.
-      try {
-        console.log(
-          '[waha message.edited] shape:',
-          JSON.stringify({
-            id: (p as { id?: unknown }).id,
-            body: (p as { body?: unknown }).body,
-            editedMessageId: (p as { editedMessageId?: unknown }).editedMessageId,
-            proto: p._data?.Message?.protocolMessage,
-            dataKeys: p._data ? Object.keys(p._data) : null,
-          }).slice(0, 1200),
-        );
-      } catch {}
       const pe = p as {
         id?: unknown;
         editedMessageId?: unknown;
@@ -1536,8 +1525,8 @@ export const wahaProvider: WhatsAppProvider = {
           pe.id,
       );
       const target = idRaw ? normalizeSerializedId(idRaw) : null;
-      let newText = textOfPayload(p);
-      if (!newText && typeof pe.body === 'string') newText = pe.body;
+      let newText = typeof pe.body === 'string' ? pe.body : '';
+      if (!newText) newText = textOfPayload(p);
       if (target && newText) edits.push({ targetExternalId: target, newText });
       return { messages, statuses, edits };
     }

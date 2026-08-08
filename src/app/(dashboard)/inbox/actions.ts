@@ -377,6 +377,7 @@ const messageColumns = {
   template_name: messages.templateName,
   message_id: messages.messageId,
   status: messages.status,
+  edited_at: messages.editedAt,
   reply_to_message_id: messages.replyToMessageId,
   interactive_reply_id: messages.interactiveReplyId,
   transcription: messages.transcription,
