@@ -181,7 +181,10 @@ export const contacts = pgTable("contacts", {
 	phoneNormalized: text("phone_normalized").generatedAlwaysAs(sql`regexp_replace(phone, '\D'::text, ''::text, 'g'::text)`),
 	name: text(),
 	email: text(),
+	// `company` = texto livre legado (mantido p/ compat: {{empresa}} nos disparos
+	// + import CSV). `companyId` = vínculo com a entidade Empresa (migração 0067).
 	company: text(),
+	companyId: uuid("company_id"),
 	// Código(s) do cliente no ERP do cliente (múltiplos por contato). Exibido
 	// ao lado do nome, editável, exportável/importável em CSV e via API v1.
 	customerCodes: text("customer_codes").array().notNull().default(sql`'{}'::text[]`),
@@ -200,6 +203,32 @@ export const contacts = pgTable("contacts", {
 			columns: [table.accountId],
 			foreignColumns: [organization.id],
 			name: "contacts_account_id_fkey"
+		}).onDelete("cascade"),
+	index("idx_contacts_company").using("btree", table.companyId.asc().nullsLast().op("uuid_ops")),
+]);
+
+// Empresas como ENTIDADE (IA v2 roadmap — Fase "Empresas"). Antes "empresa" era
+// só um texto livre no contato; agora é uma entidade própria com contatos e
+// (Fase 2) negócios vinculados. Migração 0067. A FK contacts.company_id é criada
+// na migração (aqui só a coluna, p/ não depender da ordem de definição no Drizzle).
+export const companies = pgTable("companies", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	name: text().notNull(),
+	segment: text(),
+	website: text(),
+	phone: text(),
+	notes: text(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_companies_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	uniqueIndex("idx_companies_account_name").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), sql`lower(${table.name})`),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "companies_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
 

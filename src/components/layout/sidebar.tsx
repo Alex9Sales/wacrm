@@ -12,6 +12,7 @@ import { useInternalUnread } from "@/hooks/use-internal-unread";
 import {
   Bell,
   Bot,
+  Building2,
   Crown,
   ShieldCheck,
   GitBranch,
@@ -116,6 +117,7 @@ const navItems: NavItem[] = [
   { href: "/internal-chat", label: "Chat Interno", icon: MessagesSquare },
   { href: "/notifications", label: "Notificações", icon: Bell },
   { href: "/contacts", label: "Contatos", icon: Users },
+  { href: "/empresas", label: "Empresas", icon: Building2 },
   { href: "/tarefas", label: "Tarefas", icon: ListTodo },
   { href: "/pipelines", label: "Funis", icon: GitBranch },
   { href: "/broadcasts", label: "Disparos", icon: Radio },

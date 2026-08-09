@@ -15,6 +15,7 @@ import {
   contactNotes,
   customFields,
   contactCustomValues,
+  companies,
   deals,
   pipelineStages,
 } from '@/db'
@@ -299,6 +300,47 @@ export type SaveContactResult =
   | { ok: false; duplicate: false; error: string }
 
 /**
+ * Empresa como entidade: dado o texto "empresa" de um contato, acha (por conta,
+ * case-insensitive) ou cria a Empresa e devolve o id — mantendo a entidade em
+ * sincronia com o texto, sem mudar a UX do form. Vazio → null.
+ */
+async function resolveCompanyId(
+  accountId: string,
+  userId: string,
+  companyText: string | null,
+): Promise<string | null> {
+  const name = (companyText ?? '').trim()
+  if (!name) return null
+  const find = async () =>
+    firstOrNull(
+      await db
+        .select({ id: companies.id })
+        .from(companies)
+        .where(
+          and(
+            eq(companies.accountId, accountId),
+            sql`lower(${companies.name}) = lower(${name})`,
+          ),
+        )
+        .limit(1),
+    )
+  const existing = await find()
+  if (existing) return existing.id
+  try {
+    const inserted = firstOrThrow(
+      await db
+        .insert(companies)
+        .values({ accountId, name, createdBy: userId })
+        .returning({ id: companies.id }),
+    )
+    return inserted.id
+  } catch {
+    // Corrida no índice único (account_id, lower(name)) → relê.
+    return (await find())?.id ?? null
+  }
+}
+
+/**
  * Create or update a contact and sync its contact_tags (delete + reinsert
  * the selected set). A unique-phone violation is reported as a duplicate
  * signal (not a hard error) so the form can show its friendly notice.
@@ -325,6 +367,8 @@ export async function saveContact(
   const name = input.name.trim() || null
   const email = input.email.trim() || null
   const company = input.company.trim() || null
+  // Empresa como entidade: acha/cria a Empresa pelo texto e vincula (company_id).
+  const companyId = await resolveCompanyId(ctx.accountId, ctx.userId, company)
 
   try {
     let contactId = input.contactId ?? undefined
@@ -338,6 +382,7 @@ export async function saveContact(
           phone,
           email,
           company,
+          companyId,
           updatedAt: new Date().toISOString(),
         })
         .where(and(eq(contacts.id, contactId), eq(contacts.accountId, ctx.accountId)))
@@ -355,6 +400,7 @@ export async function saveContact(
           phone,
           email,
           company,
+          companyId,
         })
         .returning({ id: contacts.id })
       contactId = firstOrThrow(inserted).id
@@ -789,13 +835,16 @@ export async function updateContactDetails(input: {
     const ctx = await getCurrentAccount()
     const phone = input.phone.trim()
     if (!phone) return { error: 'Phone number is required' }
+    const company = input.company.trim() || null
+    const companyId = await resolveCompanyId(ctx.accountId, ctx.userId, company)
     const updated = await db
       .update(contacts)
       .set({
         name: input.name.trim() || null,
         phone,
         email: input.email.trim() || null,
-        company: input.company.trim() || null,
+        company,
+        companyId,
         updatedAt: new Date().toISOString(),
       })
       .where(
