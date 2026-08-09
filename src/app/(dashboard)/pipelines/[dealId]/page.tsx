@@ -58,9 +58,11 @@ import {
 import {
   listTasksByDeal,
   toggleTaskDone,
+  getTask,
   listContactsForPicker,
   listDealsForPicker,
   type TaskLite,
+  type TaskRow,
   type PickerOption,
 } from "@/app/(dashboard)/tarefas/actions";
 import {
@@ -246,6 +248,9 @@ export default function DealDetailPage() {
   const [notFound, setNotFound] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [taskFormOpen, setTaskFormOpen] = useState(false);
+  // Tarefa sendo editada (null = criar nova). Ao editar buscamos a TaskRow
+  // completa (descrição + responsáveis) — a lista do negócio só traz TaskLite.
+  const [editingTask, setEditingTask] = useState<TaskRow | null>(null);
   const [pickerContacts, setPickerContacts] = useState<PickerOption[]>([]);
   const [pickerDeals, setPickerDeals] = useState<PickerOption[]>([]);
   const [busy, setBusy] = useState(false);
@@ -464,6 +469,19 @@ export default function DealDetailPage() {
     setTasks((prev) =>
       prev.map((t) => (t.id === taskId ? { ...t, status: res.status } : t)),
     );
+  }, []);
+
+  // Editar: busca a tarefa completa (descrição + responsáveis, que a lista não
+  // traz) e abre o TaskForm em modo edição — muda título/descrição/data/hora,
+  // responsáveis e tipo. (Sem "adiar": editar a data cobre esse caso.)
+  const editTask = useCallback(async (taskId: string) => {
+    const full = await getTask(taskId).catch(() => null);
+    if (!full) {
+      toast.error("Não foi possível abrir a tarefa.");
+      return;
+    }
+    setEditingTask(full);
+    setTaskFormOpen(true);
   }, []);
 
   useEffect(() => {
@@ -966,7 +984,10 @@ export default function DealDetailPage() {
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => setTaskFormOpen(true)}
+                onClick={() => {
+                  setEditingTask(null);
+                  setTaskFormOpen(true);
+                }}
               >
                 <Plus className="mr-1.5 h-4 w-4" /> Criar tarefa
               </Button>
@@ -1022,6 +1043,15 @@ export default function DealDetailPage() {
                           {t.type}
                         </span>
                       )}
+                      <button
+                        type="button"
+                        onClick={() => void editTask(t.id)}
+                        title="Editar tarefa"
+                        aria-label="Editar tarefa"
+                        className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      >
+                        <Pencil className="h-3.5 w-3.5" />
+                      </button>
                     </li>
                   );
                 })}
@@ -1448,17 +1478,23 @@ export default function DealDetailPage() {
         />
       )}
 
-      {/* Criar tarefa já vinculada a este lead (reaproveita o TaskForm). */}
+      {/* Criar/editar tarefa vinculada a este lead (reaproveita o TaskForm:
+          com `task` vira modo edição → updateTask; sem, cria nova). */}
       {taskFormOpen && (
         <TaskForm
           open={taskFormOpen}
-          onOpenChange={setTaskFormOpen}
+          onOpenChange={(o) => {
+            setTaskFormOpen(o);
+            if (!o) setEditingTask(null);
+          }}
+          task={editingTask}
           contacts={pickerContacts}
           deals={pickerDeals}
           prefillContactId={deal.contact_id ?? undefined}
           prefillDealId={deal.id}
           onSaved={() => {
             setTaskFormOpen(false);
+            setEditingTask(null);
             void reload();
           }}
         />
