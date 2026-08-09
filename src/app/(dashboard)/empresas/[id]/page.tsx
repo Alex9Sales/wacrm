@@ -7,10 +7,20 @@ import { toast } from 'sonner'
 import {
   getCompany,
   deleteCompany,
+  setContactCompany,
   type CompanyDetail,
 } from '../actions'
+import {
+  listContactsForPicker,
+  type PickerOption,
+} from '@/app/(dashboard)/tarefas/actions'
 import { CompanyForm } from '@/components/empresas/company-form'
 import { Button } from '@/components/ui/button'
+import {
+  Popover,
+  PopoverContent,
+  PopoverTrigger,
+} from '@/components/ui/popover'
 import {
   ArrowLeft,
   Building2,
@@ -22,6 +32,8 @@ import {
   Phone,
   Loader2,
   ExternalLink,
+  Plus,
+  X,
 } from 'lucide-react'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -47,6 +59,11 @@ export default function EmpresaDetailPage() {
   const [loading, setLoading] = useState(true)
   const [editOpen, setEditOpen] = useState(false)
   const [deleting, setDeleting] = useState(false)
+  // Seletor "Adicionar contato" à empresa (vincula contacts.company_id).
+  const [pickerOpen, setPickerOpen] = useState(false)
+  const [pickerQ, setPickerQ] = useState('')
+  const [pickerOptions, setPickerOptions] = useState<PickerOption[]>([])
+  const [busyContactId, setBusyContactId] = useState<string | null>(null)
 
   const load = useCallback(async () => {
     if (!id) return
@@ -59,6 +76,39 @@ export default function EmpresaDetailPage() {
   useEffect(() => {
     void load()
   }, [load])
+
+  useEffect(() => {
+    if (!pickerOpen) return
+    setPickerQ('')
+    listContactsForPicker()
+      .then(setPickerOptions)
+      .catch(() => setPickerOptions([]))
+  }, [pickerOpen])
+
+  async function linkContact(contactId: string) {
+    if (!company) return
+    setBusyContactId(contactId)
+    const { error } = await setContactCompany(contactId, company.id)
+    setBusyContactId(null)
+    if (error) {
+      toast.error(error)
+      return
+    }
+    setPickerOpen(false)
+    toast.success('Contato adicionado à empresa')
+    await load()
+  }
+
+  async function unlinkContact(contactId: string) {
+    setBusyContactId(contactId)
+    const { error } = await setContactCompany(contactId, null)
+    setBusyContactId(null)
+    if (error) {
+      toast.error(error)
+      return
+    }
+    await load()
+  }
 
   async function handleDelete() {
     if (!company) return
@@ -197,11 +247,73 @@ export default function EmpresaDetailPage() {
           <span className="text-xs text-muted-foreground">
             ({company.contacts.length})
           </span>
+          <div className="ml-auto">
+            <Popover open={pickerOpen} onOpenChange={setPickerOpen}>
+              <PopoverTrigger className="inline-flex items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted">
+                <Plus className="h-3.5 w-3.5" /> Adicionar contato
+              </PopoverTrigger>
+              <PopoverContent align="end" className="w-64 p-0">
+                <div className="border-b border-border p-2">
+                  <input
+                    autoFocus
+                    value={pickerQ}
+                    onChange={(e) => setPickerQ(e.target.value)}
+                    placeholder="Buscar contato…"
+                    className="w-full rounded-md border border-border bg-background px-2 py-1 text-xs outline-none focus:border-primary"
+                  />
+                </div>
+                <div className="max-h-52 overflow-y-auto p-1">
+                  {(() => {
+                    const already = new Set(company.contacts.map((c) => c.id))
+                    const term = pickerQ.trim().toLowerCase()
+                    const avail = pickerOptions
+                      .filter((o) => !already.has(o.id))
+                      .filter(
+                        (o) =>
+                          !term ||
+                          o.label.toLowerCase().includes(term) ||
+                          (o.sublabel ?? '').toLowerCase().includes(term),
+                      )
+                    if (avail.length === 0) {
+                      return (
+                        <p className="px-2 py-3 text-center text-xs text-muted-foreground">
+                          Nenhum contato.
+                        </p>
+                      )
+                    }
+                    return avail.slice(0, 50).map((o) => (
+                      <button
+                        key={o.id}
+                        type="button"
+                        onClick={() => void linkContact(o.id)}
+                        disabled={busyContactId === o.id}
+                        className="flex w-full items-center gap-2 rounded px-2 py-1.5 text-left hover:bg-muted disabled:opacity-50"
+                      >
+                        <div className="flex h-6 w-6 shrink-0 items-center justify-center rounded-full bg-muted text-[10px] font-medium text-muted-foreground">
+                          {(o.label || '?').charAt(0).toUpperCase()}
+                        </div>
+                        <div className="min-w-0 flex-1">
+                          <p className="truncate text-xs text-foreground">
+                            {o.label}
+                          </p>
+                          {o.sublabel && (
+                            <p className="truncate text-[10px] text-muted-foreground">
+                              {o.sublabel}
+                            </p>
+                          )}
+                        </div>
+                      </button>
+                    ))
+                  })()}
+                </div>
+              </PopoverContent>
+            </Popover>
+          </div>
         </div>
         {company.contacts.length === 0 ? (
           <p className="px-4 py-6 text-center text-xs text-muted-foreground">
-            Nenhum contato nesta empresa. Vincule contatos pelo campo “Empresa”
-            de cada contato.
+            Nenhum contato nesta empresa. Clique em <strong>Adicionar
+            contato</strong> acima, ou preencha o campo “Empresa” de um contato.
           </p>
         ) : (
           <ul className="divide-y divide-border">
@@ -219,6 +331,19 @@ export default function EmpresaDetailPage() {
                     {c.email ? ` · ${c.email}` : ''}
                   </p>
                 </div>
+                <button
+                  type="button"
+                  onClick={() => void unlinkContact(c.id)}
+                  disabled={busyContactId === c.id}
+                  title="Remover da empresa"
+                  className="shrink-0 rounded p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-red-600 disabled:opacity-50"
+                >
+                  {busyContactId === c.id ? (
+                    <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                  ) : (
+                    <X className="h-3.5 w-3.5" />
+                  )}
+                </button>
               </li>
             ))}
           </ul>
@@ -236,7 +361,7 @@ export default function EmpresaDetailPage() {
         </div>
         {company.deals.length === 0 ? (
           <p className="px-4 py-6 text-center text-xs text-muted-foreground">
-            Nenhum negócio vinculado (via contatos desta empresa).
+            Nenhum negócio vinculado a esta empresa.
           </p>
         ) : (
           <ul className="divide-y divide-border">
