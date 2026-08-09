@@ -69,6 +69,11 @@ import {
   type PickerOption,
 } from "@/app/(dashboard)/tarefas/actions";
 import {
+  listProducts,
+  type ProductRow,
+} from "@/app/(dashboard)/settings/products-actions";
+import {
+  updateDeal,
   listDealProducts,
   addDealProduct,
   removeDealProduct,
@@ -243,6 +248,9 @@ export default function DealDetailPage() {
   const [prodQty, setProdQty] = useState("1");
   const [prodPrice, setProdPrice] = useState("");
   const [addingProduct, setAddingProduct] = useState(false);
+  // Catálogo de produtos/serviços (Config → Produtos e serviços) p/ autocompletar.
+  const [catalog, setCatalog] = useState<ProductRow[]>([]);
+  const [showCatalog, setShowCatalog] = useState(false);
   const [uploading, setUploading] = useState(false);
   const [newQuestion, setNewQuestion] = useState("");
   const [emailSubject, setEmailSubject] = useState("");
@@ -445,6 +453,20 @@ export default function DealDetailPage() {
     () => products.reduce((sum, p) => sum + p.quantity * p.unit_price, 0),
     [products],
   );
+
+  // Carrega o catálogo (ativos) uma vez p/ autocompletar o add de produto.
+  useEffect(() => {
+    listProducts().then(setCatalog).catch(() => setCatalog([]));
+  }, []);
+
+  // Sugestões do catálogo que casam com o que está sendo digitado.
+  const catalogSuggestions = useMemo(() => {
+    const q = prodName.trim().toLowerCase();
+    const base = q
+      ? catalog.filter((c) => c.name.toLowerCase().includes(q))
+      : catalog;
+    return base.slice(0, 8);
+  }, [catalog, prodName]);
 
   // Picker options for the TaskForm (loaded once).
   useEffect(() => {
@@ -1120,12 +1142,42 @@ export default function DealDetailPage() {
             )}
             {/* Adicionar item */}
             <div className="flex flex-wrap items-end gap-2 border-t border-border px-4 py-3">
-              <input
-                value={prodName}
-                onChange={(e) => setProdName(e.target.value)}
-                placeholder="Produto/serviço"
-                className="min-w-40 flex-1 rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
-              />
+              <div className="relative min-w-40 flex-1">
+                <input
+                  value={prodName}
+                  onChange={(e) => {
+                    setProdName(e.target.value);
+                    setShowCatalog(true);
+                  }}
+                  onFocus={() => setShowCatalog(true)}
+                  onBlur={() => setTimeout(() => setShowCatalog(false), 150)}
+                  placeholder="Produto/serviço"
+                  className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                />
+                {showCatalog && catalogSuggestions.length > 0 && (
+                  <ul className="absolute bottom-full z-20 mb-1 max-h-52 w-full overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-xl">
+                    {catalogSuggestions.map((c) => (
+                      <li key={c.id}>
+                        <button
+                          type="button"
+                          onMouseDown={(e) => {
+                            e.preventDefault();
+                            setProdName(c.name);
+                            setProdPrice(c.unit_price ? String(c.unit_price) : "");
+                            setShowCatalog(false);
+                          }}
+                          className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                        >
+                          <span className="truncate text-foreground">{c.name}</span>
+                          <span className="shrink-0 text-xs text-muted-foreground">
+                            {fmtCurrency(c.unit_price, deal.currency)}
+                          </span>
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+              </div>
               <input
                 value={prodQty}
                 onChange={(e) => setProdQty(e.target.value)}
@@ -1156,13 +1208,35 @@ export default function DealDetailPage() {
               </Button>
             </div>
             {products.length > 0 && (
-              <div className="flex items-center justify-between border-t border-border px-4 py-2.5">
+              <div className="flex flex-wrap items-center justify-between gap-2 border-t border-border px-4 py-2.5">
                 <span className="text-xs font-medium uppercase tracking-wide text-muted-foreground">
                   Total dos produtos
                 </span>
-                <span className="text-sm font-bold text-primary">
-                  {fmtCurrency(productsTotal, deal.currency)}
-                </span>
+                <div className="flex items-center gap-3">
+                  {Math.abs(productsTotal - deal.value) > 0.001 && (
+                    <button
+                      type="button"
+                      onClick={async () => {
+                        const res = await updateDeal(deal.id, {
+                          value: productsTotal,
+                        });
+                        if (res.error) {
+                          toast.error(res.error);
+                          return;
+                        }
+                        toast.success("Valor do negócio atualizado");
+                        void reload();
+                      }}
+                      className="rounded-md border border-border px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                      title="Usa o total dos produtos como valor do negócio (aparece no funil)"
+                    >
+                      Usar no valor do negócio
+                    </button>
+                  )}
+                  <span className="text-sm font-bold text-primary">
+                    {fmtCurrency(productsTotal, deal.currency)}
+                  </span>
+                </div>
               </div>
             )}
           </div>
