@@ -28,6 +28,9 @@ import {
   updateScheduledMessage,
   type ScheduledMessageLite,
 } from '@/app/(dashboard)/inbox/schedule-actions'
+import { listTeamMembers } from '@/app/(dashboard)/internal-chat/actions'
+import { useAuth } from '@/hooks/use-auth'
+import { hasMinRole } from '@/lib/auth/roles'
 
 interface ScheduleMessageFormProps {
   open: boolean
@@ -71,8 +74,16 @@ export function ScheduleMessageForm({
   onSaved,
   editing,
 }: ScheduleMessageFormProps) {
+  const { accountRole } = useAuth()
+  // Só admin/supervisor escolhem o responsável (agente agenda pro próprio lead).
+  const canAssign = hasMinRole(accountRole ?? 'viewer', 'supervisor')
+
   const [text, setText] = useState('')
   const [when, setWhen] = useState('')
+  const [assignee, setAssignee] = useState('') // '' = herda o dono do lead
+  const [members, setMembers] = useState<{ id: string; name: string | null }[]>(
+    [],
+  )
   const [saving, setSaving] = useState(false)
 
   // Ao abrir: se estiver editando, prefill com o agendamento; senão, novo
@@ -85,8 +96,17 @@ export function ScheduleMessageForm({
     } else {
       setText('')
       setWhen(toLocalInput(new Date(Date.now() + 60 * 60 * 1000)))
+      setAssignee('')
     }
   }, [open, editing])
+
+  // Carrega os membros p/ o seletor de responsável (só admin/supervisor).
+  useEffect(() => {
+    if (!open || !canAssign) return
+    listTeamMembers()
+      .then((m) => setMembers(m as { id: string; name: string | null }[]))
+      .catch(() => setMembers([]))
+  }, [open, canAssign])
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
@@ -121,6 +141,8 @@ export function ScheduleMessageForm({
             contentText: body,
             // Absolute instant — local wall-clock converted to UTC ISO.
             scheduledAt: local.toISOString(),
+            // '' = herda o dono do lead; admin/supervisor podem atribuir.
+            assignedTo: assignee || null,
           })
       if (!res.ok) {
         toast.error(res.error)
@@ -192,6 +214,30 @@ export function ScheduleMessageForm({
               ))}
             </div>
           </div>
+
+          {/* Responsável — só admin/supervisor, só ao criar. Vazio = dono do lead. */}
+          {canAssign && !editing && members.length > 0 && (
+            <div className="space-y-1.5">
+              <Label htmlFor="sched-assignee">Responsável</Label>
+              <select
+                id="sched-assignee"
+                value={assignee}
+                onChange={(e) => setAssignee(e.target.value)}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50"
+              >
+                <option value="">Dono do lead (padrão)</option>
+                {members.map((m) => (
+                  <option key={m.id} value={m.id}>
+                    {m.name ?? 'Sem nome'}
+                  </option>
+                ))}
+              </select>
+              <p className="text-[11px] text-muted-foreground">
+                Quem fica responsável por esta mensagem. Se for outra pessoa, ela
+                é notificada e a mensagem aparece na central dela.
+              </p>
+            </div>
+          )}
 
           <DialogFooter className="border-border bg-popover">
             <Button
