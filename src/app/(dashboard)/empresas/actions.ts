@@ -36,11 +36,11 @@ export interface CompanyLite {
 }
 
 // Nº de contatos e de negócios (via contato) de uma empresa — subselects
-// reusados na lista e no detalhe.
-const contactsCountSql = (idCol: unknown) =>
-  sql<number>`(SELECT count(*)::int FROM contacts cc WHERE cc.company_id = ${idCol})`
-const dealsCountSql = (idCol: unknown) =>
-  sql<number>`(SELECT count(*)::int FROM deals dd JOIN contacts c2 ON c2.id = dd.contact_id WHERE c2.company_id = ${idCol})`
+// correlacionados. A referência ao id da empresa externa é QUALIFICADA
+// (`"companies"."id"`) de propósito: sem a tabela, o "id" fica ambíguo dentro do
+// subselect (contacts/deals também têm "id") → "column reference id is ambiguous".
+const CONTACTS_COUNT = sql<number>`(SELECT count(*)::int FROM contacts cc WHERE cc.company_id = "companies"."id")`
+const DEALS_COUNT = sql<number>`(SELECT count(*)::int FROM deals dd JOIN contacts c2 ON c2.id = dd.contact_id WHERE c2.company_id = "companies"."id")`
 
 /** Lista de empresas da conta (com contagens), filtrável por nome. */
 export async function listCompanies(search?: string): Promise<CompanyRow[]> {
@@ -56,8 +56,8 @@ export async function listCompanies(search?: string): Promise<CompanyRow[]> {
       website: companies.website,
       phone: companies.phone,
       created_at: companies.createdAt,
-      contacts_count: contactsCountSql(companies.id),
-      deals_count: dealsCountSql(companies.id),
+      contacts_count: CONTACTS_COUNT,
+      deals_count: DEALS_COUNT,
     })
     .from(companies)
     .where(and(...where))
