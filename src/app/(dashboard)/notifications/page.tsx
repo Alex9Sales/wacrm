@@ -8,7 +8,7 @@ import {
   markNotificationRead,
 } from "./actions";
 import type { Notification } from "@/types";
-import { Bell, CheckCheck, Loader2, UserPlus, Clock, AtSign, ArrowRightLeft, ListChecks } from "lucide-react";
+import { Bell, CheckCheck, Loader2, UserPlus, Clock, AtSign, ArrowRightLeft, ListChecks, CalendarClock, Sparkles } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
@@ -22,6 +22,8 @@ const TYPE_ICON: Record<Notification["type"], typeof Bell> = {
   mention: AtSign,
   deal_transferred: ArrowRightLeft,
   task_assigned: ListChecks,
+  deal_ai_suggestion: Sparkles,
+  scheduled_message_assigned: CalendarClock,
 };
 
 export default function NotificationsPage() {
@@ -81,6 +83,13 @@ export default function NotificationsPage() {
       if (n.type === "task_assigned") {
         if (!n.read_at) markRead(n.id);
         router.push("/tarefas");
+        return;
+      }
+      // Mensagem agendada atribuída → abre a central de Agendamentos (mesmo
+      // tendo conversation_id, o destino certo é a lista, não o inbox).
+      if (n.type === "scheduled_message_assigned") {
+        if (!n.read_at) markRead(n.id);
+        router.push("/agendamentos");
         return;
       }
       if (n.deal_id) {

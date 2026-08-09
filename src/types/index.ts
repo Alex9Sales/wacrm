@@ -223,7 +223,9 @@ export type NotificationType =
   | 'sla_alert'
   | 'mention'
   | 'deal_transferred'
-  | 'task_assigned';
+  | 'task_assigned'
+  | 'deal_ai_suggestion'
+  | 'scheduled_message_assigned';
 
 export interface Notification {
   id: string;

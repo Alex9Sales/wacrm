@@ -123,6 +123,20 @@ export default function AgendamentosPage() {
       .catch(() => setMembers([]))
   }, [canManage])
 
+  // Recarrega ao voltar o foco/aba — assim uma mensagem recém-atribuída aparece
+  // sem precisar dar reload manual.
+  useEffect(() => {
+    const refresh = () => {
+      if (!document.hidden) void load()
+    }
+    window.addEventListener('focus', refresh)
+    document.addEventListener('visibilitychange', refresh)
+    return () => {
+      window.removeEventListener('focus', refresh)
+      document.removeEventListener('visibilitychange', refresh)
+    }
+  }, [load])
+
   async function cancel(id: string) {
     if (!window.confirm('Cancelar este agendamento?')) return
     setBusyId(id)
