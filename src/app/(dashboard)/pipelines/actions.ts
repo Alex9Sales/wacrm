@@ -23,6 +23,8 @@ import {
   saveContactCustomValues,
 } from '@/app/(dashboard)/contacts/actions'
 import { createTask } from '@/app/(dashboard)/tarefas/actions'
+import { scheduleMessage } from '@/app/(dashboard)/inbox/schedule-actions'
+import { getAccountSettings } from '@/lib/settings/account-settings'
 import { dealSuggestions } from '@/db'
 
 const contactColumns = {
@@ -1598,10 +1600,50 @@ function customOptions(cf: CustomField): string[] {
     : []
 }
 
+/** Offset (ms) do fuso `tz` em `date`: (relógio-de-parede lido como UTC) − UTC. */
+function tzOffsetMs(date: Date, tz: string): number {
+  const p = new Intl.DateTimeFormat('en-US', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    second: '2-digit',
+    hour12: false,
+  }).formatToParts(date)
+  const get = (t: string) => Number(p.find((x) => x.type === t)?.value ?? 0)
+  const asUtc = Date.UTC(
+    get('year'),
+    get('month') - 1,
+    get('day'),
+    get('hour') % 24,
+    get('minute'),
+    get('second'),
+  )
+  return asUtc - date.getTime()
+}
+
+/** Instante UTC (ISO) para "daqui a `days` dias, às `hour`:00 no fuso `tz`". */
+function zonedSendAt(days: number, hour: number, tz: string): string {
+  const base = new Date(Date.now() + days * 86400000)
+  const dp = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).formatToParts(base)
+  const g = (t: string) => Number(dp.find((x) => x.type === t)?.value ?? 0)
+  const guess = Date.UTC(g('year'), g('month') - 1, g('day'), hour, 0, 0)
+  const off = tzOffsetMs(new Date(guess), tz)
+  return new Date(guess - off).toISOString()
+}
+
 function buildSuggestionsPrompt(
   deal: Deal,
   convo: ChatMessage[],
   customFields: CustomField[],
+  tz: string,
 ): string {
   const transcript = convo
     .slice(-50)
@@ -1632,6 +1674,24 @@ function buildSuggestionsPrompt(
   ]
     .filter(Boolean)
     .join('\n')
+  const contactName =
+    (deal.contact as { name?: string } | undefined)?.name || 'o cliente'
+  const agora = (() => {
+    try {
+      return new Intl.DateTimeFormat('pt-BR', {
+        timeZone: tz,
+        weekday: 'long',
+        day: '2-digit',
+        month: '2-digit',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+        hour12: false,
+      }).format(new Date())
+    } catch {
+      return 'agora'
+    }
+  })()
   return `Você é um assistente de vendas. A partir de uma conversa de WhatsApp, você faz DUAS coisas independentes para o CRM.
 
 ## 1) FATOS (campos) — seja CONSERVADOR
@@ -1641,15 +1701,19 @@ Campos disponíveis (use exatamente o "target"):
 ${dealTargets}
 ${customTargets || '(sem campos personalizados)'}
 
-## 2) PRÓXIMO PASSO (follow-up) — seja PROATIVO
-Isto é uma RECOMENDAÇÃO DE AÇÃO do vendedor, não um fato sobre o cliente — então NÃO exige "evidência dura".
-Se o negócio está ABERTO e existe qualquer próximo passo plausível (confirmar escopo/valor, enviar proposta, cobrar retorno de algo enviado, agendar reunião, tirar dúvida pendente), proponha SEMPRE exatamente 1 follow-up.
-NÃO proponha follow-up se o negócio estiver FECHADO, ou se o último passo já está claramente com o cliente e não há nada a fazer agora.
+## 2) PRÓXIMO PASSO (NO MÁXIMO 1) — seja PROATIVO
+Isto é uma RECOMENDAÇÃO DE AÇÃO do vendedor, não um fato sobre o cliente — NÃO exige "evidência dura".
+Se o negócio está ABERTO e existe um próximo passo plausível, proponha exatamente 1 — escolhendo o tipo certo:
+- Se o próximo passo é ENVIAR uma mensagem ao cliente (cobrar retorno, confirmar escopo/valor, reengajar): use "message", com a mensagem JÁ PRONTA (tom WhatsApp, natural, curta, chamando ${contactName} pelo nome, sem colchetes/placeholders) e o melhor dia/hora para disparar.
+- Se o próximo passo é uma AÇÃO INTERNA do vendedor (ligar, preparar proposta/documento, checar algo): use "task".
+Para o horário: agora é ${agora} (fuso ${tz}). Prefira horário comercial (9h–18h), evite fim de semana e não sugira um horário que já passou. "send_days" = 0 hoje, 1 amanhã, etc.
+NÃO proponha próximo passo se o negócio estiver FECHADO, ou se a bola já está claramente com o cliente e não há nada a fazer agora.
 
 Responda SOMENTE com um array JSON, sem texto fora dele. Cada item é UM destes:
 - Campo: {"kind":"field","target":"<target>","value":"<valor>","evidence":"<trecho curto da conversa que prova>"}
-- Follow-up (NO MÁXIMO 1): {"kind":"task","title":"<o que fazer, curto e acionável>","due_days":<inteiro: dias a partir de hoje>,"reason":"<por que agora, baseado na conversa>"}
-Se realmente não houver nada a propor, responda [].
+- Mensagem (próximo passo): {"kind":"message","text":"<mensagem pronta pro cliente>","send_days":<inteiro>,"send_hour":<inteiro 0-23, hora local>,"reason":"<por que agora, baseado na conversa>"}
+- Tarefa (próximo passo): {"kind":"task","title":"<o que fazer, curto e acionável>","due_days":<inteiro>,"reason":"<por que agora>"}
+Só 1 próximo passo no total (message OU task). Se realmente não houver nada a propor, responda [].
 
 ## Situação atual do negócio
 ${atuais}
@@ -1659,7 +1723,7 @@ ${transcript || '(sem conversa)'}`
 }
 
 interface ParsedSuggestion {
-  kind: 'field' | 'task'
+  kind: 'field' | 'task' | 'message'
   target: string
   label: string
   value: string
@@ -1670,6 +1734,7 @@ interface ParsedSuggestion {
 function parseSuggestions(
   raw: string,
   customFields: CustomField[],
+  tz: string,
 ): ParsedSuggestion[] {
   // Extrai o array JSON (tolera ```json ... ``` ou texto ao redor).
   const start = raw.indexOf('[')
@@ -1684,15 +1749,41 @@ function parseSuggestions(
   if (!Array.isArray(parsed)) return []
   const cfById = new Map(customFields.map((c) => [c.id, c]))
   const out: ParsedSuggestion[] = []
-  let taskCount = 0
+  let nextStepCount = 0 // no máximo 1 próximo passo (message OU task)
   for (const item of parsed) {
     if (!item || typeof item !== 'object') continue
     const o = item as Record<string, unknown>
     const kind = String(o.kind ?? 'field')
 
-    // ---- Follow-up (tarefa) ----
+    // ---- Próximo passo: MENSAGEM pronta p/ agendar ----
+    if (kind === 'message') {
+      if (nextStepCount >= 1) continue
+      const text = String(o.text ?? '').trim()
+      const reason = String(o.reason ?? '').trim()
+      if (!text) continue
+      const days = Math.max(0, Math.min(365, parseInt(String(o.send_days ?? 1), 10) || 0))
+      let hour = parseInt(String(o.send_hour ?? 10), 10)
+      if (!Number.isFinite(hour) || hour < 0 || hour > 23) hour = 10
+      let due = zonedSendAt(days, hour, tz)
+      // Nunca sugerir um horário no passado (ou colado no agora).
+      if (new Date(due).getTime() <= Date.now() + 15 * 60000) {
+        due = zonedSendAt(days + 1, hour, tz)
+      }
+      out.push({
+        kind: 'message',
+        target: 'message',
+        label: 'Mensagem de follow-up',
+        value: text,
+        evidence: reason,
+        dueAt: due,
+      })
+      nextStepCount++
+      continue
+    }
+
+    // ---- Próximo passo: TAREFA interna ----
     if (kind === 'task') {
-      if (taskCount >= 1) continue // no máximo 1 follow-up
+      if (nextStepCount >= 1) continue
       const title = String(o.title ?? '').trim()
       const reason = String(o.reason ?? '').trim()
       if (!title) continue
@@ -1706,7 +1797,7 @@ function parseSuggestions(
         evidence: reason,
         dueAt: due,
       })
-      taskCount++
+      nextStepCount++
       continue
     }
 
@@ -1772,21 +1863,23 @@ export async function generateDealSuggestions(
     if (!deal.conversation_id) {
       return { count: 0, error: 'Sem conversa vinculada para analisar.' }
     }
-    const [convo, customFields] = await Promise.all([
+    const [convo, customFields, settings] = await Promise.all([
       buildConversationContext(deal.conversation_id).catch(
         () => [] as ChatMessage[],
       ),
       listCustomFields().catch(() => [] as CustomField[]),
+      getAccountSettings(ctx.accountId).catch(() => null),
     ])
     if (convo.length === 0) {
       return { count: 0, error: 'A conversa ainda não tem mensagens.' }
     }
+    const tz = settings?.businessTimezone || 'America/Sao_Paulo'
     const result = await generateReply({
       config: cfg,
-      systemPrompt: buildSuggestionsPrompt(deal, convo, customFields),
+      systemPrompt: buildSuggestionsPrompt(deal, convo, customFields, tz),
       messages: [{ role: 'user', content: 'Analise a conversa e proponha.' }],
     })
-    const items = parseSuggestions(result.text ?? '', customFields)
+    const items = parseSuggestions(result.text ?? '', customFields, tz)
     // Regenera: limpa as pendentes antigas deste negócio antes de inserir.
     await db
       .delete(dealSuggestions)
@@ -1819,6 +1912,61 @@ export async function generateDealSuggestions(
       error: err instanceof Error ? err.message : 'Falha ao gerar sugestões.',
     }
   }
+}
+
+/** Agenda a mensagem sugerida (kind='message') na conversa do negócio: cria a
+ *  mensagem agendada (dispara sozinha via worker), marca a sugestão 'accepted'
+ *  e registra na timeline. Usada tanto pelo fluxo de confirmar/editar quanto
+ *  como fallback do acceptDealSuggestion. */
+async function scheduleSuggestedMessage(
+  ctx: AccountContext,
+  sug: { id: string; dealId: string },
+  text: string,
+  scheduledAt: string,
+): Promise<{ error: string | null }> {
+  const body = (text ?? '').trim()
+  if (!body) return { error: 'Escreva a mensagem.' }
+  const deal = await getDeal(sug.dealId)
+  if (!deal) return { error: 'Negócio não encontrado.' }
+  if (!deal.conversation_id) {
+    return {
+      error: 'Este negócio não tem conversa vinculada para enviar a mensagem.',
+    }
+  }
+  const res = await scheduleMessage({
+    conversationId: deal.conversation_id,
+    contentText: body,
+    scheduledAt,
+  })
+  if (!res.ok) return { error: res.error }
+
+  await db
+    .update(dealSuggestions)
+    .set({ status: 'accepted' })
+    .where(eq(dealSuggestions.id, sug.id))
+
+  // Rótulo de data/hora amigável no fuso da conta + prévia do texto.
+  let quando = ''
+  try {
+    const settings = await getAccountSettings(ctx.accountId)
+    quando = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: settings.businessTimezone || 'America/Sao_Paulo',
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date(scheduledAt))
+  } catch {
+    /* fuso ruim → sem rótulo */
+  }
+  const preview = body.length > 160 ? `${body.slice(0, 160)}…` : body
+  await recordDealEvent(ctx.accountId, ctx.userId, sug.dealId, 'note', {
+    text: quando
+      ? `IA agendou mensagem de follow-up para ${quando}: ${preview}`
+      : `IA agendou mensagem de follow-up: ${preview}`,
+  })
+  return { error: null }
 }
 
 /** Aceita uma sugestão: APLICA o valor no campo certo + marca 'accepted' +
@@ -1868,6 +2016,11 @@ export async function acceptDealSuggestion(
         assigneeIds: deal?.assigned_to ? [deal.assigned_to] : [],
       })
       if (!res.ok) return { error: res.error }
+    } else if (sug.kind === 'message') {
+      // Fallback (aceitar direto, sem editar): agenda com o texto/horário
+      // sugeridos. O fluxo normal usa scheduleDealSuggestion (confirma/edita).
+      if (!sug.dueAt) return { error: 'Sugestão sem horário para agendar.' }
+      return await scheduleSuggestedMessage(ctx, sug, sug.value, sug.dueAt)
     } else if (sug.target === 'deal:temperature') {
       await updateDeal(sug.dealId, { temperature: sug.value })
     } else if (sug.target === 'deal:qualification') {
@@ -1906,6 +2059,47 @@ export async function acceptDealSuggestion(
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao aceitar.' }
+  }
+}
+
+/** Confirma uma sugestão de MENSAGEM: agenda o texto (possivelmente editado)
+ *  para o horário confirmado. A UI abre um editor antes de chamar isto, então o
+ *  humano SEMPRE revê a mensagem e o horário antes de virar agendamento. */
+export async function scheduleDealSuggestion(
+  suggestionId: string,
+  input: { text: string; scheduledAt: string },
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const sug = firstOrNull(
+      await db
+        .select({
+          id: dealSuggestions.id,
+          dealId: dealSuggestions.dealId,
+          kind: dealSuggestions.kind,
+        })
+        .from(dealSuggestions)
+        .where(
+          and(
+            eq(dealSuggestions.id, suggestionId),
+            eq(dealSuggestions.accountId, ctx.accountId),
+            eq(dealSuggestions.status, 'pending'),
+          ),
+        )
+        .limit(1),
+    )
+    if (!sug) return { error: 'Sugestão não encontrada.' }
+    if (sug.kind !== 'message') {
+      return { error: 'Esta sugestão não é uma mensagem agendável.' }
+    }
+    return await scheduleSuggestedMessage(
+      ctx,
+      { id: sug.id, dealId: sug.dealId },
+      input.text,
+      input.scheduledAt,
+    )
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao agendar.' }
   }
 }
 
