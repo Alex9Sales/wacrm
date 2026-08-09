@@ -174,6 +174,8 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
       updated_at: deals.updatedAt,
       contact: contactColumns,
       assignee: assigneeColumns,
+      company_id: deals.companyId,
+      company_name: companies.name,
       // Canal de onde veio o lead (via conversa vinculada) — o card mostra o
       // ícone (WhatsApp/Instagram…) e clicar abre a conversa.
       channel_provider: channels.provider,
@@ -181,6 +183,7 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
     .from(deals)
     .leftJoin(contacts, eq(deals.contactId, contacts.id))
     .leftJoin(user, eq(deals.assignedTo, user.id))
+    .leftJoin(companies, eq(deals.companyId, companies.id))
     .leftJoin(conversations, eq(deals.conversationId, conversations.id))
     .leftJoin(channels, eq(conversations.channelId, channels.id))
     .where(await dealsVisibilityWhere(ctx, pipelineId))
@@ -191,7 +194,7 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
     // Atribuído a OUTRA pessoa (e não sou supervisor+) → card TRAVADO: não vaza
     // título/contato/valor; o board mostra só "atribuído a X" + a etapa.
     if (!dealReadable(ctx.role, ctx.userId, r.assigned_to)) {
-      return { ...r, title: '', value: 0, notes: undefined, contact: undefined, assignee, read_blocked: true }
+      return { ...r, title: '', value: 0, notes: undefined, contact: undefined, company_id: null, company_name: null, assignee, read_blocked: true }
     }
     return {
       ...r,

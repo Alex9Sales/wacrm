@@ -57,6 +57,7 @@ import {
   LayoutGrid,
   List,
   Check,
+  Building2,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useCan } from "@/hooks/use-can";
@@ -105,6 +106,9 @@ export default function PipelinesPage() {
     "all",
   );
   const [ownerMenuOpen, setOwnerMenuOpen] = useState(false);
+  // Filtro por empresa (entidade) — 'all' ou um company_id.
+  const [companyFilter, setCompanyFilter] = useState<string>("all");
+  const [companyMenuOpen, setCompanyMenuOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<
     "all" | "open" | "won" | "lost"
   >("all");
@@ -134,6 +138,8 @@ export default function PipelinesPage() {
       }
       if (statusFilter !== "all" && (d.status ?? "open") !== statusFilter)
         return false;
+      if (companyFilter !== "all" && d.company_id !== companyFilter)
+        return false;
       if (q) {
         const hay = `${d.title ?? ""} ${d.contact?.name ?? ""} ${
           d.contact?.phone ?? ""
@@ -161,7 +167,23 @@ export default function PipelinesPage() {
           );
       }
     });
-  }, [deals, ownerFilter, statusFilter, sortBy, search, user?.id]);
+  }, [deals, ownerFilter, statusFilter, companyFilter, sortBy, search, user?.id]);
+
+  // Empresas presentes nos deals (alimenta o filtro de empresa — Fase 3).
+  const companyOptions = useMemo(() => {
+    const m = new Map<string, string>();
+    for (const d of deals) {
+      if (d.company_id && d.company_name) m.set(d.company_id, d.company_name);
+    }
+    return Array.from(m, ([id, name]) => ({ id, name })).sort((a, b) =>
+      a.name.localeCompare(b.name),
+    );
+  }, [deals]);
+
+  const companyLabel =
+    companyFilter === "all"
+      ? "Todas as empresas"
+      : (companyOptions.find((c) => c.id === companyFilter)?.name ?? "Empresa");
 
   // Responsáveis presentes nos deals (alimenta o filtro multi-seleção — RD).
   const owners = useMemo(() => {
@@ -697,6 +719,66 @@ export default function PipelinesPage() {
                 </>
               )}
             </div>
+
+            {/* Empresa (entidade) — filtro single-select. Some quando não há
+                nenhuma empresa nos negócios (mantém a barra limpa). */}
+            {companyOptions.length > 0 && (
+              <div className="relative">
+                <button
+                  type="button"
+                  onClick={() => setCompanyMenuOpen((v) => !v)}
+                  className="flex h-9 w-[190px] items-center gap-2 rounded-lg border border-border bg-card px-2.5 text-sm text-foreground hover:bg-muted"
+                >
+                  <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />
+                  <span className="flex-1 truncate text-left">
+                    {companyLabel}
+                  </span>
+                  <ChevronDown className="h-4 w-4 shrink-0 text-muted-foreground" />
+                </button>
+                {companyMenuOpen && (
+                  <>
+                    <div
+                      className="fixed inset-0 z-40"
+                      onClick={() => setCompanyMenuOpen(false)}
+                    />
+                    <div className="absolute left-0 z-50 mt-1 w-64 rounded-md border border-border bg-popover p-1 text-sm shadow-xl">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setCompanyFilter("all");
+                          setCompanyMenuOpen(false);
+                        }}
+                        className={cn(
+                          "flex w-full items-center rounded px-2 py-1.5 text-left hover:bg-muted",
+                          companyFilter === "all" && "text-primary",
+                        )}
+                      >
+                        Todas as empresas
+                      </button>
+                      <div className="my-1 border-t border-border" />
+                      <div className="max-h-60 overflow-y-auto">
+                        {companyOptions.map((c) => (
+                          <button
+                            key={c.id}
+                            type="button"
+                            onClick={() => {
+                              setCompanyFilter(c.id);
+                              setCompanyMenuOpen(false);
+                            }}
+                            className={cn(
+                              "flex w-full items-center rounded px-2 py-1.5 text-left hover:bg-muted",
+                              companyFilter === c.id && "text-primary",
+                            )}
+                          >
+                            <span className="truncate">{c.name}</span>
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+            )}
 
             <Select
               value={statusFilter}

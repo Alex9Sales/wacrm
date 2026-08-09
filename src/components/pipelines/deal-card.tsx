@@ -8,6 +8,7 @@ import { toast } from "sonner";
 import {
   Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign,
   Pencil, Trash2, ArrowRightLeft, ChevronRight, Star, Copy, Pause, Play,
+  Building2,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
@@ -337,6 +338,17 @@ export function DealCard({
       <div className="mt-1.5 truncate text-xs text-muted-foreground">
         {contactLabel}
       </div>
+
+      {/* Empresa (entidade) — chip discreto quando o negócio tem empresa. */}
+      {deal.company_name && (
+        <div
+          className="mt-1 flex items-center gap-1 truncate text-[11px] text-muted-foreground"
+          title={deal.company_name}
+        >
+          <Building2 className="h-3 w-3 shrink-0" />
+          <span className="truncate">{deal.company_name}</span>
+        </div>
+      )}
 
       {/* Qualificação (★N) + dias na etapa — estilo RD. */}
       {(qualification > 0 || daysInStage !== null) && (

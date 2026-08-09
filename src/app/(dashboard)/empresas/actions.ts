@@ -10,7 +10,7 @@
 import { and, asc, eq, ilike, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
-import { db, companies, contacts, deals } from '@/db'
+import { db, companies, contacts, deals, conversations } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 
@@ -109,6 +109,7 @@ export interface CompanyDetail {
   contacts: CompanyContact[]
   deals: CompanyDeal[]
   open_deals_value: number
+  last_contact_at: string | null
 }
 
 /** Detalhe de uma empresa: dados + contatos + negócios (via contato). */
@@ -168,6 +169,23 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
     .filter((d) => d.status === 'open')
     .reduce((s, d) => s + d.value, 0)
 
+  // Último contato: mensagem mais recente entre as conversas dos contatos desta
+  // empresa.
+  const lastRow = firstOrNull(
+    await db
+      .select({
+        last: sql<string | null>`max(${conversations.lastMessageAt})`,
+      })
+      .from(conversations)
+      .innerJoin(contacts, eq(conversations.contactId, contacts.id))
+      .where(
+        and(
+          eq(contacts.companyId, id),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      ),
+  )
+
   return {
     id: row.id,
     name: row.name,
@@ -185,6 +203,7 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
     })),
     deals: deemedDeals,
     open_deals_value: openValue,
+    last_contact_at: (lastRow?.last as string | null) ?? null,
   }
 }
 

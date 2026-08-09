@@ -51,6 +51,12 @@ function brl(n: number) {
   return n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 }
 
+function fmtDay(iso: string) {
+  const d = new Date(iso)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}`
+}
+
 export default function EmpresaDetailPage() {
   const params = useParams<{ id: string }>()
   const id = params?.id
@@ -197,7 +203,7 @@ export default function EmpresaDetailPage() {
       </div>
 
       {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
         <div className="rounded-xl border border-border bg-card p-4">
           <p className="text-xs text-muted-foreground">Contatos</p>
           <p className="mt-1 text-2xl font-semibold text-foreground">
@@ -214,6 +220,12 @@ export default function EmpresaDetailPage() {
           <p className="text-xs text-muted-foreground">Em aberto</p>
           <p className="mt-1 text-2xl font-semibold text-foreground">
             {brl(company.open_deals_value)}
+          </p>
+        </div>
+        <div className="rounded-xl border border-border bg-card p-4">
+          <p className="text-xs text-muted-foreground">Último contato</p>
+          <p className="mt-1 text-2xl font-semibold text-foreground">
+            {company.last_contact_at ? fmtDay(company.last_contact_at) : '—'}
           </p>
         </div>
       </div>
