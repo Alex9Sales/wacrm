@@ -1,0 +1,356 @@
+'use client'
+
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { toast } from 'sonner'
+import {
+  importCompaniesContacts,
+  importDeals,
+  type ImportContactRow,
+  type ImportDealRow,
+} from '@/app/(dashboard)/settings/import-actions'
+import { listPipelines } from '@/app/(dashboard)/pipelines/actions'
+import type { Pipeline } from '@/types'
+import { Button } from '@/components/ui/button'
+import {
+  Upload,
+  Loader2,
+  Building2,
+  Handshake,
+  Users,
+  CheckCircle2,
+} from 'lucide-react'
+
+type ImportType = 'contacts' | 'deals'
+
+function norm(s: string) {
+  return s
+    .toLowerCase()
+    .normalize('NFD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .trim()
+}
+function toNum(v: unknown): number {
+  if (typeof v === 'number') return isFinite(v) ? v : 0
+  const s = String(v ?? '').replace(/[^\d.,-]/g, '')
+  if (!s) return 0
+  const n = parseFloat(s.replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'))
+  return isFinite(n) ? n : 0
+}
+
+/** Casa cada campo a uma coluna do arquivo por regex tolerante ao cabeçalho. */
+function mapColumns(keys: string[], spec: Record<string, RegExp>) {
+  const map: Record<string, string | undefined> = {}
+  for (const [field, re] of Object.entries(spec)) {
+    map[field] = keys.find((k) => re.test(norm(k)))
+  }
+  return map
+}
+
+const CONTACT_SPEC: Record<string, RegExp> = {
+  companyName: /organiza|empresa|company/,
+  contactName: /contato|contact|^nome$|nome completo/,
+  phone: /telefone|fone|phone|celular|whats/,
+  email: /e-?mail/,
+  segment: /segmento|segment|ramo/,
+}
+const DEAL_SPEC: Record<string, RegExp> = {
+  title: /oportunidade|negocia|negocio|deal|titulo/,
+  companyName: /organiza|empresa|company/,
+  contactName: /nome do contato|contato|contact/,
+  phone: /telefone|fone|phone|celular|whats/,
+  email: /e-?mail/,
+  source: /fonte|origem|source/,
+  campaign: /campanha|campaign/,
+  segment: /segmento|segment|ramo/,
+  note: /anota|observa|^nota|note|coment/,
+  responsible: /respons|vendedor|owner|dono/,
+  stage: /etapa|estagio|fase|stage/,
+  value: /valor|preco|price|amount/,
+}
+
+export function ImportPanel() {
+  const [type, setType] = useState<ImportType>('contacts')
+  const [pipelines, setPipelines] = useState<Pipeline[]>([])
+  const [pipelineId, setPipelineId] = useState('')
+  const [rowsC, setRowsC] = useState<ImportContactRow[]>([])
+  const [rowsD, setRowsD] = useState<ImportDealRow[]>([])
+  const [matched, setMatched] = useState<string[]>([])
+  const [fileName, setFileName] = useState('')
+  const [parsing, setParsing] = useState(false)
+  const [importing, setImporting] = useState(false)
+  const [done, setDone] = useState<string | null>(null)
+  const fileRef = useRef<HTMLInputElement>(null)
+
+  useEffect(() => {
+    listPipelines()
+      .then((p) => {
+        setPipelines(p)
+        if (p[0]) setPipelineId(p[0].id)
+      })
+      .catch(() => setPipelines([]))
+  }, [])
+
+  const reset = useCallback(() => {
+    setRowsC([])
+    setRowsD([])
+    setMatched([])
+    setFileName('')
+    setDone(null)
+  }, [])
+
+  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    if (!file) return
+    setParsing(true)
+    setDone(null)
+    try {
+      const XLSX = await import('xlsx')
+      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
+      const sheet = wb.Sheets[wb.SheetNames[0]]
+      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
+        defval: '',
+      })
+      if (json.length === 0) {
+        toast.error('Planilha vazia.')
+        return
+      }
+      const keys = Object.keys(json[0])
+      const spec = type === 'contacts' ? CONTACT_SPEC : DEAL_SPEC
+      const cmap = mapColumns(keys, spec)
+      setMatched(
+        Object.entries(cmap)
+          .filter(([, v]) => v)
+          .map(([f, v]) => `${f} ← ${v}`),
+      )
+      const get = (row: Record<string, unknown>, field: string) =>
+        cmap[field] ? String(row[cmap[field]!] ?? '').trim() : ''
+      if (type === 'contacts') {
+        if (!cmap.companyName && !cmap.contactName && !cmap.phone) {
+          toast.error(
+            'Não achei colunas de Empresa/Contato. Cabeçalhos ex.: "Nome da Organização", "Nome do contato".',
+          )
+          return
+        }
+        setRowsC(
+          json.map((r) => ({
+            companyName: get(r, 'companyName') || null,
+            contactName: get(r, 'contactName') || null,
+            phone: get(r, 'phone') || null,
+            email: get(r, 'email') || null,
+            segment: get(r, 'segment') || null,
+          })),
+        )
+      } else {
+        if (!cmap.title && !cmap.companyName && !cmap.contactName) {
+          toast.error('Não achei coluna de Oportunidade/Empresa/Contato.')
+          return
+        }
+        setRowsD(
+          json.map((r) => ({
+            title: get(r, 'title') || null,
+            companyName: get(r, 'companyName') || null,
+            contactName: get(r, 'contactName') || null,
+            phone: get(r, 'phone') || null,
+            email: get(r, 'email') || null,
+            source: get(r, 'source') || null,
+            campaign: get(r, 'campaign') || null,
+            segment: get(r, 'segment') || null,
+            note: get(r, 'note') || null,
+            responsible: get(r, 'responsible') || null,
+            stage: get(r, 'stage') || null,
+            value: cmap.value ? toNum(r[cmap.value]) : 0,
+          })),
+        )
+      }
+      setFileName(file.name)
+    } catch {
+      toast.error('Não consegui ler o arquivo. Use CSV ou XLSX.')
+    } finally {
+      setParsing(false)
+    }
+  }
+
+  const count = type === 'contacts' ? rowsC.length : rowsD.length
+
+  async function runImport() {
+    if (count === 0) return
+    setImporting(true)
+    setDone(null)
+    try {
+      if (type === 'contacts') {
+        const r = await importCompaniesContacts(rowsC)
+        if (r.error) {
+          toast.error(r.error)
+          return
+        }
+        setDone(
+          `${r.companiesCreated} empresa(s) e ${r.contactsCreated} contato(s) criados · ${r.contactsLinked} vinculado(s)${r.skipped ? ` · ${r.skipped} ignorado(s)` : ''}.`,
+        )
+      } else {
+        if (!pipelineId) {
+          toast.error('Escolha o funil de destino.')
+          return
+        }
+        const r = await importDeals(pipelineId, rowsD)
+        if (r.error) {
+          toast.error(r.error)
+          return
+        }
+        setDone(
+          `${r.dealsCreated} negócio(s) criados · ${r.companiesCreated} empresa(s) · ${r.contactsCreated} contato(s)${r.skipped ? ` · ${r.skipped} ignorado(s)` : ''}.`,
+        )
+      }
+      toast.success('Importação concluída')
+      setRowsC([])
+      setRowsD([])
+      setFileName('')
+      setMatched([])
+    } finally {
+      setImporting(false)
+    }
+  }
+
+  return (
+    <div className="space-y-5">
+      <div>
+        <h2 className="text-lg font-semibold text-foreground">Importar dados</h2>
+        <p className="text-sm text-muted-foreground">
+          Traga dados de outro CRM por planilha (CSV ou XLSX).
+        </p>
+      </div>
+
+      {/* Tipo */}
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+        {(
+          [
+            {
+              id: 'contacts' as const,
+              icon: Building2,
+              title: 'Empresas e contatos',
+              desc: 'Organização, contato, telefone, e-mail, segmento.',
+            },
+            {
+              id: 'deals' as const,
+              icon: Handshake,
+              title: 'Negociações',
+              desc: 'Oportunidades do funil: etapa, responsável, fonte, anotação.',
+            },
+          ]
+        ).map((opt) => {
+          const active = type === opt.id
+          return (
+            <button
+              key={opt.id}
+              type="button"
+              onClick={() => {
+                setType(opt.id)
+                reset()
+              }}
+              className={`flex items-start gap-3 rounded-xl border p-4 text-left transition-colors ${
+                active
+                  ? 'border-primary bg-primary/5'
+                  : 'border-border bg-card hover:bg-muted/40'
+              }`}
+            >
+              <opt.icon
+                className={`h-5 w-5 shrink-0 ${active ? 'text-primary' : 'text-muted-foreground'}`}
+              />
+              <div>
+                <p className="text-sm font-medium text-foreground">{opt.title}</p>
+                <p className="text-xs text-muted-foreground">{opt.desc}</p>
+              </div>
+            </button>
+          )
+        })}
+      </div>
+
+      {/* Funil (só negociações) */}
+      {type === 'deals' && pipelines.length > 0 && (
+        <div className="space-y-1.5">
+          <label className="text-sm font-medium text-foreground">
+            Funil de destino
+          </label>
+          <select
+            value={pipelineId}
+            onChange={(e) => setPipelineId(e.target.value)}
+            className="w-full max-w-xs rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
+          >
+            {pipelines.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+          <p className="text-[11px] text-muted-foreground">
+            A coluna “Etapa” casa por nome; sem correspondência, cai na 1ª etapa.
+          </p>
+        </div>
+      )}
+
+      {/* Upload */}
+      <div>
+        <input
+          ref={fileRef}
+          type="file"
+          accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+          onChange={onFile}
+          className="hidden"
+        />
+        <Button
+          variant="outline"
+          onClick={() => fileRef.current?.click()}
+          disabled={parsing}
+        >
+          {parsing ? (
+            <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+          ) : (
+            <Upload className="mr-1.5 h-4 w-4" />
+          )}
+          Selecionar arquivo
+        </Button>
+        {fileName && (
+          <span className="ml-2 text-xs text-muted-foreground">{fileName}</span>
+        )}
+      </div>
+
+      {/* Prévia */}
+      {count > 0 && (
+        <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+          <p className="flex items-center gap-2 text-sm font-medium text-foreground">
+            <Users className="h-4 w-4 text-primary" />
+            {count} linha{count === 1 ? '' : 's'} pronta{count === 1 ? '' : 's'}{' '}
+            para importar
+          </p>
+          {matched.length > 0 && (
+            <div className="flex flex-wrap gap-1.5">
+              {matched.map((m) => (
+                <span
+                  key={m}
+                  className="rounded-full bg-muted px-2 py-0.5 text-[10px] text-muted-foreground"
+                >
+                  {m}
+                </span>
+              ))}
+            </div>
+          )}
+          <p className="text-[11px] text-muted-foreground">
+            Empresas/contatos já existentes são reaproveitados (casa por nome /
+            telefone) — não duplica.
+          </p>
+          <Button onClick={() => void runImport()} disabled={importing}>
+            {importing && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
+            Importar {count}
+          </Button>
+        </div>
+      )}
+
+      {done && (
+        <div className="flex items-start gap-2 rounded-xl border border-emerald-500/30 bg-emerald-500/5 p-4 text-sm text-emerald-700 dark:text-emerald-400">
+          <CheckCircle2 className="mt-0.5 h-4 w-4 shrink-0" />
+          <span>{done}</span>
+        </div>
+      )}
+    </div>
+  )
+}

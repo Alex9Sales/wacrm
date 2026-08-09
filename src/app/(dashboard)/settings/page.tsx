@@ -19,6 +19,7 @@ import { TemplateManager } from '@/components/settings/template-manager';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
 import { ProductsPanel } from '@/components/settings/products-panel';
+import { ImportPanel } from '@/components/settings/import-panel';
 import { MembersTab } from '@/components/settings/members-tab';
 import { ApiKeysSettings } from '@/components/settings/api-keys-settings';
 import { IntegrationsSettings } from '@/components/settings/integrations-settings';
@@ -70,6 +71,7 @@ export default function SettingsPage() {
     fields: <FieldsAndTagsPanel />,
     deals: <DealsSettings />,
     products: <ProductsPanel />,
+    importar: <ImportPanel />,
     members: <MembersTab />,
     integrations: <IntegrationsSettings />,
     api: <ApiKeysSettings />,
