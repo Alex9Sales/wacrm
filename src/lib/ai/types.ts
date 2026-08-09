@@ -29,6 +29,10 @@ export interface AiConfig {
   /** Buffer (s): espera após a última msg do cliente antes de responder.
    *  Opcional (default 8) para não quebrar construções sintéticas. */
   autoReplyBufferSeconds?: number
+  /** IA proativa em Negociações (Fase 3): quando true, a IA analisa o negócio
+   *  vinculado no inbound e cria sugestões pendentes. Opcional (default false)
+   *  para não quebrar construções sintéticas. */
+  dealSuggestionsProactive?: boolean
   /** Optional OpenAI-compatible key for embeddings. When set, the
    *  knowledge base is embedded and semantic retrieval turns on; when
    *  null, retrieval falls back to lexical full-text search. */

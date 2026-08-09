@@ -38,7 +38,10 @@ import { publishEvent } from '@/lib/events/publish';
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
-import { enqueueAiReplyDebounced } from '@/lib/queue/queues';
+import {
+  enqueueAiReplyDebounced,
+  enqueueDealSuggestDebounced,
+} from '@/lib/queue/queues';
 import { aiReplyBufferMs } from '@/lib/ai/defaults';
 import { transcribeInboundAudio } from '@/lib/ai/transcribe';
 import { describeImage } from '@/lib/ai/vision';
@@ -594,6 +597,25 @@ export async function dispatchInboundMessage(
       );
     } catch (err) {
       console.error('[inbound] failed to enqueue AI reply:', err);
+    }
+  }
+
+  // IA proativa em Negociações (v2 — Fase 3): se ligado na conta, agenda
+  // (debounced por conversa) uma análise do negócio vinculado a esta conversa.
+  // Os gates pesados (tem negócio ABERTO? cooldown?) são re-checados no worker.
+  // Best-effort: nunca quebra o inbound. Toggle em ai_configs (default OFF).
+  if (aiCfg?.dealSuggestionsProactive && inboundText.trim()) {
+    try {
+      const dealBufferMs = Math.max(
+        0,
+        Math.floor((Number(process.env.DEAL_SUGGEST_BUFFER_SECONDS) || 25) * 1000),
+      );
+      await enqueueDealSuggestDebounced(
+        { accountId, conversationId: conversation.id },
+        dealBufferMs,
+      );
+    } catch (err) {
+      console.error('[inbound] failed to enqueue deal-suggest:', err);
     }
   }
 

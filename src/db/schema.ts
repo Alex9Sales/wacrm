@@ -1231,6 +1231,9 @@ export const aiConfigs = pgTable("ai_configs", {
 	// Buffer (s) do Agente IA — espera após a última msg antes de responder.
 	// Migração 0059. 0 = na hora.
 	autoReplyBufferSeconds: integer("auto_reply_buffer_seconds").default(8).notNull(),
+	// IA proativa em Negociações (Fase 3): analisa sozinha o negócio no inbound
+	// e cria sugestões pendentes. Migração 0066. OPT-IN, default OFF.
+	dealSuggestionsProactive: boolean("deal_suggestions_proactive").default(false).notNull(),
 	// Assinatura da IA: nome do atendente/agente + se assina as mensagens. Migração 0055.
 	signatureName: text("signature_name"),
 	signatureEnabled: boolean("signature_enabled").default(false).notNull(),

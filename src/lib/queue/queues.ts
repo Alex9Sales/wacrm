@@ -27,6 +27,7 @@ import { bullConnection } from './connection';
 export const BROADCAST_DISPATCH_QUEUE = 'broadcast-dispatch';
 export const SCHEDULED_MESSAGE_QUEUE = 'scheduled-message';
 export const AI_REPLY_QUEUE = 'ai-reply';
+export const DEAL_SUGGEST_QUEUE = 'deal-suggest';
 
 /** Payload of a dispatch job. */
 export interface BroadcastDispatchJob {
@@ -50,6 +51,12 @@ export interface AiReplyJob {
   conversationId: string;
   contactId: string;
   configOwnerUserId: string;
+}
+
+/** Payload of a debounced proactive deal-suggestion job (IA v2 — Fase 3). */
+export interface DealSuggestJob {
+  accountId: string;
+  conversationId: string;
 }
 
 /** Name of the per-channel outbound queue. (BullMQ forbids ':' in queue
@@ -142,6 +149,44 @@ export async function enqueueAiReplyDebounced(
     /* ignore — still try to add below */
   }
   await q.add('ai-reply', job, { jobId, delay: Math.max(0, delayMs) });
+}
+
+let _dealSuggestQueue: Queue<DealSuggestJob> | null = null;
+
+/** A fila única de sugestões proativas (debounced por conversa) — IA v2 Fase 3. */
+export function dealSuggestQueue(): Queue<DealSuggestJob> {
+  if (!_dealSuggestQueue) {
+    _dealSuggestQueue = new Queue<DealSuggestJob>(DEAL_SUGGEST_QUEUE, {
+      connection: bullConnection(),
+      defaultJobOptions: {
+        attempts: 1, // best-effort; sugerir de novo no próximo inbound é ok
+        removeOnComplete: { count: 200 },
+        removeOnFail: { count: 500 },
+      },
+    });
+  }
+  return _dealSuggestQueue;
+}
+
+/**
+ * Buffer por conversa (mesmo padrão do AI reply): cada novo inbound RESETA o
+ * timer, então a análise proativa só roda depois que o cliente para de mandar —
+ * junta a rajada numa análise só. Os gates (negócio aberto? cooldown?) são
+ * re-checados no worker, na hora de disparar. Best-effort: nunca quebra o inbound.
+ */
+export async function enqueueDealSuggestDebounced(
+  job: DealSuggestJob,
+  delayMs: number,
+): Promise<void> {
+  const jobId = `deal-suggest-${job.conversationId}`;
+  const q = dealSuggestQueue();
+  try {
+    const existing = await q.getJob(jobId);
+    if (existing) await existing.remove().catch(() => {});
+  } catch {
+    /* ignore — still try to add below */
+  }
+  await q.add('deal-suggest', job, { jobId, delay: Math.max(0, delayMs) });
 }
 
 const _outboundQueues = new Map<string, Queue<RecipientJob>>();
@@ -309,6 +354,10 @@ export async function closeQueues(): Promise<void> {
   if (_scheduledQueue) {
     await _scheduledQueue.close();
     _scheduledQueue = null;
+  }
+  if (_dealSuggestQueue) {
+    await _dealSuggestQueue.close();
+    _dealSuggestQueue = null;
   }
   for (const q of _outboundQueues.values()) {
     await q.close();

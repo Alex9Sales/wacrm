@@ -43,6 +43,7 @@ export async function GET() {
           auto_reply_max_per_conversation: aiConfigs.autoReplyMaxPerConversation,
           auto_reply_hours_mode: aiConfigs.autoReplyHoursMode,
           auto_reply_buffer_seconds: aiConfigs.autoReplyBufferSeconds,
+          deal_suggestions_proactive: aiConfigs.dealSuggestionsProactive,
           signature_name: aiConfigs.signatureName,
           signature_enabled: aiConfigs.signatureEnabled,
           api_key: aiConfigs.apiKey,
@@ -125,6 +126,9 @@ export async function POST(request: Request) {
         ? body.signature_name.trim().slice(0, 60)
         : null
     const signatureEnabled = body.signature_enabled === true && !!signatureName
+
+    // IA proativa em Negociações (Fase 3): opt-in por conta (default OFF).
+    const dealSuggestionsProactive = body.deal_suggestions_proactive === true
 
     const rawKey = typeof body.api_key === 'string' ? body.api_key.trim() : ''
 
@@ -230,6 +234,7 @@ export async function POST(request: Request) {
       autoReplyMaxPerConversation: number
       autoReplyHoursMode: string
       autoReplyBufferSeconds: number
+      dealSuggestionsProactive: boolean
       signatureName: string | null
       signatureEnabled: boolean
       embeddingsApiKey?: string | null
@@ -243,6 +248,7 @@ export async function POST(request: Request) {
       autoReplyMaxPerConversation: maxPer,
       autoReplyHoursMode,
       autoReplyBufferSeconds: bufferSeconds,
+      dealSuggestionsProactive,
       signatureName,
       signatureEnabled,
     }

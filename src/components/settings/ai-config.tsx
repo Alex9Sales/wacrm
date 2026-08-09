@@ -78,6 +78,7 @@ export function AiConfig() {
   const [bufferSeconds, setBufferSeconds] = useState(8);
   const [signatureName, setSignatureName] = useState('');
   const [signatureEnabled, setSignatureEnabled] = useState(false);
+  const [dealProactive, setDealProactive] = useState(false);
   // Canais onde a IA responde (multi). Vazio = todos.
   const [channels, setChannels] = useState<
     { id: string; name: string; provider: string }[]
@@ -132,6 +133,7 @@ export function AiConfig() {
         );
         setSignatureName(data.signature_name ?? '');
         setSignatureEnabled(Boolean(data.signature_enabled));
+        setDealProactive(Boolean(data.deal_suggestions_proactive));
         setHasStoredKey(Boolean(data.has_key));
         setApiKey(data.has_key ? MASKED_KEY : '');
         setKeyEdited(false);
@@ -249,6 +251,7 @@ export function AiConfig() {
     auto_reply_buffer_seconds: bufferSeconds,
     signature_name: signatureName.trim() || null,
     signature_enabled: signatureEnabled && signatureName.trim().length > 0,
+    deal_suggestions_proactive: dealProactive,
   });
 
   const handleTest = async () => {
@@ -622,6 +625,26 @@ export function AiConfig() {
                 checked={isActive}
                 onCheckedChange={setIsActive}
                 disabled={disabled}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4 rounded-md border border-border p-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  IA proativa em Negociações
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  A IA analisa sozinha cada negócio quando o cliente responde e
+                  deixa <strong>sugestões</strong> (campos + próximo passo,
+                  incluindo mensagem de follow-up para agendar) no card do
+                  negócio — você confirma o que quiser. Nada é gravado ou enviado
+                  sozinho. Roda em segundo plano e consome tokens.
+                </p>
+              </div>
+              <Switch
+                checked={dealProactive}
+                onCheckedChange={setDealProactive}
+                disabled={disabled || !isActive}
               />
             </div>
 

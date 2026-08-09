@@ -63,3 +63,11 @@ import('./ai-reply-worker')
   .catch((err) => {
     console.error('[worker] ai-reply failed to start:', err);
   });
+
+// IA proativa em Negociações (v2 — Fase 3): sugere campos + próximo passo
+// sozinha quando o cliente escreve (debounced; opt-in por conta).
+import('./deal-suggest-worker')
+  .then((m) => m.startDealSuggestWorker())
+  .catch((err) => {
+    console.error('[worker] deal-suggest failed to start:', err);
+  });
