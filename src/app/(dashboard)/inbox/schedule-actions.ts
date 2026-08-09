@@ -20,6 +20,7 @@ import { and, desc, eq, sql } from 'drizzle-orm'
 import { db, scheduledMessages, conversations } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
+import { notifyScheduledAssignee } from '@/lib/scheduled/notify'
 import {
   enqueueScheduledMessage,
   removeScheduledMessageJob,
@@ -44,6 +45,8 @@ export interface ScheduleMessageInput {
   contentText: string
   /** Absolute instant (ISO 8601, e.g. from `new Date(local).toISOString()`). */
   scheduledAt: string
+  /** Responsável explícito (picker admin/supervisor). Vazio = herda o dono do lead. */
+  assignedTo?: string | null
 }
 
 const liteSelect = {
@@ -129,12 +132,18 @@ export async function scheduleMessage(
       return { ok: false, error: 'Escolha um horário pelo menos 1 min à frente.' }
     }
 
-    // Ownership + denormalized contact, account-scoped.
-    let conv: { id: string; contactId: string } | null = null
+    // Ownership + denormalized contact + responsável (dono do lead), account-scoped.
+    let conv:
+      | { id: string; contactId: string; assignedAgentId: string | null }
+      | null = null
     try {
       conv = firstOrNull(
         await db
-          .select({ id: conversations.id, contactId: conversations.contactId })
+          .select({
+            id: conversations.id,
+            contactId: conversations.contactId,
+            assignedAgentId: conversations.assignedAgentId,
+          })
           .from(conversations)
           .where(
             and(
@@ -149,6 +158,11 @@ export async function scheduleMessage(
     }
     if (!conv) return { ok: false, error: 'Conversa não encontrada.' }
 
+    // Responsável pela agendada = quem foi passado explicitamente (picker do
+    // admin/supervisor), senão o dono atual do lead, senão o próprio criador.
+    const assignedTo =
+      input.assignedTo?.trim() || conv.assignedAgentId || ctx.userId
+
     const inserted = firstOrThrow(
       await db
         .insert(scheduledMessages)
@@ -161,6 +175,8 @@ export async function scheduleMessage(
           scheduledAt: when.toISOString(),
           status: 'pending',
           createdBy: ctx.userId,
+          assignedTo,
+          assignedBy: ctx.userId,
         })
         .returning(liteSelect),
     )
@@ -175,6 +191,16 @@ export async function scheduleMessage(
       console.error('[schedule] enqueue failed:', err)
       return { ok: false, error: 'Não foi possível agendar (fila indisponível).' }
     }
+
+    // Se o responsável não é quem criou, avisa ele (mostra criador + atribuidor).
+    await notifyScheduledAssignee({
+      accountId: ctx.accountId,
+      assignee: assignedTo,
+      actorId: ctx.userId,
+      createdBy: ctx.userId,
+      conversationId: conv.id,
+      contactId: conv.contactId,
+    })
 
     return { ok: true, scheduled: toLite(inserted as Record<string, unknown>) }
   } catch (err) {

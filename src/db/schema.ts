@@ -1245,7 +1245,7 @@ export const notifications = pgTable("notifications", {
 			foreignColumns: [contacts.id],
 			name: "notifications_contact_id_fkey"
 		}).onDelete("set null"),
-	check("notifications_type_check", sql`type = ANY (ARRAY['conversation_assigned'::text, 'sla_alert'::text, 'mention'::text, 'broadcast_halted'::text, 'deal_transferred'::text])`),
+	check("notifications_type_check", sql`type = ANY (ARRAY['conversation_assigned'::text, 'sla_alert'::text, 'mention'::text, 'broadcast_halted'::text, 'deal_transferred'::text, 'deal_ai_suggestion'::text, 'scheduled_message_assigned'::text])`),
 ]);
 
 export const webhookEndpoints = pgTable("webhook_endpoints", {
@@ -1439,11 +1439,16 @@ export const scheduledMessages = pgTable("scheduled_messages", {
 	lastError: text("last_error"),
 	attempts: integer().default(0).notNull(),
 	createdBy: uuid("created_by"),
+	// Central de agendamentos (migração 0069): responsável pela mensagem (dono do
+	// lead) e quem atribuiu. Governam a visibilidade por papel + notificação.
+	assignedTo: uuid("assigned_to"),
+	assignedBy: uuid("assigned_by"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("idx_scheduled_messages_conversation").using("btree", table.conversationId.asc().nullsLast().op("uuid_ops")),
 	index("idx_scheduled_messages_account_status").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.status.asc().nullsLast().op("text_ops")),
+	index("idx_scheduled_messages_assigned").using("btree", table.assignedTo.asc().nullsLast().op("uuid_ops")),
 	index("idx_scheduled_messages_due").using("btree", table.scheduledAt.asc().nullsLast().op("timestamptz_ops")),
 	foreignKey({
 			columns: [table.accountId],
