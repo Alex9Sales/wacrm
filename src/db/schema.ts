@@ -637,6 +637,9 @@ export const deals = pgTable("deals", {
 	pipelineId: uuid("pipeline_id").notNull(),
 	stageId: uuid("stage_id").notNull(),
 	contactId: uuid("contact_id"),
+	// Empresa vinculada ao negócio (Empresas Fase 2, migração 0068). FK criada na
+	// migração (aqui só a coluna, p/ não depender da ordem no Drizzle).
+	companyId: uuid("company_id"),
 	conversationId: uuid("conversation_id"),
 	assignedTo: uuid("assigned_to"),
 	title: text().notNull(),
@@ -662,6 +665,7 @@ export const deals = pgTable("deals", {
 	index("idx_deals_assigned_to").using("btree", table.assignedTo.asc().nullsLast().op("uuid_ops")),
 	index("idx_deals_pipeline").using("btree", table.pipelineId.asc().nullsLast().op("uuid_ops")),
 	index("idx_deals_stage").using("btree", table.stageId.asc().nullsLast().op("uuid_ops")),
+	index("idx_deals_company").using("btree", table.companyId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
 			foreignColumns: [organization.id],
@@ -693,6 +697,30 @@ export const deals = pgTable("deals", {
 			name: "deals_assigned_to_fkey"
 		}).onDelete("set null"),
 	check("deals_status_check", sql`status = ANY (ARRAY['open'::text, 'won'::text, 'lost'::text])`),
+]);
+
+// Contatos ADICIONAIS de um negócio (Empresas Fase 2 — migração 0068). O contato
+// PRINCIPAL continua em deals.contact_id; esta tabela guarda os demais (vários
+// contatos por negócio, estilo RD). UNIQUE(deal_id, contact_id) evita duplicar.
+export const dealContacts = pgTable("deal_contacts", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	dealId: uuid("deal_id").notNull(),
+	contactId: uuid("contact_id").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("idx_deal_contacts_deal_contact").using("btree", table.dealId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops")),
+	index("idx_deal_contacts_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.dealId],
+			foreignColumns: [deals.id],
+			name: "deal_contacts_deal_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.contactId],
+			foreignColumns: [contacts.id],
+			name: "deal_contacts_contact_id_fkey"
+		}).onDelete("cascade"),
 ]);
 
 // Histórico do lead (timeline estilo RD): created / stage_changed / status_changed

@@ -419,6 +419,10 @@ export interface Deal {
    * contact is deleted (ON DELETE SET NULL). History preserved.
    */
   contact_id: string | null;
+  /** Empresa vinculada ao negócio (Empresas Fase 2). */
+  company_id?: string | null;
+  /** Nome da empresa vinculada (join em getDeal). */
+  company_name?: string | null;
   conversation_id?: string;
   assigned_to?: string;
   title: string;

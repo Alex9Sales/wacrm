@@ -7,7 +7,7 @@
 // ============================================================
 
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
-import { db, channels, contacts, conversations, dealAttachments, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, notifications, pipelines, pipelineStages, user } from '@/db'
+import { db, channels, companies, contacts, conversations, dealAttachments, dealContacts, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, notifications, pipelines, pipelineStages, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
@@ -674,6 +674,21 @@ export async function createDeal(
 ): Promise<{ error: string | null; id?: string }> {
   try {
     const ctx = await getCurrentAccount()
+    // Empresas Fase 2: o negócio herda a empresa do contato (se ele tiver uma).
+    const contactCompany = input.contact_id
+      ? firstOrNull(
+          await db
+            .select({ companyId: contacts.companyId })
+            .from(contacts)
+            .where(
+              and(
+                eq(contacts.id, input.contact_id),
+                eq(contacts.accountId, ctx.accountId),
+              ),
+            )
+            .limit(1),
+        )
+      : null
     const created = firstOrNull(
       await db
         .insert(deals)
@@ -684,6 +699,7 @@ export async function createDeal(
           value: String(input.value),
           currency: input.currency,
           contactId: input.contact_id,
+          companyId: contactCompany?.companyId ?? null,
           conversationId: input.conversation_id ?? null,
           pipelineId: input.pipeline_id,
           stageId: input.stage_id,
@@ -964,6 +980,8 @@ export async function getDeal(id: string): Promise<Deal | null> {
         pipeline_id: deals.pipelineId,
         stage_id: deals.stageId,
         contact_id: deals.contactId,
+        company_id: deals.companyId,
+        company_name: companies.name,
         conversation_id: deals.conversationId,
         assigned_to: deals.assignedTo,
         title: deals.title,
@@ -984,6 +1002,7 @@ export async function getDeal(id: string): Promise<Deal | null> {
       })
       .from(deals)
       .leftJoin(contacts, eq(deals.contactId, contacts.id))
+      .leftJoin(companies, eq(deals.companyId, companies.id))
       .leftJoin(user, eq(deals.assignedTo, user.id))
       .leftJoin(pipelines, eq(deals.pipelineId, pipelines.id))
       .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
@@ -999,6 +1018,180 @@ export async function getDeal(id: string): Promise<Deal | null> {
     contact: row.contact?.id ? (row.contact as unknown as Contact) : undefined,
     assignee: row.assignee?.id ? (row.assignee as unknown as Profile) : undefined,
   } as unknown as Deal
+}
+
+// ============================================================
+// Empresas Fase 2 — empresa + contatos do negócio.
+// ============================================================
+
+/** Define (ou limpa, com null) a empresa vinculada ao negócio. */
+export async function setDealCompany(
+  dealId: string,
+  companyId: string | null,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    let companyName: string | null = null
+    if (companyId) {
+      const co = firstOrNull(
+        await db
+          .select({ name: companies.name })
+          .from(companies)
+          .where(and(eq(companies.id, companyId), eq(companies.accountId, ctx.accountId)))
+          .limit(1),
+      )
+      if (!co) return { error: 'Empresa não encontrada.' }
+      companyName = co.name
+    }
+    const updated = await db
+      .update(deals)
+      .set({ companyId, updatedAt: new Date().toISOString() })
+      .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+      .returning({ id: deals.id })
+    if (updated.length === 0) return { error: 'Negócio não encontrado.' }
+    await recordDealEvent(ctx.accountId, ctx.userId, dealId, 'note', {
+      text: companyName
+        ? `Empresa vinculada: ${companyName}`
+        : 'Empresa desvinculada do negócio',
+    })
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao vincular empresa.' }
+  }
+}
+
+export interface DealContactRow {
+  id: string
+  name: string | null
+  phone: string
+  email: string | null
+  avatar_url: string | null
+  is_primary: boolean
+}
+
+/** Contatos do negócio: o PRINCIPAL (deals.contact_id) + os ADICIONAIS
+ *  (deal_contacts). O principal vem marcado `is_primary`. */
+export async function listDealContacts(dealId: string): Promise<DealContactRow[]> {
+  const ctx = await getCurrentAccount()
+  const deal = firstOrNull(
+    await db
+      .select({ contactId: deals.contactId })
+      .from(deals)
+      .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  if (!deal) return []
+  const extras = await db
+    .select({
+      id: contacts.id,
+      name: contacts.name,
+      phone: contacts.phone,
+      email: contacts.email,
+      avatar_url: contacts.avatarUrl,
+    })
+    .from(dealContacts)
+    .innerJoin(contacts, eq(dealContacts.contactId, contacts.id))
+    .where(
+      and(eq(dealContacts.dealId, dealId), eq(dealContacts.accountId, ctx.accountId)),
+    )
+    .orderBy(asc(contacts.name))
+
+  const out: DealContactRow[] = []
+  if (deal.contactId) {
+    const primary = firstOrNull(
+      await db
+        .select({
+          id: contacts.id,
+          name: contacts.name,
+          phone: contacts.phone,
+          email: contacts.email,
+          avatar_url: contacts.avatarUrl,
+        })
+        .from(contacts)
+        .where(and(eq(contacts.id, deal.contactId), eq(contacts.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (primary) {
+      out.push({
+        id: primary.id,
+        name: primary.name ?? null,
+        phone: primary.phone,
+        email: primary.email ?? null,
+        avatar_url: primary.avatar_url ?? null,
+        is_primary: true,
+      })
+    }
+  }
+  for (const c of extras) {
+    if (c.id === deal.contactId) continue // já entrou como principal
+    out.push({
+      id: c.id,
+      name: c.name ?? null,
+      phone: c.phone,
+      email: c.email ?? null,
+      avatar_url: c.avatar_url ?? null,
+      is_primary: false,
+    })
+  }
+  return out
+}
+
+/** Adiciona um contato ADICIONAL ao negócio (idempotente). */
+export async function addDealContact(
+  dealId: string,
+  contactId: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const deal = firstOrNull(
+      await db
+        .select({ id: deals.id, contactId: deals.contactId })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!deal) return { error: 'Negócio não encontrado.' }
+    if (deal.contactId === contactId) {
+      return { error: 'Esse contato já é o principal do negócio.' }
+    }
+    const contact = firstOrNull(
+      await db
+        .select({ id: contacts.id })
+        .from(contacts)
+        .where(and(eq(contacts.id, contactId), eq(contacts.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!contact) return { error: 'Contato não encontrado.' }
+    await db
+      .insert(dealContacts)
+      .values({ accountId: ctx.accountId, dealId, contactId })
+      .onConflictDoNothing()
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao adicionar contato.' }
+  }
+}
+
+/** Remove um contato ADICIONAL do negócio (não afeta o principal). */
+export async function removeDealContact(
+  dealId: string,
+  contactId: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .delete(dealContacts)
+      .where(
+        and(
+          eq(dealContacts.dealId, dealId),
+          eq(dealContacts.contactId, contactId),
+          eq(dealContacts.accountId, ctx.accountId),
+        ),
+      )
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao remover contato.' }
+  }
 }
 
 export interface DealEvent {

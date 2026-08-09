@@ -43,6 +43,8 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DealForm } from "@/components/pipelines/deal-form";
 import { TaskForm } from "@/components/tarefas/task-form";
+import { CompanyPicker } from "@/components/pipelines/company-picker";
+import { DealContactsPanel } from "@/components/pipelines/deal-contacts-panel";
 import { TransferDealButton } from "@/components/pipelines/transfer-deal-button";
 import {
   getDeal,
@@ -51,6 +53,7 @@ import {
   moveDealToStage,
   setDealStatus,
   setDealPaused,
+  setDealCompany,
   duplicateDeal,
   addDealNote,
   type DealEvent,
@@ -850,7 +853,26 @@ export default function DealDetailPage() {
           <div className="space-y-3">
             <Field label="Nome" value={deal.title} />
             <Field label="Valor" value={fmtCurrency(deal.value, deal.currency)} />
-            <Field label="Contato" value={deal.contact?.name || deal.contact?.phone} />
+            <div>
+              <p className="text-[11px] font-medium uppercase tracking-wide text-muted-foreground">
+                Empresa
+              </p>
+              <div className="mt-1">
+                <CompanyPicker
+                  value={deal.company_id ?? null}
+                  valueName={deal.company_name ?? null}
+                  onChange={async (id) => {
+                    const { error } = await setDealCompany(deal.id, id);
+                    if (error) {
+                      toast.error(error);
+                      return;
+                    }
+                    toast.success(id ? "Empresa vinculada" : "Empresa removida");
+                    await reload();
+                  }}
+                />
+              </div>
+            </div>
             <div>
               <Field label="Responsável" value={deal.assignee?.full_name} />
               <div className="mt-1.5">
@@ -878,6 +900,9 @@ export default function DealDetailPage() {
             <Field label="Status" value={statusMeta.label} />
             {deal.notes?.trim() && <Field label="Observações" value={deal.notes} />}
           </div>
+
+          {/* Contatos do negócio (principal + adicionais) — Empresas Fase 2. */}
+          <DealContactsPanel dealId={deal.id} />
 
           {/* Campos personalizados (do contato) — editáveis, estilo RD. */}
           {deal.contact_id && customFields.length > 0 && (

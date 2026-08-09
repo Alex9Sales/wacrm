@@ -40,7 +40,8 @@ export interface CompanyLite {
 // (`"companies"."id"`) de propósito: sem a tabela, o "id" fica ambíguo dentro do
 // subselect (contacts/deals também têm "id") → "column reference id is ambiguous".
 const CONTACTS_COUNT = sql<number>`(SELECT count(*)::int FROM contacts cc WHERE cc.company_id = "companies"."id")`
-const DEALS_COUNT = sql<number>`(SELECT count(*)::int FROM deals dd JOIN contacts c2 ON c2.id = dd.contact_id WHERE c2.company_id = "companies"."id")`
+// Empresas Fase 2: negócios contam pelo vínculo DIRETO (deals.company_id).
+const DEALS_COUNT = sql<number>`(SELECT count(*)::int FROM deals dd WHERE dd.company_id = "companies"."id")`
 
 /** Lista de empresas da conta (com contagens), filtrável por nome. */
 export async function listCompanies(search?: string): Promise<CompanyRow[]> {
@@ -151,8 +152,9 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
       contact_name: contacts.name,
     })
     .from(deals)
-    .innerJoin(contacts, eq(deals.contactId, contacts.id))
-    .where(and(eq(contacts.companyId, id), eq(deals.accountId, ctx.accountId)))
+    .leftJoin(contacts, eq(deals.contactId, contacts.id))
+    // Vínculo DIRETO do negócio com a empresa (Fase 2).
+    .where(and(eq(deals.companyId, id), eq(deals.accountId, ctx.accountId)))
     .orderBy(asc(deals.title))
 
   const deemedDeals: CompanyDeal[] = companyDeals.map((d) => ({
