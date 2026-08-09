@@ -232,6 +232,29 @@ export const companies = pgTable("companies", {
 		}).onDelete("cascade"),
 ]);
 
+// Catálogo de PRODUTOS/SERVIÇOS da conta (Config → Produtos e serviços).
+// Reutilizável nos produtos do negócio (deal_products). Migração 0070.
+export const products = pgTable("products", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	name: text().notNull(),
+	description: text(),
+	// 'product' | 'service' — só rótulo/organização.
+	kind: text().default('product').notNull(),
+	unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).default('0').notNull(),
+	active: boolean().default(true).notNull(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_products_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "products_account_id_fkey"
+		}).onDelete("cascade"),
+]);
+
 export const tags = pgTable("tags", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),
