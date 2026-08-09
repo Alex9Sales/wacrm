@@ -150,6 +150,58 @@ export async function updateProduct(
   }
 }
 
+/** Importa itens em lote (CSV/XLSX já parseado no cliente). Pula nomes que já
+ *  existem (case-insensitive) e linhas sem nome. Retorna criados/pulados. */
+export async function importProducts(
+  rows: {
+    name: string
+    description?: string | null
+    unitPrice?: number
+    kind?: ProductKind
+  }[],
+): Promise<{ created: number; skipped: number; error?: string }> {
+  try {
+    const ctx = await requireRole('agent')
+    if (!Array.isArray(rows) || rows.length === 0)
+      return { created: 0, skipped: 0, error: 'Nada para importar.' }
+    const existing = await db
+      .select({ name: products.name })
+      .from(products)
+      .where(eq(products.accountId, ctx.accountId))
+    const seen = new Set(existing.map((e) => e.name.trim().toLowerCase()))
+    const toInsert: (typeof products.$inferInsert)[] = []
+    for (const r of rows) {
+      const name = clean(r.name)
+      if (!name) continue
+      const key = name.toLowerCase()
+      if (seen.has(key)) continue
+      seen.add(key)
+      toInsert.push({
+        accountId: ctx.accountId,
+        name,
+        description: clean(r.description),
+        kind: r.kind === 'service' ? 'service' : 'product',
+        unitPrice: parsePrice(r.unitPrice),
+        active: true,
+        createdBy: ctx.userId,
+      })
+    }
+    let created = 0
+    if (toInsert.length > 0) {
+      await db.insert(products).values(toInsert)
+      created = toInsert.length
+    }
+    revalidatePath('/settings')
+    return { created, skipped: rows.length - created }
+  } catch (err) {
+    return {
+      created: 0,
+      skipped: 0,
+      error: err instanceof Error ? err.message : 'Falha ao importar.',
+    }
+  }
+}
+
 export async function deleteProduct(
   id: string,
 ): Promise<{ error: string | null }> {
