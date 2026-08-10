@@ -78,6 +78,15 @@ function Iso({
       role="img"
       aria-label="Funil de vendas em 3D"
     >
+      <style>{`
+        .bar3d {
+          transform-box: fill-box;
+          transform-origin: bottom;
+          animation: grow3d .6s cubic-bezier(.22,1,.36,1) both;
+        }
+        @keyframes grow3d { from { transform: scaleY(0); } to { transform: scaleY(1); } }
+        @media (prefers-reduced-motion: reduce) { .bar3d { animation: none; } }
+      `}</style>
       {/* piso sutil */}
       <line
         x1={leftPad - 8}
@@ -98,14 +107,17 @@ function Iso({
         const sidePts = `${x + W},${yTop} ${x + W + dx},${yTop - dy} ${x + W + dx},${yBot - dy} ${x + W},${yBot}`
         return (
           <g key={s.id}>
-            {/* lado direito (mais escuro) */}
-            <polygon points={sidePts} fill={color} />
-            <polygon points={sidePts} fill="rgba(0,0,0,0.30)" />
-            {/* topo (mais claro) */}
-            <polygon points={topPts} fill={color} />
-            <polygon points={topPts} fill="rgba(255,255,255,0.28)" />
-            {/* frente */}
-            <rect x={x} y={yTop} width={W} height={barH} fill={color} rx={1} />
+            {/* barra 3D (anima crescendo a partir da base) */}
+            <g className="bar3d" style={{ animationDelay: `${i * 80}ms` }}>
+              {/* lado direito (mais escuro) */}
+              <polygon points={sidePts} fill={color} />
+              <polygon points={sidePts} fill="rgba(0,0,0,0.30)" />
+              {/* topo (mais claro) */}
+              <polygon points={topPts} fill={color} />
+              <polygon points={topPts} fill="rgba(255,255,255,0.28)" />
+              {/* frente */}
+              <rect x={x} y={yTop} width={W} height={barH} fill={color} rx={1} />
+            </g>
             {/* valor acima */}
             <text
               x={x + W / 2 + dx / 2}

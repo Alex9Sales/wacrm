@@ -1,7 +1,6 @@
 "use client"
 
 import { Clock } from 'lucide-react'
-import { DOW_SHORT_MON_FIRST } from '@/lib/dashboard/date-utils'
 import type { ResponseTimeSummary } from '@/lib/dashboard/types'
 import { BarChart } from '@/components/tremor/bar-chart'
 import { EmptyState } from './empty-state'
@@ -22,8 +21,10 @@ interface ResponseTimeChartProps {
 // Single category, single colour — the data is "average minutes
 // per weekday". Tremor expects categories as the second tuple in
 // the row object, so we shape the buckets into
-// `{ day: 'Mon', 'Avg minutes': 4.2 }` rows below.
-const CATEGORY = 'Avg minutes'
+// `{ day: 'Seg', 'Minutos': 4.2 }` rows below.
+const CATEGORY = 'Minutos'
+// Rótulos pt-BR (segunda-primeiro) — DOW_SHORT_MON_FIRST é testado em inglês.
+const DOW_SHORT_PT = ['Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb', 'Dom'] as const
 
 export function ResponseTimeChart({
   data,
@@ -38,7 +39,7 @@ export function ResponseTimeChart({
   // surface "no samples" copy without losing the data shape.
   const chartData =
     data?.buckets.map((b, i) => ({
-      day: DOW_SHORT_MON_FIRST[i],
+      day: DOW_SHORT_PT[i],
       [CATEGORY]: b.avgMinutes ?? 0,
       samples: b.samples,
     })) ?? []
@@ -48,29 +49,29 @@ export function ResponseTimeChart({
       <header className="flex items-center justify-between gap-3 border-b border-border px-5 py-4">
         <div>
           <h2 className="text-sm font-semibold text-foreground">
-            Average First Response Time
+            Tempo médio de primeira resposta
           </h2>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Minutes to reply to a customer&apos;s first unreplied message, by
-            weekday
+            Minutos para responder a primeira mensagem sem resposta do cliente,
+            por dia da semana
           </p>
         </div>
         <div className="flex items-center gap-3 text-right text-xs">
           {thresholdMinutes > 0 && (
             <span className="rounded-full border border-rose-500/40 bg-rose-500/10 px-2 py-0.5 font-medium text-rose-300 tabular-nums">
-              target {thresholdMinutes}m
+              meta {thresholdMinutes}m
             </span>
           )}
           {data && (data.thisWeekAvg != null || data.lastWeekAvg != null) && (
             <div>
               <div className="text-muted-foreground">
-                This week:{' '}
+                Esta semana:{' '}
                 <span className="font-medium text-foreground tabular-nums">
                   {fmt(data.thisWeekAvg)}
                 </span>
               </div>
               <div className="text-muted-foreground">
-                Last week:{' '}
+                Semana passada:{' '}
                 <span className="tabular-nums">{fmt(data.lastWeekAvg)}</span>
               </div>
             </div>
@@ -95,7 +96,7 @@ export function ResponseTimeChart({
             // 'violet' maps to Tailwind's `fill-violet-500` — matches
             // the brand accent the hand-rolled bars used (#7c3aed).
             colors={['violet']}
-            valueFormatter={(value) => `${value.toFixed(1)}m`}
+            valueFormatter={(value) => `${value.toFixed(1)} min`}
             showLegend={false}
             yAxisWidth={48}
             // Compact height so the chart sits well inside the card
