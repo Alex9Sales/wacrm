@@ -387,13 +387,44 @@ or **delete** — those need their own scope, granted only when you want it.
 required (pipeline/stage default to the account's first, so an agent can drop a
 card with just a title). Optional: `value`, `currency`, `contact_id`,
 `conversation_id` (links the card to a chat — shows the chat bubble),
-`stage_id`, `pipeline_id`, `notes`, `expected_close_date`, `status`.
+`stage_id`, `pipeline_id`, `notes`, `expected_close_date`, `status`,
+`source`, `origin`, `temperature` (`frio`/`morno`/`quente`), `qualification`
+(1–5), and **`custom_fields`** (see below).
 
 ```bash
 curl -X POST https://<host>/api/v1/deals \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{ "title": "Troca de botijão P13", "value": 135, "currency": "BRL",
         "contact_id": "…", "stage_id": "…" }'
+```
+
+**Structured lead fields (`custom_fields`)** — for web-form / lead-capture
+integrations, send the answers as `custom_fields` (a `{ "Field name": value }`
+object) instead of dumping everything into `notes`. Each key becomes a
+**custom field** (created by name if it doesn't exist yet) and the value is
+saved on the deal's **contact**, so it shows **structured** on the deal detail.
+Requires `contact_id`. Arrays are joined with commas; empty values are skipped.
+`source`/`origin` land as the card's real Source/Origin fields (not `notes`).
+
+```bash
+curl -X POST https://<host>/api/v1/deals \
+  -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{
+    "title": "Diagnóstico site - Marcelo Ferraz",
+    "pipeline_id": "<SALESTEC_PIPELINE_ID>",
+    "stage_id": "<SALESTEC_STAGE_NOVO_LEAD_SEM_CONTATO_ID>",
+    "contact_id": "<contactJson.data.id>",
+    "source": "site",
+    "origin": "diagnostico",
+    "value": 50000,
+    "custom_fields": {
+      "Tamanho do time": "21 a 50 pessoas",
+      "Faturamento mensal": "R$ 500 mil a R$ 2 milhões",
+      "Perda anual estimada": "R$ 1.700.000",
+      "Prazo para comprar": "Até 30 dias"
+    },
+    "notes": "Resumo do diagnóstico + link de origem"
+  }'
 ```
 
 **Move / assign** — `PATCH /api/v1/deals/{id}` (scope `deals:write`):
