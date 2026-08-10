@@ -91,6 +91,8 @@ export function DealForm({
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [catalog, setCatalog] = useState<ProductRow[]>([]);
+  const [prodQuery, setProdQuery] = useState("");
+  const [prodOpen, setProdOpen] = useState(false);
   const [linkedConversation, setLinkedConversation] =
     useState<Conversation | null>(null);
 
@@ -113,6 +115,8 @@ export function DealForm({
   useEffect(() => {
     if (!open) return;
     setConfirmDelete(false);
+    setProdQuery("");
+    setProdOpen(false);
     if (deal) {
       setTitle(deal.title);
       setValue(String(deal.value ?? ""));
@@ -373,34 +377,77 @@ export function DealForm({
               )}
             </div>
 
-            {/* Produto do catálogo (opcional): preenche o Valor com o preço-base,
-                que continua editável (o preço muda por negociação). */}
+            {/* Produto do catálogo (opcional): busca + scroll (aguenta catálogo
+                grande). Escolher preenche o Valor com o preço-base, que continua
+                editável (o preço muda por negociação). */}
             {catalog.length > 0 && (
               <div className="grid gap-2">
                 <Label className="text-muted-foreground">
                   Produto/serviço (opcional)
                 </Label>
-                <select
-                  defaultValue=""
-                  onChange={(e) => {
-                    const p = catalog.find((x) => x.id === e.target.value);
-                    if (!p) return;
-                    setValue(p.unit_price ? String(p.unit_price) : "");
-                    if (!title.trim()) setTitle(p.name);
-                    e.target.value = ""; // volta ao placeholder (só preenche)
-                  }}
-                  className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary"
-                >
-                  <option value="">Escolher do catálogo…</option>
-                  {catalog.map((p) => (
-                    <option key={p.id} value={p.id}>
-                      {p.name}
-                      {p.unit_price
-                        ? ` — ${p.unit_price.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`
-                        : ""}
-                    </option>
-                  ))}
-                </select>
+                <div className="relative">
+                  <input
+                    value={prodQuery}
+                    onChange={(e) => {
+                      setProdQuery(e.target.value);
+                      setProdOpen(true);
+                    }}
+                    onFocus={() => setProdOpen(true)}
+                    onBlur={() => setTimeout(() => setProdOpen(false), 150)}
+                    placeholder="Escolher do catálogo…"
+                    className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary"
+                  />
+                  {prodOpen &&
+                    (() => {
+                      const q = prodQuery.trim().toLowerCase();
+                      const list = (
+                        q
+                          ? catalog.filter((p) =>
+                              p.name.toLowerCase().includes(q),
+                            )
+                          : catalog
+                      ).slice(0, 200);
+                      return (
+                        <ul className="absolute z-30 mt-1 max-h-56 w-full overflow-y-auto rounded-lg border border-border bg-popover p-1 shadow-xl">
+                          {list.length === 0 ? (
+                            <li className="px-2 py-2 text-center text-xs text-muted-foreground">
+                              Nenhum item.
+                            </li>
+                          ) : (
+                            list.map((p) => (
+                              <li key={p.id}>
+                                <button
+                                  type="button"
+                                  onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    setValue(
+                                      p.unit_price ? String(p.unit_price) : "",
+                                    );
+                                    if (!title.trim()) setTitle(p.name);
+                                    setProdQuery(p.name);
+                                    setProdOpen(false);
+                                  }}
+                                  className="flex w-full items-center justify-between gap-2 rounded px-2 py-1.5 text-left text-sm hover:bg-muted"
+                                >
+                                  <span className="truncate text-foreground">
+                                    {p.name}
+                                  </span>
+                                  <span className="shrink-0 text-xs text-muted-foreground">
+                                    {p.unit_price
+                                      ? p.unit_price.toLocaleString("pt-BR", {
+                                          style: "currency",
+                                          currency: "BRL",
+                                        })
+                                      : ""}
+                                  </span>
+                                </button>
+                              </li>
+                            ))
+                          )}
+                        </ul>
+                      );
+                    })()}
+                </div>
               </div>
             )}
 
