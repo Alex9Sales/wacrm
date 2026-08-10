@@ -31,6 +31,7 @@ import { SkeletonCard } from '@/components/dashboard/skeleton'
 import { QuickActions } from '@/components/dashboard/quick-actions'
 import { ConversationsChart } from '@/components/dashboard/conversations-chart'
 import { PipelineDonut } from '@/components/dashboard/pipeline-donut'
+import { Pipeline3D } from '@/components/dashboard/pipeline-3d'
 import { ResponseTimeChart } from '@/components/dashboard/response-time-chart'
 import { ActivityFeed } from '@/components/dashboard/activity-feed'
 
@@ -150,6 +151,7 @@ export default function DashboardPage() {
               title="Conversas ativas"
               value={metrics.activeConversations.current.toLocaleString()}
               icon={MessageSquare}
+              tone="blue"
               delta={{
                 sign: metrics.activeConversations.previous,
                 label: deltaLabel(metrics.activeConversations.previous, 'novas hoje vs ontem'),
@@ -159,6 +161,7 @@ export default function DashboardPage() {
               title="Novos contatos hoje"
               value={metrics.newContactsToday.current.toLocaleString()}
               icon={UserPlus}
+              tone="violet"
               delta={{
                 sign:
                   metrics.newContactsToday.current - metrics.newContactsToday.previous,
@@ -172,12 +175,14 @@ export default function DashboardPage() {
               title="Valor de negócios abertos"
               value={formatCurrency(metrics.openDealsValue, defaultCurrency)}
               icon={DollarSign}
+              tone="emerald"
               subtitle={`${metrics.openDealsCount} ${metrics.openDealsCount === 1 ? 'negócio aberto' : 'negócios abertos'}`}
             />
             <MetricCard
               title="Mensagens enviadas hoje"
               value={metrics.messagesSentToday.current.toLocaleString()}
               icon={Send}
+              tone="amber"
               delta={{
                 sign:
                   metrics.messagesSentToday.current - metrics.messagesSentToday.previous,
@@ -190,6 +195,9 @@ export default function DashboardPage() {
           </>
         )}
       </div>
+
+      {/* Herói 3D — funil de vendas */}
+      <Pipeline3D data={pipeline} loading={pipelineLoading} currency={defaultCurrency} />
 
       {/* Quick actions */}
       <QuickActions />
