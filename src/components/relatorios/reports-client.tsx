@@ -31,6 +31,7 @@ import {
   Receipt,
   AlertTriangle,
   Wallet,
+  Lightbulb,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -242,8 +243,12 @@ function ReportsInner({ options }: { options: ReportFilterOptions }) {
       <div className="flex flex-wrap items-end gap-3">
         <Field label="Funil">
           <Select value={pipelineId} onValueChange={(v) => v && setPipelineId(v)}>
-            <SelectTrigger className="w-52">
-              <SelectValue placeholder="Selecione o funil" />
+            <SelectTrigger className="w-56">
+              <SelectValue placeholder="Selecione o funil">
+                {(v: string) =>
+                  options.pipelines.find((p) => p.id === v)?.name ?? 'Selecione o funil'
+                }
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {options.pipelines.map((p) => (
@@ -259,7 +264,13 @@ function ReportsInner({ options }: { options: ReportFilterOptions }) {
           <Field label="Responsável">
             <Select value={responsavelId} onValueChange={(v) => v && setResponsavelId(v)}>
               <SelectTrigger className="w-48">
-                <SelectValue />
+                <SelectValue>
+                  {(v: string) =>
+                    !v || v === 'all'
+                      ? 'Todos'
+                      : (options.responsaveis.find((r) => r.id === v)?.name ?? 'Todos')
+                  }
+                </SelectValue>
               </SelectTrigger>
               <SelectContent>
                 <SelectItem value="all">Todos</SelectItem>
@@ -276,7 +287,9 @@ function ReportsInner({ options }: { options: ReportFilterOptions }) {
         <Field label="Período">
           <Select value={preset} onValueChange={(v) => v && onPreset(v as Preset)}>
             <SelectTrigger className="w-44">
-              <SelectValue />
+              <SelectValue>
+                {(v: string) => PRESETS.find((p) => p.id === v)?.label ?? 'Período'}
+              </SelectValue>
             </SelectTrigger>
             <SelectContent>
               {PRESETS.map((p) => (
@@ -318,8 +331,11 @@ function ReportsInner({ options }: { options: ReportFilterOptions }) {
 
       {/* Título-insight */}
       {report && (
-        <div className="rounded-lg border border-border bg-muted/40 px-4 py-3 text-sm">
-          <span className="font-medium text-foreground">{report.insight}</span>
+        <div className="flex items-center gap-3 rounded-xl bg-gradient-to-r from-primary/10 via-primary/5 to-transparent px-4 py-3.5 ring-1 ring-primary/15">
+          <span className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-primary/15 text-primary">
+            <Lightbulb className="h-4 w-4" />
+          </span>
+          <span className="text-sm font-medium text-foreground">{report.insight}</span>
         </div>
       )}
 
@@ -565,6 +581,33 @@ function Field({ label, children }: { label: string; children: React.ReactNode }
   )
 }
 
+const KPI_TONES = {
+  good: {
+    text: 'text-emerald-600 dark:text-emerald-400',
+    chip: 'bg-emerald-500/12 text-emerald-600 dark:text-emerald-400',
+    ring: 'ring-emerald-500/20',
+    bar: 'from-emerald-500/70 to-emerald-500/0',
+  },
+  bad: {
+    text: 'text-red-600 dark:text-red-400',
+    chip: 'bg-red-500/12 text-red-600 dark:text-red-400',
+    ring: 'ring-red-500/20',
+    bar: 'from-red-500/70 to-red-500/0',
+  },
+  warn: {
+    text: 'text-amber-600 dark:text-amber-400',
+    chip: 'bg-amber-500/12 text-amber-600 dark:text-amber-400',
+    ring: 'ring-amber-500/20',
+    bar: 'from-amber-500/70 to-amber-500/0',
+  },
+  neutral: {
+    text: 'text-foreground',
+    chip: 'bg-primary/10 text-primary',
+    ring: 'ring-foreground/10',
+    bar: 'from-primary/60 to-primary/0',
+  },
+} as const
+
 function Kpi({
   icon,
   label,
@@ -580,27 +623,25 @@ function Kpi({
   tone: 'neutral' | 'good' | 'bad' | 'warn'
   small?: boolean
 }) {
-  const toneCls =
-    tone === 'good'
-      ? 'text-emerald-600 dark:text-emerald-400'
-      : tone === 'bad'
-        ? 'text-red-600 dark:text-red-400'
-        : tone === 'warn'
-          ? 'text-amber-600 dark:text-amber-400'
-          : 'text-foreground'
+  const t = KPI_TONES[tone]
   return (
-    <Card size="sm">
-      <CardContent className="flex flex-col gap-1">
-        <div className="flex items-center gap-1.5 text-xs text-muted-foreground">
-          <span className={toneCls}>{icon}</span>
-          {label}
-        </div>
-        <div className={`font-heading font-semibold tabular-nums ${small ? 'text-xl' : 'text-2xl'} ${toneCls}`}>
-          {value}
-        </div>
-        <div className="text-xs text-muted-foreground">{sub}</div>
-      </CardContent>
-    </Card>
+    <div className={`relative overflow-hidden rounded-xl bg-card p-4 ring-1 ${t.ring}`}>
+      <span
+        className={`pointer-events-none absolute inset-x-0 top-0 h-0.5 bg-gradient-to-r ${t.bar}`}
+      />
+      <div className="flex items-start justify-between">
+        <span className="text-xs font-medium text-muted-foreground">{label}</span>
+        <span className={`flex h-8 w-8 items-center justify-center rounded-lg ${t.chip}`}>
+          {icon}
+        </span>
+      </div>
+      <div
+        className={`mt-2 font-heading font-bold tabular-nums ${small ? 'text-2xl' : 'text-3xl'} ${t.text}`}
+      >
+        {value}
+      </div>
+      <div className="mt-0.5 text-xs text-muted-foreground">{sub}</div>
+    </div>
   )
 }
 
@@ -614,34 +655,53 @@ function FunnelHero({
   const maxTotal = Math.max(1, ...report.funnel.map((f) => f.total))
   if (report.funnel.every((f) => f.total === 0)) return <Empty />
   return (
-    <div className="flex flex-col gap-2">
+    <div className="flex flex-col gap-2.5">
       {report.funnel.map((f) => {
-        const width = Math.max(6, Math.round((f.total / maxTotal) * 100))
+        const width = Math.max(16, Math.round((f.total / maxTotal) * 100))
+        const empty = f.total === 0
         return (
           <div key={f.stageId} className="flex items-center gap-3">
-            <div className="w-36 shrink-0 truncate text-sm" title={f.name}>
+            {/* rótulo da etapa */}
+            <div className="w-32 shrink-0 truncate text-right text-sm text-muted-foreground" title={f.name}>
               {f.name}
-              {f.isLossHotspot && (
-                <span className="ml-1 inline-flex items-center rounded bg-red-500/15 px-1 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
-                  maior perda
-                </span>
-              )}
             </div>
-            <div className="relative h-8 flex-1 overflow-hidden rounded-md bg-muted">
+            {/* barra do funil (centralizada → efeito de afunilamento) */}
+            <div className="flex flex-1 justify-center">
               <div
-                className={`h-full rounded-md ${f.isLossHotspot ? 'bg-red-500/25' : 'bg-primary/20'}`}
-                style={{ width: `${width}%` }}
-              />
-              <div className="absolute inset-0 flex items-center gap-2 px-2 text-xs">
-                <span className="font-semibold tabular-nums">{f.total}</span>
-                <span className="text-muted-foreground">·</span>
-                <span className="tabular-nums text-muted-foreground">{money(f.openValue)} aberto</span>
-                {f.lost > 0 && (
-                  <span className="ml-auto tabular-nums text-red-600 dark:text-red-400">
-                    {Math.round(f.lossRate * 100)}% perda
+                className="relative flex h-11 items-center justify-between rounded-lg px-3 shadow-sm ring-1 ring-inset ring-white/10"
+                style={{
+                  width: `${width}%`,
+                  background: empty
+                    ? 'var(--muted)'
+                    : f.isLossHotspot
+                      ? 'linear-gradient(90deg,#ef4444,#f97316)'
+                      : 'linear-gradient(90deg,#6366f1,#8b5cf6)',
+                }}
+              >
+                <span
+                  className={`text-base font-bold tabular-nums ${empty ? 'text-muted-foreground' : 'text-white'}`}
+                >
+                  {f.total}
+                </span>
+                {f.openValue > 0 && (
+                  <span className="ml-2 truncate text-xs tabular-nums text-white/85">
+                    {money(f.openValue)}
                   </span>
                 )}
               </div>
+            </div>
+            {/* coluna direita: destaque de perda */}
+            <div className="w-28 shrink-0 text-left">
+              {f.isLossHotspot ? (
+                <span className="inline-flex items-center gap-1 rounded-full bg-red-500/12 px-2 py-0.5 text-[11px] font-semibold text-red-600 dark:text-red-400">
+                  <AlertTriangle className="h-3 w-3" />
+                  {Math.round(f.lossRate * 100)}% perda
+                </span>
+              ) : f.lost > 0 ? (
+                <span className="text-xs tabular-nums text-muted-foreground">
+                  {Math.round(f.lossRate * 100)}% perda
+                </span>
+              ) : null}
             </div>
           </div>
         )
