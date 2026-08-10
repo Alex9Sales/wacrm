@@ -169,3 +169,59 @@ export async function listGoogleEvents(
   const data = (await res.json()) as { items?: GoogleEvent[] }
   return data.items ?? []
 }
+
+// --- escrita (CRM → Google) ---
+
+export type GoogleEventBody = {
+  summary: string
+  description?: string
+  location?: string
+  start: { dateTime?: string; date?: string }
+  end: { dateTime?: string; date?: string }
+}
+
+export async function insertGoogleEvent(
+  accessToken: string,
+  calendarId: string,
+  body: GoogleEventBody,
+): Promise<{ id: string }> {
+  const res = await fetch(`${CAL_BASE}/calendars/${encodeURIComponent(calendarId)}/events`, {
+    method: 'POST',
+    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify(body),
+  })
+  if (!res.ok) throw new Error(`Google insert event (${res.status}): ${await res.text()}`)
+  return (await res.json()) as { id: string }
+}
+
+export async function patchGoogleEvent(
+  accessToken: string,
+  calendarId: string,
+  eventId: string,
+  body: GoogleEventBody,
+): Promise<void> {
+  const res = await fetch(
+    `${CAL_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+    {
+      method: 'PATCH',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  )
+  if (!res.ok) throw new Error(`Google patch event (${res.status}): ${await res.text()}`)
+}
+
+export async function deleteGoogleEvent(
+  accessToken: string,
+  calendarId: string,
+  eventId: string,
+): Promise<void> {
+  const res = await fetch(
+    `${CAL_BASE}/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
+    { method: 'DELETE', headers: { Authorization: `Bearer ${accessToken}` } },
+  )
+  // 404/410 = já não existe no Google → tratamos como sucesso.
+  if (!res.ok && res.status !== 404 && res.status !== 410) {
+    throw new Error(`Google delete event (${res.status}): ${await res.text()}`)
+  }
+}

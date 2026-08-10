@@ -11,7 +11,7 @@ import { db, calendars, calendarEvents, calendarConnections, contacts, deals, us
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { googleConfigured } from '@/lib/google/calendar'
-import { importGoogleEvents } from '@/lib/google/sync'
+import { importGoogleEvents, pushEventToGoogle } from '@/lib/google/sync'
 
 export type CalendarRow = {
   id: string
@@ -182,6 +182,12 @@ export async function createEvent(
         })
         .returning({ id: calendarEvents.id }),
     )
+    // Espelha no Google se a agenda for do Google (best-effort).
+    try {
+      await pushEventToGoogle(ctx.accountId, created.id, 'create')
+    } catch (err) {
+      console.error('[agenda] push create → google:', err)
+    }
     return { id: created.id, error: null }
   } catch (err) {
     return { id: null, error: err instanceof Error ? err.message : 'Falha ao criar evento' }
@@ -210,6 +216,12 @@ export async function updateEvent(
       .update(calendarEvents)
       .set(set)
       .where(and(eq(calendarEvents.id, id), eq(calendarEvents.accountId, ctx.accountId)))
+    // Espelha a edição no Google (best-effort).
+    try {
+      await pushEventToGoogle(ctx.accountId, id, 'update')
+    } catch (err) {
+      console.error('[agenda] push update → google:', err)
+    }
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao atualizar evento' }
@@ -219,6 +231,12 @@ export async function updateEvent(
 export async function deleteEvent(id: string): Promise<{ error: string | null }> {
   try {
     const ctx = await getCurrentAccount()
+    // Apaga no Google ANTES de remover do banco (precisa ler o google_event_id).
+    try {
+      await pushEventToGoogle(ctx.accountId, id, 'delete')
+    } catch (err) {
+      console.error('[agenda] push delete → google:', err)
+    }
     await db
       .delete(calendarEvents)
       .where(and(eq(calendarEvents.id, id), eq(calendarEvents.accountId, ctx.accountId)))

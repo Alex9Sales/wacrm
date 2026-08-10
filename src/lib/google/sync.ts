@@ -8,7 +8,15 @@ import { and, eq, sql } from 'drizzle-orm'
 import { db, calendarConnections, calendars, calendarEvents } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
-import { refreshAccessToken, listGoogleEvents, type GoogleEvent } from './calendar'
+import {
+  refreshAccessToken,
+  listGoogleEvents,
+  insertGoogleEvent,
+  patchGoogleEvent,
+  deleteGoogleEvent,
+  type GoogleEvent,
+  type GoogleEventBody,
+} from './calendar'
 
 type ConnectionRow = {
   id: string
@@ -114,4 +122,113 @@ export async function importGoogleEvents(
     }
   }
   return { imported }
+}
+
+// ============================================================
+// CRM → Google (mão dupla). Ao criar/editar/apagar um evento numa
+// agenda do Google, espelha a operação no Google Calendar.
+// Best-effort: falha aqui não derruba a operação no CRM.
+// ============================================================
+
+type PushRow = {
+  id: string
+  title: string
+  description: string | null
+  location: string | null
+  startsAt: string
+  endsAt: string
+  allDay: boolean
+  googleEventId: string | null
+  calGoogleId: string | null
+  connectionId: string | null
+}
+
+function toGoogleBody(row: PushRow): GoogleEventBody {
+  const body: GoogleEventBody = {
+    summary: row.title,
+    description: row.description ?? undefined,
+    location: row.location ?? undefined,
+    start: {},
+    end: {},
+  }
+  if (row.allDay) {
+    // Google usa datas (YYYY-MM-DD); fim é exclusivo.
+    body.start.date = row.startsAt.slice(0, 10)
+    let endDate = row.endsAt.slice(0, 10)
+    if (endDate <= row.startsAt.slice(0, 10)) {
+      const d = new Date(`${row.startsAt.slice(0, 10)}T00:00:00Z`)
+      d.setUTCDate(d.getUTCDate() + 1)
+      endDate = d.toISOString().slice(0, 10)
+    }
+    body.end.date = endDate
+  } else {
+    body.start.dateTime = row.startsAt
+    body.end.dateTime = row.endsAt
+  }
+  return body
+}
+
+/** Espelha um evento do CRM no Google. op: 'create' | 'update' | 'delete'.
+ *  No-op se a agenda do evento não for do Google. */
+export async function pushEventToGoogle(
+  accountId: string,
+  eventId: string,
+  op: 'create' | 'update' | 'delete',
+): Promise<void> {
+  const row = firstOrNull(
+    await db
+      .select({
+        id: calendarEvents.id,
+        title: calendarEvents.title,
+        description: calendarEvents.description,
+        location: calendarEvents.location,
+        startsAt: calendarEvents.startsAt,
+        endsAt: calendarEvents.endsAt,
+        allDay: calendarEvents.allDay,
+        googleEventId: calendarEvents.googleEventId,
+        calGoogleId: calendars.googleCalendarId,
+        connectionId: calendars.connectionId,
+      })
+      .from(calendarEvents)
+      .innerJoin(calendars, eq(calendarEvents.calendarId, calendars.id))
+      .where(and(eq(calendarEvents.id, eventId), eq(calendarEvents.accountId, accountId)))
+      .limit(1),
+  )
+  // Agenda local (não-Google) → nada a espelhar.
+  if (!row || !row.calGoogleId || !row.connectionId) return
+
+  const conn = firstOrNull(
+    await db
+      .select({
+        id: calendarConnections.id,
+        accessToken: calendarConnections.accessToken,
+        refreshToken: calendarConnections.refreshToken,
+        tokenExpiry: calendarConnections.tokenExpiry,
+      })
+      .from(calendarConnections)
+      .where(eq(calendarConnections.id, row.connectionId))
+      .limit(1),
+  )
+  if (!conn) return
+
+  const accessToken = await getValidAccessToken(conn)
+
+  if (op === 'delete') {
+    if (row.googleEventId) await deleteGoogleEvent(accessToken, row.calGoogleId, row.googleEventId)
+    return
+  }
+
+  const body = toGoogleBody(row as PushRow)
+
+  if (op === 'update' && row.googleEventId) {
+    await patchGoogleEvent(accessToken, row.calGoogleId, row.googleEventId, body)
+    return
+  }
+
+  // create (ou update de um evento que ainda não existe no Google)
+  const created = await insertGoogleEvent(accessToken, row.calGoogleId, body)
+  await db
+    .update(calendarEvents)
+    .set({ googleEventId: created.id, source: 'google', updatedAt: sql`now()` })
+    .where(eq(calendarEvents.id, eventId))
 }
