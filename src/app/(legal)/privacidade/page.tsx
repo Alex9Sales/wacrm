@@ -3,7 +3,7 @@ import type { Metadata } from 'next';
 export const metadata: Metadata = {
   title: 'Política de Privacidade — FluxiaCRM',
   description:
-    'Como o FluxiaCRM (Sales Tecnologia) coleta, usa, compartilha e protege seus dados, incluindo a integração com a WhatsApp Business Platform da Meta.',
+    'Como o FluxiaCRM (Sales Tecnologia) coleta, usa, compartilha e protege seus dados, incluindo as integrações com a WhatsApp Business Platform da Meta e com o Google Calendar.',
 };
 
 export default function PrivacidadePage() {
@@ -75,7 +75,49 @@ export default function PrivacidadePage() {
         Política da Plataforma Meta.
       </p>
 
-      <h2>4. Como usamos os dados</h2>
+      <h2>4. Integração com o Google (Google Calendar)</h2>
+      <p>
+        Quando um usuário conecta a sua conta Google ao FluxiaCRM (na seção{' '}
+        <strong>Agenda</strong>), solicitamos permissão para acessar o{' '}
+        <strong>Google Calendar</strong>. Usamos essa permissão exclusivamente para:
+      </p>
+      <ul>
+        <li>
+          <strong>ler</strong> seus calendários e eventos para exibi-los na Agenda do
+          FluxiaCRM; e
+        </li>
+        <li>
+          <strong>criar, editar e remover</strong> eventos quando você agenda um
+          compromisso na plataforma — mantendo o Google Calendar e a Agenda do
+          FluxiaCRM sincronizados.
+        </li>
+      </ul>
+      <p>
+        Também acessamos o <strong>endereço de e-mail</strong> da conta Google
+        conectada, apenas para identificar de qual conta os calendários vieram. Os{' '}
+        <strong>tokens de acesso</strong> do Google ficam armazenados de forma{' '}
+        <strong>criptografada</strong> e são usados só para essa sincronização. Você
+        pode <strong>desconectar</strong> o Google a qualquer momento na própria
+        Agenda, o que remove a conexão e os tokens do nosso sistema.
+      </p>
+      <p>
+        <strong>Uso Limitado (Google API Services User Data Policy):</strong> o uso e
+        a transferência, pelo FluxiaCRM, de informações recebidas das APIs do Google
+        obedecerão à{' '}
+        <a
+          href="https://developers.google.com/terms/api-services-user-data-policy"
+          target="_blank"
+          rel="noopener noreferrer"
+        >
+          Política de Dados de Usuário dos Serviços de API do Google
+        </a>
+        , incluindo os requisitos de <strong>Uso Limitado</strong>. Não usamos os
+        dados do Google Calendar para publicidade, não os vendemos e não os
+        compartilhamos com terceiros, exceto o estritamente necessário para prestar o
+        recurso, cumprir a lei ou mediante o seu consentimento.
+      </p>
+
+      <h2>5. Como usamos os dados</h2>
       <p>
         Usamos os dados para prestar e melhorar o serviço de atendimento: exibir
         conversas, permitir respostas, organizar contatos e negócios, gerar
@@ -83,7 +125,7 @@ export default function PrivacidadePage() {
         vendemos seus dados.
       </p>
 
-      <h2>5. Compartilhamento</h2>
+      <h2>6. Compartilhamento</h2>
       <p>
         Compartilhamos dados apenas com: (a) a <strong>Meta</strong>, na medida
         necessária para operar a integração do WhatsApp; (b) provedores de
@@ -92,14 +134,14 @@ export default function PrivacidadePage() {
         própria conta.
       </p>
 
-      <h2>6. Retenção e segurança</h2>
+      <h2>7. Retenção e segurança</h2>
       <p>
         Retemos os dados enquanto a conta estiver ativa ou conforme necessário para
         cumprir obrigações legais. Credenciais e tokens sensíveis são armazenados de
         forma criptografada, e o acesso é restrito por conta.
       </p>
 
-      <h2>7. Seus direitos (LGPD)</h2>
+      <h2>8. Seus direitos (LGPD)</h2>
       <p>
         Você pode solicitar acesso, correção, portabilidade ou{' '}
         <strong>exclusão</strong> dos seus dados. Consulte nossas{' '}
@@ -107,19 +149,19 @@ export default function PrivacidadePage() {
         para <strong>servicos@salestecnologia.com.br</strong>.
       </p>
 
-      <h2>8. Cookies</h2>
+      <h2>9. Cookies</h2>
       <p>
         Usamos cookies estritamente necessários para autenticação e funcionamento da
         plataforma.
       </p>
 
-      <h2>9. Alterações</h2>
+      <h2>10. Alterações</h2>
       <p>
         Podemos atualizar esta política. Alterações relevantes serão comunicadas
         pelos canais da plataforma.
       </p>
 
-      <h2>10. Contato</h2>
+      <h2>11. Contato</h2>
       <p>
         Sales Tecnologia — FluxiaCRM · <strong>servicos@salestecnologia.com.br</strong>
       </p>

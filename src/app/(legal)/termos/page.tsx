@@ -57,14 +57,28 @@ export default function TermosPage() {
         (Tech Provider) para intermediar o atendimento.
       </p>
 
-      <h2>5. Propriedade intelectual</h2>
+      <h2>5. Integração com o Google Calendar</h2>
+      <p>
+        A conexão com o Google Calendar é <strong>opcional</strong> e feita pelo
+        próprio usuário na seção Agenda, por meio do login seguro do Google (OAuth).
+        Ao conectar, você autoriza o FluxiaCRM a ler e a gerenciar (criar, editar e
+        remover) eventos dos seus calendários, apenas para manter a Agenda do
+        FluxiaCRM e o Google Calendar sincronizados. Você pode revogar o acesso a
+        qualquer momento, desconectando o Google na Agenda ou nas configurações da sua
+        Conta do Google. O tratamento desses dados segue a nossa{' '}
+        <a href="/privacidade">Política de Privacidade</a> e a Política de Dados de
+        Usuário dos Serviços de API do Google, incluindo os requisitos de Uso
+        Limitado.
+      </p>
+
+      <h2>6. Propriedade intelectual</h2>
       <p>
         O software e a marca FluxiaCRM pertencem à Sales Tecnologia. Os dados de
         atendimento inseridos por cada empresa permanecem de titularidade da
         respectiva empresa.
       </p>
 
-      <h2>6. Disponibilidade e limitação de responsabilidade</h2>
+      <h2>7. Disponibilidade e limitação de responsabilidade</h2>
       <p>
         O serviço é fornecido &quot;no estado em que se encontra&quot;. Empregamos
         esforços razoáveis para manter a plataforma disponível e segura, mas não
@@ -73,7 +87,7 @@ export default function TermosPage() {
         ou indisponibilidade do serviço.
       </p>
 
-      <h2>7. Rescisão</h2>
+      <h2>8. Rescisão</h2>
       <p>
         Você pode encerrar sua conta a qualquer momento. Podemos suspender ou
         encerrar contas que violem estes Termos ou as políticas da Meta/WhatsApp.
@@ -81,18 +95,18 @@ export default function TermosPage() {
         <a href="/exclusao-de-dados">Instruções de Exclusão de Dados</a>.
       </p>
 
-      <h2>8. Privacidade</h2>
+      <h2>9. Privacidade</h2>
       <p>
         O tratamento de dados é descrito na nossa{' '}
         <a href="/privacidade">Política de Privacidade</a>.
       </p>
 
-      <h2>9. Lei aplicável</h2>
+      <h2>10. Lei aplicável</h2>
       <p>
         Estes Termos são regidos pelas leis do Brasil.
       </p>
 
-      <h2>10. Contato</h2>
+      <h2>11. Contato</h2>
       <p>
         Sales Tecnologia — FluxiaCRM · <strong>servicos@salestecnologia.com.br</strong>
       </p>
