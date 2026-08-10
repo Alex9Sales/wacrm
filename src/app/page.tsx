@@ -14,6 +14,9 @@ export const metadata: Metadata = {
   title: 'FluxiaCRM — CRM de atendimento e vendas no WhatsApp',
   description:
     'O FluxiaCRM é uma plataforma de atendimento e vendas no WhatsApp para pequenas e médias empresas: caixa de entrada compartilhada, funil de vendas, agenda integrada ao Google Calendar, relatórios, automações e agentes de IA.',
+  // A homepage é pública e deve ser rastreável (verificação OAuth do Google +
+  // SEO) — sobrepõe o noindex global do layout só para esta rota.
+  robots: { index: true, follow: true },
 }
 
 const FEATURES = [
@@ -78,10 +81,15 @@ export default async function RootPage() {
         <h1 className="font-heading text-4xl font-bold tracking-tight sm:text-5xl">
           FluxiaCRM
         </h1>
+        <p className="mt-3 text-lg font-semibold text-primary sm:text-xl">
+          CRM de atendimento e vendas no WhatsApp
+        </p>
         <p className="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground">
-          A plataforma de <strong className="text-foreground">atendimento e vendas no WhatsApp</strong>{' '}
-          para pequenas e médias empresas. Centralize as conversas, organize seu funil,
-          agende compromissos e acompanhe os resultados — tudo em um só lugar.
+          O <strong className="text-foreground">FluxiaCRM</strong> é um software (CRM) que
+          centraliza o <strong className="text-foreground">atendimento e as vendas da sua
+          empresa pelo WhatsApp</strong>. Com ele, pequenas e médias empresas reúnem as
+          conversas numa caixa de entrada compartilhada, organizam o funil de vendas,
+          agendam compromissos e acompanham os resultados — tudo em um só lugar.
         </p>
         <div className="mt-8 flex items-center justify-center gap-3">
           <a
