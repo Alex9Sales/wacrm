@@ -10,6 +10,7 @@ import { useUnreadNotifications } from "@/hooks/use-unread-notifications";
 import { useTasksDueAlert } from "@/hooks/use-tasks-due-alert";
 import { useInternalUnread } from "@/hooks/use-internal-unread";
 import {
+  BarChart3,
   Bell,
   Bot,
   Building2,
@@ -121,6 +122,7 @@ const navItems: NavItem[] = [
   { href: "/empresas", label: "Empresas", icon: Building2 },
   { href: "/tarefas", label: "Tarefas", icon: ListTodo },
   { href: "/pipelines", label: "Funis", icon: GitBranch },
+  { href: "/relatorios", label: "Relatórios", icon: BarChart3 },
   { href: "/broadcasts", label: "Disparos", icon: Radio },
   { href: "/agendamentos", label: "Agendamentos", icon: CalendarClock },
   { href: "/automations", label: "Automações", icon: Zap },
