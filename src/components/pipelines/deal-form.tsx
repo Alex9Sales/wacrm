@@ -9,6 +9,10 @@ import {
   updateDeal,
   deleteDeal,
 } from "@/app/(dashboard)/pipelines/actions";
+import {
+  listProducts,
+  type ProductRow,
+} from "@/app/(dashboard)/settings/products-actions";
 import { useAuth } from "@/hooks/use-auth";
 import { CURRENCIES } from "@/lib/currency";
 import type {
@@ -86,6 +90,7 @@ export function DealForm({
 
   const [contacts, setContacts] = useState<Contact[]>([]);
   const [profiles, setProfiles] = useState<Profile[]>([]);
+  const [catalog, setCatalog] = useState<ProductRow[]>([]);
   const [linkedConversation, setLinkedConversation] =
     useState<Conversation | null>(null);
 
@@ -157,6 +162,10 @@ export function DealForm({
       setContacts(c);
       setProfiles(p);
     })();
+    // Catálogo (ativos) p/ o seletor de produto no Valor.
+    listProducts()
+      .then((prods) => !cancelled && setCatalog(prods))
+      .catch(() => {});
     return () => {
       cancelled = true;
     };
@@ -363,6 +372,37 @@ export function DealForm({
                 </button>
               )}
             </div>
+
+            {/* Produto do catálogo (opcional): preenche o Valor com o preço-base,
+                que continua editável (o preço muda por negociação). */}
+            {catalog.length > 0 && (
+              <div className="grid gap-2">
+                <Label className="text-muted-foreground">
+                  Produto/serviço (opcional)
+                </Label>
+                <select
+                  defaultValue=""
+                  onChange={(e) => {
+                    const p = catalog.find((x) => x.id === e.target.value);
+                    if (!p) return;
+                    setValue(p.unit_price ? String(p.unit_price) : "");
+                    if (!title.trim()) setTitle(p.name);
+                    e.target.value = ""; // volta ao placeholder (só preenche)
+                  }}
+                  className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary"
+                >
+                  <option value="">Escolher do catálogo…</option>
+                  {catalog.map((p) => (
+                    <option key={p.id} value={p.id}>
+                      {p.name}
+                      {p.unit_price
+                        ? ` — ${p.unit_price.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}`
+                        : ""}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
 
             <div className="grid grid-cols-[1fr_110px] gap-3">
               <div className="grid gap-2">
