@@ -7,7 +7,7 @@
 // API do agente IA (com aprovação). Tudo account-scoped; escrita = agent+.
 // ============================================================
 
-import { and, asc, eq, ilike, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
 import {
@@ -339,4 +339,83 @@ export async function importDeals(
       error: err instanceof Error ? err.message : 'Falha ao importar.',
     }
   }
+}
+
+// ---- Export (para migração / backup) ----
+
+export interface ExportContactRow {
+  company: string | null
+  name: string | null
+  phone: string
+  email: string | null
+}
+
+export async function exportContactsData(): Promise<ExportContactRow[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      company: contacts.company,
+      name: contacts.name,
+      phone: contacts.phone,
+      email: contacts.email,
+    })
+    .from(contacts)
+    .where(eq(contacts.accountId, ctx.accountId))
+    .orderBy(asc(contacts.name))
+    .limit(50000)
+  return rows.map((r) => ({
+    company: r.company ?? null,
+    name: r.name ?? null,
+    phone: r.phone,
+    email: r.email ?? null,
+  }))
+}
+
+export interface ExportDealRow {
+  title: string
+  company: string | null
+  contact_name: string | null
+  contact_phone: string | null
+  value: number
+  stage: string | null
+  responsible: string | null
+  source: string | null
+}
+
+export async function exportDealsData(
+  pipelineId: string,
+): Promise<ExportDealRow[]> {
+  const ctx = await getCurrentAccount()
+  if (!pipelineId) return []
+  const rows = await db
+    .select({
+      title: deals.title,
+      company: companies.name,
+      contact_name: contacts.name,
+      contact_phone: contacts.phone,
+      value: deals.value,
+      stage: pipelineStages.name,
+      responsible: user.name,
+      source: deals.source,
+    })
+    .from(deals)
+    .leftJoin(companies, eq(deals.companyId, companies.id))
+    .leftJoin(contacts, eq(deals.contactId, contacts.id))
+    .leftJoin(pipelineStages, eq(deals.stageId, pipelineStages.id))
+    .leftJoin(user, eq(deals.assignedTo, user.id))
+    .where(
+      and(eq(deals.accountId, ctx.accountId), eq(deals.pipelineId, pipelineId)),
+    )
+    .orderBy(desc(deals.createdAt))
+    .limit(50000)
+  return rows.map((r) => ({
+    title: r.title,
+    company: r.company ?? null,
+    contact_name: r.contact_name ?? null,
+    contact_phone: r.contact_phone ?? null,
+    value: Number(r.value ?? 0),
+    stage: r.stage ?? null,
+    responsible: r.responsible ?? null,
+    source: r.source ?? null,
+  }))
 }

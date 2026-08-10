@@ -8,11 +8,17 @@ import {
   type ImportContactRow,
   type ImportDealRow,
 } from '@/app/(dashboard)/settings/import-actions'
+import {
+  exportContactsData,
+  exportDealsData,
+} from '@/app/(dashboard)/settings/import-actions'
 import { listPipelines } from '@/app/(dashboard)/pipelines/actions'
 import type { Pipeline } from '@/types'
+import { parseSheet, downloadCsv } from '@/lib/import/sheet'
 import { Button } from '@/components/ui/button'
 import {
   Upload,
+  Download,
   Loader2,
   Building2,
   Handshake,
@@ -78,6 +84,8 @@ export function ImportPanel() {
   const [fileName, setFileName] = useState('')
   const [parsing, setParsing] = useState(false)
   const [importing, setImporting] = useState(false)
+  const [exporting, setExporting] = useState(false)
+  const [dragging, setDragging] = useState(false)
   const [done, setDone] = useState<string | null>(null)
   const fileRef = useRef<HTMLInputElement>(null)
 
@@ -98,19 +106,12 @@ export function ImportPanel() {
     setDone(null)
   }, [])
 
-  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = ''
+  async function handleFile(file: File | undefined) {
     if (!file) return
     setParsing(true)
     setDone(null)
     try {
-      const XLSX = await import('xlsx')
-      const wb = XLSX.read(await file.arrayBuffer(), { type: 'array' })
-      const sheet = wb.Sheets[wb.SheetNames[0]]
-      const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-        defval: '',
-      })
+      const json = await parseSheet(file)
       if (json.length === 0) {
         toast.error('Planilha vazia.')
         return
@@ -168,6 +169,59 @@ export function ImportPanel() {
       toast.error('Não consegui ler o arquivo. Use CSV ou XLSX.')
     } finally {
       setParsing(false)
+    }
+  }
+
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = ''
+    void handleFile(file)
+  }
+
+  async function exportData() {
+    setExporting(true)
+    try {
+      if (type === 'contacts') {
+        const rows = await exportContactsData()
+        downloadCsv(
+          'empresas_e_contatos.csv',
+          ['Nome da Organização', 'Nome do contato', 'Telefone do contato', 'E-mail do contato'],
+          rows.map((r) => [r.company ?? '', r.name ?? '', r.phone ?? '', r.email ?? '']),
+        )
+      } else {
+        if (!pipelineId) {
+          toast.error('Escolha o funil para exportar.')
+          return
+        }
+        const rows = await exportDealsData(pipelineId)
+        downloadCsv(
+          'negociacoes.csv',
+          [
+            'Nome da Oportunidade',
+            'Nome da Organização',
+            'Nome do contato',
+            'Telefone do contato',
+            'Valor',
+            'Etapa',
+            'Responsável',
+            'Fonte da negociação',
+          ],
+          rows.map((r) => [
+            r.title ?? '',
+            r.company ?? '',
+            r.contact_name ?? '',
+            r.contact_phone ?? '',
+            r.value ?? 0,
+            r.stage ?? '',
+            r.responsible ?? '',
+            r.source ?? '',
+          ]),
+        )
+      }
+    } catch {
+      toast.error('Falha ao exportar.')
+    } finally {
+      setExporting(false)
     }
   }
 
@@ -288,30 +342,50 @@ export function ImportPanel() {
         </div>
       )}
 
-      {/* Upload */}
-      <div>
-        <input
-          ref={fileRef}
-          type="file"
-          accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
-          onChange={onFile}
-          className="hidden"
-        />
-        <Button
-          variant="outline"
+      {/* Upload (arrastar ou clicar) + Exportar */}
+      <input
+        ref={fileRef}
+        type="file"
+        accept=".csv,.xlsx,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+        onChange={onFile}
+        className="hidden"
+      />
+      <div className="flex flex-wrap items-center gap-2">
+        <div
+          onDragOver={(e) => {
+            e.preventDefault()
+            setDragging(true)
+          }}
+          onDragLeave={() => setDragging(false)}
+          onDrop={(e) => {
+            e.preventDefault()
+            setDragging(false)
+            void handleFile(e.dataTransfer.files?.[0])
+          }}
           onClick={() => fileRef.current?.click()}
-          disabled={parsing}
+          className={`flex flex-1 cursor-pointer items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-6 text-sm transition-colors ${
+            dragging
+              ? 'border-primary bg-primary/5 text-primary'
+              : 'border-border text-muted-foreground hover:bg-muted/40'
+          }`}
         >
           {parsing ? (
+            <Loader2 className="h-4 w-4 animate-spin" />
+          ) : (
+            <Upload className="h-4 w-4" />
+          )}
+          {fileName
+            ? fileName
+            : 'Arraste um CSV/XLSX aqui ou clique para escolher'}
+        </div>
+        <Button variant="outline" onClick={() => void exportData()} disabled={exporting}>
+          {exporting ? (
             <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
           ) : (
-            <Upload className="mr-1.5 h-4 w-4" />
+            <Download className="mr-1.5 h-4 w-4" />
           )}
-          Selecionar arquivo
+          Exportar
         </Button>
-        {fileName && (
-          <span className="ml-2 text-xs text-muted-foreground">{fileName}</span>
-        )}
       </div>
 
       {/* Prévia */}

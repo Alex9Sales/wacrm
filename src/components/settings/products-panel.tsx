@@ -23,6 +23,7 @@ import {
   DialogDescription,
   DialogFooter,
 } from '@/components/ui/dialog'
+import { parseSheet, downloadCsv } from '@/lib/import/sheet'
 import {
   Package,
   Wrench,
@@ -31,6 +32,7 @@ import {
   Trash2,
   Loader2,
   Upload,
+  Download,
 } from 'lucide-react'
 
 function brl(n: number) {
@@ -63,16 +65,9 @@ interface ParsedImport {
   kind: ProductKind
 }
 
-/** Lê CSV ou XLSX (SheetJS) e mapeia as colunas Nome/Preço/Descrição/Tipo. */
+/** Lê CSV ou XLSX e mapeia as colunas Nome/Preço/Descrição/Tipo. */
 async function parseSpreadsheet(file: File): Promise<ParsedImport[]> {
-  const XLSX = await import('xlsx')
-  const buf = await file.arrayBuffer()
-  const wb = XLSX.read(buf, { type: 'array' })
-  const sheet = wb.Sheets[wb.SheetNames[0]]
-  if (!sheet) return []
-  const json = XLSX.utils.sheet_to_json<Record<string, unknown>>(sheet, {
-    defval: '',
-  })
+  const json = await parseSheet(file)
   if (json.length === 0) return []
   const keys = Object.keys(json[0])
   const find = (re: RegExp) => keys.find((k) => re.test(norm(k)))
@@ -122,6 +117,7 @@ export function ProductsPanel() {
   const [saving, setSaving] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
+  const [dragging, setDragging] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
 
   const load = useCallback(async () => {
@@ -209,9 +205,7 @@ export function ProductsPanel() {
     await load()
   }
 
-  async function onFile(e: React.ChangeEvent<HTMLInputElement>) {
-    const file = e.target.files?.[0]
-    e.target.value = '' // permite reimportar o mesmo arquivo
+  async function handleFile(file: File | undefined) {
     if (!file) return
     setImporting(true)
     try {
@@ -246,6 +240,29 @@ export function ProductsPanel() {
     }
   }
 
+  function onFile(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0]
+    e.target.value = '' // permite reimportar o mesmo arquivo
+    void handleFile(file)
+  }
+
+  function exportCsv() {
+    if (items.length === 0) {
+      toast('Catálogo vazio — nada para exportar.')
+      return
+    }
+    downloadCsv(
+      'produtos_servicos.csv',
+      ['Nome do produto', 'Preço', 'Descrição', 'Tipo'],
+      items.map((p) => [
+        p.name,
+        p.unit_price,
+        p.description ?? '',
+        p.kind === 'service' ? 'Serviço' : 'Produto',
+      ]),
+    )
+  }
+
   return (
     <div className="space-y-5">
       <div className="flex flex-wrap items-start justify-between gap-3">
@@ -265,6 +282,9 @@ export function ProductsPanel() {
             onChange={onFile}
             className="hidden"
           />
+          <Button variant="outline" onClick={exportCsv}>
+            <Download className="mr-1.5 h-4 w-4" /> Exportar
+          </Button>
           <Button
             variant="outline"
             onClick={() => fileRef.current?.click()}
@@ -282,10 +302,30 @@ export function ProductsPanel() {
           </Button>
         </div>
       </div>
-      <p className="-mt-3 text-xs text-muted-foreground">
-        Importe um CSV ou XLSX com colunas <strong>Nome</strong>,{' '}
-        <strong>Preço</strong> e <strong>Descrição</strong>.
-      </p>
+
+      {/* Solta um CSV/XLSX aqui (ou use Importar). */}
+      <div
+        onDragOver={(e) => {
+          e.preventDefault()
+          setDragging(true)
+        }}
+        onDragLeave={() => setDragging(false)}
+        onDrop={(e) => {
+          e.preventDefault()
+          setDragging(false)
+          void handleFile(e.dataTransfer.files?.[0])
+        }}
+        className={`flex items-center justify-center gap-2 rounded-xl border border-dashed px-4 py-3 text-xs transition-colors ${
+          dragging
+            ? 'border-primary bg-primary/5 text-primary'
+            : 'border-border text-muted-foreground'
+        }`}
+      >
+        <Upload className="h-4 w-4" />
+        Arraste um CSV/XLSX aqui (colunas <strong>Nome</strong>,{' '}
+        <strong>Preço</strong>, <strong>Descrição</strong>) ou use{' '}
+        <strong>Importar</strong>.
+      </div>
 
       <label className="flex items-center gap-2 text-xs text-muted-foreground">
         <input
