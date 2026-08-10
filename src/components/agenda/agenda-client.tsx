@@ -6,7 +6,8 @@
 // ============================================================
 
 import { useCallback, useEffect, useMemo, useState } from 'react'
-import { ChevronLeft, ChevronRight, Plus, X, Trash2, Clock, MapPin } from 'lucide-react'
+import { toast } from 'sonner'
+import { ChevronLeft, ChevronRight, Plus, X, Trash2, MapPin, RefreshCw, Link2, Unlink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -18,8 +19,12 @@ import {
   createEvent,
   updateEvent,
   deleteEvent,
+  getGoogleStatus,
+  syncGoogleNow,
+  disconnectGoogle,
   type CalendarRow,
   type EventRow,
+  type GoogleStatus,
 } from '@/app/(dashboard)/agenda/actions'
 
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
@@ -65,6 +70,8 @@ export function AgendaClient() {
   const [loading, setLoading] = useState(true)
   const [draft, setDraft] = useState<Draft | null>(null)
   const [saving, setSaving] = useState(false)
+  const [google, setGoogle] = useState<GoogleStatus | null>(null)
+  const [syncing, setSyncing] = useState(false)
 
   const grid = useMemo(() => monthGrid(anchor), [anchor])
   const today = useMemo(() => new Date(), [])
@@ -93,6 +100,44 @@ export function AgendaClient() {
   useEffect(() => {
     void load()
   }, [load])
+
+  // Estado da conexão Google + feedback do retorno do OAuth (?google=...).
+  useEffect(() => {
+    void getGoogleStatus().then(setGoogle).catch(() => {})
+    const params = new URLSearchParams(window.location.search)
+    const g = params.get('google')
+    if (g === 'connected') {
+      toast.success(`Google conectado${params.get('email') ? `: ${params.get('email')}` : ''}`)
+      window.history.replaceState(null, '', '/agenda')
+    } else if (g === 'error') {
+      toast.error(`Falha ao conectar o Google: ${params.get('reason') ?? ''}`)
+      window.history.replaceState(null, '', '/agenda')
+    }
+  }, [])
+
+  const onSyncGoogle = async () => {
+    setSyncing(true)
+    try {
+      const r = await syncGoogleNow()
+      if (r.error) toast.error(r.error)
+      else {
+        toast.success(`Sincronizado (${r.imported} novo(s) evento(s))`)
+        await load()
+      }
+    } finally {
+      setSyncing(false)
+    }
+  }
+
+  const onDisconnectGoogle = async () => {
+    const r = await disconnectGoogle()
+    if (r.error) toast.error(r.error)
+    else {
+      toast.success('Google desconectado')
+      setGoogle((g) => (g ? { ...g, connected: false, email: null } : g))
+      await load()
+    }
+  }
 
   const eventsForDay = useCallback(
     (day: Date): EventRow[] => {
@@ -236,6 +281,35 @@ export function AgendaClient() {
               </span>
             ))}
           </div>
+          {/* Google Calendar */}
+          {google?.connected ? (
+            <div className="flex items-center gap-1.5">
+              <span
+                className="hidden max-w-[160px] truncate rounded-full bg-muted px-2 py-1 text-xs text-muted-foreground md:inline"
+                title={google.email ?? 'Google'}
+              >
+                {google.email ?? 'Google'}
+              </span>
+              <Button variant="outline" size="sm" onClick={onSyncGoogle} disabled={syncing}>
+                <RefreshCw className={`mr-1.5 h-4 w-4 ${syncing ? 'animate-spin' : ''}`} />
+                Sincronizar
+              </Button>
+              <Button variant="outline" size="sm" onClick={onDisconnectGoogle} title="Desconectar Google">
+                <Unlink className="h-4 w-4" />
+              </Button>
+            </div>
+          ) : google?.configured ? (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => {
+                window.location.href = '/api/google/calendar/connect'
+              }}
+            >
+              <Link2 className="mr-1.5 h-4 w-4" /> Conectar Google
+            </Button>
+          ) : null}
+
           <Button size="sm" onClick={() => openNew()}>
             <Plus className="mr-1.5 h-4 w-4" /> Novo evento
           </Button>

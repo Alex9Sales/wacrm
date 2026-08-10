@@ -1794,6 +1794,8 @@ export const calendars = pgTable("calendars", {
 	// 'local' | 'google'
 	source: text().default('local').notNull(),
 	googleCalendarId: text("google_calendar_id"),
+	// Conexão OAuth dona da agenda do Google (FK real na migração 0072).
+	connectionId: uuid("connection_id"),
 	isVisible: boolean("is_visible").default(true).notNull(),
 	createdBy: uuid("created_by"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
@@ -1840,4 +1842,24 @@ export const calendarEvents = pgTable("calendar_events", {
 	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "calendar_events_deal_id_fkey" }).onDelete("set null"),
 	check("calendar_events_status_check", sql`status IN ('confirmed','cancelled')`),
 	check("calendar_events_source_check", sql`source IN ('local','google')`),
+]);
+
+// Conexões OAuth de calendário (Google) — migração 0072. Tokens criptografados.
+export const calendarConnections = pgTable("calendar_connections", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	userId: uuid("user_id").notNull(),
+	provider: text().default('google').notNull(),
+	googleEmail: text("google_email"),
+	accessToken: text("access_token").notNull(),
+	refreshToken: text("refresh_token"),
+	tokenExpiry: timestamp("token_expiry", { withTimezone: true, mode: 'string' }),
+	scope: text(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_calendar_connections_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	uniqueIndex("idx_calendar_connections_user_email").using("btree", table.userId.asc().nullsLast().op("uuid_ops"), table.googleEmail.asc().nullsLast()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "calendar_connections_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.userId], foreignColumns: [user.id], name: "calendar_connections_user_id_fkey" }).onDelete("cascade"),
 ]);

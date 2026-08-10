@@ -7,9 +7,11 @@
 // ============================================================
 
 import { and, asc, eq, gte, lte, sql } from 'drizzle-orm'
-import { db, calendars, calendarEvents, contacts, deals, user } from '@/db'
+import { db, calendars, calendarEvents, calendarConnections, contacts, deals, user } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
+import { googleConfigured } from '@/lib/google/calendar'
+import { importGoogleEvents } from '@/lib/google/sync'
 
 export type CalendarRow = {
   id: string
@@ -289,5 +291,73 @@ export async function deleteCalendar(id: string): Promise<{ error: string | null
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao remover agenda' }
+  }
+}
+
+// ---------- Google Calendar ----------
+
+export type GoogleStatus = {
+  configured: boolean // env do servidor pronto (GOOGLE_CLIENT_ID/SECRET)
+  connected: boolean
+  email: string | null
+}
+
+/** Estado da conexão Google do usuário atual. */
+export async function getGoogleStatus(): Promise<GoogleStatus> {
+  const ctx = await getCurrentAccount()
+  const conn = firstOrNull(
+    await db
+      .select({ email: calendarConnections.googleEmail })
+      .from(calendarConnections)
+      .where(
+        and(
+          eq(calendarConnections.accountId, ctx.accountId),
+          eq(calendarConnections.userId, ctx.userId),
+        ),
+      )
+      .limit(1),
+  )
+  return { configured: googleConfigured(), connected: Boolean(conn), email: conn?.email ?? null }
+}
+
+/** Reimporta eventos das agendas Google do usuário (Google → CRM). */
+export async function syncGoogleNow(): Promise<{ imported: number; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const conns = await db
+      .select({ id: calendarConnections.id })
+      .from(calendarConnections)
+      .where(
+        and(
+          eq(calendarConnections.accountId, ctx.accountId),
+          eq(calendarConnections.userId, ctx.userId),
+        ),
+      )
+    let imported = 0
+    for (const c of conns) {
+      const r = await importGoogleEvents(ctx.accountId, c.id)
+      imported += r.imported
+    }
+    return { imported, error: null }
+  } catch (err) {
+    return { imported: 0, error: err instanceof Error ? err.message : 'Falha ao sincronizar' }
+  }
+}
+
+/** Desconecta o Google (apaga a conexão; as agendas Google saem em cascata). */
+export async function disconnectGoogle(): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .delete(calendarConnections)
+      .where(
+        and(
+          eq(calendarConnections.accountId, ctx.accountId),
+          eq(calendarConnections.userId, ctx.userId),
+        ),
+      )
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao desconectar' }
   }
 }
