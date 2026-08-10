@@ -5,7 +5,7 @@
 // integração com o agente de Follow-up entram por cima depois.
 // ============================================================
 
-import { useCallback, useEffect, useMemo, useState } from 'react'
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { ChevronLeft, ChevronRight, Plus, X, Trash2, MapPin, RefreshCw, Link2, Unlink } from 'lucide-react'
 import { Button } from '@/components/ui/button'
@@ -72,6 +72,8 @@ export function AgendaClient() {
   const [saving, setSaving] = useState(false)
   const [google, setGoogle] = useState<GoogleStatus | null>(null)
   const [syncing, setSyncing] = useState(false)
+  const [view, setView] = useState<'month' | 'day'>('month')
+  const [dayDate, setDayDate] = useState<Date>(() => new Date())
 
   const grid = useMemo(() => monthGrid(anchor), [anchor])
   const today = useMemo(() => new Date(), [])
@@ -152,17 +154,23 @@ export function AgendaClient() {
     [events],
   )
 
-  const openNew = (day?: Date) => {
+  // Novo evento cai numa agenda do Google por padrão (pra sincronizar); só usa a
+  // local se não houver nenhuma do Google conectada.
+  const defaultCalendarId = () =>
+    (calendars.find((c) => c.source === 'google') ?? calendars[0])?.id ?? ''
+
+  const openNew = (day?: Date, hour?: number) => {
     const base = day ?? new Date()
     const start = new Date(base)
-    if (!day) start.setMinutes(0, 0, 0)
+    if (hour != null) start.setHours(hour, 0, 0, 0)
+    else if (!day) start.setMinutes(0, 0, 0)
     else start.setHours(9, 0, 0, 0)
     const end = new Date(start)
     end.setHours(start.getHours() + 1)
     setDraft({
       id: null,
       title: '',
-      calendarId: calendars[0]?.id ?? '',
+      calendarId: defaultCalendarId(),
       allDay: false,
       start: toLocalInput(start),
       end: toLocalInput(end),
@@ -243,34 +251,75 @@ export function AgendaClient() {
 
   const monthLabel = anchor.toLocaleDateString('pt-BR', { month: 'long', year: 'numeric' })
 
+  // Abre a visão de Dia (e garante que o mês carregado cobre esse dia).
+  const openDay = (day: Date) => {
+    setDayDate(day)
+    if (day.getMonth() !== anchor.getMonth() || day.getFullYear() !== anchor.getFullYear()) {
+      setAnchor(new Date(day.getFullYear(), day.getMonth(), 1))
+    }
+    setView('day')
+  }
+  const shiftDay = (delta: number) => {
+    const d = new Date(dayDate)
+    d.setDate(d.getDate() + delta)
+    openDay(d)
+  }
+  const navPrev = () =>
+    view === 'month'
+      ? setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1))
+      : shiftDay(-1)
+  const navNext = () =>
+    view === 'month'
+      ? setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1))
+      : shiftDay(1)
+  const navToday = () => {
+    const now = new Date()
+    if (view === 'month') setAnchor(now)
+    else openDay(now)
+  }
+  const headerLabel =
+    view === 'month'
+      ? monthLabel
+      : dayDate.toLocaleDateString('pt-BR', { weekday: 'long', day: 'numeric', month: 'long' })
+
   return (
     <div className="flex flex-col gap-4">
       {/* Barra de navegação */}
       <div className="flex flex-wrap items-center gap-2">
         <div className="flex items-center gap-1">
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() - 1, 1))}
-            aria-label="Mês anterior"
-          >
+          <Button variant="outline" size="sm" onClick={navPrev} aria-label="Anterior">
             <ChevronLeft className="h-4 w-4" />
           </Button>
-          <Button variant="outline" size="sm" onClick={() => setAnchor(new Date())}>
+          <Button variant="outline" size="sm" onClick={navToday}>
             Hoje
           </Button>
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => setAnchor(new Date(anchor.getFullYear(), anchor.getMonth() + 1, 1))}
-            aria-label="Próximo mês"
-          >
+          <Button variant="outline" size="sm" onClick={navNext} aria-label="Próximo">
             <ChevronRight className="h-4 w-4" />
           </Button>
         </div>
         <h2 className="font-heading text-lg font-semibold capitalize text-foreground">
-          {monthLabel}
+          {headerLabel}
         </h2>
+        {/* Alternância Mês / Dia */}
+        <div className="flex overflow-hidden rounded-lg ring-1 ring-border">
+          <button
+            type="button"
+            onClick={() => setView('month')}
+            className={`px-3 py-1 text-xs font-medium ${view === 'month' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+          >
+            Mês
+          </button>
+          <button
+            type="button"
+            onClick={() => {
+              setDayDate(view === 'month' ? new Date() : dayDate)
+              setView('day')
+            }}
+            className={`px-3 py-1 text-xs font-medium ${view === 'day' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
+          >
+            Dia
+          </button>
+        </div>
         <div className="ml-auto flex items-center gap-2">
           {/* Legenda das agendas */}
           <div className="hidden items-center gap-3 sm:flex">
@@ -317,6 +366,7 @@ export function AgendaClient() {
       </div>
 
       {/* Grade do mês */}
+      {view === 'month' && (
       <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
         <div className="grid grid-cols-7 border-b border-border bg-muted/40">
           {WEEKDAYS.map((w) => (
@@ -334,7 +384,7 @@ export function AgendaClient() {
               <button
                 key={i}
                 type="button"
-                onClick={() => openNew(day)}
+                onClick={() => openDay(day)}
                 className={[
                   'group min-h-[104px] border-b border-r border-border p-1.5 text-left align-top transition-colors hover:bg-muted/40',
                   i % 7 === 0 ? 'border-l' : '',
@@ -386,6 +436,17 @@ export function AgendaClient() {
           })}
         </div>
       </div>
+      )}
+
+      {/* Visão de dia (horários) */}
+      {view === 'day' && (
+        <DayView
+          date={dayDate}
+          events={eventsForDay(dayDate)}
+          onNewAt={(hour) => openNew(dayDate, hour)}
+          onEdit={openEdit}
+        />
+      )}
 
       {loading && <p className="text-center text-sm text-muted-foreground">Carregando…</p>}
 
@@ -402,6 +463,92 @@ export function AgendaClient() {
           onClose={() => setDraft(null)}
         />
       )}
+    </div>
+  )
+}
+
+function DayView({
+  date,
+  events,
+  onNewAt,
+  onEdit,
+}: {
+  date: Date
+  events: EventRow[]
+  onNewAt: (hour: number) => void
+  onEdit: (ev: EventRow) => void
+}) {
+  const HOUR_H = 48
+  const scrollRef = useRef<HTMLDivElement>(null)
+  // Abre já no horário comercial (~7h) em vez da meia-noite.
+  useEffect(() => {
+    if (scrollRef.current) scrollRef.current.scrollTop = 7 * HOUR_H
+  }, [date])
+
+  const allDay = events.filter((e) => e.allDay)
+  const timed = events.filter((e) => !e.allDay)
+
+  return (
+    <div className="overflow-hidden rounded-xl ring-1 ring-foreground/10">
+      {allDay.length > 0 && (
+        <div className="flex flex-wrap gap-1 border-b border-border bg-muted/20 p-2">
+          {allDay.map((ev) => (
+            <span
+              key={ev.id}
+              onClick={() => onEdit(ev)}
+              className="cursor-pointer truncate rounded px-2 py-0.5 text-xs text-white"
+              style={{ background: ev.calendarColor }}
+              title={ev.title}
+            >
+              {ev.title}
+            </span>
+          ))}
+        </div>
+      )}
+      <div ref={scrollRef} className="max-h-[560px] overflow-y-auto">
+        <div className="relative" style={{ height: 24 * HOUR_H }}>
+          {/* faixas de hora (clique cria evento naquele horário) */}
+          {Array.from({ length: 24 }, (_, h) => (
+            <button
+              key={h}
+              type="button"
+              onClick={() => onNewAt(h)}
+              className="absolute inset-x-0 border-b border-border/50 transition-colors hover:bg-muted/40"
+              style={{ top: h * HOUR_H, height: HOUR_H }}
+              aria-label={`Criar às ${pad(h)}:00`}
+            >
+              <span className="absolute left-1.5 top-0.5 text-[11px] tabular-nums text-muted-foreground">
+                {pad(h)}:00
+              </span>
+            </button>
+          ))}
+          {/* eventos posicionados por horário */}
+          {timed.map((ev) => {
+            const s = new Date(ev.startsAt)
+            const e = new Date(ev.endsAt)
+            const startH = s.getHours() + s.getMinutes() / 60
+            const durH = Math.max(0.5, (e.getTime() - s.getTime()) / 3_600_000)
+            return (
+              <div
+                key={ev.id}
+                onClick={() => onEdit(ev)}
+                className="absolute left-14 right-2 cursor-pointer overflow-hidden rounded-md px-2 py-1 text-xs text-white shadow-sm"
+                style={{
+                  top: startH * HOUR_H + 1,
+                  height: Math.max(20, durH * HOUR_H - 2),
+                  background: ev.calendarColor,
+                }}
+                title={ev.title}
+              >
+                <span className="font-medium tabular-nums">
+                  {pad(s.getHours())}:{pad(s.getMinutes())}
+                </span>{' '}
+                {ev.title}
+              </div>
+            )
+          })}
+        </div>
+      </div>
     </div>
   )
 }
@@ -464,9 +611,13 @@ function EventModal({
               {calendars.map((c) => (
                 <option key={c.id} value={c.id}>
                   {c.name}
+                  {c.source === 'google' ? ' · Google (sincroniza)' : ' · local (não sincroniza)'}
                 </option>
               ))}
             </select>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Agendas do Google sincronizam nos dois sentidos. A agenda local fica só no CRM.
+            </p>
           </div>
 
           <label className="flex items-center gap-2 text-sm">
