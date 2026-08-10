@@ -25,6 +25,11 @@ export const metadata: Metadata = {
     template: "%s — CRM Fluxia",
   },
   description: "CRM de WhatsApp multi-tenant da Fluxia.",
+  // Verificação de propriedade do Google Search Console (para a verificação
+  // OAuth do app). Renderiza <meta name="google-site-verification" ...>.
+  verification: {
+    google: "_fIV1g1zdq6-Kekw2wXdn6-s5uBHFaPAYI8C6VkJK1g",
+  },
   robots: {
     index: false,
     follow: false,
