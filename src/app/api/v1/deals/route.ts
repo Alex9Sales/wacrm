@@ -8,10 +8,10 @@
 // an agent can drop a card into the board with just a title.
 // ============================================================
 
-import { and, desc, eq, lt, or } from 'drizzle-orm';
+import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
 
-import { db, deals, contacts } from '@/db';
-import { firstOrNull } from '@/db/helpers';
+import { db, deals, contacts, customFields, contactCustomValues } from '@/db';
+import { firstOrNull, firstOrThrow } from '@/db/helpers';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { parseListParams, buildPage } from '@/lib/api/v1/pagination';
@@ -154,6 +154,17 @@ export async function POST(request: Request) {
             typeof body.currency === 'string' ? body.currency : undefined,
           notes: typeof body.notes === 'string' ? body.notes : null,
           status: typeof body.status === 'string' ? body.status : undefined,
+          // Fonte/Origem (ex.: source="site", origin="diagnostico") — antes eram
+          // descartados; agora viram campos de verdade no negócio, não vão pro notes.
+          source: typeof body.source === 'string' ? body.source : null,
+          origin: typeof body.origin === 'string' ? body.origin : null,
+          temperature:
+            typeof body.temperature === 'string' ? body.temperature : null,
+          qualification:
+            body.qualification != null &&
+            !Number.isNaN(Number(body.qualification))
+              ? Math.max(1, Math.min(5, Math.round(Number(body.qualification))))
+              : null,
           expectedCloseDate:
             typeof body.expected_close_date === 'string'
               ? body.expected_close_date
@@ -161,6 +172,24 @@ export async function POST(request: Request) {
         })
         .returning({ id: deals.id }),
     );
+
+    // Campos personalizados (opcional): { "Faturamento": "R$ 500 mil", ... }.
+    // Cada chave vira um campo personalizado (find-or-create por nome) e o valor
+    // é salvo no CONTATO do negócio → aparece ESTRUTURADO no detalhe (não no notes).
+    if (
+      contactId &&
+      body.custom_fields &&
+      typeof body.custom_fields === 'object' &&
+      !Array.isArray(body.custom_fields)
+    ) {
+      await applyDealCustomFields(
+        ctx.accountId,
+        userId,
+        contactId,
+        body.custom_fields as Record<string, unknown>,
+      );
+    }
+
     const deal = await getDealById(ctx.accountId, inserted!.id);
     return ok(deal, 201);
   } catch (err) {
@@ -168,5 +197,61 @@ export async function POST(request: Request) {
       return fail(err.status === 400 ? 'bad_request' : 'not_found', err.message, err.status);
     }
     return toApiErrorResponse(err);
+  }
+}
+
+/** Salva pares {nome: valor} como campos personalizados no CONTATO do negócio
+ *  (find-or-create do campo por nome; upsert do valor). Best-effort — uma falha
+ *  num campo não derruba a criação do negócio. */
+async function applyDealCustomFields(
+  accountId: string,
+  userId: string,
+  contactId: string,
+  cf: Record<string, unknown>,
+): Promise<void> {
+  for (const [rawName, rawVal] of Object.entries(cf)) {
+    const name = String(rawName).trim();
+    const value = Array.isArray(rawVal)
+      ? rawVal.filter((v) => v != null && String(v).trim()).join(', ')
+      : rawVal == null
+        ? ''
+        : String(rawVal).trim();
+    if (!name || !value) continue;
+    try {
+      const field = firstOrNull(
+        await db
+          .select({ id: customFields.id })
+          .from(customFields)
+          .where(
+            and(
+              eq(customFields.accountId, accountId),
+              sql`lower(${customFields.fieldName}) = lower(${name})`,
+            ),
+          )
+          .limit(1),
+      );
+      let fieldId = field?.id;
+      if (!fieldId) {
+        const created = firstOrThrow(
+          await db
+            .insert(customFields)
+            .values({ userId, accountId, fieldName: name, fieldType: 'text' })
+            .returning({ id: customFields.id }),
+        );
+        fieldId = created.id;
+      }
+      await db
+        .insert(contactCustomValues)
+        .values({ contactId, customFieldId: fieldId, value })
+        .onConflictDoUpdate({
+          target: [
+            contactCustomValues.contactId,
+            contactCustomValues.customFieldId,
+          ],
+          set: { value },
+        });
+    } catch (err) {
+      console.error('[api/v1/deals] custom field failed:', name, err);
+    }
   }
 }
