@@ -1780,3 +1780,64 @@ export const csatResponses = pgTable("csat_responses", {
 			name: "csat_responses_account_id_fkey"
 		}).onDelete("cascade"),
 ]);
+
+// ------------------------------------------------------------
+// Agenda (seção Agenda) — migração 0071. Multi-calendário + eventos com
+// vínculo opcional a contato/negócio. Sync Google entra numa migração seguinte.
+// ------------------------------------------------------------
+export const calendars = pgTable("calendars", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	ownerUserId: uuid("owner_user_id"),
+	name: text().notNull(),
+	color: text().default('#6366f1').notNull(),
+	// 'local' | 'google'
+	source: text().default('local').notNull(),
+	googleCalendarId: text("google_calendar_id"),
+	isVisible: boolean("is_visible").default(true).notNull(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_calendars_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	index("idx_calendars_owner").using("btree", table.ownerUserId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "calendars_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.ownerUserId], foreignColumns: [user.id], name: "calendars_owner_user_id_fkey" }).onDelete("set null"),
+	check("calendars_source_check", sql`source IN ('local','google')`),
+]);
+
+export const calendarEvents = pgTable("calendar_events", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	calendarId: uuid("calendar_id").notNull(),
+	ownerUserId: uuid("owner_user_id"),
+	title: text().notNull(),
+	description: text(),
+	location: text(),
+	startsAt: timestamp("starts_at", { withTimezone: true, mode: 'string' }).notNull(),
+	endsAt: timestamp("ends_at", { withTimezone: true, mode: 'string' }).notNull(),
+	allDay: boolean("all_day").default(false).notNull(),
+	contactId: uuid("contact_id"),
+	dealId: uuid("deal_id"),
+	// 'confirmed' | 'cancelled'
+	status: text().default('confirmed').notNull(),
+	// 'local' | 'google'
+	source: text().default('local').notNull(),
+	googleEventId: text("google_event_id"),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_calendar_events_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	index("idx_calendar_events_calendar").using("btree", table.calendarId.asc().nullsLast().op("uuid_ops")),
+	index("idx_calendar_events_starts").using("btree", table.startsAt.asc().nullsLast()),
+	index("idx_calendar_events_contact").using("btree", table.contactId.asc().nullsLast().op("uuid_ops")),
+	index("idx_calendar_events_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "calendar_events_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.calendarId], foreignColumns: [calendars.id], name: "calendar_events_calendar_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.ownerUserId], foreignColumns: [user.id], name: "calendar_events_owner_user_id_fkey" }).onDelete("set null"),
+	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "calendar_events_contact_id_fkey" }).onDelete("set null"),
+	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "calendar_events_deal_id_fkey" }).onDelete("set null"),
+	check("calendar_events_status_check", sql`status IN ('confirmed','cancelled')`),
+	check("calendar_events_source_check", sql`source IN ('local','google')`),
+]);
