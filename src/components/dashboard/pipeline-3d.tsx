@@ -50,18 +50,19 @@ function Iso({
   stages: PipelineDonutData['stages']
   currency: string
 }) {
-  // Geometria da barra + profundidade oblíqua (30°).
+  // Geometria da barra + profundidade oblíqua. Ângulo ~40° (era 30°) e
+  // profundidade maior → topo mais visível, barra mais "3D".
   const W = 56
-  const GAP = 46
-  const D = 26
-  const dx = Math.round(D * 0.87)
-  const dy = Math.round(D * 0.5)
-  const maxBarH = 170
+  const GAP = 52
+  const D = 44 // profundidade da extrusão (era 26)
+  const dx = Math.round(D * 0.766) // cos(40°)
+  const dy = Math.round(D * 0.643) // sin(40°)
+  const maxBarH = 168
   const minBarH = 10
-  const topPad = 34
+  const topPad = 48 // acomoda o topo mais alto (dy maior)
   const bottomPad = 48
   const leftPad = 22
-  const rightPad = 22
+  const rightPad = 24
 
   const maxVal = Math.max(1, ...stages.map((s) => s.totalValue))
   const baseline = topPad + maxBarH
