@@ -8,9 +8,17 @@
 // an agent can drop a card into the board with just a title.
 // ============================================================
 
-import { and, desc, eq, lt, or, sql } from 'drizzle-orm';
+import { and, asc, desc, eq, lt, or, sql } from 'drizzle-orm';
 
-import { db, deals, contacts, customFields, contactCustomValues } from '@/db';
+import {
+  db,
+  deals,
+  contacts,
+  customFields,
+  contactCustomValues,
+  conversations,
+  channels,
+} from '@/db';
 import { firstOrNull, firstOrThrow } from '@/db/helpers';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
@@ -136,6 +144,36 @@ export async function POST(request: Request) {
     }
 
     const userId = await resolveAuditUserId(ctx.accountId);
+
+    // Conversa vinculada (o card ganha o ícone de chat p/ abrir a conversa):
+    //  - conversation_id explícito (validado), OU
+    //  - create_conversation:true → acha/cria uma conversa p/ o contato num canal
+    //    (channel_id, senão o 1º conectado). Útil p/ leads de FORMULÁRIO, que não
+    //    têm conversa: o vendedor abre pelo card e manda a 1ª mensagem.
+    let conversationId: string | null = null;
+    if (typeof body.conversation_id === 'string' && body.conversation_id) {
+      const owned = firstOrNull(
+        await db
+          .select({ id: conversations.id })
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.id, body.conversation_id),
+              eq(conversations.accountId, ctx.accountId),
+            ),
+          )
+          .limit(1),
+      );
+      conversationId = owned?.id ?? null;
+    } else if (body.create_conversation === true && contactId) {
+      conversationId = await ensureFormConversation(
+        ctx.accountId,
+        userId,
+        contactId,
+        typeof body.channel_id === 'string' ? body.channel_id : null,
+      );
+    }
+
     const inserted = firstOrNull(
       await db
         .insert(deals)
@@ -145,6 +183,7 @@ export async function POST(request: Request) {
           pipelineId,
           stageId,
           contactId,
+          conversationId,
           title,
           value:
             body.value != null && !Number.isNaN(Number(body.value))
@@ -254,4 +293,79 @@ async function applyDealCustomFields(
       console.error('[api/v1/deals] custom field failed:', name, err);
     }
   }
+}
+
+/** Acha ou cria uma conversa p/ o contato (leads de formulário não têm uma).
+ *  Escolhe o canal: o pedido explícito (validado) ou o 1º canal CONECTADO da
+ *  conta; carimba o setor padrão do canal. Retorna o id da conversa (ou null se
+ *  a conta não tem nenhum canal). */
+async function ensureFormConversation(
+  accountId: string,
+  userId: string,
+  contactId: string,
+  preferredChannelId: string | null,
+): Promise<string | null> {
+  let channelId: string | null = null;
+  let sectorId: string | null = null;
+
+  if (preferredChannelId) {
+    const ch = firstOrNull(
+      await db
+        .select({ id: channels.id, defaultSectorId: channels.defaultSectorId })
+        .from(channels)
+        .where(
+          and(
+            eq(channels.id, preferredChannelId),
+            eq(channels.accountId, accountId),
+          ),
+        )
+        .limit(1),
+    );
+    if (ch) {
+      channelId = ch.id;
+      sectorId = ch.defaultSectorId ?? null;
+    }
+  }
+  if (!channelId) {
+    const ch = firstOrNull(
+      await db
+        .select({ id: channels.id, defaultSectorId: channels.defaultSectorId })
+        .from(channels)
+        .where(eq(channels.accountId, accountId))
+        // Conectado primeiro, depois o mais antigo.
+        .orderBy(
+          sql`CASE WHEN ${channels.status} = 'connected' THEN 0 ELSE 1 END`,
+          asc(channels.id),
+        )
+        .limit(1),
+    );
+    if (ch) {
+      channelId = ch.id;
+      sectorId = ch.defaultSectorId ?? null;
+    }
+  }
+
+  // Reusa uma conversa existente do contato (no canal, quando há) antes de criar.
+  const conds = [
+    eq(conversations.accountId, accountId),
+    eq(conversations.contactId, contactId),
+  ];
+  if (channelId) conds.push(eq(conversations.channelId, channelId));
+  const existing = firstOrNull(
+    await db
+      .select({ id: conversations.id })
+      .from(conversations)
+      .where(and(...conds))
+      .orderBy(desc(conversations.createdAt))
+      .limit(1),
+  );
+  if (existing) return existing.id;
+
+  const created = firstOrThrow(
+    await db
+      .insert(conversations)
+      .values({ userId, accountId, contactId, channelId, sectorId, status: 'open' })
+      .returning({ id: conversations.id }),
+  );
+  return created.id;
 }

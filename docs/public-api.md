@@ -406,6 +406,14 @@ saved on the deal's **contact**, so it shows **structured** on the deal detail.
 Requires `contact_id`. Arrays are joined with commas; empty values are skipped.
 `source`/`origin` land as the card's real Source/Origin fields (not `notes`).
 
+**Chat icon on the card (`create_conversation`)** — a form lead has no WhatsApp
+conversation, so the card would have no chat bubble to open. Send
+`"create_conversation": true` (with `contact_id`) and the API **finds or creates
+a conversation** for the contact — on `channel_id` if given, otherwise the
+account's first connected channel — and links it to the card. The card then
+shows the chat icon; the rep clicks it and sends the first message. You can also
+pass an existing `conversation_id` directly.
+
 ```bash
 curl -X POST https://<host>/api/v1/deals \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
