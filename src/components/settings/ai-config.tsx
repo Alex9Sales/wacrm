@@ -32,7 +32,6 @@ import {
   SelectValue,
 } from '@/components/ui/select';
 import { SettingsPanelHead } from './settings-panel-head';
-import { AiKnowledgeCard } from './ai-knowledge';
 import { AI_PROVIDER_DEFAULT_MODEL } from '@/lib/ai/defaults';
 import type { AiProvider } from '@/lib/ai/types';
 
@@ -851,15 +850,8 @@ export function AiConfig() {
           </CardContent>
         </Card>
 
-        <AiKnowledgeCard
-          accountId={accountId}
-          canEdit={canEdit}
-          hasEmbeddingsKey={
-            embeddingsKeyEdited
-              ? embeddingsKey.trim().length > 0
-              : hasStoredEmbeddingsKey
-          }
-        />
+        {/* A Base de conhecimento agora vive na aba dedicada "Base de
+            Conhecimento" (Agentes IA), junto do Perfil da empresa. */}
 
         <div className="flex items-center justify-between">
           {configured ? (

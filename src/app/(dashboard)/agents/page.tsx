@@ -1,13 +1,14 @@
 'use client';
 
 import { useEffect, useState } from 'react';
-import { Bot, Sparkles, Settings2, Phone } from 'lucide-react';
+import { Bot, Sparkles, Settings2, Phone, BookOpen } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { AiPlayground } from '@/components/agents/ai-playground';
 import { AiConfig } from '@/components/settings/ai-config';
+import { KnowledgeTab } from '@/components/agents/knowledge-tab';
 import { VoiceAgentsTab } from '@/components/agents/voice-agents-tab';
 
-type Tab = 'playground' | 'setup' | 'voice';
+type Tab = 'playground' | 'knowledge' | 'setup' | 'voice';
 
 export default function AgentsPage() {
   const [tab, setTab] = useState<Tab>('playground');
@@ -55,6 +56,9 @@ export default function AgentsPage() {
             <TabsTrigger value="playground">
               <Sparkles className="mr-1.5 h-4 w-4" /> Playground
             </TabsTrigger>
+            <TabsTrigger value="knowledge">
+              <BookOpen className="mr-1.5 h-4 w-4" /> Base de Conhecimento
+            </TabsTrigger>
             <TabsTrigger value="setup">
               <Settings2 className="mr-1.5 h-4 w-4" /> Configuração
             </TabsTrigger>
@@ -65,6 +69,10 @@ export default function AgentsPage() {
 
           <TabsContent value="playground" className="mt-4">
             <AiPlayground onGoToSetup={() => setTab('setup')} />
+          </TabsContent>
+
+          <TabsContent value="knowledge" className="mt-4">
+            <KnowledgeTab />
           </TabsContent>
 
           <TabsContent value="setup" className="mt-4">

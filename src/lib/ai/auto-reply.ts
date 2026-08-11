@@ -6,6 +6,7 @@ import { aiHoursAllows } from './hours-gate'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { buildConversationContext } from './context'
 import { retrieveKnowledge } from './knowledge'
+import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { generateReply } from './generate'
 import { buildSystemPrompt } from './defaults'
 import { latestUserMessage } from './query'
@@ -140,11 +141,15 @@ export async function dispatchInboundToAiReply(
       config,
       latestUserMessage(messages),
     )
+    const companyProfile = formatCompanyProfileForPrompt(
+      await getCompanyProfile(accountId),
+    )
 
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
+      companyProfile,
     })
 
     const { text, handoff } = await generateReply({

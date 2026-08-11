@@ -1375,6 +1375,29 @@ export const aiKnowledgeChunks = pgTable("ai_knowledge_chunks", {
 		}).onDelete("cascade"),
 ]);
 
+// Perfil da empresa ("Núcleo" guiado): a camada estruturada da Base de
+// Conhecimento (1 linha por conta). Sempre injetado no contexto do agente
+// (buildSystemPrompt) — não depende do retrieval. Migração 0073.
+export const aiCompanyProfile = pgTable("ai_company_profile", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	businessName: text("business_name"),
+	description: text(),
+	offerings: text(),
+	hours: text(),
+	paymentMethods: text("payment_methods"),
+	deliveryInfo: text("delivery_info"),
+	tone: text(),
+	notes: text(),
+	updatedBy: uuid("updated_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "ai_company_profile_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.updatedBy], foreignColumns: [user.id], name: "ai_company_profile_updated_by_fkey" }).onDelete("set null"),
+	unique("ai_company_profile_account_key").on(table.accountId),
+]);
+
 // ============================================================
 // TASKS ("Tarefas") — per-account task / reminder subsystem.
 //
