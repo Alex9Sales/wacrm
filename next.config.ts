@@ -155,14 +155,25 @@ const nextConfig: NextConfig = {
         headers: [{ key: "Cache-Control", value: "no-store" }],
       },
       {
+        // App HTML pages (everything except /_next/static, /_next/image, /api).
+        // Per-user, authenticated, server-rendered → MUST be `private,
+        // no-store`, for two reasons discovered 11/08:
+        //   1. Stale-bundle blank page. The previous value
+        //      `public, max-age=0, s-maxage=300, stale-while-revalidate=86400`
+        //      let the browser serve up-to-24h-STALE HTML after a deploy. The
+        //      stale HTML references Turbopack chunk hashes that 404 on the new
+        //      build → blank page a soft reload couldn't fix (only a hard
+        //      Ctrl+Shift+R bypassed the cache). `no-store` makes every
+        //      navigation fetch fresh HTML that always matches the live chunks,
+        //      so the stale bundle self-heals on a NORMAL refresh.
+        //   2. Security. `public` on an authenticated per-user page is unsafe —
+        //      a shared cache could hand one user's dashboard to another. The
+        //      old comment assumed Next/auth would override this to `private`;
+        //      the shipped header proved that false (it went out as `public`).
+        // Cloudflare already treats every HTML route as DYNAMIC (never cached),
+        // so this loses no edge caching — the s-maxage/SWR were inert anyway.
         source: "/:path((?!_next/static|_next/image|api).*)",
-        headers: [
-          {
-            key: "Cache-Control",
-            value:
-              "public, max-age=0, s-maxage=300, stale-while-revalidate=86400",
-          },
-        ],
+        headers: [{ key: "Cache-Control", value: "private, no-store" }],
       },
       {
         // Security headers on every response, including /_next/static
