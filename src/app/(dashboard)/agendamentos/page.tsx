@@ -14,6 +14,7 @@ import {
 } from './actions'
 import { cancelScheduledMessage } from '@/app/(dashboard)/inbox/schedule-actions'
 import { listTeamMembers } from '@/app/(dashboard)/internal-chat/actions'
+import { ScheduleMessageDialog } from '@/components/agendamentos/schedule-message-dialog'
 import { useAuth } from '@/hooks/use-auth'
 import { hasMinRole } from '@/lib/auth/roles'
 import { Input } from '@/components/ui/input'
@@ -181,14 +182,17 @@ export default function AgendamentosPage() {
 
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-bold text-foreground">
-          Mensagens Agendadas
-        </h1>
-        <p className="text-sm text-muted-foreground">
-          Tudo que está programado para enviar, o que já saiu e o que foi
-          cancelado ou falhou.
-        </p>
+      <div className="flex flex-wrap items-start justify-between gap-3">
+        <div>
+          <h1 className="text-2xl font-bold text-foreground">
+            Mensagens Agendadas
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Tudo que está programado para enviar, o que já saiu e o que foi
+            cancelado ou falhou.
+          </p>
+        </div>
+        <ScheduleMessageDialog onScheduled={load} />
       </div>
 
       {/* Painel de contadores (clicáveis → filtram por status). */}

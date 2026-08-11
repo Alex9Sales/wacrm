@@ -18,6 +18,7 @@ import {
   conversations,
   contacts,
   channels,
+  deals,
   sectorMembers,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -292,3 +293,45 @@ export async function retryScheduled(
   }
 }
 
+
+// ------------------------------------------------------------
+// Agendar mensagem a partir desta tela: busca de negócios (funil) com o
+// contato/telefone, pra abrir/achar a conversa e agendar a mensagem.
+// (Contatos usam listContacts; canais usam listSendableChannels.)
+// ------------------------------------------------------------
+
+export type DealPick = {
+  id: string
+  title: string
+  contactId: string | null
+  contactName: string | null
+  contactPhone: string | null
+}
+
+/** Negócios cujo título OU contato casa com a busca — só os que têm telefone
+ *  (pois agendar exige uma conversa, resolvida pelo telefone do contato). */
+export async function searchDealsForSchedule(query: string): Promise<DealPick[]> {
+  const ctx = await getCurrentAccount()
+  const q = query.trim()
+  if (!q) return []
+  const like = `%${q}%`
+  const rows = await db
+    .select({
+      id: deals.id,
+      title: deals.title,
+      contactId: deals.contactId,
+      contactName: contacts.name,
+      contactPhone: contacts.phone,
+    })
+    .from(deals)
+    .leftJoin(contacts, eq(deals.contactId, contacts.id))
+    .where(
+      and(
+        eq(deals.accountId, ctx.accountId),
+        or(ilike(deals.title, like), ilike(contacts.name, like)),
+      ),
+    )
+    .orderBy(desc(deals.createdAt))
+    .limit(8)
+  return rows.filter((r) => r.contactPhone) as DealPick[]
+}
