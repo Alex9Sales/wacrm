@@ -162,8 +162,10 @@ function toGoogleBody(row: PushRow): GoogleEventBody {
     }
     body.end.date = endDate
   } else {
-    body.start.dateTime = row.startsAt
-    body.end.dateTime = row.endsAt
+    // O Postgres devolve timestamptz como "2026-08-13 15:00:00+00" (com espaço,
+    // sem T/Z) — o Google exige RFC3339. new Date().toISOString() normaliza.
+    body.start.dateTime = new Date(row.startsAt).toISOString()
+    body.end.dateTime = new Date(row.endsAt).toISOString()
   }
   return body
 }

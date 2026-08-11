@@ -74,6 +74,8 @@ export function AgendaClient() {
   const [syncing, setSyncing] = useState(false)
   const [view, setView] = useState<'month' | 'day'>('month')
   const [dayDate, setDayDate] = useState<Date>(() => new Date())
+  const viewRef = useRef(view)
+  viewRef.current = view
 
   const grid = useMemo(() => monthGrid(anchor), [anchor])
   const today = useMemo(() => new Date(), [])
@@ -102,6 +104,15 @@ export function AgendaClient() {
   useEffect(() => {
     void load()
   }, [load])
+
+  // Voltar do navegador na visão de Dia retorna pro Mês (em vez de sair da página).
+  useEffect(() => {
+    const onPop = () => {
+      if (viewRef.current === 'day') setView('month')
+    }
+    window.addEventListener('popstate', onPop)
+    return () => window.removeEventListener('popstate', onPop)
+  }, [])
 
   // Estado da conexão Google + feedback do retorno do OAuth (?google=...).
   useEffect(() => {
@@ -257,7 +268,13 @@ export function AgendaClient() {
     if (day.getMonth() !== anchor.getMonth() || day.getFullYear() !== anchor.getFullYear()) {
       setAnchor(new Date(day.getFullYear(), day.getMonth(), 1))
     }
+    // Empilha 1x ao entrar no Dia (não a cada troca de dia) → back volta pro Mês.
+    if (viewRef.current !== 'day') window.history.pushState({ agendaDay: true }, '')
     setView('day')
+  }
+  const backToMonth = () => {
+    if (view === 'day') window.history.back()
+    else setView('month')
   }
   const shiftDay = (delta: number) => {
     const d = new Date(dayDate)
@@ -304,32 +321,20 @@ export function AgendaClient() {
         <div className="flex overflow-hidden rounded-lg ring-1 ring-border">
           <button
             type="button"
-            onClick={() => setView('month')}
+            onClick={backToMonth}
             className={`px-3 py-1 text-xs font-medium ${view === 'month' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
           >
             Mês
           </button>
           <button
             type="button"
-            onClick={() => {
-              setDayDate(view === 'month' ? new Date() : dayDate)
-              setView('day')
-            }}
+            onClick={() => openDay(view === 'month' ? new Date() : dayDate)}
             className={`px-3 py-1 text-xs font-medium ${view === 'day' ? 'bg-primary text-primary-foreground' : 'text-muted-foreground hover:bg-muted'}`}
           >
             Dia
           </button>
         </div>
         <div className="ml-auto flex items-center gap-2">
-          {/* Legenda das agendas */}
-          <div className="hidden items-center gap-3 sm:flex">
-            {calendars.map((c) => (
-              <span key={c.id} className="flex items-center gap-1.5 text-xs text-muted-foreground">
-                <span className="h-2.5 w-2.5 rounded-full" style={{ background: c.color }} />
-                {c.name}
-              </span>
-            ))}
-          </div>
           {/* Google Calendar */}
           {google?.connected ? (
             <div className="flex items-center gap-1.5">
@@ -364,6 +369,18 @@ export function AgendaClient() {
           </Button>
         </div>
       </div>
+
+      {/* Legenda das agendas — linha própria, quebra em telas menores */}
+      {calendars.length > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+          {calendars.map((c) => (
+            <span key={c.id} className="flex items-center gap-1.5 text-xs text-muted-foreground">
+              <span className="h-2.5 w-2.5 shrink-0 rounded-full" style={{ background: c.color }} />
+              {c.name}
+            </span>
+          ))}
+        </div>
+      )}
 
       {/* Grade do mês */}
       {view === 'month' && (
