@@ -825,6 +825,33 @@ async function ingestGroupMessage(
     ? baseText
     : prefixGroupAuthor(group.authorName ?? '', baseText);
 
+  // Quoted reply from WhatsApp (swipe-reply in the group): map the quoted
+  // external id to the internal message so the CRM thread renders the citation,
+  // matching WhatsApp. Same as the 1:1 path — all group messages live in this
+  // one conversation, and the stored external id is the normalized HASH, which
+  // is exactly what the provider put in replyToExternalId. Best-effort: a quote
+  // of a message we never stored just renders without the link.
+  let replyToMessageId: string | null = null;
+  if (ev.replyToExternalId) {
+    try {
+      const parent = firstOrNull(
+        await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, conversation.id),
+              eq(messages.messageId, ev.replyToExternalId),
+            ),
+          )
+          .limit(1),
+      );
+      replyToMessageId = parent?.id ?? null;
+    } catch (err) {
+      console.error('[inbound] group reply-to lookup failed:', err);
+    }
+  }
+
   // 6) Insert. No transcription/AI/flows — a group is watched, not answered.
   try {
     await db.insert(messages).values({
@@ -835,6 +862,7 @@ async function ingestGroupMessage(
       mediaUrl,
       viewOnce: ev.viewOnce ?? ev.media?.viewOnce ?? false,
       messageId: ev.externalMessageId || null,
+      replyToMessageId,
       status: isFromMe ? 'sent' : 'delivered',
       authorKey,
       createdAt: new Date().toISOString(),
