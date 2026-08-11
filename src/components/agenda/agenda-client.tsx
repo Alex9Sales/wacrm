@@ -270,10 +270,21 @@ export function AgendaClient() {
         location: draft.location,
         description: draft.description,
       }
+      // Dia do evento (pra pular a visão pra lá e evitar confusão de mês/data).
+      const eventDate = new Date(draft.start.slice(0, 10) + 'T12:00:00')
       if (draft.id) await updateEvent(draft.id, payload)
       else await createEvent(payload)
       setDraft(null)
-      await load()
+      if (viewRef.current === 'day') setDayDate(eventDate)
+      const sameMonth =
+        eventDate.getMonth() === anchor.getMonth() &&
+        eventDate.getFullYear() === anchor.getFullYear()
+      if (sameMonth) {
+        await load() // mês não muda → recarrega a visão atual
+      } else {
+        // muda o mês → o efeito de load dispara sozinho e mostra o evento
+        setAnchor(new Date(eventDate.getFullYear(), eventDate.getMonth(), 1))
+      }
     } finally {
       setSaving(false)
     }
