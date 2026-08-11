@@ -16,6 +16,7 @@ vi.mock('@/db', async (importOriginal) => {
   const chain = {
     from: () => chain,
     where: () => chain,
+    orderBy: () => chain,
     limit: () => Promise.resolve(h.rows),
   }
   return {

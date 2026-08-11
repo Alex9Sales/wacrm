@@ -1,7 +1,8 @@
 import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db, automations, conversations, contacts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
-import { loadAiConfig } from './config'
+import { loadAiConfigForChannel } from './config'
+import { hasActiveAutoReplyAgent } from './agents'
 import { aiHoursAllows } from './hours-gate'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { buildConversationContext } from './context'
@@ -64,8 +65,9 @@ export async function dispatchInboundToAiReply(
   const { accountId, conversationId, contactId, configOwnerUserId } = args
 
   try {
-    const config = await loadAiConfig(accountId)
-    if (!config || !config.autoReplyEnabled) return
+    // Cheap early-out: no active auto-reply agent on this account → nothing to
+    // do (avoids the conversation load + routing for non-AI accounts).
+    if (!(await hasActiveAutoReplyAgent(accountId))) return
 
     // Deterministic, user-configured responders win over the LLM — the
     // caller already excludes messages a Flow consumed. Message-level
@@ -106,14 +108,16 @@ export async function dispatchInboundToAiReply(
         .limit(1),
     )
     if (!conv) return
-    // Channel scope: when the admin picked specific channels, the AI only
-    // auto-replies on those. Empty list = all channels (backward compat).
-    if (
-      config.autoReplyChannelIds.length > 0 &&
-      (!conv.channelId || !config.autoReplyChannelIds.includes(conv.channelId))
-    ) {
-      return
-    }
+
+    // Multi-agente: escolhe o agente atribuído ao CANAL desta conversa.
+    // requireAutoReply → só um agente ativo e com auto-resposta ligada é
+    // elegível; o roteamento por canal (incl. "lista vazia = todos os canais")
+    // vive em pickAgentIdForChannel, então não há gate de canal separado aqui.
+    const config = await loadAiConfigForChannel(accountId, conv.channelId, {
+      requireAutoReply: true,
+    })
+    if (!config || !config.autoReplyEnabled) return
+
     // Horário de atendimento da IA: só responde conforme o modo
     // (sempre / só dentro / só fora do horário da conta). Fora da janela
     // permitida, fica muda (um humano cuida no horário certo).

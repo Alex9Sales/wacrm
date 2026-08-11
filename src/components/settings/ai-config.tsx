@@ -47,11 +47,25 @@ const KEY_PLACEHOLDER: Record<AiProvider, string> = {
   anthropic: 'sk-ant-...',
 };
 
-export function AiConfig() {
+export function AiConfig({
+  agentId,
+  onChanged,
+}: {
+  /** Multi-agente: quando presente, edita ESTE agente (via ?agent=<id>).
+   *  Ausente = o agente default da conta (compat). */
+  agentId?: string;
+  /** Chamado após salvar/remover, para o painel recarregar os cards. */
+  onChanged?: () => void;
+} = {}) {
   const { accountId, accountRole, profileLoading } = useAuth();
   const canEdit = accountRole ? canEditSettings(accountRole) : false;
+  // URL da config: escopada por agente quando há agentId.
+  const cfgUrl = agentId
+    ? `/api/ai/config?agent=${encodeURIComponent(agentId)}`
+    : '/api/ai/config';
 
   const [loading, setLoading] = useState(true);
+  const [name, setName] = useState('');
   const [saving, setSaving] = useState(false);
   const [testing, setTesting] = useState(false);
   const [removing, setRemoving] = useState(false);
@@ -100,7 +114,7 @@ export function AiConfig() {
   const fetchConfig = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/ai/config');
+      const res = await fetch(cfgUrl);
       const data = await res.json();
       if (!res.ok) {
         toast.error(data.error ?? 'Falha ao carregar a configuração de IA');
@@ -108,6 +122,7 @@ export function AiConfig() {
       }
       if (data.configured) {
         setConfigured(true);
+        setName(data.name ?? '');
         setProvider(data.provider);
         setModel(data.model);
         setSystemPrompt(data.system_prompt ?? '');
@@ -145,13 +160,15 @@ export function AiConfig() {
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [cfgUrl]);
 
   useEffect(() => {
-    if (!accountId || loadedAccountIdRef.current === accountId) return;
-    loadedAccountIdRef.current = accountId;
+    // Guard keyed on account+agent so trocar de agente (mesma conta) refaz o load.
+    const key = `${accountId ?? ''}:${agentId ?? ''}`;
+    if (!accountId || loadedAccountIdRef.current === key) return;
+    loadedAccountIdRef.current = key;
     void fetchConfig();
-  }, [accountId, fetchConfig]);
+  }, [accountId, agentId, fetchConfig]);
 
   // Load the account's channels for the "canais onde a IA responde" picker.
   useEffect(() => {
@@ -237,6 +254,7 @@ export function AiConfig() {
     embeddingsKeyEdited ? embeddingsKey.trim() || null : undefined;
 
   const buildBody = () => ({
+    name: name.trim() || null,
     provider,
     model: model.trim(),
     api_key: keyPayload(),
@@ -289,7 +307,7 @@ export function AiConfig() {
     }
     setSaving(true);
     try {
-      const res = await fetch('/api/ai/config', {
+      const res = await fetch(cfgUrl, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(buildBody()),
@@ -298,6 +316,7 @@ export function AiConfig() {
       if (res.ok) {
         toast.success('Assistente de IA salvo.');
         await fetchConfig();
+        onChanged?.();
       } else {
         toast.error(data.error ?? 'Falha ao salvar.');
       }
@@ -311,9 +330,9 @@ export function AiConfig() {
   const handleRemove = async () => {
     setRemoving(true);
     try {
-      const res = await fetch('/api/ai/config', { method: 'DELETE' });
+      const res = await fetch(cfgUrl, { method: 'DELETE' });
       if (res.ok) {
-        toast.success('Configuração de IA removida.');
+        toast.success(agentId ? 'Agente removido.' : 'Configuração de IA removida.');
         setConfigured(false);
         setHasStoredKey(false);
         setApiKey('');
@@ -321,6 +340,7 @@ export function AiConfig() {
         setIsActive(false);
         setAutoReplyEnabled(false);
         setSystemPrompt('');
+        onChanged?.();
       } else {
         const data = await res.json();
         toast.error(data.error ?? 'Falha ao remover.');
@@ -356,6 +376,31 @@ export function AiConfig() {
       )}
 
       <div className="space-y-6">
+        {agentId && (
+          <Card>
+            <CardHeader>
+              <CardTitle className="text-base">Identidade do agente</CardTitle>
+              <CardDescription>
+                O nome que aparece no painel. O papel dele (SDR, Follow-up,
+                Vendas…) você define em “Contexto do negócio e instruções”, mais
+                abaixo.
+              </CardDescription>
+            </CardHeader>
+            <CardContent>
+              <div className="space-y-2">
+                <Label>Nome do agente</Label>
+                <Input
+                  value={name}
+                  onChange={(e) => setName(e.target.value)}
+                  placeholder="ex.: SDR, Follow-up, Vendas"
+                  disabled={disabled}
+                  className="max-w-xs"
+                />
+              </div>
+            </CardContent>
+          </Card>
+        )}
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2 text-base">

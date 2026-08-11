@@ -4,7 +4,7 @@ import { db, conversations } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
-import { loadAiConfig } from '@/lib/ai/config'
+import { loadAiConfigForChannel } from '@/lib/ai/config'
 import { buildConversationContext } from '@/lib/ai/context'
 import { retrieveKnowledge } from '@/lib/ai/knowledge'
 import {
@@ -52,7 +52,7 @@ export async function POST(request: Request) {
     // means "not yours / not found" either way.
     const conversation = firstOrNull(
       await db
-        .select({ id: conversations.id })
+        .select({ id: conversations.id, channelId: conversations.channelId })
         .from(conversations)
         .where(
           and(
@@ -66,7 +66,11 @@ export async function POST(request: Request) {
       return NextResponse.json({ error: 'Conversation not found' }, { status: 404 })
     }
 
-    const config = await loadAiConfig(accountId).catch((err) => {
+    // Multi-agente: usa o agente do CANAL desta conversa; cai no default quando
+    // nenhum agente reivindica o canal (o rascunho é manual, sempre roda algo).
+    const config = await loadAiConfigForChannel(accountId, conversation.channelId, {
+      fallbackDefault: true,
+    }).catch((err) => {
       // Decrypt failure — surface distinctly from "not configured".
       console.error('[ai/draft] loadAiConfig error:', err)
       throw new AiError('Stored API key could not be decrypted.', {

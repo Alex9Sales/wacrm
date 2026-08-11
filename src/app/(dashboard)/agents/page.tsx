@@ -1,89 +1,124 @@
 'use client';
 
-import { useEffect, useState } from 'react';
-import { Bot, Sparkles, Settings2, Phone, BookOpen } from 'lucide-react';
+// ============================================================
+// Agentes IA — painel de controle (Fase A). O landing é o PAINEL (cards dos
+// agentes). Clicar num card abre a config daquele agente (Configuração +
+// Playground). "Base de Conhecimento" (o Núcleo compartilhado) e "Voz" ficam
+// acessíveis pelo cabeçalho do painel.
+// ============================================================
+
+import { useState } from 'react';
+import {
+  Bot,
+  Sparkles,
+  Settings2,
+  Phone,
+  BookOpen,
+  ArrowLeft,
+} from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
+import { Button } from '@/components/ui/button';
+import { useAuth } from '@/hooks/use-auth';
+import { canEditSettings } from '@/lib/auth/roles';
 import { AiPlayground } from '@/components/agents/ai-playground';
 import { AiConfig } from '@/components/settings/ai-config';
 import { KnowledgeTab } from '@/components/agents/knowledge-tab';
 import { VoiceAgentsTab } from '@/components/agents/voice-agents-tab';
+import { AgentsPanel } from '@/components/agents/agents-panel';
 
-type Tab = 'playground' | 'knowledge' | 'setup' | 'voice';
+type View =
+  | { kind: 'panel' }
+  | { kind: 'agent'; id: string }
+  | { kind: 'new-first' }
+  | { kind: 'knowledge' }
+  | { kind: 'voice' };
 
 export default function AgentsPage() {
-  const [tab, setTab] = useState<Tab>('playground');
-  const [decided, setDecided] = useState(false);
+  const { accountRole } = useAuth();
+  const canEdit = accountRole ? canEditSettings(accountRole) : false;
+  const [view, setView] = useState<View>({ kind: 'panel' });
 
-  // Land first-time users on Setup, returning users on the Playground.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const res = await fetch('/api/ai/config');
-        const data = await res.json().catch(() => ({}));
-        if (!cancelled) setTab(data?.configured ? 'playground' : 'setup');
-      } catch {
-        if (!cancelled) setTab('setup');
-      } finally {
-        if (!cancelled) setDecided(true);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, []);
+  const back = () => setView({ kind: 'panel' });
 
   return (
     <div>
-      <div className="flex items-center gap-2">
-        <Bot className="h-6 w-6 text-primary" />
-        <h1 className="text-2xl font-bold tracking-tight text-foreground">
-          Agentes IA
-        </h1>
-      </div>
-      <p className="mt-1 text-sm text-muted-foreground">
-        Seu agente de IA com chave própria — configure-o e depois teste-o no
-        playground antes que ele responda aos clientes na caixa de entrada.
-      </p>
+      <div className="flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          {view.kind !== 'panel' && (
+            <Button variant="ghost" size="sm" onClick={back} className="-ml-2">
+              <ArrowLeft className="mr-1.5 h-4 w-4" /> Painel
+            </Button>
+          )}
+          <Bot className="h-6 w-6 text-primary" />
+          <h1 className="text-2xl font-bold tracking-tight text-foreground">
+            Agentes IA
+          </h1>
+        </div>
 
-      {decided && (
-        <Tabs
-          value={tab}
-          onValueChange={(v) => setTab(v as Tab)}
-          className="mt-6"
-        >
-          <TabsList>
-            <TabsTrigger value="playground">
-              <Sparkles className="mr-1.5 h-4 w-4" /> Playground
-            </TabsTrigger>
-            <TabsTrigger value="knowledge">
+        {view.kind === 'panel' && (
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setView({ kind: 'knowledge' })}
+            >
               <BookOpen className="mr-1.5 h-4 w-4" /> Base de Conhecimento
-            </TabsTrigger>
-            <TabsTrigger value="setup">
-              <Settings2 className="mr-1.5 h-4 w-4" /> Configuração
-            </TabsTrigger>
-            <TabsTrigger value="voice">
+            </Button>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => setView({ kind: 'voice' })}
+            >
               <Phone className="mr-1.5 h-4 w-4" /> Voz
-            </TabsTrigger>
-          </TabsList>
+            </Button>
+          </div>
+        )}
+      </div>
 
-          <TabsContent value="playground" className="mt-4">
-            <AiPlayground onGoToSetup={() => setTab('setup')} />
-          </TabsContent>
-
-          <TabsContent value="knowledge" className="mt-4">
-            <KnowledgeTab />
-          </TabsContent>
-
-          <TabsContent value="setup" className="mt-4">
-            <AiConfig />
-          </TabsContent>
-
-          <TabsContent value="voice" className="mt-4">
-            <VoiceAgentsTab />
-          </TabsContent>
-        </Tabs>
+      {view.kind === 'panel' && (
+        <p className="mt-1 text-sm text-muted-foreground">
+          Cada agente responde nos canais que você escolher, com a sua chave.
+          Clique num card para configurar. A Base de Conhecimento é
+          compartilhada por todos.
+        </p>
       )}
+
+      <div className="mt-6">
+        {view.kind === 'panel' && (
+          <AgentsPanel
+            canEdit={canEdit}
+            onOpen={(id) => setView({ kind: 'agent', id })}
+            onFirstSetup={() => setView({ kind: 'new-first' })}
+          />
+        )}
+
+        {view.kind === 'new-first' && (
+          <AiConfig onChanged={back} />
+        )}
+
+        {view.kind === 'agent' && (
+          <Tabs defaultValue="setup">
+            <TabsList>
+              <TabsTrigger value="setup">
+                <Settings2 className="mr-1.5 h-4 w-4" /> Configuração
+              </TabsTrigger>
+              <TabsTrigger value="playground">
+                <Sparkles className="mr-1.5 h-4 w-4" /> Playground
+              </TabsTrigger>
+            </TabsList>
+            <TabsContent value="setup" className="mt-4">
+              <AiConfig key={view.id} agentId={view.id} />
+            </TabsContent>
+            <TabsContent value="playground" className="mt-4">
+              <AiPlayground agentId={view.id} />
+            </TabsContent>
+          </Tabs>
+        )}
+
+        {view.kind === 'knowledge' && <KnowledgeTab />}
+
+        {view.kind === 'voice' && <VoiceAgentsTab />}
+      </div>
     </div>
   );
 }

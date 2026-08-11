@@ -1,54 +1,58 @@
-import { eq } from 'drizzle-orm'
+import { and, asc, desc, eq } from 'drizzle-orm'
 import { db, aiConfigs } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { toAiHoursMode } from './hours-gate'
+import { pickAgentIdForChannel } from './agents'
 import type { AiConfig } from './types'
 
-/**
- * Load and decrypt the account's AI config for *use* (draft or
- * auto-reply). Returns `null` when there's no row or the master switch
- * (`is_active`) is off — both mean "AI is not available", which callers
- * treat identically. Throws only if the stored key can't be decrypted
- * (mismatched `ENCRYPTION_KEY`), so that distinct failure surfaces
- * rather than looking like "not configured".
- */
-export async function loadAiConfig(
+const agentSelect = {
+  provider: aiConfigs.provider,
+  model: aiConfigs.model,
+  apiKey: aiConfigs.apiKey,
+  systemPrompt: aiConfigs.systemPrompt,
+  isActive: aiConfigs.isActive,
+  autoReplyEnabled: aiConfigs.autoReplyEnabled,
+  autoReplyChannelIds: aiConfigs.autoReplyChannelIds,
+  autoReplyMaxPerConversation: aiConfigs.autoReplyMaxPerConversation,
+  autoReplyHoursMode: aiConfigs.autoReplyHoursMode,
+  autoReplyBufferSeconds: aiConfigs.autoReplyBufferSeconds,
+  dealSuggestionsProactive: aiConfigs.dealSuggestionsProactive,
+  embeddingsApiKey: aiConfigs.embeddingsApiKey,
+  signatureName: aiConfigs.signatureName,
+  signatureEnabled: aiConfigs.signatureEnabled,
+}
+
+type AgentRow = {
+  provider: string
+  model: string
+  apiKey: string
+  systemPrompt: string | null
+  isActive: boolean
+  autoReplyEnabled: boolean
+  autoReplyChannelIds: string[] | null
+  autoReplyMaxPerConversation: number
+  autoReplyHoursMode: string
+  autoReplyBufferSeconds: number
+  dealSuggestionsProactive: boolean
+  embeddingsApiKey: string | null
+  signatureName: string | null
+  signatureEnabled: boolean
+}
+
+/** Turn a raw agent row into a usable, decrypted AiConfig (or null when it
+ *  isn't usable). Shared by every loader below. */
+function finalizeAgent(
   accountId: string,
-  opts: { requireActive?: boolean } = {},
-): Promise<AiConfig | null> {
-  const { requireActive = true } = opts
-  const row = firstOrNull(
-    await db
-      .select({
-        provider: aiConfigs.provider,
-        model: aiConfigs.model,
-        apiKey: aiConfigs.apiKey,
-        systemPrompt: aiConfigs.systemPrompt,
-        isActive: aiConfigs.isActive,
-        autoReplyEnabled: aiConfigs.autoReplyEnabled,
-        autoReplyChannelIds: aiConfigs.autoReplyChannelIds,
-        autoReplyMaxPerConversation: aiConfigs.autoReplyMaxPerConversation,
-        autoReplyHoursMode: aiConfigs.autoReplyHoursMode,
-        autoReplyBufferSeconds: aiConfigs.autoReplyBufferSeconds,
-        dealSuggestionsProactive: aiConfigs.dealSuggestionsProactive,
-        embeddingsApiKey: aiConfigs.embeddingsApiKey,
-        signatureName: aiConfigs.signatureName,
-        signatureEnabled: aiConfigs.signatureEnabled,
-      })
-      .from(aiConfigs)
-      .where(eq(aiConfigs.accountId, accountId))
-      .limit(1),
-  )
-
+  row: AgentRow | null,
+  requireActive: boolean,
+): AiConfig | null {
   if (!row) return null
-
   // The Playground passes requireActive:false so an admin can test the
   // agent before flipping the master switch on.
   if (requireActive && !row.isActive) return null
   // Defensive: the column is NOT NULL, but a partial write / manual DB
-  // edit could leave it empty. Treat a missing key as "not configured"
-  // rather than letting decrypt() throw on null.
+  // edit could leave it empty. Treat a missing key as "not configured".
   if (!row.apiKey) return null
 
   // The embeddings key is optional and independent of the chat key —
@@ -59,8 +63,6 @@ export async function loadAiConfig(
     try {
       embeddingsApiKey = decrypt(row.embeddingsApiKey)
     } catch {
-      // Not silent — a rotated/mismatched ENCRYPTION_KEY here means
-      // semantic search quietly stops working, so leave a breadcrumb.
       console.error(
         `[ai config] embeddings key for account ${accountId} could not be decrypted — check ENCRYPTION_KEY; semantic search is disabled until it is re-entered.`,
       )
@@ -84,6 +86,70 @@ export async function loadAiConfig(
     signatureName: row.signatureName,
     signatureEnabled: row.signatureEnabled,
   }
+}
+
+/**
+ * Load + decrypt the account's DEFAULT agent for *use* (draft / pipelines /
+ * playground fallback). Multi-agente (0074): an account can have several
+ * agents; this returns the one flagged `is_default` (falls back to the oldest).
+ * Returns null when there's none or the master switch is off. Throws only if
+ * the stored key can't be decrypted (mismatched ENCRYPTION_KEY).
+ */
+export async function loadAiConfig(
+  accountId: string,
+  opts: { requireActive?: boolean } = {},
+): Promise<AiConfig | null> {
+  const { requireActive = true } = opts
+  const row = firstOrNull(
+    await db
+      .select(agentSelect)
+      .from(aiConfigs)
+      .where(eq(aiConfigs.accountId, accountId))
+      .orderBy(desc(aiConfigs.isDefault), asc(aiConfigs.createdAt))
+      .limit(1),
+  )
+  return finalizeAgent(accountId, row as AgentRow | null, requireActive)
+}
+
+/** Load + decrypt one specific agent (account-scoped). */
+export async function loadAiConfigById(
+  accountId: string,
+  agentId: string,
+  opts: { requireActive?: boolean } = {},
+): Promise<AiConfig | null> {
+  const { requireActive = true } = opts
+  const row = firstOrNull(
+    await db
+      .select(agentSelect)
+      .from(aiConfigs)
+      .where(and(eq(aiConfigs.accountId, accountId), eq(aiConfigs.id, agentId)))
+      .limit(1),
+  )
+  return finalizeAgent(accountId, row as AgentRow | null, requireActive)
+}
+
+/**
+ * Load the agent that should handle a conversation on `channelId` (routing).
+ * `requireAutoReply` restricts to agents with auto-reply on (inbound bot);
+ * `fallbackDefault` uses the default agent when no agent claims the channel
+ * (manual draft, which should always have something to run).
+ */
+export async function loadAiConfigForChannel(
+  accountId: string,
+  channelId: string | null,
+  opts: {
+    requireActive?: boolean
+    requireAutoReply?: boolean
+    fallbackDefault?: boolean
+  } = {},
+): Promise<AiConfig | null> {
+  const { requireActive = true, requireAutoReply = false, fallbackDefault = false } = opts
+  const agentId = await pickAgentIdForChannel(accountId, channelId, {
+    requireAutoReply,
+  })
+  if (agentId) return loadAiConfigById(accountId, agentId, { requireActive })
+  if (fallbackDefault) return loadAiConfig(accountId, { requireActive })
+  return null
 }
 
 /**

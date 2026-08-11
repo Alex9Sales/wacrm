@@ -1,7 +1,7 @@
 import { NextResponse } from 'next/server'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
-import { loadAiConfig } from '@/lib/ai/config'
+import { loadAiConfig, loadAiConfigById } from '@/lib/ai/config'
 import { retrieveKnowledge } from '@/lib/ai/knowledge'
 import {
   getCompanyProfile,
@@ -57,9 +57,15 @@ export async function POST(request: Request) {
       )
     }
 
-    const config = await loadAiConfig(accountId, {
-      requireActive: false,
-    }).catch((err) => {
+    // Multi-agente: testa o agente pedido (agent_id) ou o default.
+    const agentId =
+      body && typeof body.agent_id === 'string' && body.agent_id
+        ? (body.agent_id as string)
+        : null
+    const config = await (agentId
+      ? loadAiConfigById(accountId, agentId, { requireActive: false })
+      : loadAiConfig(accountId, { requireActive: false })
+    ).catch((err) => {
       console.error('[ai/playground] loadAiConfig error:', err)
       throw new AiError('Stored API key could not be decrypted.', {
         code: 'key_decrypt_failed',

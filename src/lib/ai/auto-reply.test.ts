@@ -15,6 +15,7 @@ const h = vi.hoisted(() => ({
     })
   },
   loadAiConfig: vi.fn(),
+  hasAgent: vi.fn(),
   buildConversationContext: vi.fn(),
   retrieveKnowledge: vi.fn(),
   generateReply: vi.fn(),
@@ -28,7 +29,11 @@ const h = vi.hoisted(() => ({
   },
 }))
 
-vi.mock('./config', () => ({ loadAiConfig: h.loadAiConfig }))
+// Multi-agente: o auto-reply agora roteia por canal (loadAiConfigForChannel)
+// e faz um early-out barato (hasActiveAutoReplyAgent). Mapeamos os dois para
+// os mocks existentes — o roteamento por canal é testado em agents.ts.
+vi.mock('./config', () => ({ loadAiConfigForChannel: h.loadAiConfig }))
+vi.mock('./agents', () => ({ hasActiveAutoReplyAgent: h.hasAgent }))
 vi.mock('./context', () => ({ buildConversationContext: h.buildConversationContext }))
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
@@ -119,6 +124,7 @@ beforeEach(() => {
   h.state.claim = true
   h.state.updatePayload = null
   h.state.sqlCalls = []
+  h.hasAgent.mockResolvedValue(true)
   h.loadAiConfig.mockResolvedValue(aiConfig())
   h.buildConversationContext.mockResolvedValue([{ role: 'user', content: 'hi' }])
   h.retrieveKnowledge.mockResolvedValue([])

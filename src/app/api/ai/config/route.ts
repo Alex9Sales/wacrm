@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { eq } from 'drizzle-orm'
+import { and, asc, desc, eq } from 'drizzle-orm'
 import { db, aiConfigs } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import {
@@ -25,13 +25,18 @@ function bad(message: string) {
  * whether AI is set up. The encrypted key is NEVER returned — only a
  * `has_key` flag; the settings form shows a masked placeholder.
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const { accountId } = await getCurrentAccount()
+    // Multi-agente: ?agent=<id> lê um agente específico; sem param, o default.
+    const requestedAgentId = new URL(request.url).searchParams.get('agent')
 
     const data = firstOrNull(
       await db
         .select({
+          id: aiConfigs.id,
+          name: aiConfigs.name,
+          is_default: aiConfigs.isDefault,
           // `api_key` is selected only to derive `has_key` — it is
           // stripped out below and never returned to the client.
           provider: aiConfigs.provider,
@@ -50,7 +55,15 @@ export async function GET() {
           embeddings_api_key: aiConfigs.embeddingsApiKey,
         })
         .from(aiConfigs)
-        .where(eq(aiConfigs.accountId, accountId))
+        .where(
+          requestedAgentId
+            ? and(
+                eq(aiConfigs.accountId, accountId),
+                eq(aiConfigs.id, requestedAgentId),
+              )
+            : eq(aiConfigs.accountId, accountId),
+        )
+        .orderBy(desc(aiConfigs.isDefault), asc(aiConfigs.createdAt))
         .limit(1),
     )
 
@@ -130,6 +143,15 @@ export async function POST(request: Request) {
     // IA proativa em Negociações (Fase 3): opt-in por conta (default OFF).
     const dealSuggestionsProactive = body.deal_suggestions_proactive === true
 
+    // Multi-agente: nome do agente (rótulo do card) + qual agente editar.
+    const agentName =
+      typeof body.name === 'string' && body.name.trim()
+        ? body.name.trim().slice(0, 60)
+        : null
+    const requestedAgentId =
+      new URL(request.url).searchParams.get('agent') ||
+      (typeof body.agent_id === 'string' ? body.agent_id : '')
+
     const rawKey = typeof body.api_key === 'string' ? body.api_key.trim() : ''
 
     // Embeddings key (optional, for semantic KB search): a non-empty
@@ -141,7 +163,8 @@ export async function POST(request: Request) {
         : ''
     const clearEmbeddingsKey = body.embeddings_api_key === null
 
-    // Reuse the stored key when the form didn't send a fresh one.
+    // Reuse the stored key when the form didn't send a fresh one. Multi-agente:
+    // edita o agente pedido (agent_id / ?agent), senão o DEFAULT da conta.
     const existing = firstOrNull(
       await db
         .select({
@@ -151,9 +174,18 @@ export async function POST(request: Request) {
           apiKey: aiConfigs.apiKey,
         })
         .from(aiConfigs)
-        .where(eq(aiConfigs.accountId, accountId))
+        .where(
+          requestedAgentId
+            ? and(
+                eq(aiConfigs.accountId, accountId),
+                eq(aiConfigs.id, requestedAgentId),
+              )
+            : eq(aiConfigs.accountId, accountId),
+        )
+        .orderBy(desc(aiConfigs.isDefault), asc(aiConfigs.createdAt))
         .limit(1),
     )
+    if (requestedAgentId && !existing) return bad('Agente não encontrado.')
 
     let apiKeyPlain: string
     if (rawKey) {
@@ -225,6 +257,7 @@ export async function POST(request: Request) {
 
     const encryptedKey = rawKey ? encrypt(rawKey) : null
     const shared: {
+      name?: string
       provider: string
       model: string
       systemPrompt: string | null
@@ -257,17 +290,23 @@ export async function POST(request: Request) {
     } else if (clearEmbeddingsKey) {
       shared.embeddingsApiKey = null
     }
+    // Só grava o nome quando veio um — não apaga o rótulo existente num save
+    // que mexeu só num toggle.
+    if (agentName) shared.name = agentName
 
     try {
       if (existing) {
         await db
           .update(aiConfigs)
           .set(encryptedKey ? { ...shared, apiKey: encryptedKey } : shared)
-          .where(eq(aiConfigs.accountId, accountId))
+          .where(eq(aiConfigs.id, existing.id))
       } else {
+        // Primeiro agente da conta → é o default (catch-all/fallback).
         await db.insert(aiConfigs).values({
           accountId,
           createdBy: userId,
+          isDefault: true,
+          name: agentName || 'Agente principal',
           // Guaranteed non-null: rawKey required when no existing row.
           apiKey: encryptedKey!,
           ...shared,
@@ -293,11 +332,30 @@ export async function POST(request: Request) {
  * Removes the account's AI config (turns everything off and forgets the
  * key). Also used to recover from a corrupted encrypted key.
  */
-export async function DELETE() {
+export async function DELETE(request: Request) {
   try {
     const { accountId } = await requireRole('admin')
+    // Multi-agente: ?agent=<id> exclui UM agente; sem param, reset (o default).
+    const agentId = new URL(request.url).searchParams.get('agent')
     try {
-      await db.delete(aiConfigs).where(eq(aiConfigs.accountId, accountId))
+      if (agentId) {
+        const agents = await db
+          .select({ id: aiConfigs.id, isDefault: aiConfigs.isDefault })
+          .from(aiConfigs)
+          .where(eq(aiConfigs.accountId, accountId))
+        const target = agents.find((a) => a.id === agentId)
+        if (!target) return bad('Agente não encontrado.')
+        // O principal só pode ser excluído se for o único (reset total).
+        if (target.isDefault && agents.length > 1) {
+          return bad('Torne outro agente o principal antes de excluir este.')
+        }
+        await db
+          .delete(aiConfigs)
+          .where(and(eq(aiConfigs.id, agentId), eq(aiConfigs.accountId, accountId)))
+      } else {
+        // Reset legado: apaga tudo da conta (recupera de chave corrompida).
+        await db.delete(aiConfigs).where(eq(aiConfigs.accountId, accountId))
+      }
     } catch (err) {
       console.error('[ai/config DELETE] error:', err)
       return NextResponse.json(

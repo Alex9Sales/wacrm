@@ -1295,6 +1295,11 @@ export const aiConfigs = pgTable("ai_configs", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	accountId: uuid("account_id").notNull(),
 	createdBy: uuid("created_by"),
+	// Multi-agente (migração 0074): cada linha é um AGENTE. `name` rotula o card;
+	// `isDefault` marca o agente fallback/catch-all (1 por conta). Antes era
+	// 1-por-conta (unique account_id), agora vários roteados por canal.
+	name: text(),
+	isDefault: boolean("is_default").default(false).notNull(),
 	provider: text().notNull(),
 	model: text().notNull(),
 	apiKey: text("api_key").notNull(),
@@ -1325,7 +1330,9 @@ export const aiConfigs = pgTable("ai_configs", {
 			foreignColumns: [organization.id],
 			name: "ai_configs_account_id_fkey"
 		}).onDelete("cascade"),
-	unique("ai_configs_account_id_key").on(table.accountId),
+	// A unique(account_id) foi removida na 0074 (multi-agente). O "no máximo 1
+	// default por conta" é garantido por um índice único parcial na migração.
+	index("ai_configs_account_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	check("ai_configs_auto_reply_max_per_conversation_check", sql`(auto_reply_max_per_conversation >= 1) AND (auto_reply_max_per_conversation <= 20)`),
 	check("ai_configs_auto_reply_hours_mode_check", sql`auto_reply_hours_mode = ANY (ARRAY['always'::text, 'inside'::text, 'outside'::text])`),
 	check("ai_configs_auto_reply_buffer_seconds_check", sql`(auto_reply_buffer_seconds >= 0) AND (auto_reply_buffer_seconds <= 300)`),

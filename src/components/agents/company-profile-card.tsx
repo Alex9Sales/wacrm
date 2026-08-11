@@ -152,14 +152,14 @@ export function CompanyProfileCard({ canEdit }: { canEdit: boolean }) {
             </Field>
 
             <Field
-              label="Produtos / serviços"
-              hint="Os principais itens e, se quiser, preços de referência."
+              label="O que você oferece"
+              hint="Produtos, serviços ou especialidades — o que fizer sentido pro seu negócio (loja, clínica, advocacia, imobiliária…). Se você já tem catálogo no CRM, dá pra deixar o agente de Vendas usar ele direto (em breve)."
             >
               <Textarea
                 value={form.offerings ?? ''}
                 onChange={(e) => set('offerings', e.target.value)}
                 placeholder={
-                  'ex.:\n- Botijão P13: R$ 110\n- Água 20L: R$ 12\n- Recarga de água: R$ 8'
+                  'ex. (loja): Botijão P13 R$ 110 · Água 20L R$ 12\nex. (clínica): Consulta, limpeza, clareamento, ortodontia\nex. (imobiliária): Venda e locação de imóveis na zona sul'
                 }
                 rows={4}
                 disabled={!canEdit || saving}
