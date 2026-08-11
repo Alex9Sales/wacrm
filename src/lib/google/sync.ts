@@ -223,7 +223,20 @@ export async function pushEventToGoogle(
   const body = toGoogleBody(row as PushRow)
 
   if (op === 'update' && row.googleEventId) {
-    await patchGoogleEvent(accessToken, row.calGoogleId, row.googleEventId, body)
+    try {
+      await patchGoogleEvent(accessToken, row.calGoogleId, row.googleEventId, body)
+    } catch (err) {
+      // Evento não existe mais no Google (404) → recria e regrava o id.
+      if (String(err).includes('(404)')) {
+        const recreated = await insertGoogleEvent(accessToken, row.calGoogleId, body)
+        await db
+          .update(calendarEvents)
+          .set({ googleEventId: recreated.id, updatedAt: sql`now()` })
+          .where(eq(calendarEvents.id, eventId))
+      } else {
+        throw err
+      }
+    }
     return
   }
 

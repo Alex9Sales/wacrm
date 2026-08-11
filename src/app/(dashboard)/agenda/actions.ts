@@ -160,6 +160,12 @@ export async function createEvent(
     if (!input.startsAt || !input.endsAt)
       return { id: null, error: 'Início e fim são obrigatórios' }
 
+    // Garante fim > início (senão o Google recusa com timeRangeEmpty).
+    let endsAt = input.endsAt
+    if (new Date(endsAt).getTime() <= new Date(input.startsAt).getTime()) {
+      endsAt = new Date(new Date(input.startsAt).getTime() + 3_600_000).toISOString()
+    }
+
     const calendarId =
       input.calendarId ?? (await ensureDefaultCalendar(ctx.accountId, ctx.userId))
 
@@ -175,7 +181,7 @@ export async function createEvent(
           description: input.description?.trim() || null,
           location: input.location?.trim() || null,
           startsAt: input.startsAt,
-          endsAt: input.endsAt,
+          endsAt,
           allDay: input.allDay ?? false,
           contactId: input.contactId || null,
           dealId: input.dealId || null,
@@ -207,6 +213,14 @@ export async function updateEvent(
     if (patch.startsAt !== undefined) set.startsAt = patch.startsAt
     if (patch.endsAt !== undefined) set.endsAt = patch.endsAt
     if (patch.allDay !== undefined) set.allDay = patch.allDay
+    // Garante fim > início (evita timeRangeEmpty no Google).
+    if (
+      patch.startsAt !== undefined &&
+      patch.endsAt !== undefined &&
+      new Date(patch.endsAt).getTime() <= new Date(patch.startsAt).getTime()
+    ) {
+      set.endsAt = new Date(new Date(patch.startsAt).getTime() + 3_600_000).toISOString()
+    }
     if (patch.calendarId !== undefined) set.calendarId = patch.calendarId
     if (patch.contactId !== undefined) set.contactId = patch.contactId || null
     if (patch.dealId !== undefined) set.dealId = patch.dealId || null
