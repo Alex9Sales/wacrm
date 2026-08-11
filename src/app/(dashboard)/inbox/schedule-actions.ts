@@ -15,7 +15,7 @@
 // send at the scheduled time via the shared send funnel.
 // ============================================================
 
-import { and, desc, eq, sql } from 'drizzle-orm'
+import { and, desc, eq, or, sql } from 'drizzle-orm'
 
 import { db, scheduledMessages, conversations } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
@@ -329,4 +329,37 @@ export async function updateScheduledMessage(
     console.error('[schedule] updateScheduledMessage failed:', err)
     return { ok: false, error: 'Falha ao editar o agendamento.' }
   }
+}
+
+/**
+ * Agendadas de um CONTATO (não só de uma conversa): via contact_id da própria
+ * agendada OU via o contato da conversa. Alimenta a seção "Mensagens agendadas"
+ * na tela de detalhe do contato. Pendentes primeiro.
+ */
+export async function listScheduledForContact(
+  contactId: string,
+): Promise<ScheduledMessageLite[]> {
+  const ctx = await getCurrentAccount()
+  const cid = contactId?.trim()
+  if (!cid) return []
+  const rows = await db
+    .select(liteSelect)
+    .from(scheduledMessages)
+    .leftJoin(conversations, eq(scheduledMessages.conversationId, conversations.id))
+    .where(
+      and(
+        eq(scheduledMessages.accountId, ctx.accountId),
+        or(
+          eq(scheduledMessages.contactId, cid),
+          eq(conversations.contactId, cid),
+        ),
+      ),
+    )
+    .orderBy(
+      sql`CASE WHEN ${scheduledMessages.status} = 'pending' THEN 0 ELSE 1 END`,
+      scheduledMessages.scheduledAt,
+      desc(scheduledMessages.createdAt),
+    )
+    .limit(50)
+  return rows.map((r) => toLite(r as Record<string, unknown>))
 }

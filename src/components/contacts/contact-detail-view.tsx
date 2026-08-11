@@ -25,6 +25,11 @@ import {
   listContactDeals,
 } from '@/app/(dashboard)/contacts/actions';
 import {
+  listScheduledForContact,
+  type ScheduledMessageLite,
+} from '@/app/(dashboard)/inbox/schedule-actions';
+import { ScheduleMiniList } from '@/components/inbox/schedule-mini-list';
+import {
   TemplatePicker,
   type TemplateSendValues,
 } from '@/components/inbox/template-picker';
@@ -127,6 +132,18 @@ export function ContactDetailView({
   const [deals, setDeals] = useState<Deal[]>([]);
   const [loadingDeals, setLoadingDeals] = useState(false);
 
+  // Mensagens agendadas do contato (aba Agendadas).
+  const [scheduled, setScheduled] = useState<ScheduledMessageLite[]>([]);
+
+  const fetchScheduled = useCallback(async () => {
+    if (!contactId) return;
+    try {
+      setScheduled(await listScheduledForContact(contactId));
+    } catch {
+      setScheduled([]);
+    }
+  }, [contactId]);
+
   const fetchContact = useCallback(async () => {
     if (!contactId) return;
     setLoading(true);
@@ -214,8 +231,9 @@ export function ContactDetailView({
       fetchNotes();
       fetchCustomFields();
       fetchDeals();
+      fetchScheduled();
     }
-  }, [open, contactId, fetchContact, fetchTags, fetchNotes, fetchCustomFields, fetchDeals]);
+  }, [open, contactId, fetchContact, fetchTags, fetchNotes, fetchCustomFields, fetchDeals, fetchScheduled]);
 
   async function copyPhone() {
     if (!contact) return;
@@ -522,6 +540,12 @@ export function ContactDetailView({
                 >
                   Negócios
                 </TabsTrigger>
+                <TabsTrigger
+                  value="scheduled"
+                  className="data-active:bg-muted data-active:text-primary text-muted-foreground"
+                >
+                  Agendadas
+                </TabsTrigger>
               </TabsList>
 
               {/* Details Tab */}
@@ -783,6 +807,16 @@ export function ContactDetailView({
                     ))}
                   </div>
                 )}
+              </TabsContent>
+
+              {/* Agendadas Tab — mensagens agendadas deste contato (reflete as
+                  criadas na conversa E na Central de Agendamentos). */}
+              <TabsContent value="scheduled" className="flex-1 overflow-y-auto px-4 py-3">
+                <ScheduleMiniList
+                  items={scheduled}
+                  onChanged={fetchScheduled}
+                  emptyLabel="Nenhuma mensagem agendada para este contato."
+                />
               </TabsContent>
             </Tabs>
           </div>
