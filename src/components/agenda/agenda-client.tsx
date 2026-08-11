@@ -105,6 +105,37 @@ export function AgendaClient() {
     void load()
   }, [load])
 
+  // Auto-sync Google→CRM (sem precisar clicar Sincronizar): silencioso, com
+  // throttle. Roda ao abrir, ao focar a aba e a cada 2 min.
+  const lastAutoSync = useRef(0)
+  const autoSync = useCallback(async () => {
+    const now = Date.now()
+    if (now - lastAutoSync.current < 45_000) return
+    lastAutoSync.current = now
+    try {
+      const r = await syncGoogleNow()
+      if (!r.error) await load()
+    } catch {
+      /* silencioso */
+    }
+  }, [load])
+
+  useEffect(() => {
+    if (!google?.connected) return
+    void autoSync()
+    const onFocus = () => {
+      if (!document.hidden) void autoSync()
+    }
+    window.addEventListener('focus', onFocus)
+    document.addEventListener('visibilitychange', onFocus)
+    const id = window.setInterval(() => void autoSync(), 120_000)
+    return () => {
+      window.removeEventListener('focus', onFocus)
+      document.removeEventListener('visibilitychange', onFocus)
+      window.clearInterval(id)
+    }
+  }, [google?.connected, autoSync])
+
   // Voltar do navegador na visão de Dia retorna pro Mês (em vez de sair da página).
   useEffect(() => {
     const onPop = () => {
