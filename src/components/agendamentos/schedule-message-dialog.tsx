@@ -273,7 +273,13 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
                   <Label className="mb-1 block text-xs">Enviar pelo número</Label>
                   <Select value={channelId} onValueChange={(v) => v && setChannelId(v)}>
                     <SelectTrigger className="w-full">
-                      <SelectValue placeholder="Escolha o canal" />
+                      <SelectValue placeholder="Escolha o canal">
+                        {(v: string) => {
+                          const ch = channels.find((c) => c.id === v)
+                          if (!ch) return 'Escolha o canal'
+                          return `${ch.name || 'WhatsApp'}${ch.phoneNumber ? ` · ${ch.phoneNumber}` : ''}`
+                        }}
+                      </SelectValue>
                     </SelectTrigger>
                     <SelectContent>
                       {channels.map((ch) => (

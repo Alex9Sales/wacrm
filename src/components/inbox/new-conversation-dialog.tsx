@@ -259,7 +259,15 @@ export function NewConversationDialog({
                     needsChannel && "border-destructive/60",
                   )}
                 >
-                  <SelectValue placeholder="Escolha o canal" />
+                  <SelectValue placeholder="Escolha o canal">
+                    {(v: string) => {
+                      const ch = channels.find((c) => c.id === v)
+                      if (!ch) return "Escolha o canal"
+                      const name =
+                        ch.name || PROVIDER_LABEL[ch.provider] || "WhatsApp"
+                      return `${name}${ch.phoneNumber ? ` · ${ch.phoneNumber}` : ""}`
+                    }}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {channels.map((ch) => (
