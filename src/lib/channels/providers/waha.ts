@@ -220,14 +220,23 @@ function normalizeSerializedId(id: string): string {
 }
 
 /** Rebuild the SERIALIZED id WAHA needs for `reply_to` from the HASH we store.
- *  1:1 chats only (`@c.us`): `<fromMe>_<chatId>_<HASH>`. Returns null to skip
- *  quoting — group chat (id also needs the author jid we don't have here), no
- *  context, or an id that's already serialized (leave as-is). */
+ *   1:1   (`@c.us`): `<fromMe>_<chatId>_<HASH>`
+ *   group (`@g.us`): `<fromMe>_<groupJid>_<HASH>`
+ *  gows keys a full group id as `<fromMe>_<groupJid>_<HASH>_<participant@lid>`,
+ *  but it RESOLVES a message by its HASH (proven by group reactions, which send
+ *  the bare hash and land on WhatsApp — for our own AND others' messages). We
+ *  don't reliably store the quoted author's LID (author_key prefers the phone
+ *  and is null for our own posts), so we omit the trailing participant and let
+ *  gows resolve by chat+hash — the same normalization it does on inbound/ack.
+ *  If gows still rejects it, sendText's safety net drops reply_to and resends,
+ *  so a group quote is best-effort and never costs the message. Returns null to
+ *  skip quoting: no context, or an unknown chat kind. An already-serialized id
+ *  (has "_") passes through untouched. */
 function buildWahaReplyTo(chatId: string, opts?: SendOptions): string | null {
   const hash = opts?.contextExternalId;
   if (!hash) return null;
   if (hash.includes('_')) return hash;
-  if (!chatId.endsWith('@c.us')) return null;
+  if (!chatId.endsWith('@c.us') && !chatId.endsWith('@g.us')) return null;
   return `${opts?.contextFromMe ? 'true' : 'false'}_${chatId}_${hash}`;
 }
 
@@ -1004,8 +1013,9 @@ export const wahaProvider: WhatsAppProvider = {
     if (opts?.mentions?.length) payload.mentions = opts.mentions;
     // Quoted reply → mirror the "responder" context into WhatsApp. WAHA keys a
     // message by its SERIALIZED id `<fromMe>_<chatId>_<HASH>` but we store only
-    // the HASH, so rebuild it here (1:1 only — a group id also carries the
-    // author jid we don't have at send time, so we skip groups for now).
+    // the HASH, so rebuild it here — now for groups too (gows resolves by
+    // chat+hash; see buildWahaReplyTo). The safety net below drops reply_to and
+    // resends if the engine rejects it, so the quote never costs the message.
     const replyTo = buildWahaReplyTo(chatId, opts);
     if (replyTo) payload.reply_to = replyTo;
     let { ok, status, body } = await sendWithRetry(ch, 'sendText', payload);
