@@ -159,11 +159,19 @@ export async function listContacts(
   const term = input.search.trim()
 
   if (input.tagIds.length > 0) {
+    // Build an explicit ARRAY[...] literal. Interpolating a JS array directly
+    // (`${input.tagIds}::uuid[]`) makes Drizzle expand it into a placeholder
+    // LIST (`$2, $3`), which Postgres reads as a scalar/record → "malformed
+    // array literal" (1 tag) / "cannot cast type record to uuid[]" (2+ tags).
+    const tagArray = sql`ARRAY[${sql.join(
+      input.tagIds.map((id) => sql`${id}::uuid`),
+      sql`, `,
+    )}]`
     const result = await db.execute(sql`
       SELECT to_jsonb(contact) AS contact, total_count
       FROM filter_contacts_by_tags(
         ${ctx.accountId}::uuid,
-        ${input.tagIds}::uuid[],
+        ${tagArray},
         ${term || null},
         ${input.limit},
         ${input.offset}
