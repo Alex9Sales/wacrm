@@ -654,9 +654,19 @@ export default function InboxPage() {
 
   const handleStatusChange = useCallback(
     (conversationId: string, status: ConversationStatus) => {
-      setConversations((prev) =>
-        prev.map((c) => (c.id === conversationId ? { ...c, status } : c))
-      );
+      setConversations((prev) => {
+        const updated = prev.map((c) =>
+          c.id === conversationId ? { ...c, status } : c
+        );
+        // Ao FECHAR, manda a conversa pro FIM da lista (sai da frente). Se o
+        // cliente responder depois (ex.: a nota do CSAT), ela volta pro topo
+        // pela atividade nova.
+        if (status === "closed") {
+          const idx = updated.findIndex((c) => c.id === conversationId);
+          if (idx > -1) updated.push(updated.splice(idx, 1)[0]);
+        }
+        return updated;
+      });
       if (activeConversation?.id === conversationId) {
         setActiveConversation((prev) => (prev ? { ...prev, status } : prev));
       }

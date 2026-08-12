@@ -29,6 +29,7 @@ import {
   addContactTag,
   removeContactTag,
 } from "@/app/(dashboard)/inbox/actions";
+import { promptCsatOnClose } from "./csat-prompt";
 import { createTag } from "@/components/settings/actions";
 
 // Same palette the Tags settings uses, so a tag created here looks native.
@@ -130,8 +131,9 @@ export function ConversationContextMenu({
       if (busy) return;
       setBusy(true);
       try {
-        await updateConversationStatus(conversation.id, s);
+        const { offerCsat } = await updateConversationStatus(conversation.id, s);
         onStatusChange?.(conversation.id, s);
+        if (s === "closed") promptCsatOnClose(offerCsat, conversation.id);
       } catch {
         toast.error("Falha ao atualizar o status");
       } finally {

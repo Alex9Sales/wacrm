@@ -12,6 +12,7 @@ import {
   updateConversationPriority,
   deleteConversation,
 } from "@/app/(dashboard)/inbox/actions";
+import { promptCsatOnClose } from "./csat-prompt";
 import {
   getContact,
   getContactTags,
@@ -374,8 +375,9 @@ export function ContactSidebar({
     async (status: ConversationStatus) => {
       if (!conversationId) return;
       try {
-        await updateConversationStatus(conversationId, status);
+        const { offerCsat } = await updateConversationStatus(conversationId, status);
         onStatusChange?.(conversationId, status);
+        if (status === "closed") promptCsatOnClose(offerCsat, conversationId);
       } catch (error) {
         console.error("Failed to update status:", error);
         toast.error("Falha ao atualizar o status");

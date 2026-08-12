@@ -860,13 +860,15 @@ export async function markConversationUnread(
 }
 
 /** Update a conversation's status. Account-scoped. Closing a conversation
- *  triggers the CSAT survey (when enabled). */
+ *  (open→closed) OFFERS the CSAT survey — the frontend asks the agent to
+ *  confirm before sending; we NO LONGER auto-send. Returns `offerCsat` so the
+ *  caller knows whether to prompt. */
 export async function updateConversationStatus(
   conversationId: string,
   status: ConversationStatus,
-): Promise<void> {
+): Promise<{ offerCsat: boolean }> {
   const ctx = await getCurrentAccount()
-  // Was it open before this? Only survey on an open→closed transition.
+  // Was it open before this? Only offer the survey on an open→closed transition.
   const prev = firstOrNull(
     await db
       .select({ status: conversations.status })
@@ -888,10 +890,31 @@ export async function updateConversationStatus(
         eq(conversations.accountId, ctx.accountId),
       ),
     )
+  // Fechou agora (open→closed) e a conta tem CSAT ligado? OFERECE a pesquisa —
+  // NÃO envia sozinho; o atendente confirma (via sendCsatSurvey).
+  let offerCsat = false
   if (status === 'closed' && prev && prev.status !== 'closed') {
-    const { sendCsatSurveyIfEnabled } = await import('@/lib/csat/csat')
-    await sendCsatSurveyIfEnabled(ctx.accountId, conversationId)
+    try {
+      const { getAccountSettings } = await import('@/lib/settings/account-settings')
+      const settings = await getAccountSettings(ctx.accountId)
+      offerCsat = !!settings.csatEnabled && !!settings.csatQuestion?.trim()
+    } catch {
+      offerCsat = false
+    }
   }
+  return { offerCsat }
+}
+
+/** Envia a pesquisa de satisfação AGORA — chamado quando o atendente confirma
+ *  no aviso pós-fechamento. Respeita o gate (csatEnabled + não-pendente)
+ *  internamente; best-effort. */
+export async function sendCsatSurvey(
+  conversationId: string,
+): Promise<{ ok: boolean }> {
+  const ctx = await getCurrentAccount()
+  const { sendCsatSurveyIfEnabled } = await import('@/lib/csat/csat')
+  await sendCsatSurveyIfEnabled(ctx.accountId, conversationId)
+  return { ok: true }
 }
 
 /**

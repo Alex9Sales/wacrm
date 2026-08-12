@@ -20,6 +20,7 @@ import {
   setConversationAiPaused,
   startNewConversation,
 } from "@/app/(dashboard)/inbox/actions";
+import { promptCsatOnClose } from "./csat-prompt";
 import {
   ParticipantActionSheet,
   type GroupParticipant,
@@ -832,8 +833,9 @@ export function MessageThread({
     async (status: ConversationStatus) => {
       if (!conversation) return;
 
+      let offerCsat = false;
       try {
-        await updateConversationStatus(conversation.id, status);
+        ({ offerCsat } = await updateConversationStatus(conversation.id, status));
       } catch (err) {
         console.error("Failed to update status:", err);
         toast.error("Falha ao atualizar o status");
@@ -841,6 +843,8 @@ export function MessageThread({
       }
 
       onStatusChange(conversation.id, status);
+      // Fechou? Pergunta se quer enviar a pesquisa de satisfação (não envia só).
+      if (status === "closed") promptCsatOnClose(offerCsat, conversation.id);
     },
     [conversation, onStatusChange]
   );
