@@ -121,6 +121,24 @@ export function EmbeddedSignupButton({
     // is open — a reload here would kill this FB.login callback before it POSTs
     // the one-time code, silently dropping the whole connection.
     setEmbeddedSignupActive(true);
+    // Fluxo: coexistência por padrão (número fica no WhatsApp Business). Com
+    // `?es=cloud` na URL, roda o fluxo PADRÃO do Cloud API (sem featureType) —
+    // usado p/ testar com a conta de Sandbox (que é WABA de teste, não encaixa
+    // na coexistência) e como escape-hatch p/ cliente que quer número novo.
+    const esMode =
+      typeof window !== 'undefined'
+        ? new URLSearchParams(window.location.search).get('es')
+        : null;
+    const extras: Record<string, unknown> = {
+      setup: {},
+      sessionInfoVersion: '3',
+    };
+    if (esMode !== 'cloud') {
+      // COEXISTÊNCIA: troca a tela de "migrar/verificar número" pela de
+      // "conectar sua conta do WhatsApp Business" (QR). Exige número no app
+      // WhatsApp BUSINESS (≥2.24.17); webhooks history/smb_* já inscritos.
+      extras.featureType = 'whatsapp_business_app_onboarding';
+    }
     try {
       const FB = await loadFbSdk();
       FB.login(
@@ -161,19 +179,7 @@ export function EmbeddedSignupButton({
           config_id: CONFIG_ID,
           response_type: 'code',
           override_default_response_type: true,
-          // COEXISTÊNCIA: o número FICA no WhatsApp Business do cliente e também
-          // conecta na Cloud API (histórico sincroniza). `featureType:
-          // 'whatsapp_business_app_onboarding'` troca a tela de "migrar/verificar
-          // número" pela de "conectar sua conta do WhatsApp Business" (QR code).
-          // Exige que o número esteja no app WhatsApp BUSINESS (≥ 2.24.17); os
-          // webhooks history/smb_app_state_sync/smb_message_echoes já estão
-          // inscritos no app. Doc: developers.facebook.com → Embedded Signup →
-          // "Onboard WhatsApp Business app users".
-          extras: {
-            setup: {},
-            featureType: 'whatsapp_business_app_onboarding',
-            sessionInfoVersion: '3',
-          },
+          extras,
         },
       );
     } catch (err) {
