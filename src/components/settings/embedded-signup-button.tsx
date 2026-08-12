@@ -161,7 +161,19 @@ export function EmbeddedSignupButton({
           config_id: CONFIG_ID,
           response_type: 'code',
           override_default_response_type: true,
-          extras: { setup: {}, sessionInfoVersion: '3' },
+          // COEXISTÊNCIA: o número FICA no WhatsApp Business do cliente e também
+          // conecta na Cloud API (histórico sincroniza). `featureType:
+          // 'whatsapp_business_app_onboarding'` troca a tela de "migrar/verificar
+          // número" pela de "conectar sua conta do WhatsApp Business" (QR code).
+          // Exige que o número esteja no app WhatsApp BUSINESS (≥ 2.24.17); os
+          // webhooks history/smb_app_state_sync/smb_message_echoes já estão
+          // inscritos no app. Doc: developers.facebook.com → Embedded Signup →
+          // "Onboard WhatsApp Business app users".
+          extras: {
+            setup: {},
+            featureType: 'whatsapp_business_app_onboarding',
+            sessionInfoVersion: '3',
+          },
         },
       );
     } catch (err) {
