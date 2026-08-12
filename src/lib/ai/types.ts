@@ -14,6 +14,9 @@ export type AiProvider = 'openai' | 'anthropic'
  * (stored AES-256-GCM-encrypted at rest).
  */
 export interface AiConfig {
+  /** O id do agente (ai_configs.id) — usado pra atribuir custo por agente
+   *  (Fase B). Opcional só para não quebrar construções sintéticas de teste. */
+  id?: string
   provider: AiProvider
   model: string
   apiKey: string
@@ -49,12 +52,51 @@ export interface ChatMessage {
   content: string
 }
 
+/**
+ * Tokens de uma chamada de modelo, com semântica NORMALIZADA entre provedores
+ * (Fase B): `promptTokens` é o TOTAL de input (inclui cache); `cachedReadTokens`
+ * e `cacheCreationTokens` são subconjuntos dele. Ver src/lib/ai/pricing.ts.
+ */
+export interface TokenUsage {
+  promptTokens: number
+  completionTokens: number
+  cachedReadTokens: number
+  cacheCreationTokens: number
+}
+
+/** De onde partiu a chamada de IA (mantém teste separado do tráfego real). */
+export type UsageSource =
+  | 'inbox'
+  | 'draft'
+  | 'playground'
+  | 'pipeline'
+  | 'flow'
+  | 'deal_suggest'
+  | 'vision'
+  | 'transcribe'
+  | 'tts'
+  | 'embeddings'
+
+/**
+ * Atribuição de uma chamada de IA para o medidor de custo. Quando passada a
+ * `generateReply`, a captura de tokens é gravada (best-effort) em `ai_usage`.
+ */
+export interface UsageMeta {
+  accountId: string
+  agentId?: string | null
+  conversationId?: string | null
+  channelId?: string | null
+  source: UsageSource
+}
+
 /** Outcome of a generation call. */
 export interface GenerateResult {
   /** The reply text, with any handoff sentinel stripped. */
   text: string
   /** True when the model asked to hand off to a human (auto-reply mode). */
   handoff: boolean
+  /** Tokens consumidos (Fase B). Ausente se o provedor não reportou uso. */
+  usage?: TokenUsage
 }
 
 /**

@@ -119,7 +119,19 @@ export async function POST(request: Request) {
       companyProfile,
     })
 
-    const { text } = await generateReply({ config, systemPrompt, messages })
+    const { text } = await generateReply({
+      config,
+      systemPrompt,
+      messages,
+      // Medidor de custo (Fase B): rascunho manual do atendente.
+      meta: {
+        accountId,
+        agentId: config.id ?? null,
+        conversationId,
+        channelId: conversation.channelId,
+        source: 'draft',
+      },
+    })
     return NextResponse.json({ draft: text })
   } catch (err) {
     if (err instanceof AiError) {

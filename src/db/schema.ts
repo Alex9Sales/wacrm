@@ -1339,6 +1339,52 @@ export const aiConfigs = pgTable("ai_configs", {
 	check("ai_configs_provider_check", sql`provider = ANY (ARRAY['openai'::text, 'anthropic'::text])`),
 ]);
 
+// Fase B — Medidor de custo da IA (migração 0075). Uma linha append-only por
+// chamada de modelo (só tokens; o custo US$/R$ é calculado na query com a
+// tabela de preços em src/lib/ai/pricing.ts). Semântica: prompt_tokens = TOTAL
+// de input (inclui cache); cached_read/cache_creation são subconjuntos.
+export const aiUsage = pgTable("ai_usage", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	agentId: uuid("agent_id"),
+	conversationId: uuid("conversation_id"),
+	channelId: uuid("channel_id"),
+	provider: text().notNull(),
+	model: text().notNull(),
+	source: text().default('inbox').notNull(),
+	promptTokens: integer("prompt_tokens").default(0).notNull(),
+	completionTokens: integer("completion_tokens").default(0).notNull(),
+	cachedReadTokens: integer("cached_read_tokens").default(0).notNull(),
+	cacheCreationTokens: integer("cache_creation_tokens").default(0).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("ai_usage_account_created_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsLast()),
+	index("ai_usage_account_agent_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.agentId.asc().nullsLast().op("uuid_ops")),
+	index("ai_usage_account_channel_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.channelId.asc().nullsLast().op("uuid_ops")),
+	index("ai_usage_account_conversation_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.conversationId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "ai_usage_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.agentId],
+			foreignColumns: [aiConfigs.id],
+			name: "ai_usage_agent_id_fkey"
+		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.conversationId],
+			foreignColumns: [conversations.id],
+			name: "ai_usage_conversation_id_fkey"
+		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [channels.id],
+			name: "ai_usage_channel_id_fkey"
+		}).onDelete("set null"),
+	check("ai_usage_source_check", sql`source = ANY (ARRAY['inbox'::text, 'draft'::text, 'playground'::text, 'pipeline'::text, 'flow'::text, 'deal_suggest'::text, 'vision'::text, 'transcribe'::text, 'tts'::text, 'embeddings'::text])`),
+]);
+
 export const aiKnowledgeDocuments = pgTable("ai_knowledge_documents", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	accountId: uuid("account_id").notNull(),

@@ -97,7 +97,14 @@ export async function POST(request: Request) {
       companyProfile,
     })
 
-    const { text, handoff } = await generateReply({ config, systemPrompt, messages })
+    const { text, handoff } = await generateReply({
+      config,
+      systemPrompt,
+      messages,
+      // Medidor de custo (Fase B): teste do operador — fica marcado como
+      // 'playground' pra não poluir os números reais no painel.
+      meta: { accountId, agentId: config.id ?? null, source: 'playground' },
+    })
     return NextResponse.json({ reply: text, handoff })
   } catch (err) {
     if (err instanceof AiError) {

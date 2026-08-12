@@ -7,6 +7,7 @@ import { pickAgentIdForChannel } from './agents'
 import type { AiConfig } from './types'
 
 const agentSelect = {
+  id: aiConfigs.id,
   provider: aiConfigs.provider,
   model: aiConfigs.model,
   apiKey: aiConfigs.apiKey,
@@ -24,6 +25,7 @@ const agentSelect = {
 }
 
 type AgentRow = {
+  id: string
   provider: string
   model: string
   apiKey: string
@@ -71,6 +73,7 @@ function finalizeAgent(
   }
 
   return {
+    id: row.id,
     provider: row.provider as 'openai' | 'anthropic',
     model: row.model,
     apiKey: decrypt(row.apiKey),

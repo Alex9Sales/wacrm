@@ -160,6 +160,14 @@ export async function dispatchInboundToAiReply(
       config,
       systemPrompt,
       messages,
+      // Medidor de custo (Fase B): atribui o uso ao agente/canal/conversa.
+      meta: {
+        accountId,
+        agentId: config.id ?? null,
+        conversationId,
+        channelId: conv.channelId,
+        source: 'inbox',
+      },
     })
 
     if (handoff || !text) {

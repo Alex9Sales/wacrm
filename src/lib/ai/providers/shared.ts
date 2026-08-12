@@ -1,4 +1,4 @@
-import { AiError, type ChatMessage } from '../types'
+import { AiError, type ChatMessage, type TokenUsage } from '../types'
 
 // ============================================================
 // Bits shared by the OpenAI + Anthropic adapters.
@@ -10,6 +10,21 @@ export interface ProviderArgs {
   systemPrompt: string
   messages: ChatMessage[]
   timeoutMs: number
+}
+
+/** Raw assistant text + os tokens consumidos (Fase B). Handoff parsing e a
+ *  gravação do uso acontecem em `generateReply`. */
+export interface ProviderResult {
+  text: string
+  usage: TokenUsage
+}
+
+/** Uso zerado — quando o provedor não reportou `usage` na resposta. */
+export const ZERO_USAGE: TokenUsage = {
+  promptTokens: 0,
+  completionTokens: 0,
+  cachedReadTokens: 0,
+  cacheCreationTokens: 0,
 }
 
 /** Map a fetch rejection (timeout / DNS / offline) to a typed AiError. */

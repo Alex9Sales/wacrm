@@ -1,7 +1,15 @@
-import { AiError, type AiConfig, type ChatMessage, type GenerateResult } from './types'
+import {
+  AiError,
+  type AiConfig,
+  type ChatMessage,
+  type GenerateResult,
+  type UsageMeta,
+} from './types'
 import { HANDOFF_SENTINEL, aiRequestTimeoutMs } from './defaults'
 import { generateOpenAi } from './providers/openai'
 import { generateAnthropic } from './providers/anthropic'
+import type { ProviderResult } from './providers/shared'
+import { recordAiUsage } from './usage'
 
 export interface GenerateArgs {
   config: AiConfig
@@ -9,6 +17,9 @@ export interface GenerateArgs {
   systemPrompt: string
   /** Recent conversation turns, oldest first. */
   messages: ChatMessage[]
+  /** Atribuição opcional (Fase B): quando presente, os tokens da chamada são
+   *  gravados (best-effort) em `ai_usage` pra alimentar o medidor de custo. */
+  meta?: UsageMeta
 }
 
 /**
@@ -17,7 +28,7 @@ export interface GenerateArgs {
  * of the raw text. Throws `AiError` on any provider/network failure.
  */
 export async function generateReply(args: GenerateArgs): Promise<GenerateResult> {
-  const { config, systemPrompt, messages } = args
+  const { config, systemPrompt, messages, meta } = args
   const timeoutMs = aiRequestTimeoutMs()
   const providerArgs = {
     apiKey: config.apiKey,
@@ -27,13 +38,13 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
     timeoutMs,
   }
 
-  let raw: string
+  let result: ProviderResult
   switch (config.provider) {
     case 'openai':
-      raw = await generateOpenAi(providerArgs)
+      result = await generateOpenAi(providerArgs)
       break
     case 'anthropic':
-      raw = await generateAnthropic(providerArgs)
+      result = await generateAnthropic(providerArgs)
       break
     default:
       throw new AiError(`Unsupported AI provider: ${config.provider}`, {
@@ -42,7 +53,13 @@ export async function generateReply(args: GenerateArgs): Promise<GenerateResult>
       })
   }
 
-  return parseGeneration(raw)
+  // Medidor de custo (Fase B): grava o uso quando o caller passou atribuição.
+  // recordAiUsage é best-effort (engole erros), então nunca quebra a resposta.
+  if (meta) {
+    await recordAiUsage(meta, config.provider, config.model, result.usage)
+  }
+
+  return { ...parseGeneration(result.text), usage: result.usage }
 }
 
 /**

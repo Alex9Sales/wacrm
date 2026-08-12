@@ -60,11 +60,17 @@ describe('parseGeneration', () => {
 
 describe('generateReply — OpenAI', () => {
   it('calls the chat completions endpoint and returns the reply', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(
-        okResponse({ choices: [{ message: { content: 'Sure — happy to help!' } }] }),
-      )
+    const fetchMock = vi.fn().mockResolvedValue(
+      okResponse({
+        choices: [{ message: { content: 'Sure — happy to help!' } }],
+        // OpenAI: prompt_tokens JÁ inclui os cacheados (cached é subconjunto).
+        usage: {
+          prompt_tokens: 100,
+          completion_tokens: 20,
+          prompt_tokens_details: { cached_tokens: 40 },
+        },
+      }),
+    )
     vi.stubGlobal('fetch', fetchMock)
 
     const res = await generateReply({
@@ -73,7 +79,14 @@ describe('generateReply — OpenAI', () => {
       messages: [{ role: 'user', content: 'Hi' }],
     })
 
-    expect(res).toEqual({ text: 'Sure — happy to help!', handoff: false })
+    expect(res).toMatchObject({ text: 'Sure — happy to help!', handoff: false })
+    // Medidor de custo (Fase B): tokens normalizados (prompt = TOTAL de input).
+    expect(res.usage).toEqual({
+      promptTokens: 100,
+      completionTokens: 20,
+      cachedReadTokens: 40,
+      cacheCreationTokens: 0,
+    })
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toContain('api.openai.com')
     expect(opts.headers.Authorization).toBe('Bearer sk-test')
@@ -113,9 +126,19 @@ describe('generateReply — OpenAI', () => {
 
 describe('generateReply — Anthropic', () => {
   it('calls the messages endpoint with the version header and parses text blocks', async () => {
-    const fetchMock = vi
-      .fn()
-      .mockResolvedValue(okResponse({ content: [{ type: 'text', text: 'Hi there!' }] }))
+    const fetchMock = vi.fn().mockResolvedValue(
+      okResponse({
+        content: [{ type: 'text', text: 'Hi there!' }],
+        // Anthropic: input_tokens é o NÃO-cacheado; cache_read/creation são
+        // separados — normalizamos prompt = 50 + 30 + 5 = 85.
+        usage: {
+          input_tokens: 50,
+          output_tokens: 10,
+          cache_read_input_tokens: 30,
+          cache_creation_input_tokens: 5,
+        },
+      }),
+    )
     vi.stubGlobal('fetch', fetchMock)
 
     const res = await generateReply({
@@ -124,7 +147,14 @@ describe('generateReply — Anthropic', () => {
       messages: [{ role: 'user', content: 'Hello' }],
     })
 
-    expect(res).toEqual({ text: 'Hi there!', handoff: false })
+    expect(res).toMatchObject({ text: 'Hi there!', handoff: false })
+    // Medidor de custo (Fase B): prompt = input + cache_read + cache_creation.
+    expect(res.usage).toEqual({
+      promptTokens: 85,
+      completionTokens: 10,
+      cachedReadTokens: 30,
+      cacheCreationTokens: 5,
+    })
     const [url, opts] = fetchMock.mock.calls[0]
     expect(url).toContain('api.anthropic.com')
     expect(opts.headers['x-api-key']).toBe('sk-ant-x')

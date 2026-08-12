@@ -1,24 +1,27 @@
 import { AiError } from '../types'
 import { MAX_OUTPUT_TOKENS } from '../defaults'
+import { extractOpenAiUsage } from '../usage'
 import {
   mergeConsecutive,
   providerHttpError,
   toNetworkError,
   type ProviderArgs,
+  type ProviderResult,
 } from './shared'
 
 const OPENAI_URL = 'https://api.openai.com/v1/chat/completions'
 
 interface OpenAiResponse {
   choices?: { message?: { content?: string } }[]
+  usage?: unknown
 }
 
 /**
  * Call OpenAI's Chat Completions endpoint with the caller's own key.
- * Returns the raw assistant text (handoff parsing happens in
- * `generateReply`).
+ * Returns the raw assistant text + token usage (handoff parsing and usage
+ * recording happen in `generateReply`).
  */
-export async function generateOpenAi(args: ProviderArgs): Promise<string> {
+export async function generateOpenAi(args: ProviderArgs): Promise<ProviderResult> {
   const { apiKey, model, systemPrompt, messages, timeoutMs } = args
 
   let res: Response
@@ -54,5 +57,5 @@ export async function generateOpenAi(args: ProviderArgs): Promise<string> {
       code: 'empty_response',
     })
   }
-  return text
+  return { text, usage: extractOpenAiUsage(data?.usage) }
 }
