@@ -153,7 +153,7 @@ export function CompanyProfileCard({ canEdit }: { canEdit: boolean }) {
 
             <Field
               label="O que você oferece"
-              hint="Produtos, serviços ou especialidades — o que fizer sentido pro seu negócio (loja, clínica, advocacia, imobiliária…). Se você já tem catálogo no CRM, dá pra deixar o agente de Vendas usar ele direto (em breve)."
+              hint="Um resumo do que você faz (ex.: 'Consultas, limpeza e clareamento'). Para PRODUTOS e PREÇOS, cadastre em Configurações → Produtos — a IA já usa o catálogo automaticamente, sem precisar repetir aqui."
             >
               <Textarea
                 value={form.offerings ?? ''}

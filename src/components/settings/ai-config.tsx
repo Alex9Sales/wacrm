@@ -634,15 +634,18 @@ export function AiConfig({
           <CardHeader>
             <CardTitle className="text-base">Comportamento</CardTitle>
             <CardDescription>
-              Conte ao assistente sobre o seu negócio — produtos, tom de voz, o
-              que ele pode e não pode prometer. Esse contexto alimenta tanto os
-              rascunhos quanto as respostas automáticas.
+              Aqui você define o <strong>papel</strong> e as{' '}
+              <strong>regras</strong> do agente — quem ele é e como agir. Os{' '}
+              <strong>fatos</strong> do negócio (o que vende, preços, horário)
+              ficam no <strong>Perfil da empresa</strong>, no{' '}
+              <strong>Catálogo</strong> e nas <strong>Bases de Conhecimento</strong>{' '}
+              — e entram sozinhos no contexto.
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
-                <Label htmlFor="ai-prompt">Contexto do negócio e instruções</Label>
+                <Label htmlFor="ai-prompt">Papel e instruções do agente</Label>
                 <button
                   type="button"
                   onClick={() => setPromptExpanded(true)}
@@ -657,10 +660,15 @@ export function AiConfig({
                 id="ai-prompt"
                 value={systemPrompt}
                 onChange={(e) => setSystemPrompt(e.target.value)}
-                placeholder="ex.: Somos a Acme, uma loja de equipamentos para café. Seja acolhedor e conciso. Nunca informe preços ou prazos de entrega — transfira para um humano nesses casos."
+                placeholder="ex.: Você é a SDR da Fluxia. Seja breve e educada, uma pergunta por vez. Qualifique o lead e ofereça agendar uma demo. Quando não souber um dado, ofereça verificar em vez de inventar."
                 rows={5}
                 disabled={disabled}
               />
+              <p className="text-xs text-muted-foreground">
+                Diga <strong>quem</strong> ele é e <strong>como</strong> deve
+                agir. Não precisa listar produtos e preços aqui — isso vem do
+                Catálogo e das Bases automaticamente.
+              </p>
             </div>
 
             {/* Editor expandido do prompt (igual n8n) — mesma state, tela cheia. */}

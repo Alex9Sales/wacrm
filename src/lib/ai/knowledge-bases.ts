@@ -73,8 +73,8 @@ export async function ensureDefaultBaseId(
       .values({
         accountId,
         createdBy,
-        name: 'Núcleo',
-        description: 'Base principal',
+        name: 'Geral',
+        description: 'Base principal (todos os agentes usam por padrão)',
       })
       .returning({ id: aiKnowledgeBases.id }),
   )

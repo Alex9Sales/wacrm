@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Plus, Pencil, Trash2, Database, Loader2 } from 'lucide-react';
+import { Plus, Pencil, Trash2, Database, Loader2, Lightbulb } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { canEditSettings } from '@/lib/auth/roles';
 import { cn } from '@/lib/utils';
@@ -139,6 +139,38 @@ export function KnowledgeTab() {
 
   return (
     <div className="space-y-6">
+      {/* Explicador: as 4 camadas do conhecimento do agente. */}
+      <div className="rounded-xl border border-border bg-muted/30 p-4">
+        <div className="mb-2 flex items-center gap-2">
+          <Lightbulb className="h-4 w-4 text-primary" />
+          <h3 className="text-sm font-semibold text-foreground">
+            Como montar o conhecimento do agente
+          </h3>
+        </div>
+        <ol className="space-y-1.5 text-xs text-muted-foreground">
+          <li>
+            <strong className="text-foreground">1. Perfil da empresa</strong> —
+            quem você é (nome, sobre, horário, pagamento). Entra{' '}
+            <strong>sempre</strong> no contexto.
+          </li>
+          <li>
+            <strong className="text-foreground">2. Catálogo</strong> — produtos e{' '}
+            <strong>preços</strong>. Cadastre em Configurações → Produtos; a IA já
+            usa sozinha (não repita preço aqui).
+          </li>
+          <li>
+            <strong className="text-foreground">3. Bases (documentos e Q&A)</strong>{' '}
+            — FAQs, políticas, objeções. A IA busca só quando o cliente pergunta
+            algo relacionado.
+          </li>
+          <li>
+            <strong className="text-foreground">4. No card de cada agente</strong>{' '}
+            — você escolhe <strong>quais bases</strong> ele usa (vazio = todas).
+            Assim um agente não se mistura com o conhecimento do outro.
+          </li>
+        </ol>
+      </div>
+
       <CompanyProfileCard canEdit={canEdit} />
 
       {/* Seletor de bases (Fase K) */}
