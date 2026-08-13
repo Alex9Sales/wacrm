@@ -21,6 +21,7 @@ export async function formatCatalogForPrompt(
         description: products.description,
         kind: products.kind,
         unitPrice: products.unitPrice,
+        linkUrl: products.linkUrl,
       })
       .from(products)
       .where(and(eq(products.accountId, accountId), eq(products.active, true)))
@@ -34,7 +35,8 @@ export async function formatCatalogForPrompt(
     for (const r of rows) {
       const kind = r.kind === 'service' ? 'serviço' : 'produto'
       const desc = r.description?.trim() ? ` — ${r.description.trim()}` : ''
-      const line = `- ${r.name} (${kind}, ${formatPrice(r.unitPrice)})${desc}`
+      const link = r.linkUrl?.trim() ? ` — link: ${r.linkUrl.trim()}` : ''
+      const line = `- ${r.name} (${kind}, ${formatPrice(r.unitPrice)})${desc}${link}`
       // Cap defensivo: catálogo gigante não pode estourar o prompt.
       if (chars + line.length > 6000) {
         lines.push('- …(demais itens do catálogo)')

@@ -21,6 +21,7 @@ export interface ProductRow {
   description: string | null
   kind: ProductKind
   unit_price: number
+  link_url: string | null
   active: boolean
   created_at: string
 }
@@ -30,6 +31,7 @@ export interface ProductInput {
   description?: string | null
   kind?: ProductKind
   unitPrice?: number
+  linkUrl?: string | null
   active?: boolean
 }
 
@@ -56,6 +58,7 @@ export async function listProducts(
       description: products.description,
       kind: products.kind,
       unit_price: products.unitPrice,
+      link_url: products.linkUrl,
       active: products.active,
       created_at: products.createdAt,
     })
@@ -68,6 +71,7 @@ export async function listProducts(
     description: r.description ?? null,
     kind: (r.kind as ProductKind) ?? 'product',
     unit_price: Number(r.unit_price ?? 0),
+    link_url: r.link_url ?? null,
     active: Boolean(r.active),
     created_at: r.created_at as string,
   }))
@@ -89,6 +93,7 @@ export async function createProduct(
           description: clean(input.description),
           kind: input.kind === 'service' ? 'service' : 'product',
           unitPrice: parsePrice(input.unitPrice),
+          linkUrl: clean(input.linkUrl),
           active: input.active ?? true,
           createdBy: ctx.userId,
         })
@@ -98,6 +103,7 @@ export async function createProduct(
           description: products.description,
           kind: products.kind,
           unit_price: products.unitPrice,
+          link_url: products.linkUrl,
           active: products.active,
           created_at: products.createdAt,
         }),
@@ -111,6 +117,7 @@ export async function createProduct(
         description: inserted.description ?? null,
         kind: (inserted.kind as ProductKind) ?? 'product',
         unit_price: Number(inserted.unit_price ?? 0),
+        link_url: inserted.link_url ?? null,
         active: Boolean(inserted.active),
         created_at: inserted.created_at as string,
       },
@@ -136,6 +143,7 @@ export async function updateProduct(
     if (patch.kind !== undefined)
       set.kind = patch.kind === 'service' ? 'service' : 'product'
     if (patch.unitPrice !== undefined) set.unitPrice = parsePrice(patch.unitPrice)
+    if (patch.linkUrl !== undefined) set.linkUrl = clean(patch.linkUrl)
     if (patch.active !== undefined) set.active = patch.active
     const updated = await db
       .update(products)

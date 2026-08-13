@@ -97,6 +97,7 @@ type EditValue = {
   description: string
   kind: ProductKind
   unitPrice: string
+  linkUrl: string
   active: boolean
 }
 
@@ -105,6 +106,7 @@ const EMPTY: EditValue = {
   description: '',
   kind: 'product',
   unitPrice: '',
+  linkUrl: '',
   active: true,
 }
 
@@ -141,6 +143,7 @@ export function ProductsPanel() {
       description: p.description ?? '',
       kind: p.kind,
       unitPrice: p.unit_price ? String(p.unit_price) : '',
+      linkUrl: p.link_url ?? '',
       active: p.active,
     })
     setFormOpen(true)
@@ -158,6 +161,7 @@ export function ProductsPanel() {
       description: draft.description.trim() || null,
       kind: draft.kind,
       unitPrice: priceNum,
+      linkUrl: draft.linkUrl.trim() || null,
       active: draft.active,
     }
     if (draft.id) {
@@ -492,6 +496,16 @@ export function ProductsPanel() {
                 }
                 rows={2}
                 placeholder="Detalhes (opcional)"
+              />
+            </div>
+            <div>
+              <Label htmlFor="prod-link">Link do produto</Label>
+              <Input
+                id="prod-link"
+                type="url"
+                value={draft.linkUrl}
+                onChange={(e) => setDraft({ ...draft, linkUrl: e.target.value })}
+                placeholder="https://… (página ou checkout — o agente de Vendas envia ao cliente)"
               />
             </div>
             <label className="flex items-center gap-2 text-sm text-foreground">

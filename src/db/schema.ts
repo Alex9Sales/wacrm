@@ -242,6 +242,7 @@ export const products = pgTable("products", {
 	// 'product' | 'service' — só rótulo/organização.
 	kind: text().default('product').notNull(),
 	unitPrice: numeric("unit_price", { precision: 12, scale: 2 }).default('0').notNull(),
+	linkUrl: text("link_url"),
 	active: boolean().default(true).notNull(),
 	createdBy: uuid("created_by"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
