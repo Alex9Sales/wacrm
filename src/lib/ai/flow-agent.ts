@@ -9,6 +9,7 @@
 import { loadAiConfig } from './config'
 import { buildConversationContext } from './context'
 import { retrieveKnowledge } from './knowledge'
+import { formatCatalogForPrompt } from './catalog'
 import { buildSystemPrompt } from './defaults'
 import { generateReply } from './generate'
 import { latestUserMessage } from './query'
@@ -77,10 +78,12 @@ export async function generateFlowAiReply(
       .filter(Boolean)
       .join('\n\n')
 
+    const catalog = await formatCatalogForPrompt(args.accountId)
     const systemPrompt = buildSystemPrompt({
       userPrompt: combinedPrompt || null,
       mode: 'auto_reply',
       knowledge,
+      catalog,
     })
 
     const { text, handoff } = await generateReply({

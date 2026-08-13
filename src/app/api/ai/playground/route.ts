@@ -7,6 +7,7 @@ import {
   getCompanyProfile,
   formatCompanyProfileForPrompt,
 } from '@/lib/ai/company-profile'
+import { formatCatalogForPrompt } from '@/lib/ai/catalog'
 import { generateReply } from '@/lib/ai/generate'
 import { buildSystemPrompt } from '@/lib/ai/defaults'
 import { latestUserMessage } from '@/lib/ai/query'
@@ -92,11 +93,13 @@ export async function POST(request: Request) {
     const companyProfile = formatCompanyProfileForPrompt(
       await getCompanyProfile(accountId),
     )
+    const catalog = await formatCatalogForPrompt(accountId)
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
       knowledge,
       companyProfile,
+      catalog,
     })
 
     const { text, handoff } = await generateReply({
