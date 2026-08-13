@@ -4,7 +4,7 @@ import { db, aiKnowledgeDocuments } from '@/db'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { loadEmbeddingsKey } from '@/lib/ai/config'
-import { ingestDocument } from '@/lib/ai/knowledge'
+import { ingestDocument, buildIngestText } from '@/lib/ai/knowledge'
 import { AiError } from '@/lib/ai/types'
 
 /**
@@ -21,12 +21,20 @@ export async function POST() {
     const limit = await checkRateLimit(`ai-kb-reindex:${userId}`, RATE_LIMITS.adminAction)
     if (!limit.success) return rateLimitResponse(limit)
 
-    let docs: { id: string; content: string; knowledgeBaseId: string | null }[]
+    let docs: {
+      id: string
+      title: string
+      content: string
+      sourceType: string
+      knowledgeBaseId: string | null
+    }[]
     try {
       docs = await db
         .select({
           id: aiKnowledgeDocuments.id,
+          title: aiKnowledgeDocuments.title,
           content: aiKnowledgeDocuments.content,
+          sourceType: aiKnowledgeDocuments.sourceType,
           knowledgeBaseId: aiKnowledgeDocuments.knowledgeBaseId,
         })
         .from(aiKnowledgeDocuments)
@@ -62,7 +70,7 @@ export async function POST() {
           accountId,
           { embeddingsApiKey },
           doc.id,
-          doc.content,
+          buildIngestText(doc.sourceType, doc.title, doc.content),
           doc.knowledgeBaseId,
         )
         reindexed += 1

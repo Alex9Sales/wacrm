@@ -148,7 +148,13 @@ export async function POST(request: Request) {
     const signatureEnabled = body.signature_enabled === true && !!signatureName
 
     // IA proativa em Negociações (Fase 3): opt-in por conta (default OFF).
-    const dealSuggestionsProactive = body.deal_suggestions_proactive === true
+    // IA proativa em Negociações agora é controlada FORA do agente (painel de
+    // Agentes → card "IA em Negociações", via /api/ai/deal-proactive). Aqui só
+    // PRESERVAMOS: se o campo não vier no body, não mexe no valor atual.
+    const dealSuggestionsProactive =
+      body?.deal_suggestions_proactive === undefined
+        ? undefined
+        : body.deal_suggestions_proactive === true
 
     // Multi-agente: nome do agente (rótulo do card) + qual agente editar.
     const agentName =
@@ -275,7 +281,7 @@ export async function POST(request: Request) {
       autoReplyMaxPerConversation: number
       autoReplyHoursMode: string
       autoReplyBufferSeconds: number
-      dealSuggestionsProactive: boolean
+      dealSuggestionsProactive?: boolean
       signatureName: string | null
       signatureEnabled: boolean
       embeddingsApiKey?: string | null
@@ -290,9 +296,13 @@ export async function POST(request: Request) {
       autoReplyMaxPerConversation: maxPer,
       autoReplyHoursMode,
       autoReplyBufferSeconds: bufferSeconds,
-      dealSuggestionsProactive,
       signatureName,
       signatureEnabled,
+    }
+    // IA proativa: só grava quando o campo veio no body (preserva o valor atual
+    // caso contrário — o controle vive no card "IA em Negociações" do painel).
+    if (dealSuggestionsProactive !== undefined) {
+      shared.dealSuggestionsProactive = dealSuggestionsProactive
     }
     if (rawEmbeddingsKey) {
       shared.embeddingsApiKey = encrypt(rawEmbeddingsKey)

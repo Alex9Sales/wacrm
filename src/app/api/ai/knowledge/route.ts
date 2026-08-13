@@ -9,7 +9,7 @@ import {
 } from '@/lib/auth/account'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { loadEmbeddingsKey } from '@/lib/ai/config'
-import { ingestDocument } from '@/lib/ai/knowledge'
+import { ingestDocument, buildIngestText } from '@/lib/ai/knowledge'
 import {
   ensureDefaultBaseId,
   baseBelongsToAccount,
@@ -78,6 +78,9 @@ export async function POST(request: Request) {
         { status: 400 },
       )
     }
+    // Fase K2: tipo de fonte. Por esta rota: 'text' (padrão) ou 'qa' (o título é
+    // a pergunta e o conteúdo é a resposta). URL/arquivo têm rotas próprias.
+    const sourceType = body?.sourceType === 'qa' ? 'qa' : 'text'
 
     // Fase K: o doc entra numa base. Se veio um baseId válido da conta, usa;
     // senão cai no "Núcleo" (criado sob demanda) — retrocompatível.
@@ -92,7 +95,15 @@ export async function POST(request: Request) {
       doc = firstOrThrow(
         await db
           .insert(aiKnowledgeDocuments)
-          .values({ accountId, knowledgeBaseId: baseId, createdBy: userId, title, content })
+          .values({
+            accountId,
+            knowledgeBaseId: baseId,
+            createdBy: userId,
+            title,
+            content,
+            sourceType,
+            question: sourceType === 'qa' ? title : null,
+          })
           .returning({ id: aiKnowledgeDocuments.id }),
       )
     } catch (err) {
@@ -105,7 +116,13 @@ export async function POST(request: Request) {
 
     const { key: embeddingsApiKey, corrupt } = await loadEmbeddingsKey(accountId)
     try {
-      await ingestDocument(accountId, { embeddingsApiKey }, doc.id, content, baseId)
+      await ingestDocument(
+        accountId,
+        { embeddingsApiKey },
+        doc.id,
+        buildIngestText(sourceType, title, content),
+        baseId,
+      )
     } catch (err) {
       const message = err instanceof AiError ? err.message : 'indexing failed'
       console.error('[ai/knowledge POST] ingest error:', err)

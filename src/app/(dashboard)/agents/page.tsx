@@ -27,6 +27,7 @@ import { KnowledgeTab } from '@/components/agents/knowledge-tab';
 import { VoiceAgentsTab } from '@/components/agents/voice-agents-tab';
 import { AgentsPanel } from '@/components/agents/agents-panel';
 import { UsageDashboard } from '@/components/agents/usage-dashboard';
+import { DealProactiveCard } from '@/components/agents/deal-proactive-card';
 
 type View =
   | { kind: 'panel' }
@@ -97,11 +98,14 @@ export default function AgentsPage() {
 
       <div className="mt-6">
         {view.kind === 'panel' && (
-          <AgentsPanel
-            canEdit={canEdit}
-            onOpen={(id) => setView({ kind: 'agent', id })}
-            onFirstSetup={() => setView({ kind: 'new-first' })}
-          />
+          <div className="space-y-6">
+            <AgentsPanel
+              canEdit={canEdit}
+              onOpen={(id) => setView({ kind: 'agent', id })}
+              onFirstSetup={() => setView({ kind: 'new-first' })}
+            />
+            <DealProactiveCard canEdit={canEdit} />
+          </div>
         )}
 
         {view.kind === 'new-first' && (

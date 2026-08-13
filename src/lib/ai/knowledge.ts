@@ -25,6 +25,19 @@ interface MatchRow {
  * chunks are only written once embedding (if attempted) succeeds, so a
  * failed embed never leaves half-indexed rows.
  */
+/**
+ * Texto que vai pro índice (chunks). Para Q&A, junta a PERGUNTA (título) com a
+ * RESPOSTA (conteúdo) para o retrieval casar quando o cliente faz a pergunta.
+ * Para os demais tipos (text/file/url), indexa só o conteúdo.
+ */
+export function buildIngestText(
+  sourceType: string,
+  title: string,
+  content: string,
+): string {
+  return sourceType === 'qa' ? `${title}\n\n${content}` : content
+}
+
 export async function ingestDocument(
   accountId: string,
   config: Pick<AiConfig, 'embeddingsApiKey'>,

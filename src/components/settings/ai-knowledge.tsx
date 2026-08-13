@@ -10,6 +10,8 @@ import {
   RefreshCw,
   BookOpen,
   Upload,
+  HelpCircle,
+  Link2,
 } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -26,6 +28,7 @@ import {
 interface DocSummary {
   id: string;
   title: string;
+  sourceType?: string;
   updated_at: string;
 }
 
@@ -51,7 +54,10 @@ export function AiKnowledgeCard({
   const [content, setContent] = useState('');
   const [saving, setSaving] = useState(false);
   const [importing, setImporting] = useState(false);
+  const [importingUrl, setImportingUrl] = useState(false);
   const [reindexing, setReindexing] = useState(false);
+  // 'text' = documento normal; 'qa' = pergunta & resposta (K2).
+  const [mode, setMode] = useState<'text' | 'qa'>('text');
   const loadedAccountIdRef = useRef<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
@@ -80,7 +86,8 @@ export function AiKnowledgeCard({
     void fetchDocs();
   }, [accountId, baseId, fetchDocs]);
 
-  const openNew = () => {
+  const openNew = (m: 'text' | 'qa' = 'text') => {
+    setMode(m);
     setEditing('new');
     setTitle('');
     setContent('');
@@ -94,6 +101,7 @@ export function AiKnowledgeCard({
         toast.error(data.error ?? 'Falha ao abrir o documento');
         return;
       }
+      setMode(data.sourceType === 'qa' ? 'qa' : 'text');
       setEditing(id);
       setTitle(data.title ?? '');
       setContent(data.content ?? '');
@@ -104,8 +112,33 @@ export function AiKnowledgeCard({
 
   const cancelEdit = () => {
     setEditing(null);
+    setMode('text');
     setTitle('');
     setContent('');
+  };
+
+  const importUrl = async () => {
+    const url = window.prompt('Cole a URL da página (site, FAQ, etc.):');
+    if (!url || !url.trim()) return;
+    setImportingUrl(true);
+    try {
+      const res = await fetch('/api/ai/knowledge/import-url', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ url: url.trim(), baseId }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data.success) {
+        toast.success(
+          data.warning ?? `Importado: ${data.title ?? 'página'}.`,
+        );
+        await fetchDocs();
+      } else toast.error(data.error ?? 'Falha ao importar a URL.');
+    } catch {
+      toast.error('Falha ao importar a URL.');
+    } finally {
+      setImportingUrl(false);
+    }
   };
 
   const importFile = async (file: File) => {
@@ -138,7 +171,11 @@ export function AiKnowledgeCard({
 
   const save = async () => {
     if (!title.trim() || !content.trim()) {
-      toast.error('Título e conteúdo são obrigatórios.');
+      toast.error(
+        mode === 'qa'
+          ? 'Pergunta e resposta são obrigatórias.'
+          : 'Título e conteúdo são obrigatórios.',
+      );
       return;
     }
     setSaving(true);
@@ -152,8 +189,9 @@ export function AiKnowledgeCard({
           body: JSON.stringify({
             title: title.trim(),
             content: content.trim(),
-            // Cria o doc na base selecionada (Fase K); PATCH ignora.
+            // Cria o doc na base selecionada + tipo (Fase K/K2); PATCH ignora.
             ...(isNew && baseId ? { baseId } : {}),
+            ...(isNew ? { sourceType: mode } : {}),
           }),
         },
       );
@@ -241,8 +279,15 @@ export function AiKnowledgeCard({
                     key={doc.id}
                     className="flex items-center justify-between gap-2 px-3 py-2"
                   >
-                    <span className="min-w-0 truncate text-sm text-foreground">
-                      {doc.title}
+                    <span className="flex min-w-0 items-center gap-2">
+                      {(doc.sourceType === 'qa' || doc.sourceType === 'url') && (
+                        <span className="shrink-0 rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium uppercase text-muted-foreground">
+                          {doc.sourceType === 'qa' ? 'Q&A' : 'URL'}
+                        </span>
+                      )}
+                      <span className="min-w-0 truncate text-sm text-foreground">
+                        {doc.title}
+                      </span>
                     </span>
                     {canEdit && (
                       <span className="flex shrink-0 gap-1">
@@ -274,52 +319,68 @@ export function AiKnowledgeCard({
             {editing !== null ? (
               <div className="space-y-3 rounded-md border border-border p-3">
                 <div className="space-y-2">
-                  <Label htmlFor="kb-title">Título</Label>
+                  <Label htmlFor="kb-title">
+                    {mode === 'qa' ? 'Pergunta' : 'Título'}
+                  </Label>
                   <Input
                     id="kb-title"
                     value={title}
                     onChange={(e) => setTitle(e.target.value)}
-                    placeholder="ex.: Política de trocas e reembolsos"
+                    placeholder={
+                      mode === 'qa'
+                        ? 'ex.: Qual é o horário de atendimento?'
+                        : 'ex.: Política de trocas e reembolsos'
+                    }
                     disabled={saving}
                   />
                 </div>
                 <div className="space-y-2">
                   <div className="flex items-center justify-between">
-                    <Label htmlFor="kb-content">Conteúdo</Label>
-                    <Button
-                      type="button"
-                      variant="ghost"
-                      size="sm"
-                      className="h-7"
-                      onClick={() => fileInputRef.current?.click()}
-                      disabled={saving || importing}
-                      title="Importar de um arquivo PDF, Word (.docx) ou texto"
-                    >
-                      {importing ? (
-                        <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
-                      ) : (
-                        <Upload className="mr-2 h-3.5 w-3.5" />
-                      )}
-                      Importar arquivo
-                    </Button>
-                    <input
-                      ref={fileInputRef}
-                      type="file"
-                      accept=".pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,.html,.htm,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
-                      className="hidden"
-                      onChange={(e) => {
-                        const f = e.target.files?.[0];
-                        if (f) void importFile(f);
-                        e.target.value = '';
-                      }}
-                    />
+                    <Label htmlFor="kb-content">
+                      {mode === 'qa' ? 'Resposta' : 'Conteúdo'}
+                    </Label>
+                    {mode !== 'qa' && (
+                      <>
+                        <Button
+                          type="button"
+                          variant="ghost"
+                          size="sm"
+                          className="h-7"
+                          onClick={() => fileInputRef.current?.click()}
+                          disabled={saving || importing}
+                          title="Importar de um arquivo PDF, Word (.docx) ou texto"
+                        >
+                          {importing ? (
+                            <Loader2 className="mr-2 h-3.5 w-3.5 animate-spin" />
+                          ) : (
+                            <Upload className="mr-2 h-3.5 w-3.5" />
+                          )}
+                          Importar arquivo
+                        </Button>
+                        <input
+                          ref={fileInputRef}
+                          type="file"
+                          accept=".pdf,.docx,.txt,.md,.markdown,.csv,.tsv,.json,.html,.htm,application/pdf,application/vnd.openxmlformats-officedocument.wordprocessingml.document,text/plain"
+                          className="hidden"
+                          onChange={(e) => {
+                            const f = e.target.files?.[0];
+                            if (f) void importFile(f);
+                            e.target.value = '';
+                          }}
+                        />
+                      </>
+                    )}
                   </div>
                   <Textarea
                     id="kb-content"
                     value={content}
                     onChange={(e) => setContent(e.target.value)}
-                    placeholder="Cole o texto, ou use “Importar arquivo” (PDF, Word ou texto)…"
-                    rows={8}
+                    placeholder={
+                      mode === 'qa'
+                        ? 'A resposta exata que a IA deve dar a essa pergunta…'
+                        : 'Cole o texto, ou use “Importar arquivo” (PDF, Word ou texto)…'
+                    }
+                    rows={mode === 'qa' ? 4 : 8}
                     disabled={saving || importing}
                   />
                 </div>
@@ -329,20 +390,46 @@ export function AiKnowledgeCard({
                   </Button>
                   <Button onClick={save} disabled={saving}>
                     {saving && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
-                    Salvar documento
+                    {mode === 'qa' ? 'Salvar Q&A' : 'Salvar documento'}
                   </Button>
                 </div>
               </div>
             ) : (
               canEdit && (
-                <div className="flex items-center justify-between">
-                  <Button variant="outline" size="sm" onClick={openNew}>
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => openNew('text')}
+                  >
                     <Plus className="mr-2 h-4 w-4" /> Adicionar documento
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => openNew('qa')}
+                  >
+                    <HelpCircle className="mr-2 h-4 w-4" /> Pergunta e resposta
+                  </Button>
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={importUrl}
+                    disabled={importingUrl}
+                    title="Importar o texto de uma página (site, FAQ)"
+                  >
+                    {importingUrl ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Link2 className="mr-2 h-4 w-4" />
+                    )}
+                    Importar de URL
                   </Button>
                   {hasEmbeddingsKey && docs.length > 0 && (
                     <Button
                       variant="ghost"
                       size="sm"
+                      className="ml-auto"
                       onClick={reindex}
                       disabled={reindexing}
                       title="Reprocessar embeddings de todos os documentos (ex.: após adicionar uma chave de embeddings)"

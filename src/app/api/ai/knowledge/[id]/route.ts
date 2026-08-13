@@ -9,7 +9,7 @@ import {
 } from '@/lib/auth/account'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { loadEmbeddingsKey } from '@/lib/ai/config'
-import { ingestDocument } from '@/lib/ai/knowledge'
+import { ingestDocument, buildIngestText } from '@/lib/ai/knowledge'
 import { AiError } from '@/lib/ai/types'
 
 type Params = { params: Promise<{ id: string }> }
@@ -79,7 +79,14 @@ export async function PATCH(request: Request, { params }: Params) {
     if (title !== undefined) update.title = title
     if (content !== undefined) update.content = content
 
-    let updated: { id: string; knowledgeBaseId: string | null } | null
+    let updated:
+      | {
+          id: string
+          knowledgeBaseId: string | null
+          sourceType: string
+          title: string
+        }
+      | null
     try {
       updated = firstOrNull(
         await db
@@ -94,6 +101,8 @@ export async function PATCH(request: Request, { params }: Params) {
           .returning({
             id: aiKnowledgeDocuments.id,
             knowledgeBaseId: aiKnowledgeDocuments.knowledgeBaseId,
+            sourceType: aiKnowledgeDocuments.sourceType,
+            title: aiKnowledgeDocuments.title,
           }),
       )
     } catch (err) {
@@ -109,7 +118,7 @@ export async function PATCH(request: Request, { params }: Params) {
           accountId,
           { embeddingsApiKey },
           id,
-          content,
+          buildIngestText(updated.sourceType, updated.title, content),
           updated.knowledgeBaseId,
         )
       } catch (err) {
