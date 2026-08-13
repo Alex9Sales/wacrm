@@ -14,6 +14,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { canEditSettings } from '@/lib/auth/roles';
 import { cn } from '@/lib/utils';
 import { CompanyProfileCard } from './company-profile-card';
+import { KnowledgeApprovals } from './knowledge-approvals';
 import { AiKnowledgeCard } from '@/components/settings/ai-knowledge';
 
 interface Base {
@@ -247,6 +248,8 @@ export function KnowledgeTab() {
           </div>
         )}
       </div>
+
+      <KnowledgeApprovals canEdit={canEdit} onApproved={loadBases} />
 
       <AiKnowledgeCard
         key={selected ?? 'all'}

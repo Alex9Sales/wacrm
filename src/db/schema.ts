@@ -1473,6 +1473,40 @@ export const aiKnowledgeChunks = pgTable("ai_knowledge_chunks", {
 		}).onDelete("cascade"),
 ]);
 
+// Fase K4 — Fila de aprovação: a IA PROPÕE Q&A a partir de conversas; nada
+// entra na base sem humano aprovar. Migração 0079.
+export const aiKnowledgeApprovals = pgTable("ai_knowledge_approvals", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	knowledgeBaseId: uuid("knowledge_base_id"),
+	conversationId: uuid("conversation_id"),
+	question: text().notNull(),
+	answer: text().notNull(),
+	status: text().default('pending').notNull(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	reviewedBy: uuid("reviewed_by"),
+	reviewedAt: timestamp("reviewed_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	index("ai_knowledge_approvals_account_status_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.status.asc().nullsLast(), table.createdAt.desc().nullsLast()),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "ai_knowledge_approvals_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.knowledgeBaseId],
+			foreignColumns: [aiKnowledgeBases.id],
+			name: "ai_knowledge_approvals_kb_fkey"
+		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.conversationId],
+			foreignColumns: [conversations.id],
+			name: "ai_knowledge_approvals_conversation_fkey"
+		}).onDelete("set null"),
+	check("ai_knowledge_approvals_status_check", sql`status = ANY (ARRAY['pending'::text, 'approved'::text, 'rejected'::text])`),
+]);
+
 // Perfil da empresa ("Núcleo" guiado): a camada estruturada da Base de
 // Conhecimento (1 linha por conta). Sempre injetado no contexto do agente
 // (buildSystemPrompt) — não depende do retrieval. Migração 0073.
