@@ -15,6 +15,7 @@ import {
   Phone,
   BookOpen,
   ArrowLeft,
+  BarChart3,
 } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
@@ -25,13 +26,15 @@ import { AiConfig } from '@/components/settings/ai-config';
 import { KnowledgeTab } from '@/components/agents/knowledge-tab';
 import { VoiceAgentsTab } from '@/components/agents/voice-agents-tab';
 import { AgentsPanel } from '@/components/agents/agents-panel';
+import { UsageDashboard } from '@/components/agents/usage-dashboard';
 
 type View =
   | { kind: 'panel' }
   | { kind: 'agent'; id: string }
   | { kind: 'new-first' }
   | { kind: 'knowledge' }
-  | { kind: 'voice' };
+  | { kind: 'voice' }
+  | { kind: 'usage' };
 
 export default function AgentsPage() {
   const { accountRole } = useAuth();
@@ -57,6 +60,15 @@ export default function AgentsPage() {
 
         {view.kind === 'panel' && (
           <div className="flex items-center gap-2">
+            {canEdit && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setView({ kind: 'usage' })}
+              >
+                <BarChart3 className="mr-1.5 h-4 w-4" /> Uso de LLM
+              </Button>
+            )}
             <Button
               variant="outline"
               size="sm"
@@ -114,6 +126,8 @@ export default function AgentsPage() {
             </TabsContent>
           </Tabs>
         )}
+
+        {view.kind === 'usage' && <UsageDashboard />}
 
         {view.kind === 'knowledge' && <KnowledgeTab />}
 

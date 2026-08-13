@@ -8,7 +8,9 @@ import {
   requireRole,
   toErrorResponse,
 } from '@/lib/auth/account'
+import { canEditSettings } from '@/lib/auth/roles'
 import { listAgentSummaries } from '@/lib/ai/agents'
+import { getAgentsUsage } from '@/lib/ai/analytics'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -18,12 +20,23 @@ export const dynamic = 'force-dynamic'
 // A edição de UM agente reusa POST /api/ai/config?agent=<id>.
 // ============================================================
 
-/** GET /api/ai/agents — todos os agentes da conta (para o painel). */
+/**
+ * GET /api/ai/agents — todos os agentes da conta (para o painel). Anexa o
+ * custo/atendimentos (hoje + mês) de cada agente SÓ para quem pode ver custos
+ * (supervisor+); para os demais, os cards vêm sem os números.
+ */
 export async function GET() {
   try {
-    const { accountId } = await getCurrentAccount()
+    const { accountId, role } = await getCurrentAccount()
     const agents = await listAgentSummaries(accountId)
-    return NextResponse.json({ agents })
+    if (canEditSettings(role)) {
+      const usage = await getAgentsUsage(accountId)
+      return NextResponse.json({
+        agents: agents.map((a) => ({ ...a, usage: usage[a.id] ?? null })),
+        showCosts: true,
+      })
+    }
+    return NextResponse.json({ agents, showCosts: false })
   } catch (err) {
     return toErrorResponse(err)
   }

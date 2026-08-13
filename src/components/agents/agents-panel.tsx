@@ -12,6 +12,15 @@ import { toast } from 'sonner';
 import { Bot, Plus, Loader2, ChevronRight, Radio } from 'lucide-react';
 import { Button } from '@/components/ui/button';
 
+interface AgentUsage {
+  todayCostUsd: number;
+  todayCostBrl: number;
+  monthCostUsd: number;
+  monthCostBrl: number;
+  todayConversations: number;
+  monthConversations: number;
+}
+
 interface Agent {
   id: string;
   name: string;
@@ -22,7 +31,20 @@ interface Agent {
   autoReplyEnabled: boolean;
   autoReplyChannelIds: string[];
   hasKey: boolean;
+  usage?: AgentUsage | null;
 }
+
+const ZERO_USAGE: AgentUsage = {
+  todayCostUsd: 0,
+  todayCostBrl: 0,
+  monthCostUsd: 0,
+  monthCostBrl: 0,
+  todayConversations: 0,
+  monthConversations: 0,
+};
+
+const brl = (v: number) =>
+  v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
 export function AgentsPanel({
   onOpen,
@@ -34,6 +56,7 @@ export function AgentsPanel({
   canEdit: boolean;
 }) {
   const [agents, setAgents] = useState<Agent[]>([]);
+  const [showCosts, setShowCosts] = useState(false);
   const [loading, setLoading] = useState(true);
   const [creating, setCreating] = useState(false);
 
@@ -42,8 +65,10 @@ export function AgentsPanel({
     try {
       const res = await fetch('/api/ai/agents');
       const data = await res.json();
-      if (res.ok) setAgents(Array.isArray(data.agents) ? data.agents : []);
-      else toast.error(data.error ?? 'Falha ao carregar os agentes.');
+      if (res.ok) {
+        setAgents(Array.isArray(data.agents) ? data.agents : []);
+        setShowCosts(!!data.showCosts);
+      } else toast.error(data.error ?? 'Falha ao carregar os agentes.');
     } catch {
       toast.error('Falha ao carregar os agentes.');
     } finally {
@@ -136,7 +161,37 @@ export function AgentsPanel({
             </div>
             <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
           </div>
-          <div className="flex items-center gap-3 border-t border-border pt-2.5 text-xs text-muted-foreground">
+          {showCosts &&
+            (() => {
+              const u = a.usage ?? ZERO_USAGE;
+              return (
+                <div className="mb-2.5 grid grid-cols-2 gap-2">
+                  <div className="rounded-lg bg-muted/50 px-2.5 py-1.5">
+                    <div className="text-[11px] text-muted-foreground">
+                      Custo no mês
+                    </div>
+                    <div className="text-sm font-semibold tabular-nums text-foreground">
+                      {brl(u.monthCostBrl)}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">
+                      hoje {brl(u.todayCostBrl)}
+                    </div>
+                  </div>
+                  <div className="rounded-lg bg-muted/50 px-2.5 py-1.5">
+                    <div className="text-[11px] text-muted-foreground">
+                      Atendimentos
+                    </div>
+                    <div className="text-sm font-semibold tabular-nums text-foreground">
+                      {u.monthConversations}
+                    </div>
+                    <div className="text-[10px] text-muted-foreground">
+                      hoje {u.todayConversations}
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+          <div className="mt-auto flex items-center gap-3 border-t border-border pt-2.5 text-xs text-muted-foreground">
             <span className="truncate">
               {a.provider === 'anthropic' ? 'Anthropic' : 'OpenAI'} · {a.model}
             </span>
