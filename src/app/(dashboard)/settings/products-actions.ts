@@ -22,6 +22,7 @@ export interface ProductRow {
   kind: ProductKind
   unit_price: number
   link_url: string | null
+  image_url: string | null
   active: boolean
   created_at: string
 }
@@ -32,6 +33,7 @@ export interface ProductInput {
   kind?: ProductKind
   unitPrice?: number
   linkUrl?: string | null
+  imageUrl?: string | null
   active?: boolean
 }
 
@@ -59,6 +61,7 @@ export async function listProducts(
       kind: products.kind,
       unit_price: products.unitPrice,
       link_url: products.linkUrl,
+      image_url: products.imageUrl,
       active: products.active,
       created_at: products.createdAt,
     })
@@ -72,6 +75,7 @@ export async function listProducts(
     kind: (r.kind as ProductKind) ?? 'product',
     unit_price: Number(r.unit_price ?? 0),
     link_url: r.link_url ?? null,
+    image_url: r.image_url ?? null,
     active: Boolean(r.active),
     created_at: r.created_at as string,
   }))
@@ -94,6 +98,7 @@ export async function createProduct(
           kind: input.kind === 'service' ? 'service' : 'product',
           unitPrice: parsePrice(input.unitPrice),
           linkUrl: clean(input.linkUrl),
+          imageUrl: clean(input.imageUrl),
           active: input.active ?? true,
           createdBy: ctx.userId,
         })
@@ -104,6 +109,7 @@ export async function createProduct(
           kind: products.kind,
           unit_price: products.unitPrice,
           link_url: products.linkUrl,
+          image_url: products.imageUrl,
           active: products.active,
           created_at: products.createdAt,
         }),
@@ -118,6 +124,7 @@ export async function createProduct(
         kind: (inserted.kind as ProductKind) ?? 'product',
         unit_price: Number(inserted.unit_price ?? 0),
         link_url: inserted.link_url ?? null,
+        image_url: inserted.image_url ?? null,
         active: Boolean(inserted.active),
         created_at: inserted.created_at as string,
       },
@@ -144,6 +151,7 @@ export async function updateProduct(
       set.kind = patch.kind === 'service' ? 'service' : 'product'
     if (patch.unitPrice !== undefined) set.unitPrice = parsePrice(patch.unitPrice)
     if (patch.linkUrl !== undefined) set.linkUrl = clean(patch.linkUrl)
+    if (patch.imageUrl !== undefined) set.imageUrl = clean(patch.imageUrl)
     if (patch.active !== undefined) set.active = patch.active
     const updated = await db
       .update(products)

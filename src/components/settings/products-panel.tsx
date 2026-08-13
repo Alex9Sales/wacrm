@@ -98,6 +98,7 @@ type EditValue = {
   kind: ProductKind
   unitPrice: string
   linkUrl: string
+  imageUrl: string
   active: boolean
 }
 
@@ -107,6 +108,7 @@ const EMPTY: EditValue = {
   kind: 'product',
   unitPrice: '',
   linkUrl: '',
+  imageUrl: '',
   active: true,
 }
 
@@ -119,8 +121,29 @@ export function ProductsPanel() {
   const [saving, setSaving] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [importing, setImporting] = useState(false)
+  const [uploadingImg, setUploadingImg] = useState(false)
   const [dragging, setDragging] = useState(false)
   const fileRef = useRef<HTMLInputElement>(null)
+  const imgRef = useRef<HTMLInputElement>(null)
+
+  // Sobe a foto do produto pro MinIO (via /api/media/upload) e guarda a URL.
+  async function uploadImage(file: File) {
+    setUploadingImg(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('bucket', 'media')
+      const res = await fetch('/api/media/upload', { method: 'POST', body: fd })
+      const data = await res.json().catch(() => ({}))
+      if (res.ok && data.publicUrl) {
+        setDraft((d) => ({ ...d, imageUrl: data.publicUrl }))
+      } else toast.error(data.error ?? 'Falha ao enviar a imagem.')
+    } catch {
+      toast.error('Falha ao enviar a imagem.')
+    } finally {
+      setUploadingImg(false)
+    }
+  }
 
   const load = useCallback(async () => {
     setLoading(true)
@@ -144,6 +167,7 @@ export function ProductsPanel() {
       kind: p.kind,
       unitPrice: p.unit_price ? String(p.unit_price) : '',
       linkUrl: p.link_url ?? '',
+      imageUrl: p.image_url ?? '',
       active: p.active,
     })
     setFormOpen(true)
@@ -162,6 +186,7 @@ export function ProductsPanel() {
       kind: draft.kind,
       unitPrice: priceNum,
       linkUrl: draft.linkUrl.trim() || null,
+      imageUrl: draft.imageUrl.trim() || null,
       active: draft.active,
     }
     if (draft.id) {
@@ -507,6 +532,58 @@ export function ProductsPanel() {
                 onChange={(e) => setDraft({ ...draft, linkUrl: e.target.value })}
                 placeholder="https://… (página ou checkout — o agente de Vendas envia ao cliente)"
               />
+            </div>
+            <div>
+              <Label>Foto do produto</Label>
+              <div className="mt-1 flex items-center gap-3">
+                {draft.imageUrl ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={draft.imageUrl}
+                    alt="Foto do produto"
+                    className="h-16 w-16 rounded-md border border-border object-cover"
+                  />
+                ) : (
+                  <div className="flex h-16 w-16 items-center justify-center rounded-md border border-dashed border-border text-[10px] text-muted-foreground">
+                    sem foto
+                  </div>
+                )}
+                <div className="flex flex-col gap-1">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => imgRef.current?.click()}
+                    disabled={uploadingImg}
+                  >
+                    {uploadingImg ? 'Enviando…' : draft.imageUrl ? 'Trocar foto' : 'Enviar foto'}
+                  </Button>
+                  {draft.imageUrl && (
+                    <button
+                      type="button"
+                      onClick={() => setDraft({ ...draft, imageUrl: '' })}
+                      className="text-xs text-destructive hover:underline"
+                    >
+                      Remover
+                    </button>
+                  )}
+                </div>
+                <input
+                  ref={imgRef}
+                  type="file"
+                  accept="image/png,image/jpeg,image/webp"
+                  className="hidden"
+                  onChange={(e) => {
+                    const f = e.target.files?.[0]
+                    if (f) void uploadImage(f)
+                    e.target.value = ''
+                  }}
+                />
+              </div>
+              <p className="mt-1 text-xs text-muted-foreground">
+                O agente de Vendas envia essa imagem como anexo quando falar deste
+                produto.
+              </p>
             </div>
             <label className="flex items-center gap-2 text-sm text-foreground">
               <input

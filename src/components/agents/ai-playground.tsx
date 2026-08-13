@@ -11,6 +11,8 @@ interface Turn {
   content: string;
   /** assistant-only: the agent signalled a human handoff on this turn. */
   handoff?: boolean;
+  /** assistant-only: fotos de produto que o agente enviaria como anexo. */
+  photos?: { url: string; name: string }[];
 }
 
 export function AiPlayground({
@@ -69,6 +71,7 @@ export function AiPlayground({
               ? data.reply
               : '',
           handoff: Boolean(data.handoff),
+          photos: Array.isArray(data.photos) ? data.photos : undefined,
         },
       ]);
     } catch {
@@ -152,6 +155,20 @@ export function AiPlayground({
               )}
             >
               {t.content && <p className="whitespace-pre-wrap">{t.content}</p>}
+              {t.role === 'assistant' && t.photos && t.photos.length > 0 && (
+                <div className={cn('flex flex-wrap gap-2', t.content && 'mt-2')}>
+                  {t.photos.map((ph, j) => (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      key={j}
+                      src={ph.url}
+                      alt={ph.name}
+                      title={ph.name}
+                      className="h-32 w-32 rounded-lg border border-border object-cover"
+                    />
+                  ))}
+                </div>
+              )}
               {t.role === 'assistant' && t.handoff && (
                 <p
                   className={cn(

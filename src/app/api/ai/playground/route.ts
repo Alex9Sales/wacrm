@@ -7,9 +7,9 @@ import {
   getCompanyProfile,
   formatCompanyProfileForPrompt,
 } from '@/lib/ai/company-profile'
-import { formatCatalogForPrompt } from '@/lib/ai/catalog'
+import { formatCatalogForPrompt, resolveProductPhoto } from '@/lib/ai/catalog'
 import { generateReply } from '@/lib/ai/generate'
-import { buildSystemPrompt } from '@/lib/ai/defaults'
+import { buildSystemPrompt, PHOTO_DIRECTIVE } from '@/lib/ai/defaults'
 import { latestUserMessage } from '@/lib/ai/query'
 import { AiError, type ChatMessage } from '@/lib/ai/types'
 
@@ -110,7 +110,30 @@ export async function POST(request: Request) {
       // 'playground' pra não poluir os números reais no painel.
       meta: { accountId, agentId: config.id ?? null, source: 'playground' },
     })
-    return NextResponse.json({ reply: text, handoff })
+
+    // Foto de produto: extrai os "[[foto:Nome]]" que o agente pediu, resolve a
+    // URL no catálogo (pra a UI do playground mostrar a imagem) e limpa o texto.
+    const photoNames: string[] = []
+    const reply = text
+      .split('\n')
+      .filter((line) => {
+        const m = line.trim().match(PHOTO_DIRECTIVE)
+        if (m) {
+          photoNames.push(m[1])
+          return false
+        }
+        return true
+      })
+      .join('\n')
+      .replace(/\n{3,}/g, '\n\n')
+      .trim()
+    const photos = (
+      await Promise.all(
+        photoNames.map((n) => resolveProductPhoto(accountId, n)),
+      )
+    ).filter((p): p is { url: string; name: string } => !!p)
+
+    return NextResponse.json({ reply, handoff, photos })
   } catch (err) {
     if (err instanceof AiError) {
       return NextResponse.json(

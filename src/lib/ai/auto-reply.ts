@@ -19,7 +19,8 @@ import {
   engineSendMedia,
 } from '@/lib/flows/meta-send'
 import { splitIntoMessages } from '@/lib/ai/flow-agent'
-import { AUDIO_MARKER } from '@/lib/ai/defaults'
+import { AUDIO_MARKER, PHOTO_DIRECTIVE } from '@/lib/ai/defaults'
+import { resolveProductPhoto } from '@/lib/ai/catalog'
 import { synthesizeSpeech } from '@/lib/ai/tts'
 import { putObject, publicUrl } from '@/lib/storage/s3'
 
@@ -231,6 +232,32 @@ export async function dispatchInboundToAiReply(
 
     const parts = splitIntoMessages(body)
     for (const rawPart of parts) {
+      // Foto de produto (agente de Vendas): uma parte que é só "[[foto:Nome]]"
+      // vira ANEXO de imagem — resolve a URL da foto no catálogo e envia como
+      // mídia. Item sem foto / não encontrado → ignora silenciosamente.
+      const photoMatch = rawPart.trim().match(PHOTO_DIRECTIVE)
+      if (photoMatch) {
+        const photo = await resolveProductPhoto(accountId, photoMatch[1])
+        if (photo) {
+          try {
+            await engineSendTyping({ accountId, conversationId, contactId, on: true })
+            await sleep(600)
+            await engineSendMedia({
+              accountId,
+              userId: configOwnerUserId,
+              conversationId,
+              contactId,
+              kind: 'image',
+              link: photo.url,
+              caption: photo.name,
+            })
+          } catch (err) {
+            console.error('[ai auto-reply] envio de foto do produto falhou:', err)
+          }
+        }
+        continue
+      }
+
       const wantsAudio = rawPart.trimStart().startsWith(AUDIO_MARKER)
       const clean = rawPart.replace(AUDIO_MARKER, '').trim()
       if (!clean) continue
