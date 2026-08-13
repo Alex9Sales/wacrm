@@ -36,10 +36,13 @@ export function AiKnowledgeCard({
   accountId,
   canEdit,
   hasEmbeddingsKey,
+  baseId = null,
 }: {
   accountId: string | null;
   canEdit: boolean;
   hasEmbeddingsKey: boolean;
+  /** Base selecionada (Fase K). Escopo dos documentos listados/criados. */
+  baseId?: string | null;
 }) {
   const [docs, setDocs] = useState<DocSummary[]>([]);
   const [loading, setLoading] = useState(true);
@@ -55,7 +58,10 @@ export function AiKnowledgeCard({
   const fetchDocs = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/ai/knowledge');
+      const url = baseId
+        ? `/api/ai/knowledge?baseId=${encodeURIComponent(baseId)}`
+        : '/api/ai/knowledge';
+      const res = await fetch(url);
       const data = await res.json();
       if (res.ok) setDocs(data.documents ?? []);
       else toast.error(data.error ?? 'Falha ao carregar a base de conhecimento');
@@ -64,13 +70,15 @@ export function AiKnowledgeCard({
     } finally {
       setLoading(false);
     }
-  }, []);
+  }, [baseId]);
 
   useEffect(() => {
-    if (!accountId || loadedAccountIdRef.current === accountId) return;
-    loadedAccountIdRef.current = accountId;
+    // Chaveado por conta + base: trocar de base recarrega os documentos.
+    const key = `${accountId ?? ''}:${baseId ?? ''}`;
+    if (!accountId || loadedAccountIdRef.current === key) return;
+    loadedAccountIdRef.current = key;
     void fetchDocs();
-  }, [accountId, fetchDocs]);
+  }, [accountId, baseId, fetchDocs]);
 
   const openNew = () => {
     setEditing('new');
@@ -141,7 +149,12 @@ export function AiKnowledgeCard({
         {
           method: isNew ? 'POST' : 'PATCH',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ title: title.trim(), content: content.trim() }),
+          body: JSON.stringify({
+            title: title.trim(),
+            content: content.trim(),
+            // Cria o doc na base selecionada (Fase K); PATCH ignora.
+            ...(isNew && baseId ? { baseId } : {}),
+          }),
         },
       );
       const data = await res.json();

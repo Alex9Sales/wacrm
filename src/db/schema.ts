@@ -1309,6 +1309,8 @@ export const aiConfigs = pgTable("ai_configs", {
 	autoReplyEnabled: boolean("auto_reply_enabled").default(false).notNull(),
 	// Canais onde a IA responde (multi). Vazio = todos. Migração 0054.
 	autoReplyChannelIds: uuid("auto_reply_channel_ids").array().default(sql`'{}'::uuid[]`).notNull(),
+	// Bases de conhecimento que ESTE agente usa (Fase K). Vazio = todas as bases da conta.
+	knowledgeBaseIds: uuid("knowledge_base_ids").array().default(sql`'{}'::uuid[]`).notNull(),
 	autoReplyMaxPerConversation: integer("auto_reply_max_per_conversation").default(3).notNull(),
 	// Horário de atendimento da IA: always | inside | outside (reusa o horário
 	// da conta). Migração 0058.
@@ -1385,20 +1387,53 @@ export const aiUsage = pgTable("ai_usage", {
 	check("ai_usage_source_check", sql`source = ANY (ARRAY['inbox'::text, 'draft'::text, 'playground'::text, 'pipeline'::text, 'flow'::text, 'deal_suggest'::text, 'vision'::text, 'transcribe'::text, 'tts'::text, 'embeddings'::text])`),
 ]);
 
+// Bases de conhecimento NOMEADAS (Fase K). Ficam na CONTA; cada agente escolhe
+// quais usa (ai_configs.knowledge_base_ids, vazio = todas). Migração 0076.
+export const aiKnowledgeBases = pgTable("ai_knowledge_bases", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	name: text().notNull(),
+	description: text(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("ai_knowledge_bases_account_id_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "ai_knowledge_bases_account_id_fkey"
+		}).onDelete("cascade"),
+]);
+
 export const aiKnowledgeDocuments = pgTable("ai_knowledge_documents", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	accountId: uuid("account_id").notNull(),
+	knowledgeBaseId: uuid("knowledge_base_id"),
 	createdBy: uuid("created_by"),
 	title: text().notNull(),
 	content: text().notNull(),
+	// text | file | url | qa | approval (Fase K). 'question' guarda a pergunta do Q&A;
+	// 'sourceUrl'/'fileName' a origem; 'status' o processamento (ready/pending/error).
+	sourceType: text("source_type").default('text').notNull(),
+	question: text(),
+	sourceUrl: text("source_url"),
+	fileName: text("file_name"),
+	status: text().default('ready').notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("ai_knowledge_documents_account_id_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	index("ai_knowledge_documents_kb_idx").using("btree", table.knowledgeBaseId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
 			foreignColumns: [organization.id],
 			name: "ai_knowledge_documents_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.knowledgeBaseId],
+			foreignColumns: [aiKnowledgeBases.id],
+			name: "ai_knowledge_documents_kb_fkey"
 		}).onDelete("cascade"),
 ]);
 
@@ -1406,6 +1441,8 @@ export const aiKnowledgeChunks = pgTable("ai_knowledge_chunks", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	documentId: uuid("document_id").notNull(),
 	accountId: uuid("account_id").notNull(),
+	// Base denormalizada (Fase K): filtra o retrieval por base sem join. Migração 0076.
+	knowledgeBaseId: uuid("knowledge_base_id"),
 	chunkIndex: integer("chunk_index").default(0).notNull(),
 	content: text().notNull(),
 	fts: tsvector("fts").generatedAlwaysAs(sql`to_tsvector('simple'::regconfig, content)`),
@@ -1413,6 +1450,7 @@ export const aiKnowledgeChunks = pgTable("ai_knowledge_chunks", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("ai_knowledge_chunks_account_id_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	index("ai_knowledge_chunks_account_kb_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.knowledgeBaseId.asc().nullsLast().op("uuid_ops")),
 	index("ai_knowledge_chunks_document_id_idx").using("btree", table.documentId.asc().nullsLast().op("uuid_ops")),
 	index("ai_knowledge_chunks_embedding_idx").using("hnsw", table.embedding.asc().nullsLast().op("vector_cosine_ops")),
 	index("ai_knowledge_chunks_fts_idx").using("gin", table.fts.asc().nullsLast().op("tsvector_ops")),
@@ -1425,6 +1463,11 @@ export const aiKnowledgeChunks = pgTable("ai_knowledge_chunks", {
 			columns: [table.accountId],
 			foreignColumns: [organization.id],
 			name: "ai_knowledge_chunks_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.knowledgeBaseId],
+			foreignColumns: [aiKnowledgeBases.id],
+			name: "ai_knowledge_chunks_kb_fkey"
 		}).onDelete("cascade"),
 ]);
 

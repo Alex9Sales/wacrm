@@ -25,6 +25,9 @@ export interface AiConfig {
   autoReplyEnabled: boolean
   /** Canais onde a IA responde automaticamente. Vazio = todos os canais. */
   autoReplyChannelIds: string[]
+  /** Bases de conhecimento que este agente usa (Fase K). Vazio = todas as
+   *  bases da conta. Opcional para não quebrar construções sintéticas. */
+  knowledgeBaseIds?: string[]
   autoReplyMaxPerConversation: number
   /** Horário de atendimento da IA: always | inside | outside (reusa o
    *  horário da conta). Fora da janela permitida, a IA não auto-responde. */

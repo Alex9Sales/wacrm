@@ -67,6 +67,8 @@ export async function generateFlowAiReply(
           args.accountId,
           config,
           latestUserMessage(messages),
+          5,
+          config.knowledgeBaseIds ?? [],
         )
       : []
 

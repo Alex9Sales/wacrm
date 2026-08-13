@@ -15,6 +15,7 @@ const agentSelect = {
   isActive: aiConfigs.isActive,
   autoReplyEnabled: aiConfigs.autoReplyEnabled,
   autoReplyChannelIds: aiConfigs.autoReplyChannelIds,
+  knowledgeBaseIds: aiConfigs.knowledgeBaseIds,
   autoReplyMaxPerConversation: aiConfigs.autoReplyMaxPerConversation,
   autoReplyHoursMode: aiConfigs.autoReplyHoursMode,
   autoReplyBufferSeconds: aiConfigs.autoReplyBufferSeconds,
@@ -33,6 +34,7 @@ type AgentRow = {
   isActive: boolean
   autoReplyEnabled: boolean
   autoReplyChannelIds: string[] | null
+  knowledgeBaseIds: string[] | null
   autoReplyMaxPerConversation: number
   autoReplyHoursMode: string
   autoReplyBufferSeconds: number
@@ -81,6 +83,7 @@ function finalizeAgent(
     isActive: row.isActive,
     autoReplyEnabled: row.autoReplyEnabled,
     autoReplyChannelIds: row.autoReplyChannelIds ?? [],
+    knowledgeBaseIds: row.knowledgeBaseIds ?? [],
     autoReplyMaxPerConversation: row.autoReplyMaxPerConversation,
     autoReplyHoursMode: toAiHoursMode(row.autoReplyHoursMode),
     autoReplyBufferSeconds: row.autoReplyBufferSeconds,

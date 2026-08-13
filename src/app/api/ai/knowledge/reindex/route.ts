@@ -21,12 +21,13 @@ export async function POST() {
     const limit = await checkRateLimit(`ai-kb-reindex:${userId}`, RATE_LIMITS.adminAction)
     if (!limit.success) return rateLimitResponse(limit)
 
-    let docs: { id: string; content: string }[]
+    let docs: { id: string; content: string; knowledgeBaseId: string | null }[]
     try {
       docs = await db
         .select({
           id: aiKnowledgeDocuments.id,
           content: aiKnowledgeDocuments.content,
+          knowledgeBaseId: aiKnowledgeDocuments.knowledgeBaseId,
         })
         .from(aiKnowledgeDocuments)
         .where(eq(aiKnowledgeDocuments.accountId, accountId))
@@ -57,7 +58,13 @@ export async function POST() {
     let reindexed = 0
     for (const doc of docs) {
       try {
-        await ingestDocument(accountId, { embeddingsApiKey }, doc.id, doc.content)
+        await ingestDocument(
+          accountId,
+          { embeddingsApiKey },
+          doc.id,
+          doc.content,
+          doc.knowledgeBaseId,
+        )
         reindexed += 1
       } catch (err) {
         // One bad document (e.g. a mid-run embeddings rate-limit) should

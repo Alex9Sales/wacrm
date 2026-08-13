@@ -79,7 +79,7 @@ export async function PATCH(request: Request, { params }: Params) {
     if (title !== undefined) update.title = title
     if (content !== undefined) update.content = content
 
-    let updated: { id: string } | null
+    let updated: { id: string; knowledgeBaseId: string | null } | null
     try {
       updated = firstOrNull(
         await db
@@ -91,7 +91,10 @@ export async function PATCH(request: Request, { params }: Params) {
               eq(aiKnowledgeDocuments.id, id),
             ),
           )
-          .returning({ id: aiKnowledgeDocuments.id }),
+          .returning({
+            id: aiKnowledgeDocuments.id,
+            knowledgeBaseId: aiKnowledgeDocuments.knowledgeBaseId,
+          }),
       )
     } catch (err) {
       console.error('[ai/knowledge/[id] PATCH] error:', err)
@@ -102,7 +105,13 @@ export async function PATCH(request: Request, { params }: Params) {
     if (content !== undefined) {
       const { key: embeddingsApiKey, corrupt } = await loadEmbeddingsKey(accountId)
       try {
-        await ingestDocument(accountId, { embeddingsApiKey }, id, content)
+        await ingestDocument(
+          accountId,
+          { embeddingsApiKey },
+          id,
+          content,
+          updated.knowledgeBaseId,
+        )
       } catch (err) {
         const message = err instanceof AiError ? err.message : 'indexing failed'
         console.error('[ai/knowledge/[id] PATCH] ingest error:', err)

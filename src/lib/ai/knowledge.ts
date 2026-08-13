@@ -1,4 +1,4 @@
-import { count, eq, sql } from 'drizzle-orm'
+import { and, count, eq, inArray, sql } from 'drizzle-orm'
 import { db, aiKnowledgeChunks } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import type { AiConfig } from './types'
@@ -30,6 +30,7 @@ export async function ingestDocument(
   config: Pick<AiConfig, 'embeddingsApiKey'>,
   documentId: string,
   content: string,
+  knowledgeBaseId: string | null = null,
 ): Promise<void> {
   const chunks = chunkText(content)
 
@@ -59,6 +60,7 @@ export async function ingestDocument(
   const rows = chunks.map((content, i) => ({
     documentId,
     accountId,
+    knowledgeBaseId,
     chunkIndex: i,
     content,
     embedding: embeddings ? embeddings[i] : null,
@@ -83,20 +85,32 @@ export async function retrieveKnowledge(
   config: Pick<AiConfig, 'embeddingsApiKey'>,
   queryText: string,
   k = 5,
+  baseIds: string[] = [],
 ): Promise<string[]> {
   const query = queryText.trim()
   if (!query || k <= 0) return []
 
-  // Skip everything when the account has no knowledge base — otherwise
+  // Fase K: o agente só enxerga as bases que ele escolheu (vazio = todas).
+  // `ARRAY[...]::uuid[]` construído com sql.join — interpolar array JS cru com
+  // ::uuid[] quebra (vira lista de placeholders). Ver [[drizzle-array-cast-gotcha]].
+  const scoped = baseIds.length > 0
+  const baseArr = scoped
+    ? sql`ARRAY[${sql.join(baseIds.map((id) => sql`${id}::uuid`), sql`, `)}]::uuid[]`
+    : sql`ARRAY[]::uuid[]`
+
+  // Skip everything when the (scoped) knowledge base is empty — otherwise
   // every draft / auto-reply would pay for a query embedding + two SQL
   // calls just to get []. One cheap indexed COUNT instead of a paid
   // embeddings call on the hot path.
   try {
+    const where = scoped
+      ? and(
+          eq(aiKnowledgeChunks.accountId, accountId),
+          inArray(aiKnowledgeChunks.knowledgeBaseId, baseIds),
+        )
+      : eq(aiKnowledgeChunks.accountId, accountId)
     const row = firstOrNull(
-      await db
-        .select({ n: count() })
-        .from(aiKnowledgeChunks)
-        .where(eq(aiKnowledgeChunks.accountId, accountId)),
+      await db.select({ n: count() }).from(aiKnowledgeChunks).where(where),
     )
     if (!row || row.n === 0) return []
   } catch {
@@ -112,7 +126,7 @@ export async function retrieveKnowledge(
       const [queryEmbedding] = await embedTexts(config.embeddingsApiKey, [query])
       if (queryEmbedding) {
         const res = await db.execute(
-          sql`SELECT * FROM match_ai_knowledge_semantic(${accountId}, ${toVectorLiteral(queryEmbedding)}, ${k})`,
+          sql`SELECT * FROM match_ai_knowledge_semantic(${accountId}, ${toVectorLiteral(queryEmbedding)}, ${k}, ${baseArr})`,
         )
         for (const row of res.rows as unknown as MatchRow[]) {
           picked.set(row.id, row.content)
@@ -127,7 +141,7 @@ export async function retrieveKnowledge(
   if (picked.size < k) {
     try {
       const res = await db.execute(
-        sql`SELECT * FROM match_ai_knowledge_fts(${accountId}, ${query}, ${k})`,
+        sql`SELECT * FROM match_ai_knowledge_fts(${accountId}, ${query}, ${k}, ${baseArr})`,
       )
       for (const row of res.rows as unknown as MatchRow[]) {
         if (picked.size >= k) break

@@ -45,6 +45,7 @@ export async function GET(request: Request) {
           is_active: aiConfigs.isActive,
           auto_reply_enabled: aiConfigs.autoReplyEnabled,
           auto_reply_channel_ids: aiConfigs.autoReplyChannelIds,
+          knowledge_base_ids: aiConfigs.knowledgeBaseIds,
           auto_reply_max_per_conversation: aiConfigs.autoReplyMaxPerConversation,
           auto_reply_hours_mode: aiConfigs.autoReplyHoursMode,
           auto_reply_buffer_seconds: aiConfigs.autoReplyBufferSeconds,
@@ -117,6 +118,12 @@ export async function POST(request: Request) {
     // Canais onde a IA responde (multi). Vazio = todos os canais.
     const autoReplyChannelIds = Array.isArray(body.auto_reply_channel_ids)
       ? (body.auto_reply_channel_ids as unknown[]).filter(
+          (x): x is string => typeof x === 'string' && !!x,
+        )
+      : []
+    // Bases de conhecimento que ESTE agente usa (Fase K). Vazio = todas.
+    const knowledgeBaseIds = Array.isArray(body.knowledge_base_ids)
+      ? (body.knowledge_base_ids as unknown[]).filter(
           (x): x is string => typeof x === 'string' && !!x,
         )
       : []
@@ -264,6 +271,7 @@ export async function POST(request: Request) {
       isActive: boolean
       autoReplyEnabled: boolean
       autoReplyChannelIds: string[]
+      knowledgeBaseIds: string[]
       autoReplyMaxPerConversation: number
       autoReplyHoursMode: string
       autoReplyBufferSeconds: number
@@ -278,6 +286,7 @@ export async function POST(request: Request) {
       isActive,
       autoReplyEnabled,
       autoReplyChannelIds,
+      knowledgeBaseIds,
       autoReplyMaxPerConversation: maxPer,
       autoReplyHoursMode,
       autoReplyBufferSeconds: bufferSeconds,

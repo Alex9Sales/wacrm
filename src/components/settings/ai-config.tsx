@@ -97,6 +97,11 @@ export function AiConfig({
     { id: string; name: string; provider: string }[]
   >([]);
   const [channelIds, setChannelIds] = useState<string[]>([]);
+  // Bases de conhecimento que ESTE agente usa (Fase K). Vazio = todas.
+  const [bases, setBases] = useState<
+    { id: string; name: string; documentCount: number }[]
+  >([]);
+  const [baseIds, setBaseIds] = useState<string[]>([]);
   // Model picker: the list of models the provider exposes for the current key.
   const [models, setModels] = useState<string[]>([]);
   const [loadingModels, setLoadingModels] = useState(false);
@@ -131,6 +136,11 @@ export function AiConfig({
         setChannelIds(
           Array.isArray(data.auto_reply_channel_ids)
             ? data.auto_reply_channel_ids
+            : [],
+        );
+        setBaseIds(
+          Array.isArray(data.knowledge_base_ids)
+            ? data.knowledge_base_ids
             : [],
         );
         setMaxPerConversation(data.auto_reply_max_per_conversation ?? 3);
@@ -184,6 +194,25 @@ export function AiConfig({
         }
       } catch {
         /* best-effort — sem canais o picker só some */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  // Load as bases de conhecimento da conta (seletor "quais bases este agente usa").
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/ai/knowledge/bases');
+        const data = (await res.json().catch(() => ({}))) as {
+          bases?: { id: string; name: string; documentCount: number }[];
+        };
+        if (!cancelled && Array.isArray(data.bases)) setBases(data.bases);
+      } catch {
+        /* best-effort — sem bases o seletor só some */
       }
     })();
     return () => {
@@ -263,6 +292,7 @@ export function AiConfig({
     is_active: isActive,
     auto_reply_enabled: autoReplyEnabled,
     auto_reply_channel_ids: channelIds,
+    knowledge_base_ids: baseIds,
     auto_reply_max_per_conversation: maxPerConversation,
     auto_reply_hours_mode: hoursMode,
     auto_reply_buffer_seconds: bufferSeconds,
@@ -761,6 +791,65 @@ export function AiConfig({
                 {channelIds.length === 0 && (
                   <p className="mt-2 text-[11px] text-muted-foreground">
                     Respondendo em <strong>todos</strong> os canais.
+                  </p>
+                )}
+              </div>
+            )}
+
+            {/* Bases de conhecimento deste agente (Fase K). Vazio = todas. */}
+            {bases.length > 0 && (
+              <div className="rounded-md border border-border p-3">
+                <p className="text-sm font-medium text-foreground">
+                  Base de Conhecimento deste agente
+                </p>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Escolha quais bases este agente consulta ao responder. Se não
+                  marcar nenhuma, ele usa <strong>todas</strong> as bases da
+                  conta.
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {bases.map((b) => {
+                    const checked = baseIds.includes(b.id);
+                    return (
+                      <button
+                        key={b.id}
+                        type="button"
+                        disabled={disabled}
+                        onClick={() =>
+                          setBaseIds((prev) =>
+                            prev.includes(b.id)
+                              ? prev.filter((id) => id !== b.id)
+                              : [...prev, b.id],
+                          )
+                        }
+                        className={cn(
+                          'inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-xs font-medium transition-colors',
+                          checked
+                            ? 'border-primary bg-primary/10 text-primary'
+                            : 'border-border text-muted-foreground hover:bg-muted',
+                        )}
+                      >
+                        <span
+                          className={cn(
+                            'flex h-3.5 w-3.5 items-center justify-center rounded-[4px] border',
+                            checked
+                              ? 'border-primary bg-primary text-primary-foreground'
+                              : 'border-border',
+                          )}
+                        >
+                          {checked && <Check className="h-2.5 w-2.5" />}
+                        </span>
+                        {b.name}
+                        <span className="text-[10px] opacity-70">
+                          {b.documentCount}
+                        </span>
+                      </button>
+                    );
+                  })}
+                </div>
+                {baseIds.length === 0 && (
+                  <p className="mt-2 text-[11px] text-muted-foreground">
+                    Usando <strong>todas</strong> as bases da conta.
                   </p>
                 )}
               </div>

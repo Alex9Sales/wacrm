@@ -144,6 +144,8 @@ export async function dispatchInboundToAiReply(
       accountId,
       config,
       latestUserMessage(messages),
+      5,
+      config.knowledgeBaseIds ?? [],
     )
     const companyProfile = formatCompanyProfileForPrompt(
       await getCompanyProfile(accountId),

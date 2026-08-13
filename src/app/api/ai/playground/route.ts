@@ -86,6 +86,8 @@ export async function POST(request: Request) {
       accountId,
       config,
       latestUserMessage(messages),
+      5,
+      config.knowledgeBaseIds ?? [],
     )
     const companyProfile = formatCompanyProfileForPrompt(
       await getCompanyProfile(accountId),

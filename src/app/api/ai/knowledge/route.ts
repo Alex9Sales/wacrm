@@ -1,5 +1,5 @@
 import { NextResponse } from 'next/server'
-import { desc, eq } from 'drizzle-orm'
+import { and, desc, eq } from 'drizzle-orm'
 import { db, aiKnowledgeDocuments } from '@/db'
 import { firstOrThrow } from '@/db/helpers'
 import {
@@ -10,6 +10,10 @@ import {
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
 import { loadEmbeddingsKey } from '@/lib/ai/config'
 import { ingestDocument } from '@/lib/ai/knowledge'
+import {
+  ensureDefaultBaseId,
+  baseBelongsToAccount,
+} from '@/lib/ai/knowledge-bases'
 import { AiError } from '@/lib/ai/types'
 
 /**
@@ -17,19 +21,28 @@ import { AiError } from '@/lib/ai/types'
  *
  * List the account's knowledge-base documents (any member).
  */
-export async function GET() {
+export async function GET(request: Request) {
   try {
     const { accountId } = await getCurrentAccount()
+    const baseId = new URL(request.url).searchParams.get('baseId')
+    const where = baseId
+      ? and(
+          eq(aiKnowledgeDocuments.accountId, accountId),
+          eq(aiKnowledgeDocuments.knowledgeBaseId, baseId),
+        )
+      : eq(aiKnowledgeDocuments.accountId, accountId)
     let data
     try {
       data = await db
         .select({
           id: aiKnowledgeDocuments.id,
           title: aiKnowledgeDocuments.title,
+          sourceType: aiKnowledgeDocuments.sourceType,
+          knowledgeBaseId: aiKnowledgeDocuments.knowledgeBaseId,
           updated_at: aiKnowledgeDocuments.updatedAt,
         })
         .from(aiKnowledgeDocuments)
-        .where(eq(aiKnowledgeDocuments.accountId, accountId))
+        .where(where)
         .orderBy(desc(aiKnowledgeDocuments.updatedAt))
     } catch (err) {
       console.error('[ai/knowledge GET] error:', err)
@@ -66,12 +79,20 @@ export async function POST(request: Request) {
       )
     }
 
+    // Fase K: o doc entra numa base. Se veio um baseId válido da conta, usa;
+    // senão cai no "Núcleo" (criado sob demanda) — retrocompatível.
+    const baseIdRaw = typeof body?.baseId === 'string' ? body.baseId : null
+    const baseId =
+      baseIdRaw && (await baseBelongsToAccount(accountId, baseIdRaw))
+        ? baseIdRaw
+        : await ensureDefaultBaseId(accountId, userId)
+
     let doc: { id: string }
     try {
       doc = firstOrThrow(
         await db
           .insert(aiKnowledgeDocuments)
-          .values({ accountId, createdBy: userId, title, content })
+          .values({ accountId, knowledgeBaseId: baseId, createdBy: userId, title, content })
           .returning({ id: aiKnowledgeDocuments.id }),
       )
     } catch (err) {
@@ -84,7 +105,7 @@ export async function POST(request: Request) {
 
     const { key: embeddingsApiKey, corrupt } = await loadEmbeddingsKey(accountId)
     try {
-      await ingestDocument(accountId, { embeddingsApiKey }, doc.id, content)
+      await ingestDocument(accountId, { embeddingsApiKey }, doc.id, content, baseId)
     } catch (err) {
       const message = err instanceof AiError ? err.message : 'indexing failed'
       console.error('[ai/knowledge POST] ingest error:', err)
