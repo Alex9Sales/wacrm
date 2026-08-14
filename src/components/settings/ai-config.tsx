@@ -42,6 +42,11 @@ const PROVIDER_LABEL: Record<AiProvider, string> = {
   anthropic: 'Anthropic (Claude)',
 };
 
+/** Rótulo do provedor tolerante a string (credencial pode ter 'gemini'). */
+function providerLabel(p: string): string {
+  return (PROVIDER_LABEL as Record<string, string>)[p] ?? p;
+}
+
 const KEY_PLACEHOLDER: Record<AiProvider, string> = {
   openai: 'sk-...',
   anthropic: 'sk-ant-...',
@@ -77,6 +82,12 @@ export function AiConfig({
   const [keyEdited, setKeyEdited] = useState(false);
   const [showKey, setShowKey] = useState(false);
   const [hasStoredKey, setHasStoredKey] = useState(false);
+  // Chaves de API reutilizáveis (Fase 2). credentialId '' = chave avulsa
+  // (digitada abaixo, caminho legado); um id = usa aquela credencial.
+  const [credentials, setCredentials] = useState<
+    { id: string; provider: string; label: string; keyHint: string }[]
+  >([]);
+  const [credentialId, setCredentialId] = useState('');
   const [embeddingsKey, setEmbeddingsKey] = useState('');
   const [embeddingsKeyEdited, setEmbeddingsKeyEdited] = useState(false);
   const [hasStoredEmbeddingsKey, setHasStoredEmbeddingsKey] = useState(false);
@@ -129,6 +140,7 @@ export function AiConfig({
         setName(data.name ?? '');
         setProvider(data.provider);
         setModel(data.model);
+        setCredentialId(data.credential_id ?? '');
         setSystemPrompt(data.system_prompt ?? '');
         setIsActive(data.is_active);
         setAutoReplyEnabled(data.auto_reply_enabled);
@@ -199,6 +211,32 @@ export function AiConfig({
     };
   }, []);
 
+  // Load as credenciais (Chaves de API) para o seletor.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const res = await fetch('/api/ai/credentials');
+        const data = (await res.json().catch(() => ({}))) as {
+          credentials?: {
+            id: string;
+            provider: string;
+            label: string;
+            keyHint: string;
+          }[];
+        };
+        if (!cancelled && Array.isArray(data.credentials)) {
+          setCredentials(data.credentials);
+        }
+      } catch {
+        /* best-effort */
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   // Load as bases de conhecimento da conta (seletor "quais bases este agente usa").
   useEffect(() => {
     let cancelled = false;
@@ -229,6 +267,19 @@ export function AiConfig({
     if (isDefaultModel) setModel(AI_PROVIDER_DEFAULT_MODEL[next]);
   };
 
+  // Trocar a credencial: o provedor passa a vir dela (e o modelo padrão junto).
+  // '' = voltar pra chave avulsa (o form mostra provider + chave de novo).
+  const handleCredentialChange = (id: string) => {
+    setCredentialId(id);
+    setModels([]);
+    if (id) {
+      const c = credentials.find((x) => x.id === id);
+      if (c && (c.provider === 'openai' || c.provider === 'anthropic')) {
+        handleProviderChange(c.provider);
+      }
+    }
+  };
+
   const keyPayload = () => (keyEdited ? apiKey.trim() : undefined);
 
   // Pull the provider's available models for the current key (freshly-typed or
@@ -242,7 +293,10 @@ export function AiConfig({
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             provider,
-            api_key: keyEdited ? apiKey.trim() : undefined,
+            // Com credencial escolhida, o servidor usa a chave dela; senão a
+            // chave avulsa recém-digitada (ou a embutida).
+            credential_id: credentialId || undefined,
+            api_key: credentialId ? undefined : keyEdited ? apiKey.trim() : undefined,
           }),
         });
         const data = await res.json().catch(() => ({}));
@@ -264,17 +318,17 @@ export function AiConfig({
         setLoadingModels(false);
       }
     },
-    [provider, keyEdited, apiKey],
+    [provider, keyEdited, apiKey, credentialId],
   );
 
-  // Auto-load the model list once a stored key is present (first load).
+  // Auto-load the model list once a stored key OR a credential is present.
   useEffect(() => {
-    if (configured && hasStoredKey && models.length === 0) {
+    if (configured && (hasStoredKey || credentialId) && models.length === 0) {
       void fetchModels(true);
     }
     // Intentionally not depending on fetchModels/models to run once on load.
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [configured, hasStoredKey]);
+  }, [configured, hasStoredKey, credentialId]);
 
   // undefined = leave unchanged; '' typed = null (clear); text = set.
   const embeddingsKeyPayload = () =>
@@ -284,7 +338,10 @@ export function AiConfig({
     name: name.trim() || null,
     provider,
     model: model.trim(),
-    api_key: keyPayload(),
+    // Credencial escolhida (Fase 2) — null = chave avulsa (legado).
+    credential_id: credentialId || null,
+    // Com credencial, a chave vem dela; não manda a avulsa.
+    api_key: credentialId ? undefined : keyPayload(),
     embeddings_api_key: embeddingsKeyPayload(),
     system_prompt: systemPrompt.trim() || null,
     is_active: isActive,
@@ -328,8 +385,10 @@ export function AiConfig({
       toast.error('Informe o nome do modelo.');
       return;
     }
-    if (!configured && !keyEdited) {
-      toast.error('Informe sua chave de API.');
+    // Precisa de uma chave: ou uma credencial escolhida, ou (config nova) a
+    // chave avulsa digitada.
+    if (!credentialId && !configured && !keyEdited) {
+      toast.error('Escolha uma chave de API (ou digite uma chave avulsa).');
       return;
     }
     setSaving(true);
@@ -439,24 +498,60 @@ export function AiConfig({
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
+            {/* Chave de API (Fase 2): escolhe uma credencial cadastrada ou
+                "chave avulsa" (digita abaixo, só pra este agente). */}
+            <div className="space-y-2">
+              <Label>Chave de API</Label>
+              <select
+                value={credentialId}
+                onChange={(e) => handleCredentialChange(e.target.value)}
+                disabled={disabled}
+                className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+              >
+                {credentials.map((c) => (
+                  <option key={c.id} value={c.id}>
+                    {providerLabel(c.provider) + ' · ' + c.label + ' (' + c.keyHint + ')'}
+                  </option>
+                ))}
+                <option value="">Chave avulsa (digitar abaixo)</option>
+              </select>
+              <p className="text-xs text-muted-foreground">
+                {credentials.length === 0 ? (
+                  <>
+                    Cadastre suas chaves em <strong>Chaves de API</strong> (botão
+                    no topo) para reutilizar entre agentes — ou digite uma chave
+                    avulsa abaixo.
+                  </>
+                ) : (
+                  <>Escolha uma chave cadastrada ou use uma chave avulsa.</>
+                )}
+              </p>
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="space-y-2">
                 <Label>Provedor</Label>
-                <Select
-                  value={provider}
-                  onValueChange={(v) => handleProviderChange(v as AiProvider)}
-                  disabled={disabled}
-                >
-                  <SelectTrigger>
-                    <SelectValue />
-                  </SelectTrigger>
-                  <SelectContent>
-                    <SelectItem value="openai">{PROVIDER_LABEL.openai}</SelectItem>
-                    <SelectItem value="anthropic">
-                      {PROVIDER_LABEL.anthropic}
-                    </SelectItem>
-                  </SelectContent>
-                </Select>
+                {credentialId ? (
+                  <div className="flex h-9 items-center rounded-lg border border-border bg-muted/40 px-2.5 text-sm text-muted-foreground">
+                    {providerLabel(provider) + ' · da credencial'}
+                  </div>
+                ) : (
+                  <Select
+                    value={provider}
+                    onValueChange={(v) => handleProviderChange(v as AiProvider)}
+                    disabled={disabled}
+                  >
+                    <SelectTrigger>
+                      <SelectValue />
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="openai">{PROVIDER_LABEL.openai}</SelectItem>
+                      <SelectItem value="anthropic">
+                        {PROVIDER_LABEL.anthropic}
+                      </SelectItem>
+                    </SelectContent>
+                  </Select>
+                )}
               </div>
 
               <div className="space-y-2">
@@ -544,8 +639,9 @@ export function AiConfig({
               </div>
             </div>
 
+            {!credentialId && (
             <div className="space-y-2">
-              <Label htmlFor="ai-key">Chave de API</Label>
+              <Label htmlFor="ai-key">Chave avulsa</Label>
               <div className="flex gap-2">
                 <div className="relative flex-1">
                   <Input
@@ -593,6 +689,7 @@ export function AiConfig({
                 </Button>
               </div>
             </div>
+            )}
 
             <div className="space-y-2">
               <Label htmlFor="ai-embeddings-key">

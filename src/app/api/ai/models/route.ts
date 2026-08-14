@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
-import { eq } from 'drizzle-orm'
-import { db, aiConfigs } from '@/db'
+import { and, eq } from 'drizzle-orm'
+import { db, aiConfigs, aiCredentials } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { checkRateLimit, rateLimitResponse, RATE_LIMITS } from '@/lib/rate-limit'
@@ -79,9 +79,43 @@ export async function POST(request: Request) {
       )
     }
 
-    // Freshly-typed key wins; else use the stored (decrypted) one.
+    // Credencial (Fase 2): lista os modelos com a chave da credencial escolhida.
+    const credentialId =
+      typeof body.credential_id === 'string' && body.credential_id.trim()
+        ? body.credential_id.trim()
+        : null
+
+    // Freshly-typed key wins; senão credencial; senão a chave embutida.
     const rawKey = typeof body.api_key === 'string' ? body.api_key.trim() : ''
     let apiKeyPlain = rawKey
+    if (!apiKeyPlain && credentialId) {
+      const cred = firstOrNull(
+        await db
+          .select({ apiKey: aiCredentials.apiKey })
+          .from(aiCredentials)
+          .where(
+            and(
+              eq(aiCredentials.id, credentialId),
+              eq(aiCredentials.accountId, accountId),
+            ),
+          )
+          .limit(1),
+      )
+      if (!cred?.apiKey) {
+        return NextResponse.json(
+          { error: 'Credencial não encontrada.' },
+          { status: 400 },
+        )
+      }
+      try {
+        apiKeyPlain = decrypt(cred.apiKey)
+      } catch {
+        return NextResponse.json(
+          { error: 'A chave da credencial não pôde ser lida.' },
+          { status: 400 },
+        )
+      }
+    }
     if (!apiKeyPlain) {
       const existing = firstOrNull(
         await db

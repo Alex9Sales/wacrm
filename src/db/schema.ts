@@ -1380,6 +1380,10 @@ export const aiConfigs = pgTable("ai_configs", {
 	provider: text().notNull(),
 	model: text().notNull(),
 	apiKey: text("api_key").notNull(),
+	// Credencial reutilizável (migração 0085). NULL = usa a chave embutida acima
+	// (fallback/back-compat). Quando setado, o runtime usa a chave/provedor da
+	// credencial. Ver ai_credentials.
+	credentialId: uuid("credential_id"),
 	embeddingsApiKey: text("embeddings_api_key"),
 	systemPrompt: text("system_prompt"),
 	isActive: boolean("is_active").default(false).notNull(),
@@ -1418,6 +1422,11 @@ export const aiConfigs = pgTable("ai_configs", {
 	check("ai_configs_auto_reply_hours_mode_check", sql`auto_reply_hours_mode = ANY (ARRAY['always'::text, 'inside'::text, 'outside'::text])`),
 	check("ai_configs_auto_reply_buffer_seconds_check", sql`(auto_reply_buffer_seconds >= 0) AND (auto_reply_buffer_seconds <= 300)`),
 	check("ai_configs_provider_check", sql`provider = ANY (ARRAY['openai'::text, 'anthropic'::text])`),
+	foreignKey({
+			columns: [table.credentialId],
+			foreignColumns: [aiCredentials.id],
+			name: "ai_configs_credential_id_fkey"
+		}).onDelete("set null"),
 ]);
 
 // Fase B — Medidor de custo da IA (migração 0075). Uma linha append-only por

@@ -1,16 +1,20 @@
 import { and, asc, desc, eq } from 'drizzle-orm'
-import { db, aiConfigs } from '@/db'
+import { db, aiConfigs, aiCredentials } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { toAiHoursMode } from './hours-gate'
 import { pickAgentIdForChannel } from './agents'
 import type { AiConfig } from './types'
 
+// LEFT JOIN com a credencial (Fase 2): quando o agente aponta pra uma
+// credencial, provedor+chave vêm dela; senão caem no fallback embutido.
 const agentSelect = {
   id: aiConfigs.id,
   provider: aiConfigs.provider,
   model: aiConfigs.model,
   apiKey: aiConfigs.apiKey,
+  credentialProvider: aiCredentials.provider,
+  credentialApiKey: aiCredentials.apiKey,
   systemPrompt: aiConfigs.systemPrompt,
   isActive: aiConfigs.isActive,
   autoReplyEnabled: aiConfigs.autoReplyEnabled,
@@ -30,6 +34,8 @@ type AgentRow = {
   provider: string
   model: string
   apiKey: string
+  credentialProvider: string | null
+  credentialApiKey: string | null
   systemPrompt: string | null
   isActive: boolean
   autoReplyEnabled: boolean
@@ -55,9 +61,14 @@ function finalizeAgent(
   // The Playground passes requireActive:false so an admin can test the
   // agent before flipping the master switch on.
   if (requireActive && !row.isActive) return null
-  // Defensive: the column is NOT NULL, but a partial write / manual DB
-  // edit could leave it empty. Treat a missing key as "not configured".
-  if (!row.apiKey) return null
+  // Fase 2: quando o agente aponta pra uma credencial, provedor+chave vêm
+  // dela; senão, fallback pra chave embutida no próprio agente (back-compat).
+  const effectiveProvider = row.credentialApiKey
+    ? (row.credentialProvider ?? row.provider)
+    : row.provider
+  const effectiveEncryptedKey = row.credentialApiKey ?? row.apiKey
+  // Defensive: sem chave (nem credencial, nem embutida) = "não configurado".
+  if (!effectiveEncryptedKey) return null
 
   // The embeddings key is optional and independent of the chat key —
   // a corrupt/undecryptable one should downgrade to lexical KB, not
@@ -76,9 +87,9 @@ function finalizeAgent(
 
   return {
     id: row.id,
-    provider: row.provider as 'openai' | 'anthropic',
+    provider: effectiveProvider as 'openai' | 'anthropic',
     model: row.model,
-    apiKey: decrypt(row.apiKey),
+    apiKey: decrypt(effectiveEncryptedKey),
     systemPrompt: row.systemPrompt,
     isActive: row.isActive,
     autoReplyEnabled: row.autoReplyEnabled,
@@ -110,6 +121,7 @@ export async function loadAiConfig(
     await db
       .select(agentSelect)
       .from(aiConfigs)
+      .leftJoin(aiCredentials, eq(aiCredentials.id, aiConfigs.credentialId))
       .where(eq(aiConfigs.accountId, accountId))
       .orderBy(desc(aiConfigs.isDefault), asc(aiConfigs.createdAt))
       .limit(1),
@@ -128,6 +140,7 @@ export async function loadAiConfigById(
     await db
       .select(agentSelect)
       .from(aiConfigs)
+      .leftJoin(aiCredentials, eq(aiCredentials.id, aiConfigs.credentialId))
       .where(and(eq(aiConfigs.accountId, accountId), eq(aiConfigs.id, agentId)))
       .limit(1),
   )

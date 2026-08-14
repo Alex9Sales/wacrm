@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { and, asc, desc, eq } from 'drizzle-orm'
-import { db, aiConfigs } from '@/db'
+import { db, aiConfigs, aiCredentials } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import {
   getCurrentAccount,
@@ -41,6 +41,7 @@ export async function GET(request: Request) {
           // stripped out below and never returned to the client.
           provider: aiConfigs.provider,
           model: aiConfigs.model,
+          credential_id: aiConfigs.credentialId,
           system_prompt: aiConfigs.systemPrompt,
           is_active: aiConfigs.isActive,
           auto_reply_enabled: aiConfigs.autoReplyEnabled,
@@ -102,7 +103,39 @@ export async function POST(request: Request) {
     const body = await request.json().catch(() => null)
     if (!body || typeof body !== 'object') return bad('Invalid request body')
 
-    const provider = body.provider as AiProvider
+    // Credencial reutilizável (Fase 2): quando setada, provedor + chave vêm
+    // DELA (não do body). credential_id ausente/vazio/null = caminho legado
+    // (chave avulsa digitada no form). A chave da credencial é copiada pro
+    // agente (api_key) como snapshot: se a credencial for removida depois, o
+    // agente cai no fallback e continua funcionando.
+    const credentialId =
+      typeof body.credential_id === 'string' && body.credential_id.trim()
+        ? body.credential_id.trim()
+        : null
+    let credential: { id: string; provider: string; apiKey: string } | null = null
+    if (credentialId) {
+      credential = firstOrNull(
+        await db
+          .select({
+            id: aiCredentials.id,
+            provider: aiCredentials.provider,
+            apiKey: aiCredentials.apiKey,
+          })
+          .from(aiCredentials)
+          .where(
+            and(
+              eq(aiCredentials.id, credentialId),
+              eq(aiCredentials.accountId, accountId),
+            ),
+          )
+          .limit(1),
+      )
+      if (!credential) return bad('Credencial não encontrada.')
+    }
+
+    const provider = (
+      credential ? credential.provider : body.provider
+    ) as AiProvider
     if (provider !== 'openai' && provider !== 'anthropic') {
       return bad('provider must be "openai" or "anthropic"')
     }
@@ -200,6 +233,10 @@ export async function POST(request: Request) {
     )
     if (requestedAgentId && !existing) return bad('Agente não encontrado.')
 
+    // Caminho LEGADO (chave avulsa): resolve a chave e valida com o provedor.
+    // Caminho CREDENCIAL pula tudo isso — a chave da credencial já foi validada
+    // no cadastro e é reutilizada.
+    if (!credential) {
     let apiKeyPlain: string
     if (rawKey) {
       apiKeyPlain = rawKey
@@ -250,6 +287,7 @@ export async function POST(request: Request) {
         return bad('Could not validate the API key with the provider.')
       }
     }
+    } // fim do caminho legado (!credential)
 
     // Validate a new embeddings key before storing (a cheap 1-input
     // embed), same "verify before save" discipline as the chat key.
@@ -268,11 +306,18 @@ export async function POST(request: Request) {
       }
     }
 
-    const encryptedKey = rawKey ? encrypt(rawKey) : null
+    // Chave a gravar em ai_configs.api_key: caminho credencial usa o blob
+    // (criptografado) da credencial como snapshot; legado usa a chave avulsa.
+    const apiKeyToStore: string | undefined = credential
+      ? credential.apiKey
+      : rawKey
+        ? encrypt(rawKey)
+        : undefined
     const shared: {
       name?: string
       provider: string
       model: string
+      credentialId: string | null
       systemPrompt: string | null
       isActive: boolean
       autoReplyEnabled: boolean
@@ -288,6 +333,8 @@ export async function POST(request: Request) {
     } = {
       provider,
       model,
+      // null quando é chave avulsa (legado) — desvincula de qualquer credencial.
+      credentialId,
       systemPrompt,
       isActive,
       autoReplyEnabled,
@@ -317,7 +364,7 @@ export async function POST(request: Request) {
       if (existing) {
         await db
           .update(aiConfigs)
-          .set(encryptedKey ? { ...shared, apiKey: encryptedKey } : shared)
+          .set(apiKeyToStore ? { ...shared, apiKey: apiKeyToStore } : shared)
           .where(eq(aiConfigs.id, existing.id))
       } else {
         // Primeiro agente da conta → é o default (catch-all/fallback).
@@ -326,8 +373,8 @@ export async function POST(request: Request) {
           createdBy: userId,
           isDefault: true,
           name: agentName || 'Agente principal',
-          // Guaranteed non-null: rawKey required when no existing row.
-          apiKey: encryptedKey!,
+          // Non-null garantido: credencial (snapshot) OU chave avulsa exigida.
+          apiKey: apiKeyToStore!,
           ...shared,
         })
       }
