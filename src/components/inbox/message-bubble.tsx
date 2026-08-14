@@ -470,6 +470,27 @@ function Lightbox({
     setOffset({ x: 0, y: 0 });
   };
 
+  // Copia a imagem pra área de transferência (converte pra PNG num canvas — o
+  // ClipboardItem só aceita png de forma confiável). Fallback: avisa pra baixar.
+  const copyImage = async () => {
+    try {
+      const blob = await fetch(src).then((r) => r.blob());
+      const bitmap = await createImageBitmap(blob);
+      const canvas = document.createElement("canvas");
+      canvas.width = bitmap.width;
+      canvas.height = bitmap.height;
+      canvas.getContext("2d")?.drawImage(bitmap, 0, 0);
+      const png = await new Promise<Blob | null>((res) =>
+        canvas.toBlob(res, "image/png"),
+      );
+      if (!png) throw new Error("no blob");
+      await navigator.clipboard.write([new ClipboardItem({ "image/png": png })]);
+      toast.success("Imagem copiada.");
+    } catch {
+      toast.error('Não consegui copiar. Use "Baixar".');
+    }
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -539,6 +560,9 @@ function Lightbox({
             </button>
             <button type="button" onClick={reset} title="Ajustar à tela" className={LB_BTN}>
               <RotateCcw className="h-5 w-5" />
+            </button>
+            <button type="button" onClick={copyImage} title="Copiar imagem" aria-label="Copiar imagem" className={LB_BTN}>
+              <Copy className="h-5 w-5" />
             </button>
             <a href={src} download title="Baixar" aria-label="Baixar" className={LB_BTN}>
               <Download className="h-5 w-5" />
