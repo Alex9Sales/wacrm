@@ -23,7 +23,7 @@
 import { NextResponse } from "next/server";
 import { eq } from "drizzle-orm";
 
-import { db, user as userTable } from "@/db";
+import { db, user as userTable, organizationBilling } from "@/db";
 import { firstOrNull } from "@/db/helpers";
 import { getSessionUserId } from "@/lib/auth/session";
 import {
@@ -31,6 +31,7 @@ import {
   UnauthorizedError,
   ForbiddenError,
   AccountSuspendedError,
+  TrialExpiredError,
 } from "@/lib/auth/account";
 import { isPlatformAdmin } from "@/lib/auth/platform";
 
@@ -68,6 +69,10 @@ export async function GET() {
   // Phase 8: true when the active org's billing is 'suspended'. The
   // dashboard uses this to render a friendly full-page suspended screen.
   let suspended = false;
+  // Fase 2 (trial): expired → tela "teste acabou"; active → banner de dias.
+  let trialExpired = false;
+  let trialActive = false;
+  let trialEndsAt: string | null = null;
 
   try {
     const ctx = await getCurrentAccount();
@@ -78,11 +83,30 @@ export async function GET() {
       name: ctx.account.name,
       default_currency: ctx.defaultCurrency ?? "USD",
     };
+    // Trial em andamento (não expirado — o gate já teria barrado): expõe o fim
+    // pra o banner de "faltam X dias".
+    const billing = firstOrNull(
+      await db
+        .select({
+          status: organizationBilling.status,
+          dueAt: organizationBilling.dueAt,
+        })
+        .from(organizationBilling)
+        .where(eq(organizationBilling.organizationId, ctx.accountId))
+        .limit(1),
+    );
+    if (billing?.status === "trial") {
+      trialActive = true;
+      trialEndsAt = billing.dueAt ?? null;
+    }
   } catch (err) {
     if (err instanceof AccountSuspendedError) {
       // Authenticated but the org is suspended — flag it so the client
       // shows the "conta suspensa" screen. Account fields stay null.
       suspended = true;
+    } else if (err instanceof TrialExpiredError) {
+      // Trial acabou — flag pra tela "teste acabou" + checkout.
+      trialExpired = true;
     } else if (
       !(err instanceof ForbiddenError || err instanceof UnauthorizedError)
     ) {
@@ -104,6 +128,10 @@ export async function GET() {
     is_platform_admin: isPlatformAdmin(userRow.email),
     // Phase 8 suspension: drives the dashboard's suspended screen.
     suspended,
+    // Fase 2 trial: banner de dias (active) e tela de bloqueio (expired).
+    trial_active: trialActive,
+    trial_ends_at: trialEndsAt,
+    trial_expired: trialExpired,
   };
 
   return NextResponse.json({ profile, account });

@@ -48,6 +48,11 @@ interface Profile {
   /** Phase 8: true when the active org's billing is 'suspended'. The
    *  dashboard renders a "conta suspensa" screen when this is set. */
   suspended: boolean;
+  /** Fase 2: trial em andamento (não expirado) + quando termina. */
+  trial_active: boolean;
+  trial_ends_at: string | null;
+  /** Fase 2: trial expirado — bloqueia o app. */
+  trial_expired: boolean;
 }
 
 interface AccountSummary {
@@ -129,6 +134,11 @@ interface AuthContextValue {
   /** Phase 8: active org's billing is 'suspended'. Drives the
    *  dashboard's full-page suspended screen. */
   suspended: boolean;
+  /** Fase 2: trial ativo + quando termina (banner de dias). */
+  trialActive: boolean;
+  trialEndsAt: string | null;
+  /** Fase 2: trial expirado — tela de bloqueio + checkout. */
+  trialExpired: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -176,6 +186,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           account_role: string | null;
           is_platform_admin?: boolean;
           suspended?: boolean;
+          trial_active?: boolean;
+          trial_ends_at?: string | null;
+          trial_expired?: boolean;
         } | null;
         account: AccountSummary | null;
       };
@@ -203,6 +216,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         account_role: accountRole,
         is_platform_admin: body.profile.is_platform_admin ?? false,
         suspended: body.profile.suspended ?? false,
+        trial_active: body.profile.trial_active ?? false,
+        trial_ends_at: body.profile.trial_ends_at ?? null,
+        trial_expired: body.profile.trial_expired ?? false,
       });
       setAccount(
         body.account
@@ -286,6 +302,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         defaultCurrency: account?.default_currency ?? DEFAULT_CURRENCY,
         isPlatformAdmin: profile?.is_platform_admin ?? false,
         suspended: profile?.suspended ?? false,
+        trialActive: profile?.trial_active ?? false,
+        trialEndsAt: profile?.trial_ends_at ?? null,
+        trialExpired: profile?.trial_expired ?? false,
         ...derived,
       }}
     >
@@ -331,6 +350,9 @@ export function useAuth(): AuthContextValue {
       canSeeAllConversations: false,
       isPlatformAdmin: false,
       suspended: false,
+      trialActive: false,
+      trialEndsAt: null,
+      trialExpired: false,
     };
   }
   return ctx;

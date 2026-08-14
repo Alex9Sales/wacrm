@@ -21,7 +21,7 @@ export const metadata: Metadata = {
   robots: { index: true, follow: true },
 }
 
-const TRIAL_HREF = '/signup'
+const TRIAL_HREF = '/comecar'
 
 const FEATURES = [
   {

@@ -63,6 +63,20 @@ export class AccountSuspendedError extends Error {
 }
 
 /**
+ * The active organization is on a TRIAL whose end date (billing `dueAt`) has
+ * passed. Like suspension, this short-circuits every org-scoped request from
+ * `getCurrentAccount` so the dashboard can show a "teste acabou" screen and
+ * (Fase 3) the checkout. Cleared when billing flips to 'active'.
+ */
+export class TrialExpiredError extends Error {
+  readonly status = 402 as const;
+  constructor(message = "Seu teste grátis terminou. Assine para continuar.") {
+    super(message);
+    this.name = "TrialExpiredError";
+  }
+}
+
+/**
  * Convert one of the typed errors above (or anything else) into a
  * `NextResponse`. Unknown errors collapse to 500 with the generic
  * message — we never leak `err.message` for non-classified errors.
@@ -71,7 +85,8 @@ export function toErrorResponse(err: unknown): NextResponse {
   if (
     err instanceof UnauthorizedError ||
     err instanceof ForbiddenError ||
-    err instanceof AccountSuspendedError
+    err instanceof AccountSuspendedError ||
+    err instanceof TrialExpiredError
   ) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
@@ -189,13 +204,25 @@ export async function getCurrentAccount(): Promise<AccountContext> {
   // No billing row → treat as active (legacy orgs predate the satellite).
   const billing = firstOrNull(
     await db
-      .select({ status: organizationBilling.status })
+      .select({
+        status: organizationBilling.status,
+        dueAt: organizationBilling.dueAt,
+      })
       .from(organizationBilling)
       .where(eq(organizationBilling.organizationId, account.id))
       .limit(1),
   );
   if (billing?.status === "suspended") {
     throw new AccountSuspendedError();
+  }
+  // Fase 2: trial cujo fim (dueAt) já passou → bloqueia como suspensão, mas com
+  // a tela "teste acabou" + checkout. Sem billing / active → não afeta.
+  if (
+    billing?.status === "trial" &&
+    billing.dueAt &&
+    new Date(billing.dueAt).getTime() < Date.now()
+  ) {
+    throw new TrialExpiredError();
   }
 
   return {
