@@ -1342,6 +1342,32 @@ export const supportTickets = pgTable("support_tickets", {
 		}).onDelete("set null"),
 ]);
 
+// Chaves de API reutilizáveis (migração 0084) — cada agente aponta pra uma
+// credencial (Fase 2) em vez de ter a chave embutida. api_key criptografada.
+export const aiCredentials = pgTable("ai_credentials", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	createdBy: uuid("created_by"),
+	provider: text().notNull(),
+	label: text().notNull(),
+	apiKey: text("api_key").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("ai_credentials_account_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsLast()),
+	check("ai_credentials_provider_check", sql`provider = ANY (ARRAY['openai'::text,'anthropic'::text,'gemini'::text])`),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "ai_credentials_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.createdBy],
+			foreignColumns: [user.id],
+			name: "ai_credentials_created_by_fkey"
+		}).onDelete("set null"),
+]);
+
 export const aiConfigs = pgTable("ai_configs", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	accountId: uuid("account_id").notNull(),

@@ -16,6 +16,7 @@ import {
   BookOpen,
   ArrowLeft,
   BarChart3,
+  KeyRound,
 } from 'lucide-react';
 import { Tabs, TabsList, TabsTrigger, TabsContent } from '@/components/ui/tabs';
 import { Button } from '@/components/ui/button';
@@ -29,6 +30,7 @@ import { AgentsPanel } from '@/components/agents/agents-panel';
 import { UsageDashboard } from '@/components/agents/usage-dashboard';
 import { DealProactiveCard } from '@/components/agents/deal-proactive-card';
 import { FollowUpSection } from '@/components/agents/followup-section';
+import { CredentialsManager } from '@/components/agents/credentials-manager';
 
 type View =
   | { kind: 'panel' }
@@ -36,6 +38,7 @@ type View =
   | { kind: 'new-first' }
   | { kind: 'knowledge' }
   | { kind: 'voice' }
+  | { kind: 'credentials' }
   | { kind: 'usage' };
 
 export default function AgentsPage() {
@@ -69,6 +72,15 @@ export default function AgentsPage() {
                 onClick={() => setView({ kind: 'usage' })}
               >
                 <BarChart3 className="mr-1.5 h-4 w-4" /> Uso de LLM
+              </Button>
+            )}
+            {canEdit && (
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setView({ kind: 'credentials' })}
+              >
+                <KeyRound className="mr-1.5 h-4 w-4" /> Chaves de API
               </Button>
             )}
             <Button
@@ -134,6 +146,8 @@ export default function AgentsPage() {
         )}
 
         {view.kind === 'usage' && <UsageDashboard />}
+
+        {view.kind === 'credentials' && <CredentialsManager canEdit={canEdit} />}
 
         {view.kind === 'knowledge' && <KnowledgeTab />}
 
