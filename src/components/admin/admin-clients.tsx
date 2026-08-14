@@ -26,6 +26,8 @@ import {
   Radio,
   AlertTriangle,
   ShieldCheck,
+  Search,
+  X,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -50,6 +52,7 @@ import {
   formatDate,
   formatDateTime,
   isOverdue,
+  trialCountdown,
   STATUS_LABEL,
 } from "./admin-format";
 import { EditBillingDialog } from "./edit-billing-dialog";
@@ -82,31 +85,46 @@ function StatusBadge({ status }: { status: ClientListRow["status"] }) {
   );
 }
 
+/** Which slice of clients the table shows. Cards toggle this. */
+type StatusFilter = "all" | "active" | "trial" | "suspended" | "overdue";
+
 function OverviewCard({
   label,
   value,
   tone,
+  active,
+  onClick,
 }: {
   label: string;
   value: number;
   tone?: "default" | "danger";
+  active?: boolean;
+  onClick?: () => void;
 }) {
   return (
-    <Card size="sm">
-      <CardContent>
-        <p className="text-xs font-medium text-muted-foreground">{label}</p>
-        <p
-          className={cn(
-            "mt-1 text-2xl font-semibold tabular-nums",
-            tone === "danger" && value > 0
-              ? "text-destructive"
-              : "text-foreground",
-          )}
-        >
-          {value}
-        </p>
-      </CardContent>
-    </Card>
+    <button type="button" onClick={onClick} className="w-full text-left">
+      <Card
+        size="sm"
+        className={cn(
+          "transition-colors hover:border-primary/50",
+          active && "border-primary ring-1 ring-primary/40",
+        )}
+      >
+        <CardContent>
+          <p className="text-xs font-medium text-muted-foreground">{label}</p>
+          <p
+            className={cn(
+              "mt-1 text-2xl font-semibold tabular-nums",
+              tone === "danger" && value > 0
+                ? "text-destructive"
+                : "text-foreground",
+            )}
+          >
+            {value}
+          </p>
+        </CardContent>
+      </Card>
+    </button>
   );
 }
 
@@ -121,6 +139,9 @@ export function AdminClients() {
   const [busyId, setBusyId] = useState<string | null>(null);
   // "Meus" vs "Todos": both admins see everything; this just focuses the list.
   const [onlyMine, setOnlyMine] = useState(false);
+  // Status slice (driven by the overview cards) + free-text search.
+  const [statusFilter, setStatusFilter] = useState<StatusFilter>("all");
+  const [query, setQuery] = useState("");
 
   const [provisionOpen, setProvisionOpen] = useState(false);
   const [editClient, setEditClient] = useState<ClientListRow | null>(null);
@@ -205,10 +226,38 @@ export function AdminClients() {
   const mineCount = myId
     ? clients.filter((c) => c.responsible?.id === myId).length
     : 0;
-  const visibleClients =
-    onlyMine && myId
-      ? clients.filter((c) => c.responsible?.id === myId)
-      : clients;
+
+  // Toggle a status card: clicking the active one (or "Total") clears back to all.
+  function pickStatus(next: StatusFilter) {
+    setStatusFilter((prev) => (prev === next ? "all" : next));
+  }
+
+  const q = query.trim().toLowerCase();
+  const visibleClients = clients.filter((c) => {
+    if (onlyMine && (!myId || c.responsible?.id !== myId)) return false;
+    if (statusFilter === "overdue" && !isOverdue(c.dueAt, c.status)) return false;
+    if (
+      (statusFilter === "active" ||
+        statusFilter === "trial" ||
+        statusFilter === "suspended") &&
+      c.status !== statusFilter
+    )
+      return false;
+    if (q) {
+      const hay = [
+        c.name,
+        c.owner?.email,
+        c.responsible?.name,
+        c.responsible?.email,
+        c.plan,
+      ]
+        .filter(Boolean)
+        .join(" ")
+        .toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
 
   return (
     <div className="space-y-6">
@@ -261,12 +310,61 @@ export function AdminClients() {
         </div>
       </div>
 
-      {/* Overview cards */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
-        <OverviewCard label="Total de clientes" value={overview.total} />
-        <OverviewCard label="Ativos" value={overview.active} />
-        <OverviewCard label="Suspensos" value={overview.suspended} />
-        <OverviewCard label="Vencidos" value={overview.overdue} tone="danger" />
+      {/* Overview cards — click to filter the table by status. */}
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+        <OverviewCard
+          label="Total de clientes"
+          value={overview.total}
+          active={statusFilter === "all"}
+          onClick={() => setStatusFilter("all")}
+        />
+        <OverviewCard
+          label="Ativos"
+          value={overview.active}
+          active={statusFilter === "active"}
+          onClick={() => pickStatus("active")}
+        />
+        <OverviewCard
+          label="Testes"
+          value={overview.trial}
+          active={statusFilter === "trial"}
+          onClick={() => pickStatus("trial")}
+        />
+        <OverviewCard
+          label="Suspensos"
+          value={overview.suspended}
+          active={statusFilter === "suspended"}
+          onClick={() => pickStatus("suspended")}
+        />
+        <OverviewCard
+          label="Vencidos"
+          value={overview.overdue}
+          tone="danger"
+          active={statusFilter === "overdue"}
+          onClick={() => pickStatus("overdue")}
+        />
+      </div>
+
+      {/* Search */}
+      <div className="relative max-w-sm">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-muted-foreground" />
+        <input
+          type="search"
+          value={query}
+          onChange={(e) => setQuery(e.target.value)}
+          placeholder="Buscar por nome, e-mail ou plano…"
+          className="w-full rounded-lg border border-border bg-background py-2 pl-9 pr-9 text-sm text-foreground placeholder:text-muted-foreground focus:border-primary focus:outline-none"
+        />
+        {query ? (
+          <button
+            type="button"
+            onClick={() => setQuery("")}
+            className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-muted-foreground hover:text-foreground"
+            title="Limpar busca"
+          >
+            <X className="size-4" />
+          </button>
+        ) : null}
       </div>
 
       {/* Table */}
@@ -281,7 +379,9 @@ export function AdminClients() {
             <div className="py-16 text-center text-sm text-muted-foreground">
               {clients.length === 0
                 ? "Nenhum cliente ainda. Use “Provisionar cliente”."
-                : "Você ainda não é responsável por nenhum cliente. Veja em “Todos”."}
+                : q || statusFilter !== "all" || onlyMine
+                  ? "Nenhum cliente com esses filtros."
+                  : "Nenhum cliente para mostrar."}
             </div>
           ) : (
             <Table>
@@ -359,6 +459,16 @@ export function AdminClients() {
                           ) : null}
                           {formatDate(c.dueAt)}
                         </span>
+                        {c.status === "trial" && trialCountdown(c.dueAt) ? (
+                          <span
+                            className={cn(
+                              "block text-[10px]",
+                              overdue ? "text-destructive" : "text-sky-400",
+                            )}
+                          >
+                            {trialCountdown(c.dueAt)}
+                          </span>
+                        ) : null}
                       </TableCell>
                       <TableCell className="text-center text-muted-foreground">
                         <span className="inline-flex items-center gap-1">

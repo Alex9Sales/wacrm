@@ -24,8 +24,12 @@ import {
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import type { ClientListRow, PlatformAdminUser } from "./admin-types";
-import { toDateInput } from "./admin-format";
+import type {
+  ClientBillingStatus,
+  ClientListRow,
+  PlatformAdminUser,
+} from "./admin-types";
+import { toDateInput, STATUS_LABEL } from "./admin-format";
 
 interface EditBillingDialogProps {
   client: ClientListRow | null;
@@ -42,6 +46,7 @@ export function EditBillingDialog({
   onOpenChange,
   onSaved,
 }: EditBillingDialogProps) {
+  const [status, setStatus] = useState<ClientBillingStatus>("active");
   const [startedAt, setStartedAt] = useState("");
   const [dueAt, setDueAt] = useState("");
   const [plan, setPlan] = useState("");
@@ -55,6 +60,7 @@ export function EditBillingDialog({
 
   // Hydrate the form when the dialog opens for a client.
   if (open && client && hydratedId !== client.id) {
+    setStatus(client.status);
     setStartedAt(toDateInput(client.startedAt));
     setDueAt(toDateInput(client.dueAt));
     setPlan(client.plan ?? "");
@@ -72,6 +78,7 @@ export function EditBillingDialog({
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
+          status,
           started_at: startedAt ? startedAt : null,
           due_at: dueAt ? dueAt : null,
           plan: plan.trim() || null,
@@ -114,6 +121,27 @@ export function EditBillingDialog({
         </DialogHeader>
 
         <div className="space-y-4 py-2">
+          <div className="space-y-2">
+            <Label className="text-muted-foreground">Status</Label>
+            <select
+              value={status}
+              onChange={(e) =>
+                setStatus(e.target.value as ClientBillingStatus)
+              }
+              className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+            >
+              {(["active", "trial", "suspended"] as const).map((s) => (
+                <option key={s} value={s}>
+                  {STATUS_LABEL[s]}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Converta um teste em <strong>Ativo</strong> (defina plano e
+              vencimento) ou suspenda o acesso.
+            </p>
+          </div>
+
           <div className="grid grid-cols-2 gap-3">
             <div className="space-y-2">
               <Label className="text-muted-foreground">Entrada</Label>
