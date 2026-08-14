@@ -60,28 +60,44 @@ const PLANS = [
   {
     name: 'Essencial',
     price: '497',
-    tagline: 'Para começar a organizar o atendimento',
+    tagline: 'O atendimento e o funil organizados',
     highlighted: false,
+    lead: null as string | null,
+    features: [
+      'Caixa de entrada compartilhada (vários atendentes)',
+      'Funil de vendas (CRM), contatos e empresas',
+      'Agenda com Google Calendar',
+      'Disparos, campanhas e automações',
+      'Relatórios comerciais',
+    ],
   },
   {
     name: 'Pro',
     price: '799',
-    tagline: 'Mais vendas, menos trabalho — com IA',
+    tagline: 'Vendas no automático, com Inteligência Artificial',
     highlighted: true,
+    lead: 'Tudo do Essencial, e mais:',
+    features: [
+      'Agentes de IA que atendem e qualificam sozinhos',
+      'Base de Conhecimento (a IA responde com os seus dados)',
+      'Follow-up inteligente (reengaja quem some)',
+      'IA para Negócios: sugestões no funil',
+      'IA proativa acompanhando cada negociação',
+    ],
   },
   {
     name: 'Enterprise',
     price: '1.999',
-    tagline: 'Operação em escala, com prioridade',
+    tagline: 'Voz, ligação e escala com prioridade',
     highlighted: false,
+    lead: 'Tudo do Pro, e mais:',
+    features: [
+      'Ligação pelo WhatsApp',
+      'Agente de voz: atende e liga por você (em breve)',
+      'Prioridade no suporte e na implantação',
+      'Limites ampliados de atendentes, canais e agentes',
+    ],
   },
-]
-
-const PLAN_INCLUDES = [
-  'Vários atendentes num só WhatsApp',
-  'IA que responde e qualifica sozinha',
-  'Funil de vendas + agendamentos',
-  'Disparos, campanhas e relatórios',
 ]
 
 export default async function RootPage() {
@@ -201,8 +217,13 @@ export default async function RootPage() {
                 <span className="font-heading text-4xl font-bold">{p.price}</span>
                 <span className="text-sm text-muted-foreground">/mês</span>
               </div>
-              <ul className="mt-5 space-y-2.5">
-                {PLAN_INCLUDES.map((inc) => (
+              {p.lead && (
+                <p className="mt-5 text-xs font-medium text-muted-foreground">
+                  {p.lead}
+                </p>
+              )}
+              <ul className={`${p.lead ? 'mt-2' : 'mt-5'} space-y-2.5`}>
+                {p.features.map((inc) => (
                   <li key={inc} className="flex items-start gap-2 text-sm">
                     <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
                     <span className="text-foreground">{inc}</span>
