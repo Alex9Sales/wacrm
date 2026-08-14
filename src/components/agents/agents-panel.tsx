@@ -127,7 +127,35 @@ export function AgentsPanel({
 
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
-      {agents.map((a) => (
+      {agents.map((a) => {
+        // Estado REAL para o cliente, honesto sobre o que a IA faz:
+        // - desligado (cinza): assistente desligado.
+        // - responde sozinho (verde): responde os clientes automaticamente.
+        // - não responde sozinho (âmbar): ligado só para rascunhar respostas na
+        //   caixa de entrada — NÃO responde ninguém sozinho. (Antes o card dizia
+        //   só "ativo" aqui e parecia que o bot estava atendendo.)
+        const status = !a.isActive
+          ? {
+              label: 'desligado',
+              dot: 'bg-muted-foreground/50',
+              text: 'text-muted-foreground',
+              title: 'A IA está desligada para este agente.',
+            }
+          : a.autoReplyEnabled
+            ? {
+                label: 'responde sozinho',
+                dot: 'bg-emerald-500',
+                text: 'text-emerald-600 dark:text-emerald-400',
+                title: 'A IA responde os clientes automaticamente.',
+              }
+            : {
+                label: 'não responde sozinho',
+                dot: 'bg-amber-500',
+                text: 'text-amber-600 dark:text-amber-400',
+                title:
+                  'A IA está ligada só para rascunhar respostas na caixa de entrada — ela NÃO responde os clientes sozinha. Ligue “Responder automaticamente” na configuração para ela atender sozinha.',
+              };
+        return (
         <button
           key={a.id}
           type="button"
@@ -150,13 +178,11 @@ export function AgentsPanel({
                 )}
               </div>
               <span
-                className={`flex items-center gap-1 text-xs ${a.isActive ? 'text-emerald-600 dark:text-emerald-400' : 'text-muted-foreground'}`}
+                title={status.title}
+                className={`flex items-center gap-1 text-xs ${status.text}`}
               >
-                <span
-                  className={`h-1.5 w-1.5 rounded-full ${a.isActive ? 'bg-emerald-500' : 'bg-muted-foreground/50'}`}
-                />
-                {a.isActive ? 'ativo' : 'pausado'}
-                {a.isActive && a.autoReplyEnabled ? ' · responde sozinho' : ''}
+                <span className={`h-1.5 w-1.5 rounded-full ${status.dot}`} />
+                {status.label}
               </span>
             </div>
             <ChevronRight className="h-4 w-4 shrink-0 text-muted-foreground transition-transform group-hover:translate-x-0.5" />
@@ -203,7 +229,8 @@ export function AgentsPanel({
             </span>
           </div>
         </button>
-      ))}
+        );
+      })}
 
       {canEdit && (
         <button
