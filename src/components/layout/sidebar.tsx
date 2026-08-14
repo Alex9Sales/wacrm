@@ -244,7 +244,7 @@ export function Sidebar({ open = false, onClose }: SidebarProps) {
             close button is hidden since the sidebar is always-visible. */}
         <div
           className={cn(
-            "flex h-14 shrink-0 items-center gap-2 border-b border-border px-4",
+            "flex h-12 shrink-0 items-center gap-2 border-b border-border px-4",
             collapsed ? "lg:justify-center lg:px-0" : "justify-between",
           )}
         >

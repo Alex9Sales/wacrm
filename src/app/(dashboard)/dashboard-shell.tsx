@@ -112,7 +112,9 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
         </div>
         <div className="flex items-center gap-2">
           <a
-            href="https://wa.me/"
+            href="https://wa.me/556791806048?text=Quero%20assinar%20o%20FluxiaCRM"
+            target="_blank"
+            rel="noopener noreferrer"
             className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
           >
             Assinar / falar com a Fluxia
