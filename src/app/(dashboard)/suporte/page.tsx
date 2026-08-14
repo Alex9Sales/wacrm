@@ -14,7 +14,7 @@ import { toast } from "sonner";
 import {
   LifeBuoy,
   Loader2,
-  Paperclip,
+  ImagePlus,
   Send,
   X,
   HelpCircle,
@@ -92,6 +92,7 @@ export default function SuportePage() {
   const [description, setDescription] = useState("");
   const [shots, setShots] = useState<Shot[]>([]);
   const [uploading, setUploading] = useState(0);
+  const [dragActive, setDragActive] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const [tickets, setTickets] = useState<SupportTicketDTO[]>([]);
@@ -310,29 +311,65 @@ export default function SuportePage() {
             />
           </div>
 
-          {/* Prints */}
+          {/* Prints — área grande: arrastar, colar ou clicar. */}
           <div className="space-y-2">
             <Label className="text-muted-foreground">Prints do erro</Label>
+            <input
+              ref={fileInputRef}
+              type="file"
+              accept="image/*"
+              multiple
+              className="hidden"
+              onChange={(e) => {
+                void addFiles(Array.from(e.target.files ?? []));
+                e.target.value = "";
+              }}
+            />
             <div
-              onDragOver={(e) => e.preventDefault()}
+              role="button"
+              tabIndex={0}
+              onClick={() => fileInputRef.current?.click()}
+              onKeyDown={(e) => {
+                if (e.key === "Enter" || e.key === " ") {
+                  e.preventDefault();
+                  fileInputRef.current?.click();
+                }
+              }}
+              onDragEnter={(e) => {
+                e.preventDefault();
+                setDragActive(true);
+              }}
+              onDragOver={(e) => {
+                e.preventDefault();
+                setDragActive(true);
+              }}
+              onDragLeave={(e) => {
+                // Só desliga quando sai de fato do container (não dos filhos).
+                if (e.currentTarget.contains(e.relatedTarget as Node)) return;
+                setDragActive(false);
+              }}
               onDrop={(e) => {
                 e.preventDefault();
+                setDragActive(false);
                 void addFiles(Array.from(e.dataTransfer.files));
               }}
-              className="rounded-lg border border-dashed border-border p-4"
+              className={cn(
+                "flex min-h-32 cursor-pointer flex-col items-center justify-center gap-2 rounded-xl border-2 border-dashed p-5 text-center transition-colors",
+                dragActive
+                  ? "border-primary bg-primary/10"
+                  : "border-border hover:border-primary/50 hover:bg-muted/40",
+              )}
             >
-              {shots.length === 0 && uploading === 0 ? (
-                <p className="text-center text-xs text-muted-foreground">
-                  Cole aqui com <kbd className="rounded bg-muted px-1">⌘/Ctrl</kbd>
-                  +<kbd className="rounded bg-muted px-1">V</kbd>, arraste a imagem
-                  ou clique em “Anexar print”.
-                </p>
-              ) : (
-                <div className="flex flex-wrap gap-2">
+              {shots.length > 0 || uploading > 0 ? (
+                <div
+                  className="flex flex-wrap justify-center gap-2"
+                  // Clicar num print (ou no X) não deve reabrir o seletor.
+                  onClick={(e) => e.stopPropagation()}
+                >
                   {shots.map((s) => (
                     <div
                       key={s.id}
-                      className="group relative size-20 overflow-hidden rounded-lg border border-border"
+                      className="group relative size-24 overflow-hidden rounded-lg border border-border"
                     >
                       {/* eslint-disable-next-line @next/next/no-img-element */}
                       <img
@@ -343,7 +380,7 @@ export default function SuportePage() {
                       <button
                         type="button"
                         onClick={() => removeShot(s.id)}
-                        className="absolute right-1 top-1 rounded-full bg-black/60 p-0.5 text-white opacity-0 transition-opacity group-hover:opacity-100"
+                        className="absolute right-1 top-1 rounded-full bg-black/60 p-1 text-white opacity-0 transition-opacity group-hover:opacity-100"
                         title="Remover"
                       >
                         <X className="size-3.5" />
@@ -351,34 +388,32 @@ export default function SuportePage() {
                     </div>
                   ))}
                   {uploading > 0 ? (
-                    <div className="flex size-20 items-center justify-center rounded-lg border border-border text-muted-foreground">
+                    <div className="flex size-24 items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground">
                       <Loader2 className="size-5 animate-spin" />
                     </div>
                   ) : null}
+                  <div className="flex size-24 flex-col items-center justify-center gap-1 rounded-lg border border-dashed border-border text-muted-foreground">
+                    <ImagePlus className="size-5" />
+                    <span className="text-[10px]">Adicionar</span>
+                  </div>
                 </div>
+              ) : (
+                <>
+                  <div className="flex size-11 items-center justify-center rounded-full bg-primary/10 text-primary">
+                    <ImagePlus className="size-5" />
+                  </div>
+                  <p className="text-sm font-medium text-foreground">
+                    {dragActive
+                      ? "Solte o print aqui"
+                      : "Arraste o print aqui ou clique para escolher"}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Também dá pra colar com{" "}
+                    <kbd className="rounded bg-muted px-1">⌘/Ctrl</kbd>+
+                    <kbd className="rounded bg-muted px-1">V</kbd>
+                  </p>
+                </>
               )}
-            </div>
-            <div>
-              <input
-                ref={fileInputRef}
-                type="file"
-                accept="image/*"
-                multiple
-                className="hidden"
-                onChange={(e) => {
-                  void addFiles(Array.from(e.target.files ?? []));
-                  e.target.value = "";
-                }}
-              />
-              <Button
-                type="button"
-                variant="outline"
-                size="sm"
-                onClick={() => fileInputRef.current?.click()}
-              >
-                <Paperclip className="size-4" />
-                Anexar print
-              </Button>
             </div>
           </div>
 
