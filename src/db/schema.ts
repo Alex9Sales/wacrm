@@ -433,6 +433,9 @@ export const conversations = pgTable("conversations", {
 	csatCommentPending: uuid("csat_comment_pending"),
 	lastMessageText: text("last_message_text"),
 	lastMessageAt: timestamp("last_message_at", { withTimezone: true, mode: 'string' }),
+	// Follow-up inteligente (migr 0080): quando o último follow-up automático saiu.
+	// Garante 1 por silêncio — só volta a disparar após o cliente responder.
+	lastFollowUpAt: timestamp("last_follow_up_at", { withTimezone: true, mode: 'string' }),
 	unreadCount: integer("unread_count").default(0),
 	aiAutoreplyDisabled: boolean("ai_autoreply_disabled").default(false).notNull(),
 	aiReplyCount: integer("ai_reply_count").default(0).notNull(),
@@ -1313,6 +1316,8 @@ export const aiConfigs = pgTable("ai_configs", {
 	autoReplyChannelIds: uuid("auto_reply_channel_ids").array().default(sql`'{}'::uuid[]`).notNull(),
 	// Bases de conhecimento que ESTE agente usa (Fase K). Vazio = todas as bases da conta.
 	knowledgeBaseIds: uuid("knowledge_base_ids").array().default(sql`'{}'::uuid[]`).notNull(),
+	// Follow-up inteligente (jsonb): { enabled, delayMinutes, instructions, armedAt }. Migração 0080.
+	followUp: jsonb("follow_up").default({}).notNull(),
 	autoReplyMaxPerConversation: integer("auto_reply_max_per_conversation").default(3).notNull(),
 	// Horário de atendimento da IA: always | inside | outside (reusa o horário
 	// da conta). Migração 0058.

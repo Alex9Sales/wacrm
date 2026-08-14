@@ -56,6 +56,13 @@ import('./flow-scheduler-worker')
     console.error('[worker] flow-scheduler failed to start:', err);
   });
 
+// Follow-up inteligente — tick de 5 min que reengaja conversas paradas.
+import('./followup-worker')
+  .then((m) => m.startFollowupWorker())
+  .catch((err) => {
+    console.error('[worker] followup failed to start:', err);
+  });
+
 // AI auto-reply — the message buffer: fires the debounced reply once the
 // customer stops sending (see enqueueAiReplyDebounced in the webhook).
 import('./ai-reply-worker')

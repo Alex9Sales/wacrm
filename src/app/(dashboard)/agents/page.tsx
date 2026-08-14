@@ -28,6 +28,7 @@ import { VoiceAgentsTab } from '@/components/agents/voice-agents-tab';
 import { AgentsPanel } from '@/components/agents/agents-panel';
 import { UsageDashboard } from '@/components/agents/usage-dashboard';
 import { DealProactiveCard } from '@/components/agents/deal-proactive-card';
+import { FollowUpSection } from '@/components/agents/followup-section';
 
 type View =
   | { kind: 'panel' }
@@ -122,8 +123,9 @@ export default function AgentsPage() {
                 <Sparkles className="mr-1.5 h-4 w-4" /> Playground
               </TabsTrigger>
             </TabsList>
-            <TabsContent value="setup" className="mt-4">
+            <TabsContent value="setup" className="mt-4 space-y-4">
               <AiConfig key={view.id} agentId={view.id} />
+              <FollowUpSection agentId={view.id} />
             </TabsContent>
             <TabsContent value="playground" className="mt-4">
               <AiPlayground agentId={view.id} />
