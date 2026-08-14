@@ -14,11 +14,11 @@ export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
 
 // ============================================================
-// Follow-up inteligente — config POR AGENTE (ai_configs.follow_up). Separado do
-// POST grande da config pra não resetar nada. Ao LIGAR, "arma" (armedAt=agora)
-// para não disparar no histórico.
+// Follow-up inteligente (ESCADA) — config POR AGENTE (ai_configs.follow_up).
+// Separado do POST grande da config pra não resetar nada. Ao LIGAR, "arma"
+// (armedAt=agora) para não disparar no histórico.
 //   GET  /api/ai/followup?agent=<id>
-//   PATCH /api/ai/followup  { agent, enabled, delayMinutes, instructions }  (admin+)
+//   PATCH /api/ai/followup  { agent, enabled, steps: [{delayValue,delayUnit,instructions}] }  (admin+)
 // ============================================================
 
 async function loadAgentFollowUp(accountId: string, agentId: string) {
@@ -66,8 +66,7 @@ export async function PATCH(request: Request) {
 
     const next = readFollowUpConfig({
       enabled,
-      delayMinutes: body?.delayMinutes,
-      instructions: body?.instructions,
+      steps: Array.isArray(body?.steps) ? body.steps : undefined,
       armedAt,
     })
 

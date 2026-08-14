@@ -436,6 +436,8 @@ export const conversations = pgTable("conversations", {
 	// Follow-up inteligente (migr 0080): quando o último follow-up automático saiu.
 	// Garante 1 por silêncio — só volta a disparar após o cliente responder.
 	lastFollowUpAt: timestamp("last_follow_up_at", { withTimezone: true, mode: 'string' }),
+	// Escada (v2, migr 0081): degrau atual do episódio (nº de follow-ups já enviados).
+	followUpStep: integer("follow_up_step").default(0).notNull(),
 	unreadCount: integer("unread_count").default(0),
 	aiAutoreplyDisabled: boolean("ai_autoreply_disabled").default(false).notNull(),
 	aiReplyCount: integer("ai_reply_count").default(0).notNull(),

@@ -1,15 +1,15 @@
 'use client';
 
 // ============================================================
-// Follow-up inteligente — seção na config do agente. Quando o cliente fica um
-// tempo sem responder, a IA manda UMA mensagem de reengajamento (gerada com o
-// contexto da conversa). Desligado por padrão; ao ligar, "arma" e só vale pra
-// conversas novas. Backend: /api/ai/followup. Motor: worker (tick 5 min).
+// Follow-up inteligente em ESCADA (v2) — seção na config do agente. Quando o
+// cliente fica sem responder, a IA manda uma sequência de toques (degraus) com
+// cadência crescente, cada um com sua orientação. Desligado por padrão; ao ligar
+// "arma" (só conversas novas). Backend: /api/ai/followup. Motor: worker (5 min).
 // ============================================================
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Clock3, Loader2 } from 'lucide-react';
+import { Clock3, Loader2, Plus, Trash2 } from 'lucide-react';
 import { Switch } from '@/components/ui/switch';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
@@ -19,27 +19,23 @@ import { useAuth } from '@/hooks/use-auth';
 import { canEditSettings } from '@/lib/auth/roles';
 
 type Unit = 'minutes' | 'hours' | 'days';
+interface Step {
+  delayValue: number;
+  delayUnit: Unit;
+  instructions: string;
+}
 
-function toDisplay(minutes: number): { value: number; unit: Unit } {
-  if (minutes % 1440 === 0) return { value: minutes / 1440, unit: 'days' };
-  if (minutes % 60 === 0) return { value: minutes / 60, unit: 'hours' };
-  return { value: minutes, unit: 'minutes' };
-}
-function toMinutes(value: number, unit: Unit): number {
-  const v = Math.max(1, Math.round(value || 0));
-  if (unit === 'days') return v * 1440;
-  if (unit === 'hours') return v * 60;
-  return v;
-}
+const MAX_STEPS = 5;
+const NEW_STEP: Step = { delayValue: 1, delayUnit: 'days', instructions: '' };
 
 export function FollowUpSection({ agentId }: { agentId: string }) {
   const { accountRole } = useAuth();
   const canEdit = accountRole ? canEditSettings(accountRole) : false;
 
   const [enabled, setEnabled] = useState(false);
-  const [value, setValue] = useState(1);
-  const [unit, setUnit] = useState<Unit>('hours');
-  const [instructions, setInstructions] = useState('');
+  const [steps, setSteps] = useState<Step[]>([
+    { delayValue: 1, delayUnit: 'hours', instructions: '' },
+  ]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -50,10 +46,18 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
       const data = await res.json().catch(() => ({}));
       if (res.ok && data.followUp) {
         setEnabled(!!data.followUp.enabled);
-        const d = toDisplay(Number(data.followUp.delayMinutes) || 60);
-        setValue(d.value);
-        setUnit(d.unit);
-        setInstructions(data.followUp.instructions ?? '');
+        const s = Array.isArray(data.followUp.steps) ? data.followUp.steps : [];
+        setSteps(
+          s.length > 0
+            ? s.map((x: Step) => ({
+                delayValue: Number(x.delayValue) || 1,
+                delayUnit: (['minutes', 'hours', 'days'] as Unit[]).includes(x.delayUnit)
+                  ? x.delayUnit
+                  : 'hours',
+                instructions: x.instructions ?? '',
+              }))
+            : [{ delayValue: 1, delayUnit: 'hours', instructions: '' }],
+        );
       }
     } catch {
       /* best-effort */
@@ -66,6 +70,13 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
     void load();
   }, [load]);
 
+  const setStep = (i: number, patch: Partial<Step>) =>
+    setSteps((prev) => prev.map((s, j) => (j === i ? { ...s, ...patch } : s)));
+  const addStep = () =>
+    setSteps((prev) => (prev.length >= MAX_STEPS ? prev : [...prev, { ...NEW_STEP }]));
+  const removeStep = (i: number) =>
+    setSteps((prev) => (prev.length <= 1 ? prev : prev.filter((_, j) => j !== i)));
+
   const save = async () => {
     setSaving(true);
     try {
@@ -75,8 +86,11 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
         body: JSON.stringify({
           agent: agentId,
           enabled,
-          delayMinutes: toMinutes(value, unit),
-          instructions: instructions.trim(),
+          steps: steps.map((s) => ({
+            delayValue: Math.max(1, Math.round(s.delayValue || 1)),
+            delayUnit: s.delayUnit,
+            instructions: s.instructions.trim(),
+          })),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -101,11 +115,10 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
               Follow-up inteligente
             </p>
             <p className="mt-0.5 max-w-2xl text-xs text-muted-foreground">
-              Quando o cliente fica um tempo sem responder, a IA manda{' '}
-              <strong>uma</strong> mensagem de reengajamento (com o contexto da
-              conversa). Só dispara <strong>1 vez por silêncio</strong> — volta a
-              valer depois que o cliente responder. Respeita o horário de
-              atendimento e a janela de 24h do WhatsApp.
+              Quando o cliente some, a IA manda uma <strong>sequência</strong> de
+              toques (cada um gerado com o contexto da conversa), com cadência que
+              você define. Volta pro início quando o cliente responder. Respeita o
+              horário de atendimento e a janela de 24h.
             </p>
           </div>
         </div>
@@ -118,45 +131,73 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
 
       {enabled && !loading && (
         <div className="mt-4 space-y-3 border-t border-border pt-3">
-          <div className="flex flex-wrap items-end gap-3">
-            <div>
-              <Label htmlFor="fu-delay">Enviar após</Label>
-              <div className="mt-1 flex items-center gap-2">
-                <Input
-                  id="fu-delay"
-                  type="number"
-                  min={1}
-                  value={value}
-                  onChange={(e) => setValue(Number(e.target.value))}
-                  className="h-9 w-24"
-                  disabled={!canEdit}
-                />
-                <select
-                  value={unit}
-                  onChange={(e) => setUnit(e.target.value as Unit)}
-                  disabled={!canEdit}
-                  className="h-9 rounded-md border border-border bg-background px-2 text-sm text-foreground"
-                >
-                  <option value="minutes">minutos</option>
-                  <option value="hours">horas</option>
-                  <option value="days">dias</option>
-                </select>
-                <span className="text-xs text-muted-foreground">sem resposta</span>
+          {steps.map((s, i) => (
+            <div key={i} className="rounded-lg border border-border p-3">
+              <div className="mb-2 flex items-center justify-between">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-foreground">
+                  <span className="rounded-full bg-primary/10 px-2 py-0.5 text-xs font-medium text-primary">
+                    Toque {i + 1}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {i === 0 ? 'após' : 'e depois de mais'}
+                  </span>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={s.delayValue}
+                    onChange={(e) => setStep(i, { delayValue: Number(e.target.value) })}
+                    className="h-8 w-20"
+                    disabled={!canEdit}
+                  />
+                  <select
+                    value={s.delayUnit}
+                    onChange={(e) => setStep(i, { delayUnit: e.target.value as Unit })}
+                    disabled={!canEdit}
+                    className="h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                  >
+                    <option value="minutes">minutos</option>
+                    <option value="hours">horas</option>
+                    <option value="days">dias</option>
+                  </select>
+                  <span className="text-xs text-muted-foreground">
+                    {i === 0 ? 'sem resposta' : 'sem resposta'}
+                  </span>
+                </div>
+                {canEdit && steps.length > 1 && (
+                  <button
+                    type="button"
+                    onClick={() => removeStep(i)}
+                    className="text-muted-foreground hover:text-destructive"
+                    title="Remover toque"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                )}
               </div>
+              <Label htmlFor={`fu-instr-${i}`} className="text-[11px] text-muted-foreground">
+                O que dizer neste toque
+              </Label>
+              <Textarea
+                id={`fu-instr-${i}`}
+                value={s.instructions}
+                onChange={(e) => setStep(i, { instructions: e.target.value })}
+                rows={2}
+                disabled={!canEdit}
+                placeholder={
+                  i === 0
+                    ? 'ex.: Retome leve, pergunte se ainda tem interesse.'
+                    : 'ex.: Reforce o benefício e ofereça agendar uma demo.'
+                }
+                className="mt-1"
+              />
             </div>
-          </div>
-          <div>
-            <Label htmlFor="fu-instr">O que dizer (orientação)</Label>
-            <Textarea
-              id="fu-instr"
-              value={instructions}
-              onChange={(e) => setInstructions(e.target.value)}
-              rows={3}
-              disabled={!canEdit}
-              placeholder="ex.: Retome de forma leve, pergunte se ainda tem interesse e ofereça agendar uma demo. Não force."
-              className="mt-1"
-            />
-          </div>
+          ))}
+
+          {canEdit && steps.length < MAX_STEPS && (
+            <Button variant="outline" size="sm" onClick={addStep}>
+              <Plus className="mr-1.5 h-4 w-4" /> Adicionar toque
+            </Button>
+          )}
         </div>
       )}
 
