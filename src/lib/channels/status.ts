@@ -152,13 +152,18 @@ export async function applyStatusUpdate(input: StatusUpdateInput): Promise<void>
   // 3) Webhook fan-out for messages we store (inbox / API sends). Runs last
   //    so a slow subscriber can't delay the mirrors above. Bounded to one
   //    row (message_id isn't unique) purely to resolve the owning account.
-  let msgRow: { conversationId: string; accountId: string | null } | null = null;
+  let msgRow: {
+    conversationId: string;
+    accountId: string | null;
+    channelId: string | null;
+  } | null = null;
   try {
     msgRow = firstOrNull(
       await db
         .select({
           conversationId: messages.conversationId,
           accountId: conversations.accountId,
+          channelId: conversations.channelId,
         })
         .from(messages)
         .leftJoin(conversations, eq(messages.conversationId, conversations.id))
@@ -170,11 +175,16 @@ export async function applyStatusUpdate(input: StatusUpdateInput): Promise<void>
   }
 
   if (msgRow?.accountId) {
-    await dispatchWebhookEvent(msgRow.accountId, 'message.status_updated', {
-      whatsapp_message_id: externalMessageId,
-      conversation_id: msgRow.conversationId,
-      status,
-    });
+    await dispatchWebhookEvent(
+      msgRow.accountId,
+      'message.status_updated',
+      {
+        whatsapp_message_id: externalMessageId,
+        conversation_id: msgRow.conversationId,
+        status,
+      },
+      msgRow.channelId,
+    );
   }
 }
 

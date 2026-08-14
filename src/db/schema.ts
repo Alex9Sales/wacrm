@@ -1285,16 +1285,24 @@ export const webhookEndpoints = pgTable("webhook_endpoints", {
 	url: text().notNull(),
 	secret: text().notNull(),
 	events: text("events").array().default(sql`'{}'::text[]`).notNull(),
+	// Canal (caixa de entrada) que este webhook escuta. NULL = todos. Migração 0082.
+	channelId: uuid("channel_id"),
 	isActive: boolean("is_active").default(true).notNull(),
 	lastDeliveryAt: timestamp("last_delivery_at", { withTimezone: true, mode: 'string' }),
 	failureCount: integer("failure_count").default(0).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("webhook_endpoints_account_id_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	index("webhook_endpoints_channel_idx").using("btree", table.channelId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
 			columns: [table.accountId],
 			foreignColumns: [organization.id],
 			name: "webhook_endpoints_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [channels.id],
+			name: "webhook_endpoints_channel_id_fkey"
 		}).onDelete("cascade"),
 ]);
 

@@ -215,7 +215,7 @@ export async function dispatchInboundMessage(
     await dispatchWebhookEvent(accountId, 'conversation.created', {
       conversation_id: conversation.id,
       contact_id: contactId,
-    });
+    }, conversation.channelId);
     await publishEvent(accountId, {
       type: 'conversation.created',
       conversationId: conversation.id,
@@ -474,7 +474,7 @@ export async function dispatchInboundMessage(
       whatsapp_message_id: ev.externalMessageId,
       content_type: contentType,
       text: ev.contentText ?? null,
-    });
+    }, conversation.channelId);
     return { conversationId: conversation.id, contactId, isFirstInbound };
   }
 
@@ -626,7 +626,7 @@ export async function dispatchInboundMessage(
     whatsapp_message_id: ev.externalMessageId,
     content_type: contentType,
     text: ev.contentText ?? null,
-  });
+  }, conversation.channelId);
 
   return { conversationId: conversation.id, contactId, isFirstInbound };
 }
@@ -745,7 +745,7 @@ async function ingestGroupMessage(
     await dispatchWebhookEvent(accountId, 'conversation.created', {
       conversation_id: conversation.id,
       contact_id: contactId,
-    });
+    }, conversation.channelId);
     await publishEvent(accountId, {
       type: 'conversation.created',
       conversationId: conversation.id,

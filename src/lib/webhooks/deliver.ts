@@ -20,7 +20,7 @@
 
 import { randomUUID } from 'node:crypto';
 
-import { and, arrayContains, eq, sql } from 'drizzle-orm';
+import { and, arrayContains, eq, isNull, or, sql } from 'drizzle-orm';
 
 import { db, webhookEndpoints } from '@/db';
 import { decrypt } from '@/lib/whatsapp/encryption';
@@ -47,9 +47,20 @@ interface EndpointRow {
 export async function dispatchWebhookEvent(
   accountId: string,
   event: WebhookEvent,
-  data: unknown
+  data: unknown,
+  channelId?: string | null
 ): Promise<void> {
   try {
+    // Escopo por canal: endpoints "todos os canais" (channel_id NULL) sempre
+    // recebem; um endpoint amarrado a um canal só recebe eventos daquele canal.
+    // Sem channelId no evento (defensivo), só os de "todos os canais" recebem.
+    const channelScope = channelId
+      ? or(
+          isNull(webhookEndpoints.channelId),
+          eq(webhookEndpoints.channelId, channelId)
+        )
+      : isNull(webhookEndpoints.channelId);
+
     const rows: EndpointRow[] = await db
       .select({
         id: webhookEndpoints.id,
@@ -61,7 +72,8 @@ export async function dispatchWebhookEvent(
         and(
           eq(webhookEndpoints.accountId, accountId),
           eq(webhookEndpoints.isActive, true),
-          arrayContains(webhookEndpoints.events, [event])
+          arrayContains(webhookEndpoints.events, [event]),
+          channelScope
         )
       );
 

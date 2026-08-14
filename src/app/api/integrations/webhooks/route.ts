@@ -18,9 +18,9 @@
 // ============================================================
 
 import { NextResponse } from 'next/server';
-import { desc, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 
-import { db, webhookEndpoints } from '@/db';
+import { db, webhookEndpoints, channels } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import {
   getCurrentAccount,
@@ -46,6 +46,7 @@ const WEBHOOK_PUBLIC_SELECT = {
   id: webhookEndpoints.id,
   url: webhookEndpoints.url,
   events: webhookEndpoints.events,
+  channel_id: webhookEndpoints.channelId,
   is_active: webhookEndpoints.isActive,
   last_delivery_at: webhookEndpoints.lastDeliveryAt,
   failure_count: webhookEndpoints.failureCount,
@@ -127,6 +128,21 @@ export async function POST(request: Request) {
       );
     }
 
+    // Canal (caixa de entrada) opcional: null/ausente = todos os canais. Se veio
+    // um id, tem que ser um canal DESTA conta (senão vira "todos", nunca de outra).
+    let channelId: string | null = null;
+    const rawChannel = typeof body.channel_id === 'string' ? body.channel_id : null;
+    if (rawChannel) {
+      const ch = firstOrNull(
+        await db
+          .select({ id: channels.id })
+          .from(channels)
+          .where(and(eq(channels.id, rawChannel), eq(channels.accountId, ctx.accountId)))
+          .limit(1)
+      );
+      channelId = ch ? rawChannel : null;
+    }
+
     const secret = generateWebhookSecret();
 
     let created;
@@ -140,6 +156,7 @@ export async function POST(request: Request) {
             url,
             secret: encrypt(secret),
             events,
+            channelId,
           })
           .returning(WEBHOOK_PUBLIC_SELECT)
       );

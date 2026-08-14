@@ -68,11 +68,17 @@ interface WebhookEndpoint {
   id: string;
   url: string;
   events: string[];
+  channel_id: string | null;
   is_active: boolean;
   last_delivery_at: string | null;
   failure_count: number;
   created_at: string;
   has_secret: boolean;
+}
+
+interface ChannelOpt {
+  id: string;
+  name: string;
 }
 
 function fmtDate(iso: string): string {
@@ -87,6 +93,7 @@ export function IntegrationsSettings() {
   const { canEditSettings } = useAuth();
 
   const [endpoints, setEndpoints] = useState<WebhookEndpoint[]>([]);
+  const [channels, setChannels] = useState<ChannelOpt[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -117,6 +124,22 @@ export function IntegrationsSettings() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Canais da conta — pro seletor "Caixa de entrada" e pra rotular cada webhook.
+  useEffect(() => {
+    (async () => {
+      try {
+        const res = await fetch('/api/channels');
+        const data = await res.json().catch(() => ({}));
+        if (Array.isArray(data.channels)) setChannels(data.channels);
+      } catch {
+        /* best-effort */
+      }
+    })();
+  }, []);
+
+  const channelName = (id: string | null) =>
+    id ? (channels.find((c) => c.id === id)?.name ?? 'Canal') : 'Todos os canais';
 
   async function handleToggle(endpoint: WebhookEndpoint, next: boolean) {
     setBusyId(endpoint.id);
@@ -268,7 +291,11 @@ export function IntegrationsSettings() {
                       </div>
 
                       <p className="text-muted-foreground mt-1.5 text-xs">
-                        Criada {fmtDate(e.created_at)}
+                        <span className="font-medium text-foreground">
+                          {channelName(e.channel_id)}
+                        </span>
+                        {' · Criada '}
+                        {fmtDate(e.created_at)}
                         {' · '}
                         {e.last_delivery_at
                           ? `última entrega ${fmtDate(e.last_delivery_at)}`
@@ -326,6 +353,7 @@ export function IntegrationsSettings() {
         open={createOpen}
         onOpenChange={setCreateOpen}
         onCreated={load}
+        channels={channels}
       />
 
       <ConfirmDeleteDialog
@@ -346,13 +374,16 @@ function CreateWebhookDialog({
   open,
   onOpenChange,
   onCreated,
+  channels,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: () => void;
+  channels: ChannelOpt[];
 }) {
   const [url, setUrl] = useState('');
   const [events, setEvents] = useState<WebhookEvent[]>([]);
+  const [channelId, setChannelId] = useState('');
   const [submitting, setSubmitting] = useState(false);
   // Once set, we switch from the form to the reveal view.
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
@@ -360,6 +391,7 @@ function CreateWebhookDialog({
   function reset() {
     setUrl('');
     setEvents([]);
+    setChannelId('');
     setSubmitting(false);
     setCreatedSecret(null);
   }
@@ -385,7 +417,7 @@ function CreateWebhookDialog({
       const res = await fetch('/api/integrations/webhooks', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: trimmed, events }),
+        body: JSON.stringify({ url: trimmed, events, channel_id: channelId || null }),
       });
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
@@ -488,6 +520,28 @@ function CreateWebhookDialog({
                 />
                 <p className="text-muted-foreground text-xs">
                   Deve ser uma URL <code className="text-[11px]">https://</code>.
+                </p>
+              </div>
+
+              <div className="space-y-1.5">
+                <Label className="text-muted-foreground">
+                  Caixa de entrada (canal)
+                </Label>
+                <select
+                  value={channelId}
+                  onChange={(e) => setChannelId(e.target.value)}
+                  className="border-border bg-background text-foreground h-9 w-full rounded-md border px-2 text-sm"
+                >
+                  <option value="">Todos os canais</option>
+                  {channels.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="text-muted-foreground text-xs">
+                  O webhook dispara só neste canal. Deixe em{' '}
+                  <strong>Todos os canais</strong> para receber de todos.
                 </p>
               </div>
 
