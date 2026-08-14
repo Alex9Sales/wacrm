@@ -40,6 +40,7 @@ const MASKED_KEY = '••••••••••••••••';
 const PROVIDER_LABEL: Record<AiProvider, string> = {
   openai: 'OpenAI',
   anthropic: 'Anthropic (Claude)',
+  gemini: 'Google Gemini',
 };
 
 /** Rótulo do provedor tolerante a string (credencial pode ter 'gemini'). */
@@ -50,6 +51,7 @@ function providerLabel(p: string): string {
 const KEY_PLACEHOLDER: Record<AiProvider, string> = {
   openai: 'sk-...',
   anthropic: 'sk-ant-...',
+  gemini: 'AIza...',
 };
 
 export function AiConfig({
@@ -274,7 +276,12 @@ export function AiConfig({
     setModels([]);
     if (id) {
       const c = credentials.find((x) => x.id === id);
-      if (c && (c.provider === 'openai' || c.provider === 'anthropic')) {
+      if (
+        c &&
+        (c.provider === 'openai' ||
+          c.provider === 'anthropic' ||
+          c.provider === 'gemini')
+      ) {
         handleProviderChange(c.provider);
       }
     }
@@ -548,6 +555,9 @@ export function AiConfig({
                       <SelectItem value="openai">{PROVIDER_LABEL.openai}</SelectItem>
                       <SelectItem value="anthropic">
                         {PROVIDER_LABEL.anthropic}
+                      </SelectItem>
+                      <SelectItem value="gemini">
+                        {PROVIDER_LABEL.gemini}
                       </SelectItem>
                     </SelectContent>
                   </Select>

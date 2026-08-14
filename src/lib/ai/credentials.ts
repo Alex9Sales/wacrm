@@ -17,7 +17,11 @@ import type { AiProvider } from "./types";
 
 /** Provedores que já têm adapter funcionando (podem ser validados/usados).
  *  O Gemini entra aqui na Fase 3. A tabela aceita 'gemini' desde já. */
-export const CREDENTIAL_PROVIDERS: AiProvider[] = ["openai", "anthropic"];
+export const CREDENTIAL_PROVIDERS: AiProvider[] = [
+  "openai",
+  "anthropic",
+  "gemini",
+];
 
 export interface CredentialDTO {
   id: string;

@@ -59,6 +59,29 @@ async function listAnthropicModels(apiKey: string): Promise<string[]> {
   return ids.sort((a, b) => b.localeCompare(a))
 }
 
+/** Modelos Gemini que suportam generateContent (chat), sem o prefixo models/. */
+async function listGeminiModels(apiKey: string): Promise<string[]> {
+  const res = await fetch(
+    'https://generativelanguage.googleapis.com/v1beta/models?pageSize=200',
+    { headers: { 'x-goog-api-key': apiKey } },
+  )
+  if (!res.ok) {
+    const msg =
+      res.status === 400 || res.status === 401 || res.status === 403
+        ? 'Chave inválida.'
+        : `Falha ao listar modelos (HTTP ${res.status}).`
+    throw new Error(msg)
+  }
+  const data = (await res.json().catch(() => null)) as {
+    models?: { name?: string; supportedGenerationMethods?: string[] }[]
+  } | null
+  const ids = (data?.models ?? [])
+    .filter((m) => (m.supportedGenerationMethods ?? []).includes('generateContent'))
+    .map((m) => (m.name ?? '').replace(/^models\//, ''))
+    .filter((id): id is string => typeof id === 'string' && id.startsWith('gemini'))
+  return ids.sort((a, b) => b.localeCompare(a))
+}
+
 export async function POST(request: Request) {
   try {
     const { accountId, userId } = await requireRole('admin')
@@ -72,9 +95,13 @@ export async function POST(request: Request) {
     }
 
     const provider = body.provider as AiProvider
-    if (provider !== 'openai' && provider !== 'anthropic') {
+    if (
+      provider !== 'openai' &&
+      provider !== 'anthropic' &&
+      provider !== 'gemini'
+    ) {
       return NextResponse.json(
-        { error: 'provider must be "openai" or "anthropic"' },
+        { error: 'provider must be "openai", "anthropic" or "gemini"' },
         { status: 400 },
       )
     }
@@ -144,7 +171,9 @@ export async function POST(request: Request) {
       const models =
         provider === 'openai'
           ? await listOpenAiModels(apiKeyPlain)
-          : await listAnthropicModels(apiKeyPlain)
+          : provider === 'gemini'
+            ? await listGeminiModels(apiKeyPlain)
+            : await listAnthropicModels(apiKeyPlain)
       return NextResponse.json({ models })
     } catch (err) {
       return NextResponse.json(

@@ -54,9 +54,13 @@ export async function POST(request: Request) {
     }
 
     const provider = body.provider as AiProvider;
-    if (provider !== "openai" && provider !== "anthropic") {
+    if (
+      provider !== "openai" &&
+      provider !== "anthropic" &&
+      provider !== "gemini"
+    ) {
       return NextResponse.json(
-        { error: 'provider deve ser "openai" ou "anthropic".' },
+        { error: 'provider deve ser "openai", "anthropic" ou "gemini".' },
         { status: 400 },
       );
     }

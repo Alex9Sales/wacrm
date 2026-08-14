@@ -57,6 +57,25 @@ export function extractAnthropicUsage(raw: unknown): TokenUsage {
   }
 }
 
+/**
+ * Gemini reporta `usageMetadata`: promptTokenCount é o TOTAL de input (já
+ * inclui o cache), candidatesTokenCount é o output e cachedContentTokenCount
+ * é o subconjunto lido do cache. Não há "cache creation" separado.
+ */
+export function extractGeminiUsage(raw: unknown): TokenUsage {
+  const u = (raw ?? {}) as {
+    promptTokenCount?: unknown
+    candidatesTokenCount?: unknown
+    cachedContentTokenCount?: unknown
+  }
+  return {
+    promptTokens: num(u.promptTokenCount),
+    completionTokens: num(u.candidatesTokenCount),
+    cachedReadTokens: num(u.cachedContentTokenCount),
+    cacheCreationTokens: 0,
+  }
+}
+
 /** Uma captura sem tokens não vale gravar (chamada que não consumiu nada). */
 export function isEmptyUsage(u: TokenUsage): boolean {
   return u.promptTokens === 0 && u.completionTokens === 0

@@ -87,7 +87,7 @@ function finalizeAgent(
 
   return {
     id: row.id,
-    provider: effectiveProvider as 'openai' | 'anthropic',
+    provider: effectiveProvider as 'openai' | 'anthropic' | 'gemini',
     model: row.model,
     apiKey: decrypt(effectiveEncryptedKey),
     systemPrompt: row.systemPrompt,

@@ -44,10 +44,11 @@ const PROVIDER_LABEL: Record<string, string> = {
   gemini: 'Gemini',
 };
 
-// Provedores que dá pra cadastrar HOJE (Gemini entra na Fase 3).
+// Provedores que dá pra cadastrar.
 const ADDABLE_PROVIDERS: { value: string; label: string }[] = [
   { value: 'openai', label: 'OpenAI' },
   { value: 'anthropic', label: 'Anthropic' },
+  { value: 'gemini', label: 'Google Gemini' },
 ];
 
 export function CredentialsManager({ canEdit }: { canEdit: boolean }) {
@@ -315,7 +316,13 @@ function AddCredentialDialog({
             <Label className="text-muted-foreground">Chave de API</Label>
             <Input
               type="password"
-              placeholder={provider === 'anthropic' ? 'sk-ant-...' : 'sk-...'}
+              placeholder={
+                provider === 'anthropic'
+                  ? 'sk-ant-...'
+                  : provider === 'gemini'
+                    ? 'AIza...'
+                    : 'sk-...'
+              }
               value={apiKey}
               onChange={(e) => setApiKey(e.target.value)}
               autoComplete="off"

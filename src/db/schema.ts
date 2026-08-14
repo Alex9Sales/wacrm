@@ -1421,7 +1421,7 @@ export const aiConfigs = pgTable("ai_configs", {
 	check("ai_configs_auto_reply_max_per_conversation_check", sql`(auto_reply_max_per_conversation >= 1) AND (auto_reply_max_per_conversation <= 20)`),
 	check("ai_configs_auto_reply_hours_mode_check", sql`auto_reply_hours_mode = ANY (ARRAY['always'::text, 'inside'::text, 'outside'::text])`),
 	check("ai_configs_auto_reply_buffer_seconds_check", sql`(auto_reply_buffer_seconds >= 0) AND (auto_reply_buffer_seconds <= 300)`),
-	check("ai_configs_provider_check", sql`provider = ANY (ARRAY['openai'::text, 'anthropic'::text])`),
+	check("ai_configs_provider_check", sql`provider = ANY (ARRAY['openai'::text, 'anthropic'::text, 'gemini'::text])`),
 	foreignKey({
 			columns: [table.credentialId],
 			foreignColumns: [aiCredentials.id],

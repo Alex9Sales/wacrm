@@ -52,6 +52,16 @@ const PRICES: Record<string, ModelPrice> = {
   'claude-3-opus': { input: 15, output: 75, cachedInput: 1.5, cacheWrite: 18.75 },
   'claude-opus-4': { input: 15, output: 75, cachedInput: 1.5, cacheWrite: 18.75 },
   'claude-opus': { input: 15, output: 75, cachedInput: 1.5, cacheWrite: 18.75 },
+  // ---- Google Gemini (US$/1M) ---- (mais específico = prefixo mais longo vence)
+  'gemini-2.5-flash-lite': { input: 0.1, output: 0.4, cachedInput: 0.025 },
+  'gemini-2.5-flash': { input: 0.3, output: 2.5, cachedInput: 0.075 },
+  'gemini-2.5-pro': { input: 1.25, output: 10, cachedInput: 0.31 },
+  'gemini-2.0-flash-lite': { input: 0.075, output: 0.3, cachedInput: 0.01875 },
+  'gemini-2.0-flash': { input: 0.1, output: 0.4, cachedInput: 0.025 },
+  'gemini-1.5-flash-8b': { input: 0.0375, output: 0.15, cachedInput: 0.01 },
+  'gemini-1.5-flash': { input: 0.075, output: 0.3, cachedInput: 0.01875 },
+  'gemini-1.5-pro': { input: 1.25, output: 5, cachedInput: 0.3125 },
+  'gemini': { input: 0.3, output: 2.5, cachedInput: 0.075 },
 }
 
 // Fallback conservador para um modelo desconhecido (nunca zera o custo — melhor
