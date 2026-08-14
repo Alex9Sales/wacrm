@@ -13,7 +13,7 @@
 import { NextResponse } from 'next/server';
 import { and, eq } from 'drizzle-orm';
 
-import { db, webhookEndpoints } from '@/db';
+import { db, webhookEndpoints, channels } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { requireRole, toErrorResponse } from '@/lib/auth/account';
 import { normalizeEvents } from '@/lib/webhooks/events';
@@ -26,6 +26,7 @@ const WEBHOOK_PUBLIC_SELECT = {
   id: webhookEndpoints.id,
   url: webhookEndpoints.url,
   events: webhookEndpoints.events,
+  channel_id: webhookEndpoints.channelId,
   is_active: webhookEndpoints.isActive,
   last_delivery_at: webhookEndpoints.lastDeliveryAt,
   failure_count: webhookEndpoints.failureCount,
@@ -54,9 +55,38 @@ export async function PATCH(
     const updates: Partial<{
       url: string;
       events: string[];
+      channelId: string | null;
       isActive: boolean;
       failureCount: number;
     }> = {};
+
+    // Canal (caixa de entrada): null = todos. Se veio um id, tem que ser da conta.
+    if ('channel_id' in body) {
+      const raw = body.channel_id;
+      if (raw === null || raw === '') {
+        updates.channelId = null;
+      } else if (typeof raw === 'string') {
+        const ch = firstOrNull(
+          await db
+            .select({ id: channels.id })
+            .from(channels)
+            .where(and(eq(channels.id, raw), eq(channels.accountId, ctx.accountId)))
+            .limit(1)
+        );
+        if (!ch) {
+          return NextResponse.json(
+            { error: 'Canal inválido' },
+            { status: 400 }
+          );
+        }
+        updates.channelId = raw;
+      } else {
+        return NextResponse.json(
+          { error: "'channel_id' deve ser um id de canal ou null" },
+          { status: 400 }
+        );
+      }
+    }
 
     if ('url' in body) {
       const url = normalizeWebhookUrl(body.url);

@@ -24,6 +24,7 @@ import {
   AlertTriangle,
   Copy,
   Loader2,
+  Pencil,
   Plus,
   Trash2,
   Webhook,
@@ -96,6 +97,7 @@ export function IntegrationsSettings() {
   const [channels, setChannels] = useState<ChannelOpt[]>([]);
   const [loading, setLoading] = useState(true);
   const [createOpen, setCreateOpen] = useState(false);
+  const [editing, setEditing] = useState<WebhookEndpoint | null>(null);
   const [busyId, setBusyId] = useState<string | null>(null);
   const [confirmDelete, setConfirmDelete] = useState<WebhookEndpoint | null>(
     null,
@@ -204,7 +206,12 @@ export function IntegrationsSettings() {
         description="Receba eventos do CRM em tempo real no n8n, Make, ou qualquer webhook. Cole a URL do seu fluxo e escolha os eventos."
         action={
           <RequireRole min="admin">
-            <Button onClick={() => setCreateOpen(true)}>
+            <Button
+              onClick={() => {
+                setEditing(null);
+                setCreateOpen(true);
+              }}
+            >
               <Plus className="size-4" />
               Nova integração
             </Button>
@@ -328,6 +335,18 @@ export function IntegrationsSettings() {
                         <Button
                           variant="outline"
                           size="sm"
+                          onClick={() => {
+                            setEditing(e);
+                            setCreateOpen(true);
+                          }}
+                          disabled={busyId === e.id}
+                        >
+                          <Pencil className="size-4" />
+                          Editar
+                        </Button>
+                        <Button
+                          variant="outline"
+                          size="sm"
                           onClick={() => setConfirmDelete(e)}
                           disabled={busyId === e.id}
                           className="border-red-500/40 bg-red-500/10 text-red-300 hover:border-red-500/60 hover:bg-red-500/20 hover:text-red-200"
@@ -351,9 +370,13 @@ export function IntegrationsSettings() {
 
       <CreateWebhookDialog
         open={createOpen}
-        onOpenChange={setCreateOpen}
+        onOpenChange={(next) => {
+          setCreateOpen(next);
+          if (!next) setEditing(null);
+        }}
         onCreated={load}
         channels={channels}
+        editing={editing}
       />
 
       <ConfirmDeleteDialog
@@ -375,11 +398,13 @@ function CreateWebhookDialog({
   onOpenChange,
   onCreated,
   channels,
+  editing,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   onCreated: () => void;
   channels: ChannelOpt[];
+  editing?: WebhookEndpoint | null;
 }) {
   const [url, setUrl] = useState('');
   const [events, setEvents] = useState<WebhookEvent[]>([]);
@@ -387,6 +412,22 @@ function CreateWebhookDialog({
   const [submitting, setSubmitting] = useState(false);
   // Once set, we switch from the form to the reveal view.
   const [createdSecret, setCreatedSecret] = useState<string | null>(null);
+
+  const isEdit = !!editing;
+
+  // Pré-preenche ao abrir em modo edição (e limpa ao abrir em modo criação).
+  useEffect(() => {
+    if (!open) return;
+    if (editing) {
+      setUrl(editing.url);
+      setEvents(editing.events as WebhookEvent[]);
+      setChannelId(editing.channel_id ?? '');
+    } else {
+      setUrl('');
+      setEvents([]);
+      setChannelId('');
+    }
+  }, [open, editing]);
 
   function reset() {
     setUrl('');
@@ -414,20 +455,39 @@ function CreateWebhookDialog({
     }
     setSubmitting(true);
     try {
-      const res = await fetch('/api/integrations/webhooks', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ url: trimmed, events, channel_id: channelId || null }),
-      });
+      const res = await fetch(
+        isEdit
+          ? `/api/integrations/webhooks/${editing!.id}`
+          : '/api/integrations/webhooks',
+        {
+          method: isEdit ? 'PATCH' : 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            url: trimmed,
+            events,
+            channel_id: channelId || null,
+          }),
+        },
+      );
       const payload = await res.json().catch(() => ({}));
       if (!res.ok) {
-        toast.error(payload.error || 'Falha ao criar integração');
+        toast.error(
+          payload.error ||
+            (isEdit ? 'Falha ao salvar integração' : 'Falha ao criar integração'),
+        );
         return;
       }
-      setCreatedSecret(payload.secret as string);
-      onCreated();
+      if (isEdit) {
+        // Edição não gera novo segredo — fecha e recarrega.
+        toast.success('Integração atualizada');
+        onCreated();
+        onOpenChange(false);
+      } else {
+        setCreatedSecret(payload.secret as string);
+        onCreated();
+      }
     } catch (err) {
-      console.error('[CreateWebhookDialog] create error:', err);
+      console.error('[CreateWebhookDialog] submit error:', err);
       toast.error('Não foi possível contatar o servidor');
     } finally {
       setSubmitting(false);
@@ -498,11 +558,11 @@ function CreateWebhookDialog({
           <>
             <DialogHeader>
               <DialogTitle className="text-popover-foreground">
-                Nova integração
+                {isEdit ? 'Editar integração' : 'Nova integração'}
               </DialogTitle>
               <DialogDescription className="text-muted-foreground">
-                Cole a URL do seu fluxo (n8n, Make, ou qualquer endpoint HTTPS) e
-                escolha os eventos que quer receber.
+                Cole a URL do seu fluxo (n8n, Make, ou qualquer endpoint HTTPS),
+                escolha o canal e os eventos que quer receber.
               </DialogDescription>
             </DialogHeader>
 
@@ -589,8 +649,10 @@ function CreateWebhookDialog({
                 {submitting ? (
                   <>
                     <Loader2 className="size-4 animate-spin" />
-                    Criando…
+                    {isEdit ? 'Salvando…' : 'Criando…'}
                   </>
+                ) : isEdit ? (
+                  'Salvar alterações'
                 ) : (
                   'Criar integração'
                 )}
