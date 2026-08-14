@@ -7,54 +7,86 @@ import {
   BarChart3,
   Zap,
   Bot,
+  Check,
+  Sparkles,
 } from 'lucide-react'
 import { getSessionUserId } from '@/lib/auth/session'
 
 export const metadata: Metadata = {
   title: 'FluxiaCRM — CRM de atendimento e vendas no WhatsApp',
   description:
-    'O FluxiaCRM é uma plataforma de atendimento e vendas no WhatsApp para pequenas e médias empresas: caixa de entrada compartilhada, funil de vendas, agenda integrada ao Google Calendar, relatórios, automações e agentes de IA.',
+    'O FluxiaCRM é uma plataforma de atendimento e vendas no WhatsApp para pequenas e médias empresas: caixa de entrada compartilhada, funil de vendas, agenda integrada ao Google Calendar, relatórios, automações e agentes de IA. Teste grátis por 7 dias, sem cartão.',
   // A homepage é pública e deve ser rastreável (verificação OAuth do Google +
   // SEO) — sobrepõe o noindex global do layout só para esta rota.
   robots: { index: true, follow: true },
 }
 
+const TRIAL_HREF = '/signup'
+
 const FEATURES = [
   {
     icon: MessageSquare,
     title: 'Atendimento no WhatsApp',
-    desc: 'Caixa de entrada compartilhada para toda a equipe responder os clientes num só lugar.',
+    desc: 'Caixa de entrada compartilhada: toda a equipe responde os clientes num só lugar, em vários números.',
+  },
+  {
+    icon: Bot,
+    title: 'Agentes de IA',
+    desc: 'Assistentes que respondem, qualificam e dão sequência aos leads sozinhos — com a sua chave e o seu tom.',
   },
   {
     icon: GitBranch,
     title: 'Funil de vendas (CRM)',
-    desc: 'Organize contatos, empresas e negociações em funis e acompanhe cada etapa até a venda.',
+    desc: 'Contatos, empresas e negociações organizados em funis, com cada etapa acompanhada até a venda.',
   },
   {
     icon: CalendarDays,
     title: 'Agenda + Google Calendar',
-    desc: 'Agende compromissos dentro do CRM com sincronização com o Google Calendar.',
+    desc: 'Agende compromissos dentro do CRM, com sincronização com o Google Calendar.',
+  },
+  {
+    icon: Zap,
+    title: 'Disparos e automações',
+    desc: 'Campanhas em massa e fluxos que agilizam o atendimento e a prospecção.',
   },
   {
     icon: BarChart3,
     title: 'Relatórios',
     desc: 'Painéis de desempenho comercial: funil, conversão, ticket médio e muito mais.',
   },
+]
+
+const PLANS = [
   {
-    icon: Zap,
-    title: 'Automações',
-    desc: 'Fluxos e disparos para agilizar o atendimento e a prospecção.',
+    name: 'Essencial',
+    price: '497',
+    tagline: 'Para começar a organizar o atendimento',
+    highlighted: false,
   },
   {
-    icon: Bot,
-    title: 'Agentes de IA',
-    desc: 'Assistentes de IA que ajudam a atender, qualificar e dar sequência aos leads.',
+    name: 'Pro',
+    price: '799',
+    tagline: 'Mais vendas, menos trabalho — com IA',
+    highlighted: true,
   },
+  {
+    name: 'Enterprise',
+    price: '1.999',
+    tagline: 'Operação em escala, com prioridade',
+    highlighted: false,
+  },
+]
+
+const PLAN_INCLUDES = [
+  'Vários atendentes num só WhatsApp',
+  'IA que responde e qualifica sozinha',
+  'Funil de vendas + agendamentos',
+  'Disparos, campanhas e relatórios',
 ]
 
 export default async function RootPage() {
   // Usuário logado vai direto ao painel; deslogado (e o rastreador do Google)
-  // vê a landing pública que descreve o FluxiaCRM.
+  // vê o site de vendas público que descreve o FluxiaCRM.
   const userId = await getSessionUserId().catch(() => null)
   if (userId) redirect('/dashboard')
 
@@ -68,50 +100,63 @@ export default async function RootPage() {
           </span>
           <span className="font-heading text-xl font-bold">FluxiaCRM</span>
         </div>
-        <a
-          href="/login"
-          className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90"
-        >
-          Entrar
-        </a>
+        <div className="flex items-center gap-2">
+          <a
+            href="/login"
+            className="rounded-lg px-4 py-2 text-sm font-medium text-foreground transition hover:bg-muted"
+          >
+            Entrar
+          </a>
+          <a
+            href={TRIAL_HREF}
+            className="rounded-lg bg-primary px-4 py-2 text-sm font-medium text-primary-foreground transition hover:opacity-90"
+          >
+            Testar grátis
+          </a>
+        </div>
       </header>
 
       {/* Hero */}
-      <section className="mx-auto max-w-6xl px-6 pb-8 pt-10 text-center sm:pt-16">
-        <h1 className="font-heading text-4xl font-bold tracking-tight sm:text-5xl">
-          FluxiaCRM
+      <section className="mx-auto max-w-4xl px-6 pb-10 pt-10 text-center sm:pt-20">
+        <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/10 px-3 py-1 text-xs font-medium text-primary">
+          <Sparkles className="h-3.5 w-3.5" /> CRM de WhatsApp com Inteligência Artificial
+        </span>
+        <h1 className="mt-5 font-heading text-4xl font-bold tracking-tight sm:text-6xl">
+          Venda mais no WhatsApp, sem deixar lead sem resposta
         </h1>
-        <p className="mt-3 text-lg font-semibold text-primary sm:text-xl">
-          CRM de atendimento e vendas no WhatsApp
+        <p className="mx-auto mt-5 max-w-2xl text-lg text-muted-foreground">
+          O <strong className="text-foreground">FluxiaCRM</strong> junta{' '}
+          <strong className="text-foreground">atendimento, funil de vendas e agentes de IA</strong>{' '}
+          num só lugar. Sua equipe atende em vários números, a IA responde e
+          qualifica sozinha, e nada se perde no meio do caminho.
         </p>
-        <p className="mx-auto mt-4 max-w-2xl text-lg text-muted-foreground">
-          O <strong className="text-foreground">FluxiaCRM</strong> é um software (CRM) que
-          centraliza o <strong className="text-foreground">atendimento e as vendas da sua
-          empresa pelo WhatsApp</strong>. Com ele, pequenas e médias empresas reúnem as
-          conversas numa caixa de entrada compartilhada, organizam o funil de vendas,
-          agendam compromissos e acompanham os resultados — tudo em um só lugar.
-        </p>
-        <div className="mt-8 flex items-center justify-center gap-3">
+        <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <a
-            href="/login"
-            className="rounded-lg bg-primary px-6 py-3 text-sm font-medium text-primary-foreground transition hover:opacity-90"
+            href={TRIAL_HREF}
+            className="w-full rounded-lg bg-primary px-7 py-3.5 text-sm font-semibold text-primary-foreground transition hover:opacity-90 sm:w-auto"
           >
-            Entrar na plataforma
+            Começar teste grátis de 7 dias
           </a>
           <a
-            href="#recursos"
-            className="rounded-lg px-6 py-3 text-sm font-medium text-foreground ring-1 ring-foreground/15 transition hover:bg-muted"
+            href="#planos"
+            className="w-full rounded-lg px-7 py-3.5 text-sm font-medium text-foreground ring-1 ring-foreground/15 transition hover:bg-muted sm:w-auto"
           >
-            Conhecer os recursos
+            Ver planos
           </a>
         </div>
+        <p className="mt-3 text-xs text-muted-foreground">
+          Sem cartão de crédito • Configure em minutos • Cancele quando quiser
+        </p>
       </section>
 
       {/* Recursos */}
-      <section id="recursos" className="mx-auto max-w-6xl px-6 py-12">
-        <h2 className="mb-8 text-center font-heading text-2xl font-semibold">
-          O que o FluxiaCRM faz
+      <section id="recursos" className="mx-auto max-w-6xl px-6 py-14">
+        <h2 className="mb-3 text-center font-heading text-2xl font-semibold sm:text-3xl">
+          Tudo o que você precisa pra atender e vender
         </h2>
+        <p className="mx-auto mb-10 max-w-2xl text-center text-muted-foreground">
+          Uma plataforma só, no lugar de cinco ferramentas soltas.
+        </p>
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-3">
           {FEATURES.map((f) => (
             <div key={f.title} className="rounded-xl bg-card p-5 ring-1 ring-foreground/10">
@@ -122,6 +167,86 @@ export default async function RootPage() {
               <p className="mt-1 text-sm text-muted-foreground">{f.desc}</p>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* Planos */}
+      <section id="planos" className="mx-auto max-w-6xl px-6 py-14">
+        <h2 className="mb-3 text-center font-heading text-2xl font-semibold sm:text-3xl">
+          Planos simples, sem pegadinha
+        </h2>
+        <p className="mx-auto mb-10 max-w-2xl text-center text-muted-foreground">
+          Comece com <strong className="text-foreground">7 dias grátis</strong>, sem
+          cartão. Escolha o plano quando decidir continuar.
+        </p>
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+          {PLANS.map((p) => (
+            <div
+              key={p.name}
+              className={`relative flex flex-col rounded-2xl bg-card p-6 ring-1 ${
+                p.highlighted
+                  ? 'ring-2 ring-primary shadow-lg'
+                  : 'ring-foreground/10'
+              }`}
+            >
+              {p.highlighted && (
+                <span className="absolute -top-3 left-1/2 -translate-x-1/2 rounded-full bg-primary px-3 py-1 text-xs font-semibold text-primary-foreground">
+                  Mais escolhido
+                </span>
+              )}
+              <h3 className="font-heading text-lg font-semibold">Plano {p.name}</h3>
+              <p className="mt-1 min-h-10 text-sm text-muted-foreground">{p.tagline}</p>
+              <div className="mt-4 flex items-baseline gap-1">
+                <span className="text-sm text-muted-foreground">R$</span>
+                <span className="font-heading text-4xl font-bold">{p.price}</span>
+                <span className="text-sm text-muted-foreground">/mês</span>
+              </div>
+              <ul className="mt-5 space-y-2.5">
+                {PLAN_INCLUDES.map((inc) => (
+                  <li key={inc} className="flex items-start gap-2 text-sm">
+                    <Check className="mt-0.5 h-4 w-4 shrink-0 text-primary" />
+                    <span className="text-foreground">{inc}</span>
+                  </li>
+                ))}
+              </ul>
+              <a
+                href={TRIAL_HREF}
+                className={`mt-6 rounded-lg px-4 py-3 text-center text-sm font-semibold transition ${
+                  p.highlighted
+                    ? 'bg-primary text-primary-foreground hover:opacity-90'
+                    : 'text-foreground ring-1 ring-foreground/15 hover:bg-muted'
+                }`}
+              >
+                Testar 7 dias grátis
+              </a>
+            </div>
+          ))}
+        </div>
+        <p className="mt-6 text-center text-xs text-muted-foreground">
+          Implantação (setup) sob consulta. Precisa de algo específico?{' '}
+          <a href="/login" className="text-primary hover:underline">
+            Fale com a gente
+          </a>
+          .
+        </p>
+      </section>
+
+      {/* CTA final */}
+      <section className="mx-auto max-w-6xl px-6 py-14">
+        <div className="rounded-2xl bg-primary px-6 py-12 text-center text-primary-foreground">
+          <h2 className="font-heading text-2xl font-bold sm:text-3xl">
+            Experimente 7 dias grátis
+          </h2>
+          <p className="mx-auto mt-2 max-w-xl text-primary-foreground/85">
+            Conecte seu WhatsApp e veja a IA atendendo hoje. Sem cartão, sem
+            compromisso.
+          </p>
+          <a
+            href={TRIAL_HREF}
+            className="mt-6 inline-block rounded-lg bg-background px-7 py-3.5 text-sm font-semibold text-foreground transition hover:opacity-90"
+          >
+            Começar agora
+          </a>
         </div>
       </section>
 
