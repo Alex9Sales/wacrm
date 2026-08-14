@@ -27,6 +27,7 @@ import {
   MessagesSquare,
   PanelLeftClose,
   PanelLeftOpen,
+  LifeBuoy,
   Phone,
   Radio,
   Settings,
@@ -134,6 +135,7 @@ const navItems: NavItem[] = [
 ];
 
 const bottomNavItems = [
+  { href: "/suporte", label: "Suporte", icon: LifeBuoy },
   { href: "/settings", label: "Configurações", icon: Settings },
 ];
 

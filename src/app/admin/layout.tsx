@@ -18,6 +18,7 @@ import {
   requirePlatformAdmin,
   type PlatformAdminContext,
 } from "@/lib/auth/platform";
+import { AdminNav } from "@/components/admin/admin-nav";
 import {
   UnauthorizedError,
   ForbiddenError,
@@ -74,11 +75,14 @@ export default async function AdminLayout({
   return (
     <div className="min-h-screen bg-background text-foreground">
       <header className="sticky top-0 z-20 flex h-12 items-center justify-between border-b border-border bg-background px-4 lg:px-6">
-        <div className="flex items-center gap-2">
-          <Shield className="size-5 text-primary" />
-          <span className="font-heading text-base font-semibold">
-            Fluxia · Admin
-          </span>
+        <div className="flex items-center gap-4">
+          <div className="flex items-center gap-2">
+            <Shield className="size-5 text-primary" />
+            <span className="font-heading text-base font-semibold">
+              Fluxia · Admin
+            </span>
+          </div>
+          <AdminNav />
         </div>
         <div className="flex items-center gap-4">
           <span className="hidden text-xs text-muted-foreground sm:inline">

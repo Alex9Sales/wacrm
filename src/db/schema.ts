@@ -1306,6 +1306,42 @@ export const webhookEndpoints = pgTable("webhook_endpoints", {
 		}).onDelete("cascade"),
 ]);
 
+// Suporte (migração 0083) — chamados abertos pelo cliente na tela /suporte.
+// Registro (setor Suporte no /admin) + dispara alerta no WhatsApp da Fluxia.
+export const supportTickets = pgTable("support_tickets", {
+	id: uuid().defaultRandom().primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	createdBy: uuid("created_by"),
+	// 'question' (dúvida) | 'config' (ajuda com config) | 'problem' (bug)
+	type: text().default('problem').notNull(),
+	subject: text().notNull(),
+	description: text(),
+	// URLs públicas dos prints anexados (bucket 'media').
+	screenshotUrls: jsonb("screenshot_urls").default(sql`'[]'::jsonb`).notNull(),
+	// Contexto automático: {url, userAgent, appVersion, orgName, userName, userEmail}.
+	context: jsonb().default(sql`'{}'::jsonb`).notNull(),
+	// 'open' | 'in_progress' | 'resolved'
+	status: text().default('open').notNull(),
+	alertedAt: timestamp("alerted_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("support_tickets_account_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsLast()),
+	index("support_tickets_status_idx").using("btree", table.status.asc().nullsLast(), table.createdAt.desc().nullsLast()),
+	check("support_tickets_type_check", sql`type = ANY (ARRAY['question'::text,'config'::text,'problem'::text])`),
+	check("support_tickets_status_check", sql`status = ANY (ARRAY['open'::text,'in_progress'::text,'resolved'::text])`),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "support_tickets_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.createdBy],
+			foreignColumns: [user.id],
+			name: "support_tickets_created_by_fkey"
+		}).onDelete("set null"),
+]);
+
 export const aiConfigs = pgTable("ai_configs", {
 	id: uuid().defaultRandom().primaryKey().notNull(),
 	accountId: uuid("account_id").notNull(),
