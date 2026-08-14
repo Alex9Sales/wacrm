@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useEffect, useCallback, type ReactNode } from "react";
+import { useState, useEffect, useCallback, useRef, type ReactNode } from "react";
 import { useRouter } from "next/navigation";
 import { cn } from "@/lib/utils";
 import type { Message, MessageReaction } from "@/types";
@@ -23,6 +23,10 @@ import {
   User,
   Lock,
   Ban,
+  ZoomIn,
+  ZoomOut,
+  Download,
+  RotateCcw,
 } from "lucide-react";
 import { format } from "date-fns";
 import { toast } from "sonner";
@@ -420,9 +424,16 @@ function MediaUnavailable({ label }: { label: string }) {
 }
 
 /**
- * Full-screen image viewer. Opens when a message image is clicked; closes on
- * backdrop click, the X, or Escape. Also offers "open in new tab".
+ * Full-screen image/video viewer. Opens when a message image is clicked; closes
+ * on backdrop click, the X, or Escape. Para IMAGEM: rolar = zoom, arrastar =
+ * mover, botões +/−/ajustar, baixar e abrir em nova aba (pedido do Felipe —
+ * ampliar a foto pra ler o número da peça sem ter que salvar antes).
  */
+const LB_BTN =
+  "flex h-9 w-9 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20";
+const MIN_SCALE = 1;
+const MAX_SCALE = 8;
+
 function Lightbox({
   src,
   alt,
@@ -434,6 +445,31 @@ function Lightbox({
   onClose: () => void;
   kind?: "image" | "video";
 }) {
+  const isImage = kind !== "video";
+  const [scale, setScale] = useState(1);
+  const [offset, setOffset] = useState({ x: 0, y: 0 });
+  const [dragging, setDragging] = useState(false);
+  const wrapRef = useRef<HTMLDivElement>(null);
+  const dragRef = useRef<{
+    startX: number;
+    startY: number;
+    ox: number;
+    oy: number;
+  } | null>(null);
+
+  const clamp = (s: number) => Math.min(MAX_SCALE, Math.max(MIN_SCALE, s));
+  const applyScale = (next: number) =>
+    setScale(() => {
+      const ns = clamp(next);
+      if (ns === 1) setOffset({ x: 0, y: 0 });
+      return ns;
+    });
+  const zoomBy = (factor: number) => applyScale(scale * factor);
+  const reset = () => {
+    setScale(1);
+    setOffset({ x: 0, y: 0 });
+  };
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (e.key === "Escape") onClose();
@@ -447,33 +483,83 @@ function Lightbox({
     };
   }, [onClose]);
 
+  // Rolar = zoom. Listener não-passivo pra poder cancelar o scroll da página.
+  useEffect(() => {
+    if (!isImage) return;
+    const el = wrapRef.current;
+    if (!el) return;
+    const onWheel = (e: WheelEvent) => {
+      e.preventDefault();
+      setScale((s) => {
+        const ns = clamp(s * (e.deltaY < 0 ? 1.15 : 1 / 1.15));
+        if (ns === 1) setOffset({ x: 0, y: 0 });
+        return ns;
+      });
+    };
+    el.addEventListener("wheel", onWheel, { passive: false });
+    return () => el.removeEventListener("wheel", onWheel);
+  }, [isImage]);
+
+  const onPointerDown = (e: React.PointerEvent) => {
+    if (scale <= 1) return;
+    e.preventDefault();
+    dragRef.current = { startX: e.clientX, startY: e.clientY, ox: offset.x, oy: offset.y };
+    setDragging(true);
+    e.currentTarget.setPointerCapture?.(e.pointerId);
+  };
+  const onPointerMove = (e: React.PointerEvent) => {
+    const d = dragRef.current;
+    if (!d) return;
+    setOffset({ x: d.ox + (e.clientX - d.startX), y: d.oy + (e.clientY - d.startY) });
+  };
+  const onPointerUp = () => {
+    dragRef.current = null;
+    setDragging(false);
+  };
+
   return (
     <div
-      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/85 p-4"
+      className="fixed inset-0 z-[100] flex items-center justify-center bg-black/90"
       onClick={onClose}
       role="dialog"
       aria-modal="true"
     >
-      <a
-        href={src}
-        target="_blank"
-        rel="noopener noreferrer"
+      {/* Barra de ações */}
+      <div
+        className="absolute right-3 top-3 z-10 flex items-center gap-1.5"
         onClick={(e) => e.stopPropagation()}
-        title="Abrir em nova aba"
-        aria-label="Abrir em nova aba"
-        className="absolute left-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
       >
-        <ExternalLink className="h-5 w-5" />
-      </a>
-      <button
-        type="button"
-        onClick={onClose}
-        title="Fechar"
-        aria-label="Fechar"
-        className="absolute right-4 top-4 flex h-10 w-10 items-center justify-center rounded-full bg-white/10 text-white transition-colors hover:bg-white/20"
-      >
-        <X className="h-5 w-5" />
-      </button>
+        {isImage && (
+          <>
+            <button type="button" onClick={() => zoomBy(1 / 1.4)} title="Diminuir" className={LB_BTN}>
+              <ZoomOut className="h-5 w-5" />
+            </button>
+            <button type="button" onClick={() => zoomBy(1.4)} title="Ampliar" className={LB_BTN}>
+              <ZoomIn className="h-5 w-5" />
+            </button>
+            <button type="button" onClick={reset} title="Ajustar à tela" className={LB_BTN}>
+              <RotateCcw className="h-5 w-5" />
+            </button>
+            <a href={src} download title="Baixar" aria-label="Baixar" className={LB_BTN}>
+              <Download className="h-5 w-5" />
+            </a>
+          </>
+        )}
+        <a
+          href={src}
+          target="_blank"
+          rel="noopener noreferrer"
+          title="Abrir em nova aba"
+          aria-label="Abrir em nova aba"
+          className={LB_BTN}
+        >
+          <ExternalLink className="h-5 w-5" />
+        </a>
+        <button type="button" onClick={onClose} title="Fechar" aria-label="Fechar" className={LB_BTN}>
+          <X className="h-5 w-5" />
+        </button>
+      </div>
+
       {kind === "video" ? (
         <video
           src={src}
@@ -483,13 +569,37 @@ function Lightbox({
           className="max-h-[90vh] max-w-[90vw] rounded-lg"
         />
       ) : (
-        /* eslint-disable-next-line @next/next/no-img-element */
-        <img
-          src={src}
-          alt={alt}
+        <div
+          ref={wrapRef}
+          className="flex h-full w-full items-center justify-center overflow-hidden p-4"
           onClick={(e) => e.stopPropagation()}
-          className="max-h-[90vh] max-w-[90vw] rounded-lg object-contain"
-        />
+          onDoubleClick={() => (scale > 1 ? reset() : applyScale(2))}
+          onPointerDown={onPointerDown}
+          onPointerMove={onPointerMove}
+          onPointerUp={onPointerUp}
+          onPointerLeave={onPointerUp}
+          style={{ cursor: scale > 1 ? (dragging ? "grabbing" : "grab") : "zoom-in" }}
+        >
+          {/* eslint-disable-next-line @next/next/no-img-element */}
+          <img
+            src={src}
+            alt={alt}
+            draggable={false}
+            className="max-h-[90vh] max-w-[92vw] select-none rounded-lg object-contain"
+            style={{
+              transform: `translate(${offset.x}px, ${offset.y}px) scale(${scale})`,
+              transition: dragging ? "none" : "transform 90ms ease-out",
+            }}
+          />
+        </div>
+      )}
+
+      {isImage && (
+        <div
+          className="pointer-events-none absolute bottom-3 left-1/2 -translate-x-1/2 rounded-full bg-white/10 px-3 py-1 text-xs text-white/80"
+        >
+          Rolar = zoom · arrastar = mover · {Math.round(scale * 100)}%
+        </div>
       )}
     </div>
   );
