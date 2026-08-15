@@ -13,7 +13,40 @@ import { firstOrNull } from "@/db/helpers";
 import { encrypt, decrypt } from "@/lib/whatsapp/encryption";
 import { validateAiCredentials } from "./validate";
 import { AI_PROVIDER_DEFAULT_MODEL } from "./defaults";
-import type { AiProvider } from "./types";
+import { AiError, type AiProvider } from "./types";
+
+/**
+ * Valida uma chave Gemini SEM depender de um modelo específico: lista os
+ * modelos (checagem de auth). Um generateContent com modelo fixo pode dar 404
+ * ("modelo indisponível pra novos usuários") mesmo com a chave boa — então
+ * validamos por listagem, e o usuário escolhe o modelo no seletor.
+ */
+async function validateGeminiKey(apiKey: string): Promise<void> {
+  let res: Response;
+  try {
+    res = await fetch(
+      "https://generativelanguage.googleapis.com/v1beta/models?pageSize=1",
+      { headers: { "x-goog-api-key": apiKey }, signal: AbortSignal.timeout(15_000) },
+    );
+  } catch {
+    throw new AiError("Não foi possível contatar o Google Gemini.", {
+      code: "network_error",
+      status: 502,
+    });
+  }
+  if (res.status === 400 || res.status === 401 || res.status === 403) {
+    throw new AiError(
+      "O Google rejeitou a chave (inválida ou sem permissão para a API Gemini).",
+      { code: "invalid_key", status: 401 },
+    );
+  }
+  if (!res.ok) {
+    throw new AiError(`Falha ao validar a chave Gemini (HTTP ${res.status}).`, {
+      code: "provider_error",
+      status: 502,
+    });
+  }
+}
 
 /** Provedores que já têm adapter funcionando (podem ser validados/usados).
  *  O Gemini entra aqui na Fase 3. A tabela aceita 'gemini' desde já. */
@@ -87,21 +120,27 @@ export async function createCredential(input: {
   const key = apiKey.trim();
   if (!key) throw new CredentialError("Informe a chave de API.");
 
-  // Valida a chave (liveness + auth) com o modelo padrão do provedor.
-  await validateAiCredentials({
-    provider,
-    model: AI_PROVIDER_DEFAULT_MODEL[provider],
-    apiKey: key,
-    systemPrompt: null,
-    isActive: true,
-    autoReplyEnabled: false,
-    autoReplyChannelIds: [],
-    autoReplyMaxPerConversation: 3,
-    autoReplyHoursMode: "always",
-    embeddingsApiKey: null,
-    signatureName: null,
-    signatureEnabled: false,
-  });
+  // Valida a chave antes de salvar. Gemini valida por listagem de modelos
+  // (não depende de um modelo específico); OpenAI/Anthropic por uma geração
+  // mínima com o modelo padrão.
+  if (provider === "gemini") {
+    await validateGeminiKey(key);
+  } else {
+    await validateAiCredentials({
+      provider,
+      model: AI_PROVIDER_DEFAULT_MODEL[provider],
+      apiKey: key,
+      systemPrompt: null,
+      isActive: true,
+      autoReplyEnabled: false,
+      autoReplyChannelIds: [],
+      autoReplyMaxPerConversation: 3,
+      autoReplyHoursMode: "always",
+      embeddingsApiKey: null,
+      signatureName: null,
+      signatureEnabled: false,
+    });
+  }
 
   const row = firstOrNull(
     await db
