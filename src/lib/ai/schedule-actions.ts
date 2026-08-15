@@ -5,9 +5,71 @@
 // ============================================================
 
 import { and, asc, eq } from 'drizzle-orm'
-import { db, calendars, calendarEvents, deals } from '@/db'
+import { db, calendars, calendarEvents, deals, scheduledMessages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { pushEventToGoogle } from '@/lib/google/sync'
+import { enqueueScheduledMessage } from '@/lib/queue/queues'
+
+/** DD/MM às HH:mm no fuso da conta. */
+function fmtLocal(date: Date, tz: string): string {
+  const opts: Intl.DateTimeFormatOptions = {
+    day: '2-digit',
+    month: '2-digit',
+    hour: '2-digit',
+    minute: '2-digit',
+    hour12: false,
+  }
+  try {
+    return new Intl.DateTimeFormat('pt-BR', { ...opts, timeZone: tz })
+      .format(date)
+      .replace(', ', ' às ')
+  } catch {
+    return new Intl.DateTimeFormat('pt-BR', opts).format(date)
+  }
+}
+
+/**
+ * Programa uma mensagem (lembrete) via scheduled_messages + enfileira o job.
+ * Best-effort. Ignora se o horário já passou / está muito perto (<1min).
+ * ⚠️ Fora da janela de 24h no canal OFICIAL da Meta, a entrega exige template
+ * (não tratado aqui) — em canais WAHA e dentro da janela, entrega normal.
+ */
+async function scheduleReminderMessage(input: {
+  accountId: string
+  userId: string | null
+  conversationId: string
+  contactId: string | null
+  whenUtc: Date
+  text: string
+}): Promise<void> {
+  const delayMs = input.whenUtc.getTime() - Date.now()
+  if (delayMs < 60_000) return
+  try {
+    const [row] = await db
+      .insert(scheduledMessages)
+      .values({
+        accountId: input.accountId,
+        conversationId: input.conversationId,
+        contactId: input.contactId || null,
+        messageType: 'text',
+        contentText: input.text,
+        scheduledAt: input.whenUtc.toISOString(),
+        status: 'pending',
+        createdBy: input.userId,
+        assignedTo: input.userId,
+        assignedBy: input.userId,
+      })
+      .returning({ id: scheduledMessages.id })
+    try {
+      await enqueueScheduledMessage(row.id, { delayMs })
+    } catch (err) {
+      console.error('[ai schedule] enfileirar lembrete falhou:', err)
+      await db.delete(scheduledMessages).where(eq(scheduledMessages.id, row.id))
+    }
+  } catch (err) {
+    console.error('[ai schedule] agendar lembrete falhou:', err)
+  }
+}
 
 /** Offset (min) do fuso `tz` no instante `date`. Positivo = tz à frente do UTC. */
 function tzOffsetMinutes(date: Date, tz: string): number {
@@ -141,6 +203,36 @@ export async function scheduleEventFromAi(input: {
       await pushEventToGoogle(accountId, created.id, 'create')
     } catch (err) {
       console.error('[ai schedule] google push falhou:', err)
+    }
+
+    // Ciclo de reunião (Fase D): programa o lembrete pré-reunião (3h antes, se
+    // sobrar tempo) e o pós-reunião (2h depois). Best-effort.
+    try {
+      const preWhen = new Date(start.getTime() - 3 * 3_600_000)
+      if (preWhen.getTime() - Date.now() > 60_000) {
+        await scheduleReminderMessage({
+          accountId,
+          userId,
+          conversationId,
+          contactId,
+          whenUtc: preWhen,
+          text: `Oi! 👋 Passando pra lembrar da nossa conversa em ${fmtLocal(
+            start,
+            timezone,
+          )}. Até lá! 😊`,
+        })
+      }
+      const postWhen = new Date(end.getTime() + 2 * 3_600_000)
+      await scheduleReminderMessage({
+        accountId,
+        userId,
+        conversationId,
+        contactId,
+        whenUtc: postWhen,
+        text: 'Oi! Como foi nossa conversa? Ficou alguma dúvida ou quer dar seguimento? 😊',
+      })
+    } catch (err) {
+      console.error('[ai schedule] lembretes falharam:', err)
     }
 
     return { eventId: created.id, startsAt: start.toISOString(), title }
