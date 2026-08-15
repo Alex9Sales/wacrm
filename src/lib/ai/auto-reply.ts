@@ -123,8 +123,9 @@ export async function dispatchInboundToAiReply(
     // Horário de atendimento da IA: só responde conforme o modo
     // (sempre / só dentro / só fora do horário da conta). Fora da janela
     // permitida, fica muda (um humano cuida no horário certo).
+    // Settings da conta: usado pro gate de horário E pro fuso injetado no prompt.
+    const settings = await getAccountSettings(accountId)
     if (config.autoReplyHoursMode !== 'always') {
-      const settings = await getAccountSettings(accountId)
       if (!aiHoursAllows(config.autoReplyHoursMode, settings)) return
     }
     // NEVER auto-reply in a GROUP thread. The bot answering inside a WhatsApp
@@ -160,6 +161,7 @@ export async function dispatchInboundToAiReply(
       knowledge,
       companyProfile,
       catalog,
+      timezone: settings.businessTimezone,
     })
 
     const { text, handoff } = await generateReply({
