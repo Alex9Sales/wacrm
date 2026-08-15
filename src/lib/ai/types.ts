@@ -50,6 +50,8 @@ export interface AiConfig {
   /** Encerramento inteligente (opt-in): a IA pode se despedir, resolver a
    *  conversa e mover o card do funil ao terminar. Default false. */
   autoCloseEnabled?: boolean
+  /** IA agenda de verdade (opt-in): cria evento na Agenda ao combinar horário. */
+  autoScheduleEnabled?: boolean
 }
 
 /** A single conversation turn in the shape both providers accept. */

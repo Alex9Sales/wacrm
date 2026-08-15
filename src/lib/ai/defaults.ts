@@ -81,6 +81,9 @@ export const FUNNEL_DIRECTIVE = /\[\[\s*funil\s*:\s*([^\]]+?)\s*\]\]/i
 export const SKIP_DIRECTIVE = /\[\[\s*ignorar\s*\]\]/i
 /** Etiquetar o contato com uma etiqueta EXISTENTE (captura o nome). Global. */
 export const TAG_DIRECTIVE = /\[\[\s*etiqueta\s*:\s*([^\]]+?)\s*\]\]/gi
+/** Agendar: [[AGENDAR:YYYY-MM-DDTHH:MM|título]] (data local + título opcional). */
+export const SCHEDULE_DIRECTIVE =
+  /\[\[\s*agendar\s*:\s*(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
 
 export interface AgentDirectives {
   /** Texto limpo (sem os marcadores) a enviar ao cliente. */
@@ -93,6 +96,8 @@ export interface AgentDirectives {
   resolve: boolean
   /** Encerramento: etapa do funil pedida (nome), ou null. */
   funnelStage: string | null
+  /** Agendamento: horário combinado (hora local "YYYY-MM-DDTHH:MM") + título. */
+  schedule: { startsLocal: string; title: string } | null
 }
 
 /** Extrai os marcadores de ação do texto gerado e devolve o texto limpo. */
@@ -101,6 +106,10 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const resolve = RESOLVE_DIRECTIVE.test(raw)
   const fm = raw.match(FUNNEL_DIRECTIVE)
   const funnelStage = fm ? fm[1].trim() : null
+  const sm = raw.match(SCHEDULE_DIRECTIVE)
+  const schedule = sm
+    ? { startsLocal: sm[1].trim(), title: (sm[2] || '').trim() }
+    : null
   const tags: string[] = []
   for (const m of raw.matchAll(TAG_DIRECTIVE)) {
     const name = (m[1] || '').trim()
@@ -108,12 +117,20 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   }
   const text = raw
     .replace(TAG_DIRECTIVE, '')
+    .replace(new RegExp(SCHEDULE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(FUNNEL_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(RESOLVE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(SKIP_DIRECTIVE.source, 'gi'), '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
-  return { text, skipReply, tags, resolve, funnelStage }
+  return { text, skipReply, tags, resolve, funnelStage, schedule }
+}
+
+/** Instrução: agendar reunião de verdade quando combinar um horário. */
+export function scheduleInstruction(): string {
+  return (
+    'Scheduling: when you and the customer clearly AGREE on a specific date and time for a meeting, call, or appointment, emit ONCE the marker "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>]]" — computing the ABSOLUTE date/time from the current date/time given above (business timezone). Resolve relative times ("tomorrow at 3pm", "friday morning") to the real date, use 24h time (e.g. 15:00), and put a short title after the "|" (e.g. the customer name and topic). Emit it ONLY when a concrete time is actually agreed — never for a vague "sometime". Also confirm the day and time in your normal reply. This marker is control metadata: never show it to the customer.'
+  )
 }
 
 /** Instrução: não responder mensagens que não pedem resposta. */
@@ -193,6 +210,9 @@ export function buildSystemPrompt(args: {
   /** Etiquetas EXISTENTES da conta — a IA pode aplicar uma pra qualificar.
    *  Vazio = não ensina a etiquetar. Só vale no modo auto_reply. */
   availableTags?: string[]
+  /** IA agenda de verdade (opt-in): ensina a emitir [[AGENDAR:..]] ao combinar
+   *  um horário. Só vale no modo auto_reply. */
+  autoSchedule?: boolean
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -228,6 +248,10 @@ export function buildSystemPrompt(args: {
     // Etiquetar/qualificar com etiquetas existentes (quando a conta tem tags).
     if (args.availableTags && args.availableTags.length > 0) {
       parts.push(tagInstruction(args.availableTags))
+    }
+    // IA agenda de verdade (opt-in): cria evento ao combinar um horário.
+    if (args.autoSchedule) {
+      parts.push(scheduleInstruction())
     }
     // Encerramento inteligente (opt-in): despedir + resolver + mover o funil.
     if (args.autoClose) {

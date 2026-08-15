@@ -17,6 +17,7 @@ import {
   listAccountTagNames,
   applyTagsByName,
 } from './close-actions'
+import { scheduleEventFromAi } from './schedule-actions'
 import { latestUserMessage } from './query'
 import { randomUUID } from 'crypto'
 import {
@@ -183,6 +184,7 @@ export async function dispatchInboundToAiReply(
       autoClose: config.autoCloseEnabled,
       pipelineStages: closeCtx?.stageNames ?? [],
       availableTags: accountTags,
+      autoSchedule: config.autoScheduleEnabled,
     })
 
     const { text: rawText, handoff } = await generateReply({
@@ -214,6 +216,21 @@ export async function dispatchInboundToAiReply(
         if (applied.length) {
           console.log('[ai auto-reply] etiquetas:', applied.join(', '))
         }
+      }
+    }
+    // Agendar (só quando o agente tem "IA agenda de verdade" ligado).
+    const runSchedule = async () => {
+      if (config.autoScheduleEnabled && dirs.schedule) {
+        const ev = await scheduleEventFromAi({
+          accountId,
+          userId: configOwnerUserId || null,
+          conversationId,
+          contactId,
+          startsLocal: dirs.schedule.startsLocal,
+          title: dirs.schedule.title || 'Reunião',
+          timezone: settings.businessTimezone,
+        })
+        if (ev) console.log('[ai auto-reply] agendou:', JSON.stringify(ev))
       }
     }
     // Encerrar (só quando o agente tem encerramento inteligente ligado).
@@ -378,8 +395,9 @@ export async function dispatchInboundToAiReply(
       })
     }
 
-    // Depois de enviar: etiqueta (qualifica) e, se for o caso, encerra.
+    // Depois de enviar: etiqueta, agenda (se combinou) e, se for o caso, encerra.
     await applyTags()
+    await runSchedule()
     await runClose()
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)

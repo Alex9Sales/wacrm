@@ -1411,6 +1411,9 @@ export const aiConfigs = pgTable("ai_configs", {
 	// RESOLVER a conversa e MOVER o card do funil quando o atendimento acaba /
 	// o cliente não tem mais interesse. Default OFF.
 	autoCloseEnabled: boolean("auto_close_enabled").default(false).notNull(),
+	// IA agenda de verdade (migração 0088, opt-in): cria evento na Agenda quando
+	// combina um horário com o cliente. Default OFF.
+	autoScheduleEnabled: boolean("auto_schedule_enabled").default(false).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

@@ -28,6 +28,7 @@ const agentSelect = {
   signatureName: aiConfigs.signatureName,
   signatureEnabled: aiConfigs.signatureEnabled,
   autoCloseEnabled: aiConfigs.autoCloseEnabled,
+  autoScheduleEnabled: aiConfigs.autoScheduleEnabled,
 }
 
 type AgentRow = {
@@ -50,6 +51,7 @@ type AgentRow = {
   signatureName: string | null
   signatureEnabled: boolean
   autoCloseEnabled: boolean
+  autoScheduleEnabled: boolean
 }
 
 /** Turn a raw agent row into a usable, decrypted AiConfig (or null when it
@@ -105,6 +107,7 @@ function finalizeAgent(
     signatureName: row.signatureName,
     signatureEnabled: row.signatureEnabled,
     autoCloseEnabled: row.autoCloseEnabled,
+    autoScheduleEnabled: row.autoScheduleEnabled,
   }
 }
 

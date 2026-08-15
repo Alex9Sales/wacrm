@@ -19,6 +19,17 @@ describe('parseCloseDirectives', () => {
     expect(d.text).toBe('')
   })
 
+  it('extrai [[AGENDAR:data|título]]', () => {
+    const d = parseCloseDirectives(
+      'Combinado! Te vejo amanhã.\n[[AGENDAR:2026-08-16T15:00|Reunião com Matheus]]',
+    )
+    expect(d.schedule).toEqual({
+      startsLocal: '2026-08-16T15:00',
+      title: 'Reunião com Matheus',
+    })
+    expect(d.text).toBe('Combinado! Te vejo amanhã.')
+  })
+
   it('sem marcadores = texto intacto', () => {
     const d = parseCloseDirectives('Oi, tudo bem?')
     expect(d).toMatchObject({

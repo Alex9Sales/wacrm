@@ -54,6 +54,7 @@ export async function GET(request: Request) {
           signature_name: aiConfigs.signatureName,
           signature_enabled: aiConfigs.signatureEnabled,
           auto_close_enabled: aiConfigs.autoCloseEnabled,
+          auto_schedule_enabled: aiConfigs.autoScheduleEnabled,
           api_key: aiConfigs.apiKey,
           embeddings_api_key: aiConfigs.embeddingsApiKey,
         })
@@ -185,6 +186,7 @@ export async function POST(request: Request) {
         : null
     const signatureEnabled = body.signature_enabled === true && !!signatureName
     const autoCloseEnabled = body.auto_close_enabled === true
+    const autoScheduleEnabled = body.auto_schedule_enabled === true
 
     // IA proativa em Negociações (Fase 3): opt-in por conta (default OFF).
     // IA proativa em Negociações agora é controlada FORA do agente (painel de
@@ -336,6 +338,7 @@ export async function POST(request: Request) {
       signatureName: string | null
       signatureEnabled: boolean
       autoCloseEnabled: boolean
+      autoScheduleEnabled: boolean
       embeddingsApiKey?: string | null
     } = {
       provider,
@@ -353,6 +356,7 @@ export async function POST(request: Request) {
       signatureName,
       signatureEnabled,
       autoCloseEnabled,
+      autoScheduleEnabled,
     }
     // IA proativa: só grava quando o campo veio no body (preserva o valor atual
     // caso contrário — o controle vive no card "IA em Negociações" do painel).
