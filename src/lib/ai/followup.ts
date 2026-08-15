@@ -1,6 +1,7 @@
-import { eq, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, sql } from 'drizzle-orm'
 
-import { db, aiConfigs, conversations } from '@/db'
+import { db, aiConfigs, conversations, deals, calendarEvents } from '@/db'
+import { firstOrNull } from '@/db/helpers'
 import { loadAiConfigById } from './config'
 import { buildConversationContext } from './context'
 import { generateReply } from './generate'
@@ -46,6 +47,10 @@ export interface FollowUpConfig {
   enabled: boolean
   steps: FollowUpStep[]
   armedAt: string | null
+  /** Desistência: ao esgotar os degraus sem resposta, move o card pra Perdido. */
+  giveUpEnabled: boolean
+  /** Nome da etapa "Perdido" pra onde mover ao desistir (casa por nome). */
+  giveUpStage: string | null
 }
 
 const VALID_UNITS = new Set<FollowUpDelayUnit>(['minutes', 'hours', 'days'])
@@ -93,7 +98,58 @@ export function readFollowUpConfig(raw: unknown): FollowUpConfig {
       typeof bag.instructions === 'string' ? bag.instructions.trim().slice(0, 2000) : ''
     steps = [{ delayValue: delayMinutes, delayUnit: 'minutes', instructions }]
   }
-  return { enabled, steps, armedAt }
+  const giveUpEnabled = bag.giveUpEnabled === true
+  const giveUpStage =
+    typeof bag.giveUpStage === 'string' && bag.giveUpStage.trim()
+      ? bag.giveUpStage.trim().slice(0, 100)
+      : null
+  return { enabled, steps, armedAt, giveUpEnabled, giveUpStage }
+}
+
+/**
+ * O reengajamento NÃO se aplica se o negócio já avançou: reunião futura marcada
+ * pro contato ("já agendou") ou negócio ligado ganho/perdido. Best-effort —
+ * na dúvida (erro), deixa reengajar (fail-open).
+ */
+async function isReengageBlocked(
+  accountId: string,
+  conversationId: string,
+  contactId: string | null,
+): Promise<boolean> {
+  try {
+    const deal = firstOrNull(
+      await db
+        .select({ status: deals.status })
+        .from(deals)
+        .where(
+          and(eq(deals.accountId, accountId), eq(deals.conversationId, conversationId)),
+        )
+        .orderBy(desc(deals.createdAt))
+        .limit(1),
+    )
+    if (deal && (deal.status === 'won' || deal.status === 'lost')) return true
+
+    if (contactId) {
+      const ev = firstOrNull(
+        await db
+          .select({ id: calendarEvents.id })
+          .from(calendarEvents)
+          .where(
+            and(
+              eq(calendarEvents.accountId, accountId),
+              eq(calendarEvents.contactId, contactId),
+              eq(calendarEvents.status, 'confirmed'),
+              gt(calendarEvents.startsAt, sql`now()`),
+            ),
+          )
+          .limit(1),
+      )
+      if (ev) return true
+    }
+  } catch {
+    /* fail-open */
+  }
+  return false
 }
 
 interface AgentRow {
@@ -166,15 +222,54 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
     let loaded = false
 
     for (const c of cands) {
-      if (!c.last_inbound_at || !c.last_message_at) continue
-      // Janela de 24h da última mensagem do cliente.
-      if (Date.now() - new Date(c.last_inbound_at).getTime() >= WINDOW_MS) continue
+      if (!c.last_message_at) continue
 
       // Episódio: o cliente respondeu desde o último follow-up? → reinicia no degrau 0.
       const episodeReset =
-        !c.last_follow_up_at || new Date(c.last_inbound_at) > new Date(c.last_follow_up_at)
+        !c.last_follow_up_at ||
+        (!!c.last_inbound_at && new Date(c.last_inbound_at) > new Date(c.last_follow_up_at))
       const currentStep = episodeReset ? 0 : c.follow_up_step
-      if (currentStep >= cfg.steps.length) continue // escada esgotada (até o cliente responder)
+
+      // Guard: o negócio já avançou (agendou reunião / ganho / perdido)? Não
+      // reengaja NEM desiste — reengajamento não se aplica.
+      if (await isReengageBlocked(agent.account_id, c.id, c.contact_id)) continue
+
+      // Escada esgotada.
+      if (currentStep >= cfg.steps.length) {
+        // Desistência: ninguém respondeu até o último toque → move o card pra
+        // Perdido UMA vez (é move interno do funil, não envia mensagem, então
+        // não depende da janela de 24h). Espera o delay do último degrau desde
+        // o último follow-up antes de declarar perda.
+        if (
+          currentStep === cfg.steps.length &&
+          cfg.giveUpEnabled &&
+          cfg.giveUpStage &&
+          !episodeReset &&
+          c.last_follow_up_at &&
+          Date.now() - new Date(c.last_follow_up_at).getTime() >=
+            stepDelayMinutes(cfg.steps[cfg.steps.length - 1]) * 60_000
+        ) {
+          try {
+            const rr = await applyCloseActions({
+              accountId: agent.account_id,
+              userId: agent.created_by ?? null,
+              conversationId: c.id,
+              resolve: false,
+              funnelStageName: cfg.giveUpStage,
+            })
+            console.log('[followup] desistência → Perdido:', JSON.stringify(rr))
+          } catch (err) {
+            console.error('[followup] desistência falhou:', err)
+          }
+          await stamp(c.id, currentStep + 1) // trava: não desiste de novo
+        }
+        continue // escada esgotada (até o cliente responder)
+      }
+
+      // Daqui pra baixo é ENVIO de follow-up → precisa da janela de 24h da
+      // última mensagem do cliente (fora dela, só template — não coberto aqui).
+      if (!c.last_inbound_at) continue
+      if (Date.now() - new Date(c.last_inbound_at).getTime() >= WINDOW_MS) continue
 
       const step = cfg.steps[currentStep]
       // Âncora: degrau 0 = última atividade; degraus seguintes = último follow-up.

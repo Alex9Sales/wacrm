@@ -68,6 +68,8 @@ export async function PATCH(request: Request) {
       enabled,
       steps: Array.isArray(body?.steps) ? body.steps : undefined,
       armedAt,
+      giveUpEnabled: body?.giveUpEnabled === true,
+      giveUpStage: typeof body?.giveUpStage === 'string' ? body.giveUpStage : null,
     })
 
     await db

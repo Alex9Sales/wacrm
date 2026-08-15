@@ -38,6 +38,8 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
   const [steps, setSteps] = useState<Step[]>([
     { delayValue: 1, delayUnit: 'hours', instructions: '' },
   ]);
+  const [giveUpEnabled, setGiveUpEnabled] = useState(false);
+  const [giveUpStage, setGiveUpStage] = useState('');
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -61,6 +63,10 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                 _guide: !!(x.instructions ?? '').trim(),
               }))
             : [{ delayValue: 1, delayUnit: 'hours', instructions: '' }],
+        );
+        setGiveUpEnabled(!!data.followUp.giveUpEnabled);
+        setGiveUpStage(
+          typeof data.followUp.giveUpStage === 'string' ? data.followUp.giveUpStage : '',
         );
       }
     } catch {
@@ -95,6 +101,8 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
             delayUnit: s.delayUnit,
             instructions: s.instructions.trim(),
           })),
+          giveUpEnabled,
+          giveUpStage: giveUpStage.trim(),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -137,6 +145,12 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
 
       {enabled && !loading && (
         <div className="mt-4 space-y-3 border-t border-border pt-3">
+          <p className="rounded-lg bg-muted/50 px-3 py-2 text-[11px] text-muted-foreground">
+            O follow-up só reengaja quem <strong>realmente sumiu</strong>: ele
+            não roda se o lead já <strong>agendou uma reunião</strong> ou o
+            negócio foi <strong>ganho/perdido</strong>. Volta pro início quando o
+            cliente responde.
+          </p>
           {steps.map((s, i) => (
             <div key={i} className="rounded-lg border border-border p-3">
               <div className="mb-2 flex items-center justify-between">
@@ -232,6 +246,40 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
               <Plus className="mr-1.5 h-4 w-4" /> Adicionar toque
             </Button>
           )}
+
+          {/* Desistência: sem resposta até o último toque → move pra Perdido. */}
+          <div className="rounded-lg border border-dashed border-border p-3">
+            <label className="flex items-center gap-2.5 text-sm font-medium text-foreground">
+              <Switch
+                checked={giveUpEnabled}
+                onCheckedChange={setGiveUpEnabled}
+                disabled={!canEdit}
+              />
+              Desistir depois do último toque
+            </label>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Se o cliente não responder até o último toque, move o card do funil
+              pra uma etapa e para de insistir.
+            </p>
+            {giveUpEnabled && (
+              <div className="mt-2">
+                <Label
+                  htmlFor="fu-giveup-stage"
+                  className="text-[11px] text-muted-foreground"
+                >
+                  Mover o card para a etapa:
+                </Label>
+                <Input
+                  id="fu-giveup-stage"
+                  value={giveUpStage}
+                  onChange={(e) => setGiveUpStage(e.target.value)}
+                  placeholder="ex.: Perdido"
+                  disabled={!canEdit}
+                  className="mt-1 h-8 max-w-xs"
+                />
+              </div>
+            )}
+          </div>
         </div>
       )}
 
