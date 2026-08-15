@@ -83,21 +83,26 @@ async function aiRepliesOnChannel(
   accountId: string,
   channelId: string | null | undefined,
 ): Promise<boolean> {
-  const row = firstOrNull(
-    await db
-      .select({
-        isActive: aiConfigs.isActive,
-        autoReplyEnabled: aiConfigs.autoReplyEnabled,
-        channelIds: aiConfigs.autoReplyChannelIds,
-      })
-      .from(aiConfigs)
-      .where(eq(aiConfigs.accountId, accountId))
-      .limit(1),
-  )
-  if (!row || !row.isActive || !row.autoReplyEnabled) return false
-  const ids = row.channelIds ?? []
-  if (ids.length === 0) return true // vazio = todos os canais
-  return !!channelId && ids.includes(channelId)
+  // Multi-agente: a conta pode ter VÁRIOS agentes. O botão de IA deve aparecer
+  // se QUALQUER agente ativo com auto-resposta atende este canal (canais vazio =
+  // todos). Antes pegava 1 agente arbitrário (.limit(1)) → escondia o botão
+  // quando o "escolhido" estava com auto-resposta desligada.
+  const rows = await db
+    .select({ channelIds: aiConfigs.autoReplyChannelIds })
+    .from(aiConfigs)
+    .where(
+      and(
+        eq(aiConfigs.accountId, accountId),
+        eq(aiConfigs.isActive, true),
+        eq(aiConfigs.autoReplyEnabled, true),
+      ),
+    )
+  for (const r of rows) {
+    const ids = r.channelIds ?? []
+    if (ids.length === 0) return true // esse agente atende todos os canais
+    if (channelId && ids.includes(channelId)) return true
+  }
+  return false
 }
 
 export async function getConversationWithContact(
