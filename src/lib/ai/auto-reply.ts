@@ -17,6 +17,10 @@ import {
   listAccountTagNames,
   applyTagsByName,
   createDealFromAi,
+  postInternalNote,
+  setContactAttribute,
+  listContactFieldNames,
+  setVoicePreference,
 } from './close-actions'
 import { scheduleEventFromAi } from './schedule-actions'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
@@ -111,6 +115,7 @@ export async function dispatchInboundToAiReply(
           aiAutoreplyDisabled: conversations.aiAutoreplyDisabled,
           aiReplyCount: conversations.aiReplyCount,
           channelId: conversations.channelId,
+          voicePreference: conversations.voicePreference,
           isGroup: contacts.isGroup,
         })
         .from(conversations)
@@ -180,6 +185,10 @@ export async function dispatchInboundToAiReply(
     const accountTags = has('tag') ? await listAccountTagNames(accountId) : []
     // handoff: etiquetas de roteamento (atendentes etiquetados) pra transferir.
     const routingTags = has('handoff') ? await listRoutingTags(accountId) : []
+    // set_attribute: nomes dos campos personalizados do contato.
+    const customFieldNames = has('set_attribute')
+      ? await listContactFieldNames(accountId)
+      : []
 
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
@@ -192,6 +201,8 @@ export async function dispatchInboundToAiReply(
       pipelineStages: closeCtx?.stageNames ?? [],
       availableTags: accountTags,
       routingTags,
+      customFieldNames,
+      voicePref: conv.voicePreference,
     })
 
     const { text: rawText, handoff } = await generateReply({
@@ -212,7 +223,7 @@ export async function dispatchInboundToAiReply(
     const dirs = parseCloseDirectives(rawText)
     const text = dirs.text
 
-    // Etiquetar (ferramenta 'tag').
+    // Ações "leves" da conversa: etiquetar, nota interna, atributo, voz.
     const applyTags = async () => {
       if (has('tag') && dirs.tags.length) {
         const applied = await applyTagsByName({
@@ -223,6 +234,24 @@ export async function dispatchInboundToAiReply(
         if (applied.length) {
           console.log('[ai auto-reply] etiquetas:', applied.join(', '))
         }
+      }
+      if (has('private_note') && dirs.note) {
+        await postInternalNote({ conversationId, text: dirs.note })
+      }
+      if (has('set_attribute') && dirs.attribute) {
+        await setContactAttribute({
+          accountId,
+          contactId,
+          field: dirs.attribute.field,
+          value: dirs.attribute.value,
+        })
+      }
+      if (has('voice_pref') && dirs.voicePref) {
+        await setVoicePreference({
+          accountId,
+          conversationId,
+          pref: dirs.voicePref,
+        })
       }
     }
     // Agendar (ferramenta 'schedule').

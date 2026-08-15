@@ -19,8 +19,105 @@ import {
   dealEvents,
   tags,
   contactTags,
+  messages,
+  customFields,
+  contactCustomValues,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+
+/** Nota interna na conversa (só pra equipe, nunca vai pro cliente). */
+export async function postInternalNote(input: {
+  conversationId: string
+  text: string
+}): Promise<boolean> {
+  const text = (input.text || '').trim()
+  if (!text) return false
+  try {
+    await db.insert(messages).values({
+      conversationId: input.conversationId,
+      senderType: 'bot',
+      contentType: 'text',
+      contentText: text,
+      isInternal: true,
+      status: 'sent',
+    })
+    return true
+  } catch (err) {
+    console.error('[ai note] falhou:', err)
+    return false
+  }
+}
+
+/** Nomes dos campos personalizados do contato (pra injetar no prompt). */
+export async function listContactFieldNames(accountId: string): Promise<string[]> {
+  try {
+    const rows = await db
+      .select({ name: customFields.fieldName })
+      .from(customFields)
+      .where(eq(customFields.accountId, accountId))
+      .orderBy(asc(customFields.fieldName))
+    return rows.map((r) => r.name).filter(Boolean)
+  } catch {
+    return []
+  }
+}
+
+/** Grava um atributo (campo personalizado EXISTENTE) no contato. Best-effort. */
+export async function setContactAttribute(input: {
+  accountId: string
+  contactId: string | null
+  field: string
+  value: string
+}): Promise<boolean> {
+  const { accountId, contactId, field, value } = input
+  if (!contactId || !field) return false
+  try {
+    const fields = await db
+      .select({ id: customFields.id, name: customFields.fieldName })
+      .from(customFields)
+      .where(eq(customFields.accountId, accountId))
+    const want = field.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase()
+    const match =
+      fields.find(
+        (f) => f.name.normalize('NFD').replace(/[̀-ͯ]/g, '').trim().toLowerCase() === want,
+      ) ?? null
+    if (!match) return false
+    await db
+      .insert(contactCustomValues)
+      .values({ contactId, customFieldId: match.id, value: value.slice(0, 500) })
+      .onConflictDoUpdate({
+        target: [contactCustomValues.contactId, contactCustomValues.customFieldId],
+        set: { value: value.slice(0, 500) },
+      })
+    return true
+  } catch (err) {
+    console.error('[ai attribute] falhou:', err)
+    return false
+  }
+}
+
+/** Registra a preferência de voz do cliente na conversa. */
+export async function setVoicePreference(input: {
+  accountId: string
+  conversationId: string
+  pref: 'audio' | 'text'
+}): Promise<boolean> {
+  try {
+    await db
+      .update(conversations)
+      .set({ voicePreference: input.pref })
+      .where(
+        and(
+          eq(conversations.id, input.conversationId),
+          eq(conversations.accountId, input.accountId),
+        ),
+      )
+    return true
+  } catch (err) {
+    console.error('[ai voice-pref] falhou:', err)
+    return false
+  }
+}
 
 export interface DealCloseContext {
   dealId: string

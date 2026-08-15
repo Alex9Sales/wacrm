@@ -462,6 +462,9 @@ export const conversations = pgTable("conversations", {
 	unreadCount: integer("unread_count").default(0),
 	aiAutoreplyDisabled: boolean("ai_autoreply_disabled").default(false).notNull(),
 	aiReplyCount: integer("ai_reply_count").default(0).notNull(),
+	// Preferência de voz do cliente (ferramenta voice_pref, migração 0091):
+	// 'audio' | 'text' | null. A IA enviesa o formato da resposta.
+	voicePreference: text("voice_preference"),
 	// Private conversation (migration 0032): only the assigned agent, admins,
 	// supervisors and explicit participants see it — hidden from the general
 	// queue and from agents it isn't assigned to.

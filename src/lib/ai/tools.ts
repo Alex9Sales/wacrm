@@ -99,16 +99,16 @@ export const AGENT_TOOLS: AgentToolDef[] = [
     description: 'Publica uma nota visível só pros atendentes, não pro cliente.',
     group: 'Conversa',
     defaultOn: false,
-    implemented: false,
+    implemented: true,
   },
   {
     key: 'set_attribute',
     label: 'Definir atributo',
     description:
-      'Grava um atributo personalizado na conversa/contato (ex.: estágio do lead).',
+      'Grava um campo personalizado do contato (usa só os campos que já existem).',
     group: 'Conversa',
     defaultOn: false,
-    implemented: false,
+    implemented: true,
   },
   {
     key: 'voice_pref',
@@ -116,7 +116,7 @@ export const AGENT_TOOLS: AgentToolDef[] = [
     description: 'Registra se o cliente prefere respostas em áudio ou texto.',
     group: 'Utilitária',
     defaultOn: false,
-    implemented: false,
+    implemented: true,
   },
 ]
 

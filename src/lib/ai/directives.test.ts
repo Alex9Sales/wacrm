@@ -49,6 +49,20 @@ describe('parseCloseDirectives', () => {
     expect(d.text).toBe('Show! Vou registrar aqui.')
   })
 
+  it('extrai nota/atributo/voz', () => {
+    const d = parseCloseDirectives(
+      'Anotado!\n[[NOTA:cliente pediu desconto]]\n[[ATRIBUTO:Qualificação=Quente]]\n[[VOZ:audio]]',
+    )
+    expect(d.note).toBe('cliente pediu desconto')
+    expect(d.attribute).toEqual({ field: 'Qualificação', value: 'Quente' })
+    expect(d.voicePref).toBe('audio')
+    expect(d.text).toBe('Anotado!')
+  })
+
+  it('[[VOZ:texto]] → text', () => {
+    expect(parseCloseDirectives('[[VOZ:texto]]').voicePref).toBe('text')
+  })
+
   it('sem marcadores = texto intacto', () => {
     const d = parseCloseDirectives('Oi, tudo bem?')
     expect(d).toMatchObject({

@@ -89,6 +89,12 @@ export const TRANSFER_DIRECTIVE =
   /\[\[\s*transferir\s*:\s*([^\]|]+?)\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
 /** Criar card no funil: [[CRIARCARD:título]]. */
 export const CREATE_CARD_DIRECTIVE = /\[\[\s*criarcard\s*:\s*([^\]]+?)\s*\]\]/i
+/** Nota interna: [[NOTA:texto]]. */
+export const NOTE_DIRECTIVE = /\[\[\s*nota\s*:\s*([^\]]+?)\s*\]\]/i
+/** Definir atributo: [[ATRIBUTO:campo=valor]]. */
+export const ATTR_DIRECTIVE = /\[\[\s*atributo\s*:\s*([^\]=|]+?)\s*=\s*([^\]]+?)\s*\]\]/i
+/** Preferência de voz: [[VOZ:audio]] ou [[VOZ:texto]]. */
+export const VOICE_DIRECTIVE = /\[\[\s*voz\s*:\s*(a[uú]dio|texto)\s*\]\]/i
 
 export interface AgentDirectives {
   /** Texto limpo (sem os marcadores) a enviar ao cliente. */
@@ -107,6 +113,12 @@ export interface AgentDirectives {
   transfer: { tag: string; summary: string } | null
   /** Criar card no funil: título do negócio, ou null. */
   createCard: string | null
+  /** Nota interna pra equipe, ou null. */
+  note: string | null
+  /** Atributo a gravar no contato: { field, value }, ou null. */
+  attribute: { field: string; value: string } | null
+  /** Preferência de voz do cliente: 'audio' | 'text' | null. */
+  voicePref: 'audio' | 'text' | null
 }
 
 /** Extrai os marcadores de ação do texto gerado e devolve o texto limpo. */
@@ -125,6 +137,16 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     : null
   const cm = raw.match(CREATE_CARD_DIRECTIVE)
   const createCard = cm ? cm[1].trim() : null
+  const nm = raw.match(NOTE_DIRECTIVE)
+  const note = nm ? nm[1].trim() : null
+  const am = raw.match(ATTR_DIRECTIVE)
+  const attribute = am ? { field: am[1].trim(), value: am[2].trim() } : null
+  const vm = raw.match(VOICE_DIRECTIVE)
+  const voicePref: 'audio' | 'text' | null = vm
+    ? /texto/i.test(vm[1])
+      ? 'text'
+      : 'audio'
+    : null
   const tags: string[] = []
   for (const m of raw.matchAll(TAG_DIRECTIVE)) {
     const name = (m[1] || '').trim()
@@ -135,6 +157,9 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     .replace(new RegExp(SCHEDULE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(TRANSFER_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(CREATE_CARD_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(NOTE_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(ATTR_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(VOICE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(FUNNEL_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(RESOLVE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(SKIP_DIRECTIVE.source, 'gi'), '')
@@ -149,7 +174,33 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     schedule,
     transfer,
     createCard,
+    note,
+    attribute,
+    voicePref,
   }
+}
+
+/** Instrução: nota interna pra equipe. */
+export function noteInstruction(): string {
+  return (
+    'Internal note: when there is something the TEAM should know but the customer should NOT see (a heads-up, context for whoever picks up the conversation), emit "[[NOTA:<texto>]]". It becomes an internal note in the thread, never sent to the customer. Use it sparingly, alongside your normal reply.'
+  )
+}
+
+/** Instrução: definir atributo do contato (usa só campos existentes). */
+export function attributeInstruction(fieldNames: string[]): string {
+  return (
+    `You may record a custom attribute on the contact to qualify/organize them. Emit "[[ATRIBUTO:<campo>=<valor>]]" using ONLY a field name from this list: ${fieldNames.join(
+      ' | ',
+    )}. Set it only when you clearly learn that value from the customer. Do NOT invent field names outside the list. Control metadata — never show it to the customer.`
+  )
+}
+
+/** Instrução: registrar preferência de voz do cliente. */
+export function voiceInstruction(): string {
+  return (
+    'Voice preference: if the customer says they prefer to receive replies as AUDIO (voice notes) or as TEXT, record it by emitting "[[VOZ:audio]]" or "[[VOZ:texto]]" once. This is control metadata — never show it to the customer.'
+  )
 }
 
 /** Instrução: criar um card no funil quando surge uma oportunidade não rastreada. */
@@ -265,6 +316,10 @@ export function buildSystemPrompt(args: {
   availableTags?: string[]
   /** Etiquetas de ROTEAMENTO (que têm atendente) — pra transferir por etiqueta. */
   routingTags?: string[]
+  /** Nomes dos campos personalizados do contato (pra ferramenta set_attribute). */
+  customFieldNames?: string[]
+  /** Preferência de voz já registrada nesta conversa ('audio'|'text'). */
+  voicePref?: string | null
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -316,6 +371,25 @@ export function buildSystemPrompt(args: {
     }
     if (has('schedule')) parts.push(scheduleInstruction())
     if (has('create_card')) parts.push(createCardInstruction())
+    if (has('private_note')) parts.push(noteInstruction())
+    if (
+      has('set_attribute') &&
+      args.customFieldNames &&
+      args.customFieldNames.length > 0
+    ) {
+      parts.push(attributeInstruction(args.customFieldNames))
+    }
+    if (has('voice_pref')) parts.push(voiceInstruction())
+    // Enviesa o formato pela preferência já registrada do cliente.
+    if (args.voicePref === 'audio') {
+      parts.push(
+        'This customer has told us they prefer AUDIO replies — prefer answering with a voice note (start the message with the audio marker) when it fits.',
+      )
+    } else if (args.voicePref === 'text') {
+      parts.push(
+        'This customer has told us they prefer TEXT replies — avoid audio; answer in text.',
+      )
+    }
     if (has('resolve') || has('move_card')) {
       const close = closeInstruction({
         resolve: has('resolve'),
