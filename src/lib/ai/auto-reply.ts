@@ -166,13 +166,16 @@ export async function dispatchInboundToAiReply(
     )
     const catalog = await formatCatalogForPrompt(accountId)
 
-    // Encerramento inteligente (opt-in): injeta as etapas do funil ligado pra a
-    // IA poder escolher uma ao encerrar.
-    const closeCtx = config.autoCloseEnabled
+    // Ferramentas ligadas neste agente (Fase A).
+    const tools = config.tools ?? []
+    const has = (k: string) => tools.includes(k)
+
+    // move_card: injeta as etapas do funil ligado pra a IA escolher uma.
+    const closeCtx = has('move_card')
       ? await loadDealCloseContext(accountId, conversationId)
       : null
-    // Etiquetas existentes da conta — a IA pode qualificar o lead (sempre).
-    const accountTags = await listAccountTagNames(accountId)
+    // tag: etiquetas existentes da conta (pra IA qualificar).
+    const accountTags = has('tag') ? await listAccountTagNames(accountId) : []
 
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
@@ -181,10 +184,9 @@ export async function dispatchInboundToAiReply(
       companyProfile,
       catalog,
       timezone: settings.businessTimezone,
-      autoClose: config.autoCloseEnabled,
+      tools,
       pipelineStages: closeCtx?.stageNames ?? [],
       availableTags: accountTags,
-      autoSchedule: config.autoScheduleEnabled,
     })
 
     const { text: rawText, handoff } = await generateReply({
@@ -205,9 +207,9 @@ export async function dispatchInboundToAiReply(
     const dirs = parseCloseDirectives(rawText)
     const text = dirs.text
 
-    // Etiquetar (sempre, se a IA marcou uma etiqueta existente).
+    // Etiquetar (ferramenta 'tag').
     const applyTags = async () => {
-      if (dirs.tags.length) {
+      if (has('tag') && dirs.tags.length) {
         const applied = await applyTagsByName({
           accountId,
           contactId,
@@ -218,9 +220,9 @@ export async function dispatchInboundToAiReply(
         }
       }
     }
-    // Agendar (só quando o agente tem "IA agenda de verdade" ligado).
+    // Agendar (ferramenta 'schedule').
     const runSchedule = async () => {
-      if (config.autoScheduleEnabled && dirs.schedule) {
+      if (has('schedule') && dirs.schedule) {
         const ev = await scheduleEventFromAi({
           accountId,
           userId: configOwnerUserId || null,
@@ -233,15 +235,17 @@ export async function dispatchInboundToAiReply(
         if (ev) console.log('[ai auto-reply] agendou:', JSON.stringify(ev))
       }
     }
-    // Encerrar (só quando o agente tem encerramento inteligente ligado).
+    // Encerrar (ferramentas 'resolve' / 'move_card', gate individual).
     const runClose = async () => {
-      if (config.autoCloseEnabled && (dirs.resolve || dirs.funnelStage)) {
+      const wantResolve = has('resolve') && dirs.resolve
+      const wantMove = has('move_card') && dirs.funnelStage
+      if (wantResolve || wantMove) {
         const r = await applyCloseActions({
           accountId,
           userId: configOwnerUserId || null,
           conversationId,
-          resolve: dirs.resolve,
-          funnelStageName: dirs.funnelStage,
+          resolve: wantResolve,
+          funnelStageName: wantMove ? dirs.funnelStage : null,
         })
         console.log('[ai auto-reply] encerramento:', JSON.stringify(r))
       }
@@ -249,7 +253,7 @@ export async function dispatchInboundToAiReply(
 
     // skip_reply: a msg não pedia resposta — NÃO responde, mas mantém a IA
     // ativa (não desabilita, não consome slot). Ainda pode etiquetar.
-    if (dirs.skipReply) {
+    if (has('skip_reply') && dirs.skipReply) {
       await applyTags()
       return
     }
@@ -264,7 +268,7 @@ export async function dispatchInboundToAiReply(
     if (!text) {
       // Sem texto: se foi só encerramento (marcadores sem despedida), executa e
       // sai; senão, desabilita a IA nesta conversa (nada útil pra responder).
-      if (config.autoCloseEnabled && (dirs.resolve || dirs.funnelStage)) {
+      if ((has('resolve') && dirs.resolve) || (has('move_card') && dirs.funnelStage)) {
         await runClose()
         await applyTags()
         return

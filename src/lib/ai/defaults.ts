@@ -149,18 +149,29 @@ export function tagInstruction(tags: string[]): string {
   )
 }
 
-/** Instrução (pt→modelo) de como encerrar. `stages` = etapas do funil ligado. */
-export function closeInstruction(stages: string[]): string {
-  const funnelPart =
-    stages.length > 0
-      ? ` If there is a linked deal, ALSO emit "[[FUNIL:<stage>]]" to move the card to the most fitting stage for the situation, choosing EXACTLY one name from this list: ${stages.join(
-          ' | ',
-        )} (e.g. a "lost"/"perdido"-type stage when the customer is not interested, or a "reengage"/"reativar"-type stage to try again later).`
-      : ''
+/** Instrução (pt→modelo) de como encerrar. `resolve`/`moveCard` gate cada ação;
+ *  `stages` = etapas do funil ligado (pra IA escolher). '' quando nada ligado. */
+export function closeInstruction(opts: {
+  resolve: boolean
+  moveCard: boolean
+  stages: string[]
+}): string {
+  const actions: string[] = []
+  if (opts.resolve) {
+    actions.push('"[[RESOLVER]]" to close/resolve the conversation')
+  }
+  if (opts.moveCard && opts.stages.length > 0) {
+    actions.push(
+      `"[[FUNIL:<stage>]]" to move the linked deal card to the most fitting stage, choosing EXACTLY one name from this list: ${opts.stages.join(
+        ' | ',
+      )} (e.g. a "lost"/"perdido"-type stage when the customer is not interested, or a "reengage"/"reativar"-type stage to try again later)`,
+    )
+  }
+  if (actions.length === 0) return ''
   return (
-    'Ending the conversation — ONLY when it genuinely ends: if the customer clearly has NO further interest, asks to stop, declines/discards the offer, or the request is fully resolved with nothing else to do, first send a short, warm goodbye message. Then, at the very end and each on its own line, emit the control markers: "[[RESOLVER]]" to close/resolve the conversation.' +
-    funnelPart +
-    ' NEVER emit these markers while the conversation is still active or the customer might still reply — only when it is truly finished. These markers are control metadata: do not mention or explain them to the customer.'
+    'Ending the conversation — ONLY when it genuinely ends: if the customer clearly has NO further interest, asks to stop, declines/discards the offer, or the request is fully resolved with nothing else to do, first send a short, warm goodbye message. Then, at the very end and each on its own line, emit: ' +
+    actions.join('; and ') +
+    '. NEVER emit these markers while the conversation is still active or the customer might still reply — only when it is truly finished. These markers are control metadata: do not mention or explain them to the customer.'
   )
 }
 
@@ -202,17 +213,13 @@ export function buildSystemPrompt(args: {
    *  a data/hora atuais, pra ele raciocinar sobre "hoje/amanhã/ontem" e se um
    *  compromisso agendado já passou. Default America/Sao_Paulo. */
   timezone?: string | null
-  /** Encerramento inteligente (opt-in): quando true, ensina a IA a se despedir,
-   *  resolver e mover o card ao terminar. `pipelineStages` = etapas do funil
-   *  ligado (a IA escolhe uma pelo nome). Só vale no modo auto_reply. */
-  autoClose?: boolean
+  /** Ferramentas LIGADAS no agente (chaves de tools.ts) — decidem quais ações
+   *  a IA pode fazer. Só valem no modo auto_reply. Undefined/[] = nenhuma. */
+  tools?: string[]
+  /** Etapas do funil ligado (pra ferramenta move_card escolher pelo nome). */
   pipelineStages?: string[]
-  /** Etiquetas EXISTENTES da conta — a IA pode aplicar uma pra qualificar.
-   *  Vazio = não ensina a etiquetar. Só vale no modo auto_reply. */
+  /** Etiquetas EXISTENTES da conta (pra ferramenta tag escolher). */
   availableTags?: string[]
-  /** IA agenda de verdade (opt-in): ensina a emitir [[AGENDAR:..]] ao combinar
-   *  um horário. Só vale no modo auto_reply. */
-  autoSchedule?: boolean
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -234,28 +241,35 @@ export function buildSystemPrompt(args: {
   ]
 
   if (mode === 'auto_reply') {
+    const tools = args.tools ?? []
+    const has = (k: string) => tools.includes(k)
+
+    // Base: responder sozinho e manter a conversa andando (sempre).
+    const handoffPart = has('handoff')
+      ? ` Hand off to a human ONLY when the customer explicitly asks to talk to a person/attendant, or is clearly upset, complaining, or wants to cancel/refund. In those cases reply with exactly ${HANDOFF_SENTINEL} and nothing else.`
+      : ''
     parts.push(
-      `You are replying automatically with no human in the loop. Your job is to keep the conversation going and move it forward — greet, answer, ask, and qualify. ` +
-        `Hand off to a human ONLY when the customer explicitly asks to talk to a person/attendant, or is clearly upset, complaining, or wants to cancel/refund. In those cases reply with exactly ${HANDOFF_SENTINEL} and nothing else. ` +
-        `Do NOT hand off just because you lack a specific detail: if you don't know a price, availability, or a fact, do not invent it — instead ask a clarifying question, collect the customer's need, or say you'll check and get back to them, and keep the conversation moving. Never go silent.`,
+      `You are replying automatically with no human in the loop. Your job is to keep the conversation going and move it forward — greet, answer, ask, and qualify.` +
+        handoffPart +
+        ` Do NOT hand off just because you lack a specific detail: if you don't know a price, availability, or a fact, do not invent it — instead ask a clarifying question, collect the customer's need, or say you'll check and get back to them, and keep the conversation moving. Never go silent.`,
     )
     // Voz (TTS): a IA decide texto vs áudio pelo padrão da conversa.
     parts.push(
       `You can reply with a VOICE message when it fits. To send a message as audio, start THAT message with the exact marker ${AUDIO_MARKER} at the very beginning. Use AUDIO when: the customer sent you a voice message (their message is shown prefixed with "[áudio]"), the customer asked you to answer by audio, or you are explaining a procedure or something longer that is easier to listen to. Use TEXT (no marker) for confirmations and for any data the customer must read exactly — scheduled appointment/consultation details, dates, times, addresses, numbers, prices. When you confirm an appointment/consultation, send the explanation/confirmation as an audio message (starting with ${AUDIO_MARKER}) and then send the exact data as a separate TEXT message right after. Separate distinct messages with a blank line, and keep each one short.`,
     )
-    // skip_reply: não responder "ok"/emoji (sempre ligado).
-    parts.push(skipInstruction())
-    // Etiquetar/qualificar com etiquetas existentes (quando a conta tem tags).
-    if (args.availableTags && args.availableTags.length > 0) {
+    // Ferramentas ligadas → ensina o marcador de cada uma.
+    if (has('skip_reply')) parts.push(skipInstruction())
+    if (has('tag') && args.availableTags && args.availableTags.length > 0) {
       parts.push(tagInstruction(args.availableTags))
     }
-    // IA agenda de verdade (opt-in): cria evento ao combinar um horário.
-    if (args.autoSchedule) {
-      parts.push(scheduleInstruction())
-    }
-    // Encerramento inteligente (opt-in): despedir + resolver + mover o funil.
-    if (args.autoClose) {
-      parts.push(closeInstruction(args.pipelineStages ?? []))
+    if (has('schedule')) parts.push(scheduleInstruction())
+    if (has('resolve') || has('move_card')) {
+      const close = closeInstruction({
+        resolve: has('resolve'),
+        moveCard: has('move_card'),
+        stages: args.pipelineStages ?? [],
+      })
+      if (close) parts.push(close)
     }
   }
 

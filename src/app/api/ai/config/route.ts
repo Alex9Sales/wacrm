@@ -13,6 +13,7 @@ import { validateAiCredentials } from '@/lib/ai/validate'
 import { embedTexts } from '@/lib/ai/embeddings'
 import { AiError, type AiProvider } from '@/lib/ai/types'
 import { toAiHoursMode } from '@/lib/ai/hours-gate'
+import { sanitizeTools } from '@/lib/ai/tools'
 
 function bad(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
@@ -55,6 +56,7 @@ export async function GET(request: Request) {
           signature_enabled: aiConfigs.signatureEnabled,
           auto_close_enabled: aiConfigs.autoCloseEnabled,
           auto_schedule_enabled: aiConfigs.autoScheduleEnabled,
+          tools: aiConfigs.tools,
           api_key: aiConfigs.apiKey,
           embeddings_api_key: aiConfigs.embeddingsApiKey,
         })
@@ -185,8 +187,14 @@ export async function POST(request: Request) {
         ? body.signature_name.trim().slice(0, 60)
         : null
     const signatureEnabled = body.signature_enabled === true && !!signatureName
-    const autoCloseEnabled = body.auto_close_enabled === true
-    const autoScheduleEnabled = body.auto_schedule_enabled === true
+    // Ferramentas do agente (Fase A) — fonte da verdade. Só mexe se o form
+    // mandou `tools` (senão preserva o que está salvo). Deriva os booleans
+    // antigos (auto_close/auto_schedule) do conjunto, pra mantê-los coerentes.
+    const tools = Array.isArray(body.tools) ? sanitizeTools(body.tools) : null
+    const autoCloseEnabled = tools
+      ? tools.includes('resolve') || tools.includes('move_card')
+      : undefined
+    const autoScheduleEnabled = tools ? tools.includes('schedule') : undefined
 
     // IA proativa em Negociações (Fase 3): opt-in por conta (default OFF).
     // IA proativa em Negociações agora é controlada FORA do agente (painel de
@@ -337,8 +345,9 @@ export async function POST(request: Request) {
       dealSuggestionsProactive?: boolean
       signatureName: string | null
       signatureEnabled: boolean
-      autoCloseEnabled: boolean
-      autoScheduleEnabled: boolean
+      autoCloseEnabled?: boolean
+      autoScheduleEnabled?: boolean
+      tools?: string[]
       embeddingsApiKey?: string | null
     } = {
       provider,
@@ -355,8 +364,13 @@ export async function POST(request: Request) {
       autoReplyBufferSeconds: bufferSeconds,
       signatureName,
       signatureEnabled,
-      autoCloseEnabled,
-      autoScheduleEnabled,
+    }
+    // Ferramentas: só grava quando o form mandou (preserva senão). Junto,
+    // mantém os booleans antigos coerentes.
+    if (tools) {
+      shared.tools = tools
+      shared.autoCloseEnabled = autoCloseEnabled
+      shared.autoScheduleEnabled = autoScheduleEnabled
     }
     // IA proativa: só grava quando o campo veio no body (preserva o valor atual
     // caso contrário — o controle vive no card "IA em Negociações" do painel).

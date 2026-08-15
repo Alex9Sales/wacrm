@@ -52,6 +52,9 @@ export interface AiConfig {
   autoCloseEnabled?: boolean
   /** IA agenda de verdade (opt-in): cria evento na Agenda ao combinar horário. */
   autoScheduleEnabled?: boolean
+  /** Ferramentas ligadas neste agente (chaves de tools.ts). Fonte da verdade
+   *  do que a IA pode fazer no CRM. */
+  tools?: string[]
 }
 
 /** A single conversation turn in the shape both providers accept. */

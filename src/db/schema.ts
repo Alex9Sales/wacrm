@@ -1414,6 +1414,9 @@ export const aiConfigs = pgTable("ai_configs", {
 	// IA agenda de verdade (migração 0088, opt-in): cria evento na Agenda quando
 	// combina um horário com o cliente. Default OFF.
 	autoScheduleEnabled: boolean("auto_schedule_enabled").default(false).notNull(),
+	// Ferramentas do agente (migração 0089) — conjunto de ações ligadas (chaves
+	// de src/lib/ai/tools.ts). Fonte da verdade do que a IA pode fazer no CRM.
+	tools: jsonb().default(sql`'["skip_reply","tag","handoff"]'::jsonb`).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

@@ -202,8 +202,12 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
           await getCompanyProfile(agent.account_id),
         )
         const catalog = await formatCatalogForPrompt(agent.account_id)
-        // Encerramento inteligente (opt-in): injeta as etapas do funil ligado.
-        const closeCtx = config.autoCloseEnabled
+        // Ferramentas do agente (Fase A): resolve/move gate o encerramento.
+        const cTools = config.tools ?? []
+        const resolveOn = cTools.includes('resolve')
+        const moveOn = cTools.includes('move_card')
+        // Injeta as etapas do funil ligado (pra a IA escolher) quando pode mover.
+        const closeCtx = moveOn
           ? await loadDealCloseContext(agent.account_id, c.id)
           : null
         const systemPrompt = buildFollowUpPrompt(
@@ -212,27 +216,32 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
           cfg.steps.length,
           companyProfile,
           catalog,
-          !!config.autoCloseEnabled,
+          resolveOn,
+          moveOn,
           closeCtx?.stageNames ?? [],
         )
         const r = await generateReply({ config, systemPrompt, messages })
         const raw = (r.text || '').trim()
-        closeDirs = config.autoCloseEnabled ? parseCloseDirectives(raw) : null
+        closeDirs = resolveOn || moveOn ? parseCloseDirectives(raw) : null
         text = (closeDirs ? closeDirs.text : raw).trim()
       } catch (err) {
         console.error('[followup] geração falhou:', err)
         continue // não avança o degrau — tenta no próximo tick
       }
 
-      // Aplica encerramento (resolver + mover funil), se a IA pediu.
+      // Aplica encerramento (resolver + mover funil), se a IA pediu e a
+      // ferramenta correspondente estiver ligada.
       const runFollowUpClose = async () => {
-        if (closeDirs && (closeDirs.resolve || closeDirs.funnelStage)) {
+        const cTools2 = config?.tools ?? []
+        const wantResolve = cTools2.includes('resolve') && !!closeDirs?.resolve
+        const wantMove = cTools2.includes('move_card') && !!closeDirs?.funnelStage
+        if (wantResolve || wantMove) {
           const rr = await applyCloseActions({
             accountId: agent.account_id,
             userId: agent.created_by ?? null,
             conversationId: c.id,
-            resolve: closeDirs.resolve,
-            funnelStageName: closeDirs.funnelStage,
+            resolve: wantResolve,
+            funnelStageName: wantMove ? closeDirs!.funnelStage : null,
           })
           console.log('[followup] encerramento:', JSON.stringify(rr))
         }
@@ -283,7 +292,8 @@ function buildFollowUpPrompt(
   totalSteps: number,
   companyProfile: string | null,
   catalog: string | null,
-  autoClose: boolean = false,
+  resolveOn: boolean = false,
+  moveCardOn: boolean = false,
   pipelineStages: string[] = [],
 ): string {
   const ladder =
@@ -305,6 +315,13 @@ function buildFollowUpPrompt(
     parts.push(`Product catalog (reference for prices/links):\n${catalog.trim()}`)
   // Encerramento inteligente (opt-in): no follow-up, se o cliente claramente
   // não tem mais interesse, a IA pode se despedir + resolver + mover o funil.
-  if (autoClose) parts.push(closeInstruction(pipelineStages))
+  if (resolveOn || moveCardOn) {
+    const close = closeInstruction({
+      resolve: resolveOn,
+      moveCard: moveCardOn,
+      stages: pipelineStages,
+    })
+    if (close) parts.push(close)
+  }
   return parts.join('\n\n')
 }

@@ -4,6 +4,7 @@ import { firstOrNull } from '@/db/helpers'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { toAiHoursMode } from './hours-gate'
 import { pickAgentIdForChannel } from './agents'
+import { sanitizeTools } from './tools'
 import type { AiConfig } from './types'
 
 // LEFT JOIN com a credencial (Fase 2): quando o agente aponta pra uma
@@ -29,6 +30,7 @@ const agentSelect = {
   signatureEnabled: aiConfigs.signatureEnabled,
   autoCloseEnabled: aiConfigs.autoCloseEnabled,
   autoScheduleEnabled: aiConfigs.autoScheduleEnabled,
+  tools: aiConfigs.tools,
 }
 
 type AgentRow = {
@@ -52,6 +54,7 @@ type AgentRow = {
   signatureEnabled: boolean
   autoCloseEnabled: boolean
   autoScheduleEnabled: boolean
+  tools: unknown
 }
 
 /** Turn a raw agent row into a usable, decrypted AiConfig (or null when it
@@ -108,6 +111,7 @@ function finalizeAgent(
     signatureEnabled: row.signatureEnabled,
     autoCloseEnabled: row.autoCloseEnabled,
     autoScheduleEnabled: row.autoScheduleEnabled,
+    tools: sanitizeTools(row.tools),
   }
 }
 

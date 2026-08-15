@@ -33,6 +33,7 @@ import {
 } from '@/components/ui/select';
 import { SettingsPanelHead } from './settings-panel-head';
 import { AI_PROVIDER_DEFAULT_MODEL } from '@/lib/ai/defaults';
+import { AGENT_TOOLS } from '@/lib/ai/tools';
 import type { AiProvider } from '@/lib/ai/types';
 
 const MASKED_KEY = '••••••••••••••••';
@@ -104,9 +105,12 @@ export function AiConfig({
   const [bufferSeconds, setBufferSeconds] = useState(8);
   const [signatureName, setSignatureName] = useState('');
   const [signatureEnabled, setSignatureEnabled] = useState(false);
-  // Encerramento inteligente (opt-in): a IA se despede + resolve + move o funil.
-  const [autoCloseEnabled, setAutoCloseEnabled] = useState(false);
-  const [autoScheduleEnabled, setAutoScheduleEnabled] = useState(false);
+  // Ferramentas do agente (Fase A): conjunto de ações ligadas (chaves de tools.ts).
+  const [tools, setTools] = useState<string[]>([]);
+  const toggleTool = (key: string, on: boolean) =>
+    setTools((prev) =>
+      on ? Array.from(new Set([...prev, key])) : prev.filter((t) => t !== key),
+    );
   // Canais onde a IA responde (multi). Vazio = todos.
   const [channels, setChannels] = useState<
     { id: string; name: string; provider: string }[]
@@ -173,8 +177,7 @@ export function AiConfig({
         );
         setSignatureName(data.signature_name ?? '');
         setSignatureEnabled(Boolean(data.signature_enabled));
-        setAutoCloseEnabled(Boolean(data.auto_close_enabled));
-        setAutoScheduleEnabled(Boolean(data.auto_schedule_enabled));
+        setTools(Array.isArray(data.tools) ? data.tools : []);
         setHasStoredKey(Boolean(data.has_key));
         setApiKey(data.has_key ? MASKED_KEY : '');
         setKeyEdited(false);
@@ -363,8 +366,7 @@ export function AiConfig({
     auto_reply_max_per_conversation: maxPerConversation,
     auto_reply_hours_mode: hoursMode,
     auto_reply_buffer_seconds: bufferSeconds,
-    auto_close_enabled: autoCloseEnabled,
-    auto_schedule_enabled: autoScheduleEnabled,
+    tools,
     signature_name: signatureName.trim() || null,
     signature_enabled: signatureEnabled && signatureName.trim().length > 0,
   });
@@ -840,43 +842,48 @@ export function AiConfig({
               />
             </div>
 
-            <div className="flex items-center justify-between gap-4 rounded-md border border-border p-3">
-              <div>
-                <p className="text-sm font-medium text-foreground">
-                  Encerramento inteligente
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Quando o atendimento acaba ou o cliente não tem mais interesse,
-                  a IA se despede, <strong>resolve a conversa</strong> e{' '}
-                  <strong>move o card do funil</strong> pra etapa mais adequada
-                  (ela escolhe pelo nome — ex.: “Perdido”, “Reativar”). Vale no
-                  atendimento e nos follow-ups.
-                </p>
+            {/* Ferramentas do agente (Fase A) — o que a IA pode FAZER no CRM. */}
+            <div className="rounded-md border border-border p-3">
+              <p className="text-sm font-medium text-foreground">
+                Ferramentas do agente
+              </p>
+              <p className="mb-2 text-xs text-muted-foreground">
+                O que a IA pode <strong>fazer</strong> no CRM durante a conversa —
+                além de responder. Ligue só o que quiser que ela faça sozinha.
+              </p>
+              <div className="space-y-1.5">
+                {AGENT_TOOLS.map((t) => {
+                  const on = tools.includes(t.key);
+                  return (
+                    <div
+                      key={t.key}
+                      className="flex items-center justify-between gap-3 rounded-md border border-border/60 px-2.5 py-2"
+                    >
+                      <div className="min-w-0">
+                        <p className="flex items-center gap-1.5 text-xs font-medium text-foreground">
+                          {t.label}
+                          <span className="rounded bg-muted px-1 py-0.5 text-[9px] text-muted-foreground">
+                            {t.group}
+                          </span>
+                          {!t.implemented && (
+                            <span className="rounded bg-amber-500/10 px-1 py-0.5 text-[9px] text-amber-500">
+                              em breve
+                            </span>
+                          )}
+                        </p>
+                        <p className="text-[11px] text-muted-foreground">
+                          {t.description}
+                        </p>
+                      </div>
+                      <Switch
+                        checked={on && t.implemented}
+                        onCheckedChange={(v) => toggleTool(t.key, v)}
+                        disabled={disabled || !isActive || !t.implemented}
+                      />
+                    </div>
+                  );
+                })}
               </div>
-              <Switch
-                checked={autoCloseEnabled}
-                onCheckedChange={setAutoCloseEnabled}
-                disabled={disabled || !isActive}
-              />
-            </div>
-
-            <div className="flex items-center justify-between gap-4 rounded-md border border-border p-3">
-              <div>
-                <p className="text-sm font-medium text-foreground">
-                  IA agenda de verdade
-                </p>
-                <p className="text-xs text-muted-foreground">
-                  Quando a IA e o cliente combinam um horário, ela{' '}
-                  <strong>cria o evento na Agenda</strong> do CRM (e espelha no
-                  Google Calendar, se a agenda estiver conectada). Usa a data/hora
-                  reais — resolve “amanhã às 15h” pro dia certo.
-                </p>
-              </div>
-              <Switch
-                checked={autoScheduleEnabled}
-                onCheckedChange={setAutoScheduleEnabled}
-                disabled={disabled || !isActive}
-              />
             </div>
 
             {/* Canais onde a IA responde (multi). Vazio = todos os canais. */}
