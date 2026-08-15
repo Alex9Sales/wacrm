@@ -15,10 +15,15 @@
 import { NextResponse } from "next/server";
 import { asc, eq } from "drizzle-orm";
 
-import { db, member, user } from "@/db";
+import { db, member, user, memberTags, tags } from "@/db";
 import { getCurrentAccount, toErrorResponse } from "@/lib/auth/account";
 import { canManageMembers, isAccountRole } from "@/lib/auth/roles";
 import type { AccountMember } from "@/types";
+
+interface TagLite {
+  id: string;
+  name: string;
+}
 
 export async function GET() {
   try {
@@ -50,7 +55,31 @@ export async function GET() {
 
     const canSeeEmails = canManageMembers(ctx.role);
 
-    const members: AccountMember[] = data.flatMap((row) => {
+    // Etiquetas no atendente (Fase B) — só quem administra membros vê/edita.
+    const tagsByUser: Record<string, TagLite[]> = {};
+    let accountTags: TagLite[] = [];
+    if (canSeeEmails) {
+      try {
+        const mtRows = await db
+          .select({ userId: member.userId, id: tags.id, name: tags.name })
+          .from(memberTags)
+          .innerJoin(member, eq(member.id, memberTags.memberId))
+          .innerJoin(tags, eq(tags.id, memberTags.tagId))
+          .where(eq(member.organizationId, ctx.accountId));
+        for (const r of mtRows) {
+          (tagsByUser[r.userId] ??= []).push({ id: r.id, name: r.name });
+        }
+        accountTags = await db
+          .select({ id: tags.id, name: tags.name })
+          .from(tags)
+          .where(eq(tags.accountId, ctx.accountId))
+          .orderBy(asc(tags.name));
+      } catch (err) {
+        console.error("[GET /api/account/members] tags fetch error:", err);
+      }
+    }
+
+    const members: (AccountMember & { tags: TagLite[] })[] = data.flatMap((row) => {
       // Defensive: the DB enum should never let an unknown role
       // through, but if a migration ever broadens the enum without
       // updating TS, skip the row rather than crash the page.
@@ -63,11 +92,12 @@ export async function GET() {
           avatar_url: row.avatar_url,
           role: row.account_role,
           joined_at: row.created_at ?? "",
+          tags: tagsByUser[row.user_id] ?? [],
         },
       ];
     });
 
-    return NextResponse.json({ members });
+    return NextResponse.json({ members, account_tags: accountTags });
   } catch (err) {
     return toErrorResponse(err);
   }

@@ -18,6 +18,7 @@ import {
   applyTagsByName,
 } from './close-actions'
 import { scheduleEventFromAi } from './schedule-actions'
+import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
 import { randomUUID } from 'crypto'
 import {
@@ -176,6 +177,8 @@ export async function dispatchInboundToAiReply(
       : null
     // tag: etiquetas existentes da conta (pra IA qualificar).
     const accountTags = has('tag') ? await listAccountTagNames(accountId) : []
+    // handoff: etiquetas de roteamento (atendentes etiquetados) pra transferir.
+    const routingTags = has('handoff') ? await listRoutingTags(accountId) : []
 
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
@@ -187,6 +190,7 @@ export async function dispatchInboundToAiReply(
       tools,
       pipelineStages: closeCtx?.stageNames ?? [],
       availableTags: accountTags,
+      routingTags,
     })
 
     const { text: rawText, handoff } = await generateReply({
@@ -235,6 +239,21 @@ export async function dispatchInboundToAiReply(
         if (ev) console.log('[ai auto-reply] agendou:', JSON.stringify(ev))
       }
     }
+    // Transferir pra humano por etiqueta (ferramenta 'handoff' + [[TRANSFERIR]]).
+    const runTransfer = async (): Promise<boolean> => {
+      if (has('handoff') && dirs.transfer) {
+        const r = await applyTransfer({
+          accountId,
+          conversationId,
+          contactId,
+          tagName: dirs.transfer.tag,
+          summary: dirs.transfer.summary || null,
+        })
+        console.log('[ai auto-reply] transferência:', JSON.stringify(r))
+        return true
+      }
+      return false
+    }
     // Encerrar (ferramentas 'resolve' / 'move_card', gate individual).
     const runClose = async () => {
       const wantResolve = has('resolve') && dirs.resolve
@@ -266,8 +285,13 @@ export async function dispatchInboundToAiReply(
       return
     }
     if (!text) {
-      // Sem texto: se foi só encerramento (marcadores sem despedida), executa e
-      // sai; senão, desabilita a IA nesta conversa (nada útil pra responder).
+      // Sem texto: se foi transferência/encerramento (marcadores sem despedida),
+      // executa e sai; senão, desabilita a IA (nada útil pra responder).
+      if (has('handoff') && dirs.transfer) {
+        await applyTags()
+        await runTransfer()
+        return
+      }
       if ((has('resolve') && dirs.resolve) || (has('move_card') && dirs.funnelStage)) {
         await runClose()
         await applyTags()
@@ -399,10 +423,12 @@ export async function dispatchInboundToAiReply(
       })
     }
 
-    // Depois de enviar: etiqueta, agenda (se combinou) e, se for o caso, encerra.
+    // Depois de enviar: etiqueta, agenda, transfere OU encerra (transfer tem
+    // prioridade — se transferiu, não resolve/move).
     await applyTags()
     await runSchedule()
-    await runClose()
+    const transferred = await runTransfer()
+    if (!transferred) await runClose()
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
   }

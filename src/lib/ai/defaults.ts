@@ -84,6 +84,9 @@ export const TAG_DIRECTIVE = /\[\[\s*etiqueta\s*:\s*([^\]]+?)\s*\]\]/gi
 /** Agendar: [[AGENDAR:YYYY-MM-DDTHH:MM|título]] (data local + título opcional). */
 export const SCHEDULE_DIRECTIVE =
   /\[\[\s*agendar\s*:\s*(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
+/** Transferir pra humano por etiqueta: [[TRANSFERIR:etiqueta|resumo]]. */
+export const TRANSFER_DIRECTIVE =
+  /\[\[\s*transferir\s*:\s*([^\]|]+?)\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
 
 export interface AgentDirectives {
   /** Texto limpo (sem os marcadores) a enviar ao cliente. */
@@ -98,6 +101,8 @@ export interface AgentDirectives {
   funnelStage: string | null
   /** Agendamento: horário combinado (hora local "YYYY-MM-DDTHH:MM") + título. */
   schedule: { startsLocal: string; title: string } | null
+  /** Transferência: etiqueta de roteamento + resumo pro atendente. */
+  transfer: { tag: string; summary: string } | null
 }
 
 /** Extrai os marcadores de ação do texto gerado e devolve o texto limpo. */
@@ -110,6 +115,10 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const schedule = sm
     ? { startsLocal: sm[1].trim(), title: (sm[2] || '').trim() }
     : null
+  const tm = raw.match(TRANSFER_DIRECTIVE)
+  const transfer = tm
+    ? { tag: tm[1].trim(), summary: (tm[2] || '').trim() }
+    : null
   const tags: string[] = []
   for (const m of raw.matchAll(TAG_DIRECTIVE)) {
     const name = (m[1] || '').trim()
@@ -118,12 +127,23 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const text = raw
     .replace(TAG_DIRECTIVE, '')
     .replace(new RegExp(SCHEDULE_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(TRANSFER_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(FUNNEL_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(RESOLVE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(SKIP_DIRECTIVE.source, 'gi'), '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
-  return { text, skipReply, tags, resolve, funnelStage, schedule }
+  return { text, skipReply, tags, resolve, funnelStage, schedule, transfer }
+}
+
+/** Instrução: transferir pra humano por etiqueta (com resumo). `routingTags` =
+ *  etiquetas que têm atendente. Vazio → cai no handoff simples. */
+export function transferInstruction(routingTags: string[]): string {
+  return (
+    'Handing off to a human: when the customer explicitly asks to talk to a person, wants a manager, is upset/complaining, or the request is beyond what you can do, first send a short, polite goodbye letting them know a human will continue. Then emit ONCE, on its own line, "[[TRANSFERIR:<etiqueta>|<resumo>]]" where <etiqueta> is EXACTLY one from this list of teams/roles: ' +
+    routingTags.join(' | ') +
+    ' (choose the most fitting — e.g. a "gerente"/manager tag when they ask for the manager), and <resumo> is a 1-2 sentence summary of what the customer needs, in Portuguese. Use this instead of continuing to answer. The marker is control metadata: never show it to the customer.'
+  )
 }
 
 /** Instrução: agendar reunião de verdade quando combinar um horário. */
@@ -220,6 +240,8 @@ export function buildSystemPrompt(args: {
   pipelineStages?: string[]
   /** Etiquetas EXISTENTES da conta (pra ferramenta tag escolher). */
   availableTags?: string[]
+  /** Etiquetas de ROTEAMENTO (que têm atendente) — pra transferir por etiqueta. */
+  routingTags?: string[]
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -244,15 +266,22 @@ export function buildSystemPrompt(args: {
     const tools = args.tools ?? []
     const has = (k: string) => tools.includes(k)
 
+    const routingTags = args.routingTags ?? []
     // Base: responder sozinho e manter a conversa andando (sempre).
-    const handoffPart = has('handoff')
-      ? ` Hand off to a human ONLY when the customer explicitly asks to talk to a person/attendant, or is clearly upset, complaining, or wants to cancel/refund. In those cases reply with exactly ${HANDOFF_SENTINEL} and nothing else.`
-      : ''
+    // Handoff simples (sem etiquetas de roteamento) fica no texto-base; com
+    // roteamento por etiqueta, vira uma instrução própria (transferInstruction).
+    const simpleHandoff =
+      has('handoff') && routingTags.length === 0
+        ? ` Hand off to a human ONLY when the customer explicitly asks to talk to a person/attendant, or is clearly upset, complaining, or wants to cancel/refund. In those cases reply with exactly ${HANDOFF_SENTINEL} and nothing else.`
+        : ''
     parts.push(
       `You are replying automatically with no human in the loop. Your job is to keep the conversation going and move it forward — greet, answer, ask, and qualify.` +
-        handoffPart +
+        simpleHandoff +
         ` Do NOT hand off just because you lack a specific detail: if you don't know a price, availability, or a fact, do not invent it — instead ask a clarifying question, collect the customer's need, or say you'll check and get back to them, and keep the conversation moving. Never go silent.`,
     )
+    if (has('handoff') && routingTags.length > 0) {
+      parts.push(transferInstruction(routingTags))
+    }
     // Voz (TTS): a IA decide texto vs áudio pelo padrão da conversa.
     parts.push(
       `You can reply with a VOICE message when it fits. To send a message as audio, start THAT message with the exact marker ${AUDIO_MARKER} at the very beginning. Use AUDIO when: the customer sent you a voice message (their message is shown prefixed with "[áudio]"), the customer asked you to answer by audio, or you are explaining a procedure or something longer that is easier to listen to. Use TEXT (no marker) for confirmations and for any data the customer must read exactly — scheduled appointment/consultation details, dates, times, addresses, numbers, prices. When you confirm an appointment/consultation, send the explanation/confirmation as an audio message (starting with ${AUDIO_MARKER}) and then send the exact data as a separate TEXT message right after. Separate distinct messages with a blank line, and keep each one short.`,

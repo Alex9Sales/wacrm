@@ -30,6 +30,17 @@ describe('parseCloseDirectives', () => {
     expect(d.text).toBe('Combinado! Te vejo amanhã.')
   })
 
+  it('extrai [[TRANSFERIR:etiqueta|resumo]]', () => {
+    const d = parseCloseDirectives(
+      'Vou te passar pro gerente, um instante!\n[[TRANSFERIR:Gerente|Cliente quer negociar desconto grande]]',
+    )
+    expect(d.transfer).toEqual({
+      tag: 'Gerente',
+      summary: 'Cliente quer negociar desconto grande',
+    })
+    expect(d.text).toBe('Vou te passar pro gerente, um instante!')
+  })
+
   it('sem marcadores = texto intacto', () => {
     const d = parseCloseDirectives('Oi, tudo bem?')
     expect(d).toMatchObject({

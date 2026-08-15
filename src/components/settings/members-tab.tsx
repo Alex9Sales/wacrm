@@ -76,6 +76,10 @@ import { CreateMemberDialog } from './create-member-dialog';
 import { SettingsPanelHead } from './settings-panel-head';
 import { ROLE_META } from './role-meta';
 
+interface TagLite {
+  id: string;
+  name: string;
+}
 interface Member {
   user_id: string;
   full_name: string;
@@ -83,6 +87,7 @@ interface Member {
   avatar_url: string | null;
   role: AccountRole;
   joined_at: string;
+  tags?: TagLite[];
 }
 
 interface Invitation {
@@ -131,6 +136,7 @@ export function MembersTab() {
   const { getPresence, getRow, now } = usePresence();
 
   const [members, setMembers] = useState<Member[]>([]);
+  const [accountTags, setAccountTags] = useState<TagLite[]>([]);
   const [invitations, setInvitations] = useState<Invitation[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -155,8 +161,12 @@ export function MembersTab() {
         toast.error(payload.error || 'Falha ao carregar os membros');
         return;
       }
-      const mdata = (await mres.json()) as { members: Member[] };
+      const mdata = (await mres.json()) as {
+        members: Member[];
+        account_tags?: TagLite[];
+      };
       setMembers(mdata.members);
+      setAccountTags(Array.isArray(mdata.account_tags) ? mdata.account_tags : []);
 
       if (ires) {
         if (!ires.ok) {
@@ -406,6 +416,13 @@ export function MembersTab() {
                           {member.email}
                         </p>
                       )}
+                      {canManageMembers && (
+                        <MemberTagsEditor
+                          member={member}
+                          accountTags={accountTags}
+                          onChanged={loadEverything}
+                        />
+                      )}
                     </div>
                   </div>
 
@@ -633,5 +650,96 @@ export function MembersTab() {
         </DialogContent>
       </Dialog>
     </section>
+  );
+}
+
+// ============================================================
+// Editor de etiquetas do atendente (Fase B — etiqueta no atendente). A IA
+// transfere pra quem tem a etiqueta escolhida. Reusa as etiquetas da conta.
+// ============================================================
+function MemberTagsEditor({
+  member,
+  accountTags,
+  onChanged,
+}: {
+  member: Member;
+  accountTags: TagLite[];
+  onChanged: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const current = member.tags ?? [];
+  const available = accountTags.filter(
+    (t) => !current.some((c) => c.id === t.id),
+  );
+
+  const save = async (tagIds: string[]) => {
+    setSaving(true);
+    try {
+      const res = await fetch(
+        `/api/account/members/${member.user_id}/tags`,
+        {
+          method: 'PUT',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ tag_ids: tagIds }),
+        },
+      );
+      if (!res.ok) {
+        const p = await res.json().catch(() => ({}));
+        toast.error(p.error ?? 'Falha ao salvar etiquetas.');
+        return;
+      }
+      onChanged();
+    } catch {
+      toast.error('Falha ao salvar etiquetas.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const add = (id: string) => void save([...current.map((c) => c.id), id]);
+  const remove = (id: string) =>
+    void save(current.filter((c) => c.id !== id).map((c) => c.id));
+
+  if (accountTags.length === 0) return null;
+
+  return (
+    <div className="mt-1 flex flex-wrap items-center gap-1">
+      {current.map((t) => (
+        <span
+          key={t.id}
+          className="inline-flex items-center gap-1 rounded-full border border-border bg-muted px-2 py-0.5 text-[11px] text-foreground"
+        >
+          {t.name}
+          <button
+            type="button"
+            onClick={() => remove(t.id)}
+            disabled={saving}
+            className="text-muted-foreground hover:text-destructive"
+            title="Remover etiqueta"
+          >
+            ×
+          </button>
+        </span>
+      ))}
+      {available.length > 0 && (
+        <select
+          value=""
+          disabled={saving}
+          onChange={(e) => {
+            if (e.target.value) add(e.target.value);
+            e.target.value = '';
+          }}
+          className="h-6 rounded-full border border-dashed border-border bg-transparent px-2 text-[11px] text-muted-foreground outline-none hover:text-foreground"
+          title="Adicionar etiqueta ao atendente"
+        >
+          <option value="">+ etiqueta</option>
+          {available.map((t) => (
+            <option key={t.id} value={t.id}>
+              {t.name}
+            </option>
+          ))}
+        </select>
+      )}
+    </div>
   );
 }

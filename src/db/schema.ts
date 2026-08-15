@@ -294,6 +294,27 @@ export const contactTags = pgTable("contact_tags", {
 	unique("contact_tags_contact_id_tag_id_key").on(table.contactId, table.tagId),
 ]);
 
+// Etiqueta no ATENDENTE (migração 0090) — reusa `tags` da conta pra marcar
+// membros (ex.: "Gerente"). A IA transfere pra quem tem a etiqueta escolhida.
+export const memberTags = pgTable("member_tags", {
+	memberId: uuid("member_id").notNull(),
+	tagId: uuid("tag_id").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	primaryKey({ columns: [table.memberId, table.tagId], name: "member_tags_pkey" }),
+	index("member_tags_tag_idx").using("btree", table.tagId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({
+			columns: [table.memberId],
+			foreignColumns: [member.id],
+			name: "member_tags_member_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.tagId],
+			foreignColumns: [tags.id],
+			name: "member_tags_tag_id_fkey"
+		}).onDelete("cascade"),
+]);
+
 export const customFields = pgTable("custom_fields", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),
