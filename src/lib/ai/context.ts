@@ -7,6 +7,35 @@ const AUDIO_KINDS = ['audio', 'voice', 'ptt']
 const IMAGE_KINDS = ['image']
 
 /**
+ * Carimbo "[DD/MM HH:mm] " da mensagem no fuso da conta — para a IA raciocinar
+ * sobre QUANDO cada mensagem foi dita (há quanto tempo, se um horário agendado
+ * já passou). Defensivo: sem createdAt válido, devolve '' (não carimba) — assim
+ * os testes sem timestamp e qualquer linha estranha não quebram.
+ */
+function stampFor(createdAt: unknown, timezone: string): string {
+  if (typeof createdAt !== 'string' || !createdAt) return ''
+  const d = new Date(createdAt)
+  if (Number.isNaN(d.getTime())) return ''
+  try {
+    const parts = new Intl.DateTimeFormat('pt-BR', {
+      timeZone: timezone,
+      day: '2-digit',
+      month: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).formatToParts(d)
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? ''
+    const day = get('day')
+    const month = get('month')
+    if (!day || !month) return ''
+    return `[${day}/${month} ${get('hour')}:${get('minute')}] `
+  } catch {
+    return ''
+  }
+}
+
+/**
  * Fetch the last N text/audio/image messages of a conversation and map them to
  * the provider-neutral chat shape. Customer messages become `user`; agent and
  * bot messages become `assistant`.
@@ -23,6 +52,7 @@ const IMAGE_KINDS = ['image']
 export async function buildConversationContext(
   conversationId: string,
   limit: number = aiContextMessageLimit(),
+  timezone: string = 'America/Sao_Paulo',
 ): Promise<ChatMessage[]> {
   const rows = await db
     .select({
@@ -30,6 +60,7 @@ export async function buildConversationContext(
       contentType: messages.contentType,
       contentText: messages.contentText,
       transcription: messages.transcription,
+      createdAt: messages.createdAt,
     })
     .from(messages)
     .where(
@@ -56,9 +87,11 @@ export async function buildConversationContext(
       // quando a pessoa mandou áudio, e p/ saber que a pessoa mandou uma foto).
       const prefix =
         isCustomer && isAudio ? '[áudio] ' : isCustomer && isImage ? '[imagem] ' : ''
+      // Carimbo de data/hora no início (metadata p/ a IA; o prompt manda não repetir).
+      const stamp = stampFor(m.createdAt, timezone)
       return {
         role: isCustomer ? ('user' as const) : ('assistant' as const),
-        content: `${prefix}${trimmed}`,
+        content: `${stamp}${prefix}${trimmed}`,
       }
     })
     .filter((m): m is ChatMessage => m !== null)

@@ -81,4 +81,23 @@ describe('buildConversationContext', () => {
     const out = await buildConversationContext('conv-1')
     expect(out).toEqual([{ role: 'user', content: 'oi' }])
   })
+
+  it('carimba [DD/MM HH:mm] no fuso dado quando há createdAt', async () => {
+    // 2026-08-15T14:30:00Z em America/Sao_Paulo (UTC-3) = 11:30 do dia 15/08.
+    fakeDb([
+      {
+        senderType: 'customer',
+        contentText: 'oi bom dia',
+        createdAt: '2026-08-15T14:30:00.000Z',
+      },
+    ])
+    const out = await buildConversationContext(
+      'conv-1',
+      undefined,
+      'America/Sao_Paulo',
+    )
+    expect(out).toEqual([
+      { role: 'user', content: '[15/08 11:30] oi bom dia' },
+    ])
+  })
 })

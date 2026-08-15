@@ -139,7 +139,11 @@ export async function dispatchInboundToAiReply(
     // below (this read can race a concurrent inbound).
     if (conv.aiReplyCount >= config.autoReplyMaxPerConversation) return
 
-    const messages = await buildConversationContext(conversationId)
+    const messages = await buildConversationContext(
+      conversationId,
+      undefined,
+      settings.businessTimezone,
+    )
     if (messages.length === 0) return
 
     // Ground the reply in the account's knowledge base (best-effort).
