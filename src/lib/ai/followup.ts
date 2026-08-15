@@ -4,6 +4,8 @@ import { db, aiConfigs, conversations } from '@/db'
 import { loadAiConfigById } from './config'
 import { buildConversationContext } from './context'
 import { generateReply } from './generate'
+import { closeInstruction, parseCloseDirectives } from './defaults'
+import { applyCloseActions, loadDealCloseContext } from './close-actions'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
 import type { AiConfig } from './types'
@@ -189,6 +191,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
       if (!config) break
 
       let text = ''
+      let closeDirs: ReturnType<typeof parseCloseDirectives> | null = null
       try {
         const messages = await buildConversationContext(c.id)
         if (messages.length === 0) {
@@ -199,22 +202,45 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
           await getCompanyProfile(agent.account_id),
         )
         const catalog = await formatCatalogForPrompt(agent.account_id)
+        // Encerramento inteligente (opt-in): injeta as etapas do funil ligado.
+        const closeCtx = config.autoCloseEnabled
+          ? await loadDealCloseContext(agent.account_id, c.id)
+          : null
         const systemPrompt = buildFollowUpPrompt(
           step.instructions,
           currentStep + 1,
           cfg.steps.length,
           companyProfile,
           catalog,
+          !!config.autoCloseEnabled,
+          closeCtx?.stageNames ?? [],
         )
         const r = await generateReply({ config, systemPrompt, messages })
-        text = (r.text || '').trim()
+        const raw = (r.text || '').trim()
+        closeDirs = config.autoCloseEnabled ? parseCloseDirectives(raw) : null
+        text = (closeDirs ? closeDirs.text : raw).trim()
       } catch (err) {
         console.error('[followup] geração falhou:', err)
         continue // não avança o degrau — tenta no próximo tick
       }
 
-      // Calou ou vazio → avança o degrau (não repete o LLM) e segue.
+      // Aplica encerramento (resolver + mover funil), se a IA pediu.
+      const runFollowUpClose = async () => {
+        if (closeDirs && (closeDirs.resolve || closeDirs.funnelStage)) {
+          const rr = await applyCloseActions({
+            accountId: agent.account_id,
+            userId: agent.created_by ?? null,
+            conversationId: c.id,
+            resolve: closeDirs.resolve,
+            funnelStageName: closeDirs.funnelStage,
+          })
+          console.log('[followup] encerramento:', JSON.stringify(rr))
+        }
+      }
+
+      // Calou ou vazio → não manda, mas ainda executa o encerramento se veio.
       if (!text || text.includes(SILENT)) {
+        await runFollowUpClose()
         await stamp(c.id, currentStep + 1)
         continue
       }
@@ -231,6 +257,8 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
       } catch (err) {
         console.error('[followup] envio falhou:', err)
       }
+      // Depois da despedida, resolve + move o funil.
+      await runFollowUpClose()
       await stamp(c.id, currentStep + 1)
     }
   }
@@ -255,6 +283,8 @@ function buildFollowUpPrompt(
   totalSteps: number,
   companyProfile: string | null,
   catalog: string | null,
+  autoClose: boolean = false,
+  pipelineStages: string[] = [],
 ): string {
   const ladder =
     totalSteps > 1
@@ -273,5 +303,8 @@ function buildFollowUpPrompt(
     parts.push(`Business profile (reference):\n${companyProfile.trim()}`)
   if (catalog && catalog.trim())
     parts.push(`Product catalog (reference for prices/links):\n${catalog.trim()}`)
+  // Encerramento inteligente (opt-in): no follow-up, se o cliente claramente
+  // não tem mais interesse, a IA pode se despedir + resolver + mover o funil.
+  if (autoClose) parts.push(closeInstruction(pipelineStages))
   return parts.join('\n\n')
 }

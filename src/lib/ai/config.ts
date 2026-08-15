@@ -27,6 +27,7 @@ const agentSelect = {
   embeddingsApiKey: aiConfigs.embeddingsApiKey,
   signatureName: aiConfigs.signatureName,
   signatureEnabled: aiConfigs.signatureEnabled,
+  autoCloseEnabled: aiConfigs.autoCloseEnabled,
 }
 
 type AgentRow = {
@@ -48,6 +49,7 @@ type AgentRow = {
   embeddingsApiKey: string | null
   signatureName: string | null
   signatureEnabled: boolean
+  autoCloseEnabled: boolean
 }
 
 /** Turn a raw agent row into a usable, decrypted AiConfig (or null when it
@@ -102,6 +104,7 @@ function finalizeAgent(
     embeddingsApiKey,
     signatureName: row.signatureName,
     signatureEnabled: row.signatureEnabled,
+    autoCloseEnabled: row.autoCloseEnabled,
   }
 }
 

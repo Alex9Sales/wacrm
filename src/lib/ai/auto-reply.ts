@@ -10,7 +10,8 @@ import { retrieveKnowledge } from './knowledge'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
 import { generateReply } from './generate'
-import { buildSystemPrompt } from './defaults'
+import { buildSystemPrompt, parseCloseDirectives } from './defaults'
+import { applyCloseActions, loadDealCloseContext } from './close-actions'
 import { latestUserMessage } from './query'
 import { randomUUID } from 'crypto'
 import {
@@ -159,6 +160,12 @@ export async function dispatchInboundToAiReply(
     )
     const catalog = await formatCatalogForPrompt(accountId)
 
+    // Encerramento inteligente (opt-in): injeta as etapas do funil ligado pra a
+    // IA poder escolher uma ao encerrar.
+    const closeCtx = config.autoCloseEnabled
+      ? await loadDealCloseContext(accountId, conversationId)
+      : null
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -166,9 +173,11 @@ export async function dispatchInboundToAiReply(
       companyProfile,
       catalog,
       timezone: settings.businessTimezone,
+      autoClose: config.autoCloseEnabled,
+      pipelineStages: closeCtx?.stageNames ?? [],
     })
 
-    const { text, handoff } = await generateReply({
+    const { text: rawText, handoff } = await generateReply({
       config,
       systemPrompt,
       messages,
@@ -182,10 +191,40 @@ export async function dispatchInboundToAiReply(
       },
     })
 
-    if (handoff || !text) {
-      // The model can't (or shouldn't) answer — stop auto-replying on
-      // this thread and leave the inbound unanswered so it surfaces in
-      // the inbox for a human. Sticky until an admin re-enables.
+    // Extrai os marcadores de encerramento ([[RESOLVER]]/[[FUNIL:..]]) do texto.
+    const close = config.autoCloseEnabled ? parseCloseDirectives(rawText) : null
+    const text = close ? close.text : rawText
+
+    // Executa resolver + mover o funil (best-effort). Chamado após enviar (ou
+    // direto quando o encerramento veio sem texto).
+    const runClose = async () => {
+      if (close && (close.resolve || close.funnelStage)) {
+        const r = await applyCloseActions({
+          accountId,
+          userId: configOwnerUserId || null,
+          conversationId,
+          resolve: close.resolve,
+          funnelStageName: close.funnelStage,
+        })
+        console.log('[ai auto-reply] encerramento:', JSON.stringify(r))
+      }
+    }
+
+    if (handoff) {
+      // Pediu humano — para de auto-responder aqui até um admin reativar.
+      await db
+        .update(conversations)
+        .set({ aiAutoreplyDisabled: true })
+        .where(eq(conversations.id, conversationId))
+      return
+    }
+    if (!text) {
+      // Sem texto: se foi só encerramento (marcadores sem despedida), executa e
+      // sai; senão, desabilita a IA nesta conversa (nada útil pra responder).
+      if (close && (close.resolve || close.funnelStage)) {
+        await runClose()
+        return
+      }
       await db
         .update(conversations)
         .set({ aiAutoreplyDisabled: true })
@@ -310,6 +349,9 @@ export async function dispatchInboundToAiReply(
         text: textToSend,
       })
     }
+
+    // Depois de enviar a despedida, executa o encerramento (resolver + mover).
+    await runClose()
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
   }

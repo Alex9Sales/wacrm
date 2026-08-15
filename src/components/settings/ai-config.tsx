@@ -104,6 +104,8 @@ export function AiConfig({
   const [bufferSeconds, setBufferSeconds] = useState(8);
   const [signatureName, setSignatureName] = useState('');
   const [signatureEnabled, setSignatureEnabled] = useState(false);
+  // Encerramento inteligente (opt-in): a IA se despede + resolve + move o funil.
+  const [autoCloseEnabled, setAutoCloseEnabled] = useState(false);
   // Canais onde a IA responde (multi). Vazio = todos.
   const [channels, setChannels] = useState<
     { id: string; name: string; provider: string }[]
@@ -170,6 +172,7 @@ export function AiConfig({
         );
         setSignatureName(data.signature_name ?? '');
         setSignatureEnabled(Boolean(data.signature_enabled));
+        setAutoCloseEnabled(Boolean(data.auto_close_enabled));
         setHasStoredKey(Boolean(data.has_key));
         setApiKey(data.has_key ? MASKED_KEY : '');
         setKeyEdited(false);
@@ -358,6 +361,7 @@ export function AiConfig({
     auto_reply_max_per_conversation: maxPerConversation,
     auto_reply_hours_mode: hoursMode,
     auto_reply_buffer_seconds: bufferSeconds,
+    auto_close_enabled: autoCloseEnabled,
     signature_name: signatureName.trim() || null,
     signature_enabled: signatureEnabled && signatureName.trim().length > 0,
   });
@@ -829,6 +833,26 @@ export function AiConfig({
               <Switch
                 checked={autoReplyEnabled}
                 onCheckedChange={setAutoReplyEnabled}
+                disabled={disabled || !isActive}
+              />
+            </div>
+
+            <div className="flex items-center justify-between gap-4 rounded-md border border-border p-3">
+              <div>
+                <p className="text-sm font-medium text-foreground">
+                  Encerramento inteligente
+                </p>
+                <p className="text-xs text-muted-foreground">
+                  Quando o atendimento acaba ou o cliente não tem mais interesse,
+                  a IA se despede, <strong>resolve a conversa</strong> e{' '}
+                  <strong>move o card do funil</strong> pra etapa mais adequada
+                  (ela escolhe pelo nome — ex.: “Perdido”, “Reativar”). Vale no
+                  atendimento e nos follow-ups.
+                </p>
+              </div>
+              <Switch
+                checked={autoCloseEnabled}
+                onCheckedChange={setAutoCloseEnabled}
                 disabled={disabled || !isActive}
               />
             </div>

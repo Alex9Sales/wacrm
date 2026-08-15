@@ -72,6 +72,49 @@ export function aiReplyBufferMs(): number {
  * the user typed. Auto-reply mode additionally teaches the handoff
  * protocol.
  */
+// ---- Encerramento inteligente (opt-in) — a IA decide TERMINAR o atendimento.
+/** Marcador: resolver (fechar) a conversa. */
+export const RESOLVE_DIRECTIVE = /\[\[\s*resolver\s*\]\]/i
+/** Diretiva: mover o card do funil pra etapa <nome> (captura o nome). */
+export const FUNNEL_DIRECTIVE = /\[\[\s*funil\s*:\s*([^\]]+?)\s*\]\]/i
+
+export interface CloseDirectives {
+  /** Texto limpo (sem os marcadores) a enviar ao cliente. */
+  text: string
+  /** A IA pediu pra resolver a conversa. */
+  resolve: boolean
+  /** Etapa do funil pedida (nome), ou null. */
+  funnelStage: string | null
+}
+
+/** Extrai [[RESOLVER]] / [[FUNIL:etapa]] do texto gerado e devolve o texto limpo. */
+export function parseCloseDirectives(raw: string): CloseDirectives {
+  const resolve = RESOLVE_DIRECTIVE.test(raw)
+  const fm = raw.match(FUNNEL_DIRECTIVE)
+  const funnelStage = fm ? fm[1].trim() : null
+  const text = raw
+    .replace(new RegExp(FUNNEL_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(RESOLVE_DIRECTIVE.source, 'gi'), '')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim()
+  return { text, resolve, funnelStage }
+}
+
+/** Instrução (pt→modelo) de como encerrar. `stages` = etapas do funil ligado. */
+export function closeInstruction(stages: string[]): string {
+  const funnelPart =
+    stages.length > 0
+      ? ` If there is a linked deal, ALSO emit "[[FUNIL:<stage>]]" to move the card to the most fitting stage for the situation, choosing EXACTLY one name from this list: ${stages.join(
+          ' | ',
+        )} (e.g. a "lost"/"perdido"-type stage when the customer is not interested, or a "reengage"/"reativar"-type stage to try again later).`
+      : ''
+  return (
+    'Ending the conversation — ONLY when it genuinely ends: if the customer clearly has NO further interest, asks to stop, declines/discards the offer, or the request is fully resolved with nothing else to do, first send a short, warm goodbye message. Then, at the very end and each on its own line, emit the control markers: "[[RESOLVER]]" to close/resolve the conversation.' +
+    funnelPart +
+    ' NEVER emit these markers while the conversation is still active or the customer might still reply — only when it is truly finished. These markers are control metadata: do not mention or explain them to the customer.'
+  )
+}
+
 /**
  * Data/hora atuais em pt-BR no fuso dado — ex.: "sexta-feira, 15 de agosto de
  * 2026 14:30". Injetado no system prompt pra o modelo raciocinar sobre datas.
@@ -110,6 +153,11 @@ export function buildSystemPrompt(args: {
    *  a data/hora atuais, pra ele raciocinar sobre "hoje/amanhã/ontem" e se um
    *  compromisso agendado já passou. Default America/Sao_Paulo. */
   timezone?: string | null
+  /** Encerramento inteligente (opt-in): quando true, ensina a IA a se despedir,
+   *  resolver e mover o card ao terminar. `pipelineStages` = etapas do funil
+   *  ligado (a IA escolhe uma pelo nome). Só vale no modo auto_reply. */
+  autoClose?: boolean
+  pipelineStages?: string[]
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -140,6 +188,10 @@ export function buildSystemPrompt(args: {
     parts.push(
       `You can reply with a VOICE message when it fits. To send a message as audio, start THAT message with the exact marker ${AUDIO_MARKER} at the very beginning. Use AUDIO when: the customer sent you a voice message (their message is shown prefixed with "[áudio]"), the customer asked you to answer by audio, or you are explaining a procedure or something longer that is easier to listen to. Use TEXT (no marker) for confirmations and for any data the customer must read exactly — scheduled appointment/consultation details, dates, times, addresses, numbers, prices. When you confirm an appointment/consultation, send the explanation/confirmation as an audio message (starting with ${AUDIO_MARKER}) and then send the exact data as a separate TEXT message right after. Separate distinct messages with a blank line, and keep each one short.`,
     )
+    // Encerramento inteligente (opt-in): despedir + resolver + mover o funil.
+    if (args.autoClose) {
+      parts.push(closeInstruction(args.pipelineStages ?? []))
+    }
   }
 
   // Company profile — always-on business facts (name, what they sell, hours,

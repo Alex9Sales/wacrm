@@ -47,6 +47,9 @@ export interface AiConfig {
   signatureName: string | null
   /** Quando true, as mensagens da IA vão assinadas com `signatureName`. */
   signatureEnabled: boolean
+  /** Encerramento inteligente (opt-in): a IA pode se despedir, resolver a
+   *  conversa e mover o card do funil ao terminar. Default false. */
+  autoCloseEnabled?: boolean
 }
 
 /** A single conversation turn in the shape both providers accept. */

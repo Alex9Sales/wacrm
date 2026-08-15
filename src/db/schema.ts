@@ -1407,6 +1407,10 @@ export const aiConfigs = pgTable("ai_configs", {
 	// Assinatura da IA: nome do atendente/agente + se assina as mensagens. Migração 0055.
 	signatureName: text("signature_name"),
 	signatureEnabled: boolean("signature_enabled").default(false).notNull(),
+	// Encerramento inteligente (migração 0087, opt-in): a IA pode se despedir,
+	// RESOLVER a conversa e MOVER o card do funil quando o atendimento acaba /
+	// o cliente não tem mais interesse. Default OFF.
+	autoCloseEnabled: boolean("auto_close_enabled").default(false).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
