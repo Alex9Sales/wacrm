@@ -23,6 +23,8 @@ interface Step {
   delayValue: number;
   delayUnit: Unit;
   instructions: string;
+  /** Só UI: mostra o campo de orientação (opcional). Não vai pro backend. */
+  _guide?: boolean;
 }
 
 const MAX_STEPS = 5;
@@ -55,6 +57,8 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                   ? x.delayUnit
                   : 'hours',
                 instructions: x.instructions ?? '',
+                // Já orientado? mostra o campo aberto; senão fica escondido.
+                _guide: !!(x.instructions ?? '').trim(),
               }))
             : [{ delayValue: 1, delayUnit: 'hours', instructions: '' }],
         );
@@ -115,10 +119,12 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
               Follow-up inteligente
             </p>
             <p className="mt-0.5 max-w-2xl text-xs text-muted-foreground">
-              Quando o cliente some, a IA manda uma <strong>sequência</strong> de
-              toques (cada um gerado com o contexto da conversa), com cadência que
-              você define. Volta pro início quando o cliente responder. Respeita o
-              horário de atendimento e a janela de 24h.
+              Quando o cliente some, a IA volta a falar sozinha. <strong>Você não
+              precisa escrever nada</strong> — é só ligar e definir de quanto em
+              quanto tempo ela dá um toque. Cada mensagem é gerada com o contexto
+              da conversa. Volta pro início quando o cliente responder e respeita o
+              horário de atendimento. (Se quiser, dá pra orientar o que dizer, mas
+              é opcional.)
             </p>
           </div>
         </div>
@@ -174,22 +180,50 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                   </button>
                 )}
               </div>
-              <Label htmlFor={`fu-instr-${i}`} className="text-[11px] text-muted-foreground">
-                O que dizer neste toque
-              </Label>
-              <Textarea
-                id={`fu-instr-${i}`}
-                value={s.instructions}
-                onChange={(e) => setStep(i, { instructions: e.target.value })}
-                rows={2}
-                disabled={!canEdit}
-                placeholder={
-                  i === 0
-                    ? 'ex.: Retome leve, pergunte se ainda tem interesse.'
-                    : 'ex.: Reforce o benefício e ofereça agendar uma demo.'
-                }
-                className="mt-1"
-              />
+              {s._guide ? (
+                <div className="mt-1">
+                  <div className="flex items-center justify-between">
+                    <Label
+                      htmlFor={`fu-instr-${i}`}
+                      className="text-[11px] text-muted-foreground"
+                    >
+                      Orientação (opcional) — o que dizer neste toque
+                    </Label>
+                    {canEdit && (
+                      <button
+                        type="button"
+                        onClick={() => setStep(i, { instructions: '', _guide: false })}
+                        className="text-[11px] text-muted-foreground hover:text-destructive"
+                      >
+                        remover
+                      </button>
+                    )}
+                  </div>
+                  <Textarea
+                    id={`fu-instr-${i}`}
+                    value={s.instructions}
+                    onChange={(e) => setStep(i, { instructions: e.target.value })}
+                    rows={2}
+                    disabled={!canEdit}
+                    placeholder={
+                      i === 0
+                        ? 'ex.: Retome leve, pergunte se ainda tem interesse.'
+                        : 'ex.: Reforce o benefício e ofereça agendar uma demo.'
+                    }
+                    className="mt-1"
+                  />
+                </div>
+              ) : (
+                canEdit && (
+                  <button
+                    type="button"
+                    onClick={() => setStep(i, { _guide: true })}
+                    className="text-xs text-primary hover:underline"
+                  >
+                    + Orientar o que dizer (opcional)
+                  </button>
+                )
+              )}
             </div>
           ))}
 
