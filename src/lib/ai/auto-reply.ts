@@ -11,7 +11,12 @@ import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-prof
 import { formatCatalogForPrompt } from './catalog'
 import { generateReply } from './generate'
 import { buildSystemPrompt, parseCloseDirectives } from './defaults'
-import { applyCloseActions, loadDealCloseContext } from './close-actions'
+import {
+  applyCloseActions,
+  loadDealCloseContext,
+  listAccountTagNames,
+  applyTagsByName,
+} from './close-actions'
 import { latestUserMessage } from './query'
 import { randomUUID } from 'crypto'
 import {
@@ -165,6 +170,8 @@ export async function dispatchInboundToAiReply(
     const closeCtx = config.autoCloseEnabled
       ? await loadDealCloseContext(accountId, conversationId)
       : null
+    // Etiquetas existentes da conta — a IA pode qualificar o lead (sempre).
+    const accountTags = await listAccountTagNames(accountId)
 
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
@@ -175,6 +182,7 @@ export async function dispatchInboundToAiReply(
       timezone: settings.businessTimezone,
       autoClose: config.autoCloseEnabled,
       pipelineStages: closeCtx?.stageNames ?? [],
+      availableTags: accountTags,
     })
 
     const { text: rawText, handoff } = await generateReply({
@@ -191,25 +199,43 @@ export async function dispatchInboundToAiReply(
       },
     })
 
-    // Extrai os marcadores de encerramento ([[RESOLVER]]/[[FUNIL:..]]) do texto.
-    const close = config.autoCloseEnabled ? parseCloseDirectives(rawText) : null
-    const text = close ? close.text : rawText
+    // Extrai TODOS os marcadores de ação do texto (skip/etiqueta/resolver/funil).
+    const dirs = parseCloseDirectives(rawText)
+    const text = dirs.text
 
-    // Executa resolver + mover o funil (best-effort). Chamado após enviar (ou
-    // direto quando o encerramento veio sem texto).
+    // Etiquetar (sempre, se a IA marcou uma etiqueta existente).
+    const applyTags = async () => {
+      if (dirs.tags.length) {
+        const applied = await applyTagsByName({
+          accountId,
+          contactId,
+          tagNames: dirs.tags,
+        })
+        if (applied.length) {
+          console.log('[ai auto-reply] etiquetas:', applied.join(', '))
+        }
+      }
+    }
+    // Encerrar (só quando o agente tem encerramento inteligente ligado).
     const runClose = async () => {
-      if (close && (close.resolve || close.funnelStage)) {
+      if (config.autoCloseEnabled && (dirs.resolve || dirs.funnelStage)) {
         const r = await applyCloseActions({
           accountId,
           userId: configOwnerUserId || null,
           conversationId,
-          resolve: close.resolve,
-          funnelStageName: close.funnelStage,
+          resolve: dirs.resolve,
+          funnelStageName: dirs.funnelStage,
         })
         console.log('[ai auto-reply] encerramento:', JSON.stringify(r))
       }
     }
 
+    // skip_reply: a msg não pedia resposta — NÃO responde, mas mantém a IA
+    // ativa (não desabilita, não consome slot). Ainda pode etiquetar.
+    if (dirs.skipReply) {
+      await applyTags()
+      return
+    }
     if (handoff) {
       // Pediu humano — para de auto-responder aqui até um admin reativar.
       await db
@@ -221,10 +247,12 @@ export async function dispatchInboundToAiReply(
     if (!text) {
       // Sem texto: se foi só encerramento (marcadores sem despedida), executa e
       // sai; senão, desabilita a IA nesta conversa (nada útil pra responder).
-      if (close && (close.resolve || close.funnelStage)) {
+      if (config.autoCloseEnabled && (dirs.resolve || dirs.funnelStage)) {
         await runClose()
+        await applyTags()
         return
       }
+      await applyTags()
       await db
         .update(conversations)
         .set({ aiAutoreplyDisabled: true })
@@ -350,7 +378,8 @@ export async function dispatchInboundToAiReply(
       })
     }
 
-    // Depois de enviar a despedida, executa o encerramento (resolver + mover).
+    // Depois de enviar: etiqueta (qualifica) e, se for o caso, encerra.
+    await applyTags()
     await runClose()
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)

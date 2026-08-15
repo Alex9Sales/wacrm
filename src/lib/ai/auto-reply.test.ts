@@ -38,6 +38,13 @@ vi.mock('./context', () => ({ buildConversationContext: h.buildConversationConte
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
 vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
+// Ações do agente (Fase 1/2): no-op nos testes de elegibilidade do auto-reply.
+vi.mock('./close-actions', () => ({
+  listAccountTagNames: async () => [],
+  applyTagsByName: async () => [],
+  loadDealCloseContext: async () => null,
+  applyCloseActions: async () => ({ resolved: false, movedTo: null }),
+}))
 
 vi.mock('@/db', async (importOriginal) => {
   const actual = await importOriginal<typeof import('@/db')>()

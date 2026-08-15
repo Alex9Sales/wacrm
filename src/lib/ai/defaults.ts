@@ -72,32 +72,64 @@ export function aiReplyBufferMs(): number {
  * the user typed. Auto-reply mode additionally teaches the handoff
  * protocol.
  */
-// ---- Encerramento inteligente (opt-in) — a IA decide TERMINAR o atendimento.
-/** Marcador: resolver (fechar) a conversa. */
+// ---- Ações do agente (marcadores no texto gerado, estilo [[HANDOFF]]) --------
+/** Encerramento (opt-in): resolver a conversa. */
 export const RESOLVE_DIRECTIVE = /\[\[\s*resolver\s*\]\]/i
-/** Diretiva: mover o card do funil pra etapa <nome> (captura o nome). */
+/** Encerramento (opt-in): mover o card do funil pra etapa <nome>. */
 export const FUNNEL_DIRECTIVE = /\[\[\s*funil\s*:\s*([^\]]+?)\s*\]\]/i
+/** Não responder: a mensagem não pede resposta (ex.: "ok"/emoji). */
+export const SKIP_DIRECTIVE = /\[\[\s*ignorar\s*\]\]/i
+/** Etiquetar o contato com uma etiqueta EXISTENTE (captura o nome). Global. */
+export const TAG_DIRECTIVE = /\[\[\s*etiqueta\s*:\s*([^\]]+?)\s*\]\]/gi
 
-export interface CloseDirectives {
+export interface AgentDirectives {
   /** Texto limpo (sem os marcadores) a enviar ao cliente. */
   text: string
-  /** A IA pediu pra resolver a conversa. */
+  /** A IA decidiu NÃO responder (mensagem sem pergunta). */
+  skipReply: boolean
+  /** Etiquetas (nomes) que a IA quer aplicar ao contato. */
+  tags: string[]
+  /** Encerramento: resolver a conversa. */
   resolve: boolean
-  /** Etapa do funil pedida (nome), ou null. */
+  /** Encerramento: etapa do funil pedida (nome), ou null. */
   funnelStage: string | null
 }
 
-/** Extrai [[RESOLVER]] / [[FUNIL:etapa]] do texto gerado e devolve o texto limpo. */
-export function parseCloseDirectives(raw: string): CloseDirectives {
+/** Extrai os marcadores de ação do texto gerado e devolve o texto limpo. */
+export function parseCloseDirectives(raw: string): AgentDirectives {
+  const skipReply = SKIP_DIRECTIVE.test(raw)
   const resolve = RESOLVE_DIRECTIVE.test(raw)
   const fm = raw.match(FUNNEL_DIRECTIVE)
   const funnelStage = fm ? fm[1].trim() : null
+  const tags: string[] = []
+  for (const m of raw.matchAll(TAG_DIRECTIVE)) {
+    const name = (m[1] || '').trim()
+    if (name && !tags.includes(name)) tags.push(name)
+  }
   const text = raw
+    .replace(TAG_DIRECTIVE, '')
     .replace(new RegExp(FUNNEL_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(RESOLVE_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(SKIP_DIRECTIVE.source, 'gi'), '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
-  return { text, resolve, funnelStage }
+  return { text, skipReply, tags, resolve, funnelStage }
+}
+
+/** Instrução: não responder mensagens que não pedem resposta. */
+export function skipInstruction(): string {
+  return (
+    'If the customer\'s most recent message clearly does NOT need a reply — e.g. it is just "ok", "tá", "obrigado", a thumbs-up, a single emoji, or a bare acknowledgement — reply with EXACTLY "[[IGNORAR]]" and nothing else, and no message will be sent. Use this sparingly: only when a reply would be noise. When in doubt, reply normally.'
+  )
+}
+
+/** Instrução: etiquetar o contato usando SÓ etiquetas existentes. */
+export function tagInstruction(tags: string[]): string {
+  return (
+    `You may tag the customer to qualify/organize them. To add a tag, emit "[[ETIQUETA:<name>]]" (one per tag) using ONLY names from this list: ${tags.join(
+      ' | ',
+    )}. Add a tag only when it clearly applies (interest level, segment, product). Do NOT invent tag names outside the list. This marker is control metadata — never show or mention it to the customer.`
+  )
 }
 
 /** Instrução (pt→modelo) de como encerrar. `stages` = etapas do funil ligado. */
@@ -158,6 +190,9 @@ export function buildSystemPrompt(args: {
    *  ligado (a IA escolhe uma pelo nome). Só vale no modo auto_reply. */
   autoClose?: boolean
   pipelineStages?: string[]
+  /** Etiquetas EXISTENTES da conta — a IA pode aplicar uma pra qualificar.
+   *  Vazio = não ensina a etiquetar. Só vale no modo auto_reply. */
+  availableTags?: string[]
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -188,6 +223,12 @@ export function buildSystemPrompt(args: {
     parts.push(
       `You can reply with a VOICE message when it fits. To send a message as audio, start THAT message with the exact marker ${AUDIO_MARKER} at the very beginning. Use AUDIO when: the customer sent you a voice message (their message is shown prefixed with "[áudio]"), the customer asked you to answer by audio, or you are explaining a procedure or something longer that is easier to listen to. Use TEXT (no marker) for confirmations and for any data the customer must read exactly — scheduled appointment/consultation details, dates, times, addresses, numbers, prices. When you confirm an appointment/consultation, send the explanation/confirmation as an audio message (starting with ${AUDIO_MARKER}) and then send the exact data as a separate TEXT message right after. Separate distinct messages with a blank line, and keep each one short.`,
     )
+    // skip_reply: não responder "ok"/emoji (sempre ligado).
+    parts.push(skipInstruction())
+    // Etiquetar/qualificar com etiquetas existentes (quando a conta tem tags).
+    if (args.availableTags && args.availableTags.length > 0) {
+      parts.push(tagInstruction(args.availableTags))
+    }
     // Encerramento inteligente (opt-in): despedir + resolver + mover o funil.
     if (args.autoClose) {
       parts.push(closeInstruction(args.pipelineStages ?? []))

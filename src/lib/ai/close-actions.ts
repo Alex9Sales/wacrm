@@ -10,7 +10,15 @@
 // ============================================================
 
 import { and, desc, eq, sql } from 'drizzle-orm'
-import { db, deals, pipelineStages, conversations, dealEvents } from '@/db'
+import {
+  db,
+  deals,
+  pipelineStages,
+  conversations,
+  dealEvents,
+  tags,
+  contactTags,
+} from '@/db'
 import { firstOrNull } from '@/db/helpers'
 
 export interface DealCloseContext {
@@ -56,6 +64,54 @@ export async function loadDealCloseContext(
     currentStageId: deal.stageId,
     stageNames: stages.map((s) => s.name),
   }
+}
+
+/** Nomes das etiquetas EXISTENTES da conta (pra injetar no prompt). */
+export async function listAccountTagNames(accountId: string): Promise<string[]> {
+  const rows = await db
+    .select({ name: tags.name })
+    .from(tags)
+    .where(eq(tags.accountId, accountId))
+    .orderBy(tags.name)
+  return rows.map((r) => r.name)
+}
+
+/**
+ * Anexa ao contato as etiquetas (por NOME) que a IA pediu — casando só com
+ * etiquetas EXISTENTES da conta (não cria novas). Best-effort. Devolve as que
+ * anexou.
+ */
+export async function applyTagsByName(input: {
+  accountId: string
+  contactId: string | null
+  tagNames: string[]
+}): Promise<string[]> {
+  const { accountId, contactId, tagNames } = input
+  if (!contactId || tagNames.length === 0) return []
+  const applied: string[] = []
+  try {
+    const existing = await db
+      .select({ id: tags.id, name: tags.name })
+      .from(tags)
+      .where(eq(tags.accountId, accountId))
+    for (const wanted of tagNames) {
+      const w = norm(wanted)
+      const match =
+        existing.find((t) => norm(t.name) === w) ??
+        existing.find((t) => norm(t.name).includes(w) || w.includes(norm(t.name)))
+      if (!match) continue
+      await db
+        .insert(contactTags)
+        .values({ contactId, tagId: match.id })
+        .onConflictDoNothing({
+          target: [contactTags.contactId, contactTags.tagId],
+        })
+      applied.push(match.name)
+    }
+  } catch (err) {
+    console.error('[ai tags] anexar falhou:', err)
+  }
+  return applied
 }
 
 /** Casa nome de etapa tolerante a acento/caixa/espaço. */
