@@ -2,7 +2,11 @@ import { NextResponse } from 'next/server'
 
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 import { canEditSettings } from '@/lib/auth/roles'
-import { getUsageDashboard, type UsageSource } from '@/lib/ai/analytics'
+import {
+  getUsageDashboard,
+  getResolutionFunnel,
+  type UsageSource,
+} from '@/lib/ai/analytics'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -27,8 +31,12 @@ export async function GET(request: Request) {
       rawSource === 'playground' || rawSource === 'all' ? rawSource : 'real'
     const agentId = url.searchParams.get('agent')
 
-    const data = await getUsageDashboard(accountId, { days, source, agentId })
-    return NextResponse.json(data)
+    const [data, funnel] = await Promise.all([
+      getUsageDashboard(accountId, { days, source, agentId }),
+      // Funil de automação (Fase 4) — sobre conversas reais, independe da source.
+      getResolutionFunnel(accountId, days),
+    ])
+    return NextResponse.json({ ...data, funnel })
   } catch (err) {
     return toErrorResponse(err)
   }

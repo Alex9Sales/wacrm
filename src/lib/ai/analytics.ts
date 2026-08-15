@@ -16,6 +16,65 @@ import { eq, sql } from 'drizzle-orm'
 import { db, aiConfigs, channels } from '@/db'
 import { costUsd, toBrl, type UsageTokens } from './pricing'
 
+// ============================================================
+// Fase 4 — Funil de automação (quanto a IA resolve sozinha). Inspirado no
+// painel do fazer.ai/agents. Base = conversas ATIVAS no período. sender_type:
+// 'bot' = IA, 'agent' = humano, 'customer' = cliente.
+//   • aiEngaged  = a IA mandou ≥1 mensagem (has_bot)
+//   • aiResolved = engajada + fechada + NENHUM humano respondeu
+//   • transferred= engajada + um humano entrou (respondeu OU a IA foi pausada)
+// ============================================================
+export interface ResolutionFunnel {
+  total: number
+  aiEngaged: number
+  aiResolved: number
+  transferred: number
+}
+
+export async function getResolutionFunnel(
+  accountId: string,
+  days: number,
+): Promise<ResolutionFunnel> {
+  const d = Math.min(365, Math.max(1, Math.floor(days || 30)))
+  const res = await db.execute(sql`
+    SELECT
+      count(*)::int AS total,
+      count(*) FILTER (WHERE has_bot)::int AS ai_engaged,
+      count(*) FILTER (WHERE has_bot AND status = 'closed' AND NOT has_human)::int AS ai_resolved,
+      count(*) FILTER (WHERE has_bot AND (has_human OR ai_off))::int AS transferred
+    FROM (
+      SELECT c.status,
+        c.ai_autoreply_disabled AS ai_off,
+        EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.conversation_id = c.id AND m.sender_type = 'bot'
+        ) AS has_bot,
+        EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.conversation_id = c.id AND m.sender_type = 'agent'
+            AND m.is_internal = false
+        ) AS has_human
+      FROM conversations c
+      WHERE c.account_id = ${accountId}
+        AND c.last_message_at >= now() - (${d} * interval '1 day')
+    ) t
+  `)
+  const r = res.rows[0] as
+    | {
+        total?: number
+        ai_engaged?: number
+        ai_resolved?: number
+        transferred?: number
+      }
+    | undefined
+  return {
+    total: Number(r?.total ?? 0),
+    aiEngaged: Number(r?.ai_engaged ?? 0),
+    aiResolved: Number(r?.ai_resolved ?? 0),
+    transferred: Number(r?.transferred ?? 0),
+  }
+}
+
 const REPORT_TZ = 'America/Sao_Paulo'
 const BR_OFFSET = '-03:00'
 

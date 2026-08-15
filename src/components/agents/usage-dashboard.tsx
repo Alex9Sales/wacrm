@@ -16,7 +16,16 @@ import {
   XAxis,
   YAxis,
 } from 'recharts';
-import { Loader2, Coins, Receipt, Hash, MessagesSquare } from 'lucide-react';
+import {
+  Loader2,
+  Coins,
+  Receipt,
+  Hash,
+  MessagesSquare,
+  Bot,
+  Target,
+  ArrowRightLeft,
+} from 'lucide-react';
 
 interface Dashboard {
   rangeDays: number;
@@ -57,7 +66,17 @@ interface Dashboard {
     conversations: number;
   }[];
   status: { open: number; pending: number; closed: number };
+  funnel?: {
+    total: number;
+    aiEngaged: number;
+    aiResolved: number;
+    transferred: number;
+  };
 }
+
+/** % inteiro seguro (0 quando o total é 0). */
+const pct = (part: number, total: number) =>
+  total > 0 ? Math.round((part / total) * 100) : 0;
 
 const brl = (v: number) =>
   v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
@@ -142,6 +161,47 @@ export function UsageDashboard() {
 
       {data && !loading && (
         <>
+          {/* Funil de automação (Fase 4) — quanto a IA resolve sozinha. */}
+          {data.funnel && (
+            <div>
+              <p className="mb-2 text-sm font-medium text-muted-foreground">
+                Funil de automação
+              </p>
+              <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+                <Kpi
+                  icon={<MessagesSquare className="h-4 w-4" />}
+                  label="Conversas"
+                  value={int(data.funnel.total)}
+                  sub="no período"
+                />
+                <Kpi
+                  icon={<Bot className="h-4 w-4" />}
+                  label="Envolvimento"
+                  value={`${pct(data.funnel.aiEngaged, data.funnel.total)}%`}
+                  sub={`${int(data.funnel.aiEngaged)} de ${int(
+                    data.funnel.total,
+                  )} atendidas pela IA`}
+                />
+                <Kpi
+                  icon={<Target className="h-4 w-4" />}
+                  label="Resolução"
+                  value={`${pct(data.funnel.aiResolved, data.funnel.total)}%`}
+                  sub={`${int(
+                    data.funnel.aiResolved,
+                  )} resolvidas pela IA sem humano`}
+                />
+                <Kpi
+                  icon={<ArrowRightLeft className="h-4 w-4" />}
+                  label="Transferências"
+                  value={`${pct(data.funnel.transferred, data.funnel.total)}%`}
+                  sub={`${int(
+                    data.funnel.transferred,
+                  )} escaladas para um humano`}
+                />
+              </div>
+            </div>
+          )}
+
           {/* KPIs */}
           <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
             <Kpi
