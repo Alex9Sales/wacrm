@@ -45,7 +45,7 @@ import {
 import { aiReplyBufferMs } from '@/lib/ai/defaults';
 import { transcribeInboundAudio } from '@/lib/ai/transcribe';
 import { describeImage } from '@/lib/ai/vision';
-import { loadAiConfig } from '@/lib/ai/config';
+import { loadAiConfig, loadAiConfigForChannel } from '@/lib/ai/config';
 import { getAccountSettings } from '@/lib/settings/account-settings';
 import { isWithinBusinessHours } from '@/lib/settings/business-hours';
 import { engineSendText } from '@/lib/flows/meta-send';
@@ -261,22 +261,19 @@ export async function dispatchInboundMessage(
   // vê no card o que ela entendeu. Best-effort: null em qualquer falha.
   if (contentType === 'image' && mediaUrl && !isFromMe) {
     try {
-      const cfg = await loadAiConfig(accountId);
-      // Só descreve a imagem quando a IA está ATIVA NESTE CANAL (spec Alex):
-      // isActive + autoReplyEnabled + (lista de canais vazia = todos, ou inclui
-      // este canal). Fora disso não gasta visão — o canal sem IA fica intacto.
-      const aiOnChannel =
-        !!cfg &&
-        cfg.isActive &&
-        cfg.autoReplyEnabled &&
-        ((cfg.autoReplyChannelIds ?? []).length === 0 ||
-          cfg.autoReplyChannelIds.includes(channel.id));
-      const visionKey =
-        cfg && aiOnChannel
-          ? cfg.provider === 'openai'
-            ? cfg.apiKey
-            : cfg.embeddingsApiKey
-          : null;
+      // Descreve a imagem só quando a IA ATENDE ESTE CANAL — resolvido pelo
+      // MESMO seletor por canal do auto-reply (pickAgentIdForChannel), não pelo
+      // agente default da conta. Com vários agentes ligados a canais diferentes,
+      // o default podia não cobrir este canal → a visão era pulada em silêncio
+      // (a IA respondia sem "ver" a foto e pedia a imagem de novo).
+      const cfg = await loadAiConfigForChannel(accountId, channel.id, {
+        requireAutoReply: true,
+      });
+      const visionKey = cfg
+        ? cfg.provider === 'openai'
+          ? cfg.apiKey
+          : cfg.embeddingsApiKey
+        : null;
       if (visionKey) {
         transcription = await describeImage(visionKey, mediaUrl);
       }

@@ -73,13 +73,21 @@ describe('buildConversationContext', () => {
     ])
   })
 
-  it('drops an image with no description (not yet understood)', async () => {
+  it('keeps a customer image with no description as a [imagem] placeholder', async () => {
+    // Sem descrição (visão off/falhou) NÃO descarta: a IA precisa saber que uma
+    // foto chegou, senão responde como se nada tivesse vindo e pede de novo.
     fakeDb([
       { senderType: 'customer', contentType: 'image', contentText: '[image]', transcription: null },
       { senderType: 'customer', contentType: 'text', contentText: 'oi' },
     ])
     const out = await buildConversationContext('conv-1')
-    expect(out).toEqual([{ role: 'user', content: 'oi' }])
+    expect(out).toEqual([
+      { role: 'user', content: 'oi' },
+      {
+        role: 'user',
+        content: '[imagem] o cliente enviou uma foto (sem descrição disponível)',
+      },
+    ])
   })
 
   it('carimba [DD/MM HH:mm] no fuso dado quando há createdAt', async () => {

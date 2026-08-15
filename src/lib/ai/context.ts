@@ -80,9 +80,15 @@ export async function buildConversationContext(
       const isImage = IMAGE_KINDS.includes(m.contentType)
       // Áudio/imagem → transcrição (descrição de visão p/ imagem); texto → texto.
       const raw = (isAudio || isImage ? m.transcription : m.contentText) ?? ''
-      const trimmed = raw.trim()
-      if (!trimmed) return null
+      let trimmed = raw.trim()
       const isCustomer = m.senderType === 'customer'
+      // Imagem do cliente SEM descrição (visão desligada/falhou): não descarta —
+      // sinaliza que uma foto chegou, senão a IA responde como se nada tivesse
+      // vindo e acaba pedindo a imagem de novo (bug real visto em produção).
+      if (!trimmed && isImage && isCustomer) {
+        trimmed = 'o cliente enviou uma foto (sem descrição disponível)'
+      }
+      if (!trimmed) return null
       // Marca o canal p/ a IA reconhecer (útil p/ decidir responder em áudio
       // quando a pessoa mandou áudio, e p/ saber que a pessoa mandou uma foto).
       const prefix =
