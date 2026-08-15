@@ -87,6 +87,8 @@ export const SCHEDULE_DIRECTIVE =
 /** Transferir pra humano por etiqueta: [[TRANSFERIR:etiqueta|resumo]]. */
 export const TRANSFER_DIRECTIVE =
   /\[\[\s*transferir\s*:\s*([^\]|]+?)\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
+/** Criar card no funil: [[CRIARCARD:título]]. */
+export const CREATE_CARD_DIRECTIVE = /\[\[\s*criarcard\s*:\s*([^\]]+?)\s*\]\]/i
 
 export interface AgentDirectives {
   /** Texto limpo (sem os marcadores) a enviar ao cliente. */
@@ -103,6 +105,8 @@ export interface AgentDirectives {
   schedule: { startsLocal: string; title: string } | null
   /** Transferência: etiqueta de roteamento + resumo pro atendente. */
   transfer: { tag: string; summary: string } | null
+  /** Criar card no funil: título do negócio, ou null. */
+  createCard: string | null
 }
 
 /** Extrai os marcadores de ação do texto gerado e devolve o texto limpo. */
@@ -119,6 +123,8 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const transfer = tm
     ? { tag: tm[1].trim(), summary: (tm[2] || '').trim() }
     : null
+  const cm = raw.match(CREATE_CARD_DIRECTIVE)
+  const createCard = cm ? cm[1].trim() : null
   const tags: string[] = []
   for (const m of raw.matchAll(TAG_DIRECTIVE)) {
     const name = (m[1] || '').trim()
@@ -128,12 +134,29 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     .replace(TAG_DIRECTIVE, '')
     .replace(new RegExp(SCHEDULE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(TRANSFER_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(CREATE_CARD_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(FUNNEL_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(RESOLVE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(SKIP_DIRECTIVE.source, 'gi'), '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
-  return { text, skipReply, tags, resolve, funnelStage, schedule, transfer }
+  return {
+    text,
+    skipReply,
+    tags,
+    resolve,
+    funnelStage,
+    schedule,
+    transfer,
+    createCard,
+  }
+}
+
+/** Instrução: criar um card no funil quando surge uma oportunidade não rastreada. */
+export function createCardInstruction(): string {
+  return (
+    'Creating a deal card: when you identify a REAL sales opportunity or a qualified lead that is not yet tracked in the pipeline (e.g. the customer shows clear buying intent, asks for a quote, or agrees to move forward), you may create a deal card ONCE by emitting "[[CRIARCARD:<short title>]]" — where <title> briefly names the opportunity (e.g. the customer name + product/interest, in Portuguese). Do this at most once per conversation and only for a genuine opportunity, not for every message. The marker is control metadata: never show it to the customer.'
+  )
 }
 
 /** Instrução: transferir pra humano por etiqueta (com resumo). `routingTags` =
@@ -292,6 +315,7 @@ export function buildSystemPrompt(args: {
       parts.push(tagInstruction(args.availableTags))
     }
     if (has('schedule')) parts.push(scheduleInstruction())
+    if (has('create_card')) parts.push(createCardInstruction())
     if (has('resolve') || has('move_card')) {
       const close = closeInstruction({
         resolve: has('resolve'),

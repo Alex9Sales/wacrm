@@ -41,6 +41,14 @@ describe('parseCloseDirectives', () => {
     expect(d.text).toBe('Vou te passar pro gerente, um instante!')
   })
 
+  it('extrai [[CRIARCARD:título]]', () => {
+    const d = parseCloseDirectives(
+      'Show! Vou registrar aqui.\n[[CRIARCARD:Matheus - interesse plano Pro]]',
+    )
+    expect(d.createCard).toBe('Matheus - interesse plano Pro')
+    expect(d.text).toBe('Show! Vou registrar aqui.')
+  })
+
   it('sem marcadores = texto intacto', () => {
     const d = parseCloseDirectives('Oi, tudo bem?')
     expect(d).toMatchObject({

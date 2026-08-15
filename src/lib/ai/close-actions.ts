@@ -9,10 +9,11 @@
 // A IA escolhe a etapa pelo nome (injetamos as etapas do funil no prompt).
 // ============================================================
 
-import { and, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import {
   db,
   deals,
+  pipelines,
   pipelineStages,
   conversations,
   dealEvents,
@@ -66,6 +67,8 @@ export async function loadDealCloseContext(
   }
 }
 
+/* (createDealFromAi definido acima) */
+
 /** Nomes das etiquetas EXISTENTES da conta (pra injetar no prompt). */
 export async function listAccountTagNames(accountId: string): Promise<string[]> {
   const rows = await db
@@ -112,6 +115,93 @@ export async function applyTagsByName(input: {
     console.error('[ai tags] anexar falhou:', err)
   }
   return applied
+}
+
+/**
+ * Cria um card (negócio) no funil a partir do que a IA identificou. Só cria se
+ * a conversa AINDA não tem um negócio aberto ligado (não duplica). Usa o 1º
+ * funil da conta + a 1ª etapa. Best-effort. Devolve o id ou null.
+ */
+export async function createDealFromAi(input: {
+  accountId: string
+  userId: string | null
+  conversationId: string
+  contactId: string | null
+  title: string
+}): Promise<{ dealId: string; title: string } | null> {
+  const { accountId, userId, conversationId, contactId } = input
+  const title = (input.title || '').trim().slice(0, 200)
+  if (!title) return null
+  // deals.user_id (criador) é NOT NULL — sem um usuário válido, não cria.
+  if (!userId) return null
+  try {
+    // Já existe negócio aberto ligado à conversa? Não duplica.
+    const existing = firstOrNull(
+      await db
+        .select({ id: deals.id })
+        .from(deals)
+        .where(
+          and(
+            eq(deals.accountId, accountId),
+            eq(deals.conversationId, conversationId),
+            eq(deals.status, 'open'),
+          ),
+        )
+        .limit(1),
+    )
+    if (existing) return null
+
+    // 1º funil da conta + 1ª etapa.
+    const pipeline = firstOrNull(
+      await db
+        .select({ id: pipelines.id })
+        .from(pipelines)
+        .where(eq(pipelines.accountId, accountId))
+        .orderBy(asc(pipelines.createdAt))
+        .limit(1),
+    )
+    if (!pipeline) return null
+    const stage = firstOrNull(
+      await db
+        .select({ id: pipelineStages.id })
+        .from(pipelineStages)
+        .where(eq(pipelineStages.pipelineId, pipeline.id))
+        .orderBy(asc(pipelineStages.position))
+        .limit(1),
+    )
+    if (!stage) return null
+
+    const [created] = await db
+      .insert(deals)
+      .values({
+        accountId,
+        pipelineId: pipeline.id,
+        stageId: stage.id,
+        contactId: contactId || null,
+        conversationId,
+        title,
+        status: 'open',
+        userId,
+        stageChangedAt: sql`now()`,
+      })
+      .returning({ id: deals.id })
+
+    try {
+      await db.insert(dealEvents).values({
+        accountId,
+        actorUserId: userId || null,
+        dealId: created.id,
+        type: 'created',
+        data: { by: 'ai', title },
+      })
+    } catch (err) {
+      console.error('[ai create-card] deal event falhou:', err)
+    }
+    return { dealId: created.id, title }
+  } catch (err) {
+    console.error('[ai create-card] falhou:', err)
+    return null
+  }
 }
 
 /** Casa nome de etapa tolerante a acento/caixa/espaço. */

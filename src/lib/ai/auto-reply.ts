@@ -16,6 +16,7 @@ import {
   loadDealCloseContext,
   listAccountTagNames,
   applyTagsByName,
+  createDealFromAi,
 } from './close-actions'
 import { scheduleEventFromAi } from './schedule-actions'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
@@ -239,6 +240,19 @@ export async function dispatchInboundToAiReply(
         if (ev) console.log('[ai auto-reply] agendou:', JSON.stringify(ev))
       }
     }
+    // Criar card no funil (ferramenta 'create_card' + [[CRIARCARD]]).
+    const runCreateCard = async () => {
+      if (has('create_card') && dirs.createCard) {
+        const d = await createDealFromAi({
+          accountId,
+          userId: configOwnerUserId || null,
+          conversationId,
+          contactId,
+          title: dirs.createCard,
+        })
+        if (d) console.log('[ai auto-reply] card criado:', JSON.stringify(d))
+      }
+    }
     // Transferir pra humano por etiqueta (ferramenta 'handoff' + [[TRANSFERIR]]).
     const runTransfer = async (): Promise<boolean> => {
       if (has('handoff') && dirs.transfer) {
@@ -423,9 +437,10 @@ export async function dispatchInboundToAiReply(
       })
     }
 
-    // Depois de enviar: etiqueta, agenda, transfere OU encerra (transfer tem
-    // prioridade — se transferiu, não resolve/move).
+    // Depois de enviar: etiqueta, cria card, agenda, transfere OU encerra
+    // (transfer tem prioridade — se transferiu, não resolve/move).
     await applyTags()
+    await runCreateCard()
     await runSchedule()
     const transferred = await runTransfer()
     if (!transferred) await runClose()

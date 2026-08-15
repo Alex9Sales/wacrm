@@ -86,11 +86,12 @@ export const AGENT_TOOLS: AgentToolDef[] = [
   },
   {
     key: 'create_card',
-    label: 'Criar card / tarefa',
-    description: 'Cria um novo card (negócio/tarefa) no funil.',
+    label: 'Criar card no funil',
+    description:
+      'Cria um novo negócio no funil quando surge uma oportunidade não rastreada.',
     group: 'Funil',
     defaultOn: false,
-    implemented: false,
+    implemented: true,
   },
   {
     key: 'private_note',
