@@ -34,6 +34,9 @@ const PUBLIC_API_PREFIXES = [
   //            and let each route enforce its own key + scope.
   '/api/internal', // server-to-server (voice bridge) — auths per-request via a
   //            bearer service token, not the session cookie.
+  '/api/instagram/oauth/callback', // OAuth callback do Instagram — o browser
+  //            volta do instagram.com; autentica pelo `state` assinado, não pela
+  //            sessão (o /start segue protegido).
 ]
 
 function isProtectedPath(pathname: string): boolean {
