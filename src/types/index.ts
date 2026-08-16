@@ -162,9 +162,10 @@ export type ConversationPriority =
   | 'high'
   | 'urgent';
 
-/** The set of WhatsApp transports a channel can use (Phase 4). Mirrors
- *  `ProviderId` in src/lib/channels/provider.ts. */
-export type ChannelProvider = 'meta' | 'waha' | 'evolution' | 'evogo';
+/** The set of transports a channel can use (Phase 4). Mirrors
+ *  `ProviderId` in src/lib/channels/provider.ts. Instagram Direct entra
+ *  aqui pra o inbox rotular/estilizar o canal (selinho do IG). */
+export type ChannelProvider = 'meta' | 'waha' | 'evolution' | 'evogo' | 'instagram';
 
 /** The channel a conversation belongs to, threaded to the inbox client
  *  so the composer can gate provider-specific affordances and the list /

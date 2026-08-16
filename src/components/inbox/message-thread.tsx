@@ -54,7 +54,6 @@ import {
   MailOpen,
   PanelRightOpen,
   PanelRightClose,
-  Radio,
   Trash2,
   Loader2,
   Building2,
@@ -88,6 +87,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ContactAvatar } from "./contact-avatar";
+import { ChannelBadge, CHANNEL_PROVIDER_LABELS } from "./channel-badge";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
 import { ForwardDialog } from "./forward-dialog";
@@ -109,14 +109,10 @@ interface ReplyDraft {
   preview: string;
 }
 
-/** Short provider labels for the inbox channel badge (pt-BR). Shared
- *  with the conversation list. */
-export const CHANNEL_PROVIDER_LABELS: Record<ChannelProvider, string> = {
-  meta: "Meta",
-  waha: "WAHA",
-  evolution: "Evolution",
-  evogo: "EvoGo",
-};
+// CHANNEL_PROVIDER_LABELS agora mora em ./channel-badge (fonte única, junto
+// do selinho estilizado). Reexportado aqui pra não quebrar quem já importa
+// deste módulo.
+export { CHANNEL_PROVIDER_LABELS };
 
 function renderTemplateBody(body: string, params: string[]): string {
   return body.replace(/\{\{(\d+)\}\}/g, (_, raw) => {
@@ -1421,17 +1417,12 @@ export function MessageThread({
               Only shown when the conversation carries a channel (legacy
               NULL-channel rows omit it). */}
           {conversation.channel && (
-            <Badge
-              variant="secondary"
-              className="ml-1 hidden min-w-0 shrink gap-1 text-[10px] lg:inline-flex lg:ml-2"
-              title={`Canal: ${conversation.channel.name} (${CHANNEL_PROVIDER_LABELS[conversation.channel.provider]})`}
-            >
-              <Radio className="h-3 w-3 shrink-0" />
-              <span className="max-w-28 truncate">
-                {conversation.channel.name ||
-                  CHANNEL_PROVIDER_LABELS[conversation.channel.provider]}
-              </span>
-            </Badge>
+            <ChannelBadge
+              provider={conversation.channel.provider}
+              name={conversation.channel.name}
+              size="md"
+              className="ml-1 hidden min-w-0 shrink lg:inline-flex lg:ml-2"
+            />
           )}
 
           {/* Session timer badge — hidden on the narrowest phones so

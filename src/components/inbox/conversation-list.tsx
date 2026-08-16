@@ -15,7 +15,7 @@ import type {
 } from "@/types";
 import { Search, ChevronDown, X, Radio, Inbox, Users, MessageSquarePlus, UserCheck, Layers } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
-import { CHANNEL_PROVIDER_LABELS } from "./message-thread";
+import { CHANNEL_PROVIDER_LABELS, ChannelBadge } from "./channel-badge";
 import { ContactAvatar } from "./contact-avatar";
 import { NewConversationDialog } from "./new-conversation-dialog";
 import { ConversationContextMenu } from "./conversation-context-menu";
@@ -1084,16 +1084,10 @@ function ConversationItem({
               </span>
             )}
             {conversation.channel && (
-              <span
-                className="inline-flex items-center gap-1 rounded-full bg-muted px-1.5 py-0.5 text-[9px] font-medium text-muted-foreground"
-                title={`Canal: ${conversation.channel.name} (${CHANNEL_PROVIDER_LABELS[conversation.channel.provider]})`}
-              >
-                <Radio className="h-2.5 w-2.5" />
-                <span className="max-w-16 truncate">
-                  {conversation.channel.name ||
-                    CHANNEL_PROVIDER_LABELS[conversation.channel.provider]}
-                </span>
-              </span>
+              <ChannelBadge
+                provider={conversation.channel.provider}
+                name={conversation.channel.name}
+              />
             )}
             {contactTags.slice(0, 3).map((tag) => (
               <span
