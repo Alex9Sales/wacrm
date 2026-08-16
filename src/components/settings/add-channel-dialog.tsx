@@ -278,6 +278,20 @@ export function AddChannelDialog({
                 className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
               />
             </div>
+            {provider === 'instagram' && (
+              <div className="space-y-1.5">
+                <a
+                  href="/api/instagram/oauth/start"
+                  className="flex w-full items-center justify-center gap-2 rounded-md bg-gradient-to-r from-purple-500 to-pink-500 px-3 py-2 text-sm font-medium text-white transition hover:opacity-90"
+                >
+                  Conectar com Instagram (1 clique)
+                </a>
+                <p className="text-center text-[11px] text-muted-foreground">
+                  Recomendado — você autoriza pelo Instagram e o canal é criado
+                  sozinho. Ou preencha os dados manualmente abaixo.
+                </p>
+              </div>
+            )}
             {fields.length === 0 && (
               <p className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                 A URL e a chave do servidor são preenchidas automaticamente pela
