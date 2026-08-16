@@ -313,8 +313,10 @@ export function ChannelsTab() {
         onCreated={(created) => {
           setAddOpen(false);
           void load();
-          // Non-Meta channels need pairing right after creation.
-          if (created && created.provider !== 'meta') {
+          // Só os provedores com pareamento por QR (WAHA/Evolution/EvoGo) abrem
+          // o modal de QR ao criar. Meta e Instagram conectam por token — nada
+          // de QR.
+          if (created && CAPABILITIES[created.provider]?.qrPairing) {
             setPairing(created);
           }
         }}
