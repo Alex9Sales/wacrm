@@ -8,7 +8,7 @@ import { toast } from "sonner";
 import {
   Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign,
   Pencil, Trash2, ArrowRightLeft, ChevronRight, Star, Copy, Pause, Play,
-  Building2,
+  Building2, Clock3,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
@@ -372,6 +372,18 @@ export function DealCard({
               {daysInStage === 0 ? "hoje" : `${daysInStage}d na etapa`}
             </span>
           )}
+        </div>
+      )}
+
+      {/* Próximo follow-up automático (follow-up por etapa) — o sistema agenda e
+          atualiza isto ao mover o card de etapa. */}
+      {deal.next_follow_up_at && (
+        <div
+          className="mt-1.5 flex items-center gap-1 text-[11px] text-sky-500"
+          title="Próximo follow-up automático"
+        >
+          <Clock3 className="h-3 w-3" />
+          <span>Follow-up: {formatDateTime(deal.next_follow_up_at)}</span>
         </div>
       )}
 

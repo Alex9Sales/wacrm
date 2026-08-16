@@ -444,6 +444,8 @@ export interface Deal {
   qualification?: number | null;
   /** Quando o negócio entrou na etapa ATUAL — p/ "dias na etapa". */
   stage_changed_at?: string | null;
+  /** Próximo follow-up automático agendado p/ o card (follow-up por etapa). */
+  next_follow_up_at?: string | null;
   /** Pausado (estilo RD): timestamp = pausado; null/undefined = ativo. */
   paused_at?: string | null;
   status?: DealStatus;

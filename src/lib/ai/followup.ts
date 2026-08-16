@@ -408,6 +408,7 @@ interface StageCandRow {
   conversation_id: string
   stage_name: string
   stage_changed_at: string | null
+  next_follow_up_at: string | null
   contact_id: string
   last_inbound_at: string | null
 }
@@ -448,9 +449,6 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
       /* fail-open */
     }
 
-    // Filtro grosso pelo MENOR delay dos gatilhos.
-    const minDelay = Math.min(...cfg.stageTriggers.map(stepDelayMinutes))
-
     const channels = agent.auto_reply_channel_ids ?? []
     const channelCond =
       channels.length > 0
@@ -460,9 +458,18 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
           )}]::uuid[])`
         : sql``
 
+    // Só os deals nas etapas-gatilho deste agente (case-insensitive no SQL;
+    // refino final por normStage). Sem filtro de delay: queremos ver o card já
+    // logo que entra na etapa (pra setar o "próximo follow-up" visível).
+    const stageNames = cfg.stageTriggers.map((t) => t.stage.toLowerCase())
+    const stageCond = sql`AND lower(ps.name) = ANY(ARRAY[${sql.join(
+      stageNames.map((n) => sql`${n}`),
+      sql`, `,
+    )}]::text[])`
+
     const rows = await db.execute(sql`
       SELECT d.id AS deal_id, d.conversation_id, d.stage_changed_at,
-             ps.name AS stage_name, c.contact_id,
+             d.next_follow_up_at, ps.name AS stage_name, c.contact_id,
              (SELECT max(m.created_at) FROM messages m
                 WHERE m.conversation_id = c.id
                   AND m.sender_type = 'customer' AND m.is_internal = false) AS last_inbound_at
@@ -473,9 +480,9 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
         AND d.status = 'open'
         AND d.conversation_id IS NOT NULL
         AND d.stage_changed_at IS NOT NULL
-        AND d.stage_changed_at <= now() - (${minDelay} * interval '1 minute')
         AND (d.stage_follow_up_at IS NULL OR d.stage_changed_at > d.stage_follow_up_at)
         AND c.status IN ('open','pending')
+        ${stageCond}
         ${channelCond}
       ORDER BY d.stage_changed_at ASC
       LIMIT ${PER_AGENT_CAP}
@@ -492,14 +499,23 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
         (t) => normStage(t.stage) === normStage(d.stage_name),
       )
       if (!trig) continue
-      // Ainda não deu o delay desde que entrou na etapa?
-      if (
-        Date.now() - new Date(d.stage_changed_at).getTime() <
-        stepDelayMinutes(trig) * 60_000
-      )
-        continue
-      // O cliente respondeu DEPOIS de entrar na etapa? Então o auto-reply cuida —
-      // não precisa de toque de etapa. Marca pra não perseguir.
+
+      // Planeja/atualiza o "próximo follow-up" VISÍVEL no card (o sistema
+      // editando a tarefa). plannedAt = entrou-na-etapa + delay do gatilho.
+      const plannedMs =
+        new Date(d.stage_changed_at).getTime() + stepDelayMinutes(trig) * 60_000
+      const currentMs = d.next_follow_up_at
+        ? new Date(d.next_follow_up_at).getTime()
+        : 0
+      if (Math.abs(currentMs - plannedMs) > 1000) {
+        await setNextFollowUp(d.deal_id, new Date(plannedMs).toISOString())
+      }
+
+      // Ainda não venceu? O card já mostra o horário; espera o próximo tick.
+      if (Date.now() < plannedMs) continue
+
+      // O cliente respondeu DEPOIS de entrar na etapa? O auto-reply cuida — encerra
+      // este follow-up de etapa (limpa o "próximo" + marca pra não repetir).
       if (
         d.last_inbound_at &&
         new Date(d.last_inbound_at) > new Date(d.stage_changed_at)
@@ -507,12 +523,15 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
         await stampStage(d.deal_id)
         continue
       }
-      // Janela de 24h: precisa de inbound do cliente < 24h (fora dela só template).
+      // Fora da janela de 24h → só template (não coberto aqui): encerra pra não
+      // deixar o card preso mostrando um follow-up que não vai sair.
       if (
         !d.last_inbound_at ||
         Date.now() - new Date(d.last_inbound_at).getTime() >= WINDOW_MS
-      )
+      ) {
+        await stampStage(d.deal_id)
         continue
+      }
 
       if (!loaded) {
         loaded = true
@@ -569,12 +588,25 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
   return { sent }
 }
 
-/** Carimba que o follow-up de etapa desta entrada já saiu (não repete). */
+/** Carimba que o follow-up de etapa desta entrada já saiu (não repete) e limpa
+ *  o "próximo follow-up" do card. */
 async function stampStage(dealId: string): Promise<void> {
   try {
     await db
       .update(deals)
-      .set({ stageFollowUpAt: new Date().toISOString() })
+      .set({ stageFollowUpAt: new Date().toISOString(), nextFollowUpAt: null })
+      .where(eq(deals.id, dealId))
+  } catch {
+    /* best-effort */
+  }
+}
+
+/** Atualiza o "próximo follow-up" visível no card (planejado, ainda não saiu). */
+async function setNextFollowUp(dealId: string, iso: string): Promise<void> {
+  try {
+    await db
+      .update(deals)
+      .set({ nextFollowUpAt: iso })
       .where(eq(deals.id, dealId))
   } catch {
     /* best-effort */
