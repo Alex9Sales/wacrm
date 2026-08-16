@@ -71,6 +71,9 @@ export async function PATCH(request: Request) {
       giveUpEnabled: body?.giveUpEnabled === true,
       giveUpStage: typeof body?.giveUpStage === 'string' ? body.giveUpStage : null,
       stageTriggers: Array.isArray(body?.stageTriggers) ? body.stageTriggers : undefined,
+      meetingReminders: Array.isArray(body?.meetingReminders)
+        ? body.meetingReminders
+        : undefined,
     })
 
     await db

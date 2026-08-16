@@ -56,6 +56,25 @@ interface StageTrig {
 }
 
 const MAX_STAGE_TRIGGERS = 6;
+const MAX_MEETING_REMINDERS = 6;
+
+interface MeetingRem {
+  offsetValue: number;
+  offsetUnit: Unit;
+  when: 'before' | 'after';
+  instructions: string;
+  templateName: string;
+  templateLanguage: string;
+  templateParamsText: string;
+}
+
+/** Lembretes padrão (estilo n8n): 24h, 12h, 1h antes + 2h depois. */
+const MEETING_DEFAULTS: MeetingRem[] = [
+  { offsetValue: 24, offsetUnit: 'hours', when: 'before', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '' },
+  { offsetValue: 12, offsetUnit: 'hours', when: 'before', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '' },
+  { offsetValue: 1, offsetUnit: 'hours', when: 'before', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '' },
+  { offsetValue: 2, offsetUnit: 'hours', when: 'after', instructions: '', templateName: '', templateLanguage: '', templateParamsText: '' },
+];
 /** Opções prontas (o "tem opções ou escreve" do Alex): preenche um gatilho que
  *  o usuário edita (nome da etapa + tempo). */
 const EMPTY_TEMPLATE = { templateName: '', templateLanguage: '', templateParamsText: '' };
@@ -106,6 +125,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
   const [giveUpEnabled, setGiveUpEnabled] = useState(false);
   const [giveUpStage, setGiveUpStage] = useState('');
   const [stageTriggers, setStageTriggers] = useState<StageTrig[]>([]);
+  const [meetingRems, setMeetingRems] = useState<MeetingRem[]>([]);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -162,6 +182,26 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
             _guide: !!((x.instructions as string) ?? '').trim(),
           })),
         );
+        const mr = Array.isArray(data.followUp.meetingReminders)
+          ? data.followUp.meetingReminders
+          : [];
+        setMeetingRems(
+          mr.map((x: Record<string, unknown>) => ({
+            offsetValue: Number(x.offsetValue) || 1,
+            offsetUnit: (['minutes', 'hours', 'days'] as Unit[]).includes(
+              x.offsetUnit as Unit,
+            )
+              ? (x.offsetUnit as Unit)
+              : 'hours',
+            when: x.when === 'after' ? 'after' : 'before',
+            instructions: (x.instructions as string) ?? '',
+            templateName: (x.templateName as string) ?? '',
+            templateLanguage: (x.templateLanguage as string) ?? '',
+            templateParamsText: Array.isArray(x.templateParams)
+              ? (x.templateParams as string[]).join(', ')
+              : '',
+          })),
+        );
       }
     } catch {
       /* best-effort */
@@ -203,6 +243,32 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
   const removeTrig = (i: number) =>
     setStageTriggers((prev) => prev.filter((_, j) => j !== i));
 
+  const setRem = (i: number, patch: Partial<MeetingRem>) =>
+    setMeetingRems((prev) => prev.map((m, j) => (j === i ? { ...m, ...patch } : m)));
+  const addRem = () =>
+    setMeetingRems((prev) =>
+      prev.length >= MAX_MEETING_REMINDERS
+        ? prev
+        : [
+            ...prev,
+            {
+              offsetValue: 1,
+              offsetUnit: 'hours',
+              when: 'before',
+              instructions: '',
+              templateName: '',
+              templateLanguage: '',
+              templateParamsText: '',
+            },
+          ],
+    );
+  const removeRem = (i: number) =>
+    setMeetingRems((prev) => prev.filter((_, j) => j !== i));
+  const addRemDefaults = () =>
+    setMeetingRems((prev) =>
+      prev.length > 0 ? prev : MEETING_DEFAULTS.map((m) => ({ ...m })),
+    );
+
   const save = async () => {
     setSaving(true);
     try {
@@ -233,6 +299,18 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                 .map((p) => p.trim())
                 .filter(Boolean),
             })),
+          meetingReminders: meetingRems.map((m) => ({
+            offsetValue: Math.max(0, Math.round(m.offsetValue || 1)),
+            offsetUnit: m.offsetUnit,
+            when: m.when,
+            instructions: m.instructions.trim(),
+            templateName: m.templateName.trim(),
+            templateLanguage: m.templateLanguage.trim(),
+            templateParams: m.templateParamsText
+              .split(',')
+              .map((p) => p.trim())
+              .filter(Boolean),
+          })),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -572,6 +650,128 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                     + {p.label}
                   </button>
                 ))}
+              </div>
+            )}
+          </div>
+
+          {/* Lembretes de reunião — ancorados no HORÁRIO do evento agendado. */}
+          <div className="rounded-lg border border-dashed border-border p-3">
+            <p className="text-sm font-medium text-foreground">
+              Lembretes de reunião
+            </p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Ancorados no <strong>horário da reunião</strong> agendada (ex.: 24h
+              antes, 1h antes, 2h depois). Dentro da janela de 24h vai texto da IA;
+              fora dela (canal oficial) usa o modelo.
+            </p>
+
+            {meetingRems.map((m, i) => (
+              <div key={i} className="mt-2 rounded-lg border border-border p-3">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-foreground">
+                  <Input
+                    type="number"
+                    min={0}
+                    value={m.offsetValue}
+                    onChange={(e) => setRem(i, { offsetValue: Number(e.target.value) })}
+                    className="h-8 w-20"
+                    disabled={!canEdit}
+                  />
+                  <select
+                    value={m.offsetUnit}
+                    onChange={(e) => setRem(i, { offsetUnit: e.target.value as Unit })}
+                    disabled={!canEdit}
+                    className="h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                  >
+                    <option value="minutes">minutos</option>
+                    <option value="hours">horas</option>
+                    <option value="days">dias</option>
+                  </select>
+                  <select
+                    value={m.when}
+                    onChange={(e) =>
+                      setRem(i, { when: e.target.value as 'before' | 'after' })
+                    }
+                    disabled={!canEdit}
+                    className="h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                  >
+                    <option value="before">antes da reunião</option>
+                    <option value="after">depois da reunião</option>
+                  </select>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => removeRem(i)}
+                      className="ml-auto text-muted-foreground hover:text-destructive"
+                      title="Remover lembrete"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                <Input
+                  value={m.instructions}
+                  onChange={(e) => setRem(i, { instructions: e.target.value })}
+                  placeholder="Orientação (opcional) — o que dizer neste lembrete"
+                  disabled={!canEdit}
+                  className="mt-2 h-8"
+                />
+                <div className="mt-2 border-t border-dashed border-border pt-2">
+                  <Label className="text-[11px] text-muted-foreground">
+                    Modelo p/ fora da janela de 24h (canal oficial)
+                  </Label>
+                  <select
+                    value={
+                      m.templateName
+                        ? `${m.templateName}|${m.templateLanguage}`
+                        : ''
+                    }
+                    onChange={(e) => {
+                      const [name, lang] = e.target.value.split('|');
+                      setRem(i, {
+                        templateName: name || '',
+                        templateLanguage: lang || '',
+                      });
+                    }}
+                    disabled={!canEdit}
+                    className="mt-1 h-8 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                  >
+                    <option value="">— sem modelo —</option>
+                    {templates.map((tp) => (
+                      <option key={tp.id} value={`${tp.name}|${tp.language ?? ''}`}>
+                        {tp.name} ({tp.language}) ·{' '}
+                        {templateParamCount(tp.body_text)} parâm.
+                      </option>
+                    ))}
+                  </select>
+                  {m.templateName && (
+                    <Input
+                      value={m.templateParamsText}
+                      onChange={(e) =>
+                        setRem(i, { templateParamsText: e.target.value })
+                      }
+                      placeholder="params por vírgula — ex.: {nome}, {hora}"
+                      disabled={!canEdit}
+                      className="mt-1 h-8"
+                    />
+                  )}
+                </div>
+              </div>
+            ))}
+
+            {canEdit && meetingRems.length < MAX_MEETING_REMINDERS && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={addRem}>
+                  <Plus className="mr-1.5 h-4 w-4" /> Adicionar lembrete
+                </Button>
+                {meetingRems.length === 0 && (
+                  <button
+                    type="button"
+                    onClick={addRemDefaults}
+                    className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted"
+                  >
+                    + Lembretes padrão (24h, 12h, 1h antes + 2h depois)
+                  </button>
+                )}
               </div>
             )}
           </div>

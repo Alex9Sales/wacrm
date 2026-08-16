@@ -8,7 +8,11 @@
 import { Queue, Worker } from 'bullmq';
 
 import { bullConnection } from '@/lib/queue/connection';
-import { runFollowUpSweep, runStageFollowUpSweep } from '@/lib/ai/followup';
+import {
+  runFollowUpSweep,
+  runStageFollowUpSweep,
+  runMeetingReminderSweep,
+} from '@/lib/ai/followup';
 
 const FOLLOWUP_QUEUE = 'ai-followup';
 const TICK_MS = 5 * 60_000; // 5 min
@@ -47,6 +51,15 @@ export function startFollowupWorker(): Worker {
         }
       } catch (err) {
         console.error('[followup] stage sweep failed:', err);
+      }
+      // Lembretes de reunião (ancorados no horário do evento). Mesmo tick.
+      try {
+        const rem = await runMeetingReminderSweep();
+        if (rem.sent > 0) {
+          console.log(`[followup] enviou ${rem.sent} lembrete(s) de reunião`);
+        }
+      } catch (err) {
+        console.error('[followup] meeting reminder sweep failed:', err);
       }
     },
     { connection: bullConnection(), concurrency: 1 },

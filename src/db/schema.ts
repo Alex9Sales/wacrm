@@ -2104,6 +2104,8 @@ export const calendarEvents = pgTable("calendar_events", {
 	dealId: uuid("deal_id"),
 	// 'confirmed' | 'cancelled'
 	status: text().default('confirmed').notNull(),
+	// Lembretes de reunião já enviados (ordem cronológica) — migração 0094.
+	remindersSent: integer("reminders_sent").default(0).notNull(),
 	// 'local' | 'google'
 	source: text().default('local').notNull(),
 	googleEventId: text("google_event_id"),
