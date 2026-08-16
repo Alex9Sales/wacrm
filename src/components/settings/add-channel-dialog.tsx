@@ -275,6 +275,13 @@ export function AddChannelDialog({
                 placeholder="ex.: Atendimento comercial"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
+                // Desliga o autofill do navegador/gerenciador de senha — o
+                // Chrome estava injetando lixo ("Gemini") nesses campos.
+                name="fluxia-channel-title"
+                autoComplete="off"
+                data-1p-ignore=""
+                data-lpignore="true"
+                data-form-type="other"
                 className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
               />
             </div>
@@ -314,6 +321,14 @@ export function AddChannelDialog({
                   onChange={(e) =>
                     setConfig((prev) => ({ ...prev, [f.key]: e.target.value }))
                   }
+                  // Desliga o autofill do navegador/gerenciador de senha — o
+                  // Chrome injetava "Gemini"/senha salva nesses campos. Em
+                  // campo secreto, `new-password` é o que o Chrome respeita.
+                  name={`fluxia-${f.key}`}
+                  autoComplete={f.secret ? 'new-password' : 'off'}
+                  data-1p-ignore=""
+                  data-lpignore="true"
+                  data-form-type="other"
                   className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
                 />
               </div>
