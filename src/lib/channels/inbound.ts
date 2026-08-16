@@ -45,6 +45,7 @@ import {
 import { aiReplyBufferMs } from '@/lib/ai/defaults';
 import { transcribeInboundAudio } from '@/lib/ai/transcribe';
 import { describeImage } from '@/lib/ai/vision';
+import { describeDocument } from '@/lib/ai/document';
 import { loadAiConfig, loadAiConfigForChannel } from '@/lib/ai/config';
 import { getAccountSettings } from '@/lib/settings/account-settings';
 import { isWithinBusinessHours } from '@/lib/settings/business-hours';
@@ -279,6 +280,32 @@ export async function dispatchInboundMessage(
       }
     } catch (err) {
       console.error('[inbound] image describe failed:', err);
+    }
+  }
+
+  // Entender DOCUMENTO (PDF/DOCX/texto): extrai o texto + resume, igual à visão
+  // da imagem. Mesmo gate por canal (só quando a IA atende o canal). O resumo
+  // vira a transcrição — a IA responde e o atendente vê no card.
+  if (contentType === 'document' && mediaUrl && !isFromMe) {
+    try {
+      const cfg = await loadAiConfigForChannel(accountId, channel.id, {
+        requireAutoReply: true,
+      });
+      const docKey = cfg
+        ? cfg.provider === 'openai'
+          ? cfg.apiKey
+          : cfg.embeddingsApiKey
+        : null;
+      if (docKey) {
+        transcription = await describeDocument({
+          apiKey: docKey,
+          url: mediaUrl,
+          mimetype: ev.media?.mimetype,
+          filename: ev.media?.filename,
+        });
+      }
+    } catch (err) {
+      console.error('[inbound] document describe failed:', err);
     }
   }
 
@@ -581,7 +608,10 @@ export async function dispatchInboundMessage(
   // era só descrita e ficava sem resposta (a IA "só transcrevia"). fromMe já
   // retornou lá em cima, então aqui é sempre mensagem do cliente.
   const mediaReadable =
-    (contentType === 'image' || contentType === 'audio') && !!transcription?.trim();
+    (contentType === 'image' ||
+      contentType === 'audio' ||
+      contentType === 'document') &&
+    !!transcription?.trim();
   if (
     !flowConsumed &&
     !outOfHoursSent &&

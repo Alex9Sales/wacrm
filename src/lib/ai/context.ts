@@ -5,6 +5,7 @@ import { aiContextMessageLimit } from './defaults'
 
 const AUDIO_KINDS = ['audio', 'voice', 'ptt']
 const IMAGE_KINDS = ['image']
+const DOC_KINDS = ['document']
 
 /**
  * Carimbo "[DD/MM HH:mm] " da mensagem no fuso da conta — para a IA raciocinar
@@ -66,7 +67,12 @@ export async function buildConversationContext(
     .where(
       and(
         eq(messages.conversationId, conversationId),
-        inArray(messages.contentType, ['text', ...AUDIO_KINDS, ...IMAGE_KINDS]),
+        inArray(messages.contentType, [
+          'text',
+          ...AUDIO_KINDS,
+          ...IMAGE_KINDS,
+          ...DOC_KINDS,
+        ]),
         eq(messages.isInternal, false),
       ),
     )
@@ -78,21 +84,32 @@ export async function buildConversationContext(
     .map((m) => {
       const isAudio = AUDIO_KINDS.includes(m.contentType)
       const isImage = IMAGE_KINDS.includes(m.contentType)
-      // Áudio/imagem → transcrição (descrição de visão p/ imagem); texto → texto.
-      const raw = (isAudio || isImage ? m.transcription : m.contentText) ?? ''
+      const isDoc = DOC_KINDS.includes(m.contentType)
+      // Áudio/imagem/doc → transcrição (descrição de visão/resumo do doc); texto → texto.
+      const raw =
+        (isAudio || isImage || isDoc ? m.transcription : m.contentText) ?? ''
       let trimmed = raw.trim()
       const isCustomer = m.senderType === 'customer'
-      // Imagem do cliente SEM descrição (visão desligada/falhou): não descarta —
-      // sinaliza que uma foto chegou, senão a IA responde como se nada tivesse
-      // vindo e acaba pedindo a imagem de novo (bug real visto em produção).
+      // Mídia do cliente SEM leitura (visão/extração desligada ou falhou): não
+      // descarta — sinaliza que chegou, senão a IA responde como se nada tivesse
+      // vindo e pede de novo (bug real visto em produção).
       if (!trimmed && isImage && isCustomer) {
         trimmed = 'o cliente enviou uma foto (sem descrição disponível)'
       }
+      if (!trimmed && isDoc && isCustomer) {
+        trimmed = 'o cliente enviou um documento (sem leitura disponível)'
+      }
       if (!trimmed) return null
       // Marca o canal p/ a IA reconhecer (útil p/ decidir responder em áudio
-      // quando a pessoa mandou áudio, e p/ saber que a pessoa mandou uma foto).
+      // quando a pessoa mandou áudio, e p/ saber que a pessoa mandou uma foto/doc).
       const prefix =
-        isCustomer && isAudio ? '[áudio] ' : isCustomer && isImage ? '[imagem] ' : ''
+        isCustomer && isAudio
+          ? '[áudio] '
+          : isCustomer && isImage
+            ? '[imagem] '
+            : isCustomer && isDoc
+              ? '[documento] '
+              : ''
       // Carimbo de data/hora no início (metadata p/ a IA; o prompt manda não repetir).
       const stamp = stampFor(m.createdAt, timezone)
       return {
