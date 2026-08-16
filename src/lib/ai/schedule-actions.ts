@@ -4,7 +4,7 @@
 // for do Google (pushEventToGoogle, best-effort). Nunca lança.
 // ============================================================
 
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, gt, sql } from 'drizzle-orm'
 import { db, calendars, calendarEvents, deals, scheduledMessages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { pushEventToGoogle } from '@/lib/google/sync'
@@ -182,6 +182,44 @@ export async function scheduleEventFromAi(input: {
         .limit(1),
     )
 
+    // Dedup: a IA às vezes emite [[AGENDAR]] em turnos seguidos. Se já existe um
+    // evento confirmado FUTURO pro mesmo negócio (ou contato), ATUALIZA o horário
+    // em vez de criar outro — 1 reunião = 1 evento (evita lembrete em dobro).
+    const dupMatch = deal?.id
+      ? eq(calendarEvents.dealId, deal.id)
+      : contactId
+        ? eq(calendarEvents.contactId, contactId)
+        : null
+    if (dupMatch) {
+      const existing = firstOrNull(
+        await db
+          .select({ id: calendarEvents.id })
+          .from(calendarEvents)
+          .where(
+            and(
+              eq(calendarEvents.accountId, accountId),
+              eq(calendarEvents.status, 'confirmed'),
+              gt(calendarEvents.startsAt, sql`now()`),
+              dupMatch,
+            ),
+          )
+          .orderBy(asc(calendarEvents.startsAt))
+          .limit(1),
+      )
+      if (existing) {
+        await db
+          .update(calendarEvents)
+          .set({ startsAt: start.toISOString(), endsAt: end.toISOString(), title })
+          .where(eq(calendarEvents.id, existing.id))
+        try {
+          await pushEventToGoogle(accountId, existing.id, 'update')
+        } catch (err) {
+          console.error('[ai schedule] google update falhou:', err)
+        }
+        return { eventId: existing.id, startsAt: start.toISOString(), title }
+      }
+    }
+
     const [created] = await db
       .insert(calendarEvents)
       .values({
@@ -205,35 +243,11 @@ export async function scheduleEventFromAi(input: {
       console.error('[ai schedule] google push falhou:', err)
     }
 
-    // Ciclo de reunião (Fase D): programa o lembrete pré-reunião (3h antes, se
-    // sobrar tempo) e o pós-reunião (2h depois). Best-effort.
-    try {
-      const preWhen = new Date(start.getTime() - 3 * 3_600_000)
-      if (preWhen.getTime() - Date.now() > 60_000) {
-        await scheduleReminderMessage({
-          accountId,
-          userId,
-          conversationId,
-          contactId,
-          whenUtc: preWhen,
-          text: `Oi! 👋 Passando pra lembrar da nossa conversa em ${fmtLocal(
-            start,
-            timezone,
-          )}. Até lá! 😊`,
-        })
-      }
-      const postWhen = new Date(end.getTime() + 2 * 3_600_000)
-      await scheduleReminderMessage({
-        accountId,
-        userId,
-        conversationId,
-        contactId,
-        whenUtc: postWhen,
-        text: 'Oi! Como foi nossa conversa? Ficou alguma dúvida ou quer dar seguimento? 😊',
-      })
-    } catch (err) {
-      console.error('[ai schedule] lembretes falharam:', err)
-    }
+    // Lembretes de reunião: agora são feitos pelo sweep configurável
+    // (runMeetingReminderSweep, ancorado no horário do evento + canal-aware +
+    // 1x via reminders_sent). O antigo pré/pós hardcoded foi removido — ele
+    // duplicava (1 por evento, sem dedup) e causava spam quando havia eventos
+    // repetidos.
 
     return { eventId: created.id, startsAt: start.toISOString(), title }
   } catch (err) {
