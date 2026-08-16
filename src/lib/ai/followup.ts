@@ -86,6 +86,11 @@ export interface FollowUpStep {
   delayValue: number
   delayUnit: FollowUpDelayUnit
   instructions: string
+  /** Template aprovado usado FORA da janela de 24h (canal oficial). null = nada. */
+  templateName: string | null
+  templateLanguage: string | null
+  /** Params do corpo do template; aceita tokens {nome} {hora} {data}. */
+  templateParams: string[]
 }
 /** Gatilho por ETAPA: quando o card entra na etapa <stage>, após <delay> (se o
  *  cliente estiver calado) manda UM toque. Dentro da janela de 24h = texto da IA;
@@ -151,7 +156,31 @@ function readStep(raw: unknown): FollowUpStep | null {
   const instructions = (
     typeof bag.instructions === 'string' ? bag.instructions.trim() : ''
   ).slice(0, 2000)
-  return { delayValue, delayUnit, instructions }
+  return { delayValue, delayUnit, instructions, ...readTemplateFields(bag) }
+}
+
+/** Campos de template compartilhados (degrau/etapa/lembrete). */
+function readTemplateFields(bag: Record<string, unknown>): {
+  templateName: string | null
+  templateLanguage: string | null
+  templateParams: string[]
+} {
+  return {
+    templateName:
+      typeof bag.templateName === 'string' && bag.templateName.trim()
+        ? bag.templateName.trim().slice(0, 200)
+        : null,
+    templateLanguage:
+      typeof bag.templateLanguage === 'string' && bag.templateLanguage.trim()
+        ? bag.templateLanguage.trim().slice(0, 20)
+        : null,
+    templateParams: Array.isArray(bag.templateParams)
+      ? bag.templateParams
+          .filter((p): p is string => typeof p === 'string')
+          .map((p) => p.slice(0, 300))
+          .slice(0, 10)
+      : [],
+  }
 }
 
 /**
@@ -173,7 +202,16 @@ export function readFollowUpConfig(raw: unknown): FollowUpConfig {
     const delayMinutes = Number.isFinite(dm) && dm >= 1 ? Math.round(dm) : 60
     const instructions =
       typeof bag.instructions === 'string' ? bag.instructions.trim().slice(0, 2000) : ''
-    steps = [{ delayValue: delayMinutes, delayUnit: 'minutes', instructions }]
+    steps = [
+      {
+        delayValue: delayMinutes,
+        delayUnit: 'minutes',
+        instructions,
+        templateName: null,
+        templateLanguage: null,
+        templateParams: [],
+      },
+    ]
   }
   const giveUpEnabled = bag.giveUpEnabled === true
   const giveUpStage =
@@ -350,6 +388,8 @@ interface CandRow {
   last_follow_up_at: string | null
   follow_up_step: number
   last_inbound_at: string | null
+  channel_provider: string | null
+  contact_name: string | null
 }
 
 export async function runFollowUpSweep(): Promise<{ sent: number; agents: number }> {
@@ -390,10 +430,13 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
 
     const candRes = await db.execute(sql`
       SELECT c.id, c.contact_id, c.last_message_at, c.last_follow_up_at, c.follow_up_step,
+             ch.provider AS channel_provider, ct.name AS contact_name,
              (SELECT max(m.created_at) FROM messages m
                 WHERE m.conversation_id = c.id
                   AND m.sender_type = 'customer' AND m.is_internal = false) AS last_inbound_at
       FROM conversations c
+      LEFT JOIN channels ch ON ch.id = c.channel_id
+      LEFT JOIN contacts ct ON ct.id = c.contact_id
       WHERE c.account_id = ${agent.account_id}
         AND c.status IN ('open','pending')
         AND c.last_message_at IS NOT NULL
@@ -454,10 +497,8 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         continue // escada esgotada (até o cliente responder)
       }
 
-      // Daqui pra baixo é ENVIO de follow-up → precisa da janela de 24h da
-      // última mensagem do cliente (fora dela, só template — não coberto aqui).
+      // Só reengaja quem já mandou mensagem alguma vez.
       if (!c.last_inbound_at) continue
-      if (Date.now() - new Date(c.last_inbound_at).getTime() >= WINDOW_MS) continue
 
       const step = cfg.steps[currentStep]
       // Âncora: degrau 0 = última atividade; degraus seguintes = último follow-up.
@@ -466,6 +507,38 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
           ? new Date(c.last_message_at).getTime()
           : new Date(c.last_follow_up_at as string).getTime()
       if (Date.now() - anchor < stepDelayMinutes(step) * 60_000) continue // ainda não está na hora
+
+      const windowOpen =
+        Date.now() - new Date(c.last_inbound_at).getTime() < WINDOW_MS
+
+      // Canal OFICIAL (Meta) FORA da janela de 24h → só dá pra alcançar via
+      // TEMPLATE aprovado (ex.: reativar lead frio em +30 dias). Sem template =
+      // não dá pra falar agora: pula sem avançar (retoma quando o cliente
+      // responder). WAHA/etc. não têm janela → cai no texto da IA abaixo.
+      if (officialWindowApplies(c.channel_provider) && !windowOpen) {
+        if (!step.templateName) continue
+        try {
+          const params = await resolveTemplateParams(step.templateParams, {
+            accountId: agent.account_id,
+            contactId: c.contact_id,
+            name: firstName(c.contact_name),
+            tz,
+          })
+          await sendMessageToConversation(agent.account_id, {
+            conversationId: c.id,
+            messageType: 'template',
+            templateName: step.templateName,
+            templateLanguage: step.templateLanguage,
+            templateParams: params,
+          })
+          sent += 1
+          console.log('[followup] template:', step.templateName)
+        } catch (err) {
+          console.error('[followup] template falhou:', err)
+        }
+        await stamp(c.id, currentStep + 1)
+        continue
+      }
 
       if (!loaded) {
         loaded = true

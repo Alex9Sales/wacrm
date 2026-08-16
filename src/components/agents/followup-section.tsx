@@ -34,12 +34,23 @@ interface Step {
   delayValue: number;
   delayUnit: Unit;
   instructions: string;
+  /** Template usado fora da janela de 24h (canal oficial). */
+  templateName: string;
+  templateLanguage: string;
+  templateParamsText: string;
   /** Só UI: mostra o campo de orientação (opcional). Não vai pro backend. */
   _guide?: boolean;
 }
 
 const MAX_STEPS = 5;
-const NEW_STEP: Step = { delayValue: 1, delayUnit: 'days', instructions: '' };
+const NEW_STEP: Step = {
+  delayValue: 1,
+  delayUnit: 'days',
+  instructions: '',
+  templateName: '',
+  templateLanguage: '',
+  templateParamsText: '',
+};
 
 interface StageTrig {
   stage: string;
@@ -119,9 +130,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
   const canEdit = accountRole ? canEditSettings(accountRole) : false;
 
   const [enabled, setEnabled] = useState(false);
-  const [steps, setSteps] = useState<Step[]>([
-    { delayValue: 1, delayUnit: 'hours', instructions: '' },
-  ]);
+  const [steps, setSteps] = useState<Step[]>([{ ...NEW_STEP, delayUnit: 'hours' }]);
   const [giveUpEnabled, setGiveUpEnabled] = useState(false);
   const [giveUpStage, setGiveUpStage] = useState('');
   const [stageTriggers, setStageTriggers] = useState<StageTrig[]>([]);
@@ -146,16 +155,23 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
         const s = Array.isArray(data.followUp.steps) ? data.followUp.steps : [];
         setSteps(
           s.length > 0
-            ? s.map((x: Step) => ({
+            ? s.map((x: Record<string, unknown>) => ({
                 delayValue: Number(x.delayValue) || 1,
-                delayUnit: (['minutes', 'hours', 'days'] as Unit[]).includes(x.delayUnit)
-                  ? x.delayUnit
+                delayUnit: (['minutes', 'hours', 'days'] as Unit[]).includes(
+                  x.delayUnit as Unit,
+                )
+                  ? (x.delayUnit as Unit)
                   : 'hours',
-                instructions: x.instructions ?? '',
+                instructions: (x.instructions as string) ?? '',
+                templateName: (x.templateName as string) ?? '',
+                templateLanguage: (x.templateLanguage as string) ?? '',
+                templateParamsText: Array.isArray(x.templateParams)
+                  ? (x.templateParams as string[]).join(', ')
+                  : '',
                 // Já orientado? mostra o campo aberto; senão fica escondido.
-                _guide: !!(x.instructions ?? '').trim(),
+                _guide: !!((x.instructions as string) ?? '').trim(),
               }))
-            : [{ delayValue: 1, delayUnit: 'hours', instructions: '' }],
+            : [{ ...NEW_STEP, delayUnit: 'hours' }],
         );
         setGiveUpEnabled(!!data.followUp.giveUpEnabled);
         setGiveUpStage(
@@ -282,6 +298,12 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
             delayValue: Math.max(1, Math.round(s.delayValue || 1)),
             delayUnit: s.delayUnit,
             instructions: s.instructions.trim(),
+            templateName: s.templateName.trim(),
+            templateLanguage: s.templateLanguage.trim(),
+            templateParams: s.templateParamsText
+              .split(',')
+              .map((p) => p.trim())
+              .filter(Boolean),
           })),
           giveUpEnabled,
           giveUpStage: giveUpStage.trim(),
@@ -446,6 +468,47 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                   </button>
                 )
               )}
+
+              {/* Modelo p/ reengajar FORA da janela de 24h (canal oficial) —
+                  ex.: reativar lead frio. Dentro da janela = texto da IA. */}
+              <div className="mt-2 border-t border-dashed border-border pt-2">
+                <Label className="text-[11px] text-muted-foreground">
+                  Modelo p/ fora da janela de 24h (canal oficial)
+                </Label>
+                <select
+                  value={
+                    s.templateName ? `${s.templateName}|${s.templateLanguage}` : ''
+                  }
+                  onChange={(e) => {
+                    const [name, lang] = e.target.value.split('|');
+                    setStep(i, {
+                      templateName: name || '',
+                      templateLanguage: lang || '',
+                    });
+                  }}
+                  disabled={!canEdit}
+                  className="mt-1 h-8 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                >
+                  <option value="">— sem modelo —</option>
+                  {templates.map((tp) => (
+                    <option key={tp.id} value={`${tp.name}|${tp.language ?? ''}`}>
+                      {tp.name} ({tp.language}) ·{' '}
+                      {templateParamCount(tp.body_text)} parâm.
+                    </option>
+                  ))}
+                </select>
+                {s.templateName && (
+                  <Input
+                    value={s.templateParamsText}
+                    onChange={(e) =>
+                      setStep(i, { templateParamsText: e.target.value })
+                    }
+                    placeholder="params por vírgula — ex.: {nome}"
+                    disabled={!canEdit}
+                    className="mt-1 h-8"
+                  />
+                )}
+              </div>
             </div>
           ))}
 
