@@ -823,22 +823,24 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
       )
       if (!trig) continue
 
-      // Planeja/atualiza o "próximo follow-up" VISÍVEL no card (o sistema
-      // editando a tarefa). plannedAt = entrou-na-etapa + delay do gatilho, e se
-      // cair de madrugada (<7h) empurra pro primeiro horário da manhã (07:00).
-      const plannedMs = shiftOutOfQuiet(
-        new Date(d.stage_changed_at).getTime() + stepDelayMinutes(trig) * 60_000,
-        tz,
-      )
-      const currentMs = d.next_follow_up_at
-        ? new Date(d.next_follow_up_at).getTime()
-        : 0
-      if (Math.abs(currentMs - plannedMs) > 1000) {
-        await setNextFollowUp(d.deal_id, new Date(plannedMs).toISOString())
+      // O horário do disparo é o que ESTÁ SALVO no card (`next_follow_up_at`) —
+      // setado no move de etapa (planStageFollowUp) ou pela edição manual. Se
+      // ainda estiver vazio, planeja agora (entrou-na-etapa + delay, empurrado
+      // pra 07:00 se cair de madrugada) e salva. NUNCA sobrescreve um valor já
+      // salvo (respeita a edição manual e o move — como o Alex quer).
+      let fireMs: number
+      if (d.next_follow_up_at) {
+        fireMs = new Date(d.next_follow_up_at).getTime()
+      } else {
+        fireMs = shiftOutOfQuiet(
+          new Date(d.stage_changed_at).getTime() + stepDelayMinutes(trig) * 60_000,
+          tz,
+        )
+        await setNextFollowUp(d.deal_id, new Date(fireMs).toISOString())
       }
 
       // Ainda não venceu? O card já mostra o horário; espera o próximo tick.
-      if (Date.now() < plannedMs) continue
+      if (Date.now() < fireMs) continue
 
       // O cliente respondeu DEPOIS de entrar na etapa? O auto-reply cuida — encerra
       // este follow-up de etapa (limpa o "próximo" + marca pra não repetir).
@@ -950,6 +952,102 @@ async function stampStage(dealId: string): Promise<void> {
       .where(eq(deals.id, dealId))
   } catch {
     /* best-effort */
+  }
+}
+
+/**
+ * Recalcula o "próximo follow-up" do card ao MOVER de etapa — imediato (não
+ * espera o tick de 5min). Acha o gatilho de etapa do agente que atende o canal
+ * da conversa; se a nova etapa tem gatilho, agenda `agora + delay` (empurrado
+ * pra 7h se cair de madrugada) e reabre o disparo (stage_follow_up_at=null);
+ * senão, limpa o próximo follow-up. Best-effort, nunca lança.
+ */
+export async function planStageFollowUp(input: {
+  accountId: string
+  conversationId: string
+  stageName: string
+  /** Opcional: se não vier, resolve o negócio ABERTO ligado à conversa. */
+  dealId?: string
+}): Promise<void> {
+  try {
+    let dealId = input.dealId ?? null
+    if (!dealId) {
+      const d = firstOrNull(
+        await db
+          .select({ id: deals.id })
+          .from(deals)
+          .where(
+            and(
+              eq(deals.accountId, input.accountId),
+              eq(deals.conversationId, input.conversationId),
+              eq(deals.status, 'open'),
+            ),
+          )
+          .orderBy(desc(deals.createdAt))
+          .limit(1),
+      )
+      dealId = d?.id ?? null
+    }
+    if (!dealId) return
+
+    const convRow = firstOrNull(
+      await db
+        .select({ channelId: conversations.channelId })
+        .from(conversations)
+        .where(
+          and(
+            eq(conversations.id, input.conversationId),
+            eq(conversations.accountId, input.accountId),
+          ),
+        )
+        .limit(1),
+    )
+    const channelId = convRow?.channelId ?? null
+
+    const agentsRes = await db.execute(sql`
+      SELECT auto_reply_channel_ids, follow_up
+      FROM ai_configs
+      WHERE account_id = ${input.accountId}
+        AND is_active = true AND follow_up->>'enabled' = 'true'
+    `)
+    let trig: StageTrigger | null = null
+    for (const a of agentsRes.rows as unknown as AgentRow[]) {
+      const channels = a.auto_reply_channel_ids ?? []
+      if (channels.length > 0 && (!channelId || !channels.includes(channelId)))
+        continue
+      const cfg = readFollowUpConfig(a.follow_up)
+      const t = cfg.stageTriggers.find(
+        (s) => normStage(s.stage) === normStage(input.stageName),
+      )
+      if (t) {
+        trig = t
+        break
+      }
+    }
+
+    if (!trig) {
+      // Etapa sem gatilho → não há próximo follow-up automático.
+      await db
+        .update(deals)
+        .set({ nextFollowUpAt: null })
+        .where(eq(deals.id, dealId))
+      return
+    }
+
+    let tz = 'America/Sao_Paulo'
+    try {
+      const settings = await getAccountSettings(input.accountId)
+      tz = settings.businessTimezone || tz
+    } catch {
+      /* default */
+    }
+    const plannedMs = shiftOutOfQuiet(Date.now() + stepDelayMinutes(trig) * 60_000, tz)
+    await db
+      .update(deals)
+      .set({ nextFollowUpAt: new Date(plannedMs).toISOString(), stageFollowUpAt: null })
+      .where(eq(deals.id, dealId))
+  } catch (err) {
+    console.error('[planStageFollowUp] falhou:', err)
   }
 }
 

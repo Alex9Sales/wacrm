@@ -25,6 +25,7 @@ import { createTask } from '@/app/(dashboard)/tarefas/actions'
 import { scheduleMessage } from '@/app/(dashboard)/inbox/schedule-actions'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { runDealSuggestions } from '@/lib/ai/deal-suggest'
+import { planStageFollowUp } from '@/lib/ai/followup'
 import { dealSuggestions } from '@/db'
 
 const contactColumns = {
@@ -281,6 +282,42 @@ async function stageName(stageId: string | null): Promise<string | null> {
   return row?.name ?? null
 }
 
+/**
+ * Editar MANUALMENTE o "próximo follow-up" do card (estilo n8n: a data é
+ * editável na mão). isoOrNull = ISO datetime, ou null pra limpar. Reabre o
+ * disparo (stage_follow_up_at=null) pra o worker mandar no novo horário.
+ */
+export async function setDealNextFollowUp(
+  dealId: string,
+  isoOrNull: string | null,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const before = firstOrNull(
+      await db
+        .select({ assignedTo: deals.assignedTo })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!before) return { error: 'Deal not found' }
+    if (!dealReadable(ctx.role, ctx.userId, before.assignedTo)) {
+      return { error: 'Este negócio está atribuído a outro atendente.' }
+    }
+    const value =
+      isoOrNull && !Number.isNaN(new Date(isoOrNull).getTime())
+        ? new Date(isoOrNull).toISOString()
+        : null
+    await db
+      .update(deals)
+      .set({ nextFollowUpAt: value, stageFollowUpAt: null })
+      .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falhou' }
+  }
+}
+
 export async function moveDealToStage(
   dealId: string,
   stageId: string,
@@ -306,10 +343,32 @@ export async function moveDealToStage(
       // stage_changed_at reinicia o contador de "dias na etapa" (estilo RD).
       .set({ stageId, stageChangedAt: sql`now()` })
       .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+    const toStageName = await stageName(stageId)
     await recordDealEvent(ctx.accountId, ctx.userId, dealId, 'stage_changed', {
       from: await stageName(before.stageId),
-      to: await stageName(stageId),
+      to: toStageName,
     })
+    // Atualiza o "próximo follow-up" do card conforme a nova etapa — IMEDIATO,
+    // não espera o tick de 5min (o Alex quer: mover o card recalcula a data).
+    try {
+      const d = firstOrNull(
+        await db
+          .select({ conversationId: deals.conversationId })
+          .from(deals)
+          .where(eq(deals.id, dealId))
+          .limit(1),
+      )
+      if (d?.conversationId && toStageName) {
+        await planStageFollowUp({
+          accountId: ctx.accountId,
+          dealId,
+          conversationId: d.conversationId,
+          stageName: toStageName,
+        })
+      }
+    } catch (err) {
+      console.error('[moveDealToStage] planStageFollowUp:', err)
+    }
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Failed to move deal' }

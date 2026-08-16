@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
-import { deleteDeal, transferDeal, duplicateDeal, setDealPaused } from "@/app/(dashboard)/pipelines/actions";
+import { deleteDeal, transferDeal, duplicateDeal, setDealPaused, setDealNextFollowUp } from "@/app/(dashboard)/pipelines/actions";
 import { listProfiles } from "@/app/(dashboard)/inbox/actions";
 
 interface DealCardProps {
@@ -41,6 +41,25 @@ function formatDateTime(dateStr: string) {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(
     d.getHours(),
   )}:${p(d.getMinutes())}`;
+}
+
+// ISO → valor do <input type="datetime-local"> (hora local).
+function toLocalInput(iso: string) {
+  const d = new Date(iso);
+  const p = (n: number) => String(n).padStart(2, "0");
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(
+    d.getHours(),
+  )}:${p(d.getMinutes())}`;
+}
+
+// Cor do follow-up por proximidade do disparo: vencido = vermelho, perto (<24h)
+// = amarelo, distante = neutro/escuro (estilo do kanban do n8n).
+function followUpColor(iso: string): string {
+  const ms = new Date(iso).getTime();
+  const now = Date.now();
+  if (ms < now) return "text-red-500";
+  if (ms - now < 24 * 3_600_000) return "text-amber-500";
+  return "text-foreground";
 }
 
 // Tarefas de "ligar/entrar em contato" ganham o ícone de mensagem (estilo o
@@ -85,6 +104,7 @@ export function DealCard({
 
   // Menu de clique-direito no card: Editar / Transferir / Excluir sem precisar
   // abrir a tela inteira. Guardamos a posição do cursor pra abrir ali.
+  const [editingFu, setEditingFu] = useState(false);
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [members, setMembers] = useState<Profile[] | null>(null);
   const [showTransfer, setShowTransfer] = useState(false);
@@ -375,9 +395,11 @@ export function DealCard({
         </div>
       )}
 
-      {/* Follow-ups: quantos toques de reengajamento já saíram (contador estilo
-          n8n) + o próximo follow-up automático agendado (por etapa). */}
-      {((deal.follow_up_count ?? 0) > 0 || deal.next_follow_up_at) && (
+      {/* Follow-ups: contador de toques (estilo n8n) + o próximo follow-up, com
+          COR por proximidade (vencido=vermelho, perto=amarelo, longe=escuro) e
+          EDITÁVEL na mão (clique na data). O sistema também atualiza sozinho e ao
+          mover o card de etapa. */}
+      {((deal.follow_up_count ?? 0) > 0 || deal.next_follow_up_at || editingFu) && (
         <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
           {(deal.follow_up_count ?? 0) > 0 && (
             <span
@@ -389,14 +411,46 @@ export function DealCard({
               {(deal.follow_up_count ?? 0) > 1 ? "s" : ""}
             </span>
           )}
-          {deal.next_follow_up_at && (
-            <span
-              className="flex items-center gap-1 text-sky-500"
-              title="Próximo follow-up automático"
-            >
-              <Clock3 className="h-3 w-3" />
-              {formatDateTime(deal.next_follow_up_at)}
-            </span>
+          {editingFu ? (
+            <input
+              type="datetime-local"
+              autoFocus
+              defaultValue={
+                deal.next_follow_up_at ? toLocalInput(deal.next_follow_up_at) : ""
+              }
+              onClick={(e) => e.stopPropagation()}
+              onBlur={() => setEditingFu(false)}
+              onChange={async (e) => {
+                e.stopPropagation();
+                const v = e.target.value;
+                const iso = v ? new Date(v).toISOString() : null;
+                const res = await setDealNextFollowUp(deal.id, iso);
+                setEditingFu(false);
+                if (res.error) toast.error(res.error);
+                else {
+                  toast.success(iso ? "Follow-up atualizado" : "Follow-up removido");
+                  router.refresh();
+                }
+              }}
+              className="h-6 rounded border border-border bg-background px-1 text-[11px] text-foreground"
+            />
+          ) : (
+            deal.next_follow_up_at && (
+              <button
+                type="button"
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setEditingFu(true);
+                }}
+                className={`flex items-center gap-1 ${followUpColor(
+                  deal.next_follow_up_at,
+                )} hover:underline`}
+                title="Próximo follow-up — clique pra editar a data/hora"
+              >
+                <Clock3 className="h-3 w-3" />
+                {formatDateTime(deal.next_follow_up_at)}
+              </button>
+            )
           )}
         </div>
       )}

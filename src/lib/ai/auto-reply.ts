@@ -35,6 +35,7 @@ import { splitIntoMessages } from '@/lib/ai/flow-agent'
 import { AUDIO_MARKER, PHOTO_DIRECTIVE } from '@/lib/ai/defaults'
 import { resolveProductPhoto } from '@/lib/ai/catalog'
 import { synthesizeSpeech } from '@/lib/ai/tts'
+import { planStageFollowUp } from '@/lib/ai/followup'
 import { putObject, publicUrl } from '@/lib/storage/s3'
 
 const TTS_BUCKET = 'media'
@@ -310,6 +311,11 @@ export async function dispatchInboundToAiReply(
           funnelStageName: wantMove ? dirs.funnelStage : null,
         })
         console.log('[ai auto-reply] encerramento:', JSON.stringify(r))
+        // Se a IA moveu o card, recalcula o "próximo follow-up" pela nova etapa
+        // na hora (mesmo comportamento do move manual).
+        if (r.movedTo) {
+          await planStageFollowUp({ accountId, conversationId, stageName: r.movedTo })
+        }
       }
     }
 
