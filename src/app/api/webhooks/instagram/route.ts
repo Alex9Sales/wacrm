@@ -17,8 +17,13 @@ import {
   decryptCredentials,
   loadInstagramChannelByIgId,
 } from '@/lib/channels/channels'
-import { instagramProvider } from '@/lib/channels/providers/instagram'
+import {
+  instagramProvider,
+  fetchInstagramProfile,
+} from '@/lib/channels/providers/instagram'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
+import { contacts } from '@/db'
+import { and, isNull } from 'drizzle-orm'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -127,7 +132,27 @@ export async function POST(request: Request) {
       const parsed = instagramProvider.parseWebhook(body)
       for (const ev of parsed.messages) {
         try {
-          await dispatchInboundMessage(channel, ev)
+          // O webhook só traz o IGSID → busca nome/@username e foto do perfil.
+          let profilePic: string | undefined
+          if (ev.senderExternalId && !ev.fromMe) {
+            const prof = await fetchInstagramProfile(channel, ev.senderExternalId)
+            if (prof) {
+              if (prof.name || prof.username) {
+                ev.senderName = prof.name || `@${prof.username}`
+              }
+              profilePic = prof.profilePic
+            }
+          }
+          const res = await dispatchInboundMessage(channel, ev)
+          // Foto do perfil no contato (só se ainda não tiver avatar).
+          if (res?.contactId && profilePic) {
+            await db
+              .update(contacts)
+              .set({ avatarUrl: profilePic })
+              .where(
+                and(eq(contacts.id, res.contactId), isNull(contacts.avatarUrl)),
+              )
+          }
         } catch (err) {
           console.error('[webhooks/instagram] dispatch failed:', err)
         }

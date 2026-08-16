@@ -95,6 +95,31 @@ function mapAttachment(type: string | undefined): NormalizedInbound['contentType
   }
 }
 
+/**
+ * Busca o perfil de quem mandou o DM (nome / @username / foto) pela Graph API do
+ * IG — o webhook só traz o IGSID. Best-effort: null em qualquer falha.
+ */
+export async function fetchInstagramProfile(
+  ch: ChannelCtx,
+  igsid: string,
+): Promise<{ name?: string; username?: string; profilePic?: string } | null> {
+  try {
+    const url = `${graphBaseOf(ch)}/${igsid}?fields=name,username,profile_pic`
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessTokenOf(ch)}` },
+    })
+    if (!res.ok) return null
+    const d = (await res.json()) as {
+      name?: string
+      username?: string
+      profile_pic?: string
+    }
+    return { name: d.name, username: d.username, profilePic: d.profile_pic }
+  } catch {
+    return null
+  }
+}
+
 async function graphPost(
   url: string,
   token: string,
