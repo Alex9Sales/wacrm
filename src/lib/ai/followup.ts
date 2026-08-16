@@ -13,6 +13,48 @@ import type { AiConfig } from './types'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { isWithinBusinessHours } from '@/lib/settings/business-hours'
 import { engineSendText } from '@/lib/flows/meta-send'
+import { zonedWallToUtc } from './schedule-actions'
+
+// ---- Trava de madrugada ----------------------------------------------------
+// Não manda follow-up de madrugada (antes das 7h no fuso da conta). Se o horário
+// bater de madrugada, empurra sozinho pro PRIMEIRO horário da manhã (07:00).
+const QUIET_UNTIL_HOUR = 7
+
+/** Hora local (0-23) + data YYYY-MM-DD no fuso. Defensivo (fuso inválido → meio-dia). */
+function localHourYmd(ms: number, tz: string): { hour: number; ymd: string } {
+  try {
+    const parts = new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      hour12: false,
+    }).formatToParts(new Date(ms))
+    const get = (t: string) => parts.find((p) => p.type === t)?.value ?? ''
+    let hour = parseInt(get('hour'), 10)
+    if (hour === 24) hour = 0
+    return {
+      hour: Number.isFinite(hour) ? hour : 12,
+      ymd: `${get('year')}-${get('month')}-${get('day')}`,
+    }
+  } catch {
+    return { hour: 12, ymd: '' }
+  }
+}
+
+/** Agora é madrugada (antes das 7h) no fuso? */
+function isQuietNow(tz: string): boolean {
+  return localHourYmd(Date.now(), tz).hour < QUIET_UNTIL_HOUR
+}
+
+/** Se `ms` cair de madrugada (<7h), empurra pro mesmo dia às 07:00 no fuso. */
+function shiftOutOfQuiet(ms: number, tz: string): number {
+  const { hour, ymd } = localHourYmd(ms, tz)
+  if (hour >= QUIET_UNTIL_HOUR || !ymd) return ms
+  const at7 = zonedWallToUtc(`${ymd}T07:00`, tz)
+  return at7 ? at7.getTime() : ms
+}
 
 // ============================================================
 // Follow-up inteligente em ESCADA (v2). Um "sweep" (rodado por um tick do
@@ -215,12 +257,16 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
     const cfg = readFollowUpConfig(agent.follow_up)
     if (!cfg.enabled || !cfg.armedAt || cfg.steps.length === 0) continue
 
+    let tz = 'America/Sao_Paulo'
     try {
       const settings = await getAccountSettings(agent.account_id)
       if (!isWithinBusinessHours(settings)) continue
+      tz = settings.businessTimezone || tz
     } catch {
       /* fail-open */
     }
+    // Trava de madrugada: nada de follow-up antes das 7h (resume no próximo tick).
+    if (isQuietNow(tz)) continue
 
     // Filtro grosso: pelo MENOR delay entre os degraus (o mais permissivo).
     const minDelay = Math.min(...cfg.steps.map(stepDelayMinutes))
@@ -442,9 +488,11 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
     const cfg = readFollowUpConfig(agent.follow_up)
     if (!cfg.enabled || cfg.stageTriggers.length === 0) continue
 
+    let tz = 'America/Sao_Paulo'
     try {
       const settings = await getAccountSettings(agent.account_id)
       if (!isWithinBusinessHours(settings)) continue
+      tz = settings.businessTimezone || tz
     } catch {
       /* fail-open */
     }
@@ -501,9 +549,12 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
       if (!trig) continue
 
       // Planeja/atualiza o "próximo follow-up" VISÍVEL no card (o sistema
-      // editando a tarefa). plannedAt = entrou-na-etapa + delay do gatilho.
-      const plannedMs =
-        new Date(d.stage_changed_at).getTime() + stepDelayMinutes(trig) * 60_000
+      // editando a tarefa). plannedAt = entrou-na-etapa + delay do gatilho, e se
+      // cair de madrugada (<7h) empurra pro primeiro horário da manhã (07:00).
+      const plannedMs = shiftOutOfQuiet(
+        new Date(d.stage_changed_at).getTime() + stepDelayMinutes(trig) * 60_000,
+        tz,
+      )
       const currentMs = d.next_follow_up_at
         ? new Date(d.next_follow_up_at).getTime()
         : 0
