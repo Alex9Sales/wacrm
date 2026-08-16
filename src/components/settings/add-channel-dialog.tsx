@@ -83,6 +83,12 @@ const PROVIDER_FIELDS: Record<
       secret: true,
     },
     {
+      key: 'verify_token',
+      label: 'Token de verificação do webhook (opcional)',
+      placeholder: 'deixe em branco pra gerar automático',
+      optional: true,
+    },
+    {
       key: 'graph_base',
       label: 'Base da API (opcional)',
       placeholder: 'https://graph.facebook.com/v21.0',

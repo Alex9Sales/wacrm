@@ -178,6 +178,9 @@ function buildCreateInput(
       const ig_id = str(config.ig_id)
       const access_token = str(config.access_token)
       const graph_base = str(config.graph_base)
+      // Token de verificação do webhook (o mesmo usado ao inscrever na Meta).
+      // Auto-gera um se não vier — o GET /api/webhooks/instagram casa por ele.
+      const verify_token = str(config.verify_token) || randomBytes(12).toString('hex')
       const missing = [!ig_id && 'ig_id', !access_token && 'access_token'].filter(
         Boolean,
       )
@@ -189,7 +192,7 @@ function buildCreateInput(
       return {
         provider,
         name,
-        credentials: { accessToken: access_token },
+        credentials: { accessToken: access_token, verifyToken: verify_token },
         providerMeta: graph_base
           ? { ig_id, graphBase: graph_base }
           : { ig_id },
