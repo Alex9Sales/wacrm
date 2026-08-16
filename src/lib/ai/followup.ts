@@ -1,7 +1,9 @@
-import { and, desc, eq, gt, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
 
 import { db, aiConfigs, conversations, deals, calendarEvents } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider'
+import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { loadAiConfigById } from './config'
 import { buildConversationContext } from './context'
 import { generateReply } from './generate'
@@ -86,12 +88,18 @@ export interface FollowUpStep {
   instructions: string
 }
 /** Gatilho por ETAPA: quando o card entra na etapa <stage>, após <delay> (se o
- *  cliente estiver calado e dentro da janela 24h) manda UM toque. */
+ *  cliente estiver calado) manda UM toque. Dentro da janela de 24h = texto da IA;
+ *  FORA da janela no canal oficial (Meta) = template aprovado (se configurado). */
 export interface StageTrigger {
   stage: string
   delayValue: number
   delayUnit: FollowUpDelayUnit
   instructions: string
+  /** Template aprovado a usar fora da janela de 24h (canal oficial). null = nada. */
+  templateName: string | null
+  templateLanguage: string | null
+  /** Parâmetros do corpo do template ({{1}},{{2}}…); aceita tokens {nome} {hora} {data}. */
+  templateParams: string[]
 }
 export const FOLLOW_UP_MAX_STAGE_TRIGGERS = 6
 export interface FollowUpConfig {
@@ -179,7 +187,29 @@ function readStageTrigger(raw: unknown): StageTrigger | null {
   const instructions = (
     typeof bag.instructions === 'string' ? bag.instructions.trim() : ''
   ).slice(0, 2000)
-  return { stage, delayValue, delayUnit, instructions }
+  const templateName =
+    typeof bag.templateName === 'string' && bag.templateName.trim()
+      ? bag.templateName.trim().slice(0, 200)
+      : null
+  const templateLanguage =
+    typeof bag.templateLanguage === 'string' && bag.templateLanguage.trim()
+      ? bag.templateLanguage.trim().slice(0, 20)
+      : null
+  const templateParams = Array.isArray(bag.templateParams)
+    ? bag.templateParams
+        .filter((p): p is string => typeof p === 'string')
+        .map((p) => p.slice(0, 300))
+        .slice(0, 10)
+    : []
+  return {
+    stage,
+    delayValue,
+    delayUnit,
+    instructions,
+    templateName,
+    templateLanguage,
+    templateParams,
+  }
 }
 
 /**
@@ -456,7 +486,88 @@ interface StageCandRow {
   stage_changed_at: string | null
   next_follow_up_at: string | null
   contact_id: string
+  channel_provider: string | null
+  contact_name: string | null
   last_inbound_at: string | null
+}
+
+/** Só existe janela de 24h no canal OFICIAL (Meta). WAHA/etc. mandam texto a
+ *  qualquer hora → não precisam de template. */
+function officialWindowApplies(provider: string | null): boolean {
+  return !!provider && CAPABILITIES[provider as ProviderId]?.templates === true
+}
+
+/** Primeiro nome (fallback "cliente"). */
+function firstName(name: string | null): string {
+  return (name || '').trim().split(/\s+/)[0] || 'cliente'
+}
+
+/** Formata hora/data de um ISO no fuso (HH:mm / dd/MM). */
+function fmtTimeInTz(iso: string, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat('pt-BR', {
+      timeZone: tz,
+      hour: '2-digit',
+      minute: '2-digit',
+      hour12: false,
+    }).format(new Date(iso))
+  } catch {
+    return ''
+  }
+}
+function fmtDateInTz(iso: string, tz: string): string {
+  try {
+    return new Intl.DateTimeFormat('pt-BR', {
+      timeZone: tz,
+      day: '2-digit',
+      month: '2-digit',
+    }).format(new Date(iso))
+  } catch {
+    return ''
+  }
+}
+
+/** Resolve os params do template substituindo tokens {nome} {hora} {data}. O
+ *  {hora}/{data} vêm da próxima reunião futura do contato (se houver). */
+async function resolveTemplateParams(
+  params: string[],
+  ctx: { accountId: string; contactId: string | null; name: string; tz: string },
+): Promise<string[]> {
+  const needsMeeting = params.some((p) => /\{(hora|data)\}/i.test(p))
+  let hora = ''
+  let data = ''
+  if (needsMeeting && ctx.contactId) {
+    try {
+      const ev = firstOrNull(
+        await db
+          .select({ startsAt: calendarEvents.startsAt })
+          .from(calendarEvents)
+          .where(
+            and(
+              eq(calendarEvents.accountId, ctx.accountId),
+              eq(calendarEvents.contactId, ctx.contactId),
+              eq(calendarEvents.status, 'confirmed'),
+              gt(calendarEvents.startsAt, sql`now()`),
+            ),
+          )
+          .orderBy(asc(calendarEvents.startsAt))
+          .limit(1),
+      )
+      if (ev) {
+        hora = fmtTimeInTz(ev.startsAt, ctx.tz)
+        data = fmtDateInTz(ev.startsAt, ctx.tz)
+      }
+    } catch {
+      /* best-effort */
+    }
+  }
+  return params.map((p) =>
+    p
+      .replace(/\{nome\}/gi, ctx.name)
+      .replace(/\{hora\}/gi, hora)
+      .replace(/\{data\}/gi, data)
+      .trim(),
+  )
 }
 
 /** Casa nome de etapa tolerante a acento/caixa/espaço. */
@@ -518,12 +629,15 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
     const rows = await db.execute(sql`
       SELECT d.id AS deal_id, d.conversation_id, d.stage_changed_at,
              d.next_follow_up_at, ps.name AS stage_name, c.contact_id,
+             ch.provider AS channel_provider, ct.name AS contact_name,
              (SELECT max(m.created_at) FROM messages m
                 WHERE m.conversation_id = c.id
                   AND m.sender_type = 'customer' AND m.is_internal = false) AS last_inbound_at
       FROM deals d
       JOIN pipeline_stages ps ON ps.id = d.stage_id
       JOIN conversations c ON c.id = d.conversation_id
+      LEFT JOIN channels ch ON ch.id = c.channel_id
+      LEFT JOIN contacts ct ON ct.id = c.contact_id
       WHERE d.account_id = ${agent.account_id}
         AND d.status = 'open'
         AND d.conversation_id IS NOT NULL
@@ -574,12 +688,38 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
         await stampStage(d.deal_id)
         continue
       }
-      // Fora da janela de 24h → só template (não coberto aqui): encerra pra não
-      // deixar o card preso mostrando um follow-up que não vai sair.
-      if (
-        !d.last_inbound_at ||
-        Date.now() - new Date(d.last_inbound_at).getTime() >= WINDOW_MS
-      ) {
+
+      const windowOpen =
+        !!d.last_inbound_at &&
+        Date.now() - new Date(d.last_inbound_at).getTime() < WINDOW_MS
+
+      // Canal OFICIAL (Meta) FORA da janela de 24h → só dá pra alcançar via
+      // TEMPLATE aprovado. Se o gatilho tem template, envia; senão encerra (limpa
+      // o card). WAHA/etc. não têm janela → cai no texto da IA abaixo.
+      if (officialWindowApplies(d.channel_provider) && !windowOpen) {
+        if (!trig.templateName) {
+          await stampStage(d.deal_id)
+          continue
+        }
+        try {
+          const params = await resolveTemplateParams(trig.templateParams, {
+            accountId: agent.account_id,
+            contactId: d.contact_id,
+            name: firstName(d.contact_name),
+            tz,
+          })
+          await sendMessageToConversation(agent.account_id, {
+            conversationId: d.conversation_id,
+            messageType: 'template',
+            templateName: trig.templateName,
+            templateLanguage: trig.templateLanguage,
+            templateParams: params,
+          })
+          sent += 1
+          console.log('[stage-followup] template:', trig.templateName)
+        } catch (err) {
+          console.error('[stage-followup] template falhou:', err)
+        }
         await stampStage(d.deal_id)
         continue
       }

@@ -17,6 +17,17 @@ import { Textarea } from '@/components/ui/textarea';
 import { Button } from '@/components/ui/button';
 import { useAuth } from '@/hooks/use-auth';
 import { canEditSettings } from '@/lib/auth/roles';
+import { listApprovedTemplates } from '@/app/(dashboard)/inbox/actions';
+import type { MessageTemplate } from '@/types';
+
+/** Quantos parâmetros {{n}} o corpo do template tem (maior índice). */
+function templateParamCount(bodyText: string): number {
+  let max = 0;
+  for (const m of bodyText.matchAll(/\{\{\s*(\d+)\s*\}\}/g)) {
+    max = Math.max(max, Number(m[1]) || 0);
+  }
+  return max;
+}
 
 type Unit = 'minutes' | 'hours' | 'days';
 interface Step {
@@ -35,6 +46,11 @@ interface StageTrig {
   delayValue: number;
   delayUnit: Unit;
   instructions: string;
+  /** Template aprovado usado fora da janela de 24h (canal oficial). */
+  templateName: string;
+  templateLanguage: string;
+  /** Params do template, separados por vírgula (tokens {nome} {hora} {data}). */
+  templateParamsText: string;
   /** Só UI: mostra o campo de orientação. */
   _guide?: boolean;
 }
@@ -42,6 +58,7 @@ interface StageTrig {
 const MAX_STAGE_TRIGGERS = 6;
 /** Opções prontas (o "tem opções ou escreve" do Alex): preenche um gatilho que
  *  o usuário edita (nome da etapa + tempo). */
+const EMPTY_TEMPLATE = { templateName: '', templateLanguage: '', templateParamsText: '' };
 const STAGE_PRESETS: { label: string; trig: StageTrig }[] = [
   {
     label: 'Confirmar reunião',
@@ -50,6 +67,7 @@ const STAGE_PRESETS: { label: string; trig: StageTrig }[] = [
       delayValue: 3,
       delayUnit: 'hours',
       instructions: 'Confirme a reunião combinada (dia e horário) e peça pro cliente confirmar se está de pé.',
+      ...EMPTY_TEMPLATE,
       _guide: true,
     },
   },
@@ -60,6 +78,7 @@ const STAGE_PRESETS: { label: string; trig: StageTrig }[] = [
       delayValue: 2,
       delayUnit: 'hours',
       instructions: 'Diga que sentiu falta do cliente na reunião e ofereça remarcar pra um novo horário.',
+      ...EMPTY_TEMPLATE,
       _guide: true,
     },
   },
@@ -70,6 +89,7 @@ const STAGE_PRESETS: { label: string; trig: StageTrig }[] = [
       delayValue: 1,
       delayUnit: 'days',
       instructions: 'Agradeça a presença, pergunte se ficou alguma dúvida e puxe o próximo passo.',
+      ...EMPTY_TEMPLATE,
       _guide: true,
     },
   },
@@ -86,8 +106,15 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
   const [giveUpEnabled, setGiveUpEnabled] = useState(false);
   const [giveUpStage, setGiveUpStage] = useState('');
   const [stageTriggers, setStageTriggers] = useState<StageTrig[]>([]);
+  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    listApprovedTemplates()
+      .then((t) => setTemplates(t))
+      .catch(() => setTemplates([]));
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -118,14 +145,21 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
           ? data.followUp.stageTriggers
           : [];
         setStageTriggers(
-          st.map((x: StageTrig) => ({
+          st.map((x: Record<string, unknown>) => ({
             stage: typeof x.stage === 'string' ? x.stage : '',
             delayValue: Number(x.delayValue) || 1,
-            delayUnit: (['minutes', 'hours', 'days'] as Unit[]).includes(x.delayUnit)
-              ? x.delayUnit
+            delayUnit: (['minutes', 'hours', 'days'] as Unit[]).includes(
+              x.delayUnit as Unit,
+            )
+              ? (x.delayUnit as Unit)
               : 'hours',
-            instructions: x.instructions ?? '',
-            _guide: !!(x.instructions ?? '').trim(),
+            instructions: (x.instructions as string) ?? '',
+            templateName: (x.templateName as string) ?? '',
+            templateLanguage: (x.templateLanguage as string) ?? '',
+            templateParamsText: Array.isArray(x.templateParams)
+              ? (x.templateParams as string[]).join(', ')
+              : '',
+            _guide: !!((x.instructions as string) ?? '').trim(),
           })),
         );
       }
@@ -153,7 +187,18 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
     setStageTriggers((prev) =>
       prev.length >= MAX_STAGE_TRIGGERS
         ? prev
-        : [...prev, t ?? { stage: '', delayValue: 3, delayUnit: 'hours', instructions: '' }],
+        : [
+            ...prev,
+            t ?? {
+              stage: '',
+              delayValue: 3,
+              delayUnit: 'hours',
+              instructions: '',
+              templateName: '',
+              templateLanguage: '',
+              templateParamsText: '',
+            },
+          ],
     );
   const removeTrig = (i: number) =>
     setStageTriggers((prev) => prev.filter((_, j) => j !== i));
@@ -181,6 +226,12 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
               delayValue: Math.max(1, Math.round(t.delayValue || 1)),
               delayUnit: t.delayUnit,
               instructions: t.instructions.trim(),
+              templateName: t.templateName.trim(),
+              templateLanguage: t.templateLanguage.trim(),
+              templateParams: t.templateParamsText
+                .split(',')
+                .map((p) => p.trim())
+                .filter(Boolean),
             })),
         }),
       });
@@ -450,6 +501,59 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                     </button>
                   )
                 )}
+
+                {/* Modelo aprovado: usado quando estiver FORA da janela de 24h
+                    no canal OFICIAL (Meta). Dentro da janela = texto da IA. */}
+                <div className="mt-2 border-t border-dashed border-border pt-2">
+                  <Label className="text-[11px] text-muted-foreground">
+                    Modelo p/ fora da janela de 24h (canal oficial)
+                  </Label>
+                  <select
+                    value={
+                      t.templateName
+                        ? `${t.templateName}|${t.templateLanguage}`
+                        : ''
+                    }
+                    onChange={(e) => {
+                      const [name, lang] = e.target.value.split('|');
+                      setTrig(i, {
+                        templateName: name || '',
+                        templateLanguage: lang || '',
+                      });
+                    }}
+                    disabled={!canEdit}
+                    className="mt-1 h-8 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                  >
+                    <option value="">
+                      — sem modelo (não envia fora da janela) —
+                    </option>
+                    {templates.map((tp) => (
+                      <option key={tp.id} value={`${tp.name}|${tp.language ?? ''}`}>
+                        {tp.name} ({tp.language}) ·{' '}
+                        {templateParamCount(tp.body_text)} parâm.
+                      </option>
+                    ))}
+                  </select>
+                  {t.templateName && (
+                    <>
+                      <Input
+                        value={t.templateParamsText}
+                        onChange={(e) =>
+                          setTrig(i, { templateParamsText: e.target.value })
+                        }
+                        placeholder="params por vírgula — ex.: {nome}, {hora}"
+                        disabled={!canEdit}
+                        className="mt-1 h-8"
+                      />
+                      <p className="mt-1 text-[10px] text-muted-foreground">
+                        Um valor por parâmetro do modelo. Tokens:{' '}
+                        <strong>{'{nome}'}</strong> (contato),{' '}
+                        <strong>{'{hora}'}</strong> e <strong>{'{data}'}</strong>{' '}
+                        (próxima reunião).
+                      </p>
+                    </>
+                  )}
+                </div>
               </div>
             ))}
 
