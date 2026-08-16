@@ -710,6 +710,9 @@ export const deals = pgTable("deals", {
 	lostReason: text("lost_reason"),
 	qualification: smallint("qualification"),
 	stageChangedAt: timestamp("stage_changed_at", { withTimezone: true, mode: 'string' }),
+	// Follow-up por etapa: quando o último follow-up de entrada de etapa saiu —
+	// migração 0092. Dispara de novo só quando entra numa etapa nova.
+	stageFollowUpAt: timestamp("stage_follow_up_at", { withTimezone: true, mode: 'string' }),
 	// Pausar negociação (estilo RD) — migração 0063.
 	pausedAt: timestamp("paused_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),

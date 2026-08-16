@@ -30,6 +30,51 @@ interface Step {
 const MAX_STEPS = 5;
 const NEW_STEP: Step = { delayValue: 1, delayUnit: 'days', instructions: '' };
 
+interface StageTrig {
+  stage: string;
+  delayValue: number;
+  delayUnit: Unit;
+  instructions: string;
+  /** Só UI: mostra o campo de orientação. */
+  _guide?: boolean;
+}
+
+const MAX_STAGE_TRIGGERS = 6;
+/** Opções prontas (o "tem opções ou escreve" do Alex): preenche um gatilho que
+ *  o usuário edita (nome da etapa + tempo). */
+const STAGE_PRESETS: { label: string; trig: StageTrig }[] = [
+  {
+    label: 'Confirmar reunião',
+    trig: {
+      stage: 'Agendado',
+      delayValue: 3,
+      delayUnit: 'hours',
+      instructions: 'Confirme a reunião combinada (dia e horário) e peça pro cliente confirmar se está de pé.',
+      _guide: true,
+    },
+  },
+  {
+    label: 'Remarcar (faltou)',
+    trig: {
+      stage: 'No-show',
+      delayValue: 2,
+      delayUnit: 'hours',
+      instructions: 'Diga que sentiu falta do cliente na reunião e ofereça remarcar pra um novo horário.',
+      _guide: true,
+    },
+  },
+  {
+    label: 'Pós-reunião',
+    trig: {
+      stage: 'Compareceu',
+      delayValue: 1,
+      delayUnit: 'days',
+      instructions: 'Agradeça a presença, pergunte se ficou alguma dúvida e puxe o próximo passo.',
+      _guide: true,
+    },
+  },
+];
+
 export function FollowUpSection({ agentId }: { agentId: string }) {
   const { accountRole } = useAuth();
   const canEdit = accountRole ? canEditSettings(accountRole) : false;
@@ -40,6 +85,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
   ]);
   const [giveUpEnabled, setGiveUpEnabled] = useState(false);
   const [giveUpStage, setGiveUpStage] = useState('');
+  const [stageTriggers, setStageTriggers] = useState<StageTrig[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
 
@@ -68,6 +114,20 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
         setGiveUpStage(
           typeof data.followUp.giveUpStage === 'string' ? data.followUp.giveUpStage : '',
         );
+        const st = Array.isArray(data.followUp.stageTriggers)
+          ? data.followUp.stageTriggers
+          : [];
+        setStageTriggers(
+          st.map((x: StageTrig) => ({
+            stage: typeof x.stage === 'string' ? x.stage : '',
+            delayValue: Number(x.delayValue) || 1,
+            delayUnit: (['minutes', 'hours', 'days'] as Unit[]).includes(x.delayUnit)
+              ? x.delayUnit
+              : 'hours',
+            instructions: x.instructions ?? '',
+            _guide: !!(x.instructions ?? '').trim(),
+          })),
+        );
       }
     } catch {
       /* best-effort */
@@ -87,6 +147,17 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
   const removeStep = (i: number) =>
     setSteps((prev) => (prev.length <= 1 ? prev : prev.filter((_, j) => j !== i)));
 
+  const setTrig = (i: number, patch: Partial<StageTrig>) =>
+    setStageTriggers((prev) => prev.map((t, j) => (j === i ? { ...t, ...patch } : t)));
+  const addTrig = (t?: StageTrig) =>
+    setStageTriggers((prev) =>
+      prev.length >= MAX_STAGE_TRIGGERS
+        ? prev
+        : [...prev, t ?? { stage: '', delayValue: 3, delayUnit: 'hours', instructions: '' }],
+    );
+  const removeTrig = (i: number) =>
+    setStageTriggers((prev) => prev.filter((_, j) => j !== i));
+
   const save = async () => {
     setSaving(true);
     try {
@@ -103,6 +174,14 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
           })),
           giveUpEnabled,
           giveUpStage: giveUpStage.trim(),
+          stageTriggers: stageTriggers
+            .filter((t) => t.stage.trim())
+            .map((t) => ({
+              stage: t.stage.trim(),
+              delayValue: Math.max(1, Math.round(t.delayValue || 1)),
+              delayUnit: t.delayUnit,
+              instructions: t.instructions.trim(),
+            })),
         }),
       });
       const data = await res.json().catch(() => ({}));
@@ -277,6 +356,118 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                   disabled={!canEdit}
                   className="mt-1 h-8 max-w-xs"
                 />
+              </div>
+            )}
+          </div>
+
+          {/* Follow-up por ETAPA (Fase E): gatilho quando o card ENTRA numa etapa. */}
+          <div className="rounded-lg border border-dashed border-border p-3">
+            <p className="text-sm font-medium text-foreground">Follow-up por etapa</p>
+            <p className="mt-0.5 text-[11px] text-muted-foreground">
+              Quando o card entra numa etapa, a IA dá um toque depois de um tempo
+              (ex.: entrou em <strong>Agendado</strong> → confirma a reunião). Só
+              dispara se o cliente estiver calado e dentro da janela de 24h.
+            </p>
+
+            {stageTriggers.map((t, i) => (
+              <div key={i} className="mt-2 rounded-lg border border-border p-3">
+                <div className="flex flex-wrap items-center gap-2 text-sm text-foreground">
+                  <span className="text-xs text-muted-foreground">Quando entrar em</span>
+                  <Input
+                    value={t.stage}
+                    onChange={(e) => setTrig(i, { stage: e.target.value })}
+                    placeholder="etapa (ex.: Agendado)"
+                    disabled={!canEdit}
+                    className="h-8 w-44"
+                  />
+                  <span className="text-xs text-muted-foreground">após</span>
+                  <Input
+                    type="number"
+                    min={1}
+                    value={t.delayValue}
+                    onChange={(e) => setTrig(i, { delayValue: Number(e.target.value) })}
+                    className="h-8 w-20"
+                    disabled={!canEdit}
+                  />
+                  <select
+                    value={t.delayUnit}
+                    onChange={(e) => setTrig(i, { delayUnit: e.target.value as Unit })}
+                    disabled={!canEdit}
+                    className="h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                  >
+                    <option value="minutes">minutos</option>
+                    <option value="hours">horas</option>
+                    <option value="days">dias</option>
+                  </select>
+                  {canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => removeTrig(i)}
+                      className="ml-auto text-muted-foreground hover:text-destructive"
+                      title="Remover etapa"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  )}
+                </div>
+                {t._guide ? (
+                  <div className="mt-2">
+                    <div className="flex items-center justify-between">
+                      <Label
+                        htmlFor={`st-instr-${i}`}
+                        className="text-[11px] text-muted-foreground"
+                      >
+                        Orientação (opcional) — o que dizer
+                      </Label>
+                      {canEdit && (
+                        <button
+                          type="button"
+                          onClick={() => setTrig(i, { instructions: '', _guide: false })}
+                          className="text-[11px] text-muted-foreground hover:text-destructive"
+                        >
+                          remover
+                        </button>
+                      )}
+                    </div>
+                    <Textarea
+                      id={`st-instr-${i}`}
+                      value={t.instructions}
+                      onChange={(e) => setTrig(i, { instructions: e.target.value })}
+                      rows={2}
+                      disabled={!canEdit}
+                      placeholder="ex.: Confirme o dia e horário da reunião e peça a confirmação."
+                      className="mt-1"
+                    />
+                  </div>
+                ) : (
+                  canEdit && (
+                    <button
+                      type="button"
+                      onClick={() => setTrig(i, { _guide: true })}
+                      className="mt-1 text-xs text-primary hover:underline"
+                    >
+                      + Orientar o que dizer (opcional)
+                    </button>
+                  )
+                )}
+              </div>
+            ))}
+
+            {canEdit && stageTriggers.length < MAX_STAGE_TRIGGERS && (
+              <div className="mt-2 flex flex-wrap items-center gap-2">
+                <Button variant="outline" size="sm" onClick={() => addTrig()}>
+                  <Plus className="mr-1.5 h-4 w-4" /> Adicionar etapa
+                </Button>
+                {STAGE_PRESETS.map((p) => (
+                  <button
+                    key={p.label}
+                    type="button"
+                    onClick={() => addTrig({ ...p.trig })}
+                    className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground hover:bg-muted"
+                  >
+                    + {p.label}
+                  </button>
+                ))}
               </div>
             )}
           </div>

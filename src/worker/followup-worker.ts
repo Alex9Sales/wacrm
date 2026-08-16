@@ -8,7 +8,7 @@
 import { Queue, Worker } from 'bullmq';
 
 import { bullConnection } from '@/lib/queue/connection';
-import { runFollowUpSweep } from '@/lib/ai/followup';
+import { runFollowUpSweep, runStageFollowUpSweep } from '@/lib/ai/followup';
 
 const FOLLOWUP_QUEUE = 'ai-followup';
 const TICK_MS = 5 * 60_000; // 5 min
@@ -37,6 +37,16 @@ export function startFollowupWorker(): Worker {
       const { sent, agents } = await runFollowUpSweep();
       if (sent > 0) {
         console.log(`[followup] enviou ${sent} follow-up(s) (${agents} agente(s) ligado(s))`);
+      }
+      // Follow-up por ETAPA (Fase E): toque disparado quando o card entra numa
+      // etapa configurada (ex.: Agendado → confirmar). Mesmo tick.
+      try {
+        const stage = await runStageFollowUpSweep();
+        if (stage.sent > 0) {
+          console.log(`[followup] enviou ${stage.sent} follow-up(s) por etapa`);
+        }
+      } catch (err) {
+        console.error('[followup] stage sweep failed:', err);
       }
     },
     { connection: bullConnection(), concurrency: 1 },

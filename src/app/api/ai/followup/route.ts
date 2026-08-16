@@ -70,6 +70,7 @@ export async function PATCH(request: Request) {
       armedAt,
       giveUpEnabled: body?.giveUpEnabled === true,
       giveUpStage: typeof body?.giveUpStage === 'string' ? body.giveUpStage : null,
+      stageTriggers: Array.isArray(body?.stageTriggers) ? body.stageTriggers : undefined,
     })
 
     await db
