@@ -13,7 +13,7 @@
 // ============================================================
 
 /** The set of transports we support. */
-export type ProviderId = 'meta' | 'waha' | 'evolution' | 'evogo';
+export type ProviderId = 'meta' | 'waha' | 'evolution' | 'evogo' | 'instagram';
 
 /**
  * What a given provider can and can't do. Drives capability checks
@@ -72,6 +72,14 @@ export interface NormalizedInbound {
    * (digits only).
    */
   senderLid?: string;
+  /**
+   * Id EXTERNO do remetente quando o canal não usa telefone (ex.: IGSID do
+   * Instagram Direct). Quando setado, o pipeline resolve/cria o contato por
+   * `contacts.external_id` em vez de telefone (`fromPhoneE164` fica vazio).
+   */
+  senderExternalId?: string;
+  /** Nome/username do remetente (Instagram) — o payload não traz telefone. */
+  senderName?: string;
   contentType:
     | 'text'
     | 'image'
@@ -481,5 +489,20 @@ export const CAPABILITIES: Record<ProviderId, Capabilities> = {
     inboundMedia: false,
     needsChatIdResolve: false,
     needsJitter: true,
+  },
+  instagram: {
+    // Instagram Direct via Graph API. Sem templates aprovados (fora da janela de
+    // 24h usa a tag human_agent, não template). Tem a janela de 24h como o Meta.
+    templates: false,
+    session24hWindow: true,
+    // Botões/listas do IG são limitados (quick replies) — deixamos false por ora.
+    interactive: false,
+    reactions: true,
+    typing: false,
+    qrPairing: false,
+    // Mídia inbound chega como URL direta no payload (attachments[].payload.url).
+    inboundMedia: true,
+    needsChatIdResolve: false,
+    needsJitter: false,
   },
 };

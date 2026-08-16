@@ -58,18 +58,32 @@ async function loadContactAndChannel(
 }> {
   const contact = firstOrNull(
     await db
-      .select({ id: contacts.id, phone: contacts.phone })
+      .select({
+        id: contacts.id,
+        phone: contacts.phone,
+        externalId: contacts.externalId,
+      })
       .from(contacts)
       .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
       .limit(1),
   )
-  if (!contact?.phone) {
+  if (!contact) {
     throw new Error('contact not found for this account')
   }
+  if (!contact.phone && !contact.externalId) {
+    throw new Error('contact has no phone/external id')
+  }
 
-  const sanitized = sanitizePhoneForMeta(contact.phone)
-  if (!isValidE164(sanitized)) {
-    throw new Error(`contact phone invalid: ${contact.phone}`)
+  // Instagram (e canais sem telefone): o alvo do provider é o external_id (IGSID),
+  // sem passar pela trava de E.164. WhatsApp segue por telefone.
+  let sanitized: string
+  if (contact.externalId) {
+    sanitized = contact.externalId
+  } else {
+    sanitized = sanitizePhoneForMeta(contact.phone)
+    if (!isValidE164(sanitized)) {
+      throw new Error(`contact phone invalid: ${contact.phone}`)
+    }
   }
 
   const conv = firstOrNull(

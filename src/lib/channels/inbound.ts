@@ -180,12 +180,20 @@ export async function dispatchInboundMessage(
   // name (a new contact falls back to its phone number).
   const isFromMe = ev.fromMe === true;
 
-  // 2) Resolve / create contact by E.164 (shared dedupe helper).
-  const contactOutcome = await findOrCreateContact(
-    accountId,
-    senderPhone,
-    isFromMe ? '' : ev.pushName ?? '',
-  );
+  // 2) Resolve / create contact. Instagram (e canais sem telefone) chegam com
+  //    `senderExternalId` (IGSID) e sem telefone → resolve por external_id;
+  //    o resto (WhatsApp) resolve por E.164.
+  const contactOutcome = ev.senderExternalId
+    ? await findOrCreateContactByExternalId(
+        accountId,
+        ev.senderExternalId,
+        isFromMe ? '' : ev.senderName ?? '',
+      )
+    : await findOrCreateContact(
+        accountId,
+        senderPhone,
+        isFromMe ? '' : ev.pushName ?? '',
+      );
   if (!contactOutcome) return null;
   const contactId = contactOutcome.contact.id;
 
@@ -195,7 +203,7 @@ export async function dispatchInboundMessage(
   //     Skipped for fromMe (that's the operator's own phone) and when the
   //     contact already has an avatar (attempt-once). Fire-and-forget: it
   //     is NEVER awaited on the critical path and can never drop a message.
-  if (!isFromMe && !contactOutcome.contact.avatarUrl) {
+  if (!isFromMe && !contactOutcome.contact.avatarUrl && !ev.senderExternalId) {
     void backfillContactAvatar(channel, contactId, senderPhone).catch((err) =>
       console.error('[inbound] avatar backfill dispatch failed:', err),
     );
@@ -1527,6 +1535,111 @@ async function findOrCreateContact(
       if (raced) return asExisting(raced);
     }
     console.error('[inbound] Error creating contact:', createError);
+    return null;
+  }
+}
+
+/**
+ * Resolve/cria contato por ID EXTERNO (ex.: IGSID do Instagram Direct) — canais
+ * sem telefone. `phone` fica '' (phone_normalized '' fica fora do índice único de
+ * telefone); a unicidade é por (conta, external_id). Advisory lock por
+ * (conta, external_id) evita duplicar em inbounds concorrentes.
+ */
+async function findOrCreateContactByExternalId(
+  accountId: string,
+  externalId: string,
+  name: string,
+): Promise<ContactOutcome | null> {
+  const findByExt = async () =>
+    firstOrNull(
+      await db
+        .select({
+          id: contacts.id,
+          userId: contacts.userId,
+          name: contacts.name,
+          avatarUrl: contacts.avatarUrl,
+        })
+        .from(contacts)
+        .where(
+          and(
+            eq(contacts.accountId, accountId),
+            eq(contacts.externalId, externalId),
+          ),
+        )
+        .limit(1),
+    );
+
+  const asOutcome = async (existing: {
+    id: string;
+    userId: string;
+    name: string | null;
+    avatarUrl: string | null;
+  }): Promise<ContactOutcome> => {
+    // Preenche o nome só enquanto o contato ainda não tem um nome real.
+    if (name && name !== existing.name && (!existing.name || existing.name === externalId)) {
+      try {
+        await db
+          .update(contacts)
+          .set({ name, updatedAt: new Date().toISOString() })
+          .where(eq(contacts.id, existing.id));
+      } catch {
+        /* best-effort */
+      }
+    }
+    return {
+      contact: {
+        id: existing.id,
+        userId: String(existing.userId),
+        name: existing.name ?? null,
+        avatarUrl: existing.avatarUrl ?? null,
+      },
+      wasCreated: false,
+    };
+  };
+
+  const pre = await findByExt();
+  if (pre) return asOutcome(pre);
+
+  const ownerUserId = await resolveAccountOwnerUserId(accountId);
+  if (!ownerUserId) {
+    console.error('[inbound] no member found for account; cannot create IG contact', accountId);
+    return null;
+  }
+  const lockKey = `igcontact:${accountId}:${externalId}`;
+  try {
+    return await db.transaction(async (tx) => {
+      await tx.execute(sql`SELECT pg_advisory_xact_lock(hashtext(${lockKey}))`);
+      const raced = await findByExt();
+      if (raced) return asOutcome(raced);
+      const created = firstOrNull(
+        await tx
+          .insert(contacts)
+          .values({
+            accountId,
+            userId: ownerUserId,
+            phone: '',
+            externalId,
+            name: name || externalId,
+          })
+          .returning(),
+      );
+      if (!created) return null;
+      return {
+        contact: {
+          id: created.id,
+          userId: created.userId,
+          name: created.name,
+          avatarUrl: created.avatarUrl ?? null,
+        },
+        wasCreated: true,
+      };
+    });
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      const raced = await findByExt();
+      if (raced) return asOutcome(raced);
+    }
+    console.error('[inbound] criar contato IG falhou:', err);
     return null;
   }
 }

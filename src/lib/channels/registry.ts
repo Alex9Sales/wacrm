@@ -14,12 +14,14 @@ import { metaProvider } from './providers/meta';
 import { wahaProvider } from './providers/waha';
 import { evolutionProvider } from './providers/evolution';
 import { evogoProvider } from './providers/evogo';
+import { instagramProvider } from './providers/instagram';
 
 const PROVIDERS: Record<ProviderId, WhatsAppProvider> = {
   meta: metaProvider,
   waha: wahaProvider,
   evolution: evolutionProvider,
   evogo: evogoProvider,
+  instagram: instagramProvider,
 };
 
 /** Resolve the provider implementation for a channel's provider id. */

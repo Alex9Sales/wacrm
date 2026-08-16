@@ -49,6 +49,7 @@ function managedSessionName(): string {
 
 const PROVIDERS: ReadonlySet<ProviderId> = new Set([
   'meta',
+  'instagram',
   'waha',
   'evolution',
   'evogo',
@@ -75,6 +76,9 @@ function safeProviderMeta(
       location,
       pix,
     }
+  }
+  if (provider === 'instagram') {
+    return { ig_id: meta.ig_id ?? null, graphBase: meta.graphBase ?? null, location, pix }
   }
   // waha / evolution / evogo: baseUrl + the session or instance name.
   return {
@@ -166,6 +170,29 @@ function buildCreateInput(
         name,
         credentials: { accessToken: access_token, verifyToken: verify_token },
         providerMeta: { phone_number_id, waba_id },
+      }
+    }
+    case 'instagram': {
+      // Conexão MANUAL (piloto): id da conta IG + token. graph_base opcional
+      // (use graph.instagram.com/v21.0 pro login do Instagram).
+      const ig_id = str(config.ig_id)
+      const access_token = str(config.access_token)
+      const graph_base = str(config.graph_base)
+      const missing = [!ig_id && 'ig_id', !access_token && 'access_token'].filter(
+        Boolean,
+      )
+      if (missing.length) {
+        throw new BadRequestError(
+          `instagram channel requires: ${missing.join(', ')}`,
+        )
+      }
+      return {
+        provider,
+        name,
+        credentials: { accessToken: access_token },
+        providerMeta: graph_base
+          ? { ig_id, graphBase: graph_base }
+          : { ig_id },
       }
     }
     case 'waha': {

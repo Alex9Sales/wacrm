@@ -274,12 +274,18 @@ export async function sendMessageToConversation(
         id: contacts.id,
         phone: contacts.phone,
         isGroup: contacts.isGroup,
+        externalId: contacts.externalId,
       })
       .from(contacts)
       .where(eq(contacts.id, conversation.contactId))
       .limit(1)
   );
-  if (!contact?.phone) {
+  if (!contact) {
+    throw new SendMessageError('bad_request', 'Contact not found', 400);
+  }
+  // Instagram (e canais sem telefone) identificam por external_id (IGSID) — sem
+  // telefone. Só exige telefone quando não há external_id.
+  if (!contact.phone && !contact.externalId) {
     throw new SendMessageError(
       'bad_request',
       'Contact phone number not found',
@@ -290,8 +296,9 @@ export async function sendMessageToConversation(
   const sanitizedPhone = sanitizePhoneForMeta(contact.phone);
   // A GROUP "phone" is the group jid's digits (16+), never a valid E.164 — the
   // provider turns it into `<digits>@g.us`. Skip the phone-format gate for
-  // groups so a manual operator reply into a monitored group can go out.
-  if (!contact.isGroup && !isValidE164(sanitizedPhone)) {
+  // groups (e para canais por external_id, ex.: Instagram) so a manual operator
+  // reply can still go out.
+  if (!contact.isGroup && !contact.externalId && !isValidE164(sanitizedPhone)) {
     throw new SendMessageError(
       'bad_request',
       'Invalid phone number format',
@@ -328,7 +335,10 @@ export async function sendMessageToConversation(
   // hyphen-less id makes WAHA hang and abort. The intact jid lives in
   // monitored_groups.group_jid; look it up by matching digits.
   let providerTarget = sanitizedPhone;
-  if (contact.isGroup) {
+  if (contact.externalId) {
+    // Instagram: o alvo do provider é o IGSID (não telefone).
+    providerTarget = contact.externalId;
+  } else if (contact.isGroup) {
     const wantedDigits = contact.phone.replace(/\D/g, '');
     const monitored = await db
       .select({ jid: monitoredGroups.groupJid })
@@ -572,10 +582,10 @@ export async function sendMessageToConversation(
     );
   }
 
-  // The 9th-digit auto-correct is a 1:1 (Meta) thing. NEVER for a group —
-  // workingPhone is the full group jid there; writing it into contacts.phone
-  // would corrupt the group key (digits matched against monitored_groups).
-  if (!contact.isGroup && workingPhone !== sanitizedPhone) {
+  // The 9th-digit auto-correct is a 1:1 (Meta) thing. NEVER for a group nem para
+  // Instagram (workingPhone é o IGSID/jid, não um telefone — gravá-lo em
+  // contacts.phone corromperia a chave).
+  if (!contact.isGroup && !contact.externalId && workingPhone !== sanitizedPhone) {
     console.log(
       `[send-message] Auto-corrected contact phone: ${sanitizedPhone} → ${workingPhone}`
     );

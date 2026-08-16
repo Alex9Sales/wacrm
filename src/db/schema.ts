@@ -192,11 +192,15 @@ export const contacts = pgTable("contacts", {
 	// A "contact" that is actually a WhatsApp group (phone holds the group
 	// jid's digits, name the group name). Only set for monitored groups.
 	isGroup: boolean("is_group").default(false).notNull(),
+	// Id externo do canal quando não há telefone (ex.: IGSID do Instagram Direct).
+	// Migração 0095. Unicidade por (conta, external_id) no índice abaixo.
+	externalId: text("external_id"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_contacts_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 	uniqueIndex("idx_contacts_account_phone_normalized").using("btree", table.accountId.asc().nullsLast().op("text_ops"), table.phoneNormalized.asc().nullsLast().op("text_ops")).where(sql`(phone_normalized <> ''::text)`),
+	uniqueIndex("idx_contacts_account_external_id").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.externalId.asc().nullsLast().op("text_ops")).where(sql`(external_id IS NOT NULL)`),
 	index("idx_contacts_phone").using("btree", table.phone.asc().nullsLast().op("text_ops")),
 	index("idx_contacts_user_id").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({
@@ -412,13 +416,17 @@ export const channels = pgTable("channels", {
 	uniqueIndex("channels_meta_pnid")
 		.using("btree", sql`((provider_meta->>'phone_number_id'))`)
 		.where(sql`(provider = 'meta'::text)`),
+	// Roteamento do webhook do Instagram: acha o canal por provider_meta->>'ig_id'.
+	uniqueIndex("channels_ig_id")
+		.using("btree", sql`((provider_meta->>'ig_id'))`)
+		.where(sql`(provider = 'instagram'::text)`),
 	foreignKey({
 			columns: [table.accountId],
 			foreignColumns: [organization.id],
 			name: "channels_account_id_fkey"
 		}).onDelete("cascade"),
 	unique("channels_account_id_name_key").on(table.accountId, table.name),
-	check("channels_provider_check", sql`provider = ANY (ARRAY['meta'::text, 'waha'::text, 'evolution'::text, 'evogo'::text])`),
+	check("channels_provider_check", sql`provider = ANY (ARRAY['meta'::text, 'waha'::text, 'evolution'::text, 'evogo'::text, 'instagram'::text])`),
 	check("channels_status_check", sql`status = ANY (ARRAY['disconnected'::text, 'qr_pending'::text, 'connected'::text, 'error'::text])`),
 ]);
 

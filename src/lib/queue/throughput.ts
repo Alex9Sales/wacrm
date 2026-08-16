@@ -19,6 +19,7 @@ import type { ProviderId } from '@/lib/channels/provider';
 /** Safe default send rate per provider, in messages per minute. */
 export const DEFAULT_THROUGHPUT_PER_MIN: Record<ProviderId, number> = {
   meta: 60,
+  instagram: 60,
   waha: 10,
   evolution: 15,
   evogo: 10,

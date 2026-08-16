@@ -42,10 +42,11 @@ interface AddChannelDialogProps {
   onPickMeta: () => void;
 }
 
-const PROVIDER_ORDER: ProviderId[] = ['meta', 'waha', 'evolution', 'evogo'];
+const PROVIDER_ORDER: ProviderId[] = ['meta', 'instagram', 'waha', 'evolution', 'evogo'];
 
 const PROVIDER_BLURB: Record<ProviderId, string> = {
   meta: 'API oficial do WhatsApp. Suporta templates e mensagens interativas.',
+  instagram: 'Instagram Direct (DM) via API oficial do Meta. Cole o ID da conta Instagram e o token de acesso.',
   waha: 'Provedor não oficial (WAHA), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
   evolution: 'Provedor não oficial (Evolution API), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
   evogo: 'Provedor não oficial (EvoGo), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
@@ -67,6 +68,27 @@ const PROVIDER_FIELDS: Record<
   Exclude<ProviderId, 'meta'>,
   FieldDef[]
 > = {
+  // Instagram: conexão MANUAL (piloto) — o operador cola o id da conta IG + o
+  // token. graph_base é opcional (use graph.instagram.com pro login do Instagram).
+  instagram: [
+    {
+      key: 'ig_id',
+      label: 'ID da conta Instagram (IGSID business)',
+      placeholder: '17841400000000000',
+    },
+    {
+      key: 'access_token',
+      label: 'Token de acesso (Página/Instagram)',
+      placeholder: 'EAAG…',
+      secret: true,
+    },
+    {
+      key: 'graph_base',
+      label: 'Base da API (opcional)',
+      placeholder: 'https://graph.facebook.com/v21.0',
+      optional: true,
+    },
+  ],
   waha: [],
   evolution: [],
   evogo: [],

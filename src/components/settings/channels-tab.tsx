@@ -71,6 +71,7 @@ export interface ChannelSummary {
 /** Human labels for each provider (pt-BR UI). */
 export const PROVIDER_LABELS: Record<ProviderId, string> = {
   meta: 'Meta (API Oficial)',
+  instagram: 'Instagram Direct',
   waha: 'WAHA',
   evolution: 'Evolution',
   evogo: 'EvoGo',

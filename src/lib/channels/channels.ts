@@ -114,6 +114,28 @@ export async function loadMetaChannelByPhoneNumberId(
 }
 
 /**
+ * Resolve um canal Instagram pelo id da conta IG (roteamento do webhook —
+ * `entry[].id`). Casa o índice parcial `channels_ig_id`.
+ */
+export async function loadInstagramChannelByIgId(
+  igId: string,
+): Promise<ChannelCtx | null> {
+  const row = firstOrNull(
+    await db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.provider, 'instagram'),
+          sql`${channels.providerMeta}->>'ig_id' = ${igId}`,
+        ),
+      )
+      .limit(1),
+  );
+  return row ? toCtx(row) : null;
+}
+
+/**
  * Load the account's default channel — for legacy paths that assumed a
  * single WhatsApp config (health checks, "the" account channel). Prefers
  * a connected channel, then a Meta channel, then any. Returns null if the
