@@ -375,15 +375,29 @@ export function DealCard({
         </div>
       )}
 
-      {/* Próximo follow-up automático (follow-up por etapa) — o sistema agenda e
-          atualiza isto ao mover o card de etapa. */}
-      {deal.next_follow_up_at && (
-        <div
-          className="mt-1.5 flex items-center gap-1 text-[11px] text-sky-500"
-          title="Próximo follow-up automático"
-        >
-          <Clock3 className="h-3 w-3" />
-          <span>Follow-up: {formatDateTime(deal.next_follow_up_at)}</span>
+      {/* Follow-ups: quantos toques de reengajamento já saíram (contador estilo
+          n8n) + o próximo follow-up automático agendado (por etapa). */}
+      {((deal.follow_up_count ?? 0) > 0 || deal.next_follow_up_at) && (
+        <div className="mt-1.5 flex flex-wrap items-center gap-x-2 gap-y-1 text-[11px]">
+          {(deal.follow_up_count ?? 0) > 0 && (
+            <span
+              className="flex items-center gap-1 text-muted-foreground"
+              title="Follow-ups enviados"
+            >
+              <MessageCircle className="h-3 w-3" />
+              {deal.follow_up_count} follow-up
+              {(deal.follow_up_count ?? 0) > 1 ? "s" : ""}
+            </span>
+          )}
+          {deal.next_follow_up_at && (
+            <span
+              className="flex items-center gap-1 text-sky-500"
+              title="Próximo follow-up automático"
+            >
+              <Clock3 className="h-3 w-3" />
+              {formatDateTime(deal.next_follow_up_at)}
+            </span>
+          )}
         </div>
       )}
 

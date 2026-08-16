@@ -170,6 +170,7 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
       qualification: deals.qualification,
       stage_changed_at: deals.stageChangedAt,
       next_follow_up_at: deals.nextFollowUpAt,
+      follow_up_count: conversations.followUpStep,
       paused_at: deals.pausedAt,
       created_at: deals.createdAt,
       updated_at: deals.updatedAt,
