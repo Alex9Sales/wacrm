@@ -575,7 +575,19 @@ export async function dispatchInboundMessage(
   // de mandar (junta a rajada numa resposta só). Os gates de elegibilidade são
   // re-checados no worker, na hora de disparar. Best-effort: nunca quebra o
   // inbound. `AI_REPLY_BUFFER_SECONDS=0` volta ao comportamento imediato.
-  if (!flowConsumed && !outOfHoursSent && !ev.interactiveReplyId && inboundText.trim()) {
+  // A IA responde a TEXTO e também a MÍDIA que ela consegue "ler": imagem com
+  // descrição de visão ou áudio transcrito (a transcrição já entra no contexto
+  // como "[imagem]…"/"[áudio]…"). Sem isto, uma foto/nota de voz SEM legenda
+  // era só descrita e ficava sem resposta (a IA "só transcrevia"). fromMe já
+  // retornou lá em cima, então aqui é sempre mensagem do cliente.
+  const mediaReadable =
+    (contentType === 'image' || contentType === 'audio') && !!transcription?.trim();
+  if (
+    !flowConsumed &&
+    !outOfHoursSent &&
+    !ev.interactiveReplyId &&
+    (inboundText.trim() || mediaReadable)
+  ) {
     try {
       // Buffer por conta (config da IA já carregado acima); cai no env global
       // se a IA não estiver configurada/ativa nessa conta.
