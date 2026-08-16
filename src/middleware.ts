@@ -37,6 +37,9 @@ const PUBLIC_API_PREFIXES = [
   '/api/instagram/oauth/callback', // OAuth callback do Instagram — o browser
   //            volta do instagram.com; autentica pelo `state` assinado, não pela
   //            sessão (o /start segue protegido).
+  '/api/instagram/deauthorize', // deauthorize callback do Instagram — a Meta
+  //            faz POST com signed_request; autentica pela assinatura (app
+  //            secret), não pela sessão.
 ]
 
 function isProtectedPath(pathname: string): boolean {
