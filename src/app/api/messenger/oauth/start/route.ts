@@ -31,8 +31,11 @@ const SCOPES = 'pages_show_list,pages_messaging,pages_manage_metadata'
 // "configuração de login" (config_id) que define os ativos (Páginas) + permissões.
 // Setar MESSENGER_LOGIN_CONFIG_ID no ambiente → usa config_id; senão cai no scope
 // (modo Login clássico).
+// Config "Conectar Messenger Sistema" — Token de acesso do USUÁRIO DO SISTEMA
+// (necessário pra enxergar Páginas que ficam no Portfólio Empresarial; o token
+// de usuário comum só vê Páginas pessoais e o /me/accounts vinha vazio).
 const CONFIG_ID =
-  process.env.MESSENGER_LOGIN_CONFIG_ID || '1090665340093840'
+  process.env.MESSENGER_LOGIN_CONFIG_ID || '3199230160269716'
 
 export async function GET() {
   let ctx
