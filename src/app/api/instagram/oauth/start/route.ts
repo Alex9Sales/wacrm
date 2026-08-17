@@ -17,8 +17,12 @@ const REDIRECT =
   process.env.INSTAGRAM_OAUTH_REDIRECT ||
   'https://crm.salestecnologia.com.br/api/instagram/oauth/callback'
 const APP_URL = process.env.APP_URL || 'https://crm.salestecnologia.com.br'
-// Escopos do "Instagram API com login do Instagram" p/ mensagens.
-const SCOPES = 'instagram_business_basic,instagram_business_manage_messages'
+// Escopos do "Instagram API com login do Instagram": mensagens (DM) +
+// comentários (automação comentário→DM: responder o comentário). Se o app
+// ainda não tiver a perm de comentários aprovada, o piloto/tester consegue
+// conceder mesmo assim (dev/standard access na própria conta).
+const SCOPES =
+  'instagram_business_basic,instagram_business_manage_messages,instagram_business_manage_comments'
 
 export async function GET() {
   let ctx
