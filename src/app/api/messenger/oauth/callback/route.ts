@@ -79,7 +79,10 @@ export async function GET(request: Request) {
   } catch {
     return back('erro')
   }
-  if (!payload.a || !payload.t || Date.now() - payload.t > 10 * 60 * 1000) {
+  // 30 min — o fluxo "Login para empresas" tem muitos passos (escolher Página,
+  // editar configurações, etc.), então uma janela curta estourava.
+  if (!payload.a || !payload.t || Date.now() - payload.t > 30 * 60 * 1000) {
+    console.warn('[messenger oauth] state expirado')
     return back('expirado')
   }
   const accountId = payload.a
@@ -124,8 +127,16 @@ export async function GET(request: Request) {
     )
     const pagesJson = (await pagesRes.json().catch(() => ({}))) as {
       data?: FbPage[]
+      error?: unknown
     }
     const pages = (pagesJson.data ?? []).filter((p) => p.id && p.access_token)
+    console.log(
+      '[messenger oauth] /me/accounts status',
+      pagesRes.status,
+      'páginas:',
+      pages.length,
+      pages.length === 0 ? JSON.stringify(pagesJson).slice(0, 500) : '',
+    )
     if (pages.length === 0) return back('sem_pagina')
 
     // 4) Cria/atualiza um canal por Página + inscreve o webhook.
@@ -187,6 +198,7 @@ export async function GET(request: Request) {
       connected += 1
     }
 
+    console.log('[messenger oauth] conectadas', connected, 'Página(s)')
     return back(String(connected))
   } catch (error) {
     console.error('[messenger oauth] callback error:', error)
