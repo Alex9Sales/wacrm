@@ -1,4 +1,4 @@
-import { and, count, desc, eq, gte, lt } from 'drizzle-orm'
+import { and, count, desc, eq, gte, lt, sql } from 'drizzle-orm'
 
 import {
   db,
@@ -16,7 +16,6 @@ import {
   daysAgoStart,
   DOW_SHORT_MON_FIRST,
   lastNDayKeys,
-  localDayKey,
   mondayIndex,
   startOfLocalDay,
 } from './date-utils'
@@ -145,26 +144,31 @@ export async function loadConversationsSeries(
   rangeDays: number,
 ): Promise<ConversationsSeriesPoint[]> {
   const start = daysAgoStart(rangeDays - 1).toISOString()
-  const data = await db
-    .select({ created_at: messages.createdAt, sender_type: messages.senderType })
+  // Agrega POR DIA no SQL (antes trazia TODAS as mensagens do período — 38k+ em
+  // 30 dias numa conta movimentada — e contava no JS). O container roda em UTC,
+  // então o dia UTC casa exatamente com o localDayKey (getDate em processo UTC).
+  const rows = await db
+    .select({
+      day: sql<string>`to_char(date_trunc('day', ${messages.createdAt} AT TIME ZONE 'UTC'), 'YYYY-MM-DD')`,
+      incoming: sql<boolean>`(${messages.senderType} = 'customer')`,
+      n: sql<number>`count(*)::int`,
+    })
     .from(messages)
     .innerJoin(conversations, eq(messages.conversationId, conversations.id))
     .where(
       and(eq(conversations.accountId, accountId), gte(messages.createdAt, start)),
     )
-    .orderBy(messages.createdAt)
+    .groupBy(sql`1, 2`)
 
   const keys = lastNDayKeys(rangeDays)
   const buckets = new Map<string, { incoming: number; outgoing: number }>()
   for (const k of keys) buckets.set(k, { incoming: 0, outgoing: 0 })
 
-  for (const row of data) {
-    if (!row.created_at) continue
-    const key = localDayKey(row.created_at)
-    const bucket = buckets.get(key)
+  for (const row of rows) {
+    const bucket = buckets.get(row.day)
     if (!bucket) continue
-    if (row.sender_type === 'customer') bucket.incoming += 1
-    else bucket.outgoing += 1 // agent + bot both count as outgoing
+    if (row.incoming) bucket.incoming += Number(row.n)
+    else bucket.outgoing += Number(row.n) // agent + bot both count as outgoing
   }
 
   return keys.map((day) => ({ day, ...(buckets.get(day) ?? { incoming: 0, outgoing: 0 }) }))
