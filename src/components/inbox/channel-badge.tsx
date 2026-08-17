@@ -43,6 +43,15 @@ function InstagramGlyph({ className }: { className?: string }) {
   );
 }
 
+/** Glifo do Messenger (SVG inline — lucide 1.22 não tem). Branco por cima do azul. */
+function MessengerGlyph({ className }: { className?: string }) {
+  return (
+    <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true" className={className}>
+      <path d="M12 0C5.373 0 0 4.974 0 11.111c0 3.498 1.744 6.614 4.469 8.652V24l4.088-2.242c1.092.301 2.246.464 3.443.464 6.627 0 12-4.975 12-11.111C24 4.974 18.627 0 12 0zm1.191 14.963l-3.055-3.26-5.963 3.26L10.732 8l3.131 3.259L19.752 8l-6.561 6.963z" />
+    </svg>
+  );
+}
+
 interface ChannelBadgeProps {
   provider: ChannelProvider;
   /** Nome do canal (ex.: "Fluxia Insta"); cai no rótulo do provedor se vazio. */
@@ -60,30 +69,34 @@ export function ChannelBadge({
 }: ChannelBadgeProps) {
   const providerLabel = CHANNEL_PROVIDER_LABELS[provider] ?? provider;
   const label = name || providerLabel;
-  const isInstagram = provider === "instagram";
 
   const iconCls = size === "md" ? "h-3 w-3 shrink-0" : "h-2.5 w-2.5 shrink-0";
   const textCls = size === "md" ? "text-[10px]" : "text-[9px]";
   const maxW = size === "md" ? "max-w-28" : "max-w-16";
+
+  // Cor oficial da marca por provedor (Instagram degradê, Messenger azul);
+  // os de WhatsApp ficam no look neutro.
+  let bg = "bg-muted text-muted-foreground";
+  let glyph = <Radio className={iconCls} />;
+  if (provider === "instagram") {
+    bg = "bg-gradient-to-tr from-[#feda75] via-[#d62976] to-[#4f5bd5] text-white";
+    glyph = <InstagramGlyph className={iconCls} />;
+  } else if (provider === "messenger") {
+    bg = "bg-gradient-to-br from-[#00C6FF] via-[#0068FF] to-[#A033FF] text-white";
+    glyph = <MessengerGlyph className={iconCls} />;
+  }
 
   return (
     <span
       className={cn(
         "inline-flex items-center gap-1 rounded-full px-1.5 py-0.5 font-medium",
         textCls,
-        isInstagram
-          ? // Degradê oficial do Instagram — amarelo→rosa→azul na diagonal.
-            "bg-gradient-to-tr from-[#feda75] via-[#d62976] to-[#4f5bd5] text-white"
-          : "bg-muted text-muted-foreground",
+        bg,
         className,
       )}
       title={`Canal: ${label} (${providerLabel})`}
     >
-      {isInstagram ? (
-        <InstagramGlyph className={iconCls} />
-      ) : (
-        <Radio className={iconCls} />
-      )}
+      {glyph}
       <span className={cn("truncate", maxW)}>{label}</span>
     </span>
   );
