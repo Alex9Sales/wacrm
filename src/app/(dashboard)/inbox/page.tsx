@@ -408,6 +408,17 @@ export default function InboxPage() {
     []
   );
 
+  // "Carregar mais" (paginação da inbox): anexa a próxima página de conversas
+  // (mais antigas) ao estado, deduplicando por id. O realtime continua
+  // prependando as recentes no topo — isto só adiciona no fim.
+  const handleConversationsAppended = useCallback((more: Conversation[]) => {
+    setConversations((prev) => {
+      const seen = new Set(prev.map((c) => c.id));
+      const fresh = more.filter((c) => !seen.has(c.id));
+      return fresh.length ? [...prev, ...fresh] : prev;
+    });
+  }, []);
+
   const handleSelectConversation = useCallback(
     (conv: Conversation) => {
       // Re-clicking the already-active conversation would clear the
@@ -757,6 +768,7 @@ export default function InboxPage() {
             onConversationStarted={handleConversationStarted}
             conversations={conversations}
             onConversationsLoaded={handleConversationsLoaded}
+            onConversationsAppended={handleConversationsAppended}
             resyncToken={resyncToken}
             onStatusChange={handleStatusChange}
             onPriorityChange={handlePriorityChange}

@@ -31,6 +31,9 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 
+/** Tamanho da página da inbox (paginação — perf). 1ª página + "carregar mais". */
+const CONVERSATIONS_PAGE_SIZE = 200;
+
 interface ConversationListProps {
   activeConversationId: string | null;
   onSelect: (conversation: Conversation) => void;
@@ -39,6 +42,9 @@ interface ConversationListProps {
   onConversationStarted?: (conversationId: string) => void;
   conversations: Conversation[];
   onConversationsLoaded: (conversations: Conversation[]) => void;
+  /** "Carregar mais" — anexa a próxima página de conversas (mais antigas) ao
+   *  estado do pai, deduplicando por id. */
+  onConversationsAppended?: (conversations: Conversation[]) => void;
   /**
    * Increment to force the fetch effect below to refire. The parent
    * bumps this on realtime reconnect / tab visibility → visible so the
@@ -89,6 +95,7 @@ export function ConversationList({
   onConversationStarted,
   conversations,
   onConversationsLoaded,
+  onConversationsAppended,
   resyncToken = 0,
   onStatusChange,
   onPriorityChange,
@@ -106,6 +113,15 @@ export function ConversationList({
   const searchParams = useSearchParams();
   const [search, setSearch] = useState("");
   const [newConvOpen, setNewConvOpen] = useState(false);
+  // Paginação (perf): a inbox carrega a 1ª página (CONVERSATIONS_PAGE_SIZE) e
+  // vai anexando com "carregar mais". `hasMore` = a última página veio cheia.
+  const [hasMore, setHasMore] = useState(false);
+  const [loadingMore, setLoadingMore] = useState(false);
+  // Busca no SERVIDOR: quando há texto, `searchResults` substitui a lista
+  // paginada (acha conversas antigas fora das páginas carregadas). null = sem
+  // busca ativa.
+  const [searchResults, setSearchResults] = useState<Conversation[] | null>(null);
+  const [searching, setSearching] = useState(false);
   // Empty set = todas. Otherwise a conversation shows if it matches ANY chip.
   const [statusFilters, setStatusFilters] = useState<Set<StatusChip>>(
     () => new Set(),
@@ -156,9 +172,12 @@ export function ConversationList({
 
     (async () => {
       try {
-        const data = await listConversations();
+        // Só a 1ª página (mais recentes). O resto vem por "carregar mais" e a
+        // busca vai no servidor — antes puxava TODAS (~2000) a cada abertura.
+        const data = await listConversations({ limit: CONVERSATIONS_PAGE_SIZE });
         if (cancelled) return;
         onConversationsLoadedRef.current(data);
+        setHasMore(data.length === CONVERSATIONS_PAGE_SIZE);
       } catch (error) {
         if (cancelled) return;
         console.error("Failed to fetch conversations:", error);
@@ -174,6 +193,62 @@ export function ConversationList({
     // the realtime channel reconnects or the tab regains focus — catches
     // up on any events sent while the WS was disconnected or throttled.
   }, [resyncToken]);
+
+  // Busca no SERVIDOR (com debounce). Sem texto → limpa (mostra a paginada).
+  useEffect(() => {
+    const q = search.trim();
+    if (!q) {
+      setSearchResults(null);
+      setSearching(false);
+      return;
+    }
+    setSearching(true);
+    let cancelled = false;
+    const t = setTimeout(async () => {
+      try {
+        const res = await listConversations({ search: q, limit: 50 });
+        if (!cancelled) setSearchResults(res);
+      } catch {
+        if (!cancelled) setSearchResults([]);
+      } finally {
+        if (!cancelled) setSearching(false);
+      }
+    }, 300);
+    return () => {
+      cancelled = true;
+      clearTimeout(t);
+    };
+  }, [search]);
+
+  // "Carregar mais": busca a próxima página (conversas mais antigas que a mais
+  // antiga já carregada) e anexa no estado do pai (dedup por id).
+  const loadMore = useCallback(async () => {
+    if (loadingMore) return;
+    // Cursor = menor last_message_at carregado (a lista é DESC; nulls ficam no
+    // topo e já vieram na 1ª página).
+    let cursor: string | null = null;
+    for (const c of conversations) {
+      const t = c.last_message_at;
+      if (t && (cursor === null || t < cursor)) cursor = t;
+    }
+    if (!cursor) {
+      setHasMore(false);
+      return;
+    }
+    setLoadingMore(true);
+    try {
+      const more = await listConversations({
+        limit: CONVERSATIONS_PAGE_SIZE,
+        beforeLastMessageAt: cursor,
+      });
+      onConversationsAppended?.(more);
+      setHasMore(more.length === CONVERSATIONS_PAGE_SIZE);
+    } catch (error) {
+      console.error("Failed to load more conversations:", error);
+    } finally {
+      setLoadingMore(false);
+    }
+  }, [conversations, loadingMore, onConversationsAppended]);
 
   // Tag definitions for the filter picker — loaded once so labels/colours
   // stay stable regardless of which conversations happen to be loaded.
@@ -291,7 +366,10 @@ export function ConversationList({
   }, [tags]);
 
   const filtered = useMemo(() => {
-    let result = conversations;
+    // Busca ativa → base = resultados do servidor (acha antigas fora das
+    // páginas carregadas). Sem busca → a lista paginada do pai. Os demais
+    // filtros (canal/setor/etiqueta/etc.) rodam por cima, como antes.
+    let result = searchResults ?? conversations;
 
     // Channel ("caixa") filter — applied alongside status & contact
     // filters. Null = all channels.
@@ -356,6 +434,7 @@ export function ConversationList({
     return result;
   }, [
     conversations,
+    searchResults,
     statusFilters,
     segment,
     search,
@@ -869,7 +948,9 @@ export function ConversationList({
           </div>
         ) : filtered.length === 0 ? (
           <div className="px-4 py-12 text-center">
-            <p className="text-sm text-muted-foreground">Nenhuma conversa encontrada</p>
+            <p className="text-sm text-muted-foreground">
+              {searching ? "Buscando..." : "Nenhuma conversa encontrada"}
+            </p>
           </div>
         ) : (
           <div className="flex flex-col">
@@ -889,6 +970,18 @@ export function ConversationList({
                 }
               />
             ))}
+            {/* "Carregar mais" — só na lista paginada (não durante a busca no
+                servidor, que já traz o conjunto certo). */}
+            {searchResults === null && hasMore && (
+              <button
+                type="button"
+                onClick={loadMore}
+                disabled={loadingMore}
+                className="mx-3 my-2 rounded-md border border-border py-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted disabled:opacity-60"
+              >
+                {loadingMore ? "Carregando..." : "Carregar mais conversas"}
+              </button>
+            )}
           </div>
         )}
       </ScrollArea>

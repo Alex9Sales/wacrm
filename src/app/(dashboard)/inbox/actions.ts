@@ -7,7 +7,7 @@
 // is no RLS anymore.
 // ============================================================
 
-import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, ilike, inArray, lt, or } from 'drizzle-orm'
 import {
   db,
   contactNotes,
@@ -470,7 +470,19 @@ const templateColumns = {
  * shape the old `CONVERSATION_SELECT` + `normalizeConversations` pipeline
  * produced for the inbox list. Account-scoped.
  */
-export async function listConversations(): Promise<Conversation[]> {
+/**
+ * Lista conversas da conta (mais recentes primeiro).
+ * - Sem `opts`: retorna TODAS (compat — usado pelo forward-dialog).
+ * - `limit`: pagina (a inbox pede a 1ª página de CONVERSATIONS_PAGE_SIZE).
+ * - `beforeLastMessageAt`: keyset "carregar mais" (conversas mais antigas que o cursor).
+ * - `search`: busca no SERVIDOR (nome/telefone/última msg) — acha conversas antigas
+ *   mesmo com a lista paginada. Default de 50 resultados.
+ */
+export async function listConversations(opts?: {
+  limit?: number
+  beforeLastMessageAt?: string | null
+  search?: string | null
+}): Promise<Conversation[]> {
   const ctx = await getCurrentAccount()
 
   // Sector privacy: non-admins only see general (null-sector) conversations
@@ -481,7 +493,25 @@ export async function listConversations(): Promise<Conversation[]> {
     ctx.accountId,
   )
 
-  const rows = await db
+  const filters = [eq(conversations.accountId, ctx.accountId), visibility]
+  const q = opts?.search?.trim()
+  if (q) {
+    const like = `%${q}%`
+    const cond = or(
+      ilike(contacts.name, like),
+      ilike(contacts.phone, like),
+      ilike(conversations.lastMessageText, like),
+    )
+    if (cond) filters.push(cond)
+  }
+  if (opts?.beforeLastMessageAt) {
+    filters.push(lt(conversations.lastMessageAt, opts.beforeLastMessageAt))
+  }
+
+  // Busca → 50 por padrão; página → o limit pedido; sem nada → tudo (compat).
+  const effectiveLimit = q ? (opts?.limit ?? 50) : opts?.limit
+
+  const base = db
     .select({
       ...conversationColumns,
       contact: contactColumns,
@@ -492,8 +522,9 @@ export async function listConversations(): Promise<Conversation[]> {
     .leftJoin(contacts, eq(conversations.contactId, contacts.id))
     .leftJoin(channels, eq(conversations.channelId, channels.id))
     .leftJoin(sectors, eq(conversations.sectorId, sectors.id))
-    .where(and(eq(conversations.accountId, ctx.accountId), visibility))
+    .where(and(...filters))
     .orderBy(desc(conversations.lastMessageAt))
+  const rows = await (effectiveLimit ? base.limit(effectiveLimit) : base)
 
   const contactIds = Array.from(
     new Set(rows.map((r) => r.contact?.id).filter((id): id is string => !!id)),
