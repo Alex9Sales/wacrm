@@ -43,11 +43,12 @@ interface AddChannelDialogProps {
   onPickMeta: () => void;
 }
 
-const PROVIDER_ORDER: ProviderId[] = ['meta', 'instagram', 'waha', 'evolution', 'evogo'];
+const PROVIDER_ORDER: ProviderId[] = ['meta', 'instagram', 'messenger', 'waha', 'evolution', 'evogo'];
 
 const PROVIDER_BLURB: Record<ProviderId, string> = {
   meta: 'API oficial do WhatsApp. Suporta templates e mensagens interativas.',
   instagram: 'Instagram Direct (DM) via API oficial do Meta. Cole o ID da conta Instagram e o token de acesso.',
+  messenger: 'Facebook Messenger (DM da Página) via API oficial do Meta. Cole o ID da Página e o token de acesso.',
   waha: 'Provedor não oficial (WAHA), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
   evolution: 'Provedor não oficial (Evolution API), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
   evogo: 'Provedor não oficial (EvoGo), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
@@ -80,6 +81,33 @@ const PROVIDER_FIELDS: Record<
     {
       key: 'access_token',
       label: 'Token de acesso (Página/Instagram)',
+      placeholder: 'EAAG…',
+      secret: true,
+    },
+    {
+      key: 'verify_token',
+      label: 'Token de verificação do webhook (opcional)',
+      placeholder: 'deixe em branco pra gerar automático',
+      optional: true,
+    },
+    {
+      key: 'graph_base',
+      label: 'Base da API (opcional)',
+      placeholder: 'https://graph.facebook.com/v21.0',
+      optional: true,
+    },
+  ],
+  // Messenger: conexão MANUAL — cola o id da Página do Facebook + o token da
+  // Página. Roda em graph.facebook.com (default).
+  messenger: [
+    {
+      key: 'page_id',
+      label: 'ID da Página do Facebook',
+      placeholder: '1234567890',
+    },
+    {
+      key: 'access_token',
+      label: 'Token de acesso (Página)',
       placeholder: 'EAAG…',
       secret: true,
     },

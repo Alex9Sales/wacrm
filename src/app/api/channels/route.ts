@@ -50,6 +50,7 @@ function managedSessionName(): string {
 const PROVIDERS: ReadonlySet<ProviderId> = new Set([
   'meta',
   'instagram',
+  'messenger',
   'waha',
   'evolution',
   'evogo',
@@ -79,6 +80,9 @@ function safeProviderMeta(
   }
   if (provider === 'instagram') {
     return { ig_id: meta.ig_id ?? null, graphBase: meta.graphBase ?? null, location, pix }
+  }
+  if (provider === 'messenger') {
+    return { page_id: meta.page_id ?? null, graphBase: meta.graphBase ?? null, location, pix }
   }
   // waha / evolution / evogo: baseUrl + the session or instance name.
   return {
@@ -196,6 +200,31 @@ function buildCreateInput(
         providerMeta: graph_base
           ? { ig_id, graphBase: graph_base }
           : { ig_id },
+      }
+    }
+    case 'messenger': {
+      // Conexão MANUAL: id da Página do Facebook + token da Página. Roda em
+      // graph.facebook.com (default).
+      const page_id = str(config.page_id)
+      const access_token = str(config.access_token)
+      const graph_base = str(config.graph_base)
+      // Auto-gera um se não vier — o GET /api/webhooks/messenger casa por ele.
+      const verify_token = str(config.verify_token) || randomBytes(12).toString('hex')
+      const missing = [!page_id && 'page_id', !access_token && 'access_token'].filter(
+        Boolean,
+      )
+      if (missing.length) {
+        throw new BadRequestError(
+          `messenger channel requires: ${missing.join(', ')}`,
+        )
+      }
+      return {
+        provider,
+        name,
+        credentials: { accessToken: access_token, verifyToken: verify_token },
+        providerMeta: graph_base
+          ? { page_id, graphBase: graph_base }
+          : { page_id },
       }
     }
     case 'waha': {

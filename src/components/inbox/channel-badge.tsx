@@ -18,6 +18,7 @@ export const CHANNEL_PROVIDER_LABELS: Record<ChannelProvider, string> = {
   evolution: "Evolution",
   evogo: "EvoGo",
   instagram: "Instagram",
+  messenger: "Messenger",
 };
 
 /** Glifo do Instagram (câmera em quadrado arredondado) como SVG inline —

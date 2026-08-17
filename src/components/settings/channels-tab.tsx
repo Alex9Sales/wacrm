@@ -75,6 +75,7 @@ export interface ChannelSummary {
 export const PROVIDER_LABELS: Record<ProviderId, string> = {
   meta: 'Meta (API Oficial)',
   instagram: 'Instagram Direct',
+  messenger: 'Messenger',
   waha: 'WAHA',
   evolution: 'Evolution',
   evogo: 'EvoGo',

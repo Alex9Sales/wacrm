@@ -136,6 +136,28 @@ export async function loadInstagramChannelByIgId(
 }
 
 /**
+ * Resolve um canal Messenger pelo id da Página do Facebook (roteamento do
+ * webhook — `entry[].id`). Casa o índice parcial `channels_page_id`.
+ */
+export async function loadMessengerChannelByPageId(
+  pageId: string,
+): Promise<ChannelCtx | null> {
+  const row = firstOrNull(
+    await db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.provider, 'messenger'),
+          sql`${channels.providerMeta}->>'page_id' = ${pageId}`,
+        ),
+      )
+      .limit(1),
+  );
+  return row ? toCtx(row) : null;
+}
+
+/**
  * Load the account's default channel — for legacy paths that assumed a
  * single WhatsApp config (health checks, "the" account channel). Prefers
  * a connected channel, then a Meta channel, then any. Returns null if the

@@ -420,13 +420,17 @@ export const channels = pgTable("channels", {
 	uniqueIndex("channels_ig_id")
 		.using("btree", sql`((provider_meta->>'ig_id'))`)
 		.where(sql`(provider = 'instagram'::text)`),
+	// Roteamento do webhook do Messenger: acha o canal por provider_meta->>'page_id'.
+	uniqueIndex("channels_page_id")
+		.using("btree", sql`((provider_meta->>'page_id'))`)
+		.where(sql`(provider = 'messenger'::text)`),
 	foreignKey({
 			columns: [table.accountId],
 			foreignColumns: [organization.id],
 			name: "channels_account_id_fkey"
 		}).onDelete("cascade"),
 	unique("channels_account_id_name_key").on(table.accountId, table.name),
-	check("channels_provider_check", sql`provider = ANY (ARRAY['meta'::text, 'waha'::text, 'evolution'::text, 'evogo'::text, 'instagram'::text])`),
+	check("channels_provider_check", sql`provider = ANY (ARRAY['meta'::text, 'waha'::text, 'evolution'::text, 'evogo'::text, 'instagram'::text, 'messenger'::text])`),
 	check("channels_status_check", sql`status = ANY (ARRAY['disconnected'::text, 'qr_pending'::text, 'connected'::text, 'error'::text])`),
 ]);
 

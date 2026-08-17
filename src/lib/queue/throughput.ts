@@ -20,6 +20,7 @@ import type { ProviderId } from '@/lib/channels/provider';
 export const DEFAULT_THROUGHPUT_PER_MIN: Record<ProviderId, number> = {
   meta: 60,
   instagram: 60,
+  messenger: 60,
   waha: 10,
   evolution: 15,
   evogo: 10,

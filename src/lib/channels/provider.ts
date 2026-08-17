@@ -13,7 +13,7 @@
 // ============================================================
 
 /** The set of transports we support. */
-export type ProviderId = 'meta' | 'waha' | 'evolution' | 'evogo' | 'instagram';
+export type ProviderId = 'meta' | 'waha' | 'evolution' | 'evogo' | 'instagram' | 'messenger';
 
 /**
  * What a given provider can and can't do. Drives capability checks
@@ -501,6 +501,19 @@ export const CAPABILITIES: Record<ProviderId, Capabilities> = {
     typing: false,
     qrPairing: false,
     // Mídia inbound chega como URL direta no payload (attachments[].payload.url).
+    inboundMedia: true,
+    needsChatIdResolve: false,
+    needsJitter: false,
+  },
+
+  messenger: {
+    // Facebook Messenger (DM da Página) — mesma Messenger Platform do Instagram.
+    templates: false,
+    session24hWindow: true,
+    interactive: false,
+    reactions: true,
+    typing: false,
+    qrPairing: false,
     inboundMedia: true,
     needsChatIdResolve: false,
     needsJitter: false,
