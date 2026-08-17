@@ -31,7 +31,8 @@ const SCOPES = 'pages_show_list,pages_messaging,pages_manage_metadata'
 // "configuração de login" (config_id) que define os ativos (Páginas) + permissões.
 // Setar MESSENGER_LOGIN_CONFIG_ID no ambiente → usa config_id; senão cai no scope
 // (modo Login clássico).
-const CONFIG_ID = process.env.MESSENGER_LOGIN_CONFIG_ID || ''
+const CONFIG_ID =
+  process.env.MESSENGER_LOGIN_CONFIG_ID || '1090665340093840'
 
 export async function GET() {
   let ctx
