@@ -145,6 +145,37 @@ async function graphPost(
   return data
 }
 
+/**
+ * Responde publicamente um comentário (no próprio comentário). Usa
+ * `instagram_business_manage_comments`. POST {graphBase}/{commentId}/replies.
+ */
+export async function replyToComment(
+  ch: ChannelCtx,
+  commentId: string,
+  message: string,
+): Promise<void> {
+  const url = `${graphBaseOf(ch)}/${commentId}/replies`
+  await graphPost(url, accessTokenOf(ch), { message })
+}
+
+/**
+ * Manda uma resposta PRIVADA (DM) pra quem comentou — o "private reply" do
+ * Instagram: POST {graphBase}/{ig_id}/messages com recipient.comment_id.
+ * Só pode ser enviada uma vez por comentário, dentro de 7 dias. Usa
+ * `instagram_business_manage_messages`.
+ */
+export async function sendCommentPrivateReply(
+  ch: ChannelCtx,
+  commentId: string,
+  message: string,
+): Promise<void> {
+  const url = `${graphBaseOf(ch)}/${igIdOf(ch)}/messages`
+  await graphPost(url, accessTokenOf(ch), {
+    recipient: { comment_id: commentId },
+    message: { text: message },
+  })
+}
+
 export const instagramProvider: WhatsAppProvider = {
   id: 'instagram',
   capabilities: CAPABILITIES.instagram,

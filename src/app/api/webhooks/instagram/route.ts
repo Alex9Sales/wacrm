@@ -21,6 +21,10 @@ import {
   instagramProvider,
   fetchInstagramProfile,
 } from '@/lib/channels/providers/instagram'
+import {
+  hasCommentChanges,
+  processCommentWebhook,
+} from '@/lib/channels/instagram-comments'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
 import { contacts } from '@/db'
 import { and, isNull } from 'drizzle-orm'
@@ -128,6 +132,16 @@ export async function POST(request: Request) {
   }
 
   after(async () => {
+    // Comentários (changes[].field='comments') → automação comentário→DM.
+    // Roda antes/independente dos DMs; erro aqui não afeta o processamento de DM.
+    try {
+      if (hasCommentChanges(body)) {
+        await processCommentWebhook(channel, body)
+      }
+    } catch (err) {
+      console.error('[webhooks/instagram] comment process error:', err)
+    }
+
     try {
       const parsed = instagramProvider.parseWebhook(body)
       for (const ev of parsed.messages) {

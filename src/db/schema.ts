@@ -2154,3 +2154,55 @@ export const calendarConnections = pgTable("calendar_connections", {
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "calendar_connections_account_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.userId], foreignColumns: [user.id], name: "calendar_connections_user_id_fkey" }).onDelete("cascade"),
 ]);
+
+// ============================================================
+// Automação comentário→DM do Instagram (migração 0096).
+// Regras por canal + log/dedup dos comentários processados.
+// ============================================================
+
+export const instagramCommentAutomations = pgTable("instagram_comment_automations", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	channelId: uuid("channel_id").notNull(),
+	name: text().notNull(),
+	enabled: boolean().default(true).notNull(),
+	// responde QUALQUER comentário (ignora keywords).
+	matchAny: boolean("match_any").default(false).notNull(),
+	// keywords separadas por vírgula (casa se o comentário CONTÉM qualquer uma).
+	keywords: text().default('').notNull(),
+	// resposta pública no próprio comentário (opcional).
+	publicReply: text("public_reply"),
+	// DM/resposta privada mandada a quem comentou.
+	dmMessage: text("dm_message").notNull(),
+	// não mandar o mesmo DM 2x pra mesma pessoa nessa regra.
+	oncePerUser: boolean("once_per_user").default(true).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_ig_comment_automations_channel").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.channelId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "instagram_comment_automations_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.channelId], foreignColumns: [channels.id], name: "instagram_comment_automations_channel_id_fkey" }).onDelete("cascade"),
+]);
+
+export const instagramCommentEvents = pgTable("instagram_comment_events", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	channelId: uuid("channel_id").notNull(),
+	commentId: text("comment_id").notNull(),
+	commenterIgsid: text("commenter_igsid"),
+	commenterUsername: text("commenter_username"),
+	mediaId: text("media_id"),
+	commentText: text("comment_text"),
+	automationId: uuid("automation_id"),
+	matched: boolean().default(false).notNull(),
+	publicReplied: boolean("public_replied").default(false).notNull(),
+	dmSent: boolean("dm_sent").default(false).notNull(),
+	error: text(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("uniq_ig_comment_event").using("btree", table.channelId.asc().nullsLast().op("uuid_ops"), table.commentId.asc().nullsLast()),
+	index("idx_ig_comment_events_user").using("btree", table.automationId.asc().nullsLast().op("uuid_ops"), table.commenterIgsid.asc().nullsLast()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "instagram_comment_events_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.channelId], foreignColumns: [channels.id], name: "instagram_comment_events_channel_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.automationId], foreignColumns: [instagramCommentAutomations.id], name: "instagram_comment_events_automation_id_fkey" }).onDelete("set null"),
+]);

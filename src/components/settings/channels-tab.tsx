@@ -25,6 +25,7 @@ import {
   ArrowLeft,
   MapPin,
   Users,
+  MessageCircle,
 } from 'lucide-react';
 
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider';
@@ -47,6 +48,7 @@ import { ChannelQrModal } from './channel-qr-modal';
 import { ChannelLocationDialog } from './channel-location-dialog';
 import { ChannelPixDialog } from './channel-pix-dialog';
 import { ChannelGroupsDialog } from './channel-groups-dialog';
+import { ChannelCommentAutomationDialog } from './channel-comment-automation-dialog';
 
 // ------------------------------------------------------------
 // Shared types + labels (mirrored by the child dialogs).
@@ -135,6 +137,8 @@ export function ChannelsTab() {
   const [pixing, setPixing] = useState<ChannelSummary | null>(null);
   // The channel whose monitored groups are being picked.
   const [grouping, setGrouping] = useState<ChannelSummary | null>(null);
+  // O canal Instagram cuja automação de comentários está sendo editada.
+  const [commenting, setCommenting] = useState<ChannelSummary | null>(null);
   // The channel pending delete-confirmation.
   const [deleting, setDeleting] = useState<ChannelSummary | null>(null);
   const [deleteBusy, setDeleteBusy] = useState(false);
@@ -299,6 +303,7 @@ export function ChannelsTab() {
               onLocation={() => setLocating(ch)}
               onPix={() => setPixing(ch)}
               onGroups={() => setGrouping(ch)}
+              onComments={() => setCommenting(ch)}
               onDelete={() => setDeleting(ch)}
             />
           ))}
@@ -355,6 +360,14 @@ export function ChannelsTab() {
         <ChannelGroupsDialog
           channel={grouping}
           onClose={() => setGrouping(null)}
+        />
+      )}
+
+      {/* Automação comentário→DM (só Instagram). */}
+      {commenting && (
+        <ChannelCommentAutomationDialog
+          channel={commenting}
+          onClose={() => setCommenting(null)}
         />
       )}
 
@@ -489,6 +502,7 @@ function ChannelRow({
   onLocation,
   onPix,
   onGroups,
+  onComments,
   onDelete,
 }: {
   channel: ChannelSummary;
@@ -497,9 +511,11 @@ function ChannelRow({
   onLocation: () => void;
   onPix: () => void;
   onGroups: () => void;
+  onComments: () => void;
   onDelete: () => void;
 }) {
   const isMeta = channel.provider === 'meta';
+  const isInstagram = channel.provider === 'instagram';
   const canPair = CAPABILITIES[channel.provider]?.qrPairing ?? false;
   const pairLabel =
     channel.status === 'connected' ? 'Reparear' : 'Parear';
@@ -597,6 +613,19 @@ function ChannelRow({
             >
               <Users className="size-3.5" />
               Grupos
+            </Button>
+          )}
+
+          {isInstagram && (
+            <Button
+              variant="ghost"
+              size="sm"
+              title="Automação de comentários (comentário → DM)"
+              onClick={onComments}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <MessageCircle className="size-3.5" />
+              Comentários
             </Button>
           )}
 
