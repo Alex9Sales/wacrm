@@ -27,6 +27,11 @@ const APP_URL = process.env.APP_URL || 'https://crm.salestecnologia.com.br'
 // webhook da Página (subscribed_apps). No app em dev/standard, o admin/tester
 // concede mesmo sem App Review; clientes de verdade exigem App Review.
 const SCOPES = 'pages_show_list,pages_messaging,pages_manage_metadata'
+// App no modo "Login do Facebook para empresas": ele IGNORA `scope` e exige uma
+// "configuração de login" (config_id) que define os ativos (Páginas) + permissões.
+// Setar MESSENGER_LOGIN_CONFIG_ID no ambiente → usa config_id; senão cai no scope
+// (modo Login clássico).
+const CONFIG_ID = process.env.MESSENGER_LOGIN_CONFIG_ID || ''
 
 export async function GET() {
   let ctx
@@ -39,11 +44,13 @@ export async function GET() {
   const state = encrypt(
     JSON.stringify({ a: ctx.accountId, u: ctx.userId, t: Date.now() }),
   )
-  const url =
+  const base =
     'https://www.facebook.com/v21.0/dialog/oauth?response_type=code' +
     `&client_id=${FB_APP_ID}` +
     `&redirect_uri=${encodeURIComponent(REDIRECT)}` +
-    `&scope=${encodeURIComponent(SCOPES)}` +
     `&state=${encodeURIComponent(state)}`
+  const url = CONFIG_ID
+    ? `${base}&config_id=${CONFIG_ID}`
+    : `${base}&scope=${encodeURIComponent(SCOPES)}`
   return NextResponse.redirect(url)
 }
