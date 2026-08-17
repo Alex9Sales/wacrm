@@ -26,8 +26,8 @@ const TRIAL_HREF = '/comecar'
 const FEATURES = [
   {
     icon: MessageSquare,
-    title: 'Atendimento no WhatsApp',
-    desc: 'Caixa de entrada compartilhada: toda a equipe responde os clientes num só lugar, em vários números.',
+    title: 'Atendimento multicanal',
+    desc: 'WhatsApp, Instagram Direct e Messenger numa caixa de entrada só: toda a equipe responde os clientes num lugar, em vários números.',
   },
   {
     icon: Bot,
@@ -142,9 +142,12 @@ export default async function RootPage() {
         </h1>
         <p className="mx-auto mt-5 max-w-2xl text-lg text-muted-foreground">
           O <strong className="text-foreground">FluxiaCRM</strong> junta{' '}
-          <strong className="text-foreground">atendimento, funil de vendas e agentes de IA</strong>{' '}
-          num só lugar. Sua equipe atende em vários números, a IA responde e
-          qualifica sozinha, e nada se perde no meio do caminho.
+          <strong className="text-foreground">
+            WhatsApp, Instagram e Messenger, funil de vendas e agentes de IA
+          </strong>{' '}
+          num só lugar. Sua equipe atende todos os canais numa caixa de entrada
+          só, a IA responde e qualifica sozinha, e nada se perde no meio do
+          caminho.
         </p>
         <div className="mt-8 flex flex-col items-center justify-center gap-3 sm:flex-row">
           <a
@@ -183,6 +186,63 @@ export default async function RootPage() {
               <p className="mt-1 text-sm text-muted-foreground">{f.desc}</p>
             </div>
           ))}
+        </div>
+      </section>
+
+      {/* Diferencial — o que nos separa dos concorrentes (tudo verdade hoje) */}
+      <section className="mx-auto max-w-6xl px-6 py-14">
+        <div className="rounded-2xl bg-card p-8 ring-1 ring-foreground/10 sm:p-12">
+          <h2 className="text-center font-heading text-2xl font-semibold sm:text-3xl">
+            Não é &ldquo;só mais um chatbot de WhatsApp&rdquo;
+          </h2>
+          <p className="mx-auto mt-3 max-w-2xl text-center text-muted-foreground">
+            É o único CRM que junta{' '}
+            <strong className="text-foreground">todos os seus canais</strong> e
+            uma IA que realmente{' '}
+            <strong className="text-foreground">atende, qualifica e vende</strong>
+            .
+          </p>
+          <div className="mt-10 grid grid-cols-1 gap-6 md:grid-cols-3">
+            <div>
+              <span className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <MessageSquare className="h-5 w-5" />
+              </span>
+              <h3 className="font-heading text-base font-medium">
+                Todos os canais num inbox só
+              </h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                WhatsApp, Instagram Direct e Messenger na mesma caixa de entrada.
+                Sua equipe responde tudo num lugar, sem ficar trocando de aba nem
+                de aparelho.
+              </p>
+            </div>
+            <div>
+              <span className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Bot className="h-5 w-5" />
+              </span>
+              <h3 className="font-heading text-base font-medium">
+                IA que atende de verdade
+              </h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                Com a sua chave e o seu tom. Responde com a sua base de
+                conhecimento, qualifica o lead, reengaja quem some e sugere o
+                próximo passo no funil — não é só um bot de agendamento.
+              </p>
+            </div>
+            <div>
+              <span className="mb-3 flex h-10 w-10 items-center justify-center rounded-lg bg-primary/10 text-primary">
+                <Sparkles className="h-5 w-5" />
+              </span>
+              <h3 className="font-heading text-base font-medium">
+                Comece sem travas
+              </h3>
+              <p className="mt-1 text-sm text-muted-foreground">
+                7 dias grátis, sem cartão e sem taxa de implantação. Você
+                configura em minutos e cancela quando quiser — sem contrato preso
+                por meses.
+              </p>
+            </div>
+          </div>
         </div>
       </section>
 
