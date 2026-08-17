@@ -14,6 +14,7 @@ import { db, leadAdSources, pipelines } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { encrypt } from '@/lib/whatsapp/encryption'
+import { buildTikTokAuthUrl } from '@/lib/leads/providers/tiktok-oauth'
 
 export type LeadProvider = 'tiktok' | 'meta'
 
@@ -90,6 +91,14 @@ export async function listLeadSources(): Promise<LeadSourceRow[]> {
     .where(eq(leadAdSources.accountId, ctx.accountId))
     .orderBy(desc(leadAdSources.createdAt))
   return rows.map((r) => toRow(r as Record<string, unknown>))
+}
+
+/** Inicia o OAuth 1-clique do TikTok — devolve a URL de autorização.
+ *  Lança uma mensagem amigável se o app do TikTok ainda não estiver
+ *  configurado (em análise). */
+export async function getTikTokConnectUrl(): Promise<string> {
+  const ctx = await requireRole('admin')
+  return buildTikTokAuthUrl(ctx.accountId)
 }
 
 /** Funis da conta p/ o seletor de destino. */

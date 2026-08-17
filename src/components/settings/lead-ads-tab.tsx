@@ -37,6 +37,7 @@ import {
   updateLeadSource,
   toggleLeadSource,
   deleteLeadSource,
+  getTikTokConnectUrl,
   type LeadProvider,
   type LeadSourceRow,
 } from '@/components/settings/lead-ads-actions';
@@ -87,8 +88,28 @@ export function LeadAdsTab() {
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
-    if (typeof window !== 'undefined') setOrigin(window.location.origin);
+    if (typeof window === 'undefined') return;
+    setOrigin(window.location.origin);
+    // Retorno do OAuth do TikTok (?tiktok=connected|error).
+    const params = new URLSearchParams(window.location.search);
+    const tk = params.get('tiktok');
+    if (tk === 'connected') toast.success('TikTok conectado! Suas contas de anúncios entraram como fontes.');
+    else if (tk === 'error') toast.error('Não foi possível conectar o TikTok. Tente de novo ou use a conexão manual.');
+    if (tk) {
+      params.delete('tiktok');
+      const qs = params.toString();
+      window.history.replaceState(null, '', `/settings?${qs}`);
+    }
   }, []);
+
+  const connectTikTok = async () => {
+    try {
+      const url = await getTikTokConnectUrl();
+      window.location.href = url;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao iniciar a conexão.');
+    }
+  };
 
   const reload = useCallback(async () => {
     setLoading(true);
@@ -210,9 +231,14 @@ export function LeadAdsTab() {
           </p>
         </div>
         {isAdmin && (
-          <Button onClick={openNew} className="shrink-0">
-            <Plus className="h-4 w-4" /> Adicionar fonte
-          </Button>
+          <div className="flex shrink-0 items-center gap-2">
+            <Button variant="outline" onClick={connectTikTok}>
+              Conectar TikTok
+            </Button>
+            <Button onClick={openNew}>
+              <Plus className="h-4 w-4" /> Adicionar fonte
+            </Button>
+          </div>
         )}
       </div>
 

@@ -140,12 +140,13 @@ export async function resolveTikTokLead(
       (typeof source.providerMeta.apiBase === 'string' &&
         source.providerMeta.apiBase) ||
       DEFAULT_BASE
-    // Endpoint de Lead Generation (piloto). Sobrescrevível por
-    // provider_meta.leadEndpoint quando a versão exigir outro caminho.
+    // Endpoint de Lead Generation. Confirmado nos escopos do app (Lead
+    // Management → /lead/get/). Sobrescrevível por provider_meta.leadEndpoint
+    // se a versão exigir outro caminho (ex.: /page/lead/task/download/).
     const path =
       (typeof source.providerMeta.leadEndpoint === 'string' &&
         source.providerMeta.leadEndpoint) ||
-      '/open_api/v1.3/pages/lead/get/'
+      '/open_api/v1.3/lead/get/'
     const url = `${base}${path}?advertiser_id=${encodeURIComponent(
       ev.advertiserId,
     )}&lead_id=${encodeURIComponent(ev.leadId)}`
