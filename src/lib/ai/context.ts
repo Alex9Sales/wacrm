@@ -37,6 +37,16 @@ function stampFor(createdAt: unknown, timezone: string): string {
 }
 
 /**
+ * Remove um carimbo "[DD/MM HH:mm]" que o modelo às vezes COPIA do histórico
+ * pro início da própria resposta — o carimbo é metadata só pra ele raciocinar,
+ * e vazava feio pro cliente ("[16/08 11:00] Sim, é bem prático…"). Tira só do
+ * início (não mexe em datas legítimas no meio do texto). Idempotente.
+ */
+export function stripLeadingTimestamp(text: string): string {
+  return text.replace(/^\s*\[\d{1,2}\/\d{1,2}\s+\d{1,2}:\d{2}\]\s*/, '')
+}
+
+/**
  * Fetch the last N text/audio/image messages of a conversation and map them to
  * the provider-neutral chat shape. Customer messages become `user`; agent and
  * bot messages become `assistant`.

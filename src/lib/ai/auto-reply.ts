@@ -5,7 +5,7 @@ import { loadAiConfigForChannel } from './config'
 import { hasActiveAutoReplyAgent } from './agents'
 import { aiHoursAllows } from './hours-gate'
 import { getAccountSettings } from '@/lib/settings/account-settings'
-import { buildConversationContext } from './context'
+import { buildConversationContext, stripLeadingTimestamp } from './context'
 import { retrieveKnowledge } from './knowledge'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
@@ -386,7 +386,7 @@ export async function dispatchInboundToAiReply(
     // tem msgs da IA já prefixadas), o que fazia o nome sair DOBRADO ou numa
     // bolha separada. Remove uma assinatura logo no início (com ou sem ":") e
     // a gente reaplica limpa junto da 1ª mensagem.
-    const body = signature
+    const bodyNoSig = signature
       ? text.replace(
           new RegExp(
             `^\\s*\\*${signature.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:?\\*\\s*\\n?`,
@@ -395,6 +395,9 @@ export async function dispatchInboundToAiReply(
           '',
         )
       : text
+    // O modelo às vezes copia o carimbo "[DD/MM HH:mm]" do histórico pro começo
+    // da resposta (era só metadata pra ele). Remove pra não vazar pro cliente.
+    const body = stripLeadingTimestamp(bodyNoSig)
     let signed = false
 
     const parts = splitIntoMessages(body)
@@ -426,7 +429,9 @@ export async function dispatchInboundToAiReply(
       }
 
       const wantsAudio = rawPart.trimStart().startsWith(AUDIO_MARKER)
-      const clean = rawPart.replace(AUDIO_MARKER, '').trim()
+      const clean = stripLeadingTimestamp(
+        rawPart.replace(AUDIO_MARKER, ''),
+      ).trim()
       if (!clean) continue
 
       try {

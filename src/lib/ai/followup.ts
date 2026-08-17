@@ -5,7 +5,7 @@ import { firstOrNull } from '@/db/helpers'
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { loadAiConfigById } from './config'
-import { buildConversationContext } from './context'
+import { buildConversationContext, stripLeadingTimestamp } from './context'
 import { generateReply } from './generate'
 import { closeInstruction, currentDateTimeLabel, parseCloseDirectives } from './defaults'
 import { applyCloseActions, loadDealCloseContext } from './close-actions'
@@ -580,7 +580,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         const r = await generateReply({ config, systemPrompt, messages })
         const raw = (r.text || '').trim()
         closeDirs = resolveOn || moveOn ? parseCloseDirectives(raw) : null
-        text = (closeDirs ? closeDirs.text : raw).trim()
+        text = stripLeadingTimestamp(closeDirs ? closeDirs.text : raw).trim()
       } catch (err) {
         console.error('[followup] geração falhou:', err)
         continue // não avança o degrau — tenta no próximo tick
@@ -915,7 +915,7 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
           tz,
         )
         const r = await generateReply({ config, systemPrompt, messages })
-        text = (r.text || '').trim()
+        text = stripLeadingTimestamp(r.text || '').trim()
       } catch (err) {
         console.error('[stage-followup] geração falhou:', err)
         continue // não marca — tenta no próximo tick
@@ -1319,7 +1319,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
           catalog,
         )
         const gen = await generateReply({ config, systemPrompt, messages })
-        text = (gen.text || '').trim()
+        text = stripLeadingTimestamp(gen.text || '').trim()
       } catch (err) {
         console.error('[meeting-reminder] geração falhou:', err)
         continue // não marca — tenta no próximo tick
