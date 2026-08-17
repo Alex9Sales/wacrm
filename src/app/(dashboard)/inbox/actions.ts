@@ -518,15 +518,18 @@ export async function listConversations(): Promise<Conversation[]> {
   // who's handling what) but may not READ them. Blank the preview and flag
   // read_blocked for those rows so no message content leaks in the list.
   const isAgentTier = !hasMinRole(ctx.role, 'supervisor')
-  const adminIds = isAgentTier
-    ? new Set(await getAdminUserIds(ctx.accountId))
-    : new Set<string>()
-  const sectorIds = isAgentTier
-    ? new Set(await getUserSectorIds(ctx.userId))
-    : new Set<string>()
-  const participantIds = isAgentTier
-    ? new Set(await getParticipantConversationIds(ctx.userId))
-    : new Set<string>()
+  // As três listas de visibilidade são independentes — busca em paralelo (antes
+  // era 1 round-trip atrás do outro) e só pra o tier de agente.
+  const [adminIdsArr, sectorIdsArr, participantIdsArr] = isAgentTier
+    ? await Promise.all([
+        getAdminUserIds(ctx.accountId),
+        getUserSectorIds(ctx.userId),
+        getParticipantConversationIds(ctx.userId),
+      ])
+    : [[] as string[], [] as string[], [] as string[]]
+  const adminIds = new Set(adminIdsArr)
+  const sectorIds = new Set(sectorIdsArr)
+  const participantIds = new Set(participantIdsArr)
 
   return rows.map((row) => {
     const { contact, channel, sector, ...conv } = row

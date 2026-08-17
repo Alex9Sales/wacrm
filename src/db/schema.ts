@@ -481,6 +481,8 @@ export const conversations = pgTable("conversations", {
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_conversations_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	// Perf (migr 0097): inbox lista por account_id ordenando por last_message_at DESC.
+	index("idx_conversations_account_last_msg").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.lastMessageAt.desc().nullsLast()),
 	index("idx_conversations_contact_id").using("btree", table.contactId.asc().nullsLast().op("uuid_ops")),
 	index("idx_conversations_user_id").using("btree", table.userId.asc().nullsLast().op("uuid_ops")),
 	index("idx_conversations_channel").using("btree", table.channelId.asc().nullsLast().op("uuid_ops")).where(sql`(channel_id IS NOT NULL)`),
@@ -567,6 +569,8 @@ export const messages = pgTable("messages", {
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_messages_conversation").using("btree", table.conversationId.asc().nullsLast().op("uuid_ops")),
+	// Perf (migr 0097): abrir conversa busca por conversation_id ordenando por created_at DESC (+ id p/ cursor).
+	index("idx_messages_conversation_created").using("btree", table.conversationId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsLast(), table.id.desc().nullsLast()),
 	index("idx_messages_message_id").using("btree", table.messageId.asc().nullsLast().op("text_ops")),
 	index("idx_messages_reply_to").using("btree", table.replyToMessageId.asc().nullsLast().op("uuid_ops")).where(sql`(reply_to_message_id IS NOT NULL)`),
 	foreignKey({
