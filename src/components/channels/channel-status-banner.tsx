@@ -23,6 +23,7 @@ import { useCan } from '@/hooks/use-can';
 import { Button } from '@/components/ui/button';
 import { ChannelQrModal } from '@/components/settings/channel-qr-modal';
 import type { ChannelSummary } from '@/components/settings/channels-tab';
+import { CAPABILITIES } from '@/lib/channels/provider';
 
 /** A channel whose session isn't `connected` won't send/receive. */
 function isDown(status: string): boolean {
@@ -52,7 +53,15 @@ export function ChannelStatusBanner() {
       const res = await fetch('/api/channels/status', { cache: 'no-store' });
       if (!res.ok) return;
       const data = (await res.json()) as { channels: ChannelSummary[] };
-      setDown(data.channels.filter((c) => isDown(c.status)));
+      // Só canais de PAREAMENTO POR QR (WAHA/Evolution/EvoGo) têm "sessão que
+      // cai" e reconexão por QR. Providers de token (meta/instagram/messenger)
+      // não pareiam por QR — nunca mostram este banner (senão o "Reconectar"
+      // abre o modal de QR e estoura "does not support QR pairing").
+      setDown(
+        data.channels.filter(
+          (c) => isDown(c.status) && CAPABILITIES[c.provider]?.qrPairing,
+        ),
+      );
     } catch {
       // Best-effort — a failed poll just leaves the last known state.
     }

@@ -196,6 +196,8 @@ function buildCreateInput(
       return {
         provider,
         name,
+        // Token-based: já vem conectado (não pareia por QR).
+        status: 'connected',
         credentials: { accessToken: access_token, verifyToken: verify_token },
         providerMeta: graph_base
           ? { ig_id, graphBase: graph_base }
@@ -221,6 +223,8 @@ function buildCreateInput(
       return {
         provider,
         name,
+        // Token-based: já vem conectado (não pareia por QR).
+        status: 'connected',
         credentials: { accessToken: access_token, verifyToken: verify_token },
         providerMeta: graph_base
           ? { page_id, graphBase: graph_base }
