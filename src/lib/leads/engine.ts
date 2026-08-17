@@ -6,8 +6,12 @@
 
 import { resolveAuditUserId } from '@/lib/api/v1/contacts'
 import { ingestLead, type IngestLeadResult } from '@/lib/leads/ingest'
-import type { LoadedLeadSource } from '@/lib/leads/sources'
+import {
+  loadLeadSourceForWebhook,
+  type LoadedLeadSource,
+} from '@/lib/leads/sources'
 import { type FetchedLead, buildLeadNotes } from '@/lib/leads/providers/shared'
+import { parseMetaLeadEvents, fetchMetaLead } from '@/lib/leads/providers/meta'
 
 const PROVIDER_LABEL: Record<LoadedLeadSource['provider'], string> = {
   tiktok: 'TikTok',
@@ -66,4 +70,27 @@ export async function ingestFetchedLead(
         ? source.providerMeta.introChannelId
         : null,
   })
+}
+
+/**
+ * Processa TODOS os eventos de leadgen do Meta num corpo de webhook: roteia por
+ * page_id + form_id, busca o field_data com o token da fonte e ingere. Usado
+ * pela rota dedicada `/api/webhooks/lead-ads/meta` E delegado pelo webhook do
+ * Messenger (mesma app do Meta → callback único da Página). Best-effort.
+ */
+export async function processMetaLeadWebhook(body: unknown): Promise<void> {
+  for (const ev of parseMetaLeadEvents(body)) {
+    try {
+      const source = await loadLeadSourceForWebhook('meta', ev.pageId, ev.formId)
+      if (!source) {
+        console.warn('[lead-ads/meta] no source for page', ev.pageId)
+        continue
+      }
+      const lead = await fetchMetaLead(source, ev.leadgenId)
+      if (!lead) continue
+      await ingestFetchedLead(source, lead)
+    } catch (err) {
+      console.error('[lead-ads/meta] process error:', err)
+    }
+  }
 }

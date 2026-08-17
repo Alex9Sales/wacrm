@@ -16,10 +16,9 @@ import { NextResponse, after } from 'next/server'
 import {
   parseMetaLeadEvents,
   verifyMetaLeadSignature,
-  fetchMetaLead,
 } from '@/lib/leads/providers/meta'
 import { loadLeadSourceForWebhook, metaVerifyTokenMatches } from '@/lib/leads/sources'
-import { ingestFetchedLead } from '@/lib/leads/engine'
+import { processMetaLeadWebhook } from '@/lib/leads/engine'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -75,22 +74,7 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
   }
 
-  after(async () => {
-    for (const ev of events) {
-      try {
-        const source = await loadLeadSourceForWebhook('meta', ev.pageId, ev.formId)
-        if (!source) {
-          console.warn('[lead-ads/meta] no source for page', ev.pageId)
-          continue
-        }
-        const lead = await fetchMetaLead(source, ev.leadgenId)
-        if (!lead) continue
-        await ingestFetchedLead(source, lead)
-      } catch (err) {
-        console.error('[lead-ads/meta] process error:', err)
-      }
-    }
-  })
+  after(() => processMetaLeadWebhook(body))
 
   return NextResponse.json({ status: 'received' }, { status: 200 })
 }

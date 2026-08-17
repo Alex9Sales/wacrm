@@ -19,16 +19,20 @@ export function str(v: unknown): string {
   return typeof v === 'string' ? v : typeof v === 'number' ? String(v) : ''
 }
 
-/** Acha o 1º campo cujo nome bate exatamente numa das chaves; senão, o 1º que
- *  CONTENHA a chave (cobre perguntas custom tipo "seu_telefone_whatsapp"). */
+/** Acha o 1º campo cujo nome bate exatamente numa das chaves; com `fuzzy`
+ *  (padrão), cai pro 1º que CONTENHA a chave (cobre perguntas custom tipo
+ *  "seu_telefone_whatsapp"). Desligue o fuzzy p/ nome — senão `name` casa
+ *  `first_name`/`last_name` e engole o sobrenome. */
 export function pickField(
   map: Record<string, string>,
   keys: string[],
+  fuzzy = true,
 ): string | null {
   for (const k of keys) {
     const v = map[k]
     if (v && v.trim()) return v.trim()
   }
+  if (!fuzzy) return null
   for (const k of keys) {
     const hit = Object.keys(map).find((name) => name.includes(k))
     if (hit && map[hit]?.trim()) return map[hit].trim()
@@ -53,10 +57,12 @@ export function mapContactFields(fields: Record<string, string>): {
 } {
   return {
     name:
-      pickField(fields, ['full_name', 'name', 'nome']) ??
+      // nome: exato só (sem fuzzy) → senão junta first+last (exato) — pra
+      // "name" não engolir "first_name" e perder o sobrenome.
+      pickField(fields, ['full_name', 'name', 'nome'], false) ??
       joinName(
-        pickField(fields, ['first_name', 'primeiro_nome']),
-        pickField(fields, ['last_name', 'sobrenome']),
+        pickField(fields, ['first_name', 'primeiro_nome'], false),
+        pickField(fields, ['last_name', 'sobrenome'], false),
       ),
     phone: pickField(fields, [
       'phone_number',

@@ -21,6 +21,8 @@ import {
   fetchMessengerProfile,
 } from '@/lib/channels/providers/messenger'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
+import { hasMetaLeadEvents } from '@/lib/leads/providers/meta'
+import { processMetaLeadWebhook } from '@/lib/leads/engine'
 import { contacts } from '@/db'
 import { and, isNull } from 'drizzle-orm'
 
@@ -112,6 +114,13 @@ export async function POST(request: Request) {
   if (!verified) {
     console.warn('[webhooks/messenger] rejected request with invalid signature')
     return NextResponse.json({ error: 'Invalid signature' }, { status: 401 })
+  }
+
+  // Meta Lead Ads na MESMA app da Página: o callback da Página é único, então
+  // o evento de leadgen chega aqui junto das mensagens. Delega pro motor de
+  // leads (roteia por page_id), independente de existir canal Messenger.
+  if (hasMetaLeadEvents(body)) {
+    after(() => processMetaLeadWebhook(body))
   }
 
   if (!channel) {
