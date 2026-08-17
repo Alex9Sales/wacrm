@@ -87,7 +87,7 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
     // Belt-and-suspenders for the stale bundle: if a click fires a Server
     // Action whose id changed across a deploy, Next throws "Failed to find
     // Server Action … older or newer deployment" and the page looks frozen.
-    // The version poll only catches this on its 60s tick / on return-from-away;
+    // The version poll only catches this on its 20s tick / on return-from-away;
     // a tab that stayed VISIBLE and gets clicked FIRST would still freeze. So
     // we also catch that exact error globally and reload immediately — time-
     // guarded (60s) so a non-bundle cause can never loop us.
@@ -113,7 +113,9 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
     window.addEventListener("unhandledrejection", onRejection);
 
     void check();
-    const id = window.setInterval(() => void check(), 60_000);
+    // Poll agressivo (20s): detecta o deploy novo rápido e auto-recarrega a aba
+    // ociosa antes de o usuário clicar numa ação de bundle velho.
+    const id = window.setInterval(() => void check(), 20_000);
     const onVisibility = () => {
       if (document.hidden) {
         hiddenSinceRef.current = Date.now();
