@@ -8,35 +8,22 @@
 //   4. apply useful tags (campaign / utm / interest);
 //   5. optionally fire an intro WhatsApp on a channel + an internal-chat alert.
 //
-// Native on purpose — no external Cloudflare Worker / n8n to host or hand the
-// API token to. Reuses the SAME internals as the rest of the app (phone
-// normalization, contact dedupe advisory-lock, deal/stage resolution), so a
-// form lead behaves exactly like one typed in by hand.
+// The heavy lifting lives in `ingestLead` (src/lib/leads/ingest.ts) — the SAME
+// core the TikTok/Meta Lead Ads webhooks use — so a form lead, an ad lead and a
+// hand-typed lead all behave identically. This route just owns the HTTP shell:
+// Bearer auth, CORS, and turning the rich campaign fields into notes + tags.
 //
 // Auth: `Authorization: Bearer <api_key>` with scope `contacts:write`. Mint a
 // key with ONLY that scope for public forms — even if it leaks in page source
 // the blast radius is "can create leads", nothing readable/destructive.
 //
-// Steps 2–5 are BEST-EFFORT: a failure there never loses the contact and never
-// fails the whole request — the response reports what landed.
-//
 // CORS is open (*) so a browser form can POST directly.
 // ============================================================
 
-import { db, deals, tasks } from '@/db';
-import { firstOrNull } from '@/db/helpers';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { toApiErrorResponse } from '@/lib/api/v1/respond';
-import { normalizeInboundPhoneBR } from '@/lib/whatsapp/phone-utils';
-import {
-  findOrCreateContact,
-  setContactTags,
-  loadTagsByContact,
-  resolveAuditUserId,
-} from '@/lib/api/v1/contacts';
-import { firstPipelineOf, firstStageOf } from '@/lib/api/v1/deals';
-import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation';
-import { sendMessageToConversation } from '@/lib/whatsapp/send-message';
+import { resolveAuditUserId } from '@/lib/api/v1/contacts';
+import { ingestLead, LeadPhoneError } from '@/lib/leads/ingest';
 
 const CORS_HEADERS: Record<string, string> = {
   'Access-Control-Allow-Origin': '*',
@@ -127,8 +114,6 @@ export async function POST(request: Request): Promise<Response> {
       return json({ ok: false, error: 'bad_request', message: 'JSON body required' }, 400);
     }
 
-    // 1) Contact — phone is the primary key. Normalize (fixes the BR
-    //    "0 + operadora + DDD" form) before find-or-create validates E.164.
     const rawPhone = pick(body, ['telefone', 'phone', 'whatsapp', 'celular']);
     if (!rawPhone) {
       return json(
@@ -136,147 +121,51 @@ export async function POST(request: Request): Promise<Response> {
         400,
       );
     }
-    const phone = normalizeInboundPhoneBR(rawPhone);
-    const name = pick(body, ['nome', 'name', 'full_name']);
-    const email = pick(body, ['email', 'e-mail']);
-    const company = pick(body, ['empresa', 'company']);
 
     const auditUserId = await resolveAuditUserId(ctx.accountId);
 
-    let contactId: string;
-    let contactCreated: boolean;
-    try {
-      const c = await findOrCreateContact(ctx.accountId, auditUserId, {
-        phone,
-        name,
-        email,
-        company,
-      });
-      contactId = c.id;
-      contactCreated = c.created;
-    } catch {
-      return json(
-        {
-          ok: false,
-          error: 'invalid_phone',
-          message: 'Telefone inválido — não foi possível criar o contato',
-        },
-        400,
-      );
-    }
-
-    const notes = buildNotes(body);
-    const displayName = name || phone;
-
-    // 2) Deal / Kanban card (best-effort).
-    let dealId: string | null = null;
-    try {
-      const pipelineId =
-        (typeof body.pipeline_id === 'string' && body.pipeline_id) ||
-        (await firstPipelineOf(ctx.accountId));
-      const stageId = pipelineId
-        ? (typeof body.stage_id === 'string' && body.stage_id) ||
-          (await firstStageOf(pipelineId))
-        : null;
-      if (pipelineId && stageId) {
-        const inserted = firstOrNull(
-          await db
-            .insert(deals)
-            .values({
-              userId: auditUserId,
-              accountId: ctx.accountId,
-              pipelineId,
-              stageId,
-              contactId,
-              title: `Lead — ${displayName}`,
-              value: '0',
-              notes: notes || 'Lead de formulário.',
-            })
-            .returning({ id: deals.id }),
-        );
-        dealId = inserted?.id ?? null;
-      }
-    } catch (err) {
-      console.error('[api/v1/leads] deal create failed:', err);
-    }
-
-    // 3) Follow-up task (best-effort).
-    let taskId: string | null = null;
-    try {
-      const inserted = firstOrNull(
-        await db
-          .insert(tasks)
-          .values({
-            accountId: ctx.accountId,
-            title: `Falar com ${displayName} — lead de formulário`,
-            description: notes || null,
-            type: 'follow_up',
-            status: 'open',
-            contactId,
-            dealId,
-          })
-          .returning({ id: tasks.id }),
-      );
-      taskId = inserted?.id ?? null;
-    } catch (err) {
-      console.error('[api/v1/leads] task create failed:', err);
-    }
-
-    // 4) Tags (best-effort) — union with any existing so we never wipe them.
-    let tagsApplied: string[] = [];
-    try {
-      const wanted = detectTags(body);
-      const current = contactCreated
-        ? []
-        : ((await loadTagsByContact([contactId])).get(contactId) ?? []).map(
-            (t) => t.name,
-          );
-      const union = [...new Set([...current, ...wanted])];
-      await setContactTags(ctx.accountId, auditUserId, contactId, union);
-      tagsApplied = wanted;
-    } catch (err) {
-      console.error('[api/v1/leads] tag apply failed:', err);
-    }
-
-    // 5) Optional intro WhatsApp (best-effort). Only when the form opts in and
-    //    a channel is given/available; failure never rolls back the lead.
-    let whatsappSent = false;
+    // Optional intro WhatsApp: only when the form opts in and gives the text.
     const wantsWhatsapp =
       body.send_whatsapp === true || body.send_whatsapp === 'true';
-    const introText = pick(body, ['whatsapp_text', 'intro_text']);
-    if (wantsWhatsapp && introText) {
-      try {
-        const channelId =
-          typeof body.channel_id === 'string' ? body.channel_id : null;
-        const resolved = await resolveConversationByPhone(
-          ctx.accountId,
-          phone,
-          name ?? null,
-          channelId,
-        );
-        await sendMessageToConversation(ctx.accountId, {
-          conversationId: resolved.conversationId,
-          messageType: 'text',
-          contentText: introText,
-        });
-        whatsappSent = true;
-      } catch (err) {
-        console.error('[api/v1/leads] intro whatsapp failed:', err);
-      }
-    }
+    const introText = wantsWhatsapp
+      ? pick(body, ['whatsapp_text', 'intro_text']) ?? null
+      : null;
 
-    return json(
-      {
-        ok: true,
-        contact_id: contactId,
-        contact_created: contactCreated,
-        deal_id: dealId,
-        task_id: taskId,
-        tags_applied: tagsApplied,
-        whatsapp_sent: whatsappSent,
-      },
-      201,
-    );
+    try {
+      const result = await ingestLead(ctx.accountId, auditUserId, {
+        rawPhone,
+        name: pick(body, ['nome', 'name', 'full_name']) ?? null,
+        email: pick(body, ['email', 'e-mail']) ?? null,
+        company: pick(body, ['empresa', 'company']) ?? null,
+        notes: buildNotes(body) || null,
+        tags: detectTags(body),
+        pipelineId:
+          typeof body.pipeline_id === 'string' ? body.pipeline_id : null,
+        stageId: typeof body.stage_id === 'string' ? body.stage_id : null,
+        taskSuffix: 'lead de formulário',
+        fallbackNote: 'Lead de formulário.',
+        introText,
+        channelId: typeof body.channel_id === 'string' ? body.channel_id : null,
+      });
+
+      return json(
+        {
+          ok: true,
+          contact_id: result.contactId,
+          contact_created: result.contactCreated,
+          deal_id: result.dealId,
+          task_id: result.taskId,
+          tags_applied: result.tagsApplied,
+          whatsapp_sent: result.whatsappSent,
+        },
+        201,
+      );
+    } catch (err) {
+      if (err instanceof LeadPhoneError) {
+        return json({ ok: false, error: 'invalid_phone', message: err.message }, 400);
+      }
+      throw err;
+    }
   } catch (err) {
     // Auth / scope errors come back as the standard envelope — wrap with CORS.
     return withCors(toApiErrorResponse(err));

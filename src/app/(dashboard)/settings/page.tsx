@@ -11,6 +11,7 @@ import { ProfileForm } from '@/components/settings/profile-form';
 import { SecurityPanel } from '@/components/settings/security-panel';
 import { AppearancePanel } from '@/components/settings/appearance-panel';
 import { ChannelsTab } from '@/components/settings/channels-tab';
+import { LeadAdsTab } from '@/components/settings/lead-ads-tab';
 import { ServicePanel } from '@/components/settings/service-panel';
 import { SectorsPanel } from '@/components/settings/sectors-panel';
 import { QuickRepliesPanel } from '@/components/settings/quick-replies-panel';
@@ -64,6 +65,7 @@ export default function SettingsPage() {
     appearance: <AppearancePanel />,
     notificacoes: <NotificationsPanel />,
     channels: <ChannelsTab />,
+    'lead-ads': <LeadAdsTab />,
     setores: <SectorsPanel />,
     atendimento: <ServicePanel />,
     respostas: <QuickRepliesPanel />,

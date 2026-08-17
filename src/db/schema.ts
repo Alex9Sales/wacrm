@@ -434,6 +434,50 @@ export const channels = pgTable("channels", {
 	check("channels_status_check", sql`status = ANY (ARRAY['disconnected'::text, 'qr_pending'::text, 'connected'::text, 'error'::text])`),
 ]);
 
+// ============================================================
+// Anúncios de Lead (Lead Ads) — fontes de lead do TikTok e do Meta
+// (Facebook/Instagram). NÃO é um canal de mensagem: é INGESTÃO. Um lead que
+// preenche o formulário do anúncio vira contato + card no funil (o mesmo
+// caminho do POST /api/v1/leads → ingestLead). O webhook roteia por
+// external_account_id (page_id no Meta, advertiser_id no TikTok) + form_id.
+// ============================================================
+export const leadAdSources = pgTable("lead_ad_sources", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	// 'tiktok' | 'meta'
+	provider: text().notNull(),
+	name: text().notNull(),
+	status: text().default('connected').notNull(),
+	// Chave de roteamento do webhook: page_id (Meta) / advertiser_id (TikTok).
+	externalAccountId: text("external_account_id"),
+	// Amarra a um formulário específico (opcional; null = qualquer formulário).
+	formId: text("form_id"),
+	// Token de acesso CRIPTOGRAFADO (AES-256-GCM, mesma cripto dos canais).
+	accessToken: text("access_token").notNull(),
+	// Token de verificação do webhook (GET, Meta). Auto-gera se não vier.
+	verifyToken: text("verify_token"),
+	// Funil/etapa de destino (null = primeiro funil/etapa da conta).
+	pipelineId: uuid("pipeline_id"),
+	stageId: uuid("stage_id"),
+	// Entregar lead novo pra IA (WhatsApp de abertura). Off por padrão.
+	deliverToAi: boolean("deliver_to_ai").default(false).notNull(),
+	enabled: boolean().default(true).notNull(),
+	providerMeta: jsonb("provider_meta").default({}).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+}, (table) => [
+	index("idx_lead_ad_sources_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	// Roteamento do webhook: acha a fonte por (provider, external_account_id).
+	index("idx_lead_ad_sources_route").using("btree", table.provider.asc().nullsLast(), table.externalAccountId.asc().nullsLast()),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "lead_ad_sources_account_id_fkey"
+		}).onDelete("cascade"),
+	unique("lead_ad_sources_account_id_name_key").on(table.accountId, table.name),
+	check("lead_ad_sources_provider_check", sql`provider = ANY (ARRAY['tiktok'::text, 'meta'::text])`),
+]);
+
 export const conversations = pgTable("conversations", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),
