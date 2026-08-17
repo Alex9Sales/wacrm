@@ -158,6 +158,55 @@ export async function replyToComment(
   await graphPost(url, accessTokenOf(ch), { message })
 }
 
+export interface InstagramMedia {
+  id: string
+  caption: string | null
+  /** URL da imagem/thumbnail pra mostrar no seletor de post. */
+  thumbnailUrl: string | null
+  permalink: string | null
+  timestamp: string | null
+  mediaType: string | null
+}
+
+/**
+ * Lista os posts recentes da conta IG (pro seletor de post da automação de
+ * comentário). GET {graphBase}/{ig_id}/media. Best-effort → [] em erro.
+ */
+export async function fetchInstagramMedia(
+  ch: ChannelCtx,
+  limit = 25,
+): Promise<InstagramMedia[]> {
+  const url =
+    `${graphBaseOf(ch)}/${igIdOf(ch)}/media` +
+    `?fields=id,caption,media_type,media_url,thumbnail_url,permalink,timestamp&limit=${limit}`
+  try {
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessTokenOf(ch)}` },
+    })
+    const json = (await res.json().catch(() => ({}))) as {
+      data?: Array<Record<string, unknown>>
+    }
+    if (!res.ok) {
+      console.error('[instagram media] fetch failed', res.status, json)
+      return []
+    }
+    return (json.data ?? []).map((m) => ({
+      id: String(m.id),
+      caption: (m.caption as string | undefined) ?? null,
+      thumbnailUrl:
+        (m.thumbnail_url as string | undefined) ||
+        (m.media_url as string | undefined) ||
+        null,
+      permalink: (m.permalink as string | undefined) ?? null,
+      timestamp: (m.timestamp as string | undefined) ?? null,
+      mediaType: (m.media_type as string | undefined) ?? null,
+    }))
+  } catch (err) {
+    console.error('[instagram media] error', err)
+    return []
+  }
+}
+
 /**
  * Manda uma resposta PRIVADA (DM) pra quem comentou — o "private reply" do
  * Instagram: POST {graphBase}/{ig_id}/messages com recipient.comment_id.

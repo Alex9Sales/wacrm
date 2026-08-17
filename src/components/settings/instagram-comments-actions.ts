@@ -6,11 +6,13 @@
 // E provider='instagram'. Escritas exigem admin.
 // ============================================================
 
-import { and, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq } from 'drizzle-orm'
 
 import { db, channels, instagramCommentAutomations } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
+import { loadChannelByAccount } from '@/lib/channels/channels'
+import { fetchInstagramMedia } from '@/lib/channels/providers/instagram'
 
 export interface CommentAutomation {
   id: string
@@ -22,6 +24,7 @@ export interface CommentAutomation {
   public_reply: string | null
   dm_message: string
   once_per_user: boolean
+  media_id: string | null
   created_at: string
 }
 
@@ -34,6 +37,8 @@ export interface CommentAutomationInput {
   publicReply: string | null
   dmMessage: string
   oncePerUser: boolean
+  /** Post específico (media_id do IG) OU null = qualquer post. */
+  mediaId: string | null
 }
 
 /** Garante que o canal é da conta e é Instagram. Lança se não for. */
@@ -64,6 +69,7 @@ const cols = {
   public_reply: instagramCommentAutomations.publicReply,
   dm_message: instagramCommentAutomations.dmMessage,
   once_per_user: instagramCommentAutomations.oncePerUser,
+  media_id: instagramCommentAutomations.mediaId,
   created_at: instagramCommentAutomations.createdAt,
 }
 
@@ -114,6 +120,7 @@ export async function createCommentAutomation(
         publicReply: input.publicReply?.trim() || null,
         dmMessage: input.dmMessage.trim(),
         oncePerUser: input.oncePerUser,
+        mediaId: input.mediaId?.trim() || null,
       })
       .returning(cols),
   )
@@ -139,6 +146,7 @@ export async function updateCommentAutomation(
       publicReply: input.publicReply?.trim() || null,
       dmMessage: input.dmMessage.trim(),
       oncePerUser: input.oncePerUser,
+      mediaId: input.mediaId?.trim() || null,
       updatedAt: new Date().toISOString(),
     })
     .where(
@@ -177,4 +185,49 @@ export async function deleteCommentAutomation(id: string): Promise<void> {
         eq(instagramCommentAutomations.accountId, ctx.accountId),
       ),
     )
+}
+
+export interface CommentPost {
+  id: string
+  caption: string | null
+  thumbnail_url: string | null
+  permalink: string | null
+}
+
+/** Posts recentes da conta IG do canal (pro seletor de post da automação). */
+export async function listInstagramPosts(
+  channelId: string,
+): Promise<CommentPost[]> {
+  const ctx = await getCurrentAccount()
+  await assertIgChannel(ctx.accountId, channelId)
+  const ch = await loadChannelByAccount(channelId, ctx.accountId)
+  if (!ch) return []
+  const media = await fetchInstagramMedia(ch, 30)
+  return media.map((m) => ({
+    id: m.id,
+    caption: m.caption,
+    thumbnail_url: m.thumbnailUrl,
+    permalink: m.permalink,
+  }))
+}
+
+export interface IgChannelLite {
+  id: string
+  name: string
+}
+
+/** Canais Instagram da conta (pro seletor de canal na página de Automações). */
+export async function listInstagramChannels(): Promise<IgChannelLite[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({ id: channels.id, name: channels.name })
+    .from(channels)
+    .where(
+      and(
+        eq(channels.accountId, ctx.accountId),
+        eq(channels.provider, 'instagram'),
+      ),
+    )
+    .orderBy(asc(channels.createdAt))
+  return rows
 }

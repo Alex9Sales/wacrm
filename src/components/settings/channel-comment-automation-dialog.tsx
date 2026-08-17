@@ -12,6 +12,7 @@ import { toast } from 'sonner';
 import { Loader2, Plus, Trash2, Pencil, MessageCircle, ArrowLeft } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { cn } from '@/lib/utils';
 import {
   Dialog,
   DialogContent,
@@ -26,7 +27,9 @@ import {
   updateCommentAutomation,
   toggleCommentAutomation,
   deleteCommentAutomation,
+  listInstagramPosts,
   type CommentAutomation,
+  type CommentPost,
 } from './instagram-comments-actions';
 
 const EMPTY = {
@@ -37,6 +40,8 @@ const EMPTY = {
   publicReply: '',
   dmMessage: '',
   oncePerUser: true,
+  // '' = qualquer post; senão o media_id do post escolhido.
+  mediaId: '',
 };
 
 type FormState = typeof EMPTY;
@@ -54,6 +59,10 @@ export function ChannelCommentAutomationDialog({
   const [editing, setEditing] = useState<null | 'new' | string>(null);
   const [form, setForm] = useState<FormState>(EMPTY);
   const [saving, setSaving] = useState(false);
+  // Posts do IG pro seletor (carregados sob demanda, 1x).
+  const [posts, setPosts] = useState<CommentPost[]>([]);
+  const [postsLoading, setPostsLoading] = useState(false);
+  const [postsLoaded, setPostsLoaded] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -71,9 +80,23 @@ export function ChannelCommentAutomationDialog({
     void load();
   }, [load]);
 
+  const loadPosts = useCallback(async () => {
+    if (postsLoaded || postsLoading) return;
+    setPostsLoading(true);
+    try {
+      setPosts(await listInstagramPosts(channel.id));
+      setPostsLoaded(true);
+    } catch (err) {
+      console.error('[comment-automation] posts load failed:', err);
+    } finally {
+      setPostsLoading(false);
+    }
+  }, [channel.id, postsLoaded, postsLoading]);
+
   const startNew = () => {
     setForm(EMPTY);
     setEditing('new');
+    void loadPosts();
   };
 
   const startEdit = (r: CommentAutomation) => {
@@ -85,8 +108,10 @@ export function ChannelCommentAutomationDialog({
       publicReply: r.public_reply ?? '',
       dmMessage: r.dm_message,
       oncePerUser: r.once_per_user,
+      mediaId: r.media_id ?? '',
     });
     setEditing(r.id);
+    void loadPosts();
   };
 
   const save = async () => {
@@ -101,6 +126,7 @@ export function ChannelCommentAutomationDialog({
         publicReply: form.publicReply || null,
         dmMessage: form.dmMessage,
         oncePerUser: form.oncePerUser,
+        mediaId: form.mediaId || null,
       };
       if (editing === 'new') {
         await createCommentAutomation(input);
@@ -166,6 +192,15 @@ export function ChannelCommentAutomationDialog({
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="Ex: Post do e-book"
                 className={inputCls}
+              />
+            </Field>
+
+            <Field label="Post da automação">
+              <PostPicker
+                posts={posts}
+                loading={postsLoading}
+                value={form.mediaId}
+                onChange={(id) => setForm({ ...form, mediaId: id })}
               />
             </Field>
 
@@ -318,6 +353,78 @@ export function ChannelCommentAutomationDialog({
 
 const inputCls =
   'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground';
+
+/** Seletor de post: "Qualquer post" + miniaturas dos posts do IG. */
+function PostPicker({
+  posts,
+  loading,
+  value,
+  onChange,
+}: {
+  posts: CommentPost[];
+  loading: boolean;
+  value: string;
+  onChange: (id: string) => void;
+}) {
+  return (
+    <div className="space-y-1.5">
+      <div className="flex gap-2 overflow-x-auto pb-1">
+        <button
+          type="button"
+          onClick={() => onChange('')}
+          className={cn(
+            'flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-lg border text-center text-[10px] font-medium leading-tight',
+            value === ''
+              ? 'border-primary text-foreground ring-2 ring-primary'
+              : 'border-border text-muted-foreground',
+          )}
+        >
+          Qualquer
+          <br />
+          post
+        </button>
+        {loading && posts.length === 0 && (
+          <div className="flex h-16 items-center px-2 text-muted-foreground">
+            <Loader2 className="size-4 animate-spin" />
+          </div>
+        )}
+        {posts.map((p) => (
+          <button
+            key={p.id}
+            type="button"
+            onClick={() => onChange(p.id)}
+            title={p.caption ?? ''}
+            className={cn(
+              'relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border bg-muted',
+              value === p.id ? 'border-primary ring-2 ring-primary' : 'border-border',
+            )}
+          >
+            {p.thumbnail_url ? (
+              // eslint-disable-next-line @next/next/no-img-element
+              <img
+                src={p.thumbnail_url}
+                alt=""
+                className="h-full w-full object-cover"
+              />
+            ) : (
+              <span className="flex h-full w-full items-center justify-center text-[9px] text-muted-foreground">
+                sem foto
+              </span>
+            )}
+          </button>
+        ))}
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        {value === ''
+          ? 'Vale pra comentários em qualquer post. Escolha um post pra restringir.'
+          : 'Só dispara nos comentários deste post.'}
+        {!loading && posts.length === 0
+          ? ' (Não consegui listar os posts agora — a regra vale pra qualquer post.)'
+          : ''}
+      </p>
+    </div>
+  );
+}
 
 function Field({
   label,

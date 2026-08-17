@@ -131,7 +131,11 @@ export async function processCommentWebhook(
     )
     if (!inserted) continue
 
-    const rule = rules.find((r) => matchRule(c.text, r))
+    // Casa a 1ª regra: post-específico (media_id) bate o post do comentário, ou
+    // regra sem post (media_id null) vale pra qualquer post. Depois, keyword.
+    const rule = rules.find(
+      (r) => (!r.mediaId || r.mediaId === c.mediaId) && matchRule(c.text, r),
+    )
     if (!rule) {
       await db
         .update(instagramCommentEvents)

@@ -2228,6 +2228,8 @@ export const instagramCommentAutomations = pgTable("instagram_comment_automation
 	dmMessage: text("dm_message").notNull(),
 	// não mandar o mesmo DM 2x pra mesma pessoa nessa regra.
 	oncePerUser: boolean("once_per_user").default(true).notNull(),
+	// amarra a regra a um POST específico (media_id do IG). NULL = qualquer post.
+	mediaId: text("media_id"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

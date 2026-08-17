@@ -174,6 +174,26 @@ export default function AutomationsPage() {
         </GatedButton>
       </div>
 
+      <button
+        type="button"
+        onClick={() => router.push("/automations/comentarios")}
+        className="flex w-full items-center gap-3 rounded-xl border border-border bg-card p-4 text-left transition-colors hover:border-primary/50"
+      >
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-[#feda75] via-[#d62976] to-[#4f5bd5] text-white">
+          <MessageCircle className="h-5 w-5" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold text-foreground">
+            Automações de comentário (Instagram)
+          </span>
+          <span className="block text-xs text-muted-foreground">
+            Comentou palavra-chave num post → o CRM responde e manda um DM com o
+            link. Escolha o post de cada automação.
+          </span>
+        </span>
+        <span className="shrink-0 text-xs font-medium text-primary">Abrir →</span>
+      </button>
+
       {showTemplates && (
         <section>
           <h2 className="mb-3 text-sm font-semibold text-muted-foreground">Modelos rápidos</h2>
