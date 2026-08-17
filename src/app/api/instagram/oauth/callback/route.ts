@@ -32,6 +32,30 @@ function back(status: string): NextResponse {
   return NextResponse.redirect(`${APP_URL}/settings?ig=${encodeURIComponent(status)}`)
 }
 
+/**
+ * Inscreve a conta IG no webhook do app (messages + comments). SEM isso o
+ * Instagram não entrega os DMs/comentários da conta — era o passo manual que
+ * a Fluxia teve e as conexões por OAuth não tinham. Best-effort.
+ */
+async function subscribeInstagram(igId: string, token: string): Promise<void> {
+  try {
+    const res = await fetch(
+      `${GRAPH_BASE}/${igId}/subscribed_apps?subscribed_fields=messages,comments&access_token=${encodeURIComponent(
+        token,
+      )}`,
+      { method: 'POST' },
+    )
+    if (!res.ok) {
+      const body = await res.text().catch(() => '')
+      console.warn('[instagram oauth] subscribe falhou', igId, res.status, body)
+    } else {
+      console.log('[instagram oauth] webhook inscrito', igId)
+    }
+  } catch (err) {
+    console.warn('[instagram oauth] subscribe erro', igId, err)
+  }
+}
+
 export async function GET(request: Request) {
   const { searchParams } = new URL(request.url)
   const code = searchParams.get('code')
@@ -143,6 +167,7 @@ export async function GET(request: Request) {
           updatedAt: new Date().toISOString(),
         })
         .where(eq(channels.id, existing.id))
+      await subscribeInstagram(igId, token)
       return back('reconectado')
     }
 
@@ -153,6 +178,7 @@ export async function GET(request: Request) {
       credentials,
       providerMeta,
     })
+    await subscribeInstagram(igId, token)
     return back('ok')
   } catch (error) {
     console.error('[instagram oauth] callback error:', error)
