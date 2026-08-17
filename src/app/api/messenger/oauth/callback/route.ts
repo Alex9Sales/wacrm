@@ -43,6 +43,75 @@ interface FbPage {
   access_token: string
 }
 
+/** GET simples na Graph API com o token na query. */
+async function graphGet(
+  path: string,
+  token: string,
+): Promise<Record<string, unknown>> {
+  const sep = path.includes('?') ? '&' : '?'
+  try {
+    const res = await fetch(
+      `${GRAPH}/${path}${sep}access_token=${encodeURIComponent(token)}`,
+    )
+    return (await res.json().catch(() => ({}))) as Record<string, unknown>
+  } catch {
+    return {}
+  }
+}
+
+/**
+ * Acha TODAS as Páginas que o token alcança:
+ *   1) /me/accounts (Páginas pessoais);
+ *   2) fallback: Páginas do Portfólio Empresarial via /me/businesses →
+ *      owned_pages + client_pages (precisa de business_management). É aqui
+ *      que estão as Páginas de empresa, que não aparecem no /me/accounts.
+ */
+async function fetchAllPages(userToken: string): Promise<FbPage[]> {
+  const byId = new Map<string, FbPage>()
+
+  const acc = await graphGet(
+    'me/accounts?fields=id,name,access_token&limit=100',
+    userToken,
+  )
+  const accData = (acc.data as FbPage[] | undefined) ?? []
+  for (const p of accData) if (p.id && p.access_token) byId.set(p.id, p)
+  console.log(
+    '[messenger oauth] /me/accounts:',
+    accData.length,
+    byId.size ? '' : JSON.stringify(acc).slice(0, 300),
+  )
+  if (byId.size > 0) return [...byId.values()]
+
+  // Fallback empresarial.
+  const biz = await graphGet('me/businesses?fields=id,name&limit=50', userToken)
+  const businesses = (biz.data as { id: string; name?: string }[] | undefined) ?? []
+  console.log(
+    '[messenger oauth] /me/businesses:',
+    businesses.length,
+    businesses.length ? '' : JSON.stringify(biz).slice(0, 300),
+  )
+  for (const b of businesses) {
+    for (const edge of ['owned_pages', 'client_pages']) {
+      const pg = await graphGet(
+        `${b.id}/${edge}?fields=id,name,access_token&limit=100`,
+        userToken,
+      )
+      const pgData = (pg.data as FbPage[] | undefined) ?? []
+      for (const p of pgData) {
+        if (!p.id) continue
+        let token = p.access_token
+        if (!token) {
+          const t = await graphGet(`${p.id}?fields=access_token`, userToken)
+          token = (t.access_token as string | undefined) ?? ''
+        }
+        if (token) byId.set(p.id, { id: p.id, name: p.name, access_token: token })
+      }
+      console.log(`[messenger oauth] ${edge} de ${b.id}:`, pgData.length)
+    }
+  }
+  return [...byId.values()]
+}
+
 /** Inscreve a Página no app pro webhook de mensagens (o passo manual chato). */
 async function subscribePage(pageId: string, pageToken: string): Promise<void> {
   try {
@@ -121,22 +190,9 @@ export async function GET(request: Request) {
       /* fica com o de curta duração */
     }
 
-    // 3) Páginas do usuário (+ Page access token de cada).
-    const pagesRes = await fetch(
-      `${GRAPH}/me/accounts?fields=id,name,access_token&limit=100&access_token=${userToken}`,
-    )
-    const pagesJson = (await pagesRes.json().catch(() => ({}))) as {
-      data?: FbPage[]
-      error?: unknown
-    }
-    const pages = (pagesJson.data ?? []).filter((p) => p.id && p.access_token)
-    console.log(
-      '[messenger oauth] /me/accounts status',
-      pagesRes.status,
-      'páginas:',
-      pages.length,
-      pages.length === 0 ? JSON.stringify(pagesJson).slice(0, 500) : '',
-    )
+    // 3) Páginas (pessoais + do portfólio empresarial).
+    const pages = await fetchAllPages(userToken)
+    console.log('[messenger oauth] total de Páginas resolvidas:', pages.length)
     if (pages.length === 0) return back('sem_pagina')
 
     // 4) Cria/atualiza um canal por Página + inscreve o webhook.
