@@ -49,6 +49,7 @@ import { ChannelLocationDialog } from './channel-location-dialog';
 import { ChannelPixDialog } from './channel-pix-dialog';
 import { ChannelGroupsDialog } from './channel-groups-dialog';
 import { ChannelCommentAutomationDialog } from './channel-comment-automation-dialog';
+import { ChannelProviderIcon } from './channel-provider-icon';
 
 // ------------------------------------------------------------
 // Shared types + labels (mirrored by the child dialogs).
@@ -527,6 +528,7 @@ function ChannelRow({
     <Card size="sm">
       <CardContent className="flex flex-wrap items-center justify-between gap-3">
         <div className="flex min-w-0 items-center gap-3">
+          <ChannelProviderIcon provider={channel.provider} className="h-9 w-9" />
           <div className="min-w-0">
             <div className="flex items-center gap-2">
               <span className="truncate text-sm font-medium text-foreground">

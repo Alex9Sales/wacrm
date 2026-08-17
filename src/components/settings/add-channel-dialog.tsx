@@ -31,6 +31,7 @@ import { Label } from '@/components/ui/label';
 
 import { PROVIDER_LABELS, type ChannelSummary } from './channels-tab';
 import { EmbeddedSignupButton } from './embedded-signup-button';
+import { ChannelProviderIcon } from './channel-provider-icon';
 
 interface AddChannelDialogProps {
   open: boolean;
@@ -256,13 +257,16 @@ export function AddChannelDialog({
                 key={p}
                 type="button"
                 onClick={() => handlePickProvider(p)}
-                className="flex flex-col items-start gap-0.5 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-muted"
+                className="flex items-center gap-3 rounded-lg border border-border bg-muted/40 px-3 py-2.5 text-left transition-colors hover:border-primary/50 hover:bg-muted"
               >
-                <span className="text-sm font-medium text-foreground">
-                  {PROVIDER_LABELS[p]}
-                </span>
-                <span className="text-xs text-muted-foreground">
-                  {PROVIDER_BLURB[p]}
+                <ChannelProviderIcon provider={p} className="h-9 w-9" />
+                <span className="flex min-w-0 flex-col gap-0.5">
+                  <span className="text-sm font-medium text-foreground">
+                    {PROVIDER_LABELS[p]}
+                  </span>
+                  <span className="text-xs text-muted-foreground">
+                    {PROVIDER_BLURB[p]}
+                  </span>
                 </span>
               </button>
             ))}
