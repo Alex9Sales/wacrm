@@ -60,6 +60,7 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
   // pra pedir uma 2ª confirmação ("agendar mesmo assim"). null = sem aviso.
   const [dayWarn, setDayWarn] = useState<number | null>(null)
   const [modelOpen, setModelOpen] = useState(false)
+  const [optOut, setOptOut] = useState(false)
   const seq = useRef(0)
 
   const reset = () => {
@@ -71,6 +72,7 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
     setText('')
     setWhen(defaultWhen())
     setDayWarn(null)
+    setOptOut(false)
   }
 
   useEffect(() => {
@@ -166,6 +168,7 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
         conversationId,
         contentText: text.trim(),
         scheduledAt: new Date(when).toISOString(),
+        includeOptOut: optOut,
       })
       if (!r.ok) {
         toast.error(r.error)
@@ -349,6 +352,21 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
                   rows={4}
                   placeholder="Escreva a mensagem que será enviada…"
                 />
+                <label className="mt-1.5 flex cursor-pointer items-start gap-2 text-xs text-muted-foreground">
+                  <input
+                    type="checkbox"
+                    checked={optOut}
+                    onChange={(e) => setOptOut(e.target.checked)}
+                    className="mt-0.5"
+                  />
+                  <span>
+                    <strong className="text-foreground">
+                      Incluir opção de descadastro
+                    </strong>{' '}
+                    — anexa <em>&quot;responda SAIR&quot;</em>. Quem responder SAIR
+                    é bloqueado (não perturbe).
+                  </span>
+                </label>
               </div>
 
               {/* Quando */}

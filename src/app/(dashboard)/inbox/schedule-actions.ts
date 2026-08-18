@@ -21,6 +21,7 @@ import { db, scheduledMessages, conversations } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { notifyScheduledAssignee } from '@/lib/scheduled/notify'
+import { appendOptOutLine } from '@/lib/contacts/opt-out'
 import {
   enqueueScheduledMessage,
   removeScheduledMessageJob,
@@ -47,6 +48,8 @@ export interface ScheduleMessageInput {
   scheduledAt: string
   /** Responsável explícito (picker admin/supervisor). Vazio = herda o dono do lead. */
   assignedTo?: string | null
+  /** Anti-ban: anexa "responda SAIR" no fim da mensagem agendada. */
+  includeOptOut?: boolean
 }
 
 const liteSelect = {
@@ -193,7 +196,9 @@ export async function scheduleMessage(
           conversationId: conv.id,
           contactId: conv.contactId,
           messageType: 'text',
-          contentText,
+          contentText: input.includeOptOut
+            ? appendOptOutLine(contentText)
+            : contentText,
           scheduledAt: when.toISOString(),
           status: 'pending',
           createdBy: ctx.userId,

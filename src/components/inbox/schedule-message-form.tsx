@@ -23,6 +23,7 @@ import {
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { QuickReplyPicker } from '@/components/inbox/quick-reply-picker'
 import {
   scheduleMessage,
   updateScheduledMessage,
@@ -81,6 +82,8 @@ export function ScheduleMessageForm({
   const [text, setText] = useState('')
   const [when, setWhen] = useState('')
   const [assignee, setAssignee] = useState('') // '' = herda o dono do lead
+  const [optOut, setOptOut] = useState(false) // anexar "responda SAIR"
+  const [modelOpen, setModelOpen] = useState(false)
   const [members, setMembers] = useState<{ id: string; name: string | null }[]>(
     [],
   )
@@ -97,6 +100,7 @@ export function ScheduleMessageForm({
       setText('')
       setWhen(toLocalInput(new Date(Date.now() + 60 * 60 * 1000)))
       setAssignee('')
+      setOptOut(false)
     }
   }, [open, editing])
 
@@ -143,6 +147,7 @@ export function ScheduleMessageForm({
             scheduledAt: local.toISOString(),
             // '' = herda o dono do lead; admin/supervisor podem atribuir.
             assignedTo: assignee || null,
+            includeOptOut: optOut,
           })
       if (!res.ok) {
         toast.error(res.error)
@@ -175,9 +180,20 @@ export function ScheduleMessageForm({
 
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-1.5">
-            <Label htmlFor="sched-text">
-              Mensagem <span className="text-destructive">*</span>
-            </Label>
+            <div className="flex items-center justify-between">
+              <Label htmlFor="sched-text">
+                Mensagem <span className="text-destructive">*</span>
+              </Label>
+              <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                <span>Modelos</span>
+                <QuickReplyPicker
+                  open={modelOpen}
+                  onOpenChange={setModelOpen}
+                  onPick={(c) => setText((m) => (m.trim() ? `${m}\n${c}` : c))}
+                  title="Inserir um modelo (resposta rápida)"
+                />
+              </div>
+            </div>
             <textarea
               id="sched-text"
               value={text}
@@ -187,6 +203,23 @@ export function ScheduleMessageForm({
               autoFocus
               className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
             />
+            {!editing && (
+              <label className="flex cursor-pointer items-start gap-2 pt-1 text-xs text-muted-foreground">
+                <input
+                  type="checkbox"
+                  checked={optOut}
+                  onChange={(e) => setOptOut(e.target.checked)}
+                  className="mt-0.5"
+                />
+                <span>
+                  <strong className="text-foreground">
+                    Incluir opção de descadastro
+                  </strong>{' '}
+                  — anexa <em>&quot;responda SAIR&quot;</em> no fim. Quem responder
+                  SAIR é bloqueado (não perturbe) e não recebe mais.
+                </span>
+              </label>
+            )}
           </div>
 
           <div className="space-y-1.5">
