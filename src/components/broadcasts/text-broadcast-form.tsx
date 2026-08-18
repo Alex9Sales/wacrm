@@ -16,6 +16,7 @@ import { Loader2, Upload, Users, CalendarClock, Send, Paperclip, X, Check } from
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import { QuickReplyPicker } from '@/components/inbox/quick-reply-picker'
 import {
   Select,
   SelectContent,
@@ -173,6 +174,7 @@ export function TextBroadcastForm() {
   const [dailyCap, setDailyCap] = useState(50)
   // Anti-ban: anexa a opção de descadastro ("responda SAIR"). Ligado por padrão.
   const [includeOptOut, setIncludeOptOut] = useState(true)
+  const [modelOpen, setModelOpen] = useState(false)
   const [sendNow, setSendNow] = useState(false)
   const [sendNowIntervalMin, setSendNowIntervalMin] = useState(1)
   const messageRef = useRef<HTMLTextAreaElement>(null)
@@ -471,7 +473,20 @@ export function TextBroadcastForm() {
 
       {/* Message */}
       <div className="space-y-1.5">
-        <Label>Mensagem</Label>
+        <div className="flex items-center justify-between">
+          <Label>Mensagem</Label>
+          <div className="flex items-center gap-1 text-xs text-muted-foreground">
+            <span>Modelos</span>
+            <QuickReplyPicker
+              open={modelOpen}
+              onOpenChange={setModelOpen}
+              onPick={(c) =>
+                setMessage((m) => (m.trim() ? `${m}\n${c}` : c))
+              }
+              title="Inserir um modelo (resposta rápida)"
+            />
+          </div>
+        </div>
         {/* Variable helper chips — insert {{token}} at the cursor. */}
         <div className="flex flex-wrap gap-1.5">
           {SUPPORTED_TOKENS.map((tok) => (

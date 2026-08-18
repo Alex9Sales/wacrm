@@ -13,6 +13,7 @@ import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
+import { QuickReplyPicker } from '@/components/inbox/quick-reply-picker'
 import {
   Select,
   SelectContent,
@@ -58,6 +59,7 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
   // Anti-ban: quando o dia escolhido já tem 30+ agendadas, guarda a contagem
   // pra pedir uma 2ª confirmação ("agendar mesmo assim"). null = sem aviso.
   const [dayWarn, setDayWarn] = useState<number | null>(null)
+  const [modelOpen, setModelOpen] = useState(false)
   const seq = useRef(0)
 
   const reset = () => {
@@ -327,7 +329,20 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
 
               {/* Mensagem */}
               <div>
-                <Label className="mb-1 block text-xs">Mensagem</Label>
+                <div className="mb-1 flex items-center justify-between">
+                  <Label className="block text-xs">Mensagem</Label>
+                  <div className="flex items-center gap-1 text-xs text-muted-foreground">
+                    <span>Modelos</span>
+                    <QuickReplyPicker
+                      open={modelOpen}
+                      onOpenChange={setModelOpen}
+                      onPick={(c) =>
+                        setText((m) => (m.trim() ? `${m}\n${c}` : c))
+                      }
+                      title="Inserir um modelo (resposta rápida)"
+                    />
+                  </div>
+                </div>
                 <Textarea
                   value={text}
                   onChange={(e) => setText(e.target.value)}
