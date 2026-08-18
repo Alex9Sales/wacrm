@@ -37,6 +37,7 @@ import {
 } from 'lucide-react';
 
 import { cn } from '@/lib/utils';
+import { ChannelProviderIcon } from '@/components/settings/channel-provider-icon';
 
 // ============================================================
 // Node-type union — single source of truth for every place the UI
@@ -303,6 +304,36 @@ export function nodeColors(type: NodeType): NodeColors {
 // hover) lands in every place at once and the `nodeColors()` lookup
 // lives in exactly one spot.
 // ============================================================
+
+/** true para nós que ENVIAM algo pelo canal (mensagem, botões, lista, mídia,
+ *  IA) — os únicos que mostram a "fotinha" do canal, estilo ManyChat. */
+export function isMessagingNode(type: NodeType): boolean {
+  return NODE_META[type].category === 'messaging';
+}
+
+/**
+ * Selo do CANAL (Instagram / WhatsApp / Messenger) em cima do card — a
+ * "fotinha" estilo ManyChat. O canal é do fluxo inteiro (`channel_id`); só
+ * aparece em nós que enviam mensagem e quando o fluxo está preso a um canal
+ * (não em "todos os canais"). `provider` null → não renderiza nada.
+ */
+export function NodeChannelBadge({
+  type,
+  provider,
+  className,
+}: {
+  type: NodeType;
+  provider: string | null;
+  className?: string;
+}) {
+  if (!provider || !isMessagingNode(type)) return null;
+  return (
+    <ChannelProviderIcon
+      provider={provider}
+      className={cn('h-4 w-4 shrink-0', className)}
+    />
+  );
+}
 
 export function NodeIconChip({
   type,

@@ -50,6 +50,7 @@ import { type ValidationIssue } from '@/lib/flows/validate';
 import {
   NODE_META,
   NodeIconChip,
+  NodeChannelBadge,
   groupNodeTypesByCategory,
   nodeColors,
   slugify,
@@ -60,7 +61,11 @@ import {
 import { NodeConfigForm } from './forms/node-config-form';
 import { NodeKeySelect } from './forms/fields';
 import { IssueLine } from './validation-panel';
-import { useFlowEditor, type BuilderState } from './flow-editor-state';
+import {
+  useFlowEditor,
+  useFlowChannelProvider,
+  type BuilderState,
+} from './flow-editor-state';
 
 // ============================================================
 // Local state shape — mirrors the DB but the configs are typed
@@ -572,6 +577,7 @@ function NodeCard({
 }) {
   const meta = NODE_META[node.node_type];
   const c = nodeColors(node.node_type);
+  const channelProvider = useFlowChannelProvider();
   const hasError = issues.some((i) => i.severity === 'error');
   const preview = summarizeNode(node);
   return (
@@ -624,6 +630,11 @@ function NodeCard({
             </p>
           )}
         </div>
+        <NodeChannelBadge
+          type={node.node_type}
+          provider={channelProvider}
+          className="h-[18px] w-[18px]"
+        />
         {hasError && (
           <CircleAlert className="h-3.5 w-3.5 shrink-0 text-red-400" />
         )}

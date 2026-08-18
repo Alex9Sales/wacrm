@@ -277,6 +277,22 @@ export function useFlowEditor(): FlowEditorContextValue {
   return ctx;
 }
 
+/**
+ * Provider (whatsapp/instagram/messenger) do canal preso ao fluxo — pra estampar
+ * a "fotinha" do canal nos cards (estilo ManyChat). null = fluxo em "todos os
+ * canais" (sem canal fixo) → não mostra selo.
+ */
+export function useFlowChannelProvider(): string | null {
+  const { state, channels } = useFlowEditor();
+  return useMemo(
+    () =>
+      state.channel_id
+        ? (channels.find((c) => c.id === state.channel_id)?.provider ?? null)
+        : null,
+    [state.channel_id, channels],
+  );
+}
+
 // ============================================================
 // Provider
 // ============================================================

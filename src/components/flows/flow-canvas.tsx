@@ -78,6 +78,7 @@ import { autoLayout, shouldAutoLayout } from '@/lib/flows/layout';
 import {
   NODE_META,
   NodeIconChip,
+  NodeChannelBadge,
   groupNodeTypesByCategory,
   nodeColors,
   summarizeNode,
@@ -103,6 +104,10 @@ interface NodeData extends Record<string, unknown> {
   /** Validator's "look here" pulse — flashes the card border for
    *  ~1.6s. Drives a CSS animation, doesn't change layout. */
   isFlashed: boolean;
+  /** Provider do canal do fluxo (ou null) — estampa a "fotinha" do
+   *  canal nos cards de mensagem, estilo ManyChat. Calculado uma vez e
+   *  passado por aqui (em vez de cada nó ler o contexto). */
+  channelProvider: string | null;
 }
 
 const NODE_WIDTH = 240;
@@ -132,7 +137,7 @@ function slotColor(nodeType: NodeType, slotId: string, fallback: string) {
 }
 
 function FlowNodeCard({ data, selected }: NodeProps) {
-  const { node, isEntry, isFlashed } = data as NodeData;
+  const { node, isEntry, isFlashed, channelProvider } = data as NodeData;
   const meta = NODE_META[node.node_type];
   const c = nodeColors(node.node_type);
   const summary = summarizeNode(node);
@@ -193,11 +198,18 @@ function FlowNodeCard({ data, selected }: NodeProps) {
         >
           {meta.label}
         </span>
-        {isEntry && (
-          <span className="border-border text-muted-foreground ml-auto rounded border px-1.5 py-0.5 text-[8.5px] font-bold tracking-[0.1em] uppercase">
-            Entrada
-          </span>
-        )}
+        <div className="ml-auto flex items-center gap-1.5">
+          <NodeChannelBadge
+            type={node.node_type}
+            provider={channelProvider}
+            className="h-4 w-4"
+          />
+          {isEntry && (
+            <span className="border-border text-muted-foreground rounded border px-1.5 py-0.5 text-[8.5px] font-bold tracking-[0.1em] uppercase">
+              Entrada
+            </span>
+          )}
+        </div>
       </div>
       <div className="text-muted-foreground mt-2 truncate font-mono text-[11px]">
         {node.node_key}
@@ -278,10 +290,15 @@ function FlowCanvasInner() {
     updateNodePositions,
     removeNode,
     flashKey,
+    channels,
   } = useFlowEditor();
   const reactFlow = useReactFlow();
   const builderNodes = state.nodes;
   const entryNodeId = state.entry_node_id;
+  // Canal do fluxo (mesmo pra todos os nós) → "fotinha" nos cards de mensagem.
+  const channelProvider = state.channel_id
+    ? (channels.find((c) => c.id === state.channel_id)?.provider ?? null)
+    : null;
 
   // Side-panel state — which node's form is open. Canvas-only UI; the
   // list view's analogue is the per-card expanded set in
@@ -340,12 +357,13 @@ function FlowCanvasInner() {
           node: n,
           isEntry: n.node_key === entryNodeId,
           isFlashed: n.node_key === flashKey,
+          channelProvider,
         },
       };
     });
 
     return nodes;
-  }, [builderNodes, entryNodeId, flashKey, autoLayoutPositions]);
+  }, [builderNodes, entryNodeId, flashKey, autoLayoutPositions, channelProvider]);
 
   const [rfNodes, setRfNodes] = useState<RfNode<NodeData>[]>(derivedRfNodes);
 
