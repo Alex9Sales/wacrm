@@ -165,6 +165,22 @@ async function resolveActiveOrg(
  * minimum-role check — it's a thin wrapper over this.
  */
 export async function getCurrentAccount(): Promise<AccountContext> {
+  return loadAccountContext(true);
+}
+
+/**
+ * Como `getCurrentAccount`, mas SEM o gate de billing (suspenso / trial vencido).
+ * Existe só pro fluxo de assinatura/checkout — que precisa rodar JUSTAMENTE
+ * quando o trial venceu (senão o próprio checkout cairia no 402). NÃO use em
+ * rotas normais: elas devem passar pelo gate via `getCurrentAccount`.
+ */
+export async function getBillingContext(): Promise<AccountContext> {
+  return loadAccountContext(false);
+}
+
+async function loadAccountContext(
+  enforceBilling: boolean,
+): Promise<AccountContext> {
   const userId = await getSessionUserId();
   if (!userId) {
     throw new UnauthorizedError();
@@ -202,27 +218,30 @@ export async function getCurrentAccount(): Promise<AccountContext> {
   // Phase 8 suspension enforcement: if the org's billing row is
   // 'suspended', block every org-scoped request here (the chokepoint).
   // No billing row → treat as active (legacy orgs predate the satellite).
-  const billing = firstOrNull(
-    await db
-      .select({
-        status: organizationBilling.status,
-        dueAt: organizationBilling.dueAt,
-      })
-      .from(organizationBilling)
-      .where(eq(organizationBilling.organizationId, account.id))
-      .limit(1),
-  );
-  if (billing?.status === "suspended") {
-    throw new AccountSuspendedError();
-  }
-  // Fase 2: trial cujo fim (dueAt) já passou → bloqueia como suspensão, mas com
-  // a tela "teste acabou" + checkout. Sem billing / active → não afeta.
-  if (
-    billing?.status === "trial" &&
-    billing.dueAt &&
-    new Date(billing.dueAt).getTime() < Date.now()
-  ) {
-    throw new TrialExpiredError();
+  // O checkout usa getBillingContext (enforceBilling=false) pra pular isto.
+  if (enforceBilling) {
+    const billing = firstOrNull(
+      await db
+        .select({
+          status: organizationBilling.status,
+          dueAt: organizationBilling.dueAt,
+        })
+        .from(organizationBilling)
+        .where(eq(organizationBilling.organizationId, account.id))
+        .limit(1),
+    );
+    if (billing?.status === "suspended") {
+      throw new AccountSuspendedError();
+    }
+    // Fase 2: trial cujo fim (dueAt) já passou → bloqueia como suspensão, mas
+    // com a tela "teste acabou" + checkout. Sem billing / active → não afeta.
+    if (
+      billing?.status === "trial" &&
+      billing.dueAt &&
+      new Date(billing.dueAt).getTime() < Date.now()
+    ) {
+      throw new TrialExpiredError();
+    }
   }
 
   return {

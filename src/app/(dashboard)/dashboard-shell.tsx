@@ -11,6 +11,7 @@ import { NotificationListener } from "@/components/notifications/notification-li
 import { ChannelStatusBanner } from "@/components/channels/channel-status-banner";
 import { IncomingCallModal } from "@/components/calls/incoming-call-modal";
 import { VoiceLiveBadge } from "@/components/calls/voice-live-badge";
+import { SubscribeButton } from "@/components/billing/subscribe-dialog";
 
 // Auth-gated dashboard shell. Extracted from the layout so the layout
 // itself can stay a server component and export metadata (noindex) —
@@ -93,7 +94,7 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
     );
   }
 
-  // Fase 2: trial expirado — tela amigável (o checkout Mercado Pago entra na Fase 3).
+  // Fase 2: trial expirado — tela amigável com o checkout (Asaas).
   if (!profileLoading && trialExpired) {
     return (
       <div className="flex h-screen flex-col items-center justify-center gap-6 bg-background px-6 text-center">
@@ -106,27 +107,30 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           </h1>
           <p className="text-sm text-muted-foreground">
             Esperamos que tenha curtido o FluxiaCRM! Para continuar atendendo e
-            vendendo com a plataforma, assine um plano. Fale com a Fluxia para
-            ativar sua conta.
+            vendendo com a plataforma, assine um plano — leva menos de 1 minuto,
+            com Pix, boleto ou cartão.
           </p>
         </div>
-        <div className="flex items-center gap-2">
-          <a
-            href="https://wa.me/556791806048?text=Quero%20assinar%20o%20FluxiaCRM"
-            target="_blank"
-            rel="noopener noreferrer"
-            className="inline-flex h-9 items-center gap-2 rounded-lg bg-primary px-4 text-sm font-semibold text-primary-foreground transition hover:opacity-90"
-          >
-            Assinar / falar com a Fluxia
-          </a>
-          <button
-            type="button"
-            onClick={signOut}
-            className="inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-          >
-            <LogOut className="size-4" />
-            Sair
-          </button>
+        <div className="flex flex-col items-center gap-3">
+          <SubscribeButton label="Assinar agora" />
+          <div className="flex items-center gap-3 text-xs">
+            <a
+              href="https://wa.me/556791806048?text=Quero%20assinar%20o%20FluxiaCRM"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-muted-foreground underline transition hover:text-foreground"
+            >
+              Falar com a Fluxia
+            </a>
+            <button
+              type="button"
+              onClick={signOut}
+              className="inline-flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <LogOut className="size-3.5" />
+              Sair
+            </button>
+          </div>
         </div>
       </div>
     );
@@ -161,6 +165,10 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
             ) : (
               <span>Seu teste grátis termina hoje. Assine para não perder o acesso.</span>
             )}
+            <SubscribeButton
+              label="Assinar"
+              className="ml-1 h-6 px-2.5 text-xs"
+            />
           </div>
         )}
         {/* Thinner horizontal padding on mobile so cards have room to breathe. */}

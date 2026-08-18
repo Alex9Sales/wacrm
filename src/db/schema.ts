@@ -158,6 +158,10 @@ export const organizationBilling = pgTable("organization_billing", {
 	billingPhone: text("billing_phone"),
 	notes: text(),
 	lastReminderAt: timestamp("last_reminder_at", { withTimezone: true, mode: 'string' }),
+	// Assinatura no Asaas (gateway de pagamento). Setados no checkout; o webhook
+	// /api/webhooks/asaas vira o status pra 'active' quando o pagamento confirma.
+	asaasCustomerId: text("asaas_customer_id"),
+	asaasSubscriptionId: text("asaas_subscription_id"),
 	// Platform admin (Alex/Rafael) responsible for this client. Set on
 	// provision, editable to transfer. Nullable, no FK (a removed admin just
 	// makes the row show "—"). Drives the /admin "Responsável" column + filter.
