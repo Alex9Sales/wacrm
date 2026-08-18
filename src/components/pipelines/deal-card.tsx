@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
-import { deleteDeal, transferDeal, duplicateDeal, setDealPaused, setDealNextFollowUp } from "@/app/(dashboard)/pipelines/actions";
+import { deleteDeal, transferDeal, duplicateDeal, setDealPaused, setDealNextFollowUp, openDealConversation } from "@/app/(dashboard)/pipelines/actions";
 import { listProfiles } from "@/app/(dashboard)/inbox/actions";
 
 interface DealCardProps {
@@ -180,9 +180,21 @@ export function DealCard({
   const ChannelIcon = isInstagram ? AtSign : MessageCircle;
   const channelLabel = isInstagram ? "Instagram" : "WhatsApp";
   const channelColor = isInstagram ? "text-pink-500" : "text-emerald-600";
-  const openConversation = (e: SyntheticEvent) => {
+  // Abre a conversa vinculada; se não tiver, resolve/cria pelo telefone do
+  // contato (e vincula) — assim o botão aparece mesmo sem conversa ainda.
+  const canOpenChat = !!deal.conversation_id || !!deal.contact?.phone;
+  const openConversation = async (e: SyntheticEvent) => {
     e.stopPropagation();
-    if (deal.conversation_id) window.location.href = `/inbox?c=${deal.conversation_id}`;
+    if (deal.conversation_id) {
+      window.location.href = `/inbox?c=${deal.conversation_id}`;
+      return;
+    }
+    const res = await openDealConversation(deal.id);
+    if (res.conversationId) {
+      window.location.href = `/inbox?c=${res.conversationId}`;
+    } else {
+      toast.error(res.error || "Não foi possível abrir a conversa");
+    }
   };
 
   // Funil aberto: deal atribuído a OUTRA pessoa aparece TRAVADO (igual conversa)
@@ -467,10 +479,10 @@ export function DealCard({
         )}
       </div>
 
-      {(deal.conversation_id || assigneeLabel) && (
+      {(canOpenChat || assigneeLabel) && (
         <div className="mt-2 flex items-center justify-between">
-          {/* Canal de origem (esquerda) — clicar abre a conversa vinculada. */}
-          {deal.conversation_id ? (
+          {/* WhatsApp/canal (esquerda) — abre a conversa (ou cria pelo telefone). */}
+          {canOpenChat ? (
             <span
               role="button"
               tabIndex={0}

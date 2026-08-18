@@ -8,6 +8,7 @@ import {
   createDeal,
   updateDeal,
   deleteDeal,
+  openDealConversation,
 } from "@/app/(dashboard)/pipelines/actions";
 import {
   listProducts,
@@ -95,6 +96,18 @@ export function DealForm({
   const [prodOpen, setProdOpen] = useState(false);
   const [linkedConversation, setLinkedConversation] =
     useState<Conversation | null>(null);
+
+  // Botão de WhatsApp: vai pra conversa vinculada, ou resolve/cria pelo telefone
+  // do contato do negócio (e vincula). Só faz sentido num negócio já salvo.
+  const openChat = async () => {
+    if (!deal?.id) return;
+    const res = await openDealConversation(deal.id);
+    if (res.conversationId) {
+      window.location.href = `/inbox?c=${res.conversationId}`;
+    } else {
+      toast.error(res.error || "Não foi possível abrir a conversa");
+    }
+  };
 
   const [saving, setSaving] = useState(false);
   const [statusAction, setStatusAction] = useState<DealStatus | null>(null);
@@ -359,22 +372,18 @@ export function DealForm({
                 </select>
               )}
 
-              {linkedConversation && (
-                <button
-                  type="button"
-                  onClick={() => {
-                    // Navegação COMPLETA (não Link/router.push) pro deep-link
-                    // `?c=` remontar a inbox e abrir a conversa certa — o push
-                    // client-side não reativava o efeito (mesmo caso das
-                    // notificações). ANTES ia pra "/inbox" sem o id → abria vazio.
-                    window.location.href = `/inbox?c=${linkedConversation.id}`;
-                  }}
-                  className="mt-1 inline-flex items-center gap-1.5 self-start rounded-md bg-primary/10 px-2 py-1 text-xs text-primary hover:bg-primary/20"
-                >
-                  <MessageSquare className="h-3 w-3" />
-                  Ir para a conversa
-                </button>
-              )}
+              {deal?.id &&
+                (linkedConversation ||
+                  contacts.some((c) => c.id === contactId && !!c.phone)) && (
+                  <button
+                    type="button"
+                    onClick={openChat}
+                    className="mt-1 inline-flex items-center gap-1.5 self-start rounded-md bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-500/20"
+                  >
+                    <MessageSquare className="h-3.5 w-3.5" />
+                    Abrir conversa no WhatsApp
+                  </button>
+                )}
             </div>
 
             {/* Produto do catálogo (opcional): busca + scroll (aguenta catálogo

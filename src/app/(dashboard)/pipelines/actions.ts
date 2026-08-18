@@ -27,6 +27,7 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 import { runDealSuggestions } from '@/lib/ai/deal-suggest'
 import { planStageFollowUp } from '@/lib/ai/followup'
 import { dealSuggestions } from '@/db'
+import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 
 const contactColumns = {
   id: contacts.id,
@@ -315,6 +316,76 @@ export async function setDealNextFollowUp(
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falhou' }
+  }
+}
+
+/**
+ * Abre a conversa do negócio: se já tem conversa vinculada, devolve ela; senão,
+ * resolve/cria a conversa pelo telefone do contato e VINCULA ao negócio (pra da
+ * próxima vez ser 1 clique). Usado pelo botão de WhatsApp no card e no detalhe.
+ */
+export async function openDealConversation(
+  dealId: string,
+): Promise<{ conversationId: string | null; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const deal = firstOrNull(
+      await db
+        .select({
+          conversationId: deals.conversationId,
+          contactId: deals.contactId,
+          assignedTo: deals.assignedTo,
+        })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!deal) return { conversationId: null, error: 'Negócio não encontrado' }
+    if (!dealReadable(ctx.role, ctx.userId, deal.assignedTo)) {
+      return { conversationId: null, error: 'Sem acesso a este negócio' }
+    }
+    if (deal.conversationId) {
+      return { conversationId: deal.conversationId, error: null }
+    }
+    if (!deal.contactId) {
+      return { conversationId: null, error: 'Negócio sem contato' }
+    }
+    const contact = firstOrNull(
+      await db
+        .select({ phone: contacts.phone, name: contacts.name })
+        .from(contacts)
+        .where(
+          and(
+            eq(contacts.id, deal.contactId),
+            eq(contacts.accountId, ctx.accountId),
+          ),
+        )
+        .limit(1),
+    )
+    if (!contact?.phone) {
+      return { conversationId: null, error: 'Contato sem telefone (WhatsApp)' }
+    }
+    let resolved
+    try {
+      resolved = await resolveConversationByPhone(
+        ctx.accountId,
+        contact.phone,
+        contact.name,
+      )
+    } catch {
+      return { conversationId: null, error: 'Não foi possível abrir a conversa' }
+    }
+    // Vincula pra próxima vez ser direto.
+    await db
+      .update(deals)
+      .set({ conversationId: resolved.conversationId })
+      .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+    return { conversationId: resolved.conversationId, error: null }
+  } catch (err) {
+    return {
+      conversationId: null,
+      error: err instanceof Error ? err.message : 'Erro',
+    }
   }
 }
 
