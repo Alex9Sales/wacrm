@@ -263,7 +263,7 @@ export async function sendCommentPrivateReply(
   commentId: string,
   message: string,
   buttons?: DmButton[] | null,
-): Promise<void> {
+): Promise<{ messageId: string }> {
   const url = `${graphBaseOf(ch)}/${igIdOf(ch)}/messages`
   // Com botões (estilo ManyChat): manda como generic template (card + botões
   // URL). Instagram/Messenger aceita ATÉ 3 botões por card. Sem botão: DM de
@@ -290,10 +290,11 @@ export async function sendCommentPrivateReply(
         },
       }
     : { text: message }
-  await graphPost(url, accessTokenOf(ch), {
+  const data = await graphPost(url, accessTokenOf(ch), {
     recipient: { comment_id: commentId },
     message: messagePayload,
   })
+  return { messageId: data.message_id ?? '' }
 }
 
 export const instagramProvider: WhatsAppProvider = {
@@ -381,6 +382,13 @@ export const instagramProvider: WhatsAppProvider = {
           // template/share/etc. → texto legível (ex.: echo do DM com botões).
           else attachmentText = templateText(att)
         }
+
+        // Echo da NOSSA própria mensagem sem NADA renderável: o IG manda o echo
+        // do DM-com-template (botões) SEM o payload → viraria uma bolha "[text]"
+        // vazia. A versão legível já é gravada no ENVIO (instagram-comments →
+        // dispatchInboundMessage), então descartamos este echo oco (por id, ou
+        // por ser oco, não duplica).
+        if (isEcho && !m.text && !mediaUrl && !attachmentText) continue
 
         const norm: NormalizedInbound = {
           externalMessageId: m.mid,

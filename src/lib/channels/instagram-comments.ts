@@ -18,6 +18,7 @@ import { and, eq } from 'drizzle-orm'
 import { db, instagramCommentAutomations, instagramCommentEvents } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import type { ChannelCtx } from './provider'
+import { dispatchInboundMessage } from './inbound'
 import {
   replyToComment,
   sendCommentPrivateReply,
@@ -34,6 +35,14 @@ function resolveDmButtons(rule: Rule): DmButton[] {
     return [{ text: rule.dmButtonText, url: rule.dmButtonUrl }]
   }
   return []
+}
+
+/** Texto legível do DM-com-botões pra gravar no inbox (o echo do IG vem vazio):
+ *  a mensagem + um "🔘 rótulo" por botão. */
+function renderDmText(message: string, buttons: DmButton[]): string {
+  const lines = [message.trim()].filter(Boolean)
+  for (const b of buttons) lines.push(`🔘 ${b.text}`)
+  return lines.join('\n')
 }
 
 interface CommentChange {
@@ -202,14 +211,34 @@ export async function processCommentWebhook(
       }
     }
 
+    const dmButtons = resolveDmButtons(rule)
     try {
-      await sendCommentPrivateReply(
+      const sent = await sendCommentPrivateReply(
         channel,
         c.commentId,
         rule.dmMessage,
-        resolveDmButtons(rule),
+        dmButtons,
       )
       dmSent = true
+      // DM COM BOTÕES: o echo do template chega do IG SEM texto/payload e viraria
+      // uma bolha "[text]" no inbox. Como sabemos o conteúdo aqui, gravamos a
+      // versão legível no ENVIO (o echo oco é descartado no parseWebhook). DM só
+      // de texto NÃO precisa disso (o echo já traz o texto). Best-effort.
+      if (dmButtons.length && c.fromId) {
+        try {
+          await dispatchInboundMessage(channel, {
+            externalMessageId: sent.messageId,
+            fromPhoneE164: '',
+            senderExternalId: c.fromId,
+            senderName: c.fromUsername,
+            fromMe: true,
+            contentType: 'text',
+            contentText: renderDmText(rule.dmMessage, dmButtons),
+          })
+        } catch (recErr) {
+          console.error('[comment-automation] gravar DM no inbox falhou:', recErr)
+        }
+      }
     } catch (e) {
       errMsg = `${errMsg ? errMsg + ' | ' : ''}dm: ${(e as Error).message}`
     }
