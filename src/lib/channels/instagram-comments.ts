@@ -19,11 +19,16 @@ import { db, instagramCommentAutomations, instagramCommentEvents } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import type { ChannelCtx } from './provider'
 import { dispatchInboundMessage } from './inbound'
-import { startFlowRunFromEvent } from '@/lib/flows/engine'
+import {
+  startFlowRunFromEvent,
+  getCommentFlowStart,
+  startSuspendedRun,
+} from '@/lib/flows/engine'
 import {
   replyToComment,
   sendCommentPrivateReply,
   type DmButton,
+  type DmQuickReply,
 } from './providers/instagram'
 
 type Rule = typeof instagramCommentAutomations.$inferSelect
@@ -213,16 +218,43 @@ export async function processCommentWebhook(
     }
 
     const dmButtons = resolveDmButtons(rule)
+
+    // Fase 2b (ManyChat de verdade): se a regra inicia um Fluxo cujo nó de
+    // ENTRADA é send_buttons, mandamos as OPÇÕES do fluxo como QUICK REPLIES no
+    // próprio DM. Tocar num botão: (1) abre a janela de 24h do IG e (2) casa o
+    // reply_id → o motor avança o fluxo. Sem isso, a 2ª msg do fluxo cairia na
+    // trava "fora do período permitido" (a pessoa precisa interagir primeiro).
+    let flowStart: Awaited<ReturnType<typeof getCommentFlowStart>> = null
+    let quickReplies: DmQuickReply[] | null = null
+    if (rule.startFlowId) {
+      flowStart = await getCommentFlowStart(rule.startFlowId, channel.accountId)
+      if (flowStart && flowStart.entryNode.node_type === 'send_buttons') {
+        const btns = Array.isArray(flowStart.entryNode.config.buttons)
+          ? (flowStart.entryNode.config.buttons as Array<{
+              reply_id?: string
+              title?: string
+            }>)
+          : []
+        const qs = btns
+          .filter((b) => b.reply_id && b.title)
+          .map((b) => ({ title: String(b.title), payload: String(b.reply_id) }))
+        if (qs.length) quickReplies = qs
+      }
+    }
+
     // Gravamos o DM no ENVIO quando: tem botões (o echo do template vem vazio e
     // viraria "[text]") OU a regra inicia um Fluxo (precisamos da conversa pra
     // começar a run). DM só de texto sem fluxo não precisa — o echo já traz.
     const needsRecord = dmButtons.length > 0 || !!rule.startFlowId
     try {
+      // Com quick replies, os botões de LINK do DM não vão (o fluxo controla os
+      // botões, que precisam ser de resposta pra abrir a janela).
       const sent = await sendCommentPrivateReply(
         channel,
         c.commentId,
         rule.dmMessage,
-        dmButtons,
+        quickReplies ? null : dmButtons,
+        quickReplies,
       )
       dmSent = true
 
@@ -236,7 +268,14 @@ export async function processCommentWebhook(
             senderName: c.fromUsername,
             fromMe: true,
             contentType: 'text',
-            contentText: renderDmText(rule.dmMessage, dmButtons),
+            contentText: quickReplies
+              ? [
+                  rule.dmMessage.trim(),
+                  ...quickReplies.map((q) => `🔘 ${q.title}`),
+                ]
+                  .filter(Boolean)
+                  .join('\n')
+              : renderDmText(rule.dmMessage, dmButtons),
           })
           if (res) {
             dispatched = {
@@ -249,16 +288,27 @@ export async function processCommentWebhook(
         }
       }
 
-      // Fase 2 (ManyChat): depois do DM, inicia o Fluxo escolhido pro contato, na
-      // conversa do DM — a sequência visual (botões/etapas/tags) continua lá.
+      // Inicia o Fluxo pro contato, na conversa do DM.
       if (rule.startFlowId && dispatched) {
         try {
-          await startFlowRunFromEvent(
-            rule.startFlowId,
-            channel.accountId,
-            dispatched.contactId,
-            dispatched.conversationId,
-          )
+          if (flowStart && quickReplies) {
+            // A 1ª msg (opções) já foi no DM como quick replies → a run fica
+            // PARADA na entrada; o toque no botão avança daqui (janela aberta).
+            await startSuspendedRun(
+              flowStart.flow,
+              dispatched.contactId,
+              dispatched.conversationId,
+            )
+          } else {
+            // Fluxo sem botões de resposta na entrada: start normal (pode
+            // esbarrar na janela de 24h até a pessoa responder).
+            await startFlowRunFromEvent(
+              rule.startFlowId,
+              channel.accountId,
+              dispatched.contactId,
+              dispatched.conversationId,
+            )
+          }
         } catch (flowErr) {
           console.error('[comment-automation] iniciar fluxo falhou:', flowErr)
         }

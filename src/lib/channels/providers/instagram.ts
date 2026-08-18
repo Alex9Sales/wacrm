@@ -104,6 +104,9 @@ interface IgMessaging {
     text?: string
     is_echo?: boolean
     attachments?: IgAttachment[]
+    // Quando a pessoa TOCA num botão de resposta rápida (quick reply): o texto do
+    // botão vem em `text` e o id (reply_id do fluxo) em `quick_reply.payload`.
+    quick_reply?: { payload?: string }
   }
   read?: { mid?: string }
   delivery?: { mids?: string[] }
@@ -258,38 +261,60 @@ export interface DmButton {
   url: string
 }
 
+/** Botão de RESPOSTA RÁPIDA (quick reply): tocar ENVIA uma resposta (com o
+ *  payload), o que faz o fluxo avançar E abre a janela de 24h do IG. */
+export interface DmQuickReply {
+  title: string
+  payload: string
+}
+
 export async function sendCommentPrivateReply(
   ch: ChannelCtx,
   commentId: string,
   message: string,
   buttons?: DmButton[] | null,
+  quickReplies?: DmQuickReply[] | null,
 ): Promise<{ messageId: string }> {
   const url = `${graphBaseOf(ch)}/${igIdOf(ch)}/messages`
-  // Com botões (estilo ManyChat): manda como generic template (card + botões
-  // URL). Instagram/Messenger aceita ATÉ 3 botões por card. Sem botão: DM de
-  // texto simples. Os botões renderizam no app do Instagram.
+  const quicks = (quickReplies ?? []).filter((q) => q.title && q.payload).slice(0, 3)
   const valid = (buttons ?? []).filter((b) => b.text && b.url).slice(0, 3)
-  const messagePayload = valid.length
-    ? {
-        attachment: {
-          type: 'template',
-          payload: {
-            template_type: 'generic',
-            elements: [
-              {
-                // title é obrigatório e limitado (~80). Cada botão, ~20.
-                title: (message || valid[0].text).slice(0, 80),
-                buttons: valid.map((b) => ({
-                  type: 'web_url',
-                  url: b.url,
-                  title: b.text.slice(0, 20),
-                })),
-              },
-            ],
-          },
+
+  // Prioridade: quick replies (abrem a janela e continuam o fluxo) > botões de
+  // link (generic template) > texto puro.
+  let messagePayload: Record<string, unknown>
+  if (quicks.length) {
+    messagePayload = {
+      text: message,
+      quick_replies: quicks.map((q) => ({
+        content_type: 'text',
+        title: q.title.slice(0, 20),
+        payload: q.payload,
+      })),
+    }
+  } else if (valid.length) {
+    // Botões de LINK: generic template (card + botões web_url), renderiza no app.
+    messagePayload = {
+      attachment: {
+        type: 'template',
+        payload: {
+          template_type: 'generic',
+          elements: [
+            {
+              title: (message || valid[0].text).slice(0, 80),
+              buttons: valid.map((b) => ({
+                type: 'web_url',
+                url: b.url,
+                title: b.text.slice(0, 20),
+              })),
+            },
+          ],
         },
-      }
-    : { text: message }
+      },
+    }
+  } else {
+    messagePayload = { text: message }
+  }
+
   const data = await graphPost(url, accessTokenOf(ch), {
     recipient: { comment_id: commentId },
     message: messagePayload,
@@ -397,6 +422,11 @@ export const instagramProvider: WhatsAppProvider = {
           fromMe: isEcho,
           contentType,
           contentText: m.text ?? attachmentText ?? null,
+        }
+        // Toque num botão de resposta rápida → id da opção (reply_id do fluxo).
+        // É o que faz o fluxo AVANÇAR e — de quebra — abre a janela de 24h do IG.
+        if (!isEcho && m.quick_reply?.payload) {
+          norm.interactiveReplyId = m.quick_reply.payload
         }
         if (mediaUrl) {
           norm.media = { kind: contentType, url: mediaUrl }

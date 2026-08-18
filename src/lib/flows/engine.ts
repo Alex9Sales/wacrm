@@ -2042,6 +2042,83 @@ export async function startFlowRunFromEvent(
   }
 }
 
+/**
+ * Carrega um fluxo ATIVO + o nó de ENTRADA (pra automação de comentário do IG
+ * mandar a 1ª mensagem — as opções — como resposta ao comentário, com botões de
+ * resposta rápida). null se o fluxo não existe/não está ativo/sem entrada.
+ */
+export async function getCommentFlowStart(
+  flowId: string,
+  accountId: string,
+): Promise<{ flow: FlowRow; entryNode: FlowNodeRow } | null> {
+  const flow = firstOrNull(
+    await db
+      .select(flowSelection)
+      .from(flowsTable)
+      .where(
+        and(
+          eq(flowsTable.id, flowId),
+          eq(flowsTable.accountId, accountId),
+          eq(flowsTable.status, "active"),
+        ),
+      )
+      .limit(1),
+  ) as unknown as FlowRow | null;
+  if (!flow || !flow.entry_node_id) return null;
+  const nodes = await loadAllNodes(flow.id);
+  const entryNode = nodes.get(flow.entry_node_id);
+  if (!entryNode) return null;
+  return { flow, entryNode };
+}
+
+/**
+ * Cria uma run PARADA no nó de entrada (status active, current = entrada) SEM
+ * enviar nada — a 1ª mensagem já foi mandada como resposta ao comentário (com
+ * quick replies). Quando a pessoa TOCA num botão, o inbound casa o reply_id e o
+ * motor avança daqui (com a janela de 24h já aberta pelo toque). A trava de
+ * 1-run-por-contato faz um start duplicado virar no-op seguro.
+ */
+export async function startSuspendedRun(
+  flow: FlowRow,
+  contactId: string,
+  conversationId: string,
+): Promise<boolean> {
+  try {
+    const run = firstOrThrow(
+      await db
+        .insert(flowRuns)
+        .values({
+          flowId: flow.id,
+          accountId: flow.account_id,
+          userId: flow.user_id,
+          contactId,
+          conversationId,
+          status: "active",
+          currentNodeKey: flow.entry_node_id,
+        })
+        .returning(flowRunSelection),
+    ) as unknown as FlowRunRow;
+    await logEvent(run.id, "started", flow.entry_node_id, {
+      flow_id: flow.id,
+      trigger_type: flow.trigger_type,
+      via: "instagram_comment",
+    });
+    try {
+      await db.execute(sql`SELECT increment_flow_execution_count(${flow.id})`);
+    } catch {
+      // contador é cosmético
+    }
+    return true;
+  } catch (insErr) {
+    if (isUniqueViolation(insErr)) return false;
+    console.error(
+      "[flows] startSuspendedRun error:",
+      insErr instanceof Error ? insErr.message : insErr,
+    );
+    return false;
+  }
+}
+
 // ============================================================
 // Public entry point — the webhook calls this on every inbound.
 // ============================================================
