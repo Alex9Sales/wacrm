@@ -8,7 +8,7 @@
 
 import { and, asc, desc, eq } from 'drizzle-orm'
 
-import { db, channels, instagramCommentAutomations } from '@/db'
+import { db, channels, instagramCommentAutomations, flows } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { loadChannelByAccount } from '@/lib/channels/channels'
@@ -29,6 +29,8 @@ export interface CommentAutomation {
   dm_button_text: string | null
   dm_button_url: string | null
   dm_buttons: { text: string; url: string }[] | null
+  /** Depois do DM, inicia este Fluxo pro contato (null = só o DM). */
+  start_flow_id: string | null
   created_at: string
 }
 
@@ -45,6 +47,8 @@ export interface CommentAutomationInput {
   mediaIds: string[]
   /** Botões (estilo ManyChat) no DM: até 3 { text, url }. Vazio = DM só texto. */
   dmButtons: { text: string; url: string }[]
+  /** Fluxo a iniciar depois do DM (null = só o DM). */
+  startFlowId: string | null
 }
 
 /** Garante que o canal é da conta e é Instagram. Lança se não for. */
@@ -80,6 +84,7 @@ const cols = {
   dm_button_text: instagramCommentAutomations.dmButtonText,
   dm_button_url: instagramCommentAutomations.dmButtonUrl,
   dm_buttons: instagramCommentAutomations.dmButtons,
+  start_flow_id: instagramCommentAutomations.startFlowId,
   created_at: instagramCommentAutomations.createdAt,
 }
 
@@ -156,6 +161,7 @@ export async function createCommentAutomation(
         mediaIds: input.mediaIds.length ? input.mediaIds : null,
         mediaId: null,
         ...buttonCols(input),
+        startFlowId: input.startFlowId || null,
       })
       .returning(cols),
   )
@@ -184,6 +190,7 @@ export async function updateCommentAutomation(
       mediaIds: input.mediaIds.length ? input.mediaIds : null,
       mediaId: null,
       ...buttonCols(input),
+      startFlowId: input.startFlowId || null,
       updatedAt: new Date().toISOString(),
     })
     .where(
@@ -247,6 +254,22 @@ export async function listInstagramPosts(
     thumbnail_url: m.thumbnailUrl,
     permalink: m.permalink,
   }))
+}
+
+export interface FlowLite {
+  id: string
+  name: string
+}
+
+/** Fluxos ATIVOS da conta — pro seletor "iniciar fluxo depois do DM". */
+export async function listActiveFlows(): Promise<FlowLite[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({ id: flows.id, name: flows.name })
+    .from(flows)
+    .where(and(eq(flows.accountId, ctx.accountId), eq(flows.status, 'active')))
+    .orderBy(asc(flows.name))
+  return rows
 }
 
 export interface IgChannelLite {

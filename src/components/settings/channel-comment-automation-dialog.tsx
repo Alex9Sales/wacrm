@@ -37,8 +37,10 @@ import {
   toggleCommentAutomation,
   deleteCommentAutomation,
   listInstagramPosts,
+  listActiveFlows,
   type CommentAutomation,
   type CommentPost,
+  type FlowLite,
 } from './instagram-comments-actions';
 
 const EMPTY = {
@@ -53,6 +55,8 @@ const EMPTY = {
   mediaIds: [] as string[],
   // botões no DM (estilo ManyChat): até 3 { text, url }. Vazio = DM só texto.
   dmButtons: [] as { text: string; url: string }[],
+  // fluxo iniciado depois do DM ('' = só o DM).
+  startFlowId: '',
 };
 
 type FormState = typeof EMPTY;
@@ -84,6 +88,8 @@ export function ChannelCommentAutomationDialog({
   const [posts, setPosts] = useState<CommentPost[]>(initialPosts ?? []);
   const [postsLoading, setPostsLoading] = useState(false);
   const [postsLoaded, setPostsLoaded] = useState(!!initialPosts?.length);
+  // Fluxos ATIVOS da conta pro seletor "iniciar fluxo depois do DM".
+  const [flows, setFlows] = useState<FlowLite[]>([]);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -100,6 +106,13 @@ export function ChannelCommentAutomationDialog({
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Carrega os fluxos ativos uma vez (pro seletor "iniciar fluxo").
+  useEffect(() => {
+    listActiveFlows()
+      .then(setFlows)
+      .catch(() => setFlows([]));
+  }, []);
 
   const loadPosts = useCallback(async () => {
     if (postsLoaded || postsLoading) return;
@@ -151,6 +164,7 @@ export function ChannelCommentAutomationDialog({
         : r.dm_button_text && r.dm_button_url
           ? [{ text: r.dm_button_text, url: r.dm_button_url }]
           : [],
+      startFlowId: r.start_flow_id ?? '',
     });
     setEditing(r.id);
     void loadPosts();
@@ -188,6 +202,7 @@ export function ChannelCommentAutomationDialog({
         oncePerUser: form.oncePerUser,
         mediaIds: form.mediaIds,
         dmButtons: form.dmButtons.filter((b) => b.text.trim() && b.url.trim()),
+        startFlowId: form.startFlowId || null,
       };
       if (editing === 'new') {
         await createCommentAutomation(input);
@@ -378,6 +393,30 @@ export function ChannelCommentAutomationDialog({
                 </button>
               )}
             </div>
+
+            {flows.length > 0 && (
+              <Field label="Depois do DM, iniciar um fluxo (opcional)">
+                <select
+                  value={form.startFlowId}
+                  onChange={(e) =>
+                    setForm({ ...form, startFlowId: e.target.value })
+                  }
+                  className={inputCls}
+                >
+                  <option value="">Não iniciar fluxo (só o DM)</option>
+                  {flows.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+                <p className="mt-1 text-[11px] text-muted-foreground">
+                  A pessoa entra num <strong>Fluxo</strong> (sequência com botões,
+                  etapas e etiquetas) logo depois de receber o DM. Crie fluxos na
+                  aba <strong>Fluxos</strong>.
+                </p>
+              </Field>
+            )}
 
             <label className="flex items-center gap-2 text-sm text-foreground">
               <input

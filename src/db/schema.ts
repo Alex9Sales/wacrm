@@ -2240,12 +2240,16 @@ export const instagramCommentAutomations = pgTable("instagram_comment_automation
 	// Botões do DM (card estilo ManyChat): lista de { text, url }, até 3. Se tiver
 	// ao menos 1, o DM vai como card com os botões (renderiza no app do IG).
 	dmButtons: jsonb("dm_buttons").$type<{ text: string; url: string }[]>(),
+	// Depois de mandar o DM, INICIA este Fluxo pro contato (sequência visual).
+	// NULL = só o DM. FK ON DELETE SET NULL (excluir o fluxo não apaga a regra).
+	startFlowId: uuid("start_flow_id"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("idx_ig_comment_automations_channel").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.channelId.asc().nullsLast().op("uuid_ops")),
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "instagram_comment_automations_account_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.channelId], foreignColumns: [channels.id], name: "instagram_comment_automations_channel_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.startFlowId], foreignColumns: [flows.id], name: "ig_comment_automations_start_flow_id_fkey" }).onDelete("set null"),
 ]);
 
 export const instagramCommentEvents = pgTable("instagram_comment_events", {

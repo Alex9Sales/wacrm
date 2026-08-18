@@ -19,6 +19,7 @@ import { db, instagramCommentAutomations, instagramCommentEvents } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import type { ChannelCtx } from './provider'
 import { dispatchInboundMessage } from './inbound'
+import { startFlowRunFromEvent } from '@/lib/flows/engine'
 import {
   replyToComment,
   sendCommentPrivateReply,
@@ -212,6 +213,10 @@ export async function processCommentWebhook(
     }
 
     const dmButtons = resolveDmButtons(rule)
+    // Gravamos o DM no ENVIO quando: tem botões (o echo do template vem vazio e
+    // viraria "[text]") OU a regra inicia um Fluxo (precisamos da conversa pra
+    // começar a run). DM só de texto sem fluxo não precisa — o echo já traz.
+    const needsRecord = dmButtons.length > 0 || !!rule.startFlowId
     try {
       const sent = await sendCommentPrivateReply(
         channel,
@@ -220,13 +225,11 @@ export async function processCommentWebhook(
         dmButtons,
       )
       dmSent = true
-      // DM COM BOTÕES: o echo do template chega do IG SEM texto/payload e viraria
-      // uma bolha "[text]" no inbox. Como sabemos o conteúdo aqui, gravamos a
-      // versão legível no ENVIO (o echo oco é descartado no parseWebhook). DM só
-      // de texto NÃO precisa disso (o echo já traz o texto). Best-effort.
-      if (dmButtons.length && c.fromId) {
+
+      let dispatched: { conversationId: string; contactId: string } | null = null
+      if (needsRecord && c.fromId) {
         try {
-          await dispatchInboundMessage(channel, {
+          const res = await dispatchInboundMessage(channel, {
             externalMessageId: sent.messageId,
             fromPhoneE164: '',
             senderExternalId: c.fromId,
@@ -235,8 +238,29 @@ export async function processCommentWebhook(
             contentType: 'text',
             contentText: renderDmText(rule.dmMessage, dmButtons),
           })
+          if (res) {
+            dispatched = {
+              conversationId: res.conversationId,
+              contactId: res.contactId,
+            }
+          }
         } catch (recErr) {
           console.error('[comment-automation] gravar DM no inbox falhou:', recErr)
+        }
+      }
+
+      // Fase 2 (ManyChat): depois do DM, inicia o Fluxo escolhido pro contato, na
+      // conversa do DM — a sequência visual (botões/etapas/tags) continua lá.
+      if (rule.startFlowId && dispatched) {
+        try {
+          await startFlowRunFromEvent(
+            rule.startFlowId,
+            channel.accountId,
+            dispatched.contactId,
+            dispatched.conversationId,
+          )
+        } catch (flowErr) {
+          console.error('[comment-automation] iniciar fluxo falhou:', flowErr)
         }
       }
     } catch (e) {

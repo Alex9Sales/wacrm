@@ -2003,6 +2003,45 @@ export async function dispatchTagAddedToFlows(
   }
 }
 
+/**
+ * Inicia um fluxo ATIVO pra um contato a partir de um evento externo (ex.: a
+ * automação de comentário do Instagram, depois de mandar o DM). Carrega o fluxo
+ * (tem que ser da conta + `active` + com nó de entrada), resolve os nós e começa
+ * a run. A trava de 1-run-por-contato torna um start duplicado um no-op seguro.
+ * Best-effort: devolve false (sem lançar) se o fluxo não existe/não está ativo.
+ */
+export async function startFlowRunFromEvent(
+  flowId: string,
+  accountId: string,
+  contactId: string,
+  conversationId: string,
+): Promise<boolean> {
+  try {
+    const flow = firstOrNull(
+      await db
+        .select(flowSelection)
+        .from(flowsTable)
+        .where(
+          and(
+            eq(flowsTable.id, flowId),
+            eq(flowsTable.accountId, accountId),
+            eq(flowsTable.status, "active"),
+          ),
+        )
+        .limit(1),
+    ) as unknown as FlowRow | null;
+    if (!flow || !flow.entry_node_id) return false;
+    const nodes = await loadAllNodes(flow.id);
+    return await startRunForContact(flow, contactId, conversationId, nodes);
+  } catch (err) {
+    console.error(
+      "[flows] startFlowRunFromEvent error:",
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
+}
+
 // ============================================================
 // Public entry point — the webhook calls this on every inbound.
 // ============================================================
