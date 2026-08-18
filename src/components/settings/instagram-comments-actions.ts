@@ -200,7 +200,8 @@ export async function listInstagramPosts(
 ): Promise<CommentPost[]> {
   const ctx = await getCurrentAccount()
   await assertIgChannel(ctx.accountId, channelId)
-  const ch = await loadChannelByAccount(channelId, ctx.accountId)
+  // ⚠️ ordem: loadChannelByAccount(accountId, channelId) — NÃO inverter.
+  const ch = await loadChannelByAccount(ctx.accountId, channelId)
   if (!ch) return []
   const media = await fetchInstagramMedia(ch, 30)
   return media.map((m) => ({
