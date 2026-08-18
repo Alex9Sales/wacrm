@@ -190,6 +190,7 @@ export async function fetchInstagramMedia(
       console.error('[instagram media] fetch failed', res.status, json)
       return []
     }
+    console.log('[instagram media] ok', (json.data ?? []).length, 'posts para', igIdOf(ch))
     return (json.data ?? []).map((m) => ({
       id: String(m.id),
       caption: (m.caption as string | undefined) ?? null,

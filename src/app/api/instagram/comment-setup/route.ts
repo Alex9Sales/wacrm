@@ -28,8 +28,17 @@ export async function GET(request: Request) {
       listInstagramPosts(channelId),
       listCommentAutomations(channelId),
     ])
+    console.log(
+      '[comment-setup] channel',
+      channelId,
+      'posts',
+      posts.length,
+      'rules',
+      rules.length,
+    )
     return NextResponse.json({ posts, rules })
   } catch (err) {
+    console.error('[comment-setup] error', err)
     return toErrorResponse(err)
   }
 }
