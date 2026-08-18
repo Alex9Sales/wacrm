@@ -1,25 +1,38 @@
 'use client';
 
 // ============================================================
-// Home das automações de comentário do Instagram (comentário→DM), agora sob
-// Automações (antes ficava escondido em Config→Canais). Lista as contas IG
-// conectadas e abre o gerenciador de automações de cada uma (com seletor de
-// post + mensagem). Reusa o ChannelCommentAutomationDialog.
+// Galeria das automações de comentário do Instagram. Abre já listando os POSTS
+// da conta (miniaturas) + um bloco "Qualquer post". Cada post mostra quantas
+// automações tem; clicar abre o editor já com aquele post selecionado. Fica sob
+// Automações (antes era escondido em Config→Canais).
 // ============================================================
 
-import { useEffect, useState } from 'react';
+import { useCallback, useEffect, useState } from 'react';
 import { useRouter } from 'next/navigation';
-import { ArrowLeft, Loader2, MessageCircle, Settings2 } from 'lucide-react';
+import { toast } from 'sonner';
+import { ArrowLeft, Image as ImageIcon, Loader2, Sparkles } from 'lucide-react';
 
-import { Button } from '@/components/ui/button';
 import { ChannelCommentAutomationDialog } from '@/components/settings/channel-comment-automation-dialog';
 import type { ChannelSummary } from '@/components/settings/channels-tab';
+import {
+  listInstagramPosts,
+  listCommentAutomations,
+  type CommentPost,
+  type CommentAutomation,
+} from '@/components/settings/instagram-comments-actions';
 
 export default function CommentAutomationsPage() {
   const router = useRouter();
   const [channels, setChannels] = useState<ChannelSummary[] | null>(null);
   const [error, setError] = useState<string | null>(null);
-  const [active, setActive] = useState<ChannelSummary | null>(null);
+  const [selectedId, setSelectedId] = useState<string | null>(null);
+  const [posts, setPosts] = useState<CommentPost[]>([]);
+  const [rules, setRules] = useState<CommentAutomation[]>([]);
+  const [loadingData, setLoadingData] = useState(false);
+  const [dialog, setDialog] = useState<{
+    channel: ChannelSummary;
+    mediaId: string;
+  } | null>(null);
 
   useEffect(() => {
     fetch('/api/channels')
@@ -28,17 +41,47 @@ export default function CommentAutomationsPage() {
         if (!r.ok) throw new Error(b?.error ?? 'Falha ao carregar canais');
         return b;
       })
-      .then((b) =>
-        setChannels(
-          ((b.channels ?? []) as ChannelSummary[]).filter(
-            (c) => c.provider === 'instagram',
-          ),
-        ),
-      )
+      .then((b) => {
+        const igs = ((b.channels ?? []) as ChannelSummary[]).filter(
+          (c) => c.provider === 'instagram',
+        );
+        setChannels(igs);
+        if (igs[0]) setSelectedId(igs[0].id);
+      })
       .catch((e) =>
         setError(e instanceof Error ? e.message : 'Falha ao carregar'),
       );
   }, []);
+
+  const selected = channels?.find((c) => c.id === selectedId) ?? null;
+
+  const loadData = useCallback(async (channelId: string) => {
+    setLoadingData(true);
+    try {
+      const [p, r] = await Promise.all([
+        listInstagramPosts(channelId),
+        listCommentAutomations(channelId),
+      ]);
+      setPosts(p);
+      setRules(r);
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao carregar posts.');
+    } finally {
+      setLoadingData(false);
+    }
+  }, []);
+
+  useEffect(() => {
+    if (selectedId) void loadData(selectedId);
+  }, [selectedId, loadData]);
+
+  const countFor = (mediaId: string | null) =>
+    rules.filter((r) => (mediaId ? r.media_id === mediaId : !r.media_id)).length;
+
+  const closeDialog = () => {
+    setDialog(null);
+    if (selectedId) void loadData(selectedId);
+  };
 
   return (
     <div className="space-y-6">
@@ -54,9 +97,9 @@ export default function CommentAutomationsPage() {
           Automações de comentário
         </h1>
         <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-          Alguém comenta uma palavra-chave num post do Instagram → o CRM responde
-          o comentário e manda um DM com o link. Você escolhe o post e a mensagem
-          de cada automação.
+          Escolha um post → quando alguém comentar uma palavra-chave nele, o CRM
+          responde e manda um DM com o link. Ou use &ldquo;Qualquer post&rdquo;
+          pra valer em todos.
         </p>
       </div>
 
@@ -74,42 +117,107 @@ export default function CommentAutomationsPage() {
             Nenhuma conta do Instagram conectada
           </p>
           <p className="mt-1 text-xs text-muted-foreground">
-            Conecte o Instagram em Config → Canais para criar automações de
-            comentário.
+            Conecte o Instagram em Config → Canais para criar automações.
           </p>
         </div>
       ) : (
-        <ul className="space-y-3">
-          {channels.map((c) => (
-            <li
-              key={c.id}
-              className="flex items-center justify-between gap-3 rounded-xl border border-border bg-card p-4"
+        <>
+          {channels.length > 1 && (
+            <select
+              className="h-9 w-full max-w-xs rounded-lg border border-input bg-transparent px-3 text-sm"
+              value={selectedId ?? ''}
+              onChange={(e) => setSelectedId(e.target.value)}
             >
-              <div className="flex min-w-0 items-center gap-3">
-                <span className="flex h-10 w-10 items-center justify-center rounded-lg bg-gradient-to-tr from-[#feda75] via-[#d62976] to-[#4f5bd5] text-white">
-                  <MessageCircle className="size-5" />
+              {channels.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          )}
+
+          {loadingData ? (
+            <div className="flex h-40 items-center justify-center">
+              <Loader2 className="size-6 animate-spin text-primary" />
+            </div>
+          ) : (
+            <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5">
+              {/* Qualquer post */}
+              <button
+                type="button"
+                onClick={() =>
+                  selected && setDialog({ channel: selected, mediaId: '' })
+                }
+                className="group relative flex aspect-square flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-card p-3 text-center transition-colors hover:border-primary/50"
+              >
+                <span className="flex size-10 items-center justify-center rounded-full bg-primary/10 text-primary">
+                  <Sparkles className="size-5" />
                 </span>
-                <div className="min-w-0">
-                  <p className="truncate text-sm font-medium text-foreground">
-                    {c.name}
-                  </p>
-                  <p className="text-xs text-muted-foreground">Instagram</p>
+                <span className="text-xs font-medium text-foreground">
+                  Qualquer post
+                </span>
+                <CountBadge n={countFor(null)} />
+              </button>
+
+              {posts.length === 0 && (
+                <div className="col-span-full rounded-xl border border-dashed border-border bg-card/40 p-6 text-center text-xs text-muted-foreground">
+                  Não consegui listar os posts agora (ou a conta não tem posts).
+                  Você ainda pode criar uma regra em &ldquo;Qualquer post&rdquo;.
                 </div>
-              </div>
-              <Button onClick={() => setActive(c)}>
-                <Settings2 className="size-4" /> Gerenciar automações
-              </Button>
-            </li>
-          ))}
-        </ul>
+              )}
+
+              {posts.map((p) => (
+                <button
+                  key={p.id}
+                  type="button"
+                  onClick={() =>
+                    selected && setDialog({ channel: selected, mediaId: p.id })
+                  }
+                  title={p.caption ?? ''}
+                  className="group relative aspect-square overflow-hidden rounded-xl border border-border bg-muted transition-transform hover:scale-[1.02]"
+                >
+                  {p.thumbnail_url ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img
+                      src={p.thumbnail_url}
+                      alt={p.caption ?? ''}
+                      className="h-full w-full object-cover"
+                    />
+                  ) : (
+                    <span className="flex h-full w-full items-center justify-center text-muted-foreground">
+                      <ImageIcon className="size-6" />
+                    </span>
+                  )}
+                  <span className="pointer-events-none absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/60 to-transparent p-1.5 text-left">
+                    <span className="line-clamp-1 text-[10px] text-white/90">
+                      {p.caption || 'Sem legenda'}
+                    </span>
+                  </span>
+                  <CountBadge n={countFor(p.id)} />
+                </button>
+              ))}
+            </div>
+          )}
+        </>
       )}
 
-      {active && (
+      {dialog && (
         <ChannelCommentAutomationDialog
-          channel={active}
-          onClose={() => setActive(null)}
+          channel={dialog.channel}
+          initialMediaId={dialog.mediaId}
+          onClose={closeDialog}
         />
       )}
     </div>
+  );
+}
+
+/** Selo com o número de automações do post (só aparece se > 0). */
+function CountBadge({ n }: { n: number }) {
+  if (n <= 0) return null;
+  return (
+    <span className="absolute right-1.5 top-1.5 z-10 inline-flex min-w-5 items-center justify-center rounded-full bg-primary px-1.5 text-[10px] font-semibold text-primary-foreground shadow">
+      {n}
+    </span>
   );
 }

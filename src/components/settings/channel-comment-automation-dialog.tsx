@@ -49,9 +49,14 @@ type FormState = typeof EMPTY;
 export function ChannelCommentAutomationDialog({
   channel,
   onClose,
+  initialMediaId,
 }: {
   channel: ChannelSummary;
   onClose: () => void;
+  /** Quando vem da galeria: '' = qualquer post, ou o media_id do post clicado.
+   *  A lista filtra por esse post e o "novo" já vem com ele selecionado.
+   *  undefined = modo geral (lista tudo). */
+  initialMediaId?: string | null;
 }) {
   const [rules, setRules] = useState<CommentAutomation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -94,10 +99,19 @@ export function ChannelCommentAutomationDialog({
   }, [channel.id, postsLoaded, postsLoading]);
 
   const startNew = () => {
-    setForm(EMPTY);
+    setForm({ ...EMPTY, mediaId: initialMediaId ?? '' });
     setEditing('new');
     void loadPosts();
   };
+
+  // Vindo da galeria (initialMediaId definido): mostra só as regras daquele post
+  // (ou as "qualquer post" quando ''). Modo geral (undefined) lista tudo.
+  const displayRules =
+    initialMediaId === undefined
+      ? rules
+      : rules.filter((r) =>
+          initialMediaId ? r.media_id === initialMediaId : !r.media_id,
+        );
 
   const startEdit = (r: CommentAutomation) => {
     setForm({
@@ -281,12 +295,12 @@ export function ChannelCommentAutomationDialog({
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="size-5 animate-spin text-primary" />
               </div>
-            ) : rules.length === 0 ? (
+            ) : displayRules.length === 0 ? (
               <p className="py-6 text-center text-sm text-muted-foreground">
                 Nenhuma automação ainda. Crie a primeira.
               </p>
             ) : (
-              rules.map((r) => (
+              displayRules.map((r) => (
                 <div
                   key={r.id}
                   className="flex items-center justify-between gap-2 rounded-lg border border-border bg-background px-3 py-2"
