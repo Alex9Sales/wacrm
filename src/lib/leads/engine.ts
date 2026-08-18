@@ -16,6 +16,7 @@ import { parseMetaLeadEvents, fetchMetaLead } from '@/lib/leads/providers/meta'
 const PROVIDER_LABEL: Record<LoadedLeadSource['provider'], string> = {
   tiktok: 'TikTok',
   meta: 'Meta',
+  linkedin: 'LinkedIn',
 }
 
 /** Etiquetas da origem — pra filtrar o lead no funil num piscar de olhos. */

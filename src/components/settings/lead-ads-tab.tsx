@@ -38,6 +38,7 @@ import {
   toggleLeadSource,
   deleteLeadSource,
   getTikTokConnectUrl,
+  getLinkedInConnectUrl,
   type LeadProvider,
   type LeadSourceRow,
 } from '@/components/settings/lead-ads-actions';
@@ -71,6 +72,14 @@ const EMPTY_FORM: FormState = {
 const PROVIDER_LABEL: Record<LeadProvider, string> = {
   tiktok: 'TikTok',
   meta: 'Meta (Facebook/Instagram)',
+  linkedin: 'LinkedIn',
+};
+
+/** Rótulo da chave de roteamento por provedor (mostrado no card e no form). */
+const ACCOUNT_ID_LABEL: Record<LeadProvider, string> = {
+  meta: 'page_id',
+  tiktok: 'advertiser_id',
+  linkedin: 'organization id',
 };
 
 export function LeadAdsTab() {
@@ -95,8 +104,14 @@ export function LeadAdsTab() {
     const tk = params.get('tiktok');
     if (tk === 'connected') toast.success('TikTok conectado! Suas contas de anúncios entraram como fontes.');
     else if (tk === 'error') toast.error('Não foi possível conectar o TikTok. Tente de novo ou use a conexão manual.');
-    if (tk) {
+    // Retorno do OAuth do LinkedIn (?linkedin=connected|connected_no_org|error).
+    const li = params.get('linkedin');
+    if (li === 'connected') toast.success('LinkedIn conectado! Suas organizações entraram como fontes.');
+    else if (li === 'connected_no_org') toast.success('LinkedIn conectado! Informe o organization id na fonte pra ativar o roteamento.');
+    else if (li === 'error') toast.error('Não foi possível conectar o LinkedIn. Tente de novo ou use a conexão manual.');
+    if (tk || li) {
       params.delete('tiktok');
+      params.delete('linkedin');
       const qs = params.toString();
       window.history.replaceState(null, '', `/settings?${qs}`);
     }
@@ -105,6 +120,15 @@ export function LeadAdsTab() {
   const connectTikTok = async () => {
     try {
       const url = await getTikTokConnectUrl();
+      window.location.href = url;
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao iniciar a conexão.');
+    }
+  };
+
+  const connectLinkedIn = async () => {
+    try {
+      const url = await getLinkedInConnectUrl();
       window.location.href = url;
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao iniciar a conexão.');
@@ -225,15 +249,18 @@ export function LeadAdsTab() {
             <Megaphone className="h-5 w-5 text-primary" /> Anúncios de Lead
           </h2>
           <p className="mt-1 max-w-2xl text-sm text-muted-foreground">
-            Conecte os anúncios de lead do TikTok e do Meta. Todo lead que
-            preenche o formulário cai aqui: vira contato + card no funil na hora —
-            e, se você ligar, a IA já dá o primeiro alô no WhatsApp.
+            Conecte os anúncios de lead do TikTok, do Meta e do LinkedIn. Todo
+            lead que preenche o formulário cai aqui: vira contato + card no funil
+            na hora — e, se você ligar, a IA já dá o primeiro alô no WhatsApp.
           </p>
         </div>
         {isAdmin && (
           <div className="flex shrink-0 items-center gap-2">
             <Button variant="outline" onClick={connectTikTok}>
               Conectar TikTok
+            </Button>
+            <Button variant="outline" onClick={connectLinkedIn}>
+              Conectar LinkedIn
             </Button>
             <Button onClick={openNew}>
               <Plus className="h-4 w-4" /> Adicionar fonte
@@ -268,7 +295,7 @@ export function LeadAdsTab() {
                       {s.deliver_to_ai && <Badge>IA no automático</Badge>}
                     </div>
                     <p className="mt-0.5 truncate text-xs text-muted-foreground">
-                      {s.provider === 'meta' ? 'page_id' : 'advertiser_id'}:{' '}
+                      {ACCOUNT_ID_LABEL[s.provider]}:{' '}
                       {s.external_account_id || '—'}
                       {s.form_id ? ` · form ${s.form_id}` : ''}
                     </p>
@@ -321,6 +348,14 @@ export function LeadAdsTab() {
                         <li>Assine o campo <b>leadgen</b>.</li>
                         <li>Conecte a Página e publique um anúncio de lead → teste enviando um lead.</li>
                       </ol>
+                    ) : s.provider === 'linkedin' ? (
+                      <ol className="ml-4 list-decimal space-y-1 pt-1">
+                        <li>No app do LinkedIn (Developers), com o <b>Lead Sync API</b> aprovado.</li>
+                        <li>Em <b>Webhooks</b> (leadNotifications), aponte o callback para a URL acima.</li>
+                        <li>Na validação, informe o <b>Client Secret</b> do app (é ele que assina) no campo App secret da fonte.</li>
+                        <li>Autorize a organização (organization id acima) via <b>Conectar LinkedIn</b> e publique um Lead Gen Form.</li>
+                        <li>Envie um lead de teste → ele deve cair no funil.</li>
+                      </ol>
                     ) : (
                       <ol className="ml-4 list-decimal space-y-1 pt-1">
                         <li>No TikTok for Business (Developers), app com <b>Lead Generation</b>.</li>
@@ -360,6 +395,7 @@ export function LeadAdsTab() {
               >
                 <option value="tiktok">TikTok</option>
                 <option value="meta">Meta (Facebook/Instagram)</option>
+                <option value="linkedin">LinkedIn</option>
               </select>
             </div>
 
@@ -373,13 +409,25 @@ export function LeadAdsTab() {
             </div>
 
             <div className="space-y-1.5">
-              <Label>{form.provider === 'meta' ? 'page_id (da Página)' : 'advertiser_id (conta de anúncios)'}</Label>
+              <Label>
+                {form.provider === 'meta'
+                  ? 'page_id (da Página)'
+                  : form.provider === 'linkedin'
+                    ? 'organization id (da Página de empresa)'
+                    : 'advertiser_id (conta de anúncios)'}
+              </Label>
               <Input
                 value={form.externalAccountId}
                 onChange={(e) =>
                   setForm((f) => ({ ...f, externalAccountId: e.target.value }))
                 }
-                placeholder={form.provider === 'meta' ? '1158771580642406' : '700000000000000'}
+                placeholder={
+                  form.provider === 'meta'
+                    ? '1158771580642406'
+                    : form.provider === 'linkedin'
+                      ? '144549939'
+                      : '700000000000000'
+                }
                 autoComplete="off"
               />
             </div>
@@ -389,7 +437,13 @@ export function LeadAdsTab() {
               <Textarea
                 value={form.accessToken}
                 onChange={(e) => setForm((f) => ({ ...f, accessToken: e.target.value }))}
-                placeholder={form.provider === 'meta' ? 'Page Access Token' : 'Access Token do app TikTok'}
+                placeholder={
+                  form.provider === 'meta'
+                    ? 'Page Access Token'
+                    : form.provider === 'linkedin'
+                      ? 'Access token do LinkedIn (OAuth)'
+                      : 'Access Token do app TikTok'
+                }
                 rows={2}
                 autoComplete="off"
               />
@@ -443,6 +497,27 @@ export function LeadAdsTab() {
                     autoComplete="off"
                   />
                 </div>
+              </div>
+            )}
+
+            {form.provider === 'linkedin' && (
+              <div className="space-y-1.5">
+                <Label>
+                  Client Secret{' '}
+                  <span className="text-xs text-muted-foreground">(recomendado)</span>
+                </Label>
+                <Input
+                  type="password"
+                  value={form.appSecret}
+                  onChange={(e) => setForm((f) => ({ ...f, appSecret: e.target.value }))}
+                  placeholder="usa LINKEDIN_CLIENT_SECRET se vazio"
+                  autoComplete="off"
+                />
+                <p className="text-xs text-muted-foreground">
+                  Assina o webhook (X-LI-Signature) e responde ao desafio de
+                  validação. Sem ele, o CRM aceita o lead sem validar a assinatura
+                  (piloto).
+                </p>
               </div>
             )}
 

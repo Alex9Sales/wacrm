@@ -450,7 +450,7 @@ export const channels = pgTable("channels", {
 export const leadAdSources = pgTable("lead_ad_sources", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	accountId: uuid("account_id").notNull(),
-	// 'tiktok' | 'meta'
+	// 'tiktok' | 'meta' | 'linkedin'
 	provider: text().notNull(),
 	name: text().notNull(),
 	status: text().default('connected').notNull(),
@@ -481,7 +481,7 @@ export const leadAdSources = pgTable("lead_ad_sources", {
 			name: "lead_ad_sources_account_id_fkey"
 		}).onDelete("cascade"),
 	unique("lead_ad_sources_account_id_name_key").on(table.accountId, table.name),
-	check("lead_ad_sources_provider_check", sql`provider = ANY (ARRAY['tiktok'::text, 'meta'::text])`),
+	check("lead_ad_sources_provider_check", sql`provider = ANY (ARRAY['tiktok'::text, 'meta'::text, 'linkedin'::text])`),
 ]);
 
 export const conversations = pgTable("conversations", {

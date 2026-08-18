@@ -15,8 +15,9 @@ import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { encrypt } from '@/lib/whatsapp/encryption'
 import { buildTikTokAuthUrl } from '@/lib/leads/providers/tiktok-oauth'
+import { buildLinkedInAuthUrl } from '@/lib/leads/providers/linkedin-oauth'
 
-export type LeadProvider = 'tiktok' | 'meta'
+export type LeadProvider = 'tiktok' | 'meta' | 'linkedin'
 
 /** Linha segura (sem o token) exibida na UI. */
 export interface LeadSourceRow {
@@ -37,7 +38,7 @@ export interface LeadSourceRow {
 export interface LeadSourceInput {
   provider: LeadProvider
   name: string
-  /** page_id (Meta) / advertiser_id (TikTok). */
+  /** page_id (Meta) / advertiser_id (TikTok) / organization id (LinkedIn). */
   externalAccountId: string
   accessToken: string
   formId?: string | null
@@ -101,6 +102,14 @@ export async function getTikTokConnectUrl(): Promise<string> {
   return buildTikTokAuthUrl(ctx.accountId)
 }
 
+/** Inicia o OAuth 1-clique do LinkedIn — devolve a URL de autorização.
+ *  Lança uma mensagem amigável se o Lead Sync ainda não estiver liberado
+ *  (em análise). */
+export async function getLinkedInConnectUrl(): Promise<string> {
+  const ctx = await requireRole('admin')
+  return buildLinkedInAuthUrl(ctx.accountId)
+}
+
 /** Funis da conta p/ o seletor de destino. */
 export async function listPipelinesForSelect(): Promise<
   { id: string; name: string }[]
@@ -115,7 +124,11 @@ export async function listPipelinesForSelect(): Promise<
 }
 
 function validate(input: LeadSourceInput): void {
-  if (input.provider !== 'tiktok' && input.provider !== 'meta') {
+  if (
+    input.provider !== 'tiktok' &&
+    input.provider !== 'meta' &&
+    input.provider !== 'linkedin'
+  ) {
     throw new Error('Provedor inválido.')
   }
   if (!input.name.trim()) throw new Error('Dê um nome à fonte.')
@@ -123,7 +136,9 @@ function validate(input: LeadSourceInput): void {
     throw new Error(
       input.provider === 'meta'
         ? 'Informe o page_id da Página.'
-        : 'Informe o advertiser_id da conta de anúncios.',
+        : input.provider === 'linkedin'
+          ? 'Informe o organization id (id numérico da Página de empresa).'
+          : 'Informe o advertiser_id da conta de anúncios.',
     )
   }
   if (!input.accessToken.trim()) throw new Error('Cole o token de acesso.')

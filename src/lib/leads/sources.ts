@@ -12,7 +12,7 @@ import { and, eq } from 'drizzle-orm'
 import { db, leadAdSources } from '@/db'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
-export type LeadProvider = 'tiktok' | 'meta'
+export type LeadProvider = 'tiktok' | 'meta' | 'linkedin'
 
 export interface LoadedLeadSource {
   id: string

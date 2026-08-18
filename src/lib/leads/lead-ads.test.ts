@@ -1,7 +1,17 @@
+import crypto from 'node:crypto'
+
 import { describe, it, expect } from 'vitest'
 
 import { parseMetaLeadEvents, hasMetaLeadEvents } from '@/lib/leads/providers/meta'
 import { parseTikTokLeadEvents } from '@/lib/leads/providers/tiktok'
+import {
+  parseLinkedInLeadEvents,
+  hasLinkedInLeadEvents,
+  verifyLinkedInSignature,
+  linkedInChallengeResponse,
+  resolveLinkedInLead,
+} from '@/lib/leads/providers/linkedin'
+import type { LoadedLeadSource } from '@/lib/leads/sources'
 import { mapContactFields, buildLeadNotes } from '@/lib/leads/providers/shared'
 
 // Corpo real de um webhook de leadgen do Meta (object:'page').
@@ -122,6 +132,100 @@ describe('TikTok — parse tolerante do webhook', () => {
     expect(events[0].inlineFields).toEqual({
       name: 'Beto',
       phone_number: '67911112222',
+    })
+  })
+})
+
+describe('LinkedIn Lead Sync — parse tolerante do webhook', () => {
+  it('extrai organization id da URN + leadId (leadNotifications)', () => {
+    const body = {
+      elements: [
+        {
+          owner: 'urn:li:organization:144549939',
+          leadFormResponse: 'urn:li:leadGenFormResponse:6789',
+          form: 'urn:li:leadGenForm:555',
+        },
+      ],
+    }
+    const events = parseLinkedInLeadEvents(body)
+    expect(events).toHaveLength(1)
+    expect(events[0].organizationId).toBe('144549939')
+    expect(events[0].leadId).toBe('urn:li:leadGenFormResponse:6789')
+    expect(events[0].formId).toBe('urn:li:leadGenForm:555')
+  })
+
+  it('lê campos inline no formato answers do LinkedIn', () => {
+    const body = {
+      owner: 'urn:li:organization:144549939',
+      id: 'resp-1',
+      answers: [
+        { name: 'first_name', answer: 'Ana' },
+        { name: 'last_name', answer: 'Souza' },
+        {
+          name: 'phone_number',
+          answerDetails: { textQuestionAnswer: { answer: '67988887777' } },
+        },
+        { name: 'email', answer: 'ana@ex.com' },
+      ],
+    }
+    const events = parseLinkedInLeadEvents(body)
+    expect(events).toHaveLength(1)
+    expect(events[0].inlineFields).toEqual({
+      first_name: 'Ana',
+      last_name: 'Souza',
+      phone_number: '67988887777',
+      email: 'ana@ex.com',
+    })
+  })
+
+  it('hasLinkedInLeadEvents distingue lead de corpo vazio', () => {
+    expect(hasLinkedInLeadEvents({ owner: 'urn:li:organization:1', id: 'x' })).toBe(true)
+    expect(hasLinkedInLeadEvents({ ping: true })).toBe(false)
+  })
+
+  it('valida a assinatura HMAC-SHA256 (base64 e hex) e rejeita a errada', () => {
+    const secret = 'client-secret-123'
+    const raw = JSON.stringify({ owner: 'urn:li:organization:1', id: 'x' })
+    const b64 = crypto.createHmac('sha256', secret).update(raw).digest('base64')
+    const hex = crypto.createHmac('sha256', secret).update(raw).digest('hex')
+    expect(verifyLinkedInSignature(raw, b64, secret)).toBe(true)
+    expect(verifyLinkedInSignature(raw, hex, secret)).toBe(true)
+    expect(verifyLinkedInSignature(raw, `sha256=${hex}`, secret)).toBe(true)
+    expect(verifyLinkedInSignature(raw, 'deadbeef', secret)).toBe(false)
+    expect(verifyLinkedInSignature(raw, b64, 'outro-secret')).toBe(false)
+  })
+
+  it('responde ao desafio com o HMAC hex do challengeCode', () => {
+    const secret = 'client-secret-123'
+    const code = 'abc123'
+    const expected = crypto.createHmac('sha256', secret).update(code).digest('hex')
+    expect(linkedInChallengeResponse(code, secret)).toBe(expected)
+    expect(linkedInChallengeResponse(code, null)).toBeNull()
+  })
+
+  it('resolve o lead a partir dos campos inline (sem buscar na API)', async () => {
+    const source = {
+      accessToken: 'tok',
+      providerMeta: {},
+    } as unknown as LoadedLeadSource
+    const ev = {
+      organizationId: '144549939',
+      leadId: 'resp-1',
+      formId: null,
+      inlineFields: {
+        full_name: 'Ana Souza',
+        phone_number: '67988887777',
+        email: 'ana@ex.com',
+        empresa: 'Loja X',
+      },
+    }
+    const lead = await resolveLinkedInLead(source, ev)
+    expect(lead).not.toBeNull()
+    expect(lead).toMatchObject({
+      name: 'Ana Souza',
+      phone: '67988887777',
+      email: 'ana@ex.com',
+      company: 'Loja X',
     })
   })
 })
