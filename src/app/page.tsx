@@ -10,6 +10,7 @@ import {
   Check,
   Sparkles,
   Workflow,
+  ShieldCheck,
 } from 'lucide-react'
 import { getSessionUserId } from '@/lib/auth/session'
 
@@ -54,6 +55,11 @@ const FEATURES = [
     icon: Zap,
     title: 'Disparos em massa',
     desc: 'Campanhas para a sua carteira inteira, com acompanhamento de entrega — no número oficial ou no seu WhatsApp.',
+  },
+  {
+    icon: ShieldCheck,
+    title: 'Anti-ban: protege seu número',
+    desc: 'Opção de descadastro automática nos disparos e agendamentos, bloqueio de quem pede pra sair (e o sistema nunca mais envia), aviso de volume por dia e ritmo humanizado — pra reduzir denúncias e o risco de bloqueio.',
   },
   {
     icon: BarChart3,
