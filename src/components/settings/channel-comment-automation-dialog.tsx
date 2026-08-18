@@ -292,9 +292,7 @@ export function ChannelCommentAutomationDialog({
             <div className="rounded-lg border border-border p-3">
               <p className="text-xs font-medium text-foreground">
                 Botão no DM{' '}
-                <span className="text-muted-foreground">
-                  (opcional — estilo ManyChat)
-                </span>
+                <span className="text-muted-foreground">(opcional)</span>
               </p>
               <p className="mb-2 mt-0.5 text-[11px] text-muted-foreground">
                 Se preencher, o DM vira um card com um botão clicável (abre o
