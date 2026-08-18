@@ -9,7 +9,16 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Plus, Trash2, Pencil, MessageCircle, ArrowLeft } from 'lucide-react';
+import {
+  Loader2,
+  Plus,
+  Trash2,
+  Pencil,
+  MessageCircle,
+  ArrowLeft,
+  Image as ImageIcon,
+  Repeat2,
+} from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { cn } from '@/lib/utils';
@@ -373,7 +382,8 @@ export function ChannelCommentAutomationDialog({
 const inputCls =
   'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground';
 
-/** Seletor de post: "Qualquer post" + miniaturas dos posts do IG. */
+/** Seletor de post: por padrão COMPACTO (só o post escolhido + "Trocar post").
+ *  Clicar em "Trocar post" abre a faixa com todos pra escolher outro. */
 function PostPicker({
   posts,
   loading,
@@ -385,14 +395,61 @@ function PostPicker({
   value: string;
   onChange: (id: string) => void;
 }) {
+  const [expanded, setExpanded] = useState(false);
+  const selected = value ? (posts.find((p) => p.id === value) ?? null) : null;
+
+  const pick = (id: string) => {
+    onChange(id);
+    setExpanded(false);
+  };
+
+  if (!expanded) {
+    return (
+      <div className="flex items-center gap-3">
+        {value === '' ? (
+          <div className="flex size-14 shrink-0 flex-col items-center justify-center rounded-lg border border-border text-center text-[10px] font-medium text-muted-foreground">
+            Qualquer
+            <br />
+            post
+          </div>
+        ) : selected?.thumbnail_url ? (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={selected.thumbnail_url}
+            alt=""
+            className="size-14 shrink-0 rounded-lg border border-primary object-cover"
+          />
+        ) : (
+          <div className="flex size-14 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-muted-foreground">
+            <ImageIcon className="size-5" />
+          </div>
+        )}
+        <div className="min-w-0">
+          <p className="truncate text-xs text-muted-foreground">
+            {value === ''
+              ? 'Vale pra comentários em qualquer post.'
+              : 'Só dispara nos comentários deste post.'}
+          </p>
+          <button
+            type="button"
+            onClick={() => setExpanded(true)}
+            className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+          >
+            <Repeat2 className="size-3.5" /> Trocar post
+          </button>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className="space-y-1.5">
       <div className="flex gap-2 overflow-x-auto pb-1">
         <button
           type="button"
-          onClick={() => onChange('')}
+          onClick={() => pick('')}
           className={cn(
-            'flex h-16 w-16 shrink-0 flex-col items-center justify-center rounded-lg border text-center text-[10px] font-medium leading-tight',
+            'flex size-16 shrink-0 flex-col items-center justify-center rounded-lg border text-center text-[10px] font-medium leading-tight',
             value === ''
               ? 'border-primary text-foreground ring-2 ring-primary'
               : 'border-border text-muted-foreground',
@@ -403,7 +460,7 @@ function PostPicker({
           post
         </button>
         {loading && posts.length === 0 && (
-          <div className="flex h-16 items-center px-2 text-muted-foreground">
+          <div className="flex size-16 items-center justify-center text-muted-foreground">
             <Loader2 className="size-4 animate-spin" />
           </div>
         )}
@@ -411,36 +468,31 @@ function PostPicker({
           <button
             key={p.id}
             type="button"
-            onClick={() => onChange(p.id)}
+            onClick={() => pick(p.id)}
             title={p.caption ?? ''}
             className={cn(
-              'relative h-16 w-16 shrink-0 overflow-hidden rounded-lg border bg-muted',
+              'relative size-16 shrink-0 overflow-hidden rounded-lg border bg-muted',
               value === p.id ? 'border-primary ring-2 ring-primary' : 'border-border',
             )}
           >
             {p.thumbnail_url ? (
               // eslint-disable-next-line @next/next/no-img-element
-              <img
-                src={p.thumbnail_url}
-                alt=""
-                className="h-full w-full object-cover"
-              />
+              <img src={p.thumbnail_url} alt="" className="size-full object-cover" />
             ) : (
-              <span className="flex h-full w-full items-center justify-center text-[9px] text-muted-foreground">
+              <span className="flex size-full items-center justify-center text-[9px] text-muted-foreground">
                 sem foto
               </span>
             )}
           </button>
         ))}
       </div>
-      <p className="text-[11px] text-muted-foreground">
-        {value === ''
-          ? 'Vale pra comentários em qualquer post. Escolha um post pra restringir.'
-          : 'Só dispara nos comentários deste post.'}
-        {!loading && posts.length === 0
-          ? ' (Não consegui listar os posts agora — a regra vale pra qualquer post.)'
-          : ''}
-      </p>
+      <button
+        type="button"
+        onClick={() => setExpanded(false)}
+        className="text-[11px] text-muted-foreground hover:text-foreground"
+      >
+        Fechar
+      </button>
     </div>
   );
 }
