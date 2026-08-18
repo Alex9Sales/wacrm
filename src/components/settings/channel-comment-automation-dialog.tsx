@@ -206,7 +206,7 @@ export function ChannelCommentAutomationDialog({
 
   return (
     <Dialog open onOpenChange={(next) => !next && onClose()}>
-      <DialogContent className="border-border bg-popover sm:max-w-lg">
+      <DialogContent className="max-h-[85vh] overflow-y-auto border-border bg-popover sm:max-w-lg">
         <DialogHeader>
           <DialogTitle className="flex items-center gap-2">
             <MessageCircle className="size-4" />
