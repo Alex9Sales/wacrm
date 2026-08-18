@@ -9,6 +9,7 @@ import {
   Bot,
   Check,
   Sparkles,
+  Workflow,
 } from 'lucide-react'
 import { getSessionUserId } from '@/lib/auth/session'
 
@@ -45,9 +46,14 @@ const FEATURES = [
     desc: 'Agende compromissos dentro do CRM, com sincronização com o Google Calendar.',
   },
   {
+    icon: Workflow,
+    title: 'Automações visuais (comentário → DM)',
+    desc: 'Comentou uma palavra no seu post do Instagram? O CRM responde e chama no Direct com botões que levam a pessoa por uma sequência automática — também no WhatsApp e Messenger. Você monta arrastando, sem programar, e vê os cliques e a conversão de cada etapa.',
+  },
+  {
     icon: Zap,
-    title: 'Disparos e automações',
-    desc: 'Campanhas em massa e fluxos que agilizam o atendimento e a prospecção.',
+    title: 'Disparos em massa',
+    desc: 'Campanhas para a sua carteira inteira, com acompanhamento de entrega — no número oficial ou no seu WhatsApp.',
   },
   {
     icon: BarChart3,

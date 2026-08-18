@@ -35,6 +35,8 @@ export const API_SCOPES = [
   'agent:write',
   'broadcasts:send',
   'webhooks:manage',
+  'flows:read',
+  'flows:write',
 ] as const;
 
 export type ApiScope = (typeof API_SCOPES)[number];
@@ -64,6 +66,9 @@ export const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   'agent:write': "Configure the AI text agent (provider, model, prompt, key)",
   'broadcasts:send': 'Launch broadcast campaigns',
   'webhooks:manage': 'Register and manage outbound event webhooks',
+  'flows:read': 'List and read visual flows (automations) and their nodes',
+  'flows:write':
+    'Create, update, activate/pause and delete visual flows (build automations)',
 };
 
 /** Type-narrow an unknown value into a valid `ApiScope`. */

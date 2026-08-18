@@ -47,8 +47,7 @@ export default function AutomationsPage() {
             Procurando fluxos com botões, etapas e vários canais?
           </p>
           <p className="mt-0.5 text-xs text-muted-foreground">
-            Os fluxos visuais (WhatsApp, Instagram e Messenger, estilo ManyChat)
-            agora vivem em{" "}
+            Os fluxos visuais (WhatsApp, Instagram e Messenger) agora vivem em{" "}
             <Link
               href="/flows"
               className="font-medium text-primary hover:underline"

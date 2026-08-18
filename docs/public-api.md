@@ -64,6 +64,8 @@ it. Grant the minimum.
 | `internal:write`      | Create internal channels and post messages   |
 | `broadcasts:send`     | Launch broadcast campaigns; list channels    |
 | `webhooks:manage`     | Register and manage outbound webhooks        |
+| `flows:read`          | List and read visual flows (automations)     |
+| `flows:write`         | Create, update, activate/pause and delete flows |
 
 A key with **no scopes** still authenticates and can call
 `GET /api/v1/me` — useful for verifying a key works.
@@ -516,6 +518,94 @@ curl -X PUT https://your-crm.example.com/api/v1/agent \
 - `POST /api/v1/broadcasts/text` — text/media campaign on a non-official (WAHA) channel. Body: `channel_id`, `name`, `body_text`, optional `media_url`/`media_type`/`media_filename`, and `recipients` (list of `to`) **or** `contact_ids`.
 - `GET /api/v1/broadcasts/{id}/recipients` — per-recipient status.
 - `POST /api/v1/broadcasts/{id}/pause` · `/resume` · `/cancel` — control a running campaign.
+
+### Flows (visual automations — build them via API)
+
+A **flow** is a visual automation: a graph of nodes (send buttons, branch, tag,
+delay, AI, handoff…) that runs a conversation on WhatsApp, Instagram or
+Messenger. Everything the visual builder does is available here, so an agent can
+assemble automations end-to-end.
+
+- `GET /api/v1/flows` — list flows (no nodes). Scope: `flows:read`.
+- `GET /api/v1/flows/{id}` — one flow **with its `nodes`**. Scope: `flows:read`.
+- `GET /api/v1/flows/node-types` — the catalog of every node type and its `config` fields (the machine-readable schema to build from). Scope: `flows:read`.
+- `POST /api/v1/flows` — create a flow (+ nodes). Scope: `flows:write`.
+- `PATCH /api/v1/flows/{id}` — update. Passing `nodes` replaces the whole graph. Scope: `flows:write`.
+- `POST /api/v1/flows/{id}/activate` — body `{ "status": "active" | "draft" | "archived" }`. Scope: `flows:write`.
+- `DELETE /api/v1/flows/{id}` — delete (cascade). Scope: `flows:write`.
+
+**Flow object**
+
+| Field | Notes |
+| ----- | ----- |
+| `name` | Required. |
+| `trigger_type` | `keyword` · `first_inbound_message` · `tag_added` · `manual`. Use `manual` for a flow you start from a comment automation (it won't self-fire). |
+| `trigger_config` | Depends on the trigger: `keyword` → `{ "keywords": [...], "match_type": "contains" }`; `tag_added` → `{ "tag_id": "…" }`; others → `{}`. |
+| `channel_id` | Optional. Binds the flow to one channel (`null` = any). Use the Instagram channel for comment→DM flows. |
+| `entry_node_id` | The `node_key` of the first node. |
+| `status` | `draft` (default) · `active` · `archived`. Activating validates the graph. |
+| `nodes` | Array of `{ node_key, node_type, config, position_x?, position_y? }`. |
+
+**Nodes & edges.** There are no separate "edge" objects — a node points to the
+next one by the **target's `node_key`**, in config fields like `next_node_key`
+(and `true_next`/`false_next` on a condition, `next_node_key` inside each button,
+etc.). An empty edge (`""`) ends that path. Node types (call
+`GET /api/v1/flows/node-types` for the full config of each):
+
+| Node type | What it does |
+| --------- | ------------ |
+| `send_message` | Sends text. |
+| `send_buttons` | Text + 1–3 reply buttons; **each button branches**. |
+| `send_list` | Tappable list (up to 10 rows); each row branches. |
+| `send_media` | Image / video / document by URL. |
+| `collect_input` | Asks a question, saves the answer to `vars.<key>`. |
+| `condition` | Branches true/false on a var / tag / contact field. |
+| `set_tag` | Adds/removes a tag (adding can trigger `tag_added` flows). |
+| `delay` | Waits (minutes/hours/days), optional business-hours. |
+| `jump` | Jumps to another node (loops). |
+| `randomizer` | Weighted A/B split. |
+| `http_fetch` | Calls an external API, saves the response. |
+| `action` | Batch contact ops (set field, ±tag, notify) — no message. |
+| `ai` | Hands the turn to the account's AI agent for a few turns. |
+| `handoff` | Ends the flow and passes to a human. |
+| `start` / `end` | Optional entry / terminal. |
+
+> **Comment → DM automations (Instagram, ManyChat-style):** the *comment*
+> trigger + opening DM lives in the Instagram comment automation (Config →
+> Automations UI), which then **starts a flow**. Build that flow here and give it
+> an `entry_node_id` pointing at a **`send_buttons`** node — its buttons are sent
+> as tappable quick-replies in the opening DM, and the tap opens Instagram's
+> 24h window so the rest of the flow can deliver. Then pick this flow in the
+> comment automation's "start a flow" selector.
+
+**Example — build a branching comment→DM flow and activate it**
+
+```bash
+curl -X POST https://crm.salestecnologia.com.br/api/v1/flows \
+  -H "Authorization: Bearer wacrm_live_…" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Comentário → link",
+    "trigger_type": "manual",
+    "channel_id": "<instagram_channel_id>",
+    "entry_node_id": "menu",
+    "status": "active",
+    "nodes": [
+      { "node_key": "menu", "node_type": "send_buttons", "config": {
+          "text": "O que você quer ver primeiro?",
+          "buttons": [
+            { "reply_id": "link",   "title": "💰 Quero o link", "next_node_key": "send_link" },
+            { "reply_id": "duvida", "title": "💬 Tenho dúvida",  "next_node_key": "falar" }
+          ] } },
+      { "node_key": "send_link", "node_type": "send_message", "config": {
+          "text": "Aqui está 👉 https://exemplo.com", "next_node_key": "fim" } },
+      { "node_key": "falar", "node_type": "handoff", "config": {
+          "customer_message": "Já te passo pra um atendente 🙂" } },
+      { "node_key": "fim", "node_type": "end", "config": {} }
+    ]
+  }'
+# → 201 { "data": { "id": "…", "status": "active", "nodes": [ … ] } }
+```
 
 ## Pagination
 
