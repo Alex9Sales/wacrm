@@ -29,7 +29,7 @@ export default function CommentAutomationsPage() {
   const [loadingData, setLoadingData] = useState(false);
   const [dialog, setDialog] = useState<{
     channel: ChannelSummary;
-    mediaId: string;
+    mediaIds: string[];
   } | null>(null);
 
   useEffect(() => {
@@ -77,7 +77,10 @@ export default function CommentAutomationsPage() {
   }, [selectedId, loadData]);
 
   const countFor = (mediaId: string | null) =>
-    rules.filter((r) => (mediaId ? r.media_id === mediaId : !r.media_id)).length;
+    rules.filter((r) => {
+      const ids = r.media_ids?.length ? r.media_ids : r.media_id ? [r.media_id] : [];
+      return mediaId ? ids.includes(mediaId) : ids.length === 0;
+    }).length;
 
   const closeDialog = () => {
     setDialog(null);
@@ -147,7 +150,7 @@ export default function CommentAutomationsPage() {
               <button
                 type="button"
                 onClick={() =>
-                  selected && setDialog({ channel: selected, mediaId: '' })
+                  selected && setDialog({ channel: selected, mediaIds: [] })
                 }
                 className="group relative flex aspect-square flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-border bg-card p-3 text-center transition-colors hover:border-primary/50"
               >
@@ -172,7 +175,7 @@ export default function CommentAutomationsPage() {
                   key={p.id}
                   type="button"
                   onClick={() =>
-                    selected && setDialog({ channel: selected, mediaId: p.id })
+                    selected && setDialog({ channel: selected, mediaIds: [p.id] })
                   }
                   title={p.caption ?? ''}
                   className="group relative aspect-square overflow-hidden rounded-xl border border-border bg-muted transition-transform hover:scale-[1.02]"
@@ -205,7 +208,7 @@ export default function CommentAutomationsPage() {
       {dialog && (
         <ChannelCommentAutomationDialog
           channel={dialog.channel}
-          initialMediaId={dialog.mediaId}
+          initialMediaIds={dialog.mediaIds}
           initialPosts={posts}
           onClose={closeDialog}
         />

@@ -25,6 +25,7 @@ export interface CommentAutomation {
   dm_message: string
   once_per_user: boolean
   media_id: string | null
+  media_ids: string[] | null
   created_at: string
 }
 
@@ -37,8 +38,8 @@ export interface CommentAutomationInput {
   publicReply: string | null
   dmMessage: string
   oncePerUser: boolean
-  /** Post específico (media_id do IG) OU null = qualquer post. */
-  mediaId: string | null
+  /** Posts (media_id do IG) que a regra cobre. Vazio = qualquer post. */
+  mediaIds: string[]
 }
 
 /** Garante que o canal é da conta e é Instagram. Lança se não for. */
@@ -70,6 +71,7 @@ const cols = {
   dm_message: instagramCommentAutomations.dmMessage,
   once_per_user: instagramCommentAutomations.oncePerUser,
   media_id: instagramCommentAutomations.mediaId,
+  media_ids: instagramCommentAutomations.mediaIds,
   created_at: instagramCommentAutomations.createdAt,
 }
 
@@ -120,7 +122,8 @@ export async function createCommentAutomation(
         publicReply: input.publicReply?.trim() || null,
         dmMessage: input.dmMessage.trim(),
         oncePerUser: input.oncePerUser,
-        mediaId: input.mediaId?.trim() || null,
+        mediaIds: input.mediaIds.length ? input.mediaIds : null,
+        mediaId: null,
       })
       .returning(cols),
   )
@@ -146,7 +149,8 @@ export async function updateCommentAutomation(
       publicReply: input.publicReply?.trim() || null,
       dmMessage: input.dmMessage.trim(),
       oncePerUser: input.oncePerUser,
-      mediaId: input.mediaId?.trim() || null,
+      mediaIds: input.mediaIds.length ? input.mediaIds : null,
+      mediaId: null,
       updatedAt: new Date().toISOString(),
     })
     .where(

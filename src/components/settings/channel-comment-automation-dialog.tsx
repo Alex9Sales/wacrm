@@ -16,8 +16,8 @@ import {
   Pencil,
   MessageCircle,
   ArrowLeft,
-  Image as ImageIcon,
-  Repeat2,
+  X,
+  Check,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -49,8 +49,8 @@ const EMPTY = {
   publicReply: '',
   dmMessage: '',
   oncePerUser: true,
-  // '' = qualquer post; senão o media_id do post escolhido.
-  mediaId: '',
+  // lista de media_id dos posts; vazio = qualquer post.
+  mediaIds: [] as string[],
 };
 
 type FormState = typeof EMPTY;
@@ -58,15 +58,15 @@ type FormState = typeof EMPTY;
 export function ChannelCommentAutomationDialog({
   channel,
   onClose,
-  initialMediaId,
+  initialMediaIds,
   initialPosts,
 }: {
   channel: ChannelSummary;
   onClose: () => void;
-  /** Quando vem da galeria: '' = qualquer post, ou o media_id do post clicado.
-   *  A lista filtra por esse post e o "novo" já vem com ele selecionado.
+  /** Quando vem da galeria: [] = qualquer post, ou os media_ids dos posts
+   *  clicados. A lista filtra por esses posts e o "novo" já vem com eles.
    *  undefined = modo geral (lista tudo). */
-  initialMediaId?: string | null;
+  initialMediaIds?: string[];
   /** Posts já carregados pela galeria (evita refazer a Server Action, que
    *  quebra com bundle velho). */
   initialPosts?: CommentPost[];
@@ -113,19 +113,26 @@ export function ChannelCommentAutomationDialog({
   }, [channel.id, postsLoaded, postsLoading]);
 
   const startNew = () => {
-    setForm({ ...EMPTY, mediaId: initialMediaId ?? '' });
+    setForm({ ...EMPTY, mediaIds: initialMediaIds ?? [] });
     setEditing('new');
     void loadPosts();
   };
 
-  // Vindo da galeria (initialMediaId definido): mostra só as regras daquele post
-  // (ou as "qualquer post" quando ''). Modo geral (undefined) lista tudo.
+  // Posts que uma regra cobre (media_ids novo, ou media_id legado).
+  const ruleMediaIds = (r: CommentAutomation): string[] =>
+    r.media_ids?.length ? r.media_ids : r.media_id ? [r.media_id] : [];
+
+  // Vindo da galeria (initialMediaIds definido): [] = mostra as regras "qualquer
+  // post"; [ids] = regras que cobrem algum desses posts. undefined = lista tudo.
   const displayRules =
-    initialMediaId === undefined
+    initialMediaIds === undefined
       ? rules
-      : rules.filter((r) =>
-          initialMediaId ? r.media_id === initialMediaId : !r.media_id,
-        );
+      : rules.filter((r) => {
+          const ids = ruleMediaIds(r);
+          return initialMediaIds.length === 0
+            ? ids.length === 0
+            : ids.some((id) => initialMediaIds.includes(id));
+        });
 
   const startEdit = (r: CommentAutomation) => {
     setForm({
@@ -136,7 +143,7 @@ export function ChannelCommentAutomationDialog({
       publicReply: r.public_reply ?? '',
       dmMessage: r.dm_message,
       oncePerUser: r.once_per_user,
-      mediaId: r.media_id ?? '',
+      mediaIds: ruleMediaIds(r),
     });
     setEditing(r.id);
     void loadPosts();
@@ -154,7 +161,7 @@ export function ChannelCommentAutomationDialog({
         publicReply: form.publicReply || null,
         dmMessage: form.dmMessage,
         oncePerUser: form.oncePerUser,
-        mediaId: form.mediaId || null,
+        mediaIds: form.mediaIds,
       };
       if (editing === 'new') {
         await createCommentAutomation(input);
@@ -223,12 +230,12 @@ export function ChannelCommentAutomationDialog({
               />
             </Field>
 
-            <Field label="Post da automação">
-              <PostPicker
+            <Field label="Posts da automação">
+              <PostMultiPicker
                 posts={posts}
                 loading={postsLoading}
-                value={form.mediaId}
-                onChange={(id) => setForm({ ...form, mediaId: id })}
+                value={form.mediaIds}
+                onChange={(ids) => setForm({ ...form, mediaIds: ids })}
               />
             </Field>
 
@@ -382,9 +389,9 @@ export function ChannelCommentAutomationDialog({
 const inputCls =
   'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground';
 
-/** Seletor de post: por padrão COMPACTO (só o post escolhido + "Trocar post").
- *  Clicar em "Trocar post" abre a faixa com todos pra escolher outro. */
-function PostPicker({
+/** Multi-seleção de posts: miniaturas escolhidas (com "x" pra remover) + botão
+ *  "+" que abre uma grade DENTRO do card (rola, não vaza). Vazio = qualquer post. */
+function PostMultiPicker({
   posts,
   loading,
   value,
@@ -392,107 +399,122 @@ function PostPicker({
 }: {
   posts: CommentPost[];
   loading: boolean;
-  value: string;
-  onChange: (id: string) => void;
+  value: string[];
+  onChange: (ids: string[]) => void;
 }) {
-  const [expanded, setExpanded] = useState(false);
-  const selected = value ? (posts.find((p) => p.id === value) ?? null) : null;
-
-  const pick = (id: string) => {
-    onChange(id);
-    setExpanded(false);
-  };
-
-  if (!expanded) {
-    return (
-      <div className="flex items-center gap-3">
-        {value === '' ? (
-          <div className="flex size-14 shrink-0 flex-col items-center justify-center rounded-lg border border-border text-center text-[10px] font-medium text-muted-foreground">
-            Qualquer
-            <br />
-            post
-          </div>
-        ) : selected?.thumbnail_url ? (
-          // eslint-disable-next-line @next/next/no-img-element
-          <img
-            src={selected.thumbnail_url}
-            alt=""
-            className="size-14 shrink-0 rounded-lg border border-primary object-cover"
-          />
-        ) : (
-          <div className="flex size-14 shrink-0 items-center justify-center rounded-lg border border-border bg-muted text-muted-foreground">
-            <ImageIcon className="size-5" />
-          </div>
-        )}
-        <div className="min-w-0">
-          <p className="truncate text-xs text-muted-foreground">
-            {value === ''
-              ? 'Vale pra comentários em qualquer post.'
-              : 'Só dispara nos comentários deste post.'}
-          </p>
-          <button
-            type="button"
-            onClick={() => setExpanded(true)}
-            className="mt-0.5 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
-          >
-            <Repeat2 className="size-3.5" /> Trocar post
-          </button>
-        </div>
-      </div>
-    );
-  }
+  const [picking, setPicking] = useState(false);
+  const selected = value
+    .map((id) => posts.find((p) => p.id === id))
+    .filter((p): p is CommentPost => !!p);
+  const toggle = (id: string) =>
+    onChange(value.includes(id) ? value.filter((x) => x !== id) : [...value, id]);
 
   return (
-    <div className="space-y-1.5">
-      <div className="flex gap-2 overflow-x-auto pb-1">
+    <div className="space-y-2">
+      <div className="flex flex-wrap items-center gap-2">
+        {value.length === 0 ? (
+          <span className="rounded-full border border-border px-3 py-1 text-xs text-muted-foreground">
+            Qualquer post
+          </span>
+        ) : (
+          selected.map((p) => (
+            <span key={p.id} className="relative">
+              {p.thumbnail_url ? (
+                // eslint-disable-next-line @next/next/no-img-element
+                <img
+                  src={p.thumbnail_url}
+                  alt=""
+                  className="size-12 rounded-lg border border-primary object-cover"
+                />
+              ) : (
+                <span className="flex size-12 items-center justify-center rounded-lg border border-border bg-muted text-[9px] text-muted-foreground">
+                  post
+                </span>
+              )}
+              <button
+                type="button"
+                onClick={() => toggle(p.id)}
+                aria-label="Remover post"
+                className="absolute -right-1.5 -top-1.5 flex size-4 items-center justify-center rounded-full bg-destructive text-white"
+              >
+                <X className="size-2.5" />
+              </button>
+            </span>
+          ))
+        )}
         <button
           type="button"
-          onClick={() => pick('')}
-          className={cn(
-            'flex size-16 shrink-0 flex-col items-center justify-center rounded-lg border text-center text-[10px] font-medium leading-tight',
-            value === ''
-              ? 'border-primary text-foreground ring-2 ring-primary'
-              : 'border-border text-muted-foreground',
-          )}
+          onClick={() => setPicking((v) => !v)}
+          aria-label="Adicionar posts"
+          className="flex size-12 items-center justify-center rounded-lg border border-dashed border-border text-muted-foreground transition-colors hover:border-primary/50 hover:text-primary"
         >
-          Qualquer
-          <br />
-          post
+          <Plus className="size-5" />
         </button>
-        {loading && posts.length === 0 && (
-          <div className="flex size-16 items-center justify-center text-muted-foreground">
-            <Loader2 className="size-4 animate-spin" />
-          </div>
-        )}
-        {posts.map((p) => (
-          <button
-            key={p.id}
-            type="button"
-            onClick={() => pick(p.id)}
-            title={p.caption ?? ''}
-            className={cn(
-              'relative size-16 shrink-0 overflow-hidden rounded-lg border bg-muted',
-              value === p.id ? 'border-primary ring-2 ring-primary' : 'border-border',
-            )}
-          >
-            {p.thumbnail_url ? (
-              // eslint-disable-next-line @next/next/no-img-element
-              <img src={p.thumbnail_url} alt="" className="size-full object-cover" />
-            ) : (
-              <span className="flex size-full items-center justify-center text-[9px] text-muted-foreground">
-                sem foto
-              </span>
-            )}
-          </button>
-        ))}
       </div>
-      <button
-        type="button"
-        onClick={() => setExpanded(false)}
-        className="text-[11px] text-muted-foreground hover:text-foreground"
-      >
-        Fechar
-      </button>
+
+      <p className="text-[11px] text-muted-foreground">
+        {value.length === 0
+          ? 'Vale pra comentários em qualquer post. Adicione posts (+) pra restringir.'
+          : `Dispara nos comentários de ${value.length} post(s).`}
+      </p>
+
+      {picking && (
+        <div className="rounded-lg border border-border bg-muted/30 p-2">
+          <div className="flex items-center justify-between pb-2">
+            <button
+              type="button"
+              onClick={() => onChange([])}
+              className="text-[11px] text-primary hover:underline"
+            >
+              Limpar (qualquer post)
+            </button>
+            <button
+              type="button"
+              onClick={() => setPicking(false)}
+              className="text-[11px] font-medium text-foreground hover:underline"
+            >
+              Pronto
+            </button>
+          </div>
+          {loading && posts.length === 0 ? (
+            <div className="flex h-16 items-center justify-center text-muted-foreground">
+              <Loader2 className="size-4 animate-spin" />
+            </div>
+          ) : (
+            <div className="grid max-h-48 grid-cols-4 gap-2 overflow-y-auto sm:grid-cols-5">
+              {posts.map((p) => {
+                const on = value.includes(p.id);
+                return (
+                  <button
+                    key={p.id}
+                    type="button"
+                    onClick={() => toggle(p.id)}
+                    title={p.caption ?? ''}
+                    className={cn(
+                      'relative aspect-square overflow-hidden rounded-lg border bg-muted',
+                      on ? 'border-primary ring-2 ring-primary' : 'border-border',
+                    )}
+                  >
+                    {p.thumbnail_url ? (
+                      // eslint-disable-next-line @next/next/no-img-element
+                      <img src={p.thumbnail_url} alt="" className="size-full object-cover" />
+                    ) : (
+                      <span className="flex size-full items-center justify-center text-[9px] text-muted-foreground">
+                        sem foto
+                      </span>
+                    )}
+                    {on && (
+                      <span className="absolute right-1 top-1 flex size-4 items-center justify-center rounded-full bg-primary text-white">
+                        <Check className="size-2.5" />
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }
