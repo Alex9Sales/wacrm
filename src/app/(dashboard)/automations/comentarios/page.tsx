@@ -14,11 +14,9 @@ import { ArrowLeft, Image as ImageIcon, Loader2, Sparkles } from 'lucide-react';
 
 import { ChannelCommentAutomationDialog } from '@/components/settings/channel-comment-automation-dialog';
 import type { ChannelSummary } from '@/components/settings/channels-tab';
-import {
-  listInstagramPosts,
-  listCommentAutomations,
-  type CommentPost,
-  type CommentAutomation,
+import type {
+  CommentPost,
+  CommentAutomation,
 } from '@/components/settings/instagram-comments-actions';
 
 export default function CommentAutomationsPage() {
@@ -58,12 +56,15 @@ export default function CommentAutomationsPage() {
   const loadData = useCallback(async (channelId: string) => {
     setLoadingData(true);
     try {
-      const [p, r] = await Promise.all([
-        listInstagramPosts(channelId),
-        listCommentAutomations(channelId),
-      ]);
-      setPosts(p);
-      setRules(r);
+      // Rota de API estável (não quebra com bundle velho, ao contrário das
+      // Server Actions) — é o que deixava a galeria sem listar os posts.
+      const res = await fetch(
+        `/api/instagram/comment-setup?channelId=${encodeURIComponent(channelId)}`,
+      );
+      const b = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(b?.error ?? 'Falha ao carregar posts');
+      setPosts((b.posts ?? []) as CommentPost[]);
+      setRules((b.rules ?? []) as CommentAutomation[]);
     } catch (err) {
       toast.error(err instanceof Error ? err.message : 'Falha ao carregar posts.');
     } finally {
@@ -205,6 +206,7 @@ export default function CommentAutomationsPage() {
         <ChannelCommentAutomationDialog
           channel={dialog.channel}
           initialMediaId={dialog.mediaId}
+          initialPosts={posts}
           onClose={closeDialog}
         />
       )}

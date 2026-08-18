@@ -50,6 +50,7 @@ export function ChannelCommentAutomationDialog({
   channel,
   onClose,
   initialMediaId,
+  initialPosts,
 }: {
   channel: ChannelSummary;
   onClose: () => void;
@@ -57,6 +58,9 @@ export function ChannelCommentAutomationDialog({
    *  A lista filtra por esse post e o "novo" já vem com ele selecionado.
    *  undefined = modo geral (lista tudo). */
   initialMediaId?: string | null;
+  /** Posts já carregados pela galeria (evita refazer a Server Action, que
+   *  quebra com bundle velho). */
+  initialPosts?: CommentPost[];
 }) {
   const [rules, setRules] = useState<CommentAutomation[]>([]);
   const [loading, setLoading] = useState(true);
@@ -64,10 +68,11 @@ export function ChannelCommentAutomationDialog({
   const [editing, setEditing] = useState<null | 'new' | string>(null);
   const [form, setForm] = useState<FormState>(EMPTY);
   const [saving, setSaving] = useState(false);
-  // Posts do IG pro seletor (carregados sob demanda, 1x).
-  const [posts, setPosts] = useState<CommentPost[]>([]);
+  // Posts do IG pro seletor. Se a galeria já passou (initialPosts), usa esses e
+  // não refaz a Server Action; senão carrega sob demanda (uso via Config→Canais).
+  const [posts, setPosts] = useState<CommentPost[]>(initialPosts ?? []);
   const [postsLoading, setPostsLoading] = useState(false);
-  const [postsLoaded, setPostsLoaded] = useState(false);
+  const [postsLoaded, setPostsLoaded] = useState(!!initialPosts?.length);
 
   const load = useCallback(async () => {
     setLoading(true);
