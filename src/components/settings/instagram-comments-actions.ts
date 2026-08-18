@@ -26,6 +26,8 @@ export interface CommentAutomation {
   once_per_user: boolean
   media_id: string | null
   media_ids: string[] | null
+  dm_button_text: string | null
+  dm_button_url: string | null
   created_at: string
 }
 
@@ -40,6 +42,9 @@ export interface CommentAutomationInput {
   oncePerUser: boolean
   /** Posts (media_id do IG) que a regra cobre. Vazio = qualquer post. */
   mediaIds: string[]
+  /** Botão (estilo ManyChat) no DM: texto + URL. Vazio = DM só texto. */
+  dmButtonText: string | null
+  dmButtonUrl: string | null
 }
 
 /** Garante que o canal é da conta e é Instagram. Lança se não for. */
@@ -72,6 +77,8 @@ const cols = {
   once_per_user: instagramCommentAutomations.oncePerUser,
   media_id: instagramCommentAutomations.mediaId,
   media_ids: instagramCommentAutomations.mediaIds,
+  dm_button_text: instagramCommentAutomations.dmButtonText,
+  dm_button_url: instagramCommentAutomations.dmButtonUrl,
   created_at: instagramCommentAutomations.createdAt,
 }
 
@@ -124,6 +131,8 @@ export async function createCommentAutomation(
         oncePerUser: input.oncePerUser,
         mediaIds: input.mediaIds.length ? input.mediaIds : null,
         mediaId: null,
+        dmButtonText: input.dmButtonText?.trim() || null,
+        dmButtonUrl: input.dmButtonUrl?.trim() || null,
       })
       .returning(cols),
   )
@@ -151,6 +160,8 @@ export async function updateCommentAutomation(
       oncePerUser: input.oncePerUser,
       mediaIds: input.mediaIds.length ? input.mediaIds : null,
       mediaId: null,
+      dmButtonText: input.dmButtonText?.trim() || null,
+      dmButtonUrl: input.dmButtonUrl?.trim() || null,
       updatedAt: new Date().toISOString(),
     })
     .where(

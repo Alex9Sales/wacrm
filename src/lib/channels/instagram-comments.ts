@@ -189,7 +189,14 @@ export async function processCommentWebhook(
     }
 
     try {
-      await sendCommentPrivateReply(channel, c.commentId, rule.dmMessage)
+      await sendCommentPrivateReply(
+        channel,
+        c.commentId,
+        rule.dmMessage,
+        rule.dmButtonText && rule.dmButtonUrl
+          ? { text: rule.dmButtonText, url: rule.dmButtonUrl }
+          : null,
+      )
       dmSent = true
     } catch (e) {
       errMsg = `${errMsg ? errMsg + ' | ' : ''}dm: ${(e as Error).message}`

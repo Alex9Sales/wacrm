@@ -213,15 +213,47 @@ export async function fetchInstagramMedia(
  * Só pode ser enviada uma vez por comentário, dentro de 7 dias. Usa
  * `instagram_business_manage_messages`.
  */
+export interface DmButton {
+  text: string
+  url: string
+}
+
 export async function sendCommentPrivateReply(
   ch: ChannelCtx,
   commentId: string,
   message: string,
+  button?: DmButton | null,
 ): Promise<void> {
   const url = `${graphBaseOf(ch)}/${igIdOf(ch)}/messages`
+  // Com botão (estilo ManyChat): manda como generic template (card + botão URL).
+  // Sem botão: DM de texto simples. O botão renderiza no app do Instagram.
+  const messagePayload =
+    button && button.text && button.url
+      ? {
+          attachment: {
+            type: 'template',
+            payload: {
+              template_type: 'generic',
+              elements: [
+                {
+                  // title é obrigatório e limitado (~80). O botão, ~20.
+                  title: (message || button.text).slice(0, 80),
+                  buttons: [
+                    {
+                      type: 'web_url',
+                      url: button.url,
+                      title: button.text.slice(0, 20),
+                    },
+                  ],
+                },
+              ],
+            },
+          },
+        }
+      : { text: message }
   await graphPost(url, accessTokenOf(ch), {
     recipient: { comment_id: commentId },
-    message: { text: message },
+    message: messagePayload,
   })
 }
 

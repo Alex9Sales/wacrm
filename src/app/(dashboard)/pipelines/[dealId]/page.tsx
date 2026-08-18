@@ -35,6 +35,7 @@ import {
   Copy,
   Pause,
   Play,
+  MessageCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -56,6 +57,7 @@ import {
   setDealCompany,
   duplicateDeal,
   addDealNote,
+  openDealConversation,
   type DealEvent,
 } from "@/app/(dashboard)/pipelines/actions";
 import {
@@ -657,6 +659,25 @@ export default function DealDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
+          {deal.contact_id && (
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={busy}
+              title="Abrir conversa no WhatsApp"
+              onClick={async () => {
+                const res = await openDealConversation(deal.id);
+                if (res.conversationId) {
+                  window.location.href = `/inbox?c=${res.conversationId}`;
+                } else {
+                  toast.error(res.error || "Não foi possível abrir a conversa");
+                }
+              }}
+              className="border-emerald-300 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+            >
+              <MessageCircle className="mr-1.5 h-4 w-4" /> WhatsApp
+            </Button>
+          )}
           {status !== "won" && (
             <Button
               size="sm"

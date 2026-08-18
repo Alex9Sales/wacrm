@@ -51,6 +51,9 @@ const EMPTY = {
   oncePerUser: true,
   // lista de media_id dos posts; vazio = qualquer post.
   mediaIds: [] as string[],
+  // botão no DM (estilo ManyChat): texto + link. Vazio = DM só texto.
+  dmButtonText: '',
+  dmButtonUrl: '',
 };
 
 type FormState = typeof EMPTY;
@@ -144,6 +147,8 @@ export function ChannelCommentAutomationDialog({
       dmMessage: r.dm_message,
       oncePerUser: r.once_per_user,
       mediaIds: ruleMediaIds(r),
+      dmButtonText: r.dm_button_text ?? '',
+      dmButtonUrl: r.dm_button_url ?? '',
     });
     setEditing(r.id);
     void loadPosts();
@@ -162,6 +167,8 @@ export function ChannelCommentAutomationDialog({
         dmMessage: form.dmMessage,
         oncePerUser: form.oncePerUser,
         mediaIds: form.mediaIds,
+        dmButtonText: form.dmButtonText || null,
+        dmButtonUrl: form.dmButtonUrl || null,
       };
       if (editing === 'new') {
         await createCommentAutomation(input);
@@ -272,15 +279,51 @@ export function ChannelCommentAutomationDialog({
               />
             </Field>
 
-            <Field label="Mensagem do DM (com o link)">
+            <Field label="Mensagem do DM">
               <textarea
                 value={form.dmMessage}
                 onChange={(e) => setForm({ ...form, dmMessage: e.target.value })}
-                placeholder="Oi! Aqui está o link que você pediu: https://…"
+                placeholder="Oi! Aqui está o que você pediu 👇"
                 rows={3}
                 className={inputCls}
               />
             </Field>
+
+            <div className="rounded-lg border border-border p-3">
+              <p className="text-xs font-medium text-foreground">
+                Botão no DM{' '}
+                <span className="text-muted-foreground">
+                  (opcional — estilo ManyChat)
+                </span>
+              </p>
+              <p className="mb-2 mt-0.5 text-[11px] text-muted-foreground">
+                Se preencher, o DM vira um card com um botão clicável (abre o
+                link / página de vendas). O botão aparece no app do Instagram.
+              </p>
+              <div className="grid grid-cols-2 gap-2">
+                <Field label="Texto do botão">
+                  <input
+                    value={form.dmButtonText}
+                    onChange={(e) =>
+                      setForm({ ...form, dmButtonText: e.target.value })
+                    }
+                    placeholder="Ex: Quero o link"
+                    maxLength={20}
+                    className={inputCls}
+                  />
+                </Field>
+                <Field label="Link do botão">
+                  <input
+                    value={form.dmButtonUrl}
+                    onChange={(e) =>
+                      setForm({ ...form, dmButtonUrl: e.target.value })
+                    }
+                    placeholder="https://..."
+                    className={inputCls}
+                  />
+                </Field>
+              </div>
+            </div>
 
             <label className="flex items-center gap-2 text-sm text-foreground">
               <input

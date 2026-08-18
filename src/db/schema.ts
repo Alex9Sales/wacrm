@@ -2233,6 +2233,10 @@ export const instagramCommentAutomations = pgTable("instagram_comment_automation
 	mediaId: text("media_id"),
 	// lista de posts (media_id) que a regra cobre. NULL/vazio = qualquer post.
 	mediaIds: text("media_ids").array(),
+	// Botão (estilo ManyChat) no DM: se ambos preenchidos, o DM vai como card
+	// com um botão que abre a URL (renderiza no app do IG). NULL = DM só texto.
+	dmButtonText: text("dm_button_text"),
+	dmButtonUrl: text("dm_button_url"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
