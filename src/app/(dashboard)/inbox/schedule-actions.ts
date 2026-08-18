@@ -103,6 +103,28 @@ export async function listScheduledMessages(
 }
 
 /**
+ * Quantas mensagens PENDENTES a conta já tem agendadas pro MESMO dia (fuso
+ * America/Sao_Paulo) do instante informado. Alimenta o aviso anti-ban de "já tem
+ * 30+ nesse dia" na tela de Nova mensagem.
+ */
+export async function countScheduledPendingOnDay(
+  scheduledAtISO: string,
+): Promise<number> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({ n: sql<number>`count(*)::int` })
+    .from(scheduledMessages)
+    .where(
+      and(
+        eq(scheduledMessages.accountId, ctx.accountId),
+        eq(scheduledMessages.status, 'pending'),
+        sql`(${scheduledMessages.scheduledAt} AT TIME ZONE 'America/Sao_Paulo')::date = (${scheduledAtISO}::timestamptz AT TIME ZONE 'America/Sao_Paulo')::date`,
+      ),
+    )
+  return rows[0]?.n ?? 0
+}
+
+/**
  * Schedule a text message into a conversation. Validates ownership + a
  * future instant, inserts the row, and enqueues the delayed job. If the
  * enqueue fails the row is rolled back so we never leave a pending row

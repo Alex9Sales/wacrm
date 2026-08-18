@@ -195,6 +195,12 @@ export const contacts = pgTable("contacts", {
 	// Id externo do canal quando não há telefone (ex.: IGSID do Instagram Direct).
 	// Migração 0095. Unicidade por (conta, external_id) no índice abaixo.
 	externalId: text("external_id"),
+	// "Não perturbe" / opt-out (anti-ban, migração 0105): true = a pessoa pediu
+	// pra não receber mais. Disparos e agendadas PULAM esse contato (atendente
+	// ainda responde 1:1 normal). Setado quando responde SAIR/toca "não quero".
+	optedOut: boolean("opted_out").default(false).notNull(),
+	optedOutAt: timestamp("opted_out_at", { withTimezone: true, mode: 'string' }),
+	optedOutReason: text("opted_out_reason"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
@@ -964,6 +970,10 @@ export const broadcasts = pgTable("broadcasts", {
 	// humanized-paced. bodyText holds the message for 'text' broadcasts.
 	messageKind: text("message_kind").default('template').notNull(),
 	bodyText: text("body_text"),
+	// Anti-ban (migração 0105): anexa uma opção de descadastro no fim de cada
+	// mensagem 'text' (WAHA = "responda SAIR"; oficial usa botões no template).
+	// Ligado por padrão pra disparos de texto.
+	includeOptOut: boolean("include_opt_out").default(true).notNull(),
 	// Optional media attachment for a 'text' broadcast (image/video/document/
 	// audio). mediaUrl is the public (proxy) URL the provider fetches.
 	mediaUrl: text("media_url"),

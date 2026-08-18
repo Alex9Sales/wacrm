@@ -35,6 +35,7 @@ export interface BroadcastRow {
   pacing: unknown;
   templateName: string | null;
   templateLanguage: string;
+  includeOptOut: boolean;
 }
 
 /** Load the broadcast row (or null if it vanished). */
@@ -56,6 +57,7 @@ export async function loadBroadcastRow(
         pacing: broadcasts.pacing,
         templateName: broadcasts.templateName,
         templateLanguage: broadcasts.templateLanguage,
+        includeOptOut: broadcasts.includeOptOut,
       })
       .from(broadcasts)
       .where(eq(broadcasts.id, broadcastId))
@@ -138,6 +140,8 @@ export interface RecipientJobContext {
     slotAt: string | null;
     /** Personalization values for {{tokens}} in a 'text' body. */
     vars: Record<string, string>;
+    /** Contato pediu pra não receber ("não perturbe") → o worker pula. */
+    optedOut: boolean;
   };
 }
 
@@ -167,6 +171,7 @@ export async function loadRecipientJobContext(
         contactName: contacts.name,
         contactEmail: contacts.email,
         contactCompany: contacts.company,
+        optedOut: contacts.optedOut,
       })
       .from(broadcastRecipients)
       .leftJoin(contacts, eq(broadcastRecipients.contactId, contacts.id))
@@ -192,6 +197,7 @@ export async function loadRecipientJobContext(
   const isText = broadcast.messageKind === 'text';
   const sendContext: BroadcastSendContext = {
     messageKind: isText ? 'text' : 'template',
+    includeOptOut: broadcast.includeOptOut,
     bodyText: broadcast.bodyText,
     mediaUrl: broadcast.mediaUrl,
     mediaType: broadcast.mediaType,
@@ -233,6 +239,7 @@ export async function loadRecipientJobContext(
           email: row.contactEmail,
           company: row.contactCompany,
         }),
+        optedOut: row.optedOut === true,
       },
     },
   };

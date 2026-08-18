@@ -21,6 +21,7 @@ import {
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
+import { optOutContact, resubscribeContact } from '@/lib/contacts/opt-out'
 import { dispatchTagAddedToFlows } from '@/lib/flows/engine'
 import {
   sanitizePhoneForMeta,
@@ -62,6 +63,7 @@ const contactColumns = {
   company: contacts.company,
   customer_codes: contacts.customerCodes,
   avatar_url: contacts.avatarUrl,
+  opted_out: contacts.optedOut,
   created_at: contacts.createdAt,
   updated_at: contacts.updatedAt,
 }
@@ -762,6 +764,20 @@ export async function getContact(contactId: string): Promise<Contact | null> {
     .where(and(eq(contacts.id, contactId), eq(contacts.accountId, ctx.accountId)))
     .limit(1)
   return (firstOrNull(rows) as unknown as Contact) ?? null
+}
+
+/** Bloqueia/desbloqueia manualmente o "não perturbe" (opt-out) de um contato. */
+export async function setContactOptedOut(
+  contactId: string,
+  optedOut: boolean,
+): Promise<{ ok: boolean }> {
+  const ctx = await getCurrentAccount()
+  if (optedOut) {
+    await optOutContact(ctx.accountId, contactId, 'manual')
+  } else {
+    await resubscribeContact(ctx.accountId, contactId)
+  }
+  return { ok: true }
 }
 
 /** tag_id list currently on a contact (detail view Tags tab). */

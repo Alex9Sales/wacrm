@@ -27,6 +27,7 @@ import {
   messages,
   monitoredGroups,
   groupParticipantNames,
+  notifications,
 } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import {
@@ -64,6 +65,7 @@ import {
   resolveGroupMentions,
 } from '@/lib/whatsapp/group';
 import { normalizeInboundPhoneBR } from '@/lib/whatsapp/phone-utils';
+import { matchesOptOut, optOutContact } from '@/lib/contacts/opt-out';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
 
@@ -527,6 +529,27 @@ export async function dispatchInboundMessage(
 
   // Flag broadcast reply, if any.
   await flagBroadcastReplyIfAny(accountId, contactId);
+
+  // Anti-ban: pedido de descadastro ("SAIR"/"PARAR" no WAHA, ou o botão "não
+  // quero" do oficial). Marca o contato como "não perturbe", avisa a equipe, e
+  // NÃO deixa a resposta cair em fluxo/automação/IA. Só bulk é suprimido —
+  // atendimento 1:1 do humano segue normal.
+  if (matchesOptOut(ev.contentText, ev.interactiveReplyId)) {
+    try {
+      const changed = await optOutContact(accountId, contactId, 'reply');
+      if (changed) await notifyOptOut(accountId, contactId, conversation.id);
+    } catch (err) {
+      console.error('[inbound] opt-out handling failed:', err);
+    }
+    await dispatchWebhookEvent(accountId, 'message.received', {
+      conversation_id: conversation.id,
+      contact_id: contactId,
+      whatsapp_message_id: ev.externalMessageId,
+      content_type: contentType,
+      text: ev.contentText ?? null,
+    }, conversation.channelId);
+    return { conversationId: conversation.id, contactId, isFirstInbound };
+  }
 
   // Config da IA (carregado uma vez): decide se a IA é o respondente de
   // fora-do-horário e serve o buffer abaixo. requireActive default → null
@@ -1782,4 +1805,35 @@ async function flagBroadcastReplyIfAny(accountId: string, contactId: string) {
   } catch (err) {
     console.error('[inbound] flagBroadcastReplyIfAny failed:', err);
   }
+}
+
+/** Avisa a equipe (dono do contato) que alguém pediu pra sair da lista. */
+async function notifyOptOut(
+  accountId: string,
+  contactId: string,
+  conversationId: string,
+): Promise<void> {
+  const c = firstOrNull(
+    await db
+      .select({
+        name: contacts.name,
+        phone: contacts.phone,
+        userId: contacts.userId,
+      })
+      .from(contacts)
+      .where(eq(contacts.id, contactId))
+      .limit(1),
+  );
+  if (!c) return;
+  const who = c.name || c.phone || 'Um contato';
+  await db.insert(notifications).values({
+    accountId,
+    userId: c.userId,
+    type: 'contact_opted_out',
+    conversationId,
+    contactId,
+    title: `${who} pediu pra não receber mais`,
+    body: 'Marquei como "Não perturbe" — disparos e agendamentos já pulam esse contato. Se quiser, tire-o da lista.',
+  });
+  await publishEvent(accountId, { type: 'notification' });
 }

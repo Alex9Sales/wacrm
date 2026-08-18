@@ -101,6 +101,9 @@ export interface Contact {
    *  do nome, editável, e exportado/importado em CSV + API v1. */
   customer_codes?: string[];
   avatar_url?: string;
+  /** "Não perturbe": a pessoa pediu pra não receber (opt-out). Disparos e
+   *  agendamentos pulam esse contato. */
+  opted_out?: boolean;
   /** True when this "contact" is a monitored WhatsApp GROUP (not a person).
    *  Drives the inbox group segmentation + the group marker on the row. */
   is_group?: boolean;

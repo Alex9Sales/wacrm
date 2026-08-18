@@ -35,6 +35,7 @@ import {
   SendMessageError,
 } from '@/lib/whatsapp/send-message';
 import { publishEvent } from '@/lib/events/publish';
+import { isContactOptedOut } from '@/lib/contacts/opt-out';
 
 function log(...args: unknown[]): void {
   console.log('[worker:scheduled]', ...args);
@@ -73,6 +74,21 @@ async function processScheduledMessageJob(
   }
   if (row.status !== 'pending') {
     log(`${scheduledMessageId} skipped: status ${row.status}`);
+    return;
+  }
+
+  // Anti-ban: se o contato pediu pra não receber ("não perturbe"), não envia —
+  // cancela o agendamento com o motivo. (Atendimento 1:1 do humano segue normal.)
+  if (row.contactId && (await isContactOptedOut(row.contactId))) {
+    await db
+      .update(scheduledMessages)
+      .set({
+        status: 'cancelled',
+        lastError: 'Opt-out — contato pediu para não receber (não perturbe)',
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(scheduledMessages.id, scheduledMessageId));
+    log(`${scheduledMessageId} skipped: opt-out`);
     return;
   }
 

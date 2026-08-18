@@ -36,6 +36,7 @@ import {
 } from '@/lib/whatsapp/phone-utils';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
 import { renderMessageVars } from '@/lib/whatsapp/message-vars';
+import { appendOptOutLine } from '@/lib/contacts/opt-out';
 import type { OutboundMedia } from '@/lib/channels/provider';
 import type { MessageTemplate } from '@/types';
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
@@ -383,6 +384,8 @@ export async function createBroadcast(
 export interface BroadcastSendContext {
   /** 'template' (Meta) or 'text' (free-text drip on a non-official channel). */
   messageKind?: 'template' | 'text';
+  /** Anexa a opção de descadastro ("responda SAIR") no fim de cada 'text'. */
+  includeOptOut?: boolean;
   /** The message body for a 'text' broadcast (may contain {{tokens}}). */
   bodyText?: string | null;
   /** Optional media attachment for a 'text' broadcast. */
@@ -427,7 +430,9 @@ export async function sendBroadcastRecipient(
   // provider (WAHA/Evolution/EvoGo) resolves its own chatId. No template.
   if (ctx.messageKind === 'text') {
     const rawBody = ctx.bodyText ?? '';
-    const body = renderMessageVars(rawBody, recipient.vars ?? {}).trim();
+    let body = renderMessageVars(rawBody, recipient.vars ?? {}).trim();
+    // Anti-ban: anexa a opção de descadastro ("responda SAIR") no fim.
+    if (ctx.includeOptOut) body = appendOptOutLine(body);
     const mediaUrl = (ctx.mediaUrl ?? '').trim();
 
     try {

@@ -171,6 +171,8 @@ export function TextBroadcastForm() {
   const [channelId, setChannelId] = useState('')
   const [message, setMessage] = useState('')
   const [dailyCap, setDailyCap] = useState(50)
+  // Anti-ban: anexa a opção de descadastro ("responda SAIR"). Ligado por padrão.
+  const [includeOptOut, setIncludeOptOut] = useState(true)
   const [sendNow, setSendNow] = useState(false)
   const [sendNowIntervalMin, setSendNowIntervalMin] = useState(1)
   const messageRef = useRef<HTMLTextAreaElement>(null)
@@ -381,6 +383,7 @@ export function TextBroadcastForm() {
         mediaUrl: mediaUrl || null,
         mediaType,
         mediaFilename: mediaFilename || null,
+        includeOptOut,
         dailyCap: cap,
         sendNow,
         sendNowIntervalMin: Math.max(0, Math.floor(sendNowIntervalMin) || 0),
@@ -407,7 +410,7 @@ export function TextBroadcastForm() {
     } finally {
       setSubmitting(false)
     }
-  }, [canSubmit, name, channelId, message, mediaUrl, mediaType, mediaFilename, cap, sendNow, sendNowIntervalMin, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
+  }, [canSubmit, name, channelId, message, mediaUrl, mediaType, mediaFilename, includeOptOut, cap, sendNow, sendNowIntervalMin, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
 
   if (loading) {
     return (
@@ -508,6 +511,28 @@ export function TextBroadcastForm() {
           </div>
         )}
       </div>
+
+      {/* Anti-ban: opção de descadastro */}
+      <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border bg-card/50 p-3">
+        <input
+          type="checkbox"
+          checked={includeOptOut}
+          onChange={(e) => setIncludeOptOut(e.target.checked)}
+          className="mt-0.5"
+        />
+        <span className="text-sm">
+          <span className="font-medium text-foreground">
+            Incluir opção de descadastro{' '}
+            <span className="text-muted-foreground">(recomendado)</span>
+          </span>
+          <span className="mt-0.5 block text-xs text-muted-foreground">
+            Anexa <em>&quot;Se não quiser mais receber, responda SAIR.&quot;</em>{' '}
+            no fim. Quem responder <strong>SAIR</strong> é marcado como &quot;não
+            perturbe&quot; e não recebe mais — reduz denúncias e o risco de
+            bloqueio.
+          </span>
+        </span>
+      </label>
 
       {/* Media attachment */}
       <div className="space-y-1.5">

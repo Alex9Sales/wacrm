@@ -162,6 +162,19 @@ async function processRecipientJob(job: Job<RecipientJob>): Promise<void> {
   const { channel, sendContext, recipient } = loaded.ctx;
   const attempts = recipient.attempts + 1;
 
+  // Anti-ban: contato pediu pra não receber ("não perturbe") → não envia. Marca
+  // como falha com motivo claro (aparece na aba de falhas com "opt-out").
+  if (recipient.optedOut) {
+    await markRecipientFailed(
+      recipient.id,
+      attempts,
+      'Opt-out — contato pediu para não receber (não perturbe)',
+    );
+    log(`recipient ${recipient.id} skipped: opt-out`);
+    await finalizeBroadcastIfDone(loaded.ctx.broadcast.id);
+    return;
+  }
+
   // Business-hours guard for humanized drips: if this job fires OUTSIDE the
   // allowed window/day (e.g. the worker was down across its slot and BullMQ
   // released it late), re-delay to the next valid window instead of sending

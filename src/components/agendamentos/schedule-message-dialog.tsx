@@ -27,7 +27,10 @@ import {
   startNewConversation,
   type SendableChannel,
 } from '@/app/(dashboard)/inbox/actions'
-import { scheduleMessage } from '@/app/(dashboard)/inbox/schedule-actions'
+import {
+  scheduleMessage,
+  countScheduledPendingOnDay,
+} from '@/app/(dashboard)/inbox/schedule-actions'
 
 type Target = { kind: 'contact' | 'deal'; label: string; phone: string; name: string | null }
 
@@ -52,6 +55,9 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
   const [text, setText] = useState('')
   const [when, setWhen] = useState(defaultWhen)
   const [submitting, setSubmitting] = useState(false)
+  // Anti-ban: quando o dia escolhido já tem 30+ agendadas, guarda a contagem
+  // pra pedir uma 2ª confirmação ("agendar mesmo assim"). null = sem aviso.
+  const [dayWarn, setDayWarn] = useState<number | null>(null)
   const seq = useRef(0)
 
   const reset = () => {
@@ -62,6 +68,7 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
     setChannelId('')
     setText('')
     setWhen(defaultWhen())
+    setDayWarn(null)
   }
 
   useEffect(() => {
@@ -70,6 +77,11 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
       .then((list) => setChannels(list))
       .catch(() => setChannels([]))
   }, [open])
+
+  // Trocar a data/hora limpa o aviso de volume (recheca no próximo Agendar).
+  useEffect(() => {
+    setDayWarn(null)
+  }, [when])
 
   // Busca (contato ou negócio), debounced.
   useEffect(() => {
@@ -125,6 +137,21 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
     if (!text.trim()) {
       toast.error('Escreva a mensagem.')
       return
+    }
+    // Anti-ban: se o dia já tem 30+ agendadas, avisa e pede 2ª confirmação.
+    if (dayWarn === null) {
+      try {
+        const n = await countScheduledPendingOnDay(new Date(when).toISOString())
+        if (n >= 30) {
+          setDayWarn(n)
+          toast.warning(
+            `Você já tem ${n} mensagens agendadas para esse dia. Mandar muitas no mesmo dia aumenta o risco de bloqueio — considere outra data.`,
+          )
+          return
+        }
+      } catch {
+        // Se a checagem falhar, não trava o agendamento.
+      }
     }
     setSubmitting(true)
     try {
@@ -321,12 +348,25 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
               </div>
             </div>
 
+            {dayWarn !== null && (
+              <div className="mt-4 rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-300">
+                ⚠️ Esse dia já tem <strong>{dayWarn}</strong> mensagens agendadas.
+                Mandar muitas no mesmo dia aumenta o risco de bloqueio — o ideal é
+                escolher <strong>outra data</strong>. Se quiser mesmo assim, é só
+                clicar em Agendar de novo.
+              </div>
+            )}
+
             <div className="mt-5 flex items-center justify-end gap-2">
               <Button variant="outline" onClick={() => setOpen(false)} disabled={submitting}>
                 Cancelar
               </Button>
               <Button onClick={submit} disabled={!canSubmit || channels.length === 0}>
-                {submitting ? 'Agendando…' : 'Agendar'}
+                {submitting
+                  ? 'Agendando…'
+                  : dayWarn !== null
+                    ? 'Agendar mesmo assim'
+                    : 'Agendar'}
               </Button>
             </div>
           </div>

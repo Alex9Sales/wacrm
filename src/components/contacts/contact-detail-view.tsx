@@ -23,6 +23,7 @@ import {
   listContactCustomValues,
   saveContactCustomValues,
   listContactDeals,
+  setContactOptedOut,
 } from '@/app/(dashboard)/contacts/actions';
 import {
   listScheduledForContact,
@@ -54,6 +55,7 @@ import {
   Building2,
   Copy,
   Check,
+  BellOff,
   Loader2,
   Plus,
   Trash2,
@@ -240,6 +242,25 @@ export function ContactDetailView({
     await navigator.clipboard.writeText(contact.phone);
     setCopiedPhone(true);
     setTimeout(() => setCopiedPhone(false), 2000);
+  }
+
+  async function toggleOptOut() {
+    if (!contact) return;
+    const next = !contact.opted_out;
+    // Otimista — reflete na hora; reverte no erro.
+    setContact({ ...contact, opted_out: next });
+    try {
+      await setContactOptedOut(contact.id, next);
+      toast.success(
+        next
+          ? 'Contato bloqueado — disparos e agendamentos vão pular.'
+          : 'Envios reativados para este contato.',
+      );
+      onUpdated();
+    } catch {
+      setContact({ ...contact, opted_out: !next });
+      toast.error('Não foi possível atualizar.');
+    }
   }
 
   // Abrir a conversa direto (não-oficial): resolve/cria a conversa desse
@@ -451,6 +472,27 @@ export function ContactDetailView({
                         {contact.company}
                       </span>
                     )}
+                  </div>
+                  {/* Anti-ban: selo "Não perturbe" + botão de bloquear/reativar. */}
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    {contact.opted_out && (
+                      <Badge
+                        variant="outline"
+                        className="border-amber-500/40 bg-amber-500/10 text-amber-600 dark:text-amber-300"
+                      >
+                        <BellOff className="mr-1 size-3" />
+                        Não perturbe
+                      </Badge>
+                    )}
+                    <button
+                      type="button"
+                      onClick={toggleOptOut}
+                      className="text-[11px] font-medium text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+                    >
+                      {contact.opted_out
+                        ? 'Reativar envios'
+                        : 'Bloquear envios (não perturbe)'}
+                    </button>
                   </div>
                 </div>
               </div>

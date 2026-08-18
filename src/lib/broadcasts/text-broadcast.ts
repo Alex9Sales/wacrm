@@ -36,6 +36,8 @@ export interface EnqueueTextBroadcastInput {
   mediaUrl?: string | null
   mediaType?: 'image' | 'video' | 'document' | 'audio' | null
   mediaFilename?: string | null
+  /** Anexa a opção de descadastro ("responda SAIR") no fim. Default true. */
+  includeOptOut?: boolean
   /** Max sends per day (default 50) for the humanized drip. */
   dailyCap?: number
   /** Start now, ignoring business hours (test / urgent). */
@@ -148,6 +150,7 @@ export async function enqueueTextBroadcast(
           channelId: channel.id,
           messageKind: 'text',
           bodyText: body || null,
+          includeOptOut: input.includeOptOut !== false,
           mediaUrl: mediaUrl || null,
           mediaType,
           mediaFilename: input.mediaFilename?.trim() || null,

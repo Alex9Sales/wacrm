@@ -895,6 +895,8 @@ export interface CreateTextBroadcastInput {
   sendNow?: boolean
   /** When sendNow: minutes between each message (0 = all at once). */
   sendNowIntervalMin?: number
+  /** Anexa a opção de descadastro ("responda SAIR") no fim. Default true. */
+  includeOptOut?: boolean
   audience: ResolveAudienceInput
 }
 
@@ -921,6 +923,7 @@ export async function createTextBroadcast(
       mediaUrl: input.mediaUrl,
       mediaType: input.mediaType,
       mediaFilename: input.mediaFilename,
+      includeOptOut: input.includeOptOut,
       dailyCap: input.dailyCap,
       sendNow: input.sendNow,
       sendNowIntervalMin: input.sendNowIntervalMin,
