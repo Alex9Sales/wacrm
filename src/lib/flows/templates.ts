@@ -295,10 +295,70 @@ const LEAD_CAPTURE: FlowTemplate = {
 };
 
 // ============================================================
+// 4. Comentário do Instagram → DM (ManyChat) — começa com BOTÕES
+//    (as opções viram botões tocáveis no DM), pronto pra ligar numa
+//    automação de comentário. O 1º nó SER send_buttons é o que abre a
+//    janela de 24h do IG quando a pessoa toca.
+// ============================================================
+const COMMENT_TO_DM: FlowTemplate = {
+  slug: "comment_to_dm",
+  name: "Comentário do Instagram → DM",
+  description:
+    "Pra ligar numa automação de comentário: começa com botões (as opções viram botões tocáveis no DM) e ramifica — manda o link ou passa pro atendente.",
+  icon: "MessageSquare",
+  trigger_type: "manual",
+  trigger_config: {},
+  entry_node_id: "menu",
+  nodes: [
+    {
+      node_key: "menu",
+      node_type: "send_buttons",
+      config: {
+        text: "O que você quer ver primeiro?",
+        buttons: [
+          {
+            reply_id: "link",
+            title: "💰 Quero o link",
+            next_node_key: "send_link",
+          },
+          {
+            reply_id: "duvida",
+            title: "💬 Tenho dúvida",
+            next_node_key: "duvida_handoff",
+          },
+        ],
+      } as SendButtonsNodeConfig,
+    },
+    {
+      node_key: "send_link",
+      node_type: "send_message",
+      config: {
+        text: "Aqui está 👉 https://exemplo.com . Qualquer dúvida, é só chamar! 💜",
+        next_node_key: "end",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "duvida_handoff",
+      node_type: "handoff",
+      config: {
+        customer_message: "Claro! Já te passo pra um atendente 🙂",
+        note: "Veio de um comentário no Instagram e tem uma dúvida.",
+      } as HandoffNodeConfig,
+    },
+    {
+      node_key: "end",
+      node_type: "end",
+      config: {},
+    },
+  ],
+};
+
+// ============================================================
 // Registry
 // ============================================================
 
 const TEMPLATES: Record<string, FlowTemplate> = {
+  comment_to_dm: COMMENT_TO_DM,
   welcome_menu: WELCOME_MENU,
   faq_bot: FAQ_BOT,
   lead_capture: LEAD_CAPTURE,

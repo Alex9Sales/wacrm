@@ -129,7 +129,7 @@ const navItems: NavItem[] = [
   { href: "/broadcasts", label: "Disparos", icon: Radio },
   { href: "/agendamentos", label: "Agendamentos", icon: CalendarClock },
   { href: "/automations", label: "Automações", icon: Zap },
-  { href: "/flows", label: "Fluxos", icon: Workflow, beta: true },
+  { href: "/flows", label: "Fluxos", icon: Workflow },
   { href: "/agents", label: "Agentes IA", icon: Bot },
   { href: "/supervisao", label: "Supervisão", icon: Gauge, adminOnly: true },
 ];

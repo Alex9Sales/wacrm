@@ -415,6 +415,18 @@ export function ChannelCommentAutomationDialog({
                   etapas e etiquetas) logo depois de receber o DM. Crie fluxos na
                   aba <strong>Fluxos</strong>.
                 </p>
+                {(() => {
+                  const sel = flows.find((f) => f.id === form.startFlowId)
+                  if (!form.startFlowId || !sel || sel.entry_is_buttons) return null
+                  return (
+                    <p className="mt-1.5 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-[11px] text-amber-600 dark:text-amber-300">
+                      ⚠️ Esse fluxo <strong>não começa com Botões</strong>. No
+                      Instagram, a pessoa precisa tocar num botão pra continuar —
+                      comece o fluxo com um nó de <strong>Botões</strong> pra a
+                      sequência ser entregue.
+                    </p>
+                  )
+                })()}
               </Field>
             )}
 

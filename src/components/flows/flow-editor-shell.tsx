@@ -40,6 +40,7 @@ import type {
   FlowChannelOption,
   FlowMemberOption,
   FlowTagOption,
+  FlowNodeStats,
 } from "@/lib/flows/types";
 
 /**
@@ -65,6 +66,7 @@ interface Props {
   channels: FlowChannelOption[];
   members: FlowMemberOption[];
   tags: FlowTagOption[];
+  stats?: FlowNodeStats;
 }
 
 export function FlowEditorShell({
@@ -73,6 +75,7 @@ export function FlowEditorShell({
   channels,
   members,
   tags,
+  stats,
 }: Props) {
   // Read the persisted choice in the useState initializer. Safe even
   // though this is a client component because the parent page only
@@ -112,6 +115,7 @@ export function FlowEditorShell({
       channels={channels}
       members={members}
       tags={tags}
+      stats={stats}
     >
       <div className="flex h-full min-h-0 flex-col">
         <EditorHeader />

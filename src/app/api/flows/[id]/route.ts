@@ -1,6 +1,16 @@
 import { NextResponse } from 'next/server'
-import { and, asc, eq } from 'drizzle-orm'
-import { db, flows, flowNodes, channels, member, user, tags } from '@/db'
+import { and, asc, eq, sql } from 'drizzle-orm'
+import {
+  db,
+  flows,
+  flowNodes,
+  flowRuns,
+  flowRunEvents,
+  channels,
+  member,
+  user,
+  tags,
+} from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 
@@ -71,7 +81,8 @@ export async function GET(
     const { id } = await context.params
     const ctx = await getCurrentAccount()
 
-    const [flow, nodes, channelList, memberList, tagList] = await Promise.all([
+    const [flow, nodes, channelList, memberList, tagList, statRows] =
+      await Promise.all([
       db
         .select(flowColumns)
         .from(flows)
@@ -114,9 +125,29 @@ export async function GET(
         .from(tags)
         .where(eq(tags.accountId, ctx.accountId))
         .orderBy(asc(tags.name)),
+      // Analytics por nó (Fase 3): quantas vezes cada nó ENVIOU uma mensagem e
+      // quantas RESPOSTAS chegou nele (toques em botão) — pra CTR estilo ManyChat.
+      db
+        .select({
+          node_key: flowRunEvents.nodeKey,
+          event_type: flowRunEvents.eventType,
+          n: sql<number>`count(*)::int`,
+        })
+        .from(flowRunEvents)
+        .innerJoin(flowRuns, eq(flowRunEvents.flowRunId, flowRuns.id))
+        .where(eq(flowRuns.flowId, id))
+        .groupBy(flowRunEvents.nodeKey, flowRunEvents.eventType),
     ])
     if (!flow) {
       return NextResponse.json({ error: 'Not found' }, { status: 404 })
+    }
+    // { node_key: { sent, replies } } — o cliente calcula o CTR (replies/sent).
+    const stats: Record<string, { sent: number; replies: number }> = {}
+    for (const row of statRows) {
+      if (!row.node_key) continue
+      const s = (stats[row.node_key] ??= { sent: 0, replies: 0 })
+      if (row.event_type === 'message_sent') s.sent += row.n
+      else if (row.event_type === 'reply_received') s.replies += row.n
     }
     return NextResponse.json({
       flow,
@@ -124,6 +155,7 @@ export async function GET(
       channels: channelList,
       members: memberList,
       tags: tagList,
+      stats,
     })
   } catch (err) {
     return toErrorResponse(err)

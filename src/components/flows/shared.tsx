@@ -26,9 +26,11 @@ import {
   ListChecks,
   ListPlus,
   MessageCircle,
+  MousePointerClick,
   Paperclip,
   PlayCircle,
   Repeat,
+  Send,
   Shuffle,
   Tag,
   UserPlus,
@@ -332,6 +334,50 @@ export function NodeChannelBadge({
       provider={provider}
       className={cn('h-4 w-4 shrink-0', className)}
     />
+  );
+}
+
+/**
+ * Métricas do nó (Fase 3, estilo ManyChat): enviado · respostas · CTR. Só
+ * aparece quando o nó já enviou ao menos 1 mensagem. CTR (respostas/enviado) só
+ * pra nós de botões/lista — os únicos onde faz sentido "clicar". `stats`
+ * undefined ou sem envios → não renderiza nada.
+ */
+export function NodeStatsRow({
+  type,
+  stats,
+  className,
+}: {
+  type: NodeType;
+  stats?: { sent: number; replies: number };
+  className?: string;
+}) {
+  if (!stats || stats.sent <= 0) return null;
+  const isChoice = type === 'send_buttons' || type === 'send_list';
+  const ctr = isChoice ? Math.round((stats.replies / stats.sent) * 100) : null;
+  return (
+    <div
+      className={cn(
+        'flex flex-wrap items-center gap-x-2.5 gap-y-0.5 text-[10.5px] text-muted-foreground',
+        className
+      )}
+    >
+      <span className="inline-flex items-center gap-1" title="Enviado">
+        <Send size={11} /> {stats.sent}
+      </span>
+      {isChoice && (
+        <>
+          <span className="inline-flex items-center gap-1" title="Respostas (toques)">
+            <MousePointerClick size={11} /> {stats.replies}
+          </span>
+          {ctr !== null && (
+            <span className="text-primary font-semibold" title="Taxa de cliques">
+              CTR {ctr}%
+            </span>
+          )}
+        </>
+      )}
+    </div>
   );
 }
 

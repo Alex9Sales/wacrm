@@ -51,6 +51,7 @@ import {
   NODE_META,
   NodeIconChip,
   NodeChannelBadge,
+  NodeStatsRow,
   groupNodeTypesByCategory,
   nodeColors,
   slugify,
@@ -578,6 +579,7 @@ function NodeCard({
   const meta = NODE_META[node.node_type];
   const c = nodeColors(node.node_type);
   const channelProvider = useFlowChannelProvider();
+  const { stats } = useFlowEditor();
   const hasError = issues.some((i) => i.severity === 'error');
   const preview = summarizeNode(node);
   return (
@@ -629,6 +631,11 @@ function NodeCard({
               {preview}
             </p>
           )}
+          <NodeStatsRow
+            type={node.node_type}
+            stats={stats[node.node_key]}
+            className="mt-1"
+          />
         </div>
         <NodeChannelBadge
           type={node.node_type}

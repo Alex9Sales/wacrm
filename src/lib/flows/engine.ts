@@ -2103,6 +2103,12 @@ export async function startSuspendedRun(
       trigger_type: flow.trigger_type,
       via: "instagram_comment",
     });
+    // A 1ª msg (as opções) já foi enviada como resposta ao comentário, FORA do
+    // motor — registra o envio no nó de entrada pra o CTR do card bater (senão
+    // o nó de botões apareceria com 0 enviados apesar de ter recebido toques).
+    await logEvent(run.id, "message_sent", flow.entry_node_id, {
+      via: "instagram_comment_private_reply",
+    });
     try {
       await db.execute(sql`SELECT increment_flow_execution_count(${flow.id})`);
     } catch {

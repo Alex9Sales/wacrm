@@ -530,6 +530,12 @@ export interface FlowTagOption {
   color: string | null;
 }
 
+/** Métricas por nó (Fase 3, estilo ManyChat). Chave = node_key. `sent` = quantas
+ *  vezes o nó enviou uma mensagem; `replies` = respostas recebidas nele (toques
+ *  em botão). O CTR (replies/sent) é calculado no cliente. Servido por
+ *  GET /api/flows/[id]. Nós sem eventos simplesmente não aparecem no mapa. */
+export type FlowNodeStats = Record<string, { sent: number; replies: number }>;
+
 // ============================================================
 // Engine input — what `dispatchInboundToFlows` accepts
 // ============================================================

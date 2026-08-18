@@ -56,6 +56,7 @@ import type {
   FlowChannelOption,
   FlowMemberOption,
   FlowTagOption,
+  FlowNodeStats,
 } from "@/lib/flows/types";
 import { NODE_META, slugify, type BuilderNode, type NodeType } from "./shared";
 
@@ -87,6 +88,10 @@ export interface FlowEditorContextValue {
 
   /** Account's tags for the tag_added trigger + set_tag pickers. */
   tags: FlowTagOption[];
+
+  /** Métricas por nó (enviado/respostas) pra mostrar CTR nos cards. Read-only
+   *  (foto do carregamento) — não muda com edições. Vazio se o fluxo é novo. */
+  stats: FlowNodeStats;
 
   // Authored state
   state: BuilderState;
@@ -303,6 +308,7 @@ interface ProviderProps {
   channels: FlowChannelOption[];
   members: FlowMemberOption[];
   tags: FlowTagOption[];
+  stats?: FlowNodeStats;
   children: ReactNode;
 }
 
@@ -312,6 +318,7 @@ export function FlowEditorProvider({
   channels,
   members,
   tags,
+  stats,
   children,
 }: ProviderProps) {
   const router = useRouter();
@@ -605,6 +612,7 @@ export function FlowEditorProvider({
       channels,
       members,
       tags,
+      stats: stats ?? {},
       state,
       setState,
       dirty,
@@ -629,6 +637,7 @@ export function FlowEditorProvider({
       channels,
       members,
       tags,
+      stats,
       state,
       setState,
       dirty,

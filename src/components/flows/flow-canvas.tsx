@@ -79,6 +79,7 @@ import {
   NODE_META,
   NodeIconChip,
   NodeChannelBadge,
+  NodeStatsRow,
   groupNodeTypesByCategory,
   nodeColors,
   summarizeNode,
@@ -108,6 +109,8 @@ interface NodeData extends Record<string, unknown> {
    *  canal nos cards de mensagem, estilo ManyChat. Calculado uma vez e
    *  passado por aqui (em vez de cada nó ler o contexto). */
   channelProvider: string | null;
+  /** Métricas do nó (enviado/respostas) pra CTR no card. undefined = sem envios. */
+  nodeStats?: { sent: number; replies: number };
 }
 
 const NODE_WIDTH = 240;
@@ -137,7 +140,8 @@ function slotColor(nodeType: NodeType, slotId: string, fallback: string) {
 }
 
 function FlowNodeCard({ data, selected }: NodeProps) {
-  const { node, isEntry, isFlashed, channelProvider } = data as NodeData;
+  const { node, isEntry, isFlashed, channelProvider, nodeStats } =
+    data as NodeData;
   const meta = NODE_META[node.node_type];
   const c = nodeColors(node.node_type);
   const summary = summarizeNode(node);
@@ -219,6 +223,11 @@ function FlowNodeCard({ data, selected }: NodeProps) {
           {summary}
         </div>
       )}
+      <NodeStatsRow
+        type={node.node_type}
+        stats={nodeStats}
+        className="mt-1.5"
+      />
 
       {isMultiSlot && (
         <div className="border-border mt-2.5 flex flex-col gap-1 border-t pt-2.5">
@@ -291,6 +300,7 @@ function FlowCanvasInner() {
     removeNode,
     flashKey,
     channels,
+    stats,
   } = useFlowEditor();
   const reactFlow = useReactFlow();
   const builderNodes = state.nodes;
@@ -358,12 +368,20 @@ function FlowCanvasInner() {
           isEntry: n.node_key === entryNodeId,
           isFlashed: n.node_key === flashKey,
           channelProvider,
+          nodeStats: stats[n.node_key],
         },
       };
     });
 
     return nodes;
-  }, [builderNodes, entryNodeId, flashKey, autoLayoutPositions, channelProvider]);
+  }, [
+    builderNodes,
+    entryNodeId,
+    flashKey,
+    autoLayoutPositions,
+    channelProvider,
+    stats,
+  ]);
 
   const [rfNodes, setRfNodes] = useState<RfNode<NodeData>[]>(derivedRfNodes);
 

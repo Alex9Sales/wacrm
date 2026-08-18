@@ -205,14 +205,11 @@ export default function FlowsPage() {
         <div>
           <div className="flex items-center gap-2">
             <h1 className="text-2xl font-semibold text-foreground">Fluxos</h1>
-            <span className="inline-flex items-center rounded-full border border-amber-500/40 bg-amber-500/10 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
-              Beta
-            </span>
           </div>
           <p className="mt-1 text-sm text-muted-foreground">
-            Crie conversas do WhatsApp com ramificações e comandadas por botões.
-            Úteis para menus, perguntas frequentes e triagem antes de um humano
-            assumir.
+            Crie conversas com ramificações e comandadas por botões (WhatsApp,
+            Instagram e Messenger). Úteis para menus, comentário → DM, perguntas
+            frequentes e triagem antes de um humano assumir.
           </p>
         </div>
         <GatedButton

@@ -6,7 +6,7 @@
 // E provider='instagram'. Escritas exigem admin.
 // ============================================================
 
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, sql } from 'drizzle-orm'
 
 import { db, channels, instagramCommentAutomations, flows } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -259,13 +259,20 @@ export async function listInstagramPosts(
 export interface FlowLite {
   id: string
   name: string
+  /** A entrada do fluxo é um nó de BOTÕES? Comentário→fluxo exige isso (senão a
+   *  2ª msg trava na janela de 24h do IG — a pessoa precisa tocar num botão). */
+  entry_is_buttons: boolean
 }
 
 /** Fluxos ATIVOS da conta — pro seletor "iniciar fluxo depois do DM". */
 export async function listActiveFlows(): Promise<FlowLite[]> {
   const ctx = await getCurrentAccount()
   const rows = await db
-    .select({ id: flows.id, name: flows.name })
+    .select({
+      id: flows.id,
+      name: flows.name,
+      entry_is_buttons: sql<boolean>`EXISTS (SELECT 1 FROM flow_nodes n WHERE n.flow_id = ${flows.id} AND n.node_key = ${flows.entryNodeId} AND n.node_type = 'send_buttons')`,
+    })
     .from(flows)
     .where(and(eq(flows.accountId, ctx.accountId), eq(flows.status, 'active')))
     .orderBy(asc(flows.name))
