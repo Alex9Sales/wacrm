@@ -18,9 +18,23 @@ import { and, eq } from 'drizzle-orm'
 import { db, instagramCommentAutomations, instagramCommentEvents } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import type { ChannelCtx } from './provider'
-import { replyToComment, sendCommentPrivateReply } from './providers/instagram'
+import {
+  replyToComment,
+  sendCommentPrivateReply,
+  type DmButton,
+} from './providers/instagram'
 
 type Rule = typeof instagramCommentAutomations.$inferSelect
+
+/** Botões do DM da regra: usa `dmButtons` (novo); cai no par legado se vazio. */
+function resolveDmButtons(rule: Rule): DmButton[] {
+  const list = rule.dmButtons?.filter((b) => b?.text && b?.url) ?? []
+  if (list.length) return list
+  if (rule.dmButtonText && rule.dmButtonUrl) {
+    return [{ text: rule.dmButtonText, url: rule.dmButtonUrl }]
+  }
+  return []
+}
 
 interface CommentChange {
   commentId: string
@@ -193,9 +207,7 @@ export async function processCommentWebhook(
         channel,
         c.commentId,
         rule.dmMessage,
-        rule.dmButtonText && rule.dmButtonUrl
-          ? { text: rule.dmButtonText, url: rule.dmButtonUrl }
-          : null,
+        resolveDmButtons(rule),
       )
       dmSent = true
     } catch (e) {

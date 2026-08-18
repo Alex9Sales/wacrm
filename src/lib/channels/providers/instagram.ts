@@ -51,9 +51,49 @@ function graphBaseOf(ch: ChannelCtx): string {
 }
 
 // ---- Webhook payload (Messenger-style, universe instagram) -----------------
+interface IgTemplateButton {
+  title?: string
+  type?: string
+  url?: string
+}
 interface IgAttachment {
   type?: string
-  payload?: { url?: string }
+  payload?: {
+    url?: string
+    // Echo de mensagem com template (o DM da automação de comentário com botões):
+    // generic = { elements: [{ title, subtitle, buttons }] }; button = { text, buttons }.
+    title?: string
+    text?: string
+    template_type?: string
+    buttons?: IgTemplateButton[]
+    elements?: {
+      title?: string
+      subtitle?: string
+      buttons?: IgTemplateButton[]
+    }[]
+  }
+}
+
+/**
+ * Texto legível de um attachment de TEMPLATE (o echo do DM com botões). Junta o
+ * título/corpo do card + os rótulos dos botões, pra renderizar como bolha de
+ * texto no inbox em vez de um "[text]" vazio. null se não der pra extrair nada.
+ */
+function templateText(att: IgAttachment): string | null {
+  const p = att.payload
+  if (!p) return null
+  const el = p.elements?.[0]
+  const title = (p.text ?? p.title ?? el?.title ?? '').trim()
+  const subtitle = (el?.subtitle ?? '').trim()
+  const labels = (el?.buttons ?? p.buttons ?? [])
+    .map((b) => b?.title?.trim())
+    .filter((t): t is string => !!t)
+  const parts: string[] = []
+  if (title) parts.push(title)
+  if (subtitle) parts.push(subtitle)
+  if (labels.length) parts.push(labels.map((t) => `🔘 ${t}`).join('  '))
+  const out = parts.join('\n')
+  return out || null
 }
 interface IgMessaging {
   sender?: { id?: string }
@@ -222,35 +262,34 @@ export async function sendCommentPrivateReply(
   ch: ChannelCtx,
   commentId: string,
   message: string,
-  button?: DmButton | null,
+  buttons?: DmButton[] | null,
 ): Promise<void> {
   const url = `${graphBaseOf(ch)}/${igIdOf(ch)}/messages`
-  // Com botão (estilo ManyChat): manda como generic template (card + botão URL).
-  // Sem botão: DM de texto simples. O botão renderiza no app do Instagram.
-  const messagePayload =
-    button && button.text && button.url
-      ? {
-          attachment: {
-            type: 'template',
-            payload: {
-              template_type: 'generic',
-              elements: [
-                {
-                  // title é obrigatório e limitado (~80). O botão, ~20.
-                  title: (message || button.text).slice(0, 80),
-                  buttons: [
-                    {
-                      type: 'web_url',
-                      url: button.url,
-                      title: button.text.slice(0, 20),
-                    },
-                  ],
-                },
-              ],
-            },
+  // Com botões (estilo ManyChat): manda como generic template (card + botões
+  // URL). Instagram/Messenger aceita ATÉ 3 botões por card. Sem botão: DM de
+  // texto simples. Os botões renderizam no app do Instagram.
+  const valid = (buttons ?? []).filter((b) => b.text && b.url).slice(0, 3)
+  const messagePayload = valid.length
+    ? {
+        attachment: {
+          type: 'template',
+          payload: {
+            template_type: 'generic',
+            elements: [
+              {
+                // title é obrigatório e limitado (~80). Cada botão, ~20.
+                title: (message || valid[0].text).slice(0, 80),
+                buttons: valid.map((b) => ({
+                  type: 'web_url',
+                  url: b.url,
+                  title: b.text.slice(0, 20),
+                })),
+              },
+            ],
           },
-        }
-      : { text: message }
+        },
+      }
+    : { text: message }
   await graphPost(url, accessTokenOf(ch), {
     recipient: { comment_id: commentId },
     message: messagePayload,
@@ -334,10 +373,13 @@ export const instagramProvider: WhatsAppProvider = {
 
         let contentType: NormalizedInbound['contentType'] = 'text'
         let mediaUrl: string | undefined
+        let attachmentText: string | null = null
         const att = m.attachments?.[0]
         if (att) {
           contentType = mapAttachment(att.type)
           if (contentType !== 'text') mediaUrl = att.payload?.url
+          // template/share/etc. → texto legível (ex.: echo do DM com botões).
+          else attachmentText = templateText(att)
         }
 
         const norm: NormalizedInbound = {
@@ -346,7 +388,7 @@ export const instagramProvider: WhatsAppProvider = {
           senderExternalId: partnerId,
           fromMe: isEcho,
           contentType,
-          contentText: m.text ?? null,
+          contentText: m.text ?? attachmentText ?? null,
         }
         if (mediaUrl) {
           norm.media = { kind: contentType, url: mediaUrl }

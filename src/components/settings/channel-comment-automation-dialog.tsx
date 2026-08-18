@@ -51,9 +51,8 @@ const EMPTY = {
   oncePerUser: true,
   // lista de media_id dos posts; vazio = qualquer post.
   mediaIds: [] as string[],
-  // botão no DM (estilo ManyChat): texto + link. Vazio = DM só texto.
-  dmButtonText: '',
-  dmButtonUrl: '',
+  // botões no DM (estilo ManyChat): até 3 { text, url }. Vazio = DM só texto.
+  dmButtons: [] as { text: string; url: string }[],
 };
 
 type FormState = typeof EMPTY;
@@ -147,8 +146,11 @@ export function ChannelCommentAutomationDialog({
       dmMessage: r.dm_message,
       oncePerUser: r.once_per_user,
       mediaIds: ruleMediaIds(r),
-      dmButtonText: r.dm_button_text ?? '',
-      dmButtonUrl: r.dm_button_url ?? '',
+      dmButtons: r.dm_buttons?.length
+        ? r.dm_buttons.map((b) => ({ text: b.text, url: b.url }))
+        : r.dm_button_text && r.dm_button_url
+          ? [{ text: r.dm_button_text, url: r.dm_button_url }]
+          : [],
     });
     setEditing(r.id);
     void loadPosts();
@@ -185,8 +187,7 @@ export function ChannelCommentAutomationDialog({
         dmMessage,
         oncePerUser: form.oncePerUser,
         mediaIds: form.mediaIds,
-        dmButtonText: form.dmButtonText || null,
-        dmButtonUrl: form.dmButtonUrl || null,
+        dmButtons: form.dmButtons.filter((b) => b.text.trim() && b.url.trim()),
       };
       if (editing === 'new') {
         await createCommentAutomation(input);
@@ -203,6 +204,24 @@ export function ChannelCommentAutomationDialog({
       setSaving(false);
     }
   };
+
+  // --- botões do DM (até 3) ---
+  const addButton = () =>
+    setForm((f) =>
+      f.dmButtons.length >= 3
+        ? f
+        : { ...f, dmButtons: [...f.dmButtons, { text: '', url: '' }] },
+    );
+  const updateButton = (i: number, patch: Partial<{ text: string; url: string }>) =>
+    setForm((f) => ({
+      ...f,
+      dmButtons: f.dmButtons.map((b, idx) => (idx === i ? { ...b, ...patch } : b)),
+    }));
+  const removeButton = (i: number) =>
+    setForm((f) => ({
+      ...f,
+      dmButtons: f.dmButtons.filter((_, idx) => idx !== i),
+    }));
 
   const toggle = async (r: CommentAutomation) => {
     // Otimista.
@@ -309,36 +328,55 @@ export function ChannelCommentAutomationDialog({
 
             <div className="rounded-lg border border-border p-3">
               <p className="text-xs font-medium text-foreground">
-                Botão no DM{' '}
-                <span className="text-muted-foreground">(opcional)</span>
+                Botões no DM{' '}
+                <span className="text-muted-foreground">(opcional, até 3)</span>
               </p>
               <p className="mb-2 mt-0.5 text-[11px] text-muted-foreground">
-                Se preencher, o DM vira um card com um botão clicável (abre o
-                link / página de vendas). O botão aparece no app do Instagram.
+                Cada botão abre um link — conteúdo, grupo de WhatsApp, página de
+                vendas… Ex.: um &ldquo;Quero o link&rdquo; e outro &ldquo;Entrar
+                na comunidade&rdquo;. Aparecem no app do Instagram.
               </p>
-              <div className="grid grid-cols-2 gap-2">
-                <Field label="Texto do botão">
-                  <input
-                    value={form.dmButtonText}
-                    onChange={(e) =>
-                      setForm({ ...form, dmButtonText: e.target.value })
-                    }
-                    placeholder="Ex: Quero o link"
-                    maxLength={20}
-                    className={inputCls}
-                  />
-                </Field>
-                <Field label="Link do botão">
-                  <input
-                    value={form.dmButtonUrl}
-                    onChange={(e) =>
-                      setForm({ ...form, dmButtonUrl: e.target.value })
-                    }
-                    placeholder="https://..."
-                    className={inputCls}
-                  />
-                </Field>
+
+              <div className="space-y-2">
+                {form.dmButtons.map((b, i) => (
+                  <div key={i} className="flex items-center gap-2">
+                    <input
+                      value={b.text}
+                      onChange={(e) => updateButton(i, { text: e.target.value })}
+                      placeholder="Texto (ex: Quero o link)"
+                      maxLength={20}
+                      className={cn(inputCls, 'flex-1')}
+                    />
+                    <input
+                      value={b.url}
+                      onChange={(e) => updateButton(i, { url: e.target.value })}
+                      placeholder="https://..."
+                      className={cn(inputCls, 'flex-1')}
+                    />
+                    <button
+                      type="button"
+                      onClick={() => removeButton(i)}
+                      aria-label="Remover botão"
+                      className="shrink-0 text-muted-foreground hover:text-destructive"
+                    >
+                      <Trash2 className="size-4" />
+                    </button>
+                  </div>
+                ))}
               </div>
+
+              {form.dmButtons.length < 3 && (
+                <button
+                  type="button"
+                  onClick={addButton}
+                  className="mt-2 inline-flex items-center gap-1 text-xs font-medium text-primary hover:underline"
+                >
+                  <Plus className="size-3.5" />
+                  {form.dmButtons.length === 0
+                    ? 'Adicionar botão'
+                    : 'Adicionar outro botão'}
+                </button>
+              )}
             </div>
 
             <label className="flex items-center gap-2 text-sm text-foreground">

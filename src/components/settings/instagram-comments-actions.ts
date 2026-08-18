@@ -28,6 +28,7 @@ export interface CommentAutomation {
   media_ids: string[] | null
   dm_button_text: string | null
   dm_button_url: string | null
+  dm_buttons: { text: string; url: string }[] | null
   created_at: string
 }
 
@@ -42,9 +43,8 @@ export interface CommentAutomationInput {
   oncePerUser: boolean
   /** Posts (media_id do IG) que a regra cobre. Vazio = qualquer post. */
   mediaIds: string[]
-  /** Botão (estilo ManyChat) no DM: texto + URL. Vazio = DM só texto. */
-  dmButtonText: string | null
-  dmButtonUrl: string | null
+  /** Botões (estilo ManyChat) no DM: até 3 { text, url }. Vazio = DM só texto. */
+  dmButtons: { text: string; url: string }[]
 }
 
 /** Garante que o canal é da conta e é Instagram. Lança se não for. */
@@ -79,6 +79,7 @@ const cols = {
   media_ids: instagramCommentAutomations.mediaIds,
   dm_button_text: instagramCommentAutomations.dmButtonText,
   dm_button_url: instagramCommentAutomations.dmButtonUrl,
+  dm_buttons: instagramCommentAutomations.dmButtons,
   created_at: instagramCommentAutomations.createdAt,
 }
 
@@ -105,6 +106,20 @@ function validate(input: CommentAutomationInput): void {
   if (!input.dmMessage.trim()) throw new Error('Escreva a mensagem do DM.')
   if (!input.matchAny && !input.keywords.trim()) {
     throw new Error('Informe ao menos uma palavra-chave (ou marque "qualquer comentário").')
+  }
+}
+
+/** Normaliza os botões do DM: apara, tira vazios, corta em 3. Devolve as colunas
+ *  (lista nova `dmButtons` + par legado com o 1º botão, pra compat de leitura). */
+function buttonCols(input: CommentAutomationInput) {
+  const buttons = (input.dmButtons ?? [])
+    .map((b) => ({ text: b.text.trim(), url: b.url.trim() }))
+    .filter((b) => b.text && b.url)
+    .slice(0, 3)
+  return {
+    dmButtons: buttons.length ? buttons : null,
+    dmButtonText: buttons[0]?.text ?? null,
+    dmButtonUrl: buttons[0]?.url ?? null,
   }
 }
 
@@ -140,8 +155,7 @@ export async function createCommentAutomation(
         oncePerUser: input.oncePerUser,
         mediaIds: input.mediaIds.length ? input.mediaIds : null,
         mediaId: null,
-        dmButtonText: input.dmButtonText?.trim() || null,
-        dmButtonUrl: input.dmButtonUrl?.trim() || null,
+        ...buttonCols(input),
       })
       .returning(cols),
   )
@@ -169,8 +183,7 @@ export async function updateCommentAutomation(
       oncePerUser: input.oncePerUser,
       mediaIds: input.mediaIds.length ? input.mediaIds : null,
       mediaId: null,
-      dmButtonText: input.dmButtonText?.trim() || null,
-      dmButtonUrl: input.dmButtonUrl?.trim() || null,
+      ...buttonCols(input),
       updatedAt: new Date().toISOString(),
     })
     .where(
