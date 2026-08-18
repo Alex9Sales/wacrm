@@ -102,11 +102,20 @@ export async function listCommentAutomations(
 }
 
 function validate(input: CommentAutomationInput): void {
-  if (!input.name.trim()) throw new Error('Dê um nome à automação.')
   if (!input.dmMessage.trim()) throw new Error('Escreva a mensagem do DM.')
   if (!input.matchAny && !input.keywords.trim()) {
     throw new Error('Informe ao menos uma palavra-chave (ou marque "qualquer comentário").')
   }
+}
+
+/** Nome padrão quando vem vazio (o nome é opcional pro usuário). */
+function fallbackName(input: CommentAutomationInput): string {
+  if (input.matchAny) return 'Qualquer comentário'
+  const first = input.keywords
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean)[0]
+  return first ? `Palavra "${first}"` : 'Automação de comentário'
 }
 
 /** Cria uma regra. */
@@ -122,7 +131,7 @@ export async function createCommentAutomation(
       .values({
         accountId: ctx.accountId,
         channelId: input.channelId,
-        name: input.name.trim(),
+        name: input.name.trim() || fallbackName(input),
         enabled: input.enabled,
         matchAny: input.matchAny,
         keywords: input.keywords.trim(),
@@ -151,7 +160,7 @@ export async function updateCommentAutomation(
   await db
     .update(instagramCommentAutomations)
     .set({
-      name: input.name.trim(),
+      name: input.name.trim() || fallbackName(input),
       enabled: input.enabled,
       matchAny: input.matchAny,
       keywords: input.keywords.trim(),

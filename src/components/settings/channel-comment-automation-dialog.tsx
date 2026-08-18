@@ -155,16 +155,34 @@ export function ChannelCommentAutomationDialog({
   };
 
   const save = async () => {
+    // Validação no CLIENTE: mensagem limpa e instantânea. Erro lançado numa
+    // Server Action em produção volta pro navegador sanitizado ("An error
+    // occurred in the Server Components render… digest"), então nunca deixamos
+    // a validação chegar no servidor.
+    const dmMessage = form.dmMessage.trim();
+    if (!dmMessage) {
+      toast.error('Escreva a mensagem do DM.');
+      return;
+    }
+    if (!form.matchAny && !form.keywords.trim()) {
+      toast.error(
+        'Informe ao menos uma palavra-chave (ou marque "qualquer comentário").',
+      );
+      return;
+    }
+    // Nome é opcional pro usuário: se vazio, geramos a partir do gatilho.
+    const name = form.name.trim() || autoName(form);
+
     setSaving(true);
     try {
       const input = {
         channelId: channel.id,
-        name: form.name,
+        name,
         enabled: form.enabled,
         matchAny: form.matchAny,
         keywords: form.keywords,
         publicReply: form.publicReply || null,
-        dmMessage: form.dmMessage,
+        dmMessage,
         oncePerUser: form.oncePerUser,
         mediaIds: form.mediaIds,
         dmButtonText: form.dmButtonText || null,
@@ -228,11 +246,11 @@ export function ChannelCommentAutomationDialog({
 
         {inForm ? (
           <div className="flex flex-col gap-3 py-1">
-            <Field label="Nome da automação">
+            <Field label="Nome (opcional)">
               <input
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
-                placeholder="Ex: Post do e-book"
+                placeholder="Deixe em branco que a gente nomeia sozinho"
                 className={inputCls}
               />
             </Field>
@@ -429,6 +447,16 @@ export function ChannelCommentAutomationDialog({
 
 const inputCls =
   'w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground';
+
+/** Nome automático quando o usuário deixa em branco — a partir do gatilho. */
+function autoName(f: FormState): string {
+  if (f.matchAny) return 'Qualquer comentário';
+  const first = f.keywords
+    .split(',')
+    .map((k) => k.trim())
+    .filter(Boolean)[0];
+  return first ? `Palavra "${first}"` : 'Automação de comentário';
+}
 
 /** Multi-seleção de posts: miniaturas escolhidas (com "x" pra remover) + botão
  *  "+" que abre uma grade DENTRO do card (rola, não vaza). Vazio = qualquer post. */
