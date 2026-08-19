@@ -63,6 +63,7 @@ import {
   duplicateDeal,
   addDealNote,
   openDealConversation,
+  openDealWhatsApp,
   type DealEvent,
 } from "@/app/(dashboard)/pipelines/actions";
 import {
@@ -699,6 +700,29 @@ export default function DealDetailPage() {
                 </Button>
               );
             })()}
+          {/* Secundário: falar no WhatsApp pelo telefone (quando a origem não é
+              WhatsApp e o contato tem número). Não muda a origem do negócio. */}
+          {deal.contact_id &&
+            !!deal.contact?.phone &&
+            dealChannelLabel(deal.channel_provider) !== "WhatsApp" && (
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy}
+                title="Abrir/continuar no WhatsApp (pelo telefone do contato)"
+                onClick={async () => {
+                  const res = await openDealWhatsApp(deal.id);
+                  if (res.conversationId) {
+                    window.location.href = `/inbox?c=${res.conversationId}`;
+                  } else {
+                    toast.error(res.error || "Não foi possível abrir o WhatsApp");
+                  }
+                }}
+                className="border-emerald-300 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+              >
+                <MessageCircle className="mr-1.5 h-4 w-4" /> WhatsApp
+              </Button>
+            )}
           {status !== "won" && (
             <Button
               size="sm"

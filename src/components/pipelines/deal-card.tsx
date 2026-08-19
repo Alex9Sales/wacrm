@@ -12,7 +12,7 @@ import {
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
-import { deleteDeal, transferDeal, duplicateDeal, setDealPaused, setDealNextFollowUp, openDealConversation } from "@/app/(dashboard)/pipelines/actions";
+import { deleteDeal, transferDeal, duplicateDeal, setDealPaused, setDealNextFollowUp, openDealConversation, openDealWhatsApp } from "@/app/(dashboard)/pipelines/actions";
 import { dealChannelLabel, isInstagramProvider } from "@/lib/pipelines/channel-label";
 import { listProfiles } from "@/app/(dashboard)/inbox/actions";
 
@@ -194,6 +194,19 @@ export function DealCard({
       window.location.href = `/inbox?c=${res.conversationId}`;
     } else {
       toast.error(res.error || "Não foi possível abrir a conversa");
+    }
+  };
+
+  // Atalho "WhatsApp": aparece quando a origem NÃO é WhatsApp e o contato tem
+  // telefone. Abre/cria a conversa de WhatsApp sem mexer na origem do negócio.
+  const showWhats = channelLabel !== "WhatsApp" && !!deal.contact?.phone;
+  const openWhats = async (e: SyntheticEvent) => {
+    e.stopPropagation();
+    const res = await openDealWhatsApp(deal.id);
+    if (res.conversationId) {
+      window.location.href = `/inbox?c=${res.conversationId}`;
+    } else {
+      toast.error(res.error || "Não foi possível abrir o WhatsApp");
     }
   };
 
@@ -481,24 +494,44 @@ export function DealCard({
 
       {(canOpenChat || assigneeLabel) && (
         <div className="mt-2 flex items-center justify-between">
-          {/* WhatsApp/canal (esquerda) — abre a conversa (ou cria pelo telefone). */}
+          {/* Canal de origem + (se não-WhatsApp e tiver telefone) atalho WhatsApp. */}
           {canOpenChat ? (
-            <span
-              role="button"
-              tabIndex={0}
-              aria-label={`Abrir conversa (${channelLabel})`}
-              title={`Abrir conversa (${channelLabel})`}
-              onClick={openConversation}
-              onKeyDown={(e) => {
-                if (e.key === "Enter" || e.key === " ") {
-                  e.preventDefault();
-                  openConversation(e);
-                }
-              }}
-              className={`inline-flex h-5 w-5 items-center justify-center rounded-md transition-colors hover:bg-background ${channelColor}`}
-            >
-              <ChannelIcon className="h-3.5 w-3.5" />
-            </span>
+            <div className="flex items-center gap-1">
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label={`Abrir conversa (${channelLabel})`}
+                title={`Abrir conversa (${channelLabel})`}
+                onClick={openConversation}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" || e.key === " ") {
+                    e.preventDefault();
+                    openConversation(e);
+                  }
+                }}
+                className={`inline-flex h-5 w-5 items-center justify-center rounded-md transition-colors hover:bg-background ${channelColor}`}
+              >
+                <ChannelIcon className="h-3.5 w-3.5" />
+              </span>
+              {showWhats && (
+                <span
+                  role="button"
+                  tabIndex={0}
+                  aria-label="Falar no WhatsApp"
+                  title="Falar no WhatsApp (pelo telefone do contato)"
+                  onClick={openWhats}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" || e.key === " ") {
+                      e.preventDefault();
+                      openWhats(e);
+                    }
+                  }}
+                  className="inline-flex h-5 w-5 items-center justify-center rounded-md text-emerald-600 transition-colors hover:bg-background"
+                >
+                  <MessageCircle className="h-3.5 w-3.5" />
+                </span>
+              )}
+            </div>
           ) : (
             <span />
           )}

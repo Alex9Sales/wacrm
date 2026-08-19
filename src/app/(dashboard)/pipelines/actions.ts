@@ -389,6 +389,71 @@ export async function openDealConversation(
   }
 }
 
+/**
+ * "Falar no WhatsApp" — abre (ou cria) a conversa de WhatsApp do contato do
+ * negócio pelo TELEFONE, mesmo quando o negócio veio de outro canal (Instagram/
+ * Messenger). Não mexe na conversa de ORIGEM do negócio (deal.conversationId
+ * segue apontando pro canal de onde o lead veio); é só um atalho pra continuar
+ * no WhatsApp quando o telefone estiver preenchido.
+ */
+export async function openDealWhatsApp(
+  dealId: string,
+): Promise<{ conversationId: string | null; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const deal = firstOrNull(
+      await db
+        .select({ contactId: deals.contactId, assignedTo: deals.assignedTo })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!deal) return { conversationId: null, error: 'Negócio não encontrado' }
+    if (!dealReadable(ctx.role, ctx.userId, deal.assignedTo)) {
+      return { conversationId: null, error: 'Sem acesso a este negócio' }
+    }
+    if (!deal.contactId) return { conversationId: null, error: 'Negócio sem contato' }
+    const contact = firstOrNull(
+      await db
+        .select({ phone: contacts.phone, name: contacts.name })
+        .from(contacts)
+        .where(
+          and(eq(contacts.id, deal.contactId), eq(contacts.accountId, ctx.accountId)),
+        )
+        .limit(1),
+    )
+    if (!contact?.phone) {
+      return {
+        conversationId: null,
+        error: 'Adicione o telefone do contato para falar no WhatsApp.',
+      }
+    }
+    try {
+      const resolved = await resolveConversationByPhone(
+        ctx.accountId,
+        contact.phone,
+        contact.name,
+      )
+      return { conversationId: resolved.conversationId, error: null }
+    } catch (err) {
+      // resolveConversationByPhone lança SendMessageError (telefone inválido /
+      // sem canal de WhatsApp conectado). Devolve a mensagem amigável.
+      return {
+        conversationId: null,
+        error:
+          err instanceof Error
+            ? err.message
+            : 'Não foi possível abrir a conversa no WhatsApp.',
+      }
+    }
+  } catch (err) {
+    return {
+      conversationId: null,
+      error: err instanceof Error ? err.message : 'Erro',
+    }
+  }
+}
+
 export async function moveDealToStage(
   dealId: string,
   stageId: string,

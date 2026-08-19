@@ -9,6 +9,7 @@ import {
   updateDeal,
   deleteDeal,
   openDealConversation,
+  openDealWhatsApp,
 } from "@/app/(dashboard)/pipelines/actions";
 import {
   listProducts,
@@ -111,6 +112,19 @@ export function DealForm({
       window.location.href = `/inbox?c=${res.conversationId}`;
     } else {
       toast.error(res.error || "Não foi possível abrir a conversa");
+    }
+  };
+
+  // "Falar no WhatsApp": abre/cria a conversa de WhatsApp pelo telefone do
+  // contato (mesmo quando o negócio veio de outro canal). Só aparece quando a
+  // origem NÃO é WhatsApp e o contato tem telefone.
+  const openWhats = async () => {
+    if (!deal?.id) return;
+    const res = await openDealWhatsApp(deal.id);
+    if (res.conversationId) {
+      window.location.href = `/inbox?c=${res.conversationId}`;
+    } else {
+      toast.error(res.error || "Não foi possível abrir o WhatsApp");
     }
   };
 
@@ -378,29 +392,52 @@ export function DealForm({
               )}
 
               {deal?.id &&
-                (linkedConversation ||
-                  contacts.some((c) => c.id === contactId && !!c.phone)) &&
                 (() => {
-                  // Canal REAL do negócio (via conversa vinculada). O botão abre
-                  // essa conversa, então o texto nomeia o canal certo.
                   const chIsIg = isInstagramProvider(deal.channel_provider);
+                  const originIsWhats =
+                    dealChannelLabel(deal.channel_provider) === "WhatsApp";
+                  const contactHasPhone = contacts.some(
+                    (c) => c.id === contactId && !!c.phone,
+                  );
+                  // Primário: abre a conversa de ORIGEM do negócio (o canal de
+                  // onde o lead veio). Secundário: WhatsApp pelo telefone, só se a
+                  // origem não é WhatsApp e o contato tem telefone preenchido.
+                  const showPrimary = !!linkedConversation || contactHasPhone;
+                  const showWhats = !originIsWhats && contactHasPhone;
+                  if (!showPrimary && !showWhats) return null;
                   return (
-                    <button
-                      type="button"
-                      onClick={openChat}
-                      className={`mt-1 inline-flex items-center gap-1.5 self-start rounded-md px-2.5 py-1.5 text-xs font-medium ${
-                        chIsIg
-                          ? "bg-pink-500/10 text-pink-600 hover:bg-pink-500/20"
-                          : "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
-                      }`}
-                    >
-                      {chIsIg ? (
-                        <AtSign className="h-3.5 w-3.5" />
-                      ) : (
-                        <MessageSquare className="h-3.5 w-3.5" />
+                    <div className="mt-1 flex flex-wrap gap-2">
+                      {showPrimary && (
+                        <button
+                          type="button"
+                          onClick={openChat}
+                          className={`inline-flex items-center gap-1.5 rounded-md px-2.5 py-1.5 text-xs font-medium ${
+                            chIsIg
+                              ? "bg-pink-500/10 text-pink-600 hover:bg-pink-500/20"
+                              : "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
+                          }`}
+                        >
+                          {chIsIg ? (
+                            <AtSign className="h-3.5 w-3.5" />
+                          ) : (
+                            <MessageSquare className="h-3.5 w-3.5" />
+                          )}
+                          Abrir conversa no{" "}
+                          {dealChannelLabel(deal.channel_provider)}
+                        </button>
                       )}
-                      Abrir conversa no {dealChannelLabel(deal.channel_provider)}
-                    </button>
+                      {showWhats && (
+                        <button
+                          type="button"
+                          onClick={openWhats}
+                          title="Abrir/continuar no WhatsApp (pelo telefone do contato)"
+                          className="inline-flex items-center gap-1.5 rounded-md bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-500/20"
+                        >
+                          <MessageSquare className="h-3.5 w-3.5" />
+                          WhatsApp
+                        </button>
+                      )}
+                    </div>
                   );
                 })()}
             </div>
