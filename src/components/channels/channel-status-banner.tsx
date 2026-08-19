@@ -16,11 +16,10 @@
 // ============================================================
 
 import { useCallback, useEffect, useState } from 'react';
-import { AlertTriangle, QrCode } from 'lucide-react';
+import { AlertTriangle } from 'lucide-react';
 
 import { useServerEvents } from '@/hooks/use-server-events';
 import { useCan } from '@/hooks/use-can';
-import { Button } from '@/components/ui/button';
 import { ChannelQrModal } from '@/components/settings/channel-qr-modal';
 import type { ChannelSummary } from '@/components/settings/channels-tab';
 import { CAPABILITIES } from '@/lib/channels/provider';
@@ -30,16 +29,16 @@ function isDown(status: string): boolean {
   return status !== 'connected';
 }
 
-/** Short reason line per non-connected state. */
+/** Short reason line per non-connected state (curto, cabe numa linha). */
 function reasonFor(status: string): string {
   switch (status) {
     case 'error':
-      return 'a sessão caiu (possível ban ou logout no aparelho)';
+      return 'sessão caiu (possível ban ou logout no aparelho)';
     case 'qr_pending':
-      return 'aguardando leitura do QR Code';
+      return 'aguardando a leitura do QR';
     case 'disconnected':
     default:
-      return 'a sessão desconectou';
+      return 'sessão desconectou';
   }
 }
 
@@ -84,30 +83,29 @@ export function ChannelStatusBanner() {
 
   return (
     <>
-      <div className="border-b border-amber-500/30 bg-amber-500/10">
-        <div className="mx-auto flex flex-col gap-2 px-4 py-2.5 sm:px-6">
+      <div className="border-b border-red-500/15 bg-red-500/[0.06]">
+        <div className="mx-auto flex flex-col gap-0.5 px-4 py-1.5 sm:px-6">
           {down.map((ch) => (
             <div
               key={ch.id}
-              className="flex flex-wrap items-center gap-x-2 gap-y-1.5 text-sm"
+              className="flex items-center gap-1.5 text-xs text-red-700 dark:text-red-300/90"
             >
-              <AlertTriangle className="h-4 w-4 shrink-0 text-amber-600 dark:text-amber-400" />
-              <span className="text-amber-900 dark:text-amber-200">
-                O canal <b>{ch.name}</b> saiu do ar — {reasonFor(ch.status)}. As
-                mensagens não estão saindo por ele.
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-500/80" />
+              <span className="min-w-0 truncate">
+                Canal <b className="font-semibold">{ch.name}</b> fora do ar —{' '}
+                {reasonFor(ch.status)}.
               </span>
               {canReconnect ? (
-                <Button
-                  size="sm"
+                <button
+                  type="button"
                   onClick={() => setReconnecting(ch)}
-                  className="ml-auto h-7 gap-1.5 bg-amber-600 text-white hover:bg-amber-700"
+                  className="shrink-0 font-medium underline decoration-red-400/50 underline-offset-2 transition-colors hover:text-red-800 hover:decoration-red-500 dark:hover:text-red-200"
                 >
-                  <QrCode className="h-3.5 w-3.5" />
                   Reconectar
-                </Button>
+                </button>
               ) : (
-                <span className="ml-auto text-xs text-amber-700/80 dark:text-amber-300/80">
-                  Avise um administrador para reconectar.
+                <span className="shrink-0 text-red-600/70 dark:text-red-300/60">
+                  avise um admin
                 </span>
               )}
             </div>
