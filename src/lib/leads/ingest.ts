@@ -48,6 +48,10 @@ export interface IngestLeadInput {
   introText?: string | null
   /** Canal p/ o WhatsApp de abertura (null → resolve automaticamente). */
   channelId?: string | null
+  /** Origem estruturada do lead (Site/Instagram/Indicação/…) → deals.origin. */
+  origin?: string | null
+  /** Fonte/detalhe livre (ex.: nome da campanha) → deals.source. */
+  source?: string | null
 }
 
 export interface IngestLeadResult {
@@ -119,6 +123,8 @@ export async function ingestLead(
             title: `Lead — ${displayName}`,
             value: '0',
             notes: notes || fallbackNote,
+            origin: input.origin?.trim() || null,
+            source: input.source?.trim() || null,
           })
           .returning({ id: deals.id }),
       )

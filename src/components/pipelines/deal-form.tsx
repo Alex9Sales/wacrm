@@ -50,6 +50,7 @@ import {
   dealChannelLabel,
   isInstagramProvider,
 } from "@/lib/pipelines/channel-label";
+import { DEAL_ORIGINS, isDealOrigin } from "@/lib/pipelines/deal-origin";
 import { toast } from "sonner";
 
 interface DealFormProps {
@@ -648,12 +649,21 @@ export function DealForm({
               </div>
               <div className="grid gap-2">
                 <Label className="text-muted-foreground">Origem</Label>
-                <Input
+                <select
                   value={origin}
                   onChange={(e) => setOrigin(e.target.value)}
-                  placeholder="Ex.: Campanha, Site"
-                  className="border-border bg-muted text-foreground"
-                />
+                  className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
+                >
+                  <option value="">— de onde veio —</option>
+                  {origin && !isDealOrigin(origin) && (
+                    <option value={origin}>{origin}</option>
+                  )}
+                  {DEAL_ORIGINS.map((o) => (
+                    <option key={o} value={o}>
+                      {o}
+                    </option>
+                  ))}
+                </select>
               </div>
             </div>
 

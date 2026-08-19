@@ -65,6 +65,8 @@ export async function ingestFetchedLead(
     stageId: source.stageId,
     taskSuffix: `lead de anúncio (${label})`,
     fallbackNote: `Lead de anúncio (${label}).`,
+    origin: 'Anúncio',
+    source: label,
     introText: source.deliverToAi ? introMessage(source, lead) : null,
     channelId:
       typeof source.providerMeta.introChannelId === 'string'

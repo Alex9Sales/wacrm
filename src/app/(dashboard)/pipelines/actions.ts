@@ -170,6 +170,9 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
       status: deals.status,
       temperature: deals.temperature,
       qualification: deals.qualification,
+      // Origem/fonte do lead (selo no card + filtro por origem).
+      source: deals.source,
+      origin: deals.origin,
       stage_changed_at: deals.stageChangedAt,
       next_follow_up_at: deals.nextFollowUpAt,
       follow_up_count: conversations.followUpStep,

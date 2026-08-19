@@ -146,6 +146,10 @@ export async function POST(request: Request): Promise<Response> {
         fallbackNote: 'Lead de formulário.',
         introText,
         channelId: typeof body.channel_id === 'string' ? body.channel_id : null,
+        // Origem estruturada: o formulário do site cai como "Site" por padrão;
+        // outras integrações mandam `origem`/`fonte` pra sobrepor.
+        origin: pick(body, ['origem', 'origin']) ?? 'Site',
+        source: pick(body, ['fonte', 'source', 'utm_source']) ?? null,
       });
 
       return json(

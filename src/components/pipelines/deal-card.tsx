@@ -492,49 +492,58 @@ export function DealCard({
         )}
       </div>
 
-      {(canOpenChat || assigneeLabel) && (
-        <div className="mt-2 flex items-center justify-between">
-          {/* Canal de origem + (se não-WhatsApp e tiver telefone) atalho WhatsApp. */}
-          {canOpenChat ? (
-            <div className="flex items-center gap-1">
+      {(canOpenChat || assigneeLabel || deal.origin) && (
+        <div className="mt-2 flex items-center justify-between gap-2">
+          {/* Esquerda: selo de origem (de onde veio) + canal da conversa +
+              (se não-WhatsApp e tiver telefone) atalho WhatsApp. */}
+          <div className="flex min-w-0 items-center gap-1.5">
+            {deal.origin && (
               <span
-                role="button"
-                tabIndex={0}
-                aria-label={`Abrir conversa (${channelLabel})`}
-                title={`Abrir conversa (${channelLabel})`}
-                onClick={openConversation}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" || e.key === " ") {
-                    e.preventDefault();
-                    openConversation(e);
-                  }
-                }}
-                className={`inline-flex h-5 w-5 items-center justify-center rounded-md transition-colors hover:bg-background ${channelColor}`}
+                title={`Origem: ${deal.origin}`}
+                className="inline-flex shrink-0 items-center rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
               >
-                <ChannelIcon className="h-3.5 w-3.5" />
+                {deal.origin}
               </span>
-              {showWhats && (
+            )}
+            {canOpenChat && (
+              <div className="flex items-center gap-1">
                 <span
                   role="button"
                   tabIndex={0}
-                  aria-label="Falar no WhatsApp"
-                  title="Falar no WhatsApp (pelo telefone do contato)"
-                  onClick={openWhats}
+                  aria-label={`Abrir conversa (${channelLabel})`}
+                  title={`Abrir conversa (${channelLabel})`}
+                  onClick={openConversation}
                   onKeyDown={(e) => {
                     if (e.key === "Enter" || e.key === " ") {
                       e.preventDefault();
-                      openWhats(e);
+                      openConversation(e);
                     }
                   }}
-                  className="inline-flex h-5 w-5 items-center justify-center rounded-md text-emerald-600 transition-colors hover:bg-background"
+                  className={`inline-flex h-5 w-5 items-center justify-center rounded-md transition-colors hover:bg-background ${channelColor}`}
                 >
-                  <MessageCircle className="h-3.5 w-3.5" />
+                  <ChannelIcon className="h-3.5 w-3.5" />
                 </span>
-              )}
-            </div>
-          ) : (
-            <span />
-          )}
+                {showWhats && (
+                  <span
+                    role="button"
+                    tabIndex={0}
+                    aria-label="Falar no WhatsApp"
+                    title="Falar no WhatsApp (pelo telefone do contato)"
+                    onClick={openWhats}
+                    onKeyDown={(e) => {
+                      if (e.key === "Enter" || e.key === " ") {
+                        e.preventDefault();
+                        openWhats(e);
+                      }
+                    }}
+                    className="inline-flex h-5 w-5 items-center justify-center rounded-md text-emerald-600 transition-colors hover:bg-background"
+                  >
+                    <MessageCircle className="h-3.5 w-3.5" />
+                  </span>
+                )}
+              </div>
+            )}
+          </div>
           {/* Responsável (direita) — foto do perfil se tiver, senão a inicial. */}
           {assigneeLabel && (
             <span
