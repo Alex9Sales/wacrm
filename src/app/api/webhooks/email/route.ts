@@ -9,6 +9,7 @@
 // ============================================================
 
 import { NextResponse, after } from 'next/server'
+import PostalMime from 'postal-mime'
 
 import { loadEmailChannelByAddress } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
@@ -31,11 +32,36 @@ function bareEmail(v: unknown): string {
 export async function POST(request: Request) {
   const rawBody = await request.text()
 
-  let body: { to?: unknown } | null
+  let body: {
+    to?: unknown
+    from?: unknown
+    raw?: unknown
+  } & Record<string, unknown> | null
   try {
     body = JSON.parse(rawBody)
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  // Worker "sem dependência" manda o e-mail cru (`raw`) — a gente faz o parse
+  // do MIME aqui (assunto/corpo/HTML/remetente). Se vier já parseado (JSON com
+  // from/subject/text…), usa direto.
+  if (body && typeof body.raw === 'string' && body.raw) {
+    try {
+      const parsed = await new PostalMime().parse(body.raw)
+      body = {
+        to: body.to,
+        from: parsed.from?.address || body.from || '',
+        fromName: parsed.from?.name || '',
+        subject: parsed.subject || '',
+        text: parsed.text || '',
+        html: parsed.html || '',
+        messageId: parsed.messageId || '',
+      }
+    } catch (err) {
+      console.error('[webhooks/email] falha ao parsear o MIME:', err)
+      return NextResponse.json({ error: 'MIME parse failed' }, { status: 400 })
+    }
   }
 
   const to = bareEmail(body?.to)
