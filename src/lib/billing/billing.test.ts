@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest'
 
 import { getPlan, isPlanKey, formatPrice, PLAN_LIST } from '@/lib/billing/plans'
+import { normalizeAsaasKey } from '@/lib/billing/asaas'
 import {
   isActivateEvent,
   extractOrgRef,
@@ -21,6 +22,22 @@ describe('planos', () => {
   it('formata o preço em reais', () => {
     expect(formatPrice(497)).toBe('R$ 497')
     expect(formatPrice(1999)).toBe('R$ 1.999')
+  })
+})
+
+describe('normalização da chave do Asaas', () => {
+  it('garante exatamente um $ inicial (com, sem, ou $$)', () => {
+    expect(normalizeAsaasKey('$aact_abc')).toBe('$aact_abc')
+    expect(normalizeAsaasKey('aact_abc')).toBe('$aact_abc')
+    expect(normalizeAsaasKey('$$aact_abc')).toBe('$aact_abc')
+    expect(normalizeAsaasKey('  $aact_abc  ')).toBe('$aact_abc')
+  })
+
+  it('vazio/ausente → undefined', () => {
+    expect(normalizeAsaasKey('')).toBeUndefined()
+    expect(normalizeAsaasKey('   ')).toBeUndefined()
+    expect(normalizeAsaasKey(undefined)).toBeUndefined()
+    expect(normalizeAsaasKey(null)).toBeUndefined()
   })
 })
 

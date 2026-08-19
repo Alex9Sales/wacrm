@@ -21,9 +21,27 @@ export class AsaasError extends Error {
   }
 }
 
+/**
+ * Normaliza a chave do Asaas. A API exige o `$` inicial (`$aact_…`), mas esse
+ * `$` some quando o valor passa pelo env_file do docker-compose (interpolação).
+ * Então aceitamos a chave COM ou SEM `$` (ou `$$`) e garantimos exatamente um.
+ * Retorna undefined se não houver chave. Exportada só p/ teste.
+ */
+export function normalizeAsaasKey(
+  raw: string | undefined | null,
+): string | undefined {
+  const t = (raw ?? '').trim()
+  if (!t) return undefined
+  return '$' + t.replace(/^\$+/, '')
+}
+
+function apiKey(): string | undefined {
+  return normalizeAsaasKey(process.env.ASAAS_API_KEY)
+}
+
 /** true quando a chave do Asaas está no ambiente. */
 export function asaasConfigured(): boolean {
-  return !!process.env.ASAAS_API_KEY
+  return !!apiKey()
 }
 
 function baseUrl(): string {
@@ -38,7 +56,7 @@ async function asaasFetch<T>(
   path: string,
   opts: { method?: string; body?: unknown } = {},
 ): Promise<T> {
-  const key = process.env.ASAAS_API_KEY
+  const key = apiKey()
   if (!key) throw new AsaasError('Asaas não configurado (ASAAS_API_KEY ausente).')
   let res: Response
   try {
