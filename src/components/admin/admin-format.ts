@@ -29,7 +29,13 @@ export function isOverdue(
   dueAt: string | null,
   status: ClientBillingStatus,
 ): boolean {
-  if (!dueAt || status === "suspended") return false;
+  if (
+    !dueAt ||
+    status === "suspended" ||
+    status === "canceled" ||
+    status === "deleted"
+  )
+    return false;
   const d = new Date(dueAt);
   if (Number.isNaN(d.getTime())) return false;
   return d.getTime() < Date.now();
@@ -67,4 +73,6 @@ export const STATUS_LABEL: Record<ClientBillingStatus, string> = {
   active: "Ativo",
   suspended: "Suspenso",
   trial: "Teste",
+  canceled: "Cancelado",
+  deleted: "Excluído",
 };

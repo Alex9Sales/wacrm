@@ -162,6 +162,11 @@ export const organizationBilling = pgTable("organization_billing", {
 	// /api/webhooks/asaas vira o status pra 'active' quando o pagamento confirma.
 	asaasCustomerId: text("asaas_customer_id"),
 	asaasSubscriptionId: text("asaas_subscription_id"),
+	// Ciclo de vida (migr 0102): cancel_at = fim do período pago quando o cliente
+	// cancela (o acesso vale ATÉ lá; depois vira 'canceled'). deleted_at =
+	// soft-delete (mantém o registro + histórico, mas bloqueia e some da lista).
+	cancelAt: timestamp("cancel_at", { withTimezone: true, mode: 'string' }),
+	deletedAt: timestamp("deleted_at", { withTimezone: true, mode: 'string' }),
 	// Platform admin (Alex/Rafael) responsible for this client. Set on
 	// provision, editable to transfer. Nullable, no FK (a removed admin just
 	// makes the row show "—"). Drives the /admin "Responsável" column + filter.
@@ -174,7 +179,37 @@ export const organizationBilling = pgTable("organization_billing", {
 			foreignColumns: [organization.id],
 			name: "organization_billing_organization_id_fkey"
 		}).onDelete("cascade"),
-	check("organization_billing_status_check", sql`status = ANY (ARRAY['active'::text, 'suspended'::text, 'trial'::text])`),
+	check("organization_billing_status_check", sql`status = ANY (ARRAY['active'::text, 'suspended'::text, 'trial'::text, 'canceled'::text])`),
+]);
+
+// ============================================================
+// billing_events (migr 0102) — trilha de auditoria do ciclo de vida da conta:
+// provisionamento, ativação, suspensão, reativação, cancelamento, exclusão,
+// mudança de plano, lembrete, pagamento. Quem (admin/cliente/sistema), quando e
+// por quê. Lida só pelo /admin (platform admin).
+// ============================================================
+export const billingEvents = pgTable("billing_events", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	organizationId: uuid("organization_id").notNull(),
+	// provisioned | activated | suspended | reactivated | canceled | deleted |
+	// plan_changed | reminder_sent | payment_received | …
+	event: text().notNull(),
+	fromStatus: text("from_status"),
+	toStatus: text("to_status"),
+	// admin | client | system
+	actorType: text("actor_type").default('admin').notNull(),
+	actorId: uuid("actor_id"),
+	actorLabel: text("actor_label"),
+	reason: text(),
+	metadata: jsonb().default({}).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_billing_events_org").using("btree", table.organizationId.asc().nullsLast(), table.createdAt.desc().nullsLast()),
+	foreignKey({
+			columns: [table.organizationId],
+			foreignColumns: [organization.id],
+			name: "billing_events_organization_id_fkey"
+		}).onDelete("cascade"),
 ]);
 
 export const contacts = pgTable("contacts", {

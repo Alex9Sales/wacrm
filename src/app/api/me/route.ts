@@ -32,6 +32,8 @@ import {
   ForbiddenError,
   AccountSuspendedError,
   TrialExpiredError,
+  AccountCanceledError,
+  AccountDeletedError,
 } from "@/lib/auth/account";
 import { isPlatformAdmin } from "@/lib/auth/platform";
 
@@ -73,6 +75,9 @@ export async function GET() {
   let trialExpired = false;
   let trialActive = false;
   let trialEndsAt: string | null = null;
+  // Ciclo de vida (0102): assinatura cancelada / conta excluída → telas próprias.
+  let canceled = false;
+  let deleted = false;
 
   try {
     const ctx = await getCurrentAccount();
@@ -107,6 +112,10 @@ export async function GET() {
     } else if (err instanceof TrialExpiredError) {
       // Trial acabou — flag pra tela "teste acabou" + checkout.
       trialExpired = true;
+    } else if (err instanceof AccountCanceledError) {
+      canceled = true;
+    } else if (err instanceof AccountDeletedError) {
+      deleted = true;
     } else if (
       !(err instanceof ForbiddenError || err instanceof UnauthorizedError)
     ) {
@@ -132,6 +141,9 @@ export async function GET() {
     trial_active: trialActive,
     trial_ends_at: trialEndsAt,
     trial_expired: trialExpired,
+    // Ciclo de vida: assinatura cancelada / conta excluída.
+    canceled,
+    deleted,
   };
 
   return NextResponse.json({ profile, account });

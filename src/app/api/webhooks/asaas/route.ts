@@ -84,6 +84,10 @@ async function activateFromPayment(payment: unknown): Promise<void> {
     const set: Partial<typeof organizationBilling.$inferInsert> = {
       status: 'active',
       dueAt,
+      // Pagamento confirmado → limpa qualquer cancelamento pendente/vencido
+      // (ex.: cliente cancelado que reassinou). deleted_at NÃO é mexido aqui
+      // (exclusão é decisão do admin; o gate bloqueia por deleted_at de todo jeito).
+      cancelAt: null,
       updatedAt: new Date().toISOString(),
     }
     if (subscriptionId) set.asaasSubscriptionId = subscriptionId

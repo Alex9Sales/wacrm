@@ -16,10 +16,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   Loader2,
-  Power,
-  PowerOff,
   Pencil,
-  Send,
   UserPlus,
   RefreshCw,
   Users,
@@ -50,19 +47,21 @@ import type {
 } from "./admin-types";
 import {
   formatDate,
-  formatDateTime,
   isOverdue,
   trialCountdown,
   STATUS_LABEL,
 } from "./admin-format";
 import { EditBillingDialog } from "./edit-billing-dialog";
 import { ProvisionDialog } from "./provision-dialog";
+import { ClientActions } from "./client-actions";
 
 const EMPTY_OVERVIEW: ClientOverview = {
   total: 0,
   active: 0,
   suspended: 0,
   trial: 0,
+  canceled: 0,
+  deleted: 0,
   overdue: 0,
 };
 
@@ -78,6 +77,20 @@ function StatusBadge({ status }: { status: ClientListRow["status"] }) {
   if (status === "suspended") {
     return <Badge variant="destructive">{label}</Badge>;
   }
+  if (status === "canceled") {
+    return (
+      <Badge className="border-amber-500/40 bg-amber-500/10 text-amber-400">
+        {label}
+      </Badge>
+    );
+  }
+  if (status === "deleted") {
+    return (
+      <Badge className="border-border bg-muted text-muted-foreground">
+        {label}
+      </Badge>
+    );
+  }
   return (
     <Badge className="border-sky-500/40 bg-sky-500/10 text-sky-400">
       {label}
@@ -86,7 +99,14 @@ function StatusBadge({ status }: { status: ClientListRow["status"] }) {
 }
 
 /** Which slice of clients the table shows. Cards toggle this. */
-type StatusFilter = "all" | "active" | "trial" | "suspended" | "overdue";
+type StatusFilter =
+  | "all"
+  | "active"
+  | "trial"
+  | "suspended"
+  | "canceled"
+  | "deleted"
+  | "overdue";
 
 function OverviewCard({
   label,
@@ -135,8 +155,6 @@ export function AdminClients() {
   // The logged-in admin's own id, from the API (no AuthProvider under /admin).
   const [myId, setMyId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  // Per-row in-flight state so a toggle/reminder disables only that row.
-  const [busyId, setBusyId] = useState<string | null>(null);
   // "Meus" vs "Todos": both admins see everything; this just focuses the list.
   const [onlyMine, setOnlyMine] = useState(false);
   // Status slice (driven by the overview cards) + free-text search.
@@ -171,53 +189,6 @@ export function AdminClients() {
     void load();
   }, [load]);
 
-  async function toggleStatus(client: ClientListRow) {
-    const next = client.status === "suspended" ? "active" : "suspended";
-    setBusyId(client.id);
-    try {
-      const res = await fetch(`/api/admin/clients/${client.id}`, {
-        method: "PATCH",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status: next }),
-      });
-      if (!res.ok) {
-        const payload = await res.json().catch(() => ({}));
-        toast.error(payload.error || "Não foi possível alterar o status.");
-        return;
-      }
-      toast.success(
-        next === "suspended" ? "Cliente desligado." : "Cliente ligado.",
-      );
-      await load();
-    } catch (err) {
-      console.error("[AdminClients] toggle error:", err);
-      toast.error("Não foi possível conectar ao servidor.");
-    } finally {
-      setBusyId(null);
-    }
-  }
-
-  async function sendReminder(client: ClientListRow) {
-    setBusyId(client.id);
-    try {
-      const res = await fetch(`/api/admin/clients/${client.id}/reminder`, {
-        method: "POST",
-      });
-      const payload = await res.json().catch(() => ({}));
-      if (!res.ok) {
-        toast.error(payload.error || "Não foi possível enviar o lembrete.");
-        return;
-      }
-      toast.success("Lembrete enviado.");
-      await load();
-    } catch (err) {
-      console.error("[AdminClients] reminder error:", err);
-      toast.error("Não foi possível conectar ao servidor.");
-    } finally {
-      setBusyId(null);
-    }
-  }
-
   function openEdit(client: ClientListRow) {
     setEditClient(client);
     setEditOpen(true);
@@ -235,11 +206,15 @@ export function AdminClients() {
   const q = query.trim().toLowerCase();
   const visibleClients = clients.filter((c) => {
     if (onlyMine && (!myId || c.responsible?.id !== myId)) return false;
+    // Excluídas só aparecem no filtro "Excluídas".
+    if (c.status === "deleted" && statusFilter !== "deleted") return false;
     if (statusFilter === "overdue" && !isOverdue(c.dueAt, c.status)) return false;
     if (
       (statusFilter === "active" ||
         statusFilter === "trial" ||
-        statusFilter === "suspended") &&
+        statusFilter === "suspended" ||
+        statusFilter === "canceled" ||
+        statusFilter === "deleted") &&
       c.status !== statusFilter
     )
       return false;
@@ -311,7 +286,7 @@ export function AdminClients() {
       </div>
 
       {/* Overview cards — click to filter the table by status. */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-5">
+      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
         <OverviewCard
           label="Total de clientes"
           value={overview.total}
@@ -342,6 +317,18 @@ export function AdminClients() {
           tone="danger"
           active={statusFilter === "overdue"}
           onClick={() => pickStatus("overdue")}
+        />
+        <OverviewCard
+          label="Canceladas"
+          value={overview.canceled}
+          active={statusFilter === "canceled"}
+          onClick={() => pickStatus("canceled")}
+        />
+        <OverviewCard
+          label="Excluídas"
+          value={overview.deleted}
+          active={statusFilter === "deleted"}
+          onClick={() => pickStatus("deleted")}
         />
       </div>
 
@@ -402,8 +389,13 @@ export function AdminClients() {
               <TableBody>
                 {visibleClients.map((c) => {
                   const overdue = isOverdue(c.dueAt, c.status);
-                  const rowBusy = busyId === c.id;
                   const mine = !!myId && c.responsible?.id === myId;
+                  // Cancelamento agendado ainda no futuro (conta segue ativa).
+                  const cancelPending =
+                    !!c.cancelAt &&
+                    c.status !== "canceled" &&
+                    c.status !== "deleted" &&
+                    new Date(c.cancelAt).getTime() > Date.now();
                   return (
                     <TableRow key={c.id}>
                       <TableCell className="font-medium text-foreground">
@@ -469,6 +461,11 @@ export function AdminClients() {
                             {trialCountdown(c.dueAt)}
                           </span>
                         ) : null}
+                        {cancelPending ? (
+                          <span className="block text-[10px] text-amber-400">
+                            cancela em {formatDate(c.cancelAt)}
+                          </span>
+                        ) : null}
                       </TableCell>
                       <TableCell className="text-center text-muted-foreground">
                         <span className="inline-flex items-center gap-1">
@@ -484,58 +481,20 @@ export function AdminClients() {
                       </TableCell>
                       <TableCell>
                         <div className="flex items-center justify-end gap-1">
-                          <Button
-                            size="sm"
-                            variant={
-                              c.status === "suspended" ? "outline" : "destructive"
-                            }
-                            onClick={() => void toggleStatus(c)}
-                            disabled={rowBusy}
-                            title={
-                              c.status === "suspended"
-                                ? "Ligar cliente"
-                                : "Desligar cliente"
-                            }
-                          >
-                            {rowBusy ? (
-                              <Loader2 className="size-3.5 animate-spin" />
-                            ) : c.status === "suspended" ? (
-                              <Power className="size-3.5" />
-                            ) : (
-                              <PowerOff className="size-3.5" />
-                            )}
-                            {c.status === "suspended" ? "Ligar" : "Desligar"}
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="ghost"
-                            onClick={() => openEdit(c)}
-                            title="Editar cobrança"
-                          >
-                            <Pencil className="size-3.5" />
-                          </Button>
-                          {c.billingPhone ? (
+                          {c.status !== "deleted" ? (
                             <Button
                               size="sm"
                               variant="ghost"
-                              onClick={() => void sendReminder(c)}
-                              disabled={rowBusy}
-                              title={
-                                c.lastReminderAt
-                                  ? `Último lembrete: ${formatDateTime(c.lastReminderAt)}`
-                                  : "Enviar lembrete de cobrança"
-                              }
+                              onClick={() => openEdit(c)}
+                              title="Editar cobrança"
                             >
-                              <Send className="size-3.5" />
-                              {c.lastReminderAt ? (
-                                <span className="text-[10px] text-muted-foreground">
-                                  {formatDateTime(c.lastReminderAt)}
-                                </span>
-                              ) : (
-                                "Lembrete"
-                              )}
+                              <Pencil className="size-3.5" />
                             </Button>
                           ) : null}
+                          <ClientActions
+                            client={c}
+                            onDone={() => void load()}
+                          />
                         </div>
                       </TableCell>
                     </TableRow>

@@ -53,6 +53,9 @@ interface Profile {
   trial_ends_at: string | null;
   /** Fase 2: trial expirado — bloqueia o app. */
   trial_expired: boolean;
+  /** Ciclo de vida (0102): assinatura cancelada / conta excluída. */
+  canceled: boolean;
+  deleted: boolean;
 }
 
 interface AccountSummary {
@@ -139,6 +142,9 @@ interface AuthContextValue {
   trialEndsAt: string | null;
   /** Fase 2: trial expirado — tela de bloqueio + checkout. */
   trialExpired: boolean;
+  /** Ciclo de vida: assinatura cancelada / conta excluída — telas próprias. */
+  canceled: boolean;
+  deleted: boolean;
 }
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -189,6 +195,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           trial_active?: boolean;
           trial_ends_at?: string | null;
           trial_expired?: boolean;
+          canceled?: boolean;
+          deleted?: boolean;
         } | null;
         account: AccountSummary | null;
       };
@@ -219,6 +227,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         trial_active: body.profile.trial_active ?? false,
         trial_ends_at: body.profile.trial_ends_at ?? null,
         trial_expired: body.profile.trial_expired ?? false,
+        canceled: body.profile.canceled ?? false,
+        deleted: body.profile.deleted ?? false,
       });
       setAccount(
         body.account
@@ -305,6 +315,8 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         trialActive: profile?.trial_active ?? false,
         trialEndsAt: profile?.trial_ends_at ?? null,
         trialExpired: profile?.trial_expired ?? false,
+        canceled: profile?.canceled ?? false,
+        deleted: profile?.deleted ?? false,
         ...derived,
       }}
     >
@@ -353,6 +365,8 @@ export function useAuth(): AuthContextValue {
       trialActive: false,
       trialEndsAt: null,
       trialExpired: false,
+      canceled: false,
+      deleted: false,
     };
   }
   return ctx;

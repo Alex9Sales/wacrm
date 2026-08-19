@@ -21,15 +21,26 @@ import {
   user,
 } from "@/db";
 
-export type ClientBillingStatus = "active" | "suspended" | "trial";
+export type ClientBillingStatus =
+  | "active"
+  | "suspended"
+  | "trial"
+  | "canceled"
+  | "deleted";
 
 export interface ClientListRow {
   id: string;
   name: string;
   slug: string | null;
   createdAt: string;
-  /** Billing satellite (Phase 8). status defaults to 'active' when no row. */
+  /** Status EFETIVO (satélite Phase 8 + ciclo de vida 0102): considera
+   *  deleted_at e cancel_at já vencido. Default 'active' quando não há linha. */
   status: ClientBillingStatus;
+  /** Cancelamento agendado (fim do período pago). Se no futuro, a conta ainda
+   *  está ativa e o painel mostra "cancela em DD/MM". */
+  cancelAt: string | null;
+  /** Soft-delete — quando setado, a conta está excluída. */
+  deletedAt: string | null;
   startedAt: string | null;
   dueAt: string | null;
   plan: string | null;
@@ -74,7 +85,16 @@ export async function listClients(): Promise<ClientListRow[]> {
       name: organization.name,
       slug: organization.slug,
       createdAt: organization.createdAt,
-      status: organizationBilling.status,
+      // Status EFETIVO: excluída > cancelada (status ou cancel_at vencido) > o resto.
+      status: sql<string>`CASE
+        WHEN ${organizationBilling.deletedAt} IS NOT NULL THEN 'deleted'
+        WHEN ${organizationBilling.status} = 'canceled'
+          OR (${organizationBilling.cancelAt} IS NOT NULL AND ${organizationBilling.cancelAt} <= now())
+          THEN 'canceled'
+        ELSE COALESCE(${organizationBilling.status}, 'active')
+      END`,
+      cancelAt: organizationBilling.cancelAt,
+      deletedAt: organizationBilling.deletedAt,
       startedAt: organizationBilling.startedAt,
       dueAt: organizationBilling.dueAt,
       plan: organizationBilling.plan,
@@ -105,6 +125,8 @@ export async function listClients(): Promise<ClientListRow[]> {
     slug: r.slug,
     createdAt: r.createdAt,
     status: (r.status ?? "active") as ClientBillingStatus,
+    cancelAt: r.cancelAt,
+    deletedAt: r.deletedAt,
     startedAt: r.startedAt,
     dueAt: r.dueAt,
     plan: r.plan,
@@ -125,11 +147,14 @@ export async function listClients(): Promise<ClientListRow[]> {
 }
 
 export interface ClientOverview {
+  /** Base viva (não conta as excluídas). */
   total: number;
   active: number;
   suspended: number;
   trial: number;
-  /** due_at in the past AND not suspended. */
+  canceled: number;
+  deleted: number;
+  /** due_at in the past AND effectively active (not suspended/canceled/deleted). */
   overdue: number;
 }
 
@@ -139,14 +164,22 @@ export interface ClientOverview {
  * (matching the suspension chokepoint's legacy default).
  */
 export async function getClientOverview(): Promise<ClientOverview> {
+  // Condições reaproveitadas (SQL). "vivo" = não excluído; "cancelado efetivo"
+  // = status canceled OU cancel_at já vencido; "ativo efetivo" = sem bloqueio.
+  const notDeleted = sql`${organizationBilling.deletedAt} IS NULL`;
+  const effCanceled = sql`(${organizationBilling.status} = 'canceled' OR (${organizationBilling.cancelAt} IS NOT NULL AND ${organizationBilling.cancelAt} <= now()))`;
+  const effActive = sql`(${organizationBilling.status} IS NULL OR ${organizationBilling.status} = 'active') AND (${organizationBilling.cancelAt} IS NULL OR ${organizationBilling.cancelAt} > now())`;
+
   const [row] = await db
     .select({
-      total: sql<number>`count(*)::int`,
-      // No billing row → active (legacy default).
-      active: sql<number>`count(*) FILTER (WHERE ${organizationBilling.status} IS NULL OR ${organizationBilling.status} = 'active')::int`,
-      suspended: sql<number>`count(*) FILTER (WHERE ${organizationBilling.status} = 'suspended')::int`,
-      trial: sql<number>`count(*) FILTER (WHERE ${organizationBilling.status} = 'trial')::int`,
-      overdue: sql<number>`count(*) FILTER (WHERE ${organizationBilling.dueAt} < now() AND ${organizationBilling.status} IS DISTINCT FROM 'suspended')::int`,
+      // Base viva: não conta as excluídas.
+      total: sql<number>`count(*) FILTER (WHERE ${notDeleted})::int`,
+      active: sql<number>`count(*) FILTER (WHERE ${notDeleted} AND ${effActive})::int`,
+      suspended: sql<number>`count(*) FILTER (WHERE ${notDeleted} AND ${organizationBilling.status} = 'suspended')::int`,
+      trial: sql<number>`count(*) FILTER (WHERE ${notDeleted} AND ${organizationBilling.status} = 'trial')::int`,
+      canceled: sql<number>`count(*) FILTER (WHERE ${notDeleted} AND ${effCanceled})::int`,
+      deleted: sql<number>`count(*) FILTER (WHERE ${organizationBilling.deletedAt} IS NOT NULL)::int`,
+      overdue: sql<number>`count(*) FILTER (WHERE ${notDeleted} AND ${organizationBilling.dueAt} < now() AND ${organizationBilling.status} IS DISTINCT FROM 'suspended' AND NOT ${effCanceled})::int`,
     })
     .from(organization)
     .leftJoin(
@@ -159,6 +192,8 @@ export async function getClientOverview(): Promise<ClientOverview> {
     active: Number(row?.active ?? 0),
     suspended: Number(row?.suspended ?? 0),
     trial: Number(row?.trial ?? 0),
+    canceled: Number(row?.canceled ?? 0),
+    deleted: Number(row?.deleted ?? 0),
     overdue: Number(row?.overdue ?? 0),
   };
 }

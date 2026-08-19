@@ -77,6 +77,31 @@ export class TrialExpiredError extends Error {
 }
 
 /**
+ * A assinatura da organização foi CANCELADA (status='canceled', ou o
+ * cancelamento agendado `cancel_at` já passou). Bloqueia como a suspensão, mas
+ * com a tela "assinatura cancelada". Limpa quando o billing volta a 'active'.
+ */
+export class AccountCanceledError extends Error {
+  readonly status = 403 as const;
+  constructor(message = "Sua assinatura foi cancelada. Assine novamente para voltar.") {
+    super(message);
+    this.name = "AccountCanceledError";
+  }
+}
+
+/**
+ * A conta foi EXCLUÍDA (soft-delete, `deleted_at` setado). Bloqueia todo acesso
+ * org-scoped com a tela "conta encerrada". O registro é mantido pro histórico.
+ */
+export class AccountDeletedError extends Error {
+  readonly status = 403 as const;
+  constructor(message = "Esta conta foi encerrada. Fale com a Fluxia.") {
+    super(message);
+    this.name = "AccountDeletedError";
+  }
+}
+
+/**
  * Convert one of the typed errors above (or anything else) into a
  * `NextResponse`. Unknown errors collapse to 500 with the generic
  * message — we never leak `err.message` for non-classified errors.
@@ -86,7 +111,9 @@ export function toErrorResponse(err: unknown): NextResponse {
     err instanceof UnauthorizedError ||
     err instanceof ForbiddenError ||
     err instanceof AccountSuspendedError ||
-    err instanceof TrialExpiredError
+    err instanceof TrialExpiredError ||
+    err instanceof AccountCanceledError ||
+    err instanceof AccountDeletedError
   ) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }
@@ -225,13 +252,27 @@ async function loadAccountContext(
         .select({
           status: organizationBilling.status,
           dueAt: organizationBilling.dueAt,
+          cancelAt: organizationBilling.cancelAt,
+          deletedAt: organizationBilling.deletedAt,
         })
         .from(organizationBilling)
         .where(eq(organizationBilling.organizationId, account.id))
         .limit(1),
     );
+    // Conta excluída (soft-delete) — bloqueia tudo. Vem antes dos demais.
+    if (billing?.deletedAt) {
+      throw new AccountDeletedError();
+    }
     if (billing?.status === "suspended") {
       throw new AccountSuspendedError();
+    }
+    // Cancelada: status já 'canceled', OU o cancelamento agendado (cancel_at =
+    // fim do período pago) já passou. Antes de cancel_at o acesso continua.
+    if (
+      billing?.status === "canceled" ||
+      (billing?.cancelAt && new Date(billing.cancelAt).getTime() < Date.now())
+    ) {
+      throw new AccountCanceledError();
     }
     // Fase 2: trial cujo fim (dueAt) já passou → bloqueia como suspensão, mas
     // com a tela "teste acabou" + checkout. Sem billing / active → não afeta.

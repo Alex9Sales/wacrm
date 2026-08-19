@@ -166,3 +166,18 @@ export async function firstInvoiceUrl(subscriptionId: string): Promise<string | 
   )
   return r.data?.[0]?.invoiceUrl ?? null
 }
+
+/**
+ * Cancela a assinatura no Asaas (para de gerar novas cobranças). Idempotente do
+ * nosso lado: se o Asaas devolver 404 (já removida), tratamos como sucesso.
+ */
+export async function cancelSubscription(subscriptionId: string): Promise<void> {
+  try {
+    await asaasFetch(`/subscriptions/${encodeURIComponent(subscriptionId)}`, {
+      method: 'DELETE',
+    })
+  } catch (err) {
+    if (err instanceof AsaasError && err.status === 404) return // já não existe
+    throw err
+  }
+}

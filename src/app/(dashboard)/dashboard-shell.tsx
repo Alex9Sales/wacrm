@@ -26,6 +26,8 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
     trialActive,
     trialEndsAt,
     trialExpired,
+    canceled,
+    deleted,
     signOut,
   } = useAuth();
   const trialDaysLeft =
@@ -90,6 +92,75 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           <LogOut className="size-4" />
           Sair
         </button>
+      </div>
+    );
+  }
+
+  // Ciclo de vida: conta excluída (soft-delete) — encerrada.
+  if (!profileLoading && deleted) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-6 bg-background px-6 text-center">
+        <div className="flex size-14 items-center justify-center rounded-full bg-muted text-muted-foreground">
+          <Ban className="size-7" />
+        </div>
+        <div className="max-w-md space-y-2">
+          <h1 className="font-heading text-xl font-semibold text-foreground">
+            Conta encerrada
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Esta conta foi encerrada. Se você acha que é um engano, fale com a
+            Fluxia.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={signOut}
+          className="inline-flex h-9 items-center gap-2 rounded-lg border border-border px-3 text-sm font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+        >
+          <LogOut className="size-4" />
+          Sair
+        </button>
+      </div>
+    );
+  }
+
+  // Ciclo de vida: assinatura cancelada — pode reassinar (checkout Asaas).
+  if (!profileLoading && canceled) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-6 bg-background px-6 text-center">
+        <div className="flex size-14 items-center justify-center rounded-full bg-amber-500/10 text-amber-500">
+          <Clock3 className="size-7" />
+        </div>
+        <div className="max-w-md space-y-2">
+          <h1 className="font-heading text-xl font-semibold text-foreground">
+            Sua assinatura foi cancelada
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            Para voltar a usar o FluxiaCRM, é só assinar de novo — leva menos de
+            1 minuto, com Pix, boleto ou cartão.
+          </p>
+        </div>
+        <div className="flex flex-col items-center gap-3">
+          <SubscribeButton label="Assinar novamente" />
+          <div className="flex items-center gap-3 text-xs">
+            <a
+              href="https://wa.me/556791806048?text=Quero%20voltar%20a%20assinar%20o%20FluxiaCRM"
+              target="_blank"
+              rel="noopener noreferrer"
+              className="text-muted-foreground underline transition hover:text-foreground"
+            >
+              Falar com a Fluxia
+            </a>
+            <button
+              type="button"
+              onClick={signOut}
+              className="inline-flex items-center gap-1.5 text-muted-foreground transition-colors hover:text-foreground"
+            >
+              <LogOut className="size-3.5" />
+              Sair
+            </button>
+          </div>
+        </div>
       </div>
     );
   }

@@ -2,7 +2,12 @@
 // the server shapes in src/lib/admin/clients.ts (ClientListRow /
 // ClientOverview) so the client components don't import server-only code.
 
-export type ClientBillingStatus = "active" | "suspended" | "trial";
+export type ClientBillingStatus =
+  | "active"
+  | "suspended"
+  | "trial"
+  | "canceled"
+  | "deleted";
 
 export interface ClientListRow {
   id: string;
@@ -10,6 +15,8 @@ export interface ClientListRow {
   slug: string | null;
   createdAt: string;
   status: ClientBillingStatus;
+  cancelAt: string | null;
+  deletedAt: string | null;
   startedAt: string | null;
   dueAt: string | null;
   plan: string | null;
@@ -34,7 +41,21 @@ export interface ClientOverview {
   active: number;
   suspended: number;
   trial: number;
+  canceled: number;
+  deleted: number;
   overdue: number;
+}
+
+export interface BillingEventRow {
+  id: string;
+  event: string;
+  fromStatus: string | null;
+  toStatus: string | null;
+  actorType: string;
+  actorLabel: string | null;
+  reason: string | null;
+  metadata: Record<string, unknown>;
+  createdAt: string;
 }
 
 export interface AdminClientsResponse {
