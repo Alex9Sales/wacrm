@@ -136,9 +136,14 @@ export const emailProvider: WhatsAppProvider = {
       // Sem segredo configurado: não valida (piloto) — a rota loga o aviso.
       return true
     }
-    const provided =
-      ctx.headers.get('x-email-token') || ctx.headers.get('x-inbound-token')
-    return provided === secret
+    // .trim() em ambos: um espaço/quebra-de-linha colado junto do segredo no
+    // Cloudflare não deve quebrar a validação.
+    const provided = (
+      ctx.headers.get('x-email-token') ||
+      ctx.headers.get('x-inbound-token') ||
+      ''
+    ).trim()
+    return provided === secret.trim()
   },
 
   parseWebhook(body: unknown): ParsedWebhook {
