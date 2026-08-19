@@ -43,12 +43,13 @@ interface AddChannelDialogProps {
   onPickMeta: () => void;
 }
 
-const PROVIDER_ORDER: ProviderId[] = ['meta', 'instagram', 'messenger', 'waha', 'evolution', 'evogo'];
+const PROVIDER_ORDER: ProviderId[] = ['meta', 'instagram', 'messenger', 'email', 'waha', 'evolution', 'evogo'];
 
 const PROVIDER_BLURB: Record<ProviderId, string> = {
   meta: 'API oficial do WhatsApp. Suporta templates e mensagens interativas.',
   instagram: 'Instagram Direct (DM) via API oficial do Meta. Cole o ID da conta Instagram e o token de acesso.',
   messenger: 'Facebook Messenger (DM da Página) via API oficial do Meta. Cole o ID da Página e o token de acesso.',
+  email: 'E-mail no inbox. Recebe pelo Cloudflare Email Routing (Worker) e responde pelo Resend. Informe o endereço de atendimento.',
   waha: 'Provedor não oficial (WAHA), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
   evolution: 'Provedor não oficial (Evolution API), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
   evogo: 'Provedor não oficial (EvoGo), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
@@ -121,6 +122,39 @@ const PROVIDER_FIELDS: Record<
       key: 'graph_base',
       label: 'Base da API (opcional)',
       placeholder: 'https://graph.facebook.com/v21.0',
+      optional: true,
+    },
+  ],
+  // E-mail: recebe pelo Cloudflare Email Worker, responde pelo Resend.
+  email: [
+    {
+      key: 'address',
+      label: 'Endereço de recebimento',
+      placeholder: 'contato@atendimento.salestecnologia.com.br',
+    },
+    {
+      key: 'from',
+      label: 'Remetente (From) — domínio verificado no Resend (opcional)',
+      placeholder: 'atendimento@salestecnologia.com.br (default = o endereço acima)',
+      optional: true,
+    },
+    {
+      key: 'from_name',
+      label: 'Nome do remetente (opcional)',
+      placeholder: 'Atendimento',
+      optional: true,
+    },
+    {
+      key: 'resend_api_key',
+      label: 'Chave do Resend (opcional)',
+      placeholder: 're_… — usa a global se em branco',
+      secret: true,
+      optional: true,
+    },
+    {
+      key: 'inbound_secret',
+      label: 'Segredo do webhook (opcional)',
+      placeholder: 'gera automático — cole no Cloudflare Worker',
       optional: true,
     },
   ],

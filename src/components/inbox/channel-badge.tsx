@@ -1,4 +1,4 @@
-import { Radio } from "lucide-react";
+import { Radio, Mail } from "lucide-react";
 
 import type { ChannelProvider } from "@/types";
 import { cn } from "@/lib/utils";
@@ -19,6 +19,7 @@ export const CHANNEL_PROVIDER_LABELS: Record<ChannelProvider, string> = {
   evogo: "EvoGo",
   instagram: "Instagram",
   messenger: "Messenger",
+  email: "E-mail",
 };
 
 /** Glifo do Instagram (câmera em quadrado arredondado) como SVG inline —
@@ -84,6 +85,9 @@ export function ChannelBadge({
   } else if (provider === "messenger") {
     bg = "bg-gradient-to-br from-[#00C6FF] via-[#0068FF] to-[#A033FF] text-white";
     glyph = <MessengerGlyph className={iconCls} />;
+  } else if (provider === "email") {
+    bg = "bg-red-500/15 text-red-600 dark:text-red-300";
+    glyph = <Mail className={iconCls} />;
   }
 
   return (

@@ -13,7 +13,7 @@
 // ============================================================
 
 /** The set of transports we support. */
-export type ProviderId = 'meta' | 'waha' | 'evolution' | 'evogo' | 'instagram' | 'messenger';
+export type ProviderId = 'meta' | 'waha' | 'evolution' | 'evogo' | 'instagram' | 'messenger' | 'email';
 
 /**
  * What a given provider can and can't do. Drives capability checks
@@ -515,6 +515,21 @@ export const CAPABILITIES: Record<ProviderId, Capabilities> = {
     typing: false,
     qrPairing: false,
     inboundMedia: true,
+    needsChatIdResolve: false,
+    needsJitter: false,
+  },
+
+  email: {
+    // E-mail: sem janela de 24h (composer nunca trava), sem QR, sem templates,
+    // sem reações/interativos. Identidade por endereço (external_id). Mídia
+    // inbound fica pra depois (v1 texto).
+    templates: false,
+    session24hWindow: false,
+    interactive: false,
+    reactions: false,
+    typing: false,
+    qrPairing: false,
+    inboundMedia: false,
     needsChatIdResolve: false,
     needsJitter: false,
   },

@@ -157,6 +157,27 @@ export async function loadMessengerChannelByPageId(
   return row ? toCtx(row) : null;
 }
 
+/** Roteamento do webhook de e-mail: acha o canal pelo endereço de destino
+ *  (provider_meta.address), case-insensitive. */
+export async function loadEmailChannelByAddress(
+  address: string,
+): Promise<ChannelCtx | null> {
+  const addr = address.trim().toLowerCase();
+  const row = firstOrNull(
+    await db
+      .select()
+      .from(channels)
+      .where(
+        and(
+          eq(channels.provider, 'email'),
+          sql`lower(${channels.providerMeta}->>'address') = ${addr}`,
+        ),
+      )
+      .limit(1),
+  );
+  return row ? toCtx(row) : null;
+}
+
 /**
  * Load the account's default channel — for legacy paths that assumed a
  * single WhatsApp config (health checks, "the" account channel). Prefers

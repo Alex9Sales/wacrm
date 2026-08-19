@@ -16,6 +16,7 @@ import { evolutionProvider } from './providers/evolution';
 import { evogoProvider } from './providers/evogo';
 import { instagramProvider } from './providers/instagram';
 import { messengerProvider } from './providers/messenger';
+import { emailProvider } from './providers/email';
 
 const PROVIDERS: Record<ProviderId, WhatsAppProvider> = {
   meta: metaProvider,
@@ -24,6 +25,7 @@ const PROVIDERS: Record<ProviderId, WhatsAppProvider> = {
   evogo: evogoProvider,
   instagram: instagramProvider,
   messenger: messengerProvider,
+  email: emailProvider,
 };
 
 /** Resolve the provider implementation for a channel's provider id. */

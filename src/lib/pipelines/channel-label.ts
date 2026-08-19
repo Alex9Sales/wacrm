@@ -12,6 +12,7 @@ export function dealChannelLabel(provider: string | null | undefined): string {
   const p = (provider || "").toLowerCase();
   if (p === "instagram") return "Instagram";
   if (p === "messenger") return "Messenger";
+  if (p === "email") return "E-mail";
   return "WhatsApp";
 }
 

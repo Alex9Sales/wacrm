@@ -51,6 +51,7 @@ const PROVIDERS: ReadonlySet<ProviderId> = new Set([
   'meta',
   'instagram',
   'messenger',
+  'email',
   'waha',
   'evolution',
   'evogo',
@@ -83,6 +84,11 @@ function safeProviderMeta(
   }
   if (provider === 'messenger') {
     return { page_id: meta.page_id ?? null, graphBase: meta.graphBase ?? null, location, pix }
+  }
+  if (provider === 'email') {
+    // Expõe só o endereço (recebe) + o From. resendApiKey/inboundSecret ficam
+    // no `credentials` (nunca expostos).
+    return { address: meta.address ?? null, from: meta.from ?? null, location, pix }
   }
   // waha / evolution / evogo: baseUrl + the session or instance name.
   return {
@@ -230,6 +236,28 @@ function buildCreateInput(
           ? { page_id, graphBase: graph_base }
           : { page_id },
       }
+    }
+    case 'email': {
+      // Conexão MANUAL: endereço de recebimento + (opcional) chave Resend, From,
+      // nome e segredo de inbound. Nasce 'connected' (não pareia por QR).
+      const addressRaw = str(config.address)
+      const address = addressRaw ? addressRaw.trim().toLowerCase() : null
+      if (!address || !address.includes('@')) {
+        throw new BadRequestError(
+          'email channel requires a valid `address` (ex.: contato@atendimento.salestecnologia.com.br)',
+        )
+      }
+      const from = str(config.from)
+      const from_name = str(config.from_name)
+      const resend_api_key = str(config.resend_api_key)
+      // Auto-gera o segredo do webhook se não vier — vai no Cloudflare Worker.
+      const inbound_secret = str(config.inbound_secret) || randomBytes(16).toString('hex')
+      const credentials: Record<string, unknown> = { inboundSecret: inbound_secret }
+      if (resend_api_key) credentials.resendApiKey = resend_api_key
+      if (from_name) credentials.fromName = from_name
+      const providerMeta: Record<string, unknown> = { address }
+      if (from) providerMeta.from = from
+      return { provider, name, status: 'connected', credentials, providerMeta }
     }
     case 'waha': {
       // Managed by default: fall back to the platform WAHA server + auto
