@@ -39,11 +39,16 @@ import {
   X,
   Trash2,
   MessageSquare,
+  AtSign,
   DollarSign,
   Loader2,
   ExternalLink,
   Star,
 } from "lucide-react";
+import {
+  dealChannelLabel,
+  isInstagramProvider,
+} from "@/lib/pipelines/channel-label";
 import { toast } from "sonner";
 
 interface DealFormProps {
@@ -374,16 +379,30 @@ export function DealForm({
 
               {deal?.id &&
                 (linkedConversation ||
-                  contacts.some((c) => c.id === contactId && !!c.phone)) && (
-                  <button
-                    type="button"
-                    onClick={openChat}
-                    className="mt-1 inline-flex items-center gap-1.5 self-start rounded-md bg-emerald-500/10 px-2.5 py-1.5 text-xs font-medium text-emerald-600 hover:bg-emerald-500/20"
-                  >
-                    <MessageSquare className="h-3.5 w-3.5" />
-                    Abrir conversa no WhatsApp
-                  </button>
-                )}
+                  contacts.some((c) => c.id === contactId && !!c.phone)) &&
+                (() => {
+                  // Canal REAL do negócio (via conversa vinculada). O botão abre
+                  // essa conversa, então o texto nomeia o canal certo.
+                  const chIsIg = isInstagramProvider(deal.channel_provider);
+                  return (
+                    <button
+                      type="button"
+                      onClick={openChat}
+                      className={`mt-1 inline-flex items-center gap-1.5 self-start rounded-md px-2.5 py-1.5 text-xs font-medium ${
+                        chIsIg
+                          ? "bg-pink-500/10 text-pink-600 hover:bg-pink-500/20"
+                          : "bg-emerald-500/10 text-emerald-600 hover:bg-emerald-500/20"
+                      }`}
+                    >
+                      {chIsIg ? (
+                        <AtSign className="h-3.5 w-3.5" />
+                      ) : (
+                        <MessageSquare className="h-3.5 w-3.5" />
+                      )}
+                      Abrir conversa no {dealChannelLabel(deal.channel_provider)}
+                    </button>
+                  );
+                })()}
             </div>
 
             {/* Produto do catálogo (opcional): busca + scroll (aguenta catálogo

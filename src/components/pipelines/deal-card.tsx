@@ -13,6 +13,7 @@ import {
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
 import { deleteDeal, transferDeal, duplicateDeal, setDealPaused, setDealNextFollowUp, openDealConversation } from "@/app/(dashboard)/pipelines/actions";
+import { dealChannelLabel, isInstagramProvider } from "@/lib/pipelines/channel-label";
 import { listProfiles } from "@/app/(dashboard)/inbox/actions";
 
 interface DealCardProps {
@@ -175,10 +176,9 @@ export function DealCard({
 
   // Canal de origem do lead (via conversa vinculada). Só WhatsApp e Instagram
   // por enquanto — o resto cai no ícone de WhatsApp (default do produto).
-  const provider = (deal.channel_provider || "").toLowerCase();
-  const isInstagram = provider === "instagram";
+  const isInstagram = isInstagramProvider(deal.channel_provider);
   const ChannelIcon = isInstagram ? AtSign : MessageCircle;
-  const channelLabel = isInstagram ? "Instagram" : "WhatsApp";
+  const channelLabel = dealChannelLabel(deal.channel_provider);
   const channelColor = isInstagram ? "text-pink-500" : "text-emerald-600";
   // Abre a conversa vinculada; se não tiver, resolve/cria pelo telefone do
   // contato (e vincula) — assim o botão aparece mesmo sem conversa ainda.

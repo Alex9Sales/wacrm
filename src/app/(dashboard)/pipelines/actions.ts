@@ -1118,6 +1118,9 @@ export async function getDeal(id: string): Promise<Deal | null> {
         company_id: deals.companyId,
         company_name: companies.name,
         conversation_id: deals.conversationId,
+        // Canal de origem (via conversa vinculada) — o botão "Abrir conversa"
+        // usa isso pra nomear o canal certo (WhatsApp/Instagram/Messenger).
+        channel_provider: channels.provider,
         assigned_to: deals.assignedTo,
         title: deals.title,
         value: deals.value,
@@ -1140,6 +1143,8 @@ export async function getDeal(id: string): Promise<Deal | null> {
       .leftJoin(companies, eq(deals.companyId, companies.id))
       .leftJoin(user, eq(deals.assignedTo, user.id))
       .leftJoin(pipelines, eq(deals.pipelineId, pipelines.id))
+      .leftJoin(conversations, eq(deals.conversationId, conversations.id))
+      .leftJoin(channels, eq(conversations.channelId, channels.id))
       .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
       .limit(1),
   )

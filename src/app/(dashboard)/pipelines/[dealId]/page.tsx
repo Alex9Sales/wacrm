@@ -36,10 +36,15 @@ import {
   Pause,
   Play,
   MessageCircle,
+  AtSign,
 } from "lucide-react";
 import { toast } from "sonner";
 
 import { cn } from "@/lib/utils";
+import {
+  dealChannelLabel,
+  isInstagramProvider,
+} from "@/lib/pipelines/channel-label";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { DealForm } from "@/components/pipelines/deal-form";
@@ -659,25 +664,41 @@ export default function DealDetailPage() {
           </div>
         </div>
         <div className="flex items-center gap-2">
-          {deal.contact_id && (
-            <Button
-              size="sm"
-              variant="outline"
-              disabled={busy}
-              title="Abrir conversa no WhatsApp"
-              onClick={async () => {
-                const res = await openDealConversation(deal.id);
-                if (res.conversationId) {
-                  window.location.href = `/inbox?c=${res.conversationId}`;
-                } else {
-                  toast.error(res.error || "Não foi possível abrir a conversa");
-                }
-              }}
-              className="border-emerald-300 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
-            >
-              <MessageCircle className="mr-1.5 h-4 w-4" /> WhatsApp
-            </Button>
-          )}
+          {deal.contact_id &&
+            (() => {
+              const chIsIg = isInstagramProvider(deal.channel_provider);
+              const chLabel = dealChannelLabel(deal.channel_provider);
+              return (
+                <Button
+                  size="sm"
+                  variant="outline"
+                  disabled={busy}
+                  title={`Abrir conversa no ${chLabel}`}
+                  onClick={async () => {
+                    const res = await openDealConversation(deal.id);
+                    if (res.conversationId) {
+                      window.location.href = `/inbox?c=${res.conversationId}`;
+                    } else {
+                      toast.error(
+                        res.error || "Não foi possível abrir a conversa",
+                      );
+                    }
+                  }}
+                  className={
+                    chIsIg
+                      ? "border-pink-300 text-pink-600 hover:bg-pink-50 dark:hover:bg-pink-950/30"
+                      : "border-emerald-300 text-emerald-600 hover:bg-emerald-50 dark:hover:bg-emerald-950/30"
+                  }
+                >
+                  {chIsIg ? (
+                    <AtSign className="mr-1.5 h-4 w-4" />
+                  ) : (
+                    <MessageCircle className="mr-1.5 h-4 w-4" />
+                  )}{" "}
+                  {chLabel}
+                </Button>
+              );
+            })()}
           {status !== "won" && (
             <Button
               size="sm"
