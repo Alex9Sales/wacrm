@@ -21,6 +21,7 @@ import { createChannel } from '@/lib/channels/channels'
 import {
   EMAIL_HOSTED_DOMAIN,
   createBrandedDomain,
+  detectDnsProvider,
   domainOfEmail,
 } from '@/lib/channels/providers/email-domains'
 
@@ -86,6 +87,10 @@ export async function POST(request: Request) {
     // Alias hospedado único p/ RECEBER (o cliente encaminha a marca dele → aqui).
     const ingestAddress = `in-${randomBytes(6).toString('hex')}@${EMAIL_HOSTED_DOMAIN}`
 
+    // Detecta o provedor de DNS do cliente (pelos NS) p/ um passo-a-passo
+    // específico na UI. Não bloqueia: em falha, cai no genérico.
+    const dnsProvider = await detectDnsProvider(domain).catch(() => null)
+
     const credentials: Record<string, unknown> = {}
     if (fromName) credentials.fromName = fromName
 
@@ -105,6 +110,7 @@ export async function POST(request: Request) {
           resendDomainId: domainState.id,
           domainName: domain,
           domainStatus: domainState.status,
+          ...(dnsProvider ? { dnsProvider } : {}),
         },
       })
     } catch (err) {
@@ -123,6 +129,7 @@ export async function POST(request: Request) {
         channelId: channel.id,
         ingestAddress,
         domain: domainState,
+        dnsProvider,
       },
       { status: 201 },
     )

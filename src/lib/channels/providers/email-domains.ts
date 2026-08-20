@@ -16,6 +16,8 @@
 // Este módulo só fala com a API de domínios do Resend (chave global).
 // ============================================================
 
+import { promises as dnsp } from 'node:dns'
+
 import { Resend } from 'resend'
 
 /** Subdomínio hospedado da Fluxia (recebe pelo Cloudflare catch-all → Worker).
@@ -119,4 +121,67 @@ export function domainOfEmail(email: string): string | null {
   if (at < 0) return null
   const domain = email.slice(at + 1).trim().toLowerCase()
   return domain.includes('.') ? domain : null
+}
+
+// ---- Detecção do provedor de DNS (pra passo-a-passo específico) ----
+
+export interface DnsProvider {
+  /** slug estável — o frontend mapeia p/ o passo-a-passo. */
+  id: string
+  /** nome amigável do provedor. */
+  name: string
+  /** link direto pro painel de DNS (quando conhecido). */
+  panelUrl: string | null
+  /** nameservers detectados (transparência/depuração). */
+  nameservers: string[]
+}
+
+/** Assinaturas de NS → provedor. Ordem importa (mais específico primeiro). */
+const NS_SIGNATURES: Array<{ id: string; name: string; panelUrl: string | null; re: RegExp }> = [
+  { id: 'cloudflare', name: 'Cloudflare', panelUrl: 'https://dash.cloudflare.com', re: /\.cloudflare\.com\.?$/i },
+  { id: 'registrobr', name: 'Registro.br', panelUrl: 'https://registro.br/painel/', re: /(\.dns\.br|registro\.br)\.?$/i },
+  { id: 'hostinger', name: 'Hostinger', panelUrl: 'https://hpanel.hostinger.com/', re: /(hostinger\.com|dns-parking\.com)/i },
+  { id: 'godaddy', name: 'GoDaddy', panelUrl: 'https://dcc.godaddy.com/', re: /(domaincontrol\.com|godaddy)\.?$/i },
+  { id: 'namecheap', name: 'Namecheap', panelUrl: 'https://ap.www.namecheap.com/', re: /(registrar-servers\.com|namecheap)\.?$/i },
+  { id: 'locaweb', name: 'Locaweb', panelUrl: 'https://painel.locaweb.com.br/', re: /locaweb\.com/i },
+  { id: 'uolhost', name: 'UOL Host', panelUrl: 'https://painel.uolhost.uol.com.br/', re: /uol(host)?\.com/i },
+  { id: 'kinghost', name: 'KingHost', panelUrl: 'https://painel.kinghost.com.br/', re: /kinghost/i },
+  { id: 'hostgator', name: 'HostGator', panelUrl: 'https://financeiro.hostgator.com.br/', re: /hostgator/i },
+  { id: 'google', name: 'Google / Squarespace', panelUrl: 'https://domains.squarespace.com/', re: /(googledomains\.com|google\.com|squarespace)/i },
+  { id: 'vercel', name: 'Vercel', panelUrl: 'https://vercel.com/dashboard/domains', re: /vercel-dns\.com/i },
+  { id: 'aws', name: 'AWS Route 53', panelUrl: 'https://console.aws.amazon.com/route53/', re: /awsdns/i },
+]
+
+/** Resolve os NS subindo do subdomínio até achar a delegação (ex.:
+ *  `fluxia.salestecnologia.com.br` herda os NS de `salestecnologia.com.br`). */
+async function resolveNsUp(domain: string): Promise<string[]> {
+  const labels = domain.split('.')
+  for (let i = 0; i <= labels.length - 2; i++) {
+    const d = labels.slice(i).join('.')
+    try {
+      const ns = await dnsp.resolveNs(d)
+      if (ns && ns.length) return ns
+    } catch {
+      // NODATA/NXDOMAIN nesse nível — tenta o próximo pai.
+    }
+  }
+  return []
+}
+
+/** Descobre o provedor de DNS do domínio pelos nameservers. Nunca lança —
+ *  em falha volta 'unknown' (o passo-a-passo genérico ainda serve). */
+export async function detectDnsProvider(domain: string): Promise<DnsProvider> {
+  let nameservers: string[] = []
+  try {
+    nameservers = await resolveNsUp(domain)
+  } catch {
+    nameservers = []
+  }
+  const lower = nameservers.map((n) => n.toLowerCase())
+  for (const sig of NS_SIGNATURES) {
+    if (lower.some((n) => sig.re.test(n))) {
+      return { id: sig.id, name: sig.name, panelUrl: sig.panelUrl, nameservers }
+    }
+  }
+  return { id: 'unknown', name: 'seu provedor de DNS', panelUrl: null, nameservers }
 }

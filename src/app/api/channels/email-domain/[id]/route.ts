@@ -61,6 +61,7 @@ async function syncAndRespond(
     ingestAddress: typeof meta.ingestAddress === 'string' ? meta.ingestAddress : null,
     address: typeof meta.address === 'string' ? meta.address : null,
     domainName: typeof meta.domainName === 'string' ? meta.domainName : null,
+    dnsProvider: meta.dnsProvider ?? null,
   })
 }
 

@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
-import { Loader2, Copy, CheckCircle2 } from 'lucide-react';
+import { Loader2, Copy, CheckCircle2, ExternalLink } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import {
@@ -31,6 +31,13 @@ interface DomainRecord {
   status: string;
 }
 
+export interface DnsProvider {
+  id: string;
+  name: string;
+  panelUrl: string | null;
+  nameservers?: string[];
+}
+
 export interface DomainState {
   status: string;
   verified: boolean;
@@ -38,6 +45,42 @@ export interface DomainState {
   ingestAddress: string | null;
   address: string | null;
   domainName: string | null;
+  dnsProvider?: DnsProvider | null;
+}
+
+/** Passo-a-passo específico por provedor de DNS (onde adicionar os registros). */
+const PROVIDER_HINTS: Record<string, string> = {
+  cloudflare:
+    'No painel: DNS → Records → Add record. No campo Name, cole só a parte antes do domínio (ex.: send.fluxia) — o Cloudflare completa o resto. TTL: Auto.',
+  registrobr:
+    'No painel do domínio: aba DNS / "Editar Zona" → adicione cada registro (tipo, nome e valor exatamente como na tabela).',
+  hostinger:
+    'hPanel → Domínios → seu domínio → Zona DNS (Gerenciar registros DNS) → Adicionar registro.',
+  godaddy:
+    'Meus Produtos → DNS do domínio → Adicionar → escolha o tipo e cole nome e valor.',
+  namecheap:
+    'Domain List → Manage → aba Advanced DNS → Add New Record.',
+  locaweb:
+    'Painel Locaweb → Domínios → Zona DNS do domínio → adicionar registro.',
+  uolhost:
+    'Painel UOL Host → Domínios → Zona DNS → adicionar registro.',
+  kinghost:
+    'Painel KingHost → Domínios → Zona DNS → adicionar registro.',
+  hostgator:
+    'Painel HostGator → Domínios → Zona DNS (cPanel) → adicionar registro.',
+  google:
+    'No painel de domínios (Squarespace/Google) → DNS → Custom records → adicionar.',
+  vercel:
+    'Vercel → Domains → seu domínio → adicionar os registros DNS.',
+  aws:
+    'Route 53 → Hosted zones → seu domínio → Create record.',
+};
+
+function providerHint(id: string | undefined): string {
+  return (
+    (id && PROVIDER_HINTS[id]) ||
+    'No painel de DNS do seu domínio, adicione os registros abaixo (tipo, nome e valor conforme a tabela).'
+  );
 }
 
 interface EmailDomainDialogProps {
@@ -171,6 +214,27 @@ export function EmailDomainDialog({
               <h3 className="text-sm font-medium text-foreground">
                 1. Adicione no DNS do seu domínio (para enviar)
               </h3>
+              {state?.dnsProvider && (
+                <div className="rounded-md border border-primary/30 bg-primary/5 px-3 py-2 text-xs">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="text-muted-foreground">Seu DNS parece estar no</span>
+                    <span className="font-medium text-foreground">{state.dnsProvider.name}</span>
+                    {state.dnsProvider.panelUrl && (
+                      <a
+                        href={state.dnsProvider.panelUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="inline-flex items-center gap-1 text-primary hover:underline"
+                      >
+                        abrir painel <ExternalLink className="size-3" />
+                      </a>
+                    )}
+                  </div>
+                  <p className="mt-1 text-muted-foreground">
+                    {providerHint(state.dnsProvider.id)}
+                  </p>
+                </div>
+              )}
               <div className="overflow-x-auto rounded-md border border-border">
                 <table className="w-full text-left text-xs">
                   <thead className="bg-muted/50 text-muted-foreground">

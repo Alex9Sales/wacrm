@@ -259,6 +259,7 @@ export function AddChannelDialog({
           channelId: string;
           ingestAddress: string;
           domain: { id: string; name: string; status: string; records: DomainState['records'] };
+          dnsProvider: DomainState['dnsProvider'];
         };
         toast.success('Canal criado! Agora configure o DNS para verificar o domínio.');
         onBrandedCreated?.({
@@ -270,6 +271,7 @@ export function AddChannelDialog({
             ingestAddress: data.ingestAddress,
             address: (config.address ?? '').trim().toLowerCase(),
             domainName: data.domain.name,
+            dnsProvider: data.dnsProvider ?? null,
           },
         });
         reset();
