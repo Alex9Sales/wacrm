@@ -20,6 +20,7 @@ export const API_SCOPES = [
   'contacts:write',
   'conversations:read',
   'conversations:write',
+  'channels:write',
   'tags:read',
   'tags:write',
   'internal:read',
@@ -49,7 +50,9 @@ export const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   'contacts:write': 'Create and update contacts',
   'conversations:read': 'List and read conversations',
   'conversations:write':
-    'Transfer/assign conversations (set agent, sector, status, or priority)',
+    'Transfer/assign conversations (set agent, sector, status, or priority); start a conversation with a recipient',
+  'channels:write':
+    'Create channels via API (hosted e-mail alias / Gmail app-password)',
   'tags:read': 'List the account tags (labels)',
   'tags:write':
     'Create tags and add/remove them on conversations (contacts)',

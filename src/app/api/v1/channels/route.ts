@@ -17,8 +17,11 @@ import { asc, eq } from 'drizzle-orm';
 
 import { db, channels } from '@/db';
 import { requireApiKey } from '@/lib/auth/api-context';
-import { ok, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { ok, fail, badRequest, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { getProvider } from '@/lib/channels/registry';
+import { createChannel, type CreateChannelInput } from '@/lib/channels/channels';
+import { EMAIL_HOSTED_DOMAIN } from '@/lib/channels/providers/email-domains';
+import { verifyGmailLogin } from '@/lib/channels/providers/gmail';
 import type { ProviderId } from '@/lib/channels/provider';
 
 export async function GET(request: Request) {
@@ -42,6 +45,129 @@ export async function GET(request: Request) {
       official: !getProvider(r.provider as ProviderId).capabilities.needsJitter,
     }));
     return ok({ data });
+  } catch (err) {
+    return toApiErrorResponse(err);
+  }
+}
+
+// ============================================================
+// POST /api/v1/channels — cria um canal por API (scope: channels:write).
+// Só os modos "ponte" (sem tela): E-MAIL HOSPEDADO (apelido no domínio da
+// Fluxia, sem DNS) e GMAIL (senha de app). Domínio próprio (branded) exige DNS
+// → segue só pela tela. Body:
+//   E-mail hospedado: { "provider":"email", "name":"Suporte", "handle":"suporte", "from_name"? }
+//                     → cria suporte@<domínio hospedado>
+//   Gmail:            { "provider":"gmail", "name":"Loja", "address":"loja@gmail.com",
+//                       "app_password":"...", "from_name"? }  (valida o login antes)
+// Resposta: { data: { id, provider, name, address, status } }.
+// ============================================================
+export async function POST(request: Request) {
+  try {
+    const ctx = await requireApiKey(request, 'channels:write');
+
+    let body: {
+      provider?: unknown
+      name?: unknown
+      handle?: unknown
+      address?: unknown
+      app_password?: unknown
+      from_name?: unknown
+    };
+    try {
+      body = await request.json();
+    } catch {
+      throw badRequest('Invalid JSON body');
+    }
+
+    const provider = typeof body.provider === 'string' ? body.provider : '';
+    const name = typeof body.name === 'string' ? body.name.trim() : '';
+    const fromName =
+      typeof body.from_name === 'string' && body.from_name.trim()
+        ? body.from_name.trim()
+        : null;
+    if (!name) throw badRequest('`name` is required.');
+
+    let input: CreateChannelInput;
+
+    if (provider === 'email') {
+      const addressRaw = typeof body.address === 'string' ? body.address.trim() : '';
+      const handle =
+        typeof body.handle === 'string'
+          ? body.handle.split('@')[0].trim().toLowerCase()
+          : '';
+      if (addressRaw && !handle) {
+        throw badRequest(
+          'Domínio próprio exige DNS — crie pela tela. Por API, use `handle` (e-mail hospedado no domínio da Fluxia).',
+        );
+      }
+      if (!/^[a-z0-9](?:[a-z0-9._-]{0,30}[a-z0-9])?$/.test(handle)) {
+        throw badRequest(
+          '`handle` inválido (letras minúsculas, números, ponto, hífen ou "_").',
+        );
+      }
+      const address = `${handle}@${EMAIL_HOSTED_DOMAIN}`;
+      const credentials: Record<string, unknown> = {};
+      if (fromName) credentials.fromName = fromName;
+      input = {
+        provider: 'email',
+        name,
+        status: 'connected',
+        credentials,
+        providerMeta: { address, from: address },
+      };
+    } else if (provider === 'gmail') {
+      const address =
+        typeof body.address === 'string' ? body.address.trim().toLowerCase() : '';
+      const appPassword =
+        typeof body.app_password === 'string'
+          ? body.app_password.replace(/\s+/g, '')
+          : '';
+      if (!address.includes('@')) throw badRequest('`address` (Gmail) é obrigatório.');
+      if (!appPassword) throw badRequest('`app_password` é obrigatório.');
+      try {
+        await verifyGmailLogin(address, appPassword);
+      } catch {
+        throw badRequest(
+          'Não consegui conectar ao Gmail — confira o e-mail e a senha de app (2FA + IMAP ativos).',
+        );
+      }
+      const credentials: Record<string, unknown> = { address, appPassword };
+      if (fromName) credentials.fromName = fromName;
+      input = {
+        provider: 'gmail',
+        name,
+        status: 'connected',
+        credentials,
+        providerMeta: { address },
+      };
+    } else {
+      throw badRequest(
+        'Por API só dá pra criar canal `email` (hospedado) ou `gmail`. Outros canais: use a tela.',
+      );
+    }
+
+    let channel;
+    try {
+      channel = await createChannel(ctx.accountId, input);
+    } catch (err) {
+      const e = err as { code?: string };
+      if (e?.code === '23505') {
+        return fail('conflict', 'Já existe um canal com esse nome ou endereço.', 409);
+      }
+      throw err;
+    }
+
+    const address = (channel.providerMeta as { address?: string }).address ?? null;
+    return ok(
+      {
+        id: channel.id,
+        provider: channel.provider,
+        name: channel.name,
+        address,
+        status: 'connected',
+      },
+      201,
+    );
   } catch (err) {
     return toApiErrorResponse(err);
   }
