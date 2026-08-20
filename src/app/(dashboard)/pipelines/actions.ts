@@ -923,6 +923,8 @@ export async function createDeal(
     if (created?.id) {
       await recordDealEvent(ctx.accountId, ctx.userId, created.id, 'created', {
         stage: await stageName(input.stage_id),
+        // ID p/ o Raio-X resolver a etapa de entrada à prova de renomear.
+        stageId: input.stage_id,
       })
     }
     return { error: null, id: created?.id }
@@ -989,6 +991,7 @@ export async function duplicateDeal(
     if (!created?.id) return { error: 'Falha ao duplicar' }
     await recordDealEvent(ctx.accountId, ctx.userId, created.id, 'created', {
       stage: await stageName(src.stageId),
+      stageId: src.stageId,
     })
     // Copia os produtos (itens) da negociação original.
     const prods = await db

@@ -732,9 +732,11 @@ function FunnelHero({
             {/* coluna direita: destaque de perda */}
             <div className="w-28 shrink-0 text-left">
               {f.isLossHotspot ? (
+                // Etapa vermelha: mostra o MESMO número que a pintou (gargalo =
+                // taxa de morte entre resolvidos; senão, perda snapshot).
                 <span className="inline-flex items-center gap-1 rounded-full bg-red-500/12 px-2 py-0.5 text-[11px] font-semibold text-red-600 dark:text-red-400">
                   <AlertTriangle className="h-3 w-3" />
-                  {Math.round(f.lossRate * 100)}% perda
+                  {Math.round((f.biggestLeak && f.lostHere > 0 ? f.deathRate : f.lossRate) * 100)}% perda
                 </span>
               ) : f.lost > 0 ? (
                 <span className="text-xs tabular-nums text-muted-foreground">

@@ -390,35 +390,36 @@ export async function getComercialReport(
   // Inferir passagem pelo snapshot da etapa atual mente em 4 casos: ganho no
   // meio do funil, negócio criado direto numa etapa avançada, card movido pra
   // trás/reaberto e aberto em trânsito. Então, por negócio da coorte, montamos o
-  // piso de ENTRADA (evento 'created') e o ponto MAIS AVANÇADO alcançado (max das
-  // etapas visitadas) a partir de deal_events; caímos no snapshot só sem eventos.
-  const posByName = new Map(stages.map((st) => [st.name, st.position]))
-  const posByStageId = new Map(stages.map((st) => [st.id, st.position]))
-  const idxByPosition = new Map(stages.map((st, i) => [st.position, i]))
-  const resolvePos = (id?: string | null, name?: string | null): number | undefined => {
-    if (id && posByStageId.has(id)) return posByStageId.get(id)
-    if (name && posByName.has(name)) return posByName.get(name)
+  // piso de ENTRADA (evento 'created') e a etapa de DESFECHO (perda carimbada /
+  // ganho / atual) e contamos a passagem no intervalo [entrada..desfecho].
+  // Trabalha em ÍNDICE via stageId (único) — `position` pode empatar entre
+  // etapas. Nome só como último recurso p/ eventos antigos sem id.
+  const idxByStageId = new Map(stages.map((st, i) => [st.id, i]))
+  const idxByName = new Map(stages.map((st, i) => [st.name, i]))
+  const resolveIdx = (id?: string | null, name?: string | null): number | undefined => {
+    if (id && idxByStageId.has(id)) return idxByStageId.get(id)
+    if (name && idxByName.has(name)) return idxByName.get(name)
     return undefined
   }
 
-  // Estado atual (snapshot) por negócio da coorte — rede de segurança + desfecho.
+  // Estado por negócio da coorte — piso/teto visitados + etapa de desfecho.
   type DealMeta = {
     status: string
-    curPos: number | undefined
-    entryPos: number | undefined
-    maxPos: number | undefined
-    deathPos: number | undefined
+    curIdx: number | undefined
+    minI: number | undefined // entrada (menor índice visitado)
+    maxI: number | undefined // ponto mais avançado alcançado
+    deathI: number | undefined // etapa carimbada da perda
     lostReason: string | null
   }
   const meta = new Map<string, DealMeta>()
   for (const row of cohortRows) {
-    const curPos = posByStageId.get(row.stageId)
+    const curIdx = idxByStageId.get(row.stageId)
     meta.set(row.id, {
       status: row.status ?? 'open',
-      curPos,
-      entryPos: undefined,
-      maxPos: undefined,
-      deathPos: row.status === 'lost' ? curPos : undefined,
+      curIdx,
+      minI: undefined,
+      maxI: undefined,
+      deathI: row.status === 'lost' ? curIdx : undefined,
       lostReason: row.lostReason ?? null,
     })
   }
@@ -441,31 +442,31 @@ export async function getComercialReport(
     const m = meta.get(ev.deal_id)
     if (!m) continue
     const d = ev.data ?? {}
-    const visit = (p: number | undefined) => {
-      if (p === undefined) return
-      m.entryPos = m.entryPos === undefined ? p : Math.min(m.entryPos, p)
-      m.maxPos = m.maxPos === undefined ? p : Math.max(m.maxPos, p)
+    const visit = (idx: number | undefined) => {
+      if (idx === undefined) return
+      m.minI = m.minI === undefined ? idx : Math.min(m.minI, idx)
+      m.maxI = m.maxI === undefined ? idx : Math.max(m.maxI, idx)
     }
     if (ev.type === 'created') {
-      visit(resolvePos(asStr(d.stageId), asStr(d.stage)))
+      visit(resolveIdx(asStr(d.stageId), asStr(d.stage)))
     } else if (ev.type === 'stage_changed') {
-      visit(resolvePos(asStr(d.fromId), asStr(d.from)))
-      visit(resolvePos(asStr(d.toId), asStr(d.to)))
+      visit(resolveIdx(asStr(d.fromId), asStr(d.from)))
+      visit(resolveIdx(asStr(d.toId), asStr(d.to)))
     } else if (ev.type === 'status_changed' && asStr(d.to) === 'lost') {
       // Etapa CARIMBADA da morte (perde-em-pé); o último 'lost' vence.
-      const p = resolvePos(asStr(d.stageId), null)
-      if (p !== undefined) m.deathPos = p
+      const p = resolveIdx(asStr(d.stageId), null)
+      if (p !== undefined) m.deathI = p
     }
   }
 
-  // Consolida piso/teto com o snapshot como rede de segurança (deals sem evento).
+  // Consolida com o snapshot como rede de segurança (deals sem evento).
   for (const m of meta.values()) {
-    if (m.curPos !== undefined) {
-      m.maxPos = m.maxPos === undefined ? m.curPos : Math.max(m.maxPos, m.curPos)
-      m.entryPos = m.entryPos === undefined ? m.curPos : Math.min(m.entryPos, m.curPos)
+    if (m.curIdx !== undefined) {
+      m.maxI = m.maxI === undefined ? m.curIdx : Math.max(m.maxI, m.curIdx)
+      m.minI = m.minI === undefined ? m.curIdx : Math.min(m.minI, m.curIdx)
     }
-    if (m.entryPos === undefined) m.entryPos = m.maxPos
-    if (m.status === 'lost' && m.deathPos === undefined) m.deathPos = m.curPos ?? m.maxPos
+    if (m.minI === undefined) m.minI = m.maxI
+    if (m.status === 'lost' && m.deathI === undefined) m.deathI = m.curIdx ?? m.maxI
   }
 
   // Contagens de passagem por índice de etapa.
@@ -479,27 +480,30 @@ export async function getComercialReport(
   const lossByIdx = new Array<Map<string, number> | null>(N).fill(null)
 
   for (const m of meta.values()) {
-    if (m.entryPos === undefined || m.maxPos === undefined) continue
-    const entryI = idxByPosition.get(m.entryPos)
-    const maxI = idxByPosition.get(m.maxPos)
-    if (entryI === undefined || maxI === undefined) continue
-    for (let i = entryI; i <= maxI; i++) {
+    if (m.minI === undefined) continue
+    // Etapa de DESFECHO (onde o negócio EFETIVAMENTE parou): perda = etapa
+    // carimbada; ganho/aberto = etapa atual; senão o ponto mais avançado. Contar
+    // até o desfecho (e não até o max) garante que cada negócio caia em UM único
+    // balde terminal — sem duplo-count quando morre antes do topo alcançado.
+    let termI = m.status === 'lost' ? m.deathI ?? m.curIdx ?? m.maxI : m.curIdx ?? m.maxI
+    if (termI === undefined) termI = m.maxI
+    if (termI === undefined) continue
+    const entryI = Math.min(m.minI, termI) // entrada nunca depois do desfecho
+    for (let i = entryI; i <= termI; i++) {
       reached[i] += 1
-      if (i < maxI) {
-        // Seguiu para uma etapa posterior (avanço real).
+      if (i < termI) {
+        // Seguiu adiante deste ponto (avanço real).
         movedForward[i] += 1
       } else if (m.status === 'won') {
         // Ganhou aqui: sucesso EM PÉ, não é avanço nem vazamento.
         wonHere[i] += 1
       } else if (m.status === 'lost') {
-        // Morreu: atribui à etapa carimbada (dentro do alcançado).
-        const deathI = m.deathPos !== undefined ? idxByPosition.get(m.deathPos) : i
-        const di = deathI !== undefined && deathI >= entryI && deathI <= maxI ? deathI : i
-        lostHere[di] += 1
+        // Morreu aqui (etapa carimbada da perda).
+        lostHere[i] += 1
         const reason = (m.lostReason ?? '').trim() || 'Sem motivo'
-        const rm = lossByIdx[di] ?? new Map<string, number>()
+        const rm = lossByIdx[i] ?? new Map<string, number>()
         rm.set(reason, (rm.get(reason) ?? 0) + 1)
-        lossByIdx[di] = rm
+        lossByIdx[i] = rm
       } else {
         // Aberto, parado nesta etapa (em trânsito).
         openHere[i] += 1
@@ -580,7 +584,9 @@ export async function getComercialReport(
     // Um único vermelho no relatório: o herói aponta a MESMA etapa do gargalo.
     funnel[leakIdx].isLossHotspot = true
   } else if (hotIdx >= 0) {
+    // Sem gargalo de fluxo: destaca a maior perda (snapshot) nos DOIS cards.
     funnel[hotIdx].isLossHotspot = true
+    funnel[hotIdx].biggestLeak = true
   }
 
   // Série temporal: une criadas + ganhas por bucket.
