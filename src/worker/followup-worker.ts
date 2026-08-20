@@ -38,9 +38,15 @@ export function startFollowupWorker(): Worker {
   const worker = new Worker(
     FOLLOWUP_QUEUE,
     async () => {
-      const { sent, agents } = await runFollowUpSweep();
-      if (sent > 0) {
-        console.log(`[followup] enviou ${sent} follow-up(s) (${agents} agente(s) ligado(s))`);
+      // Isola o sweep principal: um erro aqui NÃO pode derrubar o tick nem os
+      // sweeps irmãos (etapa / lembretes) abaixo — cada um tem seu try/catch.
+      try {
+        const { sent, agents } = await runFollowUpSweep();
+        if (sent > 0) {
+          console.log(`[followup] enviou ${sent} follow-up(s) (${agents} agente(s) ligado(s))`);
+        }
+      } catch (err) {
+        console.error('[followup] sweep principal falhou:', err);
       }
       // Follow-up por ETAPA (Fase E): toque disparado quando o card entra numa
       // etapa configurada (ex.: Agendado → confirmar). Mesmo tick.

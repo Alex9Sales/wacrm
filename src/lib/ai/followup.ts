@@ -278,13 +278,13 @@ function pickEmailChannel(channels: WorkerChannelCtx[]): WorkerChannelCtx | null
   return channels.find((ch) => ch.provider === 'email' || ch.provider === 'gmail') ?? null
 }
 
-/** Alvo de e-mail deste toque: conversa de e-mail do MESMO contato + endereço
- *  (contacts.email). null → sem e-mail/sem canal → o toque cai no WhatsApp. */
+/** Alvo de e-mail deste toque: só resolve endereço (contacts.email) + canal — NÃO
+ *  cria a conversa aqui (evita conversa vazia se a IA calar). null → sem e-mail/
+ *  sem canal → o toque cai no WhatsApp. */
 async function resolveEmailTarget(
-  accountId: string,
   contactId: string,
   emailChannel: WorkerChannelCtx | null,
-): Promise<{ channel: WorkerChannelCtx; conversationId: string; to: string } | null> {
+): Promise<{ channel: WorkerChannelCtx; to: string; contactId: string; userId: string } | null> {
   if (!emailChannel) return null
   const contact = firstOrNull(
     await db
@@ -295,40 +295,55 @@ async function resolveEmailTarget(
   )
   const to = (contact?.email ?? '').trim()
   if (!contact || !to) return null
-  const res = await findOrCreateConversation(accountId, contact.userId, contactId, emailChannel.id)
-  if (!res) return null
-  return { channel: emailChannel, conversationId: res.conversation.id, to }
+  return { channel: emailChannel, to, contactId, userId: contact.userId }
 }
 
-/** Entrega um toque por e-mail no endereço do contato + registra na conversa. */
+/** Entrega um toque por e-mail no endereço do contato + registra na conversa de
+ *  e-mail do MESMO contato (criada só agora). ENTREGA e PERSISTÊNCIA são
+ *  separadas: se o e-mail saiu, devolve true mesmo que o log falhe — assim uma
+ *  falha de banco NUNCA vira um WhatsApp duplicado (o e-mail já foi). */
 async function deliverFollowUpEmail(
-  target: { channel: WorkerChannelCtx; conversationId: string; to: string },
+  accountId: string,
+  target: { channel: WorkerChannelCtx; to: string; contactId: string; userId: string },
   text: string,
 ): Promise<boolean> {
+  let res: { externalMessageId?: string | null }
   try {
-    const provider = getProvider(target.channel.provider)
-    const res = await provider.sendText(target.channel, target.to, text)
-    await db.insert(messages).values({
-      conversationId: target.conversationId,
-      senderType: 'bot',
-      contentType: 'text',
-      contentText: text,
-      messageId: res.externalMessageId ?? null,
-      status: 'sent',
-    })
-    await db
-      .update(conversations)
-      .set({
-        lastMessageText: text.slice(0, 200),
-        lastMessageAt: new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      })
-      .where(eq(conversations.id, target.conversationId))
-    return true
+    res = await getProvider(target.channel.provider).sendText(target.channel, target.to, text)
   } catch (err) {
     console.error('[followup] entrega por e-mail falhou:', err)
-    return false
+    return false // e-mail NÃO saiu → o chamador pode cair no WhatsApp
   }
+  // E-mail entregue. Logar é best-effort (nunca refaz o toque).
+  try {
+    const conv = await findOrCreateConversation(
+      accountId,
+      target.userId,
+      target.contactId,
+      target.channel.id,
+    )
+    if (conv) {
+      await db.insert(messages).values({
+        conversationId: conv.conversation.id,
+        senderType: 'bot',
+        contentType: 'text',
+        contentText: text,
+        messageId: res.externalMessageId ?? null,
+        status: 'sent',
+      })
+      await db
+        .update(conversations)
+        .set({
+          lastMessageText: text.slice(0, 200),
+          lastMessageAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        })
+        .where(eq(conversations.id, conv.conversation.id))
+    }
+  } catch (logErr) {
+    console.error('[followup] log do e-mail falhou (e-mail já enviado):', logErr)
+  }
+  return true
 }
 
 /**
@@ -606,6 +621,10 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
 
     for (const c of cands) {
       if (!c.last_message_at) continue
+      // Só reengaja quem já mandou mensagem alguma vez (o cliente precisa ter
+      // escrito). Guard no TOPO: conversas SEM inbound (ex.: a conversa de e-mail
+      // criada pelo próprio follow-up) nunca viram cadência nem gastam consulta.
+      if (!c.last_inbound_at) continue
 
       // Episódio: o cliente respondeu desde o último follow-up? → reinicia no degrau 0.
       const episodeReset =
@@ -650,9 +669,6 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         continue // escada esgotada (até o cliente responder)
       }
 
-      // Só reengaja quem já mandou mensagem alguma vez.
-      if (!c.last_inbound_at) continue
-
       const step = cfg.steps[currentStep]
       // Âncora: degrau 0 = última atividade; degraus seguintes = último follow-up.
       const anchor =
@@ -667,9 +683,21 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
       let emailTarget: Awaited<ReturnType<typeof resolveEmailTarget>> = null
       if (step.channel === 'email' && c.contact_id) {
         if (emailChannel === undefined) {
-          emailChannel = pickEmailChannel(await listChannels(agent.account_id))
+          try {
+            // listChannels descriptografa TODOS os canais da conta — uma
+            // credencial ilegível num canal irmão não pode derrubar o tick.
+            emailChannel = pickEmailChannel(await listChannels(agent.account_id))
+          } catch (err) {
+            console.error('[followup] listChannels falhou — sem e-mail, cai no WhatsApp:', err)
+            emailChannel = null
+          }
         }
-        emailTarget = await resolveEmailTarget(agent.account_id, c.contact_id, emailChannel)
+        try {
+          emailTarget = await resolveEmailTarget(c.contact_id, emailChannel)
+        } catch (err) {
+          console.error('[followup] resolveEmailTarget falhou — cai no WhatsApp:', err)
+          emailTarget = null
+        }
       }
 
       const windowOpen =
@@ -802,18 +830,29 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
       try {
         // Toque por E-MAIL no e-mail do mesmo lead (conversa de e-mail própria);
         // se a entrega por e-mail falhar, CAI no WhatsApp (fallback escolhido).
-        const emailOk = emailTarget ? await deliverFollowUpEmail(emailTarget, text) : false
+        const emailOk = emailTarget
+          ? await deliverFollowUpEmail(agent.account_id, emailTarget, text)
+          : false
         if (emailTarget && emailOk) {
           sent += 1
         } else {
-          await engineSendText({
-            accountId: agent.account_id,
-            userId: agent.created_by ?? '',
-            conversationId: c.id,
-            contactId: c.contact_id,
-            text,
-          })
-          sent += 1
+          // Fallback WhatsApp — mas respeita a janela oficial (Meta fora da 24h
+          // sem template não entrega): não manda free-text nem conta o toque.
+          const waBlocked = officialWindowApplies(c.channel_provider) && !windowOpen
+          if (waBlocked) {
+            console.warn(
+              '[followup] toque sem entrega (e-mail falhou/ausente e WhatsApp fora da janela de 24h)',
+            )
+          } else {
+            await engineSendText({
+              accountId: agent.account_id,
+              userId: agent.created_by ?? '',
+              conversationId: c.id,
+              contactId: c.contact_id,
+              text,
+            })
+            sent += 1
+          }
         }
       } catch (err) {
         console.error('[followup] envio falhou:', err)
