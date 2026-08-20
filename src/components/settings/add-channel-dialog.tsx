@@ -200,9 +200,10 @@ const EMAIL_BRANDED_FIELDS: FieldDef[] = [
   },
 ];
 
-// E-mail BYO (meu provedor/API): o cliente traz o Resend + domínio dele. Envia
-// pela chave dele; recebe apontando o inbound do provedor dele pro nosso webhook.
-const EMAIL_API_FIELDS: FieldDef[] = [
+// E-mail BYO (meu provedor/API): o cliente traz o provedor dele. Envia por
+// Resend (chave) OU SMTP (qualquer provedor); recebe apontando o inbound dele
+// pro nosso webhook.
+const EMAIL_API_RESEND_FIELDS: FieldDef[] = [
   {
     key: 'address',
     label: 'Seu e-mail (no seu domínio)',
@@ -214,6 +215,29 @@ const EMAIL_API_FIELDS: FieldDef[] = [
     placeholder: 're_… (a sua, não a da Fluxia)',
     secret: true,
   },
+  {
+    key: 'from_name',
+    label: 'Nome do remetente',
+    placeholder: 'Atendimento',
+    optional: true,
+  },
+];
+
+// SMTP genérico — funciona com QUALQUER provedor (Hostinger, HostGator, etc.).
+const EMAIL_API_SMTP_FIELDS: FieldDef[] = [
+  {
+    key: 'address',
+    label: 'Seu e-mail (o que aparece pro cliente)',
+    placeholder: 'contato@seudominio.com',
+  },
+  { key: 'smtp_host', label: 'Servidor SMTP', placeholder: 'smtp.hostinger.com' },
+  { key: 'smtp_port', label: 'Porta', placeholder: '465' },
+  {
+    key: 'smtp_user',
+    label: 'Usuário SMTP',
+    placeholder: 'geralmente o e-mail completo',
+  },
+  { key: 'smtp_password', label: 'Senha SMTP', placeholder: '••••••', secret: true },
   {
     key: 'from_name',
     label: 'Nome do remetente',
@@ -235,16 +259,21 @@ export function AddChannelDialog({
   const [config, setConfig] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
   const [emailMode, setEmailMode] = useState<EmailMode>('hosted');
+  // No modo "Meu provedor (API)": envia por Resend (chave) OU SMTP (qualquer
+  // provedor: Hostinger, HostGator, etc.).
+  const [apiSend, setApiSend] = useState<'resend' | 'smtp'>('resend');
 
   const fields = useMemo(() => {
     if (!provider || provider === 'meta') return [];
     if (provider === 'email') {
       if (emailMode === 'branded') return EMAIL_BRANDED_FIELDS;
-      if (emailMode === 'api') return EMAIL_API_FIELDS;
+      if (emailMode === 'api') {
+        return apiSend === 'smtp' ? EMAIL_API_SMTP_FIELDS : EMAIL_API_RESEND_FIELDS;
+      }
       return PROVIDER_FIELDS.email;
     }
     return PROVIDER_FIELDS[provider as Exclude<ProviderId, 'meta'>];
-  }, [provider, emailMode]);
+  }, [provider, emailMode, apiSend]);
 
   // Preview do endereço hospedado (só e-mail): sanitiza o que o cliente digita.
   const emailHandle = (config.handle ?? '')
@@ -259,6 +288,7 @@ export function AddChannelDialog({
     setConfig({});
     setSubmitting(false);
     setEmailMode('hosted');
+    setApiSend('resend');
   }, []);
 
   const handleClose = useCallback(
@@ -491,7 +521,7 @@ export function AddChannelDialog({
                   {([
                     ['hosted', 'Apelido Fluxia', 'Pronto na hora, sem DNS. Endereço no domínio da Fluxia.'],
                     ['branded', 'Meu domínio', 'Sua marca, na nossa infra. Exige DNS + encaminhamento.'],
-                    ['api', 'Meu provedor (API)', 'Você traz o seu Resend + domínio. A Fluxia é só o inbox — recebe por webhook.'],
+                    ['api', 'Meu provedor', 'Você traz o seu envio (Resend ou SMTP de qualquer provedor). A Fluxia é só o inbox — recebe por webhook.'],
                   ] as [EmailMode, string, string][]).map(([mode, title, desc]) => (
                     <button
                       key={mode}
@@ -502,6 +532,34 @@ export function AddChannelDialog({
                       }}
                       className={`w-full rounded-md border px-3 py-2 text-left text-xs transition ${
                         emailMode === mode
+                          ? 'border-primary/60 bg-primary/10'
+                          : 'border-border bg-muted/40 hover:bg-muted'
+                      }`}
+                    >
+                      <span className="block font-medium text-foreground">{title}</span>
+                      <span className="text-muted-foreground">{desc}</span>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+            {provider === 'email' && emailMode === 'api' && (
+              <div className="space-y-1.5">
+                <Label className="text-muted-foreground">Como você envia?</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  {([
+                    ['resend', 'Resend (API)', 'Cola a chave re_…'],
+                    ['smtp', 'SMTP', 'Qualquer provedor (Hostinger, HostGator…)'],
+                  ] as ['resend' | 'smtp', string, string][]).map(([m, title, desc]) => (
+                    <button
+                      key={m}
+                      type="button"
+                      onClick={() => {
+                        setApiSend(m);
+                        setConfig({});
+                      }}
+                      className={`rounded-md border px-3 py-2 text-left text-xs transition ${
+                        apiSend === m
                           ? 'border-primary/60 bg-primary/10'
                           : 'border-border bg-muted/40 hover:bg-muted'
                       }`}
@@ -596,10 +654,11 @@ export function AddChannelDialog({
             )}
             {provider === 'email' && emailMode === 'api' && (
               <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                <strong>Enviar</strong> já usa a sua chave do Resend (nada mais a
-                fazer). Pra <strong>receber</strong>, depois de criar te mostramos
-                um <strong>webhook + segredo</strong> pra você apontar o inbound do
-                seu provedor — a Fluxia é só o inbox.
+                <strong>Enviar</strong> já usa o seu provedor{' '}
+                {apiSend === 'smtp' ? '(SMTP)' : '(Resend)'} — nada mais a fazer.
+                Pra <strong>receber</strong>, depois de criar te mostramos um{' '}
+                <strong>webhook + segredo</strong> pra apontar o inbound do seu
+                provedor. A Fluxia é só o inbox.
               </div>
             )}
             {provider === 'gmail' && (

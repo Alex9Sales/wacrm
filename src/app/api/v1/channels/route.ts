@@ -75,6 +75,10 @@ export async function POST(request: Request) {
       from?: unknown
       resend_api_key?: unknown
       inbound_secret?: unknown
+      smtp_host?: unknown
+      smtp_port?: unknown
+      smtp_user?: unknown
+      smtp_password?: unknown
       app_password?: unknown
       from_name?: unknown
     };
@@ -119,6 +123,16 @@ export async function POST(request: Request) {
         const inboundSecret = inboundSecretIn || randomBytes(16).toString('hex');
         const credentials: Record<string, unknown> = { inboundSecret };
         if (resendKey) credentials.resendApiKey = resendKey;
+        // SMTP genérico (qualquer provedor: Hostinger, HostGator, etc.).
+        const smtpHost = typeof body.smtp_host === 'string' ? body.smtp_host.trim() : '';
+        const smtpUser = typeof body.smtp_user === 'string' ? body.smtp_user.trim() : '';
+        const smtpPassword = typeof body.smtp_password === 'string' ? body.smtp_password : '';
+        if (smtpHost && smtpUser && smtpPassword) {
+          credentials.smtpHost = smtpHost;
+          credentials.smtpUser = smtpUser;
+          credentials.smtpPassword = smtpPassword;
+          credentials.smtpPort = Number(body.smtp_port) || 587;
+        }
         if (fromName) credentials.fromName = fromName;
         const providerMeta: Record<string, unknown> = { address };
         if (from) providerMeta.from = from;
@@ -177,6 +191,27 @@ export async function POST(request: Request) {
       throw badRequest(
         'Por API só dá pra criar canal `email` (hospedado) ou `gmail`. Outros canais: use a tela.',
       );
+    }
+
+    // BYO-SMTP: valida o login SMTP antes de criar.
+    if (provider === 'email' && typeof input.credentials.smtpHost === 'string') {
+      const c = input.credentials as {
+        smtpHost?: string
+        smtpPort?: number
+        smtpUser?: string
+        smtpPassword?: string
+      };
+      try {
+        const { verifySmtpLogin } = await import('@/lib/channels/providers/email');
+        await verifySmtpLogin(
+          String(c.smtpHost ?? ''),
+          Number(c.smtpPort) || 587,
+          String(c.smtpUser ?? ''),
+          String(c.smtpPassword ?? ''),
+        );
+      } catch {
+        throw badRequest('Não consegui conectar ao SMTP — confira host, porta, usuário e senha.');
+      }
     }
 
     let channel;

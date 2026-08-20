@@ -17,6 +17,7 @@
 //                     = address), replySubject? }.
 // ============================================================
 
+import nodemailer from 'nodemailer'
 import { Resend } from 'resend'
 
 import { CAPABILITIES } from '../provider'
@@ -135,6 +136,49 @@ function oneLineSubject(s: string): string {
   return clean || 'Atendimento'
 }
 
+/** Config SMTP do canal (BYO — qualquer provedor: Hostinger, HostGator, etc.).
+ *  Quando presente, o envio sai por SMTP em vez do Resend. */
+function smtpConfigOf(
+  ch: ChannelCtx,
+): { host: string; port: number; user: string; pass: string } | null {
+  const c = ch.credentials
+  const host = typeof c.smtpHost === 'string' ? c.smtpHost.trim() : ''
+  const user = typeof c.smtpUser === 'string' ? c.smtpUser.trim() : ''
+  const pass = typeof c.smtpPassword === 'string' ? c.smtpPassword : ''
+  if (!host || !user || !pass) return null
+  const port = Number(c.smtpPort) || 587
+  return { host, port, user, pass }
+}
+
+/** Transporte SMTP (secure=SSL na 465; STARTTLS nas demais). */
+function smtpTransport(cfg: { host: string; port: number; user: string; pass: string }) {
+  return nodemailer.createTransport({
+    host: cfg.host,
+    port: cfg.port,
+    secure: cfg.port === 465,
+    auth: { user: cfg.user, pass: cfg.pass },
+  })
+}
+
+/** Testa o login SMTP (usado na criação do canal BYO-SMTP pra falhar rápido). */
+export async function verifySmtpLogin(
+  host: string,
+  port: number,
+  user: string,
+  pass: string,
+): Promise<void> {
+  await smtpTransport({ host: host.trim(), port: port || 587, user: user.trim(), pass }).verify()
+}
+
+/** Cabeçalho From: "<Nome> <endereço>". */
+function fromHeaderOf(ch: ChannelCtx): string {
+  const fromName =
+    (typeof ch.credentials.fromName === 'string' && ch.credentials.fromName) ||
+    ch.name ||
+    'Atendimento'
+  return `${fromName} <${fromAddressOf(ch)}>`
+}
+
 /** Nome de arquivo padrão pra um anexo de saída sem filename. */
 function defaultFilename(media: OutboundMedia): string {
   const extByMime: Record<string, string> = {
@@ -157,19 +201,26 @@ export const emailProvider: WhatsAppProvider = {
 
   // `to` = e-mail do cliente (vem de contacts.external_id no send-message).
   async sendText(ch, to, text) {
-    const resend = new Resend(resendKeyOf(ch))
-    const fromName =
-      (typeof ch.credentials.fromName === 'string' && ch.credentials.fromName) ||
-      ch.name ||
-      'Atendimento'
-    const from = `${fromName} <${fromAddressOf(ch)}>`
     const subject = oneLineSubject(
       (typeof ch.providerMeta.replySubject === 'string' &&
         ch.providerMeta.replySubject) ||
         'Atendimento',
     )
-    const { data, error } = await resend.emails.send({
-      from,
+    // BYO-SMTP (qualquer provedor): envia por SMTP se o canal tiver essa config.
+    const smtp = smtpConfigOf(ch)
+    if (smtp) {
+      const info = await smtpTransport(smtp).sendMail({
+        from: fromHeaderOf(ch),
+        to,
+        replyTo: addressOf(ch),
+        subject,
+        text,
+      })
+      return { externalMessageId: info.messageId ?? '' }
+    }
+    // Resend (hospedado, branded, ou BYO-Resend).
+    const { data, error } = await new Resend(resendKeyOf(ch)).emails.send({
+      from: fromHeaderOf(ch),
       to,
       replyTo: addressOf(ch),
       subject,
@@ -181,15 +232,9 @@ export const emailProvider: WhatsAppProvider = {
     return { externalMessageId: data?.id ?? '' }
   },
 
-  // `to` = e-mail do cliente. Anexa via Resend: `path` (URL pública do MinIO)
-  // ou `content` (base64). O caption vira o assunto + corpo do e-mail.
+  // `to` = e-mail do cliente. Baixa os bytes no servidor e anexa por SMTP
+  // (BYO) ou Resend. O caption vira o corpo do e-mail.
   async sendMedia(ch, to, media) {
-    const resend = new Resend(resendKeyOf(ch))
-    const fromName =
-      (typeof ch.credentials.fromName === 'string' && ch.credentials.fromName) ||
-      ch.name ||
-      'Atendimento'
-    const from = `${fromName} <${fromAddressOf(ch)}>`
     const caption = (media.caption || '').trim()
     // Assunto ESTÁVEL (1 linha, mantém o thread). O caption vai pro CORPO — se
     // fosse pro assunto, um caption multilinha quebrava o Resend (`\n`).
@@ -200,7 +245,7 @@ export const emailProvider: WhatsAppProvider = {
     )
     const filename = (media.filename || '').trim() || defaultFilename(media)
 
-    // Baixa os bytes NO SERVIDOR e anexa como conteúdo — não depende do Resend
+    // Baixa os bytes NO SERVIDOR e anexa como conteúdo — não depende do provedor
     // conseguir alcançar a URL do MinIO (pode ser interna).
     let content: Buffer | null = null
     if (media.base64) {
@@ -216,13 +261,28 @@ export const emailProvider: WhatsAppProvider = {
       throw new Error('Anexo sem conteúdo (sem url nem base64).')
     }
     const attachment = { filename, content }
+    const bodyText = caption || 'Segue o anexo.'
 
-    const { data, error } = await resend.emails.send({
-      from,
+    // BYO-SMTP (qualquer provedor).
+    const smtp = smtpConfigOf(ch)
+    if (smtp) {
+      const info = await smtpTransport(smtp).sendMail({
+        from: fromHeaderOf(ch),
+        to,
+        replyTo: addressOf(ch),
+        subject,
+        text: bodyText,
+        attachments: [attachment],
+      })
+      return { externalMessageId: info.messageId ?? '' }
+    }
+
+    const { data, error } = await new Resend(resendKeyOf(ch)).emails.send({
+      from: fromHeaderOf(ch),
       to,
       replyTo: addressOf(ch),
       subject,
-      text: caption || 'Segue o anexo.',
+      text: bodyText,
       attachments: [attachment],
     })
     if (error) {

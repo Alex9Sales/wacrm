@@ -79,9 +79,9 @@ export function EmailApiSetupDialog({
             Canal criado — configure o recebimento
           </DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            <strong>Enviar já funciona</strong> (usa o seu Resend). Pra{' '}
-            <strong>receber</strong>, aponte o inbound do seu provedor pro webhook
-            abaixo — uma vez só.
+            <strong>Enviar já funciona</strong> (usa o seu provedor — Resend ou
+            SMTP). Pra <strong>receber</strong>, aponte o inbound do seu provedor
+            pro webhook abaixo — uma vez só.
           </DialogDescription>
         </DialogHeader>
 

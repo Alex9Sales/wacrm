@@ -296,10 +296,21 @@ function buildCreateInput(
       }
       const from = str(config.from)
       const resend_api_key = str(config.resend_api_key)
-      // Auto-gera o segredo do webhook se não vier — vai no Cloudflare Worker.
+      // SMTP genérico (BYO — qualquer provedor: Hostinger, HostGator, etc.).
+      const smtp_host = str(config.smtp_host)
+      const smtp_user = str(config.smtp_user)
+      const smtp_password = str(config.smtp_password)
+      const smtp_port = str(config.smtp_port)
+      // Auto-gera o segredo do webhook se não vier.
       const inbound_secret = str(config.inbound_secret) || randomBytes(16).toString('hex')
       const credentials: Record<string, unknown> = { inboundSecret: inbound_secret }
       if (resend_api_key) credentials.resendApiKey = resend_api_key
+      if (smtp_host && smtp_user && smtp_password) {
+        credentials.smtpHost = smtp_host
+        credentials.smtpUser = smtp_user
+        credentials.smtpPassword = smtp_password
+        credentials.smtpPort = smtp_port ? Number(smtp_port) : 587
+      }
       if (from_name) credentials.fromName = from_name
       const providerMeta: Record<string, unknown> = { address }
       if (from) providerMeta.from = from
@@ -471,6 +482,33 @@ export async function POST(request: Request) {
           {
             error:
               'Não consegui conectar ao Gmail. Confira o e-mail e a senha de app (precisa da verificação em 2 etapas ativada).',
+          },
+          { status: 400 },
+        )
+      }
+    }
+
+    // E-mail BYO-SMTP: valida o login SMTP antes de criar.
+    if (provider === 'email' && typeof input.credentials.smtpHost === 'string') {
+      const c = input.credentials as {
+        smtpHost?: string
+        smtpPort?: number
+        smtpUser?: string
+        smtpPassword?: string
+      }
+      try {
+        const { verifySmtpLogin } = await import('@/lib/channels/providers/email')
+        await verifySmtpLogin(
+          String(c.smtpHost ?? ''),
+          Number(c.smtpPort) || 587,
+          String(c.smtpUser ?? ''),
+          String(c.smtpPassword ?? ''),
+        )
+      } catch {
+        return NextResponse.json(
+          {
+            error:
+              'Não consegui conectar ao servidor SMTP. Confira host, porta, usuário e senha.',
           },
           { status: 400 },
         )
