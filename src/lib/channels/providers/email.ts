@@ -129,6 +129,12 @@ function stripB64Prefix(b64: string): string {
   return b64.includes(',') ? b64.slice(b64.indexOf(',') + 1) : b64
 }
 
+/** Assunto sempre em 1 linha: o Resend REJEITA `\n`/`\r` no campo subject. */
+function oneLineSubject(s: string): string {
+  const clean = s.replace(/[\r\n\t]+/g, ' ').replace(/\s{2,}/g, ' ').trim()
+  return clean || 'Atendimento'
+}
+
 /** Nome de arquivo padrão pra um anexo de saída sem filename. */
 function defaultFilename(media: OutboundMedia): string {
   const extByMime: Record<string, string> = {
@@ -157,10 +163,11 @@ export const emailProvider: WhatsAppProvider = {
       ch.name ||
       'Atendimento'
     const from = `${fromName} <${fromAddressOf(ch)}>`
-    const subject =
+    const subject = oneLineSubject(
       (typeof ch.providerMeta.replySubject === 'string' &&
         ch.providerMeta.replySubject) ||
-      'Atendimento'
+        'Atendimento',
+    )
     const { data, error } = await resend.emails.send({
       from,
       to,
@@ -184,11 +191,13 @@ export const emailProvider: WhatsAppProvider = {
       'Atendimento'
     const from = `${fromName} <${fromAddressOf(ch)}>`
     const caption = (media.caption || '').trim()
-    const subject =
-      caption ||
+    // Assunto ESTÁVEL (1 linha, mantém o thread). O caption vai pro CORPO — se
+    // fosse pro assunto, um caption multilinha quebrava o Resend (`\n`).
+    const subject = oneLineSubject(
       (typeof ch.providerMeta.replySubject === 'string' &&
         ch.providerMeta.replySubject) ||
-      'Atendimento'
+        'Atendimento',
+    )
     const filename = (media.filename || '').trim() || defaultFilename(media)
 
     // Baixa os bytes NO SERVIDOR e anexa como conteúdo — não depende do Resend
