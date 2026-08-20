@@ -66,20 +66,26 @@ export type FunnelStage = {
   lossRate: number
   /** true na etapa de MAIOR taxa de perda (destaque do guia). */
   isLossHotspot: boolean
-  // ---- Raio-X do funil (passagem por etapa) ----
-  /** Quantos negócios da coorte CHEGARAM nesta etapa ou além (forward-only). */
+  // ---- Raio-X do funil (passagem REAL por etapa, reconstruída de eventos) ----
+  /** Quantos negócios da coorte PASSARAM por esta etapa (entrada ≤ etapa ≤ topo). */
   reached: number
-  /** Quantos AVANÇARAM desta etapa para a frente (na última = ganhos aqui). */
-  advanced: number
-  /** advanced / reached (0..1) — taxa de avanço desta etapa. */
-  stageConversion: number
-  /** 1 - stageConversion — % que chegou aqui e travou/morreu (não avançou). */
-  dropoff: number
+  /** Quantos seguiram para uma etapa POSTERIOR (avanço real; exclui ganho-em-pé). */
+  movedForward: number
+  /** movedForward / reached (0..1) — fluxo real para a próxima etapa. */
+  forwardRate: number
+  /** Quantos GANHARAM nesta etapa (sucesso em pé; nem avanço nem vazamento). */
+  wonHere: number
+  /** Quantos MORRERAM nesta etapa (etapa carimbada da perda). */
+  lostHere: number
+  /** lostHere / (avançou+ganhou+morreu-aqui) — taxa de morte entre os resolvidos. */
+  deathRate: number
+  /** Quantos ABERTOS estão parados nesta etapa (em trânsito). */
+  openHere: number
   /** Média de dias que os negócios ABERTOS estão parados nesta etapa (null se 0). */
   avgDaysStalled: number | null
-  /** Top motivos de perda DESTA etapa (perde-em-pé: morreu onde parou). */
+  /** Top motivos de perda DESTA etapa (pela etapa carimbada da morte). */
   lossReasons: StageLossReason[]
-  /** true na etapa de MAIOR drop-off (o gargalo real do funil). */
+  /** true na etapa de MAIOR taxa de morte (o gargalo real do funil). */
   biggestLeak: boolean
 }
 
@@ -247,7 +253,8 @@ export async function getComercialReport(
     })
     .from(pipelineStages)
     .where(eq(pipelineStages.pipelineId, filters.pipelineId))
-    .orderBy(asc(pipelineStages.position))
+    // Desempate estável quando duas etapas têm a mesma position.
+    .orderBy(asc(pipelineStages.position), asc(pipelineStages.createdAt))
 
   // ---- Q4: série temporal (criadas por dia/semana/mês) ----
   const days = daysBetween(filters.from, filters.to)
@@ -292,11 +299,12 @@ export async function getComercialReport(
     string,
     { total: number; open: number; won: number; lost: number; openValue: number; totalValue: number }
   >()
-  // Raio-X: motivo de perda POR etapa (perde-em-pé → morreu onde parou) e
-  // acúmulo de dias parado dos negócios ABERTOS por etapa.
-  const lossByStage = new Map<string, Map<string, number>>()
+  // Raio-X: acúmulo de dias parado dos negócios ABERTOS por etapa (motivo×etapa
+  // é computado depois, pela etapa CARIMBADA da morte). O "hoje" do cálculo de
+  // dias é limitado ao fim do período p/ janelas passadas não inflarem/derivarem.
   const stalledByStage = new Map<string, { sum: number; n: number }>()
   const nowMs = Date.now()
+  const refMs = Math.min(nowMs, Date.parse(toTs) || nowMs)
   // responsáveis: criadas por pessoa.
   const respMap = new Map<string, ResponsavelRow>()
   const ensureResp = (id: string | null): ResponsavelRow => {
@@ -335,21 +343,14 @@ export async function getComercialReport(
       // Dias parado nesta etapa (piso = criação quando nunca mudou de etapa).
       const since = Date.parse(row.stageChangedAt ?? row.createdAt ?? '')
       if (!Number.isNaN(since)) {
-        const days = Math.max(0, (nowMs - since) / 864e5)
+        const days = Math.max(0, (refMs - since) / 864e5)
         const acc = stalledByStage.get(row.stageId) ?? { sum: 0, n: 0 }
         acc.sum += days
         acc.n += 1
         stalledByStage.set(row.stageId, acc)
       }
     } else if (row.status === 'won') s.won += 1
-    else if (row.status === 'lost') {
-      s.lost += 1
-      // Motivo de perda cruzado com a etapa onde morreu.
-      const reason = (row.lostReason ?? '').trim() || 'Sem motivo'
-      const rm = lossByStage.get(row.stageId) ?? new Map<string, number>()
-      rm.set(reason, (rm.get(reason) ?? 0) + 1)
-      lossByStage.set(row.stageId, rm)
-    }
+    else if (row.status === 'lost') s.lost += 1
     byStage.set(row.stageId, s)
 
     ensureResp(row.assignedTo).criadas += 1
@@ -385,37 +386,144 @@ export async function getComercialReport(
   const conversao = fechadosCoorte > 0 ? ganhosCoorte / fechadosCoorte : 0
   const ticketMedio = vendas > 0 ? valorVendas / vendas : 0
 
-  // Raio-X — PASSAGEM por etapa (quantos CHEGARAM em cada etapa ou além).
-  // Com movimento forward-only + perde-em-pé, a etapa atual de cada negócio é o
-  // ponto mais avançado que ele alcançou; reached(i) = quantos estão na etapa i
-  // ou em qualquer etapa posterior (soma de sufixo por posição).
-  const idxByStage = new Map(stages.map((st, i) => [st.id, i]))
-  const countAtIdx = new Array<number>(stages.length).fill(0)
-  for (const row of cohortRows) {
-    const i = idxByStage.get(row.stageId)
-    if (i !== undefined) countAtIdx[i] += 1
-  }
-  const reachedAtIdx = new Array<number>(stages.length).fill(0)
-  for (let i = stages.length - 1; i >= 0; i--) {
-    reachedAtIdx[i] = countAtIdx[i] + (reachedAtIdx[i + 1] ?? 0)
+  // Raio-X — PASSAGEM REAL por etapa, reconstruída dos EVENTOS do negócio.
+  // Inferir passagem pelo snapshot da etapa atual mente em 4 casos: ganho no
+  // meio do funil, negócio criado direto numa etapa avançada, card movido pra
+  // trás/reaberto e aberto em trânsito. Então, por negócio da coorte, montamos o
+  // piso de ENTRADA (evento 'created') e o ponto MAIS AVANÇADO alcançado (max das
+  // etapas visitadas) a partir de deal_events; caímos no snapshot só sem eventos.
+  const posByName = new Map(stages.map((st) => [st.name, st.position]))
+  const posByStageId = new Map(stages.map((st) => [st.id, st.position]))
+  const idxByPosition = new Map(stages.map((st, i) => [st.position, i]))
+  const resolvePos = (id?: string | null, name?: string | null): number | undefined => {
+    if (id && posByStageId.has(id)) return posByStageId.get(id)
+    if (name && posByName.has(name)) return posByName.get(name)
+    return undefined
   }
 
-  // Funil por etapa + destaque da maior taxa de perda + Raio-X (conversão/gargalo).
+  // Estado atual (snapshot) por negócio da coorte — rede de segurança + desfecho.
+  type DealMeta = {
+    status: string
+    curPos: number | undefined
+    entryPos: number | undefined
+    maxPos: number | undefined
+    deathPos: number | undefined
+    lostReason: string | null
+  }
+  const meta = new Map<string, DealMeta>()
+  for (const row of cohortRows) {
+    const curPos = posByStageId.get(row.stageId)
+    meta.set(row.id, {
+      status: row.status ?? 'open',
+      curPos,
+      entryPos: undefined,
+      maxPos: undefined,
+      deathPos: row.status === 'lost' ? curPos : undefined,
+      lostReason: row.lostReason ?? null,
+    })
+  }
+
+  // Eventos de passagem/desfecho da coorte (created + stage_changed + status).
+  const passageRes = await db.execute(sql`
+    SELECT ev.deal_id AS deal_id, ev.type AS type, ev.data AS data
+    FROM deal_events ev
+    JOIN deals d ON d.id = ev.deal_id
+    WHERE ev.account_id = ${ctx.accountId}
+      AND ev.type IN ('created','stage_changed','status_changed')
+      AND d.pipeline_id = ${filters.pipelineId}
+      AND d.created_at >= ${fromTs}
+      AND d.created_at <= ${toTs}${assigneeSqlD}
+    ORDER BY ev.deal_id, ev.created_at ASC
+  `)
+  type EvRow = { deal_id: string; type: string; data: Record<string, unknown> }
+  const asStr = (x: unknown) => (typeof x === 'string' ? x : undefined)
+  for (const ev of passageRes.rows as unknown as EvRow[]) {
+    const m = meta.get(ev.deal_id)
+    if (!m) continue
+    const d = ev.data ?? {}
+    const visit = (p: number | undefined) => {
+      if (p === undefined) return
+      m.entryPos = m.entryPos === undefined ? p : Math.min(m.entryPos, p)
+      m.maxPos = m.maxPos === undefined ? p : Math.max(m.maxPos, p)
+    }
+    if (ev.type === 'created') {
+      visit(resolvePos(asStr(d.stageId), asStr(d.stage)))
+    } else if (ev.type === 'stage_changed') {
+      visit(resolvePos(asStr(d.fromId), asStr(d.from)))
+      visit(resolvePos(asStr(d.toId), asStr(d.to)))
+    } else if (ev.type === 'status_changed' && asStr(d.to) === 'lost') {
+      // Etapa CARIMBADA da morte (perde-em-pé); o último 'lost' vence.
+      const p = resolvePos(asStr(d.stageId), null)
+      if (p !== undefined) m.deathPos = p
+    }
+  }
+
+  // Consolida piso/teto com o snapshot como rede de segurança (deals sem evento).
+  for (const m of meta.values()) {
+    if (m.curPos !== undefined) {
+      m.maxPos = m.maxPos === undefined ? m.curPos : Math.max(m.maxPos, m.curPos)
+      m.entryPos = m.entryPos === undefined ? m.curPos : Math.min(m.entryPos, m.curPos)
+    }
+    if (m.entryPos === undefined) m.entryPos = m.maxPos
+    if (m.status === 'lost' && m.deathPos === undefined) m.deathPos = m.curPos ?? m.maxPos
+  }
+
+  // Contagens de passagem por índice de etapa.
+  const N = stages.length
+  const reached = new Array<number>(N).fill(0)
+  const movedForward = new Array<number>(N).fill(0)
+  const wonHere = new Array<number>(N).fill(0)
+  const lostHere = new Array<number>(N).fill(0)
+  const openHere = new Array<number>(N).fill(0)
+  // Motivo de perda pela etapa CARIMBADA da morte (não o snapshot atual).
+  const lossByIdx = new Array<Map<string, number> | null>(N).fill(null)
+
+  for (const m of meta.values()) {
+    if (m.entryPos === undefined || m.maxPos === undefined) continue
+    const entryI = idxByPosition.get(m.entryPos)
+    const maxI = idxByPosition.get(m.maxPos)
+    if (entryI === undefined || maxI === undefined) continue
+    for (let i = entryI; i <= maxI; i++) {
+      reached[i] += 1
+      if (i < maxI) {
+        // Seguiu para uma etapa posterior (avanço real).
+        movedForward[i] += 1
+      } else if (m.status === 'won') {
+        // Ganhou aqui: sucesso EM PÉ, não é avanço nem vazamento.
+        wonHere[i] += 1
+      } else if (m.status === 'lost') {
+        // Morreu: atribui à etapa carimbada (dentro do alcançado).
+        const deathI = m.deathPos !== undefined ? idxByPosition.get(m.deathPos) : i
+        const di = deathI !== undefined && deathI >= entryI && deathI <= maxI ? deathI : i
+        lostHere[di] += 1
+        const reason = (m.lostReason ?? '').trim() || 'Sem motivo'
+        const rm = lossByIdx[di] ?? new Map<string, number>()
+        rm.set(reason, (rm.get(reason) ?? 0) + 1)
+        lossByIdx[di] = rm
+      } else {
+        // Aberto, parado nesta etapa (em trânsito).
+        openHere[i] += 1
+      }
+    }
+  }
+
+  // Funil por etapa: snapshot (herói) + Raio-X de passagem (conversão/gargalo).
   const funnel: FunnelStage[] = stages.map((st, i) => {
     const s = byStage.get(st.id)
     const total = s?.total ?? 0
     const lost = s?.lost ?? 0
     const won = s?.won ?? 0
-    const reached = reachedAtIdx[i]
-    const isLast = i === stages.length - 1
-    // Avançaram = seguiram para a frente OU fecharam ganho AQUI (ganho no meio do
-    // funil é sucesso, não gargalo). Na última, só o ganho conta como avanço.
-    const advanced = isLast ? won : (reachedAtIdx[i + 1] ?? 0) + won
-    const stageConversion = reached > 0 ? advanced / reached : 0
-    const dropoff = reached > 0 ? 1 - stageConversion : 0
+    const rc = reached[i]
+    // Fluxo REAL para a próxima etapa (exclui ganho-em-pé e aberto parado).
+    const forwardRate = rc > 0 ? movedForward[i] / rc : 0
+    // Vazamento = mortes ENTRE os já resolvidos/seguidos nesta etapa
+    // (avançou + ganhou + morreu-aqui). Abertos em trânsito ficam de fora — igual
+    // à regra "só fechados no denominador" da conversão; evita gargalo falso.
+    const decided = movedForward[i] + wonHere[i] + lostHere[i]
+    const deathRate = decided > 0 ? lostHere[i] / decided : 0
     const st2 = stalledByStage.get(st.id)
     const avgDaysStalled = st2 && st2.n > 0 ? st2.sum / st2.n : null
-    const lm = lossByStage.get(st.id)
+    const lm = lossByIdx[i]
     const lossReasons: StageLossReason[] = lm
       ? [...lm.entries()]
           .map(([reason, count]) => ({ reason, count }))
@@ -434,16 +542,31 @@ export async function getComercialReport(
       totalValue: s?.totalValue ?? 0,
       lossRate: total > 0 ? lost / total : 0,
       isLossHotspot: false,
-      reached,
-      advanced,
-      stageConversion,
-      dropoff,
+      reached: rc,
+      movedForward: movedForward[i],
+      forwardRate,
+      wonHere: wonHere[i],
+      lostHere: lostHere[i],
+      deathRate,
+      openHere: openHere[i],
       avgDaysStalled,
       lossReasons,
       biggestLeak: false,
     }
   })
-  // Hotspot: maior lossRate entre etapas com massa mínima (evita ruído de n=1).
+
+  // Gargalo (Raio-X): maior taxa de MORTE-por-etapa entre os já resolvidos, com
+  // massa mínima e perda real. Ignora a última (não há "próxima" p/ vazar).
+  let leakIdx = -1
+  let leakRate = 0
+  funnel.forEach((f, i) => {
+    const decided = f.movedForward + f.wonHere + f.lostHere
+    if (i < funnel.length - 1 && f.lostHere > 0 && decided >= 3 && f.deathRate > leakRate) {
+      leakRate = f.deathRate
+      leakIdx = i
+    }
+  })
+  // Destaque de perda snapshot (fallback quando não há gargalo claro pelo fluxo).
   let hotIdx = -1
   let hotRate = 0
   funnel.forEach((f, i) => {
@@ -452,18 +575,13 @@ export async function getComercialReport(
       hotIdx = i
     }
   })
-  if (hotIdx >= 0) funnel[hotIdx].isLossHotspot = true
-  // Gargalo (Raio-X): maior DROP-OFF entre etapas por onde passou massa mínima.
-  // Ignora a última etapa (não há "próxima" para vazar). É o "conserte aqui".
-  let leakIdx = -1
-  let leakRate = 0
-  funnel.forEach((f, i) => {
-    if (i < funnel.length - 1 && f.reached >= 3 && f.dropoff > leakRate) {
-      leakRate = f.dropoff
-      leakIdx = i
-    }
-  })
-  if (leakIdx >= 0) funnel[leakIdx].biggestLeak = true
+  if (leakIdx >= 0) {
+    funnel[leakIdx].biggestLeak = true
+    // Um único vermelho no relatório: o herói aponta a MESMA etapa do gargalo.
+    funnel[leakIdx].isLossHotspot = true
+  } else if (hotIdx >= 0) {
+    funnel[hotIdx].isLossHotspot = true
+  }
 
   // Série temporal: une criadas + ganhas por bucket.
   const tsMap = new Map<string, TimePoint>()
@@ -555,11 +673,11 @@ function buildInsight(a: {
     parts.push(`Conversão de ${pct}% entre os já encerrados.`)
   }
   // Gargalo (Raio-X) tem prioridade: é o "conserte AQUI". Cita a etapa, o % que
-  // não avança e o motivo principal — a conclusão que o vendedor quer.
-  if (a.leak && a.leak.dropoff > 0) {
+  // morre entre os resolvidos e o motivo principal — a conclusão que o vendedor quer.
+  if (a.leak && a.leak.deathRate > 0) {
     const top = a.leak.lossReasons[0]
     parts.push(
-      `Maior gargalo: "${a.leak.name}" — ${Math.round(a.leak.dropoff * 100)}% não avança` +
+      `Maior gargalo: "${a.leak.name}" — ${Math.round(a.leak.deathRate * 100)}% dos que passam morrem aqui` +
         (top ? ` (motivo nº1: ${top.reason}).` : '.'),
     )
   } else if (a.hotspot && a.hotspot.lossRate > 0) {

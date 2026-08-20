@@ -210,14 +210,16 @@ function ReportsInner({ options }: { options: ReportFilterOptions }) {
     rows.push(['', ''])
     rows.push([
       '— Raio-X por etapa —',
-      'chegaram | avançaram | conversão% | travaram% | perdidos | dias parados',
+      'chegaram | avançaram | fluxo% | ganharam aqui | morreram aqui | morte% | parados | dias parados',
     ])
     for (const f of report.funnel) {
       rows.push([
         f.name,
-        `${f.reached} | ${f.advanced} | ${Math.round(f.stageConversion * 100)} | ${Math.round(
-          f.dropoff * 100,
-        )} | ${f.lost} | ${f.avgDaysStalled != null ? Math.round(f.avgDaysStalled) : '—'}`,
+        `${f.reached} | ${f.movedForward} | ${Math.round(f.forwardRate * 100)} | ${f.wonHere} | ${
+          f.lostHere
+        } | ${Math.round(f.deathRate * 100)} | ${f.openHere} | ${
+          f.avgDaysStalled != null ? Math.round(f.avgDaysStalled) : '—'
+        }`,
       ])
     }
     rows.push(['', ''])
@@ -764,8 +766,8 @@ function StageXray({ report }: { report: ComercialReport }) {
       {f.map((st, i) => {
         const isLast = i === f.length - 1
         const width = Math.max(6, Math.round((st.reached / maxReached) * 100))
-        const convPct = Math.round(st.stageConversion * 100)
-        const dropPct = Math.round(st.dropoff * 100)
+        const forwardPct = Math.round(st.forwardRate * 100)
+        const deathPct = Math.round(st.deathRate * 100)
         return (
           <div key={st.stageId}>
             <div
@@ -804,27 +806,33 @@ function StageXray({ report }: { report: ComercialReport }) {
                 />
               </div>
 
-              {/* métricas da etapa */}
+              {/* métricas da etapa: avançou / ganhou-aqui / morreu-aqui / parado */}
               <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
-                <span className="text-emerald-600 dark:text-emerald-400">
-                  {isLast ? `${st.advanced} ganharam` : `${st.advanced} avançaram`}
-                  {st.reached > 0 && ` · ${convPct}%`}
-                </span>
-                {!isLast && dropPct > 0 && (
+                {!isLast && st.movedForward > 0 && (
+                  <span className="text-emerald-600 dark:text-emerald-400">
+                    {st.movedForward} avançaram · {forwardPct}%
+                  </span>
+                )}
+                {st.wonHere > 0 && (
+                  <span className="inline-flex items-center gap-1 font-medium text-emerald-600 dark:text-emerald-400">
+                    <Trophy className="h-3 w-3" /> {st.wonHere} ganharam aqui
+                  </span>
+                )}
+                {st.lostHere > 0 && (
                   <span
                     className={
                       st.biggestLeak
                         ? 'font-semibold text-red-600 dark:text-red-400'
-                        : 'text-muted-foreground'
+                        : 'text-red-600/90 dark:text-red-400/90'
                     }
                   >
-                    {dropPct}% travaram aqui
+                    {st.lostHere} morreram aqui{deathPct > 0 && ` · ${deathPct}%`}
                   </span>
                 )}
-                {st.lost > 0 && <span className="text-muted-foreground">{st.lost} perdidos</span>}
-                {st.avgDaysStalled != null && st.open > 0 && (
+                {st.openHere > 0 && (
                   <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
-                    <Clock className="h-3 w-3" /> ~{Math.round(st.avgDaysStalled)}d parados
+                    <Clock className="h-3 w-3" /> {st.openHere} parados
+                    {st.avgDaysStalled != null && ` ~${Math.round(st.avgDaysStalled)}d`}
                   </span>
                 )}
               </div>
@@ -845,11 +853,11 @@ function StageXray({ report }: { report: ComercialReport }) {
               )}
             </div>
 
-            {/* conector de conversão para a próxima etapa */}
+            {/* conector: fluxo REAL para a próxima etapa (só quem avançou) */}
             {!isLast && (
               <div className="flex items-center justify-center gap-1.5 py-1 text-[11px] text-muted-foreground">
                 <ArrowDown className="h-3 w-3" />
-                {convPct}% seguem para “{f[i + 1].name}”
+                {forwardPct}% seguem para “{f[i + 1].name}”
               </div>
             )}
           </div>
