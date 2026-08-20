@@ -44,7 +44,7 @@ import { activeMentionQuery } from "@/lib/inbox/mentions";
 import {
   uploadAccountMedia,
   deleteAccountMedia,
-  MEDIA_MAX_BYTES_BY_KIND,
+  mediaMaxBytesFor,
 } from "@/lib/storage/upload-media";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { QuickReplyPicker } from "@/components/inbox/quick-reply-picker";
@@ -502,10 +502,10 @@ export function MessageComposer({
   // Upload a captured file to chat-media and stage it as a draft.
   const stageUpload = useCallback(
     async (kind: ComposerMediaKind, file: File) => {
-      // Per-kind ceiling mirrors Meta's caps (image 5 MB, etc.) so we
-      // reject before upload rather than orphaning an object that Meta
-      // would then refuse at send.
-      const max = MEDIA_MAX_BYTES_BY_KIND[kind];
+      // Teto por (canal, tipo): e-mail aceita bem mais (25MB); WhatsApp segue
+      // os caps do Meta (imagem 5MB, etc.), rejeitando antes do upload pra não
+      // orfanar um objeto que o Meta recusaria no envio.
+      const max = mediaMaxBytesFor(provider, kind);
       if (file.size > max) {
         toast.error(
           `O arquivo tem ${(file.size / 1024 / 1024).toFixed(1)} MB — o limite para ${kind} é ${Math.round(
@@ -630,8 +630,11 @@ export function MessageComposer({
         type: "audio/ogg",
       });
       if (file.size === 0) return; // cancelled / empty take
-      if (file.size > MEDIA_MAX_BYTES_BY_KIND.audio) {
-        toast.error("A gravação é muito longa (acima de 16 MB).");
+      const audioMax = mediaMaxBytesFor(provider, "audio");
+      if (file.size > audioMax) {
+        toast.error(
+          `A gravação é muito longa (acima de ${Math.round(audioMax / 1024 / 1024)} MB).`,
+        );
         return;
       }
       setBusy(true);

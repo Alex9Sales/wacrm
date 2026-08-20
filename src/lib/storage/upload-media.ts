@@ -16,17 +16,17 @@
 // under their own account folder (replacing the old bucket RLS guard).
 // ============================================================
 
-/** 16 MB — the media upload ceiling enforced by the server route. */
-export const MEDIA_MAX_BYTES = 16 * 1024 * 1024;
+/** 25 MB — teto ABSOLUTO do route de upload (o maior entre os canais). O gate
+ *  fino é por (canal, tipo) via `mediaMaxBytesFor`. E-mail precisa de mais que
+ *  os 16MB antigos do WhatsApp. */
+export const MEDIA_MAX_BYTES = 25 * 1024 * 1024;
 
 /**
  * Per-kind upload ceilings that mirror Meta's WhatsApp Cloud API caps so
- * a file that the bucket would accept (≤16 MB) but Meta would reject is
- * caught client-side BEFORE upload — otherwise it lands in storage as an
- * orphan and the send fails with a confusing 400. Images are Meta's
- * tightest cap at 5 MB; documents are held at the 16 MB bucket limit
- * (Meta allows 100 MB, but the bucket — and shared-hosting upload UX —
- * caps lower).
+ * a file that the bucket would accept but Meta would reject is caught
+ * client-side BEFORE upload — otherwise it lands in storage as an orphan
+ * and the send fails with a confusing 400. Images are Meta's tightest cap
+ * at 5 MB; video/audio/document at 16 MB.
  */
 export const MEDIA_MAX_BYTES_BY_KIND = {
   image: 5 * 1024 * 1024,
@@ -34,6 +34,23 @@ export const MEDIA_MAX_BYTES_BY_KIND = {
   audio: 16 * 1024 * 1024,
   document: 16 * 1024 * 1024,
 } as const;
+
+/** Teto de anexo por E-MAIL. Gmail/Outlook aceitam ~25MB; o Resend permite 40MB
+ *  no total (base64 infla ~33%), então 25MB de arquivo cabe com folga. */
+export const EMAIL_MAX_BYTES = 25 * 1024 * 1024;
+
+/**
+ * Limite de upload por (canal, tipo). E-mail tem teto único e alto
+ * (`EMAIL_MAX_BYTES`); os demais canais seguem os caps do WhatsApp/Meta.
+ * O composer passa o provider da conversa.
+ */
+export function mediaMaxBytesFor(
+  provider: string | undefined,
+  kind: keyof typeof MEDIA_MAX_BYTES_BY_KIND,
+): number {
+  if (provider === "email") return EMAIL_MAX_BYTES;
+  return MEDIA_MAX_BYTES_BY_KIND[kind];
+}
 
 /** Friendly bucket names the upload route accepts. */
 export type FriendlyBucket = "avatars" | "media";
