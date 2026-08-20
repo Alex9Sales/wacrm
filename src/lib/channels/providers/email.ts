@@ -24,6 +24,7 @@ import type {
   ChannelCtx,
   NormalizedInbound,
   NormalizedStatus,
+  OutboundMedia,
   ParsedWebhook,
   WebhookVerifyCtx,
   WhatsAppProvider,
@@ -73,6 +74,13 @@ function inboundSecretsOf(ch: ChannelCtx | null): string[] {
   return out
 }
 
+interface EmailAttachment {
+  filename?: string
+  mimeType?: string
+  disposition?: string | null
+  base64?: string
+}
+
 interface EmailWebhookBody {
   from?: string
   fromName?: string
@@ -81,6 +89,16 @@ interface EmailWebhookBody {
   text?: string
   html?: string
   messageId?: string
+  attachments?: EmailAttachment[]
+}
+
+/** Tipo de conteúdo (messages.content_type) a partir do mimetype do anexo. */
+function kindForMime(mime: string | undefined): 'image' | 'audio' | 'video' | 'document' {
+  const m = (mime || '').toLowerCase()
+  if (m.startsWith('image/')) return 'image'
+  if (m.startsWith('audio/')) return 'audio'
+  if (m.startsWith('video/')) return 'video'
+  return 'document'
 }
 
 /** Tira as tags do HTML pra ter um fallback de texto legível. */
@@ -104,6 +122,27 @@ function bareEmail(v: string | undefined): string {
   if (!v) return ''
   const m = v.match(/<([^>]+)>/)
   return (m ? m[1] : v).trim().toLowerCase()
+}
+
+/** Tira o prefixo `data:...;base64,` se vier junto. */
+function stripB64Prefix(b64: string): string {
+  return b64.includes(',') ? b64.slice(b64.indexOf(',') + 1) : b64
+}
+
+/** Nome de arquivo padrão pra um anexo de saída sem filename. */
+function defaultFilename(media: OutboundMedia): string {
+  const extByMime: Record<string, string> = {
+    'image/jpeg': '.jpg',
+    'image/png': '.png',
+    'image/gif': '.gif',
+    'image/webp': '.webp',
+    'audio/mpeg': '.mp3',
+    'audio/ogg': '.ogg',
+    'video/mp4': '.mp4',
+    'application/pdf': '.pdf',
+  }
+  const ext = extByMime[(media.mimetype || '').toLowerCase()] || ''
+  return `anexo${ext}`
 }
 
 export const emailProvider: WhatsAppProvider = {
@@ -135,9 +174,52 @@ export const emailProvider: WhatsAppProvider = {
     return { externalMessageId: data?.id ?? '' }
   },
 
-  async sendMedia() {
-    // v1: anexos por e-mail ainda não suportados (chega na Fase 3).
-    throw new Error('Anexos por e-mail ainda não são suportados (em breve).')
+  // `to` = e-mail do cliente. Anexa via Resend: `path` (URL pública do MinIO)
+  // ou `content` (base64). O caption vira o assunto + corpo do e-mail.
+  async sendMedia(ch, to, media) {
+    const resend = new Resend(resendKeyOf(ch))
+    const fromName =
+      (typeof ch.credentials.fromName === 'string' && ch.credentials.fromName) ||
+      ch.name ||
+      'Atendimento'
+    const from = `${fromName} <${fromAddressOf(ch)}>`
+    const caption = (media.caption || '').trim()
+    const subject =
+      caption ||
+      (typeof ch.providerMeta.replySubject === 'string' &&
+        ch.providerMeta.replySubject) ||
+      'Atendimento'
+    const filename = (media.filename || '').trim() || defaultFilename(media)
+
+    // Baixa os bytes NO SERVIDOR e anexa como conteúdo — não depende do Resend
+    // conseguir alcançar a URL do MinIO (pode ser interna).
+    let content: Buffer | null = null
+    if (media.base64) {
+      content = Buffer.from(stripB64Prefix(media.base64), 'base64')
+    } else if (media.url) {
+      const res = await fetch(media.url)
+      if (!res.ok) {
+        throw new Error(`não consegui baixar o anexo (${res.status})`)
+      }
+      content = Buffer.from(await res.arrayBuffer())
+    }
+    if (!content) {
+      throw new Error('Anexo sem conteúdo (sem url nem base64).')
+    }
+    const attachment = { filename, content }
+
+    const { data, error } = await resend.emails.send({
+      from,
+      to,
+      replyTo: addressOf(ch),
+      subject,
+      text: caption || 'Segue o anexo.',
+      attachments: [attachment],
+    })
+    if (error) {
+      throw new Error(`email send falhou: ${error.message}`)
+    }
+    return { externalMessageId: data?.id ?? '' }
   },
 
   async verifyWebhook(ctx: WebhookVerifyCtx, ch: ChannelCtx | null) {
@@ -162,21 +244,54 @@ export const emailProvider: WhatsAppProvider = {
     const statuses: NormalizedStatus[] = []
 
     const from = bareEmail(b.from)
-    if (from) {
-      const text = (b.text && b.text.trim()) || (b.html ? htmlToText(b.html) : '')
-      const subject = (b.subject || '').trim()
-      const content = subject ? `✉️ ${subject}\n\n${text}` : text
+    if (!from) return { messages, statuses }
+
+    const senderName = (b.fromName || '').trim() || from
+    const baseId = b.messageId?.trim() || `${from}:${Date.now()}`
+    const text = (b.text && b.text.trim()) || (b.html ? htmlToText(b.html) : '')
+    const subject = (b.subject || '').trim()
+    const content = subject ? `✉️ ${subject}\n\n${text}` : text
+
+    // Anexos "de verdade": ignora inline (logos/assinaturas embutidas no HTML).
+    const attachments = (Array.isArray(b.attachments) ? b.attachments : []).filter(
+      (a): a is Required<Pick<EmailAttachment, 'base64'>> & EmailAttachment =>
+        !!a && typeof a.base64 === 'string' && !!a.base64 && a.disposition !== 'inline',
+    )
+
+    // Texto: emite quando há corpo/assunto, OU quando não há anexo (pra a
+    // mensagem não sumir num e-mail só-anexo com corpo vazio).
+    if (content.trim() || attachments.length === 0) {
       messages.push({
-        externalMessageId:
-          b.messageId?.trim() || `${from}:${Date.now()}`,
+        externalMessageId: baseId,
         fromPhoneE164: '',
         senderExternalId: from,
-        senderName: (b.fromName || '').trim() || from,
+        senderName,
         fromMe: false,
         contentType: 'text',
         contentText: content || '(sem conteúdo)',
       })
     }
+
+    // Um anexo = uma mensagem de mídia (o pipeline sobe pro MinIO via base64).
+    attachments.forEach((a, i) => {
+      const kind = kindForMime(a.mimeType)
+      messages.push({
+        externalMessageId: `${baseId}:att${i}`,
+        fromPhoneE164: '',
+        senderExternalId: from,
+        senderName,
+        fromMe: false,
+        contentType: kind,
+        contentText: null,
+        media: {
+          kind,
+          mimetype: a.mimeType,
+          base64: a.base64,
+          filename: a.filename || undefined,
+        },
+      })
+    })
+
     return { messages, statuses }
   },
 }

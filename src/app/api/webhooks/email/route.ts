@@ -29,6 +29,27 @@ function bareEmail(v: unknown): string {
   return (m ? m[1] : v).trim().toLowerCase()
 }
 
+// Anexo individual acima disso a gente ignora (protege memória do webhook e o
+// limite de tamanho do Resend/MinIO). ~20MB binários.
+const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
+
+/** Converte o `content` de um anexo do PostalMime (ArrayBuffer/Uint8Array/
+ *  string) em base64, respeitando o teto de tamanho. Retorna null se estourar
+ *  ou vier vazio. */
+function attachmentToBase64(content: unknown): string | null {
+  let buf: Buffer | null = null
+  if (content instanceof ArrayBuffer) {
+    buf = Buffer.from(new Uint8Array(content))
+  } else if (ArrayBuffer.isView(content)) {
+    buf = Buffer.from(content.buffer, content.byteOffset, content.byteLength)
+  } else if (typeof content === 'string') {
+    // PostalMime pode entregar como string (base64 já) — reembala pra medir.
+    buf = Buffer.from(content, 'base64')
+  }
+  if (!buf || buf.length === 0 || buf.length > MAX_ATTACHMENT_BYTES) return null
+  return buf.toString('base64')
+}
+
 export async function POST(request: Request) {
   const rawBody = await request.text()
 
@@ -49,6 +70,18 @@ export async function POST(request: Request) {
   if (body && typeof body.raw === 'string' && body.raw) {
     try {
       const parsed = await new PostalMime().parse(body.raw)
+      const attachments = (parsed.attachments || [])
+        .map((a) => {
+          const base64 = attachmentToBase64(a.content)
+          if (!base64) return null
+          return {
+            filename: a.filename || '',
+            mimeType: a.mimeType || 'application/octet-stream',
+            disposition: a.disposition || null,
+            base64,
+          }
+        })
+        .filter(Boolean)
       body = {
         to: body.to,
         from: parsed.from?.address || body.from || '',
@@ -57,6 +90,7 @@ export async function POST(request: Request) {
         text: parsed.text || '',
         html: parsed.html || '',
         messageId: parsed.messageId || '',
+        attachments,
       }
     } catch (err) {
       console.error('[webhooks/email] falha ao parsear o MIME:', err)

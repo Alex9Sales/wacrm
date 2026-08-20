@@ -37,4 +37,40 @@ describe('email provider — parseWebhook', () => {
   it('sem remetente → sem mensagens', () => {
     expect(emailProvider.parseWebhook({ subject: 'x' }).messages).toHaveLength(0)
   })
+
+  it('anexo vira mensagem de mídia separada (imagem)', () => {
+    const { messages } = emailProvider.parseWebhook({
+      from: 'ana@cliente.com',
+      subject: 'Nota fiscal',
+      text: 'Segue em anexo.',
+      attachments: [
+        {
+          filename: 'nota.png',
+          mimeType: 'image/png',
+          disposition: 'attachment',
+          base64: 'aGVsbG8=',
+        },
+      ],
+    })
+    // 1 texto + 1 mídia
+    expect(messages).toHaveLength(2)
+    expect(messages[0].contentType).toBe('text')
+    const media = messages[1]
+    expect(media.contentType).toBe('image')
+    expect(media.media?.base64).toBe('aGVsbG8=')
+    expect(media.media?.filename).toBe('nota.png')
+    expect(media.externalMessageId).not.toBe(messages[0].externalMessageId) // id único
+  })
+
+  it('ignora anexo inline (logo de assinatura)', () => {
+    const { messages } = emailProvider.parseWebhook({
+      from: 'ana@cliente.com',
+      text: 'Oi',
+      attachments: [
+        { filename: 'logo.png', mimeType: 'image/png', disposition: 'inline', base64: 'aGVsbG8=' },
+      ],
+    })
+    expect(messages).toHaveLength(1) // só o texto
+    expect(messages[0].contentType).toBe('text')
+  })
 })
