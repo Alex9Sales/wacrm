@@ -1568,6 +1568,37 @@ async function findOrCreateContact(
  * telefone); a unicidade é por (conta, external_id). Advisory lock por
  * (conta, external_id) evita duplicar em inbounds concorrentes.
  */
+/**
+ * Inicia (ou reabre) uma conversa de E-MAIL a partir de um endereço digitado
+ * pelo agente — o equivalente do "nova conversa" pros canais por endereço.
+ * Resolve o contato por external_id (o e-mail, minúsculo) + a conversa
+ * (conta, contato, canal). O envio em si sai depois pelo composer normal.
+ */
+export async function resolveEmailConversation(
+  channel: ChannelCtx,
+  email: string,
+  name: string | null,
+): Promise<{ conversationId: string; contactCreated: boolean }> {
+  const addr = email.trim().toLowerCase();
+  const contactOutcome = await findOrCreateContactByExternalId(
+    channel.accountId,
+    addr,
+    name?.trim() || '',
+  );
+  if (!contactOutcome) throw new Error('Não foi possível criar o contato.');
+  const convResult = await findOrCreateConversation(
+    channel.accountId,
+    contactOutcome.contact.userId,
+    contactOutcome.contact.id,
+    channel.id,
+  );
+  if (!convResult) throw new Error('Não foi possível criar a conversa.');
+  return {
+    conversationId: convResult.conversation.id,
+    contactCreated: contactOutcome.wasCreated,
+  };
+}
+
 async function findOrCreateContactByExternalId(
   accountId: string,
   externalId: string,

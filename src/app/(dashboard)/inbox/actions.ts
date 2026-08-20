@@ -1679,12 +1679,24 @@ export async function listSendableChannels(): Promise<SendableChannel[]> {
       ),
     )
     .orderBy(asc(channels.name))
-  return rows.map((r) => ({
-    id: r.id,
-    name: r.name,
-    provider: r.provider as ChannelProvider,
-    phoneNumber: r.phoneNumber,
-  }))
+  // Só provedores que dá pra INICIAR uma conversa: WhatsApp (por telefone) e
+  // e-mail (por endereço). Instagram/Messenger não deixam abrir DM com quem
+  // não te escreveu (janela de 24h da plataforma), então ficam de fora.
+  const ORIGINATE: ReadonlySet<string> = new Set([
+    'meta',
+    'waha',
+    'evolution',
+    'evogo',
+    'email',
+  ])
+  return rows
+    .filter((r) => ORIGINATE.has(r.provider))
+    .map((r) => ({
+      id: r.id,
+      name: r.name,
+      provider: r.provider as ChannelProvider,
+      phoneNumber: r.phoneNumber,
+    }))
 }
 
 /**
@@ -1716,6 +1728,36 @@ export async function startNewConversation(input: {
     }
   } catch (err) {
     // SendMessageError carries a user-safe message (bad phone / no channel).
+    throw new Error(
+      err instanceof Error ? err.message : 'Não foi possível iniciar a conversa.',
+    )
+  }
+}
+
+/**
+ * Inicia (ou reabre) uma conversa de E-MAIL com um endereço digitado pelo
+ * agente — o "nova conversa" pro canal de e-mail. Cria o contato por e-mail +
+ * a conversa nesse canal e devolve o id pra o inbox abrir. O envio sai depois
+ * pelo composer. Gated a agent+.
+ */
+export async function startNewEmailConversation(input: {
+  email: string
+  name?: string | null
+  channelId: string
+}): Promise<{ conversationId: string; contactCreated: boolean }> {
+  const ctx = await requireRole('agent')
+  const addr = (input.email || '').trim().toLowerCase()
+  if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) {
+    throw new Error('Digite um e-mail válido.')
+  }
+  const channel = await loadChannel(input.channelId)
+  if (!channel || channel.accountId !== ctx.accountId || channel.provider !== 'email') {
+    throw new Error('Canal de e-mail inválido.')
+  }
+  const { resolveEmailConversation } = await import('@/lib/channels/inbound')
+  try {
+    return await resolveEmailConversation(channel, addr, input.name?.trim() || null)
+  } catch (err) {
     throw new Error(
       err instanceof Error ? err.message : 'Não foi possível iniciar a conversa.',
     )

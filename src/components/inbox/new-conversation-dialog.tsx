@@ -37,6 +37,7 @@ import { listContacts } from "@/app/(dashboard)/contacts/actions";
 import {
   listSendableChannels,
   startNewConversation,
+  startNewEmailConversation,
   type SendableChannel,
 } from "@/app/(dashboard)/inbox/actions";
 import { isStaleActionError, reloadForStaleAction } from "@/lib/stale-action";
@@ -46,6 +47,7 @@ const PROVIDER_LABEL: Record<string, string> = {
   waha: "WhatsApp",
   evolution: "WhatsApp",
   evogo: "WhatsApp",
+  email: "E-mail",
 };
 
 /**
@@ -77,6 +79,7 @@ export function NewConversationDialog({
   onStarted: (conversationId: string) => void;
 }) {
   const [phone, setPhone] = useState("");
+  const [email, setEmail] = useState("");
   const [name, setName] = useState("");
   const [channels, setChannels] = useState<SendableChannel[]>([]);
   const [channelId, setChannelId] = useState<string>("");
@@ -90,9 +93,15 @@ export function NewConversationDialog({
   >([]);
   const justSelectedRef = useRef(false);
 
+  // Canal selecionado → decide se o destinatário é TELEFONE (WhatsApp) ou
+  // E-MAIL. Com 1 canal só, ele já vem escolhido; com vários, segue o picker.
+  const selectedChannel = channels.find((c) => c.id === channelId);
+  const isEmail = selectedChannel?.provider === "email";
+
   useEffect(() => {
     if (!open) return;
     setPhone("");
+    setEmail("");
     setName("");
     setChannelId("");
     setMatches([]);
@@ -107,8 +116,9 @@ export function NewConversationDialog({
   }, [open]);
 
   // Debounced search of SAVED contacts as the agent types (name or number).
+  // Só no modo telefone — no e-mail o agente digita o endereço direto.
   useEffect(() => {
-    if (!open) return;
+    if (!open || isEmail) return;
     if (justSelectedRef.current) {
       justSelectedRef.current = false;
       return;
@@ -136,7 +146,7 @@ export function NewConversationDialog({
       }
     }, 250);
     return () => clearTimeout(t);
-  }, [phone, open]);
+  }, [phone, open, isEmail]);
 
   const selectContact = (m: { name: string; phone: string }) => {
     justSelectedRef.current = true;
@@ -148,21 +158,34 @@ export function NewConversationDialog({
   // Com mais de um canal, ESCOLHER o canal é obrigatório — senão a conversa
   // sairia por um canal qualquer (padrão). Felipe/cema: forçar a seleção.
   const needsChannel = channels.length > 1 && !channelId;
-  const canSubmit = phone.trim().length > 0 && !submitting && !needsChannel;
+  const recipientFilled = (isEmail ? email : phone).trim().length > 0;
+  const canSubmit = recipientFilled && !submitting && !needsChannel;
 
   async function handleStart() {
-    const normalized = toE164(phone);
-    if (!normalized) {
+    // Valida ANTES de travar o botão (senão fica preso num input inválido).
+    if (isEmail) {
+      const addr = email.trim().toLowerCase();
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) {
+        toast.error("Digite um e-mail válido.");
+        return;
+      }
+    } else if (!toE164(phone)) {
       toast.error("Digite um número de telefone válido.");
       return;
     }
     setSubmitting(true);
     try {
-      const { conversationId, contactCreated } = await startNewConversation({
-        phone: normalized,
-        name: name.trim() || null,
-        channelId: channelId || null,
-      });
+      const { conversationId, contactCreated } = isEmail
+        ? await startNewEmailConversation({
+            email: email.trim().toLowerCase(),
+            name: name.trim() || null,
+            channelId,
+          })
+        : await startNewConversation({
+            phone: toE164(phone)!,
+            name: name.trim() || null,
+            channelId: channelId || null,
+          });
       toast.success(
         contactCreated ? "Conversa iniciada." : "Conversa aberta.",
       );
@@ -193,64 +216,16 @@ export function NewConversationDialog({
             Nova conversa
           </DialogTitle>
           <DialogDescription>
-            Digite um número novo (com DDD — o 55 é adicionado no Brasil) ou
-            busque um contato já salvo pelo nome.
+            Escolha o canal, informe o destinatário (número ou e-mail) e comece
+            a conversa — mesmo com quem nunca te escreveu.
           </DialogDescription>
         </DialogHeader>
 
         <div className="space-y-4">
-          <div className="space-y-1.5">
-            <Label htmlFor="nc-phone">Número ou nome do contato</Label>
-            <div className="relative">
-              <Input
-                id="nc-phone"
-                value={phone}
-                onChange={(e) => setPhone(e.target.value)}
-                onKeyDown={(e) => {
-                  if (e.key === "Enter" && matches.length === 0 && canSubmit)
-                    handleStart();
-                }}
-                placeholder="Digite o número novo ou busque um contato salvo"
-                autoFocus
-                autoComplete="off"
-              />
-              {matches.length > 0 && (
-                <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg">
-                  {matches.map((m) => (
-                    <button
-                      key={m.id}
-                      type="button"
-                      onClick={() => selectContact(m)}
-                      className="flex w-full flex-col items-start rounded-md px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground"
-                    >
-                      <span className="text-sm font-medium text-foreground">
-                        {m.name || m.phone}
-                      </span>
-                      <span className="text-xs text-muted-foreground">
-                        {m.phone}
-                      </span>
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-          </div>
-
-          <div className="space-y-1.5">
-            <Label htmlFor="nc-name">Nome (opcional)</Label>
-            <Input
-              id="nc-name"
-              value={name}
-              onChange={(e) => setName(e.target.value)}
-              placeholder="Como salvar este contato"
-              maxLength={80}
-            />
-          </div>
-
           {channels.length > 1 && (
             <div className="space-y-1.5">
               <Label>
-                Enviar pelo número <span className="text-destructive">*</span>
+                Enviar pelo canal <span className="text-destructive">*</span>
               </Label>
               <Select value={channelId} onValueChange={(v) => v && setChannelId(v)}>
                 <SelectTrigger
@@ -263,16 +238,16 @@ export function NewConversationDialog({
                     {(v: string) => {
                       const ch = channels.find((c) => c.id === v)
                       if (!ch) return "Escolha o canal"
-                      const name =
-                        ch.name || PROVIDER_LABEL[ch.provider] || "WhatsApp"
-                      return `${name}${ch.phoneNumber ? ` · ${ch.phoneNumber}` : ""}`
+                      const label =
+                        ch.name || PROVIDER_LABEL[ch.provider] || "Canal"
+                      return `${label}${ch.phoneNumber ? ` · ${ch.phoneNumber}` : ""}`
                     }}
                   </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {channels.map((ch) => (
                     <SelectItem key={ch.id} value={ch.id}>
-                      {ch.name || PROVIDER_LABEL[ch.provider] || "WhatsApp"}
+                      {ch.name || PROVIDER_LABEL[ch.provider] || "Canal"}
                       {ch.phoneNumber ? ` · ${ch.phoneNumber}` : ""}
                     </SelectItem>
                   ))}
@@ -280,15 +255,81 @@ export function NewConversationDialog({
               </Select>
               {needsChannel && (
                 <p className="text-xs text-muted-foreground">
-                  Escolha por qual número a conversa vai sair.
+                  Escolha por qual canal a conversa vai sair.
                 </p>
               )}
             </div>
           )}
 
+          {isEmail ? (
+            <div className="space-y-1.5">
+              <Label htmlFor="nc-email">E-mail do destinatário</Label>
+              <Input
+                id="nc-email"
+                type="email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && canSubmit) handleStart();
+                }}
+                placeholder="cliente@empresa.com"
+                autoFocus
+                autoComplete="off"
+              />
+            </div>
+          ) : (
+            <div className="space-y-1.5">
+              <Label htmlFor="nc-phone">Número ou nome do contato</Label>
+              <div className="relative">
+                <Input
+                  id="nc-phone"
+                  value={phone}
+                  onChange={(e) => setPhone(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === "Enter" && matches.length === 0 && canSubmit)
+                      handleStart();
+                  }}
+                  placeholder="Digite o número novo ou busque um contato salvo"
+                  autoFocus
+                  autoComplete="off"
+                />
+                {matches.length > 0 && (
+                  <div className="absolute z-20 mt-1 max-h-56 w-full overflow-y-auto rounded-md border border-border bg-popover p-1 shadow-lg">
+                    {matches.map((m) => (
+                      <button
+                        key={m.id}
+                        type="button"
+                        onClick={() => selectContact(m)}
+                        className="flex w-full flex-col items-start rounded-md px-2 py-1.5 text-left hover:bg-accent hover:text-accent-foreground"
+                      >
+                        <span className="text-sm font-medium text-foreground">
+                          {m.name || m.phone}
+                        </span>
+                        <span className="text-xs text-muted-foreground">
+                          {m.phone}
+                        </span>
+                      </button>
+                    ))}
+                  </div>
+                )}
+              </div>
+            </div>
+          )}
+
+          <div className="space-y-1.5">
+            <Label htmlFor="nc-name">Nome (opcional)</Label>
+            <Input
+              id="nc-name"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Como salvar este contato"
+              maxLength={80}
+            />
+          </div>
+
           {noChannels && (
             <p className="rounded-md border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-700 dark:text-amber-300">
-              Nenhum canal de WhatsApp conectado. Conecte um número em
+              Nenhum canal conectado. Conecte um canal (WhatsApp ou e-mail) em
               Configurações › Canais antes de iniciar uma conversa.
             </p>
           )}
