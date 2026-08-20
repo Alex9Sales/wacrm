@@ -13,6 +13,8 @@
 //   broadcast (POST /broadcasts/text) runs on.
 // ============================================================
 
+import { randomBytes } from 'node:crypto';
+
 import { asc, eq } from 'drizzle-orm';
 
 import { db, channels } from '@/db';
@@ -70,6 +72,9 @@ export async function POST(request: Request) {
       name?: unknown
       handle?: unknown
       address?: unknown
+      from?: unknown
+      resend_api_key?: unknown
+      inbound_secret?: unknown
       app_password?: unknown
       from_name?: unknown
     };
@@ -88,6 +93,9 @@ export async function POST(request: Request) {
     if (!name) throw badRequest('`name` is required.');
 
     let input: CreateChannelInput;
+    // Preenchido no modo BYO — o cliente precisa desse segredo pra apontar o
+    // inbound do provedor dele pro nosso webhook.
+    let byoInboundSecret: string | null = null;
 
     if (provider === 'email') {
       const addressRaw = typeof body.address === 'string' ? body.address.trim() : '';
@@ -95,26 +103,51 @@ export async function POST(request: Request) {
         typeof body.handle === 'string'
           ? body.handle.split('@')[0].trim().toLowerCase()
           : '';
-      if (addressRaw && !handle) {
-        throw badRequest(
-          'Domínio próprio exige DNS — crie pela tela. Por API, use `handle` (e-mail hospedado no domínio da Fluxia).',
-        );
+      const from = typeof body.from === 'string' ? body.from.trim() : '';
+      const resendKey =
+        typeof body.resend_api_key === 'string' ? body.resend_api_key.trim() : '';
+      const inboundSecretIn =
+        typeof body.inbound_secret === 'string' ? body.inbound_secret.trim() : '';
+
+      if (addressRaw) {
+        // BYO ("traga o seu"): o CLIENTE traz o domínio dele + (opcional) o
+        // Resend dele. Envia pela chave dele; recebe apontando o inbound do
+        // provedor dele pro nosso webhook com o `inbound_secret`. A Fluxia é só
+        // o inbox — não hospeda nada.
+        const address = addressRaw.toLowerCase();
+        if (!address.includes('@')) throw badRequest('`address` inválido.');
+        const inboundSecret = inboundSecretIn || randomBytes(16).toString('hex');
+        const credentials: Record<string, unknown> = { inboundSecret };
+        if (resendKey) credentials.resendApiKey = resendKey;
+        if (fromName) credentials.fromName = fromName;
+        const providerMeta: Record<string, unknown> = { address };
+        if (from) providerMeta.from = from;
+        input = {
+          provider: 'email',
+          name,
+          status: 'connected',
+          credentials,
+          providerMeta,
+        };
+        byoInboundSecret = inboundSecret;
+      } else {
+        // HOSPEDADO: só o apelido, no domínio da Fluxia (nossa infra é a ponte).
+        if (!/^[a-z0-9](?:[a-z0-9._-]{0,30}[a-z0-9])?$/.test(handle)) {
+          throw badRequest(
+            'Informe `handle` (e-mail hospedado) OU `address` (+ `resend_api_key`) pro seu próprio provedor.',
+          );
+        }
+        const address = `${handle}@${EMAIL_HOSTED_DOMAIN}`;
+        const credentials: Record<string, unknown> = {};
+        if (fromName) credentials.fromName = fromName;
+        input = {
+          provider: 'email',
+          name,
+          status: 'connected',
+          credentials,
+          providerMeta: { address, from: address },
+        };
       }
-      if (!/^[a-z0-9](?:[a-z0-9._-]{0,30}[a-z0-9])?$/.test(handle)) {
-        throw badRequest(
-          '`handle` inválido (letras minúsculas, números, ponto, hífen ou "_").',
-        );
-      }
-      const address = `${handle}@${EMAIL_HOSTED_DOMAIN}`;
-      const credentials: Record<string, unknown> = {};
-      if (fromName) credentials.fromName = fromName;
-      input = {
-        provider: 'email',
-        name,
-        status: 'connected',
-        credentials,
-        providerMeta: { address, from: address },
-      };
     } else if (provider === 'gmail') {
       const address =
         typeof body.address === 'string' ? body.address.trim().toLowerCase() : '';
@@ -165,6 +198,18 @@ export async function POST(request: Request) {
         name: channel.name,
         address,
         status: 'connected',
+        // BYO: onde o cliente aponta o inbound do provedor dele (Resend inbound,
+        // encaminhamento, MX próprio…) pra os e-mails caírem no CRM.
+        ...(byoInboundSecret
+          ? {
+              inbound: {
+                webhook_url: 'https://crm.salestecnologia.com.br/api/webhooks/email',
+                header: 'x-email-token',
+                secret: byoInboundSecret,
+                body: 'JSON { to, from, raw } (MIME cru) OU { to, from, subject, text, html }',
+              },
+            }
+          : {}),
       },
       201,
     );
