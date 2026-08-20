@@ -275,6 +275,7 @@ export async function sendMessageToConversation(
         phone: contacts.phone,
         isGroup: contacts.isGroup,
         externalId: contacts.externalId,
+        email: contacts.email,
       })
       .from(contacts)
       .where(eq(contacts.id, conversation.contactId))
@@ -335,7 +336,13 @@ export async function sendMessageToConversation(
   // hyphen-less id makes WAHA hang and abort. The intact jid lives in
   // monitored_groups.group_jid; look it up by matching digits.
   let providerTarget = sanitizedPhone;
-  if (contact.externalId) {
+  const isEmailChannel = channel.provider === 'email' || channel.provider === 'gmail';
+  if (isEmailChannel && contact.email) {
+    // E-mail: o destinatário é SEMPRE o e-mail do contato — mesmo que o lead
+    // tenha entrado por outro canal (external_id pode ser um id de WhatsApp/IG).
+    // Isso permite uma conversa de e-mail no MESMO contato (cadência multicanal).
+    providerTarget = contact.email;
+  } else if (contact.externalId) {
     // Instagram: o alvo do provider é o IGSID (não telefone).
     providerTarget = contact.externalId;
   } else if (contact.isGroup) {

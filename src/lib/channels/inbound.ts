@@ -1721,7 +1721,7 @@ async function resolveAccountOwnerUserId(
  * the Meta webhook but keys on channel_id too — one conversation per
  * (account, contact, channel).
  */
-async function findOrCreateConversation(
+export async function findOrCreateConversation(
   accountId: string,
   userId: string,
   contactId: string,

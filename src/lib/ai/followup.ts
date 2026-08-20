@@ -1,9 +1,12 @@
 import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
 
-import { db, aiConfigs, conversations, deals, calendarEvents } from '@/db'
+import { db, aiConfigs, conversations, deals, calendarEvents, contacts, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
+import { getProvider } from '@/lib/channels/registry'
+import { listChannels } from '@/lib/channels/channels'
+import { findOrCreateConversation } from '@/lib/channels/inbound'
 import { loadAiConfigById } from './config'
 import { buildConversationContext, stripLeadingTimestamp } from './context'
 import { generateReply } from './generate'
@@ -265,6 +268,68 @@ export const FOLLOW_UP_PRESETS: FollowUpPreset[] = [
     ],
   },
 ]
+
+type WorkerChannelCtx = Awaited<ReturnType<typeof listChannels>>[number]
+
+/** O canal de e-mail da conta (email ou gmail), ou null. "Conectado" = ter
+ *  credencial (não há campo de status no ChannelCtx); se faltar credencial, a
+ *  entrega falha e cai no WhatsApp. */
+function pickEmailChannel(channels: WorkerChannelCtx[]): WorkerChannelCtx | null {
+  return channels.find((ch) => ch.provider === 'email' || ch.provider === 'gmail') ?? null
+}
+
+/** Alvo de e-mail deste toque: conversa de e-mail do MESMO contato + endereço
+ *  (contacts.email). null → sem e-mail/sem canal → o toque cai no WhatsApp. */
+async function resolveEmailTarget(
+  accountId: string,
+  contactId: string,
+  emailChannel: WorkerChannelCtx | null,
+): Promise<{ channel: WorkerChannelCtx; conversationId: string; to: string } | null> {
+  if (!emailChannel) return null
+  const contact = firstOrNull(
+    await db
+      .select({ email: contacts.email, userId: contacts.userId })
+      .from(contacts)
+      .where(eq(contacts.id, contactId))
+      .limit(1),
+  )
+  const to = (contact?.email ?? '').trim()
+  if (!contact || !to) return null
+  const res = await findOrCreateConversation(accountId, contact.userId, contactId, emailChannel.id)
+  if (!res) return null
+  return { channel: emailChannel, conversationId: res.conversation.id, to }
+}
+
+/** Entrega um toque por e-mail no endereço do contato + registra na conversa. */
+async function deliverFollowUpEmail(
+  target: { channel: WorkerChannelCtx; conversationId: string; to: string },
+  text: string,
+): Promise<boolean> {
+  try {
+    const provider = getProvider(target.channel.provider)
+    const res = await provider.sendText(target.channel, target.to, text)
+    await db.insert(messages).values({
+      conversationId: target.conversationId,
+      senderType: 'bot',
+      contentType: 'text',
+      contentText: text,
+      messageId: res.externalMessageId ?? null,
+      status: 'sent',
+    })
+    await db
+      .update(conversations)
+      .set({
+        lastMessageText: text.slice(0, 200),
+        lastMessageAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      })
+      .where(eq(conversations.id, target.conversationId))
+    return true
+  } catch (err) {
+    console.error('[followup] entrega por e-mail falhou:', err)
+    return false
+  }
+}
 
 /**
  * Lê + normaliza a config de follow-up do jsonb `ai_configs.follow_up`.
@@ -536,6 +601,8 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
 
     let config: AiConfig | null = null
     let loaded = false
+    // Canal de e-mail da conta (carregado sob demanda no 1º passo de e-mail).
+    let emailChannel: WorkerChannelCtx | null | undefined = undefined
 
     for (const c of cands) {
       if (!c.last_message_at) continue
@@ -594,14 +661,26 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
           : new Date(c.last_follow_up_at as string).getTime()
       if (Date.now() - anchor < stepDelayMinutes(step) * 60_000) continue // ainda não está na hora
 
+      // Roteamento MULTICANAL: passo de e-mail → entrega no e-mail do MESMO lead
+      // (contacts.email) quando há e-mail + canal de e-mail; senão CAI no
+      // WhatsApp (fallback escolhido). E-mail não tem janela de 24h → pula o gate.
+      let emailTarget: Awaited<ReturnType<typeof resolveEmailTarget>> = null
+      if (step.channel === 'email' && c.contact_id) {
+        if (emailChannel === undefined) {
+          emailChannel = pickEmailChannel(await listChannels(agent.account_id))
+        }
+        emailTarget = await resolveEmailTarget(agent.account_id, c.contact_id, emailChannel)
+      }
+
       const windowOpen =
         Date.now() - new Date(c.last_inbound_at).getTime() < WINDOW_MS
 
       // Canal OFICIAL (Meta) FORA da janela de 24h → só dá pra alcançar via
       // TEMPLATE aprovado (ex.: reativar lead frio em +30 dias). Sem template =
       // não dá pra falar agora: pula sem avançar (retoma quando o cliente
-      // responder). WAHA/etc. não têm janela → cai no texto da IA abaixo.
-      if (officialWindowApplies(c.channel_provider) && !windowOpen) {
+      // responder). WAHA/etc. não têm janela → cai no texto da IA abaixo. Só vale
+      // pro caminho WhatsApp de origem — um passo roteado pra e-mail ignora o gate.
+      if (!emailTarget && officialWindowApplies(c.channel_provider) && !windowOpen) {
         if (!step.templateName) continue
         try {
           const params = await resolveTemplateParams(step.templateParams, {
@@ -721,14 +800,21 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
       }
 
       try {
-        await engineSendText({
-          accountId: agent.account_id,
-          userId: agent.created_by ?? '',
-          conversationId: c.id,
-          contactId: c.contact_id,
-          text,
-        })
-        sent += 1
+        // Toque por E-MAIL no e-mail do mesmo lead (conversa de e-mail própria);
+        // se a entrega por e-mail falhar, CAI no WhatsApp (fallback escolhido).
+        const emailOk = emailTarget ? await deliverFollowUpEmail(emailTarget, text) : false
+        if (emailTarget && emailOk) {
+          sent += 1
+        } else {
+          await engineSendText({
+            accountId: agent.account_id,
+            userId: agent.created_by ?? '',
+            conversationId: c.id,
+            contactId: c.contact_id,
+            text,
+          })
+          sent += 1
+        }
       } catch (err) {
         console.error('[followup] envio falhou:', err)
       }
