@@ -486,6 +486,9 @@ export async function moveDealToStage(
     await recordDealEvent(ctx.accountId, ctx.userId, dealId, 'stage_changed', {
       from: await stageName(before.stageId),
       to: toStageName,
+      // IDs p/ o Raio-X reconstruir passagem à prova de renomear (fase 2).
+      fromId: before.stageId,
+      toId: stageId,
     })
     // Atualiza o "próximo follow-up" do card conforme a nova etapa — IMEDIATO,
     // não espera o tick de 5min (o Alex quer: mover o card recalcula a data).
@@ -1077,6 +1080,8 @@ export async function updateDeal(
       await recordDealEvent(ctx.accountId, ctx.userId, id, 'stage_changed', {
         from: await stageName(before.stageId),
         to: await stageName(patch.stage_id!),
+        fromId: before.stageId,
+        toId: patch.stage_id!,
       })
     }
     if (patch.status !== undefined && patch.status !== before.status) {
@@ -1086,6 +1091,11 @@ export async function updateDeal(
         // Motivo aparece na timeline: "marcou como perdida, motivo: X".
         ...(patch.status === 'lost' && patch.lost_reason
           ? { reason: patch.lost_reason }
+          : {}),
+        // Perde-em-pé: carimba a etapa onde morreu p/ o histórico não se perder
+        // se o card for movido/reaberto depois (Raio-X fase 2).
+        ...(patch.status === 'lost'
+          ? { stageId: patch.stage_id ?? before.stageId }
           : {}),
       })
     }

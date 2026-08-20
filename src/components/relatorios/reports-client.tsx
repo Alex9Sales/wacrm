@@ -26,12 +26,15 @@ import {
 import {
   Download,
   TrendingUp,
+  TrendingDown,
   Trophy,
   Percent,
   Receipt,
   AlertTriangle,
   Wallet,
   Lightbulb,
+  Clock,
+  ArrowDown,
 } from 'lucide-react'
 
 import { Button } from '@/components/ui/button'
@@ -205,7 +208,26 @@ function ReportsInner({ options }: { options: ReportFilterOptions }) {
       rows.push([`${f.name} · perda (%)`, Math.round(f.lossRate * 100)])
     }
     rows.push(['', ''])
-    rows.push(['— Motivos de perda —', ''])
+    rows.push([
+      '— Raio-X por etapa —',
+      'chegaram | avançaram | conversão% | travaram% | perdidos | dias parados',
+    ])
+    for (const f of report.funnel) {
+      rows.push([
+        f.name,
+        `${f.reached} | ${f.advanced} | ${Math.round(f.stageConversion * 100)} | ${Math.round(
+          f.dropoff * 100,
+        )} | ${f.lost} | ${f.avgDaysStalled != null ? Math.round(f.avgDaysStalled) : '—'}`,
+      ])
+    }
+    rows.push(['', ''])
+    rows.push(['— Motivo de perda por etapa —', ''])
+    for (const f of report.funnel) {
+      if (f.lossReasons.length)
+        rows.push([f.name, f.lossReasons.map((l) => `${l.reason}: ${l.count}`).join(' | ')])
+    }
+    rows.push(['', ''])
+    rows.push(['— Motivos de perda (geral) —', ''])
     for (const l of report.lossReasons) rows.push([l.reason, l.count])
     rows.push(['', ''])
     rows.push(['— Por responsável —', 'criadas | ganhas | perdidas | valor ganho'])
@@ -408,6 +430,21 @@ function ReportsInner({ options }: { options: ReportFilterOptions }) {
             </CardHeader>
             <CardContent>
               <FunnelHero report={report} money={money} />
+            </CardContent>
+          </Card>
+
+          {/* Raio-X do funil — passagem por etapa, conversão e onde morre */}
+          <Card>
+            <CardHeader>
+              <CardTitle className="flex items-center justify-between">
+                <span>Raio-X do funil — onde trava e por quê</span>
+                <span className="text-xs font-normal text-muted-foreground">
+                  passagem por etapa · perdido fica onde parou
+                </span>
+              </CardTitle>
+            </CardHeader>
+            <CardContent>
+              <StageXray report={report} />
             </CardContent>
           </Card>
 
@@ -703,6 +740,118 @@ function FunnelHero({
                 </span>
               ) : null}
             </div>
+          </div>
+        )
+      })}
+    </div>
+  )
+}
+
+/**
+ * Raio-X do funil (insight do Thiago/Growth Martins, trazido pelo Rafael):
+ * "perdido" fica NA etapa onde parou — então a etapa atual de cada negócio é o
+ * ponto mais avançado que ele alcançou. Mostra, por etapa: quantos CHEGARAM,
+ * quantos AVANÇARAM (conversão), quantos TRAVARAM (drop-off), há quantos dias os
+ * abertos estão parados, e POR QUE os perdidos morreram ali. O gargalo (maior
+ * drop-off) vem destacado: é o "conserte o script AQUI".
+ */
+function StageXray({ report }: { report: ComercialReport }) {
+  const f = report.funnel
+  const maxReached = Math.max(1, ...f.map((s) => s.reached))
+  if (f.every((s) => s.reached === 0)) return <Empty />
+  return (
+    <div className="flex flex-col gap-1">
+      {f.map((st, i) => {
+        const isLast = i === f.length - 1
+        const width = Math.max(6, Math.round((st.reached / maxReached) * 100))
+        const convPct = Math.round(st.stageConversion * 100)
+        const dropPct = Math.round(st.dropoff * 100)
+        return (
+          <div key={st.stageId}>
+            <div
+              className={[
+                'rounded-lg border p-3',
+                st.biggestLeak ? 'border-red-500/40 bg-red-500/5' : 'border-border bg-card',
+              ].join(' ')}
+            >
+              {/* nome + destaque de gargalo + chegaram */}
+              <div className="mb-2 flex items-center justify-between gap-2">
+                <div className="flex min-w-0 items-center gap-2">
+                  <span className="truncate text-sm font-medium text-foreground" title={st.name}>
+                    {st.name}
+                  </span>
+                  {st.biggestLeak && (
+                    <span className="inline-flex shrink-0 items-center gap-1 rounded-full bg-red-500/12 px-2 py-0.5 text-[10px] font-semibold text-red-600 dark:text-red-400">
+                      <TrendingDown className="h-3 w-3" /> gargalo
+                    </span>
+                  )}
+                </div>
+                <span className="shrink-0 text-xs tabular-nums text-muted-foreground">
+                  {st.reached} chegaram
+                </span>
+              </div>
+
+              {/* barra proporcional a "chegaram" (efeito funil) */}
+              <div className="h-2.5 w-full overflow-hidden rounded-full bg-muted">
+                <div
+                  className="h-full rounded-full"
+                  style={{
+                    width: `${width}%`,
+                    background: st.biggestLeak
+                      ? 'linear-gradient(90deg,#ef4444,#f97316)'
+                      : 'linear-gradient(90deg,#6366f1,#8b5cf6)',
+                  }}
+                />
+              </div>
+
+              {/* métricas da etapa */}
+              <div className="mt-2 flex flex-wrap items-center gap-x-4 gap-y-1 text-xs">
+                <span className="text-emerald-600 dark:text-emerald-400">
+                  {isLast ? `${st.advanced} ganharam` : `${st.advanced} avançaram`}
+                  {st.reached > 0 && ` · ${convPct}%`}
+                </span>
+                {!isLast && dropPct > 0 && (
+                  <span
+                    className={
+                      st.biggestLeak
+                        ? 'font-semibold text-red-600 dark:text-red-400'
+                        : 'text-muted-foreground'
+                    }
+                  >
+                    {dropPct}% travaram aqui
+                  </span>
+                )}
+                {st.lost > 0 && <span className="text-muted-foreground">{st.lost} perdidos</span>}
+                {st.avgDaysStalled != null && st.open > 0 && (
+                  <span className="inline-flex items-center gap-1 text-amber-600 dark:text-amber-400">
+                    <Clock className="h-3 w-3" /> ~{Math.round(st.avgDaysStalled)}d parados
+                  </span>
+                )}
+              </div>
+
+              {/* motivos de perda DESTA etapa (cruzamento motivo × etapa) */}
+              {st.lossReasons.length > 0 && (
+                <div className="mt-2 flex flex-wrap items-center gap-1.5">
+                  <span className="text-[11px] text-muted-foreground">Morreu por:</span>
+                  {st.lossReasons.map((lr) => (
+                    <span
+                      key={lr.reason}
+                      className="rounded-full border border-red-500/25 bg-red-500/5 px-2 py-0.5 text-[11px] text-red-600 dark:text-red-400"
+                    >
+                      {lr.reason} · {lr.count}
+                    </span>
+                  ))}
+                </div>
+              )}
+            </div>
+
+            {/* conector de conversão para a próxima etapa */}
+            {!isLast && (
+              <div className="flex items-center justify-center gap-1.5 py-1 text-[11px] text-muted-foreground">
+                <ArrowDown className="h-3 w-3" />
+                {convPct}% seguem para “{f[i + 1].name}”
+              </div>
+            )}
           </div>
         )
       })}
