@@ -137,12 +137,12 @@ export async function POST(request: Request) {
     try {
       body = await request.json();
     } catch {
-      return badRequest('Invalid JSON body');
+      throw badRequest('Invalid JSON body');
     }
 
     const channelId = typeof body.channel_id === 'string' ? body.channel_id : '';
     const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : null;
-    if (!channelId) return badRequest('`channel_id` is required.');
+    if (!channelId) throw badRequest('`channel_id` is required.');
 
     const channel = await loadChannel(channelId);
     if (!channel || channel.accountId !== ctx.accountId) {
@@ -154,7 +154,7 @@ export async function POST(request: Request) {
       const email =
         typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
       if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
-        return badRequest('`email` is required for an e-mail/Gmail channel.');
+        throw badRequest('`email` is required for an e-mail/Gmail channel.');
       }
       const { resolveEmailConversation } = await import('@/lib/channels/inbound');
       resolved = await resolveEmailConversation(channel, email, name);
@@ -165,14 +165,14 @@ export async function POST(request: Request) {
       channel.provider === 'evogo'
     ) {
       const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
-      if (!phone) return badRequest('`phone` is required for a WhatsApp channel.');
+      if (!phone) throw badRequest('`phone` is required for a WhatsApp channel.');
       const { resolveConversationByPhone } = await import(
         '@/lib/whatsapp/resolve-conversation'
       );
       const r = await resolveConversationByPhone(ctx.accountId, phone, name, channelId);
       resolved = { conversationId: r.conversationId, contactCreated: r.contactCreated };
     } else {
-      return badRequest(
+      throw badRequest(
         'Não dá pra iniciar conversa nesse canal (Instagram/Messenger exigem a 1ª mensagem do cliente).',
       );
     }

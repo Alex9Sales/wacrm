@@ -151,7 +151,7 @@ export async function POST(
     try {
       body = await request.json();
     } catch {
-      return badRequest('Invalid JSON body');
+      throw badRequest('Invalid JSON body');
     }
 
     const text = typeof body.text === 'string' ? body.text : '';
@@ -163,7 +163,7 @@ export async function POST(
       typeof body.reply_to_message_id === 'string' ? body.reply_to_message_id : null;
 
     if (!mediaUrl && !text.trim()) {
-      return badRequest('Provide `text` (or `media_url`).');
+      throw badRequest('Provide `text` (or `media_url`).');
     }
 
     // Ownership 404 antes de enviar (mensagem de erro consistente com o GET).
