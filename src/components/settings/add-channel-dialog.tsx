@@ -429,7 +429,7 @@ export function AddChannelDialog({
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
-      <DialogContent className="border-border bg-popover sm:max-w-md">
+      <DialogContent className="max-h-[88vh] overflow-y-auto border-border bg-popover sm:max-w-md">
         <DialogHeader>
           <DialogTitle className="text-popover-foreground">
             Adicionar canal
@@ -681,7 +681,7 @@ export function AddChannelDialog({
           </div>
         )}
 
-        <DialogFooter className="border-border bg-popover">
+        <DialogFooter className="sticky bottom-0 z-10 border-t border-border bg-popover pt-3">
           {!provider ? (
             <Button
               variant="outline"
