@@ -46,6 +46,7 @@ import { cn } from '@/lib/utils';
 import { WhatsAppConfig } from './whatsapp-config';
 import { AddChannelDialog } from './add-channel-dialog';
 import { EmailDomainDialog, type DomainState } from './email-domain-dialog';
+import { EmailApiSetupDialog, type EmailApiInbound } from './email-api-setup-dialog';
 import { ChannelQrModal } from './channel-qr-modal';
 import { ChannelLocationDialog } from './channel-location-dialog';
 import { ChannelPixDialog } from './channel-pix-dialog';
@@ -141,6 +142,8 @@ export function ChannelsTab() {
   const [domainSetup, setDomainSetup] = useState<
     { channelId: string; initial: DomainState | null } | null
   >(null);
+  // E-mail BYO (meu provedor/API) recém-criado → mostra webhook + segredo.
+  const [apiInbound, setApiInbound] = useState<EmailApiInbound | null>(null);
   // The channel whose business location is being set.
   const [locating, setLocating] = useState<ChannelSummary | null>(null);
   // The channel whose Pix key is being set.
@@ -345,6 +348,11 @@ export function ChannelsTab() {
           void load();
           setDomainSetup({ channelId, initial });
         }}
+        onEmailApiCreated={(inbound) => {
+          setAddOpen(false);
+          void load();
+          setApiInbound(inbound);
+        }}
       />
 
       {/* Setup do domínio próprio (white-label): registros DNS + encaminhamento. */}
@@ -354,6 +362,9 @@ export function ChannelsTab() {
         onClose={() => setDomainSetup(null)}
         onVerified={() => void load()}
       />
+
+      {/* E-mail BYO recém-criado: webhook + segredo pra o cliente ligar o inbound. */}
+      <EmailApiSetupDialog inbound={apiInbound} onClose={() => setApiInbound(null)} />
 
       {/* Business location editor for a channel. */}
       {locating && (

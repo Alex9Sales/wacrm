@@ -496,7 +496,34 @@ export async function POST(request: Request) {
       throw err
     }
 
-    return NextResponse.json({ id: channel.id }, { status: 201 })
+    // BYO ("meu provedor"): o canal de e-mail avançado tem inboundSecret próprio.
+    // Devolvemos o webhook de entrada + o segredo pra o cliente apontar o inbound
+    // do provedor dele (a UI mostra numa tela; a Fluxia é só o inbox).
+    const inboundSecret =
+      provider === 'email' && typeof input.credentials.inboundSecret === 'string'
+        ? input.credentials.inboundSecret
+        : null
+    const address =
+      provider === 'email'
+        ? (input.providerMeta?.address as string | undefined) ?? null
+        : null
+
+    return NextResponse.json(
+      {
+        id: channel.id,
+        ...(inboundSecret
+          ? {
+              inbound: {
+                webhook_url: 'https://crm.salestecnologia.com.br/api/webhooks/email',
+                header: 'x-email-token',
+                secret: inboundSecret,
+                address,
+              },
+            }
+          : {}),
+      },
+      { status: 201 },
+    )
   } catch (err) {
     return toErrorResponse(err)
   }
