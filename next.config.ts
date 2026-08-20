@@ -80,6 +80,21 @@ const nextConfig: NextConfig = {
   output: 'standalone',
 
   /**
+   * Teto do corpo bufferizado quando o middleware ("proxy") lê a requisição.
+   * Default deste Next = 10MB: acima disso ele TRUNCA o corpo e o route handler
+   * recebe um corpo incompleto. Isso quebrava DOIS caminhos de e-mail:
+   *   - SAÍDA: upload de mídia > 10MB → multipart cortado → "Expected
+   *     multipart/form-data" (anexo de e-mail vai até 25MB).
+   *   - ENTRADA: webhook /api/webhooks/email recebe o MIME cru; um anexo de
+   *     ~20MB vira ~27MB em base64 → seria truncado e o anexo se perdia.
+   * 40MB cobre os dois com folga (bate com o total do Resend). Ver
+   * MEDIA_MAX_BYTES / EMAIL_MAX_BYTES em lib/storage/upload-media.ts.
+   */
+  experimental: {
+    proxyClientMaxBodySize: '40mb',
+  },
+
+  /**
    * Pin the file-tracing root to THIS project directory.
    *
    * Next infers the monorepo root by walking up for a lockfile. There's a
