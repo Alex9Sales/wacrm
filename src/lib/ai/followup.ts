@@ -8,7 +8,7 @@ import { loadAiConfigById } from './config'
 import { buildConversationContext, stripLeadingTimestamp } from './context'
 import { generateReply } from './generate'
 import { closeInstruction, currentDateTimeLabel, parseCloseDirectives } from './defaults'
-import { applyCloseActions, loadDealCloseContext } from './close-actions'
+import { applyCloseActions, loadDealCloseContext, markDealLostInPlace } from './close-actions'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
 import type { AiConfig } from './types'
@@ -82,10 +82,21 @@ const PER_AGENT_CAP = 40
 export const FOLLOW_UP_MAX_STEPS = 5
 
 export type FollowUpDelayUnit = 'minutes' | 'hours' | 'days'
+/** Canal do toque: 'auto' = canal da conversa (padrão/retrocompat); 'whatsapp' e
+ *  'email' = canal explícito (email cai pro WhatsApp quando o lead não tem e-mail
+ *  ou a conta não tem canal de e-mail — roteamento real na fase 2b). */
+export type FollowUpChannel = 'whatsapp' | 'email' | 'auto'
+/** Ação do degrau: 'followup' (padrão) ou 'close' = após o toque, encerra o
+ *  negócio em PERDE-EM-PÉ (mantém a etapa) com motivo automático. */
+export type FollowUpAction = 'followup' | 'close'
 export interface FollowUpStep {
   delayValue: number
   delayUnit: FollowUpDelayUnit
   instructions: string
+  /** Canal do toque (multicanal). Default 'auto'. */
+  channel: FollowUpChannel
+  /** 'followup' ou 'close' (encerra em perde-em-pé após o toque). Default 'followup'. */
+  action: FollowUpAction
   /** Template aprovado usado FORA da janela de 24h (canal oficial). null = nada. */
   templateName: string | null
   templateLanguage: string | null
@@ -137,8 +148,12 @@ export interface FollowUpConfig {
 
 const VALID_UNITS = new Set<FollowUpDelayUnit>(['minutes', 'hours', 'days'])
 
-/** Minutos de um degrau (clamp [5, 43200] = 5min..30d). */
-export function stepDelayMinutes(step: FollowUpStep): number {
+/** Minutos de um degrau (clamp [5, 43200] = 5min..30d). Aceita qualquer coisa
+ *  com delayValue/delayUnit (degrau, gatilho de etapa…). */
+export function stepDelayMinutes(step: {
+  delayValue: number
+  delayUnit: FollowUpDelayUnit
+}): number {
   const v = Math.max(1, Math.round(step.delayValue || 0))
   const mult = step.delayUnit === 'days' ? 1440 : step.delayUnit === 'hours' ? 60 : 1
   return Math.min(43200, Math.max(5, v * mult))
@@ -156,7 +171,10 @@ function readStep(raw: unknown): FollowUpStep | null {
   const instructions = (
     typeof bag.instructions === 'string' ? bag.instructions.trim() : ''
   ).slice(0, 2000)
-  return { delayValue, delayUnit, instructions, ...readTemplateFields(bag) }
+  const channel: FollowUpChannel =
+    bag.channel === 'whatsapp' || bag.channel === 'email' ? bag.channel : 'auto'
+  const action: FollowUpAction = bag.action === 'close' ? 'close' : 'followup'
+  return { delayValue, delayUnit, instructions, channel, action, ...readTemplateFields(bag) }
 }
 
 /** Campos de template compartilhados (degrau/etapa/lembrete). */
@@ -183,6 +201,71 @@ function readTemplateFields(bag: Record<string, unknown>): {
   }
 }
 
+/** Monta um degrau de cadência (helper dos presets). */
+function mkStep(
+  delayValue: number,
+  delayUnit: FollowUpDelayUnit,
+  channel: FollowUpChannel,
+  instructions: string,
+  action: FollowUpAction = 'followup',
+): FollowUpStep {
+  return {
+    delayValue,
+    delayUnit,
+    channel,
+    action,
+    instructions,
+    templateName: null,
+    templateLanguage: null,
+    templateParams: [],
+  }
+}
+
+export interface FollowUpPreset {
+  id: string
+  name: string
+  description: string
+  steps: FollowUpStep[]
+  giveUpEnabled: boolean
+}
+
+/**
+ * Cadências prontas (o usuário escolhe e liga). Os `delay` são o TEMPO desde o
+ * toque anterior (degrau 0 = silêncio antes do 1º). O passo `close` encerra em
+ * perde-em-pé. Canais 'email' caem pro WhatsApp quando o lead não tem e-mail
+ * (roteamento real de e-mail = fase 2b). Espelham o modelo do Rafael.
+ */
+export const FOLLOW_UP_PRESETS: FollowUpPreset[] = [
+  {
+    id: 'multichannel-rafael',
+    name: 'Multicanal (WhatsApp + E-mail) — 5 toques',
+    description:
+      'Dia 1 WhatsApp · Dia 3 e-mail · Dia 6 WhatsApp · Dia 8 e-mail · Dia 9 encerra. Alterna os canais conforme o lead tem (só WhatsApp → tudo no zap).',
+    giveUpEnabled: true,
+    steps: [
+      mkStep(1, 'days', 'whatsapp', 'Primeiro reengajamento, leve e sem pressão: retome o assunto e pergunte se ainda faz sentido conversar.'),
+      mkStep(2, 'days', 'email', 'Segundo toque (e-mail): relembre o valor da solução e convide a responder quando puder.'),
+      mkStep(3, 'days', 'whatsapp', 'Terceiro toque: traga uma prova/benefício curto e pergunte se pode ajudar em algo.'),
+      mkStep(2, 'days', 'email', 'Quarto toque (e-mail): última tentativa amistosa, deixando a porta aberta.'),
+      mkStep(1, 'days', 'whatsapp', 'Despedida cordial: agradeça, diga que fica à disposição e encerre.', 'close'),
+    ],
+  },
+  {
+    id: 'whatsapp-only',
+    name: 'Só WhatsApp — 5 toques',
+    description:
+      'Mesma cadência (dias 1, 3, 6, 8, 9) toda no WhatsApp, terminando com encerramento. Bom para leads sem e-mail.',
+    giveUpEnabled: true,
+    steps: [
+      mkStep(1, 'days', 'whatsapp', 'Primeiro reengajamento, leve e sem pressão: retome o assunto e pergunte se ainda faz sentido conversar.'),
+      mkStep(2, 'days', 'whatsapp', 'Segundo toque: relembre o valor e convide a responder quando puder.'),
+      mkStep(3, 'days', 'whatsapp', 'Terceiro toque: traga uma prova/benefício curto e pergunte se pode ajudar em algo.'),
+      mkStep(2, 'days', 'whatsapp', 'Quarto toque: última tentativa amistosa, deixando a porta aberta.'),
+      mkStep(1, 'days', 'whatsapp', 'Despedida cordial: agradeça, diga que fica à disposição e encerre.', 'close'),
+    ],
+  },
+]
+
 /**
  * Lê + normaliza a config de follow-up do jsonb `ai_configs.follow_up`.
  * RETROCOMPAT v1: se não vier `steps`, monta um degrau a partir do
@@ -207,6 +290,8 @@ export function readFollowUpConfig(raw: unknown): FollowUpConfig {
         delayValue: delayMinutes,
         delayUnit: 'minutes',
         instructions,
+        channel: 'auto',
+        action: 'followup',
         templateName: null,
         templateLanguage: null,
         templateParams: [],
@@ -467,28 +552,29 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
 
       // Escada esgotada.
       if (currentStep >= cfg.steps.length) {
-        // Desistência: ninguém respondeu até o último toque → move o card pra
-        // Perdido UMA vez (é move interno do funil, não envia mensagem, então
-        // não depende da janela de 24h). Espera o delay do último degrau desde
-        // o último follow-up antes de declarar perda.
+        // Desistência: ninguém respondeu até o último toque → marca o negócio
+        // como PERDIDO EM PÉ (mantém a etapa onde parou — perde-em-pé), UMA vez,
+        // com motivo automático e histórico (N follow-ups). Não move pra uma
+        // coluna "Perdido" (isso apagaria ONDE o lead morreu). Espera o delay do
+        // último degrau desde o último follow-up antes de declarar perda.
         if (
           currentStep === cfg.steps.length &&
           cfg.giveUpEnabled &&
-          cfg.giveUpStage &&
           !episodeReset &&
           c.last_follow_up_at &&
           Date.now() - new Date(c.last_follow_up_at).getTime() >=
             stepDelayMinutes(cfg.steps[cfg.steps.length - 1]) * 60_000
         ) {
           try {
-            const rr = await applyCloseActions({
+            const rr = await markDealLostInPlace({
               accountId: agent.account_id,
               userId: agent.created_by ?? null,
               conversationId: c.id,
-              resolve: false,
-              funnelStageName: cfg.giveUpStage,
+              reason: `Não respondeu (${cfg.steps.length} follow-ups)`,
+              by: 'followup',
+              followUps: cfg.steps.length,
             })
-            console.log('[followup] desistência → Perdido:', JSON.stringify(rr))
+            console.log('[followup] desistência → perdido em pé:', JSON.stringify(rr))
           } catch (err) {
             console.error('[followup] desistência falhou:', err)
           }
@@ -606,9 +692,30 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         }
       }
 
+      // Passo de ENCERRAMENTO (action:'close', ex.: "dia 9 encerra"): após o
+      // toque, marca o negócio como PERDIDO EM PÉ (mantém a etapa) com motivo
+      // automático + histórico. Config-driven (não depende de marcador da IA).
+      const runCloseStep = async () => {
+        if (step.action !== 'close') return
+        try {
+          await markDealLostInPlace({
+            accountId: agent.account_id,
+            userId: agent.created_by ?? null,
+            conversationId: c.id,
+            reason: `Não respondeu (${currentStep + 1} follow-ups)`,
+            by: 'followup',
+            followUps: currentStep + 1,
+          })
+          console.log('[followup] passo de encerramento → perdido em pé')
+        } catch (err) {
+          console.error('[followup] close-step falhou:', err)
+        }
+      }
+
       // Calou ou vazio → não manda, mas ainda executa o encerramento se veio.
       if (!text || text.includes(SILENT)) {
         await runFollowUpClose()
+        await runCloseStep()
         await stamp(c.id, currentStep + 1)
         continue
       }
@@ -625,8 +732,9 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
       } catch (err) {
         console.error('[followup] envio falhou:', err)
       }
-      // Depois da despedida, resolve + move o funil.
+      // Depois da despedida, resolve + move o funil + (se for) encerra em pé.
       await runFollowUpClose()
+      await runCloseStep()
       await stamp(c.id, currentStep + 1)
     }
   }

@@ -357,15 +357,15 @@ export async function markDealLostInPlace(input: {
           .limit(1),
       )?.name ?? null
 
-    // Perde EM PÉ: status='lost' + motivo, SEM mexer na etapa (perde onde parou).
-    await db
-      .update(deals)
-      .set({ status: 'lost', lostReason: reason })
-      .where(and(eq(deals.id, deal.id), eq(deals.accountId, accountId)))
-
-    // Evento rico: carimba a etapa da MORTE (Raio-X) + contexto (quem/follow-ups).
-    try {
-      await db.insert(dealEvents).values({
+    // Perde EM PÉ: status='lost' + motivo (SEM mexer na etapa) + evento carimbado
+    // ATÔMICOS — o evento é o dado que o Raio-X data a perda; se falhar, desfaz o
+    // status pra não ficar 'lost' sem evento (KPI de perda datada não desincroniza).
+    await db.transaction(async (tx) => {
+      await tx
+        .update(deals)
+        .set({ status: 'lost', lostReason: reason })
+        .where(and(eq(deals.id, deal.id), eq(deals.accountId, accountId)))
+      await tx.insert(dealEvents).values({
         accountId,
         actorUserId: userId || null,
         dealId: deal.id,
@@ -380,9 +380,7 @@ export async function markDealLostInPlace(input: {
           ...(input.followUps != null ? { followUps: input.followUps } : {}),
         },
       })
-    } catch (err) {
-      console.error('[ai lose] deal event falhou:', err)
-    }
+    })
 
     // Nota interna (visível pra equipe na conversa).
     if (conversationId) {

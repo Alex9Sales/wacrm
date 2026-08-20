@@ -30,10 +30,16 @@ function templateParamCount(bodyText: string): number {
 }
 
 type Unit = 'minutes' | 'hours' | 'days';
+type StepChannel = 'auto' | 'whatsapp' | 'email';
+type StepAction = 'followup' | 'close';
 interface Step {
   delayValue: number;
   delayUnit: Unit;
   instructions: string;
+  /** Canal do toque (multicanal): auto | whatsapp | email. */
+  channel: StepChannel;
+  /** 'close' = encerra em perde-em-pé após este toque. */
+  action: StepAction;
   /** Template usado fora da janela de 24h (canal oficial). */
   templateName: string;
   templateLanguage: string;
@@ -47,10 +53,49 @@ const NEW_STEP: Step = {
   delayValue: 1,
   delayUnit: 'days',
   instructions: '',
+  channel: 'auto',
+  action: 'followup',
   templateName: '',
   templateLanguage: '',
   templateParamsText: '',
 };
+
+/** Cadências prontas (espelham FOLLOW_UP_PRESETS do backend). */
+const CADENCE_PRESETS: {
+  id: string;
+  name: string;
+  description: string;
+  giveUp: boolean;
+  steps: Pick<Step, 'delayValue' | 'delayUnit' | 'channel' | 'action' | 'instructions'>[];
+}[] = [
+  {
+    id: 'multichannel-rafael',
+    name: 'Multicanal (WhatsApp + E-mail) — 5 toques',
+    description:
+      'Dia 1 WhatsApp · Dia 3 e-mail · Dia 6 WhatsApp · Dia 8 e-mail · Dia 9 encerra. E-mail cai pro WhatsApp quando o lead não tem e-mail.',
+    giveUp: true,
+    steps: [
+      { delayValue: 1, delayUnit: 'days', channel: 'whatsapp', action: 'followup', instructions: 'Primeiro reengajamento, leve e sem pressão: retome o assunto e pergunte se ainda faz sentido conversar.' },
+      { delayValue: 2, delayUnit: 'days', channel: 'email', action: 'followup', instructions: 'Segundo toque (e-mail): relembre o valor da solução e convide a responder quando puder.' },
+      { delayValue: 3, delayUnit: 'days', channel: 'whatsapp', action: 'followup', instructions: 'Terceiro toque: traga uma prova/benefício curto e pergunte se pode ajudar em algo.' },
+      { delayValue: 2, delayUnit: 'days', channel: 'email', action: 'followup', instructions: 'Quarto toque (e-mail): última tentativa amistosa, deixando a porta aberta.' },
+      { delayValue: 1, delayUnit: 'days', channel: 'whatsapp', action: 'close', instructions: 'Despedida cordial: agradeça, diga que fica à disposição e encerre.' },
+    ],
+  },
+  {
+    id: 'whatsapp-only',
+    name: 'Só WhatsApp — 5 toques',
+    description: 'Mesma cadência (dias 1, 3, 6, 8, 9) toda no WhatsApp, terminando com encerramento.',
+    giveUp: true,
+    steps: [
+      { delayValue: 1, delayUnit: 'days', channel: 'whatsapp', action: 'followup', instructions: 'Primeiro reengajamento, leve e sem pressão: retome o assunto e pergunte se ainda faz sentido conversar.' },
+      { delayValue: 2, delayUnit: 'days', channel: 'whatsapp', action: 'followup', instructions: 'Segundo toque: relembre o valor e convide a responder quando puder.' },
+      { delayValue: 3, delayUnit: 'days', channel: 'whatsapp', action: 'followup', instructions: 'Terceiro toque: traga uma prova/benefício curto e pergunte se pode ajudar em algo.' },
+      { delayValue: 2, delayUnit: 'days', channel: 'whatsapp', action: 'followup', instructions: 'Quarto toque: última tentativa amistosa, deixando a porta aberta.' },
+      { delayValue: 1, delayUnit: 'days', channel: 'whatsapp', action: 'close', instructions: 'Despedida cordial: agradeça, diga que fica à disposição e encerre.' },
+    ],
+  },
+];
 
 interface StageTrig {
   stage: string;
@@ -163,6 +208,12 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                   ? (x.delayUnit as Unit)
                   : 'hours',
                 instructions: (x.instructions as string) ?? '',
+                channel: (['auto', 'whatsapp', 'email'] as StepChannel[]).includes(
+                  x.channel as StepChannel,
+                )
+                  ? (x.channel as StepChannel)
+                  : 'auto',
+                action: x.action === 'close' ? 'close' : 'followup',
                 templateName: (x.templateName as string) ?? '',
                 templateLanguage: (x.templateLanguage as string) ?? '',
                 templateParamsText: Array.isArray(x.templateParams)
@@ -234,6 +285,26 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
     setSteps((prev) => prev.map((s, j) => (j === i ? { ...s, ...patch } : s)));
   const addStep = () =>
     setSteps((prev) => (prev.length >= MAX_STEPS ? prev : [...prev, { ...NEW_STEP }]));
+  /** Aplica uma cadência pronta (substitui os degraus + liga a desistência). */
+  const applyPreset = (id: string) => {
+    const preset = CADENCE_PRESETS.find((p) => p.id === id);
+    if (!preset) return;
+    setSteps(
+      preset.steps.map((s) => ({
+        delayValue: s.delayValue,
+        delayUnit: s.delayUnit,
+        channel: s.channel,
+        action: s.action,
+        instructions: s.instructions,
+        templateName: '',
+        templateLanguage: '',
+        templateParamsText: '',
+        _guide: !!s.instructions.trim(),
+      })),
+    );
+    setGiveUpEnabled(preset.giveUp);
+    toast.success(`Cadência "${preset.name}" aplicada — revise e salve.`);
+  };
   const removeStep = (i: number) =>
     setSteps((prev) => (prev.length <= 1 ? prev : prev.filter((_, j) => j !== i)));
 
@@ -297,6 +368,8 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
           steps: steps.map((s) => ({
             delayValue: Math.max(1, Math.round(s.delayValue || 1)),
             delayUnit: s.delayUnit,
+            channel: s.channel,
+            action: s.action,
             instructions: s.instructions.trim(),
             templateName: s.templateName.trim(),
             templateLanguage: s.templateLanguage.trim(),
@@ -381,6 +454,30 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
             negócio foi <strong>ganho/perdido</strong>. Volta pro início quando o
             cliente responde.
           </p>
+          {canEdit && (
+            <div className="flex flex-wrap items-center gap-2 rounded-lg border border-dashed border-border px-3 py-2">
+              <span className="text-xs font-medium text-muted-foreground">
+                Cadência pronta:
+              </span>
+              <select
+                value=""
+                onChange={(e) => {
+                  if (e.target.value) applyPreset(e.target.value);
+                }}
+                className="h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+              >
+                <option value="">Aplicar um modelo…</option>
+                {CADENCE_PRESETS.map((p) => (
+                  <option key={p.id} value={p.id}>
+                    {p.name}
+                  </option>
+                ))}
+              </select>
+              <span className="text-[11px] text-muted-foreground">
+                (preenche os toques abaixo — você ajusta e salva)
+              </span>
+            </div>
+          )}
           {steps.map((s, i) => (
             <div key={i} className="rounded-lg border border-border p-3">
               <div className="mb-2 flex items-center justify-between">
@@ -423,6 +520,32 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                     <Trash2 className="h-4 w-4" />
                   </button>
                 )}
+              </div>
+              {/* Canal do toque (multicanal) + encerramento */}
+              <div className="mb-2 flex flex-wrap items-center gap-2 text-xs">
+                <span className="text-muted-foreground">Canal:</span>
+                <select
+                  value={s.channel}
+                  onChange={(e) => setStep(i, { channel: e.target.value as StepChannel })}
+                  disabled={!canEdit}
+                  className="h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                >
+                  <option value="auto">Automático (canal da conversa)</option>
+                  <option value="whatsapp">WhatsApp</option>
+                  <option value="email">E-mail (cai pro WhatsApp se o lead não tiver)</option>
+                </select>
+                <label className="ml-1 flex cursor-pointer items-center gap-1.5">
+                  <input
+                    type="checkbox"
+                    checked={s.action === 'close'}
+                    onChange={(e) =>
+                      setStep(i, { action: e.target.checked ? 'close' : 'followup' })
+                    }
+                    disabled={!canEdit}
+                    className="h-3.5 w-3.5 accent-red-600"
+                  />
+                  <span className="text-muted-foreground">Encerra aqui (marca perdido em pé)</span>
+                </label>
               </div>
               {s._guide ? (
                 <div className="mt-1">
@@ -518,7 +641,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
             </Button>
           )}
 
-          {/* Desistência: sem resposta até o último toque → move pra Perdido. */}
+          {/* Desistência: sem resposta até o último toque → perde EM PÉ. */}
           <div className="rounded-lg border border-dashed border-border p-3">
             <label className="flex items-center gap-2.5 text-sm font-medium text-foreground">
               <Switch
@@ -526,30 +649,15 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
                 onCheckedChange={setGiveUpEnabled}
                 disabled={!canEdit}
               />
-              Desistir depois do último toque
+              Encerrar depois do último toque
             </label>
             <p className="mt-1 text-[11px] text-muted-foreground">
-              Se o cliente não responder até o último toque, move o card do funil
-              pra uma etapa e para de insistir.
+              Se o cliente não responder até o último toque, marca o negócio como{' '}
+              <strong>perdido mantendo a etapa onde parou</strong> (perde-em-pé),
+              com o motivo <em>&ldquo;Não respondeu&rdquo;</em> e histórico — assim o
+              Raio-X mostra exatamente <strong>onde</strong> o lead morreu. Não move
+              pra uma coluna &ldquo;Perdido&rdquo;.
             </p>
-            {giveUpEnabled && (
-              <div className="mt-2">
-                <Label
-                  htmlFor="fu-giveup-stage"
-                  className="text-[11px] text-muted-foreground"
-                >
-                  Mover o card para a etapa:
-                </Label>
-                <Input
-                  id="fu-giveup-stage"
-                  value={giveUpStage}
-                  onChange={(e) => setGiveUpStage(e.target.value)}
-                  placeholder="ex.: Perdido"
-                  disabled={!canEdit}
-                  className="mt-1 h-8 max-w-xs"
-                />
-              </div>
-            )}
           </div>
 
           {/* Follow-up por ETAPA (Fase E): gatilho quando o card ENTRA numa etapa. */}
