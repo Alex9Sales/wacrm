@@ -70,7 +70,28 @@ export async function POST(request: Request) {
   if (body && typeof body.raw === 'string' && body.raw) {
     try {
       const parsed = await new PostalMime().parse(body.raw)
-      const attachments = (parsed.attachments || [])
+      // DIAGNÓSTICO (anexos): o que o PostalMime achou vs. o que passou no filtro.
+      const rawAtts = parsed.attachments || []
+      console.log(
+        '[webhooks/email] raw=%d bytes, postalmime achou %d anexo(s): %j',
+        typeof body.raw === 'string' ? body.raw.length : -1,
+        rawAtts.length,
+        rawAtts.map((a) => ({
+          f: a.filename,
+          m: a.mimeType,
+          d: a.disposition,
+          ctor: Object.prototype.toString.call(a.content),
+          len:
+            a.content instanceof ArrayBuffer
+              ? a.content.byteLength
+              : ArrayBuffer.isView(a.content)
+                ? a.content.byteLength
+                : typeof a.content === 'string'
+                  ? a.content.length
+                  : -1,
+        })),
+      )
+      const attachments = rawAtts
         .map((a) => {
           const base64 = attachmentToBase64(a.content)
           if (!base64) return null
@@ -82,6 +103,7 @@ export async function POST(request: Request) {
           }
         })
         .filter(Boolean)
+      console.log('[webhooks/email] anexos após filtro:', attachments.length)
       body = {
         to: body.to,
         from: parsed.from?.address || body.from || '',
