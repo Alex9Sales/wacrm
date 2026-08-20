@@ -45,11 +45,15 @@ interface AddChannelDialogProps {
 
 const PROVIDER_ORDER: ProviderId[] = ['meta', 'instagram', 'messenger', 'email', 'waha', 'evolution', 'evogo'];
 
+// Domínio hospedado da Fluxia (espelha EMAIL_HOSTED_DOMAIN no servidor). Só pra
+// mostrar o preview do endereço; quem monta o endereço final é o backend.
+const EMAIL_HOSTED_DOMAIN = 'atendimento.salestecnologia.com.br';
+
 const PROVIDER_BLURB: Record<ProviderId, string> = {
   meta: 'API oficial do WhatsApp. Suporta templates e mensagens interativas.',
   instagram: 'Instagram Direct (DM) via API oficial do Meta. Cole o ID da conta Instagram e o token de acesso.',
   messenger: 'Facebook Messenger (DM da Página) via API oficial do Meta. Cole o ID da Página e o token de acesso.',
-  email: 'E-mail no inbox. Recebe pelo Cloudflare Email Routing (Worker) e responde pelo Resend. Informe o endereço de atendimento.',
+  email: 'E-mail no inbox — a Fluxia hospeda pra você. Escolha um apelido e ganhe um endereço @atendimento.salestecnologia.com.br na hora, sem mexer em DNS.',
   waha: 'Provedor não oficial (WAHA), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
   evolution: 'Provedor não oficial (Evolution API), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
   evogo: 'Provedor não oficial (EvoGo), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
@@ -125,36 +129,19 @@ const PROVIDER_FIELDS: Record<
       optional: true,
     },
   ],
-  // E-mail: recebe pelo Cloudflare Email Worker, responde pelo Resend.
+  // E-mail HOSPEDADO: cliente só escolhe um apelido → apelido@<domínio da
+  // Fluxia>. Recebe pelo Cloudflare Worker (catch-all), responde pelo Resend
+  // (domínio já verificado). Sem DNS, sem token.
   email: [
     {
-      key: 'address',
-      label: 'Endereço de recebimento',
-      placeholder: 'contato@atendimento.salestecnologia.com.br',
-    },
-    {
-      key: 'from',
-      label: 'Remetente (From) — domínio verificado no Resend (opcional)',
-      placeholder: 'atendimento@salestecnologia.com.br (default = o endereço acima)',
-      optional: true,
+      key: 'handle',
+      label: 'Apelido do e-mail (o que vem antes do @)',
+      placeholder: 'atendimento',
     },
     {
       key: 'from_name',
-      label: 'Nome do remetente (opcional)',
+      label: 'Nome do remetente',
       placeholder: 'Atendimento',
-      optional: true,
-    },
-    {
-      key: 'resend_api_key',
-      label: 'Chave do Resend (opcional)',
-      placeholder: 're_… — usa a global se em branco',
-      secret: true,
-      optional: true,
-    },
-    {
-      key: 'inbound_secret',
-      label: 'Segredo do webhook (opcional)',
-      placeholder: 'gera automático — cole no Cloudflare Worker',
       optional: true,
     },
   ],
@@ -181,6 +168,13 @@ export function AddChannelDialog({
         : [],
     [provider],
   );
+
+  // Preview do endereço hospedado (só e-mail): sanitiza o que o cliente digita.
+  const emailHandle = (config.handle ?? '')
+    .split('@')[0]
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9._-]/g, '');
 
   const reset = useCallback(() => {
     setProvider(null);
@@ -243,7 +237,14 @@ export function AddChannelDialog({
       }
 
       const { id } = (await res.json()) as { id: string };
-      toast.success('Canal criado. Escaneie o QR Code para parear.');
+      if (provider === 'email') {
+        const h = (config.handle ?? '').split('@')[0].trim().toLowerCase();
+        toast.success(`Canal de e-mail criado: ${h}@${EMAIL_HOSTED_DOMAIN}`);
+      } else if (provider === 'instagram' || provider === 'messenger') {
+        toast.success('Canal criado com sucesso.');
+      } else {
+        toast.success('Canal criado. Escaneie o QR Code para parear.');
+      }
       // Build a lightweight summary so the parent can open the QR modal
       // without waiting for a list refetch.
       onCreated({
@@ -414,6 +415,17 @@ export function AddChannelDialog({
                 />
               </div>
             ))}
+            {provider === 'email' && (
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                Seu e-mail:{' '}
+                <strong className="break-all text-foreground">
+                  {emailHandle || 'apelido'}@{EMAIL_HOSTED_DOMAIN}
+                </strong>
+                <br />
+                Dê esse endereço aos seus clientes — as mensagens caem aqui no
+                inbox e você responde por aqui mesmo. Sem DNS, sem configuração.
+              </div>
+            )}
           </div>
         )}
 

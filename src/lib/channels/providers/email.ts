@@ -55,12 +55,22 @@ function resendKeyOf(ch: ChannelCtx): string {
   return key
 }
 
-/** Token que o Cloudflare Worker manda no header pra provar que é ele. */
-function inboundSecretOf(ch: ChannelCtx | null): string | null {
-  if (ch && typeof ch.credentials.inboundSecret === 'string' && ch.credentials.inboundSecret) {
-    return ch.credentials.inboundSecret
+/**
+ * Segredos aceitos no header `x-email-token` (o Cloudflare Worker prova que é
+ * ele). MULTI-TENANT: o Worker manda UM token (o compartilhado) pra TODOS os
+ * endereços do subdomínio; canais hospedados validam contra a env
+ * `EMAIL_INBOUND_SECRET`, e um canal BYO pode ter o seu próprio
+ * `credentials.inboundSecret`. Aceitamos qualquer um dos dois (com `.trim()`).
+ */
+function inboundSecretsOf(ch: ChannelCtx | null): string[] {
+  const out: string[] = []
+  if (ch && typeof ch.credentials.inboundSecret === 'string') {
+    const s = ch.credentials.inboundSecret.trim()
+    if (s) out.push(s)
   }
-  return process.env.EMAIL_INBOUND_SECRET || null
+  const env = (process.env.EMAIL_INBOUND_SECRET || '').trim()
+  if (env) out.push(env)
+  return out
 }
 
 interface EmailWebhookBody {
@@ -131,19 +141,19 @@ export const emailProvider: WhatsAppProvider = {
   },
 
   async verifyWebhook(ctx: WebhookVerifyCtx, ch: ChannelCtx | null) {
-    const secret = inboundSecretOf(ch)
-    if (!secret) {
+    const secrets = inboundSecretsOf(ch)
+    if (secrets.length === 0) {
       // Sem segredo configurado: não valida (piloto) — a rota loga o aviso.
       return true
     }
-    // .trim() em ambos: um espaço/quebra-de-linha colado junto do segredo no
-    // Cloudflare não deve quebrar a validação.
+    // .trim() nos dois lados: um espaço/quebra-de-linha colado junto do segredo
+    // no Cloudflare não deve quebrar a validação.
     const provided = (
       ctx.headers.get('x-email-token') ||
       ctx.headers.get('x-inbound-token') ||
       ''
     ).trim()
-    return provided === secret.trim()
+    return secrets.includes(provided)
   },
 
   parseWebhook(body: unknown): ParsedWebhook {

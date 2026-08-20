@@ -30,6 +30,14 @@ import type { ProviderId } from '@/lib/channels/provider'
 // SEM voz (furo de onboarding do Felipe). Agora o :3999 é o piso, e a env só
 // sobrepõe se apontar pra outro lugar de propósito. Ver [[crmfluxia-waha-voice-engine-3999]].
 const WAHA_VOICE_BASE_URL = 'http://72.60.137.234:3999'
+
+// E-mail HOSPEDADO (multi-tenant): o cliente só escolhe um "apelido" e a
+// plataforma monta `apelido@<EMAIL_HOSTED_DOMAIN>` no domínio verificado da
+// Fluxia — sem DNS, sem token (recebe pelo catch-all do Cloudflare Worker,
+// valida pela env compartilhada EMAIL_INBOUND_SECRET, envia pela RESEND_API_KEY
+// global). Ver [[crmfluxia-email-canal]].
+const EMAIL_HOSTED_DOMAIN =
+  process.env.EMAIL_HOSTED_DOMAIN || 'atendimento.salestecnologia.com.br'
 const MANAGED = {
   waha: {
     baseUrl: process.env.WAHA_BASE_URL || WAHA_VOICE_BASE_URL,
@@ -238,17 +246,41 @@ function buildCreateInput(
       }
     }
     case 'email': {
-      // Conexão MANUAL: endereço de recebimento + (opcional) chave Resend, From,
-      // nome e segredo de inbound. Nasce 'connected' (não pareia por QR).
+      const from_name = str(config.from_name)
+      const handleRaw = str(config.handle)
       const addressRaw = str(config.address)
+
+      // HOSPEDADO (padrão): cliente só dá um apelido → `apelido@<domínio>`.
+      // Tolerante: se digitar o e-mail inteiro, pega só a parte antes do @.
+      // Sem segredo/chave por canal (usa a env compartilhada + Resend global).
+      if (handleRaw && !addressRaw) {
+        const handle = handleRaw.split('@')[0].trim().toLowerCase()
+        if (!/^[a-z0-9](?:[a-z0-9._-]{0,30}[a-z0-9])?$/.test(handle)) {
+          throw new BadRequestError(
+            'Escolha um endereço válido (letras minúsculas, números, ponto, hífen ou "_"). Ex.: atendimento, suporte.vendas',
+          )
+        }
+        const address = `${handle}@${EMAIL_HOSTED_DOMAIN}`
+        const credentials: Record<string, unknown> = {}
+        if (from_name) credentials.fromName = from_name
+        return {
+          provider,
+          name,
+          status: 'connected',
+          credentials,
+          providerMeta: { address, from: address },
+        }
+      }
+
+      // AVANÇADO / BYO: endereço completo + (opcional) From, chave Resend e
+      // segredo de inbound próprios. Nasce 'connected' (não pareia por QR).
       const address = addressRaw ? addressRaw.trim().toLowerCase() : null
       if (!address || !address.includes('@')) {
         throw new BadRequestError(
-          'email channel requires a valid `address` (ex.: contato@atendimento.salestecnologia.com.br)',
+          'Informe um apelido de e-mail (ex.: atendimento) ou o endereço completo no modo avançado.',
         )
       }
       const from = str(config.from)
-      const from_name = str(config.from_name)
       const resend_api_key = str(config.resend_api_key)
       // Auto-gera o segredo do webhook se não vier — vai no Cloudflare Worker.
       const inbound_secret = str(config.inbound_secret) || randomBytes(16).toString('hex')
@@ -320,10 +352,21 @@ class BadRequestError extends Error {}
 function isDuplicateNameError(err: unknown): boolean {
   const e = err as { code?: string; constraint?: string; message?: string }
   return (
-    e?.code === '23505' ||
-    e?.constraint === 'channels_account_id_name_key' ||
-    (typeof e?.message === 'string' &&
-      e.message.includes('channels_account_id_name_key'))
+    e?.code === '23505' &&
+    (e?.constraint === 'channels_account_id_name_key' ||
+      (typeof e?.message === 'string' &&
+        e.message.includes('channels_account_id_name_key')))
+  )
+}
+
+/** Detect a duplicate email-address violation (unique idx channels_email_addr). */
+function isDuplicateEmailAddressError(err: unknown): boolean {
+  const e = err as { code?: string; constraint?: string; message?: string }
+  return (
+    e?.code === '23505' &&
+    (e?.constraint === 'channels_email_addr' ||
+      (typeof e?.message === 'string' &&
+        e.message.includes('channels_email_addr')))
   )
 }
 
@@ -378,6 +421,12 @@ export async function POST(request: Request) {
     try {
       channel = await createChannel(ctx.accountId, input)
     } catch (err) {
+      if (isDuplicateEmailAddressError(err)) {
+        return NextResponse.json(
+          { error: 'Esse endereço de e-mail já está em uso. Escolha outro apelido.' },
+          { status: 409 },
+        )
+      }
       if (isDuplicateNameError(err)) {
         return NextResponse.json(
           { error: `A channel named "${name.trim()}" already exists.` },
