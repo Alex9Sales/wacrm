@@ -26,6 +26,7 @@ import {
   MapPin,
   Users,
   MessageCircle,
+  Globe,
 } from 'lucide-react';
 
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider';
@@ -44,6 +45,7 @@ import { cn } from '@/lib/utils';
 
 import { WhatsAppConfig } from './whatsapp-config';
 import { AddChannelDialog } from './add-channel-dialog';
+import { EmailDomainDialog, type DomainState } from './email-domain-dialog';
 import { ChannelQrModal } from './channel-qr-modal';
 import { ChannelLocationDialog } from './channel-location-dialog';
 import { ChannelPixDialog } from './channel-pix-dialog';
@@ -134,6 +136,10 @@ export function ChannelsTab() {
   const [addOpen, setAddOpen] = useState(false);
   // The channel currently being paired via the QR modal (non-Meta only).
   const [pairing, setPairing] = useState<ChannelSummary | null>(null);
+  // E-mail com domínio próprio em setup (registros DNS + encaminhamento).
+  const [domainSetup, setDomainSetup] = useState<
+    { channelId: string; initial: DomainState | null } | null
+  >(null);
   // The channel whose business location is being set.
   const [locating, setLocating] = useState<ChannelSummary | null>(null);
   // The channel whose Pix key is being set.
@@ -308,6 +314,7 @@ export function ChannelsTab() {
               onGroups={() => setGrouping(ch)}
               onComments={() => setCommenting(ch)}
               onDelete={() => setDeleting(ch)}
+              onConfigureDomain={() => setDomainSetup({ channelId: ch.id, initial: null })}
             />
           ))}
         </div>
@@ -332,6 +339,19 @@ export function ChannelsTab() {
           setAddOpen(false);
           setView({ kind: 'meta', channelId: null });
         }}
+        onBrandedCreated={({ channelId, initial }) => {
+          setAddOpen(false);
+          void load();
+          setDomainSetup({ channelId, initial });
+        }}
+      />
+
+      {/* Setup do domínio próprio (white-label): registros DNS + encaminhamento. */}
+      <EmailDomainDialog
+        channelId={domainSetup?.channelId ?? null}
+        initial={domainSetup?.initial ?? null}
+        onClose={() => setDomainSetup(null)}
+        onVerified={() => void load()}
       />
 
       {/* Business location editor for a channel. */}
@@ -507,6 +527,7 @@ function ChannelRow({
   onGroups,
   onComments,
   onDelete,
+  onConfigureDomain,
 }: {
   channel: ChannelSummary;
   onEditMeta: () => void;
@@ -516,10 +537,14 @@ function ChannelRow({
   onGroups: () => void;
   onComments: () => void;
   onDelete: () => void;
+  onConfigureDomain: () => void;
 }) {
   const isMeta = channel.provider === 'meta';
   const isInstagram = channel.provider === 'instagram';
   const canPair = CAPABILITIES[channel.provider]?.qrPairing ?? false;
+  const isBrandedEmail =
+    channel.provider === 'email' &&
+    (channel.provider_meta as { mode?: string }).mode === 'branded';
   const pairLabel =
     channel.status === 'connected' ? 'Reparear' : 'Parear';
   const hasLocation = !!(channel.provider_meta as { location?: unknown })
@@ -573,6 +598,19 @@ function ChannelRow({
               {pairLabel}
             </Button>
           ) : null}
+
+          {isBrandedEmail && (
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={onConfigureDomain}
+              className="border-border"
+              title="Registros DNS + encaminhamento do domínio próprio"
+            >
+              <Globe className="size-3.5" />
+              {channel.status === 'connected' ? 'Domínio' : 'Configurar domínio'}
+            </Button>
+          )}
 
           <Button
             variant="ghost"

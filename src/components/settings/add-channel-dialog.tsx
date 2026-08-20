@@ -32,6 +32,10 @@ import { Label } from '@/components/ui/label';
 import { PROVIDER_LABELS, type ChannelSummary } from './channels-tab';
 import { EmbeddedSignupButton } from './embedded-signup-button';
 import { ChannelProviderIcon } from './channel-provider-icon';
+import type { DomainState } from './email-domain-dialog';
+
+/** Modo de criação do canal de e-mail: apelido hospedado vs. domínio próprio. */
+type EmailMode = 'hosted' | 'branded';
 
 interface AddChannelDialogProps {
   open: boolean;
@@ -41,6 +45,8 @@ interface AddChannelDialogProps {
   onCreated: (created: ChannelSummary | null) => void;
   /** Meta was picked — the parent swaps to the WhatsAppConfig editor. */
   onPickMeta: () => void;
+  /** E-mail com domínio próprio criado — o pai abre o modal de setup do DNS. */
+  onBrandedCreated?: (payload: { channelId: string; initial: DomainState }) => void;
 }
 
 const PROVIDER_ORDER: ProviderId[] = ['meta', 'instagram', 'messenger', 'email', 'waha', 'evolution', 'evogo'];
@@ -150,24 +156,41 @@ const PROVIDER_FIELDS: Record<
   evogo: [],
 };
 
+// E-mail com DOMÍNIO PRÓPRIO (white-label): o cliente envia com a marca dele.
+const EMAIL_BRANDED_FIELDS: FieldDef[] = [
+  {
+    key: 'address',
+    label: 'Seu e-mail (no seu domínio)',
+    placeholder: 'atendimento@suaempresa.com.br',
+  },
+  {
+    key: 'from_name',
+    label: 'Nome do remetente',
+    placeholder: 'Atendimento',
+    optional: true,
+  },
+];
+
 export function AddChannelDialog({
   open,
   onOpenChange,
   onCreated,
   onPickMeta,
+  onBrandedCreated,
 }: AddChannelDialogProps) {
   const [provider, setProvider] = useState<ProviderId | null>(null);
   const [name, setName] = useState('');
   const [config, setConfig] = useState<Record<string, string>>({});
   const [submitting, setSubmitting] = useState(false);
+  const [emailMode, setEmailMode] = useState<EmailMode>('hosted');
 
-  const fields = useMemo(
-    () =>
-      provider && provider !== 'meta'
-        ? PROVIDER_FIELDS[provider as Exclude<ProviderId, 'meta'>]
-        : [],
-    [provider],
-  );
+  const fields = useMemo(() => {
+    if (!provider || provider === 'meta') return [];
+    if (provider === 'email') {
+      return emailMode === 'branded' ? EMAIL_BRANDED_FIELDS : PROVIDER_FIELDS.email;
+    }
+    return PROVIDER_FIELDS[provider as Exclude<ProviderId, 'meta'>];
+  }, [provider, emailMode]);
 
   // Preview do endereço hospedado (só e-mail): sanitiza o que o cliente digita.
   const emailHandle = (config.handle ?? '')
@@ -181,6 +204,7 @@ export function AddChannelDialog({
     setName('');
     setConfig({});
     setSubmitting(false);
+    setEmailMode('hosted');
   }, []);
 
   const handleClose = useCallback(
@@ -214,6 +238,44 @@ export function AddChannelDialog({
 
     setSubmitting(true);
     try {
+      // E-MAIL com DOMÍNIO PRÓPRIO: fluxo separado — cria o domínio no Resend
+      // e o pai abre o modal de setup do DNS (não é o create genérico).
+      if (provider === 'email' && emailMode === 'branded') {
+        const res = await fetch('/api/channels/email-domain', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            name: name.trim(),
+            address: (config.address ?? '').trim(),
+            from_name: (config.from_name ?? '').trim() || undefined,
+          }),
+        });
+        if (!res.ok) {
+          const payload = await res.json().catch(() => ({}));
+          toast.error(payload.error || 'Falha ao criar o canal.');
+          return;
+        }
+        const data = (await res.json()) as {
+          channelId: string;
+          ingestAddress: string;
+          domain: { id: string; name: string; status: string; records: DomainState['records'] };
+        };
+        toast.success('Canal criado! Agora configure o DNS para verificar o domínio.');
+        onBrandedCreated?.({
+          channelId: data.channelId,
+          initial: {
+            status: data.domain.status,
+            verified: data.domain.status === 'verified',
+            records: data.domain.records,
+            ingestAddress: data.ingestAddress,
+            address: (config.address ?? '').trim().toLowerCase(),
+            domainName: data.domain.name,
+          },
+        });
+        reset();
+        return;
+      }
+
       const cleanConfig: Record<string, string> = {};
       for (const f of fields) {
         const v = config[f.key]?.trim();
@@ -263,7 +325,7 @@ export function AddChannelDialog({
     } finally {
       setSubmitting(false);
     }
-  }, [provider, name, fields, config, onCreated, reset]);
+  }, [provider, name, fields, config, emailMode, onCreated, onBrandedCreated, reset]);
 
   return (
     <Dialog open={open} onOpenChange={handleClose}>
@@ -352,6 +414,47 @@ export function AddChannelDialog({
                 className="border-border bg-muted text-foreground placeholder:text-muted-foreground"
               />
             </div>
+            {provider === 'email' && (
+              <div className="space-y-1.5">
+                <Label className="text-muted-foreground">Tipo de endereço</Label>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEmailMode('hosted');
+                      setConfig({});
+                    }}
+                    className={`rounded-md border px-3 py-2 text-left text-xs transition ${
+                      emailMode === 'hosted'
+                        ? 'border-primary/60 bg-primary/10'
+                        : 'border-border bg-muted/40 hover:bg-muted'
+                    }`}
+                  >
+                    <span className="block font-medium text-foreground">Apelido Fluxia</span>
+                    <span className="text-muted-foreground">
+                      Pronto na hora, sem DNS.
+                    </span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setEmailMode('branded');
+                      setConfig({});
+                    }}
+                    className={`rounded-md border px-3 py-2 text-left text-xs transition ${
+                      emailMode === 'branded'
+                        ? 'border-primary/60 bg-primary/10'
+                        : 'border-border bg-muted/40 hover:bg-muted'
+                    }`}
+                  >
+                    <span className="block font-medium text-foreground">Meu domínio</span>
+                    <span className="text-muted-foreground">
+                      Sua marca. Exige DNS + encaminhamento.
+                    </span>
+                  </button>
+                </div>
+              </div>
+            )}
             {provider === 'instagram' && (
               <div className="space-y-1.5">
                 <a
@@ -415,7 +518,7 @@ export function AddChannelDialog({
                 />
               </div>
             ))}
-            {provider === 'email' && (
+            {provider === 'email' && emailMode === 'hosted' && (
               <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
                 Seu e-mail:{' '}
                 <strong className="break-all text-foreground">
@@ -424,6 +527,13 @@ export function AddChannelDialog({
                 <br />
                 Dê esse endereço aos seus clientes — as mensagens caem aqui no
                 inbox e você responde por aqui mesmo. Sem DNS, sem configuração.
+              </div>
+            )}
+            {provider === 'email' && emailMode === 'branded' && (
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                Depois de criar, você adiciona uns registros no DNS do seu
+                domínio e configura um encaminhamento — te guiamos na tela
+                seguinte. Assim o e-mail sai com a <strong>sua marca</strong>.
               </div>
             )}
           </div>

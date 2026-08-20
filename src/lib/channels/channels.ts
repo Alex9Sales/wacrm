@@ -157,8 +157,11 @@ export async function loadMessengerChannelByPageId(
   return row ? toCtx(row) : null;
 }
 
-/** Roteamento do webhook de e-mail: acha o canal pelo endereço de destino
- *  (provider_meta.address), case-insensitive. */
+/** Roteamento do webhook de e-mail: acha o canal pelo endereço de DESTINO,
+ *  case-insensitive. Casa tanto o `address` (canal hospedado, ou a marca do
+ *  cliente) quanto o `ingestAddress` (canal com domínio próprio: o cliente
+ *  ENCAMINHA a marca dele → esse alias hospedado, então o e-mail chega aqui com
+ *  `to` = ingestAddress). */
 export async function loadEmailChannelByAddress(
   address: string,
 ): Promise<ChannelCtx | null> {
@@ -170,7 +173,8 @@ export async function loadEmailChannelByAddress(
       .where(
         and(
           eq(channels.provider, 'email'),
-          sql`lower(${channels.providerMeta}->>'address') = ${addr}`,
+          sql`(lower(${channels.providerMeta}->>'address') = ${addr}
+               OR lower(${channels.providerMeta}->>'ingestAddress') = ${addr})`,
         ),
       )
       .limit(1),

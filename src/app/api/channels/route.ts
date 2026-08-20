@@ -18,6 +18,7 @@ import { eq } from 'drizzle-orm'
 import { db, channels } from '@/db'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { createChannel, type CreateChannelInput } from '@/lib/channels/channels'
+import { EMAIL_HOSTED_DOMAIN } from '@/lib/channels/providers/email-domains'
 import type { ProviderId } from '@/lib/channels/provider'
 
 // Managed (Fluxia-hosted) infra for the non-official providers. When these
@@ -35,9 +36,8 @@ const WAHA_VOICE_BASE_URL = 'http://72.60.137.234:3999'
 // plataforma monta `apelido@<EMAIL_HOSTED_DOMAIN>` no domínio verificado da
 // Fluxia — sem DNS, sem token (recebe pelo catch-all do Cloudflare Worker,
 // valida pela env compartilhada EMAIL_INBOUND_SECRET, envia pela RESEND_API_KEY
-// global). Ver [[crmfluxia-email-canal]].
-const EMAIL_HOSTED_DOMAIN =
-  process.env.EMAIL_HOSTED_DOMAIN || 'atendimento.salestecnologia.com.br'
+// global). Ver [[crmfluxia-email-canal]]. `EMAIL_HOSTED_DOMAIN` mora em
+// email-domains.ts (compartilhado com o fluxo de domínio próprio).
 const MANAGED = {
   waha: {
     baseUrl: process.env.WAHA_BASE_URL || WAHA_VOICE_BASE_URL,
@@ -94,9 +94,18 @@ function safeProviderMeta(
     return { page_id: meta.page_id ?? null, graphBase: meta.graphBase ?? null, location, pix }
   }
   if (provider === 'email') {
-    // Expõe só o endereço (recebe) + o From. resendApiKey/inboundSecret ficam
-    // no `credentials` (nunca expostos).
-    return { address: meta.address ?? null, from: meta.from ?? null, location, pix }
+    // Expõe endereço + From + (branded) o modo/domínio pra UI mostrar o botão
+    // "Configurar domínio". resendApiKey/inboundSecret/ingestAddress/domainId
+    // ficam no `credentials`/meta e NÃO são expostos.
+    return {
+      address: meta.address ?? null,
+      from: meta.from ?? null,
+      mode: meta.mode ?? null,
+      domain_name: meta.domainName ?? null,
+      domain_status: meta.domainStatus ?? null,
+      location,
+      pix,
+    }
   }
   // waha / evolution / evogo: baseUrl + the session or instance name.
   return {
