@@ -311,6 +311,100 @@ function norm(s: string): string {
 }
 
 /**
+ * Marca o negócio ligado à conversa (ou por id) como PERDIDO mantendo a etapa
+ * atual (perde-em-pé) + histórico rico. Reutilizável: IA (marcador [[PERDER:]])
+ * e, na fase 2, a auto-perda por follow-up esgotado. Best-effort, nunca lança.
+ */
+export async function markDealLostInPlace(input: {
+  accountId: string
+  userId: string | null
+  conversationId?: string | null
+  dealId?: string | null
+  reason?: string | null
+  by?: 'ai' | 'followup' | 'system'
+  followUps?: number | null
+}): Promise<{ dealId: string; stageName: string | null } | null> {
+  const { accountId, userId, conversationId, dealId } = input
+  const by = input.by ?? 'ai'
+  const reason = (input.reason || '').trim().slice(0, 120) || 'Sem interesse'
+  try {
+    // Acha o negócio ABERTO (por id, senão o mais recente ligado à conversa).
+    const deal = firstOrNull(
+      await db
+        .select({ id: deals.id, stageId: deals.stageId })
+        .from(deals)
+        .where(
+          and(
+            eq(deals.accountId, accountId),
+            eq(deals.status, 'open'),
+            dealId
+              ? eq(deals.id, dealId)
+              : conversationId
+                ? eq(deals.conversationId, conversationId)
+                : sql`false`,
+          ),
+        )
+        .orderBy(desc(deals.createdAt))
+        .limit(1),
+    )
+    if (!deal) return null
+    const stageName =
+      firstOrNull(
+        await db
+          .select({ name: pipelineStages.name })
+          .from(pipelineStages)
+          .where(eq(pipelineStages.id, deal.stageId))
+          .limit(1),
+      )?.name ?? null
+
+    // Perde EM PÉ: status='lost' + motivo, SEM mexer na etapa (perde onde parou).
+    await db
+      .update(deals)
+      .set({ status: 'lost', lostReason: reason })
+      .where(and(eq(deals.id, deal.id), eq(deals.accountId, accountId)))
+
+    // Evento rico: carimba a etapa da MORTE (Raio-X) + contexto (quem/follow-ups).
+    try {
+      await db.insert(dealEvents).values({
+        accountId,
+        actorUserId: userId || null,
+        dealId: deal.id,
+        type: 'status_changed',
+        data: {
+          from: 'open',
+          to: 'lost',
+          reason,
+          stageId: deal.stageId,
+          stageName,
+          by,
+          ...(input.followUps != null ? { followUps: input.followUps } : {}),
+        },
+      })
+    } catch (err) {
+      console.error('[ai lose] deal event falhou:', err)
+    }
+
+    // Nota interna (visível pra equipe na conversa).
+    if (conversationId) {
+      const ctx =
+        input.followUps != null
+          ? ` após ${input.followUps} follow-up(s) sem retorno`
+          : ''
+      await postInternalNote({
+        conversationId,
+        text: `🔻 Negócio marcado como PERDIDO${
+          stageName ? ` na etapa "${stageName}"` : ''
+        }${ctx} — motivo: ${reason}. (${by === 'ai' ? 'IA' : by})`,
+      })
+    }
+    return { dealId: deal.id, stageName }
+  } catch (err) {
+    console.error('[ai lose] falhou:', err)
+    return null
+  }
+}
+
+/**
  * Executa as ações de encerramento decididas pela IA. Best-effort, nunca lança.
  * Devolve o que fez (pra log).
  */
@@ -320,13 +414,29 @@ export async function applyCloseActions(input: {
   conversationId: string
   resolve: boolean
   funnelStageName: string | null
-}): Promise<{ resolved: boolean; movedTo: string | null }> {
-  const { accountId, userId, conversationId, resolve, funnelStageName } = input
+  /** Motivo da perda (marcador [[PERDER:]]) — perde EM PÉ, não move de etapa. */
+  loseReason?: string | null
+}): Promise<{ resolved: boolean; movedTo: string | null; lost: boolean }> {
+  const { accountId, userId, conversationId, resolve, funnelStageName, loseReason } = input
   let resolved = false
   let movedTo: string | null = null
+  let lost = false
 
-  // 1) Mover o card do funil (se a IA pediu e casar uma etapa do funil do deal).
-  if (funnelStageName && funnelStageName.trim()) {
+  // 0) Perder EM PÉ tem PRIORIDADE sobre mover: se a IA pediu [[PERDER:]], marca
+  // perdido mantendo a etapa e NÃO move o card (mover um perdido não faz sentido).
+  if (loseReason !== undefined && loseReason !== null) {
+    const r = await markDealLostInPlace({
+      accountId,
+      userId,
+      conversationId,
+      reason: loseReason,
+      by: 'ai',
+    })
+    lost = !!r
+  }
+
+  // 1) Mover o card do funil (se a IA pediu, casar uma etapa e NÃO tiver perdido).
+  if (!lost && funnelStageName && funnelStageName.trim()) {
     try {
       const deal = firstOrNull(
         await db
@@ -401,5 +511,5 @@ export async function applyCloseActions(input: {
     }
   }
 
-  return { resolved, movedTo }
+  return { resolved, movedTo, lost }
 }

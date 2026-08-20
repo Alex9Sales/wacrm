@@ -63,6 +63,19 @@ describe('parseCloseDirectives', () => {
     expect(parseCloseDirectives('[[VOZ:texto]]').voicePref).toBe('text')
   })
 
+  it('extrai [[PERDER:motivo]] (perde-em-pé) e limpa o texto', () => {
+    const d = parseCloseDirectives('Sem problemas, obrigado!\n[[PERDER:Achou caro]]')
+    expect(d.lose).toEqual({ reason: 'Achou caro' })
+    expect(d.funnelStage).toBeNull()
+    expect(d.text).toBe('Sem problemas, obrigado!')
+  })
+
+  it('[[PERDER]] sem motivo → reason vazio (vira default no apply)', () => {
+    const d = parseCloseDirectives('Até mais!\n[[PERDER]]')
+    expect(d.lose).toEqual({ reason: '' })
+    expect(d.text).toBe('Até mais!')
+  })
+
   it('sem marcadores = texto intacto', () => {
     const d = parseCloseDirectives('Oi, tudo bem?')
     expect(d).toMatchObject({

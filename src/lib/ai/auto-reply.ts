@@ -302,13 +302,16 @@ export async function dispatchInboundToAiReply(
     const runClose = async () => {
       const wantResolve = has('resolve') && dirs.resolve
       const wantMove = has('move_card') && dirs.funnelStage
-      if (wantResolve || wantMove) {
+      // Perder EM PÉ compartilha o gate de mutação do card ('move_card').
+      const wantLose = has('move_card') && dirs.lose
+      if (wantResolve || wantMove || wantLose) {
         const r = await applyCloseActions({
           accountId,
           userId: configOwnerUserId || null,
           conversationId,
           resolve: wantResolve,
           funnelStageName: wantMove ? dirs.funnelStage : null,
+          loseReason: wantLose ? dirs.lose!.reason : null,
         })
         console.log('[ai auto-reply] encerramento:', JSON.stringify(r))
         // Se a IA moveu o card, recalcula o "próximo follow-up" pela nova etapa
@@ -341,7 +344,10 @@ export async function dispatchInboundToAiReply(
         await runTransfer()
         return
       }
-      if ((has('resolve') && dirs.resolve) || (has('move_card') && dirs.funnelStage)) {
+      if (
+        (has('resolve') && dirs.resolve) ||
+        (has('move_card') && (dirs.funnelStage || dirs.lose))
+      ) {
         await runClose()
         await applyTags()
         return

@@ -77,6 +77,9 @@ export function aiReplyBufferMs(): number {
 export const RESOLVE_DIRECTIVE = /\[\[\s*resolver\s*\]\]/i
 /** Encerramento (opt-in): mover o card do funil pra etapa <nome>. */
 export const FUNNEL_DIRECTIVE = /\[\[\s*funil\s*:\s*([^\]]+?)\s*\]\]/i
+/** Perder EM PÉ: marca o negócio como perdido MANTENDO a etapa (perde-em-pé).
+ *  Motivo opcional: [[PERDER:Achou caro]] ou só [[PERDER]]. */
+export const LOSE_DIRECTIVE = /\[\[\s*perder\s*(?::\s*([^\]]+?))?\s*\]\]/i
 /** Não responder: a mensagem não pede resposta (ex.: "ok"/emoji). */
 export const SKIP_DIRECTIVE = /\[\[\s*ignorar\s*\]\]/i
 /** Etiquetar o contato com uma etiqueta EXISTENTE (captura o nome). Global. */
@@ -107,6 +110,8 @@ export interface AgentDirectives {
   resolve: boolean
   /** Encerramento: etapa do funil pedida (nome), ou null. */
   funnelStage: string | null
+  /** Perder EM PÉ: motivo da perda (mantém a etapa), ou null. */
+  lose: { reason: string } | null
   /** Agendamento: horário combinado (hora local "YYYY-MM-DDTHH:MM") + título. */
   schedule: { startsLocal: string; title: string } | null
   /** Transferência: etiqueta de roteamento + resumo pro atendente. */
@@ -127,6 +132,8 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const resolve = RESOLVE_DIRECTIVE.test(raw)
   const fm = raw.match(FUNNEL_DIRECTIVE)
   const funnelStage = fm ? fm[1].trim() : null
+  const pm = raw.match(LOSE_DIRECTIVE)
+  const lose = pm ? { reason: (pm[1] || '').trim() } : null
   const sm = raw.match(SCHEDULE_DIRECTIVE)
   const schedule = sm
     ? { startsLocal: sm[1].trim(), title: (sm[2] || '').trim() }
@@ -161,6 +168,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     .replace(new RegExp(ATTR_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(VOICE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(FUNNEL_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(LOSE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(RESOLVE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(SKIP_DIRECTIVE.source, 'gi'), '')
     .replace(/\n{3,}/g, '\n\n')
@@ -171,6 +179,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     tags,
     resolve,
     funnelStage,
+    lose,
     schedule,
     transfer,
     createCard,
@@ -254,7 +263,7 @@ export function moveCardInstruction(stages: string[]): string {
   return (
     'Keeping the deal card in sync with reality: the linked deal sits in a pipeline whose stages, in order, are: ' +
     stages.join(' → ') +
-    '. As the conversation progresses, move the card to the stage that matches where things ACTUALLY are, by emitting "[[FUNIL:<stage>]]" on its own line, choosing EXACTLY one name from that list. Move it FORWARD, one step at a time, only when something real just changed: when the customer shows clear interest or becomes qualified, move to an early "qualified/interested"-type stage; when you agree on and schedule a concrete meeting, move to a "scheduled/appointment"-type stage (emit it together with the [[AGENDAR:...]] marker). Then STOP there — do NOT jump ahead to stages that depend on a human or on the customer showing up (a "confirmed", "attended/compareceu", or "won" stage): those are moved later by a human or by an automated follow-up, not by you now. Do NOT move the card on every message, and do not move it backwards. If the customer clearly loses interest or drops out, you may move it to a "lost/perdido"-type stage. This marker is control metadata: never show it to the customer.'
+    '. As the conversation progresses, move the card to the stage that matches where things ACTUALLY are, by emitting "[[FUNIL:<stage>]]" on its own line, choosing EXACTLY one name from that list. Move it FORWARD, one step at a time, only when something real just changed: when the customer shows clear interest or becomes qualified, move to an early "qualified/interested"-type stage; when you agree on and schedule a concrete meeting, move to a "scheduled/appointment"-type stage (emit it together with the [[AGENDAR:...]] marker). Then STOP there — do NOT jump ahead to stages that depend on a human or on the customer showing up (a "confirmed", "attended/compareceu", or "won" stage): those are moved later by a human or by an automated follow-up, not by you now. Do NOT move the card on every message, and do not move it backwards. Do NOT use this marker to mark a deal as lost: when the customer clearly loses interest, drops out, or says no, emit "[[PERDER:<short reason>]]" instead — it marks the deal as lost while KEEPING it on the CURRENT stage (so the funnel report shows exactly WHERE it was lost). This marker is control metadata: never show it to the customer.'
   )
 }
 
@@ -271,9 +280,12 @@ export function closeInstruction(opts: {
   }
   if (opts.moveCard && opts.stages.length > 0) {
     actions.push(
-      `"[[FUNIL:<stage>]]" to move the linked deal card to the most fitting stage, choosing EXACTLY one name from this list: ${opts.stages.join(
+      `"[[FUNIL:<stage>]]" to move the linked deal card FORWARD to the most fitting stage, choosing EXACTLY one name from this list: ${opts.stages.join(
         ' | ',
-      )} (e.g. a "lost"/"perdido"-type stage when the customer is not interested, or a "reengage"/"reativar"-type stage to try again later)`,
+      )} (use it only to advance the deal — never to mark it lost)`,
+    )
+    actions.push(
+      '"[[PERDER:<short reason>]]" to mark the deal as LOST while keeping it on its CURRENT stage (do this — instead of moving to any "lost/perdido" stage — when the customer is not interested, says no, or drops out; the short reason powers the loss-by-stage report, e.g. "achou caro", "sem retorno", "comprou concorrente")',
     )
   }
   if (actions.length === 0) return ''

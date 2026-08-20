@@ -592,13 +592,15 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         const cTools2 = config?.tools ?? []
         const wantResolve = cTools2.includes('resolve') && !!closeDirs?.resolve
         const wantMove = cTools2.includes('move_card') && !!closeDirs?.funnelStage
-        if (wantResolve || wantMove) {
+        const wantLose = cTools2.includes('move_card') && !!closeDirs?.lose
+        if (wantResolve || wantMove || wantLose) {
           const rr = await applyCloseActions({
             accountId: agent.account_id,
             userId: agent.created_by ?? null,
             conversationId: c.id,
             resolve: wantResolve,
             funnelStageName: wantMove ? closeDirs!.funnelStage : null,
+            loseReason: wantLose ? closeDirs!.lose!.reason : null,
           })
           console.log('[followup] encerramento:', JSON.stringify(rr))
         }
