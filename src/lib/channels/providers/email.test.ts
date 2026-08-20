@@ -62,7 +62,7 @@ describe('email provider — parseWebhook', () => {
     expect(media.externalMessageId).not.toBe(messages[0].externalMessageId) // id único
   })
 
-  it('ignora anexo inline (logo de assinatura)', () => {
+  it('ignora anexo inline PEQUENO (logo de assinatura)', () => {
     const { messages } = emailProvider.parseWebhook({
       from: 'ana@cliente.com',
       text: 'Oi',
@@ -72,5 +72,21 @@ describe('email provider — parseWebhook', () => {
     })
     expect(messages).toHaveLength(1) // só o texto
     expect(messages[0].contentType).toBe('text')
+  })
+
+  it('MANTÉM foto inline GRANDE (Gmail/iPhone mandam foto como inline)', () => {
+    // ~30KB de base64 ≈ 22KB de bytes → acima do piso de 20KB.
+    const bigBase64 = 'A'.repeat(30 * 1024)
+    const { messages } = emailProvider.parseWebhook({
+      from: 'ana@cliente.com',
+      subject: 'Foto',
+      text: 'Segue a foto.',
+      attachments: [
+        { filename: 'image0.jpeg', mimeType: 'image/jpeg', disposition: 'inline', base64: bigBase64 },
+      ],
+    })
+    expect(messages).toHaveLength(2) // texto + a foto
+    expect(messages[1].contentType).toBe('image')
+    expect(messages[1].media?.mimetype).toBe('image/jpeg')
   })
 })

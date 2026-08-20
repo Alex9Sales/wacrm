@@ -252,10 +252,20 @@ export const emailProvider: WhatsAppProvider = {
     const subject = (b.subject || '').trim()
     const content = subject ? `✉️ ${subject}\n\n${text}` : text
 
-    // Anexos "de verdade": ignora inline (logos/assinaturas embutidas no HTML).
+    // Anexos "de verdade". Gmail/iPhone mandam FOTO como `inline` (não
+    // "attachment"), então não dá pra descartar todo inline — senão a foto do
+    // cliente some. Só descartamos inline PEQUENO (logo/pixel de assinatura
+    // embutido). Foto/arquivo real (grande) sempre entra.
+    const INLINE_MIN_BYTES = 20 * 1024
     const attachments = (Array.isArray(b.attachments) ? b.attachments : []).filter(
-      (a): a is Required<Pick<EmailAttachment, 'base64'>> & EmailAttachment =>
-        !!a && typeof a.base64 === 'string' && !!a.base64 && a.disposition !== 'inline',
+      (a): a is Required<Pick<EmailAttachment, 'base64'>> & EmailAttachment => {
+        if (!a || typeof a.base64 !== 'string' || !a.base64) return false
+        if (a.disposition === 'inline') {
+          const bytes = Math.floor((a.base64.length * 3) / 4)
+          if (bytes < INLINE_MIN_BYTES) return false
+        }
+        return true
+      },
     )
 
     // Texto: emite quando há corpo/assunto, OU quando não há anexo (pra a
