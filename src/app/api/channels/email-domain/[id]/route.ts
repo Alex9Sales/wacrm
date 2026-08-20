@@ -99,7 +99,15 @@ export async function POST(
         { status: 404 },
       )
     }
-    const domain = await verifyBrandedDomain(loaded.resendDomainId)
+    // Lê o status ATUAL primeiro: se o Resend já verificou (ele auto-checa em
+    // background), reflete na hora. `verify()` reseta o status pra 'pending'
+    // por um instante enquanto re-checa — chamá-lo à toa faria o botão dizer
+    // "ainda verificando" mesmo com o domínio já verde. Só cutuca o verify()
+    // quando ainda NÃO está verificado.
+    let domain = await getBrandedDomain(loaded.resendDomainId)
+    if (domain.status !== 'verified') {
+      domain = await verifyBrandedDomain(loaded.resendDomainId)
+    }
     return syncAndRespond(id, ctx.accountId, loaded.meta, domain)
   } catch (err) {
     return toErrorResponse(err)
