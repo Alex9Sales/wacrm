@@ -20,6 +20,7 @@ export const CHANNEL_PROVIDER_LABELS: Record<ChannelProvider, string> = {
   instagram: "Instagram",
   messenger: "Messenger",
   email: "E-mail",
+  gmail: "Gmail",
 };
 
 /** Glifo do Instagram (câmera em quadrado arredondado) como SVG inline —
@@ -87,6 +88,9 @@ export function ChannelBadge({
     glyph = <MessengerGlyph className={iconCls} />;
   } else if (provider === "email") {
     bg = "bg-red-500/15 text-red-600 dark:text-red-300";
+    glyph = <Mail className={iconCls} />;
+  } else if (provider === "gmail") {
+    bg = "bg-[#EA4335]/15 text-[#EA4335] dark:text-red-300";
     glyph = <Mail className={iconCls} />;
   }
 

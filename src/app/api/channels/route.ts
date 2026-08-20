@@ -60,6 +60,7 @@ const PROVIDERS: ReadonlySet<ProviderId> = new Set([
   'instagram',
   'messenger',
   'email',
+  'gmail',
   'waha',
   'evolution',
   'evogo',
@@ -106,6 +107,10 @@ function safeProviderMeta(
       location,
       pix,
     }
+  }
+  if (provider === 'gmail') {
+    // Só o endereço Gmail. appPassword fica em `credentials` (nunca exposto).
+    return { address: meta.address ?? null, location, pix }
   }
   // waha / evolution / evogo: baseUrl + the session or instance name.
   return {
@@ -300,6 +305,34 @@ function buildCreateInput(
       if (from) providerMeta.from = from
       return { provider, name, status: 'connected', credentials, providerMeta }
     }
+    case 'gmail': {
+      // Gmail dedicado: e-mail + senha de app (2FA). Envia por SMTP, recebe por
+      // IMAP (worker). Nasce 'connected' (a rota valida o login antes).
+      const addressRaw = str(config.address)
+      const address = addressRaw ? addressRaw.trim().toLowerCase() : null
+      if (!address || !address.includes('@')) {
+        throw new BadRequestError(
+          'Informe o endereço do Gmail (ex.: seunegocio@gmail.com).',
+        )
+      }
+      const app_password = str(config.app_password)
+      if (!app_password) {
+        throw new BadRequestError('Cole a senha de app do Google (16 letras).')
+      }
+      const from_name = str(config.from_name)
+      const credentials: Record<string, unknown> = {
+        address,
+        appPassword: app_password.replace(/\s+/g, ''),
+      }
+      if (from_name) credentials.fromName = from_name
+      return {
+        provider,
+        name,
+        status: 'connected',
+        credentials,
+        providerMeta: { address },
+      }
+    }
     case 'waha': {
       // Managed by default: fall back to the platform WAHA server + auto
       // session. Advanced callers may still pass their own base_url/api_key.
@@ -424,6 +457,24 @@ export async function POST(request: Request) {
         return NextResponse.json({ error: err.message }, { status: 400 })
       }
       throw err
+    }
+
+    // Gmail: valida o login SMTP antes de criar — assim uma senha de app errada
+    // falha na hora, com mensagem clara, em vez de só no 1º envio.
+    if (provider === 'gmail') {
+      const creds = input.credentials as { address?: string; appPassword?: string }
+      try {
+        const { verifyGmailLogin } = await import('@/lib/channels/providers/gmail')
+        await verifyGmailLogin(String(creds.address ?? ''), String(creds.appPassword ?? ''))
+      } catch {
+        return NextResponse.json(
+          {
+            error:
+              'Não consegui conectar ao Gmail. Confira o e-mail e a senha de app (precisa da verificação em 2 etapas ativada).',
+          },
+          { status: 400 },
+        )
+      }
     }
 
     let channel

@@ -79,6 +79,7 @@ export const PROVIDER_LABELS: Record<ProviderId, string> = {
   instagram: 'Instagram Direct',
   messenger: 'Messenger',
   email: 'E-mail',
+  gmail: 'Gmail',
   waha: 'WAHA',
   evolution: 'Evolution',
   evogo: 'EvoGo',

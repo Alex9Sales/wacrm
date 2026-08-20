@@ -49,7 +49,7 @@ interface AddChannelDialogProps {
   onBrandedCreated?: (payload: { channelId: string; initial: DomainState }) => void;
 }
 
-const PROVIDER_ORDER: ProviderId[] = ['meta', 'instagram', 'messenger', 'email', 'waha', 'evolution', 'evogo'];
+const PROVIDER_ORDER: ProviderId[] = ['meta', 'instagram', 'messenger', 'email', 'gmail', 'waha', 'evolution', 'evogo'];
 
 // Domínio hospedado da Fluxia (espelha EMAIL_HOSTED_DOMAIN no servidor). Só pra
 // mostrar o preview do endereço; quem monta o endereço final é o backend.
@@ -60,6 +60,7 @@ const PROVIDER_BLURB: Record<ProviderId, string> = {
   instagram: 'Instagram Direct (DM) via API oficial do Meta. Cole o ID da conta Instagram e o token de acesso.',
   messenger: 'Facebook Messenger (DM da Página) via API oficial do Meta. Cole o ID da Página e o token de acesso.',
   email: 'E-mail no inbox — a Fluxia hospeda pra você. Escolha um apelido e ganhe um endereço @atendimento.salestecnologia.com.br na hora, sem mexer em DNS.',
+  gmail: 'Conecte um Gmail dedicado do negócio — envia e recebe como o seu Gmail. Precisa da senha de app do Google (verificação em 2 etapas).',
   waha: 'Provedor não oficial (WAHA), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
   evolution: 'Provedor não oficial (Evolution API), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
   evogo: 'Provedor não oficial (EvoGo), gerenciado pela Fluxia. Só dê um nome e pareie por QR Code.',
@@ -143,6 +144,26 @@ const PROVIDER_FIELDS: Record<
       key: 'handle',
       label: 'Apelido do e-mail (o que vem antes do @)',
       placeholder: 'atendimento',
+    },
+    {
+      key: 'from_name',
+      label: 'Nome do remetente',
+      placeholder: 'Atendimento',
+      optional: true,
+    },
+  ],
+  // Gmail dedicado: e-mail + senha de app (2FA). Envia por SMTP, recebe por IMAP.
+  gmail: [
+    {
+      key: 'address',
+      label: 'Seu Gmail (conta dedicada do negócio)',
+      placeholder: 'seunegocio@gmail.com',
+    },
+    {
+      key: 'app_password',
+      label: 'Senha de app do Google (16 letras)',
+      placeholder: 'xxxx xxxx xxxx xxxx',
+      secret: true,
     },
     {
       key: 'from_name',
@@ -304,6 +325,8 @@ export function AddChannelDialog({
       if (provider === 'email') {
         const h = (config.handle ?? '').split('@')[0].trim().toLowerCase();
         toast.success(`Canal de e-mail criado: ${h}@${EMAIL_HOSTED_DOMAIN}`);
+      } else if (provider === 'gmail') {
+        toast.success('Gmail conectado! Já dá pra enviar e receber.');
       } else if (provider === 'instagram' || provider === 'messenger') {
         toast.success('Canal criado com sucesso.');
       } else {
@@ -536,6 +559,23 @@ export function AddChannelDialog({
                 Depois de criar, você adiciona uns registros no DNS do seu
                 domínio e configura um encaminhamento — te guiamos na tela
                 seguinte. Assim o e-mail sai com a <strong>sua marca</strong>.
+              </div>
+            )}
+            {provider === 'gmail' && (
+              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
+                Como pegar a senha de app: ative a{' '}
+                <strong>verificação em 2 etapas</strong> no Google, depois vá em{' '}
+                <a
+                  href="https://myaccount.google.com/apppasswords"
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary hover:underline"
+                >
+                  Senhas de app
+                </a>{' '}
+                e gere uma — cole os 16 caracteres acima.
+                <br />⚠️ Use um <strong>Gmail dedicado</strong> do negócio: a
+                gente lê a caixa de entrada dele.
               </div>
             )}
           </div>

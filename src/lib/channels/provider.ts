@@ -13,7 +13,7 @@
 // ============================================================
 
 /** The set of transports we support. */
-export type ProviderId = 'meta' | 'waha' | 'evolution' | 'evogo' | 'instagram' | 'messenger' | 'email';
+export type ProviderId = 'meta' | 'waha' | 'evolution' | 'evogo' | 'instagram' | 'messenger' | 'email' | 'gmail';
 
 /**
  * What a given provider can and can't do. Drives capability checks
@@ -523,6 +523,20 @@ export const CAPABILITIES: Record<ProviderId, Capabilities> = {
     // E-mail: sem janela de 24h (composer nunca trava), sem QR, sem templates,
     // sem reações/interativos. Identidade por endereço (external_id). Anexos
     // (inbound: MIME → base64 → MinIO; outbound: Resend attachments).
+    templates: false,
+    session24hWindow: false,
+    interactive: false,
+    reactions: false,
+    typing: false,
+    qrPairing: false,
+    inboundMedia: true,
+    needsChatIdResolve: false,
+    needsJitter: false,
+  },
+  gmail: {
+    // Gmail pessoal/dedicado: envia por SMTP (senha de app), recebe por IMAP
+    // (worker de polling). Igual e-mail nas capabilities: identidade por
+    // endereço, sem janela/QR/templates/reações. Anexos suportados.
     templates: false,
     session24hWindow: false,
     interactive: false,

@@ -78,3 +78,11 @@ import('./deal-suggest-worker')
   .catch((err) => {
     console.error('[worker] deal-suggest failed to start:', err);
   });
+
+// Modo Gmail — tick de 1 min que lê a INBOX (IMAP) dos canais Gmail e traz as
+// mensagens novas pro inbox do CRM.
+import('./gmail-poll-worker')
+  .then((m) => m.startGmailPollWorker())
+  .catch((err) => {
+    console.error('[worker] gmail-poll failed to start:', err);
+  });

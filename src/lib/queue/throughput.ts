@@ -22,6 +22,7 @@ export const DEFAULT_THROUGHPUT_PER_MIN: Record<ProviderId, number> = {
   instagram: 60,
   messenger: 60,
   email: 60,
+  gmail: 30,
   waha: 10,
   evolution: 15,
   evogo: 10,

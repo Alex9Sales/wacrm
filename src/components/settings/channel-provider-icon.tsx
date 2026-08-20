@@ -86,6 +86,25 @@ export function ChannelProviderIcon({
       </span>
     );
   }
+  if (provider === 'gmail') {
+    // Envelope Gmail (vermelho no branco) — distinto do e-mail genérico.
+    return (
+      <span className={cn(box, 'bg-white ring-1 ring-black/10')}>
+        <svg
+          viewBox="0 0 24 24"
+          fill="none"
+          stroke="#EA4335"
+          strokeWidth="2"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+          className={glyph}
+        >
+          <rect x="2" y="4" width="20" height="16" rx="2" />
+          <path d="m2 7 10 6 10-6" />
+        </svg>
+      </span>
+    );
+  }
   // meta + waha + evolution + evogo → todos são WhatsApp (verde oficial).
   return (
     <span className={cn(box, 'bg-[#25D366]')}>

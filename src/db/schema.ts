@@ -479,7 +479,7 @@ export const channels = pgTable("channels", {
 			name: "channels_account_id_fkey"
 		}).onDelete("cascade"),
 	unique("channels_account_id_name_key").on(table.accountId, table.name),
-	check("channels_provider_check", sql`provider = ANY (ARRAY['meta'::text, 'waha'::text, 'evolution'::text, 'evogo'::text, 'instagram'::text, 'messenger'::text, 'email'::text])`),
+	check("channels_provider_check", sql`provider = ANY (ARRAY['meta'::text, 'waha'::text, 'evolution'::text, 'evogo'::text, 'instagram'::text, 'messenger'::text, 'email'::text, 'gmail'::text])`),
 	check("channels_status_check", sql`status = ANY (ARRAY['disconnected'::text, 'qr_pending'::text, 'connected'::text, 'error'::text])`),
 ]);
 
