@@ -1,19 +1,25 @@
 // ============================================================
-// GET /api/v1/conversations — list conversations (scope: conversations:read)
+// GET  /api/v1/conversations — list conversations (scope: conversations:read)
+// POST /api/v1/conversations — inicia/reabre uma conversa com um destinatário
+//      (scope: conversations:write). Body:
+//        E-mail/Gmail:  { "channel_id", "email", "name"? }
+//        WhatsApp:      { "channel_id", "phone", "name"? }
+//      Devolve { conversation_id, contact_created } — depois use
+//      POST /conversations/{id}/messages pra enviar. (Instagram/Messenger não
+//      permitem iniciar: exigem a 1ª mensagem do cliente.)
 //
-// Keyset-paginated (newest first). Filters: `?status=` (open/pending/
+// GET é keyset-paginated (newest first). Filters: `?status=` (open/pending/
 // closed), `?contact_id=`, `?channel_id=`, `?contact_phone=`,
-// `?created_after=` (ISO), and `?is_group=true|false` (só grupos / só 1:1 —
-// pra um agente monitorar os grupos). Each conversation embeds its contact
-// (with `is_group`) + tags (loaded in a second bounded query).
+// `?created_after=` (ISO), and `?is_group=true|false`.
 // ============================================================
 
 import { and, desc, eq, gte, lt, or } from 'drizzle-orm';
 
 import { db, contacts, conversations } from '@/db';
 import { normalizePhone } from '@/lib/whatsapp/phone-utils';
+import { loadChannel } from '@/lib/channels/channels';
 import { requireApiKey } from '@/lib/auth/api-context';
-import { okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { ok, okList, badRequest, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { parseListParams, buildPage } from '@/lib/api/v1/pagination';
 import { loadTagsByContact } from '@/lib/api/v1/contacts';
 import { serializeConversation } from '@/lib/api/v1/conversations';
@@ -112,6 +118,71 @@ export async function GET(request: Request) {
         } as unknown as Conversation)
       ),
       nextCursor
+    );
+  } catch (err) {
+    return toApiErrorResponse(err);
+  }
+}
+
+export async function POST(request: Request) {
+  try {
+    const ctx = await requireApiKey(request, 'conversations:write');
+
+    let body: {
+      channel_id?: unknown
+      email?: unknown
+      phone?: unknown
+      name?: unknown
+    };
+    try {
+      body = await request.json();
+    } catch {
+      return badRequest('Invalid JSON body');
+    }
+
+    const channelId = typeof body.channel_id === 'string' ? body.channel_id : '';
+    const name = typeof body.name === 'string' && body.name.trim() ? body.name.trim() : null;
+    if (!channelId) return badRequest('`channel_id` is required.');
+
+    const channel = await loadChannel(channelId);
+    if (!channel || channel.accountId !== ctx.accountId) {
+      return fail('not_found', 'Channel not found', 404);
+    }
+
+    let resolved: { conversationId: string; contactCreated: boolean };
+    if (channel.provider === 'email' || channel.provider === 'gmail') {
+      const email =
+        typeof body.email === 'string' ? body.email.trim().toLowerCase() : '';
+      if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(email)) {
+        return badRequest('`email` is required for an e-mail/Gmail channel.');
+      }
+      const { resolveEmailConversation } = await import('@/lib/channels/inbound');
+      resolved = await resolveEmailConversation(channel, email, name);
+    } else if (
+      channel.provider === 'meta' ||
+      channel.provider === 'waha' ||
+      channel.provider === 'evolution' ||
+      channel.provider === 'evogo'
+    ) {
+      const phone = typeof body.phone === 'string' ? body.phone.trim() : '';
+      if (!phone) return badRequest('`phone` is required for a WhatsApp channel.');
+      const { resolveConversationByPhone } = await import(
+        '@/lib/whatsapp/resolve-conversation'
+      );
+      const r = await resolveConversationByPhone(ctx.accountId, phone, name, channelId);
+      resolved = { conversationId: r.conversationId, contactCreated: r.contactCreated };
+    } else {
+      return badRequest(
+        'Não dá pra iniciar conversa nesse canal (Instagram/Messenger exigem a 1ª mensagem do cliente).',
+      );
+    }
+
+    return ok(
+      {
+        conversation_id: resolved.conversationId,
+        contact_created: resolved.contactCreated,
+      },
+      201,
     );
   } catch (err) {
     return toApiErrorResponse(err);
