@@ -7,7 +7,7 @@
 // ============================================================
 
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
-import { db, channels, companies, contacts, conversations, dealAttachments, dealContacts, dealEmails, dealEvents, dealProducts, dealProposals, dealQuestions, deals, member, messages, notifications, pipelines, pipelineStages, stageTaskTemplates, user } from '@/db'
+import { db, channels, companies, contacts, conversations, customFields, dealAttachments, dealContacts, dealCustomValues, dealEmails, dealEvents, dealProducts, dealProposals, dealQuestions, deals, member, messages, notifications, pipelines, pipelineStages, stageTaskTemplates, user } from '@/db'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 import { buildProposalData, loadDealProposalFields } from '@/lib/proposals/proposal'
 import {
@@ -2341,6 +2341,99 @@ export async function sendDealProposalEmail(
   } catch (err) {
     console.error('[sendDealProposalEmail]', err)
     return { error: err instanceof Error ? err.message : 'Falha ao enviar a proposta.' }
+  }
+}
+
+// ------------------------------------------------------------
+// Campos personalizados DO NEGÓCIO (entity='deal', migração 0113).
+// Definições em custom_fields (entity='deal'); valores em deal_custom_values.
+// Espelha os do contato, mas atrelados ao próprio negócio.
+// ------------------------------------------------------------
+export async function listDealCustomFieldsWithValues(
+  dealId: string,
+): Promise<{ fields: CustomField[]; values: Record<string, string> }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const [fields, vals] = await Promise.all([
+      db
+        .select({
+          id: customFields.id,
+          user_id: customFields.userId,
+          account_id: customFields.accountId,
+          field_name: customFields.fieldName,
+          field_type: customFields.fieldType,
+          field_options: customFields.fieldOptions,
+          entity: customFields.entity,
+          created_at: customFields.createdAt,
+        })
+        .from(customFields)
+        .where(and(eq(customFields.accountId, ctx.accountId), eq(customFields.entity, 'deal')))
+        .orderBy(asc(customFields.fieldName)),
+      db
+        .select({ fid: dealCustomValues.customFieldId, value: dealCustomValues.value })
+        .from(dealCustomValues)
+        .where(
+          and(eq(dealCustomValues.accountId, ctx.accountId), eq(dealCustomValues.dealId, dealId)),
+        ),
+    ])
+    const values: Record<string, string> = {}
+    for (const v of vals) values[v.fid] = v.value ?? ''
+    return { fields: fields as unknown as CustomField[], values }
+  } catch (err) {
+    console.error('[listDealCustomFieldsWithValues]', err)
+    return { fields: [], values: {} }
+  }
+}
+
+/** Salva os valores dos campos personalizados do negócio (upsert; vazio apaga). */
+export async function saveDealCustomValues(
+  dealId: string,
+  values: Record<string, string>,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const deal = firstOrNull(
+      await db
+        .select({ assignedTo: deals.assignedTo })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!deal) return { error: 'Negócio não encontrado.' }
+    if (!dealReadable(ctx.role, ctx.userId, deal.assignedTo)) {
+      return { error: 'Este negócio está atribuído a outro atendente.' }
+    }
+    for (const [fid, raw] of Object.entries(values)) {
+      const v = (raw ?? '').trim()
+      if (!v) {
+        await db
+          .delete(dealCustomValues)
+          .where(
+            and(
+              eq(dealCustomValues.dealId, dealId),
+              eq(dealCustomValues.customFieldId, fid),
+            ),
+          )
+        continue
+      }
+      await db
+        .insert(dealCustomValues)
+        .values({
+          accountId: ctx.accountId,
+          dealId,
+          customFieldId: fid,
+          value: v,
+          updatedAt: sql`now()`,
+        })
+        .onConflictDoUpdate({
+          target: [dealCustomValues.dealId, dealCustomValues.customFieldId],
+          set: { value: v, updatedAt: sql`now()` },
+        })
+    }
+    return { error: null }
+  } catch (err) {
+    console.error('[saveDealCustomValues]', err)
+    return { error: 'Falha ao salvar os campos.' }
   }
 }
 

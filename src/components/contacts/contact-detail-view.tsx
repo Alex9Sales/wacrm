@@ -202,7 +202,8 @@ export function ContactDetailView({
         listCustomFields(),
         listContactCustomValues(contactId),
       ]);
-      setCustomFields(fields);
+      // Só campos do CONTATO aqui (os de NEGÓCIO vivem no detalhe do negócio).
+      setCustomFields(fields.filter((f) => (f.entity ?? "contact") === "contact"));
       const map: Record<string, string> = {};
       values.forEach((v) => {
         map[v.custom_field_id] = v.value ?? '';

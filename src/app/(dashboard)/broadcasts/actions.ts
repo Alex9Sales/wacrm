@@ -322,7 +322,8 @@ export async function listCustomFields(): Promise<CustomField[]> {
       created_at: customFields.createdAt,
     })
     .from(customFields)
-    .where(eq(customFields.accountId, ctx.accountId))
+    // Disparo personaliza CONTATOS → só campos de contato (não os de negócio).
+    .where(and(eq(customFields.accountId, ctx.accountId), eq(customFields.entity, 'contact')))
     .orderBy(customFields.fieldName)
   return rows as unknown as CustomField[]
 }

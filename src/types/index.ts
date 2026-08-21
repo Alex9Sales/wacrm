@@ -136,6 +136,8 @@ export interface CustomField {
   field_name: string;
   field_type: string;
   field_options?: Record<string, unknown>;
+  /** 'contact' (default) ou 'deal' (campo do negócio). Migração 0113. */
+  entity?: string;
   created_at: string;
 }
 

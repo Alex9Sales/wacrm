@@ -959,6 +959,7 @@ export async function listCustomFields(): Promise<CustomField[]> {
       field_name: customFields.fieldName,
       field_type: customFields.fieldType,
       field_options: customFields.fieldOptions,
+      entity: customFields.entity,
       created_at: customFields.createdAt,
     })
     .from(customFields)
@@ -1099,18 +1100,31 @@ export async function listContactDeals(contactId: string): Promise<Deal[]> {
 // ============================================================
 
 /** Create a custom field definition. Admin+ only. */
+export type CustomFieldType =
+  | 'text'
+  | 'select'
+  | 'number'
+  | 'date'
+  | 'boolean'
+  | 'currency'
+
 export async function createCustomField(
   fieldName: string,
-  // 'text' (input livre) ou 'select' (opções pré-definidas, estilo RD).
-  fieldType: 'text' | 'select' = 'text',
+  // Tipos: texto/lista(select)/número/data/sim-não(boolean)/moeda.
+  fieldType: CustomFieldType = 'text',
   options: string[] = [],
+  // Escopo: 'contact' (padrão) ou 'deal' (campo do negócio). Migração 0113.
+  entity: 'contact' | 'deal' = 'contact',
 ): Promise<{ error: string | null }> {
   const name = fieldName.trim()
   if (!name) return { error: 'Field name is required' }
+  const ALLOWED: CustomFieldType[] = ['text', 'select', 'number', 'date', 'boolean', 'currency']
+  const type: CustomFieldType = ALLOWED.includes(fieldType) ? fieldType : 'text'
+  const scope: 'contact' | 'deal' = entity === 'deal' ? 'deal' : 'contact'
   const cleanOptions = Array.from(
     new Set(options.map((o) => o.trim()).filter(Boolean)),
   )
-  if (fieldType === 'select' && cleanOptions.length === 0) {
+  if (type === 'select' && cleanOptions.length === 0) {
     return { error: 'Um campo de seleção precisa de pelo menos uma opção.' }
   }
   try {
@@ -1125,6 +1139,7 @@ export async function createCustomField(
         .where(
           and(
             eq(customFields.accountId, ctx.accountId),
+            eq(customFields.entity, scope),
             ilike(customFields.fieldName, name),
           ),
         )
@@ -1133,8 +1148,9 @@ export async function createCustomField(
     if (clash) return { error: `A field named "${name}" already exists.` }
     await db.insert(customFields).values({
       fieldName: name,
-      fieldType,
-      fieldOptions: fieldType === 'select' ? { options: cleanOptions } : null,
+      fieldType: type,
+      fieldOptions: type === 'select' ? { options: cleanOptions } : null,
+      entity: scope,
       userId: ctx.userId,
       accountId: ctx.accountId,
     })

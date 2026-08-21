@@ -9,7 +9,17 @@ import {
   createCustomField,
   renameCustomField,
   deleteCustomField,
+  type CustomFieldType,
 } from '@/app/(dashboard)/contacts/actions';
+
+const TYPE_LABELS: Record<CustomFieldType, string> = {
+  text: 'Texto',
+  select: 'Seleção',
+  number: 'Número',
+  date: 'Data',
+  boolean: 'Sim/Não',
+  currency: 'Moeda (R$)',
+};
 import {
   Dialog,
   DialogContent,
@@ -42,9 +52,10 @@ export function CustomFieldsManager({
         <DialogHeader>
           <DialogTitle className="text-popover-foreground">Campos personalizados</DialogTitle>
           <DialogDescription className="text-muted-foreground">
-            Defina campos extras de contato (ex.: CEP, origem do lead). Eles
-            aparecem em todos os contatos e na ação de automação “Atualizar campo
-            do contato”.
+            Defina campos extras do <b>contato</b> (ex.: CEP, origem) ou do{' '}
+            <b>negócio</b> (ex.: orçamento, concorrente). Escolha o tipo
+            (texto, lista, número, data, sim/não, moeda). Aparecem na ficha do
+            contato ou do negócio.
           </DialogDescription>
         </DialogHeader>
         <CustomFieldsPanel />
@@ -65,7 +76,8 @@ export function CustomFieldsPanel() {
   const [fields, setFields] = useState<CustomField[]>([]);
   const [loading, setLoading] = useState(true);
   const [newName, setNewName] = useState('');
-  const [newType, setNewType] = useState<'text' | 'select'>('text');
+  const [newType, setNewType] = useState<CustomFieldType>('text');
+  const [newEntity, setNewEntity] = useState<'contact' | 'deal'>('contact');
   const [newOptions, setNewOptions] = useState('');
   const [creating, setCreating] = useState(false);
   const [busyId, setBusyId] = useState<string | null>(null);
@@ -92,11 +104,15 @@ export function CustomFieldsPanel() {
     }
   }, [accountId, fetchFields]);
 
-  /** Case-insensitive name clash within the loaded list. */
-  function isDuplicate(name: string, exceptId?: string): boolean {
+  /** Case-insensitive name clash within the SAME entity (contato/negócio). */
+  function isDuplicate(name: string, exceptId?: string, entity?: string): boolean {
     const lower = name.toLowerCase();
+    const ent = entity ?? newEntity;
     return fields.some(
-      (f) => f.id !== exceptId && f.field_name.toLowerCase() === lower
+      (f) =>
+        f.id !== exceptId &&
+        (f.entity ?? 'contact') === ent &&
+        f.field_name.toLowerCase() === lower,
     );
   }
 
@@ -125,7 +141,7 @@ export function CustomFieldsPanel() {
     }
 
     setCreating(true);
-    const { error } = await createCustomField(name, newType, options);
+    const { error } = await createCustomField(name, newType, options, newEntity);
     setCreating(false);
 
     if (error) {
@@ -198,30 +214,27 @@ export function CustomFieldsPanel() {
             placeholder="Nome do novo campo…"
             className="bg-muted text-foreground"
           />
-          <div className="flex shrink-0 rounded-md border border-border">
-            <button
-              type="button"
-              onClick={() => setNewType('text')}
-              className={`px-2.5 py-1.5 text-xs transition-colors ${
-                newType === 'text'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-muted'
-              }`}
-            >
-              Texto
-            </button>
-            <button
-              type="button"
-              onClick={() => setNewType('select')}
-              className={`px-2.5 py-1.5 text-xs transition-colors ${
-                newType === 'select'
-                  ? 'bg-primary text-primary-foreground'
-                  : 'text-muted-foreground hover:bg-muted'
-              }`}
-            >
-              Seleção
-            </button>
-          </div>
+          <select
+            value={newEntity}
+            onChange={(e) => setNewEntity(e.target.value as 'contact' | 'deal')}
+            title="Onde o campo aparece"
+            className="shrink-0 rounded-md border border-border bg-muted px-2 py-1.5 text-xs text-foreground"
+          >
+            <option value="contact">Contato</option>
+            <option value="deal">Negócio</option>
+          </select>
+          <select
+            value={newType}
+            onChange={(e) => setNewType(e.target.value as CustomFieldType)}
+            title="Tipo do campo"
+            className="shrink-0 rounded-md border border-border bg-muted px-2 py-1.5 text-xs text-foreground"
+          >
+            {(Object.keys(TYPE_LABELS) as CustomFieldType[]).map((t) => (
+              <option key={t} value={t}>
+                {TYPE_LABELS[t]}
+              </option>
+            ))}
+          </select>
           <Button
             onClick={handleCreate}
             disabled={creating || !newName.trim()}
@@ -311,6 +324,10 @@ function FieldRow({
         aria-label={`Renomear ${field.field_name}`}
         className="focus:border-primary h-8 border-transparent bg-transparent text-foreground hover:border-border"
       />
+      <span className="shrink-0 whitespace-nowrap rounded bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+        {(field.entity ?? 'contact') === 'deal' ? 'Negócio' : 'Contato'} ·{' '}
+        {TYPE_LABELS[field.field_type as CustomFieldType] ?? field.field_type}
+      </span>
       <Button
         variant="ghost"
         size="icon-sm"

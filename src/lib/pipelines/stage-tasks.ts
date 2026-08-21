@@ -1,4 +1,3 @@
-import 'server-only'
 import { and, asc, eq, inArray, sql } from 'drizzle-orm'
 
 import { db, tasks, deals, stageTaskTemplates } from '@/db'

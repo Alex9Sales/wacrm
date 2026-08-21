@@ -428,6 +428,8 @@ export const customFields = pgTable("custom_fields", {
 	fieldName: text("field_name").notNull(),
 	fieldType: text("field_type").default('text').notNull(),
 	fieldOptions: jsonb("field_options"),
+	// Escopo do campo: 'contact' (default) ou 'deal' (negócio). Migração 0113.
+	entity: text().default('contact').notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_custom_fields_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
@@ -456,6 +458,21 @@ export const contactCustomValues = pgTable("contact_custom_values", {
 			name: "contact_custom_values_custom_field_id_fkey"
 		}).onDelete("cascade"),
 	unique("contact_custom_values_contact_id_custom_field_id_key").on(table.contactId, table.customFieldId),
+]);
+
+// Valores dos campos personalizados DO NEGÓCIO (migração 0113). Espelha
+// contact_custom_values. FKs no SQL da migração.
+export const dealCustomValues = pgTable("deal_custom_values", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	dealId: uuid("deal_id").notNull(),
+	customFieldId: uuid("custom_field_id").notNull(),
+	value: text(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_deal_custom_values_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+	unique("deal_custom_values_deal_id_custom_field_id_key").on(table.dealId, table.customFieldId),
 ]);
 
 export const contactNotes = pgTable("contact_notes", {

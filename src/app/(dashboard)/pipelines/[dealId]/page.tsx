@@ -102,6 +102,8 @@ import {
   getDealProposal,
   saveDealProposal,
   sendDealProposalEmail,
+  listDealCustomFieldsWithValues,
+  saveDealCustomValues,
   type DealProduct,
   type DealAttachment,
   type DealQuestion,
@@ -305,6 +307,10 @@ export default function DealDetailPage() {
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [customValues, setCustomValues] = useState<Record<string, string>>({});
   const [customDirty, setCustomDirty] = useState(false);
+  // Campos personalizados DO NEGÓCIO (entity='deal', migração 0113).
+  const [dealCustomFields, setDealCustomFields] = useState<CustomField[]>([]);
+  const [dealCustomValues, setDealCustomValues] = useState<Record<string, string>>({});
+  const [dealCustomDirty, setDealCustomDirty] = useState(false);
   const [savingCustom, setSavingCustom] = useState(false);
 
   const reload = useCallback(async () => {
@@ -350,18 +356,22 @@ export default function DealDetailPage() {
     setPropUrl(pp.publicUrl);
     setPropDirty(false);
 
-    // Campos personalizados (definição da conta + valores do contato do deal).
-    const [cf, cv] = await Promise.all([
+    // Campos personalizados: do CONTATO (entity='contact') + do NEGÓCIO (deal).
+    const [cf, cv, dealCf] = await Promise.all([
       listCustomFields().catch(() => [] as CustomField[]),
       d.contact_id
         ? listContactCustomValues(d.contact_id).catch(() => [])
         : Promise.resolve([]),
+      listDealCustomFieldsWithValues(dealId).catch(() => ({ fields: [], values: {} })),
     ]);
-    setCustomFields(cf);
+    setCustomFields(cf.filter((f) => (f.entity ?? "contact") === "contact"));
     const map: Record<string, string> = {};
     for (const row of cv) map[row.custom_field_id] = row.value ?? "";
     setCustomValues(map);
     setCustomDirty(false);
+    setDealCustomFields(dealCf.fields);
+    setDealCustomValues(dealCf.values);
+    setDealCustomDirty(false);
   }, [dealId]);
 
   const handleSaveCustom = useCallback(async () => {
@@ -379,6 +389,19 @@ export default function DealDetailPage() {
     toast.success("Campos salvos");
     setCustomDirty(false);
   }, [deal?.contact_id, customValues]);
+
+  const handleSaveDealCustom = useCallback(async () => {
+    if (!dealId) return;
+    setSavingCustom(true);
+    const { error } = await saveDealCustomValues(dealId, dealCustomValues);
+    setSavingCustom(false);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    toast.success("Campos do negócio salvos");
+    setDealCustomDirty(false);
+  }, [dealId, dealCustomValues]);
 
   const submitQuestion = useCallback(async () => {
     if (!deal) return;
@@ -1151,11 +1174,45 @@ export default function DealDetailPage() {
           {/* Contatos do negócio (principal + adicionais) — Empresas Fase 2. */}
           <DealContactsPanel dealId={deal.id} />
 
+          {/* Campos personalizados DO NEGÓCIO (entity='deal') — editáveis. */}
+          {dealCustomFields.length > 0 && (
+            <div className="mt-4 space-y-2 border-t border-border pt-3">
+              <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                Campos do negócio
+              </p>
+              {dealCustomFields.map((field) => (
+                <div key={field.id} className="space-y-1">
+                  <label className="text-[11px] font-medium text-muted-foreground">
+                    {field.field_name}
+                  </label>
+                  <CustomFieldInput
+                    field={field}
+                    value={dealCustomValues[field.id] ?? ""}
+                    onChange={(val) => {
+                      setDealCustomValues((prev) => ({ ...prev, [field.id]: val }));
+                      setDealCustomDirty(true);
+                    }}
+                  />
+                </div>
+              ))}
+              {dealCustomDirty && (
+                <Button
+                  size="sm"
+                  onClick={() => void handleSaveDealCustom()}
+                  disabled={savingCustom}
+                  className="mt-1 w-full bg-primary text-primary-foreground hover:bg-primary/90"
+                >
+                  {savingCustom ? "Salvando…" : "Salvar campos do negócio"}
+                </Button>
+              )}
+            </div>
+          )}
+
           {/* Campos personalizados (do contato) — editáveis, estilo RD. */}
           {deal.contact_id && customFields.length > 0 && (
             <div className="mt-4 space-y-2 border-t border-border pt-3">
               <p className="text-xs font-semibold uppercase tracking-wide text-muted-foreground">
-                Campos personalizados
+                Campos do contato
               </p>
               {customFields.map((field) => (
                 <div key={field.id} className="space-y-1">
