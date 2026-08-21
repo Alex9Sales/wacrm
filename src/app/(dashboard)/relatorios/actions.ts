@@ -21,7 +21,7 @@
 // ============================================================
 
 import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
-import { db, deals, member, pipelines, pipelineStages, user } from '@/db'
+import { db, deals, member, pipelines, pipelineStages, salesGoals, user } from '@/db'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
 
@@ -98,6 +98,9 @@ export type ResponsavelRow = {
   ganhas: number
   perdidas: number
   valorGanho: number
+  /** Meta MENSAL (0 = sem meta). Progresso = valorGanho/ganhas no período. */
+  metaValue: number
+  metaCount: number
 }
 
 export type ComercialReport = {
@@ -311,7 +314,7 @@ export async function getComercialReport(
     const key = id ?? '—'
     let r = respMap.get(key)
     if (!r) {
-      r = { id: key, name: '', criadas: 0, ganhas: 0, perdidas: 0, valorGanho: 0 }
+      r = { id: key, name: '', criadas: 0, ganhas: 0, perdidas: 0, valorGanho: 0, metaValue: 0, metaCount: 0 }
       respMap.set(key, r)
     }
     return r
@@ -614,6 +617,28 @@ export async function getComercialReport(
   const respRow = respMap.get('—')
   if (respRow) respRow.name = 'Não atribuído'
 
+  // Metas (mensais) por responsável — anexa ao respMap.
+  try {
+    const goals = await db
+      .select({
+        userId: salesGoals.userId,
+        targetValue: salesGoals.targetValue,
+        targetCount: salesGoals.targetCount,
+      })
+      .from(salesGoals)
+      .where(eq(salesGoals.accountId, ctx.accountId))
+    const gMap = new Map(goals.map((g) => [g.userId, g]))
+    for (const [id, r] of respMap) {
+      const g = gMap.get(id)
+      if (g) {
+        r.metaValue = toNum(g.targetValue)
+        r.metaCount = Number(g.targetCount) || 0
+      }
+    }
+  } catch (err) {
+    console.error('[relatorios] metas:', err)
+  }
+
   const responsaveis = [...respMap.values()]
     .filter((r) => r.criadas > 0 || r.ganhas > 0 || r.perdidas > 0)
     .sort((a, b) => b.valorGanho - a.valorGanho || b.ganhas - a.ganhas)
@@ -692,4 +717,79 @@ function buildInsight(a: {
     )
   }
   return parts.join(' ')
+}
+
+// ------------------------------------------------------------
+// Metas de venda por responsável (fase 5). 1 meta mensal por pessoa.
+// ------------------------------------------------------------
+export interface SalesGoalRow {
+  user_id: string
+  name: string
+  target_value: number
+  target_count: number
+}
+
+/** Membros da conta + a meta de cada um (0 se não tem). */
+export async function listSalesGoals(): Promise<SalesGoalRow[]> {
+  try {
+    const ctx = await getCurrentAccount()
+    const rows = await db
+      .select({
+        user_id: user.id,
+        name: user.name,
+        target_value: salesGoals.targetValue,
+        target_count: salesGoals.targetCount,
+      })
+      .from(member)
+      .innerJoin(user, eq(user.id, member.userId))
+      .leftJoin(
+        salesGoals,
+        and(eq(salesGoals.userId, user.id), eq(salesGoals.accountId, ctx.accountId)),
+      )
+      .where(eq(member.organizationId, ctx.accountId))
+      .orderBy(asc(user.name))
+    return rows.map((r) => ({
+      user_id: r.user_id,
+      name: r.name ?? '',
+      target_value: toNum(r.target_value),
+      target_count: Number(r.target_count) || 0,
+    }))
+  } catch (err) {
+    console.error('[listSalesGoals]', err)
+    return []
+  }
+}
+
+/** Define a meta (mensal) de um responsável (supervisor+). */
+export async function saveSalesGoal(
+  userId: string,
+  targetValue: number,
+  targetCount: number,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    if (!hasMinRole(ctx.role, 'supervisor')) {
+      return { error: 'Sem permissão para definir metas.' }
+    }
+    const v = Number.isFinite(targetValue) ? Math.max(0, targetValue) : 0
+    const c = Number.isFinite(targetCount) ? Math.max(0, Math.trunc(targetCount)) : 0
+    await db
+      .insert(salesGoals)
+      .values({
+        accountId: ctx.accountId,
+        userId,
+        targetValue: String(v),
+        targetCount: c,
+        createdBy: ctx.userId,
+        updatedAt: sql`now()`,
+      })
+      .onConflictDoUpdate({
+        target: [salesGoals.accountId, salesGoals.userId],
+        set: { targetValue: String(v), targetCount: c, updatedAt: sql`now()` },
+      })
+    return { error: null }
+  } catch (err) {
+    console.error('[saveSalesGoal]', err)
+    return { error: 'Falha ao salvar a meta.' }
+  }
 }

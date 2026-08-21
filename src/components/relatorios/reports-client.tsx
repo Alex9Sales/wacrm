@@ -39,6 +39,15 @@ import {
 
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
+import { Input } from '@/components/ui/input'
+import {
+  Dialog,
+  DialogContent,
+  DialogHeader,
+  DialogTitle,
+  DialogDescription,
+  DialogFooter,
+} from '@/components/ui/dialog'
 import {
   Select,
   SelectContent,
@@ -46,13 +55,17 @@ import {
   SelectTrigger,
   SelectValue,
 } from '@/components/ui/select'
+import { toast } from 'sonner'
 import { formatCurrency, formatCurrencyShort } from '@/lib/currency'
 import { downloadCsv } from '@/lib/import/sheet'
 import {
   getComercialReport,
   listReportFilters,
+  listSalesGoals,
+  saveSalesGoal,
   type ComercialReport,
   type ReportFilterOptions,
+  type SalesGoalRow,
 } from '@/app/(dashboard)/relatorios/actions'
 
 // Cores semânticas fixas (verde=venda, vermelho=perda…) — estáveis em
@@ -158,6 +171,7 @@ function ReportsInner({ options }: { options: ReportFilterOptions }) {
   const [report, setReport] = useState<ComercialReport | null>(null)
   const [pending, startTransition] = useTransition()
   const [reportType, setReportType] = useState<string>('comercial')
+  const [metasOpen, setMetasOpen] = useState(false)
 
   const currency = report?.currency ?? options.defaultCurrency
 
@@ -540,8 +554,11 @@ function ReportsInner({ options }: { options: ReportFilterOptions }) {
 
           {/* Desempenho por responsável */}
           <Card>
-            <CardHeader>
+            <CardHeader className="flex flex-row items-center justify-between space-y-0">
               <CardTitle>Desempenho por responsável</CardTitle>
+              <Button variant="outline" size="sm" onClick={() => setMetasOpen(true)}>
+                Definir metas
+              </Button>
             </CardHeader>
             <CardContent>
               {report.responsaveis.length === 0 ? (
@@ -577,25 +594,67 @@ function ReportsInner({ options }: { options: ReportFilterOptions }) {
                           <th className="py-2 px-2 text-right font-medium">Criadas</th>
                           <th className="py-2 px-2 text-right font-medium">Ganhas</th>
                           <th className="py-2 px-2 text-right font-medium">Perdidas</th>
-                          <th className="py-2 pl-2 text-right font-medium">Valor ganho</th>
+                          <th className="py-2 px-2 text-right font-medium">Conversão</th>
+                          <th className="py-2 px-2 text-right font-medium">Ticket</th>
+                          <th className="py-2 px-2 text-right font-medium">Valor ganho</th>
+                          <th className="py-2 pl-2 font-medium">Meta (mês)</th>
                         </tr>
                       </thead>
                       <tbody>
-                        {report.responsaveis.map((r) => (
-                          <tr key={r.id} className="border-b border-border/60">
-                            <td className="py-2 pr-2">{r.name}</td>
-                            <td className="py-2 px-2 text-right tabular-nums">{r.criadas}</td>
-                            <td className="py-2 px-2 text-right tabular-nums text-emerald-600 dark:text-emerald-400">
-                              {r.ganhas}
-                            </td>
-                            <td className="py-2 px-2 text-right tabular-nums text-red-600 dark:text-red-400">
-                              {r.perdidas}
-                            </td>
-                            <td className="py-2 pl-2 text-right tabular-nums font-medium">
-                              {money(r.valorGanho)}
-                            </td>
-                          </tr>
-                        ))}
+                        {report.responsaveis.map((r) => {
+                          const fechadas = r.ganhas + r.perdidas
+                          const conv = fechadas > 0 ? r.ganhas / fechadas : 0
+                          const ticket = r.ganhas > 0 ? r.valorGanho / r.ganhas : 0
+                          const pct =
+                            r.metaValue > 0
+                              ? Math.min(1, r.valorGanho / r.metaValue)
+                              : null
+                          const hit = pct !== null && r.valorGanho >= r.metaValue
+                          return (
+                            <tr key={r.id} className="border-b border-border/60">
+                              <td className="py-2 pr-2">{r.name}</td>
+                              <td className="py-2 px-2 text-right tabular-nums">{r.criadas}</td>
+                              <td className="py-2 px-2 text-right tabular-nums text-emerald-600 dark:text-emerald-400">
+                                {r.ganhas}
+                              </td>
+                              <td className="py-2 px-2 text-right tabular-nums text-red-600 dark:text-red-400">
+                                {r.perdidas}
+                              </td>
+                              <td className="py-2 px-2 text-right tabular-nums text-muted-foreground">
+                                {fechadas > 0 ? `${Math.round(conv * 100)}%` : "—"}
+                              </td>
+                              <td className="py-2 px-2 text-right tabular-nums text-muted-foreground">
+                                {r.ganhas > 0 ? money(ticket) : "—"}
+                              </td>
+                              <td className="py-2 px-2 text-right tabular-nums font-medium">
+                                {money(r.valorGanho)}
+                              </td>
+                              <td className="py-2 pl-2 min-w-[140px]">
+                                {r.metaValue > 0 ? (
+                                  <div>
+                                    <div className="h-2 w-full overflow-hidden rounded-full bg-muted">
+                                      <div
+                                        className={`h-full rounded-full ${hit ? "bg-emerald-500" : "bg-primary"}`}
+                                        style={{ width: `${(pct ?? 0) * 100}%` }}
+                                      />
+                                    </div>
+                                    <div className="mt-0.5 text-[10px] text-muted-foreground">
+                                      {money(r.valorGanho)} / {money(r.metaValue)}
+                                      {hit ? " ✓" : ""}
+                                      {r.metaCount > 0
+                                        ? ` · ${r.ganhas}/${r.metaCount} vendas`
+                                        : ""}
+                                    </div>
+                                  </div>
+                                ) : (
+                                  <span className="text-[11px] text-muted-foreground">
+                                    sem meta
+                                  </span>
+                                )}
+                              </td>
+                            </tr>
+                          )
+                        })}
                       </tbody>
                     </table>
                   </div>
@@ -605,11 +664,126 @@ function ReportsInner({ options }: { options: ReportFilterOptions }) {
           </Card>
         </>
       )}
+
+      <MetasDialog open={metasOpen} onOpenChange={setMetasOpen} onSaved={load} />
     </div>
   )
 }
 
 // ---------- subcomponentes ----------
+
+/** Editor de metas mensais por responsável (supervisor+). */
+function MetasDialog({
+  open,
+  onOpenChange,
+  onSaved,
+}: {
+  open: boolean
+  onOpenChange: (v: boolean) => void
+  onSaved: () => void
+}) {
+  const [rows, setRows] = useState<SalesGoalRow[] | null>(null)
+  const [savingId, setSavingId] = useState<string | null>(null)
+
+  useEffect(() => {
+    if (!open) return
+    setRows(null)
+    listSalesGoals()
+      .then(setRows)
+      .catch(() => setRows([]))
+  }, [open])
+
+  function patch(userId: string, field: 'target_value' | 'target_count', value: number) {
+    setRows((rs) =>
+      (rs ?? []).map((r) => (r.user_id === userId ? { ...r, [field]: value } : r)),
+    )
+  }
+
+  async function save(r: SalesGoalRow) {
+    setSavingId(r.user_id)
+    const { error } = await saveSalesGoal(r.user_id, r.target_value, r.target_count)
+    setSavingId(null)
+    if (error) {
+      toast.error(error)
+      return
+    }
+    toast.success(`Meta de ${r.name || 'responsável'} salva.`)
+    onSaved()
+  }
+
+  return (
+    <Dialog open={open} onOpenChange={onOpenChange}>
+      <DialogContent className="max-h-[85vh] overflow-y-auto sm:max-w-lg">
+        <DialogHeader>
+          <DialogTitle>Metas por responsável (mês)</DialogTitle>
+          <DialogDescription>
+            Defina a meta mensal de cada pessoa em R$ e/ou nº de vendas. O
+            relatório mostra o progresso no período selecionado.
+          </DialogDescription>
+        </DialogHeader>
+        {rows === null ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">Carregando…</p>
+        ) : rows.length === 0 ? (
+          <p className="py-6 text-center text-sm text-muted-foreground">
+            Nenhum membro na conta.
+          </p>
+        ) : (
+          <div className="space-y-2">
+            {rows.map((r) => (
+              <div
+                key={r.user_id}
+                className="flex items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2"
+              >
+                <span className="min-w-0 flex-1 truncate text-sm text-foreground">
+                  {r.name || '—'}
+                </span>
+                <div className="flex items-center gap-1">
+                  <span className="text-xs text-muted-foreground">R$</span>
+                  <Input
+                    type="number"
+                    min={0}
+                    value={r.target_value || ''}
+                    onChange={(e) =>
+                      patch(r.user_id, 'target_value', parseFloat(e.target.value) || 0)
+                    }
+                    placeholder="0"
+                    className="h-8 w-24 text-sm"
+                  />
+                </div>
+                <div className="flex items-center gap-1">
+                  <Input
+                    type="number"
+                    min={0}
+                    value={r.target_count || ''}
+                    onChange={(e) =>
+                      patch(r.user_id, 'target_count', parseInt(e.target.value, 10) || 0)
+                    }
+                    placeholder="0"
+                    className="h-8 w-16 text-sm"
+                  />
+                  <span className="text-xs text-muted-foreground">vendas</span>
+                </div>
+                <Button
+                  size="sm"
+                  variant="outline"
+                  onClick={() => void save(r)}
+                  disabled={savingId === r.user_id}
+                >
+                  {savingId === r.user_id ? '…' : 'Salvar'}
+                </Button>
+              </div>
+            ))}
+          </div>
+        )}
+        <DialogFooter>
+          <Button variant="ghost" onClick={() => onOpenChange(false)}>
+            Fechar
+          </Button>
+        </DialogFooter>
+      </DialogContent>
+    </Dialog>
+  )
+}
 
 function Field({ label, children }: { label: string; children: React.ReactNode }) {
   return (

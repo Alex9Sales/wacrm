@@ -9,6 +9,7 @@
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
 import { db, channels, companies, contacts, conversations, customFields, dealAttachments, dealContacts, dealCustomValues, dealEmails, dealEvents, dealProducts, dealProposals, dealQuestions, deals, member, messages, notifications, pipelines, pipelineStages, stageTaskTemplates, user } from '@/db'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
+import { enqueueTextBroadcast } from '@/lib/broadcasts/text-broadcast'
 import { buildProposalData, loadDealProposalFields } from '@/lib/proposals/proposal'
 import {
   formatProposalMoney,
@@ -2434,6 +2435,111 @@ export async function saveDealCustomValues(
   } catch (err) {
     console.error('[saveDealCustomValues]', err)
     return { error: 'Falha ao salvar os campos.' }
+  }
+}
+
+// ------------------------------------------------------------
+// Disparo por ETAPA do funil (item 6). Manda uma mensagem de texto pra todos
+// os leads (contatos) dos negócios ABERTOS de uma etapa, reusando o motor de
+// Disparos (rate-limit + opt-out) e registrando no histórico de cada negócio.
+// ------------------------------------------------------------
+export interface StageBroadcastInfo {
+  leadCount: number
+  channels: { id: string; name: string; provider: string }[]
+}
+
+/** Contagem de leads (negócios abertos com contato, legíveis) + canais de texto. */
+export async function stageBroadcastInfo(stageId: string): Promise<StageBroadcastInfo> {
+  try {
+    const ctx = await getCurrentAccount()
+    const rows = await db
+      .select({ contactId: deals.contactId, assignedTo: deals.assignedTo })
+      .from(deals)
+      .where(
+        and(
+          eq(deals.accountId, ctx.accountId),
+          eq(deals.stageId, stageId),
+          eq(deals.status, 'open'),
+        ),
+      )
+    const ids = new Set(
+      rows
+        .filter((r) => r.contactId && dealReadable(ctx.role, ctx.userId, r.assignedTo))
+        .map((r) => r.contactId as string),
+    )
+    // Canais de texto (disparo é WAHA/Evolution/EvoGo — não-oficial).
+    const chans = await db
+      .select({ id: channels.id, name: channels.name, provider: channels.provider })
+      .from(channels)
+      .where(
+        and(
+          eq(channels.accountId, ctx.accountId),
+          inArray(channels.provider, ['waha', 'evolution', 'evogo']),
+        ),
+      )
+      .orderBy(asc(channels.name))
+    return { leadCount: ids.size, channels: chans }
+  } catch (err) {
+    console.error('[stageBroadcastInfo]', err)
+    return { leadCount: 0, channels: [] }
+  }
+}
+
+/** Dispara uma mensagem de texto pra todos os leads (abertos) de uma etapa. */
+export async function broadcastToStage(input: {
+  stageId: string
+  channelId: string
+  text: string
+}): Promise<{ ok: boolean; total?: number; error?: string }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const text = (input.text ?? '').trim()
+    if (!text) return { ok: false, error: 'Escreva a mensagem.' }
+    if (!input.channelId) return { ok: false, error: 'Escolha o canal.' }
+    const rows = await db
+      .select({
+        dealId: deals.id,
+        contactId: deals.contactId,
+        assignedTo: deals.assignedTo,
+      })
+      .from(deals)
+      .where(
+        and(
+          eq(deals.accountId, ctx.accountId),
+          eq(deals.stageId, input.stageId),
+          eq(deals.status, 'open'),
+        ),
+      )
+    const readable = rows.filter(
+      (r) => r.contactId && dealReadable(ctx.role, ctx.userId, r.assignedTo),
+    )
+    const contactIds = [...new Set(readable.map((r) => r.contactId as string))]
+    if (contactIds.length === 0) {
+      return { ok: false, error: 'Nenhum lead com contato nesta etapa.' }
+    }
+    const stageNm = await stageName(input.stageId)
+    const res = await enqueueTextBroadcast(ctx.accountId, ctx.userId, {
+      name: `Disparo — etapa ${stageNm ?? ''}`.trim(),
+      channelId: input.channelId,
+      bodyText: text,
+      recipientContactIds: contactIds,
+      includeOptOut: true,
+      audienceFilter: { kind: 'stage', stageId: input.stageId },
+    })
+    if (res.error || !res.broadcastId) {
+      return { ok: false, error: res.error ?? 'Falha ao disparar.' }
+    }
+    // Registra no histórico de cada negócio (best-effort).
+    const preview = text.length > 80 ? `${text.slice(0, 80)}…` : text
+    for (const r of readable) {
+      await recordDealEvent(ctx.accountId, ctx.userId, r.dealId, 'note', {
+        text: `📣 Disparo enviado (etapa): ${preview}`,
+      })
+    }
+    return { ok: true, total: res.totalRecipients }
+  } catch (err) {
+    console.error('[broadcastToStage]', err)
+    return { ok: false, error: 'Falha ao disparar para a etapa.' }
   }
 }
 

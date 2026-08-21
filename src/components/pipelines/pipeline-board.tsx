@@ -18,7 +18,8 @@ import type { Deal, PipelineStage } from "@/types";
 import type { DealTaskCount } from "@/app/(dashboard)/tarefas/actions";
 import { DealCard } from "./deal-card";
 import { Button } from "@/components/ui/button";
-import { Plus } from "lucide-react";
+import { Plus, Megaphone } from "lucide-react";
+import { StageBroadcastDialog } from "./stage-broadcast-dialog";
 import { useAuth } from "@/hooks/use-auth";
 import { formatCurrency } from "@/lib/currency";
 
@@ -236,6 +237,7 @@ function StageColumn({
   showStats?: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
+  const [bcastOpen, setBcastOpen] = useState(false);
 
   // Estatísticas por coluna (estilo RD) — calculadas dos deals + taskCounts.
   const stats = useMemo(() => {
@@ -276,9 +278,20 @@ function StageColumn({
         <h3 className="truncate text-sm font-semibold text-foreground">
           {stage.name}
         </h3>
-        <span className="shrink-0 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
-          {deals.length}
-        </span>
+        <div className="flex shrink-0 items-center gap-1">
+          <button
+            type="button"
+            onClick={() => setBcastOpen(true)}
+            title="Disparar mensagem para os leads desta etapa"
+            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
+            aria-label="Disparar para a etapa"
+          >
+            <Megaphone className="h-3.5 w-3.5" />
+          </button>
+          <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+            {deals.length}
+          </span>
+        </div>
       </div>
       <p className="text-xs text-muted-foreground">
         {formatCurrency(totalValue, currency)}
@@ -334,6 +347,13 @@ function StageColumn({
         <Plus className="mr-1 h-3 w-3" />
         Novo negócio
       </Button>
+
+      <StageBroadcastDialog
+        stageId={stage.id}
+        stageName={stage.name}
+        open={bcastOpen}
+        onOpenChange={setBcastOpen}
+      />
     </div>
   );
 }

@@ -475,6 +475,21 @@ export const dealCustomValues = pgTable("deal_custom_values", {
 	unique("deal_custom_values_deal_id_custom_field_id_key").on(table.dealId, table.customFieldId),
 ]);
 
+// Metas de venda por responsável (migração 0114). 1 meta mensal por pessoa.
+export const salesGoals = pgTable("sales_goals", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	userId: uuid("user_id").notNull(),
+	targetValue: numeric("target_value", { precision: 14, scale: 2 }).default('0').notNull(),
+	targetCount: integer("target_count").default(0).notNull(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_sales_goals_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	unique("sales_goals_account_id_user_id_key").on(table.accountId, table.userId),
+]);
+
 export const contactNotes = pgTable("contact_notes", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	contactId: uuid("contact_id").notNull(),
