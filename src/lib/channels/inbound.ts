@@ -1628,28 +1628,27 @@ async function findOrCreateContactByExternalId(
     );
 
   // 2c — identidade multicanal: casa por contacts.email (o MESMO lead que veio
-  // por WhatsApp/outro canal com o e-mail preenchido). Preferimos o mais ANTIGO
-  // (o lead original) e evitamos casar um contato-de-e-mail já com external_id.
+  // por WhatsApp/outro canal com o e-mail preenchido). SÓ leads SEM external_id
+  // (exclui IG/Messenger, que já têm id de canal próprio) e pega até 2 pra
+  // detectar AMBIGUIDADE (e-mail genérico/compartilhado em vários contatos).
   const findByEmail = async () =>
-    firstOrNull(
-      await db
-        .select({
-          id: contacts.id,
-          userId: contacts.userId,
-          name: contacts.name,
-          avatarUrl: contacts.avatarUrl,
-          externalId: contacts.externalId,
-        })
-        .from(contacts)
-        .where(
-          and(
-            eq(contacts.accountId, accountId),
-            sql`lower(${contacts.email}) = ${externalId.toLowerCase()}`,
-          ),
-        )
-        .orderBy(asc(contacts.createdAt))
-        .limit(1),
-    );
+    await db
+      .select({
+        id: contacts.id,
+        userId: contacts.userId,
+        name: contacts.name,
+        avatarUrl: contacts.avatarUrl,
+      })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.accountId, accountId),
+          isNull(contacts.externalId),
+          sql`lower(${contacts.email}) = ${externalId.toLowerCase()}`,
+        ),
+      )
+      .orderBy(asc(contacts.createdAt))
+      .limit(2);
 
   const asOutcome = async (existing: {
     id: string;
@@ -1684,20 +1683,22 @@ async function findOrCreateContactByExternalId(
 
   // 2c — no e-mail, antes de criar contato novo: casa pelo endereço em
   // contacts.email (ex.: lead que veio por WhatsApp e depois recebeu e-mail da
-  // cadência). "Reivindica" o external_id (se estava vazio) pra as próximas
-  // respostas casarem direto por external_id.
+  // cadência). Funde SÓ quando é INEQUÍVOCO — exatamente 1 lead (sem external_id)
+  // com esse e-mail. Se 0 ou >1 (e-mail genérico/compartilhado), cai na criação
+  // de um contato de e-mail dedicado (comportamento pré-2c): não sequestra o
+  // lead errado nem mistura correspondentes distintos. "Reivindica" o external_id
+  // pra as próximas respostas casarem direto.
   if (opts?.matchByEmail) {
-    const byEmail = await findByEmail();
-    if (byEmail) {
-      if (!byEmail.externalId) {
-        try {
-          await db
-            .update(contacts)
-            .set({ externalId, updatedAt: new Date().toISOString() })
-            .where(and(eq(contacts.id, byEmail.id), isNull(contacts.externalId)));
-        } catch {
-          /* corrida/colisão no external_id → segue com o contato mesmo assim */
-        }
+    const byEmailRows = await findByEmail();
+    if (byEmailRows.length === 1) {
+      const byEmail = byEmailRows[0];
+      try {
+        await db
+          .update(contacts)
+          .set({ externalId, updatedAt: new Date().toISOString() })
+          .where(and(eq(contacts.id, byEmail.id), isNull(contacts.externalId)));
+      } catch {
+        /* corrida/colisão no external_id → segue com o contato mesmo assim */
       }
       return asOutcome(byEmail);
     }
