@@ -1056,6 +1056,25 @@ export const dealEmails = pgTable("deal_emails", {
 	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "deal_emails_deal_id_fkey" }).onDelete("cascade"),
 ]);
 
+// Proposta do negócio (documento profissional) — migração 0109. 1 por negócio
+// (unique deal_id). O `id` é o token do link público /proposta/<id>.
+export const dealProposals = pgTable("deal_proposals", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	dealId: uuid("deal_id").notNull(),
+	discount: numeric({ precision: 12, scale: 2 }).default('0').notNull(),
+	discountType: text("discount_type").default('value').notNull(),
+	validUntil: date("valid_until"),
+	terms: text(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("idx_deal_proposals_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "deal_proposals_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "deal_proposals_deal_id_fkey" }).onDelete("cascade"),
+]);
+
 export const broadcasts = pgTable("broadcasts", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),

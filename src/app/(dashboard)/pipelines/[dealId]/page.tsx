@@ -98,12 +98,16 @@ import {
   listDealEmailThread,
   dealEmailChannelAvailable,
   sendDealEmail,
+  getDealProposal,
+  saveDealProposal,
+  sendDealProposalEmail,
   type DealProduct,
   type DealAttachment,
   type DealQuestion,
   type DealEmail,
   type DealEmailMessage,
 } from "@/app/(dashboard)/pipelines/actions";
+import { computeTotals, type DiscountType } from "@/lib/proposals/shared";
 import type { Deal, PipelineStage, CustomField } from "@/types";
 import {
   listCustomFields,
@@ -275,6 +279,15 @@ export default function DealDetailPage() {
   const [sendingEmail, setSendingEmail] = useState(false);
   const [showManualEmail, setShowManualEmail] = useState(false);
   const emailThreadRef = useRef<HTMLUListElement>(null);
+  // Proposta (aba Propostas): campos editáveis + link público (PDF/compartilhar).
+  const [propDiscount, setPropDiscount] = useState(""); // string p/ digitar livre
+  const [propDiscountType, setPropDiscountType] = useState<DiscountType>("value");
+  const [propValidUntil, setPropValidUntil] = useState(""); // 'YYYY-MM-DD' | ''
+  const [propTerms, setPropTerms] = useState("");
+  const [propUrl, setPropUrl] = useState<string | null>(null);
+  const [savingProp, setSavingProp] = useState(false);
+  const [sendingProp, setSendingProp] = useState(false);
+  const [propDirty, setPropDirty] = useState(false);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -302,7 +315,7 @@ export default function DealDetailPage() {
       return;
     }
     setDeal(d);
-    const [st, ev, tk, pr, at, qs, em, emThread, emAvail] = await Promise.all([
+    const [st, ev, tk, pr, at, qs, em, emThread, emAvail, pp] = await Promise.all([
       listStages(d.pipeline_id).catch(() => [] as PipelineStage[]),
       listDealEvents(dealId).catch(() => [] as DealEvent[]),
       listTasksByDeal(dealId).catch(() => [] as TaskLite[]),
@@ -312,6 +325,11 @@ export default function DealDetailPage() {
       listDealEmails(dealId).catch(() => [] as DealEmail[]),
       listDealEmailThread(dealId).catch(() => [] as DealEmailMessage[]),
       dealEmailChannelAvailable().catch(() => false),
+      getDealProposal(dealId).catch(() => ({
+        data: null,
+        publicUrl: null,
+        error: null,
+      })),
     ]);
     setStages(st);
     setEvents(ev);
@@ -322,6 +340,14 @@ export default function DealDetailPage() {
     setEmails(em);
     setEmailThread(emThread);
     setEmailChannelAvail(emAvail);
+    if (pp.data) {
+      setPropDiscount(pp.data.fields.discount ? String(pp.data.fields.discount) : "");
+      setPropDiscountType(pp.data.fields.discountType);
+      setPropValidUntil(pp.data.fields.validUntil ?? "");
+      setPropTerms(pp.data.fields.terms ?? "");
+    }
+    setPropUrl(pp.publicUrl);
+    setPropDirty(false);
 
     // Campos personalizados (definição da conta + valores do contato do deal).
     const [cf, cv] = await Promise.all([
@@ -424,6 +450,85 @@ export default function DealDetailPage() {
     setEmailThread(thread);
     setEvents(ev);
   }, [deal, sendingEmail, sendSubject, sendBody, emailThread, events]);
+
+  // ---- Proposta (aba Propostas) ----
+  // Totais do preview (recalcula ao vivo enquanto edita o desconto).
+  const propTotals = useMemo(
+    () =>
+      computeTotals(
+        products.map((p) => ({
+          name: p.name,
+          quantity: p.quantity,
+          unitPrice: p.unit_price,
+          subtotal: p.quantity * p.unit_price,
+        })),
+        parseFloat(propDiscount) || 0,
+        propDiscountType,
+      ),
+    [products, propDiscount, propDiscountType],
+  );
+
+  const saveProposal = useCallback(async (): Promise<string | null> => {
+    if (!dealId) return null;
+    setSavingProp(true);
+    const res = await saveDealProposal(dealId, {
+      discount: parseFloat(propDiscount) || 0,
+      discountType: propDiscountType,
+      validUntil: propValidUntil || null,
+      terms: propTerms || null,
+    });
+    setSavingProp(false);
+    if (res.error) {
+      toast.error(res.error);
+      return null;
+    }
+    setPropUrl(res.publicUrl);
+    setPropDirty(false);
+    return res.publicUrl;
+  }, [dealId, propDiscount, propDiscountType, propValidUntil, propTerms]);
+
+  const sendProposal = useCallback(async () => {
+    if (!dealId || sendingProp) return;
+    setSendingProp(true);
+    // Salva primeiro (o e-mail leva o link, que tem que refletir o estado atual).
+    const url = await saveProposal();
+    if (!url) {
+      setSendingProp(false);
+      return;
+    }
+    const res = await sendDealProposalEmail(dealId);
+    setSendingProp(false);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("Proposta enviada por e-mail");
+    const [thread, ev] = await Promise.all([
+      listDealEmailThread(dealId).catch(() => emailThread),
+      listDealEvents(dealId).catch(() => events),
+    ]);
+    setEmailThread(thread);
+    setEvents(ev);
+  }, [dealId, sendingProp, saveProposal, emailThread, events]);
+
+  const openProposalPdf = useCallback(async () => {
+    // Abre a proposta pública (documento limpo → Baixar PDF lá). Garante salvo.
+    let url = propDirty ? null : propUrl;
+    if (!url) url = await saveProposal();
+    if (url) window.open(url, "_blank", "noopener");
+  }, [propDirty, propUrl, saveProposal]);
+
+  const copyProposalLink = useCallback(async () => {
+    let url = propDirty ? null : propUrl;
+    if (!url) url = await saveProposal();
+    if (!url) return;
+    try {
+      await navigator.clipboard.writeText(url);
+      toast.success("Link da proposta copiado");
+    } catch {
+      toast.error("Não foi possível copiar o link");
+    }
+  }, [propDirty, propUrl, saveProposal]);
 
   const submitProduct = useCallback(async () => {
     if (!deal || addingProduct) return;
@@ -1539,69 +1644,214 @@ export default function DealDetailPage() {
 
           {tab === "propostas" && (
             <div className="rounded-xl border border-border bg-card">
-              <div className="flex items-center justify-between gap-2 border-b border-border px-4 py-3">
-                <div className="flex items-center gap-2">
-                  <FileText className="h-4 w-4 text-primary" />
-                  <h2 className="text-sm font-semibold text-foreground">Proposta</h2>
-                </div>
-                <Button
-                  size="sm"
-                  variant="outline"
-                  onClick={() => window.print()}
-                  disabled={products.length === 0}
-                >
-                  <Printer className="mr-1.5 h-4 w-4" /> Imprimir / PDF
-                </Button>
+              <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+                <FileText className="h-4 w-4 text-primary" />
+                <h2 className="text-sm font-semibold text-foreground">Proposta</h2>
+                <span className="ml-auto text-xs text-muted-foreground">
+                  Documento profissional · PDF · link · e-mail
+                </span>
               </div>
               {products.length === 0 ? (
                 <p className="px-4 py-6 text-center text-xs text-muted-foreground">
                   Adicione itens na aba &quot;Produtos&quot; para gerar a proposta.
                 </p>
               ) : (
-                <div className="p-4">
-                  <p className="text-base font-semibold text-foreground">
-                    Proposta — {deal.title}
-                  </p>
-                  <p className="text-xs text-muted-foreground">
-                    Cliente: {deal.contact?.name || deal.contact?.phone || "—"}
-                  </p>
-                  <div className="mt-3 overflow-x-auto">
-                    <table className="w-full text-sm">
-                      <thead>
-                        <tr className="border-b border-border text-left text-xs text-muted-foreground">
-                          <th className="py-1.5 pr-2 font-medium">Produto</th>
-                          <th className="py-1.5 px-2 text-right font-medium">Qtd</th>
-                          <th className="py-1.5 px-2 text-right font-medium">
-                            Preço un.
-                          </th>
-                          <th className="py-1.5 pl-2 text-right font-medium">
-                            Subtotal
-                          </th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {products.map((p) => (
-                          <tr key={p.id} className="border-b border-border/60">
-                            <td className="py-1.5 pr-2 text-foreground">{p.name}</td>
-                            <td className="py-1.5 px-2 text-right text-muted-foreground">
-                              {p.quantity}
-                            </td>
-                            <td className="py-1.5 px-2 text-right text-muted-foreground">
-                              {fmtCurrency(p.unit_price, deal.currency)}
-                            </td>
-                            <td className="py-1.5 pl-2 text-right text-foreground">
-                              {fmtCurrency(p.quantity * p.unit_price, deal.currency)}
-                            </td>
+                <div className="space-y-5 p-4">
+                  {/* Itens */}
+                  <div>
+                    <p className="text-base font-semibold text-foreground">
+                      {deal.title}
+                    </p>
+                    <p className="text-xs text-muted-foreground">
+                      Cliente:{" "}
+                      {deal.contact?.name || deal.contact?.phone || "—"}
+                    </p>
+                    <div className="mt-3 overflow-x-auto">
+                      <table className="w-full text-sm">
+                        <thead>
+                          <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                            <th className="py-1.5 pr-2 font-medium">Produto</th>
+                            <th className="py-1.5 px-2 text-right font-medium">Qtd</th>
+                            <th className="py-1.5 px-2 text-right font-medium">
+                              Preço un.
+                            </th>
+                            <th className="py-1.5 pl-2 text-right font-medium">
+                              Subtotal
+                            </th>
                           </tr>
-                        ))}
-                      </tbody>
-                    </table>
+                        </thead>
+                        <tbody>
+                          {products.map((p) => (
+                            <tr key={p.id} className="border-b border-border/60">
+                              <td className="py-1.5 pr-2 text-foreground">{p.name}</td>
+                              <td className="py-1.5 px-2 text-right text-muted-foreground">
+                                {p.quantity}
+                              </td>
+                              <td className="py-1.5 px-2 text-right text-muted-foreground">
+                                {fmtCurrency(p.unit_price, deal.currency)}
+                              </td>
+                              <td className="py-1.5 pl-2 text-right text-foreground">
+                                {fmtCurrency(
+                                  p.quantity * p.unit_price,
+                                  deal.currency,
+                                )}
+                              </td>
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    </div>
                   </div>
-                  <div className="mt-3 flex items-center justify-between border-t border-border pt-2">
-                    <span className="text-sm font-medium text-foreground">Total</span>
-                    <span className="text-base font-bold text-primary">
-                      {fmtCurrency(productsTotal, deal.currency)}
-                    </span>
+
+                  {/* Desconto + validade */}
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">
+                        Desconto
+                      </label>
+                      <div className="mt-1 flex items-stretch gap-1">
+                        <Input
+                          type="number"
+                          min={0}
+                          step="0.01"
+                          inputMode="decimal"
+                          placeholder="0"
+                          value={propDiscount}
+                          onChange={(e) => {
+                            setPropDiscount(e.target.value);
+                            setPropDirty(true);
+                          }}
+                          className="flex-1"
+                        />
+                        <div className="flex overflow-hidden rounded-lg border border-border">
+                          {(["value", "percent"] as DiscountType[]).map((t) => (
+                            <button
+                              key={t}
+                              type="button"
+                              onClick={() => {
+                                setPropDiscountType(t);
+                                setPropDirty(true);
+                              }}
+                              className={cn(
+                                "px-3 text-sm font-medium transition-colors",
+                                propDiscountType === t
+                                  ? "bg-primary text-primary-foreground"
+                                  : "bg-background text-muted-foreground hover:text-foreground",
+                              )}
+                            >
+                              {t === "value" ? "R$" : "%"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                    <div>
+                      <label className="text-xs font-medium text-muted-foreground">
+                        Validade
+                      </label>
+                      <Input
+                        type="date"
+                        value={propValidUntil}
+                        onChange={(e) => {
+                          setPropValidUntil(e.target.value);
+                          setPropDirty(true);
+                        }}
+                        className="mt-1"
+                      />
+                    </div>
+                  </div>
+
+                  {/* Termos / condições */}
+                  <div>
+                    <label className="text-xs font-medium text-muted-foreground">
+                      Condições / termos
+                    </label>
+                    <textarea
+                      value={propTerms}
+                      onChange={(e) => {
+                        setPropTerms(e.target.value);
+                        setPropDirty(true);
+                      }}
+                      placeholder="Forma de pagamento, prazo de entrega, observações…"
+                      rows={3}
+                      className="mt-1 w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50"
+                    />
+                  </div>
+
+                  {/* Totais (ao vivo) */}
+                  <div className="space-y-1 border-t border-border pt-3 text-sm">
+                    <div className="flex items-center justify-between text-muted-foreground">
+                      <span>Subtotal</span>
+                      <span>{fmtCurrency(propTotals.subtotal, deal.currency)}</span>
+                    </div>
+                    {propTotals.discountValue > 0 && (
+                      <div className="flex items-center justify-between text-emerald-600 dark:text-emerald-400">
+                        <span>
+                          Desconto
+                          {propDiscountType === "percent"
+                            ? ` (${parseFloat(propDiscount) || 0}%)`
+                            : ""}
+                        </span>
+                        <span>
+                          − {fmtCurrency(propTotals.discountValue, deal.currency)}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex items-center justify-between pt-1 text-base font-bold text-foreground">
+                      <span>Total</span>
+                      <span className="text-primary">
+                        {fmtCurrency(propTotals.total, deal.currency)}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Ações */}
+                  <div className="flex flex-wrap items-center gap-2 border-t border-border pt-3">
+                    <Button size="sm" onClick={() => void saveProposal()} disabled={savingProp}>
+                      {savingProp ? (
+                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      ) : null}
+                      Salvar
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void openProposalPdf()}
+                      disabled={savingProp}
+                    >
+                      <Printer className="mr-1.5 h-4 w-4" /> Abrir / Baixar PDF
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void copyProposalLink()}
+                      disabled={savingProp}
+                    >
+                      <Copy className="mr-1.5 h-4 w-4" /> Copiar link
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void sendProposal()}
+                      disabled={sendingProp || savingProp}
+                      title={
+                        emailChannelAvail
+                          ? undefined
+                          : "Conecte um canal de e-mail para enviar"
+                      }
+                    >
+                      {sendingProp ? (
+                        <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      ) : (
+                        <Mail className="mr-1.5 h-4 w-4" />
+                      )}
+                      Enviar por e-mail
+                    </Button>
+                    {propDirty && propUrl && (
+                      <span className="text-xs text-amber-600 dark:text-amber-400">
+                        Alterações não salvas — salve para atualizar o link/PDF.
+                      </span>
+                    )}
                   </div>
                 </div>
               )}

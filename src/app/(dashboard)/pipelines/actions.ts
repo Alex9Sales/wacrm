@@ -7,7 +7,14 @@
 // ============================================================
 
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
-import { db, channels, companies, contacts, conversations, dealAttachments, dealContacts, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, messages, notifications, pipelines, pipelineStages, user } from '@/db'
+import { db, channels, companies, contacts, conversations, dealAttachments, dealContacts, dealEmails, dealEvents, dealProducts, dealProposals, dealQuestions, deals, member, messages, notifications, pipelines, pipelineStages, user } from '@/db'
+import { buildProposalData, loadDealProposalFields } from '@/lib/proposals/proposal'
+import {
+  formatProposalMoney,
+  formatProposalDate,
+  type ProposalData,
+  type DiscountType,
+} from '@/lib/proposals/shared'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { findOrCreateConversation } from '@/lib/channels/inbound'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
@@ -1941,6 +1948,170 @@ export async function sendDealEmail(
   } catch (err) {
     console.error('[sendDealEmail]', err)
     return { error: err instanceof Error ? err.message : 'Falha ao enviar o e-mail.' }
+  }
+}
+
+// ------------------------------------------------------------
+// Propostas do negócio (documento profissional) — aba Propostas.
+// Os campos (desconto/validade/termos) ficam em deal_proposals; o preview
+// (marca + cliente + itens + totais) vem de buildProposalData. O `id` da
+// linha é o token do link público /proposta/<id> (PDF limpo + compartilhar).
+// ------------------------------------------------------------
+const PROPOSAL_APP_URL = (
+  process.env.APP_URL || 'https://crm.salestecnologia.com.br'
+).replace(/\/$/, '')
+
+/** URL pública (link compartilhável / PDF limpo) de uma proposta. Interno —
+ *  num arquivo 'use server' só funções async podem ser EXPORTADAS. */
+function proposalPublicUrl(proposalId: string): string {
+  return `${PROPOSAL_APP_URL}/proposta/${proposalId}`
+}
+
+export interface DealProposalResult {
+  data: ProposalData | null
+  publicUrl: string | null
+  error: string | null
+}
+
+/** Carrega a proposta do negócio (campos salvos + preview montado). */
+export async function getDealProposal(dealId: string): Promise<DealProposalResult> {
+  try {
+    const ctx = await getCurrentAccount()
+    const deal = firstOrNull(
+      await db
+        .select({ assignedTo: deals.assignedTo })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!deal) return { data: null, publicUrl: null, error: 'Negócio não encontrado.' }
+    if (!dealReadable(ctx.role, ctx.userId, deal.assignedTo)) {
+      return {
+        data: null,
+        publicUrl: null,
+        error: 'Este negócio está atribuído a outro atendente.',
+      }
+    }
+    const { id, createdAt, fields } = await loadDealProposalFields(ctx.accountId, dealId)
+    const data = await buildProposalData(ctx.accountId, dealId, fields, id, createdAt)
+    return { data, publicUrl: id ? proposalPublicUrl(id) : null, error: null }
+  } catch (err) {
+    console.error('[getDealProposal]', err)
+    return { data: null, publicUrl: null, error: 'Falha ao carregar a proposta.' }
+  }
+}
+
+export interface SaveProposalInput {
+  discount: number
+  discountType: DiscountType
+  validUntil: string | null
+  terms: string | null
+}
+
+/** Cria/atualiza a proposta do negócio (upsert por deal_id). */
+export async function saveDealProposal(
+  dealId: string,
+  input: SaveProposalInput,
+): Promise<{ id: string | null; publicUrl: string | null; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const deal = firstOrNull(
+      await db
+        .select({ assignedTo: deals.assignedTo })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!deal) return { id: null, publicUrl: null, error: 'Negócio não encontrado.' }
+    if (!dealReadable(ctx.role, ctx.userId, deal.assignedTo)) {
+      return {
+        id: null,
+        publicUrl: null,
+        error: 'Este negócio está atribuído a outro atendente.',
+      }
+    }
+    const discount = Number.isFinite(input.discount) ? Math.max(0, input.discount) : 0
+    const discountType: DiscountType =
+      input.discountType === 'percent' ? 'percent' : 'value'
+    const validUntil =
+      input.validUntil && /^\d{4}-\d{2}-\d{2}$/.test(input.validUntil)
+        ? input.validUntil
+        : null
+    const terms = (input.terms ?? '').trim() || null
+
+    const row = firstOrThrow(
+      await db
+        .insert(dealProposals)
+        .values({
+          accountId: ctx.accountId,
+          dealId,
+          discount: String(discount),
+          discountType,
+          validUntil,
+          terms,
+          createdBy: ctx.userId,
+          updatedAt: sql`now()`,
+        })
+        .onConflictDoUpdate({
+          target: dealProposals.dealId,
+          set: {
+            discount: String(discount),
+            discountType,
+            validUntil,
+            terms,
+            updatedAt: sql`now()`,
+          },
+        })
+        .returning({ id: dealProposals.id }),
+    )
+    return { id: row.id, publicUrl: proposalPublicUrl(row.id), error: null }
+  } catch (err) {
+    console.error('[saveDealProposal]', err)
+    return { id: null, publicUrl: null, error: 'Falha ao salvar a proposta.' }
+  }
+}
+
+/** Envia a proposta pro lead por e-mail (resumo + link público). Exige a
+ *  proposta salva antes (precisa do id/token) e e-mail do contato. */
+export async function sendDealProposalEmail(
+  dealId: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const { id, createdAt, fields } = await loadDealProposalFields(ctx.accountId, dealId)
+    if (!id) return { error: 'Salve a proposta antes de enviar.' }
+    const data = await buildProposalData(ctx.accountId, dealId, fields, id, createdAt)
+    if (!data) return { error: 'Não foi possível montar a proposta.' }
+    if (!data.items.length) {
+      return { error: 'Adicione itens na aba Produtos antes de enviar a proposta.' }
+    }
+    const link = proposalPublicUrl(id)
+    const money = (n: number) => formatProposalMoney(n, data.currency)
+    const lines: string[] = [
+      `Olá${data.client.name ? `, ${data.client.name}` : ''}!`,
+      '',
+      `Segue a nossa proposta${data.seller.name ? ` — ${data.seller.name}` : ''}.`,
+      '',
+      ...data.items.map(
+        (it) => `• ${it.name} — ${it.quantity} × ${money(it.unitPrice)} = ${money(it.subtotal)}`,
+      ),
+      '',
+      ...(data.totals.discountValue > 0
+        ? [`Desconto: ${money(data.totals.discountValue)}`]
+        : []),
+      `Total: ${money(data.totals.total)}`,
+      ...(data.fields.validUntil
+        ? [`Válida até: ${formatProposalDate(data.fields.validUntil)}`]
+        : []),
+      '',
+      `Ver a proposta completa: ${link}`,
+    ]
+    const subject = `Proposta ${data.number}${data.seller.name ? ` — ${data.seller.name}` : ''}`
+    // sendDealEmail já grava a nota "✉️ E-mail enviado — <subject>" no histórico.
+    return await sendDealEmail(dealId, { subject, body: lines.join('\n') })
+  } catch (err) {
+    console.error('[sendDealProposalEmail]', err)
+    return { error: err instanceof Error ? err.message : 'Falha ao enviar a proposta.' }
   }
 }
 
