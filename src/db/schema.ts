@@ -692,6 +692,9 @@ export const callLogs = pgTable("call_logs", {
 export const messages = pgTable("messages", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	conversationId: uuid("conversation_id").notNull(),
+	// Conta desnormalizada (migração 0111): preenchida por trigger a partir da
+	// conversa. Evita Seq Scan nas agregações de mensagem (painel/relatórios).
+	accountId: uuid("account_id"),
 	senderType: text("sender_type").notNull(),
 	senderId: uuid("sender_id"),
 	contentType: text("content_type").default('text').notNull(),

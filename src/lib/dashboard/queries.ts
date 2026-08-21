@@ -74,17 +74,14 @@ export async function loadMetrics(accountId: string): Promise<MetricsBundle> {
   }
 
   const countAgentMessages = async (from: string, to?: string) => {
+    // messages.account_id (migr 0111) → Index Scan direto, sem join.
     const conds = [
-      eq(conversations.accountId, accountId),
+      eq(messages.accountId, accountId),
       eq(messages.senderType, 'agent'),
       gte(messages.createdAt, from),
     ]
     if (to) conds.push(lt(messages.createdAt, to))
-    const [row] = await db
-      .select({ n: count() })
-      .from(messages)
-      .innerJoin(conversations, eq(messages.conversationId, conversations.id))
-      .where(and(...conds))
+    const [row] = await db.select({ n: count() }).from(messages).where(and(...conds))
     return row?.n ?? 0
   }
 
@@ -154,10 +151,7 @@ export async function loadConversationsSeries(
       n: sql<number>`count(*)::int`,
     })
     .from(messages)
-    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
-    .where(
-      and(eq(conversations.accountId, accountId), gte(messages.createdAt, start)),
-    )
+    .where(and(eq(messages.accountId, accountId), gte(messages.createdAt, start)))
     .groupBy(sql`1, 2`)
 
   const keys = lastNDayKeys(rangeDays)
@@ -237,10 +231,9 @@ export async function loadResponseTime(accountId: string): Promise<ResponseTimeS
       created_at: messages.createdAt,
     })
     .from(messages)
-    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
     .where(
       and(
-        eq(conversations.accountId, accountId),
+        eq(messages.accountId, accountId),
         gte(messages.createdAt, fourteenDaysAgo),
       ),
     )
@@ -340,7 +333,7 @@ export async function loadActivity(accountId: string, limit = 20): Promise<Activ
       .leftJoin(contacts, eq(conversations.contactId, contacts.id))
       .where(
         and(
-          eq(conversations.accountId, accountId),
+          eq(messages.accountId, accountId),
           eq(messages.senderType, 'customer'),
         ),
       )

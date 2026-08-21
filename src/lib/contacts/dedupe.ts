@@ -1,4 +1,4 @@
-import { and, eq, inArray, like, sql } from "drizzle-orm";
+import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { db, contacts } from "@/db";
 import { normalizePhone, phonesMatch } from "@/lib/whatsapp/phone-utils";
@@ -55,7 +55,12 @@ export async function findExistingContact(
       .select()
       .from(contacts)
       .where(
-        and(eq(contacts.accountId, accountId), like(contacts.phone, `%${suffix}`)),
+        and(
+          eq(contacts.accountId, accountId),
+          // Índice idx_contacts_account_phone_suffix (migr 0111): mata o Seq
+          // Scan por-inbound. Mesmo padrão do caminho em lote (right(...,8)).
+          sql`right(${contacts.phoneNormalized}, 8) = ${suffix}`,
+        ),
       )) as unknown as ExistingContact[];
   } catch {
     return null;
