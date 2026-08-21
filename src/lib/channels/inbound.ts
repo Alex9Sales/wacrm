@@ -38,6 +38,7 @@ import {
 import { publishEvent } from '@/lib/events/publish';
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
+import { maybePauseCadenceOnReply } from '@/lib/cadences/cadence';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
 import {
   enqueueAiReplyDebounced,
@@ -481,6 +482,11 @@ export async function dispatchInboundMessage(
       } catch (err) {
         console.error('[inbound] keyword reroute failed:', err);
       }
+    }
+    // Cadência: o lead respondeu → pausa a cadência ativa que pede "pausar ao
+    // responder" (cancela os degraus pendentes). Best-effort.
+    if (conversation.contactId) {
+      await maybePauseCadenceOnReply(accountId, conversation.contactId);
     }
   }
 

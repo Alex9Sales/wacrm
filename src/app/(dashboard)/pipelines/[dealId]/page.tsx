@@ -52,6 +52,7 @@ import { TaskForm } from "@/components/tarefas/task-form";
 import { CompanyPicker } from "@/components/pipelines/company-picker";
 import { DealContactsPanel } from "@/components/pipelines/deal-contacts-panel";
 import { TransferDealButton } from "@/components/pipelines/transfer-deal-button";
+import { CadenceButton } from "@/components/inbox/cadence-button";
 import {
   getDeal,
   listStages,
@@ -878,6 +879,9 @@ export default function DealDetailPage() {
                 <MessageCircle className="mr-1.5 h-4 w-4" /> WhatsApp
               </Button>
             )}
+          {deal.contact_id && (
+            <CadenceButton dealId={deal.id} variant="button" disabled={busy} />
+          )}
           {status !== "won" && (
             <Button
               size="sm"

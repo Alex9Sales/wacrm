@@ -33,6 +33,8 @@ import {
 } from "@/app/(dashboard)/inbox/schedule-actions";
 import { ScheduleMessageForm } from "./schedule-message-form";
 import { ScheduleMiniList } from "./schedule-mini-list";
+import { CadenceSidebar } from "./cadence-sidebar";
+import { Repeat } from "lucide-react";
 import { CustomerCodesEditor } from "./customer-codes-editor";
 import { CustomFieldInput } from "@/components/contacts/custom-field-input";
 import type {
@@ -981,6 +983,13 @@ export function ContactSidebar({
                 >
                   + Agendar mensagem
                 </button>
+              </Section>
+            )}
+
+            {/* ---- Cadência (requer conversa ativa) ---- */}
+            {conversation && (
+              <Section icon={Repeat} title="Cadência">
+                <CadenceSidebar conversationId={conversation.id} />
               </Section>
             )}
 

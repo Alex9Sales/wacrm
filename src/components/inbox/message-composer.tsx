@@ -48,6 +48,7 @@ import {
 } from "@/lib/storage/upload-media";
 import { EmojiPicker } from "@/components/ui/emoji-picker";
 import { QuickReplyPicker } from "@/components/inbox/quick-reply-picker";
+import { CadenceButton } from "@/components/inbox/cadence-button";
 import { ReplyQuote } from "./reply-quote";
 import { useMyStatus } from "@/hooks/use-my-status";
 import { presenceStatusPt } from "@/lib/presence";
@@ -1111,6 +1112,8 @@ export function MessageComposer({
             onOpenChange={setQrOpen}
             initialQuery={qrQuery}
           />
+
+          <CadenceButton conversationId={conversationId} disabled={readOnly} />
 
           <div className="relative flex-1">
             {/* Group @mention picker — WhatsApp-style: type "@" to filter the

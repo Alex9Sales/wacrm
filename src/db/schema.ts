@@ -875,6 +875,71 @@ export const stageTaskTemplates = pgTable("stage_task_templates", {
 	foreignKey({ columns: [table.stageId], foreignColumns: [pipelineStages.id], name: "stage_task_templates_stage_id_fkey" }).onDelete("cascade"),
 ]);
 
+// Cadências (migração 0112) — sequência de mensagens fixas multicanal. FKs no
+// SQL da migração (evita forward-ref no schema); aqui só colunas + índices.
+export const cadences = pgTable("cadences", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	name: text().notNull(),
+	description: text(),
+	active: boolean().default(true).notNull(),
+	pauseOnReply: boolean("pause_on_reply").default(true).notNull(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_cadences_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+]);
+
+export const cadenceSteps = pgTable("cadence_steps", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	cadenceId: uuid("cadence_id").notNull(),
+	position: integer().default(0).notNull(),
+	delayValue: integer("delay_value").default(0).notNull(),
+	delayUnit: text("delay_unit").default('days').notNull(),
+	channel: text().default('whatsapp').notNull(),
+	subject: text(),
+	body: text().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_cadence_steps_cadence").using("btree", table.cadenceId.asc().nullsLast().op("uuid_ops"), table.position.asc().nullsLast().op("int4_ops")),
+]);
+
+export const cadenceEnrollments = pgTable("cadence_enrollments", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	cadenceId: uuid("cadence_id").notNull(),
+	contactId: uuid("contact_id").notNull(),
+	conversationId: uuid("conversation_id"),
+	dealId: uuid("deal_id"),
+	status: text().default('active').notNull(),
+	enrolledBy: uuid("enrolled_by"),
+	enrolledAt: timestamp("enrolled_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_cadence_enroll_account_status").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.status.asc().nullsLast().op("text_ops")),
+	index("idx_cadence_enroll_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+]);
+
+export const cadenceEvents = pgTable("cadence_events", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	enrollmentId: uuid("enrollment_id").notNull(),
+	cadenceId: uuid("cadence_id"),
+	contactId: uuid("contact_id"),
+	dealId: uuid("deal_id"),
+	type: text().notNull(),
+	stepPosition: integer("step_position"),
+	channel: text(),
+	data: jsonb().default({}).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_cadence_events_enrollment").using("btree", table.enrollmentId.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast().op("timestamptz_ops")),
+	index("idx_cadence_events_contact").using("btree", table.contactId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsLast().op("timestamptz_ops")),
+]);
+
 export const deals = pgTable("deals", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),
@@ -1965,6 +2030,11 @@ export const scheduledMessages = pgTable("scheduled_messages", {
 	// lead) e quem atribuiu. Governam a visibilidade por papel + notificação.
 	assignedTo: uuid("assigned_to"),
 	assignedBy: uuid("assigned_by"),
+	// Tag de cadência (migração 0112): qual inscrição/degrau gerou esta agendada.
+	cadenceEnrollmentId: uuid("cadence_enrollment_id"),
+	cadenceStepPosition: integer("cadence_step_position"),
+	// Assunto do e-mail (degrau de e-mail da cadência). Null = assunto padrão.
+	subject: text(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

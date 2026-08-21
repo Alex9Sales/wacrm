@@ -36,6 +36,10 @@ import {
 } from '@/lib/whatsapp/send-message';
 import { publishEvent } from '@/lib/events/publish';
 import { isContactOptedOut } from '@/lib/contacts/opt-out';
+import {
+  onCadenceStepSent,
+  finalizeEnrollmentIfDrained,
+} from '@/lib/cadences/cadence';
 
 function log(...args: unknown[]): void {
   console.log('[worker:scheduled]', ...args);
@@ -88,6 +92,10 @@ async function processScheduledMessageJob(
         updatedAt: new Date().toISOString(),
       })
       .where(eq(scheduledMessages.id, scheduledMessageId));
+    // Cadência: opt-out drenou este degrau → conclui a inscrição se foi o último.
+    if (row.cadenceEnrollmentId) {
+      await finalizeEnrollmentIfDrained(row.accountId, row.cadenceEnrollmentId);
+    }
     log(`${scheduledMessageId} skipped: opt-out`);
     return;
   }
@@ -102,6 +110,8 @@ async function processScheduledMessageJob(
       contentText: row.contentText,
       mediaUrl: row.mediaUrl,
       filename: row.filename,
+      // Assunto (degrau de e-mail da cadência); WhatsApp/IG ignoram.
+      subject: row.subject ?? undefined,
     });
 
     // Guard on status='pending' so a race with a cancel doesn't resurrect it
@@ -124,6 +134,16 @@ async function processScheduledMessageJob(
       conversationId: row.conversationId,
     });
 
+    // Cadência: registra o degrau enviado + conclui a inscrição se foi o último.
+    if (row.cadenceEnrollmentId) {
+      await onCadenceStepSent(
+        scheduledMessageId,
+        row.accountId,
+        row.cadenceEnrollmentId,
+        row.cadenceStepPosition,
+      );
+    }
+
     log(`${scheduledMessageId} sent → ${result.whatsappMessageId}`);
     return;
   } catch (err) {
@@ -144,6 +164,9 @@ async function processScheduledMessageJob(
             eq(scheduledMessages.status, 'pending'),
           ),
         );
+      if (row.cadenceEnrollmentId) {
+        await finalizeEnrollmentIfDrained(row.accountId, row.cadenceEnrollmentId);
+      }
       log(`${scheduledMessageId} PERMANENT failure: ${message}`);
       throw new UnrecoverableError(message);
     }
@@ -159,6 +182,9 @@ async function processScheduledMessageJob(
             eq(scheduledMessages.status, 'pending'),
           ),
         );
+      if (row.cadenceEnrollmentId) {
+        await finalizeEnrollmentIfDrained(row.accountId, row.cadenceEnrollmentId);
+      }
       log(`${scheduledMessageId} failed (retries exhausted): ${message}`);
     } else {
       log(`${scheduledMessageId} transient failure, will retry: ${message}`);

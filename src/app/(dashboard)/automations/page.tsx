@@ -1,5 +1,5 @@
 import Link from "next/link"
-import { ArrowRight, MessageCircle, Workflow } from "lucide-react"
+import { ArrowRight, MessageCircle, Workflow, Send } from "lucide-react"
 
 // ============================================================
 // Página "Automações" — agora focada SÓ nas automações de comentário do
@@ -33,6 +33,26 @@ export default function AutomationsPage() {
             Comentou uma palavra-chave num post → o CRM responde o comentário e
             manda um DM com botões (link, comunidade…). Escolha o post de cada
             automação.
+          </span>
+        </span>
+        <ArrowRight className="h-4 w-4 shrink-0 text-primary" />
+      </Link>
+
+      <Link
+        href="/automations/cadencias"
+        className="flex w-full items-center gap-3 rounded-xl border border-border bg-card p-4 text-left transition-colors hover:border-primary/50"
+      >
+        <span className="flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-gradient-to-tr from-violet-500 to-fuchsia-500 text-white">
+          <Send className="h-5 w-5" />
+        </span>
+        <span className="min-w-0 flex-1">
+          <span className="block text-sm font-semibold text-foreground">
+            Cadências (sequência de mensagens)
+          </span>
+          <span className="block text-xs text-muted-foreground">
+            Monte sequências de mensagens (WhatsApp, e-mail, Instagram) por
+            serviço/produto. Coloque o lead na cadência pelo construtor, pelo
+            funil ou na conversa — cada degrau dispara sozinho no canal do lead.
           </span>
         </span>
         <ArrowRight className="h-4 w-4 shrink-0 text-primary" />
