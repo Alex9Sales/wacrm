@@ -5,7 +5,9 @@ import { toast } from 'sonner'
 import {
   createCompany,
   updateCompany,
+  listCompanyAssignees,
   type CompanyInput,
+  type AssigneeLite,
 } from '@/app/(dashboard)/empresas/actions'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -43,6 +45,12 @@ export function CompanyForm({
   const [website, setWebsite] = useState('')
   const [phone, setPhone] = useState('')
   const [notes, setNotes] = useState('')
+  const [document, setDocument] = useState('')
+  const [email, setEmail] = useState('')
+  const [address, setAddress] = useState('')
+  const [size, setSize] = useState('')
+  const [assignedTo, setAssignedTo] = useState('')
+  const [assignees, setAssignees] = useState<AssigneeLite[]>([])
   const [saving, setSaving] = useState(false)
 
   useEffect(() => {
@@ -52,6 +60,14 @@ export function CompanyForm({
     setWebsite(company?.website ?? '')
     setPhone(company?.phone ?? '')
     setNotes(company?.notes ?? '')
+    setDocument(company?.document ?? '')
+    setEmail(company?.email ?? '')
+    setAddress(company?.address ?? '')
+    setSize(company?.size ?? '')
+    setAssignedTo(company?.assignedTo ?? '')
+    listCompanyAssignees()
+      .then(setAssignees)
+      .catch(() => setAssignees([]))
   }, [open, company])
 
   async function submit() {
@@ -66,6 +82,11 @@ export function CompanyForm({
       website: website.trim() || null,
       phone: phone.trim() || null,
       notes: notes.trim() || null,
+      document: document.trim() || null,
+      email: email.trim() || null,
+      address: address.trim() || null,
+      size: size.trim() || null,
+      assignedTo: assignedTo || null,
     }
     if (isEdit) {
       const res = await updateCompany(company!.id, payload)
@@ -132,14 +153,75 @@ export function CompanyForm({
               />
             </div>
           </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="company-website">Site</Label>
+              <Input
+                id="company-website"
+                value={website}
+                onChange={(e) => setWebsite(e.target.value)}
+                placeholder="Ex.: raconsultoria.com.br"
+              />
+            </div>
+            <div>
+              <Label htmlFor="company-email">E-mail</Label>
+              <Input
+                id="company-email"
+                value={email}
+                onChange={(e) => setEmail(e.target.value)}
+                placeholder="Ex.: contato@empresa.com"
+              />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+            <div>
+              <Label htmlFor="company-document">CNPJ / documento</Label>
+              <Input
+                id="company-document"
+                value={document}
+                onChange={(e) => setDocument(e.target.value)}
+                placeholder="Ex.: 00.000.000/0001-00"
+              />
+            </div>
+            <div>
+              <Label htmlFor="company-size">Porte</Label>
+              <select
+                id="company-size"
+                value={size}
+                onChange={(e) => setSize(e.target.value)}
+                className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground"
+              >
+                <option value="">—</option>
+                <option value="Pequena">Pequena</option>
+                <option value="Média">Média</option>
+                <option value="Grande">Grande</option>
+              </select>
+            </div>
+          </div>
           <div>
-            <Label htmlFor="company-website">Site</Label>
+            <Label htmlFor="company-address">Endereço</Label>
             <Input
-              id="company-website"
-              value={website}
-              onChange={(e) => setWebsite(e.target.value)}
-              placeholder="Ex.: raconsultoria.com.br"
+              id="company-address"
+              value={address}
+              onChange={(e) => setAddress(e.target.value)}
+              placeholder="Ex.: Rua X, 123 — Campo Grande/MS"
             />
+          </div>
+          <div>
+            <Label htmlFor="company-assignee">Responsável</Label>
+            <select
+              id="company-assignee"
+              value={assignedTo}
+              onChange={(e) => setAssignedTo(e.target.value)}
+              className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground"
+            >
+              <option value="">Sem responsável</option>
+              {assignees.map((a) => (
+                <option key={a.id} value={a.id}>
+                  {a.name ?? 'Sem nome'}
+                </option>
+              ))}
+            </select>
           </div>
           <div>
             <Label htmlFor="company-notes">Observações</Label>

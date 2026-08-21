@@ -7,10 +7,22 @@
 // direto negócio↔empresa é da Fase 2). Escritas exigem agent+.
 // ============================================================
 
-import { and, asc, eq, ilike, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, ilike, inArray, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
-import { db, companies, contacts, deals, conversations } from '@/db'
+import {
+  db,
+  companies,
+  companyTags,
+  companyEvents,
+  companyAttachments,
+  contacts,
+  deals,
+  conversations,
+  tags,
+  user,
+  member,
+} from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 
@@ -98,6 +110,21 @@ export interface CompanyDeal {
   contact_name: string | null
 }
 
+export interface CompanyTagLite {
+  id: string
+  name: string
+  color: string
+}
+
+export interface CompanyMetrics {
+  won_count: number
+  won_value: number
+  open_count: number
+  open_value: number
+  lost_count: number
+  ticket: number
+}
+
 export interface CompanyDetail {
   id: string
   name: string
@@ -105,11 +132,19 @@ export interface CompanyDetail {
   website: string | null
   phone: string | null
   notes: string | null
+  document: string | null
+  email: string | null
+  address: string | null
+  size: string | null
+  assigned_to: string | null
+  assignee_name: string | null
+  tags: CompanyTagLite[]
   created_at: string
   contacts: CompanyContact[]
   deals: CompanyDeal[]
   open_deals_value: number
   last_contact_at: string | null
+  metrics: CompanyMetrics
 }
 
 /** Detalhe de uma empresa: dados + contatos + negócios (via contato). */
@@ -124,13 +159,28 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
         website: companies.website,
         phone: companies.phone,
         notes: companies.notes,
+        document: companies.document,
+        email: companies.email,
+        address: companies.address,
+        size: companies.size,
+        assigned_to: companies.assignedTo,
+        assignee_name: user.name,
         created_at: companies.createdAt,
       })
       .from(companies)
+      .leftJoin(user, eq(companies.assignedTo, user.id))
       .where(and(eq(companies.id, id), eq(companies.accountId, ctx.accountId)))
       .limit(1),
   )
   if (!row) return null
+
+  // Etiquetas da empresa.
+  const companyTagRows = await db
+    .select({ id: tags.id, name: tags.name, color: tags.color })
+    .from(companyTags)
+    .innerJoin(tags, eq(tags.id, companyTags.tagId))
+    .where(eq(companyTags.companyId, id))
+    .orderBy(asc(tags.name))
 
   const companyContacts = await db
     .select({
@@ -168,6 +218,19 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
   const openValue = deemedDeals
     .filter((d) => d.status === 'open')
     .reduce((s, d) => s + d.value, 0)
+  // Painel de métricas da empresa (mini raio-x): ganho / aberto / perdido.
+  const wonDeals = deemedDeals.filter((d) => d.status === 'won')
+  const lostDeals = deemedDeals.filter((d) => d.status === 'lost')
+  const openDeals = deemedDeals.filter((d) => d.status === 'open')
+  const wonValue = wonDeals.reduce((s, d) => s + d.value, 0)
+  const metrics: CompanyMetrics = {
+    won_count: wonDeals.length,
+    won_value: wonValue,
+    open_count: openDeals.length,
+    open_value: openValue,
+    lost_count: lostDeals.length,
+    ticket: wonDeals.length > 0 ? wonValue / wonDeals.length : 0,
+  }
 
   // Último contato: mensagem mais recente entre as conversas dos contatos desta
   // empresa.
@@ -193,6 +256,14 @@ export async function getCompany(id: string): Promise<CompanyDetail | null> {
     website: row.website,
     phone: row.phone,
     notes: row.notes,
+    document: row.document ?? null,
+    email: row.email ?? null,
+    address: row.address ?? null,
+    size: row.size ?? null,
+    assigned_to: row.assigned_to ?? null,
+    assignee_name: row.assignee_name ?? null,
+    tags: companyTagRows.map((t) => ({ id: t.id, name: t.name, color: t.color })),
+    metrics,
     created_at: row.created_at as string,
     contacts: companyContacts.map((c) => ({
       id: c.id,
@@ -213,6 +284,12 @@ export interface CompanyInput {
   website?: string | null
   phone?: string | null
   notes?: string | null
+  // Ficha rica (v2).
+  document?: string | null
+  email?: string | null
+  address?: string | null
+  size?: string | null
+  assignedTo?: string | null
 }
 
 /** Cria uma empresa. Erra se já existir uma com o mesmo nome (case-insensitive). */
@@ -246,6 +323,11 @@ export async function createCompany(
           website: clean(input.website),
           phone: clean(input.phone),
           notes: clean(input.notes),
+          document: clean(input.document),
+          email: clean(input.email),
+          address: clean(input.address),
+          size: clean(input.size),
+          assignedTo: clean(input.assignedTo),
           createdBy: ctx.userId,
         })
         .returning({ id: companies.id, name: companies.name }),
@@ -326,6 +408,11 @@ export async function updateCompany(
     if (patch.website !== undefined) set.website = clean(patch.website)
     if (patch.phone !== undefined) set.phone = clean(patch.phone)
     if (patch.notes !== undefined) set.notes = clean(patch.notes)
+    if (patch.document !== undefined) set.document = clean(patch.document)
+    if (patch.email !== undefined) set.email = clean(patch.email)
+    if (patch.address !== undefined) set.address = clean(patch.address)
+    if (patch.size !== undefined) set.size = clean(patch.size)
+    if (patch.assignedTo !== undefined) set.assignedTo = clean(patch.assignedTo)
 
     const updated = await db
       .update(companies)
@@ -401,5 +488,247 @@ export async function setContactCompany(
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao vincular.' }
+  }
+}
+
+// ============================================================
+// Empresas v2 — responsável (dono) + etiquetas + histórico + anexos.
+// ============================================================
+
+export interface AssigneeLite {
+  id: string
+  name: string | null
+}
+
+/** Membros da conta (pra o seletor de responsável da empresa). */
+export async function listCompanyAssignees(): Promise<AssigneeLite[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({ id: user.id, name: user.name })
+    .from(member)
+    .innerJoin(user, eq(user.id, member.userId))
+    .where(eq(member.organizationId, ctx.accountId))
+    .orderBy(asc(user.name))
+  return rows.map((r) => ({ id: r.id, name: r.name ?? null }))
+}
+
+/** Todas as etiquetas da conta (pra sugerir no editor de etiquetas da empresa). */
+export async function listAccountTags(): Promise<CompanyTagLite[]> {
+  const ctx = await getCurrentAccount()
+  return db
+    .select({ id: tags.id, name: tags.name, color: tags.color })
+    .from(tags)
+    .where(eq(tags.accountId, ctx.accountId))
+    .orderBy(asc(tags.name))
+}
+
+/** Substitui as etiquetas da empresa (por NOME; cria as que não existem). */
+export async function setCompanyTags(
+  companyId: string,
+  tagNames: string[],
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await requireRole('agent')
+    const owned = firstOrNull(
+      await db
+        .select({ id: companies.id })
+        .from(companies)
+        .where(and(eq(companies.id, companyId), eq(companies.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!owned) return { error: 'Empresa não encontrada.' }
+    const norm = (s: string) => s.trim().toLowerCase()
+    const wanted = [...new Set(tagNames.map((t) => t.trim()).filter(Boolean))].slice(0, 20)
+    const existing = await db
+      .select({ id: tags.id, name: tags.name })
+      .from(tags)
+      .where(eq(tags.accountId, ctx.accountId))
+    const idByName = new Map(existing.map((t) => [norm(t.name), t.id]))
+    const tagIds: string[] = []
+    for (const name of wanted) {
+      let id = idByName.get(norm(name))
+      if (!id) {
+        const created = firstOrThrow(
+          await db
+            .insert(tags)
+            .values({ accountId: ctx.accountId, userId: ctx.userId, name })
+            .returning({ id: tags.id }),
+        )
+        id = created.id
+        idByName.set(norm(name), id)
+      }
+      tagIds.push(id)
+    }
+    await db.delete(companyTags).where(eq(companyTags.companyId, companyId))
+    if (tagIds.length) {
+      await db
+        .insert(companyTags)
+        .values(tagIds.map((tagId) => ({ companyId, tagId })))
+        .onConflictDoNothing()
+    }
+    revalidatePath(`/empresas/${companyId}`)
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao salvar etiquetas.' }
+  }
+}
+
+// ── Histórico / atividade da empresa ──
+export interface CompanyEventRow {
+  id: string
+  type: string
+  data: Record<string, unknown>
+  actor_name: string | null
+  created_at: string
+}
+
+export async function listCompanyActivity(companyId: string): Promise<CompanyEventRow[]> {
+  try {
+    const ctx = await getCurrentAccount()
+    const rows = await db
+      .select({
+        id: companyEvents.id,
+        type: companyEvents.type,
+        data: companyEvents.data,
+        actor_name: user.name,
+        created_at: companyEvents.createdAt,
+      })
+      .from(companyEvents)
+      .leftJoin(user, eq(user.id, companyEvents.actorUserId))
+      .where(
+        and(eq(companyEvents.companyId, companyId), eq(companyEvents.accountId, ctx.accountId)),
+      )
+      .orderBy(desc(companyEvents.createdAt))
+      .limit(100)
+    return rows.map((r) => ({
+      id: r.id,
+      type: r.type,
+      data: (r.data as Record<string, unknown>) ?? {},
+      actor_name: r.actor_name ?? null,
+      created_at: r.created_at as string,
+    }))
+  } catch {
+    return []
+  }
+}
+
+/** Adiciona uma nota (evento 'note') no histórico da empresa. */
+export async function addCompanyNote(
+  companyId: string,
+  text: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await requireRole('agent')
+    const t = (text ?? '').trim()
+    if (!t) return { error: 'A anotação não pode ficar vazia.' }
+    const owned = firstOrNull(
+      await db
+        .select({ id: companies.id })
+        .from(companies)
+        .where(and(eq(companies.id, companyId), eq(companies.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!owned) return { error: 'Empresa não encontrada.' }
+    await db.insert(companyEvents).values({
+      accountId: ctx.accountId,
+      companyId,
+      actorUserId: ctx.userId,
+      type: 'note',
+      data: { text: t },
+    })
+    revalidatePath(`/empresas/${companyId}`)
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao anotar.' }
+  }
+}
+
+// ── Anexos / arquivos da empresa ──
+export interface CompanyAttachmentRow {
+  id: string
+  name: string
+  url: string
+  mime: string | null
+  size: number | null
+  created_at: string
+}
+
+export async function listCompanyAttachments(
+  companyId: string,
+): Promise<CompanyAttachmentRow[]> {
+  try {
+    const ctx = await getCurrentAccount()
+    const rows = await db
+      .select({
+        id: companyAttachments.id,
+        name: companyAttachments.name,
+        url: companyAttachments.url,
+        mime: companyAttachments.mime,
+        size: companyAttachments.size,
+        created_at: companyAttachments.createdAt,
+      })
+      .from(companyAttachments)
+      .where(
+        and(
+          eq(companyAttachments.companyId, companyId),
+          eq(companyAttachments.accountId, ctx.accountId),
+        ),
+      )
+      .orderBy(desc(companyAttachments.createdAt))
+    return rows.map((r) => ({
+      id: r.id,
+      name: r.name,
+      url: r.url,
+      mime: r.mime ?? null,
+      size: r.size ?? null,
+      created_at: r.created_at as string,
+    }))
+  } catch {
+    return []
+  }
+}
+
+export async function addCompanyAttachment(
+  companyId: string,
+  file: { name: string; url: string; mime?: string | null; size?: number | null },
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await requireRole('agent')
+    const name = (file.name ?? '').trim()
+    const url = (file.url ?? '').trim()
+    if (!name || !url) return { error: 'Arquivo inválido.' }
+    const owned = firstOrNull(
+      await db
+        .select({ id: companies.id })
+        .from(companies)
+        .where(and(eq(companies.id, companyId), eq(companies.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!owned) return { error: 'Empresa não encontrada.' }
+    await db.insert(companyAttachments).values({
+      accountId: ctx.accountId,
+      companyId,
+      name,
+      url,
+      mime: file.mime ?? null,
+      size: file.size ?? null,
+      uploadedBy: ctx.userId,
+    })
+    revalidatePath(`/empresas/${companyId}`)
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao anexar.' }
+  }
+}
+
+export async function removeCompanyAttachment(id: string): Promise<{ error: string | null }> {
+  try {
+    const ctx = await requireRole('agent')
+    await db
+      .delete(companyAttachments)
+      .where(and(eq(companyAttachments.id, id), eq(companyAttachments.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao remover.' }
   }
 }

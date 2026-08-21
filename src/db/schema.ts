@@ -268,6 +268,12 @@ export const companies = pgTable("companies", {
 	website: text(),
 	phone: text(),
 	notes: text(),
+	// Ficha rica (Empresas v2 — migração 0108).
+	document: text(),
+	email: text(),
+	address: text(),
+	size: text(),
+	assignedTo: uuid("assigned_to"),
 	createdBy: uuid("created_by"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
@@ -279,6 +285,43 @@ export const companies = pgTable("companies", {
 			foreignColumns: [organization.id],
 			name: "companies_account_id_fkey"
 		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.assignedTo],
+			foreignColumns: [user.id],
+			name: "companies_assigned_to_fkey"
+		}).onDelete("set null"),
+]);
+
+// Histórico/atividade da EMPRESA (timeline: notas + eventos) — migração 0108.
+export const companyEvents = pgTable("company_events", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	companyId: uuid("company_id").notNull(),
+	actorUserId: uuid("actor_user_id"),
+	type: text().notNull(),
+	data: jsonb().default(sql`'{}'::jsonb`).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_company_events_company").using("btree", table.companyId.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "company_events_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.companyId], foreignColumns: [companies.id], name: "company_events_company_id_fkey" }).onDelete("cascade"),
+]);
+
+// Anexos/arquivos da EMPRESA (metadados; binário no MinIO) — migração 0108.
+export const companyAttachments = pgTable("company_attachments", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	companyId: uuid("company_id").notNull(),
+	name: text().notNull(),
+	url: text().notNull(),
+	mime: text(),
+	size: integer(),
+	uploadedBy: uuid("uploaded_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_company_attachments_company").using("btree", table.companyId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "company_attachments_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.companyId], foreignColumns: [companies.id], name: "company_attachments_company_id_fkey" }).onDelete("cascade"),
 ]);
 
 // Catálogo de PRODUTOS/SERVIÇOS da conta (Config → Produtos e serviços).
@@ -320,6 +363,20 @@ export const tags = pgTable("tags", {
 			foreignColumns: [organization.id],
 			name: "tags_account_id_fkey"
 		}).onDelete("cascade"),
+]);
+
+// Etiquetas da EMPRESA (reusa tags, como contact_tags) — migração 0108.
+// Definido APÓS `tags` (o FK referencia tags.id — sem forward-reference).
+export const companyTags = pgTable("company_tags", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	companyId: uuid("company_id").notNull(),
+	tagId: uuid("tag_id").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
+}, (table) => [
+	uniqueIndex("idx_company_tags_unique").using("btree", table.companyId.asc().nullsLast().op("uuid_ops"), table.tagId.asc().nullsLast().op("uuid_ops")),
+	index("idx_company_tags_company").using("btree", table.companyId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.companyId], foreignColumns: [companies.id], name: "company_tags_company_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.tagId], foreignColumns: [tags.id], name: "company_tags_tag_id_fkey" }).onDelete("cascade"),
 ]);
 
 export const contactTags = pgTable("contact_tags", {

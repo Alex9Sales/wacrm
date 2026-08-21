@@ -1,6 +1,6 @@
 'use client'
 
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, type ComponentType } from 'react'
 import { useParams, useRouter } from 'next/navigation'
 import Link from 'next/link'
 import { toast } from 'sonner'
@@ -8,7 +8,15 @@ import {
   getCompany,
   deleteCompany,
   setContactCompany,
+  listCompanyActivity,
+  addCompanyNote,
+  listCompanyAttachments,
+  addCompanyAttachment,
+  removeCompanyAttachment,
+  setCompanyTags,
   type CompanyDetail,
+  type CompanyEventRow,
+  type CompanyAttachmentRow,
 } from '../actions'
 import {
   listContactsForPicker,
@@ -34,6 +42,17 @@ import {
   ExternalLink,
   Plus,
   X,
+  Mail,
+  MapPin,
+  FileText,
+  UserRound,
+  Tag as TagIcon,
+  Paperclip,
+  Clock,
+  Trophy,
+  Wallet,
+  XCircle,
+  Receipt,
 } from 'lucide-react'
 
 const STATUS_LABEL: Record<string, string> = {
@@ -57,6 +76,41 @@ function fmtDay(iso: string) {
   return `${p(d.getDate())}/${p(d.getMonth() + 1)}`
 }
 
+function fmtDateTime(iso: string) {
+  const d = new Date(iso)
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${p(d.getDate())}/${p(d.getMonth() + 1)}/${d.getFullYear()} ${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
+/** Texto de um evento do histórico da empresa. */
+function eventText(ev: CompanyEventRow): string {
+  if (ev.type === 'note') return String((ev.data as { text?: string }).text ?? '')
+  const map: Record<string, string> = {
+    deal_won: '🏆 Negócio ganho',
+    deal_lost: '🔻 Negócio perdido',
+    contact_added: '👤 Contato adicionado',
+  }
+  return map[ev.type] ?? ev.type
+}
+
+function Field({
+  icon: Icon,
+  label,
+  value,
+}: {
+  icon: ComponentType<{ className?: string }>
+  label: string
+  value: string
+}) {
+  return (
+    <div className="flex items-center gap-2 text-sm">
+      <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
+      <span className="w-24 shrink-0 text-xs text-muted-foreground">{label}</span>
+      <span className="min-w-0 flex-1 truncate text-foreground">{value}</span>
+    </div>
+  )
+}
+
 export default function EmpresaDetailPage() {
   const params = useParams<{ id: string }>()
   const id = params?.id
@@ -70,12 +124,24 @@ export default function EmpresaDetailPage() {
   const [pickerQ, setPickerQ] = useState('')
   const [pickerOptions, setPickerOptions] = useState<PickerOption[]>([])
   const [busyContactId, setBusyContactId] = useState<string | null>(null)
+  const [activity, setActivity] = useState<CompanyEventRow[]>([])
+  const [attachments, setAttachments] = useState<CompanyAttachmentRow[]>([])
+  const [note, setNote] = useState('')
+  const [savingNote, setSavingNote] = useState(false)
+  const [uploading, setUploading] = useState(false)
+  const [newTag, setNewTag] = useState('')
 
   const load = useCallback(async () => {
     if (!id) return
     setLoading(true)
-    const c = await getCompany(id).catch(() => null)
+    const [c, act, atts] = await Promise.all([
+      getCompany(id).catch(() => null),
+      listCompanyActivity(id).catch(() => [] as CompanyEventRow[]),
+      listCompanyAttachments(id).catch(() => [] as CompanyAttachmentRow[]),
+    ])
     setCompany(c)
+    setActivity(act)
+    setAttachments(atts)
     setLoading(false)
   }, [id])
 
@@ -109,6 +175,69 @@ export default function EmpresaDetailPage() {
     setBusyContactId(contactId)
     const { error } = await setContactCompany(contactId, null)
     setBusyContactId(null)
+    if (error) {
+      toast.error(error)
+      return
+    }
+    await load()
+  }
+
+  async function submitNote() {
+    if (!company) return
+    const t = note.trim()
+    if (!t) return
+    setSavingNote(true)
+    const { error } = await addCompanyNote(company.id, t)
+    setSavingNote(false)
+    if (error) {
+      toast.error(error)
+      return
+    }
+    setNote('')
+    setActivity(await listCompanyActivity(company.id).catch(() => activity))
+  }
+
+  async function uploadFile(file: File) {
+    if (!company || uploading) return
+    setUploading(true)
+    try {
+      const fd = new FormData()
+      fd.append('file', file)
+      fd.append('bucket', 'media')
+      const res = await fetch('/api/media/upload', { method: 'POST', body: fd })
+      const data = (await res.json().catch(() => ({}))) as {
+        publicUrl?: string
+        error?: string
+      }
+      if (!res.ok || !data.publicUrl) {
+        toast.error(data.error || 'Falha no upload do arquivo')
+        return
+      }
+      const { error } = await addCompanyAttachment(company.id, {
+        name: file.name,
+        url: data.publicUrl,
+        mime: file.type,
+        size: file.size,
+      })
+      if (error) toast.error(error)
+      else setAttachments(await listCompanyAttachments(company.id).catch(() => attachments))
+    } finally {
+      setUploading(false)
+    }
+  }
+
+  async function deleteAttachment(attId: string) {
+    const { error } = await removeCompanyAttachment(attId)
+    if (error) {
+      toast.error(error)
+      return
+    }
+    setAttachments((prev) => prev.filter((a) => a.id !== attId))
+  }
+
+  async function saveTags(names: string[]) {
+    if (!company) return
+    const { error } = await setCompanyTags(company.id, names)
     if (error) {
       toast.error(error)
       return
@@ -202,54 +331,131 @@ export default function EmpresaDetailPage() {
         </div>
       </div>
 
-      {/* Stats */}
-      <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+      {/* Painel de métricas — mini raio-x da empresa */}
+      <div className="grid grid-cols-2 gap-3 lg:grid-cols-4">
         <div className="rounded-xl border border-border bg-card p-4">
-          <p className="text-xs text-muted-foreground">Contatos</p>
-          <p className="mt-1 text-2xl font-semibold text-foreground">
-            {company.contacts.length}
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Trophy className="h-3.5 w-3.5 text-emerald-500" /> Ganho
+          </p>
+          <p className="mt-1 text-2xl font-semibold text-emerald-600 dark:text-emerald-400">
+            {brl(company.metrics.won_value)}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            {company.metrics.won_count} negócio(s)
           </p>
         </div>
         <div className="rounded-xl border border-border bg-card p-4">
-          <p className="text-xs text-muted-foreground">Negócios</p>
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Wallet className="h-3.5 w-3.5 text-amber-500" /> Em aberto
+          </p>
           <p className="mt-1 text-2xl font-semibold text-foreground">
-            {company.deals.length}
+            {brl(company.metrics.open_value)}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            {company.metrics.open_count} negócio(s)
           </p>
         </div>
         <div className="rounded-xl border border-border bg-card p-4">
-          <p className="text-xs text-muted-foreground">Em aberto</p>
-          <p className="mt-1 text-2xl font-semibold text-foreground">
-            {brl(company.open_deals_value)}
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <Receipt className="h-3.5 w-3.5 text-muted-foreground" /> Ticket médio
           </p>
+          <p className="mt-1 text-2xl font-semibold text-foreground">
+            {brl(company.metrics.ticket)}
+          </p>
+          <p className="text-[11px] text-muted-foreground">por venda ganha</p>
         </div>
         <div className="rounded-xl border border-border bg-card p-4">
-          <p className="text-xs text-muted-foreground">Último contato</p>
+          <p className="flex items-center gap-1.5 text-xs text-muted-foreground">
+            <XCircle className="h-3.5 w-3.5 text-red-500" /> Perdidos
+          </p>
           <p className="mt-1 text-2xl font-semibold text-foreground">
-            {company.last_contact_at ? fmtDay(company.last_contact_at) : '—'}
+            {company.metrics.lost_count}
+          </p>
+          <p className="text-[11px] text-muted-foreground">
+            {company.contacts.length} contato(s) ·{' '}
+            {company.last_contact_at ? `visto ${fmtDay(company.last_contact_at)}` : 'sem contato'}
           </p>
         </div>
       </div>
 
-      {/* Dados */}
-      {(company.website || company.phone || company.notes) && (
-        <div className="space-y-2 rounded-xl border border-border bg-card p-4">
-          {company.phone && (
-            <p className="flex items-center gap-2 text-sm text-foreground">
-              <Phone className="h-4 w-4 text-muted-foreground" /> {company.phone}
-            </p>
-          )}
-          {company.website && (
-            <p className="flex items-center gap-2 text-sm text-foreground">
-              <Globe className="h-4 w-4 text-muted-foreground" /> {company.website}
-            </p>
-          )}
+      {/* Ficha (dados) + Etiquetas */}
+      <div className="grid gap-4 lg:grid-cols-2">
+        <div className="space-y-2.5 rounded-xl border border-border bg-card p-4">
+          <h2 className="mb-1 text-sm font-semibold text-foreground">Dados</h2>
+          <Field icon={UserRound} label="Responsável" value={company.assignee_name ?? '—'} />
+          <Field icon={FileText} label="CNPJ / doc" value={company.document ?? '—'} />
+          <Field icon={Mail} label="E-mail" value={company.email ?? '—'} />
+          <Field icon={Phone} label="Telefone" value={company.phone ?? '—'} />
+          <Field icon={Globe} label="Site" value={company.website ?? '—'} />
+          <Field icon={MapPin} label="Endereço" value={company.address ?? '—'} />
+          <Field icon={Building2} label="Porte" value={company.size ?? '—'} />
           {company.notes && (
-            <p className="whitespace-pre-wrap text-sm text-muted-foreground">
+            <p className="whitespace-pre-wrap pt-1 text-sm text-muted-foreground">
               {company.notes}
             </p>
           )}
         </div>
-      )}
+
+        <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+          <h2 className="flex items-center gap-2 text-sm font-semibold text-foreground">
+            <TagIcon className="h-4 w-4 text-primary" /> Etiquetas
+          </h2>
+          <div className="flex flex-wrap gap-1.5">
+            {company.tags.length === 0 && (
+              <span className="text-xs text-muted-foreground">Sem etiquetas.</span>
+            )}
+            {company.tags.map((t) => (
+              <span
+                key={t.id}
+                className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-xs font-medium"
+                style={{ backgroundColor: `${t.color}22`, color: t.color }}
+              >
+                {t.name}
+                <button
+                  type="button"
+                  onClick={() =>
+                    void saveTags(
+                      company.tags.map((x) => x.name).filter((n) => n !== t.name),
+                    )
+                  }
+                  className="transition-opacity hover:opacity-60"
+                  aria-label="Remover etiqueta"
+                >
+                  <X className="h-3 w-3" />
+                </button>
+              </span>
+            ))}
+          </div>
+          <div className="flex gap-2">
+            <input
+              value={newTag}
+              onChange={(e) => setNewTag(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && newTag.trim()) {
+                  e.preventDefault()
+                  void saveTags([...company.tags.map((x) => x.name), newTag.trim()])
+                  setNewTag('')
+                }
+              }}
+              placeholder="Nova etiqueta…"
+              className="h-8 flex-1 rounded-md border border-border bg-background px-2 text-xs outline-none focus:border-primary"
+            />
+            <Button
+              size="sm"
+              variant="outline"
+              disabled={!newTag.trim()}
+              onClick={() => {
+                if (newTag.trim()) {
+                  void saveTags([...company.tags.map((x) => x.name), newTag.trim()])
+                  setNewTag('')
+                }
+              }}
+            >
+              Adicionar
+            </Button>
+          </div>
+        </div>
+      </div>
 
       {/* Contatos */}
       <div className="rounded-xl border border-border bg-card">
@@ -409,6 +615,107 @@ export default function EmpresaDetailPage() {
         )}
       </div>
 
+      {/* Atividade / histórico */}
+      <div className="rounded-xl border border-border bg-card">
+        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+          <Clock className="h-4 w-4 text-primary" />
+          <h2 className="text-sm font-semibold text-foreground">Atividade</h2>
+        </div>
+        <div className="space-y-2 border-b border-border px-4 py-3">
+          <textarea
+            value={note}
+            onChange={(e) => setNote(e.target.value)}
+            placeholder="Adicionar uma nota sobre a empresa…"
+            rows={2}
+            className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+          />
+          <div className="flex justify-end">
+            <Button size="sm" disabled={!note.trim() || savingNote} onClick={() => void submitNote()}>
+              {savingNote ? (
+                <Loader2 className="mr-1 h-4 w-4 animate-spin" />
+              ) : (
+                <Plus className="mr-1 h-4 w-4" />
+              )}
+              Anotar
+            </Button>
+          </div>
+        </div>
+        {activity.length === 0 ? (
+          <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+            Sem atividade ainda.
+          </p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {activity.map((ev) => (
+              <li key={ev.id} className="px-4 py-2.5">
+                <p className="whitespace-pre-wrap break-words text-sm text-foreground">
+                  {eventText(ev)}
+                </p>
+                <p className="mt-0.5 text-[11px] text-muted-foreground">
+                  {ev.actor_name ? `${ev.actor_name} · ` : ''}
+                  {fmtDateTime(ev.created_at)}
+                </p>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
+      {/* Anexos / arquivos */}
+      <div className="rounded-xl border border-border bg-card">
+        <div className="flex items-center gap-2 border-b border-border px-4 py-3">
+          <Paperclip className="h-4 w-4 text-primary" />
+          <h2 className="text-sm font-semibold text-foreground">Arquivos</h2>
+          <label className="ml-auto inline-flex cursor-pointer items-center gap-1 rounded-md border border-border bg-background px-2 py-1 text-xs text-muted-foreground transition-colors hover:bg-muted">
+            {uploading ? (
+              <Loader2 className="h-3.5 w-3.5 animate-spin" />
+            ) : (
+              <Plus className="h-3.5 w-3.5" />
+            )}
+            Enviar arquivo
+            <input
+              type="file"
+              className="hidden"
+              disabled={uploading}
+              onChange={(e) => {
+                const f = e.target.files?.[0]
+                if (f) void uploadFile(f)
+                e.target.value = ''
+              }}
+            />
+          </label>
+        </div>
+        {attachments.length === 0 ? (
+          <p className="px-4 py-6 text-center text-xs text-muted-foreground">
+            Nenhum arquivo. Contrato, proposta e docs da empresa ficam aqui.
+          </p>
+        ) : (
+          <ul className="divide-y divide-border">
+            {attachments.map((a) => (
+              <li key={a.id} className="flex items-center gap-3 px-4 py-2.5">
+                <FileText className="h-4 w-4 shrink-0 text-muted-foreground" />
+                <a
+                  href={a.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="min-w-0 flex-1 truncate text-sm text-foreground hover:underline"
+                >
+                  {a.name}
+                </a>
+                <button
+                  type="button"
+                  onClick={() => void deleteAttachment(a.id)}
+                  className="shrink-0 text-muted-foreground transition-colors hover:text-red-600"
+                  aria-label="Remover arquivo"
+                >
+                  <Trash2 className="h-4 w-4" />
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       {editOpen && (
         <CompanyForm
           open={editOpen}
@@ -420,6 +727,11 @@ export default function EmpresaDetailPage() {
             website: company.website,
             phone: company.phone,
             notes: company.notes,
+            document: company.document,
+            email: company.email,
+            address: company.address,
+            size: company.size,
+            assignedTo: company.assigned_to,
           }}
           onSaved={() => void load()}
         />
