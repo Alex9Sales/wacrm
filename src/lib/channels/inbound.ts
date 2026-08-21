@@ -18,7 +18,7 @@
 // ============================================================
 
 import { randomUUID } from 'crypto';
-import { and, count, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
+import { and, asc, count, eq, gte, inArray, isNull, sql } from 'drizzle-orm';
 
 import {
   db,
@@ -190,6 +190,9 @@ export async function dispatchInboundMessage(
         accountId,
         ev.senderExternalId,
         isFromMe ? '' : ev.senderName ?? '',
+        // 2c: no e-mail, casa a resposta pelo contacts.email do MESMO lead
+        // (não cria contato de e-mail separado). IG/Messenger seguem só por id.
+        { matchByEmail: channel.provider === 'email' || channel.provider === 'gmail' },
       )
     : await findOrCreateContact(
         accountId,
@@ -1603,6 +1606,7 @@ async function findOrCreateContactByExternalId(
   accountId: string,
   externalId: string,
   name: string,
+  opts?: { matchByEmail?: boolean },
 ): Promise<ContactOutcome | null> {
   const findByExt = async () =>
     firstOrNull(
@@ -1620,6 +1624,30 @@ async function findOrCreateContactByExternalId(
             eq(contacts.externalId, externalId),
           ),
         )
+        .limit(1),
+    );
+
+  // 2c — identidade multicanal: casa por contacts.email (o MESMO lead que veio
+  // por WhatsApp/outro canal com o e-mail preenchido). Preferimos o mais ANTIGO
+  // (o lead original) e evitamos casar um contato-de-e-mail já com external_id.
+  const findByEmail = async () =>
+    firstOrNull(
+      await db
+        .select({
+          id: contacts.id,
+          userId: contacts.userId,
+          name: contacts.name,
+          avatarUrl: contacts.avatarUrl,
+          externalId: contacts.externalId,
+        })
+        .from(contacts)
+        .where(
+          and(
+            eq(contacts.accountId, accountId),
+            sql`lower(${contacts.email}) = ${externalId.toLowerCase()}`,
+          ),
+        )
+        .orderBy(asc(contacts.createdAt))
         .limit(1),
     );
 
@@ -1653,6 +1681,27 @@ async function findOrCreateContactByExternalId(
 
   const pre = await findByExt();
   if (pre) return asOutcome(pre);
+
+  // 2c — no e-mail, antes de criar contato novo: casa pelo endereço em
+  // contacts.email (ex.: lead que veio por WhatsApp e depois recebeu e-mail da
+  // cadência). "Reivindica" o external_id (se estava vazio) pra as próximas
+  // respostas casarem direto por external_id.
+  if (opts?.matchByEmail) {
+    const byEmail = await findByEmail();
+    if (byEmail) {
+      if (!byEmail.externalId) {
+        try {
+          await db
+            .update(contacts)
+            .set({ externalId, updatedAt: new Date().toISOString() })
+            .where(and(eq(contacts.id, byEmail.id), isNull(contacts.externalId)));
+        } catch {
+          /* corrida/colisão no external_id → segue com o contato mesmo assim */
+        }
+      }
+      return asOutcome(byEmail);
+    }
+  }
 
   const ownerUserId = await resolveAccountOwnerUserId(accountId);
   if (!ownerUserId) {
