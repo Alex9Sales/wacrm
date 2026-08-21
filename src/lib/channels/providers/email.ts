@@ -200,10 +200,11 @@ export const emailProvider: WhatsAppProvider = {
   capabilities: CAPABILITIES.email,
 
   // `to` = e-mail do cliente (vem de contacts.external_id no send-message).
-  async sendText(ch, to, text) {
+  async sendText(ch, to, text, options) {
     const subject = oneLineSubject(
-      (typeof ch.providerMeta.replySubject === 'string' &&
-        ch.providerMeta.replySubject) ||
+      (options?.subject && options.subject.trim()) ||
+        (typeof ch.providerMeta.replySubject === 'string' &&
+          ch.providerMeta.replySubject) ||
         'Atendimento',
     )
     // BYO-SMTP (qualquer provedor): envia por SMTP se o canal tiver essa config.

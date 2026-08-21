@@ -7,7 +7,9 @@
 // ============================================================
 
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
-import { db, channels, companies, contacts, conversations, dealAttachments, dealContacts, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, notifications, pipelines, pipelineStages, user } from '@/db'
+import { db, channels, companies, contacts, conversations, dealAttachments, dealContacts, dealEmails, dealEvents, dealProducts, dealQuestions, deals, member, messages, notifications, pipelines, pipelineStages, user } from '@/db'
+import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
+import { findOrCreateConversation } from '@/lib/channels/inbound'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
@@ -1783,6 +1785,159 @@ export async function removeDealEmail(id: string): Promise<{ error: string | nul
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao remover e-mail' }
+  }
+}
+
+// ============================================================
+// E-mail REAL do negócio — a conversa de e-mail do contato (mesmo motor do
+// inbox): cadência (2b), respostas (2c) e envios manuais aparecem aqui.
+// ============================================================
+
+export type DealEmailMessage = {
+  id: string
+  direction: 'in' | 'out'
+  text: string
+  createdAt: string
+  channelName: string | null
+}
+
+/** Mensagens de e-mail REAIS trocadas com o contato do negócio. */
+export async function listDealEmailThread(dealId: string): Promise<DealEmailMessage[]> {
+  try {
+    const ctx = await getCurrentAccount()
+    const deal = firstOrNull(
+      await db
+        .select({ contactId: deals.contactId, assignedTo: deals.assignedTo })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!deal || !deal.contactId) return []
+    if (!dealReadable(ctx.role, ctx.userId, deal.assignedTo)) return []
+    const rows = await db
+      .select({
+        id: messages.id,
+        senderType: messages.senderType,
+        contentText: messages.contentText,
+        createdAt: messages.createdAt,
+        channelName: channels.name,
+      })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .innerJoin(channels, eq(channels.id, conversations.channelId))
+      .where(
+        and(
+          eq(conversations.accountId, ctx.accountId),
+          eq(conversations.contactId, deal.contactId),
+          inArray(channels.provider, ['email', 'gmail']),
+          eq(messages.isInternal, false),
+        ),
+      )
+      .orderBy(asc(messages.createdAt))
+      .limit(200)
+    return rows.map((r) => ({
+      id: r.id,
+      direction:
+        r.senderType === 'customer' || r.senderType === 'contact' ? 'in' : 'out',
+      text: r.contentText ?? '',
+      createdAt: r.createdAt ?? '',
+      channelName: r.channelName ?? null,
+    }))
+  } catch (err) {
+    console.error('[listDealEmailThread]', err)
+    return []
+  }
+}
+
+/** A conta tem canal de e-mail conectado? (habilita o compositor da aba). */
+export async function dealEmailChannelAvailable(): Promise<boolean> {
+  try {
+    const ctx = await getCurrentAccount()
+    const row = firstOrNull(
+      await db
+        .select({ id: channels.id })
+        .from(channels)
+        .where(
+          and(
+            eq(channels.accountId, ctx.accountId),
+            inArray(channels.provider, ['email', 'gmail']),
+          ),
+        )
+        .limit(1),
+    )
+    return !!row
+  } catch {
+    return false
+  }
+}
+
+/** Envia um e-mail REAL pro contato do negócio (via canal de e-mail) → cai na
+ *  conversa de e-mail do contato (aparece na aba e no inbox) + vira nota no
+ *  histórico do negócio. */
+export async function sendDealEmail(
+  dealId: string,
+  input: { subject: string; body: string },
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const body = (input.body ?? '').trim()
+    const subject = (input.subject ?? '').trim()
+    if (!body) return { error: 'Escreva o corpo do e-mail.' }
+    const deal = firstOrNull(
+      await db
+        .select({ contactId: deals.contactId, assignedTo: deals.assignedTo })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!deal) return { error: 'Negócio não encontrado.' }
+    if (!dealReadable(ctx.role, ctx.userId, deal.assignedTo)) {
+      return { error: 'Este negócio está atribuído a outro atendente.' }
+    }
+    if (!deal.contactId) return { error: 'O negócio não tem contato vinculado.' }
+    const contact = firstOrNull(
+      await db
+        .select({ email: contacts.email, userId: contacts.userId })
+        .from(contacts)
+        .where(eq(contacts.id, deal.contactId))
+        .limit(1),
+    )
+    if (!contact?.email) return { error: 'O contato não tem e-mail cadastrado.' }
+    // Prefere provider 'email' (antes de 'gmail') por ordenação.
+    const emailChannel = firstOrNull(
+      await db
+        .select({ id: channels.id })
+        .from(channels)
+        .where(
+          and(
+            eq(channels.accountId, ctx.accountId),
+            inArray(channels.provider, ['email', 'gmail']),
+          ),
+        )
+        .orderBy(asc(channels.provider))
+        .limit(1),
+    )
+    if (!emailChannel) return { error: 'Nenhum canal de e-mail conectado.' }
+    const conv = await findOrCreateConversation(
+      ctx.accountId,
+      contact.userId,
+      deal.contactId,
+      emailChannel.id,
+    )
+    if (!conv) return { error: 'Não foi possível abrir a conversa de e-mail.' }
+    await sendMessageToConversation(ctx.accountId, {
+      conversationId: conv.conversation.id,
+      messageType: 'text',
+      contentText: body,
+      subject: subject || undefined,
+    })
+    await recordDealEvent(ctx.accountId, ctx.userId, dealId, 'note', {
+      text: `✉️ E-mail enviado${subject ? ` — ${subject}` : ''}`,
+    })
+    return { error: null }
+  } catch (err) {
+    console.error('[sendDealEmail]', err)
+    return { error: err instanceof Error ? err.message : 'Falha ao enviar o e-mail.' }
   }
 }
 

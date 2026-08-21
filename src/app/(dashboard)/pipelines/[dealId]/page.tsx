@@ -95,10 +95,14 @@ import {
   listDealEmails,
   addDealEmail,
   removeDealEmail,
+  listDealEmailThread,
+  dealEmailChannelAvailable,
+  sendDealEmail,
   type DealProduct,
   type DealAttachment,
   type DealQuestion,
   type DealEmail,
+  type DealEmailMessage,
 } from "@/app/(dashboard)/pipelines/actions";
 import type { Deal, PipelineStage, CustomField } from "@/types";
 import {
@@ -263,6 +267,13 @@ export default function DealDetailPage() {
   const [newQuestion, setNewQuestion] = useState("");
   const [emailSubject, setEmailSubject] = useState("");
   const [emailBody, setEmailBody] = useState("");
+  // E-mail REAL do negócio (conversa do contato) + compositor de envio.
+  const [emailThread, setEmailThread] = useState<DealEmailMessage[]>([]);
+  const [emailChannelAvail, setEmailChannelAvail] = useState(false);
+  const [sendSubject, setSendSubject] = useState("");
+  const [sendBody, setSendBody] = useState("");
+  const [sendingEmail, setSendingEmail] = useState(false);
+  const [showManualEmail, setShowManualEmail] = useState(false);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -290,7 +301,7 @@ export default function DealDetailPage() {
       return;
     }
     setDeal(d);
-    const [st, ev, tk, pr, at, qs, em] = await Promise.all([
+    const [st, ev, tk, pr, at, qs, em, emThread, emAvail] = await Promise.all([
       listStages(d.pipeline_id).catch(() => [] as PipelineStage[]),
       listDealEvents(dealId).catch(() => [] as DealEvent[]),
       listTasksByDeal(dealId).catch(() => [] as TaskLite[]),
@@ -298,6 +309,8 @@ export default function DealDetailPage() {
       listDealAttachments(dealId).catch(() => [] as DealAttachment[]),
       listDealQuestions(dealId).catch(() => [] as DealQuestion[]),
       listDealEmails(dealId).catch(() => [] as DealEmail[]),
+      listDealEmailThread(dealId).catch(() => [] as DealEmailMessage[]),
+      dealEmailChannelAvailable().catch(() => false),
     ]);
     setStages(st);
     setEvents(ev);
@@ -306,6 +319,8 @@ export default function DealDetailPage() {
     setAttachments(at);
     setQuestions(qs);
     setEmails(em);
+    setEmailThread(emThread);
+    setEmailChannelAvail(emAvail);
 
     // Campos personalizados (definição da conta + valores do contato do deal).
     const [cf, cv] = await Promise.all([
@@ -381,6 +396,33 @@ export default function DealDetailPage() {
     if (error) toast.error(error);
     else setEmails((prev) => prev.filter((e) => e.id !== id));
   }, []);
+
+  // Envia um e-mail REAL pro contato (via canal de e-mail) → cai na conversa +
+  // histórico. Atualiza o thread e o histórico ao voltar.
+  const sendRealEmail = useCallback(async () => {
+    if (!deal || sendingEmail) return;
+    const body = sendBody.trim();
+    if (!body) return;
+    setSendingEmail(true);
+    const { error } = await sendDealEmail(deal.id, {
+      subject: sendSubject.trim(),
+      body,
+    });
+    setSendingEmail(false);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    setSendSubject("");
+    setSendBody("");
+    toast.success("E-mail enviado");
+    const [thread, ev] = await Promise.all([
+      listDealEmailThread(deal.id).catch(() => emailThread),
+      listDealEvents(deal.id).catch(() => events),
+    ]);
+    setEmailThread(thread);
+    setEvents(ev);
+  }, [deal, sendingEmail, sendSubject, sendBody, emailThread, events]);
 
   const submitProduct = useCallback(async () => {
     if (!deal || addingProduct) return;
@@ -1562,67 +1604,140 @@ export default function DealDetailPage() {
             <div className="rounded-xl border border-border bg-card">
               <div className="flex items-center gap-2 border-b border-border px-4 py-3">
                 <Mail className="h-4 w-4 text-primary" />
-                <h2 className="text-sm font-semibold text-foreground">E-mails</h2>
+                <h2 className="text-sm font-semibold text-foreground">E-mail do lead</h2>
               </div>
-              <div className="space-y-2 border-b border-border px-4 py-3">
-                <input
-                  value={emailSubject}
-                  onChange={(e) => setEmailSubject(e.target.value)}
-                  placeholder="Assunto do e-mail"
-                  className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
-                />
-                <textarea
-                  value={emailBody}
-                  onChange={(e) => setEmailBody(e.target.value)}
-                  placeholder="Cole ou anote o conteúdo do e-mail trocado com o lead…"
-                  rows={3}
-                  className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
-                />
-                <div className="flex justify-end">
-                  <Button
-                    size="sm"
-                    disabled={!emailSubject.trim()}
-                    onClick={() => void submitEmail()}
-                  >
-                    <Plus className="mr-1 h-4 w-4" /> Registrar e-mail
-                  </Button>
-                </div>
-              </div>
-              {emails.length === 0 ? (
+
+              {/* Thread REAL: cadência (follow-up), respostas do lead e envios */}
+              {emailThread.length === 0 ? (
                 <p className="px-4 py-6 text-center text-xs text-muted-foreground">
-                  Nenhum e-mail registrado. Registre aqui os e-mails trocados com
-                  o lead.
+                  Nenhum e-mail ainda. Os e-mails trocados com este lead
+                  (cadência, respostas e envios) aparecem aqui.
                 </p>
               ) : (
-                <ul className="divide-y divide-border">
-                  {emails.map((em) => (
-                    <li key={em.id} className="flex items-start gap-2 px-4 py-3">
-                      <div className="min-w-0 flex-1">
-                        <p className="truncate text-sm font-medium text-foreground">
-                          {em.subject}
-                        </p>
-                        {em.body && (
-                          <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-muted-foreground">
-                            {em.body}
-                          </p>
-                        )}
-                        <p className="mt-1 text-[11px] text-muted-foreground">
-                          {em.actor_name ? `${em.actor_name} · ` : ""}
-                          {fmtDateTime(em.created_at)}
+                <ul className="max-h-[420px] space-y-2 overflow-y-auto px-4 py-3">
+                  {emailThread.map((m) => (
+                    <li
+                      key={m.id}
+                      className={`flex ${m.direction === "out" ? "justify-end" : "justify-start"}`}
+                    >
+                      <div
+                        className={`max-w-[85%] rounded-lg px-3 py-2 text-sm ${m.direction === "out" ? "bg-primary/10" : "bg-muted"} text-foreground`}
+                      >
+                        <p className="whitespace-pre-wrap break-words">{m.text}</p>
+                        <p className="mt-1 text-[10px] text-muted-foreground">
+                          {m.direction === "out" ? "Enviado" : "Recebido"} ·{" "}
+                          {fmtDateTime(m.createdAt)}
                         </p>
                       </div>
-                      <button
-                        type="button"
-                        onClick={() => void deleteEmail(em.id)}
-                        className="shrink-0 text-muted-foreground transition-colors hover:text-red-500"
-                        aria-label="Remover e-mail"
-                      >
-                        <Trash2 className="h-4 w-4" />
-                      </button>
                     </li>
                   ))}
                 </ul>
               )}
+
+              {/* Compositor: enviar um e-mail REAL pro lead */}
+              <div className="space-y-2 border-t border-border px-4 py-3">
+                {emailChannelAvail ? (
+                  <>
+                    <input
+                      value={sendSubject}
+                      onChange={(e) => setSendSubject(e.target.value)}
+                      placeholder="Assunto"
+                      className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                    />
+                    <textarea
+                      value={sendBody}
+                      onChange={(e) => setSendBody(e.target.value)}
+                      placeholder="Escreva o e-mail para o lead…"
+                      rows={3}
+                      className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        disabled={!sendBody.trim() || sendingEmail}
+                        onClick={() => void sendRealEmail()}
+                      >
+                        <Mail className="mr-1 h-4 w-4" />
+                        {sendingEmail ? "Enviando…" : "Enviar e-mail"}
+                      </Button>
+                    </div>
+                  </>
+                ) : (
+                  <p className="text-center text-xs text-muted-foreground">
+                    Conecte um canal de e-mail para enviar e receber e-mails deste
+                    lead por aqui.
+                  </p>
+                )}
+              </div>
+
+              {/* Registrar e-mail trocado FORA do CRM (manual) — recolhível */}
+              <div className="border-t border-border px-4 py-3">
+                <button
+                  type="button"
+                  onClick={() => setShowManualEmail((v) => !v)}
+                  className="text-[11px] font-medium text-muted-foreground hover:text-foreground"
+                >
+                  {showManualEmail ? "− " : "+ "}
+                  Registrar e-mail trocado fora do CRM (manual)
+                </button>
+                {showManualEmail && (
+                  <div className="mt-2 space-y-2">
+                    <input
+                      value={emailSubject}
+                      onChange={(e) => setEmailSubject(e.target.value)}
+                      placeholder="Assunto do e-mail"
+                      className="w-full rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                    />
+                    <textarea
+                      value={emailBody}
+                      onChange={(e) => setEmailBody(e.target.value)}
+                      placeholder="Cole ou anote o conteúdo do e-mail…"
+                      rows={2}
+                      className="w-full resize-none rounded-lg border border-border bg-background px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary/50"
+                    />
+                    <div className="flex justify-end">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        disabled={!emailSubject.trim()}
+                        onClick={() => void submitEmail()}
+                      >
+                        <Plus className="mr-1 h-4 w-4" /> Registrar
+                      </Button>
+                    </div>
+                    {emails.length > 0 && (
+                      <ul className="divide-y divide-border">
+                        {emails.map((em) => (
+                          <li key={em.id} className="flex items-start gap-2 py-2">
+                            <div className="min-w-0 flex-1">
+                              <p className="truncate text-sm font-medium text-foreground">
+                                {em.subject}
+                              </p>
+                              {em.body && (
+                                <p className="mt-0.5 whitespace-pre-wrap break-words text-xs text-muted-foreground">
+                                  {em.body}
+                                </p>
+                              )}
+                              <p className="mt-1 text-[11px] text-muted-foreground">
+                                {em.actor_name ? `${em.actor_name} · ` : ""}
+                                {fmtDateTime(em.created_at)}
+                              </p>
+                            </div>
+                            <button
+                              type="button"
+                              onClick={() => void deleteEmail(em.id)}
+                              className="shrink-0 text-muted-foreground transition-colors hover:text-red-500"
+                              aria-label="Remover e-mail"
+                            >
+                              <Trash2 className="h-4 w-4" />
+                            </button>
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                  </div>
+                )}
+              </div>
             </div>
           )}
         </section>

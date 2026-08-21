@@ -176,6 +176,8 @@ export interface SendOptions {
    * a real WhatsApp mention (blue, notifies); others ignore it (plain text).
    */
   mentions?: string[];
+  /** Assunto do e-mail (canais de e-mail). Ignorado por WhatsApp/IG/Messenger. */
+  subject?: string;
 }
 
 /** Outbound media descriptor. */

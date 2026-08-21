@@ -121,6 +121,8 @@ export interface SendMessageParams {
   /** Structured template params (header/body/buttons). */
   templateMessageParams?: unknown;
   replyToMessageId?: string | null;
+  /** Assunto do e-mail (canais de e-mail). Ignorado pelos outros canais. */
+  subject?: string | null;
 }
 
 export interface SendMessageResult {
@@ -221,6 +223,7 @@ export async function sendMessageToConversation(
     templateParams,
     templateMessageParams,
     replyToMessageId,
+    subject,
   } = params;
 
   if (!conversationId) {
@@ -532,6 +535,7 @@ export async function sendMessageToConversation(
       contextExternalId: contextMessageId,
       contextFromMe,
       mentions: mentionJids.length ? mentionJids : undefined,
+      subject: subject || undefined,
     });
     return result.externalMessageId;
   };
