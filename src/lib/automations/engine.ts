@@ -33,6 +33,7 @@ import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { and, asc, count, eq, gte, isNull, sql } from 'drizzle-orm'
 import { engineSendText, engineSendTemplate } from './meta-send'
 import { dispatchTagAddedToFlows } from '@/lib/flows/engine'
+import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 
 // ------------------------------------------------------------
 // Row mappings — the engine's public types (src/types) are
@@ -604,18 +605,35 @@ async function runStep(step: AutomationStep, args: ExecuteArgs): Promise<string>
           .where(eq(organization.id, args.automation.account_id))
           .limit(1),
       )
-      await db.insert(deals).values({
-        // Tenancy + audit, same split as automation_logs above.
-        accountId: args.automation.account_id,
-        userId: args.automation.user_id,
-        pipelineId: cfg.pipeline_id,
-        stageId: cfg.stage_id,
-        contactId: args.contactId,
-        title: interpolate(cfg.title, args),
-        value: String(cfg.value ?? 0),
-        currency: acct?.default_currency ?? 'USD',
-        status: 'open',
-      })
+      const createdDeal = firstOrNull(
+        await db
+          .insert(deals)
+          .values({
+            // Tenancy + audit, same split as automation_logs above.
+            accountId: args.automation.account_id,
+            userId: args.automation.user_id,
+            pipelineId: cfg.pipeline_id,
+            stageId: cfg.stage_id,
+            contactId: args.contactId,
+            title: interpolate(cfg.title, args),
+            value: String(cfg.value ?? 0),
+            currency: acct?.default_currency ?? 'USD',
+            status: 'open',
+          })
+          .returning({ id: deals.id }),
+      )
+      // Atividades automáticas da etapa de entrada (best-effort).
+      if (createdDeal?.id) {
+        try {
+          await autoCreateStageTasks(
+            { accountId: args.automation.account_id, userId: args.automation.user_id },
+            createdDeal.id,
+            cfg.stage_id,
+          )
+        } catch (err) {
+          console.error('[automations create_deal] autoCreateStageTasks:', err)
+        }
+      }
       return 'deal created'
     }
 

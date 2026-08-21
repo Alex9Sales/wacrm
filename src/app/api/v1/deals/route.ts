@@ -24,6 +24,7 @@ import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, okList, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
 import { parseListParams, buildPage } from '@/lib/api/v1/pagination';
 import { resolveAuditUserId } from '@/lib/api/v1/contacts';
+import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks';
 import {
   DEAL_COLUMNS,
   serializeDeal,
@@ -211,6 +212,22 @@ export async function POST(request: Request) {
         })
         .returning({ id: deals.id }),
     );
+
+    // Atividades automáticas da etapa de entrada (best-effort) — só p/ aberto.
+    if (inserted?.id) {
+      const st = typeof body.status === 'string' ? body.status : 'open';
+      if (st !== 'won' && st !== 'lost') {
+        try {
+          await autoCreateStageTasks(
+            { accountId: ctx.accountId, userId },
+            inserted.id,
+            stageId,
+          );
+        } catch (err) {
+          console.error('[api/v1/deals] autoCreateStageTasks:', err);
+        }
+      }
+    }
 
     // Campos personalizados (opcional): { "Faturamento": "R$ 500 mil", ... }.
     // Cada chave vira um campo personalizado (find-or-create por nome) e o valor

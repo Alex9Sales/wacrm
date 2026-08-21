@@ -24,6 +24,7 @@ import {
   loadTagsByContact,
 } from '@/lib/api/v1/contacts'
 import { firstPipelineOf, firstStageOf } from '@/lib/api/v1/deals'
+import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 
@@ -129,6 +130,14 @@ export async function ingestLead(
           .returning({ id: deals.id }),
       )
       dealId = inserted?.id ?? null
+      // Atividades automáticas da etapa de entrada (best-effort).
+      if (dealId) {
+        try {
+          await autoCreateStageTasks({ accountId, userId: auditUserId }, dealId, stageId)
+        } catch (err) {
+          console.error('[ingestLead] autoCreateStageTasks:', err)
+        }
+      }
     }
   } catch (err) {
     console.error('[ingestLead] deal create failed:', err)

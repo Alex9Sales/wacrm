@@ -7,7 +7,8 @@
 // ============================================================
 
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
-import { db, channels, companies, contacts, conversations, dealAttachments, dealContacts, dealEmails, dealEvents, dealProducts, dealProposals, dealQuestions, deals, member, messages, notifications, pipelines, pipelineStages, user } from '@/db'
+import { db, channels, companies, contacts, conversations, dealAttachments, dealContacts, dealEmails, dealEvents, dealProducts, dealProposals, dealQuestions, deals, member, messages, notifications, pipelines, pipelineStages, stageTaskTemplates, user } from '@/db'
+import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 import { buildProposalData, loadDealProposalFields } from '@/lib/proposals/proposal'
 import {
   formatProposalMoney,
@@ -475,7 +476,11 @@ export async function moveDealToStage(
     // Grab the current stage first so the timeline can show from → to.
     const before = firstOrNull(
       await db
-        .select({ stageId: deals.stageId, assignedTo: deals.assignedTo })
+        .select({
+          stageId: deals.stageId,
+          status: deals.status,
+          assignedTo: deals.assignedTo,
+        })
         .from(deals)
         .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
         .limit(1),
@@ -499,6 +504,21 @@ export async function moveDealToStage(
       fromId: before.stageId,
       toId: stageId,
     })
+    // Atividades automáticas da nova etapa (best-effort, nunca derruba o move).
+    // Só p/ negócio ABERTO — arrastar um ganho/perdido no board não gera tarefas.
+    try {
+      const n =
+        before.status === 'won' || before.status === 'lost'
+          ? 0
+          : await autoCreateStageTasks(ctx, dealId, stageId)
+      if (n > 0) {
+        await recordDealEvent(ctx.accountId, ctx.userId, dealId, 'note', {
+          text: `🗒️ ${n} atividade${n > 1 ? 's' : ''} da etapa "${toStageName ?? ''}" criada${n > 1 ? 's' : ''}`,
+        })
+      }
+    } catch (err) {
+      console.error('[moveDealToStage] autoCreateStageTasks:', err)
+    }
     // Atualiza o "próximo follow-up" do card conforme a nova etapa — IMEDIATO,
     // não espera o tick de 5min (o Alex quer: mover o card recalcula a data).
     try {
@@ -777,6 +797,192 @@ export async function deleteStage(stageId: string): Promise<{ error: string | nu
   }
 }
 
+// ============================================================
+// Atividades automáticas por etapa (stage_task_templates, migração 0110).
+// Templates de tarefa por etapa — materializados em `tasks` quando um negócio
+// entra na etapa (autoCreateStageTasks). Editados no "Gerenciar funil".
+// ============================================================
+
+export interface StageTaskTemplate {
+  id: string
+  stage_id: string
+  title: string
+  description: string | null
+  due_offset_days: number
+  type: string | null
+  position: number
+  active: boolean
+}
+
+const templateColumns = {
+  id: stageTaskTemplates.id,
+  stage_id: stageTaskTemplates.stageId,
+  title: stageTaskTemplates.title,
+  description: stageTaskTemplates.description,
+  due_offset_days: stageTaskTemplates.dueOffsetDays,
+  type: stageTaskTemplates.type,
+  position: stageTaskTemplates.position,
+  active: stageTaskTemplates.active,
+}
+
+/** Confirma que a etapa pertence à conta (via funil). */
+async function assertOwnedStage(
+  ctx: AccountContext,
+  stageId: string,
+): Promise<boolean> {
+  const owned = firstOrNull(
+    await db
+      .select({ id: pipelineStages.id })
+      .from(pipelineStages)
+      .innerJoin(pipelines, eq(pipelineStages.pipelineId, pipelines.id))
+      .where(and(eq(pipelineStages.id, stageId), eq(pipelines.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  return !!owned
+}
+
+/** Templates de atividade de TODAS as etapas de um funil (pra config). */
+export async function listStageTaskTemplates(
+  pipelineId: string,
+): Promise<StageTaskTemplate[]> {
+  try {
+    const ctx = await getCurrentAccount()
+    const rows = await db
+      .select(templateColumns)
+      .from(stageTaskTemplates)
+      .innerJoin(pipelineStages, eq(pipelineStages.id, stageTaskTemplates.stageId))
+      .where(
+        and(
+          eq(pipelineStages.pipelineId, pipelineId),
+          eq(stageTaskTemplates.accountId, ctx.accountId),
+        ),
+      )
+      .orderBy(asc(stageTaskTemplates.position), asc(stageTaskTemplates.createdAt))
+    return rows
+  } catch (err) {
+    console.error('[listStageTaskTemplates]', err)
+    return []
+  }
+}
+
+export interface StageTaskTemplateInput {
+  title: string
+  description?: string | null
+  dueOffsetDays?: number
+  type?: string | null
+}
+
+/** Cria um template de atividade numa etapa. */
+export async function addStageTaskTemplate(
+  stageId: string,
+  input: StageTaskTemplateInput,
+): Promise<{ template: StageTaskTemplate | null; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    if (!(await assertOwnedStage(ctx, stageId))) {
+      return { template: null, error: 'Etapa não encontrada.' }
+    }
+    const title = (input.title ?? '').trim()
+    if (!title) return { template: null, error: 'O título é obrigatório.' }
+    const posRow = firstOrNull(
+      await db
+        .select({ c: count() })
+        .from(stageTaskTemplates)
+        .where(eq(stageTaskTemplates.stageId, stageId)),
+    )
+    const position = Number(posRow?.c ?? 0)
+    const days = Number(input.dueOffsetDays)
+    const row = firstOrThrow(
+      await db
+        .insert(stageTaskTemplates)
+        .values({
+          accountId: ctx.accountId,
+          stageId,
+          title,
+          description: (input.description ?? '').trim() || null,
+          dueOffsetDays: Number.isFinite(days) ? Math.max(0, Math.trunc(days)) : 0,
+          type: (input.type ?? '').trim() || null,
+          position,
+          createdBy: ctx.userId,
+          updatedAt: sql`now()`,
+        })
+        .returning(templateColumns),
+    )
+    return { template: row, error: null }
+  } catch (err) {
+    console.error('[addStageTaskTemplate]', err)
+    return { template: null, error: 'Falha ao criar a atividade.' }
+  }
+}
+
+/** Edita um template (título/descrição/prazo/tipo/ativo). */
+export async function updateStageTaskTemplate(
+  id: string,
+  patch: {
+    title?: string
+    description?: string | null
+    dueOffsetDays?: number
+    type?: string | null
+    active?: boolean
+  },
+): Promise<{ template: StageTaskTemplate | null; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const set: Record<string, unknown> = { updatedAt: sql`now()` }
+    if (patch.title !== undefined) {
+      const t = patch.title.trim()
+      if (!t) return { template: null, error: 'O título é obrigatório.' }
+      set.title = t
+    }
+    if (patch.description !== undefined)
+      set.description = (patch.description ?? '').trim() || null
+    if (patch.dueOffsetDays !== undefined) {
+      const days = Number(patch.dueOffsetDays)
+      set.dueOffsetDays = Number.isFinite(days) ? Math.max(0, Math.trunc(days)) : 0
+    }
+    if (patch.type !== undefined) set.type = (patch.type ?? '').trim() || null
+    if (patch.active !== undefined) set.active = patch.active
+    const row = firstOrNull(
+      await db
+        .update(stageTaskTemplates)
+        .set(set)
+        .where(
+          and(
+            eq(stageTaskTemplates.id, id),
+            eq(stageTaskTemplates.accountId, ctx.accountId),
+          ),
+        )
+        .returning(templateColumns),
+    )
+    if (!row) return { template: null, error: 'Atividade não encontrada.' }
+    return { template: row, error: null }
+  } catch (err) {
+    console.error('[updateStageTaskTemplate]', err)
+    return { template: null, error: 'Falha ao salvar a atividade.' }
+  }
+}
+
+/** Remove um template de atividade. Tarefas já criadas NÃO são apagadas. */
+export async function removeStageTaskTemplate(
+  id: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .delete(stageTaskTemplates)
+      .where(
+        and(
+          eq(stageTaskTemplates.id, id),
+          eq(stageTaskTemplates.accountId, ctx.accountId),
+        ),
+      )
+    return { error: null }
+  } catch (err) {
+    console.error('[removeStageTaskTemplate]', err)
+    return { error: 'Falha ao remover a atividade.' }
+  }
+}
+
 /** Delete a pipeline the caller owns. ON DELETE CASCADE removes deals + stages. */
 export async function deletePipeline(pipelineId: string): Promise<{ error: string | null }> {
   try {
@@ -935,6 +1141,12 @@ export async function createDeal(
         // ID p/ o Raio-X resolver a etapa de entrada à prova de renomear.
         stageId: input.stage_id,
       })
+      // Atividades automáticas da etapa inicial (best-effort).
+      try {
+        await autoCreateStageTasks(ctx, created.id, input.stage_id)
+      } catch (err) {
+        console.error('[createDeal] autoCreateStageTasks:', err)
+      }
     }
     return { error: null, id: created?.id }
   } catch (err) {
@@ -1089,12 +1301,29 @@ export async function updateDeal(
       .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
 
     if (stageChanged) {
+      const toName = await stageName(patch.stage_id!)
       await recordDealEvent(ctx.accountId, ctx.userId, id, 'stage_changed', {
         from: await stageName(before.stageId),
-        to: await stageName(patch.stage_id!),
+        to: toName,
         fromId: before.stageId,
         toId: patch.stage_id!,
       })
+      // Atividades automáticas da etapa — só p/ negócio que RESULTA aberto.
+      // Considera o status EFETIVO (o do patch, senão o atual): não gera ao
+      // fechar no mesmo update NEM ao editar a etapa de um já ganho/perdido.
+      const effectiveStatus = patch.status ?? before.status
+      if (effectiveStatus !== 'lost' && effectiveStatus !== 'won') {
+        try {
+          const n = await autoCreateStageTasks(ctx, id, patch.stage_id!)
+          if (n > 0) {
+            await recordDealEvent(ctx.accountId, ctx.userId, id, 'note', {
+              text: `🗒️ ${n} atividade${n > 1 ? 's' : ''} da etapa "${toName ?? ''}" criada${n > 1 ? 's' : ''}`,
+            })
+          }
+        } catch (err) {
+          console.error('[updateDeal] autoCreateStageTasks:', err)
+        }
+      }
     }
     if (patch.status !== undefined && patch.status !== before.status) {
       await recordDealEvent(ctx.accountId, ctx.userId, id, 'status_changed', {

@@ -850,6 +850,28 @@ export const pipelineStages = pgTable("pipeline_stages", {
 		}).onDelete("cascade"),
 ]);
 
+// Atividades automáticas por etapa (migração 0110). Templates de tarefa que
+// são materializados em `tasks` quando um negócio ENTRA na etapa.
+export const stageTaskTemplates = pgTable("stage_task_templates", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	stageId: uuid("stage_id").notNull(),
+	title: text().notNull(),
+	description: text(),
+	dueOffsetDays: integer("due_offset_days").default(0).notNull(),
+	type: text(),
+	position: integer().default(0).notNull(),
+	active: boolean().default(true).notNull(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_stage_task_templates_stage").using("btree", table.stageId.asc().nullsLast().op("uuid_ops")),
+	index("idx_stage_task_templates_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "stage_task_templates_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.stageId], foreignColumns: [pipelineStages.id], name: "stage_task_templates_stage_id_fkey" }).onDelete("cascade"),
+]);
+
 export const deals = pgTable("deals", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),
@@ -1876,10 +1898,14 @@ export const tasks = pgTable("tasks", {
 	assignedTo: uuid("assigned_to"),
 	assigneeIds: uuid("assignee_ids").array().default(sql`'{}'::uuid[]`).notNull(),
 	createdBy: uuid("created_by"),
+	// Origem: template de etapa que criou esta tarefa (auto). Dedupe na
+	// reentrada + marca a tarefa como automática. Migração 0110.
+	sourceTemplateId: uuid("source_template_id"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("idx_tasks_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	index("idx_tasks_source_template").using("btree", table.sourceTemplateId.asc().nullsLast().op("uuid_ops")),
 	index("idx_tasks_assignee_ids").using("gin", table.assigneeIds.asc().nullsLast().op("array_ops")),
 	index("idx_tasks_account_status").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.status.asc().nullsLast().op("text_ops")),
 	index("idx_tasks_due_at").using("btree", table.dueAt.asc().nullsLast().op("timestamptz_ops")),

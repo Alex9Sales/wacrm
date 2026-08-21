@@ -24,6 +24,7 @@ import {
   contactCustomValues,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 
 /** Nota interna na conversa (só pra equipe, nunca vai pro cliente). */
 export async function postInternalNote(input: {
@@ -293,6 +294,12 @@ export async function createDealFromAi(input: {
       })
     } catch (err) {
       console.error('[ai create-card] deal event falhou:', err)
+    }
+    // Atividades automáticas da etapa de entrada (best-effort).
+    try {
+      await autoCreateStageTasks({ accountId, userId: userId || null }, created.id, stage.id)
+    } catch (err) {
+      console.error('[ai create-card] autoCreateStageTasks:', err)
     }
     return { dealId: created.id, title }
   } catch (err) {

@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   DndContext,
   PointerSensor,
@@ -22,6 +22,11 @@ import {
   countDealsInStage,
   deleteStage,
   deletePipeline,
+  listStageTaskTemplates,
+  addStageTaskTemplate,
+  updateStageTaskTemplate,
+  removeStageTaskTemplate,
+  type StageTaskTemplate,
 } from "@/app/(dashboard)/pipelines/actions";
 import type { Pipeline, PipelineStage } from "@/types";
 import {
@@ -40,6 +45,8 @@ import {
   Plus,
   GripVertical,
   AlertTriangle,
+  ListChecks,
+  CalendarClock,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -85,6 +92,93 @@ export function PipelineSettings({
   const [saving, setSaving] = useState(false);
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false);
   const [deleting, setDeleting] = useState(false);
+  // Atividades automáticas por etapa: fonte única aqui, editor controlado.
+  const [templatesByStage, setTemplatesByStage] = useState<
+    Record<string, StageTaskTemplate[]>
+  >({});
+  // Marca que o usuário já mexeu nos templates nesta abertura — evita que uma
+  // carga que resolve TARDE sobrescreva edições recém-feitas (persistidas).
+  const templatesTouched = useRef(false);
+
+  // Carrega os templates de atividade do funil ao abrir.
+  useEffect(() => {
+    if (!open) return;
+    let alive = true;
+    templatesTouched.current = false;
+    listStageTaskTemplates(pipeline.id)
+      .then((rows) => {
+        if (!alive || templatesTouched.current) return;
+        const map: Record<string, StageTaskTemplate[]> = {};
+        for (const t of rows) (map[t.stage_id] ??= []).push(t);
+        setTemplatesByStage(map);
+      })
+      .catch(() => {
+        // Não zera o mapa (senão o usuário pode recriar templates que existem);
+        // só avisa da falha de carga.
+        if (alive && !templatesTouched.current) {
+          toast.error("Não foi possível carregar as atividades das etapas.");
+        }
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, pipeline.id]);
+
+  async function handleAddTemplate(
+    stageId: string,
+    input: { title: string; dueOffsetDays: number; type: string | null },
+  ) {
+    templatesTouched.current = true;
+    const { template, error } = await addStageTaskTemplate(stageId, input);
+    if (error || !template) {
+      toast.error(error ?? "Falha ao adicionar a atividade");
+      return;
+    }
+    setTemplatesByStage((prev) => ({
+      ...prev,
+      [stageId]: [...(prev[stageId] ?? []), template],
+    }));
+  }
+
+  async function handleRemoveTemplate(stageId: string, id: string) {
+    templatesTouched.current = true;
+    // Remoção otimista guardando o estado p/ reverter se o servidor falhar.
+    let snapshot: StageTaskTemplate[] = [];
+    setTemplatesByStage((prev) => {
+      snapshot = prev[stageId] ?? [];
+      return { ...prev, [stageId]: snapshot.filter((t) => t.id !== id) };
+    });
+    const { error } = await removeStageTaskTemplate(id);
+    if (error) {
+      toast.error(error);
+      setTemplatesByStage((prev) => ({ ...prev, [stageId]: snapshot }));
+    }
+  }
+
+  async function handleToggleTemplate(
+    stageId: string,
+    id: string,
+    active: boolean,
+  ) {
+    templatesTouched.current = true;
+    setTemplatesByStage((prev) => ({
+      ...prev,
+      [stageId]: (prev[stageId] ?? []).map((t) =>
+        t.id === id ? { ...t, active } : t,
+      ),
+    }));
+    const { error } = await updateStageTaskTemplate(id, { active });
+    if (error) {
+      toast.error(error);
+      // Reverte o checkbox pro estado real do servidor.
+      setTemplatesByStage((prev) => ({
+        ...prev,
+        [stageId]: (prev[stageId] ?? []).map((t) =>
+          t.id === id ? { ...t, active: !active } : t,
+        ),
+      }));
+    }
+  }
 
   // Reset form state when the dialog opens or its prop inputs change
   // — legitimate prop-driven sync.
@@ -280,6 +374,16 @@ export function PipelineSettings({
                           }}
                           onRemove={() => handleRemoveStage(stage.id)}
                           colors={STAGE_COLORS}
+                          templates={templatesByStage[stage.id] ?? []}
+                          onAddTemplate={(input) =>
+                            handleAddTemplate(stage.id, input)
+                          }
+                          onRemoveTemplate={(id) =>
+                            handleRemoveTemplate(stage.id, id)
+                          }
+                          onToggleTemplate={(id, active) =>
+                            handleToggleTemplate(stage.id, id, active)
+                          }
                         />
                       ))}
                     </div>
@@ -468,6 +572,10 @@ function SortableStageRow({
   onGuidanceChange,
   onRemove,
   colors,
+  templates,
+  onAddTemplate,
+  onRemoveTemplate,
+  onToggleTemplate,
 }: {
   stage: PipelineStage;
   onNameChange: (v: string) => void;
@@ -476,11 +584,21 @@ function SortableStageRow({
   onGuidanceChange: (v: string) => void;
   onRemove: () => void;
   colors: string[];
+  templates: StageTaskTemplate[];
+  onAddTemplate: (input: {
+    title: string;
+    dueOffsetDays: number;
+    type: string | null;
+  }) => void;
+  onRemoveTemplate: (id: string) => void;
+  onToggleTemplate: (id: string, active: boolean) => void;
 }) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } =
     useSortable({ id: stage.id });
   const [showGuide, setShowGuide] = useState(false);
+  const [showTasks, setShowTasks] = useState(false);
   const hasGuide = !!(stage.objective?.trim() || stage.guidance?.trim());
+  const activeCount = templates.filter((t) => t.active).length;
 
   const style = {
     transform: CSS.Transform.toString(transform),
@@ -512,6 +630,19 @@ function SortableStageRow({
         />
         <button
           type="button"
+          onClick={() => setShowTasks((v) => !v)}
+          title="Atividades automáticas ao entrar na etapa"
+          className={`inline-flex items-center gap-1 rounded px-1.5 py-0.5 text-[11px] transition-colors ${
+            activeCount > 0 || showTasks
+              ? "text-primary hover:bg-primary/10"
+              : "text-muted-foreground hover:bg-background"
+          }`}
+        >
+          <ListChecks className="h-3 w-3" />
+          Atividades{activeCount > 0 ? ` (${activeCount})` : ""}
+        </button>
+        <button
+          type="button"
           onClick={() => setShowGuide((v) => !v)}
           title="Orientações da etapa (objetivo + descrição)"
           className={`rounded px-1.5 py-0.5 text-[11px] transition-colors ${
@@ -531,6 +662,15 @@ function SortableStageRow({
           <Trash2 className="h-3 w-3" />
         </Button>
       </div>
+
+      {showTasks && (
+        <StageTasksEditor
+          templates={templates}
+          onAdd={onAddTemplate}
+          onRemove={onRemoveTemplate}
+          onToggle={onToggleTemplate}
+        />
+      )}
 
       {showGuide && (
         <div className="mt-2 space-y-2 border-t border-border pt-2">
@@ -560,6 +700,133 @@ function SortableStageRow({
           </div>
         </div>
       )}
+    </div>
+  );
+}
+
+// Editor das atividades automáticas de UMA etapa. Controlado: recebe a lista
+// atual + callbacks (persistem no servidor via o pai). Só guarda o form novo.
+function StageTasksEditor({
+  templates,
+  onAdd,
+  onRemove,
+  onToggle,
+}: {
+  templates: StageTaskTemplate[];
+  onAdd: (input: {
+    title: string;
+    dueOffsetDays: number;
+    type: string | null;
+  }) => void;
+  onRemove: (id: string) => void;
+  onToggle: (id: string, active: boolean) => void;
+}) {
+  const [title, setTitle] = useState("");
+  const [days, setDays] = useState("");
+  const [type, setType] = useState("");
+
+  function submit() {
+    const t = title.trim();
+    if (!t) return;
+    onAdd({
+      title: t,
+      dueOffsetDays: Math.max(0, parseInt(days, 10) || 0),
+      type: type.trim() || null,
+    });
+    setTitle("");
+    setDays("");
+    setType("");
+  }
+
+  return (
+    <div className="mt-2 space-y-2 border-t border-border pt-2">
+      <p className="text-[11px] text-muted-foreground">
+        Tarefas criadas automaticamente para o responsável quando o negócio
+        entra nesta etapa.
+      </p>
+      {templates.length > 0 && (
+        <ul className="space-y-1">
+          {templates.map((tpl) => (
+            <li
+              key={tpl.id}
+              className={cn(
+                "flex items-center gap-2 rounded-md border border-border bg-background px-2 py-1",
+                !tpl.active && "opacity-50",
+              )}
+            >
+              <input
+                type="checkbox"
+                checked={tpl.active}
+                onChange={(e) => onToggle(tpl.id, e.target.checked)}
+                className="h-3.5 w-3.5 accent-primary"
+                title={tpl.active ? "Ativa (desmarque p/ pausar)" : "Inativa"}
+              />
+              <span className="flex-1 truncate text-xs text-foreground">
+                {tpl.title}
+                {tpl.type ? (
+                  <span className="ml-1 rounded bg-muted px-1 text-[10px] text-muted-foreground">
+                    {tpl.type}
+                  </span>
+                ) : null}
+              </span>
+              <span className="inline-flex items-center gap-0.5 whitespace-nowrap text-[10px] text-muted-foreground">
+                <CalendarClock className="h-3 w-3" />
+                {tpl.due_offset_days === 0 ? "hoje" : `+${tpl.due_offset_days}d`}
+              </span>
+              <button
+                type="button"
+                onClick={() => onRemove(tpl.id)}
+                className="text-muted-foreground hover:text-red-400"
+                title="Remover atividade"
+              >
+                <Trash2 className="h-3 w-3" />
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <div className="flex items-center gap-1.5">
+        <Input
+          value={title}
+          onChange={(e) => setTitle(e.target.value)}
+          onKeyDown={(e) => {
+            if (e.key === "Enter") {
+              e.preventDefault();
+              submit();
+            }
+          }}
+          placeholder="Nova atividade (ex.: Ligar para o lead)"
+          className="h-7 flex-1 text-xs"
+        />
+        <Input
+          value={type}
+          onChange={(e) => setType(e.target.value)}
+          placeholder="tipo"
+          className="h-7 w-16 text-xs"
+          title="Rótulo opcional (ligar, enviar, cobrar…)"
+        />
+        <div className="flex items-center gap-0.5">
+          <Input
+            value={days}
+            onChange={(e) => setDays(e.target.value)}
+            type="number"
+            min={0}
+            placeholder="0"
+            className="h-7 w-12 text-xs"
+            title="Prazo em dias a partir da entrada na etapa"
+          />
+          <span className="text-[10px] text-muted-foreground">d</span>
+        </div>
+        <Button
+          size="icon-xs"
+          variant="ghost"
+          onClick={submit}
+          className="text-primary"
+          title="Adicionar atividade"
+        >
+          <Plus className="h-3.5 w-3.5" />
+        </Button>
+      </div>
     </div>
   );
 }
