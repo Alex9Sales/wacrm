@@ -97,16 +97,29 @@ function Field({
   icon: Icon,
   label,
   value,
+  href,
 }: {
   icon: ComponentType<{ className?: string }>
   label: string
   value: string
+  href?: string
 }) {
   return (
     <div className="flex items-center gap-2 text-sm">
       <Icon className="h-4 w-4 shrink-0 text-muted-foreground" />
       <span className="w-24 shrink-0 text-xs text-muted-foreground">{label}</span>
-      <span className="min-w-0 flex-1 truncate text-foreground">{value}</span>
+      {href ? (
+        <a
+          href={href}
+          target="_blank"
+          rel="noreferrer"
+          className="min-w-0 flex-1 truncate text-primary hover:underline"
+        >
+          {value}
+        </a>
+      ) : (
+        <span className="min-w-0 flex-1 truncate text-foreground">{value}</span>
+      )}
     </div>
   )
 }
@@ -130,10 +143,12 @@ export default function EmpresaDetailPage() {
   const [savingNote, setSavingNote] = useState(false)
   const [uploading, setUploading] = useState(false)
   const [newTag, setNewTag] = useState('')
+  const [savingTags, setSavingTags] = useState(false)
 
-  const load = useCallback(async () => {
+  // `silent` = refresh sem piscar a tela toda (usado nas mutações).
+  const load = useCallback(async (silent = false) => {
     if (!id) return
-    setLoading(true)
+    if (!silent) setLoading(true)
     const [c, act, atts] = await Promise.all([
       getCompany(id).catch(() => null),
       listCompanyActivity(id).catch(() => [] as CompanyEventRow[]),
@@ -142,7 +157,7 @@ export default function EmpresaDetailPage() {
     setCompany(c)
     setActivity(act)
     setAttachments(atts)
-    setLoading(false)
+    if (!silent) setLoading(false)
   }, [id])
 
   useEffect(() => {
@@ -168,7 +183,7 @@ export default function EmpresaDetailPage() {
     }
     setPickerOpen(false)
     toast.success('Contato adicionado à empresa')
-    await load()
+    await load(true)
   }
 
   async function unlinkContact(contactId: string) {
@@ -179,7 +194,7 @@ export default function EmpresaDetailPage() {
       toast.error(error)
       return
     }
-    await load()
+    await load(true)
   }
 
   async function submitNote() {
@@ -236,13 +251,15 @@ export default function EmpresaDetailPage() {
   }
 
   async function saveTags(names: string[]) {
-    if (!company) return
+    if (!company || savingTags) return
+    setSavingTags(true)
     const { error } = await setCompanyTags(company.id, names)
+    setSavingTags(false)
     if (error) {
       toast.error(error)
       return
     }
-    await load()
+    await load(true)
   }
 
   async function handleDelete() {
@@ -384,9 +401,30 @@ export default function EmpresaDetailPage() {
           <h2 className="mb-1 text-sm font-semibold text-foreground">Dados</h2>
           <Field icon={UserRound} label="Responsável" value={company.assignee_name ?? '—'} />
           <Field icon={FileText} label="CNPJ / doc" value={company.document ?? '—'} />
-          <Field icon={Mail} label="E-mail" value={company.email ?? '—'} />
-          <Field icon={Phone} label="Telefone" value={company.phone ?? '—'} />
-          <Field icon={Globe} label="Site" value={company.website ?? '—'} />
+          <Field
+            icon={Mail}
+            label="E-mail"
+            value={company.email ?? '—'}
+            href={company.email ? `mailto:${company.email}` : undefined}
+          />
+          <Field
+            icon={Phone}
+            label="Telefone"
+            value={company.phone ?? '—'}
+            href={company.phone ? `tel:${company.phone.replace(/[^\d+]/g, '')}` : undefined}
+          />
+          <Field
+            icon={Globe}
+            label="Site"
+            value={company.website ?? '—'}
+            href={
+              company.website
+                ? /^https?:\/\//i.test(company.website)
+                  ? company.website
+                  : `https://${company.website}`
+                : undefined
+            }
+          />
           <Field icon={MapPin} label="Endereço" value={company.address ?? '—'} />
           <Field icon={Building2} label="Porte" value={company.size ?? '—'} />
           {company.notes && (

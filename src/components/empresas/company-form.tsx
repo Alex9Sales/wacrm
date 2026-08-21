@@ -68,7 +68,10 @@ export function CompanyForm({
     listCompanyAssignees()
       .then(setAssignees)
       .catch(() => setAssignees([]))
-  }, [open, company])
+    // Só re-semeia ao abrir ou ao trocar de empresa (não a cada render do pai),
+    // pra não apagar o que o usuário está digitando.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, company?.id])
 
   async function submit() {
     if (!name.trim()) {

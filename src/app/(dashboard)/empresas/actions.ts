@@ -31,6 +31,23 @@ function clean(v: string | null | undefined): string | null {
   return t ? t : null
 }
 
+/** true se `userId` é membro da conta (ou null = sem responsável). Evita
+ *  atribuir uma empresa a um usuário de OUTRA conta (tenancy + PII). */
+async function isAccountMember(
+  accountId: string,
+  userId: string | null,
+): Promise<boolean> {
+  if (!userId) return true
+  const m = firstOrNull(
+    await db
+      .select({ userId: member.userId })
+      .from(member)
+      .where(and(eq(member.userId, userId), eq(member.organizationId, accountId)))
+      .limit(1),
+  )
+  return !!m
+}
+
 export interface CompanyRow {
   id: string
   name: string
@@ -313,6 +330,10 @@ export async function createCompany(
         .limit(1),
     )
     if (existing) return { ok: false, error: 'Já existe uma empresa com esse nome.' }
+    const assignedTo = clean(input.assignedTo)
+    if (!(await isAccountMember(ctx.accountId, assignedTo))) {
+      return { ok: false, error: 'Responsável não pertence a esta conta.' }
+    }
     const inserted = firstOrThrow(
       await db
         .insert(companies)
@@ -327,7 +348,7 @@ export async function createCompany(
           email: clean(input.email),
           address: clean(input.address),
           size: clean(input.size),
-          assignedTo: clean(input.assignedTo),
+          assignedTo,
           createdBy: ctx.userId,
         })
         .returning({ id: companies.id, name: companies.name }),
@@ -412,7 +433,13 @@ export async function updateCompany(
     if (patch.email !== undefined) set.email = clean(patch.email)
     if (patch.address !== undefined) set.address = clean(patch.address)
     if (patch.size !== undefined) set.size = clean(patch.size)
-    if (patch.assignedTo !== undefined) set.assignedTo = clean(patch.assignedTo)
+    if (patch.assignedTo !== undefined) {
+      const a = clean(patch.assignedTo)
+      if (!(await isAccountMember(ctx.accountId, a))) {
+        return { ok: false, error: 'Responsável não pertence a esta conta.' }
+      }
+      set.assignedTo = a
+    }
 
     const updated = await db
       .update(companies)
@@ -485,6 +512,27 @@ export async function setContactCompany(
       .where(and(eq(contacts.id, contactId), eq(contacts.accountId, ctx.accountId)))
       .returning({ id: contacts.id })
     if (updated.length === 0) return { error: 'Contato não encontrado.' }
+    // Propaga pra os negócios do contato — senão o painel/métricas da empresa
+    // (que contam por deals.company_id) ficam desatualizados ao vincular/mover.
+    await db
+      .update(deals)
+      .set({ companyId })
+      .where(and(eq(deals.contactId, contactId), eq(deals.accountId, ctx.accountId)))
+    // Histórico da empresa: registra a entrada do contato.
+    if (companyId) {
+      try {
+        await db.insert(companyEvents).values({
+          accountId: ctx.accountId,
+          companyId,
+          actorUserId: ctx.userId,
+          type: 'contact_added',
+          data: { contactId },
+        })
+      } catch {
+        /* best-effort */
+      }
+      revalidatePath(`/empresas/${companyId}`)
+    }
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao vincular.' }
@@ -559,13 +607,16 @@ export async function setCompanyTags(
       }
       tagIds.push(id)
     }
-    await db.delete(companyTags).where(eq(companyTags.companyId, companyId))
-    if (tagIds.length) {
-      await db
-        .insert(companyTags)
-        .values(tagIds.map((tagId) => ({ companyId, tagId })))
-        .onConflictDoNothing()
-    }
+    // Substitui o conjunto atômicamente (evita janela sem etiquetas).
+    await db.transaction(async (tx) => {
+      await tx.delete(companyTags).where(eq(companyTags.companyId, companyId))
+      if (tagIds.length) {
+        await tx
+          .insert(companyTags)
+          .values(tagIds.map((tagId) => ({ companyId, tagId })))
+          .onConflictDoNothing()
+      }
+    })
     revalidatePath(`/empresas/${companyId}`)
     return { error: null }
   } catch (err) {
