@@ -1833,8 +1833,11 @@ export async function listDealEmailThread(dealId: string): Promise<DealEmailMess
           eq(messages.isInternal, false),
         ),
       )
-      .orderBy(asc(messages.createdAt))
+      // Os 200 mais RECENTES (senão uma thread grande esconderia os novos);
+      // reverte p/ exibir do mais antigo pro mais novo (leitura de chat).
+      .orderBy(desc(messages.createdAt))
       .limit(200)
+    rows.reverse()
     return rows.map((r) => ({
       id: r.id,
       direction:

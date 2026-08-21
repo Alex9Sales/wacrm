@@ -287,33 +287,11 @@ export async function sendMessageToConversation(
   if (!contact) {
     throw new SendMessageError('bad_request', 'Contact not found', 400);
   }
-  // Instagram (e canais sem telefone) identificam por external_id (IGSID) — sem
-  // telefone. Só exige telefone quando não há external_id.
-  if (!contact.phone && !contact.externalId) {
-    throw new SendMessageError(
-      'bad_request',
-      'Contact phone number not found',
-      400
-    );
-  }
 
-  const sanitizedPhone = sanitizePhoneForMeta(contact.phone);
-  // A GROUP "phone" is the group jid's digits (16+), never a valid E.164 — the
-  // provider turns it into `<digits>@g.us`. Skip the phone-format gate for
-  // groups (e para canais por external_id, ex.: Instagram) so a manual operator
-  // reply can still go out.
-  if (!contact.isGroup && !contact.externalId && !isValidE164(sanitizedPhone)) {
-    throw new SendMessageError(
-      'bad_request',
-      'Invalid phone number format',
-      400
-    );
-  }
-
-  // Resolve the conversation's channel (Phase 4). Credentials arrive
-  // already-decrypted on the ChannelCtx (channels.ts owns that). Prefer the
-  // conversation's own channel_id; fall back to the account's default
-  // channel for legacy conversations created before channel_id existed.
+  // Resolve the conversation's channel FIRST — um e-mail entrega por
+  // contacts.email e NÃO usa telefone, então as travas de telefone abaixo só
+  // valem pra canais NÃO-e-mail. Credentials chegam já-descriptografadas no
+  // ChannelCtx; prefere o channel_id da conversa, cai no default (legado).
   const channel = conversation.channelId
     ? await loadChannel(conversation.channelId)
     : await loadDefaultChannel(accountId);
@@ -330,6 +308,29 @@ export async function sendMessageToConversation(
   if (channel.accountId !== accountId) {
     throw new SendMessageError('not_found', 'Conversation not found', 404);
   }
+  const isEmailChannel =
+    channel.provider === 'email' || channel.provider === 'gmail';
+
+  const sanitizedPhone = sanitizePhoneForMeta(contact.phone);
+  // Canal de e-mail com contato que tem e-mail dispensa telefone. Os demais
+  // canais (WhatsApp/IG/Messenger) mantêm as travas: exige telefone OU external_id
+  // (IGSID), e telefone em E.164 (grupo/external_id passam por serem casos à parte).
+  if (!(isEmailChannel && contact.email)) {
+    if (!contact.phone && !contact.externalId) {
+      throw new SendMessageError(
+        'bad_request',
+        'Contact phone number not found',
+        400
+      );
+    }
+    if (!contact.isGroup && !contact.externalId && !isValidE164(sanitizedPhone)) {
+      throw new SendMessageError(
+        'bad_request',
+        'Invalid phone number format',
+        400
+      );
+    }
+  }
 
   const provider = getProvider(channel.provider);
 
@@ -339,7 +340,6 @@ export async function sendMessageToConversation(
   // hyphen-less id makes WAHA hang and abort. The intact jid lives in
   // monitored_groups.group_jid; look it up by matching digits.
   let providerTarget = sanitizedPhone;
-  const isEmailChannel = channel.provider === 'email' || channel.provider === 'gmail';
   if (isEmailChannel && contact.email) {
     // E-mail: o destinatário é SEMPRE o e-mail do contato — mesmo que o lead
     // tenha entrado por outro canal (external_id pode ser um id de WhatsApp/IG).

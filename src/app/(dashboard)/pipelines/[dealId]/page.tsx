@@ -6,7 +6,7 @@
 // eventos + anotações). Aberto ao clicar num card do funil.
 // ============================================================
 
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useParams } from "next/navigation";
 import {
   ArrowLeft,
@@ -274,6 +274,7 @@ export default function DealDetailPage() {
   const [sendBody, setSendBody] = useState("");
   const [sendingEmail, setSendingEmail] = useState(false);
   const [showManualEmail, setShowManualEmail] = useState(false);
+  const emailThreadRef = useRef<HTMLUListElement>(null);
   const [loading, setLoading] = useState(true);
   const [notFound, setNotFound] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
@@ -570,6 +571,13 @@ export default function DealDetailPage() {
       cancelled = true;
     };
   }, [reload]);
+
+  // Rola o thread de e-mail pro fim (msg mais recente) ao abrir a aba/atualizar.
+  useEffect(() => {
+    if (tab !== "email") return;
+    const el = emailThreadRef.current;
+    if (el) el.scrollTop = el.scrollHeight;
+  }, [tab, emailThread]);
 
   const changeStage = useCallback(
     async (stageId: string) => {
@@ -1614,7 +1622,10 @@ export default function DealDetailPage() {
                   (cadência, respostas e envios) aparecem aqui.
                 </p>
               ) : (
-                <ul className="max-h-[420px] space-y-2 overflow-y-auto px-4 py-3">
+                <ul
+                  ref={emailThreadRef}
+                  className="max-h-[420px] space-y-2 overflow-y-auto px-4 py-3"
+                >
                   {emailThread.map((m) => (
                     <li
                       key={m.id}

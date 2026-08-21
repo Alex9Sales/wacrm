@@ -105,10 +105,11 @@ export async function verifyGmailLogin(
   await transport.verify()
 }
 
-function subjectOf(ch: ChannelCtx): string {
+function subjectOf(ch: ChannelCtx, override?: string): string {
   return oneLineSubject(
-    (typeof ch.providerMeta.replySubject === 'string' &&
-      ch.providerMeta.replySubject) ||
+    (override && override.trim()) ||
+      (typeof ch.providerMeta.replySubject === 'string' &&
+        ch.providerMeta.replySubject) ||
       'Atendimento',
   )
 }
@@ -118,13 +119,13 @@ export const gmailProvider: WhatsAppProvider = {
   capabilities: CAPABILITIES.gmail,
 
   // `to` = e-mail do cliente (vem de contacts.external_id no send-message).
-  async sendText(ch, to, text) {
+  async sendText(ch, to, text, options) {
     const address = gmailAddressOf(ch)
     const info = await gmailTransport(ch).sendMail({
       from: `${fromNameOf(ch)} <${address}>`,
       to,
       replyTo: address,
-      subject: subjectOf(ch),
+      subject: subjectOf(ch, options?.subject),
       text,
     })
     return { externalMessageId: info.messageId ?? '' }
