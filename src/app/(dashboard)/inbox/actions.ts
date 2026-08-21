@@ -7,7 +7,7 @@
 // is no RLS anymore.
 // ============================================================
 
-import { and, asc, desc, eq, ilike, inArray, lt, or } from 'drizzle-orm'
+import { and, asc, desc, eq, ilike, inArray, lt, or, sql } from 'drizzle-orm'
 import {
   db,
   contactNotes,
@@ -501,6 +501,8 @@ export async function listConversations(opts?: {
       ilike(contacts.name, like),
       ilike(contacts.phone, like),
       ilike(conversations.lastMessageText, like),
+      // Código do cliente (customer_codes[] do contato): exato ou parcial.
+      sql`EXISTS (SELECT 1 FROM unnest(${contacts.customerCodes}) AS code WHERE code ILIKE ${like})`,
     )
     if (cond) filters.push(cond)
   }

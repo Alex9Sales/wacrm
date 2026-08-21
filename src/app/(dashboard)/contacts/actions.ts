@@ -197,6 +197,8 @@ export async function listContacts(
           ilike(contacts.name, like),
           ilike(contacts.phone, like),
           ilike(contacts.email, like),
+          // Código do cliente (customer_codes[]): casa exato ou parcial.
+          sql`EXISTS (SELECT 1 FROM unnest(${contacts.customerCodes}) AS code WHERE code ILIKE ${like})`,
         ),
       )
     : eq(contacts.accountId, ctx.accountId)
