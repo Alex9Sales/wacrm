@@ -448,6 +448,16 @@ export const DIAGNOSTICO_HTML = `<!doctype html>
           <span class="err" id="err-email" role="alert"></span>
         </div>
         <div class="field">
+          <label for="f-empresa">Nome da empresa</label>
+          <input id="f-empresa" name="empresa" type="text" autocomplete="organization" placeholder="Ex.: Gás Central" aria-describedby="err-empresa" />
+          <span class="err" id="err-empresa" role="alert"></span>
+        </div>
+        <div class="field">
+          <label for="f-doc">CNPJ ou CPF <span style="color:var(--text-mute);font-weight:400">(opcional)</span></label>
+          <input id="f-doc" name="documento" type="text" inputmode="numeric" placeholder="Pode deixar em branco" aria-describedby="err-doc" />
+          <span class="err" id="err-doc" role="alert"></span>
+        </div>
+        <div class="field">
           <label for="f-seg">O que a sua empresa faz?</label>
           <select id="f-seg" name="segmento" aria-describedby="err-seg">
             <option value="">Escolha uma opção</option>
@@ -461,6 +471,29 @@ export const DIAGNOSTICO_HTML = `<!doctype html>
             <option>Outro</option>
           </select>
           <span class="err" id="err-seg" role="alert"></span>
+        </div>
+        <div class="field">
+          <label for="f-fat">Faturamento por mês</label>
+          <select id="f-fat" name="faturamento" aria-describedby="err-fat">
+            <option value="">Escolha uma opção</option>
+            <option>Até R$ 5 mil</option>
+            <option>R$ 5 mil a R$ 20 mil</option>
+            <option>R$ 20 mil a R$ 100 mil</option>
+            <option>Mais de R$ 100 mil</option>
+            <option>Prefiro não dizer</option>
+          </select>
+          <span class="err" id="err-fat" role="alert"></span>
+        </div>
+        <div class="field">
+          <label for="f-func">Quantas pessoas trabalham com você?</label>
+          <select id="f-func" name="funcionarios" aria-describedby="err-func">
+            <option value="">Escolha uma opção</option>
+            <option>Só eu</option>
+            <option>1 a 3</option>
+            <option>4 a 10</option>
+            <option>Mais de 10</option>
+          </select>
+          <span class="err" id="err-func" role="alert"></span>
         </div>
         <div>
           <label class="consent">
@@ -707,12 +740,17 @@ export const DIAGNOSTICO_HTML = `<!doctype html>
     var nome = el("f-nome").value.trim();
     var wpp = digits(el("f-wpp").value);
     var email = el("f-email").value.trim();
+    var empresa = el("f-empresa").value.trim();
+    var documento = el("f-doc").value.trim();
     var seg = el("f-seg").value;
+    var fat = el("f-fat").value;
+    var func = el("f-func").value;
     var ok = el("f-ok").checked;
     var valid = true;
     var firstBad = null;
 
-    setErr("f-nome", "err-nome", ""); setErr("f-wpp", "err-wpp", ""); setErr("f-email", "err-email", ""); setErr("f-seg", "err-seg", ""); el("err-ok").textContent = "";
+    setErr("f-nome", "err-nome", ""); setErr("f-wpp", "err-wpp", ""); setErr("f-email", "err-email", "");
+    setErr("f-empresa", "err-empresa", ""); setErr("f-seg", "err-seg", ""); setErr("f-fat", "err-fat", ""); setErr("f-func", "err-func", ""); el("err-ok").textContent = "";
 
     var at = email.indexOf("@");
     var emailOk = at > 0 && email.lastIndexOf(".") > at + 1 && email.indexOf(" ") < 0;
@@ -720,11 +758,14 @@ export const DIAGNOSTICO_HTML = `<!doctype html>
     if (nome.length < 2) { setErr("f-nome", "err-nome", "Escreva seu nome."); valid = false; firstBad = firstBad || "f-nome"; }
     if (wpp.length < 10) { setErr("f-wpp", "err-wpp", "Coloque o WhatsApp com DDD."); valid = false; firstBad = firstBad || "f-wpp"; }
     if (!emailOk) { setErr("f-email", "err-email", "Coloque um e-mail válido."); valid = false; firstBad = firstBad || "f-email"; }
+    if (empresa.length < 2) { setErr("f-empresa", "err-empresa", "Escreva o nome da empresa."); valid = false; firstBad = firstBad || "f-empresa"; }
     if (!seg) { setErr("f-seg", "err-seg", "Escolha uma opção."); valid = false; firstBad = firstBad || "f-seg"; }
+    if (!fat) { setErr("f-fat", "err-fat", "Escolha uma opção."); valid = false; firstBad = firstBad || "f-fat"; }
+    if (!func) { setErr("f-func", "err-func", "Escolha uma opção."); valid = false; firstBad = firstBad || "f-func"; }
     if (!ok) { el("err-ok").textContent = "Marque para receber o diagnóstico."; valid = false; firstBad = firstBad || "f-ok"; }
     if (!valid) { if (firstBad) el(firstBad).focus(); return; }
 
-    state.contact = { nome: nome, whatsapp: wpp, email: email, segmento: seg };
+    state.contact = { nome: nome, whatsapp: wpp, email: email, empresa: empresa, segmento: seg };
 
     var btn = el("submitBtn");
     btn.disabled = true;
@@ -738,7 +779,8 @@ export const DIAGNOSTICO_HTML = `<!doctype html>
       return { pergunta: Q.q, resposta: a != null ? Q.opts[a].t : null };
     });
     var payload = {
-      nome: nome, whatsapp: wpp, email: email, segmento: seg, site: el("f-site").value,
+      nome: nome, whatsapp: wpp, email: email, empresa: empresa, documento: documento,
+      segmento: seg, faturamento: fat, funcionarios: func, site: el("f-site").value,
       indice: score.pct, faixa: tierFor(score.pct).risk, respostas: respostas
     };
     var done = false;

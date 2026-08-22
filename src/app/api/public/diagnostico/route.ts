@@ -16,6 +16,9 @@ const STAGE_ID = process.env.DIAGNOSTICO_STAGE_ID || 'e011004b-8324-419c-90a4-ad
 // Campos personalizados do negócio (entity='deal') que o diagnóstico preenche.
 const FIELD_INDICE = process.env.DIAGNOSTICO_FIELD_INDICE || 'a8183611-637e-4bd5-ae99-ec4e5ee2eacc'
 const FIELD_SEGMENTO = process.env.DIAGNOSTICO_FIELD_SEGMENTO || '7d8f3eb2-690b-4495-b916-cd80336a4999'
+const FIELD_FATURAMENTO = process.env.DIAGNOSTICO_FIELD_FATURAMENTO || '8f9d93b8-391b-4985-bae1-375109d26d1c'
+const FIELD_FUNCIONARIOS = process.env.DIAGNOSTICO_FIELD_FUNCIONARIOS || 'd259a4a5-eda5-44b0-b1f8-d759fccf3c21'
+const FIELD_DOC = process.env.DIAGNOSTICO_FIELD_DOC || '251ff044-a69c-472f-b036-94d7bb245417'
 
 export const dynamic = 'force-dynamic'
 
@@ -44,7 +47,11 @@ export async function POST(req: Request) {
   const nome = str(body.nome, 120)
   const whatsapp = str(body.whatsapp, 30).replace(/[^0-9]/g, '')
   const email = str(body.email, 160)
+  const empresa = str(body.empresa, 120)
+  const documento = str(body.documento, 30)
   const segmento = str(body.segmento, 80)
+  const faturamento = str(body.faturamento, 40)
+  const funcionarios = str(body.funcionarios, 40)
   const indice = Number.isFinite(Number(body.indice))
     ? Math.max(0, Math.min(100, Math.round(Number(body.indice))))
     : null
@@ -76,7 +83,11 @@ export async function POST(req: Request) {
   // Bloco completo (com todas as respostas) pro Histórico do negócio.
   const lines: string[] = ['📋 Diagnóstico do WhatsApp']
   if (indice != null) lines.push(`Índice de vazamento: ${indice}/100${faixa ? ` (${faixa})` : ''}`)
+  if (empresa) lines.push(`Empresa: ${empresa}`)
+  if (documento) lines.push(`CNPJ/CPF: ${documento}`)
   if (segmento) lines.push(`Segmento: ${segmento}`)
+  if (faturamento) lines.push(`Faturamento (mês): ${faturamento}`)
+  if (funcionarios) lines.push(`Funcionários: ${funcionarios}`)
   if (email) lines.push(`E-mail: ${email}`)
   if (respostas.length) {
     lines.push('')
@@ -94,6 +105,7 @@ export async function POST(req: Request) {
       rawPhone: whatsapp,
       name: nome,
       email: email || null,
+      company: empresa || null,
       notes: shortNote,
       pipelineId: PIPELINE_ID,
       stageId: STAGE_ID,
@@ -128,6 +140,12 @@ export async function POST(req: Request) {
           cv.push({ accountId: ACCOUNT_ID, dealId: res.dealId, customFieldId: FIELD_INDICE, value: String(indice) })
         if (segmento)
           cv.push({ accountId: ACCOUNT_ID, dealId: res.dealId, customFieldId: FIELD_SEGMENTO, value: segmento })
+        if (faturamento)
+          cv.push({ accountId: ACCOUNT_ID, dealId: res.dealId, customFieldId: FIELD_FATURAMENTO, value: faturamento })
+        if (funcionarios)
+          cv.push({ accountId: ACCOUNT_ID, dealId: res.dealId, customFieldId: FIELD_FUNCIONARIOS, value: funcionarios })
+        if (documento)
+          cv.push({ accountId: ACCOUNT_ID, dealId: res.dealId, customFieldId: FIELD_DOC, value: documento })
         if (cv.length) await db.insert(dealCustomValues).values(cv)
       } catch (e) {
         console.error('[diagnostico] deal_custom_values failed:', e)
