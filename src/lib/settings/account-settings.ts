@@ -49,6 +49,9 @@ export interface AccountSettings {
    *  for teams that answer on the phone itself. Admin/supervisor-controlled
    *  in Configurações → Notificações. */
   crmCallingEnabled: boolean
+  /** Negócio ABERTO parado nesta MESMA etapa por mais dias que isto vira
+   *  "esfriando" (alerta no card + filtro no funil). 0 = desligado. Padrão 7. */
+  staleDealDays: number
 }
 
 /** Mon–Fri 08:00–18:00, weekend closed. Index 0=Sunday … 6=Saturday. */
@@ -81,6 +84,7 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   csatCommentPrompt:
     'Obrigado pela nota! Se quiser, deixe um comentário sobre o atendimento — é rapidinho. 🙏',
   crmCallingEnabled: true,
+  staleDealDays: 7,
 }
 
 /** Read an account's settings, merged over the defaults. */

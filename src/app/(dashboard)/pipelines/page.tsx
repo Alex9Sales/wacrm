@@ -17,6 +17,7 @@ import {
 } from "@/app/(dashboard)/tarefas/actions";
 import { TaskForm } from "@/components/tarefas/task-form";
 import { PipelineBoard } from "@/components/pipelines/pipeline-board";
+import { getDealAlertDays } from "@/components/settings/actions";
 import { PipelineList } from "@/components/pipelines/pipeline-list";
 import { PipelineSettings } from "@/components/pipelines/pipeline-settings";
 import { DealForm } from "@/components/pipelines/deal-form";
@@ -54,6 +55,7 @@ import {
   User as UserIcon,
   CircleDot,
   ArrowDownUp,
+  Snowflake,
   LayoutGrid,
   List,
   Check,
@@ -119,12 +121,22 @@ export default function PipelinesPage() {
   const [search, setSearch] = useState("");
   // Kanban (board) ⇄ Lista (tabela) — toggle estilo RD.
   const [viewMode, setViewMode] = useState<"board" | "list">("board");
+  // "Esfriando": limite de dias (da conta) + filtro só-esfriando.
+  const [staleDays, setStaleDays] = useState(0);
+  const [staleOnly, setStaleOnly] = useState(false);
 
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [selectedPipelineId, setSelectedPipelineId] = useState<string>("");
   const [stages, setStages] = useState<PipelineStage[]>([]);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [loading, setLoading] = useState(true);
+
+  // Limite de "esfriando" da conta (0 = desligado).
+  useEffect(() => {
+    getDealAlertDays()
+      .then(setStaleDays)
+      .catch(() => {});
+  }, []);
 
   // Aplica os filtros/ordenação no cliente. O board (contagem + soma por
   // etapa), drag-drop e mutações continuam operando sobre `deals`; só a
@@ -141,6 +153,15 @@ export default function PipelinesPage() {
         return false;
       if (companyFilter !== "all" && d.company_id !== companyFilter)
         return false;
+      if (staleOnly) {
+        const since = d.stage_changed_at ?? d.created_at;
+        const days = since
+          ? Math.floor((Date.now() - new Date(since).getTime()) / 86400000)
+          : 0;
+        const stale =
+          staleDays > 0 && (d.status ?? "open") === "open" && days >= staleDays;
+        if (!stale) return false;
+      }
       if (q) {
         const hay = `${d.title ?? ""} ${d.contact?.name ?? ""} ${
           d.contact?.phone ?? ""
@@ -168,7 +189,7 @@ export default function PipelinesPage() {
           );
       }
     });
-  }, [deals, ownerFilter, statusFilter, companyFilter, sortBy, search, user?.id]);
+  }, [deals, ownerFilter, statusFilter, companyFilter, staleOnly, staleDays, sortBy, search, user?.id]);
 
   // Empresas presentes nos deals (alimenta o filtro de empresa — Fase 3).
   const companyOptions = useMemo(() => {
@@ -852,6 +873,22 @@ export default function PipelinesPage() {
               </SelectContent>
             </Select>
 
+            {staleDays > 0 && (
+              <button
+                type="button"
+                onClick={() => setStaleOnly((v) => !v)}
+                title="Mostrar só os negócios parados na etapa (esfriando)"
+                className={`inline-flex h-9 shrink-0 items-center gap-1.5 rounded-lg border px-3 text-sm font-medium transition-colors ${
+                  staleOnly
+                    ? "border-amber-500/50 bg-amber-500/10 text-amber-600"
+                    : "border-border bg-card text-muted-foreground hover:text-foreground"
+                }`}
+              >
+                <Snowflake className="h-4 w-4" />
+                Esfriando
+              </button>
+            )}
+
             <span className="ml-auto shrink-0 rounded-md border border-border bg-card px-2.5 py-1.5 text-xs font-medium text-muted-foreground">
               {visibleDeals.length}{" "}
               {visibleDeals.length === 1 ? "negócio" : "negócios"}
@@ -875,6 +912,7 @@ export default function PipelinesPage() {
               taskCounts={taskCounts}
               dealsWithProducts={dealsWithProducts}
               onCreateTask={handleCreateTask}
+              staleDays={staleDays}
             />
           )}
         </>

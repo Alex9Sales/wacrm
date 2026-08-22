@@ -959,3 +959,21 @@ export async function saveLeadDistribution(input: {
     })
   return { error: null }
 }
+
+// ============================================================
+// Alerta de negócio "esfriando" (parado na etapa). Guardado no
+// account_settings.staleDealDays. 0 = desligado.
+// ============================================================
+
+export async function getDealAlertDays(): Promise<number> {
+  const ctx = await getCurrentAccount()
+  const s = await getAccountSettings(ctx.accountId)
+  return typeof s.staleDealDays === 'number' ? s.staleDealDays : 7
+}
+
+export async function setDealAlertDays(days: number): Promise<{ error: string | null }> {
+  const ctx = await requireRole('admin')
+  const n = Math.max(0, Math.min(365, Math.floor(Number(days) || 0)))
+  await updateAccountSettings(ctx.accountId, { staleDealDays: n })
+  return { error: null }
+}

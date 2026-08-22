@@ -9,7 +9,7 @@ import { toast } from "sonner";
 import {
   Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign,
   Pencil, Trash2, ArrowRightLeft, ChevronRight, Star, Copy, Pause, Play,
-  Building2, Clock3,
+  Building2, Clock3, Snowflake,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
@@ -30,6 +30,8 @@ interface DealCardProps {
   onCreateTask?: (deal: Deal) => void;
   /** "Tocar ligações no CRM" resolvido UMA vez no board (evita 1 fetch/card). */
   callingEnabled?: boolean;
+  /** Dias parado na etapa que marcam "esfriando" (0/undefined = desligado). */
+  staleDays?: number;
 }
 
 function formatDate(dateStr: string) {
@@ -84,6 +86,7 @@ export function DealCard({
   onEdit,
   onCreateTask,
   callingEnabled,
+  staleDays,
 }: DealCardProps) {
   const router = useRouter();
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
@@ -108,6 +111,13 @@ export function DealCard({
         Math.floor((Date.now() - new Date(stageSince).getTime()) / 86400000),
       )
     : null;
+  // "Esfriando": negócio ABERTO parado na etapa além do limite da conta.
+  const isStale =
+    !!staleDays &&
+    staleDays > 0 &&
+    daysInStage !== null &&
+    daysInStage >= staleDays &&
+    (deal.status ?? "open") === "open";
 
   // Menu de clique-direito no card: Editar / Transferir / Excluir sem precisar
   // abrir a tela inteira. Guardamos a posição do cursor pra abrir ali.
@@ -286,7 +296,9 @@ export function DealCard({
         e.stopPropagation();
         window.location.href = `/pipelines/${deal.id}`;
       }}
-      className={`group relative w-full cursor-pointer rounded-xl border border-border/50 bg-muted/70 pl-4 pr-3 py-3 text-left shadow-sm transition-all ${
+      className={`group relative w-full cursor-pointer rounded-xl border bg-muted/70 pl-4 pr-3 py-3 text-left shadow-sm transition-all ${
+        isStale ? "border-amber-500/40 ring-1 ring-amber-500/25" : "border-border/50"
+      } ${
         isOverlay
           ? "shadow-xl"
           : "hover:-translate-y-0.5 hover:border-border hover:bg-muted hover:shadow-lg"
@@ -435,9 +447,18 @@ export function DealCard({
           )}
           {daysInStage !== null && (
             <span
-              className="text-[10px] text-muted-foreground"
-              title="Tempo na etapa atual"
+              className={`inline-flex items-center gap-1 text-[10px] ${
+                isStale
+                  ? "rounded bg-amber-500/15 px-1.5 py-0.5 font-medium text-amber-600"
+                  : "text-muted-foreground"
+              }`}
+              title={
+                isStale
+                  ? `Esfriando: ${daysInStage} dias parado nesta etapa`
+                  : "Tempo na etapa atual"
+              }
             >
+              {isStale && <Snowflake className="h-3 w-3" />}
               {daysInStage === 0 ? "hoje" : `${daysInStage}d na etapa`}
             </span>
           )}

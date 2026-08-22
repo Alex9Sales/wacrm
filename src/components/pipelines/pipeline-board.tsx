@@ -36,6 +36,8 @@ interface PipelineBoardProps {
   dealsWithProducts?: Set<string>;
   /** Open the reused TaskForm prefilled with a deal (+ its contact). */
   onCreateTask?: (deal: Deal) => void;
+  /** Dias parado na etapa que marcam "esfriando" (0/undefined = desligado). */
+  staleDays?: number;
 }
 
 export function PipelineBoard({
@@ -47,6 +49,7 @@ export function PipelineBoard({
   taskCounts,
   dealsWithProducts,
   onCreateTask,
+  staleDays,
 }: PipelineBoardProps) {
   const { defaultCurrency } = useAuth();
   // Resolvido UMA vez aqui e passado pra baixo (StageColumn → card), pra não
@@ -142,7 +145,7 @@ export function PipelineBoard({
               key={stage.id}
               stage={stage}
               deals={stageDeals}
-              callingEnabled={callingEnabled}
+              callingEnabled={callingEnabled} staleDays={staleDays}
               totalValue={totalValue}
               currency={defaultCurrency}
               onAddDeal={onAddDeal}
@@ -171,7 +174,7 @@ export function PipelineBoard({
               }
               onEdit={() => {}}
               isOverlay
-              callingEnabled={callingEnabled}
+              callingEnabled={callingEnabled} staleDays={staleDays}
             />
           </div>
         ) : null}
@@ -231,6 +234,7 @@ function StageColumn({
   onCreateTask,
   showStats,
   callingEnabled,
+  staleDays,
 }: {
   stage: PipelineStage;
   deals: Deal[];
@@ -243,6 +247,7 @@ function StageColumn({
   onCreateTask?: (deal: Deal) => void;
   showStats?: boolean;
   callingEnabled?: boolean;
+  staleDays?: number;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const [bcastOpen, setBcastOpen] = useState(false);
@@ -341,7 +346,7 @@ function StageColumn({
               onEdit={onEditDeal}
               taskCount={taskCounts?.[deal.id]}
               onCreateTask={onCreateTask}
-              callingEnabled={callingEnabled}
+              callingEnabled={callingEnabled} staleDays={staleDays}
             />
           ))
         )}
@@ -374,6 +379,7 @@ function DraggableDealCard({
   taskCount,
   onCreateTask,
   callingEnabled,
+  staleDays,
 }: {
   deal: Deal;
   stage: PipelineStage;
@@ -381,6 +387,7 @@ function DraggableDealCard({
   taskCount?: DealTaskCount;
   onCreateTask?: (deal: Deal) => void;
   callingEnabled?: boolean;
+  staleDays?: number;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: deal.id,
@@ -401,7 +408,7 @@ function DraggableDealCard({
         onEdit={onEdit}
         taskCount={taskCount}
         onCreateTask={onCreateTask}
-        callingEnabled={callingEnabled}
+        callingEnabled={callingEnabled} staleDays={staleDays}
       />
     </div>
   );
