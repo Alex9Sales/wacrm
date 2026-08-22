@@ -8,6 +8,8 @@ import {
   listStages,
   moveDealToStage,
   getDealsWithProducts,
+  getDealAiHints,
+  type DealAiHint,
 } from "./actions";
 import type { Pipeline, PipelineStage, Deal } from "@/types";
 import {
@@ -245,6 +247,8 @@ export default function PipelinesPage() {
   const [taskCounts, setTaskCounts] = useState<Record<string, DealTaskCount>>(
     {},
   );
+  // Dicas da IA por negócio (sugestões pendentes + próximo passo) pro card.
+  const [aiHints, setAiHints] = useState<Record<string, DealAiHint>>({});
   // Negócios que TÊM produtos — p/ a métrica "Sem produtos" das estatísticas.
   const [dealsWithProducts, setDealsWithProducts] = useState<Set<string>>(
     new Set(),
@@ -295,15 +299,18 @@ export default function PipelinesPage() {
     if (ids.length === 0) {
       setTaskCounts({});
       setDealsWithProducts(new Set());
+      setAiHints({});
       return;
     }
     try {
-      const [counts, withProds] = await Promise.all([
+      const [counts, withProds, hints] = await Promise.all([
         getDealTaskCounts(ids),
         getDealsWithProducts(ids),
+        getDealAiHints(ids).catch(() => ({}) as Record<string, DealAiHint>),
       ]);
       setTaskCounts(counts);
       setDealsWithProducts(new Set(withProds));
+      setAiHints(hints);
     } catch (err) {
       console.error("Failed to load task counts:", err);
     }
@@ -913,6 +920,7 @@ export default function PipelinesPage() {
               dealsWithProducts={dealsWithProducts}
               onCreateTask={handleCreateTask}
               staleDays={staleDays}
+              aiHints={aiHints}
             />
           )}
         </>

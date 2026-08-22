@@ -2,6 +2,7 @@
 
 import type { Deal, PipelineStage, Profile } from "@/types";
 import type { DealTaskCount } from "@/app/(dashboard)/tarefas/actions";
+import type { DealAiHint } from "@/app/(dashboard)/pipelines/actions";
 import { useEffect, useState, type SyntheticEvent } from "react";
 import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
@@ -9,7 +10,7 @@ import { toast } from "sonner";
 import {
   Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign,
   Pencil, Trash2, ArrowRightLeft, ChevronRight, Star, Copy, Pause, Play,
-  Building2, Clock3, Snowflake,
+  Building2, Clock3, Snowflake, Sparkles,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
@@ -32,6 +33,8 @@ interface DealCardProps {
   callingEnabled?: boolean;
   /** Dias parado na etapa que marcam "esfriando" (0/undefined = desligado). */
   staleDays?: number;
+  /** Dica da IA p/ este negócio (próximo passo sugerido + nº de sugestões). */
+  aiHint?: DealAiHint;
 }
 
 function formatDate(dateStr: string) {
@@ -87,6 +90,7 @@ export function DealCard({
   onCreateTask,
   callingEnabled,
   staleDays,
+  aiHint,
 }: DealCardProps) {
   const router = useRouter();
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
@@ -634,6 +638,24 @@ export function DealCard({
           {nextDueAt && (
             <span className="ml-auto shrink-0 tabular-nums">
               {formatDateTime(nextDueAt)}
+            </span>
+          )}
+        </div>
+      )}
+
+      {/* Dica da IA (item "IA no card"): próximo passo sugerido pela IA a
+          partir da conversa. Roxo/violeta pra destacar que veio do agente.
+          Clicar no card já abre o negócio — a sugestão vive na aba "IA". */}
+      {aiHint?.nextStep && (
+        <div
+          title={`Sugestão da IA: ${aiHint.nextStep}`}
+          className="mt-2 flex items-center gap-1.5 rounded-md border border-violet-500/25 bg-violet-500/10 px-2 py-1 text-[11px] text-violet-300"
+        >
+          <Sparkles className="h-3 w-3 shrink-0" />
+          <span className="truncate">{aiHint.nextStep}</span>
+          {aiHint.pending > 1 && (
+            <span className="ml-auto shrink-0 rounded-full bg-violet-500/20 px-1.5 tabular-nums">
+              {aiHint.pending}
             </span>
           )}
         </div>

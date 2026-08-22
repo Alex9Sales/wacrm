@@ -16,6 +16,7 @@ import {
 } from "@dnd-kit/core";
 import type { Deal, PipelineStage } from "@/types";
 import type { DealTaskCount } from "@/app/(dashboard)/tarefas/actions";
+import type { DealAiHint } from "@/app/(dashboard)/pipelines/actions";
 import { DealCard } from "./deal-card";
 import { Button } from "@/components/ui/button";
 import { Plus, Megaphone } from "lucide-react";
@@ -38,6 +39,8 @@ interface PipelineBoardProps {
   onCreateTask?: (deal: Deal) => void;
   /** Dias parado na etapa que marcam "esfriando" (0/undefined = desligado). */
   staleDays?: number;
+  /** Dicas da IA por negócio (próximo passo + nº de sugestões pendentes). */
+  aiHints?: Record<string, DealAiHint>;
 }
 
 export function PipelineBoard({
@@ -50,6 +53,7 @@ export function PipelineBoard({
   dealsWithProducts,
   onCreateTask,
   staleDays,
+  aiHints,
 }: PipelineBoardProps) {
   const { defaultCurrency } = useAuth();
   // Resolvido UMA vez aqui e passado pra baixo (StageColumn → card), pra não
@@ -154,6 +158,7 @@ export function PipelineBoard({
               dealsWithProducts={dealsWithProducts}
               onCreateTask={onCreateTask}
               showStats={showStats}
+              aiHints={aiHints}
             />
           );
         })}
@@ -235,6 +240,7 @@ function StageColumn({
   showStats,
   callingEnabled,
   staleDays,
+  aiHints,
 }: {
   stage: PipelineStage;
   deals: Deal[];
@@ -248,6 +254,7 @@ function StageColumn({
   showStats?: boolean;
   callingEnabled?: boolean;
   staleDays?: number;
+  aiHints?: Record<string, DealAiHint>;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const [bcastOpen, setBcastOpen] = useState(false);
@@ -347,6 +354,7 @@ function StageColumn({
               taskCount={taskCounts?.[deal.id]}
               onCreateTask={onCreateTask}
               callingEnabled={callingEnabled} staleDays={staleDays}
+              aiHint={aiHints?.[deal.id]}
             />
           ))
         )}
@@ -380,6 +388,7 @@ function DraggableDealCard({
   onCreateTask,
   callingEnabled,
   staleDays,
+  aiHint,
 }: {
   deal: Deal;
   stage: PipelineStage;
@@ -388,6 +397,7 @@ function DraggableDealCard({
   onCreateTask?: (deal: Deal) => void;
   callingEnabled?: boolean;
   staleDays?: number;
+  aiHint?: DealAiHint;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: deal.id,
@@ -409,6 +419,7 @@ function DraggableDealCard({
         taskCount={taskCount}
         onCreateTask={onCreateTask}
         callingEnabled={callingEnabled} staleDays={staleDays}
+        aiHint={aiHint}
       />
     </div>
   );

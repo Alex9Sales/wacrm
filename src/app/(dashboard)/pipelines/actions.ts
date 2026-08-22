@@ -35,6 +35,7 @@ import {
 import { createTask } from '@/app/(dashboard)/tarefas/actions'
 import { scheduleMessage } from '@/app/(dashboard)/inbox/schedule-actions'
 import { getAccountSettings } from '@/lib/settings/account-settings'
+import { enrollContactInCadence } from '@/lib/cadences/cadence'
 import { runDealSuggestions } from '@/lib/ai/deal-suggest'
 import { planStageFollowUp } from '@/lib/ai/followup'
 import { dealSuggestions } from '@/db'
@@ -1258,7 +1259,7 @@ export async function updateDeal(
     // Load current stage/status to detect meaningful changes for the timeline.
     const before = firstOrNull(
       await db
-        .select({ stageId: deals.stageId, status: deals.status, assignedTo: deals.assignedTo })
+        .select({ stageId: deals.stageId, status: deals.status, assignedTo: deals.assignedTo, contactId: deals.contactId })
         .from(deals)
         .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
         .limit(1),
@@ -1342,6 +1343,26 @@ export async function updateDeal(
           ? { stageId: patch.stage_id ?? before.stageId }
           : {}),
       })
+      // Gatilho por status: ganhou → cadência de pós-venda; perdeu →
+      // cadência de recuperação (as escolhidas na conta). Best-effort.
+      if (
+        (patch.status === 'won' || patch.status === 'lost') &&
+        before.contactId
+      ) {
+        try {
+          const s = await getAccountSettings(ctx.accountId)
+          const cadId =
+            patch.status === 'won' ? s.wonCadenceId : s.lostCadenceId
+          if (cadId) {
+            await enrollContactInCadence(
+              { accountId: ctx.accountId, userId: ctx.userId },
+              { cadenceId: cadId, contactId: before.contactId, dealId: id },
+            )
+          }
+        } catch (err) {
+          console.error('[updateDeal] status cadence trigger:', err)
+        }
+      }
     }
     return { error: null }
   } catch (err) {
@@ -2721,6 +2742,44 @@ export async function listDealSuggestions(
     )
     .orderBy(desc(dealSuggestions.createdAt))
   return rows as unknown as DealSuggestion[]
+}
+
+/** Resumo das sugestões da IA por negócio, pro CARD do board (batch, estilo
+ *  taskCounts): quantas pendentes + o "próximo passo" (a mensagem/tarefa
+ *  sugerida). Read-only; reusa as sugestões já geradas (proativas + manuais). */
+export interface DealAiHint {
+  pending: number
+  nextStep: string | null
+}
+export async function getDealAiHints(
+  dealIds: string[],
+): Promise<Record<string, DealAiHint>> {
+  const ctx = await getCurrentAccount()
+  const out: Record<string, DealAiHint> = {}
+  if (dealIds.length === 0) return out
+  const rows = await db
+    .select({
+      dealId: dealSuggestions.dealId,
+      kind: dealSuggestions.kind,
+      value: dealSuggestions.value,
+    })
+    .from(dealSuggestions)
+    .where(
+      and(
+        eq(dealSuggestions.accountId, ctx.accountId),
+        inArray(dealSuggestions.dealId, dealIds),
+        eq(dealSuggestions.status, 'pending'),
+      ),
+    )
+    .orderBy(desc(dealSuggestions.createdAt))
+  for (const r of rows) {
+    const h = out[r.dealId] ?? (out[r.dealId] = { pending: 0, nextStep: null })
+    h.pending += 1
+    if (!h.nextStep && (r.kind === 'message' || r.kind === 'task')) {
+      h.nextStep = r.value ?? null
+    }
+  }
+  return out
 }
 
 /** Roda a IA sobre a conversa e cria sugestões PENDENTES (substitui as antigas

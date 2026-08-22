@@ -52,6 +52,11 @@ export interface AccountSettings {
   /** Negócio ABERTO parado nesta MESMA etapa por mais dias que isto vira
    *  "esfriando" (alerta no card + filtro no funil). 0 = desligado. Padrão 7. */
   staleDealDays: number
+  /** Cadência que inscreve o contato ao marcar o negócio como GANHO
+   *  (pós-venda/onboarding). null = nenhuma. */
+  wonCadenceId: string | null
+  /** Cadência ao marcar como PERDIDO (recuperação). null = nenhuma. */
+  lostCadenceId: string | null
 }
 
 /** Mon–Fri 08:00–18:00, weekend closed. Index 0=Sunday … 6=Saturday. */
@@ -85,6 +90,8 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
     'Obrigado pela nota! Se quiser, deixe um comentário sobre o atendimento — é rapidinho. 🙏',
   crmCallingEnabled: true,
   staleDealDays: 7,
+  wonCadenceId: null,
+  lostCadenceId: null,
 }
 
 /** Read an account's settings, merged over the defaults. */

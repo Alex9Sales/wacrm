@@ -18,6 +18,7 @@ import {
   messageTemplates,
   channels,
   customFields,
+  cadences,
   leadDistribution,
   organization,
   user,
@@ -975,5 +976,42 @@ export async function setDealAlertDays(days: number): Promise<{ error: string | 
   const ctx = await requireRole('admin')
   const n = Math.max(0, Math.min(365, Math.floor(Number(days) || 0)))
   await updateAccountSettings(ctx.accountId, { staleDealDays: n })
+  return { error: null }
+}
+
+// ============================================================
+// Gatilho por status: cadência ao GANHAR / PERDER o negócio.
+// ============================================================
+
+export async function getStatusCadences(): Promise<{
+  cadences: { id: string; name: string; active: boolean }[]
+  wonCadenceId: string | null
+  lostCadenceId: string | null
+}> {
+  const ctx = await getCurrentAccount()
+  const [list, s] = await Promise.all([
+    db
+      .select({ id: cadences.id, name: cadences.name, active: cadences.active })
+      .from(cadences)
+      .where(eq(cadences.accountId, ctx.accountId))
+      .orderBy(asc(cadences.name)),
+    getAccountSettings(ctx.accountId),
+  ])
+  return {
+    cadences: list,
+    wonCadenceId: s.wonCadenceId ?? null,
+    lostCadenceId: s.lostCadenceId ?? null,
+  }
+}
+
+export async function setStatusCadences(input: {
+  wonCadenceId: string | null
+  lostCadenceId: string | null
+}): Promise<{ error: string | null }> {
+  const ctx = await requireRole('admin')
+  await updateAccountSettings(ctx.accountId, {
+    wonCadenceId: input.wonCadenceId || null,
+    lostCadenceId: input.lostCadenceId || null,
+  })
   return { error: null }
 }
