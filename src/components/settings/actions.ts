@@ -39,6 +39,7 @@ import {
   getAccountSettings,
   updateAccountSettings,
 } from '@/lib/settings/account-settings'
+import { previewDigest, sendDigestNow } from '@/lib/reports/owner-digest'
 import type { Tag, MessageTemplate, WhatsAppConfig } from '@/types'
 
 // ------------------------------------------------------------
@@ -1014,4 +1015,76 @@ export async function setStatusCadences(input: {
     lostCadenceId: input.lostCadenceId || null,
   })
   return { error: null }
+}
+
+// ============================================================
+// Sócio IA — resumo diário do funil no WhatsApp do dono.
+// ============================================================
+
+const WA_PROVIDERS = ['waha', 'meta', 'evolution', 'evogo']
+
+export async function getOwnerDigest(): Promise<{
+  enabled: boolean
+  hour: number
+  phone: string
+  channelId: string | null
+  channels: { id: string; name: string }[]
+  preview: string
+}> {
+  const ctx = await getCurrentAccount()
+  const [s, chans, preview] = await Promise.all([
+    getAccountSettings(ctx.accountId),
+    db
+      .select({ id: channels.id, name: channels.name, provider: channels.provider })
+      .from(channels)
+      .where(eq(channels.accountId, ctx.accountId)),
+    previewDigest(ctx.accountId).catch(() => ''),
+  ])
+  return {
+    enabled: s.ownerDigestEnabled,
+    hour: s.ownerDigestHour,
+    phone: s.ownerDigestPhone,
+    channelId: s.ownerDigestChannelId,
+    channels: chans
+      .filter((c) => WA_PROVIDERS.includes(c.provider))
+      .map((c) => ({ id: c.id, name: c.name })),
+    preview,
+  }
+}
+
+/** Normaliza o telefone do dono: só dígitos + prefixo BR (55) se vier "pelado". */
+function normalizeOwnerPhone(raw: string): string {
+  const digits = (raw ?? '').replace(/\D/g, '')
+  if (!digits) return ''
+  // 10–11 dígitos = DDD + número sem código do país → assume Brasil (+55).
+  if ((digits.length === 10 || digits.length === 11) && !digits.startsWith('55')) {
+    return `55${digits}`
+  }
+  return digits
+}
+
+export async function setOwnerDigest(input: {
+  enabled: boolean
+  hour: number
+  phone: string
+  channelId: string | null
+}): Promise<{ error: string | null }> {
+  const ctx = await requireRole('admin')
+  const phone = normalizeOwnerPhone(input.phone)
+  if (input.enabled && !phone) {
+    return { error: 'Informe o número do WhatsApp que vai receber o resumo.' }
+  }
+  const hour = Math.min(23, Math.max(0, Math.trunc(Number(input.hour))))
+  await updateAccountSettings(ctx.accountId, {
+    ownerDigestEnabled: !!input.enabled,
+    ownerDigestHour: Number.isFinite(hour) ? hour : 8,
+    ownerDigestPhone: phone,
+    ownerDigestChannelId: input.channelId || null,
+  })
+  return { error: null }
+}
+
+export async function sendOwnerDigestTest(): Promise<{ ok: boolean; error?: string }> {
+  const ctx = await requireRole('admin')
+  return sendDigestNow(ctx.accountId)
 }

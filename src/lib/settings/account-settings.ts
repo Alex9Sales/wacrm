@@ -57,6 +57,18 @@ export interface AccountSettings {
   wonCadenceId: string | null
   /** Cadência ao marcar como PERDIDO (recuperação). null = nenhuma. */
   lostCadenceId: string | null
+  /** Sócio IA — resumo diário do funil enviado no WhatsApp do dono.
+   *  OFF por padrão (dispara mensagem real). */
+  ownerDigestEnabled: boolean
+  /** Hora (0–23) do envio, avaliada no `businessTimezone` da conta. Padrão 8h. */
+  ownerDigestHour: number
+  /** Telefone (WhatsApp) que RECEBE o resumo. Vazio = não envia. */
+  ownerDigestPhone: string
+  /** Canal WhatsApp de origem do envio. null = 1º canal WhatsApp conectado. */
+  ownerDigestChannelId: string | null
+  /** Marcador anti-duplicação: 'YYYY-MM-DD' (no fuso da conta) do último envio.
+   *  Escrito SÓ pelo worker — chave separada pra o save da UI não sobrescrever. */
+  ownerDigestLastSent: string | null
 }
 
 /** Mon–Fri 08:00–18:00, weekend closed. Index 0=Sunday … 6=Saturday. */
@@ -92,6 +104,11 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   staleDealDays: 7,
   wonCadenceId: null,
   lostCadenceId: null,
+  ownerDigestEnabled: false,
+  ownerDigestHour: 8,
+  ownerDigestPhone: '',
+  ownerDigestChannelId: null,
+  ownerDigestLastSent: null,
 }
 
 /** Read an account's settings, merged over the defaults. */

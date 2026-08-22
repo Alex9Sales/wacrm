@@ -86,3 +86,11 @@ import('./gmail-poll-worker')
   .catch((err) => {
     console.error('[worker] gmail-poll failed to start:', err);
   });
+
+// Sócio IA — tick de 15 min que manda o resumo diário do funil no WhatsApp do
+// dono (opt-in por conta, na hora configurada no fuso da conta).
+import('./owner-digest-worker')
+  .then((m) => m.startOwnerDigestWorker())
+  .catch((err) => {
+    console.error('[worker] owner-digest failed to start:', err);
+  });
