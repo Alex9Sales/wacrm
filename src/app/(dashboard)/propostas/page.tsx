@@ -19,6 +19,7 @@ import {
   GitBranch,
   Send,
   X,
+  MessageCircle,
 } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
@@ -40,6 +41,17 @@ import {
 import type { DiscountType } from "@/lib/proposals/shared";
 
 type Pipeline = { id: string; name: string; stages: { id: string; name: string }[] };
+
+/** Link wa.me pra enviar a proposta no WhatsApp (abre a conversa com o link). */
+function whatsappShareHref(phone: string, url: string): string {
+  const digits = (phone || "").replace(/\D/g, "");
+  const to =
+    digits && (digits.length === 10 || digits.length === 11) && !digits.startsWith("55")
+      ? `55${digits}`
+      : digits;
+  const text = encodeURIComponent(`Olá! Segue a proposta: ${url}`);
+  return to ? `https://wa.me/${to}?text=${text}` : `https://wa.me/?text=${text}`;
+}
 
 const STATUS_META: Record<
   ProposalListRow["status"],
@@ -404,6 +416,11 @@ function ProposalCreator({
           <a href={done.url} target="_blank" rel="noreferrer">
             <Button variant="outline">
               <ExternalLink className="mr-1.5 h-4 w-4" /> Abrir / PDF
+            </Button>
+          </a>
+          <a href={whatsappShareHref(clientPhone, done.url)} target="_blank" rel="noreferrer">
+            <Button variant="outline">
+              <MessageCircle className="mr-1.5 h-4 w-4" /> Enviar por WhatsApp
             </Button>
           </a>
           <Button variant="outline" onClick={() => void handleSendEmail()} disabled={sendingEmail}>
