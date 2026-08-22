@@ -58,6 +58,7 @@ import {
   List,
   Check,
   Building2,
+  RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
 import { useCan } from "@/hooks/use-can";
@@ -378,6 +379,19 @@ export default function PipelinesPage() {
     void loadTaskCounts(d);
   }, [loadDeals, loadTaskCounts, selectedPipelineId]);
 
+  // Atualizar o funil inteiro (etapas + negócios) — botão manual no header, pra
+  // pegar o que mudou em outra aba/pessoa sem recarregar a página.
+  const [refreshing, setRefreshing] = useState(false);
+  const handleRefreshBoard = useCallback(async () => {
+    if (!selectedPipelineId || refreshing) return;
+    setRefreshing(true);
+    try {
+      await Promise.all([refreshStages(), refreshDeals()]);
+    } finally {
+      setRefreshing(false);
+    }
+  }, [selectedPipelineId, refreshing, refreshStages, refreshDeals]);
+
   // Open the reused TaskForm prefilled with the deal (+ its contact).
   const handleCreateTask = useCallback((deal: Deal) => {
     setTaskDeal(deal);
@@ -538,6 +552,16 @@ export default function PipelinesPage() {
         </div>
 
         <div className="flex items-center gap-2">
+          <button
+            type="button"
+            onClick={() => void handleRefreshBoard()}
+            disabled={!selectedPipelineId || refreshing}
+            title="Atualizar funil (etapas e negócios)"
+            aria-label="Atualizar funil"
+            className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-border bg-card text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+          >
+            <RefreshCw className={`h-4 w-4 ${refreshing ? "animate-spin" : ""}`} />
+          </button>
           <GatedButton
             variant="outline"
             canAct={canEditSettings}
