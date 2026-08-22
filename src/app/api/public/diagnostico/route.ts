@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 
+import { db, dealEvents } from '@/db'
 import { ingestLead, LeadPhoneError } from '@/lib/leads/ingest'
 
 // Endpoint PÚBLICO (sem auth) do formulário /diagnostico. Recebe o quiz e joga
@@ -39,6 +40,7 @@ export async function POST(req: Request) {
 
   const nome = str(body.nome, 120)
   const whatsapp = str(body.whatsapp, 30).replace(/[^0-9]/g, '')
+  const email = str(body.email, 160)
   const segmento = str(body.segmento, 80)
   const indice = Number.isFinite(Number(body.indice))
     ? Math.max(0, Math.min(100, Math.round(Number(body.indice))))
@@ -62,26 +64,34 @@ export async function POST(req: Request) {
         .filter((a) => a.pergunta)
     : []
 
-  // Monta o bloco de notas do card.
+  // Resumo curto pro campo Observações do card.
+  const shortNote =
+    `Diagnóstico do WhatsApp · índice ${indice ?? '—'}/100` +
+    (faixa ? ` (${faixa})` : '') +
+    (segmento ? ` · ${segmento}` : '')
+
+  // Bloco completo (com todas as respostas) pro Histórico do negócio.
   const lines: string[] = ['📋 Diagnóstico do WhatsApp']
   if (indice != null) lines.push(`Índice de vazamento: ${indice}/100${faixa ? ` (${faixa})` : ''}`)
   if (segmento) lines.push(`Segmento: ${segmento}`)
+  if (email) lines.push(`E-mail: ${email}`)
   if (respostas.length) {
     lines.push('')
     lines.push('Respostas:')
     respostas.forEach((a) => lines.push(`• ${a.pergunta} ${a.resposta ?? '—'}`))
   }
-  const notes = lines.join('\n')
+  const fullNote = lines.join('\n')
 
   const tags = ['Diagnóstico']
   if (segmento) tags.push(segmento)
   if (faixa) tags.push(faixa)
 
   try {
-    await ingestLead(ACCOUNT_ID, USER_ID, {
+    const res = await ingestLead(ACCOUNT_ID, USER_ID, {
       rawPhone: whatsapp,
       name: nome,
-      notes,
+      email: email || null,
+      notes: shortNote,
       pipelineId: PIPELINE_ID,
       stageId: STAGE_ID,
       origin: 'Diagnóstico',
@@ -89,6 +99,21 @@ export async function POST(req: Request) {
       taskSuffix: 'diagnóstico',
       tags,
     })
+    // Joga o diagnóstico completo no Histórico do negócio (aparece na timeline
+    // "anotações", não só no campo Observações).
+    if (res.dealId) {
+      try {
+        await db.insert(dealEvents).values({
+          accountId: ACCOUNT_ID,
+          dealId: res.dealId,
+          actorUserId: USER_ID,
+          type: 'note',
+          data: { text: fullNote },
+        })
+      } catch (e) {
+        console.error('[diagnostico] deal_event note failed:', e)
+      }
+    }
     return NextResponse.json({ ok: true })
   } catch (err) {
     if (err instanceof LeadPhoneError) {

@@ -439,6 +439,11 @@ export const DIAGNOSTICO_HTML = `<!doctype html>
           <span class="err" id="err-wpp" role="alert"></span>
         </div>
         <div class="field">
+          <label for="f-email">Seu melhor e-mail</label>
+          <input id="f-email" name="email" type="email" autocomplete="email" placeholder="voce@empresa.com" aria-describedby="err-email" />
+          <span class="err" id="err-email" role="alert"></span>
+        </div>
+        <div class="field">
           <label for="f-seg">O que a sua empresa faz?</label>
           <select id="f-seg" name="segmento" aria-describedby="err-seg">
             <option value="">Escolha uma opção</option>
@@ -687,20 +692,25 @@ export const DIAGNOSTICO_HTML = `<!doctype html>
     e.preventDefault();
     var nome = el("f-nome").value.trim();
     var wpp = digits(el("f-wpp").value);
+    var email = el("f-email").value.trim();
     var seg = el("f-seg").value;
     var ok = el("f-ok").checked;
     var valid = true;
     var firstBad = null;
 
-    setErr("f-nome", "err-nome", ""); setErr("f-wpp", "err-wpp", ""); setErr("f-seg", "err-seg", ""); el("err-ok").textContent = "";
+    setErr("f-nome", "err-nome", ""); setErr("f-wpp", "err-wpp", ""); setErr("f-email", "err-email", ""); setErr("f-seg", "err-seg", ""); el("err-ok").textContent = "";
+
+    var at = email.indexOf("@");
+    var emailOk = at > 0 && email.lastIndexOf(".") > at + 1 && email.indexOf(" ") < 0;
 
     if (nome.length < 2) { setErr("f-nome", "err-nome", "Escreva seu nome."); valid = false; firstBad = firstBad || "f-nome"; }
     if (wpp.length < 10) { setErr("f-wpp", "err-wpp", "Coloque o WhatsApp com DDD."); valid = false; firstBad = firstBad || "f-wpp"; }
+    if (!emailOk) { setErr("f-email", "err-email", "Coloque um e-mail válido."); valid = false; firstBad = firstBad || "f-email"; }
     if (!seg) { setErr("f-seg", "err-seg", "Escolha uma opção."); valid = false; firstBad = firstBad || "f-seg"; }
     if (!ok) { el("err-ok").textContent = "Marque para receber o diagnóstico."; valid = false; firstBad = firstBad || "f-ok"; }
     if (!valid) { if (firstBad) el(firstBad).focus(); return; }
 
-    state.contact = { nome: nome, whatsapp: wpp, segmento: seg };
+    state.contact = { nome: nome, whatsapp: wpp, email: email, segmento: seg };
 
     var btn = el("submitBtn");
     btn.disabled = true;
@@ -714,7 +724,7 @@ export const DIAGNOSTICO_HTML = `<!doctype html>
       return { pergunta: Q.q, resposta: a != null ? Q.opts[a].t : null };
     });
     var payload = {
-      nome: nome, whatsapp: wpp, segmento: seg, site: el("f-site").value,
+      nome: nome, whatsapp: wpp, email: email, segmento: seg, site: el("f-site").value,
       indice: score.pct, faixa: tierFor(score.pct).risk, respostas: respostas
     };
     var done = false;
