@@ -1,16 +1,10 @@
 "use client";
 
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { usePathname } from "next/navigation";
 import { Sparkles, RotateCw, X } from "lucide-react";
 
 import { isEmbeddedSignupActive } from "@/lib/embedded-signup-flag";
-
-// After the tab has been hidden this long, a RETURN with a new build in the
-// air auto-recovers the stale bundle (reload) instead of only nudging with the
-// banner. This is the "opened the laptop / came back after a while" case —
-// where a stale tab otherwise hits "Failed to find Server Action" and looks
-// frozen. A short alt-tab (below this) still just shows the banner.
-const AUTO_RELOAD_AFTER_HIDDEN_MS = 30_000;
 
 /** True when the user is mid-typing in a field with content — don't yank the
  *  page out from under a draft; show the banner instead. */
@@ -28,74 +22,66 @@ function isEditingDirtyText(): boolean {
 // "Nova versão disponível" banner. The server rendered this page from build
 // `initialBuildId`; we poll /api/version and, when the running server reports
 // a newer id, surface a one-click refresh so clients pick up new features
-// without a manual hard-reload. Dismiss hides it until an even newer build
-// ships. If a new build lands while the tab is away and the user then returns,
-// we reload automatically (see AUTO_RELOAD_AFTER_HIDDEN_MS) so they never land
-// on a stale, frozen page.
+// without a manual hard-reload.
+//
+// A stale tab is effectively BROKEN: every Server Action it fires hits "Failed
+// to find Server Action" and no-ops, AND a client-side navigation to a page
+// added/changed by the new build renders the OLD component silently (no error
+// to catch — e.g. a new button just doesn't appear). So we don't only nudge —
+// we auto-reload a visible, idle tab that sees a newer build, and we re-check
+// on three edges besides the 20s poll: return-from-hidden, window focus, and
+// EVERY client-side route change (closes the "navigated on a stale bundle"
+// gap that a plain interval leaves open for up to one tick). Guarded so it's
+// safe: once per build, never while typing a draft, never mid Embedded-Signup.
 export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
   const [latest, setLatest] = useState<string | null>(null);
   const [dismissed, setDismissed] = useState<string | null>(null);
   const checking = useRef(false);
-  // When the tab last went hidden — to size how long the user was away.
-  const hiddenSinceRef = useRef<number | null>(null);
+  const pathname = usePathname();
 
-  useEffect(() => {
+  const check = useCallback(async () => {
     // Dormant in dev (no BUILD_ID) — nothing to compare against.
     if (!initialBuildId || initialBuildId === "dev") return;
-    let stopped = false;
-
-    const check = async (canAutoReload = false) => {
-      if (checking.current || document.hidden) return;
-      checking.current = true;
-      try {
-        const res = await fetch("/api/version", { cache: "no-store" });
-        if (!res.ok) return;
-        const data = (await res.json()) as { buildId?: string };
-        if (stopped || typeof data.buildId !== "string") return;
-        const build = data.buildId;
-        const isNew = build !== initialBuildId;
-        // Auto-recover a stale bundle: reload straight to the new build. A
-        // stale tab is effectively BROKEN — every Server Action it fires hits
-        // "Failed to find Server Action" and silently no-ops (delete, send,
-        // etc. look like they "come back"), and most handlers catch that error
-        // so the global listener below never sees it. So we don't wait for the
-        // user to click the banner: any visible, idle tab that sees a newer
-        // build reloads itself within the poll interval. Guarded so it's safe —
-        // once per build (a mismatched /api/version can't loop), never while
-        // typing a draft, never mid Embedded-Signup popup. `canAutoReload`
-        // (return-from-away ≥30s) is kept only to force the check even in the
-        // rare paths that pass it; the reload no longer depends on it.
-        void canAutoReload;
-        if (isNew && !isEditingDirtyText() && !isEmbeddedSignupActive()) {
-          const guardKey = "fluxia:autoReloadedFor";
-          if (sessionStorage.getItem(guardKey) !== build) {
-            sessionStorage.setItem(guardKey, build);
-            window.location.reload();
-            return;
-          }
+    if (checking.current || document.hidden) return;
+    checking.current = true;
+    try {
+      const res = await fetch("/api/version", { cache: "no-store" });
+      if (!res.ok) return;
+      const data = (await res.json()) as { buildId?: string };
+      if (typeof data.buildId !== "string") return;
+      const build = data.buildId;
+      if (build === initialBuildId) return;
+      // Newer build in the air. Auto-recover unless it would clobber a draft
+      // or an in-flight Embedded-Signup popup — then fall back to the banner.
+      if (!isEditingDirtyText() && !isEmbeddedSignupActive()) {
+        const guardKey = "fluxia:autoReloadedFor";
+        if (sessionStorage.getItem(guardKey) !== build) {
+          sessionStorage.setItem(guardKey, build);
+          window.location.reload();
+          return;
         }
-        // Reached only when we deliberately DIDN'T auto-reload (mid-draft or
-        // mid-ES) — fall back to the manual "Nova versão" banner.
-        setLatest(build);
-      } catch {
-        // offline / transient — try again on the next tick.
-      } finally {
-        checking.current = false;
       }
-    };
+      setLatest(build);
+    } catch {
+      // offline / transient — try again on the next edge.
+    } finally {
+      checking.current = false;
+    }
+  }, [initialBuildId]);
 
-    // Belt-and-suspenders for the stale bundle: if a click fires a Server
-    // Action whose id changed across a deploy, Next throws "Failed to find
-    // Server Action … older or newer deployment" and the page looks frozen.
-    // The version poll only catches this on its 20s tick / on return-from-away;
-    // a tab that stayed VISIBLE and gets clicked FIRST would still freeze. So
-    // we also catch that exact error globally and reload immediately — time-
-    // guarded (60s) so a non-bundle cause can never loop us.
+  // Poll + focus/visibility + a global catch for the stale Server-Action error.
+  useEffect(() => {
+    if (!initialBuildId || initialBuildId === "dev") return;
+
+    // Belt-and-suspenders: a click that fires a Server Action whose id changed
+    // across a deploy throws "Failed to find Server Action … older or newer
+    // deployment" and the page looks frozen. Catch that exact error globally
+    // and reload immediately — time-guarded (60s) so a non-bundle cause can't
+    // loop us.
     const STALE_ACTION_RE =
       /Failed to find Server Action|older or newer deployment/i;
     const reloadForStaleAction = (msg: unknown) => {
       if (typeof msg !== "string" || !STALE_ACTION_RE.test(msg)) return;
-      // Never yank the page out from under an in-flight Embedded Signup popup.
       if (isEmbeddedSignupActive()) return;
       const KEY = "fluxia:staleActionReloadAt";
       const last = Number(sessionStorage.getItem(KEY) || 0);
@@ -117,28 +103,27 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
     // ociosa antes de o usuário clicar numa ação de bundle velho.
     const id = window.setInterval(() => void check(), 20_000);
     const onVisibility = () => {
-      if (document.hidden) {
-        hiddenSinceRef.current = Date.now();
-        return;
-      }
-      const awayMs = hiddenSinceRef.current
-        ? Date.now() - hiddenSinceRef.current
-        : 0;
-      hiddenSinceRef.current = null;
-      void check(awayMs >= AUTO_RELOAD_AFTER_HIDDEN_MS);
+      if (!document.hidden) void check();
     };
     const onFocus = () => void check();
     document.addEventListener("visibilitychange", onVisibility);
     window.addEventListener("focus", onFocus);
     return () => {
-      stopped = true;
       window.clearInterval(id);
       document.removeEventListener("visibilitychange", onVisibility);
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("error", onError);
       window.removeEventListener("unhandledrejection", onRejection);
     };
-  }, [initialBuildId]);
+  }, [initialBuildId, check]);
+
+  // Re-check on EVERY client-side navigation. Landing on a page the new build
+  // changed while running the old bundle renders the old component with no
+  // error to catch (e.g. a just-added button is missing) — so we verify the
+  // build the instant the route changes, not up to 20s later.
+  useEffect(() => {
+    void check();
+  }, [pathname, check]);
 
   const hasUpdate =
     !!latest && latest !== initialBuildId && latest !== dismissed;
