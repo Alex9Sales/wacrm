@@ -37,6 +37,7 @@ import { CadenceSidebar } from "./cadence-sidebar";
 import { Repeat } from "lucide-react";
 import { CustomerCodesEditor } from "./customer-codes-editor";
 import { CustomFieldInput } from "@/components/contacts/custom-field-input";
+import { CallButton } from "@/components/calls/call-button";
 import type {
   Contact,
   Conversation,
@@ -554,20 +555,30 @@ export function ContactSidebar({
             />
           </div>
 
-          {/* Contact fields: phone (copy), email, empresa */}
+          {/* Contact fields: phone (copy + ligar), email, empresa */}
           <div className="mt-4 space-y-1.5">
-            <button
-              onClick={handleCopyPhone}
-              className="flex w-full items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted"
-            >
-              <Phone className="h-4 w-4 text-muted-foreground" />
-              <span className="flex-1 text-left">{contact.phone}</span>
-              {copied ? (
-                <Check className="h-3 w-3 text-primary" />
-              ) : (
-                <Copy className="h-3 w-3 text-muted-foreground" />
+            <div className="flex items-center gap-1">
+              <button
+                onClick={handleCopyPhone}
+                className="flex flex-1 items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground transition-colors hover:bg-muted"
+              >
+                <Phone className="h-4 w-4 text-muted-foreground" />
+                <span className="flex-1 text-left">{contact.phone}</span>
+                {copied ? (
+                  <Check className="h-3 w-3 text-primary" />
+                ) : (
+                  <Copy className="h-3 w-3 text-muted-foreground" />
+                )}
+              </button>
+              {contact.phone && !contact.is_group && (
+                <CallButton
+                  phone={contact.phone}
+                  name={contact.name}
+                  className="h-9 w-9 shrink-0"
+                  title="Ligar para o contato (voz WhatsApp)"
+                />
               )}
-            </button>
+            </div>
 
             <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground">
               <Mail className="h-4 w-4 shrink-0 text-muted-foreground" />

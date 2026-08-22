@@ -15,6 +15,7 @@ import { ContactAvatar } from "@/components/inbox/contact-avatar";
 import { deleteDeal, transferDeal, duplicateDeal, setDealPaused, setDealNextFollowUp, openDealConversation, openDealWhatsApp } from "@/app/(dashboard)/pipelines/actions";
 import { dealChannelLabel, isInstagramProvider } from "@/lib/pipelines/channel-label";
 import { listProfiles } from "@/app/(dashboard)/inbox/actions";
+import { CallButton } from "@/components/calls/call-button";
 
 interface DealCardProps {
   deal: Deal;
@@ -25,6 +26,8 @@ interface DealCardProps {
   taskCount?: DealTaskCount;
   /** Open the reused TaskForm prefilled with this deal (+ its contact). */
   onCreateTask?: (deal: Deal) => void;
+  /** "Tocar ligações no CRM" resolvido UMA vez no board (evita 1 fetch/card). */
+  callingEnabled?: boolean;
 }
 
 function formatDate(dateStr: string) {
@@ -78,6 +81,7 @@ export function DealCard({
   taskCount,
   onEdit,
   onCreateTask,
+  callingEnabled,
 }: DealCardProps) {
   const router = useRouter();
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
@@ -540,6 +544,15 @@ export function DealCard({
                   >
                     <MessageCircle className="h-3.5 w-3.5" />
                   </span>
+                )}
+                {deal.contact?.phone && (
+                  <CallButton
+                    phone={deal.contact.phone}
+                    name={deal.contact?.name}
+                    enabled={callingEnabled}
+                    title="Ligar para o contato (voz WhatsApp)"
+                    className="h-5 w-5 hover:bg-background [&_svg]:h-3.5 [&_svg]:w-3.5"
+                  />
                 )}
               </div>
             )}

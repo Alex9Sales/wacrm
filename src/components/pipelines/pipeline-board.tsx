@@ -21,6 +21,7 @@ import { Button } from "@/components/ui/button";
 import { Plus, Megaphone } from "lucide-react";
 import { StageBroadcastDialog } from "./stage-broadcast-dialog";
 import { useAuth } from "@/hooks/use-auth";
+import { useCrmCallingEnabled } from "@/hooks/use-crm-calling";
 import { formatCurrency } from "@/lib/currency";
 
 interface PipelineBoardProps {
@@ -48,6 +49,9 @@ export function PipelineBoard({
   onCreateTask,
 }: PipelineBoardProps) {
   const { defaultCurrency } = useAuth();
+  // Resolvido UMA vez aqui e passado pra baixo (StageColumn → card), pra não
+  // fazer 1 fetch de "ligações no CRM" por card do board.
+  const callingEnabled = useCrmCallingEnabled();
   const [activeDealId, setActiveDealId] = useState<string | null>(null);
   // Estatísticas por coluna (estilo RD) — toggle global mostra/esconde.
   const [showStats, setShowStats] = useState(false);
@@ -138,6 +142,7 @@ export function PipelineBoard({
               key={stage.id}
               stage={stage}
               deals={stageDeals}
+              callingEnabled={callingEnabled}
               totalValue={totalValue}
               currency={defaultCurrency}
               onAddDeal={onAddDeal}
@@ -166,6 +171,7 @@ export function PipelineBoard({
               }
               onEdit={() => {}}
               isOverlay
+              callingEnabled={callingEnabled}
             />
           </div>
         ) : null}
@@ -224,6 +230,7 @@ function StageColumn({
   dealsWithProducts,
   onCreateTask,
   showStats,
+  callingEnabled,
 }: {
   stage: PipelineStage;
   deals: Deal[];
@@ -235,6 +242,7 @@ function StageColumn({
   dealsWithProducts?: Set<string>;
   onCreateTask?: (deal: Deal) => void;
   showStats?: boolean;
+  callingEnabled?: boolean;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const [bcastOpen, setBcastOpen] = useState(false);
@@ -333,6 +341,7 @@ function StageColumn({
               onEdit={onEditDeal}
               taskCount={taskCounts?.[deal.id]}
               onCreateTask={onCreateTask}
+              callingEnabled={callingEnabled}
             />
           ))
         )}
@@ -364,12 +373,14 @@ function DraggableDealCard({
   onEdit,
   taskCount,
   onCreateTask,
+  callingEnabled,
 }: {
   deal: Deal;
   stage: PipelineStage;
   onEdit: (deal: Deal) => void;
   taskCount?: DealTaskCount;
   onCreateTask?: (deal: Deal) => void;
+  callingEnabled?: boolean;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: deal.id,
@@ -390,6 +401,7 @@ function DraggableDealCard({
         onEdit={onEdit}
         taskCount={taskCount}
         onCreateTask={onCreateTask}
+        callingEnabled={callingEnabled}
       />
     </div>
   );

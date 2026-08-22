@@ -30,6 +30,7 @@ import {
   type ScheduledMessageLite,
 } from '@/app/(dashboard)/inbox/schedule-actions';
 import { ScheduleMiniList } from '@/components/inbox/schedule-mini-list';
+import { CallButton } from '@/components/calls/call-button';
 import {
   TemplatePicker,
   type TemplateSendValues,
@@ -461,6 +462,14 @@ export function ContactDetailView({
                         <Copy className="size-3" />
                       )}
                     </button>
+                    {contact.phone && !contact.is_group && (
+                      <CallButton
+                        phone={contact.phone}
+                        name={contact.name}
+                        variant="pill"
+                        title="Ligar para o contato (voz WhatsApp)"
+                      />
+                    )}
                     {contact.email && (
                       <span className="flex items-center gap-1">
                         <Mail className="size-3" />
