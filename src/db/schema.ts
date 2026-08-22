@@ -1201,6 +1201,12 @@ export const dealProposals = pgTable("deal_proposals", {
 	validUntil: date("valid_until"),
 	terms: text(),
 	createdBy: uuid("created_by"),
+	// Aceite digital + rastreio (migração 0117).
+	viewedAt: timestamp("viewed_at", { withTimezone: true, mode: 'string' }),
+	acceptedAt: timestamp("accepted_at", { withTimezone: true, mode: 'string' }),
+	acceptorName: text("acceptor_name"),
+	acceptorDocument: text("acceptor_document"),
+	acceptorIp: text("acceptor_ip"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

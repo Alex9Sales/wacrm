@@ -147,10 +147,22 @@ export async function buildProposalData(
 }
 
 /** Lê a linha deal_proposals de um negócio (ou defaults se ainda não existe). */
+export interface ProposalTracking {
+  viewedAt: string | null
+  acceptedAt: string | null
+  acceptorName: string | null
+  acceptorDocument: string | null
+}
+
 export async function loadDealProposalFields(
   accountId: string,
   dealId: string,
-): Promise<{ id: string | null; createdAt: string | null; fields: ProposalFields }> {
+): Promise<{
+  id: string | null
+  createdAt: string | null
+  fields: ProposalFields
+  tracking: ProposalTracking
+}> {
   const row = firstOrNull(
     await db
       .select({
@@ -160,6 +172,10 @@ export async function loadDealProposalFields(
         validUntil: dealProposals.validUntil,
         terms: dealProposals.terms,
         createdAt: dealProposals.createdAt,
+        viewedAt: dealProposals.viewedAt,
+        acceptedAt: dealProposals.acceptedAt,
+        acceptorName: dealProposals.acceptorName,
+        acceptorDocument: dealProposals.acceptorDocument,
       })
       .from(dealProposals)
       .where(
@@ -167,7 +183,20 @@ export async function loadDealProposalFields(
       )
       .limit(1),
   )
-  if (!row) return { id: null, createdAt: null, fields: { ...DEFAULT_PROPOSAL_FIELDS } }
+  const emptyTracking: ProposalTracking = {
+    viewedAt: null,
+    acceptedAt: null,
+    acceptorName: null,
+    acceptorDocument: null,
+  }
+  if (!row) {
+    return {
+      id: null,
+      createdAt: null,
+      fields: { ...DEFAULT_PROPOSAL_FIELDS },
+      tracking: emptyTracking,
+    }
+  }
   return {
     id: row.id,
     createdAt: row.createdAt,
@@ -176,6 +205,12 @@ export async function loadDealProposalFields(
       discountType: (row.discountType as DiscountType) || 'value',
       validUntil: row.validUntil ?? null,
       terms: row.terms ?? null,
+    },
+    tracking: {
+      viewedAt: row.viewedAt ?? null,
+      acceptedAt: row.acceptedAt ?? null,
+      acceptorName: row.acceptorName ?? null,
+      acceptorDocument: row.acceptorDocument ?? null,
     },
   }
 }
@@ -204,6 +239,8 @@ export async function getPublicProposalData(
         validUntil: dealProposals.validUntil,
         terms: dealProposals.terms,
         createdAt: dealProposals.createdAt,
+        acceptedAt: dealProposals.acceptedAt,
+        acceptorName: dealProposals.acceptorName,
       })
       .from(dealProposals)
       .where(eq(dealProposals.id, proposalId))
@@ -216,7 +253,18 @@ export async function getPublicProposalData(
     validUntil: row.validUntil ?? null,
     terms: row.terms ?? null,
   }
-  return buildProposalData(row.accountId, row.dealId, fields, row.id, row.createdAt)
+  const data = await buildProposalData(
+    row.accountId,
+    row.dealId,
+    fields,
+    row.id,
+    row.createdAt,
+  )
+  if (!data) return null
+  data.accepted = row.acceptedAt
+    ? { at: row.acceptedAt, name: row.acceptorName ?? '' }
+    : null
+  return data
   } catch (err) {
     console.error('[getPublicProposalData]', err)
     return null

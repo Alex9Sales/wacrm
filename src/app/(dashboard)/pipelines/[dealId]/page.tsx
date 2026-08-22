@@ -288,6 +288,12 @@ export default function DealDetailPage() {
   const [propValidUntil, setPropValidUntil] = useState(""); // 'YYYY-MM-DD' | ''
   const [propTerms, setPropTerms] = useState("");
   const [propUrl, setPropUrl] = useState<string | null>(null);
+  const [propTracking, setPropTracking] = useState<{
+    viewedAt: string | null;
+    acceptedAt: string | null;
+    acceptorName: string | null;
+    acceptorDocument: string | null;
+  } | null>(null);
   const [savingProp, setSavingProp] = useState(false);
   const [sendingProp, setSendingProp] = useState(false);
   const [propDirty, setPropDirty] = useState(false);
@@ -335,6 +341,7 @@ export default function DealDetailPage() {
       getDealProposal(dealId).catch(() => ({
         data: null,
         publicUrl: null,
+        tracking: null,
         error: null,
       })),
     ]);
@@ -354,6 +361,7 @@ export default function DealDetailPage() {
       setPropTerms(pp.data.fields.terms ?? "");
     }
     setPropUrl(pp.publicUrl);
+    setPropTracking(pp.tracking ?? null);
     setPropDirty(false);
 
     // Campos personalizados: do CONTATO (entity='contact') + do NEGÓCIO (deal).
@@ -507,6 +515,15 @@ export default function DealDetailPage() {
       return null;
     }
     setPropUrl(res.publicUrl);
+    // 1ª proposta salva ainda não tem rastreio — mostra o estado "não visualizada".
+    setPropTracking((t) =>
+      t ?? {
+        viewedAt: null,
+        acceptedAt: null,
+        acceptorName: null,
+        acceptorDocument: null,
+      },
+    );
     setPropDirty(false);
     return res.publicUrl;
   }, [dealId, propDiscount, propDiscountType, propValidUntil, propTerms]);
@@ -1914,6 +1931,60 @@ export default function DealDetailPage() {
                       </span>
                     )}
                   </div>
+
+                  {/* Rastreio: visualização + aceite digital (feito na página pública). */}
+                  {propUrl && propTracking && (
+                    <div className="rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
+                      {propTracking.acceptedAt ? (
+                        <div className="flex items-center gap-1.5 text-emerald-600 dark:text-emerald-400">
+                          <span>✅</span>
+                          <span>
+                            Aceita por{" "}
+                            <strong>{propTracking.acceptorName || "cliente"}</strong>
+                            {propTracking.acceptorDocument
+                              ? ` (${propTracking.acceptorDocument})`
+                              : ""}{" "}
+                            em{" "}
+                            {new Date(propTracking.acceptedAt).toLocaleString(
+                              "pt-BR",
+                              {
+                                day: "2-digit",
+                                month: "2-digit",
+                                year: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              },
+                            )}
+                          </span>
+                        </div>
+                      ) : propTracking.viewedAt ? (
+                        <div className="flex items-center gap-1.5 text-sky-600 dark:text-sky-400">
+                          <span>👀</span>
+                          <span>
+                            Visualizada pelo cliente em{" "}
+                            {new Date(propTracking.viewedAt).toLocaleString(
+                              "pt-BR",
+                              {
+                                day: "2-digit",
+                                month: "2-digit",
+                                year: "numeric",
+                                hour: "2-digit",
+                                minute: "2-digit",
+                              },
+                            )}
+                          </span>
+                        </div>
+                      ) : (
+                        <div className="flex items-center gap-1.5 text-muted-foreground">
+                          <span>•</span>
+                          <span>
+                            Ainda não visualizada. Compartilhe o link — você é
+                            avisado quando o cliente abrir ou aceitar.
+                          </span>
+                        </div>
+                      )}
+                    </div>
+                  )}
                 </div>
               )}
             </div>

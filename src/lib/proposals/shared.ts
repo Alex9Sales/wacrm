@@ -53,6 +53,8 @@ export interface ProposalData {
   fields: ProposalFields
   totals: ProposalTotals
   createdAt: string | null
+  /** Aceite digital (público): preenchido quando o cliente aceitou a proposta. */
+  accepted?: { at: string; name: string } | null
 }
 
 export const DEFAULT_PROPOSAL_FIELDS: ProposalFields = {

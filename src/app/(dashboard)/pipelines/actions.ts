@@ -2317,6 +2317,12 @@ function proposalPublicUrl(proposalId: string): string {
 export interface DealProposalResult {
   data: ProposalData | null
   publicUrl: string | null
+  tracking: {
+    viewedAt: string | null
+    acceptedAt: string | null
+    acceptorName: string | null
+    acceptorDocument: string | null
+  } | null
   error: string | null
 }
 
@@ -2331,20 +2337,30 @@ export async function getDealProposal(dealId: string): Promise<DealProposalResul
         .where(and(eq(deals.id, dealId), eq(deals.accountId, ctx.accountId)))
         .limit(1),
     )
-    if (!deal) return { data: null, publicUrl: null, error: 'Negócio não encontrado.' }
+    if (!deal)
+      return { data: null, publicUrl: null, tracking: null, error: 'Negócio não encontrado.' }
     if (!dealReadable(ctx.role, ctx.userId, deal.assignedTo)) {
       return {
         data: null,
         publicUrl: null,
+        tracking: null,
         error: 'Este negócio está atribuído a outro atendente.',
       }
     }
-    const { id, createdAt, fields } = await loadDealProposalFields(ctx.accountId, dealId)
+    const { id, createdAt, fields, tracking } = await loadDealProposalFields(
+      ctx.accountId,
+      dealId,
+    )
     const data = await buildProposalData(ctx.accountId, dealId, fields, id, createdAt)
-    return { data, publicUrl: id ? proposalPublicUrl(id) : null, error: null }
+    return {
+      data,
+      publicUrl: id ? proposalPublicUrl(id) : null,
+      tracking: id ? tracking : null,
+      error: null,
+    }
   } catch (err) {
     console.error('[getDealProposal]', err)
-    return { data: null, publicUrl: null, error: 'Falha ao carregar a proposta.' }
+    return { data: null, publicUrl: null, tracking: null, error: 'Falha ao carregar a proposta.' }
   }
 }
 

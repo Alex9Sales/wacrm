@@ -15,6 +15,7 @@ import {
   type ProposalData,
 } from '@/lib/proposals/shared'
 import { PrintBar } from './print-bar'
+import { ProposalActions } from './accept-box'
 
 export const metadata: Metadata = {
   title: 'Proposta comercial',
@@ -49,12 +50,12 @@ export default async function PublicProposalPage({
   return (
     <main className="min-h-screen bg-slate-100 py-8 px-4 print:bg-white print:py-0 print:px-0">
       <PrintBar shareUrl={shareUrl} />
-      <ProposalDocument data={data} />
+      <ProposalDocument data={data} id={id} />
     </main>
   )
 }
 
-function ProposalDocument({ data }: { data: ProposalData }) {
+function ProposalDocument({ data, id }: { data: ProposalData; id: string }) {
   const money = (n: number) => formatProposalMoney(n, data.currency)
   const { seller, client, items, fields, totals } = data
   const createdDate = data.createdAt
@@ -207,6 +208,9 @@ function ProposalDocument({ data }: { data: ProposalData }) {
             <p className="mt-1 text-sm text-slate-600">{seller.paymentMethods}</p>
           </section>
         ) : null}
+
+        {/* Aceite digital + rastreio de visualização (beacon no componente). */}
+        <ProposalActions id={id} accepted={data.accepted ?? null} />
       </div>
 
       <footer className="border-t border-slate-200 px-10 py-5 text-center text-xs text-slate-400 print:px-8">
