@@ -41,6 +41,15 @@ export interface ProposalFields {
   terms: string | null
 }
 
+/** Override de marca por proposta (Seção Propostas). Campos vazios caem no
+ *  perfil da conta. */
+export interface ProposalSellerOverride {
+  name?: string | null
+  logo?: string | null
+  tagline?: string | null
+  paymentMethods?: string | null
+}
+
 export interface ProposalData {
   /** id da linha deal_proposals = token do link público (null se ainda não salvo) */
   id: string | null

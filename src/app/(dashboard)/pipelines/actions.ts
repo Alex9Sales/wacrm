@@ -2347,11 +2347,16 @@ export async function getDealProposal(dealId: string): Promise<DealProposalResul
         error: 'Este negócio está atribuído a outro atendente.',
       }
     }
-    const { id, createdAt, fields, tracking } = await loadDealProposalFields(
+    const { id, createdAt, fields, tracking, sellerOverride } =
+      await loadDealProposalFields(ctx.accountId, dealId)
+    const data = await buildProposalData(
       ctx.accountId,
       dealId,
+      fields,
+      id,
+      createdAt,
+      sellerOverride,
     )
-    const data = await buildProposalData(ctx.accountId, dealId, fields, id, createdAt)
     return {
       data,
       publicUrl: id ? proposalPublicUrl(id) : null,

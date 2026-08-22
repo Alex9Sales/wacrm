@@ -1226,6 +1226,8 @@ export const dealProposals = pgTable("deal_proposals", {
 	validUntil: date("valid_until"),
 	terms: text(),
 	createdBy: uuid("created_by"),
+	// Marca sobrescrita por proposta (migração 0119): null = usa o perfil da conta.
+	sellerOverride: jsonb("seller_override"),
 	// Aceite digital + rastreio (migração 0117).
 	viewedAt: timestamp("viewed_at", { withTimezone: true, mode: 'string' }),
 	acceptedAt: timestamp("accepted_at", { withTimezone: true, mode: 'string' }),

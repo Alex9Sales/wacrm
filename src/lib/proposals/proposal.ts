@@ -20,6 +20,7 @@ import {
   type ProposalClient,
   type ProposalFields,
   type ProposalData,
+  type ProposalSellerOverride,
   type DiscountType,
 } from '@/lib/proposals/shared'
 
@@ -45,6 +46,7 @@ export async function buildProposalData(
   fields: ProposalFields,
   proposalId: string | null,
   createdAt: string | null,
+  sellerOverride?: ProposalSellerOverride | null,
 ): Promise<ProposalData | null> {
   const deal = firstOrNull(
     await db
@@ -122,6 +124,15 @@ export async function buildProposalData(
     tagline: profile.description?.trim() || null,
     paymentMethods: profile.payment_methods?.trim() || null,
   }
+  // Override por proposta (Seção Propostas): campo preenchido substitui o perfil.
+  if (sellerOverride) {
+    const o = sellerOverride
+    if (o.name && o.name.trim()) seller.name = o.name.trim()
+    if (o.logo && o.logo.trim()) seller.logo = o.logo.trim()
+    if (o.tagline && o.tagline.trim()) seller.tagline = o.tagline.trim()
+    if (o.paymentMethods && o.paymentMethods.trim())
+      seller.paymentMethods = o.paymentMethods.trim()
+  }
 
   // Cliente: prioriza a empresa (razão social/CNPJ), completa com o contato.
   const client: ProposalClient = {
@@ -162,6 +173,7 @@ export async function loadDealProposalFields(
   createdAt: string | null
   fields: ProposalFields
   tracking: ProposalTracking
+  sellerOverride: ProposalSellerOverride | null
 }> {
   const row = firstOrNull(
     await db
@@ -172,6 +184,7 @@ export async function loadDealProposalFields(
         validUntil: dealProposals.validUntil,
         terms: dealProposals.terms,
         createdAt: dealProposals.createdAt,
+        sellerOverride: dealProposals.sellerOverride,
         viewedAt: dealProposals.viewedAt,
         acceptedAt: dealProposals.acceptedAt,
         acceptorName: dealProposals.acceptorName,
@@ -195,6 +208,7 @@ export async function loadDealProposalFields(
       createdAt: null,
       fields: { ...DEFAULT_PROPOSAL_FIELDS },
       tracking: emptyTracking,
+      sellerOverride: null,
     }
   }
   return {
@@ -212,6 +226,7 @@ export async function loadDealProposalFields(
       acceptorName: row.acceptorName ?? null,
       acceptorDocument: row.acceptorDocument ?? null,
     },
+    sellerOverride: (row.sellerOverride as ProposalSellerOverride | null) ?? null,
   }
 }
 
@@ -239,6 +254,7 @@ export async function getPublicProposalData(
         validUntil: dealProposals.validUntil,
         terms: dealProposals.terms,
         createdAt: dealProposals.createdAt,
+        sellerOverride: dealProposals.sellerOverride,
         acceptedAt: dealProposals.acceptedAt,
         acceptorName: dealProposals.acceptorName,
       })
@@ -259,6 +275,7 @@ export async function getPublicProposalData(
     fields,
     row.id,
     row.createdAt,
+    (row.sellerOverride as ProposalSellerOverride | null) ?? null,
   )
   if (!data) return null
   data.accepted = row.acceptedAt
