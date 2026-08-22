@@ -427,7 +427,15 @@ export function ConversationList({
         const name = c.contact?.name?.toLowerCase() ?? "";
         const phone = c.contact?.phone?.toLowerCase() ?? "";
         const lastMsg = c.last_message_text?.toLowerCase() ?? "";
-        return name.includes(q) || phone.includes(q) || lastMsg.includes(q);
+        // Código do cliente (customer_codes[]) — o servidor já casa por código;
+        // sem isto o filtro local escondia a conversa achada pelo código.
+        const codes = (c.contact?.customer_codes ?? []).join(" ").toLowerCase();
+        return (
+          name.includes(q) ||
+          phone.includes(q) ||
+          lastMsg.includes(q) ||
+          codes.includes(q)
+        );
       });
     }
 

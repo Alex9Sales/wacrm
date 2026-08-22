@@ -4,9 +4,11 @@
 // os leads (negócios abertos) da etapa, reusando o motor de Disparos
 // (rate-limit + opt-out). Cada envio vira nota no histórico do negócio.
 
-import { useEffect, useState } from 'react'
+import { useCallback, useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
 import { Loader2, Megaphone } from 'lucide-react'
+
+import { SUPPORTED_TOKENS } from '@/lib/whatsapp/message-vars'
 
 import {
   Dialog,
@@ -38,6 +40,25 @@ export function StageBroadcastDialog({
   const [channelId, setChannelId] = useState('')
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
+  const textRef = useRef<HTMLTextAreaElement>(null)
+
+  /** Insere {{token}} na posição do cursor (cada lead recebe o valor dele). */
+  const insertToken = useCallback((token: string) => {
+    const snippet = `{{${token}}}`
+    const el = textRef.current
+    if (!el) {
+      setText((m) => m + snippet)
+      return
+    }
+    const start = el.selectionStart ?? el.value.length
+    const end = el.selectionEnd ?? el.value.length
+    setText((m) => m.slice(0, start) + snippet + m.slice(end))
+    requestAnimationFrame(() => {
+      el.focus()
+      const pos = start + snippet.length
+      el.setSelectionRange(pos, pos)
+    })
+  }, [])
 
   useEffect(() => {
     if (!open) return
@@ -122,13 +143,34 @@ export function StageBroadcastDialog({
                 </select>
               </div>
             )}
-            <textarea
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="Mensagem do disparo… (use com moderação)"
-              rows={4}
-              className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
-            />
+            <div className="space-y-1.5">
+              <div className="flex flex-wrap items-center gap-1.5">
+                <span className="text-[11px] text-muted-foreground">Variáveis:</span>
+                {SUPPORTED_TOKENS.map((tok) => (
+                  <button
+                    key={tok}
+                    type="button"
+                    onClick={() => insertToken(tok)}
+                    className="rounded-full border border-border px-2 py-0.5 text-[11px] text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+                    title={`Inserir {{${tok}}}`}
+                  >
+                    {`{{${tok}}}`}
+                  </button>
+                ))}
+              </div>
+              <textarea
+                ref={textRef}
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="Ex.: Olá {{primeiro_nome|cliente}}, tudo bem? Passando pra saber…"
+                rows={4}
+                className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary"
+              />
+              <p className="text-[11px] text-muted-foreground">
+                Cada lead recebe o valor dele (nome, empresa…). Use{' '}
+                <code>{'{{primeiro_nome|cliente}}'}</code> pra ter um padrão quando faltar.
+              </p>
+            </div>
           </div>
         )}
 
