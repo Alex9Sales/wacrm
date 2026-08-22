@@ -24,6 +24,8 @@ export interface ProposalSeller {
   logo: string | null
   tagline: string | null
   paymentMethods: string | null
+  document: string | null
+  website: string | null
 }
 
 export interface ProposalClient {

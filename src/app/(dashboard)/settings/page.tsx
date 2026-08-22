@@ -16,6 +16,7 @@ import { ServicePanel } from '@/components/settings/service-panel';
 import { SectorsPanel } from '@/components/settings/sectors-panel';
 import { QuickRepliesPanel } from '@/components/settings/quick-replies-panel';
 import { NotificationsPanel } from '@/components/settings/notifications-panel';
+import { CompanyForm } from '@/components/settings/company-form';
 import { TemplateManager } from '@/components/settings/template-manager';
 import { FieldsAndTagsPanel } from '@/components/settings/fields-and-tags-panel';
 import { DealsSettings } from '@/components/settings/deals-settings';
@@ -64,6 +65,7 @@ export default function SettingsPage() {
     security: <SecurityPanel />,
     appearance: <AppearancePanel />,
     notificacoes: <NotificationsPanel />,
+    empresa: <CompanyForm />,
     channels: <ChannelsTab />,
     'lead-ads': <LeadAdsTab />,
     setores: <SectorsPanel />,

@@ -28,6 +28,7 @@ import {
   sectorMembers,
   conversations,
   quickReplies,
+  aiCompanyProfile,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { isUniqueViolation } from '@/lib/contacts/dedupe'
@@ -40,6 +41,7 @@ import {
   updateAccountSettings,
 } from '@/lib/settings/account-settings'
 import { previewDigest, sendDigestNow } from '@/lib/reports/owner-digest'
+import { getCompanyProfile } from '@/lib/ai/company-profile'
 import type { Tag, MessageTemplate, WhatsAppConfig } from '@/types'
 
 // ------------------------------------------------------------
@@ -1087,4 +1089,81 @@ export async function setOwnerDigest(input: {
 export async function sendOwnerDigestTest(): Promise<{ ok: boolean; error?: string }> {
   const ctx = await requireRole('admin')
   return sendDigestNow(ctx.accountId)
+}
+
+// ============================================================
+// Dados da empresa (emissor das propostas): logo + razão social + nome fantasia
+// + CNPJ/CPF + site + descrição + formas de pagamento. Logo em organization.logo;
+// o resto em ai_company_profile (compartilhado com o contexto da IA).
+// ============================================================
+
+export interface CompanyDataInput {
+  logo: string | null
+  legalName: string | null
+  tradeName: string | null
+  document: string | null
+  website: string | null
+  description: string | null
+  paymentMethods: string | null
+}
+
+export async function getCompanyData(): Promise<CompanyDataInput> {
+  const ctx = await getCurrentAccount()
+  const [profile, orgRow] = await Promise.all([
+    getCompanyProfile(ctx.accountId),
+    db
+      .select({ logo: organization.logo })
+      .from(organization)
+      .where(eq(organization.id, ctx.accountId))
+      .limit(1),
+  ])
+  return {
+    logo: orgRow[0]?.logo ?? null,
+    legalName: profile.legal_name,
+    // Mostra o nome fantasia; se vazio, cai no business_name que a IA já usa.
+    tradeName: profile.trade_name || profile.business_name,
+    document: profile.document,
+    website: profile.website,
+    description: profile.description,
+    paymentMethods: profile.payment_methods,
+  }
+}
+
+export async function saveCompanyData(
+  input: CompanyDataInput,
+): Promise<{ error: string | null }> {
+  const ctx = await requireRole('admin')
+  const clean = (v: string | null | undefined) => (v ?? '').trim() || null
+  const now = new Date().toISOString()
+  await db
+    .insert(aiCompanyProfile)
+    .values({
+      accountId: ctx.accountId,
+      legalName: clean(input.legalName),
+      tradeName: clean(input.tradeName),
+      document: clean(input.document),
+      website: clean(input.website),
+      description: clean(input.description),
+      paymentMethods: clean(input.paymentMethods),
+      updatedBy: ctx.userId,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: aiCompanyProfile.accountId,
+      set: {
+        legalName: clean(input.legalName),
+        tradeName: clean(input.tradeName),
+        document: clean(input.document),
+        website: clean(input.website),
+        description: clean(input.description),
+        paymentMethods: clean(input.paymentMethods),
+        updatedBy: ctx.userId,
+        updatedAt: now,
+      },
+    })
+  await db
+    .update(organization)
+    .set({ logo: clean(input.logo) })
+    .where(eq(organization.id, ctx.accountId))
+  return { error: null }
 }

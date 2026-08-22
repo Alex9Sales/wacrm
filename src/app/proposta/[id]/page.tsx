@@ -84,6 +84,12 @@ function ProposalDocument({ data, id }: { data: ProposalData; id: string }) {
           {seller.tagline ? (
             <p className="mt-1 max-w-sm text-sm text-slate-500">{seller.tagline}</p>
           ) : null}
+          {(seller.document || seller.website) && (
+            <div className="mt-1.5 space-y-0.5 text-xs text-slate-500">
+              {seller.document ? <div>CNPJ: {seller.document}</div> : null}
+              {seller.website ? <div>{seller.website}</div> : null}
+            </div>
+          )}
         </div>
         <div className="shrink-0 text-right">
           <div className="text-[11px] font-semibold uppercase tracking-wider text-slate-400">

@@ -19,6 +19,11 @@ export interface CompanyProfile {
   delivery_info: string | null
   tone: string | null
   notes: string | null
+  // Identidade p/ propostas (migração 0120).
+  legal_name: string | null
+  trade_name: string | null
+  document: string | null
+  website: string | null
   updated_at: string | null
 }
 
@@ -31,6 +36,10 @@ const EMPTY: CompanyProfile = {
   delivery_info: null,
   tone: null,
   notes: null,
+  legal_name: null,
+  trade_name: null,
+  document: null,
+  website: null,
   updated_at: null,
 }
 
@@ -51,6 +60,10 @@ export async function getCompanyProfile(
           delivery_info: aiCompanyProfile.deliveryInfo,
           tone: aiCompanyProfile.tone,
           notes: aiCompanyProfile.notes,
+          legal_name: aiCompanyProfile.legalName,
+          trade_name: aiCompanyProfile.tradeName,
+          document: aiCompanyProfile.document,
+          website: aiCompanyProfile.website,
           updated_at: aiCompanyProfile.updatedAt,
         })
         .from(aiCompanyProfile)

@@ -17,6 +17,7 @@ import {
   Webhook,
   Zap,
   Bell,
+  Store,
   type LucideIcon,
 } from 'lucide-react';
 
@@ -34,6 +35,7 @@ export const SETTINGS_SECTIONS = [
   'security',
   'appearance',
   'notificacoes',
+  'empresa',
   'channels',
   'lead-ads',
   'setores',
@@ -67,6 +69,7 @@ export const SECTION_META: Record<SettingsSection, SectionMeta> = {
   security: { id: 'security', label: 'Login e segurança', icon: Shield, group: 'account' },
   appearance: { id: 'appearance', label: 'Aparência', icon: Palette, group: 'account' },
   notificacoes: { id: 'notificacoes', label: 'Notificações', icon: Bell, group: 'account' },
+  empresa: { id: 'empresa', label: 'Dados da empresa', icon: Store, group: 'workspace' },
   channels: { id: 'channels', label: 'Canais', icon: MessageSquare, group: 'workspace' },
   'lead-ads': { id: 'lead-ads', label: 'Anúncios de Lead', icon: Megaphone, group: 'workspace' },
   setores: { id: 'setores', label: 'Setores', icon: Building2, group: 'workspace' },

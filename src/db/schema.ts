@@ -2003,6 +2003,11 @@ export const aiCompanyProfile = pgTable("ai_company_profile", {
 	deliveryInfo: text("delivery_info"),
 	tone: text(),
 	notes: text(),
+	// Identidade da empresa p/ propostas (migração 0120).
+	legalName: text("legal_name"),
+	tradeName: text("trade_name"),
+	document: text(),
+	website: text(),
 	updatedBy: uuid("updated_by"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),

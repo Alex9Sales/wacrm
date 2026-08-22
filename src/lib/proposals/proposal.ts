@@ -119,10 +119,19 @@ export async function buildProposalData(
   })
 
   const seller: ProposalSeller = {
-    name: (profile.business_name || org?.name || 'Proposta comercial').trim(),
+    // Nome fantasia > razão social > nome comercial (AI) > nome da conta.
+    name: (
+      profile.trade_name ||
+      profile.business_name ||
+      profile.legal_name ||
+      org?.name ||
+      'Proposta comercial'
+    ).trim(),
     logo: org?.logo ?? null,
     tagline: profile.description?.trim() || null,
     paymentMethods: profile.payment_methods?.trim() || null,
+    document: profile.document?.trim() || null,
+    website: profile.website?.trim() || null,
   }
   // Override por proposta (Seção Propostas): campo preenchido substitui o perfil.
   if (sellerOverride) {
