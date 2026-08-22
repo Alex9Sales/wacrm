@@ -340,6 +340,7 @@ export async function setDealNextFollowUp(
  */
 export async function openDealConversation(
   dealId: string,
+  channelId?: string,
 ): Promise<{ conversationId: string | null; error: string | null }> {
   try {
     const ctx = await getCurrentAccount()
@@ -385,6 +386,7 @@ export async function openDealConversation(
         ctx.accountId,
         contact.phone,
         contact.name,
+        channelId || null,
       )
     } catch {
       return { conversationId: null, error: 'Não foi possível abrir a conversa' }

@@ -3,6 +3,7 @@
 import type { Deal, PipelineStage, Profile } from "@/types";
 import type { DealTaskCount } from "@/app/(dashboard)/tarefas/actions";
 import { useEffect, useState, type SyntheticEvent } from "react";
+import { createPortal } from "react-dom";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
 import {
@@ -15,7 +16,8 @@ import { ContactAvatar } from "@/components/inbox/contact-avatar";
 import { deleteDeal, transferDeal, duplicateDeal, setDealPaused, setDealNextFollowUp, openDealConversation, openDealWhatsApp } from "@/app/(dashboard)/pipelines/actions";
 import { dealChannelLabel, isInstagramProvider } from "@/lib/pipelines/channel-label";
 import { listProfiles } from "@/app/(dashboard)/inbox/actions";
-import { CallButton } from "@/components/calls/call-button";
+import { CallButton, loadConnectedChannels } from "@/components/calls/call-button";
+import type { DialerChannel } from "@/app/(dashboard)/calls/actions";
 
 interface DealCardProps {
   deal: Deal;
@@ -114,6 +116,11 @@ export function DealCard({
   const [members, setMembers] = useState<Profile[] | null>(null);
   const [showTransfer, setShowTransfer] = useState(false);
   const [busy, setBusy] = useState(false);
+  const [convPicker, setConvPicker] = useState<{
+    channels: DialerChannel[];
+    x: number;
+    y: number;
+  } | null>(null);
 
   useEffect(() => {
     if (!menuPos) return;
@@ -187,18 +194,31 @@ export function DealCard({
   // Abre a conversa vinculada; se não tiver, resolve/cria pelo telefone do
   // contato (e vincula) — assim o botão aparece mesmo sem conversa ainda.
   const canOpenChat = !!deal.conversation_id || !!deal.contact?.phone;
-  const openConversation = async (e: SyntheticEvent) => {
-    e.stopPropagation();
-    if (deal.conversation_id) {
-      window.location.href = `/inbox?c=${deal.conversation_id}`;
-      return;
-    }
-    const res = await openDealConversation(deal.id);
+  const goConversation = async (channelId?: string) => {
+    const res = await openDealConversation(deal.id, channelId);
     if (res.conversationId) {
       window.location.href = `/inbox?c=${res.conversationId}`;
     } else {
       toast.error(res.error || "Não foi possível abrir a conversa");
     }
+  };
+  const openConversation = async (e: SyntheticEvent) => {
+    e.stopPropagation();
+    // Já tem conversa vinculada → abre direto.
+    if (deal.conversation_id) {
+      window.location.href = `/inbox?c=${deal.conversation_id}`;
+      return;
+    }
+    // Captura a posição ANTES do await (React zera currentTarget depois).
+    const rect = (e.currentTarget as HTMLElement).getBoundingClientRect();
+    const channels = await loadConnectedChannels();
+    // 0 ou 1 canal → abre direto (o servidor pega o padrão). Vários → escolher.
+    if (channels.length <= 1) {
+      void goConversation(channels[0]?.id);
+      return;
+    }
+    const x = Math.max(8, Math.min(rect.left, window.innerWidth - 216));
+    setConvPicker({ channels, x, y: rect.bottom + 4 });
   };
 
   // Atalho "WhatsApp": aparece quando a origem NÃO é WhatsApp e o contato tem
@@ -598,6 +618,42 @@ export function DealCard({
         </div>
       )}
     </button>
+
+    {convPicker &&
+      createPortal(
+        <div
+          className="fixed inset-0 z-[110]"
+          onClick={(e) => {
+            e.stopPropagation();
+            setConvPicker(null);
+          }}
+        >
+          <div
+            className="absolute w-52 overflow-hidden rounded-lg border border-border bg-popover shadow-xl"
+            style={{ left: convPicker.x, top: convPicker.y }}
+            onClick={(e) => e.stopPropagation()}
+          >
+            <p className="border-b border-border px-3 py-2 text-[11px] font-medium text-muted-foreground">
+              Abrir conversa em
+            </p>
+            {convPicker.channels.map((c) => (
+              <button
+                key={c.id}
+                type="button"
+                onClick={() => {
+                  setConvPicker(null);
+                  void goConversation(c.id);
+                }}
+                className="flex w-full items-center gap-2 px-3 py-2 text-left text-sm text-popover-foreground transition hover:bg-muted"
+              >
+                <MessageCircle className="h-3.5 w-3.5 text-emerald-600" />
+                <span className="truncate">{c.name}</span>
+              </button>
+            ))}
+          </div>
+        </div>,
+        document.body,
+      )}
 
     {menuPos && (
       <div

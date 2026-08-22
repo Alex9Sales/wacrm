@@ -26,7 +26,7 @@ import {
 // Um fetch de canais compartilhado por TODOS os botões (cacheado por 30s). Evita
 // N chamadas quando há muitos botões e o agente clica em vários.
 let channelsCache: { at: number; promise: Promise<DialerChannel[]> } | null = null
-function loadConnectedChannels(): Promise<DialerChannel[]> {
+export function loadConnectedChannels(): Promise<DialerChannel[]> {
   const fresh =
     channelsCache && Date.now() - channelsCache.at < 30_000
       ? channelsCache.promise
