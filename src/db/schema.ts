@@ -885,6 +885,8 @@ export const pipelineStages = pgTable("pipeline_stages", {
 	// Orientações por etapa (estilo RD) — migração 0062.
 	objective: text(),
 	guidance: text(),
+	// Probabilidade de fechamento (0–100) p/ a previsão de receita — migração 0116.
+	probability: integer().default(50).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_pipeline_stages_pipeline").using("btree", table.pipelineId.asc().nullsLast().op("uuid_ops")),

@@ -218,6 +218,7 @@ export function PipelineSettings({
       position: i,
       objective: s.objective ?? null,
       guidance: s.guidance ?? null,
+      probability: s.probability ?? 50,
     }));
 
     const { error } = await savePipelineSettings(
@@ -370,6 +371,11 @@ export function PipelineSettings({
                           onGuidanceChange={(v) => {
                             const updated = [...localStages];
                             updated[index] = { ...updated[index], guidance: v };
+                            setLocalStages(updated);
+                          }}
+                          onProbabilityChange={(v) => {
+                            const updated = [...localStages];
+                            updated[index] = { ...updated[index], probability: v };
                             setLocalStages(updated);
                           }}
                           onRemove={() => handleRemoveStage(stage.id)}
@@ -570,6 +576,7 @@ function SortableStageRow({
   onColorChange,
   onObjectiveChange,
   onGuidanceChange,
+  onProbabilityChange,
   onRemove,
   colors,
   templates,
@@ -582,6 +589,7 @@ function SortableStageRow({
   onColorChange: (v: string) => void;
   onObjectiveChange: (v: string) => void;
   onGuidanceChange: (v: string) => void;
+  onProbabilityChange: (v: number) => void;
   onRemove: () => void;
   colors: string[];
   templates: StageTaskTemplate[];
@@ -697,6 +705,29 @@ function SortableStageRow({
               rows={2}
               className="w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground outline-none focus:border-primary"
             />
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            <label className="text-[11px] font-medium text-muted-foreground">
+              Probabilidade de fechamento
+            </label>
+            <div className="flex items-center gap-1">
+              <input
+                type="number"
+                min={0}
+                max={100}
+                value={stage.probability ?? 50}
+                onChange={(e) =>
+                  onProbabilityChange(
+                    Math.max(0, Math.min(100, Number(e.target.value) || 0)),
+                  )
+                }
+                className="h-7 w-16 rounded-md border border-border bg-background px-2 text-center text-xs text-foreground outline-none focus:border-primary"
+              />
+              <span className="text-xs text-muted-foreground">%</span>
+            </div>
+            <span className="text-[11px] text-muted-foreground">
+              usada na previsão de receita do funil
+            </span>
           </div>
         </div>
       )}

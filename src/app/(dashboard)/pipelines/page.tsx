@@ -24,6 +24,7 @@ import { PipelineList } from "@/components/pipelines/pipeline-list";
 import { PipelineSettings } from "@/components/pipelines/pipeline-settings";
 import { DealForm } from "@/components/pipelines/deal-form";
 import { PipelineAnalytics } from "@/components/pipelines/pipeline-analytics";
+import { PipelineForecastCard } from "@/components/pipelines/pipeline-forecast-card";
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -249,6 +250,13 @@ export default function PipelinesPage() {
   );
   // Dicas da IA por negócio (sugestões pendentes + próximo passo) pro card.
   const [aiHints, setAiHints] = useState<Record<string, DealAiHint>>({});
+  // Previsão de receita: re-busca quando os negócios/etapas mudam (debounce
+  // pra coalescer arrastar/editar) ou quando o funil é atualizado.
+  const [forecastNonce, setForecastNonce] = useState(0);
+  useEffect(() => {
+    const t = setTimeout(() => setForecastNonce((n) => n + 1), 400);
+    return () => clearTimeout(t);
+  }, [deals, stages]);
   // Negócios que TÊM produtos — p/ a métrica "Sem produtos" das estatísticas.
   const [dealsWithProducts, setDealsWithProducts] = useState<Set<string>>(
     new Set(),
@@ -902,6 +910,10 @@ export default function PipelinesPage() {
             </span>
           </div>
 
+          <PipelineForecastCard
+            pipelineId={selectedPipelineId}
+            refreshKey={forecastNonce}
+          />
           <PipelineAnalytics stages={stages} deals={deals} />
           {viewMode === "list" ? (
             <PipelineList

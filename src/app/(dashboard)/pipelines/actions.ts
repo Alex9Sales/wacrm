@@ -128,6 +128,7 @@ export async function listStages(pipelineId: string): Promise<PipelineStage[]> {
       color: pipelineStages.color,
       objective: pipelineStages.objective,
       guidance: pipelineStages.guidance,
+      probability: pipelineStages.probability,
       created_at: pipelineStages.createdAt,
     })
     .from(pipelineStages)
@@ -655,6 +656,13 @@ export async function transferDeal(
  * Account-scoped: the rename filters on accountId and stages are only upserted
  * after confirming the pipeline belongs to the caller.
  */
+/** Probabilidade de etapa saneada para 0–100 (default 50 quando ausente). */
+function clampProb(p?: number | null): number {
+  const n = Math.trunc(Number(p))
+  if (!Number.isFinite(n)) return 50
+  return Math.min(100, Math.max(0, n))
+}
+
 export async function savePipelineSettings(
   pipelineId: string,
   name: string,
@@ -665,6 +673,7 @@ export async function savePipelineSettings(
     position: number
     objective?: string | null
     guidance?: string | null
+    probability?: number | null
   }[],
   stepperStyle?: string,
 ): Promise<{ error: string | null }> {
@@ -703,6 +712,7 @@ export async function savePipelineSettings(
             position: s.position,
             objective: s.objective ?? null,
             guidance: s.guidance ?? null,
+            probability: clampProb(s.probability),
           })),
         )
         .onConflictDoUpdate({
@@ -713,12 +723,96 @@ export async function savePipelineSettings(
             position: sql`excluded.position`,
             objective: sql`excluded.objective`,
             guidance: sql`excluded.guidance`,
+            probability: sql`excluded.probability`,
           },
         })
     }
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Failed to save pipeline' }
+  }
+}
+
+/** Previsão de receita do funil: meta do mês (sales_goals), ganho no mês, e o
+ *  PONDERADO a fechar esse mês (negócios abertos × probabilidade da etapa, com
+ *  data prevista dentro do mês). `openNoDateCount` = abertos sem data prevista
+ *  (ficam de fora do ponderado — o card sugere preencher). Account-scoped. */
+export interface PipelineForecast {
+  goal: number
+  wonThisMonth: number
+  weightedThisMonth: number
+  /** Funil ponderado TOTAL: soma (valor × prob) de todos os abertos, sem filtro
+   *  de data — o número que sempre aparece quando há negócios abertos. */
+  weightedOpenTotal: number
+  openNoDateCount: number
+  projection: number
+  monthLabel: string
+}
+
+export async function getPipelineForecast(
+  pipelineId: string,
+): Promise<PipelineForecast> {
+  const ctx = await getCurrentAccount()
+  const s = await getAccountSettings(ctx.accountId)
+  const tz = s.businessTimezone || 'America/Sao_Paulo'
+
+  const [won, weighted, weightedTotal, noDate, goalRow] = await Promise.all([
+    // Ganho no MÊS corrente (via deal_events), só deste funil.
+    db.execute(sql`
+      SELECT COALESCE(SUM(value), 0)::float8 AS total FROM (
+        SELECT DISTINCT ev.deal_id, d.value
+        FROM deal_events ev JOIN deals d ON d.id = ev.deal_id
+        WHERE ev.account_id = ${ctx.accountId} AND d.pipeline_id = ${pipelineId}
+          AND ev.type = 'status_changed' AND (ev.data->>'to') = 'won'
+          AND ev.created_at >= date_trunc('month', (now() AT TIME ZONE ${tz})) AT TIME ZONE ${tz}
+      ) x
+    `),
+    // Ponderado a fechar esse mês: abertos com data prevista no mês × prob da etapa.
+    db.execute(sql`
+      SELECT COALESCE(SUM(d.value * st.probability / 100.0), 0)::float8 AS total
+      FROM deals d JOIN pipeline_stages st ON st.id = d.stage_id
+      WHERE d.account_id = ${ctx.accountId} AND d.pipeline_id = ${pipelineId}
+        AND d.status = 'open'
+        AND d.expected_close_date >= (date_trunc('month', (now() AT TIME ZONE ${tz})))::date
+        AND d.expected_close_date <  (date_trunc('month', (now() AT TIME ZONE ${tz})) + interval '1 month')::date
+    `),
+    // Funil ponderado TOTAL: todos os abertos × prob da etapa (sem filtro de data).
+    db.execute(sql`
+      SELECT COALESCE(SUM(d.value * st.probability / 100.0), 0)::float8 AS total
+      FROM deals d JOIN pipeline_stages st ON st.id = d.stage_id
+      WHERE d.account_id = ${ctx.accountId} AND d.pipeline_id = ${pipelineId}
+        AND d.status = 'open'
+    `),
+    // Abertos sem data prevista (ficam de fora do ponderado).
+    db.execute(sql`
+      SELECT count(*)::int AS n FROM deals
+      WHERE account_id = ${ctx.accountId} AND pipeline_id = ${pipelineId}
+        AND status = 'open' AND expected_close_date IS NULL
+    `),
+    // Meta do time no mês (soma das metas por vendedor).
+    db.execute(sql`
+      SELECT COALESCE(SUM(target_value), 0)::float8 AS total
+      FROM sales_goals WHERE account_id = ${ctx.accountId}
+    `),
+  ])
+
+  const total = (r: { rows: unknown[] }) =>
+    Number((r.rows[0] as { total?: number } | undefined)?.total ?? 0)
+  const wonThisMonth = total(won)
+  const weightedThisMonth = total(weighted)
+  return {
+    goal: total(goalRow),
+    wonThisMonth,
+    weightedThisMonth,
+    weightedOpenTotal: total(weightedTotal),
+    openNoDateCount: Number(
+      (noDate.rows[0] as { n?: number } | undefined)?.n ?? 0,
+    ),
+    projection: wonThisMonth + weightedThisMonth,
+    monthLabel: new Intl.DateTimeFormat('pt-BR', {
+      timeZone: tz,
+      month: 'long',
+    }).format(new Date()),
   }
 }
 

@@ -412,6 +412,8 @@ export interface PipelineStage {
   /** Orientações por etapa (estilo RD): objetivo + descrição/orientação. */
   objective?: string | null;
   guidance?: string | null;
+  /** Probabilidade de fechamento (0–100) p/ a previsão de receita. */
+  probability?: number;
   created_at: string;
 }
 
