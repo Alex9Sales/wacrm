@@ -62,6 +62,8 @@ import { ContactDetailView } from '@/components/contacts/contact-detail-view';
 import { ImportModal } from '@/components/contacts/import-modal';
 import { CustomFieldsManager } from '@/components/contacts/custom-fields-manager';
 import { useCan } from '@/hooks/use-can';
+import { useCrmCallingEnabled } from '@/hooks/use-crm-calling';
+import { CallButton } from '@/components/calls/call-button';
 import { GatedButton } from '@/components/ui/gated-button';
 import { Checkbox } from '@/components/ui/checkbox';
 
@@ -74,6 +76,8 @@ interface ContactWithTags extends Contact {
 export default function ContactsPage() {
   const canEdit = useCan('send-messages');
   const canEditSettings = useCan('edit-settings');
+  // Resolvido 1x aqui e passado pra cada linha (evita 1 fetch por contato).
+  const callingEnabled = useCrmCallingEnabled();
 
   const [contacts, setContacts] = useState<ContactWithTags[]>([]);
   const [loading, setLoading] = useState(true);
@@ -680,6 +684,16 @@ export default function ContactsPage() {
                     })}
                   </TableCell>
                   <TableCell>
+                    <div className="flex items-center justify-end gap-0.5">
+                    {contact.phone && !contact.is_group && (
+                      <CallButton
+                        phone={contact.phone}
+                        name={contact.name}
+                        enabled={callingEnabled}
+                        title="Ligar para o contato (voz WhatsApp)"
+                        className="size-8"
+                      />
+                    )}
                     <DropdownMenu>
                       <DropdownMenuTrigger
                         render={
@@ -720,6 +734,7 @@ export default function ContactsPage() {
                         </DropdownMenuItem>
                       </DropdownMenuContent>
                     </DropdownMenu>
+                    </div>
                   </TableCell>
                 </TableRow>
               ))

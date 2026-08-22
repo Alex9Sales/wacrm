@@ -140,6 +140,10 @@ function CallButtonView({
         void place(channelId)
         return
       }
+      // Captura a posição AGORA (síncrono): depois do await o React zera
+      // e.currentTarget, e ler getBoundingClientRect() ali estoura → o seletor
+      // nunca abria em contas com vários canais (caso "não liga").
+      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
       setBusy(true)
       const channels = await loadConnectedChannels()
       if (mounted.current) setBusy(false)
@@ -151,9 +155,10 @@ function CallButtonView({
         void place(channels[0].id)
         return
       }
-      // Vários canais → escolher de qual número ligar.
-      const rect = (e.currentTarget as HTMLElement).getBoundingClientRect()
-      setPicker({ channels, x: rect.left, y: rect.bottom + 4 })
+      // Vários canais → escolher de qual número ligar. Trava o x na tela (a
+      // ficha/sidebar fica na direita e o menu de 208px vazaria).
+      const x = Math.max(8, Math.min(rect.left, window.innerWidth - 216))
+      setPicker({ channels, x, y: rect.bottom + 4 })
     },
     [busy, dialable, channelId, place],
   )
