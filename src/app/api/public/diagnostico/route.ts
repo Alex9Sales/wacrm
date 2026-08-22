@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 
-import { db, dealEvents } from '@/db'
+import { db, dealCustomValues, dealEvents } from '@/db'
 import { ingestLead, LeadPhoneError } from '@/lib/leads/ingest'
 
 // Endpoint PÚBLICO (sem auth) do formulário /diagnostico. Recebe o quiz e joga
@@ -13,6 +13,9 @@ const ACCOUNT_ID = process.env.DIAGNOSTICO_ACCOUNT_ID || '310ed185-53fc-414d-be6
 const USER_ID = process.env.DIAGNOSTICO_USER_ID || 'e9a94ff1-4d57-44a3-b538-1b62d265c3d4'
 const PIPELINE_ID = process.env.DIAGNOSTICO_PIPELINE_ID || '23a7223f-e4d6-49a6-9c05-b4e95791a216'
 const STAGE_ID = process.env.DIAGNOSTICO_STAGE_ID || 'e011004b-8324-419c-90a4-add507c4b8ef'
+// Campos personalizados do negócio (entity='deal') que o diagnóstico preenche.
+const FIELD_INDICE = process.env.DIAGNOSTICO_FIELD_INDICE || 'a8183611-637e-4bd5-ae99-ec4e5ee2eacc'
+const FIELD_SEGMENTO = process.env.DIAGNOSTICO_FIELD_SEGMENTO || '7d8f3eb2-690b-4495-b916-cd80336a4999'
 
 export const dynamic = 'force-dynamic'
 
@@ -112,6 +115,22 @@ export async function POST(req: Request) {
         })
       } catch (e) {
         console.error('[diagnostico] deal_event note failed:', e)
+      }
+      // Campos personalizados do negócio: Índice de vazamento + Segmento.
+      try {
+        const cv: {
+          accountId: string
+          dealId: string
+          customFieldId: string
+          value: string
+        }[] = []
+        if (indice != null)
+          cv.push({ accountId: ACCOUNT_ID, dealId: res.dealId, customFieldId: FIELD_INDICE, value: String(indice) })
+        if (segmento)
+          cv.push({ accountId: ACCOUNT_ID, dealId: res.dealId, customFieldId: FIELD_SEGMENTO, value: segmento })
+        if (cv.length) await db.insert(dealCustomValues).values(cv)
+      } catch (e) {
+        console.error('[diagnostico] deal_custom_values failed:', e)
       }
     }
     return NextResponse.json({ ok: true })

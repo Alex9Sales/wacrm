@@ -1,6 +1,4 @@
-// Gerado a partir do diagnostico. Documento completo servido via
-// <iframe srcDoc> na rota /diagnostico. O submit faz POST best-effort
-// em /api/public/diagnostico.
+// Gerado do diagnostico. Documento servido via <iframe srcDoc> em /diagnostico.
 export const DIAGNOSTICO_HTML = `<!doctype html>
 <html lang="pt-BR">
 <title>Diagnóstico Fluxia</title>
@@ -291,6 +289,12 @@ export const DIAGNOSTICO_HTML = `<!doctype html>
   .fix .ic svg { width: 18px; height: 18px; }
   .fix .ft { font-weight: 600; font-size: 0.96rem; }
   .fix .fd { font-size: 0.86rem; color: var(--text-mute); margin-top: 0.1rem; }
+  .confirm { margin-top: 1.1rem; display: flex; align-items: flex-start; gap: 0.6rem; font-size: 0.92rem; color: var(--text-dim); background: rgba(87,217,168,0.1); border: 1px solid rgba(87,217,168,0.28); border-radius: var(--r-sm); padding: 0.75rem 0.9rem; }
+  .confirm svg { width: 18px; height: 18px; color: var(--ok); flex: none; margin-top: 1px; }
+  .steps { margin-top: 1.6rem; }
+  .steps .st-title { font-size: 0.82rem; font-weight: 600; color: var(--violet-soft); letter-spacing: 0.02em; margin-bottom: 0.8rem; }
+  .step { display: flex; align-items: center; gap: 0.7rem; padding: 0.32rem 0; font-size: 0.95rem; color: var(--text-dim); }
+  .step .sn { width: 24px; height: 24px; flex: none; border-radius: var(--r-pill); background: rgba(124,77,255,0.16); color: var(--violet-soft); font-size: 0.8rem; font-weight: 700; display: grid; place-items: center; }
   .result-cta { margin-top: 1.8rem; display: flex; flex-wrap: wrap; gap: 0.9rem; }
   .fineprint { margin-top: 1.1rem; font-size: 0.8rem; color: var(--text-mute); }
 
@@ -500,7 +504,17 @@ export const DIAGNOSTICO_HTML = `<!doctype html>
           <span class="q-count" id="resGreet"></span>
           <h2 class="rt" id="resTitle"></h2>
           <p class="lead" id="resLead"></p>
+          <div class="confirm">
+            <svg viewBox="0 0 24 24" fill="none"><path d="M20 6 9 17l-5-5" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+            <span id="resConfirm">Recebemos seus dados. Um especialista da Fluxia vai te chamar no WhatsApp.</span>
+          </div>
           <div class="fix-list" id="fixList"></div>
+          <div class="steps">
+            <div class="st-title">O que acontece agora</div>
+            <div class="step"><span class="sn">1</span> Você testa o FluxiaCRM grátis por 7 dias, sem cartão.</div>
+            <div class="step"><span class="sn">2</span> A gente te ajuda a montar tudo, no seu ritmo.</div>
+            <div class="step"><span class="sn">3</span> Seu WhatsApp organizado, sem lead escapando.</div>
+          </div>
           <div class="result-cta">
             <a class="btn btn-primary btn-lg" id="ctaTrial" href="#" target="_top" rel="noopener">
               Testar o FluxiaCRM 7 dias grátis
@@ -786,6 +800,9 @@ export const DIAGNOSTICO_HTML = `<!doctype html>
     el("resGreet").textContent = firstName ? (tier.greet + firstName) : "Seu resultado";
     el("resTitle").textContent = tier.title;
     el("resLead").textContent = tier.lead;
+    el("resConfirm").textContent = firstName
+      ? ("Recebemos seus dados, " + firstName + ". Um especialista da Fluxia vai te chamar no seu WhatsApp.")
+      : "Recebemos seus dados. Um especialista da Fluxia vai te chamar no seu WhatsApp.";
 
     var pill = el("riskPill");
     pill.textContent = tier.risk;
