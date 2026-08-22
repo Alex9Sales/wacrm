@@ -18,6 +18,7 @@ import {
   messageTemplates,
   channels,
   customFields,
+  leadDistribution,
   organization,
   user,
   member,
@@ -32,6 +33,7 @@ import { isUniqueViolation } from '@/lib/contacts/dedupe'
 import { auth } from '@/lib/auth'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
+import { loadLeadDistribution } from '@/lib/leads/distribution'
 import {
   getAccountSettings,
   updateAccountSettings,
@@ -906,4 +908,54 @@ export async function deleteQuickReply(id: string): Promise<void> {
     .where(
       and(eq(quickReplies.id, id), eq(quickReplies.accountId, ctx.accountId)),
     )
+}
+
+// ============================================================
+// Distribuição automática de leads (rodízio). Migração 0115.
+// ============================================================
+
+/** Config atual + membros da conta (pra montar a tela). */
+export async function getLeadDistribution() {
+  const ctx = await getCurrentAccount()
+  const config = await loadLeadDistribution(ctx.accountId)
+  const members = await db
+    .select({
+      id: user.id,
+      name: user.name,
+      email: user.email,
+      role: member.role,
+    })
+    .from(member)
+    .innerJoin(user, eq(member.userId, user.id))
+    .where(eq(member.organizationId, ctx.accountId))
+    .orderBy(asc(user.name))
+  return { config, members }
+}
+
+/** Salva a config do rodízio (admin+). Upsert por conta. */
+export async function saveLeadDistribution(input: {
+  enabled: boolean
+  strategy: 'round_robin' | 'load'
+  memberIds: string[]
+}): Promise<{ error: string | null }> {
+  const ctx = await requireRole('admin')
+  const strategy = input.strategy === 'load' ? 'load' : 'round_robin'
+  const ids = Array.from(
+    new Set((input.memberIds ?? []).filter((v) => typeof v === 'string')),
+  )
+  const now = new Date().toISOString()
+  await db
+    .insert(leadDistribution)
+    .values({
+      accountId: ctx.accountId,
+      enabled: !!input.enabled,
+      strategy,
+      memberIds: ids,
+      updatedAt: now,
+    })
+    .onConflictDoUpdate({
+      target: leadDistribution.accountId,
+      set: { enabled: !!input.enabled, strategy, memberIds: ids, updatedAt: now },
+    })
+  return { error: null }
 }

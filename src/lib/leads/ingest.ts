@@ -15,8 +15,9 @@
 // 2–5 são BEST-EFFORT: falhar ali nunca perde o contato.
 // ============================================================
 
-import { db, deals, tasks } from '@/db'
+import { db, dealEvents, deals, notifications, tasks } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { pickAssignee } from '@/lib/leads/distribution'
 import { normalizeInboundPhoneBR } from '@/lib/whatsapp/phone-utils'
 import {
   findOrCreateContact,
@@ -53,6 +54,8 @@ export interface IngestLeadInput {
   origin?: string | null
   /** Fonte/detalhe livre (ex.: nome da campanha) → deals.source. */
   source?: string | null
+  /** Responsável explícito. Se vazio, usa o rodízio (distribuição automática). */
+  assignedTo?: string | null
 }
 
 export interface IngestLeadResult {
@@ -106,12 +109,17 @@ export async function ingestLead(
 
   // 2) Card/negócio no Kanban (best-effort).
   let dealId: string | null = null
+  // Responsável: explícito, senão o rodízio (distribuição automática). Null =
+  // rodízio desligado / sem membros → cai sem dono, como antes.
+  let assignee: string | null = null
   try {
     const pipelineId = input.pipelineId || (await firstPipelineOf(accountId))
     const stageId = pipelineId
       ? input.stageId || (await firstStageOf(pipelineId))
       : null
     if (pipelineId && stageId) {
+      assignee =
+        input.assignedTo ?? (await pickAssignee(accountId).catch(() => null))
       const inserted = firstOrNull(
         await db
           .insert(deals)
@@ -121,6 +129,7 @@ export async function ingestLead(
             pipelineId,
             stageId,
             contactId,
+            assignedTo: assignee,
             title: `Lead — ${displayName}`,
             value: '0',
             notes: notes || fallbackNote,
@@ -136,6 +145,32 @@ export async function ingestLead(
           await autoCreateStageTasks({ accountId, userId: auditUserId }, dealId, stageId)
         } catch (err) {
           console.error('[ingestLead] autoCreateStageTasks:', err)
+        }
+        // Distribuição: registra no histórico + notifica o responsável.
+        if (assignee) {
+          try {
+            await db.insert(dealEvents).values({
+              accountId,
+              dealId,
+              actorUserId: auditUserId,
+              type: 'note',
+              data: { text: '🎯 Lead distribuído automaticamente (rodízio).' },
+            })
+            if (assignee !== auditUserId) {
+              await db.insert(notifications).values({
+                accountId,
+                userId: assignee,
+                type: 'lead_assigned',
+                dealId,
+                contactId,
+                actorUserId: auditUserId,
+                title: 'Novo lead pra você',
+                body: `${displayName} caiu no seu funil.`,
+              })
+            }
+          } catch (err) {
+            console.error('[ingestLead] distribution notify failed:', err)
+          }
         }
       }
     }
@@ -157,6 +192,8 @@ export async function ingestLead(
           status: 'open',
           contactId,
           dealId,
+          assignedTo: assignee,
+          assigneeIds: assignee ? [assignee] : [],
         })
         .returning({ id: tasks.id }),
     )

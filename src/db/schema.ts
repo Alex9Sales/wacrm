@@ -490,6 +490,16 @@ export const salesGoals = pgTable("sales_goals", {
 	unique("sales_goals_account_id_user_id_key").on(table.accountId, table.userId),
 ]);
 
+// Distribuição automática de leads (rodízio). 1 config por conta. Migração 0115.
+export const leadDistribution = pgTable("lead_distribution", {
+	accountId: uuid("account_id").primaryKey().notNull(),
+	enabled: boolean().default(false).notNull(),
+	strategy: text().default('round_robin').notNull(), // 'round_robin' | 'load'
+	memberIds: jsonb("member_ids").default([]).notNull(),
+	lastAssignedUserId: uuid("last_assigned_user_id"),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
 export const contactNotes = pgTable("contact_notes", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	contactId: uuid("contact_id").notNull(),
