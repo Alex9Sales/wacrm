@@ -157,10 +157,12 @@ export async function ingestLead(
               data: { text: '🎯 Lead distribuído automaticamente (rodízio).' },
             })
             if (assignee !== auditUserId) {
+              // Reusa 'deal_transferred' (a CHECK do notifications só aceita
+              // tipos conhecidos); o título/corpo dão o sentido de "lead novo".
               await db.insert(notifications).values({
                 accountId,
                 userId: assignee,
-                type: 'lead_assigned',
+                type: 'deal_transferred',
                 dealId,
                 contactId,
                 actorUserId: auditUserId,
