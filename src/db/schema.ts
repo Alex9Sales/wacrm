@@ -500,6 +500,31 @@ export const leadDistribution = pgTable("lead_distribution", {
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 });
 
+// Captação self-serve — formulários públicos por conta (migração 0118).
+export const captureForms = pgTable("capture_forms", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	slug: text().notNull(),
+	name: text().notNull(),
+	headline: text(),
+	description: text(),
+	successMessage: text("success_message"),
+	submitLabel: text("submit_label"),
+	fields: jsonb().default([]).notNull(),
+	pipelineId: uuid("pipeline_id"),
+	stageId: uuid("stage_id"),
+	origin: text().default('Formulário').notNull(),
+	theme: text().default('light').notNull(),
+	active: boolean().default(true).notNull(),
+	submissions: integer().default(0).notNull(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("idx_capture_forms_slug").using("btree", table.slug.asc().nullsLast().op("text_ops")),
+	index("idx_capture_forms_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+]);
+
 export const contactNotes = pgTable("contact_notes", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	contactId: uuid("contact_id").notNull(),

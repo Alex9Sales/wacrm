@@ -1,0 +1,259 @@
+'use server'
+
+import { and, asc, desc, eq } from 'drizzle-orm'
+
+import { db, captureForms, pipelines, pipelineStages } from '@/db'
+import { firstOrNull } from '@/db/helpers'
+import { getCurrentAccount } from '@/lib/auth/account'
+import { isUniqueViolation } from '@/lib/contacts/dedupe'
+import {
+  normalizeCaptureFields,
+  slugifyName,
+  type CaptureField,
+} from '@/lib/capture/shared'
+
+const APP_URL = (
+  process.env.APP_URL || 'https://crm.salestecnologia.com.br'
+).replace(/\/$/, '')
+
+function capturePublicUrl(slug: string): string {
+  return `${APP_URL}/f/${slug}`
+}
+
+export interface CaptureFormRow {
+  id: string
+  name: string
+  slug: string
+  publicUrl: string
+  origin: string
+  active: boolean
+  submissions: number
+  pipelineName: string | null
+}
+
+export interface CaptureFormDetail {
+  id: string
+  name: string
+  slug: string
+  publicUrl: string
+  headline: string | null
+  description: string | null
+  successMessage: string | null
+  submitLabel: string | null
+  fields: CaptureField[]
+  pipelineId: string | null
+  stageId: string | null
+  origin: string
+  active: boolean
+  submissions: number
+}
+
+export interface CaptureFormInput {
+  name: string
+  headline: string | null
+  description: string | null
+  successMessage: string | null
+  submitLabel: string | null
+  fields: CaptureField[]
+  pipelineId: string | null
+  stageId: string | null
+  origin: string
+  active: boolean
+}
+
+export async function listCaptureForms(): Promise<CaptureFormRow[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: captureForms.id,
+      name: captureForms.name,
+      slug: captureForms.slug,
+      origin: captureForms.origin,
+      active: captureForms.active,
+      submissions: captureForms.submissions,
+      pipelineName: pipelines.name,
+    })
+    .from(captureForms)
+    .leftJoin(pipelines, eq(pipelines.id, captureForms.pipelineId))
+    .where(eq(captureForms.accountId, ctx.accountId))
+    .orderBy(desc(captureForms.createdAt))
+  return rows.map((r) => ({
+    ...r,
+    publicUrl: capturePublicUrl(r.slug),
+    pipelineName: r.pipelineName ?? null,
+  }))
+}
+
+export async function getCaptureForm(
+  id: string,
+): Promise<CaptureFormDetail | null> {
+  const ctx = await getCurrentAccount()
+  const row = firstOrNull(
+    await db
+      .select()
+      .from(captureForms)
+      .where(and(eq(captureForms.id, id), eq(captureForms.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  if (!row) return null
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    publicUrl: capturePublicUrl(row.slug),
+    headline: row.headline,
+    description: row.description,
+    successMessage: row.successMessage,
+    submitLabel: row.submitLabel,
+    fields: normalizeCaptureFields(row.fields),
+    pipelineId: row.pipelineId,
+    stageId: row.stageId,
+    origin: row.origin,
+    active: row.active,
+    submissions: row.submissions,
+  }
+}
+
+/** Gera um slug único (base do nome + sufixo curto), tentando de novo em colisão. */
+async function uniqueSlug(name: string): Promise<string> {
+  const base = slugifyName(name) || 'formulario'
+  for (let i = 0; i < 6; i++) {
+    const suffix = Math.random().toString(36).slice(2, 7)
+    const slug = `${base}-${suffix}`
+    const taken = firstOrNull(
+      await db
+        .select({ id: captureForms.id })
+        .from(captureForms)
+        .where(eq(captureForms.slug, slug))
+        .limit(1),
+    )
+    if (!taken) return slug
+  }
+  return `${base}-${Date.now().toString(36)}`
+}
+
+export async function createCaptureForm(
+  input: CaptureFormInput,
+): Promise<{ id: string | null; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const name = (input.name ?? '').trim()
+    if (!name) return { id: null, error: 'Dê um nome ao formulário.' }
+    const slug = await uniqueSlug(name)
+    try {
+      const row = await db
+        .insert(captureForms)
+        .values({
+          accountId: ctx.accountId,
+          slug,
+          name,
+          headline: (input.headline ?? '').trim() || null,
+          description: (input.description ?? '').trim() || null,
+          successMessage: (input.successMessage ?? '').trim() || null,
+          submitLabel: (input.submitLabel ?? '').trim() || null,
+          fields: normalizeCaptureFields(input.fields),
+          pipelineId: input.pipelineId || null,
+          stageId: input.stageId || null,
+          origin: (input.origin ?? '').trim() || 'Formulário',
+          active: input.active ?? true,
+          createdBy: ctx.userId,
+        })
+        .returning({ id: captureForms.id })
+      return { id: row[0]?.id ?? null, error: null }
+    } catch (err) {
+      if (isUniqueViolation(err)) {
+        return { id: null, error: 'Não foi possível gerar o link. Tente de novo.' }
+      }
+      throw err
+    }
+  } catch (err) {
+    console.error('[createCaptureForm]', err)
+    return { id: null, error: 'Falha ao criar o formulário.' }
+  }
+}
+
+export async function updateCaptureForm(
+  id: string,
+  input: CaptureFormInput,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const name = (input.name ?? '').trim()
+    if (!name) return { error: 'Dê um nome ao formulário.' }
+    const owned = firstOrNull(
+      await db
+        .select({ id: captureForms.id })
+        .from(captureForms)
+        .where(and(eq(captureForms.id, id), eq(captureForms.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!owned) return { error: 'Formulário não encontrado.' }
+    await db
+      .update(captureForms)
+      .set({
+        name,
+        headline: (input.headline ?? '').trim() || null,
+        description: (input.description ?? '').trim() || null,
+        successMessage: (input.successMessage ?? '').trim() || null,
+        submitLabel: (input.submitLabel ?? '').trim() || null,
+        fields: normalizeCaptureFields(input.fields),
+        pipelineId: input.pipelineId || null,
+        stageId: input.stageId || null,
+        origin: (input.origin ?? '').trim() || 'Formulário',
+        active: input.active ?? true,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(and(eq(captureForms.id, id), eq(captureForms.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    console.error('[updateCaptureForm]', err)
+    return { error: 'Falha ao salvar o formulário.' }
+  }
+}
+
+export async function deleteCaptureForm(
+  id: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .delete(captureForms)
+      .where(and(eq(captureForms.id, id), eq(captureForms.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    console.error('[deleteCaptureForm]', err)
+    return { error: 'Falha ao excluir o formulário.' }
+  }
+}
+
+/** Funis + etapas da conta pro seletor de destino do formulário. */
+export async function listCapturePipelines(): Promise<
+  { id: string; name: string; stages: { id: string; name: string }[] }[]
+> {
+  const ctx = await getCurrentAccount()
+  const [pips, stgs] = await Promise.all([
+    db
+      .select({ id: pipelines.id, name: pipelines.name })
+      .from(pipelines)
+      .where(eq(pipelines.accountId, ctx.accountId))
+      .orderBy(asc(pipelines.name)),
+    db
+      .select({
+        id: pipelineStages.id,
+        name: pipelineStages.name,
+        pipelineId: pipelineStages.pipelineId,
+        position: pipelineStages.position,
+      })
+      .from(pipelineStages)
+      .innerJoin(pipelines, eq(pipelines.id, pipelineStages.pipelineId))
+      .where(eq(pipelines.accountId, ctx.accountId))
+      .orderBy(asc(pipelineStages.position)),
+  ])
+  return pips.map((p) => ({
+    id: p.id,
+    name: p.name,
+    stages: stgs
+      .filter((s) => s.pipelineId === p.id)
+      .map((s) => ({ id: s.id, name: s.name })),
+  }))
+}
