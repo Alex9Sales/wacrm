@@ -29,6 +29,7 @@ import {
   updateCaptureForm,
   deleteCaptureForm,
   listCapturePipelines,
+  listCaptureChannels,
   type CaptureFormRow,
   type CaptureFormDetail,
 } from "./actions";
@@ -52,6 +53,7 @@ type Pipeline = { id: string; name: string; stages: { id: string; name: string }
 export default function CaptacaoPage() {
   const [forms, setForms] = useState<CaptureFormRow[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
+  const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<
     CaptureFormDetail | { new: "form" | "landing" } | null
@@ -59,12 +61,14 @@ export default function CaptacaoPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [f, p] = await Promise.all([
+    const [f, p, ch] = await Promise.all([
       listCaptureForms().catch(() => [] as CaptureFormRow[]),
       listCapturePipelines().catch(() => [] as Pipeline[]),
+      listCaptureChannels().catch(() => [] as { id: string; name: string }[]),
     ]);
     setForms(f);
     setPipelines(p);
+    setChannels(ch);
     setLoading(false);
   }, []);
 
@@ -104,6 +108,7 @@ export default function CaptacaoPage() {
         initial={isNew ? null : (editing as CaptureFormDetail)}
         newMode={isNew ? (editing as { new: "form" | "landing" }).new : undefined}
         pipelines={pipelines}
+        channels={channels}
         onCancel={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);
@@ -241,6 +246,7 @@ function CaptureEditor({
   initial,
   newMode,
   pipelines,
+  channels,
   onCancel,
   onSaved,
 }: {
@@ -248,6 +254,7 @@ function CaptureEditor({
   /** Ao criar: modo pré-escolhido pelo botão (form | landing). */
   newMode?: "form" | "landing";
   pipelines: Pipeline[];
+  channels: { id: string; name: string }[];
   onCancel: () => void;
   onSaved: () => void;
 }) {
@@ -266,6 +273,11 @@ function CaptureEditor({
   const [active, setActive] = useState(initial?.active ?? true);
   const [pipelineId, setPipelineId] = useState(initial?.pipelineId ?? "");
   const [stageId, setStageId] = useState(initial?.stageId ?? "");
+  // IA no Segundo Zero: primeira mensagem da IA no WhatsApp após o envio.
+  const [aiIntro, setAiIntro] = useState(initial?.aiIntro ?? false);
+  const [introChannelId, setIntroChannelId] = useState(
+    initial?.introChannelId ?? "",
+  );
   const [saving, setSaving] = useState(false);
 
   // Conteúdo da landing page.
@@ -366,6 +378,8 @@ function CaptureEditor({
         testimonials,
         ctaText: ctaText.trim() || null,
       },
+      aiIntro,
+      introChannelId: introChannelId || null,
       pipelineId: pipelineId || null,
       stageId: stageId || null,
       origin: origin.trim() || "Formulário",
@@ -707,6 +721,51 @@ function CaptureEditor({
               ) : null}
             </div>
           </div>
+        )}
+      </div>
+
+      {/* IA no Segundo Zero */}
+      <div className="space-y-3 rounded-xl border border-violet-500/30 bg-violet-500/5 p-4">
+        <label className="flex items-start gap-2.5">
+          <input
+            type="checkbox"
+            checked={aiIntro}
+            onChange={(e) => setAiIntro(e.target.checked)}
+            className="mt-0.5 size-4 accent-primary"
+          />
+          <span>
+            <span className="flex items-center gap-1.5 text-sm font-semibold text-foreground">
+              ⚡ IA no Segundo Zero
+            </span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              Segundos após o envio, o lead recebe no WhatsApp a primeira
+              mensagem escrita pela sua IA — chamando pelo nome e citando o que
+              ele pediu. Quando ele responder, o agente do canal continua a
+              conversa.
+            </span>
+          </span>
+        </label>
+        {aiIntro && channels.length > 1 && (
+          <div className="grid gap-1.5 sm:max-w-xs">
+            <Label>Enviar pelo canal</Label>
+            <select
+              value={introChannelId}
+              onChange={(e) => setIntroChannelId(e.target.value)}
+              className={selectCls}
+            >
+              <option value="">Canal padrão</option>
+              {channels.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
+        {aiIntro && channels.length === 0 && (
+          <p className="text-xs text-amber-600 dark:text-amber-400">
+            Conecte um canal de WhatsApp para a mensagem sair.
+          </p>
         )}
       </div>
 

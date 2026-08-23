@@ -87,6 +87,7 @@ export type UsageSource =
   | 'transcribe'
   | 'tts'
   | 'embeddings'
+  | 'capture'
 
 /**
  * Atribuição de uma chamada de IA para o medidor de custo. Quando passada a

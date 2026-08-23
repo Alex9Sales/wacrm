@@ -2,7 +2,7 @@
 
 import { and, asc, desc, eq } from 'drizzle-orm'
 
-import { db, captureForms, pipelines, pipelineStages } from '@/db'
+import { db, captureForms, pipelines, pipelineStages, channels } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { isUniqueViolation } from '@/lib/contacts/dedupe'
@@ -46,6 +46,8 @@ export interface CaptureFormDetail {
   submitLabel: string | null
   fields: CaptureField[]
   content: CaptureContent
+  aiIntro: boolean
+  introChannelId: string | null
   pipelineId: string | null
   stageId: string | null
   origin: string
@@ -61,6 +63,8 @@ export interface CaptureFormInput {
   submitLabel: string | null
   fields: CaptureField[]
   content: CaptureContent
+  aiIntro: boolean
+  introChannelId: string | null
   pipelineId: string | null
   stageId: string | null
   origin: string
@@ -120,6 +124,8 @@ export async function getCaptureForm(
     submitLabel: row.submitLabel,
     fields: normalizeCaptureFields(row.fields),
     content: normalizeCaptureContent(row.content),
+    aiIntro: row.aiIntro,
+    introChannelId: row.introChannelId,
     pipelineId: row.pipelineId,
     stageId: row.stageId,
     origin: row.origin,
@@ -167,6 +173,8 @@ export async function createCaptureForm(
           submitLabel: (input.submitLabel ?? '').trim() || null,
           fields: normalizeCaptureFields(input.fields),
           content: normalizeCaptureContent(input.content),
+          aiIntro: !!input.aiIntro,
+          introChannelId: input.introChannelId || null,
           pipelineId: input.pipelineId || null,
           stageId: input.stageId || null,
           origin: (input.origin ?? '').trim() || 'Formulário',
@@ -213,6 +221,8 @@ export async function updateCaptureForm(
         submitLabel: (input.submitLabel ?? '').trim() || null,
         fields: normalizeCaptureFields(input.fields),
         content: normalizeCaptureContent(input.content),
+        aiIntro: !!input.aiIntro,
+        introChannelId: input.introChannelId || null,
         pipelineId: input.pipelineId || null,
         stageId: input.stageId || null,
         origin: (input.origin ?? '').trim() || 'Formulário',
@@ -240,6 +250,20 @@ export async function deleteCaptureForm(
     console.error('[deleteCaptureForm]', err)
     return { error: 'Falha ao excluir o formulário.' }
   }
+}
+
+/** Canais WhatsApp da conta — seletor do "IA no Segundo Zero". */
+export async function listCaptureChannels(): Promise<
+  { id: string; name: string }[]
+> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({ id: channels.id, name: channels.name, provider: channels.provider })
+    .from(channels)
+    .where(eq(channels.accountId, ctx.accountId))
+  return rows
+    .filter((c) => ['waha', 'meta', 'evolution', 'evogo'].includes(c.provider))
+    .map((c) => ({ id: c.id, name: c.name }))
 }
 
 /** Funis + etapas da conta pro seletor de destino do formulário. */

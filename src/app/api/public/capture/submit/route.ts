@@ -1,13 +1,14 @@
 // Submissão pública de um formulário de captação. Resolve o form pelo slug,
 // valida (honeypot + obrigatórios), e joga o lead no funil da conta via ingestLead
 // (contato + card + tarefa + rodízio). Sob /api/public (liberado no middleware).
-import { NextResponse } from 'next/server'
+import { NextResponse, after } from 'next/server'
 import { eq, sql } from 'drizzle-orm'
 
 import { db, captureForms, member } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { ingestLead } from '@/lib/leads/ingest'
 import { getPublicCaptureForm } from '@/lib/capture/public'
+import { sendCaptureAiIntro } from '@/lib/capture/ai-intro'
 
 export const dynamic = 'force-dynamic'
 
@@ -97,6 +98,24 @@ export async function POST(req: Request) {
       .update(captureForms)
       .set({ submissions: sql`submissions + 1` })
       .where(eq(captureForms.id, form.id))
+
+    // IA no Segundo Zero: primeira mensagem no WhatsApp segundos após o envio.
+    // Fora do request (after) pra resposta do form continuar instantânea;
+    // best-effort — o lead JÁ está garantido no funil.
+    if (form.aiIntro) {
+      after(() =>
+        sendCaptureAiIntro({
+          accountId: form.accountId,
+          formName: form.name,
+          channelId: form.introChannelId,
+          phone,
+          name: nome || null,
+          company: empresa || null,
+          email: email || null,
+          message: mensagem || null,
+        }),
+      )
+    }
 
     return NextResponse.json({ ok: true })
   } catch (err) {

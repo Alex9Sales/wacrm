@@ -23,6 +23,8 @@ export interface PublicCaptureForm {
   submitLabel: string | null
   fields: CaptureField[]
   content: CaptureContent
+  aiIntro: boolean
+  introChannelId: string | null
   pipelineId: string | null
   stageId: string | null
   origin: string
@@ -53,6 +55,8 @@ export async function getPublicCaptureForm(
     submitLabel: row.submitLabel,
     fields: normalizeCaptureFields(row.fields),
     content: normalizeCaptureContent(row.content),
+    aiIntro: row.aiIntro,
+    introChannelId: row.introChannelId,
     pipelineId: row.pipelineId,
     stageId: row.stageId,
     origin: row.origin,

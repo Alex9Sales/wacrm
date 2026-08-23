@@ -512,6 +512,10 @@ export const captureForms = pgTable("capture_forms", {
 	submitLabel: text("submit_label"),
 	fields: jsonb().default([]).notNull(),
 	content: jsonb(),
+	// IA no Segundo Zero (migração 0124): primeira mensagem da IA no WhatsApp
+	// segundos após o envio do formulário.
+	aiIntro: boolean("ai_intro").default(false).notNull(),
+	introChannelId: uuid("intro_channel_id"),
 	pipelineId: uuid("pipeline_id"),
 	stageId: uuid("stage_id"),
 	origin: text().default('Formulário').notNull(),
