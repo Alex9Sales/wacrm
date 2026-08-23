@@ -2,10 +2,13 @@
 
 import { and, asc, desc, eq } from 'drizzle-orm'
 
-import { db, captureForms, pipelines, pipelineStages, channels } from '@/db'
+import { db, captureForms, pipelines, pipelineStages, channels, products } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { isUniqueViolation } from '@/lib/contacts/dedupe'
+import { loadAiConfig } from '@/lib/ai/config'
+import { generateReply } from '@/lib/ai/generate'
+import { getCompanyProfile } from '@/lib/ai/company-profile'
 import {
   normalizeCaptureFields,
   normalizeCaptureContent,
@@ -249,6 +252,127 @@ export async function deleteCaptureForm(
   } catch (err) {
     console.error('[deleteCaptureForm]', err)
     return { error: 'Falha ao excluir o formulário.' }
+  }
+}
+
+// ------------------------------------------------------------
+// Landing em 1 clique — a IA (que já conhece o negócio: perfil da empresa +
+// catálogo) escreve a landing inteira: headline, descrição, CTA, benefícios,
+// botão e mensagem de sucesso. O dono só revisa e salva. Nunca inventa
+// depoimentos (prova social é real ou nada).
+// ------------------------------------------------------------
+export interface GeneratedLanding {
+  headline: string
+  description: string
+  ctaText: string
+  benefitsTitle: string
+  benefits: { title: string; description: string }[]
+  submitLabel: string
+  successMessage: string
+}
+
+export async function generateCaptureLanding(
+  briefing: string,
+): Promise<{ data: GeneratedLanding | null; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const config = await loadAiConfig(ctx.accountId, { requireActive: false })
+    if (!config) {
+      return {
+        data: null,
+        error:
+          'Configure um agente de IA (com chave) em Agentes IA para gerar a landing.',
+      }
+    }
+
+    const [profile, prods] = await Promise.all([
+      getCompanyProfile(ctx.accountId),
+      db
+        .select({ name: products.name, description: products.description })
+        .from(products)
+        .where(and(eq(products.accountId, ctx.accountId), eq(products.active, true)))
+        .limit(8),
+    ])
+
+    const empresa =
+      profile.trade_name || profile.business_name || '(nome não informado)'
+    const contexto = [
+      `Empresa: ${empresa}`,
+      profile.description ? `Sobre: ${profile.description}` : '',
+      profile.offerings ? `Produtos/serviços: ${profile.offerings}` : '',
+      prods.length
+        ? `Catálogo: ${prods
+            .map((p) => p.name + (p.description ? ` (${p.description})` : ''))
+            .join('; ')}`
+        : '',
+      briefing.trim() ? `Objetivo desta página (do dono): ${briefing.trim()}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+
+    const systemPrompt = [
+      'Você é um copywriter brasileiro especialista em landing pages de captação que CONVERTEM.',
+      'Escreva em português do Brasil, direto, concreto e sem clichê de marketing ("soluções inovadoras", "líder de mercado" etc. são PROIBIDOS).',
+      'A página termina num formulário de WhatsApp — todo o texto empurra a pessoa a deixar o contato.',
+      'NUNCA invente depoimentos, números ou clientes.',
+      'Responda APENAS com um JSON válido, sem comentários e sem markdown, neste formato exato:',
+      '{"headline": "...", "description": "...", "ctaText": "...", "benefitsTitle": "...", "benefits": [{"title": "...", "description": "..."}, {"title": "...", "description": "..."}, {"title": "...", "description": "..."}], "submitLabel": "...", "successMessage": "..."}',
+      'Regras: headline com no máximo 9 palavras (benefício claro, pode 1 emoji); description com 1-2 frases; ctaText e submitLabel curtos (2-4 palavras, 1ª pessoa tipo "Quero..."); benefitsTitle curto; exatamente 3 benefits (title 2-5 palavras, description 1 frase concreta); successMessage calorosa dizendo que a equipe chama no WhatsApp.',
+    ].join('\n')
+
+    const result = await generateReply({
+      config,
+      systemPrompt,
+      messages: [
+        {
+          role: 'user',
+          content: `Dados do negócio:\n${contexto}\n\nGere o JSON da landing.`,
+        },
+      ],
+      meta: {
+        accountId: ctx.accountId,
+        agentId: config.id ?? null,
+        channelId: null,
+        source: 'capture',
+      },
+    })
+
+    // Parse robusto: tira cerca de código e pega o primeiro objeto JSON.
+    const raw = result.text.replace(/```(?:json)?/gi, '').trim()
+    const start = raw.indexOf('{')
+    const end = raw.lastIndexOf('}')
+    if (start < 0 || end <= start) {
+      return { data: null, error: 'A IA não retornou um formato válido. Tente de novo.' }
+    }
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as Partial<GeneratedLanding>
+    const s = (v: unknown, max: number) =>
+      typeof v === 'string' ? v.trim().slice(0, max) : ''
+    const benefits = (Array.isArray(parsed.benefits) ? parsed.benefits : [])
+      .map((b) => ({
+        title: s((b as { title?: unknown })?.title, 120),
+        description: s((b as { description?: unknown })?.description, 300),
+      }))
+      .filter((b) => b.title)
+      .slice(0, 6)
+    const data: GeneratedLanding = {
+      headline: s(parsed.headline, 160),
+      description: s(parsed.description, 400),
+      ctaText: s(parsed.ctaText, 40),
+      benefitsTitle: s(parsed.benefitsTitle, 120),
+      benefits,
+      submitLabel: s(parsed.submitLabel, 40),
+      successMessage: s(parsed.successMessage, 400),
+    }
+    if (!data.headline || benefits.length === 0) {
+      return { data: null, error: 'A IA não retornou um formato válido. Tente de novo.' }
+    }
+    return { data, error: null }
+  } catch (err) {
+    console.error('[generateCaptureLanding]', err)
+    return {
+      data: null,
+      error: 'Falha ao gerar com a IA. Confira a chave do agente e tente de novo.',
+    }
   }
 }
 

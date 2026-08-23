@@ -30,6 +30,7 @@ import {
   deleteCaptureForm,
   listCapturePipelines,
   listCaptureChannels,
+  generateCaptureLanding,
   type CaptureFormRow,
   type CaptureFormDetail,
 } from "./actions";
@@ -296,6 +297,29 @@ function CaptureEditor({
   );
   const [uploadingHero, setUploadingHero] = useState(false);
   const [uploadingLandingLogo, setUploadingLandingLogo] = useState(false);
+  // Landing em 1 clique: a IA escreve a página inteira (o dono revisa e salva).
+  const [genBriefing, setGenBriefing] = useState("");
+  const [generating, setGenerating] = useState(false);
+
+  async function handleGenerate() {
+    setGenerating(true);
+    const res = await generateCaptureLanding(genBriefing);
+    setGenerating(false);
+    if (res.error || !res.data) {
+      toast.error(res.error ?? "Falha ao gerar com a IA.");
+      return;
+    }
+    const d = res.data;
+    setHeadline(d.headline);
+    if (d.description) setDescription(d.description);
+    if (d.ctaText) setCtaText(d.ctaText);
+    if (d.benefitsTitle) setBenefitsTitle(d.benefitsTitle);
+    setBenefits(d.benefits);
+    if (d.submitLabel) setSubmitLabel(d.submitLabel);
+    if (d.successMessage) setSuccessMessage(d.successMessage);
+    if (!name.trim()) setName(d.headline.slice(0, 60));
+    toast.success("Landing escrita pela IA — revise, ajuste e salve. ✨");
+  }
 
   async function uploadTo(
     file: File | null,
@@ -526,6 +550,39 @@ function CaptureEditor({
 
         {mode === "landing" && (
           <div className="space-y-4 border-t border-border pt-3">
+            {/* Landing em 1 clique */}
+            <div className="space-y-2 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
+              <div className="text-sm font-semibold text-foreground">
+                ✨ Criar com IA
+              </div>
+              <p className="text-xs text-muted-foreground">
+                A IA escreve a página inteira (título, benefícios, botões) usando
+                o que ela já sabe do seu negócio. Você só revisa e salva.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={genBriefing}
+                  onChange={(e) => setGenBriefing(e.target.value)}
+                  placeholder="Objetivo da página (opcional) — ex.: captar clínicas"
+                  className="min-w-[200px] flex-1"
+                />
+                <Button
+                  type="button"
+                  onClick={() => void handleGenerate()}
+                  disabled={generating}
+                >
+                  {generating ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      Escrevendo...
+                    </>
+                  ) : (
+                    "Criar com IA"
+                  )}
+                </Button>
+              </div>
+            </div>
+
             <div className="grid gap-4 sm:grid-cols-2">
               <div className="grid gap-1.5">
                 <Label>Imagem do topo (hero)</Label>
