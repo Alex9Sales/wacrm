@@ -9,6 +9,7 @@ import { useCallback, useEffect, useState } from "react";
 import { toast } from "sonner";
 import {
   Plus,
+  LayoutTemplate,
   Copy,
   Trash2,
   Pencil,
@@ -52,7 +53,9 @@ export default function CaptacaoPage() {
   const [forms, setForms] = useState<CaptureFormRow[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [loading, setLoading] = useState(true);
-  const [editing, setEditing] = useState<CaptureFormDetail | "new" | null>(null);
+  const [editing, setEditing] = useState<
+    CaptureFormDetail | { new: "form" | "landing" } | null
+  >(null);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -95,9 +98,11 @@ export default function CaptacaoPage() {
   }
 
   if (editing) {
+    const isNew = "new" in editing;
     return (
       <CaptureEditor
-        initial={editing === "new" ? null : editing}
+        initial={isNew ? null : (editing as CaptureFormDetail)}
+        newMode={isNew ? (editing as { new: "form" | "landing" }).new : undefined}
         pipelines={pipelines}
         onCancel={() => setEditing(null)}
         onSaved={() => {
@@ -117,9 +122,14 @@ export default function CaptacaoPage() {
             Formulários públicos que jogam o lead direto no seu funil.
           </p>
         </div>
-        <Button onClick={() => setEditing("new")}>
-          <Plus className="mr-1.5 h-4 w-4" /> Novo formulário
-        </Button>
+        <div className="flex items-center gap-2">
+          <Button variant="outline" onClick={() => setEditing({ new: "form" })}>
+            <Plus className="mr-1.5 h-4 w-4" /> Novo formulário
+          </Button>
+          <Button onClick={() => setEditing({ new: "landing" })}>
+            <LayoutTemplate className="mr-1.5 h-4 w-4" /> Nova landing page
+          </Button>
+        </div>
       </div>
 
       {loading ? (
@@ -133,7 +143,7 @@ export default function CaptacaoPage() {
             Nenhum formulário ainda. Crie um e compartilhe o link na bio do
             Instagram, no site ou onde quiser.
           </p>
-          <Button className="mt-4" onClick={() => setEditing("new")}>
+          <Button className="mt-4" onClick={() => setEditing({ new: "landing" })}>
             <Plus className="mr-1.5 h-4 w-4" /> Criar o primeiro
           </Button>
         </div>
@@ -150,6 +160,15 @@ export default function CaptacaoPage() {
                     <h2 className="truncate text-sm font-semibold text-foreground">
                       {f.name}
                     </h2>
+                    <span
+                      className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                        f.mode === "landing"
+                          ? "bg-violet-500/15 text-violet-600 dark:text-violet-400"
+                          : "bg-sky-500/15 text-sky-600 dark:text-sky-400"
+                      }`}
+                    >
+                      {f.mode === "landing" ? "Landing" : "Formulário"}
+                    </span>
                     <span
                       className={`rounded-full px-1.5 py-0.5 text-[10px] ${
                         f.active
@@ -220,11 +239,14 @@ export default function CaptacaoPage() {
 // ------------------------------------------------------------
 function CaptureEditor({
   initial,
+  newMode,
   pipelines,
   onCancel,
   onSaved,
 }: {
   initial: CaptureFormDetail | null;
+  /** Ao criar: modo pré-escolhido pelo botão (form | landing). */
+  newMode?: "form" | "landing";
   pipelines: Pipeline[];
   onCancel: () => void;
   onSaved: () => void;
@@ -248,7 +270,9 @@ function CaptureEditor({
 
   // Conteúdo da landing page.
   const initContent = initial?.content ?? DEFAULT_CAPTURE_CONTENT;
-  const [mode, setMode] = useState<"form" | "landing">(initContent.mode);
+  const [mode, setMode] = useState<"form" | "landing">(
+    initial ? initContent.mode : newMode ?? initContent.mode,
+  );
   const [heroImage, setHeroImage] = useState(initContent.heroImage ?? "");
   const [landingLogo, setLandingLogo] = useState(initContent.logo ?? "");
   const [brandColor, setBrandColor] = useState(initContent.brandColor ?? "#7c3aed");
@@ -369,7 +393,13 @@ function CaptureEditor({
       <div className="flex items-center gap-3">
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-foreground">
-            {initial ? "Editar formulário" : "Novo formulário"}
+            {initial
+              ? mode === "landing"
+                ? "Editar landing page"
+                : "Editar formulário"
+              : mode === "landing"
+                ? "Nova landing page"
+                : "Novo formulário"}
           </h1>
           <p className="text-sm text-muted-foreground">
             O link fica pronto assim que você salvar.

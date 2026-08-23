@@ -31,6 +31,8 @@ export interface CaptureFormRow {
   active: boolean
   submissions: number
   pipelineName: string | null
+  /** 'landing' quando a página pública é a landing completa. */
+  mode: 'form' | 'landing'
 }
 
 export interface CaptureFormDetail {
@@ -76,15 +78,22 @@ export async function listCaptureForms(): Promise<CaptureFormRow[]> {
       active: captureForms.active,
       submissions: captureForms.submissions,
       pipelineName: pipelines.name,
+      content: captureForms.content,
     })
     .from(captureForms)
     .leftJoin(pipelines, eq(pipelines.id, captureForms.pipelineId))
     .where(eq(captureForms.accountId, ctx.accountId))
     .orderBy(desc(captureForms.createdAt))
   return rows.map((r) => ({
-    ...r,
+    id: r.id,
+    name: r.name,
+    slug: r.slug,
+    origin: r.origin,
+    active: r.active,
+    submissions: r.submissions,
     publicUrl: capturePublicUrl(r.slug),
     pipelineName: r.pipelineName ?? null,
+    mode: normalizeCaptureContent(r.content).mode,
   }))
 }
 
