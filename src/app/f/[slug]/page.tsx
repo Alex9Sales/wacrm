@@ -15,8 +15,10 @@ import {
   DEFAULT_CAPTURE_SUBMIT,
   DEFAULT_CAPTURE_SUCCESS,
 } from '@/lib/capture/shared'
+import { meshGradientBackground } from '@/lib/capture/hero-art'
 import { CaptureFormClient } from './capture-form-client'
 import { CaptureLanding } from './landing'
+import { CaptureQuizClient } from './quiz-client'
 
 export async function generateMetadata({
   params,
@@ -76,6 +78,30 @@ export default async function PublicCapturePage({
     form.accountId,
     form.content.schedulerSlug,
   )
+
+  // Quiz com IA: perguntas → contato → diagnóstico personalizado na tela.
+  // Sem perguntas configuradas, cai no formulário simples (defensivo).
+  if (form.content.mode === 'quiz' && form.content.quiz.questions.length > 0) {
+    const accent = form.content.brandColor || '#7c3aed'
+    return (
+      <CaptureQuizClient
+        slug={form.slug}
+        headline={headline}
+        description={form.description}
+        ctaStart={form.content.ctaText || 'Começar'}
+        questions={form.content.quiz.questions}
+        fields={form.fields}
+        submitLabel={submitLabel}
+        accent={accent}
+        logo={form.content.logo}
+        background={meshGradientBackground(accent, form.slug)}
+        aiEnabled={form.content.quiz.aiResult}
+        successOffer={successOffer}
+        successWaHref={successWaHref}
+        successSchedulerUrl={schedulerUrl}
+      />
+    )
+  }
 
   if (form.content.mode === 'landing') {
     return (

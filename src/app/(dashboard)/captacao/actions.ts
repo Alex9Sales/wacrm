@@ -47,8 +47,8 @@ export interface CaptureFormRow {
   active: boolean
   submissions: number
   pipelineName: string | null
-  /** 'landing' quando a página pública é a landing completa. */
-  mode: 'form' | 'landing'
+  /** Tipo da página pública: formulário simples, landing completa ou quiz. */
+  mode: 'form' | 'landing' | 'quiz'
 }
 
 export interface CaptureFormDetail {
@@ -421,6 +421,136 @@ export async function generateCaptureLanding(
     return { data, error: null }
   } catch (err) {
     console.error('[generateCaptureLanding]', err)
+    return {
+      data: null,
+      error: 'Falha ao gerar com a IA. Confira a chave do agente e tente de novo.',
+    }
+  }
+}
+
+// ------------------------------------------------------------
+// Quiz em 1 clique — a IA escreve o quiz inteiro: título, descrição, 4-5
+// perguntas de múltipla escolha que QUALIFICAM o lead (dor, urgência, porte)
+// e as instruções do diagnóstico. O dono só revisa e salva.
+// ------------------------------------------------------------
+export interface GeneratedQuiz {
+  headline: string
+  description: string
+  ctaStart: string
+  questions: { text: string; type: 'choice' | 'text'; options: string[] }[]
+  resultPrompt: string
+}
+
+export async function generateCaptureQuiz(
+  briefing: string,
+): Promise<{ data: GeneratedQuiz | null; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const config = await loadAiConfig(ctx.accountId, { requireActive: false })
+    if (!config) {
+      return {
+        data: null,
+        error:
+          'Configure um agente de IA (com chave) em Agentes IA para gerar o quiz.',
+      }
+    }
+
+    const [profile, prods] = await Promise.all([
+      getCompanyProfile(ctx.accountId),
+      db
+        .select({ name: products.name, description: products.description })
+        .from(products)
+        .where(and(eq(products.accountId, ctx.accountId), eq(products.active, true)))
+        .limit(8),
+    ])
+
+    const empresa =
+      profile.trade_name || profile.business_name || '(nome não informado)'
+    const contexto = [
+      `Empresa: ${empresa}`,
+      profile.description ? `Sobre: ${profile.description}` : '',
+      profile.tone ? `TOM DE VOZ da marca (escreva EXATAMENTE neste tom): ${profile.tone}` : '',
+      profile.offerings ? `Produtos/serviços: ${profile.offerings}` : '',
+      prods.length
+        ? `Catálogo: ${prods
+            .map((p) => p.name + (p.description ? ` (${p.description})` : ''))
+            .join('; ')}`
+        : '',
+      briefing.trim() ? `Objetivo deste quiz (do dono): ${briefing.trim()}` : '',
+    ]
+      .filter(Boolean)
+      .join('\n')
+
+    const systemPrompt = [
+      'Você é especialista brasileiro em quizzes de captação (lead magnets interativos) que qualificam e convertem.',
+      'Escreva em português do Brasil, direto e concreto, sem clichê de marketing.',
+      'O quiz roda assim: a pessoa responde as perguntas → deixa o WhatsApp → recebe um diagnóstico personalizado da IA na tela. As perguntas devem revelar DOR, URGÊNCIA e PORTE/CONTEXTO do lead (é assim que a IA qualifica quente/morno/frio).',
+      'Responda APENAS com um JSON válido, sem comentários e sem markdown, neste formato exato:',
+      '{"headline": "...", "description": "...", "ctaStart": "...", "questions": [{"text": "...", "type": "choice", "options": ["...", "...", "..."]}], "resultPrompt": "..."}',
+      'Regras: headline com no máximo 9 palavras prometendo o resultado do quiz (pode 1 emoji); description com 1-2 frases; ctaStart curto (2-4 palavras, ex.: "Começar agora"); 4 a 5 questions — as primeiras "choice" com 3-4 options curtas (máx. 6 palavras cada), a ÚLTIMA pode ser {"type": "text", "options": []} pedindo pra pessoa contar mais; resultPrompt = 2-3 frases instruindo a IA que escreverá o diagnóstico (papel, foco, o que recomendar).',
+    ].join('\n')
+
+    const result = await generateReply({
+      config,
+      systemPrompt,
+      messages: [
+        {
+          role: 'user',
+          content: `Dados do negócio:\n${contexto}\n\nGere o JSON do quiz.`,
+        },
+      ],
+      meta: {
+        accountId: ctx.accountId,
+        agentId: config.id ?? null,
+        channelId: null,
+        source: 'capture',
+      },
+    })
+
+    // Parse robusto: tira cerca de código e pega o primeiro objeto JSON.
+    const raw = result.text.replace(/```(?:json)?/gi, '').trim()
+    const start = raw.indexOf('{')
+    const end = raw.lastIndexOf('}')
+    if (start < 0 || end <= start) {
+      return { data: null, error: 'A IA não retornou um formato válido. Tente de novo.' }
+    }
+    const parsed = JSON.parse(raw.slice(start, end + 1)) as Partial<GeneratedQuiz>
+    const s = (v: unknown, max: number) =>
+      typeof v === 'string' ? v.trim().slice(0, max) : ''
+    const questions = (Array.isArray(parsed.questions) ? parsed.questions : [])
+      .map((q) => {
+        const type =
+          (q as { type?: unknown })?.type === 'text' ? ('text' as const) : ('choice' as const)
+        return {
+          text: s((q as { text?: unknown })?.text, 300),
+          type,
+          options:
+            type === 'text'
+              ? []
+              : (Array.isArray((q as { options?: unknown })?.options)
+                  ? ((q as { options: unknown[] }).options)
+                  : []
+                )
+                  .map((op) => s(op, 120))
+                  .filter(Boolean)
+                  .slice(0, 6),
+        }
+      })
+      .filter((q) => q.text && (q.type === 'text' || q.options.length >= 2))
+      .slice(0, 10)
+    const data: GeneratedQuiz = {
+      headline: s(parsed.headline, 160),
+      description: s(parsed.description, 400),
+      ctaStart: s(parsed.ctaStart, 40),
+      questions,
+      resultPrompt: s(parsed.resultPrompt, 600),
+    }
+    if (!data.headline || questions.length < 3) {
+      return { data: null, error: 'A IA não retornou um formato válido. Tente de novo.' }
+    }
+    return { data, error: null }
+  } catch (err) {
+    console.error('[generateCaptureQuiz]', err)
     return {
       data: null,
       error: 'Falha ao gerar com a IA. Confira a chave do agente e tente de novo.',

@@ -16,6 +16,9 @@ import {
   ExternalLink,
   ClipboardList,
   Loader2,
+  Brain,
+  ArrowUp,
+  ArrowDown,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -39,6 +42,7 @@ import {
   createScheduler,
   updateScheduler,
   deleteScheduler,
+  generateCaptureQuiz,
   type CaptureFormRow,
   type CaptureFormDetail,
   type CaptureWaInfo,
@@ -56,10 +60,12 @@ import {
   DEFAULT_CAPTURE_HEADLINE,
   DEFAULT_CAPTURE_SUBMIT,
   DEFAULT_CAPTURE_SUCCESS,
+  STARTER_QUIZ_QUESTIONS,
   type CaptureField,
   type CaptureFieldKey,
   type CaptureBenefit,
   type CaptureTestimonial,
+  type QuizQuestion,
 } from "@/lib/capture/shared";
 import { uploadAccountMedia } from "@/lib/storage/upload-media";
 import { getCompanyData } from "@/components/settings/actions";
@@ -134,7 +140,7 @@ export default function CaptacaoPage() {
   const [members, setMembers] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<
-    CaptureFormDetail | { new: "form" | "landing" } | null
+    CaptureFormDetail | { new: "form" | "landing" | "quiz" } | null
   >(null);
   const [editingSched, setEditingSched] = useState<SchedulerDetail | "new" | null>(
     null,
@@ -230,7 +236,11 @@ export default function CaptacaoPage() {
     return (
       <CaptureEditor
         initial={isNew ? null : (editing as CaptureFormDetail)}
-        newMode={isNew ? (editing as { new: "form" | "landing" }).new : undefined}
+        newMode={
+          isNew
+            ? (editing as { new: "form" | "landing" | "quiz" }).new
+            : undefined
+        }
         pipelines={pipelines}
         channels={channels}
         cadences={cadences}
@@ -256,6 +266,9 @@ export default function CaptacaoPage() {
         <div className="flex items-center gap-2">
           <Button variant="outline" onClick={() => setEditing({ new: "form" })}>
             <Plus className="mr-1.5 h-4 w-4" /> Novo formulário
+          </Button>
+          <Button variant="outline" onClick={() => setEditing({ new: "quiz" })}>
+            <Brain className="mr-1.5 h-4 w-4" /> Novo quiz
           </Button>
           <Button onClick={() => setEditing({ new: "landing" })}>
             <LayoutTemplate className="mr-1.5 h-4 w-4" /> Nova landing page
@@ -295,10 +308,16 @@ export default function CaptacaoPage() {
                       className={`rounded-full px-1.5 py-0.5 text-[10px] ${
                         f.mode === "landing"
                           ? "bg-violet-500/15 text-violet-600 dark:text-violet-400"
-                          : "bg-sky-500/15 text-sky-600 dark:text-sky-400"
+                          : f.mode === "quiz"
+                            ? "bg-fuchsia-500/15 text-fuchsia-600 dark:text-fuchsia-400"
+                            : "bg-sky-500/15 text-sky-600 dark:text-sky-400"
                       }`}
                     >
-                      {f.mode === "landing" ? "Landing" : "Formulário"}
+                      {f.mode === "landing"
+                        ? "Landing"
+                        : f.mode === "quiz"
+                          ? "🧠 Quiz"
+                          : "Formulário"}
                     </span>
                     <span
                       className={`rounded-full px-1.5 py-0.5 text-[10px] ${
@@ -812,8 +831,8 @@ function CaptureEditor({
   onSaved,
 }: {
   initial: CaptureFormDetail | null;
-  /** Ao criar: modo pré-escolhido pelo botão (form | landing). */
-  newMode?: "form" | "landing";
+  /** Ao criar: modo pré-escolhido pelo botão (form | landing | quiz). */
+  newMode?: "form" | "landing" | "quiz";
   pipelines: Pipeline[];
   channels: { id: string; name: string }[];
   cadences: { id: string; name: string }[];
@@ -852,7 +871,7 @@ function CaptureEditor({
 
   // Conteúdo da landing page.
   const initContent = initial?.content ?? DEFAULT_CAPTURE_CONTENT;
-  const [mode, setMode] = useState<"form" | "landing">(
+  const [mode, setMode] = useState<"form" | "landing" | "quiz">(
     initial ? initContent.mode : newMode ?? initContent.mode,
   );
   const [heroImage, setHeroImage] = useState(initContent.heroImage ?? "");
@@ -878,6 +897,39 @@ function CaptureEditor({
     "gradient" | "mesh" | "waves" | "blobs" | "grid" | "lowpoly"
   >(initContent.heroStyle ?? "gradient");
   const [brandBusy, setBrandBusy] = useState(false);
+  // Quiz com IA: perguntas + diagnóstico.
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>(() =>
+    initContent.quiz?.questions?.length
+      ? initContent.quiz.questions
+      : newMode === "quiz"
+        ? STARTER_QUIZ_QUESTIONS
+        : [],
+  );
+  const [quizAiResult, setQuizAiResult] = useState(
+    initContent.quiz?.aiResult ?? true,
+  );
+  const [quizResultPrompt, setQuizResultPrompt] = useState(
+    initContent.quiz?.resultPrompt ?? "",
+  );
+  const [quizResultFallback, setQuizResultFallback] = useState(
+    initContent.quiz?.resultFallback ?? "",
+  );
+
+  function patchQuestion(i: number, patch: Partial<QuizQuestion>) {
+    setQuizQuestions((prev) =>
+      prev.map((q, idx) => (idx === i ? { ...q, ...patch } : q)),
+    );
+  }
+
+  function moveQuestion(i: number, dir: -1 | 1) {
+    setQuizQuestions((prev) => {
+      const j = i + dir;
+      if (j < 0 || j >= prev.length) return prev;
+      const next = [...prev];
+      [next[i], next[j]] = [next[j], next[i]];
+      return next;
+    });
+  }
 
   async function useCompanyLogo() {
     setBrandBusy(true);
@@ -999,6 +1051,25 @@ function CaptureEditor({
     toast.success("Landing escrita pela IA — revise, ajuste e salve. ✨");
   }
 
+  // Quiz em 1 clique: a IA escreve título + perguntas + instruções do diagnóstico.
+  async function handleGenerateQuiz() {
+    setGenerating(true);
+    const res = await generateCaptureQuiz(genBriefing);
+    setGenerating(false);
+    if (res.error || !res.data) {
+      toast.error(res.error ?? "Falha ao gerar com a IA.");
+      return;
+    }
+    const d = res.data;
+    setHeadline(d.headline);
+    if (d.description) setDescription(d.description);
+    if (d.ctaStart) setCtaText(d.ctaStart);
+    setQuizQuestions(d.questions);
+    if (d.resultPrompt) setQuizResultPrompt(d.resultPrompt);
+    if (!name.trim()) setName(d.headline.slice(0, 60));
+    toast.success("Quiz escrito pela IA — revise, ajuste e salve. ✨");
+  }
+
   async function uploadTo(
     file: File | null,
     set: (url: string) => void,
@@ -1055,6 +1126,22 @@ function CaptureEditor({
       toast.error("Dê um nome ao formulário.");
       return;
     }
+    const cleanQuestions = quizQuestions
+      .map((q) => ({
+        text: q.text.trim(),
+        type: q.type,
+        options:
+          q.type === "text"
+            ? []
+            : q.options.map((op) => op.trim()).filter(Boolean),
+      }))
+      .filter((q) => q.text && (q.type === "text" || q.options.length >= 2));
+    if (mode === "quiz" && cleanQuestions.length === 0) {
+      toast.error(
+        "Adicione pelo menos 1 pergunta (múltipla escolha precisa de 2+ opções).",
+      );
+      return;
+    }
     const fields: CaptureField[] = CAPTURE_FIELD_ORDER.filter(
       (k) => fieldState[k].enabled,
     ).map((k) => ({
@@ -1082,6 +1169,12 @@ function CaptureEditor({
         showWhatsapp,
         schedulerSlug: schedulerSlug || null,
         heroStyle,
+        quiz: {
+          questions: cleanQuestions,
+          aiResult: quizAiResult,
+          resultPrompt: quizResultPrompt.trim() || null,
+          resultFallback: quizResultFallback.trim() || null,
+        },
       },
       aiIntro,
       introChannelId: introChannelId || null,
@@ -1116,13 +1209,12 @@ function CaptureEditor({
       <div className="flex items-center gap-3">
         <div className="flex-1">
           <h1 className="text-2xl font-bold text-foreground">
-            {initial
-              ? mode === "landing"
-                ? "Editar landing page"
-                : "Editar formulário"
-              : mode === "landing"
-                ? "Nova landing page"
-                : "Novo formulário"}
+            {(initial ? "Editar " : mode === "landing" ? "Nova " : "Novo ") +
+              (mode === "landing"
+                ? "landing page"
+                : mode === "quiz"
+                  ? "quiz"
+                  : "formulário")}
           </h1>
           <p className="text-sm text-muted-foreground">
             O link fica pronto assim que você salvar.
@@ -1216,12 +1308,18 @@ function CaptureEditor({
             [
               ["form", "Formulário simples"],
               ["landing", "Landing page"],
+              ["quiz", "🧠 Quiz"],
             ] as const
           ).map(([m, label]) => (
             <button
               key={m}
               type="button"
-              onClick={() => setMode(m)}
+              onClick={() => {
+                setMode(m);
+                if (m === "quiz" && quizQuestions.length === 0) {
+                  setQuizQuestions(STARTER_QUIZ_QUESTIONS);
+                }
+              }}
               className={`flex-1 px-3 py-2 text-sm transition ${
                 mode === m
                   ? "bg-primary text-primary-foreground"
@@ -1586,6 +1684,291 @@ function CaptureEditor({
                   <Plus className="mr-1.5 h-3.5 w-3.5" /> Adicionar depoimento
                 </Button>
               ) : null}
+            </div>
+          </div>
+        )}
+
+        {mode === "quiz" && (
+          <div className="space-y-4 border-t border-border pt-3">
+            {/* Quiz em 1 clique */}
+            <div className="space-y-2 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
+              <div className="text-sm font-semibold text-foreground">
+                ✨ Criar com IA
+              </div>
+              <p className="text-xs text-muted-foreground">
+                A IA escreve o quiz inteiro (título, perguntas que qualificam e
+                as instruções do diagnóstico) usando o que ela já sabe do seu
+                negócio. Você só revisa e salva.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Input
+                  value={genBriefing}
+                  onChange={(e) => setGenBriefing(e.target.value)}
+                  placeholder="Objetivo do quiz (opcional) — ex.: qualificar clínicas"
+                  className="min-w-[200px] flex-1"
+                />
+                <Button
+                  type="button"
+                  onClick={() => void handleGenerateQuiz()}
+                  disabled={generating}
+                >
+                  {generating ? (
+                    <>
+                      <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                      Escrevendo...
+                    </>
+                  ) : (
+                    "Criar com IA"
+                  )}
+                </Button>
+              </div>
+            </div>
+
+            {/* Identidade da marca (o quiz usa logo + cor no fundo mesh) */}
+            <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
+              <div className="text-sm font-semibold text-foreground">
+                🎨 Identidade da marca
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void useCompanyLogo()}
+                  disabled={brandBusy}
+                >
+                  🖼️ Usar logo da empresa
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void useLogoColor()}
+                  disabled={brandBusy}
+                >
+                  {brandBusy ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : null}
+                  🎯 Usar cor da logo
+                </Button>
+                <input
+                  type="color"
+                  value={brandColor}
+                  onChange={(e) => setBrandColor(e.target.value)}
+                  className="h-8 w-10 cursor-pointer rounded border border-border bg-transparent"
+                  title={brandColor}
+                />
+                {landingLogo ? (
+                  // eslint-disable-next-line @next/next/no-img-element
+                  <img
+                    src={landingLogo}
+                    alt=""
+                    className="h-8 w-auto max-w-[70px] object-contain"
+                  />
+                ) : null}
+                <input
+                  type="file"
+                  accept="image/*"
+                  onChange={(e) =>
+                    void uploadTo(
+                      e.target.files?.[0] ?? null,
+                      setLandingLogo,
+                      setUploadingLandingLogo,
+                    )
+                  }
+                  className="text-xs text-muted-foreground"
+                />
+                {uploadingLandingLogo ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : null}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                A página do quiz ganha um fundo mesh gradient na cor da marca,
+                com a logo no topo do card.
+              </p>
+            </div>
+
+            {/* Perguntas */}
+            <div className="space-y-2">
+              <Label>Perguntas ({quizQuestions.length}/10)</Label>
+              {quizQuestions.map((q, i) => (
+                <div
+                  key={i}
+                  className="space-y-2 rounded-lg border border-border bg-muted/30 p-3"
+                >
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-muted-foreground">
+                      {i + 1}.
+                    </span>
+                    <select
+                      value={q.type}
+                      onChange={(e) =>
+                        patchQuestion(i, {
+                          type: e.target.value === "text" ? "text" : "choice",
+                        })
+                      }
+                      className="h-8 rounded-lg border border-border bg-muted px-2 text-xs text-foreground outline-none"
+                    >
+                      <option value="choice">Múltipla escolha</option>
+                      <option value="text">Resposta livre</option>
+                    </select>
+                    <div className="ml-auto flex items-center gap-0.5">
+                      <button
+                        type="button"
+                        onClick={() => moveQuestion(i, -1)}
+                        disabled={i === 0}
+                        className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      >
+                        <ArrowUp className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => moveQuestion(i, 1)}
+                        disabled={i === quizQuestions.length - 1}
+                        className="rounded p-1 text-muted-foreground hover:text-foreground disabled:opacity-30"
+                      >
+                        <ArrowDown className="h-3.5 w-3.5" />
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setQuizQuestions((prev) =>
+                            prev.filter((_, idx) => idx !== i),
+                          )
+                        }
+                        className="rounded p-1 text-muted-foreground hover:text-red-500"
+                      >
+                        <Trash2 className="h-3.5 w-3.5" />
+                      </button>
+                    </div>
+                  </div>
+                  <Input
+                    value={q.text}
+                    onChange={(e) => patchQuestion(i, { text: e.target.value })}
+                    placeholder="Texto da pergunta"
+                  />
+                  {q.type === "choice" ? (
+                    <div className="space-y-1.5 pl-4">
+                      {q.options.map((op, oi) => (
+                        <div key={oi} className="flex items-center gap-2">
+                          <Input
+                            value={op}
+                            onChange={(e) =>
+                              patchQuestion(i, {
+                                options: q.options.map((x, xi) =>
+                                  xi === oi ? e.target.value : x,
+                                ),
+                              })
+                            }
+                            placeholder={`Opção ${oi + 1}`}
+                            className="h-8"
+                          />
+                          <button
+                            type="button"
+                            onClick={() =>
+                              patchQuestion(i, {
+                                options: q.options.filter((_, xi) => xi !== oi),
+                              })
+                            }
+                            className="rounded p-1 text-muted-foreground hover:text-red-500"
+                          >
+                            <Trash2 className="h-3.5 w-3.5" />
+                          </button>
+                        </div>
+                      ))}
+                      {q.options.length < 6 ? (
+                        <button
+                          type="button"
+                          onClick={() =>
+                            patchQuestion(i, { options: [...q.options, ""] })
+                          }
+                          className="text-xs font-medium text-primary hover:underline"
+                        >
+                          + Adicionar opção
+                        </button>
+                      ) : null}
+                    </div>
+                  ) : (
+                    <p className="pl-4 text-[11px] text-muted-foreground">
+                      O lead escreve livremente — ótimo pra última pergunta
+                      (&quot;conte mais&quot;).
+                    </p>
+                  )}
+                </div>
+              ))}
+              {quizQuestions.length < 10 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setQuizQuestions((prev) => [
+                      ...prev,
+                      { text: "", type: "choice", options: ["", ""] },
+                    ])
+                  }
+                >
+                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Adicionar pergunta
+                </Button>
+              ) : null}
+            </div>
+
+            {/* Diagnóstico com IA */}
+            <div className="space-y-3 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
+              <label className="flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  checked={quizAiResult}
+                  onChange={(e) => setQuizAiResult(e.target.checked)}
+                  className="mt-0.5 size-4 accent-primary"
+                />
+                <span>
+                  <span className="text-sm font-semibold text-foreground">
+                    🧠 Diagnóstico com IA na tela
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Assim que o lead deixa o contato, a IA lê as respostas e
+                    mostra um resultado personalizado na hora — e ainda
+                    qualifica o lead (🔥 quente / 🌤️ morno / ❄️ frio) com
+                    etiqueta no contato e resumo pro vendedor no card.
+                  </span>
+                </span>
+              </label>
+              {quizAiResult ? (
+                <div className="grid gap-1.5">
+                  <Label>Instruções do diagnóstico (opcional)</Label>
+                  <textarea
+                    value={quizResultPrompt}
+                    onChange={(e) => setQuizResultPrompt(e.target.value)}
+                    rows={2}
+                    placeholder='Ex.: "Você é consultora de estética. Recomende o protocolo ideal e convide pra avaliação gratuita."'
+                    className="w-full resize-none rounded-lg border border-border bg-muted px-2.5 py-2 text-sm text-foreground outline-none focus:border-primary"
+                  />
+                </div>
+              ) : null}
+              <div className="grid gap-1.5">
+                <Label>
+                  {quizAiResult
+                    ? "Texto reserva (se a IA falhar)"
+                    : "Texto mostrado no final"}
+                </Label>
+                <textarea
+                  value={quizResultFallback}
+                  onChange={(e) => setQuizResultFallback(e.target.value)}
+                  rows={2}
+                  placeholder="Ex.: Recebemos suas respostas! Vamos te chamar no WhatsApp com as recomendações."
+                  className="w-full resize-none rounded-lg border border-border bg-muted px-2.5 py-2 text-sm text-foreground outline-none focus:border-primary"
+                />
+              </div>
+            </div>
+
+            <div className="grid gap-1.5 sm:max-w-xs">
+              <Label>Texto do botão inicial</Label>
+              <Input
+                value={ctaText}
+                onChange={(e) => setCtaText(e.target.value)}
+                placeholder="Começar"
+              />
             </div>
           </div>
         )}

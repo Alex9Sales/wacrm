@@ -13,9 +13,61 @@ export interface CaptureTestimonial {
   author: string
   role: string
 }
+// ------------------------------------------------------------
+// Quiz com IA: perguntas → dados de contato → diagnóstico personalizado
+// escrito pela IA na tela (e qualificação quente/morno/frio pro vendedor).
+// ------------------------------------------------------------
+export interface QuizQuestion {
+  text: string
+  /** 'choice' = múltipla escolha (botões); 'text' = resposta livre. */
+  type: 'choice' | 'text'
+  /** Opções (só pra 'choice'; 2–6). */
+  options: string[]
+}
+
+export interface CaptureQuiz {
+  questions: QuizQuestion[]
+  /** IA escreve o resultado personalizado na tela + qualifica o lead. */
+  aiResult: boolean
+  /** Instruções extras pro diagnóstico (ex.: "você é consultora de estética..."). */
+  resultPrompt: string | null
+  /** Texto mostrado quando a IA está desligada ou falha. */
+  resultFallback: string | null
+}
+
+export const DEFAULT_CAPTURE_QUIZ: CaptureQuiz = {
+  questions: [],
+  aiResult: true,
+  resultPrompt: null,
+  resultFallback: null,
+}
+
+/** Perguntas iniciais de um quiz novo — o dono edita (ou pede pra IA escrever). */
+export const STARTER_QUIZ_QUESTIONS: QuizQuestion[] = [
+  {
+    text: 'Qual é o seu maior desafio hoje?',
+    type: 'choice',
+    options: [
+      'Atrair mais clientes',
+      'Atender rápido quem chega',
+      'Organizar o time e os processos',
+    ],
+  },
+  {
+    text: 'Pra quando você quer resolver isso?',
+    type: 'choice',
+    options: ['Pra ontem 🔥', 'Nos próximos meses', 'Só pesquisando por enquanto'],
+  },
+  {
+    text: 'Conte um pouco mais sobre a sua situação',
+    type: 'text',
+    options: [],
+  },
+]
+
 export interface CaptureContent {
-  /** 'form' = só o formulário (padrão); 'landing' = página completa. */
-  mode: 'form' | 'landing'
+  /** 'form' = só o formulário (padrão); 'landing' = página completa; 'quiz' = quiz interativo. */
+  mode: 'form' | 'landing' | 'quiz'
   heroImage: string | null
   logo: string | null
   /** Cor de destaque (hex). null = roxo padrão. */
@@ -31,6 +83,8 @@ export interface CaptureContent {
   schedulerSlug: string | null
   /** Fundo do hero (estilo Haikei/Trianglify, gerado por código na cor da marca). */
   heroStyle: 'gradient' | 'mesh' | 'waves' | 'blobs' | 'grid' | 'lowpoly'
+  /** Configuração do quiz (só usada quando mode = 'quiz'). */
+  quiz: CaptureQuiz
 }
 
 export const DEFAULT_CAPTURE_CONTENT: CaptureContent = {
@@ -45,6 +99,7 @@ export const DEFAULT_CAPTURE_CONTENT: CaptureContent = {
   showWhatsapp: false,
   schedulerSlug: null,
   heroStyle: 'gradient',
+  quiz: DEFAULT_CAPTURE_QUIZ,
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/
@@ -56,8 +111,31 @@ export function normalizeCaptureContent(input: unknown): CaptureContent {
     typeof v === 'string' ? v.trim().slice(0, max) : ''
   const benefits = Array.isArray(o.benefits) ? o.benefits : []
   const testimonials = Array.isArray(o.testimonials) ? o.testimonials : []
+  const quizIn = (o.quiz ?? {}) as Partial<CaptureQuiz>
+  const quizQuestions = (
+    Array.isArray(quizIn.questions) ? quizIn.questions : []
+  )
+    .map((q) => {
+      const type = (q as QuizQuestion | undefined)?.type === 'text' ? 'text' : 'choice'
+      return {
+        text: str((q as QuizQuestion | undefined)?.text, 300),
+        type,
+        options:
+          type === 'text'
+            ? []
+            : (Array.isArray((q as QuizQuestion | undefined)?.options)
+                ? ((q as QuizQuestion).options as unknown[])
+                : []
+              )
+                .map((op) => str(op, 120))
+                .filter(Boolean)
+                .slice(0, 6),
+      } as QuizQuestion
+    })
+    .filter((q) => q.text && (q.type === 'text' || q.options.length >= 2))
+    .slice(0, 10)
   return {
-    mode: o.mode === 'landing' ? 'landing' : 'form',
+    mode: o.mode === 'landing' ? 'landing' : o.mode === 'quiz' ? 'quiz' : 'form',
     heroImage: str(o.heroImage, 600) || null,
     logo: str(o.logo, 600) || null,
     brandColor:
@@ -88,6 +166,12 @@ export function normalizeCaptureContent(input: unknown): CaptureContent {
       o.heroStyle === 'lowpoly'
         ? o.heroStyle
         : 'gradient',
+    quiz: {
+      questions: quizQuestions,
+      aiResult: quizIn.aiResult !== false,
+      resultPrompt: str(quizIn.resultPrompt, 600) || null,
+      resultFallback: str(quizIn.resultFallback, 600) || null,
+    },
   }
 }
 
