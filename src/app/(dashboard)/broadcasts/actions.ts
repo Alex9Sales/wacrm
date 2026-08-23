@@ -899,6 +899,8 @@ export interface CreateTextBroadcastInput {
   mediaUrl?: string | null
   mediaType?: 'image' | 'video' | 'document' | 'audio' | null
   mediaFilename?: string | null
+  /** Múltiplos anexos (até 10) — precede mediaUrl. */
+  media?: { url: string; type: string; filename?: string | null }[]
   /** Max sends per day (default 50). Window/days/timezone use the defaults. */
   dailyCap?: number
   /** Send starting now (no business-hours wait) instead of the humanized
@@ -936,6 +938,7 @@ export async function createTextBroadcast(
       mediaUrl: input.mediaUrl,
       mediaType: input.mediaType,
       mediaFilename: input.mediaFilename,
+      media: input.media,
       includeOptOut: input.includeOptOut,
       subject: input.subject,
       dailyCap: input.dailyCap,

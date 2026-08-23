@@ -207,6 +207,19 @@ export const emailProvider: WhatsAppProvider = {
           ch.providerMeta.replySubject) ||
         'Atendimento',
     )
+    // Anexos (disparo de e-mail): baixa cada URL e anexa TODOS num só e-mail.
+    let attachments: { filename: string; content: Buffer }[] | undefined
+    if (options?.attachments?.length) {
+      attachments = []
+      for (const a of options.attachments) {
+        const res = await fetch(a.url)
+        if (!res.ok) throw new Error(`não consegui baixar o anexo (${res.status})`)
+        attachments.push({
+          filename: (a.filename || '').trim() || 'anexo',
+          content: Buffer.from(await res.arrayBuffer()),
+        })
+      }
+    }
     // BYO-SMTP (qualquer provedor): envia por SMTP se o canal tiver essa config.
     const smtp = smtpConfigOf(ch)
     if (smtp) {
@@ -216,6 +229,7 @@ export const emailProvider: WhatsAppProvider = {
         replyTo: addressOf(ch),
         subject,
         text,
+        ...(attachments ? { attachments } : {}),
       })
       return { externalMessageId: info.messageId ?? '' }
     }
@@ -226,6 +240,9 @@ export const emailProvider: WhatsAppProvider = {
       replyTo: addressOf(ch),
       subject,
       text,
+      ...(attachments
+        ? { attachments: attachments.map((a) => ({ filename: a.filename, content: a.content })) }
+        : {}),
     })
     if (error) {
       throw new Error(`email send falhou: ${error.message}`)

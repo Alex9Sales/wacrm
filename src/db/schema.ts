@@ -1301,6 +1301,9 @@ export const broadcasts = pgTable("broadcasts", {
 	bodyText: text("body_text"),
 	// Assunto quando o canal do disparo é e-mail (migração 0128); WhatsApp ignora.
 	subject: text(),
+	// Múltiplos anexos (migração 0129): [{url,type,filename}]. null = usa as
+	// colunas media_url/media_type/media_filename antigas (single).
+	media: jsonb(),
 	// Anti-ban (migração 0105): anexa uma opção de descadastro no fim de cada
 	// mensagem 'text' (WAHA = "responda SAIR"; oficial usa botões no template).
 	// Ligado por padrão pra disparos de texto.

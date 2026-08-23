@@ -390,6 +390,9 @@ export interface BroadcastSendContext {
   bodyText?: string | null;
   /** Assunto quando o canal é de e-mail (email/gmail); WhatsApp ignora. */
   subject?: string | null;
+  /** Múltiplos anexos: WhatsApp → 1 mensagem por item (legenda no 1º);
+   *  e-mail → todos anexados num único e-mail. Precede mediaUrl (legado). */
+  media?: { url: string; type: string; filename?: string | null }[] | null;
   /** Optional media attachment for a 'text' broadcast. */
   mediaUrl?: string | null;
   mediaType?: string | null;
@@ -435,30 +438,75 @@ export async function sendBroadcastRecipient(
     let body = renderMessageVars(rawBody, recipient.vars ?? {}).trim();
     // Anti-ban: anexa a opção de descadastro ("responda SAIR") no fim.
     if (ctx.includeOptOut) body = appendOptOutLine(body);
-    const mediaUrl = (ctx.mediaUrl ?? '').trim();
+
+    // Lista de anexos: media[] novo tem precedência; senão a single antiga.
+    const legacyUrl = (ctx.mediaUrl ?? '').trim();
+    const mediaList =
+      ctx.media && ctx.media.length > 0
+        ? ctx.media
+        : legacyUrl
+          ? [
+              {
+                url: legacyUrl,
+                type: (ctx.mediaType as string) || 'image',
+                filename: ctx.mediaFilename ?? null,
+              },
+            ]
+          : [];
 
     try {
-      if (mediaUrl) {
-        const kind = (ctx.mediaType as OutboundMedia['kind']) || 'image';
-        // Audio carries no caption on WhatsApp; everything else uses the
-        // personalized text as the caption.
-        const media: OutboundMedia = {
-          kind,
-          url: mediaUrl,
-          caption: kind === 'audio' || !body ? undefined : body,
-          filename: ctx.mediaFilename ?? undefined,
-        };
-        const result = await provider.sendMedia(channel, recipient.phone, media);
+      // Canal de E-MAIL (subject presente): UM e-mail com corpo + N anexos.
+      if (ctx.subject) {
+        if (!body && mediaList.length === 0) {
+          return { ok: false, error: 'empty text body' };
+        }
+        const result = await provider.sendText(
+          channel,
+          recipient.phone,
+          body || 'Segue em anexo.',
+          {
+            subject: ctx.subject,
+            ...(mediaList.length > 0
+              ? {
+                  attachments: mediaList.map((m) => ({
+                    url: m.url,
+                    filename: m.filename ?? undefined,
+                  })),
+                }
+              : {}),
+          },
+        );
         return { ok: true, externalMessageId: result.externalMessageId };
       }
 
+      // WhatsApp: cada anexo vira uma mensagem; a legenda (corpo) vai no 1º
+      // não-áudio. Sem anexos → texto puro.
+      if (mediaList.length > 0) {
+        let lastId = '';
+        let captionUsed = false;
+        for (const m of mediaList) {
+          const kind = (m.type as OutboundMedia['kind']) || 'image';
+          const useCaption = !captionUsed && kind !== 'audio' && !!body;
+          const media: OutboundMedia = {
+            kind,
+            url: m.url,
+            caption: useCaption ? body : undefined,
+            filename: m.filename ?? undefined,
+          };
+          const result = await provider.sendMedia(channel, recipient.phone, media);
+          lastId = result.externalMessageId;
+          if (useCaption) captionUsed = true;
+        }
+        // Corpo ficou sem lugar (todos os anexos são áudio) → manda como texto.
+        if (body && !captionUsed) {
+          const r = await provider.sendText(channel, recipient.phone, body, {});
+          lastId = r.externalMessageId;
+        }
+        return { ok: true, externalMessageId: lastId };
+      }
+
       if (!body) return { ok: false, error: 'empty text body' };
-      const result = await provider.sendText(
-        channel,
-        recipient.phone,
-        body,
-        ctx.subject ? { subject: ctx.subject } : {},
-      );
+      const result = await provider.sendText(channel, recipient.phone, body, {});
       return { ok: true, externalMessageId: result.externalMessageId };
     } catch (error) {
       return {

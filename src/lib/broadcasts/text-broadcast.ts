@@ -36,6 +36,10 @@ export interface EnqueueTextBroadcastInput {
   mediaUrl?: string | null
   mediaType?: 'image' | 'video' | 'document' | 'audio' | null
   mediaFilename?: string | null
+  /** Múltiplos anexos (até 10). Tem precedência sobre mediaUrl/mediaType. No
+   *  WhatsApp cada um vira uma mensagem (legenda no 1º); no e-mail vão todos
+   *  como anexos de um único e-mail. */
+  media?: { url: string; type: string; filename?: string | null }[]
   /** Anexa a opção de descadastro ("responda SAIR") no fim. Default true. */
   includeOptOut?: boolean
   /** Assunto — obrigatório quando o canal é de e-mail; WhatsApp ignora. */
@@ -71,7 +75,19 @@ export async function enqueueTextBroadcast(
   try {
     const body = (input.bodyText ?? '').trim()
     const mediaUrl = (input.mediaUrl ?? '').trim()
-    if (!body && !mediaUrl) {
+    // Lista de anexos: `media[]` novo tem precedência; senão a single antiga.
+    const MEDIA_KINDS = ['image', 'video', 'document', 'audio'] as const
+    const mediaList = (input.media ?? [])
+      .map((m) => ({
+        url: (m.url ?? '').trim(),
+        type: (MEDIA_KINDS as readonly string[]).includes(m.type)
+          ? m.type
+          : 'document',
+        filename: (m.filename ?? '').trim() || null,
+      }))
+      .filter((m) => m.url)
+      .slice(0, 10)
+    if (!body && !mediaUrl && mediaList.length === 0) {
       return { broadcastId: null, totalRecipients: 0, error: 'Escreva a mensagem ou anexe uma mídia.' }
     }
     const mediaType = mediaUrl
@@ -101,13 +117,7 @@ export async function enqueueTextBroadcast(
     if (isEmail && !subject) {
       return { broadcastId: null, totalRecipients: 0, error: 'Informe o assunto do e-mail.' }
     }
-    if (isEmail && mediaUrl) {
-      return {
-        broadcastId: null,
-        totalRecipients: 0,
-        error: 'Disparo de e-mail ainda não aceita mídia — envie só o texto.',
-      }
-    }
+    // E-mail aceita anexos via `media[]` (todos num só e-mail).
 
     // Keep account-owned contacts with a valid destination (phone no WhatsApp;
     // e-mail nos canais de e-mail), deduped, in order.
@@ -177,6 +187,7 @@ export async function enqueueTextBroadcast(
           bodyText: body || null,
           subject: subject || null,
           includeOptOut: input.includeOptOut !== false,
+          media: mediaList.length > 0 ? mediaList : null,
           mediaUrl: mediaUrl || null,
           mediaType,
           mediaFilename: input.mediaFilename?.trim() || null,

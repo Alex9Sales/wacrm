@@ -87,9 +87,12 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
   const messageRef = useRef<HTMLTextAreaElement>(null)
 
   // Optional media attachment.
-  const [mediaUrl, setMediaUrl] = useState('')
-  const [mediaType, setMediaType] = useState<MediaKind | null>(null)
-  const [mediaFilename, setMediaFilename] = useState('')
+  // Múltiplos anexos (até 10): mídia, PDF, documentos…
+  const [mediaItems, setMediaItems] = useState<
+    { url: string; type: MediaKind; filename: string }[]
+  >([])
+  const [mediaDragOver, setMediaDragOver] = useState(false)
+  const [csvDragOver, setCsvDragOver] = useState(false)
   const [uploadingMedia, setUploadingMedia] = useState(false)
   const mediaRef = useRef<HTMLInputElement>(null)
 
@@ -224,32 +227,45 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
     )
   }, [])
 
-  const handleMediaFile = useCallback(async (file: File) => {
-    const kind = kindFromMime(file.type)
-    const max = MEDIA_MAX_BYTES_BY_KIND[kind]
-    if (file.size > max) {
-      toast.error(`Arquivo grande demais para ${kind} (máx. ${Math.round(max / 1024 / 1024)}MB).`)
-      return
-    }
-    setUploadingMedia(true)
-    try {
-      const { publicUrl } = await uploadAccountMedia('media', file)
-      setMediaUrl(publicUrl)
-      setMediaType(kind)
-      setMediaFilename(file.name)
-      toast.success('Mídia anexada.')
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha ao enviar a mídia.')
-    } finally {
-      setUploadingMedia(false)
-    }
-  }, [])
+  const handleMediaFiles = useCallback(
+    async (files: File[]) => {
+      if (files.length === 0) return
+      setUploadingMedia(true)
+      try {
+        let added = 0
+        for (const file of files) {
+          if (mediaItems.length + added >= 10) {
+            toast.error('Máximo de 10 anexos por disparo.')
+            break
+          }
+          const kind = kindFromMime(file.type)
+          const max = MEDIA_MAX_BYTES_BY_KIND[kind]
+          if (file.size > max) {
+            toast.error(
+              `"${file.name}" é grande demais (máx. ${Math.round(max / 1024 / 1024)}MB).`,
+            )
+            continue
+          }
+          const { publicUrl } = await uploadAccountMedia('media', file)
+          setMediaItems((prev) => [
+            ...prev,
+            { url: publicUrl, type: kind, filename: file.name },
+          ])
+          added++
+        }
+        if (added > 0) toast.success(`${added} anexo(s) adicionados.`)
+      } catch (err) {
+        toast.error(err instanceof Error ? err.message : 'Falha ao enviar a mídia.')
+      } finally {
+        setUploadingMedia(false)
+        if (mediaRef.current) mediaRef.current.value = ''
+      }
+    },
+    [mediaItems.length],
+  )
 
-  const clearMedia = useCallback(() => {
-    setMediaUrl('')
-    setMediaType(null)
-    setMediaFilename('')
-    if (mediaRef.current) mediaRef.current.value = ''
+  const removeMedia = useCallback((index: number) => {
+    setMediaItems((prev) => prev.filter((_, i) => i !== index))
   }, [])
 
   /** Insert a {{token}} at the cursor in the message textarea. */
@@ -281,7 +297,7 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
     !uploadingMedia &&
     !!channelId &&
     (!isEmailChannel || subject.trim().length > 0) &&
-    (message.trim().length > 0 || !!mediaUrl) &&
+    (message.trim().length > 0 || mediaItems.length > 0) &&
     ((audienceType === 'all') ||
       (audienceType === 'tags' && selectedTagIds.length > 0) ||
       (audienceType === 'contacts' && pickedContacts.length > 0) ||
@@ -295,9 +311,7 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
         name: name.trim() || null,
         channelId,
         bodyText: message.trim(),
-        mediaUrl: mediaUrl || null,
-        mediaType,
-        mediaFilename: mediaFilename || null,
+        media: mediaItems.length > 0 ? mediaItems : undefined,
         includeOptOut,
         subject: subject.trim() || null,
         dailyCap: cap,
@@ -326,7 +340,7 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
     } finally {
       setSubmitting(false)
     }
-  }, [canSubmit, name, channelId, subject, message, mediaUrl, mediaType, mediaFilename, includeOptOut, cap, sendNow, sendNowIntervalMin, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
+  }, [canSubmit, name, channelId, subject, message, mediaItems, includeOptOut, cap, sendNow, sendNowIntervalMin, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
 
   if (loading) {
     return (
@@ -493,43 +507,66 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
         </span>
       </label>
 
-      {/* Media attachment (e-mail v1 é só texto) */}
-      <div className={isEmailChannel ? "hidden" : "space-y-1.5"}>
-        <Label>Mídia (opcional)</Label>
+      {/* Anexos (múltiplos): mídia, PDF, documentos — clique OU arraste. */}
+      <div className="space-y-1.5">
+        <Label>{isEmailChannel ? 'Anexos (opcional)' : 'Mídia (opcional)'}</Label>
         <input
           ref={mediaRef}
           type="file"
-          accept="image/*,video/*,audio/*,application/pdf"
+          multiple
+          accept="image/*,video/*,audio/*,application/pdf,.doc,.docx,.xls,.xlsx,.ppt,.pptx,.txt"
           className="hidden"
           onChange={(e) => {
-            const f = e.target.files?.[0]
-            if (f) void handleMediaFile(f)
+            void handleMediaFiles(Array.from(e.target.files ?? []))
           }}
         />
-        {mediaUrl ? (
-          <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-muted px-3 py-2">
-            <span className="flex items-center gap-2 truncate text-xs text-foreground">
-              <Paperclip className="h-3.5 w-3.5 shrink-0 text-primary" />
-              <span className="truncate">{mediaFilename}</span>
-              <span className="shrink-0 rounded-full bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
-                {mediaType}
-              </span>
-            </span>
-            <button
-              type="button"
-              onClick={clearMedia}
-              className="shrink-0 text-muted-foreground hover:text-red-400"
-              aria-label="Remover mídia"
-            >
-              <X className="h-4 w-4" />
-            </button>
+        {mediaItems.length > 0 && (
+          <div className="space-y-1.5">
+            {mediaItems.map((m, i) => (
+              <div
+                key={`${m.url}-${i}`}
+                className="flex items-center justify-between gap-2 rounded-lg border border-border bg-muted px-3 py-2"
+              >
+                <span className="flex items-center gap-2 truncate text-xs text-foreground">
+                  <Paperclip className="h-3.5 w-3.5 shrink-0 text-primary" />
+                  <span className="truncate">{m.filename}</span>
+                  <span className="shrink-0 rounded-full bg-background px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                    {m.type}
+                  </span>
+                </span>
+                <button
+                  type="button"
+                  onClick={() => removeMedia(i)}
+                  className="shrink-0 text-muted-foreground hover:text-red-400"
+                  aria-label="Remover anexo"
+                >
+                  <X className="h-4 w-4" />
+                </button>
+              </div>
+            ))}
           </div>
-        ) : (
+        )}
+        {mediaItems.length < 10 && (
           <button
             type="button"
             onClick={() => mediaRef.current?.click()}
+            onDragOver={(e) => {
+              e.preventDefault()
+              setMediaDragOver(true)
+            }}
+            onDragLeave={() => setMediaDragOver(false)}
+            onDrop={(e) => {
+              e.preventDefault()
+              setMediaDragOver(false)
+              void handleMediaFiles(Array.from(e.dataTransfer.files ?? []))
+            }}
             disabled={uploadingMedia}
-            className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border px-3 py-3 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground disabled:opacity-50"
+            className={cn(
+              'flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-3 text-xs transition-colors disabled:opacity-50',
+              mediaDragOver
+                ? 'border-primary bg-primary/5 text-foreground'
+                : 'border-border text-muted-foreground hover:border-primary/40 hover:text-foreground',
+            )}
           >
             {uploadingMedia ? (
               <>
@@ -537,16 +574,29 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
               </>
             ) : (
               <>
-                <Paperclip className="h-4 w-4" /> Anexar imagem, vídeo, áudio ou PDF
+                <Paperclip className="h-4 w-4" />
+                {mediaItems.length > 0
+                  ? 'Adicionar mais anexos — clique ou arraste aqui'
+                  : 'Anexar imagem, vídeo, áudio, PDF ou documento — clique ou arraste aqui'}
               </>
             )}
           </button>
         )}
-        {mediaType === 'audio' && message.trim().length > 0 && (
-          <p className="text-[11px] text-amber-400">
-            Áudio não leva legenda — o texto acima não será enviado junto.
+        {!isEmailChannel && mediaItems.length > 1 && (
+          <p className="text-[11px] text-muted-foreground">
+            No WhatsApp cada anexo vira uma mensagem — o texto vai junto do
+            primeiro. No e-mail, todos vão num único e-mail.
           </p>
         )}
+        {!isEmailChannel &&
+          mediaItems.some((m) => m.type === 'audio') &&
+          message.trim().length > 0 &&
+          mediaItems.every((m) => m.type === 'audio') && (
+            <p className="text-[11px] text-amber-400">
+              Áudio não leva legenda — o texto será enviado como mensagem
+              separada.
+            </p>
+          )}
       </div>
 
       {/* Audience */}
@@ -690,12 +740,28 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
             <button
               type="button"
               onClick={() => fileRef.current?.click()}
-              className="flex w-full items-center justify-center gap-2 rounded-lg border border-dashed border-border px-3 py-3 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
+              onDragOver={(e) => {
+                e.preventDefault()
+                setCsvDragOver(true)
+              }}
+              onDragLeave={() => setCsvDragOver(false)}
+              onDrop={(e) => {
+                e.preventDefault()
+                setCsvDragOver(false)
+                const f = e.dataTransfer.files?.[0]
+                if (f) void handleFile(f)
+              }}
+              className={cn(
+                'flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-3 text-xs transition-colors',
+                csvDragOver
+                  ? 'border-primary bg-primary/5 text-foreground'
+                  : 'border-border text-muted-foreground hover:border-primary/40 hover:text-foreground',
+              )}
             >
               <Upload className="h-4 w-4" />
               {csvName
-                ? `${csvName} — ${csvContacts.length} contatos`
-                : 'Enviar planilha (.csv) — uma linha por contato: telefone,nome'}
+                ? `${csvName} — ${csvContacts.length} contatos (arraste outro pra trocar)`
+                : 'Enviar planilha (.csv) — clique ou arraste aqui. Uma linha por contato: telefone,nome'}
             </button>
           </div>
         )}

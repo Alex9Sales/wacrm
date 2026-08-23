@@ -30,6 +30,7 @@ export interface BroadcastRow {
   messageKind: string;
   bodyText: string | null;
   subject: string | null;
+  media: unknown;
   mediaUrl: string | null;
   mediaType: string | null;
   mediaFilename: string | null;
@@ -53,6 +54,7 @@ export async function loadBroadcastRow(
         messageKind: broadcasts.messageKind,
         bodyText: broadcasts.bodyText,
         subject: broadcasts.subject,
+        media: broadcasts.media,
         mediaUrl: broadcasts.mediaUrl,
         mediaType: broadcasts.mediaType,
         mediaFilename: broadcasts.mediaFilename,
@@ -213,6 +215,9 @@ export async function loadRecipientJobContext(
     messageKind: isText ? 'text' : 'template',
     includeOptOut: broadcast.includeOptOut,
     subject: broadcast.subject,
+    media: Array.isArray(broadcast.media)
+      ? (broadcast.media as { url: string; type: string; filename?: string | null }[])
+      : null,
     bodyText: broadcast.bodyText,
     mediaUrl: broadcast.mediaUrl,
     mediaType: broadcast.mediaType,

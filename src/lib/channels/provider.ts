@@ -178,6 +178,9 @@ export interface SendOptions {
   mentions?: string[];
   /** Assunto do e-mail (canais de e-mail). Ignorado por WhatsApp/IG/Messenger. */
   subject?: string;
+  /** Anexos do e-mail (canais de e-mail): o provider baixa cada URL e anexa
+   *  TODOS num único e-mail. Ignorado por WhatsApp/IG/Messenger. */
+  attachments?: { url: string; filename?: string }[];
 }
 
 /** Outbound media descriptor. */
