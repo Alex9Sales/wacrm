@@ -67,6 +67,7 @@ import {
 } from '@/lib/whatsapp/group';
 import { normalizeInboundPhoneBR } from '@/lib/whatsapp/phone-utils';
 import { matchesOptOut, optOutContact } from '@/lib/contacts/opt-out';
+import { handleCaptureWaRef } from '@/lib/capture/wa-ref';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
 
@@ -559,6 +560,11 @@ export async function dispatchInboundMessage(
     }, conversation.channelId);
     return { conversationId: conversation.id, contactId, isFirstInbound };
   }
+
+  // 📱 Link Zap rastreado (Captação): a 1ª mensagem pode trazer o ref (#F7K2)
+  // do link wa.me/QR de um formulário → card no funil com a origem exata.
+  // Best-effort e com guarda de duplicação (nunca derruba o inbound).
+  await handleCaptureWaRef(accountId, contactId, ev.contentText ?? '');
 
   // Config da IA (carregado uma vez): decide se a IA é o respondente de
   // fora-do-horário e serve o buffer abaixo. requireActive default → null

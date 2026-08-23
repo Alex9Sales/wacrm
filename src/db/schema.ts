@@ -516,6 +516,10 @@ export const captureForms = pgTable("capture_forms", {
 	// segundos após o envio do formulário.
 	aiIntro: boolean("ai_intro").default(false).notNull(),
 	introChannelId: uuid("intro_channel_id"),
+	// Link Zap + QR rastreado (migração 0125): ref curto no wa.me/QR → card com
+	// a origem exata quando o "Oi" chega no inbound.
+	waRef: text("wa_ref"),
+	waLeads: integer("wa_leads").default(0).notNull(),
 	pipelineId: uuid("pipeline_id"),
 	stageId: uuid("stage_id"),
 	origin: text().default('Formulário').notNull(),

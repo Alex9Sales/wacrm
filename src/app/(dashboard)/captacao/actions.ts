@@ -1,6 +1,6 @@
 'use server'
 
-import { and, asc, desc, eq } from 'drizzle-orm'
+import { and, asc, desc, eq, sql } from 'drizzle-orm'
 
 import { db, captureForms, pipelines, pipelineStages, channels, products } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -16,6 +16,8 @@ import {
   type CaptureField,
   type CaptureContent,
 } from '@/lib/capture/shared'
+import { randomWaRef } from '@/lib/capture/wa-ref'
+import { loadDefaultChannel } from '@/lib/channels/channels'
 
 const APP_URL = (
   process.env.APP_URL || 'https://crm.salestecnologia.com.br'
@@ -137,6 +139,22 @@ export async function getCaptureForm(
   }
 }
 
+/** Gera um wa_ref único (colisão é raríssima; tenta algumas vezes). */
+async function uniqueWaRef(): Promise<string> {
+  for (let i = 0; i < 6; i++) {
+    const ref = randomWaRef()
+    const taken = firstOrNull(
+      await db
+        .select({ id: captureForms.id })
+        .from(captureForms)
+        .where(sql`upper(${captureForms.waRef}) = ${ref}`)
+        .limit(1),
+    )
+    if (!taken) return ref
+  }
+  return randomWaRef(8)
+}
+
 /** Gera um slug único (base do nome + sufixo curto), tentando de novo em colisão. */
 async function uniqueSlug(name: string): Promise<string> {
   const base = slugifyName(name) || 'formulario'
@@ -163,12 +181,14 @@ export async function createCaptureForm(
     const name = (input.name ?? '').trim()
     if (!name) return { id: null, error: 'Dê um nome ao formulário.' }
     const slug = await uniqueSlug(name)
+    const waRef = await uniqueWaRef()
     try {
       const row = await db
         .insert(captureForms)
         .values({
           accountId: ctx.accountId,
           slug,
+          waRef,
           name,
           headline: (input.headline ?? '').trim() || null,
           description: (input.description ?? '').trim() || null,
@@ -373,6 +393,85 @@ export async function generateCaptureLanding(
       data: null,
       error: 'Falha ao gerar com a IA. Confira a chave do agente e tente de novo.',
     }
+  }
+}
+
+// ------------------------------------------------------------
+// Link Zap + QR rastreado: link wa.me com o ref do formulário embutido na
+// mensagem pré-preenchida. O número é o do canal do form (⚡) ou o padrão.
+// ------------------------------------------------------------
+export interface CaptureWaInfo {
+  link: string
+  ref: string
+  phone: string
+  channelName: string
+  message: string
+}
+
+export async function getCaptureWaInfo(
+  formId: string,
+): Promise<{ data: CaptureWaInfo | null; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const form = firstOrNull(
+      await db
+        .select({
+          waRef: captureForms.waRef,
+          introChannelId: captureForms.introChannelId,
+        })
+        .from(captureForms)
+        .where(and(eq(captureForms.id, formId), eq(captureForms.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!form) return { data: null, error: 'Formulário não encontrado.' }
+
+    // Garante o ref (forms antigos podem não ter — gera e grava na hora).
+    let ref = (form.waRef ?? '').toUpperCase()
+    if (!ref) {
+      ref = await uniqueWaRef()
+      await db
+        .update(captureForms)
+        .set({ waRef: ref })
+        .where(eq(captureForms.id, formId))
+    }
+
+    // Canal: o escolhido no ⚡ (se tiver telefone), senão o padrão da conta.
+    let channelName = ''
+    let phoneRaw = ''
+    if (form.introChannelId) {
+      const ch = firstOrNull(
+        await db
+          .select({ name: channels.name, phone: channels.phoneNumber })
+          .from(channels)
+          .where(and(eq(channels.id, form.introChannelId), eq(channels.accountId, ctx.accountId)))
+          .limit(1),
+      )
+      if (ch?.phone) {
+        channelName = ch.name
+        phoneRaw = ch.phone
+      }
+    }
+    if (!phoneRaw) {
+      const def = await loadDefaultChannel(ctx.accountId)
+      if (def?.phoneNumber) {
+        channelName = def.name
+        phoneRaw = def.phoneNumber
+      }
+    }
+    const phone = phoneRaw.replace(/\D/g, '')
+    if (!phone) {
+      return {
+        data: null,
+        error: 'Nenhum canal WhatsApp com número encontrado. Conecte um canal primeiro.',
+      }
+    }
+
+    const message = `Olá! Quero mais informações. #${ref}`
+    const link = `https://wa.me/${phone}?text=${encodeURIComponent(message)}`
+    return { data: { link, ref, phone, channelName, message }, error: null }
+  } catch (err) {
+    console.error('[getCaptureWaInfo]', err)
+    return { data: null, error: 'Falha ao montar o link do WhatsApp.' }
   }
 }
 

@@ -31,9 +31,12 @@ import {
   listCapturePipelines,
   listCaptureChannels,
   generateCaptureLanding,
+  getCaptureWaInfo,
   type CaptureFormRow,
   type CaptureFormDetail,
+  type CaptureWaInfo,
 } from "./actions";
+import QRCode from "qrcode";
 import {
   CAPTURE_FIELD_DEFS,
   CAPTURE_FIELD_ORDER,
@@ -300,6 +303,36 @@ function CaptureEditor({
   // Landing em 1 clique: a IA escreve a página inteira (o dono revisa e salva).
   const [genBriefing, setGenBriefing] = useState("");
   const [generating, setGenerating] = useState(false);
+
+  // Link Zap + QR rastreado (só de formulário já salvo).
+  const [waInfo, setWaInfo] = useState<CaptureWaInfo | null>(null);
+  const [qrUrl, setQrUrl] = useState("");
+
+  useEffect(() => {
+    if (!initial) return;
+    let alive = true;
+    getCaptureWaInfo(initial.id)
+      .then((res) => alive && setWaInfo(res.data))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [initial]);
+
+  useEffect(() => {
+    if (!waInfo) {
+      setQrUrl("");
+      return;
+    }
+    const dark = /^#[0-9a-fA-F]{6}$/.test(brandColor) ? brandColor : "#7c3aed";
+    QRCode.toDataURL(waInfo.link, {
+      width: 512,
+      margin: 2,
+      color: { dark, light: "#ffffff" },
+    })
+      .then(setQrUrl)
+      .catch(() => setQrUrl(""));
+  }, [waInfo, brandColor]);
 
   async function handleGenerate() {
     setGenerating(true);
@@ -823,6 +856,77 @@ function CaptureEditor({
           <p className="text-xs text-amber-600 dark:text-amber-400">
             Conecte um canal de WhatsApp para a mensagem sair.
           </p>
+        )}
+      </div>
+
+      {/* Link Zap + QR rastreado */}
+      <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <div className="text-sm font-semibold text-foreground">
+          📱 Link do WhatsApp + QR rastreado
+        </div>
+        {!initial ? (
+          <p className="text-xs text-muted-foreground">
+            Salve o formulário para gerar o link e o QR — cada um carrega um
+            código invisível: quando o &quot;Oi&quot; chegar, o lead vira card
+            no funil com a origem exata.
+          </p>
+        ) : !waInfo ? (
+          <p className="text-xs text-muted-foreground">
+            Nenhum canal WhatsApp com número encontrado — conecte um canal para
+            gerar o link.
+          </p>
+        ) : (
+          <div className="flex flex-wrap items-start gap-4">
+            <div className="min-w-[220px] flex-1 space-y-2">
+              <p className="text-xs text-muted-foreground">
+                Quem clicar (ou escanear) abre o WhatsApp de{" "}
+                <strong className="text-foreground">{waInfo.channelName}</strong>{" "}
+                com a mensagem pronta:
+              </p>
+              <p className="rounded-lg border border-border bg-muted/50 px-3 py-2 text-xs text-foreground">
+                {waInfo.message}
+              </p>
+              <div className="flex items-center gap-1 rounded-lg border border-border bg-muted/50 px-2 py-1.5">
+                <span className="flex-1 truncate text-xs text-muted-foreground">
+                  {waInfo.link}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => {
+                    navigator.clipboard?.writeText(waInfo.link);
+                    toast.success("Link do WhatsApp copiado.");
+                  }}
+                  title="Copiar link"
+                  className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </button>
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                O <strong>#{waInfo.ref}</strong> na mensagem é o rastreador:
+                quando ela chega, o card nasce com a origem &quot;{origin ||
+                "Formulário"}&quot; e a fonte deste formulário. Use o link no
+                story/bio e o QR em material impresso ou no balcão.
+              </p>
+            </div>
+            {qrUrl ? (
+              <div className="space-y-2 text-center">
+                {/* eslint-disable-next-line @next/next/no-img-element */}
+                <img
+                  src={qrUrl}
+                  alt="QR do WhatsApp"
+                  className="h-36 w-36 rounded-lg border border-border bg-white p-1"
+                />
+                <a
+                  href={qrUrl}
+                  download={`qr-whatsapp-${initial.slug}.png`}
+                  className="block text-xs font-medium text-primary hover:underline"
+                >
+                  Baixar QR (PNG)
+                </a>
+              </div>
+            ) : null}
+          </div>
         )}
       </div>
 
