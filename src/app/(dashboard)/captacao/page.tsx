@@ -31,11 +31,20 @@ import {
   listCapturePipelines,
   listCaptureChannels,
   listCaptureCadences,
+  listCaptureMembers,
   generateCaptureLanding,
   getCaptureWaInfo,
+  listSchedulers,
+  getScheduler,
+  createScheduler,
+  updateScheduler,
+  deleteScheduler,
   type CaptureFormRow,
   type CaptureFormDetail,
   type CaptureWaInfo,
+  type SchedulerRow,
+  type SchedulerDetail,
+  type SchedulerWindowInput,
 } from "./actions";
 import QRCode from "qrcode";
 import {
@@ -60,23 +69,32 @@ export default function CaptacaoPage() {
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
   const [cadences, setCadences] = useState<{ id: string; name: string }[]>([]);
+  const [scheds, setScheds] = useState<SchedulerRow[]>([]);
+  const [members, setMembers] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<
     CaptureFormDetail | { new: "form" | "landing" } | null
   >(null);
+  const [editingSched, setEditingSched] = useState<SchedulerDetail | "new" | null>(
+    null,
+  );
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [f, p, ch, cad] = await Promise.all([
+    const [f, p, ch, cad, sc, mb] = await Promise.all([
       listCaptureForms().catch(() => [] as CaptureFormRow[]),
       listCapturePipelines().catch(() => [] as Pipeline[]),
       listCaptureChannels().catch(() => [] as { id: string; name: string }[]),
       listCaptureCadences().catch(() => [] as { id: string; name: string }[]),
+      listSchedulers().catch(() => [] as SchedulerRow[]),
+      listCaptureMembers().catch(() => [] as { id: string; name: string }[]),
     ]);
     setForms(f);
     setPipelines(p);
     setChannels(ch);
     setCadences(cad);
+    setScheds(sc);
+    setMembers(mb);
     setLoading(false);
   }, []);
 
@@ -107,6 +125,43 @@ export default function CaptacaoPage() {
   function copyLink(url: string) {
     navigator.clipboard?.writeText(url);
     toast.success("Link copiado.");
+  }
+
+  async function openEditSched(id: string) {
+    const detail = await getScheduler(id).catch(() => null);
+    if (!detail) {
+      toast.error("Não foi possível abrir a página de agendamento.");
+      return;
+    }
+    setEditingSched(detail);
+  }
+
+  async function handleDeleteSched(id: string) {
+    if (!confirm("Excluir esta página de agendamento? O link para de funcionar."))
+      return;
+    const { error } = await deleteScheduler(id);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    toast.success("Página excluída.");
+    void load();
+  }
+
+  if (editingSched) {
+    return (
+      <SchedulerEditor
+        initial={editingSched === "new" ? null : editingSched}
+        pipelines={pipelines}
+        channels={channels}
+        members={members}
+        onCancel={() => setEditingSched(null)}
+        onSaved={() => {
+          setEditingSched(null);
+          void load();
+        }}
+      />
+    );
   }
 
   if (editing) {
@@ -244,6 +299,439 @@ export default function CaptacaoPage() {
           ))}
         </div>
       )}
+
+      {/* Páginas de agendamento (tipo Calendly) */}
+      <div className="mt-8 flex items-center gap-3 border-t border-border pt-6">
+        <div className="flex-1">
+          <h2 className="text-lg font-bold text-foreground">
+            🗓️ Páginas de agendamento
+          </h2>
+          <p className="text-sm text-muted-foreground">
+            Link público onde o lead escolhe o horário — vira reunião na agenda
+            e card no funil, com confirmação no WhatsApp.
+          </p>
+        </div>
+        <Button onClick={() => setEditingSched("new")}>
+          <Plus className="mr-1.5 h-4 w-4" /> Nova página
+        </Button>
+      </div>
+
+      {!loading && scheds.length === 0 ? (
+        <div className="rounded-xl border border-dashed border-border bg-card/40 p-6 text-center">
+          <p className="text-sm text-muted-foreground">
+            Nenhuma página ainda. Crie uma e coloque o link na bio, na
+            assinatura de e-mail ou mande direto pro lead.
+          </p>
+        </div>
+      ) : (
+        <div className="grid gap-3 sm:grid-cols-2">
+          {scheds.map((s) => (
+            <div key={s.id} className="rounded-xl border border-border bg-card p-4">
+              <div className="flex items-center gap-2">
+                <h3 className="truncate text-sm font-semibold text-foreground">
+                  {s.name}
+                </h3>
+                <span
+                  className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                    s.active
+                      ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                      : "bg-muted text-muted-foreground"
+                  }`}
+                >
+                  {s.active ? "Ativa" : "Inativa"}
+                </span>
+              </div>
+              <p className="mt-0.5 text-xs text-muted-foreground">
+                {s.ownerName ? `Agenda de ${s.ownerName} · ` : ""}
+                {s.bookings} agendamento(s)
+              </p>
+              <div className="mt-3 flex items-center gap-1 rounded-lg border border-border bg-muted/50 px-2 py-1.5">
+                <span className="flex-1 truncate text-xs text-muted-foreground">
+                  {s.publicUrl}
+                </span>
+                <button
+                  type="button"
+                  onClick={() => copyLink(s.publicUrl)}
+                  title="Copiar link"
+                  className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+                >
+                  <Copy className="h-3.5 w-3.5" />
+                </button>
+                <a
+                  href={s.publicUrl}
+                  target="_blank"
+                  rel="noreferrer"
+                  title="Abrir"
+                  className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+                >
+                  <ExternalLink className="h-3.5 w-3.5" />
+                </a>
+              </div>
+              <div className="mt-3 flex items-center gap-2">
+                <Button size="sm" variant="outline" onClick={() => void openEditSched(s.id)}>
+                  <Pencil className="mr-1.5 h-3.5 w-3.5" /> Editar
+                </Button>
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => void handleDeleteSched(s.id)}
+                  className="text-muted-foreground hover:text-red-500"
+                >
+                  <Trash2 className="h-3.5 w-3.5" />
+                </Button>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ------------------------------------------------------------
+// Editor da página de agendamento.
+// ------------------------------------------------------------
+const WEEKDAYS = ["Dom", "Seg", "Ter", "Qua", "Qui", "Sex", "Sáb"];
+const DEFAULT_AVAILABILITY: SchedulerWindowInput[] = [
+  { open: null, close: null },
+  { open: "09:00", close: "18:00" },
+  { open: "09:00", close: "18:00" },
+  { open: "09:00", close: "18:00" },
+  { open: "09:00", close: "18:00" },
+  { open: "09:00", close: "18:00" },
+  { open: null, close: null },
+];
+
+function SchedulerEditor({
+  initial,
+  pipelines,
+  channels,
+  members,
+  onCancel,
+  onSaved,
+}: {
+  initial: SchedulerDetail | null;
+  pipelines: Pipeline[];
+  channels: { id: string; name: string }[];
+  members: { id: string; name: string }[];
+  onCancel: () => void;
+  onSaved: () => void;
+}) {
+  const [name, setName] = useState(initial?.name ?? "");
+  const [headline, setHeadline] = useState(initial?.headline ?? "");
+  const [description, setDescription] = useState(initial?.description ?? "");
+  const [userId, setUserId] = useState(initial?.userId ?? members[0]?.id ?? "");
+  const [duration, setDuration] = useState(initial?.durationMinutes ?? 30);
+  const [availability, setAvailability] = useState<SchedulerWindowInput[]>(
+    initial?.availability?.length === 7
+      ? initial.availability
+      : DEFAULT_AVAILABILITY,
+  );
+  const [minNotice, setMinNotice] = useState(initial?.minNoticeHours ?? 12);
+  const [horizon, setHorizon] = useState(initial?.horizonDays ?? 14);
+  const [location, setLocation] = useState(initial?.location ?? "");
+  const [pipelineId, setPipelineId] = useState(initial?.pipelineId ?? "");
+  const [stageId, setStageId] = useState(initial?.stageId ?? "");
+  const [origin, setOrigin] = useState(initial?.origin ?? "Agendamento");
+  const [confirmWhatsapp, setConfirmWhatsapp] = useState(
+    initial?.confirmWhatsapp ?? true,
+  );
+  const [confirmChannelId, setConfirmChannelId] = useState(
+    initial?.confirmChannelId ?? "",
+  );
+  const [active, setActive] = useState(initial?.active ?? true);
+  const [saving, setSaving] = useState(false);
+
+  const stages = pipelines.find((p) => p.id === pipelineId)?.stages ?? [];
+
+  function setDay(i: number, patch: Partial<SchedulerWindowInput>) {
+    setAvailability((prev) =>
+      prev.map((w, idx) => (idx === i ? { ...w, ...patch } : w)),
+    );
+  }
+
+  async function handleSave() {
+    if (!name.trim()) {
+      toast.error("Dê um nome à página.");
+      return;
+    }
+    if (!userId) {
+      toast.error("Escolha o dono da agenda.");
+      return;
+    }
+    const input = {
+      name: name.trim(),
+      headline: headline.trim() || null,
+      description: description.trim() || null,
+      userId,
+      durationMinutes: duration,
+      availability,
+      minNoticeHours: minNotice,
+      horizonDays: horizon,
+      location: location.trim() || null,
+      pipelineId: pipelineId || null,
+      stageId: stageId || null,
+      origin: origin.trim() || "Agendamento",
+      confirmWhatsapp,
+      confirmChannelId: confirmChannelId || null,
+      active,
+    };
+    setSaving(true);
+    const res = initial
+      ? await updateScheduler(initial.id, input)
+      : await createScheduler(input);
+    setSaving(false);
+    if ("error" in res && res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success(initial ? "Página salva." : "Página criada — link pronto.");
+    onSaved();
+  }
+
+  const selectCls =
+    "h-10 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary";
+  const timeCls =
+    "h-8 w-[92px] rounded-lg border border-border bg-muted px-2 text-sm text-foreground outline-none focus:border-primary";
+
+  return (
+    <div className="mx-auto max-w-2xl space-y-5">
+      <div className="flex items-center gap-3">
+        <div className="flex-1">
+          <h1 className="text-2xl font-bold text-foreground">
+            {initial ? "Editar página de agendamento" : "Nova página de agendamento"}
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            O lead escolhe o horário; a reunião cai na agenda e o card no funil.
+          </p>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-muted-foreground">
+          Ativa
+          <Switch checked={active} onCheckedChange={setActive} />
+        </label>
+      </div>
+
+      <div className="space-y-4 rounded-xl border border-border bg-card p-4">
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-1.5">
+            <Label>Nome (interno)</Label>
+            <Input
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder="Ex.: Demonstração da Fluxia"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Dono da agenda</Label>
+            <select
+              value={userId}
+              onChange={(e) => setUserId(e.target.value)}
+              className={selectCls}
+            >
+              {members.map((m) => (
+                <option key={m.id} value={m.id}>
+                  {m.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-1.5 sm:col-span-2">
+            <Label>Título público</Label>
+            <Input
+              value={headline}
+              onChange={(e) => setHeadline(e.target.value)}
+              placeholder="Ex.: Agende sua demonstração gratuita"
+            />
+          </div>
+          <div className="grid gap-1.5 sm:col-span-2">
+            <Label>Descrição (opcional)</Label>
+            <textarea
+              value={description}
+              onChange={(e) => setDescription(e.target.value)}
+              rows={2}
+              className="w-full resize-none rounded-lg border border-border bg-muted px-2.5 py-2 text-sm text-foreground outline-none focus:border-primary"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Duração</Label>
+            <select
+              value={duration}
+              onChange={(e) => setDuration(Number(e.target.value))}
+              className={selectCls}
+            >
+              {[15, 30, 45, 60, 90].map((d) => (
+                <option key={d} value={d}>
+                  {d} minutos
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Local / como será</Label>
+            <Input
+              value={location}
+              onChange={(e) => setLocation(e.target.value)}
+              placeholder="Ex.: Chamada pelo WhatsApp"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* Disponibilidade semanal */}
+      <div className="space-y-2 rounded-xl border border-border bg-card p-4">
+        <div className="text-sm font-semibold text-foreground">
+          Horários disponíveis
+        </div>
+        {WEEKDAYS.map((label, i) => {
+          const w = availability[i];
+          const on = !!(w?.open && w?.close);
+          return (
+            <div key={i} className="flex flex-wrap items-center gap-2">
+              <label className="flex w-20 items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={on}
+                  onChange={(e) =>
+                    setDay(
+                      i,
+                      e.target.checked
+                        ? { open: "09:00", close: "18:00" }
+                        : { open: null, close: null },
+                    )
+                  }
+                  className="size-4 accent-primary"
+                />
+                {label}
+              </label>
+              {on ? (
+                <>
+                  <input
+                    type="time"
+                    value={w.open ?? "09:00"}
+                    onChange={(e) => setDay(i, { open: e.target.value })}
+                    className={timeCls}
+                  />
+                  <span className="text-xs text-muted-foreground">às</span>
+                  <input
+                    type="time"
+                    value={w.close ?? "18:00"}
+                    onChange={(e) => setDay(i, { close: e.target.value })}
+                    className={timeCls}
+                  />
+                </>
+              ) : (
+                <span className="text-xs text-muted-foreground">indisponível</span>
+              )}
+            </div>
+          );
+        })}
+        <p className="text-[11px] text-muted-foreground">
+          Horários no fuso da conta. Reuniões já marcadas na agenda do dono
+          (inclusive do Google) bloqueiam o horário automaticamente.
+        </p>
+        <div className="flex flex-wrap items-center gap-4 border-t border-border pt-3 text-sm">
+          <label className="flex items-center gap-2 text-muted-foreground">
+            Antecedência mínima
+            <Input
+              type="number"
+              min={0}
+              max={168}
+              value={minNotice}
+              onChange={(e) => setMinNotice(Number(e.target.value) || 0)}
+              className="h-8 w-20 text-center"
+            />
+            horas
+          </label>
+          <label className="flex items-center gap-2 text-muted-foreground">
+            Mostrar próximos
+            <Input
+              type="number"
+              min={1}
+              max={60}
+              value={horizon}
+              onChange={(e) => setHorizon(Number(e.target.value) || 14)}
+              className="h-8 w-20 text-center"
+            />
+            dias
+          </label>
+        </div>
+      </div>
+
+      {/* Destino + confirmação */}
+      <div className="grid gap-4 rounded-xl border border-border bg-card p-4 sm:grid-cols-2">
+        <div className="grid gap-1.5">
+          <Label>Funil de destino</Label>
+          <select
+            value={pipelineId}
+            onChange={(e) => {
+              setPipelineId(e.target.value);
+              setStageId("");
+            }}
+            className={selectCls}
+          >
+            <option value="">Primeiro funil</option>
+            {pipelines.map((p) => (
+              <option key={p.id} value={p.id}>
+                {p.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="grid gap-1.5">
+          <Label>Etapa</Label>
+          <select
+            value={stageId}
+            onChange={(e) => setStageId(e.target.value)}
+            disabled={!pipelineId}
+            className={selectCls}
+          >
+            <option value="">Primeira etapa</option>
+            {stages.map((s) => (
+              <option key={s.id} value={s.id}>
+                {s.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="grid gap-1.5">
+          <Label>Origem do lead</Label>
+          <Input value={origin} onChange={(e) => setOrigin(e.target.value)} />
+        </div>
+        <div className="grid gap-1.5">
+          <Label>Canal da confirmação</Label>
+          <select
+            value={confirmChannelId}
+            onChange={(e) => setConfirmChannelId(e.target.value)}
+            className={selectCls}
+          >
+            <option value="">Canal padrão</option>
+            {channels.map((c) => (
+              <option key={c.id} value={c.id}>
+                {c.name}
+              </option>
+            ))}
+          </select>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-foreground sm:col-span-2">
+          <input
+            type="checkbox"
+            checked={confirmWhatsapp}
+            onChange={(e) => setConfirmWhatsapp(e.target.checked)}
+            className="size-4 accent-primary"
+          />
+          Enviar confirmação no WhatsApp do lead ao agendar
+        </label>
+      </div>
+
+      <div className="flex items-center gap-2">
+        <Button onClick={() => void handleSave()} disabled={saving}>
+          {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
+          Salvar
+        </Button>
+        <Button variant="ghost" onClick={onCancel} disabled={saving}>
+          Cancelar
+        </Button>
+      </div>
     </div>
   );
 }

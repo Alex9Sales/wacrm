@@ -2,7 +2,18 @@
 
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
 
-import { db, captureForms, pipelines, pipelineStages, channels, products, cadences } from '@/db'
+import {
+  db,
+  captureForms,
+  pipelines,
+  pipelineStages,
+  channels,
+  products,
+  cadences,
+  schedulers,
+  member,
+  user,
+} from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { isUniqueViolation } from '@/lib/contacts/dedupe'
@@ -556,4 +567,256 @@ export async function listCapturePipelines(): Promise<
       .filter((s) => s.pipelineId === p.id)
       .map((s) => ({ id: s.id, name: s.name })),
   }))
+}
+
+// ------------------------------------------------------------
+// Página de agendamento pública (tipo Calendly) — gestão.
+// ------------------------------------------------------------
+
+export interface SchedulerWindowInput {
+  open: string | null
+  close: string | null
+}
+
+export interface SchedulerRow {
+  id: string
+  name: string
+  slug: string
+  publicUrl: string
+  ownerName: string | null
+  active: boolean
+  bookings: number
+}
+
+export interface SchedulerDetail {
+  id: string
+  name: string
+  slug: string
+  publicUrl: string
+  headline: string | null
+  description: string | null
+  userId: string
+  durationMinutes: number
+  availability: SchedulerWindowInput[]
+  minNoticeHours: number
+  horizonDays: number
+  location: string | null
+  pipelineId: string | null
+  stageId: string | null
+  origin: string
+  confirmWhatsapp: boolean
+  confirmChannelId: string | null
+  active: boolean
+  bookings: number
+}
+
+export interface SchedulerInput {
+  name: string
+  headline: string | null
+  description: string | null
+  userId: string
+  durationMinutes: number
+  availability: SchedulerWindowInput[]
+  minNoticeHours: number
+  horizonDays: number
+  location: string | null
+  pipelineId: string | null
+  stageId: string | null
+  origin: string
+  confirmWhatsapp: boolean
+  confirmChannelId: string | null
+  active: boolean
+}
+
+function schedulerPublicUrl(slug: string): string {
+  return `${APP_URL}/agendar/${slug}`
+}
+
+const HM_RE = /^([01]?\d|2[0-3]):[0-5]\d$/
+function cleanAvailability(input: SchedulerWindowInput[]): SchedulerWindowInput[] {
+  const out: SchedulerWindowInput[] = []
+  for (let i = 0; i < 7; i++) {
+    const w = input?.[i]
+    const open = w?.open && HM_RE.test(w.open) ? w.open : null
+    const close = w?.close && HM_RE.test(w.close) ? w.close : null
+    out.push(open && close ? { open, close } : { open: null, close: null })
+  }
+  return out
+}
+
+/** Membros da conta (dono da agenda). */
+export async function listCaptureMembers(): Promise<
+  { id: string; name: string }[]
+> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({ id: member.userId, name: user.name, email: user.email })
+    .from(member)
+    .innerJoin(user, eq(user.id, member.userId))
+    .where(eq(member.organizationId, ctx.accountId))
+  return rows.map((r) => ({ id: r.id, name: r.name || r.email }))
+}
+
+export async function listSchedulers(): Promise<SchedulerRow[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: schedulers.id,
+      name: schedulers.name,
+      slug: schedulers.slug,
+      active: schedulers.active,
+      bookings: schedulers.bookings,
+      ownerName: user.name,
+    })
+    .from(schedulers)
+    .leftJoin(user, eq(user.id, schedulers.userId))
+    .where(eq(schedulers.accountId, ctx.accountId))
+    .orderBy(desc(schedulers.createdAt))
+  return rows.map((r) => ({
+    id: r.id,
+    name: r.name,
+    slug: r.slug,
+    publicUrl: schedulerPublicUrl(r.slug),
+    ownerName: r.ownerName ?? null,
+    active: r.active,
+    bookings: r.bookings,
+  }))
+}
+
+export async function getScheduler(id: string): Promise<SchedulerDetail | null> {
+  const ctx = await getCurrentAccount()
+  const row = firstOrNull(
+    await db
+      .select()
+      .from(schedulers)
+      .where(and(eq(schedulers.id, id), eq(schedulers.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  if (!row) return null
+  return {
+    id: row.id,
+    name: row.name,
+    slug: row.slug,
+    publicUrl: schedulerPublicUrl(row.slug),
+    headline: row.headline,
+    description: row.description,
+    userId: row.userId,
+    durationMinutes: row.durationMinutes,
+    availability: cleanAvailability(
+      (row.availability as SchedulerWindowInput[]) ?? [],
+    ),
+    minNoticeHours: row.minNoticeHours,
+    horizonDays: row.horizonDays,
+    location: row.location,
+    pipelineId: row.pipelineId,
+    stageId: row.stageId,
+    origin: row.origin,
+    confirmWhatsapp: row.confirmWhatsapp,
+    confirmChannelId: row.confirmChannelId,
+    active: row.active,
+    bookings: row.bookings,
+  }
+}
+
+async function uniqueSchedulerSlug(name: string): Promise<string> {
+  const base = slugifyName(name) || 'agenda'
+  for (let i = 0; i < 6; i++) {
+    const suffix = Math.random().toString(36).slice(2, 7)
+    const slug = `${base}-${suffix}`
+    const taken = firstOrNull(
+      await db
+        .select({ id: schedulers.id })
+        .from(schedulers)
+        .where(eq(schedulers.slug, slug))
+        .limit(1),
+    )
+    if (!taken) return slug
+  }
+  return `${base}-${Date.now().toString(36)}`
+}
+
+function cleanSchedulerInput(input: SchedulerInput) {
+  return {
+    name: (input.name ?? '').trim(),
+    headline: (input.headline ?? '').trim() || null,
+    description: (input.description ?? '').trim() || null,
+    userId: input.userId,
+    durationMinutes: Math.min(240, Math.max(10, Math.trunc(Number(input.durationMinutes)) || 30)),
+    availability: cleanAvailability(input.availability ?? []),
+    minNoticeHours: Math.min(168, Math.max(0, Math.trunc(Number(input.minNoticeHours)) || 0)),
+    horizonDays: Math.min(60, Math.max(1, Math.trunc(Number(input.horizonDays)) || 14)),
+    location: (input.location ?? '').trim() || null,
+    pipelineId: input.pipelineId || null,
+    stageId: input.stageId || null,
+    origin: (input.origin ?? '').trim() || 'Agendamento',
+    confirmWhatsapp: !!input.confirmWhatsapp,
+    confirmChannelId: input.confirmChannelId || null,
+    active: input.active ?? true,
+  }
+}
+
+export async function createScheduler(
+  input: SchedulerInput,
+): Promise<{ id: string | null; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const clean = cleanSchedulerInput(input)
+    if (!clean.name) return { id: null, error: 'Dê um nome à página.' }
+    if (!clean.userId) return { id: null, error: 'Escolha o dono da agenda.' }
+    if (!clean.availability.some((w) => w.open && w.close)) {
+      return { id: null, error: 'Defina ao menos um dia com horário disponível.' }
+    }
+    const slug = await uniqueSchedulerSlug(clean.name)
+    const row = await db
+      .insert(schedulers)
+      .values({ accountId: ctx.accountId, slug, ...clean, createdBy: ctx.userId })
+      .returning({ id: schedulers.id })
+    return { id: row[0]?.id ?? null, error: null }
+  } catch (err) {
+    console.error('[createScheduler]', err)
+    return { id: null, error: 'Falha ao criar a página de agendamento.' }
+  }
+}
+
+export async function updateScheduler(
+  id: string,
+  input: SchedulerInput,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const clean = cleanSchedulerInput(input)
+    if (!clean.name) return { error: 'Dê um nome à página.' }
+    if (!clean.userId) return { error: 'Escolha o dono da agenda.' }
+    const owned = firstOrNull(
+      await db
+        .select({ id: schedulers.id })
+        .from(schedulers)
+        .where(and(eq(schedulers.id, id), eq(schedulers.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!owned) return { error: 'Página não encontrada.' }
+    await db
+      .update(schedulers)
+      .set({ ...clean, updatedAt: new Date().toISOString() })
+      .where(and(eq(schedulers.id, id), eq(schedulers.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    console.error('[updateScheduler]', err)
+    return { error: 'Falha ao salvar a página de agendamento.' }
+  }
+}
+
+export async function deleteScheduler(
+  id: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .delete(schedulers)
+      .where(and(eq(schedulers.id, id), eq(schedulers.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    console.error('[deleteScheduler]', err)
+    return { error: 'Falha ao excluir a página.' }
+  }
 }

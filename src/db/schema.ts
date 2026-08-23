@@ -539,6 +539,35 @@ export const captureForms = pgTable("capture_forms", {
 	index("idx_capture_forms_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 ]);
 
+// Página de agendamento pública tipo Calendly (migração 0127).
+export const schedulers = pgTable("schedulers", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	slug: text().notNull(),
+	name: text().notNull(),
+	headline: text(),
+	description: text(),
+	userId: uuid("user_id").notNull(),
+	durationMinutes: integer("duration_minutes").default(30).notNull(),
+	availability: jsonb().default([]).notNull(),
+	minNoticeHours: integer("min_notice_hours").default(12).notNull(),
+	horizonDays: integer("horizon_days").default(14).notNull(),
+	location: text(),
+	pipelineId: uuid("pipeline_id"),
+	stageId: uuid("stage_id"),
+	origin: text().default('Agendamento').notNull(),
+	confirmWhatsapp: boolean("confirm_whatsapp").default(true).notNull(),
+	confirmChannelId: uuid("confirm_channel_id"),
+	active: boolean().default(true).notNull(),
+	bookings: integer().default(0).notNull(),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("idx_schedulers_slug").using("btree", table.slug.asc().nullsLast().op("text_ops")),
+	index("idx_schedulers_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+]);
+
 export const contactNotes = pgTable("contact_notes", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	contactId: uuid("contact_id").notNull(),
