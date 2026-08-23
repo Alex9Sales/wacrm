@@ -37,6 +37,7 @@ export function CompanyForm() {
   const [docNum, setDocNum] = useState("");
   const [website, setWebsite] = useState("");
   const [address, setAddress] = useState("");
+  const [phone, setPhone] = useState("");
   const [description, setDescription] = useState("");
   const [paymentMethods, setPaymentMethods] = useState("");
   const [looking, setLooking] = useState(false);
@@ -50,6 +51,7 @@ export function CompanyForm() {
         setDocNum(d.document ?? "");
         setWebsite(d.website ?? "");
         setAddress(d.address ?? "");
+        setPhone(d.phone ?? "");
         setDescription(d.description ?? "");
         setPaymentMethods(d.paymentMethods ?? "");
       })
@@ -86,6 +88,7 @@ export function CompanyForm() {
     if (res.legalName) setLegalName(res.legalName);
     if (res.tradeName) setTradeName(res.tradeName);
     if (res.address) setAddress(res.address);
+    if (res.phone) setPhone(res.phone);
     toast.success("Dados do CNPJ preenchidos. Confira e salve.");
   }
 
@@ -98,6 +101,7 @@ export function CompanyForm() {
       document: docNum,
       website,
       address,
+      phone,
       description,
       paymentMethods,
     });
@@ -239,13 +243,22 @@ export function CompanyForm() {
                     placeholder="www.suaempresa.com.br"
                   />
                 </div>
-                <div className="grid gap-1.5 sm:col-span-2">
+                <div className="grid gap-1.5">
                   <Label>Endereço</Label>
                   <Input
                     value={address}
                     onChange={(e) => setAddress(e.target.value)}
                     disabled={!canEditSettings}
                     placeholder="Rua, número - bairro, cidade/UF"
+                  />
+                </div>
+                <div className="grid gap-1.5">
+                  <Label>Telefone</Label>
+                  <Input
+                    value={phone}
+                    onChange={(e) => setPhone(e.target.value)}
+                    disabled={!canEditSettings}
+                    placeholder="(00) 00000-0000"
                   />
                 </div>
                 <div className="grid gap-1.5 sm:col-span-2">

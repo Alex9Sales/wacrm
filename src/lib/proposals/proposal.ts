@@ -133,6 +133,7 @@ export async function buildProposalData(
     document: profile.document?.trim() || null,
     website: profile.website?.trim() || null,
     address: profile.address?.trim() || null,
+    phone: profile.phone?.trim() || null,
   }
   // Override por proposta (Seção Propostas): campo preenchido substitui o perfil.
   if (sellerOverride) {

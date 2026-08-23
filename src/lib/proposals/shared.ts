@@ -27,6 +27,7 @@ export interface ProposalSeller {
   document: string | null
   website: string | null
   address: string | null
+  phone: string | null
 }
 
 export interface ProposalClient {

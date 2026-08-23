@@ -84,10 +84,11 @@ function ProposalDocument({ data, id }: { data: ProposalData; id: string }) {
           {seller.tagline ? (
             <p className="mt-1 max-w-sm text-sm text-slate-500">{seller.tagline}</p>
           ) : null}
-          {(seller.document || seller.website || seller.address) && (
+          {(seller.document || seller.website || seller.address || seller.phone) && (
             <div className="mt-1.5 space-y-0.5 text-xs text-slate-500">
               {seller.document ? <div>CNPJ: {seller.document}</div> : null}
               {seller.address ? <div>{seller.address}</div> : null}
+              {seller.phone ? <div>Tel: {seller.phone}</div> : null}
               {seller.website ? <div>{seller.website}</div> : null}
             </div>
           )}

@@ -25,6 +25,7 @@ export interface CompanyProfile {
   document: string | null
   website: string | null
   address: string | null
+  phone: string | null
   updated_at: string | null
 }
 
@@ -42,6 +43,7 @@ const EMPTY: CompanyProfile = {
   document: null,
   website: null,
   address: null,
+  phone: null,
   updated_at: null,
 }
 
@@ -67,6 +69,7 @@ export async function getCompanyProfile(
           document: aiCompanyProfile.document,
           website: aiCompanyProfile.website,
           address: aiCompanyProfile.address,
+          phone: aiCompanyProfile.phone,
           updated_at: aiCompanyProfile.updatedAt,
         })
         .from(aiCompanyProfile)

@@ -1104,6 +1104,7 @@ export interface CompanyDataInput {
   document: string | null
   website: string | null
   address: string | null
+  phone: string | null
   description: string | null
   paymentMethods: string | null
 }
@@ -1126,6 +1127,7 @@ export async function getCompanyData(): Promise<CompanyDataInput> {
     document: profile.document,
     website: profile.website,
     address: profile.address,
+    phone: profile.phone,
     description: profile.description,
     paymentMethods: profile.payment_methods,
   }
@@ -1137,12 +1139,13 @@ export async function lookupCnpj(cnpj: string): Promise<{
   legalName: string | null
   tradeName: string | null
   address: string | null
+  phone: string | null
   error?: string
 }> {
   await getCurrentAccount()
   const digits = (cnpj ?? '').replace(/\D/g, '')
   if (digits.length !== 14) {
-    return { legalName: null, tradeName: null, address: null, error: 'CNPJ inválido (precisa ter 14 dígitos).' }
+    return { legalName: null, tradeName: null, address: null, phone: null, error: 'CNPJ inválido (precisa ter 14 dígitos).' }
   }
   try {
     const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`, {
@@ -1158,6 +1161,7 @@ export async function lookupCnpj(cnpj: string): Promise<{
         legalName: null,
         tradeName: null,
         address: null,
+        phone: null,
         error: res.status === 404 ? 'CNPJ não encontrado.' : 'Não foi possível consultar o CNPJ agora.',
       }
     }
@@ -1172,13 +1176,24 @@ export async function lookupCnpj(cnpj: string): Promise<{
       [s('municipio'), s('uf')].filter(Boolean).join('/'),
       s('cep') ? `CEP ${s('cep')}` : '',
     ].filter(Boolean)
+    // Telefone: BrasilAPI manda só dígitos (DDD+numero) → formata (DD) XXXX-XXXX.
+    const telDigits = s('ddd_telefone_1').replace(/\D/g, '')
+    let phone: string | null = null
+    if (telDigits.length === 10) {
+      phone = `(${telDigits.slice(0, 2)}) ${telDigits.slice(2, 6)}-${telDigits.slice(6)}`
+    } else if (telDigits.length === 11) {
+      phone = `(${telDigits.slice(0, 2)}) ${telDigits.slice(2, 7)}-${telDigits.slice(7)}`
+    } else if (telDigits) {
+      phone = telDigits
+    }
     return {
       legalName: s('razao_social') || null,
       tradeName: s('nome_fantasia') || null,
       address: parts.length ? parts.join(' - ') : null,
+      phone,
     }
   } catch {
-    return { legalName: null, tradeName: null, address: null, error: 'Não foi possível consultar o CNPJ agora.' }
+    return { legalName: null, tradeName: null, address: null, phone: null, error: 'Não foi possível consultar o CNPJ agora.' }
   }
 }
 
@@ -1197,6 +1212,7 @@ export async function saveCompanyData(
       document: clean(input.document),
       website: clean(input.website),
       address: clean(input.address),
+      phone: clean(input.phone),
       description: clean(input.description),
       paymentMethods: clean(input.paymentMethods),
       updatedBy: ctx.userId,
@@ -1210,6 +1226,7 @@ export async function saveCompanyData(
         document: clean(input.document),
         website: clean(input.website),
         address: clean(input.address),
+        phone: clean(input.phone),
         description: clean(input.description),
         paymentMethods: clean(input.paymentMethods),
         updatedBy: ctx.userId,
