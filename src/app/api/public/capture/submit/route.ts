@@ -47,6 +47,16 @@ export async function POST(req: Request) {
         { status: 400 },
       )
     }
+    // WhatsApp COM DDD (com ou sem +55) — sem DDD o número é inútil e a IA
+    // não consegue chamar de volta.
+    const telDigits = phone.replace(/\D/g, '')
+    const national = telDigits.startsWith('55') ? telDigits.slice(2) : telDigits
+    if (national.length < 10 || national.length > 11) {
+      return NextResponse.json(
+        { ok: false, error: 'Informe o WhatsApp com DDD — ex.: (67) 99999-9999' },
+        { status: 400 },
+      )
+    }
     for (const f of form.fields) {
       if (f.required && !val(f.key)) {
         return NextResponse.json(

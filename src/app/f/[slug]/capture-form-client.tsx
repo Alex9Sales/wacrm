@@ -60,6 +60,18 @@ export function CaptureFormClient({
         return;
       }
     }
+    // WhatsApp precisa vir COM DDD — sem ele o número é inútil (ninguém
+    // consegue chamar de volta). Aceita com ou sem o +55.
+    const telDigits = (values["telefone"] ?? "").replace(/\D/g, "");
+    if (telDigits) {
+      const national = telDigits.startsWith("55")
+        ? telDigits.slice(2)
+        : telDigits;
+      if (national.length < 10 || national.length > 11) {
+        setError("Informe o WhatsApp com DDD — ex.: (67) 99999-9999");
+        return;
+      }
+    }
     setSending(true);
     try {
       const r = await fetch("/api/public/capture/submit", {
@@ -163,9 +175,17 @@ export function CaptureFormClient({
                         type={def.inputType}
                         value={values[f.key] ?? ""}
                         onChange={(e) => set(f.key, e.target.value)}
+                        placeholder={
+                          f.key === "telefone" ? "(67) 99999-9999" : undefined
+                        }
                         className={`${common} h-10`}
                       />
                     )}
+                    {f.key === "telefone" ? (
+                      <p className="text-[11px] text-slate-400">
+                        Digite com DDD — é por ele que vamos te chamar.
+                      </p>
+                    ) : null}
                   </div>
                 );
               })}
