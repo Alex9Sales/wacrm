@@ -50,6 +50,7 @@ import QRCode from "qrcode";
 import {
   CAPTURE_FIELD_DEFS,
   CAPTURE_FIELD_ORDER,
+  CAPTURE_TEMPLATES,
   DEFAULT_CAPTURE_FIELDS,
   DEFAULT_CAPTURE_CONTENT,
   DEFAULT_CAPTURE_HEADLINE,
@@ -173,6 +174,7 @@ export default function CaptacaoPage() {
         pipelines={pipelines}
         channels={channels}
         cadences={cadences}
+        scheds={scheds}
         onCancel={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);
@@ -745,6 +747,7 @@ function CaptureEditor({
   pipelines,
   channels,
   cadences,
+  scheds,
   onCancel,
   onSaved,
 }: {
@@ -754,6 +757,7 @@ function CaptureEditor({
   pipelines: Pipeline[];
   channels: { id: string; name: string }[];
   cadences: { id: string; name: string }[];
+  scheds: SchedulerRow[];
   onCancel: () => void;
   onSaved: () => void;
 }) {
@@ -802,6 +806,32 @@ function CaptureEditor({
   );
   const [uploadingHero, setUploadingHero] = useState(false);
   const [uploadingLandingLogo, setUploadingLandingLogo] = useState(false);
+  // Mini-site: botão de WhatsApp + agendamento na landing.
+  const [showWhatsapp, setShowWhatsapp] = useState(
+    initContent.showWhatsapp ?? false,
+  );
+  const [schedulerSlug, setSchedulerSlug] = useState(
+    initContent.schedulerSlug ?? "",
+  );
+
+  // Modelos prontos (a "galeria" do RD, já escrita): 1 clique preenche tudo.
+  function applyTemplate(id: string) {
+    const t = CAPTURE_TEMPLATES.find((x) => x.id === id);
+    if (!t) return;
+    setHeadline(t.headline);
+    setDescription(t.description);
+    setCtaText(t.ctaText);
+    setBenefitsTitle(t.benefitsTitle);
+    setBenefits(t.benefits);
+    setSubmitLabel(t.submitLabel);
+    setSuccessMessage(t.successMessage);
+    setOfferTitle(t.offerTitle ?? "");
+    setOfferText(t.offerText ?? "");
+    setOrigin(t.origin);
+    if (!name.trim()) setName(`${t.label}`);
+    toast.success(`Modelo "${t.label}" aplicado — ajuste e salve. ✨`);
+  }
+
   // Landing em 1 clique: a IA escreve a página inteira (o dono revisa e salva).
   const [genBriefing, setGenBriefing] = useState("");
   const [generating, setGenerating] = useState(false);
@@ -936,6 +966,8 @@ function CaptureEditor({
         benefits,
         testimonials,
         ctaText: ctaText.trim() || null,
+        showWhatsapp,
+        schedulerSlug: schedulerSlug || null,
       },
       aiIntro,
       introChannelId: introChannelId || null,
@@ -1089,6 +1121,27 @@ function CaptureEditor({
 
         {mode === "landing" && (
           <div className="space-y-4 border-t border-border pt-3">
+            {/* Modelos prontos */}
+            <div className="space-y-2">
+              <Label>Começar por um modelo</Label>
+              <div className="flex flex-wrap gap-2">
+                {CAPTURE_TEMPLATES.map((t) => (
+                  <button
+                    key={t.id}
+                    type="button"
+                    onClick={() => applyTemplate(t.id)}
+                    className="rounded-lg border border-border bg-muted px-3 py-1.5 text-sm text-foreground transition hover:border-primary hover:bg-primary/10"
+                  >
+                    {t.emoji} {t.label}
+                  </button>
+                ))}
+              </div>
+              <p className="text-[11px] text-muted-foreground">
+                Um clique preenche título, benefícios, botões e oferta — depois
+                use o &quot;Criar com IA&quot; pra adaptar ao seu negócio.
+              </p>
+            </div>
+
             {/* Landing em 1 clique */}
             <div className="space-y-2 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
               <div className="text-sm font-semibold text-foreground">
@@ -1119,6 +1172,43 @@ function CaptureEditor({
                     "Criar com IA"
                   )}
                 </Button>
+              </div>
+            </div>
+
+            {/* Mini-site: WhatsApp + agendamento na página */}
+            <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
+              <label className="flex items-center gap-2 text-sm text-foreground">
+                <input
+                  type="checkbox"
+                  checked={showWhatsapp}
+                  onChange={(e) => setShowWhatsapp(e.target.checked)}
+                  className="size-4 accent-primary"
+                />
+                Botão &quot;💬 WhatsApp&quot; na página
+                <span className="text-xs text-muted-foreground">
+                  (com o código de rastreio — quem chamar já vem identificado)
+                </span>
+              </label>
+              <div className="grid gap-1.5 sm:max-w-md">
+                <Label>Botão &quot;📅 Agendar horário&quot;</Label>
+                <select
+                  value={schedulerSlug}
+                  onChange={(e) => setSchedulerSlug(e.target.value)}
+                  className={selectCls}
+                >
+                  <option value="">Sem agendamento</option>
+                  {scheds
+                    .filter((s) => s.active)
+                    .map((s) => (
+                      <option key={s.id} value={s.slug}>
+                        {s.name}
+                      </option>
+                    ))}
+                </select>
+                <p className="text-[11px] text-muted-foreground">
+                  Aparece no topo da página e na tela de sucesso. Crie páginas
+                  de agendamento na seção 🗓️ abaixo.
+                </p>
               </div>
             </div>
 

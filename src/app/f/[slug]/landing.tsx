@@ -14,6 +14,8 @@ export function CaptureLanding({
   content,
   successOffer,
   successWaHref,
+  landingWaHref,
+  schedulerUrl,
 }: {
   slug: string;
   headline: string;
@@ -24,6 +26,10 @@ export function CaptureLanding({
   content: CaptureContent;
   successOffer?: { title: string | null; text: string | null } | null;
   successWaHref?: string | null;
+  /** Botão "💬 WhatsApp" da landing (link rastreado, mensagem pré-envio). */
+  landingWaHref?: string | null;
+  /** Botão "📅 Agendar horário" (página de agendamento da conta). */
+  schedulerUrl?: string | null;
 }) {
   const accent = content.brandColor || "#7c3aed";
 
@@ -54,13 +60,34 @@ export function CaptureLanding({
                 {description}
               </p>
             ) : null}
-            <a
-              href="#capture-form"
-              className="mt-6 inline-flex items-center rounded-xl px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
-              style={{ background: accent }}
-            >
-              {content.ctaText || submitLabel}
-            </a>
+            <div className="mt-6 flex flex-wrap items-center gap-2.5">
+              <a
+                href="#capture-form"
+                className="inline-flex items-center rounded-xl px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
+                style={{ background: accent }}
+              >
+                {content.ctaText || submitLabel}
+              </a>
+              {landingWaHref ? (
+                <a
+                  href={landingWaHref}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="inline-flex items-center gap-1.5 rounded-xl border border-emerald-500 bg-white px-4 py-3 text-sm font-semibold text-emerald-600 transition hover:bg-emerald-50"
+                >
+                  💬 WhatsApp
+                </a>
+              ) : null}
+              {schedulerUrl ? (
+                <a
+                  href={schedulerUrl}
+                  className="inline-flex items-center gap-1.5 rounded-xl border bg-white px-4 py-3 text-sm font-semibold transition hover:opacity-80"
+                  style={{ borderColor: accent, color: accent }}
+                >
+                  📅 Agendar horário
+                </a>
+              ) : null}
+            </div>
           </div>
           {content.heroImage ? (
             <div className="order-first md:order-last">
@@ -151,6 +178,7 @@ export function CaptureLanding({
           embedded
           successOffer={successOffer}
           successWaHref={successWaHref}
+          successSchedulerUrl={schedulerUrl}
         />
       </section>
 

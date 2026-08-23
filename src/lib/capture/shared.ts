@@ -25,6 +25,10 @@ export interface CaptureContent {
   testimonials: CaptureTestimonial[]
   /** Texto do botão do hero (rola até o formulário). */
   ctaText: string | null
+  /** Botão "💬 WhatsApp" na landing (usa o link rastreado do formulário). */
+  showWhatsapp: boolean
+  /** Slug de uma página de agendamento → botão "📅 Agendar horário". */
+  schedulerSlug: string | null
 }
 
 export const DEFAULT_CAPTURE_CONTENT: CaptureContent = {
@@ -36,6 +40,8 @@ export const DEFAULT_CAPTURE_CONTENT: CaptureContent = {
   benefits: [],
   testimonials: [],
   ctaText: null,
+  showWhatsapp: false,
+  schedulerSlug: null,
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/
@@ -69,8 +75,133 @@ export function normalizeCaptureContent(input: unknown): CaptureContent {
       .filter((t) => t.quote)
       .slice(0, 6),
     ctaText: str(o.ctaText, 40) || null,
+    showWhatsapp: !!o.showWhatsapp,
+    schedulerSlug: str(o.schedulerSlug, 80) || null,
   }
 }
+
+// ------------------------------------------------------------
+// Modelos prontos de landing (a "galeria" do RD, mas já escrita em pt-BR).
+// Um clique aplica o modelo; "Criar com IA" adapta ao negócio depois.
+// ------------------------------------------------------------
+export interface CaptureTemplate {
+  id: string
+  emoji: string
+  label: string
+  headline: string
+  description: string
+  ctaText: string
+  benefitsTitle: string
+  benefits: CaptureBenefit[]
+  submitLabel: string
+  successMessage: string
+  offerTitle: string | null
+  offerText: string | null
+  origin: string
+}
+
+export const CAPTURE_TEMPLATES: CaptureTemplate[] = [
+  {
+    id: 'demo',
+    emoji: '🖥️',
+    label: 'Demonstração / serviço',
+    headline: 'Veja funcionando antes de decidir',
+    description:
+      'Deixe seu contato e a gente te mostra na prática como funciona — rápido, sem compromisso.',
+    ctaText: 'Quero uma demonstração',
+    benefitsTitle: 'Por que vale seus 30 minutos',
+    benefits: [
+      { title: 'Na prática, não no papel', description: 'Você vê o funcionamento real, com exemplos do seu dia a dia.' },
+      { title: 'Tira-dúvidas ao vivo', description: 'Pergunte o que quiser — quem apresenta é quem entende do assunto.' },
+      { title: 'Sem compromisso', description: 'Terminou a demonstração, a decisão é sua. Sem pressão.' },
+    ],
+    submitLabel: 'Agendar demonstração',
+    successMessage: 'Prontinho! 🎉 Já vamos te chamar no WhatsApp pra combinar o melhor horário.',
+    offerTitle: null,
+    offerText: null,
+    origin: 'Demonstração',
+  },
+  {
+    id: 'cupom',
+    emoji: '🏷️',
+    label: 'Cupom / promoção',
+    headline: 'Ganhe um desconto exclusivo 🏷️',
+    description:
+      'Deixe seu contato e receba seu cupom no WhatsApp — válido por tempo limitado.',
+    ctaText: 'Quero meu cupom',
+    benefitsTitle: 'Como funciona',
+    benefits: [
+      { title: 'Cadastre-se em 30 segundos', description: 'Só nome e WhatsApp — sem formulário gigante.' },
+      { title: 'Cupom direto no WhatsApp', description: 'Você recebe o código na hora, no seu zap.' },
+      { title: 'Use quando quiser', description: 'Aproveite no prazo da promoção, sem pegadinha.' },
+    ],
+    submitLabel: 'Receber meu cupom',
+    successMessage: 'Cupom garantido! 🎉 Olha seu WhatsApp — ele chega em instantes.',
+    offerTitle: '🎁 Seu cupom está a caminho',
+    offerText: 'Chame a gente no WhatsApp se quiser usar agora mesmo.',
+    origin: 'Promoção',
+  },
+  {
+    id: 'material',
+    emoji: '📕',
+    label: 'E-book / material',
+    headline: 'Baixe grátis o material completo 📕',
+    description:
+      'Um guia direto ao ponto pra você aplicar hoje. Deixe seu contato e receba no WhatsApp.',
+    ctaText: 'Baixar grátis',
+    benefitsTitle: 'O que você vai ver',
+    benefits: [
+      { title: 'Passo a passo aplicável', description: 'Nada de teoria vazia — checklist pra usar no mesmo dia.' },
+      { title: 'Exemplos reais', description: 'Casos práticos que mostram o antes e o depois.' },
+      { title: 'Leitura rápida', description: 'Direto ao ponto — você termina em uma sentada.' },
+    ],
+    submitLabel: 'Quero o material',
+    successMessage: 'Enviado! 🎉 O material chega no seu WhatsApp em instantes.',
+    offerTitle: null,
+    offerText: null,
+    origin: 'Material',
+  },
+  {
+    id: 'evento',
+    emoji: '🎟️',
+    label: 'Webinar / evento',
+    headline: 'Garanta sua vaga no evento 🎟️',
+    description:
+      'Ao vivo e gratuito. Inscreva-se e receba o lembrete e o link de acesso no WhatsApp.',
+    ctaText: 'Garantir minha vaga',
+    benefitsTitle: 'O que rola no evento',
+    benefits: [
+      { title: 'Conteúdo ao vivo', description: 'Aprenda com quem faz — e pergunte em tempo real.' },
+      { title: 'Lembrete no WhatsApp', description: 'A gente te avisa antes de começar, pra você não perder.' },
+      { title: 'Bônus pra quem participa', description: 'Material exclusivo pra quem estiver ao vivo.' },
+    ],
+    submitLabel: 'Quero participar',
+    successMessage: 'Vaga garantida! 🎉 O lembrete e o link chegam no seu WhatsApp.',
+    offerTitle: null,
+    offerText: null,
+    origin: 'Evento',
+  },
+  {
+    id: 'orcamento',
+    emoji: '💬',
+    label: 'Orçamento / contato',
+    headline: 'Peça seu orçamento sem compromisso',
+    description:
+      'Conte o que você precisa e a gente responde no WhatsApp com uma proposta feita pra você.',
+    ctaText: 'Pedir orçamento',
+    benefitsTitle: 'Por que pedir por aqui',
+    benefits: [
+      { title: 'Resposta rápida', description: 'Seu pedido cai direto com quem resolve — sem fila de e-mail.' },
+      { title: 'Proposta sob medida', description: 'Nada de tabela genérica: orçamento pro seu caso.' },
+      { title: 'Tudo pelo WhatsApp', description: 'Combine os detalhes sem sair do aplicativo.' },
+    ],
+    submitLabel: 'Enviar pedido',
+    successMessage: 'Recebido! 🎉 Já vamos te responder no WhatsApp com o orçamento.',
+    offerTitle: null,
+    offerText: null,
+    origin: 'Orçamento',
+  },
+]
 
 export type CaptureFieldKey =
   | 'nome'

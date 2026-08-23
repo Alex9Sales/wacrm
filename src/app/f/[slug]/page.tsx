@@ -5,7 +5,11 @@
 // ============================================================
 import type { Metadata } from 'next'
 
-import { getPublicCaptureForm, getPublicCaptureWaHref } from '@/lib/capture/public'
+import {
+  getPublicCaptureForm,
+  getPublicCaptureWaHref,
+  getPublicSchedulerUrl,
+} from '@/lib/capture/public'
 import {
   DEFAULT_CAPTURE_HEADLINE,
   DEFAULT_CAPTURE_SUBMIT,
@@ -58,12 +62,20 @@ export default async function PublicCapturePage({
   const successMessage = form.successMessage || DEFAULT_CAPTURE_SUCCESS
   // Obrigado que Vende: oferta + botão de WhatsApp na tela de sucesso.
   const successWaHref = form.successWhatsapp
-    ? await getPublicCaptureWaHref(form)
+    ? await getPublicCaptureWaHref(form, 'sent')
     : null
   const successOffer =
     form.successOfferTitle || form.successOfferText
       ? { title: form.successOfferTitle, text: form.successOfferText }
       : null
+  // Mini-site: botão de WhatsApp na landing + botão "Agendar horário".
+  const landingWaHref = form.content.showWhatsapp
+    ? await getPublicCaptureWaHref(form, 'info')
+    : null
+  const schedulerUrl = await getPublicSchedulerUrl(
+    form.accountId,
+    form.content.schedulerSlug,
+  )
 
   if (form.content.mode === 'landing') {
     return (
@@ -77,6 +89,8 @@ export default async function PublicCapturePage({
         content={form.content}
         successOffer={successOffer}
         successWaHref={successWaHref}
+        landingWaHref={landingWaHref}
+        schedulerUrl={schedulerUrl}
       />
     )
   }
@@ -91,6 +105,7 @@ export default async function PublicCapturePage({
       successMessage={successMessage}
       successOffer={successOffer}
       successWaHref={successWaHref}
+      successSchedulerUrl={schedulerUrl}
     />
   )
 }

@@ -23,6 +23,7 @@ export function CaptureFormClient({
   embedded,
   successOffer,
   successWaHref,
+  successSchedulerUrl,
 }: {
   slug: string;
   headline: string;
@@ -38,6 +39,8 @@ export function CaptureFormClient({
   successOffer?: { title: string | null; text: string | null } | null;
   /** Obrigado que Vende: botão "Chamar no WhatsApp" (wa.me com ref rastreado). */
   successWaHref?: string | null;
+  /** Botão "📅 Agendar horário" na tela de sucesso. */
+  successSchedulerUrl?: string | null;
 }) {
   const brand = accent || "#7c3aed";
   const [values, setValues] = useState<Record<string, string>>({});
@@ -140,6 +143,16 @@ export function CaptureFormClient({
                 className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-600"
               >
                 💬 Chamar no WhatsApp agora
+              </a>
+            ) : null}
+
+            {successSchedulerUrl ? (
+              <a
+                href={successSchedulerUrl}
+                className="mt-2.5 inline-flex w-full items-center justify-center gap-2 rounded-lg border px-4 py-2.5 text-sm font-semibold transition hover:opacity-80"
+                style={{ borderColor: brand, color: brand }}
+              >
+                📅 Já quer garantir um horário? Agende agora
               </a>
             ) : null}
           </div>

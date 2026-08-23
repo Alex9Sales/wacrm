@@ -3,7 +3,7 @@
 
 import { and, eq } from 'drizzle-orm'
 
-import { db, captureForms, channels } from '@/db'
+import { db, captureForms, channels, schedulers } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadDefaultChannel } from '@/lib/channels/channels'
 import {
@@ -45,6 +45,7 @@ export interface PublicCaptureForm {
  */
 export async function getPublicCaptureWaHref(
   form: PublicCaptureForm,
+  kind: 'info' | 'sent' = 'sent',
 ): Promise<string | null> {
   try {
     let phoneRaw = ''
@@ -67,10 +68,38 @@ export async function getPublicCaptureWaHref(
     const phone = phoneRaw.replace(/\D/g, '')
     if (!phone) return null
     const ref = (form.waRef ?? '').toUpperCase()
-    const message = ref
-      ? `Olá! Acabei de enviar o formulário. #${ref}`
-      : 'Olá! Acabei de enviar o formulário.'
+    const base =
+      kind === 'info'
+        ? 'Olá! Quero mais informações.'
+        : 'Olá! Acabei de enviar o formulário.'
+    const message = ref ? `${base} #${ref}` : base
     return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`
+  } catch {
+    return null
+  }
+}
+
+/** Slug de agendamento validado (ativo e da MESMA conta) → URL pública, ou null. */
+export async function getPublicSchedulerUrl(
+  accountId: string,
+  slug: string | null,
+): Promise<string | null> {
+  if (!slug) return null
+  try {
+    const row = firstOrNull(
+      await db
+        .select({ slug: schedulers.slug })
+        .from(schedulers)
+        .where(
+          and(
+            eq(schedulers.slug, slug),
+            eq(schedulers.accountId, accountId),
+            eq(schedulers.active, true),
+          ),
+        )
+        .limit(1),
+    )
+    return row ? `/agendar/${row.slug}` : null
   } catch {
     return null
   }
