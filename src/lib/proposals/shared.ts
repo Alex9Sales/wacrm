@@ -26,6 +26,7 @@ export interface ProposalSeller {
   paymentMethods: string | null
   document: string | null
   website: string | null
+  address: string | null
 }
 
 export interface ProposalClient {

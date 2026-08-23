@@ -1103,6 +1103,7 @@ export interface CompanyDataInput {
   tradeName: string | null
   document: string | null
   website: string | null
+  address: string | null
   description: string | null
   paymentMethods: string | null
 }
@@ -1124,8 +1125,56 @@ export async function getCompanyData(): Promise<CompanyDataInput> {
     tradeName: profile.trade_name || profile.business_name,
     document: profile.document,
     website: profile.website,
+    address: profile.address,
     description: profile.description,
     paymentMethods: profile.payment_methods,
+  }
+}
+
+/** Busca dados de um CNPJ (BrasilAPI, pública/grátis) — razão social, nome
+ *  fantasia e endereço — pra preencher automaticamente os dados da empresa. */
+export async function lookupCnpj(cnpj: string): Promise<{
+  legalName: string | null
+  tradeName: string | null
+  address: string | null
+  error?: string
+}> {
+  await getCurrentAccount()
+  const digits = (cnpj ?? '').replace(/\D/g, '')
+  if (digits.length !== 14) {
+    return { legalName: null, tradeName: null, address: null, error: 'CNPJ inválido (precisa ter 14 dígitos).' }
+  }
+  try {
+    const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`, {
+      headers: { accept: 'application/json' },
+      cache: 'no-store',
+    })
+    if (!res.ok) {
+      return {
+        legalName: null,
+        tradeName: null,
+        address: null,
+        error: res.status === 404 ? 'CNPJ não encontrado.' : 'Não foi possível consultar o CNPJ agora.',
+      }
+    }
+    const d = (await res.json()) as Record<string, unknown>
+    const s = (k: string) => {
+      const v = d[k]
+      return typeof v === 'string' ? v.trim() : v != null ? String(v) : ''
+    }
+    const parts = [
+      [s('logradouro'), s('numero')].filter(Boolean).join(', '),
+      s('bairro'),
+      [s('municipio'), s('uf')].filter(Boolean).join('/'),
+      s('cep') ? `CEP ${s('cep')}` : '',
+    ].filter(Boolean)
+    return {
+      legalName: s('razao_social') || null,
+      tradeName: s('nome_fantasia') || null,
+      address: parts.length ? parts.join(' - ') : null,
+    }
+  } catch {
+    return { legalName: null, tradeName: null, address: null, error: 'Não foi possível consultar o CNPJ agora.' }
   }
 }
 
@@ -1143,6 +1192,7 @@ export async function saveCompanyData(
       tradeName: clean(input.tradeName),
       document: clean(input.document),
       website: clean(input.website),
+      address: clean(input.address),
       description: clean(input.description),
       paymentMethods: clean(input.paymentMethods),
       updatedBy: ctx.userId,
@@ -1155,6 +1205,7 @@ export async function saveCompanyData(
         tradeName: clean(input.tradeName),
         document: clean(input.document),
         website: clean(input.website),
+        address: clean(input.address),
         description: clean(input.description),
         paymentMethods: clean(input.paymentMethods),
         updatedBy: ctx.userId,

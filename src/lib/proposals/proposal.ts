@@ -132,6 +132,7 @@ export async function buildProposalData(
     paymentMethods: profile.payment_methods?.trim() || null,
     document: profile.document?.trim() || null,
     website: profile.website?.trim() || null,
+    address: profile.address?.trim() || null,
   }
   // Override por proposta (Seção Propostas): campo preenchido substitui o perfil.
   if (sellerOverride) {

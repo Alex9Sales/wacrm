@@ -2,11 +2,11 @@
 
 import { useEffect, useState } from "react";
 import { toast } from "sonner";
-import { Loader2, Store, Upload, Trash2 } from "lucide-react";
+import { Loader2, Store, Upload, Trash2, Search } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
 import { uploadAccountMedia } from "@/lib/storage/upload-media";
-import { getCompanyData, saveCompanyData } from "./actions";
+import { getCompanyData, saveCompanyData, lookupCnpj } from "./actions";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -36,8 +36,10 @@ export function CompanyForm() {
   const [legalName, setLegalName] = useState("");
   const [docNum, setDocNum] = useState("");
   const [website, setWebsite] = useState("");
+  const [address, setAddress] = useState("");
   const [description, setDescription] = useState("");
   const [paymentMethods, setPaymentMethods] = useState("");
+  const [looking, setLooking] = useState(false);
 
   useEffect(() => {
     getCompanyData()
@@ -47,6 +49,7 @@ export function CompanyForm() {
         setLegalName(d.legalName ?? "");
         setDocNum(d.document ?? "");
         setWebsite(d.website ?? "");
+        setAddress(d.address ?? "");
         setDescription(d.description ?? "");
         setPaymentMethods(d.paymentMethods ?? "");
       })
@@ -67,6 +70,25 @@ export function CompanyForm() {
     }
   }
 
+  async function handleLookup() {
+    const digits = docNum.replace(/\D/g, "");
+    if (digits.length !== 14) {
+      toast.error("Informe um CNPJ com 14 dígitos para buscar.");
+      return;
+    }
+    setLooking(true);
+    const res = await lookupCnpj(docNum);
+    setLooking(false);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    if (res.legalName) setLegalName(res.legalName);
+    if (res.tradeName) setTradeName(res.tradeName);
+    if (res.address) setAddress(res.address);
+    toast.success("Dados do CNPJ preenchidos. Confira e salve.");
+  }
+
   async function handleSave() {
     setSaving(true);
     const { error } = await saveCompanyData({
@@ -75,6 +97,7 @@ export function CompanyForm() {
       legalName,
       document: docNum,
       website,
+      address,
       description,
       paymentMethods,
     });
@@ -178,12 +201,34 @@ export function CompanyForm() {
                 </div>
                 <div className="grid gap-1.5">
                   <Label>CNPJ / CPF</Label>
-                  <Input
-                    value={docNum}
-                    onChange={(e) => setDocNum(e.target.value)}
-                    disabled={!canEditSettings}
-                    placeholder="00.000.000/0001-00"
-                  />
+                  <div className="flex items-center gap-1.5">
+                    <Input
+                      value={docNum}
+                      onChange={(e) => setDocNum(e.target.value)}
+                      disabled={!canEditSettings}
+                      placeholder="00.000.000/0001-00"
+                      className="flex-1"
+                    />
+                    <Button
+                      type="button"
+                      variant="outline"
+                      size="sm"
+                      onClick={() => void handleLookup()}
+                      disabled={!canEditSettings || looking}
+                      title="Buscar dados pelo CNPJ"
+                    >
+                      {looking ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Search className="size-4" />
+                      )}
+                      Buscar
+                    </Button>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    CNPJ? Clique em Buscar pra preencher razão social, nome
+                    fantasia e endereço automaticamente.
+                  </p>
                 </div>
                 <div className="grid gap-1.5">
                   <Label>Site</Label>
@@ -192,6 +237,15 @@ export function CompanyForm() {
                     onChange={(e) => setWebsite(e.target.value)}
                     disabled={!canEditSettings}
                     placeholder="www.suaempresa.com.br"
+                  />
+                </div>
+                <div className="grid gap-1.5 sm:col-span-2">
+                  <Label>Endereço</Label>
+                  <Input
+                    value={address}
+                    onChange={(e) => setAddress(e.target.value)}
+                    disabled={!canEditSettings}
+                    placeholder="Rua, número - bairro, cidade/UF"
                   />
                 </div>
                 <div className="grid gap-1.5 sm:col-span-2">

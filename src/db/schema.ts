@@ -2008,6 +2008,7 @@ export const aiCompanyProfile = pgTable("ai_company_profile", {
 	tradeName: text("trade_name"),
 	document: text(),
 	website: text(),
+	address: text(),
 	updatedBy: uuid("updated_by"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
