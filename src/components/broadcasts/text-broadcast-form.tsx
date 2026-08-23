@@ -170,6 +170,8 @@ export function TextBroadcastForm() {
 
   const [name, setName] = useState('')
   const [channelId, setChannelId] = useState('')
+  // Newsletter: canal de e-mail → o disparo vai por e-mail e exige Assunto.
+  const [subject, setSubject] = useState('')
   const [message, setMessage] = useState('')
   const [dailyCap, setDailyCap] = useState(50)
   // Anti-ban: anexa a opção de descadastro ("responda SAIR"). Ligado por padrão.
@@ -363,11 +365,14 @@ export function TextBroadcastForm() {
 
   const cap = Math.max(1, Math.min(2000, Math.floor(dailyCap) || 50))
   const estDays = estimate && estimate > 0 ? Math.ceil(estimate / cap) : 0
+  // Canal de e-mail selecionado → newsletter (assunto obrigatório, sem mídia).
+  const isEmailChannel = !!channels.find((c) => c.id === channelId)?.is_email
 
   const canSubmit =
     !submitting &&
     !uploadingMedia &&
     !!channelId &&
+    (!isEmailChannel || subject.trim().length > 0) &&
     (message.trim().length > 0 || !!mediaUrl) &&
     ((audienceType === 'all') ||
       (audienceType === 'tags' && selectedTagIds.length > 0) ||
@@ -386,6 +391,7 @@ export function TextBroadcastForm() {
         mediaType,
         mediaFilename: mediaFilename || null,
         includeOptOut,
+        subject: subject.trim() || null,
         dailyCap: cap,
         sendNow,
         sendNowIntervalMin: Math.max(0, Math.floor(sendNowIntervalMin) || 0),
@@ -412,7 +418,7 @@ export function TextBroadcastForm() {
     } finally {
       setSubmitting(false)
     }
-  }, [canSubmit, name, channelId, message, mediaUrl, mediaType, mediaFilename, includeOptOut, cap, sendNow, sendNowIntervalMin, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
+  }, [canSubmit, name, channelId, subject, message, mediaUrl, mediaType, mediaFilename, includeOptOut, cap, sendNow, sendNowIntervalMin, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
 
   if (loading) {
     return (
@@ -453,12 +459,19 @@ export function TextBroadcastForm() {
             <SelectContent>
               {channels.map((c) => (
                 <SelectItem key={c.id} value={c.id}>
+                  {c.is_email ? '✉️ ' : ''}
                   {c.name}
                   {c.phone_number ? ` · ${c.phone_number}` : ''}
                 </SelectItem>
               ))}
             </SelectContent>
           </Select>
+          {isEmailChannel ? (
+            <p className="text-[11px] text-muted-foreground">
+              Canal de e-mail: o disparo vai pro <strong>e-mail</strong> dos
+              contatos (quem não tem e-mail fica de fora).
+            </p>
+          ) : null}
         </div>
         <div className="space-y-1.5">
           <Label>Nome do disparo (opcional)</Label>
@@ -470,6 +483,19 @@ export function TextBroadcastForm() {
           />
         </div>
       </div>
+
+      {/* Assunto (só e-mail) */}
+      {isEmailChannel ? (
+        <div className="space-y-1.5">
+          <Label>Assunto do e-mail</Label>
+          <Input
+            value={subject}
+            onChange={(e) => setSubject(e.target.value)}
+            placeholder="Ex.: Novidades de agosto 🎉"
+            className="bg-muted border-border"
+          />
+        </div>
+      ) : null}
 
       {/* Message */}
       <div className="space-y-1.5">
@@ -549,8 +575,8 @@ export function TextBroadcastForm() {
         </span>
       </label>
 
-      {/* Media attachment */}
-      <div className="space-y-1.5">
+      {/* Media attachment (e-mail v1 é só texto) */}
+      <div className={isEmailChannel ? "hidden" : "space-y-1.5"}>
         <Label>Mídia (opcional)</Label>
         <input
           ref={mediaRef}

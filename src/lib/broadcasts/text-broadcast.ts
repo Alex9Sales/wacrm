@@ -38,6 +38,8 @@ export interface EnqueueTextBroadcastInput {
   mediaFilename?: string | null
   /** Anexa a opção de descadastro ("responda SAIR") no fim. Default true. */
   includeOptOut?: boolean
+  /** Assunto — obrigatório quando o canal é de e-mail; WhatsApp ignora. */
+  subject?: string | null
   /** Max sends per day (default 50) for the humanized drip. */
   dailyCap?: number
   /** Start now, ignoring business hours (test / urgent). */
@@ -80,37 +82,58 @@ export async function enqueueTextBroadcast(
           : 'image')
       : null
 
-    // Channel: owned + a non-official provider (text drip is WAHA/Evo/EvoGo).
+    // Channel: owned + não-oficial (drip WAHA/Evo/EvoGo) OU canal de E-MAIL
+    // (newsletter/segmento — o destinatário vira contacts.email).
     const channel = input.channelId ? await loadChannel(input.channelId) : null
     if (!channel || channel.accountId !== accountId) {
       return { broadcastId: null, totalRecipients: 0, error: 'Canal inválido.' }
     }
-    if (!getProvider(channel.provider).capabilities.needsJitter) {
+    const isEmail = channel.provider === 'email' || channel.provider === 'gmail'
+    if (!isEmail && !getProvider(channel.provider).capabilities.needsJitter) {
       return {
         broadcastId: null,
         totalRecipients: 0,
         error:
-          'Disparo de texto só em canal não-oficial (WAHA/Evolution/EvoGo). Para o Meta use um template.',
+          'Disparo de texto só em canal não-oficial (WAHA/Evolution/EvoGo) ou de e-mail. Para o Meta use um template.',
+      }
+    }
+    const subject = (input.subject ?? '').trim()
+    if (isEmail && !subject) {
+      return { broadcastId: null, totalRecipients: 0, error: 'Informe o assunto do e-mail.' }
+    }
+    if (isEmail && mediaUrl) {
+      return {
+        broadcastId: null,
+        totalRecipients: 0,
+        error: 'Disparo de e-mail ainda não aceita mídia — envie só o texto.',
       }
     }
 
-    // Keep account-owned contacts with a valid phone, deduped, in order.
+    // Keep account-owned contacts with a valid destination (phone no WhatsApp;
+    // e-mail nos canais de e-mail), deduped, in order.
     const ids = Array.from(
       new Set(input.recipientContactIds.filter((v): v is string => !!v)),
     )
     const recipients: { contactId: string }[] = []
     if (ids.length > 0) {
       const rows = (await db
-        .select({ id: contacts.id, phone: contacts.phone })
+        .select({ id: contacts.id, phone: contacts.phone, email: contacts.email })
         .from(contacts)
         .where(and(inArray(contacts.id, ids), eq(contacts.accountId, accountId)))) as {
         id: string
         phone: string | null
+        email: string | null
       }[]
       const byId = new Map(rows.map((r) => [r.id, r]))
       for (const id of ids) {
         const c = byId.get(id)
         if (!c) continue
+        if (isEmail) {
+          const email = (c.email ?? '').trim()
+          if (!/^\S+@\S+\.\S+$/.test(email)) continue
+          recipients.push({ contactId: c.id })
+          continue
+        }
         const sanitized = sanitizePhoneForMeta(c.phone ?? '')
         if (!isValidE164(sanitized)) continue
         recipients.push({ contactId: c.id })
@@ -120,7 +143,9 @@ export async function enqueueTextBroadcast(
       return {
         broadcastId: null,
         totalRecipients: 0,
-        error: 'Nenhum contato com telefone válido nesta audiência.',
+        error: isEmail
+          ? 'Nenhum contato com e-mail válido nesta audiência.'
+          : 'Nenhum contato com telefone válido nesta audiência.',
       }
     }
 
@@ -150,6 +175,7 @@ export async function enqueueTextBroadcast(
           channelId: channel.id,
           messageKind: 'text',
           bodyText: body || null,
+          subject: subject || null,
           includeOptOut: input.includeOptOut !== false,
           mediaUrl: mediaUrl || null,
           mediaType,

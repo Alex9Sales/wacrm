@@ -1299,6 +1299,8 @@ export const broadcasts = pgTable("broadcasts", {
 	// humanized-paced. bodyText holds the message for 'text' broadcasts.
 	messageKind: text("message_kind").default('template').notNull(),
 	bodyText: text("body_text"),
+	// Assunto quando o canal do disparo é e-mail (migração 0128); WhatsApp ignora.
+	subject: text(),
 	// Anti-ban (migração 0105): anexa uma opção de descadastro no fim de cada
 	// mensagem 'text' (WAHA = "responda SAIR"; oficial usa botões no template).
 	// Ligado por padrão pra disparos de texto.

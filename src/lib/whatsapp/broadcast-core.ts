@@ -388,6 +388,8 @@ export interface BroadcastSendContext {
   includeOptOut?: boolean;
   /** The message body for a 'text' broadcast (may contain {{tokens}}). */
   bodyText?: string | null;
+  /** Assunto quando o canal é de e-mail (email/gmail); WhatsApp ignora. */
+  subject?: string | null;
   /** Optional media attachment for a 'text' broadcast. */
   mediaUrl?: string | null;
   mediaType?: string | null;
@@ -451,7 +453,12 @@ export async function sendBroadcastRecipient(
       }
 
       if (!body) return { ok: false, error: 'empty text body' };
-      const result = await provider.sendText(channel, recipient.phone, body, {});
+      const result = await provider.sendText(
+        channel,
+        recipient.phone,
+        body,
+        ctx.subject ? { subject: ctx.subject } : {},
+      );
       return { ok: true, externalMessageId: result.externalMessageId };
     } catch (error) {
       return {

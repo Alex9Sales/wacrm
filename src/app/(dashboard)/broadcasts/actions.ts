@@ -283,6 +283,8 @@ export interface BroadcastChannel {
   name: string
   phone_number: string | null
   status: string
+  /** Canal de e-mail (email/gmail) — disparo vira newsletter com assunto. */
+  is_email?: boolean
 }
 
 /**
@@ -875,10 +877,18 @@ export async function listTextBroadcastChannels(): Promise<BroadcastChannel[]> {
     .from(channels)
     .where(eq(channels.accountId, ctx.accountId))
     .orderBy(channels.name)
-  // Only providers that need jitter (non-official) support free-text drips.
+  // Não-oficiais (drip com jitter) + canais de E-MAIL (newsletter/segmento).
   return rows
-    .filter((r) => getProvider(r.provider as ProviderId).capabilities.needsJitter)
-    .map(({ provider: _p, ...r }) => r as BroadcastChannel)
+    .filter(
+      (r) =>
+        r.provider === 'email' ||
+        r.provider === 'gmail' ||
+        getProvider(r.provider as ProviderId).capabilities.needsJitter,
+    )
+    .map(({ provider, ...r }) => ({
+      ...(r as BroadcastChannel),
+      is_email: provider === 'email' || provider === 'gmail',
+    }))
 }
 
 export interface CreateTextBroadcastInput {
@@ -898,6 +908,8 @@ export interface CreateTextBroadcastInput {
   sendNowIntervalMin?: number
   /** Anexa a opção de descadastro ("responda SAIR") no fim. Default true. */
   includeOptOut?: boolean
+  /** Assunto — obrigatório quando o canal é de e-mail. */
+  subject?: string | null
   audience: ResolveAudienceInput
 }
 
@@ -925,6 +937,7 @@ export async function createTextBroadcast(
       mediaType: input.mediaType,
       mediaFilename: input.mediaFilename,
       includeOptOut: input.includeOptOut,
+      subject: input.subject,
       dailyCap: input.dailyCap,
       sendNow: input.sendNow,
       sendNowIntervalMin: input.sendNowIntervalMin,

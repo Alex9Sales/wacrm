@@ -29,6 +29,7 @@ export interface BroadcastRow {
   status: string;
   messageKind: string;
   bodyText: string | null;
+  subject: string | null;
   mediaUrl: string | null;
   mediaType: string | null;
   mediaFilename: string | null;
@@ -51,6 +52,7 @@ export async function loadBroadcastRow(
         status: broadcasts.status,
         messageKind: broadcasts.messageKind,
         bodyText: broadcasts.bodyText,
+        subject: broadcasts.subject,
         mediaUrl: broadcasts.mediaUrl,
         mediaType: broadcasts.mediaType,
         mediaFilename: broadcasts.mediaFilename,
@@ -189,15 +191,28 @@ export async function loadRecipientJobContext(
     return { kind: 'broadcast', broadcast };
   }
 
-  if (!row.phone) return { kind: 'missing', reason: 'recipient has no phone' };
-
   const channel = await resolveBroadcastChannel(broadcast);
   if (!channel) return { kind: 'missing', reason: 'channel not resolvable' };
+
+  // Canal de e-mail → o destino é contacts.email (fica no campo `phone` do
+  // recipient, que é só "o endereço de entrega" pro provider.sendText).
+  const isEmailChannel =
+    channel.provider === 'email' || channel.provider === 'gmail';
+  const destination = isEmailChannel
+    ? (row.contactEmail ?? '').trim()
+    : row.phone ?? '';
+  if (!destination) {
+    return {
+      kind: 'missing',
+      reason: isEmailChannel ? 'recipient has no email' : 'recipient has no phone',
+    };
+  }
 
   const isText = broadcast.messageKind === 'text';
   const sendContext: BroadcastSendContext = {
     messageKind: isText ? 'text' : 'template',
     includeOptOut: broadcast.includeOptOut,
+    subject: broadcast.subject,
     bodyText: broadcast.bodyText,
     mediaUrl: broadcast.mediaUrl,
     mediaType: broadcast.mediaType,
@@ -229,7 +244,7 @@ export async function loadRecipientJobContext(
         id: row.id,
         status: row.status,
         attempts: row.attempts,
-        phone: row.phone,
+        phone: destination,
         params,
         messageParams: (row.messageParams as SendTimeParams | null) ?? undefined,
         slotAt: row.slotAt ?? null,
