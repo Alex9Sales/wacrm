@@ -35,14 +35,58 @@ export function CaptureLanding({
 
   return (
     <main className="min-h-screen bg-white text-slate-900">
-      {/* Hero */}
+      {/* Hero — fundo generativo na cor da marca (estilo Haikei, por código). */}
       <section
-        className="border-b border-slate-100"
+        className="relative overflow-hidden border-b border-slate-100"
         style={{
           background: `linear-gradient(180deg, ${accent}0f 0%, #ffffff 100%)`,
         }}
       >
-        <div className="mx-auto grid max-w-5xl items-center gap-8 px-5 py-12 sm:py-16 md:grid-cols-2">
+        {content.heroStyle === 'waves' ? (
+          <svg
+            className="pointer-events-none absolute inset-x-0 bottom-0 h-40 w-full"
+            viewBox="0 0 1440 200"
+            preserveAspectRatio="none"
+            aria-hidden="true"
+          >
+            <path
+              d="M0,96 C240,160 480,40 720,88 C960,136 1200,60 1440,110 L1440,200 L0,200 Z"
+              fill={accent}
+              opacity="0.07"
+            />
+            <path
+              d="M0,130 C260,80 520,180 780,130 C1040,80 1260,170 1440,140 L1440,200 L0,200 Z"
+              fill={accent}
+              opacity="0.12"
+            />
+            <path
+              d="M0,170 C320,140 640,196 960,168 C1180,150 1320,180 1440,170 L1440,200 L0,200 Z"
+              fill={accent}
+              opacity="0.2"
+            />
+          </svg>
+        ) : null}
+        {content.heroStyle === 'blobs' ? (
+          <svg
+            className="pointer-events-none absolute inset-0 h-full w-full"
+            viewBox="0 0 1440 600"
+            preserveAspectRatio="xMidYMid slice"
+            aria-hidden="true"
+          >
+            <path
+              d="M1180,-80 C1320,-40 1420,80 1380,200 C1340,320 1180,340 1080,280 C980,220 960,80 1020,0 C1060,-56 1120,-96 1180,-80 Z"
+              fill={accent}
+              opacity="0.1"
+            />
+            <path
+              d="M120,420 C240,380 360,440 380,540 C400,640 300,720 180,700 C60,680 -20,580 20,500 C48,444 80,434 120,420 Z"
+              fill={accent}
+              opacity="0.12"
+            />
+            <circle cx="1300" cy="480" r="90" fill={accent} opacity="0.06" />
+          </svg>
+        ) : null}
+        <div className="relative z-10 mx-auto grid max-w-5xl items-center gap-8 px-5 py-12 sm:py-16 md:grid-cols-2">
           <div>
             {content.logo ? (
               // eslint-disable-next-line @next/next/no-img-element

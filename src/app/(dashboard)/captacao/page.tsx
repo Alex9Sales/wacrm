@@ -62,6 +62,66 @@ import {
   type CaptureTestimonial,
 } from "@/lib/capture/shared";
 import { uploadAccountMedia } from "@/lib/storage/upload-media";
+import { getCompanyData } from "@/components/settings/actions";
+
+/** Cor dominante da logo (client, canvas): ignora cinzas/branco/preto e pega o
+ *  matiz saturado mais frequente. Logo vem do proxy same-origin (sem taint). */
+async function dominantColorFromImage(url: string): Promise<string | null> {
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = "anonymous";
+    img.onload = () => {
+      try {
+        const size = 64;
+        const c = document.createElement("canvas");
+        c.width = size;
+        c.height = size;
+        const ctx = c.getContext("2d");
+        if (!ctx) return resolve(null);
+        ctx.drawImage(img, 0, 0, size, size);
+        const data = ctx.getImageData(0, 0, size, size).data;
+        const buckets = new Map<
+          string,
+          { count: number; r: number; g: number; b: number }
+        >();
+        for (let i = 0; i < data.length; i += 4) {
+          const r = data[i];
+          const g = data[i + 1];
+          const b = data[i + 2];
+          const a = data[i + 3];
+          if (a < 200) continue;
+          const max = Math.max(r, g, b);
+          const min = Math.min(r, g, b);
+          const sat = max === 0 ? 0 : (max - min) / max;
+          const lum = (r + g + b) / 3;
+          if (sat < 0.25 || lum < 30 || lum > 235) continue;
+          const key = `${r >> 5}-${g >> 5}-${b >> 5}`;
+          const bk = buckets.get(key) ?? { count: 0, r: 0, g: 0, b: 0 };
+          bk.count++;
+          bk.r += r;
+          bk.g += g;
+          bk.b += b;
+          buckets.set(key, bk);
+        }
+        let top: { count: number; r: number; g: number; b: number } | null =
+          null;
+        for (const v of buckets.values()) {
+          if (!top || v.count > top.count) top = v;
+        }
+        if (!top) return resolve(null);
+        const hx = (n: number) =>
+          Math.round(n / top.count)
+            .toString(16)
+            .padStart(2, "0");
+        resolve(`#${hx(top.r)}${hx(top.g)}${hx(top.b)}`);
+      } catch {
+        resolve(null);
+      }
+    };
+    img.onerror = () => resolve(null);
+    img.src = url;
+  });
+}
 
 type Pipeline = { id: string; name: string; stages: { id: string; name: string }[] };
 
@@ -813,6 +873,59 @@ function CaptureEditor({
   const [schedulerSlug, setSchedulerSlug] = useState(
     initContent.schedulerSlug ?? "",
   );
+  // Identidade da marca: fundo do hero + puxar logo/cor da empresa.
+  const [heroStyle, setHeroStyle] = useState<"gradient" | "waves" | "blobs">(
+    initContent.heroStyle ?? "gradient",
+  );
+  const [brandBusy, setBrandBusy] = useState(false);
+
+  async function useCompanyLogo() {
+    setBrandBusy(true);
+    try {
+      const d = await getCompanyData();
+      if (!d.logo) {
+        toast.error(
+          "Sua empresa ainda não tem logo — suba em Config → Dados da empresa.",
+        );
+        return;
+      }
+      setLandingLogo(d.logo);
+      toast.success("Logo da empresa aplicada.");
+    } catch {
+      toast.error("Falha ao buscar os dados da empresa.");
+    } finally {
+      setBrandBusy(false);
+    }
+  }
+
+  async function useLogoColor() {
+    setBrandBusy(true);
+    try {
+      let src = landingLogo;
+      if (!src) {
+        const d = await getCompanyData().catch(() => null);
+        src = d?.logo ?? "";
+        if (src) setLandingLogo(src);
+      }
+      if (!src) {
+        toast.error(
+          "Nenhuma logo pra extrair a cor — suba a logo aqui ou em Dados da empresa.",
+        );
+        return;
+      }
+      const color = await dominantColorFromImage(src);
+      if (!color) {
+        toast.error(
+          "Não consegui achar uma cor forte na logo — escolha manualmente.",
+        );
+        return;
+      }
+      setBrandColor(color);
+      toast.success(`Cor da marca extraída da logo: ${color}`);
+    } finally {
+      setBrandBusy(false);
+    }
+  }
 
   // Modelos prontos (a "galeria" do RD, já escrita): 1 clique preenche tudo.
   function applyTemplate(id: string) {
@@ -968,6 +1081,7 @@ function CaptureEditor({
         ctaText: ctaText.trim() || null,
         showWhatsapp,
         schedulerSlug: schedulerSlug || null,
+        heroStyle,
       },
       aiIntro,
       introChannelId: introChannelId || null,
@@ -1172,6 +1286,70 @@ function CaptureEditor({
                     "Criar com IA"
                   )}
                 </Button>
+              </div>
+            </div>
+
+            {/* Identidade da marca: logo + cor da logo + fundo do hero */}
+            <div className="space-y-3 rounded-lg border border-border bg-muted/30 p-3">
+              <div className="text-sm font-semibold text-foreground">
+                🎨 Identidade da marca
+              </div>
+              <div className="flex flex-wrap items-center gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void useCompanyLogo()}
+                  disabled={brandBusy}
+                >
+                  🖼️ Usar logo da empresa
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => void useLogoColor()}
+                  disabled={brandBusy}
+                >
+                  {brandBusy ? (
+                    <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                  ) : null}
+                  🎯 Usar cor da logo
+                </Button>
+                <span
+                  className="h-6 w-6 rounded-full border border-border"
+                  style={{ background: brandColor }}
+                  title={brandColor}
+                />
+              </div>
+              <div className="grid gap-1.5">
+                <Label>Fundo do topo</Label>
+                <div className="flex gap-2">
+                  {(
+                    [
+                      ["gradient", "Gradiente"],
+                      ["waves", "🌊 Ondas"],
+                      ["blobs", "🫧 Bolhas"],
+                    ] as const
+                  ).map(([v, label]) => (
+                    <button
+                      key={v}
+                      type="button"
+                      onClick={() => setHeroStyle(v)}
+                      className={`rounded-lg border px-3 py-1.5 text-sm transition ${
+                        heroStyle === v
+                          ? "border-primary bg-primary/10 text-foreground"
+                          : "border-border text-muted-foreground hover:border-primary/40"
+                      }`}
+                    >
+                      {label}
+                    </button>
+                  ))}
+                </div>
+                <p className="text-[11px] text-muted-foreground">
+                  Formas geradas por código na cor da marca — cara de designer,
+                  sem cara de template.
+                </p>
               </div>
             </div>
 

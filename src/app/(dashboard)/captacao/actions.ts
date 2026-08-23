@@ -350,6 +350,7 @@ export async function generateCaptureLanding(
     const contexto = [
       `Empresa: ${empresa}`,
       profile.description ? `Sobre: ${profile.description}` : '',
+      profile.tone ? `TOM DE VOZ da marca (escreva EXATAMENTE neste tom): ${profile.tone}` : '',
       profile.offerings ? `Produtos/serviços: ${profile.offerings}` : '',
       prods.length
         ? `Catálogo: ${prods

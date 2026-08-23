@@ -29,6 +29,8 @@ export interface CaptureContent {
   showWhatsapp: boolean
   /** Slug de uma página de agendamento → botão "📅 Agendar horário". */
   schedulerSlug: string | null
+  /** Fundo do hero (estilo Haikei, gerado por código na cor da marca). */
+  heroStyle: 'gradient' | 'waves' | 'blobs'
 }
 
 export const DEFAULT_CAPTURE_CONTENT: CaptureContent = {
@@ -42,6 +44,7 @@ export const DEFAULT_CAPTURE_CONTENT: CaptureContent = {
   ctaText: null,
   showWhatsapp: false,
   schedulerSlug: null,
+  heroStyle: 'gradient',
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/
@@ -77,6 +80,8 @@ export function normalizeCaptureContent(input: unknown): CaptureContent {
     ctaText: str(o.ctaText, 40) || null,
     showWhatsapp: !!o.showWhatsapp,
     schedulerSlug: str(o.schedulerSlug, 80) || null,
+    heroStyle:
+      o.heroStyle === 'waves' || o.heroStyle === 'blobs' ? o.heroStyle : 'gradient',
   }
 }
 
