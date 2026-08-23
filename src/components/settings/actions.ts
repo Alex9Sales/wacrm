@@ -1146,7 +1146,11 @@ export async function lookupCnpj(cnpj: string): Promise<{
   }
   try {
     const res = await fetch(`https://brasilapi.com.br/api/cnpj/v1/${digits}`, {
-      headers: { accept: 'application/json' },
+      // BrasilAPI (Cloudflare) devolve 403 "Forbidden" sem User-Agent de browser.
+      headers: {
+        accept: 'application/json',
+        'user-agent': 'Mozilla/5.0 (compatible; FluxiaCRM/1.0)',
+      },
       cache: 'no-store',
     })
     if (!res.ok) {
