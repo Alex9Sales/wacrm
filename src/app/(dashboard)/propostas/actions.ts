@@ -162,6 +162,7 @@ export interface SaveProposalDraftInput {
   clientName?: string | null
   clientCompany?: string | null
   clientDocument?: string | null
+  clientAddress?: string | null
   clientPhone?: string | null
   clientEmail?: string | null
   pipelineId?: string | null
@@ -206,6 +207,7 @@ async function attachCompany(
   contactId: string | null,
   companyName: string,
   document: string | null,
+  address: string | null,
 ) {
   const name = companyName.trim()
   if (!name) return
@@ -219,17 +221,17 @@ async function attachCompany(
   let companyId: string
   if (existing) {
     companyId = existing.id
-    if (document) {
-      await db
-        .update(companies)
-        .set({ document })
-        .where(eq(companies.id, companyId))
+    const patch: Record<string, string> = {}
+    if (document) patch.document = document
+    if (address) patch.address = address
+    if (Object.keys(patch).length > 0) {
+      await db.update(companies).set(patch).where(eq(companies.id, companyId))
     }
   } else {
     const created = firstOrThrow(
       await db
         .insert(companies)
-        .values({ accountId, name, document: document || null })
+        .values({ accountId, name, document: document || null, address: address || null })
         .returning({ id: companies.id }),
     )
     companyId = created.id
@@ -307,6 +309,7 @@ export async function saveProposalDraft(
           contactId,
           input.clientCompany!.trim(),
           (input.clientDocument ?? '').trim() || null,
+          (input.clientAddress ?? '').trim() || null,
         )
       }
     } else {

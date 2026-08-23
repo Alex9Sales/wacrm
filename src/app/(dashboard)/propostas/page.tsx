@@ -20,6 +20,7 @@ import {
   Send,
   X,
   MessageCircle,
+  Search,
 } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
@@ -29,6 +30,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { sendDealProposalEmail } from "@/app/(dashboard)/pipelines/actions";
+import { lookupCnpj } from "@/components/settings/actions";
 import {
   listAllProposals,
   listProposalPipelines,
@@ -247,8 +249,10 @@ function ProposalCreator({
   const [clientName, setClientName] = useState("");
   const [clientCompany, setClientCompany] = useState("");
   const [clientDocument, setClientDocument] = useState("");
+  const [clientAddress, setClientAddress] = useState("");
   const [clientPhone, setClientPhone] = useState("");
   const [clientEmail, setClientEmail] = useState("");
+  const [lookingCnpj, setLookingCnpj] = useState(false);
   const [pipelineId, setPipelineId] = useState("");
   const [stageId, setStageId] = useState("");
   // existente
@@ -321,6 +325,25 @@ function ProposalCreator({
     }
   }
 
+  async function handleClientLookup() {
+    const digits = clientDocument.replace(/\D/g, "");
+    if (digits.length !== 14) {
+      toast.error("Informe um CNPJ com 14 dígitos para buscar.");
+      return;
+    }
+    setLookingCnpj(true);
+    const res = await lookupCnpj(clientDocument);
+    setLookingCnpj(false);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    if (res.tradeName || res.legalName)
+      setClientCompany(res.tradeName || res.legalName || "");
+    if (res.address) setClientAddress(res.address);
+    toast.success("Dados do CNPJ preenchidos.");
+  }
+
   async function handleSave() {
     if (mode === "new" && !clientPhone.trim()) {
       toast.error("Informe o WhatsApp do cliente.");
@@ -341,6 +364,7 @@ function ProposalCreator({
       clientName,
       clientCompany,
       clientDocument,
+      clientAddress,
       clientPhone,
       clientEmail,
       pipelineId: pipelineId || null,
@@ -493,7 +517,36 @@ function ProposalCreator({
               </div>
               <div className="grid gap-1.5">
                 <Label>CNPJ / CPF</Label>
-                <Input value={clientDocument} onChange={(e) => setClientDocument(e.target.value)} />
+                <div className="flex items-center gap-1.5">
+                  <Input
+                    value={clientDocument}
+                    onChange={(e) => setClientDocument(e.target.value)}
+                    placeholder="Digite o CNPJ e busque"
+                    className="flex-1"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void handleClientLookup()}
+                    disabled={lookingCnpj}
+                    title="Buscar empresa pelo CNPJ"
+                  >
+                    {lookingCnpj ? (
+                      <Loader2 className="h-4 w-4 animate-spin" />
+                    ) : (
+                      <Search className="h-4 w-4" />
+                    )}
+                  </Button>
+                </div>
+              </div>
+              <div className="grid gap-1.5">
+                <Label>Endereço</Label>
+                <Input
+                  value={clientAddress}
+                  onChange={(e) => setClientAddress(e.target.value)}
+                  placeholder="Preenchido pela busca de CNPJ"
+                />
               </div>
               <div className="grid gap-1.5 sm:col-span-2">
                 <Label>E-mail (para enviar por e-mail)</Label>
