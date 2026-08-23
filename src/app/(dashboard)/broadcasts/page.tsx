@@ -186,7 +186,16 @@ export default function BroadcastsPage() {
             Envie mensagens em massa para seus contatos usando templates aprovados.
           </p>
         </div>
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <GatedButton
+            canAct={canCreate}
+            gateReason="criar disparos"
+            onClick={() => router.push('/broadcasts/text?email=1')}
+            variant="outline"
+            className="border-border text-foreground hover:bg-muted"
+          >
+            ✉️ Disparo de e-mail
+          </GatedButton>
           <GatedButton
             canAct={canCreate}
             gateReason="criar disparos"

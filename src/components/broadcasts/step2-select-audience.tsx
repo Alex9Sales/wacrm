@@ -1,7 +1,9 @@
 'use client';
 
-import { useEffect, useState, useCallback } from 'react';
+import { useEffect, useState, useCallback, useRef } from 'react';
 import { listTags } from '@/app/(dashboard)/contacts/actions';
+import { parseCsv } from '@/lib/broadcasts/csv';
+import { toast } from 'sonner';
 import {
   listCustomFields,
   estimateAudienceCount,
@@ -88,6 +90,31 @@ export function Step2SelectAudience({
   onBack,
 }: Step2Props) {
   const [tags, setTags] = useState<Tag[]>([]);
+  // Importar CSV: clique OU arrastar-e-soltar no card.
+  const csvFileRef = useRef<HTMLInputElement>(null);
+  const [csvFileName, setCsvFileName] = useState('');
+  const [csvDragOver, setCsvDragOver] = useState(false);
+
+  const readCsvFile = useCallback(
+    (file: File | null) => {
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = () => {
+        const parsed = parseCsv(String(reader.result ?? ''));
+        if (parsed.length === 0) {
+          toast.error(
+            'Nenhum telefone encontrado no arquivo. Confira as colunas do CSV.',
+          );
+          return;
+        }
+        setCsvFileName(file.name);
+        onUpdate({ ...audience, type: 'csv', csvContacts: parsed });
+        toast.success(`${parsed.length} contato(s) importados do CSV.`);
+      };
+      reader.readAsText(file);
+    },
+    [audience, onUpdate],
+  );
   const [customFields, setCustomFields] = useState<CustomField[]>([]);
   const [loadingTags, setLoadingTags] = useState(false);
   const [loadingFields, setLoadingFields] = useState(false);
@@ -357,6 +384,60 @@ export function Step2SelectAudience({
                 className="h-9 rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none placeholder:text-muted-foreground focus:border-primary focus:ring-1 focus:ring-primary"
               />
             </div>
+          )}
+        </div>
+      )}
+
+      {audience.type === 'csv' && (
+        <div
+          onDragOver={(e) => {
+            e.preventDefault();
+            setCsvDragOver(true);
+          }}
+          onDragLeave={() => setCsvDragOver(false)}
+          onDrop={(e) => {
+            e.preventDefault();
+            setCsvDragOver(false);
+            readCsvFile(e.dataTransfer.files?.[0] ?? null);
+          }}
+          onClick={() => csvFileRef.current?.click()}
+          className={`cursor-pointer rounded-xl border-2 border-dashed p-6 text-center transition ${
+            csvDragOver
+              ? 'border-primary bg-primary/5'
+              : 'border-border bg-card/50 hover:border-primary/50'
+          }`}
+        >
+          <input
+            ref={csvFileRef}
+            type="file"
+            accept=".csv,text/csv,text/plain"
+            className="hidden"
+            onChange={(e) => {
+              readCsvFile(e.target.files?.[0] ?? null);
+              e.target.value = '';
+            }}
+          />
+          <Upload className="mx-auto mb-2 h-6 w-6 text-muted-foreground" />
+          {audience.csvContacts && audience.csvContacts.length > 0 ? (
+            <>
+              <p className="text-sm font-medium text-foreground">
+                {csvFileName || 'CSV importado'} —{' '}
+                {audience.csvContacts.length.toLocaleString()} contato(s)
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                Arraste outro arquivo (ou clique) para substituir.
+              </p>
+            </>
+          ) : (
+            <>
+              <p className="text-sm font-medium text-foreground">
+                Arraste o arquivo CSV aqui
+              </p>
+              <p className="mt-1 text-xs text-muted-foreground">
+                ou clique para escolher. Colunas: telefone (com DDD) e nome —
+                com ou sem cabeçalho; vírgula, ponto e vírgula ou tabulação.
+              </p>
+            </>
           )}
         </div>
       )}

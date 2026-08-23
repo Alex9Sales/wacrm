@@ -35,6 +35,7 @@ import {
   MEDIA_MAX_BYTES_BY_KIND,
 } from '@/lib/storage/upload-media'
 import { renderForContact, SUPPORTED_TOKENS } from '@/lib/whatsapp/message-vars'
+import { parseCsv, type CsvContact } from '@/lib/broadcasts/csv'
 import type { Tag } from '@/types'
 import { cn } from '@/lib/utils'
 
@@ -57,111 +58,15 @@ const PREVIEW_CONTACT = {
 
 type AudienceType = 'all' | 'tags' | 'contacts' | 'csv'
 
-interface CsvContact {
-  phone: string
-  name?: string
-}
-
 interface PickContact {
   id: string
   name: string
   phone: string
 }
 
-/** Split one CSV line into cells, respecting double-quoted fields (which may
- *  contain the separator). Accepts comma, semicolon or tab. */
-function splitCsvLine(line: string): string[] {
-  const cells: string[] = []
-  let cur = ''
-  let inQuotes = false
-  for (let i = 0; i < line.length; i++) {
-    const ch = line[i]
-    if (inQuotes) {
-      if (ch === '"') {
-        if (line[i + 1] === '"') {
-          cur += '"'
-          i++
-        } else {
-          inQuotes = false
-        }
-      } else {
-        cur += ch
-      }
-    } else if (ch === '"') {
-      inQuotes = true
-    } else if (ch === ',' || ch === ';' || ch === '\t') {
-      cells.push(cur)
-      cur = ''
-    } else {
-      cur += ch
-    }
-  }
-  cells.push(cur)
-  return cells.map((c) => c.trim())
-}
-
-const PHONE_HEADER = /(phone|telefone|celular|whats|fone|n[uú]mero|mobile|msisdn|contato)/i
-const NAME_HEADER = /^(name|nome|full_?name|nome_completo|first_?name|primeiro_?nome|contato)$/i
-const FIELD_HINT = /(phone|telefone|celular|whats|fone|n[uú]mero|name|nome|email|e-mail)/i
-
-/** Count digits in a cell (for phone detection). */
-function digitCount(s: string): number {
-  return s.replace(/\D/g, '').length
-}
-
-/** Parse pasted/uploaded CSV text into { phone, name } rows. Header-aware:
- *  finds the phone/name columns by header name (so `phone_normalized`,
- *  `telefone`, etc. in any position work), and falls back to scanning each
- *  row for a phone-shaped cell when there is no usable header. Accepts comma,
- *  semicolon or tab separators and quoted fields. */
-function parseCsv(text: string): CsvContact[] {
-  const out: CsvContact[] = []
-  const rows = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean)
-    .map(splitCsvLine)
-  if (rows.length === 0) return out
-
-  const header = rows[0].map((h) => h.toLowerCase())
-  // A first row is a header when it names a known field (phone/name/email…).
-  const hasHeader = header.some((h) => FIELD_HINT.test(h))
-
-  let phoneIdx = -1
-  let nameIdx = -1
-  if (hasHeader) {
-    phoneIdx = header.findIndex((h) => PHONE_HEADER.test(h))
-    nameIdx = header.findIndex((h) => NAME_HEADER.test(h))
-    // A bare "contato" column is a weak name signal; only use it for the name
-    // when we already found a distinct phone column.
-    if (nameIdx === phoneIdx) nameIdx = -1
-  }
-
-  const dataRows = hasHeader ? rows.slice(1) : rows
-  for (const parts of dataRows) {
-    // 1) header-mapped phone column, else 2) positional col 0, else 3) the
-    //    first cell in the row that looks like a phone (10–15 digits).
-    let phoneCell = phoneIdx !== -1 ? (parts[phoneIdx] ?? '') : (parts[0] ?? '')
-    if (digitCount(phoneCell) < 8) {
-      const idx = parts.findIndex((p) => {
-        const d = digitCount(p)
-        return d >= 10 && d <= 15
-      })
-      if (idx !== -1) phoneCell = parts[idx]
-    }
-    const phone = phoneCell.replace(/[^\d+]/g, '')
-    if (digitCount(phone) < 8) continue // too short to be a phone
-
-    const nameCell =
-      nameIdx !== -1 ? parts[nameIdx] : hasHeader ? undefined : parts[1]
-    out.push({ phone, name: nameCell?.trim() || undefined })
-  }
-  return out
-}
-
 const DAY_LABELS = 'seg–sáb'
 
-export function TextBroadcastForm() {
+export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
   const router = useRouter()
 
   const [channels, setChannels] = useState<BroadcastChannel[]>([])
@@ -213,9 +118,12 @@ export function TextBroadcastForm() {
           listTags(),
         ])
         if (cancelled) return
-        setChannels(chs)
+        // Modo "Disparo de e-mail": só canais de e-mail (o cliente usa o que
+        // configurou em Canais).
+        const usable = emailOnly ? chs.filter((c) => c.is_email) : chs
+        setChannels(usable)
         setTags(tgs)
-        if (chs.length > 0) setChannelId(chs[0].id)
+        if (usable.length > 0) setChannelId(usable[0].id)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -431,9 +339,19 @@ export function TextBroadcastForm() {
   if (channels.length === 0) {
     return (
       <div className="rounded-xl border border-border bg-card/50 p-6 text-sm text-muted-foreground">
-        Nenhum canal não-oficial (WAHA/Evolution/EvoGo) conectado. Conecte um
-        canal em <strong>Configurações → Canais</strong> para fazer disparos de
-        texto.
+        {emailOnly ? (
+          <>
+            Nenhum canal de e-mail conectado. Conecte um canal (E-mail ou Modo
+            Gmail) em <strong>Configurações → Canais</strong> para fazer
+            disparos de e-mail.
+          </>
+        ) : (
+          <>
+            Nenhum canal não-oficial (WAHA/Evolution/EvoGo) conectado. Conecte
+            um canal em <strong>Configurações → Canais</strong> para fazer
+            disparos de texto.
+          </>
+        )}
       </div>
     )
   }
