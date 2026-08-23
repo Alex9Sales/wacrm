@@ -874,9 +874,9 @@ function CaptureEditor({
     initContent.schedulerSlug ?? "",
   );
   // Identidade da marca: fundo do hero + puxar logo/cor da empresa.
-  const [heroStyle, setHeroStyle] = useState<"gradient" | "waves" | "blobs">(
-    initContent.heroStyle ?? "gradient",
-  );
+  const [heroStyle, setHeroStyle] = useState<
+    "gradient" | "mesh" | "waves" | "blobs" | "grid" | "lowpoly"
+  >(initContent.heroStyle ?? "gradient");
   const [brandBusy, setBrandBusy] = useState(false);
 
   async function useCompanyLogo() {
@@ -1324,12 +1324,15 @@ function CaptureEditor({
               </div>
               <div className="grid gap-1.5">
                 <Label>Fundo do topo</Label>
-                <div className="flex gap-2">
+                <div className="flex flex-wrap gap-2">
                   {(
                     [
                       ["gradient", "Gradiente"],
+                      ["mesh", "🎨 Mesh"],
                       ["waves", "🌊 Ondas"],
                       ["blobs", "🫧 Bolhas"],
+                      ["grid", "▦ Grade"],
+                      ["lowpoly", "🔷 Low-poly"],
                     ] as const
                   ).map(([v, label]) => (
                     <button

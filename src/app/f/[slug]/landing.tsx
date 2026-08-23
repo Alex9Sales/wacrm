@@ -2,6 +2,11 @@
 // social + o formulário embutido. Server component; o form interativo é o
 // CaptureFormClient. Tema "papel" (claro), cor de destaque da conta.
 import type { CaptureContent, CaptureField } from "@/lib/capture/shared";
+import {
+  lowPolyTriangles,
+  gridDots,
+  meshGradientBackground,
+} from "@/lib/capture/hero-art";
 import { CaptureFormClient } from "./capture-form-client";
 
 export function CaptureLanding({
@@ -32,15 +37,17 @@ export function CaptureLanding({
   schedulerUrl?: string | null;
 }) {
   const accent = content.brandColor || "#7c3aed";
+  const heroBackground =
+    content.heroStyle === "mesh"
+      ? meshGradientBackground(accent, slug)
+      : `linear-gradient(180deg, ${accent}0f 0%, #ffffff 100%)`;
 
   return (
     <main className="min-h-screen bg-white text-slate-900">
       {/* Hero — fundo generativo na cor da marca (estilo Haikei, por código). */}
       <section
         className="relative overflow-hidden border-b border-slate-100"
-        style={{
-          background: `linear-gradient(180deg, ${accent}0f 0%, #ffffff 100%)`,
-        }}
+        style={{ background: heroBackground }}
       >
         {content.heroStyle === 'waves' ? (
           <svg
@@ -64,6 +71,66 @@ export function CaptureLanding({
               fill={accent}
               opacity="0.2"
             />
+          </svg>
+        ) : null}
+        {content.heroStyle === "grid" ? (
+          <svg
+            className="pointer-events-none absolute inset-0 h-full w-full"
+            viewBox="0 0 1440 560"
+            preserveAspectRatio="xMidYMid slice"
+            aria-hidden="true"
+          >
+            <defs>
+              <pattern
+                id="hero-grid"
+                width="48"
+                height="48"
+                patternUnits="userSpaceOnUse"
+              >
+                <path
+                  d="M 48 0 L 0 0 0 48"
+                  fill="none"
+                  stroke={accent}
+                  strokeOpacity="0.12"
+                  strokeWidth="1"
+                />
+              </pattern>
+              <radialGradient id="hero-grid-fade" cx="50%" cy="0%" r="90%">
+                <stop offset="0%" stopColor="white" stopOpacity="1" />
+                <stop offset="100%" stopColor="white" stopOpacity="0" />
+              </radialGradient>
+              <mask id="hero-grid-mask">
+                <rect width="1440" height="560" fill="url(#hero-grid-fade)" />
+              </mask>
+            </defs>
+            <rect
+              width="1440"
+              height="560"
+              fill="url(#hero-grid)"
+              mask="url(#hero-grid-mask)"
+            />
+            {gridDots(slug).map((d, i) => (
+              <circle
+                key={i}
+                cx={d.x}
+                cy={d.y}
+                r={d.r}
+                fill={accent}
+                opacity={d.opacity}
+              />
+            ))}
+          </svg>
+        ) : null}
+        {content.heroStyle === "lowpoly" ? (
+          <svg
+            className="pointer-events-none absolute inset-0 h-full w-full"
+            viewBox="0 0 1440 560"
+            preserveAspectRatio="xMidYMid slice"
+            aria-hidden="true"
+          >
+            {lowPolyTriangles(slug).map((t, i) => (
+              <polygon key={i} points={t.points} fill={accent} opacity={t.opacity} />
+            ))}
           </svg>
         ) : null}
         {content.heroStyle === 'blobs' ? (
