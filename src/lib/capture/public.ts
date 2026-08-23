@@ -3,8 +3,9 @@
 
 import { and, eq } from 'drizzle-orm'
 
-import { db, captureForms } from '@/db'
+import { db, captureForms, channels } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { loadDefaultChannel } from '@/lib/channels/channels'
 import {
   normalizeCaptureFields,
   normalizeCaptureContent,
@@ -25,11 +26,54 @@ export interface PublicCaptureForm {
   content: CaptureContent
   aiIntro: boolean
   introChannelId: string | null
+  waRef: string | null
+  successOfferTitle: string | null
+  successOfferText: string | null
+  successWhatsapp: boolean
+  cadenceId: string | null
   pipelineId: string | null
   stageId: string | null
   origin: string
   theme: string
   createdBy: string | null
+}
+
+/**
+ * Link wa.me do botão "Chamar no WhatsApp" da tela de sucesso: número do canal
+ * do form (⚡) ou do canal padrão, com a mensagem pré-preenchida carregando o
+ * ref rastreado. null quando a conta não tem canal com número.
+ */
+export async function getPublicCaptureWaHref(
+  form: PublicCaptureForm,
+): Promise<string | null> {
+  try {
+    let phoneRaw = ''
+    if (form.introChannelId) {
+      const ch = firstOrNull(
+        await db
+          .select({ phone: channels.phoneNumber })
+          .from(channels)
+          .where(
+            and(eq(channels.id, form.introChannelId), eq(channels.accountId, form.accountId)),
+          )
+          .limit(1),
+      )
+      phoneRaw = ch?.phone ?? ''
+    }
+    if (!phoneRaw) {
+      const def = await loadDefaultChannel(form.accountId)
+      phoneRaw = def?.phoneNumber ?? ''
+    }
+    const phone = phoneRaw.replace(/\D/g, '')
+    if (!phone) return null
+    const ref = (form.waRef ?? '').toUpperCase()
+    const message = ref
+      ? `Olá! Acabei de enviar o formulário. #${ref}`
+      : 'Olá! Acabei de enviar o formulário.'
+    return `https://wa.me/${phone}?text=${encodeURIComponent(message)}`
+  } catch {
+    return null
+  }
 }
 
 export async function getPublicCaptureForm(
@@ -57,6 +101,11 @@ export async function getPublicCaptureForm(
     content: normalizeCaptureContent(row.content),
     aiIntro: row.aiIntro,
     introChannelId: row.introChannelId,
+    waRef: row.waRef,
+    successOfferTitle: row.successOfferTitle,
+    successOfferText: row.successOfferText,
+    successWhatsapp: row.successWhatsapp,
+    cadenceId: row.cadenceId,
     pipelineId: row.pipelineId,
     stageId: row.stageId,
     origin: row.origin,

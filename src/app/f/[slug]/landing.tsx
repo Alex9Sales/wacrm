@@ -12,6 +12,8 @@ export function CaptureLanding({
   submitLabel,
   successMessage,
   content,
+  successOffer,
+  successWaHref,
 }: {
   slug: string;
   headline: string;
@@ -20,6 +22,8 @@ export function CaptureLanding({
   submitLabel: string;
   successMessage: string;
   content: CaptureContent;
+  successOffer?: { title: string | null; text: string | null } | null;
+  successWaHref?: string | null;
 }) {
   const accent = content.brandColor || "#7c3aed";
 
@@ -145,6 +149,8 @@ export function CaptureLanding({
           successMessage={successMessage}
           accent={accent}
           embedded
+          successOffer={successOffer}
+          successWaHref={successWaHref}
         />
       </section>
 

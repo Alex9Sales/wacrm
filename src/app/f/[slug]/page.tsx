@@ -5,7 +5,7 @@
 // ============================================================
 import type { Metadata } from 'next'
 
-import { getPublicCaptureForm } from '@/lib/capture/public'
+import { getPublicCaptureForm, getPublicCaptureWaHref } from '@/lib/capture/public'
 import {
   DEFAULT_CAPTURE_HEADLINE,
   DEFAULT_CAPTURE_SUBMIT,
@@ -56,6 +56,14 @@ export default async function PublicCapturePage({
   const headline = form.headline || form.name || DEFAULT_CAPTURE_HEADLINE
   const submitLabel = form.submitLabel || DEFAULT_CAPTURE_SUBMIT
   const successMessage = form.successMessage || DEFAULT_CAPTURE_SUCCESS
+  // Obrigado que Vende: oferta + botão de WhatsApp na tela de sucesso.
+  const successWaHref = form.successWhatsapp
+    ? await getPublicCaptureWaHref(form)
+    : null
+  const successOffer =
+    form.successOfferTitle || form.successOfferText
+      ? { title: form.successOfferTitle, text: form.successOfferText }
+      : null
 
   if (form.content.mode === 'landing') {
     return (
@@ -67,6 +75,8 @@ export default async function PublicCapturePage({
         submitLabel={submitLabel}
         successMessage={successMessage}
         content={form.content}
+        successOffer={successOffer}
+        successWaHref={successWaHref}
       />
     )
   }
@@ -79,6 +89,8 @@ export default async function PublicCapturePage({
       fields={form.fields}
       submitLabel={submitLabel}
       successMessage={successMessage}
+      successOffer={successOffer}
+      successWaHref={successWaHref}
     />
   )
 }

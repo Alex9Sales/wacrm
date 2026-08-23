@@ -21,6 +21,8 @@ export function CaptureFormClient({
   successMessage,
   accent,
   embedded,
+  successOffer,
+  successWaHref,
 }: {
   slug: string;
   headline: string;
@@ -32,6 +34,10 @@ export function CaptureFormClient({
   accent?: string;
   /** Embutido numa landing → renderiza só o card, sem o fundo de tela cheia. */
   embedded?: boolean;
+  /** Obrigado que Vende: bloco de oferta na tela de sucesso. */
+  successOffer?: { title: string | null; text: string | null } | null;
+  /** Obrigado que Vende: botão "Chamar no WhatsApp" (wa.me com ref rastreado). */
+  successWaHref?: string | null;
 }) {
   const brand = accent || "#7c3aed";
   const [values, setValues] = useState<Record<string, string>>({});
@@ -94,6 +100,36 @@ export function CaptureFormClient({
               Tudo certo!
             </h1>
             <p className="mt-2 text-sm text-slate-600">{successMessage}</p>
+
+            {/* Obrigado que Vende: oferta + próximo passo no WhatsApp. */}
+            {successOffer ? (
+              <div
+                className="mt-5 rounded-xl border px-4 py-3 text-left"
+                style={{ borderColor: `${brand}55`, background: `${brand}0d` }}
+              >
+                {successOffer.title ? (
+                  <p className="text-sm font-semibold text-slate-900">
+                    {successOffer.title}
+                  </p>
+                ) : null}
+                {successOffer.text ? (
+                  <p className="mt-1 whitespace-pre-wrap text-sm text-slate-600">
+                    {successOffer.text}
+                  </p>
+                ) : null}
+              </div>
+            ) : null}
+
+            {successWaHref ? (
+              <a
+                href={successWaHref}
+                target="_blank"
+                rel="noreferrer"
+                className="mt-5 inline-flex w-full items-center justify-center gap-2 rounded-lg bg-emerald-500 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-emerald-600"
+              >
+                💬 Chamar no WhatsApp agora
+              </a>
+            ) : null}
           </div>
         ) : (
           <>

@@ -2,7 +2,7 @@
 
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
 
-import { db, captureForms, pipelines, pipelineStages, channels, products } from '@/db'
+import { db, captureForms, pipelines, pipelineStages, channels, products, cadences } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { isUniqueViolation } from '@/lib/contacts/dedupe'
@@ -53,6 +53,10 @@ export interface CaptureFormDetail {
   content: CaptureContent
   aiIntro: boolean
   introChannelId: string | null
+  successOfferTitle: string | null
+  successOfferText: string | null
+  successWhatsapp: boolean
+  cadenceId: string | null
   pipelineId: string | null
   stageId: string | null
   origin: string
@@ -70,6 +74,10 @@ export interface CaptureFormInput {
   content: CaptureContent
   aiIntro: boolean
   introChannelId: string | null
+  successOfferTitle: string | null
+  successOfferText: string | null
+  successWhatsapp: boolean
+  cadenceId: string | null
   pipelineId: string | null
   stageId: string | null
   origin: string
@@ -131,6 +139,10 @@ export async function getCaptureForm(
     content: normalizeCaptureContent(row.content),
     aiIntro: row.aiIntro,
     introChannelId: row.introChannelId,
+    successOfferTitle: row.successOfferTitle,
+    successOfferText: row.successOfferText,
+    successWhatsapp: row.successWhatsapp,
+    cadenceId: row.cadenceId,
     pipelineId: row.pipelineId,
     stageId: row.stageId,
     origin: row.origin,
@@ -198,6 +210,10 @@ export async function createCaptureForm(
           content: normalizeCaptureContent(input.content),
           aiIntro: !!input.aiIntro,
           introChannelId: input.introChannelId || null,
+          successOfferTitle: (input.successOfferTitle ?? '').trim() || null,
+          successOfferText: (input.successOfferText ?? '').trim() || null,
+          successWhatsapp: !!input.successWhatsapp,
+          cadenceId: input.cadenceId || null,
           pipelineId: input.pipelineId || null,
           stageId: input.stageId || null,
           origin: (input.origin ?? '').trim() || 'Formulário',
@@ -246,6 +262,10 @@ export async function updateCaptureForm(
         content: normalizeCaptureContent(input.content),
         aiIntro: !!input.aiIntro,
         introChannelId: input.introChannelId || null,
+        successOfferTitle: (input.successOfferTitle ?? '').trim() || null,
+        successOfferText: (input.successOfferText ?? '').trim() || null,
+        successWhatsapp: !!input.successWhatsapp,
+        cadenceId: input.cadenceId || null,
         pipelineId: input.pipelineId || null,
         stageId: input.stageId || null,
         origin: (input.origin ?? '').trim() || 'Formulário',
@@ -473,6 +493,23 @@ export async function getCaptureWaInfo(
     console.error('[getCaptureWaInfo]', err)
     return { data: null, error: 'Falha ao montar o link do WhatsApp.' }
   }
+}
+
+/** Cadências ativas (com degrau) — seletor do "Obrigado que Vende". */
+export async function listCaptureCadences(): Promise<
+  { id: string; name: string }[]
+> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: cadences.id,
+      name: cadences.name,
+      steps: sql<number>`(SELECT count(*)::int FROM cadence_steps s WHERE s.cadence_id = ${cadences.id})`,
+    })
+    .from(cadences)
+    .where(and(eq(cadences.accountId, ctx.accountId), eq(cadences.active, true)))
+    .orderBy(asc(cadences.name))
+  return rows.filter((r) => r.steps > 0).map((r) => ({ id: r.id, name: r.name }))
 }
 
 /** Canais WhatsApp da conta — seletor do "IA no Segundo Zero". */

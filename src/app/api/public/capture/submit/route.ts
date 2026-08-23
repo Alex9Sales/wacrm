@@ -9,6 +9,7 @@ import { firstOrNull } from '@/db/helpers'
 import { ingestLead } from '@/lib/leads/ingest'
 import { getPublicCaptureForm } from '@/lib/capture/public'
 import { sendCaptureAiIntro } from '@/lib/capture/ai-intro'
+import { enrollContactInCadence } from '@/lib/cadences/cadence'
 
 export const dynamic = 'force-dynamic'
 
@@ -82,7 +83,7 @@ export async function POST(req: Request) {
       )
     }
 
-    await ingestLead(form.accountId, auditUser, {
+    const lead = await ingestLead(form.accountId, auditUser, {
       rawPhone: phone,
       name: nome || null,
       email: email || null,
@@ -93,6 +94,22 @@ export async function POST(req: Request) {
       origin: form.origin || 'Formulário',
       source: `Formulário: ${form.name}`,
     })
+
+    // Obrigado que Vende: cadência automática pra quem envia (best-effort,
+    // fora do request; pausa sozinha quando o lead responder).
+    if (form.cadenceId && lead.contactId) {
+      const cadenceId = form.cadenceId
+      after(async () => {
+        try {
+          await enrollContactInCadence(
+            { accountId: form.accountId, userId: auditUser },
+            { cadenceId, contactId: lead.contactId, dealId: lead.dealId },
+          )
+        } catch (err) {
+          console.error('[capture submit] cadência falhou:', err)
+        }
+      })
+    }
 
     await db
       .update(captureForms)

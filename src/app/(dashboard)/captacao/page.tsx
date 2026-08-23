@@ -30,6 +30,7 @@ import {
   deleteCaptureForm,
   listCapturePipelines,
   listCaptureChannels,
+  listCaptureCadences,
   generateCaptureLanding,
   getCaptureWaInfo,
   type CaptureFormRow,
@@ -58,6 +59,7 @@ export default function CaptacaoPage() {
   const [forms, setForms] = useState<CaptureFormRow[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
   const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
+  const [cadences, setCadences] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<
     CaptureFormDetail | { new: "form" | "landing" } | null
@@ -65,14 +67,16 @@ export default function CaptacaoPage() {
 
   const load = useCallback(async () => {
     setLoading(true);
-    const [f, p, ch] = await Promise.all([
+    const [f, p, ch, cad] = await Promise.all([
       listCaptureForms().catch(() => [] as CaptureFormRow[]),
       listCapturePipelines().catch(() => [] as Pipeline[]),
       listCaptureChannels().catch(() => [] as { id: string; name: string }[]),
+      listCaptureCadences().catch(() => [] as { id: string; name: string }[]),
     ]);
     setForms(f);
     setPipelines(p);
     setChannels(ch);
+    setCadences(cad);
     setLoading(false);
   }, []);
 
@@ -113,6 +117,7 @@ export default function CaptacaoPage() {
         newMode={isNew ? (editing as { new: "form" | "landing" }).new : undefined}
         pipelines={pipelines}
         channels={channels}
+        cadences={cadences}
         onCancel={() => setEditing(null)}
         onSaved={() => {
           setEditing(null);
@@ -251,6 +256,7 @@ function CaptureEditor({
   newMode,
   pipelines,
   channels,
+  cadences,
   onCancel,
   onSaved,
 }: {
@@ -259,6 +265,7 @@ function CaptureEditor({
   newMode?: "form" | "landing";
   pipelines: Pipeline[];
   channels: { id: string; name: string }[];
+  cadences: { id: string; name: string }[];
   onCancel: () => void;
   onSaved: () => void;
 }) {
@@ -282,6 +289,13 @@ function CaptureEditor({
   const [introChannelId, setIntroChannelId] = useState(
     initial?.introChannelId ?? "",
   );
+  // Obrigado que Vende: oferta + botão de zap + cadência na tela de sucesso.
+  const [offerTitle, setOfferTitle] = useState(initial?.successOfferTitle ?? "");
+  const [offerText, setOfferText] = useState(initial?.successOfferText ?? "");
+  const [successWhatsapp, setSuccessWhatsapp] = useState(
+    initial?.successWhatsapp ?? false,
+  );
+  const [cadenceId, setCadenceId] = useState(initial?.cadenceId ?? "");
   const [saving, setSaving] = useState(false);
 
   // Conteúdo da landing page.
@@ -437,6 +451,10 @@ function CaptureEditor({
       },
       aiIntro,
       introChannelId: introChannelId || null,
+      successOfferTitle: offerTitle.trim() || null,
+      successOfferText: offerText.trim() || null,
+      successWhatsapp,
+      cadenceId: cadenceId || null,
       pipelineId: pipelineId || null,
       stageId: stageId || null,
       origin: origin.trim() || "Formulário",
@@ -928,6 +946,71 @@ function CaptureEditor({
             ) : null}
           </div>
         )}
+      </div>
+
+      {/* Obrigado que Vende */}
+      <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <div className="text-sm font-semibold text-foreground">
+          🎁 Obrigado que Vende
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Depois do envio, a tela de sucesso pode oferecer um próximo passo:
+          um bônus/oferta, o botão de chamar no WhatsApp e uma sequência
+          automática de mensagens.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-1.5">
+            <Label>Título da oferta (opcional)</Label>
+            <Input
+              value={offerTitle}
+              onChange={(e) => setOfferTitle(e.target.value)}
+              placeholder="Ex.: 🎁 Bônus de boas-vindas"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Cadência pra quem envia</Label>
+            <select
+              value={cadenceId}
+              onChange={(e) => setCadenceId(e.target.value)}
+              className={selectCls}
+            >
+              <option value="">Nenhuma</option>
+              {cadences.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.name}
+                </option>
+              ))}
+            </select>
+          </div>
+          <div className="grid gap-1.5 sm:col-span-2">
+            <Label>Texto da oferta (opcional)</Label>
+            <textarea
+              value={offerText}
+              onChange={(e) => setOfferText(e.target.value)}
+              rows={2}
+              placeholder="Ex.: Chame no WhatsApp agora e ganhe a implantação gratuita."
+              className="w-full resize-none rounded-lg border border-border bg-muted px-2.5 py-2 text-sm text-foreground outline-none focus:border-primary"
+            />
+          </div>
+        </div>
+        <label className="flex items-center gap-2 text-sm text-foreground">
+          <input
+            type="checkbox"
+            checked={successWhatsapp}
+            onChange={(e) => setSuccessWhatsapp(e.target.checked)}
+            className="size-4 accent-primary"
+          />
+          Botão &quot;Chamar no WhatsApp agora&quot; na tela de sucesso
+          <span className="text-xs text-muted-foreground">
+            (com o código de rastreio — o lead que chamar já vem identificado)
+          </span>
+        </label>
+        {cadenceId ? (
+          <p className="text-[11px] text-amber-600 dark:text-amber-400">
+            ⚠️ A cadência agenda mensagens reais pra quem enviar o formulário.
+            Ela pausa sozinha quando o lead responder.
+          </p>
+        ) : null}
       </div>
 
       {/* Destino */}

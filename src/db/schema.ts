@@ -520,6 +520,11 @@ export const captureForms = pgTable("capture_forms", {
 	// a origem exata quando o "Oi" chega no inbound.
 	waRef: text("wa_ref"),
 	waLeads: integer("wa_leads").default(0).notNull(),
+	// Obrigado que Vende (migração 0126): oferta + botão de zap + cadência.
+	successOfferTitle: text("success_offer_title"),
+	successOfferText: text("success_offer_text"),
+	successWhatsapp: boolean("success_whatsapp").default(false).notNull(),
+	cadenceId: uuid("cadence_id"),
 	pipelineId: uuid("pipeline_id"),
 	stageId: uuid("stage_id"),
 	origin: text().default('Formulário').notNull(),
