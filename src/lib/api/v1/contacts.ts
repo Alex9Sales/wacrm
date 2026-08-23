@@ -205,7 +205,17 @@ export async function setContactTags(
     tagNames,
     canCreateTags: true,
   });
-  const desired = new Set(tagIdByKey.values());
+  // tagIdByKey é o mapa de TODAS as tags da conta (é um índice de lookup) —
+  // usar .values() direto aplicava a conta inteira no contato. O desejado é
+  // só o que foi PEDIDO em tagNames.
+  const wantedKeys = new Set(
+    tagNames.map((n) => n.trim().toLowerCase()).filter(Boolean)
+  );
+  const desired = new Set(
+    [...tagIdByKey.entries()]
+      .filter(([key]) => wantedKeys.has(key))
+      .map(([, id]) => id)
+  );
 
   // Diff against the current joins rather than delete-all-then-insert:
   // a diff only touches tags that actually change, so a mid-operation
