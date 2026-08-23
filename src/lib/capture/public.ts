@@ -5,7 +5,12 @@ import { and, eq } from 'drizzle-orm'
 
 import { db, captureForms } from '@/db'
 import { firstOrNull } from '@/db/helpers'
-import { normalizeCaptureFields, type CaptureField } from './shared'
+import {
+  normalizeCaptureFields,
+  normalizeCaptureContent,
+  type CaptureField,
+  type CaptureContent,
+} from './shared'
 
 export interface PublicCaptureForm {
   id: string
@@ -17,6 +22,7 @@ export interface PublicCaptureForm {
   successMessage: string | null
   submitLabel: string | null
   fields: CaptureField[]
+  content: CaptureContent
   pipelineId: string | null
   stageId: string | null
   origin: string
@@ -46,6 +52,7 @@ export async function getPublicCaptureForm(
     successMessage: row.successMessage,
     submitLabel: row.submitLabel,
     fields: normalizeCaptureFields(row.fields),
+    content: normalizeCaptureContent(row.content),
     pipelineId: row.pipelineId,
     stageId: row.stageId,
     origin: row.origin,

@@ -35,12 +35,16 @@ import {
   CAPTURE_FIELD_DEFS,
   CAPTURE_FIELD_ORDER,
   DEFAULT_CAPTURE_FIELDS,
+  DEFAULT_CAPTURE_CONTENT,
   DEFAULT_CAPTURE_HEADLINE,
   DEFAULT_CAPTURE_SUBMIT,
   DEFAULT_CAPTURE_SUCCESS,
   type CaptureField,
   type CaptureFieldKey,
+  type CaptureBenefit,
+  type CaptureTestimonial,
 } from "@/lib/capture/shared";
+import { uploadAccountMedia } from "@/lib/storage/upload-media";
 
 type Pipeline = { id: string; name: string; stages: { id: string; name: string }[] };
 
@@ -242,6 +246,38 @@ function CaptureEditor({
   const [stageId, setStageId] = useState(initial?.stageId ?? "");
   const [saving, setSaving] = useState(false);
 
+  // Conteúdo da landing page.
+  const initContent = initial?.content ?? DEFAULT_CAPTURE_CONTENT;
+  const [mode, setMode] = useState<"form" | "landing">(initContent.mode);
+  const [heroImage, setHeroImage] = useState(initContent.heroImage ?? "");
+  const [landingLogo, setLandingLogo] = useState(initContent.logo ?? "");
+  const [brandColor, setBrandColor] = useState(initContent.brandColor ?? "#7c3aed");
+  const [ctaText, setCtaText] = useState(initContent.ctaText ?? "");
+  const [benefitsTitle, setBenefitsTitle] = useState(initContent.benefitsTitle ?? "");
+  const [benefits, setBenefits] = useState<CaptureBenefit[]>(initContent.benefits);
+  const [testimonials, setTestimonials] = useState<CaptureTestimonial[]>(
+    initContent.testimonials,
+  );
+  const [uploadingHero, setUploadingHero] = useState(false);
+  const [uploadingLandingLogo, setUploadingLandingLogo] = useState(false);
+
+  async function uploadTo(
+    file: File | null,
+    set: (url: string) => void,
+    setBusy: (b: boolean) => void,
+  ) {
+    if (!file) return;
+    setBusy(true);
+    try {
+      const { publicUrl } = await uploadAccountMedia("media", file);
+      set(publicUrl);
+    } catch {
+      toast.error("Falha ao enviar a imagem.");
+    } finally {
+      setBusy(false);
+    }
+  }
+
   // Campos: map key → {enabled, required, label}.
   const initFields = initial?.fields ?? DEFAULT_CAPTURE_FIELDS;
   const [fieldState, setFieldState] = useState<
@@ -296,6 +332,16 @@ function CaptureEditor({
       successMessage: successMessage.trim() || null,
       submitLabel: submitLabel.trim() || null,
       fields,
+      content: {
+        mode,
+        heroImage: heroImage.trim() || null,
+        logo: landingLogo.trim() || null,
+        brandColor: /^#[0-9a-fA-F]{6}$/.test(brandColor) ? brandColor : null,
+        benefitsTitle: benefitsTitle.trim() || null,
+        benefits,
+        testimonials,
+        ctaText: ctaText.trim() || null,
+      },
       pipelineId: pipelineId || null,
       stageId: stageId || null,
       origin: origin.trim() || "Formulário",
@@ -407,6 +453,231 @@ function CaptureEditor({
         <p className="text-[11px] text-muted-foreground">
           WhatsApp é sempre pedido e obrigatório — é a chave do lead no funil.
         </p>
+      </div>
+
+      {/* Página */}
+      <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <div className="text-sm font-semibold text-foreground">Página</div>
+        <div className="flex overflow-hidden rounded-lg border border-border">
+          {(
+            [
+              ["form", "Formulário simples"],
+              ["landing", "Landing page"],
+            ] as const
+          ).map(([m, label]) => (
+            <button
+              key={m}
+              type="button"
+              onClick={() => setMode(m)}
+              className={`flex-1 px-3 py-2 text-sm transition ${
+                mode === m
+                  ? "bg-primary text-primary-foreground"
+                  : "text-muted-foreground hover:bg-muted"
+              }`}
+            >
+              {label}
+            </button>
+          ))}
+        </div>
+
+        {mode === "landing" && (
+          <div className="space-y-4 border-t border-border pt-3">
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="grid gap-1.5">
+                <Label>Imagem do topo (hero)</Label>
+                <div className="flex items-center gap-2">
+                  {heroImage ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={heroImage} alt="" className="h-10 w-16 rounded object-cover" />
+                  ) : null}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) =>
+                      void uploadTo(e.target.files?.[0] ?? null, setHeroImage, setUploadingHero)
+                    }
+                    className="text-xs text-muted-foreground"
+                  />
+                  {uploadingHero ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {heroImage ? (
+                    <button
+                      type="button"
+                      onClick={() => setHeroImage("")}
+                      className="text-xs text-muted-foreground hover:text-red-500"
+                    >
+                      remover
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="grid gap-1.5">
+                <Label>Logo</Label>
+                <div className="flex items-center gap-2">
+                  {landingLogo ? (
+                    // eslint-disable-next-line @next/next/no-img-element
+                    <img src={landingLogo} alt="" className="h-10 w-auto max-w-[80px] object-contain" />
+                  ) : null}
+                  <input
+                    type="file"
+                    accept="image/*"
+                    onChange={(e) =>
+                      void uploadTo(e.target.files?.[0] ?? null, setLandingLogo, setUploadingLandingLogo)
+                    }
+                    className="text-xs text-muted-foreground"
+                  />
+                  {uploadingLandingLogo ? <Loader2 className="h-4 w-4 animate-spin" /> : null}
+                  {landingLogo ? (
+                    <button
+                      type="button"
+                      onClick={() => setLandingLogo("")}
+                      className="text-xs text-muted-foreground hover:text-red-500"
+                    >
+                      remover
+                    </button>
+                  ) : null}
+                </div>
+              </div>
+              <div className="grid gap-1.5">
+                <Label>Cor de destaque</Label>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="color"
+                    value={brandColor}
+                    onChange={(e) => setBrandColor(e.target.value)}
+                    className="h-9 w-12 cursor-pointer rounded border border-border bg-transparent"
+                  />
+                  <Input
+                    value={brandColor}
+                    onChange={(e) => setBrandColor(e.target.value)}
+                    className="h-9 w-28"
+                  />
+                </div>
+              </div>
+              <div className="grid gap-1.5">
+                <Label>Texto do botão do topo</Label>
+                <Input
+                  value={ctaText}
+                  onChange={(e) => setCtaText(e.target.value)}
+                  placeholder="Ex.: Quero começar"
+                />
+              </div>
+            </div>
+
+            {/* Benefícios */}
+            <div className="space-y-2">
+              <Label>Benefícios</Label>
+              <Input
+                value={benefitsTitle}
+                onChange={(e) => setBenefitsTitle(e.target.value)}
+                placeholder="Título da seção (ex.: Por que a gente?)"
+              />
+              {benefits.map((b, i) => (
+                <div key={i} className="flex flex-wrap items-start gap-2">
+                  <Input
+                    value={b.title}
+                    onChange={(e) =>
+                      setBenefits((prev) =>
+                        prev.map((x, idx) => (idx === i ? { ...x, title: e.target.value } : x)),
+                      )
+                    }
+                    placeholder="Título"
+                    className="w-40"
+                  />
+                  <Input
+                    value={b.description}
+                    onChange={(e) =>
+                      setBenefits((prev) =>
+                        prev.map((x, idx) =>
+                          idx === i ? { ...x, description: e.target.value } : x,
+                        ),
+                      )
+                    }
+                    placeholder="Descrição"
+                    className="min-w-[160px] flex-1"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setBenefits((prev) => prev.filter((_, idx) => idx !== i))}
+                    className="mt-1.5 rounded p-1 text-muted-foreground hover:text-red-500"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </button>
+                </div>
+              ))}
+              {benefits.length < 6 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setBenefits((prev) => [...prev, { title: "", description: "" }])}
+                >
+                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Adicionar benefício
+                </Button>
+              ) : null}
+            </div>
+
+            {/* Depoimentos */}
+            <div className="space-y-2">
+              <Label>Depoimentos (prova social)</Label>
+              {testimonials.map((t, i) => (
+                <div key={i} className="space-y-1.5 rounded-lg border border-border/60 p-2">
+                  <textarea
+                    value={t.quote}
+                    onChange={(e) =>
+                      setTestimonials((prev) =>
+                        prev.map((x, idx) => (idx === i ? { ...x, quote: e.target.value } : x)),
+                      )
+                    }
+                    rows={2}
+                    placeholder="O que o cliente disse"
+                    className="w-full resize-none rounded-lg border border-border bg-muted px-2.5 py-1.5 text-sm text-foreground outline-none focus:border-primary"
+                  />
+                  <div className="flex flex-wrap items-center gap-2">
+                    <Input
+                      value={t.author}
+                      onChange={(e) =>
+                        setTestimonials((prev) =>
+                          prev.map((x, idx) => (idx === i ? { ...x, author: e.target.value } : x)),
+                        )
+                      }
+                      placeholder="Nome"
+                      className="h-8 w-36"
+                    />
+                    <Input
+                      value={t.role}
+                      onChange={(e) =>
+                        setTestimonials((prev) =>
+                          prev.map((x, idx) => (idx === i ? { ...x, role: e.target.value } : x)),
+                        )
+                      }
+                      placeholder="Empresa / cargo"
+                      className="h-8 w-44"
+                    />
+                    <button
+                      type="button"
+                      onClick={() => setTestimonials((prev) => prev.filter((_, idx) => idx !== i))}
+                      className="ml-auto rounded p-1 text-muted-foreground hover:text-red-500"
+                    >
+                      <Trash2 className="h-4 w-4" />
+                    </button>
+                  </div>
+                </div>
+              ))}
+              {testimonials.length < 6 ? (
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() =>
+                    setTestimonials((prev) => [...prev, { quote: "", author: "", role: "" }])
+                  }
+                >
+                  <Plus className="mr-1.5 h-3.5 w-3.5" /> Adicionar depoimento
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        )}
       </div>
 
       {/* Destino */}

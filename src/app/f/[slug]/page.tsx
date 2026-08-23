@@ -12,6 +12,7 @@ import {
   DEFAULT_CAPTURE_SUCCESS,
 } from '@/lib/capture/shared'
 import { CaptureFormClient } from './capture-form-client'
+import { CaptureLanding } from './landing'
 
 export async function generateMetadata({
   params,
@@ -52,14 +53,32 @@ export default async function PublicCapturePage({
     )
   }
 
+  const headline = form.headline || form.name || DEFAULT_CAPTURE_HEADLINE
+  const submitLabel = form.submitLabel || DEFAULT_CAPTURE_SUBMIT
+  const successMessage = form.successMessage || DEFAULT_CAPTURE_SUCCESS
+
+  if (form.content.mode === 'landing') {
+    return (
+      <CaptureLanding
+        slug={form.slug}
+        headline={headline}
+        description={form.description}
+        fields={form.fields}
+        submitLabel={submitLabel}
+        successMessage={successMessage}
+        content={form.content}
+      />
+    )
+  }
+
   return (
     <CaptureFormClient
       slug={form.slug}
-      headline={form.headline || form.name || DEFAULT_CAPTURE_HEADLINE}
+      headline={headline}
       description={form.description}
       fields={form.fields}
-      submitLabel={form.submitLabel || DEFAULT_CAPTURE_SUBMIT}
-      successMessage={form.successMessage || DEFAULT_CAPTURE_SUCCESS}
+      submitLabel={submitLabel}
+      successMessage={successMessage}
     />
   )
 }

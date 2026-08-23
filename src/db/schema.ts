@@ -511,6 +511,7 @@ export const captureForms = pgTable("capture_forms", {
 	successMessage: text("success_message"),
 	submitLabel: text("submit_label"),
 	fields: jsonb().default([]).notNull(),
+	content: jsonb(),
 	pipelineId: uuid("pipeline_id"),
 	stageId: uuid("stage_id"),
 	origin: text().default('Formulário').notNull(),

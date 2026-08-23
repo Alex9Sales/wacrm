@@ -1,6 +1,77 @@
 // Captação self-serve — tipos + defaults PUROS (sem DB, sem server-only).
 // Compartilhado entre a gestão no CRM, a rota pública /f/[slug] e o endpoint.
 
+// ------------------------------------------------------------
+// Landing page (conteúdo em volta do formulário).
+// ------------------------------------------------------------
+export interface CaptureBenefit {
+  title: string
+  description: string
+}
+export interface CaptureTestimonial {
+  quote: string
+  author: string
+  role: string
+}
+export interface CaptureContent {
+  /** 'form' = só o formulário (padrão); 'landing' = página completa. */
+  mode: 'form' | 'landing'
+  heroImage: string | null
+  logo: string | null
+  /** Cor de destaque (hex). null = roxo padrão. */
+  brandColor: string | null
+  benefitsTitle: string | null
+  benefits: CaptureBenefit[]
+  testimonials: CaptureTestimonial[]
+  /** Texto do botão do hero (rola até o formulário). */
+  ctaText: string | null
+}
+
+export const DEFAULT_CAPTURE_CONTENT: CaptureContent = {
+  mode: 'form',
+  heroImage: null,
+  logo: null,
+  brandColor: null,
+  benefitsTitle: null,
+  benefits: [],
+  testimonials: [],
+  ctaText: null,
+}
+
+const HEX_RE = /^#[0-9a-fA-F]{6}$/
+
+/** Sanea o conteúdo da landing (limita tamanhos, valida cor, corta vazios). */
+export function normalizeCaptureContent(input: unknown): CaptureContent {
+  const o = (input ?? {}) as Partial<CaptureContent>
+  const str = (v: unknown, max = 400) =>
+    typeof v === 'string' ? v.trim().slice(0, max) : ''
+  const benefits = Array.isArray(o.benefits) ? o.benefits : []
+  const testimonials = Array.isArray(o.testimonials) ? o.testimonials : []
+  return {
+    mode: o.mode === 'landing' ? 'landing' : 'form',
+    heroImage: str(o.heroImage, 600) || null,
+    logo: str(o.logo, 600) || null,
+    brandColor:
+      typeof o.brandColor === 'string' && HEX_RE.test(o.brandColor.trim())
+        ? o.brandColor.trim()
+        : null,
+    benefitsTitle: str(o.benefitsTitle, 120) || null,
+    benefits: benefits
+      .map((b) => ({ title: str(b?.title, 120), description: str(b?.description, 300) }))
+      .filter((b) => b.title || b.description)
+      .slice(0, 6),
+    testimonials: testimonials
+      .map((t) => ({
+        quote: str(t?.quote, 400),
+        author: str(t?.author, 80),
+        role: str(t?.role, 120),
+      }))
+      .filter((t) => t.quote)
+      .slice(0, 6),
+    ctaText: str(o.ctaText, 40) || null,
+  }
+}
+
 export type CaptureFieldKey =
   | 'nome'
   | 'telefone'

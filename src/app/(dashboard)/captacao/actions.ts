@@ -8,8 +8,10 @@ import { getCurrentAccount } from '@/lib/auth/account'
 import { isUniqueViolation } from '@/lib/contacts/dedupe'
 import {
   normalizeCaptureFields,
+  normalizeCaptureContent,
   slugifyName,
   type CaptureField,
+  type CaptureContent,
 } from '@/lib/capture/shared'
 
 const APP_URL = (
@@ -41,6 +43,7 @@ export interface CaptureFormDetail {
   successMessage: string | null
   submitLabel: string | null
   fields: CaptureField[]
+  content: CaptureContent
   pipelineId: string | null
   stageId: string | null
   origin: string
@@ -55,6 +58,7 @@ export interface CaptureFormInput {
   successMessage: string | null
   submitLabel: string | null
   fields: CaptureField[]
+  content: CaptureContent
   pipelineId: string | null
   stageId: string | null
   origin: string
@@ -106,6 +110,7 @@ export async function getCaptureForm(
     successMessage: row.successMessage,
     submitLabel: row.submitLabel,
     fields: normalizeCaptureFields(row.fields),
+    content: normalizeCaptureContent(row.content),
     pipelineId: row.pipelineId,
     stageId: row.stageId,
     origin: row.origin,
@@ -152,6 +157,7 @@ export async function createCaptureForm(
           successMessage: (input.successMessage ?? '').trim() || null,
           submitLabel: (input.submitLabel ?? '').trim() || null,
           fields: normalizeCaptureFields(input.fields),
+          content: normalizeCaptureContent(input.content),
           pipelineId: input.pipelineId || null,
           stageId: input.stageId || null,
           origin: (input.origin ?? '').trim() || 'Formulário',
@@ -197,6 +203,7 @@ export async function updateCaptureForm(
         successMessage: (input.successMessage ?? '').trim() || null,
         submitLabel: (input.submitLabel ?? '').trim() || null,
         fields: normalizeCaptureFields(input.fields),
+        content: normalizeCaptureContent(input.content),
         pipelineId: input.pipelineId || null,
         stageId: input.stageId || null,
         origin: (input.origin ?? '').trim() || 'Formulário',

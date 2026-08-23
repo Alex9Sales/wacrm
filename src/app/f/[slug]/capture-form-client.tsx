@@ -19,6 +19,8 @@ export function CaptureFormClient({
   fields,
   submitLabel,
   successMessage,
+  accent,
+  embedded,
 }: {
   slug: string;
   headline: string;
@@ -26,7 +28,12 @@ export function CaptureFormClient({
   fields: CaptureField[];
   submitLabel: string;
   successMessage: string;
+  /** Cor de destaque (hex). Default = roxo Fluxia. */
+  accent?: string;
+  /** Embutido numa landing → renderiza só o card, sem o fundo de tela cheia. */
+  embedded?: boolean;
 }) {
+  const brand = accent || "#7c3aed";
   const [values, setValues] = useState<Record<string, string>>({});
   const [site, setSite] = useState(""); // honeypot
   const [sending, setSending] = useState(false);
@@ -70,10 +77,15 @@ export function CaptureFormClient({
     }
   }
 
-  return (
-    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-slate-100 to-slate-200 px-4 py-10">
-      <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl sm:p-8">
-        {done ? (
+  const card = (
+    <div
+      className={
+        embedded
+          ? "w-full rounded-2xl border border-slate-200 bg-white p-6 shadow-lg sm:p-8"
+          : "w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl sm:p-8"
+      }
+    >
+      {done ? (
           <div className="py-6 text-center">
             <div className="mx-auto mb-4 flex h-14 w-14 items-center justify-center rounded-full bg-emerald-100 text-2xl">
               ✓
@@ -141,7 +153,8 @@ export function CaptureFormClient({
               <button
                 type="submit"
                 disabled={sending}
-                className="mt-1 w-full rounded-lg bg-violet-600 px-4 py-2.5 text-sm font-semibold text-white transition hover:bg-violet-700 disabled:opacity-60"
+                style={{ background: brand }}
+                className="mt-1 w-full rounded-lg px-4 py-2.5 text-sm font-semibold text-white transition hover:opacity-90 disabled:opacity-60"
               >
                 {sending ? "Enviando..." : submitLabel}
               </button>
@@ -149,10 +162,19 @@ export function CaptureFormClient({
           </>
         )}
 
-        <p className="mt-5 text-center text-[11px] text-slate-400">
-          Feito com Fluxia
-        </p>
+        {!embedded && (
+          <p className="mt-5 text-center text-[11px] text-slate-400">
+            Feito com Fluxia
+          </p>
+        )}
       </div>
+  );
+
+  if (embedded) return card;
+
+  return (
+    <main className="flex min-h-screen items-center justify-center bg-gradient-to-b from-slate-100 to-slate-200 px-4 py-10">
+      {card}
     </main>
   );
 }
