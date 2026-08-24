@@ -947,7 +947,7 @@ export async function listCaptureCadences(): Promise<
     .select({
       id: cadences.id,
       name: cadences.name,
-      steps: sql<number>`(SELECT count(*)::int FROM cadence_steps s WHERE s.cadence_id = ${cadences.id})`,
+      steps: sql<number>`(SELECT count(*)::int FROM cadence_steps s WHERE s.cadence_id = "cadences"."id")`,
     })
     .from(cadences)
     .where(and(eq(cadences.accountId, ctx.accountId), eq(cadences.active, true)))

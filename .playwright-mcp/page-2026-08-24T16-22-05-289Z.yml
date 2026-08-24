@@ -1,0 +1,20 @@
+- generic [active] [ref=f5e1]:
+  - generic [ref=f5e5]: "05"
+  - generic [ref=f5e6]:
+    - generic [ref=f5e7]: "FLUXIA_OS :: gargalo 05"
+    - generic [ref=f5e9]: // GARGALO 05
+    - generic [ref=f5e10]:
+      - text: Anúncio rodando
+      - emphasis [ref=f5e11]: no escuro.
+    - generic [ref=f5e12]:
+      - text: Você sabe quanto gastou. Mas sabe
+      - strong [ref=f5e13]: qual campanha virou dinheiro
+      - text: — não só clique?
+    - generic [ref=f5e14]:
+      - generic [ref=f5e15]: "> fluxia resolve:"
+      - text: "Raio-X de campanha: cada origem com leads, vendas e R$ no bolso. Decisão com dado, não achismo."
+    - generic [ref=f5e16]:
+      - generic [ref=f5e17]:
+        - text: FLUXIA
+        - generic [ref=f5e22]: CRM
+      - generic [ref=f5e32]: "@fluxia.oficial4"

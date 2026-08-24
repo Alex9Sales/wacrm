@@ -1,0 +1,17 @@
+- generic [active] [ref=e1]:
+  - generic [ref=e5]: "?"
+  - generic [ref=e6]:
+    - generic [ref=e7]: "FLUXIA_OS :: vendas_vazando"
+    - generic [ref=e9]:
+      - text: Quantas vendasvocê perdeu
+      - emphasis [ref=e10]: hoje
+      - text: sem nem saber?
+    - generic [ref=e11]:
+      - text: A maioria não morre no preço.Morre em
+      - strong [ref=e12]: 5 gargalos invisíveis
+      - text: do atendimento.Arrasta que a gente te mostra cada um. 👉
+    - generic [ref=e13]:
+      - generic [ref=e14]:
+        - text: FLUXIA
+        - generic [ref=e19]: CRM
+      - generic [ref=e29]: "@fluxia.oficial4"

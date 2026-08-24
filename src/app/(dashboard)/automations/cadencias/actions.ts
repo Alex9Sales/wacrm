@@ -104,8 +104,8 @@ export async function listCadences(): Promise<CadenceRow[]> {
         description: cadences.description,
         active: cadences.active,
         pause_on_reply: cadences.pauseOnReply,
-        step_count: sql<number>`(SELECT count(*)::int FROM cadence_steps s WHERE s.cadence_id = ${cadences.id})`,
-        active_enrollments: sql<number>`(SELECT count(*)::int FROM cadence_enrollments e WHERE e.cadence_id = ${cadences.id} AND e.status = 'active')`,
+        step_count: sql<number>`(SELECT count(*)::int FROM cadence_steps s WHERE s.cadence_id = "cadences"."id")`,
+        active_enrollments: sql<number>`(SELECT count(*)::int FROM cadence_enrollments e WHERE e.cadence_id = "cadences"."id" AND e.status = 'active')`,
       })
       .from(cadences)
       .where(eq(cadences.accountId, ctx.accountId))
@@ -261,7 +261,7 @@ export async function listCadenceOptions(): Promise<
       .select({
         id: cadences.id,
         name: cadences.name,
-        steps: sql<number>`(SELECT count(*)::int FROM cadence_steps s WHERE s.cadence_id = ${cadences.id})`,
+        steps: sql<number>`(SELECT count(*)::int FROM cadence_steps s WHERE s.cadence_id = "cadences"."id")`,
       })
       .from(cadences)
       .where(and(eq(cadences.accountId, ctx.accountId), eq(cadences.active, true)))
@@ -269,11 +269,13 @@ export async function listCadenceOptions(): Promise<
     const out = rows
       .filter((r) => r.steps > 0)
       .map((r) => ({ id: r.id, name: r.name }))
-    // Diagnóstico temporário (chamado do Rafael 24/08): loga conta + retorno
-    // pra cravar se a action executa e o que devolve. Remover após resolver.
-    console.log(
-      `[listCadenceOptions] conta=${ctx.accountId} total=${rows.length} com_degrau=${out.length}`,
-    )
+    // Sentinela (bug do Rafael 24/08): cadência existir mas o count de degraus
+    // vir 0 é sinal de regressão na subquery — loga pra investigar.
+    if (rows.length > 0 && out.length === 0) {
+      console.warn(
+        `[listCadenceOptions] anomalia: conta=${ctx.accountId} total=${rows.length} com_degrau=0`,
+      )
+    }
     return out
   } catch (err) {
     console.error('[listCadenceOptions]', err)

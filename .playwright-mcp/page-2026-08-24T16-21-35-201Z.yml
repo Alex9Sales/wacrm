@@ -1,0 +1,18 @@
+- generic [active] [ref=f3e1]:
+  - generic [ref=f3e5]: "03"
+  - generic [ref=f3e6]:
+    - generic [ref=f3e7]: "FLUXIA_OS :: gargalo 03"
+    - generic [ref=f3e9]: // GARGALO 03
+    - generic [ref=f3e10]:
+      - text: O follow-up queficou pra
+      - emphasis [ref=f3e11]: amanhã
+      - text: .
+    - generic [ref=f3e12]: "\"Depois eu chamo ele\" — e o negócio de R$ 5 mil morre esquecido num caderno."
+    - generic [ref=f3e13]:
+      - generic [ref=f3e14]: "> fluxia resolve:"
+      - text: "Funil que cobra você: cadência automática de mensagens + alerta de negócio esfriando."
+    - generic [ref=f3e15]:
+      - generic [ref=f3e16]:
+        - text: FLUXIA
+        - generic [ref=f3e21]: CRM
+      - generic [ref=f3e31]: "@fluxia.oficial4"

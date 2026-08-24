@@ -62,15 +62,15 @@ export interface ClientListRow {
  */
 export async function listClients(): Promise<ClientListRow[]> {
   const memberCount = sql<number>`(
-    SELECT count(*)::int FROM ${member} m WHERE m.organization_id = ${organization.id}
+    SELECT count(*)::int FROM ${member} m WHERE m.organization_id = "organization"."id"
   )`;
   const channelCount = sql<number>`(
-    SELECT count(*)::int FROM ${channels} c WHERE c.account_id = ${organization.id}
+    SELECT count(*)::int FROM ${channels} c WHERE c.account_id = "organization"."id"
   )`;
   // First owner member's user id (by membership creation order).
   const ownerUserId = sql<string | null>`(
     SELECT m.user_id FROM ${member} m
-    WHERE m.organization_id = ${organization.id} AND m.role = 'owner'
+    WHERE m.organization_id = "organization"."id" AND m.role = 'owner'
     ORDER BY m.created_at ASC
     LIMIT 1
   )`;
