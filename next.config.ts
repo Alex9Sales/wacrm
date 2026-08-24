@@ -187,7 +187,9 @@ const nextConfig: NextConfig = {
         //      the shipped header proved that false (it went out as `public`).
         // Cloudflare already treats every HTML route as DYNAMIC (never cached),
         // so this loses no edge caching — the s-maxage/SWR were inert anyway.
-        source: "/:path((?!_next/static|_next/image|api).*)",
+        // widget.js is carved out: it's a public static script embedded on
+        // client sites — its route handler sets public/max-age itself.
+        source: "/:path((?!_next/static|_next/image|api|widget\\.js).*)",
         headers: [{ key: "Cache-Control", value: "private, no-store" }],
       },
       {
