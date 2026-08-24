@@ -23,7 +23,8 @@
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
 import { eq, and } from 'drizzle-orm';
 
-import { db, scheduledMessages } from '@/db';
+import { db, scheduledMessages, contacts } from '@/db';
+import { renderForContact } from '@/lib/whatsapp/message-vars';
 import { bullConnection } from '@/lib/queue/connection';
 import {
   SCHEDULED_MESSAGE_QUEUE,
@@ -103,15 +104,46 @@ async function processScheduledMessageJob(
   const attempts = row.attempts + 1;
   const now = new Date().toISOString();
 
+  // Personalização {nome}/{{nome}} etc. no ENVIO (cadências e agendadas):
+  // resolve os tokens com o contato — cobre também degraus já agendados com
+  // o placeholder cru (caso real da cadência do Rafael 24/08).
+  let contentText = row.contentText;
+  let subject = row.subject ?? undefined;
+  if (
+    row.contactId &&
+    ((contentText ?? '').includes('{') || (subject ?? '').includes('{'))
+  ) {
+    try {
+      const c = (
+        await db
+          .select({
+            name: contacts.name,
+            phone: contacts.phone,
+            email: contacts.email,
+            company: contacts.company,
+          })
+          .from(contacts)
+          .where(eq(contacts.id, row.contactId))
+          .limit(1)
+      )[0];
+      if (c) {
+        if (contentText) contentText = renderForContact(contentText, c);
+        if (subject) subject = renderForContact(subject, c);
+      }
+    } catch (err) {
+      log(`${scheduledMessageId} personalização falhou (segue cru): ${String(err)}`);
+    }
+  }
+
   try {
     const result = await sendMessageToConversation(row.accountId, {
       conversationId: row.conversationId,
       messageType: row.messageType,
-      contentText: row.contentText,
+      contentText,
       mediaUrl: row.mediaUrl,
       filename: row.filename,
       // Assunto (degrau de e-mail da cadência); WhatsApp/IG ignoram.
-      subject: row.subject ?? undefined,
+      subject,
     });
 
     // Guard on status='pending' so a race with a cancel doesn't resurrect it

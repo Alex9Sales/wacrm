@@ -45,6 +45,20 @@ export const SUPPORTED_TOKENS = [
 
 const TOKEN_RE = /\{\{\s*([a-zA-Z_]+)\s*(?:\|([^}]*))?\}\}/g;
 
+// Chave SIMPLES ({nome}) também vale — usuário esquece a dupla direto (caso
+// real: cadência do Rafael 24/08 saiu "{nome}," pro cliente). Normaliza pra
+// {{...}} ANTES do render; lookbehind/lookahead pra não mexer em {{nome}}.
+// Só tokens conhecidos — "{qualquer coisa}" de texto normal fica intacto.
+const SINGLE_BRACE_RE =
+  /(?<!\{)\{\s*(primeiro_nome|nome|telefone|email|empresa)\s*(\|[^}]*)?\}(?!\})/gi;
+
+function normalizeSingleBraces(body: string): string {
+  return body.replace(
+    SINGLE_BRACE_RE,
+    (_m, key: string, fb?: string) => `{{${key.toLowerCase()}${fb ?? ''}}}`,
+  );
+}
+
 /**
  * Render `body`, replacing supported {{tokens}} with `values`. A token with
  * no value falls back to its `|fallback` (or empty string). Unknown tokens
@@ -54,7 +68,7 @@ export function renderMessageVars(
   body: string,
   values: Record<string, string>,
 ): string {
-  return body.replace(TOKEN_RE, (match, rawKey: string, rawFallback?: string) => {
+  return normalizeSingleBraces(body).replace(TOKEN_RE, (match, rawKey: string, rawFallback?: string) => {
     const key = rawKey.toLowerCase();
     if (!(key in values)) return match; // unknown token — leave as-is
     const value = values[key];
