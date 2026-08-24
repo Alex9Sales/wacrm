@@ -11,6 +11,8 @@ import {
   Sparkles,
   Workflow,
   ShieldCheck,
+  Magnet,
+  FileCheck,
 } from 'lucide-react'
 import { getSessionUserId } from '@/lib/auth/session'
 
@@ -29,42 +31,47 @@ const FEATURES = [
   {
     icon: MessageSquare,
     title: 'Atendimento multicanal',
-    desc: 'WhatsApp, Instagram Direct e Messenger numa caixa de entrada só: toda a equipe responde os clientes num lugar, em vários números.',
+    desc: 'WhatsApp, Instagram Direct, Messenger e e-mail numa caixa de entrada só: toda a equipe responde num lugar, em vários números e canais.',
   },
   {
     icon: Bot,
-    title: 'Agentes de IA',
-    desc: 'Assistentes que respondem, qualificam e dão sequência aos leads sozinhos — com a sua chave e o seu tom.',
+    title: 'Agentes de IA que atendem de verdade',
+    desc: 'Respondem em segundos, 24/7 — entendem áudio, imagem e PDF, qualificam o lead, movem o funil e sabem a hora de chamar um humano. Com a sua chave e o seu tom de voz.',
+  },
+  {
+    icon: Magnet,
+    title: 'Captação que não existe no mercado',
+    desc: 'Landing pages e quiz escritos pela IA, chat que captura o lead na conversa, link de WhatsApp com QR rastreado e página de agendamento tipo Calendly — tudo com a cara da sua marca, até no seu próprio domínio, e um widget pra colar em qualquer site.',
   },
   {
     icon: GitBranch,
-    title: 'Funil de vendas (CRM)',
-    desc: 'Contatos, empresas e negociações organizados em funis, com cada etapa acompanhada até a venda.',
-  },
-  {
-    icon: CalendarDays,
-    title: 'Agenda + Google Calendar',
-    desc: 'Agende compromissos dentro do CRM, com sincronização com o Google Calendar.',
+    title: 'Funil de vendas com IA do lado',
+    desc: 'Negociações organizadas por etapa, rodízio automático de leads, alerta de negócio esfriando, previsão de receita e sugestões da IA em cada card.',
   },
   {
     icon: Workflow,
-    title: 'Automações visuais (comentário → DM)',
-    desc: 'Comentou uma palavra no seu post do Instagram? O CRM responde e chama no Direct com botões que levam a pessoa por uma sequência automática — também no WhatsApp e Messenger. Você monta arrastando, sem programar, e vê os cliques e a conversão de cada etapa.',
+    title: 'Social selling no Instagram',
+    desc: 'Comentou no post? Vira DM com botões e lead no funil — com respostas que se alternam pra parecer humano, opção "só pra seguidores" que cresce seu perfil, resposta automática a story e lembrete pra quem sumiu.',
+  },
+  {
+    icon: FileCheck,
+    title: 'Propostas com aceite digital',
+    desc: 'Monte a proposta no CRM (com busca automática de CNPJ), envie o link e acompanhe: você vê quando o cliente abriu e recebe o aceite registrado com data, nome e IP.',
+  },
+  {
+    icon: CalendarDays,
+    title: 'Agenda + agendamento público',
+    desc: 'Sua página de horários (tipo Calendly) pro cliente marcar sozinho — cai na agenda, vira lead no funil e confirma no WhatsApp. Sincronizada com o Google Calendar.',
   },
   {
     icon: Zap,
-    title: 'Disparos em massa',
-    desc: 'Campanhas para a sua carteira inteira, com acompanhamento de entrega — no número oficial ou no seu WhatsApp.',
-  },
-  {
-    icon: ShieldCheck,
-    title: 'Anti-ban: protege seu número',
-    desc: 'Opção de descadastro automática nos disparos e agendamentos, bloqueio de quem pede pra sair (e o sistema nunca mais envia), aviso de volume por dia e ritmo humanizado — pra reduzir denúncias e o risco de bloqueio.',
+    title: 'Disparos e cadências blindados',
+    desc: 'Campanhas por WhatsApp e E-MAIL (com anexos), cadências multicanal que pausam quando o cliente responde — e o anti-ban de série: descadastro automático, ritmo humanizado e aviso de volume pra proteger seu número.',
   },
   {
     icon: BarChart3,
-    title: 'Relatórios',
-    desc: 'Painéis de desempenho comercial: funil, conversão, ticket médio e muito mais.',
+    title: 'Relatórios que mostram o dinheiro',
+    desc: 'Funil, conversão, metas por vendedor e o Raio-X de campanha: quantos leads cada origem trouxe e quanto virou venda. E o Sócio IA manda o resumo do dia no seu WhatsApp.',
   },
 ]
 
@@ -76,7 +83,7 @@ const PLANS = [
     highlighted: false,
     lead: null as string | null,
     features: [
-      '1 atendente e 1 canal de WhatsApp',
+      '1 atendente, 1 canal de WhatsApp e 1 agente de IA',
       'IA respondendo seus clientes',
       'Funil de vendas (CRM) completo',
       'Captação: landing, quiz e link rastreado',
@@ -90,7 +97,8 @@ const PLANS = [
     highlighted: false,
     lead: null as string | null,
     features: [
-      'Caixa de entrada compartilhada (vários atendentes)',
+      'Até 5 atendentes e 2 canais',
+      'Caixa de entrada compartilhada',
       'Funil de vendas (CRM), contatos e empresas',
       'Agenda com Google Calendar',
       'Disparos, campanhas e automações',
@@ -104,6 +112,7 @@ const PLANS = [
     highlighted: true,
     lead: 'Tudo do Essencial, e mais:',
     features: [
+      'Até 10 atendentes e 5 canais',
       'Agentes de IA que atendem e qualificam sozinhos',
       'Base de Conhecimento (a IA responde com os seus dados)',
       'Follow-up inteligente (reengaja quem some)',
