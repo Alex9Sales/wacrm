@@ -266,7 +266,15 @@ export async function listCadenceOptions(): Promise<
       .from(cadences)
       .where(and(eq(cadences.accountId, ctx.accountId), eq(cadences.active, true)))
       .orderBy(asc(cadences.name))
-    return rows.filter((r) => r.steps > 0).map((r) => ({ id: r.id, name: r.name }))
+    const out = rows
+      .filter((r) => r.steps > 0)
+      .map((r) => ({ id: r.id, name: r.name }))
+    // Diagnóstico temporário (chamado do Rafael 24/08): loga conta + retorno
+    // pra cravar se a action executa e o que devolve. Remover após resolver.
+    console.log(
+      `[listCadenceOptions] conta=${ctx.accountId} total=${rows.length} com_degrau=${out.length}`,
+    )
+    return out
   } catch (err) {
     console.error('[listCadenceOptions]', err)
     return null
