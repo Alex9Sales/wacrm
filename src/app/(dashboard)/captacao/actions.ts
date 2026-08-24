@@ -32,7 +32,11 @@ import {
   type CaptureContent,
 } from '@/lib/capture/shared'
 import { randomWaRef } from '@/lib/capture/wa-ref'
-import { addDomainToCoolify } from '@/lib/capture/coolify'
+import {
+  addDomainToCoolify,
+  removeDomainFromCoolify,
+  triggerCoolifyDeploy,
+} from '@/lib/capture/coolify'
 import { loadDefaultChannel } from '@/lib/channels/channels'
 
 const APP_URL = (
@@ -891,10 +895,17 @@ export async function verifyCaptureDomain(
       .update(captureDomains)
       .set({ verified: true, verifiedAt: new Date().toISOString() })
       .where(eq(captureDomains.id, row.id))
-    // Ativação automática no proxy (Coolify → Traefik → certificado LE).
+    // Ativação automática COMPLETA: domínio entra no proxy (Coolify) e, se o
+    // fqdn mudou, já dispara o deploy que regenera o Traefik + emite o
+    // certificado Let's Encrypt — zero passo manual. A chamada de deploy só
+    // ENFILEIRA (retorna na hora); o recreate acontece async no Coolify.
     // Best-effort: falhou, o domínio segue verificado e a ativação sai manual.
     const ssl = await addDomainToCoolify(row.domain)
     if (!ssl.ok) console.warn('[verifyCaptureDomain] coolify:', ssl.detail)
+    if (ssl.ok && ssl.changed) {
+      const dep = await triggerCoolifyDeploy()
+      if (!dep.ok) console.warn('[verifyCaptureDomain] deploy:', dep.detail)
+    }
     return { verified: true, error: null, sslQueued: ssl.ok }
   } catch (err) {
     console.error('[verifyCaptureDomain]', err)
@@ -907,9 +918,19 @@ export async function deleteCaptureDomain(
 ): Promise<{ error: string | null }> {
   try {
     const ctx = await getCurrentAccount()
-    await db
-      .delete(captureDomains)
-      .where(and(eq(captureDomains.id, id), eq(captureDomains.accountId, ctx.accountId)))
+    const row = firstOrNull(
+      await db
+        .delete(captureDomains)
+        .where(and(eq(captureDomains.id, id), eq(captureDomains.accountId, ctx.accountId)))
+        .returning({ domain: captureDomains.domain, verified: captureDomains.verified }),
+    )
+    // Tira do proxy também (best-effort; sem deploy — a limpeza de rota/cert
+    // pega carona no próximo deploy, e o conteúdo já morre na hora porque a
+    // rota valida o domínio no banco a cada request).
+    if (row?.verified) {
+      const res = await removeDomainFromCoolify(row.domain)
+      if (!res.ok) console.warn('[deleteCaptureDomain] coolify:', res.detail)
+    }
     return { error: null }
   } catch (err) {
     console.error('[deleteCaptureDomain]', err)
