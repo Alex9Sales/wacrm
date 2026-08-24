@@ -247,6 +247,12 @@ export function AdminClients() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <a
+            href="/admin/sucesso"
+            className="rounded-lg border border-border px-3 py-1.5 text-sm text-foreground transition hover:bg-muted"
+          >
+            📈 Sucesso do Cliente
+          </a>
           {/* Meus / Todos — both admins see everything; this focuses the list. */}
           <div className="flex overflow-hidden rounded-lg border border-border">
             <button
