@@ -15,7 +15,12 @@
 
 import { and, eq, sql } from 'drizzle-orm'
 
-import { db, instagramCommentAutomations, instagramCommentEvents } from '@/db'
+import {
+  db,
+  instagramCommentAutomations,
+  instagramCommentEvents,
+  instagramFollowGatePending,
+} from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import type { ChannelCtx } from './provider'
 import { dispatchInboundMessage } from './inbound'
@@ -27,6 +32,8 @@ import {
 import {
   replyToComment,
   sendCommentPrivateReply,
+  fetchFollowsBusiness,
+  instagramProvider,
   type DmButton,
   type DmQuickReply,
 } from './providers/instagram'
@@ -240,6 +247,57 @@ export async function processCommentWebhook(
       }
     }
 
+    // 🔒 Follow gate (social selling): o link é só pra quem SEGUE o perfil.
+    // Não segue (ou não deu pra saber) → DM pede o follow, guarda a pendência
+    // e a ENTREGA acontece quando a pessoa responder já seguindo (hook no
+    // inbound → handleFollowGateReply).
+    if (rule.followGate) {
+      const follows = c.fromId
+        ? await fetchFollowsBusiness(channel, c.fromId)
+        : null
+      if (follows !== true) {
+        const gateMsg =
+          (rule.followGateMessage ?? '').trim() || FOLLOW_GATE_DEFAULT
+        let gateSent = false
+        try {
+          await sendCommentPrivateReply(channel, c.commentId, gateMsg, null, null)
+          gateSent = true
+          if (c.fromId) {
+            await db
+              .insert(instagramFollowGatePending)
+              .values({
+                accountId: channel.accountId,
+                channelId: channel.id,
+                automationId: rule.id,
+                igUserId: c.fromId,
+              })
+              .onConflictDoUpdate({
+                target: [
+                  instagramFollowGatePending.automationId,
+                  instagramFollowGatePending.igUserId,
+                ],
+                set: { delivered: false, deliveredAt: null },
+              })
+          }
+        } catch (e) {
+          errMsg = `${errMsg ? errMsg + ' | ' : ''}gate: ${(e as Error).message}`
+        }
+        await db
+          .update(instagramCommentEvents)
+          .set({
+            matched: true,
+            automationId: rule.id,
+            publicReplied,
+            dmSent: gateSent,
+            error: [errMsg, 'follow_gate: aguardando follow']
+              .filter(Boolean)
+              .join(' | '),
+          })
+          .where(eq(instagramCommentEvents.id, inserted.id))
+        continue
+      }
+    }
+
     const dmButtons = resolveDmButtons(rule)
 
     // Fase 2b (ManyChat de verdade): se a regra inicia um Fluxo cujo nó de
@@ -350,5 +408,138 @@ export async function processCommentWebhook(
         error: errMsg,
       })
       .where(eq(instagramCommentEvents.id, inserted.id))
+  }
+}
+
+// ============================================================
+// 🔒 Follow gate — textos padrão + entrega pós-follow.
+// ============================================================
+
+const FOLLOW_GATE_DEFAULT =
+  'Opa! 😊 Esse conteúdo é exclusivo pra quem segue a gente. Segue o perfil e me responde aqui qualquer coisa que eu libero na hora! 😉'
+const FOLLOW_GATE_REMINDER =
+  'Ainda não achei seu follow por aqui 👀 Segue o perfil e me manda um "segui" que eu libero na hora!'
+
+/** Texto de entrega pós-follow: DM da regra + botões como links clicáveis. */
+function renderGateDelivery(rule: Rule): string {
+  const buttons = resolveDmButtons(rule)
+  const lines = [`Boa! 🎉 ${rule.dmMessage.trim()}`]
+  for (const b of buttons) lines.push(`👉 ${b.text}: ${b.url}`)
+  return lines.join('\n')
+}
+
+/**
+ * Chamada pelo INBOUND (import dinâmico, sem ciclo) quando chega DM de cliente
+ * num canal Instagram: se a pessoa tem pendência de follow gate e AGORA segue o
+ * perfil, entrega o DM original da regra (com botões como links + inicia o
+ * Fluxo — a janela de 24h está aberta, ela acabou de mandar mensagem). Se ainda
+ * não segue, lembra UMA vez só (nada de spam a cada mensagem). Best-effort.
+ */
+export async function handleFollowGateReply(
+  channel: ChannelCtx,
+  igUserId: string,
+  conversationId: string,
+  contactId: string,
+): Promise<void> {
+  if (!igUserId) return
+  const pendings = await db
+    .select({
+      pending: instagramFollowGatePending,
+      rule: instagramCommentAutomations,
+    })
+    .from(instagramFollowGatePending)
+    .innerJoin(
+      instagramCommentAutomations,
+      eq(instagramCommentAutomations.id, instagramFollowGatePending.automationId),
+    )
+    .where(
+      and(
+        eq(instagramFollowGatePending.channelId, channel.id),
+        eq(instagramFollowGatePending.igUserId, igUserId),
+        eq(instagramFollowGatePending.delivered, false),
+        eq(instagramCommentAutomations.enabled, true),
+        eq(instagramCommentAutomations.followGate, true),
+      ),
+    )
+    .limit(3)
+  if (!pendings.length) return
+
+  const follows = await fetchFollowsBusiness(channel, igUserId)
+
+  if (follows === true) {
+    for (const { pending, rule } of pendings) {
+      // Claim atômico: só quem marcar delivered primeiro envia (sem duplicar
+      // quando duas mensagens chegam juntas).
+      const claimed = firstOrNull(
+        await db
+          .update(instagramFollowGatePending)
+          .set({ delivered: true, deliveredAt: new Date().toISOString() })
+          .where(
+            and(
+              eq(instagramFollowGatePending.id, pending.id),
+              eq(instagramFollowGatePending.delivered, false),
+            ),
+          )
+          .returning({ id: instagramFollowGatePending.id }),
+      )
+      if (!claimed) continue
+      try {
+        const text = renderGateDelivery(rule)
+        const sent = await instagramProvider.sendText(channel, igUserId, text)
+        // Grava no inbox no envio (dedupe por id segura o echo).
+        try {
+          await dispatchInboundMessage(channel, {
+            externalMessageId: sent.externalMessageId,
+            fromPhoneE164: '',
+            senderExternalId: igUserId,
+            fromMe: true,
+            contentType: 'text',
+            contentText: text,
+          })
+        } catch {
+          // o echo do IG cobre a gravação
+        }
+        if (rule.startFlowId) {
+          try {
+            await startFlowRunFromEvent(
+              rule.startFlowId,
+              channel.accountId,
+              contactId,
+              conversationId,
+            )
+          } catch (e) {
+            console.error('[follow-gate] iniciar fluxo falhou:', e)
+          }
+        }
+      } catch (e) {
+        console.error('[follow-gate] entrega falhou:', e)
+        // devolve a pendência — tenta de novo na próxima mensagem da pessoa
+        await db
+          .update(instagramFollowGatePending)
+          .set({ delivered: false, deliveredAt: null })
+          .where(eq(instagramFollowGatePending.id, pending.id))
+      }
+    }
+    return
+  }
+
+  // Confirmado que NÃO segue: lembra uma vez só. (null = não deu pra saber —
+  // fica em silêncio pra não cobrar quem talvez já siga.)
+  if (follows === false && pendings.some((p) => !p.pending.reminded)) {
+    try {
+      await instagramProvider.sendText(channel, igUserId, FOLLOW_GATE_REMINDER)
+    } catch (e) {
+      console.error('[follow-gate] lembrete falhou:', e)
+    }
+    await db
+      .update(instagramFollowGatePending)
+      .set({ reminded: true })
+      .where(
+        and(
+          eq(instagramFollowGatePending.channelId, channel.id),
+          eq(instagramFollowGatePending.igUserId, igUserId),
+          eq(instagramFollowGatePending.delivered, false),
+        ),
+      )
   }
 }

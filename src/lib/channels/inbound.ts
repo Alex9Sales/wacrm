@@ -566,6 +566,24 @@ export async function dispatchInboundMessage(
   // Best-effort e com guarda de duplicação (nunca derruba o inbound).
   await handleCaptureWaRef(accountId, contactId, ev.contentText ?? '');
 
+  // 🔒 Follow gate (IG, social selling): quem comentou sem seguir e agora
+  // respondeu a DM — checa o follow e entrega o link pendente (lembra 1x se
+  // ainda não segue). Import dinâmico pra não criar ciclo com
+  // instagram-comments (que importa este arquivo). Best-effort.
+  if (channel.provider === 'instagram' && !ev.fromMe && ev.senderExternalId) {
+    try {
+      const { handleFollowGateReply } = await import('./instagram-comments');
+      await handleFollowGateReply(
+        channel,
+        ev.senderExternalId,
+        conversation.id,
+        contactId,
+      );
+    } catch (err) {
+      console.error('[inbound] follow-gate falhou:', err);
+    }
+  }
+
   // Config da IA (carregado uma vez): decide se a IA é o respondente de
   // fora-do-horário e serve o buffer abaixo. requireActive default → null
   // quando a IA está desligada/inativa.

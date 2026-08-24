@@ -58,6 +58,9 @@ const EMPTY = {
   dmButtons: [] as { text: string; url: string }[],
   // fluxo iniciado depois do DM ('' = só o DM).
   startFlowId: '',
+  // 🔒 follow gate: exige seguir o perfil antes de receber o link.
+  followGate: false,
+  followGateMessage: '',
 };
 
 type FormState = typeof EMPTY;
@@ -170,6 +173,8 @@ export function ChannelCommentAutomationDialog({
           ? [{ text: r.dm_button_text, url: r.dm_button_url }]
           : [],
       startFlowId: r.start_flow_id ?? '',
+      followGate: r.follow_gate,
+      followGateMessage: r.follow_gate_message ?? '',
     });
     setEditing(r.id);
     void loadPosts();
@@ -208,6 +213,8 @@ export function ChannelCommentAutomationDialog({
         mediaIds: form.mediaIds,
         dmButtons: form.dmButtons.filter((b) => b.text.trim() && b.url.trim()),
         startFlowId: form.startFlowId || null,
+        followGate: form.followGate,
+        followGateMessage: form.followGateMessage || null,
       };
       if (editing === 'new') {
         await createCommentAutomation(input);
@@ -397,6 +404,48 @@ export function ChannelCommentAutomationDialog({
                 className={inputCls}
               />
             </Field>
+
+            {/* 🔒 Follow gate (social selling) */}
+            <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
+              <label className="flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  checked={form.followGate}
+                  onChange={(e) =>
+                    setForm({ ...form, followGate: e.target.checked })
+                  }
+                  className="mt-0.5 size-4 accent-primary"
+                />
+                <span>
+                  <span className="text-sm font-semibold text-foreground">
+                    🔒 Só pra seguidores (follow gate)
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Antes de entregar o link, a gente checa se a pessoa SEGUE o
+                    perfil. Não segue? A DM pede o follow — e quando ela
+                    responder já seguindo, o link é entregue sozinho. Cada post
+                    vira máquina de seguidor.
+                  </span>
+                </span>
+              </label>
+              {form.followGate ? (
+                <div className="mt-2.5">
+                  <textarea
+                    value={form.followGateMessage}
+                    onChange={(e) =>
+                      setForm({ ...form, followGateMessage: e.target.value })
+                    }
+                    placeholder='Opa! 😊 Esse conteúdo é exclusivo pra quem segue a gente. Segue o perfil e me responde aqui qualquer coisa que eu libero na hora! 😉'
+                    rows={2}
+                    className={inputCls}
+                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Mensagem que pede o follow (vazio = usamos o texto acima).
+                    Quem já segue recebe o link direto, sem essa etapa.
+                  </p>
+                </div>
+              ) : null}
+            </div>
 
             <div className="rounded-lg border border-border p-3">
               <p className="text-xs font-medium text-foreground">

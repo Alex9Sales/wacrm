@@ -33,6 +33,9 @@ export interface CommentAutomation {
   dm_buttons: { text: string; url: string }[] | null
   /** Depois do DM, inicia este Fluxo pro contato (null = só o DM). */
   start_flow_id: string | null
+  /** 🔒 Follow gate: exige seguir o perfil antes de receber o DM com o link. */
+  follow_gate: boolean
+  follow_gate_message: string | null
   created_at: string
 }
 
@@ -52,6 +55,10 @@ export interface CommentAutomationInput {
   dmButtons: { text: string; url: string }[]
   /** Fluxo a iniciar depois do DM (null = só o DM). */
   startFlowId: string | null
+  /** 🔒 Follow gate: exige seguir o perfil antes de receber o DM com o link. */
+  followGate: boolean
+  /** Mensagem que pede o follow (null = texto padrão). */
+  followGateMessage: string | null
 }
 
 /** Garante que o canal é da conta e é Instagram. Lança se não for. */
@@ -89,6 +96,8 @@ const cols = {
   dm_button_url: instagramCommentAutomations.dmButtonUrl,
   dm_buttons: instagramCommentAutomations.dmButtons,
   start_flow_id: instagramCommentAutomations.startFlowId,
+  follow_gate: instagramCommentAutomations.followGate,
+  follow_gate_message: instagramCommentAutomations.followGateMessage,
   created_at: instagramCommentAutomations.createdAt,
 }
 
@@ -179,6 +188,8 @@ export async function createCommentAutomation(
         mediaId: null,
         ...buttonCols(input),
         startFlowId: input.startFlowId || null,
+        followGate: input.followGate,
+        followGateMessage: input.followGateMessage?.trim() || null,
       })
       .returning(cols),
   )
@@ -208,6 +219,8 @@ export async function updateCommentAutomation(
       mediaId: null,
       ...buttonCols(input),
       startFlowId: input.startFlowId || null,
+      followGate: input.followGate,
+      followGateMessage: input.followGateMessage?.trim() || null,
       updatedAt: new Date().toISOString(),
     })
     .where(

@@ -584,6 +584,22 @@ export const captureDomains = pgTable("capture_domains", {
 	index("idx_capture_domains_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 ]);
 
+// 🔒 Pendências do follow gate: quem comentou mas ainda não segue. Entrega
+// acontece quando a pessoa responde a DM já seguindo (hook no inbound).
+export const instagramFollowGatePending = pgTable("instagram_follow_gate_pending", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	channelId: uuid("channel_id").notNull(),
+	automationId: uuid("automation_id").notNull(),
+	igUserId: text("ig_user_id").notNull(),
+	reminded: boolean().default(false).notNull(),
+	delivered: boolean().default(false).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	deliveredAt: timestamp("delivered_at", { withTimezone: true, mode: 'string' }),
+}, (table) => [
+	uniqueIndex("idx_ig_fgate_rule_user").using("btree", table.automationId.asc().nullsLast().op("uuid_ops"), table.igUserId.asc().nullsLast().op("text_ops")),
+]);
+
 export const contactNotes = pgTable("contact_notes", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	contactId: uuid("contact_id").notNull(),
@@ -2605,6 +2621,10 @@ export const instagramCommentAutomations = pgTable("instagram_comment_automation
 	// via replyRotation) — parece humano e evita padrão de spam.
 	publicReplies: jsonb("public_replies").$type<string[]>(),
 	replyRotation: integer("reply_rotation").default(0).notNull(),
+	// 🔒 Follow gate (social selling): exige seguir o perfil antes de receber o
+	// DM com o link; a mensagem pede o follow (null = texto padrão).
+	followGate: boolean("follow_gate").default(false).notNull(),
+	followGateMessage: text("follow_gate_message"),
 	// DM/resposta privada mandada a quem comentou.
 	dmMessage: text("dm_message").notNull(),
 	// não mandar o mesmo DM 2x pra mesma pessoa nessa regra.

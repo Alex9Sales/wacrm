@@ -169,6 +169,30 @@ export async function fetchInstagramProfile(
   }
 }
 
+/**
+ * 🔒 Follow gate: a pessoa segue o perfil? A Graph API expõe
+ * `is_user_follow_business` no perfil do usuário. null = não deu pra saber
+ * (sem conversa ainda / erro) — o chamador decide o fallback.
+ */
+export async function fetchFollowsBusiness(
+  ch: ChannelCtx,
+  igsid: string,
+): Promise<boolean | null> {
+  try {
+    const url = `${graphBaseOf(ch)}/${igsid}?fields=is_user_follow_business`
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessTokenOf(ch)}` },
+    })
+    if (!res.ok) return null
+    const d = (await res.json()) as { is_user_follow_business?: boolean }
+    return typeof d.is_user_follow_business === 'boolean'
+      ? d.is_user_follow_business
+      : null
+  } catch {
+    return null
+  }
+}
+
 async function graphPost(
   url: string,
   token: string,
