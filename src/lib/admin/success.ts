@@ -66,6 +66,13 @@ export interface SuccessDashboard {
 
 const MODULES_TOTAL = 8
 
+/** db.execute retorna array OU {rows} conforme o driver — normaliza. */
+function toRows(res: unknown): Array<Record<string, unknown>> {
+  if (Array.isArray(res)) return res as Array<Record<string, unknown>>
+  const r = (res as { rows?: unknown }).rows
+  return Array.isArray(r) ? (r as Array<Record<string, unknown>>) : []
+}
+
 function planPrice(plan: string | null): number {
   if (plan && isPlanKey(plan)) return PLANS[plan].price
   return 0
@@ -115,7 +122,7 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
   // Uma linha por conta (billing vivo, sem soft-delete) com TODOS os
   // agregados de uso. Subqueries qualificadas na mão — nada de interpolação
   // de coluna dentro de subquery (gotcha Drizzle 24/08).
-  const rows = (await db.execute(sql`
+  const rows = toRows(await db.execute(sql`
     SELECT
       o.id AS org_id,
       o.name,
@@ -150,7 +157,7 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
     JOIN organization_billing b ON b.organization_id = o.id
     WHERE b.deleted_at IS NULL AND b.status <> 'canceled'
     ORDER BY o.created_at DESC
-  `)) as unknown as Array<Record<string, unknown>>
+  `))
 
   const now = Date.now()
   const accounts: AccountHealthRow[] = rows.map((r) => {
@@ -216,7 +223,7 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
   monthStart.setHours(0, 0, 0, 0)
   const monthIso = monthStart.toISOString()
 
-  const [monthAgg] = (await db.execute(sql`
+  const [monthAgg] = toRows(await db.execute(sql`
     SELECT
       (SELECT count(*)::int FROM organization_billing nb
         WHERE nb.created_at >= ${monthIso} AND nb.deleted_at IS NULL) AS new_this_month,
@@ -226,7 +233,7 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
         FROM billing_events be2
         JOIN organization_billing ob ON ob.organization_id = be2.organization_id
         WHERE be2.event = 'canceled' AND be2.created_at >= ${monthIso}) AS canceled_plans
-  `)) as unknown as Array<Record<string, unknown>>
+  `))
 
   const canceledThisMonth = Number(monthAgg?.canceled_this_month ?? 0)
   const churnedMrr = String(monthAgg?.canceled_plans ?? '')
