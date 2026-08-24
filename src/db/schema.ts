@@ -568,6 +568,22 @@ export const schedulers = pgTable("schedulers", {
 	index("idx_schedulers_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
 ]);
 
+// 🌐 Domínio próprio das páginas de captação: o cliente aponta um CNAME e as
+// páginas /f/* passam a responder no domínio dele (roteado por Host no
+// middleware → /custom-domain). `verified` vira true após a checagem de DNS.
+export const captureDomains = pgTable("capture_domains", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	domain: text().notNull(),
+	verified: boolean().default(false).notNull(),
+	verifiedAt: timestamp("verified_at", { withTimezone: true, mode: 'string' }),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("idx_capture_domains_domain").using("btree", table.domain.asc().nullsLast().op("text_ops")),
+	index("idx_capture_domains_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+]);
+
 export const contactNotes = pgTable("contact_notes", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	contactId: uuid("contact_id").notNull(),

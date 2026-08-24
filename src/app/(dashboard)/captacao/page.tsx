@@ -45,6 +45,11 @@ import {
   deleteScheduler,
   generateCaptureQuiz,
   getCaptureXray,
+  listCaptureDomains,
+  addCaptureDomain,
+  verifyCaptureDomain,
+  deleteCaptureDomain,
+  type CaptureDomainRow,
   type CaptureXray,
   type CaptureFormRow,
   type CaptureFormDetail,
@@ -676,7 +681,154 @@ export default function CaptacaoPage() {
           ))}
         </div>
       )}
+
+      <DomainsSection />
     </div>
+  );
+}
+
+// ------------------------------------------------------------
+// 🌐 Domínio próprio: as páginas de captação no domínio do cliente.
+// ------------------------------------------------------------
+function DomainsSection() {
+  const [domains, setDomains] = useState<CaptureDomainRow[]>([]);
+  const [newDomain, setNewDomain] = useState("");
+  const [busy, setBusy] = useState<string | null>(null);
+
+  const reload = useCallback(async () => {
+    setDomains(await listCaptureDomains().catch(() => []));
+  }, []);
+
+  useEffect(() => {
+    void reload();
+  }, [reload]);
+
+  async function handleAdd() {
+    if (!newDomain.trim()) return;
+    setBusy("add");
+    const { error } = await addCaptureDomain(newDomain);
+    setBusy(null);
+    if (error) {
+      toast.error(error);
+      return;
+    }
+    setNewDomain("");
+    toast.success("Domínio cadastrado — agora aponte o CNAME e verifique.");
+    void reload();
+  }
+
+  async function handleVerify(id: string) {
+    setBusy(id);
+    const res = await verifyCaptureDomain(id);
+    setBusy(null);
+    if (res.verified) {
+      toast.success("Domínio verificado! 🎉 Nosso time ativa o certificado SSL em seguida.");
+    } else {
+      toast.error(res.error ?? "Ainda não verificado.");
+    }
+    void reload();
+  }
+
+  async function handleDeleteDomain(id: string) {
+    if (!confirm("Remover este domínio? As páginas param de responder nele.")) return;
+    setBusy(id);
+    const { error } = await deleteCaptureDomain(id);
+    setBusy(null);
+    if (error) toast.error(error);
+    void reload();
+  }
+
+  return (
+    <>
+      <div className="mt-8 flex items-center gap-3 border-t border-border pt-6">
+        <div className="flex-1">
+          <h2 className="text-lg font-bold text-foreground">🌐 Domínio próprio</h2>
+          <p className="text-sm text-muted-foreground">
+            Suas páginas de captação respondendo no SEU domínio (ex.:
+            paginas.suaempresa.com.br) — sem a nossa marca na URL.
+          </p>
+        </div>
+      </div>
+
+      <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <div className="flex flex-wrap items-center gap-2">
+          <Input
+            value={newDomain}
+            onChange={(e) => setNewDomain(e.target.value)}
+            placeholder="paginas.suaempresa.com.br"
+            className="min-w-[220px] flex-1"
+          />
+          <Button
+            type="button"
+            onClick={() => void handleAdd()}
+            disabled={busy === "add" || !newDomain.trim()}
+          >
+            {busy === "add" ? (
+              <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+            ) : (
+              <Plus className="mr-1.5 h-4 w-4" />
+            )}
+            Adicionar
+          </Button>
+        </div>
+        <p className="text-[11px] text-muted-foreground">
+          Como funciona: no seu provedor de DNS, crie um{" "}
+          <strong className="text-foreground">CNAME</strong> do domínio acima
+          apontando para{" "}
+          <strong className="text-foreground">crm.salestecnologia.com.br</strong>{" "}
+          e clique em Verificar. Depois de verificado, nosso time ativa o
+          certificado SSL (você recebe o aviso). A página inicial do domínio
+          abre sua landing mais recente; cada página fica em
+          seu-dominio/&lt;link-da-pagina&gt;.
+        </p>
+        {domains.length > 0 ? (
+          <div className="space-y-2">
+            {domains.map((d) => (
+              <div
+                key={d.id}
+                className="flex flex-wrap items-center gap-2 rounded-lg border border-border bg-muted/30 px-3 py-2"
+              >
+                <span className="text-sm font-medium text-foreground">
+                  {d.domain}
+                </span>
+                <span
+                  className={`rounded-full px-1.5 py-0.5 text-[10px] ${
+                    d.verified
+                      ? "bg-emerald-500/15 text-emerald-600 dark:text-emerald-400"
+                      : "bg-amber-500/15 text-amber-600 dark:text-amber-400"
+                  }`}
+                >
+                  {d.verified ? "✓ Verificado" : "Aguardando DNS"}
+                </span>
+                <div className="ml-auto flex items-center gap-1.5">
+                  {!d.verified ? (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => void handleVerify(d.id)}
+                      disabled={busy === d.id}
+                    >
+                      {busy === d.id ? (
+                        <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" />
+                      ) : null}
+                      Verificar
+                    </Button>
+                  ) : null}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    onClick={() => void handleDeleteDomain(d.id)}
+                    className="text-muted-foreground hover:text-red-500"
+                  >
+                    <Trash2 className="h-3.5 w-3.5" />
+                  </Button>
+                </div>
+              </div>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </>
   );
 }
 
@@ -1108,6 +1260,11 @@ function CaptureEditor({
     "gradient" | "mesh" | "waves" | "blobs" | "grid" | "lowpoly"
   >(initContent.heroStyle ?? "gradient");
   const [brandBusy, setBrandBusy] = useState(false);
+  // 📈 Pixel & Analytics (Meta + GA4) nas páginas públicas.
+  const [trackPixel, setTrackPixel] = useState(
+    initContent.tracking?.metaPixelId ?? "",
+  );
+  const [trackGa4, setTrackGa4] = useState(initContent.tracking?.ga4Id ?? "");
   // 💬 Landing que Conversa: chat com a IA no lugar do formulário.
   const [chatEnabled, setChatEnabled] = useState(
     initContent.chat?.enabled ?? false,
@@ -1390,6 +1547,10 @@ function CaptureEditor({
         chat: {
           enabled: chatEnabled,
           greeting: chatGreeting.trim() || null,
+        },
+        tracking: {
+          metaPixelId: trackPixel.trim() || null,
+          ga4Id: trackGa4.trim() || null,
         },
         quiz: {
           questions: cleanQuestions,
@@ -2408,6 +2569,77 @@ function CaptureEditor({
             Ela pausa sozinha quando o lead responder.
           </p>
         ) : null}
+      </div>
+
+      {/* 📈 Pixel & Analytics */}
+      <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <div className="text-sm font-semibold text-foreground">
+          📈 Pixel &amp; Analytics
+        </div>
+        <p className="text-xs text-muted-foreground">
+          Cole os IDs e a página dispara <strong>PageView</strong> na visita e
+          a conversão de <strong>Lead</strong> quando o contato entra — seus
+          anúncios da Meta e o Google Analytics passam a otimizar com dado
+          real.
+        </p>
+        <div className="grid gap-3 sm:grid-cols-2">
+          <div className="grid gap-1.5">
+            <Label>Pixel da Meta (ID)</Label>
+            <Input
+              value={trackPixel}
+              onChange={(e) => setTrackPixel(e.target.value)}
+              placeholder="Ex.: 1234567890123456"
+            />
+          </div>
+          <div className="grid gap-1.5">
+            <Label>Google Analytics 4 (Measurement ID)</Label>
+            <Input
+              value={trackGa4}
+              onChange={(e) => setTrackGa4(e.target.value)}
+              placeholder="Ex.: G-ABC123XYZ"
+            />
+          </div>
+        </div>
+      </div>
+
+      {/* 🧩 Widget pro site */}
+      <div className="space-y-3 rounded-xl border border-border bg-card p-4">
+        <div className="text-sm font-semibold text-foreground">
+          🧩 Widget pro seu site
+        </div>
+        {!initial ? (
+          <p className="text-xs text-muted-foreground">
+            Salve a página primeiro — aí você ganha um código de UMA linha pra
+            colar no seu site e abrir esta página num balão flutuante (o chat
+            aparece direto, tipo Leadster).
+          </p>
+        ) : (
+          <>
+            <p className="text-xs text-muted-foreground">
+              Cole esta linha antes do <code>&lt;/body&gt;</code> de qualquer
+              site — aparece o balão 💬 no canto que abre esta página (chat,
+              quiz ou formulário) sem sair do site.
+            </p>
+            <div className="flex items-start gap-2 rounded-lg border border-border bg-muted/50 p-2.5">
+              <code className="flex-1 break-all text-[11px] leading-relaxed text-foreground">
+                {`<script src="${typeof window !== "undefined" ? window.location.origin : ""}/widget.js" data-fluxia="${initial.slug}" data-color="${brandColor}" async></script>`}
+              </code>
+              <button
+                type="button"
+                onClick={() => {
+                  navigator.clipboard?.writeText(
+                    `<script src="${window.location.origin}/widget.js" data-fluxia="${initial.slug}" data-color="${brandColor}" async></script>`,
+                  );
+                  toast.success("Código do widget copiado.");
+                }}
+                title="Copiar"
+                className="rounded p-1 text-muted-foreground hover:bg-background hover:text-foreground"
+              >
+                <Copy className="h-3.5 w-3.5" />
+              </button>
+            </div>
+          </>
+        )}
       </div>
 
       {/* Destino */}

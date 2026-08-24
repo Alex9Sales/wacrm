@@ -7,6 +7,7 @@ import {
   type CaptureField,
   type QuizQuestion,
 } from "@/lib/capture/shared";
+import { trackLead } from "./tracking-scripts";
 
 /**
  * Quiz público de captação (/f/[slug] com mode='quiz'). Fluxo: intro →
@@ -120,6 +121,7 @@ export function CaptureQuizClient({
       }
       setResult(j.result || "Recebemos suas respostas! 🎉");
       setStep("done");
+      trackLead();
     } catch {
       setError("Erro de conexão. Tente de novo.");
       setStep("contact");

@@ -2,6 +2,8 @@
 
 import { useEffect, useRef, useState } from "react";
 
+import { trackLead } from "./tracking-scripts";
+
 /**
  * 💬 Landing que Conversa — o chat embutido na landing (no lugar do
  * formulário). Stateless: manda o histórico a cada turno pro endpoint
@@ -39,6 +41,7 @@ export function CaptureChatClient({
   accent,
   logo,
   suggestions,
+  fill,
 }: {
   slug: string;
   greeting: string;
@@ -47,6 +50,8 @@ export function CaptureChatClient({
   logo?: string | null;
   /** Perguntas prontas mostradas no primeiro turno (chips clicáveis). */
   suggestions?: string[];
+  /** true = ocupa a altura toda do container (iframe do widget). */
+  fill?: boolean;
 }) {
   const [messages, setMessages] = useState<ChatMsg[]>([
     { role: "assistant", content: greeting },
@@ -103,6 +108,7 @@ export function CaptureChatClient({
       if (j.leadCaptured) {
         setLeadDone(true);
         setWaHref(j.waHref ?? null);
+        trackLead();
       }
     } catch {
       setError("Erro de conexão. Tente de novo.");
@@ -117,7 +123,13 @@ export function CaptureChatClient({
   }
 
   return (
-    <div className="w-full overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-slate-900/10">
+    <div
+      className={
+        fill
+          ? "flex h-full w-full flex-col overflow-hidden bg-white"
+          : "w-full overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-slate-900/10"
+      }
+    >
       <div
         className="flex items-center gap-2.5 px-4 py-3"
         style={{
@@ -144,7 +156,10 @@ export function CaptureChatClient({
         </span>
       </div>
 
-      <div ref={scrollRef} className="h-80 space-y-2.5 overflow-y-auto bg-slate-50/60 p-4">
+      <div
+        ref={scrollRef}
+        className={`space-y-2.5 overflow-y-auto bg-slate-50/60 p-4 ${fill ? "flex-1" : "h-80"}`}
+      >
         {messages.map((m, i) => (
           <div
             key={i}

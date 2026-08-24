@@ -16,6 +16,7 @@ import {
   deals,
   contactTags,
   tags,
+  captureDomains,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
@@ -779,6 +780,136 @@ export async function getCaptureXray(days: number): Promise<CaptureXray> {
     { leads: 0, open: 0, won: 0, lost: 0, wonValue: 0 },
   )
   return { totals, rows }
+}
+
+// ------------------------------------------------------------
+// 🌐 Domínio próprio: o cliente aponta um CNAME pro nosso host e as páginas
+// de captação respondem no domínio DELE. Verificação por DNS-over-HTTPS
+// (Cloudflare): CNAME pra *.salestecnologia.com.br OU A pro nosso IP.
+// ------------------------------------------------------------
+export interface CaptureDomainRow {
+  id: string
+  domain: string
+  verified: boolean
+}
+
+const OUR_CNAME_SUFFIX = 'salestecnologia.com.br'
+const OUR_IP = '72.60.137.234'
+const DOMAIN_RE = /^[a-z0-9][a-z0-9-]{0,62}(\.[a-z0-9][a-z0-9-]{0,62}){1,6}$/
+
+export async function listCaptureDomains(): Promise<CaptureDomainRow[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: captureDomains.id,
+      domain: captureDomains.domain,
+      verified: captureDomains.verified,
+    })
+    .from(captureDomains)
+    .where(eq(captureDomains.accountId, ctx.accountId))
+    .orderBy(asc(captureDomains.domain))
+  return rows
+}
+
+export async function addCaptureDomain(
+  input: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const domain = (input ?? '')
+      .trim()
+      .toLowerCase()
+      .replace(/^https?:\/\//, '')
+      .replace(/[/?#].*$/, '')
+      .replace(/:\d+$/, '')
+      .replace(/\.$/, '')
+    if (!DOMAIN_RE.test(domain)) {
+      return { error: 'Domínio inválido — ex.: paginas.suaempresa.com.br' }
+    }
+    if (domain.endsWith(OUR_CNAME_SUFFIX)) {
+      return { error: 'Use um domínio seu (esse é o nosso 🙂).' }
+    }
+    await db.insert(captureDomains).values({
+      accountId: ctx.accountId,
+      domain,
+      createdBy: ctx.userId,
+    })
+    return { error: null }
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return { error: 'Esse domínio já está cadastrado.' }
+    }
+    console.error('[addCaptureDomain]', err)
+    return { error: 'Falha ao cadastrar o domínio.' }
+  }
+}
+
+/** Consulta DoH da Cloudflare (JSON). Retorna os `data` das respostas. */
+async function dohAnswers(name: string, type: 'CNAME' | 'A'): Promise<string[]> {
+  try {
+    const r = await fetch(
+      `https://cloudflare-dns.com/dns-query?name=${encodeURIComponent(name)}&type=${type}`,
+      { headers: { accept: 'application/dns-json' }, cache: 'no-store' },
+    )
+    if (!r.ok) return []
+    const j = (await r.json()) as { Answer?: { type: number; data: string }[] }
+    return (j.Answer ?? []).map((a) => a.data.toLowerCase().replace(/\.$/, ''))
+  } catch {
+    return []
+  }
+}
+
+export async function verifyCaptureDomain(
+  id: string,
+): Promise<{ verified: boolean; error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const row = firstOrNull(
+      await db
+        .select({ id: captureDomains.id, domain: captureDomains.domain })
+        .from(captureDomains)
+        .where(and(eq(captureDomains.id, id), eq(captureDomains.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!row) return { verified: false, error: 'Domínio não encontrado.' }
+    const [cnames, aRecords] = await Promise.all([
+      dohAnswers(row.domain, 'CNAME'),
+      dohAnswers(row.domain, 'A'),
+    ])
+    const ok =
+      cnames.some((c) => c.endsWith(OUR_CNAME_SUFFIX)) ||
+      aRecords.includes(OUR_IP)
+    if (!ok) {
+      return {
+        verified: false,
+        error:
+          'DNS ainda não aponta pra gente. Confira o CNAME e aguarde a propagação (pode levar até 1h).',
+      }
+    }
+    await db
+      .update(captureDomains)
+      .set({ verified: true, verifiedAt: new Date().toISOString() })
+      .where(eq(captureDomains.id, row.id))
+    return { verified: true, error: null }
+  } catch (err) {
+    console.error('[verifyCaptureDomain]', err)
+    return { verified: false, error: 'Falha ao verificar. Tente de novo.' }
+  }
+}
+
+export async function deleteCaptureDomain(
+  id: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    await db
+      .delete(captureDomains)
+      .where(and(eq(captureDomains.id, id), eq(captureDomains.accountId, ctx.accountId)))
+    return { error: null }
+  } catch (err) {
+    console.error('[deleteCaptureDomain]', err)
+    return { error: 'Falha ao remover o domínio.' }
+  }
 }
 
 /** Cadências ativas (com degrau) — seletor do "Obrigado que Vende". */

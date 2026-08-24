@@ -6,6 +6,7 @@ import {
   CAPTURE_FIELD_DEFS,
   type CaptureField,
 } from "@/lib/capture/shared";
+import { trackLead } from "./tracking-scripts";
 
 /**
  * Formulário público de captação (/f/[slug]). Limpo e neutro — é o formulário
@@ -92,6 +93,7 @@ export function CaptureFormClient({
         return;
       }
       setDone(true);
+      trackLead();
     } catch {
       setError("Erro de conexão. Tente de novo.");
       setSending(false);

@@ -193,9 +193,17 @@ const nextConfig: NextConfig = {
       {
         // Security headers on every response, including /_next/static
         // assets (nosniff matters there) and /api/* (HSTS + referrer-
-        // policy don't hurt).
-        source: "/:path*",
+        // policy don't hurt). /f/* is carved out (rule below) so the
+        // capture pages can live inside the embeddable widget's iframe.
+        source: "/:path((?!f/).*)",
         headers: [...SECURITY_HEADERS],
+      },
+      {
+        // Capture pages (/f/*): same protections MINUS X-Frame-Options —
+        // the "🧩 Widget pro seu site" embeds these pages in an <iframe>
+        // on the client's own website.
+        source: "/f/:path*",
+        headers: SECURITY_HEADERS.filter((h) => h.key !== "X-Frame-Options"),
       },
     ];
   },

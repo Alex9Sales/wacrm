@@ -1,24 +1,12 @@
 // ============================================================
 // /f/[slug] — PÁGINA PÚBLICA de um formulário de captação (sem auth). Resolve o
-// form pelo slug e renderiza o formulário; ao enviar, o lead cai no funil da
-// conta via /api/public/capture/submit → ingestLead.
+// form pelo slug e delega pra view compartilhada (PublicCaptureView), que
+// também serve o domínio próprio e o modo embed (?embed=1, iframe do widget).
 // ============================================================
 import type { Metadata } from 'next'
 
-import {
-  getPublicCaptureForm,
-  getPublicCaptureWaHref,
-  getPublicSchedulerUrl,
-} from '@/lib/capture/public'
-import {
-  DEFAULT_CAPTURE_HEADLINE,
-  DEFAULT_CAPTURE_SUBMIT,
-  DEFAULT_CAPTURE_SUCCESS,
-} from '@/lib/capture/shared'
-import { meshGradientBackground } from '@/lib/capture/hero-art'
-import { CaptureFormClient } from './capture-form-client'
-import { CaptureLanding } from './landing'
-import { CaptureQuizClient } from './quiz-client'
+import { getPublicCaptureForm } from '@/lib/capture/public'
+import { PublicCaptureView } from './view'
 
 export async function generateMetadata({
   params,
@@ -38,10 +26,13 @@ export async function generateMetadata({
 
 export default async function PublicCapturePage({
   params,
+  searchParams,
 }: {
   params: Promise<{ slug: string }>
+  searchParams: Promise<{ embed?: string }>
 }) {
   const { slug } = await params
+  const { embed } = await searchParams
   const form = await getPublicCaptureForm(slug)
 
   if (!form) {
@@ -59,79 +50,5 @@ export default async function PublicCapturePage({
     )
   }
 
-  const headline = form.headline || form.name || DEFAULT_CAPTURE_HEADLINE
-  const submitLabel = form.submitLabel || DEFAULT_CAPTURE_SUBMIT
-  const successMessage = form.successMessage || DEFAULT_CAPTURE_SUCCESS
-  // Obrigado que Vende: oferta + botão de WhatsApp na tela de sucesso.
-  const successWaHref = form.successWhatsapp
-    ? await getPublicCaptureWaHref(form, 'sent')
-    : null
-  const successOffer =
-    form.successOfferTitle || form.successOfferText
-      ? { title: form.successOfferTitle, text: form.successOfferText }
-      : null
-  // Mini-site: botão de WhatsApp na landing + botão "Agendar horário".
-  const landingWaHref = form.content.showWhatsapp
-    ? await getPublicCaptureWaHref(form, 'info')
-    : null
-  const schedulerUrl = await getPublicSchedulerUrl(
-    form.accountId,
-    form.content.schedulerSlug,
-  )
-
-  // Quiz com IA: perguntas → contato → diagnóstico personalizado na tela.
-  // Sem perguntas configuradas, cai no formulário simples (defensivo).
-  if (form.content.mode === 'quiz' && form.content.quiz.questions.length > 0) {
-    const accent = form.content.brandColor || '#7c3aed'
-    return (
-      <CaptureQuizClient
-        slug={form.slug}
-        headline={headline}
-        description={form.description}
-        ctaStart={form.content.ctaText || 'Começar'}
-        questions={form.content.quiz.questions}
-        fields={form.fields}
-        submitLabel={submitLabel}
-        accent={accent}
-        logo={form.content.logo}
-        background={meshGradientBackground(accent, form.slug)}
-        aiEnabled={form.content.quiz.aiResult}
-        successOffer={successOffer}
-        successWaHref={successWaHref}
-        successSchedulerUrl={schedulerUrl}
-      />
-    )
-  }
-
-  if (form.content.mode === 'landing') {
-    return (
-      <CaptureLanding
-        slug={form.slug}
-        headline={headline}
-        description={form.description}
-        fields={form.fields}
-        submitLabel={submitLabel}
-        successMessage={successMessage}
-        content={form.content}
-        successOffer={successOffer}
-        successWaHref={successWaHref}
-        landingWaHref={landingWaHref}
-        schedulerUrl={schedulerUrl}
-      />
-    )
-  }
-
-  return (
-    <CaptureFormClient
-      slug={form.slug}
-      headline={headline}
-      description={form.description}
-      fields={form.fields}
-      submitLabel={submitLabel}
-      successMessage={successMessage}
-      successOffer={successOffer}
-      successWaHref={successWaHref}
-      successSchedulerUrl={schedulerUrl}
-    />
-  )
+  return <PublicCaptureView form={form} embed={embed === '1'} />
 }

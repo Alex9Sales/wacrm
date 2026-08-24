@@ -87,6 +87,8 @@ export interface CaptureContent {
   quiz: CaptureQuiz
   /** 💬 Landing que Conversa: chat com a IA no lugar do formulário. */
   chat: { enabled: boolean; greeting: string | null }
+  /** 📈 Rastreamento de anúncios: Pixel da Meta + GA4 (disparam PageView e Lead). */
+  tracking: { metaPixelId: string | null; ga4Id: string | null }
 }
 
 export const DEFAULT_CAPTURE_CONTENT: CaptureContent = {
@@ -103,6 +105,7 @@ export const DEFAULT_CAPTURE_CONTENT: CaptureContent = {
   heroStyle: 'gradient',
   quiz: DEFAULT_CAPTURE_QUIZ,
   chat: { enabled: false, greeting: null },
+  tracking: { metaPixelId: null, ga4Id: null },
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/
@@ -180,6 +183,15 @@ export function normalizeCaptureContent(input: unknown): CaptureContent {
       greeting:
         str((o.chat as { greeting?: unknown } | undefined)?.greeting, 300) || null,
     },
+    tracking: (() => {
+      const t = (o.tracking ?? {}) as { metaPixelId?: unknown; ga4Id?: unknown }
+      const pixel = str(t.metaPixelId, 24).replace(/\D/g, '')
+      const ga4 = str(t.ga4Id, 20).toUpperCase()
+      return {
+        metaPixelId: /^\d{5,20}$/.test(pixel) ? pixel : null,
+        ga4Id: /^G-[A-Z0-9]{4,16}$/.test(ga4) ? ga4 : null,
+      }
+    })(),
   }
 }
 

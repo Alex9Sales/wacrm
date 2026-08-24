@@ -65,8 +65,60 @@ function isProtectedPath(pathname: string): boolean {
   return false
 }
 
+// ------------------------------------------------------------
+// 🌐 Domínio próprio das páginas de captação. O middleware é edge/DB-free,
+// então a checagem aqui é só de HOST: requisição chegando num host que NÃO é
+// nosso é rewritada pra /custom-domain/<host>/... — a rota (Node) valida o
+// domínio no banco (capture_domains.verified) e serve a página da conta.
+// APIs públicas que as páginas usam (/api/public, /api/files) passam direto.
+// ------------------------------------------------------------
+const PRIMARY_HOST_SUFFIX = '.salestecnologia.com.br'
+const PRIMARY_HOSTS = new Set([
+  'crm.salestecnologia.com.br',
+  'salestecnologia.com.br',
+  'localhost',
+  '127.0.0.1',
+])
+
+function isPrimaryHost(hostRaw: string): boolean {
+  const host = hostRaw.split(':')[0].toLowerCase()
+  return (
+    !host || PRIMARY_HOSTS.has(host) || host.endsWith(PRIMARY_HOST_SUFFIX)
+  )
+}
+
+function customDomainRewrite(
+  request: NextRequest,
+  pathname: string,
+): NextResponse | null {
+  const host = (request.headers.get('host') ?? '').toLowerCase()
+  if (isPrimaryHost(host)) return null
+  // Assets e APIs públicas que a página precisa funcionam em qualquer host.
+  if (
+    pathname.startsWith('/_next') ||
+    pathname.startsWith('/api/public') ||
+    pathname.startsWith('/api/files') ||
+    pathname === '/favicon.ico' ||
+    pathname === '/robots.txt'
+  ) {
+    return null
+  }
+  const bare = host.split(':')[0]
+  const segments = pathname.split('/').filter(Boolean)
+  // Só a home (página padrão da conta) e /<slug> existem num domínio custom;
+  // qualquer caminho mais fundo volta pra home do domínio.
+  const slug = segments.length === 1 ? segments[0] : ''
+  const url = request.nextUrl.clone()
+  url.pathname = slug
+    ? `/custom-domain/${bare}/${slug}`
+    : `/custom-domain/${bare}`
+  return NextResponse.rewrite(url)
+}
+
 export async function middleware(request: NextRequest) {
   const { pathname } = request.nextUrl
+  const custom = customDomainRewrite(request, pathname)
+  if (custom) return custom
   // Presence check only — no network / DB. getSessionCookie reads the
   // Better Auth cookie straight off the request.
   const hasSession = Boolean(getSessionCookie(request))
