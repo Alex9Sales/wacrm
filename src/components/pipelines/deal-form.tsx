@@ -2,7 +2,6 @@
 
 import { useState, useEffect } from "react";
 import {
-  listContactsForDeal,
   listAssignees,
   listConversationsForContact,
   createDeal,
@@ -16,6 +15,11 @@ import {
   type ProductRow,
 } from "@/app/(dashboard)/settings/products-actions";
 import { useAuth } from "@/hooks/use-auth";
+import { ContactPicker } from "@/components/contacts/contact-picker";
+import {
+  getPickerContact,
+  type PickerContact,
+} from "@/components/contacts/contact-picker-actions";
 import { CURRENCIES } from "@/lib/currency";
 import type {
   Contact,
@@ -96,7 +100,7 @@ export function DealForm({
   const [origin, setOrigin] = useState("");
   const [qualification, setQualification] = useState(0);
 
-  const [contacts, setContacts] = useState<Contact[]>([]);
+  const [selectedContact, setSelectedContact] = useState<PickerContact | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
   const [catalog, setCatalog] = useState<ProductRow[]>([]);
   const [prodQuery, setProdQuery] = useState("");
@@ -139,7 +143,6 @@ export function DealForm({
   // When opened from a conversation the contact is known — show it locked
   // (just the client) instead of an empty "Selecione um contato". "Alterar"
   // flips this to the full picker.
-  const [contactLocked, setContactLocked] = useState(false);
 
   // Reset the form fields every time the sheet opens or its input
   // props change. This is a legitimate prop-driven sync; the rule is
@@ -167,7 +170,6 @@ export function DealForm({
       setQualification(deal.qualification ?? 0);
       setLostReason(deal.lost_reason ?? "");
       setLostReasonOpen(false);
-      setContactLocked(false);
     } else {
       setTitle("");
       setValue("");
@@ -181,22 +183,34 @@ export function DealForm({
       setSource("");
       setOrigin("");
       // Opened from a conversation → start with the contact locked-in.
-      setContactLocked(!!defaultContactId);
     }
   }, [open, deal, defaultStageId, defaultContactId, stages, defaultCurrency]);
   /* eslint-enable react-hooks/set-state-in-effect */
+
+  // Resolve nome/telefone do contato selecionado (edição ou vindo da conversa).
+  useEffect(() => {
+    if (!contactId) {
+      setSelectedContact(null);
+      return;
+    }
+    if (selectedContact?.id === contactId) return;
+    let alive = true;
+    getPickerContact(contactId)
+      .then((c) => alive && c && setSelectedContact(c))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [contactId]);
 
   // Load supporting data once the sheet is open
   useEffect(() => {
     if (!open) return;
     let cancelled = false;
     (async () => {
-      const [c, p] = await Promise.all([
-        listContactsForDeal(),
-        listAssignees(),
-      ]);
+      const p = await listAssignees();
       if (cancelled) return;
-      setContacts(c);
       setProfiles(p);
     })();
     // Catálogo (ativos) p/ o seletor de produto no Valor.
@@ -361,45 +375,21 @@ export function DealForm({
 
             <div className="grid gap-2">
               <Label className="text-muted-foreground">Contato</Label>
-              {contactLocked && contactId ? (
-                <div className="flex items-center justify-between gap-2 rounded-lg border border-border bg-muted px-2.5 py-2 text-sm text-foreground">
-                  <span className="truncate">
-                    {(() => {
-                      const c = contacts.find((x) => x.id === contactId);
-                      return c?.name || c?.phone || "Contato da conversa";
-                    })()}
-                  </span>
-                  <button
-                    type="button"
-                    onClick={() => setContactLocked(false)}
-                    className="shrink-0 text-xs text-primary underline-offset-2 hover:underline"
-                  >
-                    Alterar
-                  </button>
-                </div>
-              ) : (
-                <select
-                  value={contactId}
-                  onChange={(e) => setContactId(e.target.value)}
-                  className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary focus:ring-1 focus:ring-primary"
-                >
-                  <option value="">Selecione um contato</option>
-                  {contacts.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name || c.phone}
-                    </option>
-                  ))}
-                </select>
-              )}
+              <ContactPicker
+                value={contactId}
+                onChange={(id, c) => {
+                  setContactId(id);
+                  setSelectedContact(c);
+                }}
+              />
 
               {deal?.id &&
                 (() => {
                   const chIsIg = isInstagramProvider(deal.channel_provider);
                   const originIsWhats =
                     dealChannelLabel(deal.channel_provider) === "WhatsApp";
-                  const contactHasPhone = contacts.some(
-                    (c) => c.id === contactId && !!c.phone,
-                  );
+                  const contactHasPhone =
+                    selectedContact?.id === contactId && !!selectedContact.phone;
                   // Primário: abre a conversa de ORIGEM do negócio (o canal de
                   // onde o lead veio). Secundário: WhatsApp pelo telefone, só se a
                   // origem não é WhatsApp e o contato tem telefone preenchido.

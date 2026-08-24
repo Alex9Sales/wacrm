@@ -73,6 +73,7 @@ export function CadenceButton({
     name: null,
   })
   const [options, setOptions] = useState<{ id: string; name: string }[]>([])
+  const [loadError, setLoadError] = useState(false)
   const [busy, setBusy] = useState(false)
 
   const busKey = dealId ?? conversationId ?? ''
@@ -89,19 +90,34 @@ export function CadenceButton({
 
   const refresh = useCallback(async () => {
     setLoading(true)
-    const [st, opts] = await Promise.all([
-      dealId
-        ? getDealCadenceState(dealId)
-        : getContactCadenceState({ conversationId }),
-      listCadenceOptions(),
-    ])
-    setState(st)
-    setOptions(opts)
-    setBadge({
-      active: st?.status === 'active',
-      name: st?.status === 'active' ? st.cadence_name : null,
-    })
-    setLoading(false)
+    setLoadError(false)
+    try {
+      const [st, opts] = await Promise.all([
+        dealId
+          ? getDealCadenceState(dealId)
+          : getContactCadenceState({ conversationId }),
+        listCadenceOptions(),
+      ])
+      // null = a busca FALHOU (não é "sem cadências") — mostra o aviso de
+      // recarregar em vez do enganoso "Nenhuma cadência criada".
+      if (opts === null) {
+        setLoadError(true)
+        setOptions([])
+      } else {
+        setOptions(opts)
+      }
+      setState(st)
+      setBadge({
+        active: st?.status === 'active',
+        name: st?.status === 'active' ? st.cadence_name : null,
+      })
+    } catch {
+      // Server Action falhou no transporte (clássico: bundle velho após
+      // deploy). O aviso manda recarregar — nunca finge lista vazia.
+      setLoadError(true)
+    } finally {
+      setLoading(false)
+    }
   }, [conversationId, dealId])
 
   function onOpenChange(v: boolean) {
@@ -230,7 +246,12 @@ export function CadenceButton({
                 Última: {state.cadence_name} ({EVENT_LABEL[state.status] ?? state.status})
               </p>
             )}
-            {options.length === 0 ? (
+            {loadError ? (
+              <p className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">
+                ⚠️ Não consegui carregar as cadências — recarregue a página
+                (Ctrl+Shift+R) e tente de novo.
+              </p>
+            ) : options.length === 0 ? (
               <p className="mt-2 text-xs text-muted-foreground">
                 Nenhuma cadência criada. Crie em Automações → Cadências.
               </p>

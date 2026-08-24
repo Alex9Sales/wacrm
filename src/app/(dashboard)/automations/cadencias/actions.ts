@@ -248,8 +248,13 @@ export async function deleteCadence(id: string): Promise<{ error: string | null 
   }
 }
 
-/** Opções pra os seletores de "colocar em cadência" (só ativas + com degrau). */
-export async function listCadenceOptions(): Promise<{ id: string; name: string }[]> {
+/** Opções pra os seletores de "colocar em cadência" (só ativas + com degrau).
+ *  Retorna NULL em erro — o cliente diferencia "vazio de verdade" de "falhou"
+ *  (senão um erro vira o enganoso "Nenhuma cadência criada", como no chamado
+ *  do Rafael 24/08 com bundle velho). */
+export async function listCadenceOptions(): Promise<
+  { id: string; name: string }[] | null
+> {
   try {
     const ctx = await getCurrentAccount()
     const rows = await db
@@ -262,8 +267,9 @@ export async function listCadenceOptions(): Promise<{ id: string; name: string }
       .where(and(eq(cadences.accountId, ctx.accountId), eq(cadences.active, true)))
       .orderBy(asc(cadences.name))
     return rows.filter((r) => r.steps > 0).map((r) => ({ id: r.id, name: r.name }))
-  } catch {
-    return []
+  } catch (err) {
+    console.error('[listCadenceOptions]', err)
+    return null
   }
 }
 
