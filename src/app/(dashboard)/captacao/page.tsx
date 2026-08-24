@@ -19,6 +19,7 @@ import {
   Brain,
   ArrowUp,
   ArrowDown,
+  BarChart3,
 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -43,6 +44,8 @@ import {
   updateScheduler,
   deleteScheduler,
   generateCaptureQuiz,
+  getCaptureXray,
+  type CaptureXray,
   type CaptureFormRow,
   type CaptureFormDetail,
   type CaptureWaInfo,
@@ -131,6 +134,25 @@ async function dominantColorFromImage(url: string): Promise<string | null> {
 
 type Pipeline = { id: string; name: string; stages: { id: string; name: string }[] };
 
+const XRAY_KIND: Record<
+  "form" | "landing" | "quiz" | "whatsapp" | "agenda",
+  { emoji: string; label: string }
+> = {
+  form: { emoji: "📝", label: "Formulário" },
+  landing: { emoji: "🖼️", label: "Landing" },
+  quiz: { emoji: "🧠", label: "Quiz" },
+  whatsapp: { emoji: "📱", label: "Link Zap" },
+  agenda: { emoji: "📅", label: "Agenda" },
+};
+
+function fmtBRL(v: number): string {
+  return new Intl.NumberFormat("pt-BR", {
+    style: "currency",
+    currency: "BRL",
+    maximumFractionDigits: v % 1 === 0 ? 0 : 2,
+  }).format(v);
+}
+
 export default function CaptacaoPage() {
   const [forms, setForms] = useState<CaptureFormRow[]>([]);
   const [pipelines, setPipelines] = useState<Pipeline[]>([]);
@@ -145,6 +167,18 @@ export default function CaptacaoPage() {
   const [editingSched, setEditingSched] = useState<SchedulerDetail | "new" | null>(
     null,
   );
+  // 📊 Raio-X de campanha
+  const [showXray, setShowXray] = useState(false);
+  const [xrayDays, setXrayDays] = useState(30);
+  const [xray, setXray] = useState<CaptureXray | null>(null);
+  const [xrayLoading, setXrayLoading] = useState(false);
+
+  const loadXray = useCallback(async (d: number) => {
+    setXrayLoading(true);
+    const res = await getCaptureXray(d).catch(() => null);
+    setXray(res);
+    setXrayLoading(false);
+  }, []);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -264,6 +298,16 @@ export default function CaptacaoPage() {
           </p>
         </div>
         <div className="flex items-center gap-2">
+          <Button
+            variant={showXray ? "default" : "outline"}
+            onClick={() => {
+              const next = !showXray;
+              setShowXray(next);
+              if (next && !xray) void loadXray(xrayDays);
+            }}
+          >
+            <BarChart3 className="mr-1.5 h-4 w-4" /> Raio-X
+          </Button>
           <Button variant="outline" onClick={() => setEditing({ new: "form" })}>
             <Plus className="mr-1.5 h-4 w-4" /> Novo formulário
           </Button>
@@ -275,6 +319,172 @@ export default function CaptacaoPage() {
           </Button>
         </div>
       </div>
+
+      {/* 📊 Raio-X de campanha: cohort dos leads captados no período */}
+      {showXray ? (
+        <div className="space-y-4 rounded-xl border border-border bg-card p-4">
+          <div className="flex flex-wrap items-center gap-2">
+            <div className="text-sm font-semibold text-foreground">
+              📊 Raio-X de campanha
+            </div>
+            <span className="text-xs text-muted-foreground">
+              leads captados no período — e no que deu
+            </span>
+            <div className="ml-auto flex gap-1">
+              {(
+                [
+                  [7, "7 dias"],
+                  [30, "30 dias"],
+                  [90, "90 dias"],
+                  [0, "Tudo"],
+                ] as const
+              ).map(([d, label]) => (
+                <button
+                  key={d}
+                  type="button"
+                  onClick={() => {
+                    setXrayDays(d);
+                    void loadXray(d);
+                  }}
+                  className={`rounded-lg border px-2.5 py-1 text-xs transition ${
+                    xrayDays === d
+                      ? "border-primary bg-primary/10 text-foreground"
+                      : "border-border text-muted-foreground hover:border-primary/40"
+                  }`}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+          </div>
+
+          {xrayLoading ? (
+            <div className="flex justify-center py-8 text-muted-foreground">
+              <Loader2 className="h-5 w-5 animate-spin" />
+            </div>
+          ) : !xray || xray.totals.leads === 0 ? (
+            <p className="py-4 text-center text-sm text-muted-foreground">
+              Nenhum lead de captação no período — compartilhe seus links e o
+              raio-x acende. 📡
+            </p>
+          ) : (
+            <>
+              <div className="grid grid-cols-2 gap-2 sm:grid-cols-5">
+                {(
+                  [
+                    ["Leads captados", String(xray.totals.leads), ""],
+                    ["Em negociação", String(xray.totals.open), ""],
+                    [
+                      "🏆 Ganhos",
+                      String(xray.totals.won),
+                      fmtBRL(xray.totals.wonValue),
+                    ],
+                    ["Perdidos", String(xray.totals.lost), ""],
+                    [
+                      "Conversão",
+                      xray.totals.leads
+                        ? `${Math.round((xray.totals.won / xray.totals.leads) * 100)}%`
+                        : "0%",
+                      "",
+                    ],
+                  ] as const
+                ).map(([label, value, extra]) => (
+                  <div
+                    key={label}
+                    className="rounded-lg border border-border bg-muted/30 p-3"
+                  >
+                    <div className="text-lg font-bold text-foreground">
+                      {value}
+                    </div>
+                    <div className="text-xs text-muted-foreground">{label}</div>
+                    {extra ? (
+                      <div className="mt-0.5 text-xs font-medium text-emerald-600 dark:text-emerald-400">
+                        {extra}
+                      </div>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full min-w-[560px] text-sm">
+                  <thead>
+                    <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                      <th className="py-2 pr-3 font-medium">Origem</th>
+                      <th className="px-2 py-2 text-right font-medium">Leads</th>
+                      <th className="px-2 py-2 text-right font-medium">
+                        Em aberto
+                      </th>
+                      <th className="px-2 py-2 text-right font-medium">Ganhos</th>
+                      <th className="px-2 py-2 text-right font-medium">
+                        Perdidos
+                      </th>
+                      <th className="px-2 py-2 text-right font-medium">
+                        Conversão
+                      </th>
+                      <th className="py-2 pl-2 text-right font-medium">
+                        Valor ganho
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {xray.rows.map((r) => {
+                      const meta = XRAY_KIND[r.kind];
+                      return (
+                        <tr
+                          key={r.source}
+                          className="border-b border-border/60 last:border-0"
+                        >
+                          <td className="py-2 pr-3">
+                            <div className="flex items-center gap-1.5">
+                              <span>{meta.emoji}</span>
+                              <span className="font-medium text-foreground">
+                                {r.label}
+                              </span>
+                              <span className="rounded-full bg-muted px-1.5 py-0.5 text-[10px] text-muted-foreground">
+                                {meta.label}
+                              </span>
+                            </div>
+                            {r.quiz ? (
+                              <div className="mt-0.5 text-[11px] text-muted-foreground">
+                                🔥 {r.quiz.quente} quente
+                                {r.quiz.quente === 1 ? "" : "s"} · 🌤️{" "}
+                                {r.quiz.morno} morno
+                                {r.quiz.morno === 1 ? "" : "s"} · ❄️{" "}
+                                {r.quiz.frio} frio{r.quiz.frio === 1 ? "" : "s"}
+                              </div>
+                            ) : null}
+                          </td>
+                          <td className="px-2 py-2 text-right font-medium text-foreground">
+                            {r.leads}
+                          </td>
+                          <td className="px-2 py-2 text-right text-muted-foreground">
+                            {r.open}
+                          </td>
+                          <td className="px-2 py-2 text-right text-emerald-600 dark:text-emerald-400">
+                            {r.won}
+                          </td>
+                          <td className="px-2 py-2 text-right text-muted-foreground">
+                            {r.lost}
+                          </td>
+                          <td className="px-2 py-2 text-right text-foreground">
+                            {r.leads
+                              ? `${Math.round((r.won / r.leads) * 100)}%`
+                              : "—"}
+                          </td>
+                          <td className="py-2 pl-2 text-right font-medium text-foreground">
+                            {r.wonValue > 0 ? fmtBRL(r.wonValue) : "—"}
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </div>
+      ) : null}
 
       {loading ? (
         <div className="flex justify-center py-12 text-muted-foreground">

@@ -1,6 +1,6 @@
 'use server'
 
-import { and, asc, desc, eq, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gte, inArray, sql } from 'drizzle-orm'
 
 import {
   db,
@@ -13,6 +13,9 @@ import {
   schedulers,
   member,
   user,
+  deals,
+  contactTags,
+  tags,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
@@ -635,6 +638,144 @@ export async function getCaptureWaInfo(
     console.error('[getCaptureWaInfo]', err)
     return { data: null, error: 'Falha ao montar o link do WhatsApp.' }
   }
+}
+
+// ------------------------------------------------------------
+// 📊 Raio-X de campanha — pra cada ativo de captação (formulário, landing,
+// quiz, link zap rastreado, agenda), quantos leads ENTRARAM no período e no
+// que deu: abertos, ganhos (com valor), perdidos, conversão. Cohort pelos
+// deals criados no período (o que a captação gerou), casando pelo `source`
+// que cada caminho grava ("Formulário: X", "Quiz: X", "Link WhatsApp: X",
+// "Agendamento: X"). Quiz ganha o termômetro 🔥/🌤️/❄️ das etiquetas da IA.
+// ------------------------------------------------------------
+export interface XrayRow {
+  source: string
+  kind: 'form' | 'landing' | 'quiz' | 'whatsapp' | 'agenda'
+  label: string
+  leads: number
+  open: number
+  won: number
+  lost: number
+  wonValue: number
+  quiz: { quente: number; morno: number; frio: number } | null
+}
+
+export interface CaptureXray {
+  totals: { leads: number; open: number; won: number; lost: number; wonValue: number }
+  rows: XrayRow[]
+}
+
+export async function getCaptureXray(days: number): Promise<CaptureXray> {
+  const ctx = await getCurrentAccount()
+  const since =
+    days > 0 ? new Date(Date.now() - days * 86_400_000).toISOString() : null
+
+  const sourceFilter = sql`${deals.source} ~ '^(Formulário|Quiz|Link WhatsApp|Agendamento): '`
+  const conds = [eq(deals.accountId, ctx.accountId), sourceFilter]
+  if (since) conds.push(gte(deals.createdAt, since))
+
+  const [byStatus, quizTags, forms] = await Promise.all([
+    db
+      .select({
+        source: deals.source,
+        status: deals.status,
+        n: sql<number>`count(*)::int`,
+        value: sql<string>`coalesce(sum(${deals.value}), 0)::text`,
+      })
+      .from(deals)
+      .where(and(...conds))
+      .groupBy(deals.source, deals.status),
+    // Termômetro do quiz: etiqueta atual da IA nos contatos desses leads.
+    db
+      .select({
+        source: deals.source,
+        tag: tags.name,
+        n: sql<number>`count(DISTINCT ${deals.contactId})::int`,
+      })
+      .from(deals)
+      .innerJoin(contactTags, eq(contactTags.contactId, deals.contactId))
+      .innerJoin(tags, eq(tags.id, contactTags.tagId))
+      .where(
+        and(
+          ...conds,
+          sql`${deals.source} LIKE 'Quiz: %'`,
+          inArray(tags.name, ['Quiz: quente', 'Quiz: morno', 'Quiz: frio']),
+        ),
+      )
+      .groupBy(deals.source, tags.name),
+    // Nome → modo, pra distinguir landing de formulário simples no selo.
+    db
+      .select({ name: captureForms.name, content: captureForms.content })
+      .from(captureForms)
+      .where(eq(captureForms.accountId, ctx.accountId)),
+  ])
+
+  const modeByName = new Map<string, 'form' | 'landing' | 'quiz'>()
+  for (const f of forms)
+    modeByName.set(f.name, normalizeCaptureContent(f.content).mode)
+
+  const rowsBySource = new Map<string, XrayRow>()
+  for (const r of byStatus) {
+    const source = r.source ?? ''
+    let row = rowsBySource.get(source)
+    if (!row) {
+      let kind: XrayRow['kind'] = 'form'
+      let label = source
+      if (source.startsWith('Quiz: ')) {
+        kind = 'quiz'
+        label = source.slice(6)
+      } else if (source.startsWith('Link WhatsApp: ')) {
+        kind = 'whatsapp'
+        label = source.slice(15)
+      } else if (source.startsWith('Agendamento: ')) {
+        kind = 'agenda'
+        label = source.slice(13)
+      } else if (source.startsWith('Formulário: ')) {
+        label = source.slice(12)
+        kind = modeByName.get(label) === 'landing' ? 'landing' : 'form'
+      }
+      row = {
+        source,
+        kind,
+        label,
+        leads: 0,
+        open: 0,
+        won: 0,
+        lost: 0,
+        wonValue: 0,
+        quiz: null,
+      }
+      rowsBySource.set(source, row)
+    }
+    row.leads += r.n
+    if (r.status === 'won') {
+      row.won += r.n
+      row.wonValue += Number(r.value) || 0
+    } else if (r.status === 'lost') row.lost += r.n
+    else row.open += r.n
+  }
+
+  for (const q of quizTags) {
+    const row = rowsBySource.get(q.source ?? '')
+    if (!row) continue
+    if (!row.quiz) row.quiz = { quente: 0, morno: 0, frio: 0 }
+    if (q.tag === 'Quiz: quente') row.quiz.quente = q.n
+    else if (q.tag === 'Quiz: morno') row.quiz.morno = q.n
+    else if (q.tag === 'Quiz: frio') row.quiz.frio = q.n
+  }
+
+  const rows = [...rowsBySource.values()].sort((a, b) => b.leads - a.leads)
+  const totals = rows.reduce(
+    (acc, r) => ({
+      leads: acc.leads + r.leads,
+      open: acc.open + r.open,
+      won: acc.won + r.won,
+      lost: acc.lost + r.lost,
+      wonValue: acc.wonValue + r.wonValue,
+    }),
+    { leads: 0, open: 0, won: 0, lost: 0, wonValue: 0 },
+  )
+  return { totals, rows }
 }
 
 /** Cadências ativas (com degrau) — seletor do "Obrigado que Vende". */
