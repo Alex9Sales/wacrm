@@ -8,6 +8,7 @@ import {
   meshGradientBackground,
 } from "@/lib/capture/hero-art";
 import { CaptureFormClient } from "./capture-form-client";
+import { CaptureChatClient } from "./chat-client";
 
 export function CaptureLanding({
   slug,
@@ -276,21 +277,32 @@ export function CaptureLanding({
         </section>
       ) : null}
 
-      {/* Formulário */}
+      {/* Formulário — ou o chat, quando a landing conversa. */}
       <section id="capture-form" className="mx-auto max-w-md px-5 py-14">
-        <CaptureFormClient
-          slug={slug}
-          headline={content.ctaText || "Preencha e comece"}
-          description={null}
-          fields={fields}
-          submitLabel={submitLabel}
-          successMessage={successMessage}
-          accent={accent}
-          embedded
-          successOffer={successOffer}
-          successWaHref={successWaHref}
-          successSchedulerUrl={schedulerUrl}
-        />
+        {content.chat.enabled ? (
+          <CaptureChatClient
+            slug={slug}
+            greeting={
+              content.chat.greeting ||
+              "Oi! 👋 Pode perguntar o que quiser — e se preferir, já deixo seu contato com a equipe."
+            }
+            accent={accent}
+          />
+        ) : (
+          <CaptureFormClient
+            slug={slug}
+            headline={content.ctaText || "Preencha e comece"}
+            description={null}
+            fields={fields}
+            submitLabel={submitLabel}
+            successMessage={successMessage}
+            accent={accent}
+            embedded
+            successOffer={successOffer}
+            successWaHref={successWaHref}
+            successSchedulerUrl={schedulerUrl}
+          />
+        )}
       </section>
 
       <p className="pb-8 text-center text-[11px] text-slate-400">

@@ -92,6 +92,8 @@ function templateText(att: IgAttachment): string | null {
   if (title) parts.push(title)
   if (subtitle) parts.push(subtitle)
   if (labels.length) parts.push(labels.map((t) => `🔘 ${t}`).join('  '))
+  // Compartilhamento de post/reel (type 'share'): só vem a URL — mostra ela.
+  if (!parts.length && p.url) parts.push(`🔗 ${p.url}`)
   const out = parts.join('\n')
   return out || null
 }
@@ -103,6 +105,10 @@ interface IgMessaging {
     mid?: string
     text?: string
     is_echo?: boolean
+    // Conteúdo que a API do IG NÃO entrega (ex.: DM com botões/carrossel de
+    // OUTRA empresa, tipo ManyChat): chega só com mid + esta flag, sem texto.
+    is_unsupported?: boolean
+    is_deleted?: boolean
     attachments?: IgAttachment[]
     // Quando a pessoa TOCA num botão de resposta rápida (quick reply): o texto do
     // botão vem em `text` e o id (reply_id do fluxo) em `quick_reply.payload`.
@@ -414,6 +420,20 @@ export const instagramProvider: WhatsAppProvider = {
         // dispatchInboundMessage), então descartamos este echo oco (por id, ou
         // por ser oco, não duplica).
         if (isEcho && !m.text && !mediaUrl && !attachmentText) continue
+
+        // Inbound sem NADA renderável (sem texto, sem mídia, sem template):
+        // era isso que virava a bolha "[text]" no inbox. Caso clássico: DM com
+        // botões/carrossel mandado por OUTRA empresa (automação tipo ManyChat)
+        // — a API marca `is_unsupported` e não entrega o conteúdo. Rotula de
+        // forma honesta e loga o evento cru pra diagnosticarmos formatos novos.
+        if (!isEcho && !m.text && !mediaUrl && !attachmentText) {
+          attachmentText = m.is_unsupported
+            ? '📩 Mensagem com conteúdo que o Instagram não entrega pra apps (botões/carrossel). Abra o Instagram pra ver.'
+            : '📩 Mensagem do Instagram num formato que ainda não reconhecemos.'
+          if (!m.is_unsupported) {
+            console.warn('[instagram] inbound sem conteúdo renderável:', JSON.stringify(ev))
+          }
+        }
 
         const norm: NormalizedInbound = {
           externalMessageId: m.mid,

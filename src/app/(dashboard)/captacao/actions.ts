@@ -650,7 +650,7 @@ export async function getCaptureWaInfo(
 // ------------------------------------------------------------
 export interface XrayRow {
   source: string
-  kind: 'form' | 'landing' | 'quiz' | 'whatsapp' | 'agenda'
+  kind: 'form' | 'landing' | 'quiz' | 'whatsapp' | 'agenda' | 'chat'
   label: string
   leads: number
   open: number
@@ -670,7 +670,7 @@ export async function getCaptureXray(days: number): Promise<CaptureXray> {
   const since =
     days > 0 ? new Date(Date.now() - days * 86_400_000).toISOString() : null
 
-  const sourceFilter = sql`${deals.source} ~ '^(Formulário|Quiz|Link WhatsApp|Agendamento): '`
+  const sourceFilter = sql`${deals.source} ~ '^(Formulário|Quiz|Link WhatsApp|Agendamento|Chat): '`
   const conds = [eq(deals.accountId, ctx.accountId), sourceFilter]
   if (since) conds.push(gte(deals.createdAt, since))
 
@@ -730,6 +730,9 @@ export async function getCaptureXray(days: number): Promise<CaptureXray> {
       } else if (source.startsWith('Agendamento: ')) {
         kind = 'agenda'
         label = source.slice(13)
+      } else if (source.startsWith('Chat: ')) {
+        kind = 'chat'
+        label = source.slice(6)
       } else if (source.startsWith('Formulário: ')) {
         label = source.slice(12)
         kind = modeByName.get(label) === 'landing' ? 'landing' : 'form'

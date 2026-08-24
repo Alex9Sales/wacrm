@@ -85,6 +85,8 @@ export interface CaptureContent {
   heroStyle: 'gradient' | 'mesh' | 'waves' | 'blobs' | 'grid' | 'lowpoly'
   /** Configuração do quiz (só usada quando mode = 'quiz'). */
   quiz: CaptureQuiz
+  /** 💬 Landing que Conversa: chat com a IA no lugar do formulário. */
+  chat: { enabled: boolean; greeting: string | null }
 }
 
 export const DEFAULT_CAPTURE_CONTENT: CaptureContent = {
@@ -100,6 +102,7 @@ export const DEFAULT_CAPTURE_CONTENT: CaptureContent = {
   schedulerSlug: null,
   heroStyle: 'gradient',
   quiz: DEFAULT_CAPTURE_QUIZ,
+  chat: { enabled: false, greeting: null },
 }
 
 const HEX_RE = /^#[0-9a-fA-F]{6}$/
@@ -171,6 +174,11 @@ export function normalizeCaptureContent(input: unknown): CaptureContent {
       aiResult: quizIn.aiResult !== false,
       resultPrompt: str(quizIn.resultPrompt, 600) || null,
       resultFallback: str(quizIn.resultFallback, 600) || null,
+    },
+    chat: {
+      enabled: !!(o.chat as { enabled?: unknown } | undefined)?.enabled,
+      greeting:
+        str((o.chat as { greeting?: unknown } | undefined)?.greeting, 300) || null,
     },
   }
 }

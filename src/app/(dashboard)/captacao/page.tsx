@@ -135,7 +135,7 @@ async function dominantColorFromImage(url: string): Promise<string | null> {
 type Pipeline = { id: string; name: string; stages: { id: string; name: string }[] };
 
 const XRAY_KIND: Record<
-  "form" | "landing" | "quiz" | "whatsapp" | "agenda",
+  "form" | "landing" | "quiz" | "whatsapp" | "agenda" | "chat",
   { emoji: string; label: string }
 > = {
   form: { emoji: "📝", label: "Formulário" },
@@ -143,6 +143,7 @@ const XRAY_KIND: Record<
   quiz: { emoji: "🧠", label: "Quiz" },
   whatsapp: { emoji: "📱", label: "Link Zap" },
   agenda: { emoji: "📅", label: "Agenda" },
+  chat: { emoji: "💬", label: "Chat" },
 };
 
 function fmtBRL(v: number): string {
@@ -1107,6 +1108,13 @@ function CaptureEditor({
     "gradient" | "mesh" | "waves" | "blobs" | "grid" | "lowpoly"
   >(initContent.heroStyle ?? "gradient");
   const [brandBusy, setBrandBusy] = useState(false);
+  // 💬 Landing que Conversa: chat com a IA no lugar do formulário.
+  const [chatEnabled, setChatEnabled] = useState(
+    initContent.chat?.enabled ?? false,
+  );
+  const [chatGreeting, setChatGreeting] = useState(
+    initContent.chat?.greeting ?? "",
+  );
   // Quiz com IA: perguntas + diagnóstico.
   const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>(() =>
     initContent.quiz?.questions?.length
@@ -1379,6 +1387,10 @@ function CaptureEditor({
         showWhatsapp,
         schedulerSlug: schedulerSlug || null,
         heroStyle,
+        chat: {
+          enabled: chatEnabled,
+          greeting: chatGreeting.trim() || null,
+        },
         quiz: {
           questions: cleanQuestions,
           aiResult: quizAiResult,
@@ -1662,6 +1674,39 @@ function CaptureEditor({
                   sem cara de template.
                 </p>
               </div>
+            </div>
+
+            {/* 💬 Landing que Conversa */}
+            <div className="space-y-3 rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
+              <label className="flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  checked={chatEnabled}
+                  onChange={(e) => setChatEnabled(e.target.checked)}
+                  className="mt-0.5 size-4 accent-primary"
+                />
+                <span>
+                  <span className="text-sm font-semibold text-foreground">
+                    💬 Landing que Conversa
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    No lugar do formulário, um chat com a sua IA: o visitante
+                    tira dúvidas sobre o negócio e a IA captura nome + WhatsApp
+                    na conversa — o lead cai no funil com a transcrição no
+                    card. Usa a IA da conta (precisa de agente com chave).
+                  </span>
+                </span>
+              </label>
+              {chatEnabled ? (
+                <div className="grid gap-1.5">
+                  <Label>Primeira mensagem do chat</Label>
+                  <Input
+                    value={chatGreeting}
+                    onChange={(e) => setChatGreeting(e.target.value)}
+                    placeholder="Oi! 👋 Pode perguntar o que quiser..."
+                  />
+                </div>
+              ) : null}
             </div>
 
             {/* Mini-site: WhatsApp + agendamento na página */}
