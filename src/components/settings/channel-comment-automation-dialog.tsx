@@ -48,7 +48,8 @@ const EMPTY = {
   enabled: true,
   matchAny: false,
   keywords: '',
-  publicReply: '',
+  // até 3 variantes de resposta pública — alternadas a cada envio.
+  publicReplies: [''] as string[],
   dmMessage: '',
   oncePerUser: true,
   // lista de media_id dos posts; vazio = qualquer post.
@@ -155,7 +156,11 @@ export function ChannelCommentAutomationDialog({
       enabled: r.enabled,
       matchAny: r.match_any,
       keywords: r.keywords,
-      publicReply: r.public_reply ?? '',
+      publicReplies: r.public_replies?.length
+        ? r.public_replies
+        : r.public_reply
+          ? [r.public_reply]
+          : [''],
       dmMessage: r.dm_message,
       oncePerUser: r.once_per_user,
       mediaIds: ruleMediaIds(r),
@@ -197,7 +202,7 @@ export function ChannelCommentAutomationDialog({
         enabled: form.enabled,
         matchAny: form.matchAny,
         keywords: form.keywords,
-        publicReply: form.publicReply || null,
+        publicReplies: form.publicReplies,
         dmMessage,
         oncePerUser: form.oncePerUser,
         mediaIds: form.mediaIds,
@@ -322,13 +327,65 @@ export function ChannelCommentAutomationDialog({
             )}
 
             <Field label="Resposta pública no comentário (opcional)">
-              <textarea
-                value={form.publicReply}
-                onChange={(e) => setForm({ ...form, publicReply: e.target.value })}
-                placeholder="Te chamei na DM! 📩"
-                rows={2}
-                className={inputCls}
-              />
+              <div className="space-y-2">
+                {form.publicReplies.map((reply, i) => (
+                  <div key={i} className="flex items-start gap-2">
+                    <textarea
+                      value={reply}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          publicReplies: form.publicReplies.map((r, idx) =>
+                            idx === i ? e.target.value : r,
+                          ),
+                        })
+                      }
+                      placeholder={
+                        ['Te chamei na DM! 📩', 'Olha a DM! ✨', 'Acabei de te mandar no direct 🚀'][i] ??
+                        'Mais uma variação...'
+                      }
+                      rows={2}
+                      className={inputCls}
+                    />
+                    {form.publicReplies.length > 1 ? (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setForm({
+                            ...form,
+                            publicReplies: form.publicReplies.filter(
+                              (_, idx) => idx !== i,
+                            ),
+                          })
+                        }
+                        className="mt-2 text-muted-foreground transition hover:text-red-500"
+                        title="Remover variação"
+                      >
+                        ✕
+                      </button>
+                    ) : null}
+                  </div>
+                ))}
+                {form.publicReplies.length < 3 ? (
+                  <button
+                    type="button"
+                    onClick={() =>
+                      setForm({
+                        ...form,
+                        publicReplies: [...form.publicReplies, ''],
+                      })
+                    }
+                    className="text-xs font-medium text-primary hover:underline"
+                  >
+                    + Adicionar variação ({form.publicReplies.length}/3)
+                  </button>
+                ) : null}
+                <p className="text-[11px] text-muted-foreground">
+                  Com 2-3 variações, a gente alterna entre elas a cada
+                  comentário — parece humano e evita o padrão de spam que o
+                  Instagram detecta.
+                </p>
+              </div>
             </Field>
 
             <Field label="Mensagem do DM">

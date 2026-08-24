@@ -13,7 +13,7 @@
 // webhook de novo).
 // ============================================================
 
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 
 import { db, instagramCommentAutomations, instagramCommentEvents } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -208,9 +208,32 @@ export async function processCommentWebhook(
     let dmSent = false
     let errMsg: string | null = null
 
-    if (rule.publicReply && rule.publicReply.trim()) {
+    // Resposta pública: até 3 variantes ALTERNADAS a cada envio (round-robin
+    // atômico no banco — comentários simultâneos não repetem a mesma). Regras
+    // antigas seguem no campo legado `publicReply` (1 variante).
+    const replyVariants = (
+      Array.isArray(rule.publicReplies) && rule.publicReplies.length
+        ? rule.publicReplies
+        : rule.publicReply
+          ? [rule.publicReply]
+          : []
+    )
+      .map((s) => (s ?? '').trim())
+      .filter(Boolean)
+    if (replyVariants.length) {
       try {
-        await replyToComment(channel, c.commentId, rule.publicReply.trim())
+        let replyText = replyVariants[0]
+        if (replyVariants.length > 1) {
+          const rot = firstOrNull(
+            await db
+              .update(instagramCommentAutomations)
+              .set({ replyRotation: sql`reply_rotation + 1` })
+              .where(eq(instagramCommentAutomations.id, rule.id))
+              .returning({ n: instagramCommentAutomations.replyRotation }),
+          )
+          replyText = replyVariants[((rot?.n ?? 1) - 1) % replyVariants.length]
+        }
+        await replyToComment(channel, c.commentId, replyText)
         publicReplied = true
       } catch (e) {
         errMsg = `public: ${(e as Error).message}`

@@ -22,6 +22,8 @@ export interface CommentAutomation {
   match_any: boolean
   keywords: string
   public_reply: string | null
+  /** Variantes da resposta pública (até 3, alternadas). null = usa public_reply. */
+  public_replies: string[] | null
   dm_message: string
   once_per_user: boolean
   media_id: string | null
@@ -40,7 +42,8 @@ export interface CommentAutomationInput {
   enabled: boolean
   matchAny: boolean
   keywords: string
-  publicReply: string | null
+  /** Até 3 variantes de resposta pública — alternamos entre elas a cada envio. */
+  publicReplies: string[]
   dmMessage: string
   oncePerUser: boolean
   /** Posts (media_id do IG) que a regra cobre. Vazio = qualquer post. */
@@ -77,6 +80,7 @@ const cols = {
   match_any: instagramCommentAutomations.matchAny,
   keywords: instagramCommentAutomations.keywords,
   public_reply: instagramCommentAutomations.publicReply,
+  public_replies: instagramCommentAutomations.publicReplies,
   dm_message: instagramCommentAutomations.dmMessage,
   once_per_user: instagramCommentAutomations.oncePerUser,
   media_id: instagramCommentAutomations.mediaId,
@@ -139,6 +143,19 @@ function fallbackName(input: CommentAutomationInput): string {
 }
 
 /** Cria uma regra. */
+/** Variantes da resposta pública: até 3, sem vazias; a 1ª também vai no campo
+ *  legado `public_reply` (compat de leitura em código antigo). */
+function publicReplyCols(input: CommentAutomationInput) {
+  const replies = (input.publicReplies ?? [])
+    .map((s) => (s ?? '').trim())
+    .filter(Boolean)
+    .slice(0, 3)
+  return {
+    publicReply: replies[0] ?? null,
+    publicReplies: replies.length ? replies : null,
+  }
+}
+
 export async function createCommentAutomation(
   input: CommentAutomationInput,
 ): Promise<CommentAutomation> {
@@ -155,7 +172,7 @@ export async function createCommentAutomation(
         enabled: input.enabled,
         matchAny: input.matchAny,
         keywords: input.keywords.trim(),
-        publicReply: input.publicReply?.trim() || null,
+        ...publicReplyCols(input),
         dmMessage: input.dmMessage.trim(),
         oncePerUser: input.oncePerUser,
         mediaIds: input.mediaIds.length ? input.mediaIds : null,
@@ -184,7 +201,7 @@ export async function updateCommentAutomation(
       enabled: input.enabled,
       matchAny: input.matchAny,
       keywords: input.keywords.trim(),
-      publicReply: input.publicReply?.trim() || null,
+      ...publicReplyCols(input),
       dmMessage: input.dmMessage.trim(),
       oncePerUser: input.oncePerUser,
       mediaIds: input.mediaIds.length ? input.mediaIds : null,

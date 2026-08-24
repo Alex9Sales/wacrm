@@ -2598,8 +2598,13 @@ export const instagramCommentAutomations = pgTable("instagram_comment_automation
 	matchAny: boolean("match_any").default(false).notNull(),
 	// keywords separadas por vírgula (casa se o comentário CONTÉM qualquer uma).
 	keywords: text().default('').notNull(),
-	// resposta pública no próprio comentário (opcional).
+	// resposta pública no próprio comentário (opcional). LEGADO: 1 variante;
+	// a fonte da verdade agora é `publicReplies` (rotação).
 	publicReply: text("public_reply"),
+	// até 3 variantes de resposta pública, alternadas a cada envio (round-robin
+	// via replyRotation) — parece humano e evita padrão de spam.
+	publicReplies: jsonb("public_replies").$type<string[]>(),
+	replyRotation: integer("reply_rotation").default(0).notNull(),
 	// DM/resposta privada mandada a quem comentou.
 	dmMessage: text("dm_message").notNull(),
 	// não mandar o mesmo DM 2x pra mesma pessoa nessa regra.
