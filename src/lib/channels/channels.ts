@@ -244,6 +244,12 @@ export async function createChannel(
   accountId: string,
   input: CreateChannelInput,
 ): Promise<ChannelCtx> {
+  // 💳 Limite do plano (Start = 1 canal). Funil ÚNICO de criação — cobre
+  // WAHA, Meta, IG/Messenger OAuth, e-mail e API v1. Lança PlanLimitError
+  // com mensagem amigável (segura pra UI).
+  const { assertPlanLimit } = await import('@/lib/billing/limits');
+  await assertPlanLimit(accountId, 'channels');
+
   const webhookSecret = input.webhookSecret ?? crypto.randomBytes(24).toString('hex');
   const row = firstOrNull(
     await db

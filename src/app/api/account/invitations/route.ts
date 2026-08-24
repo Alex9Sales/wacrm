@@ -45,7 +45,21 @@ export async function GET() {
 
 export async function POST(request: Request) {
   try {
-    await requireRole("admin");
+    const ctx = await requireRole("admin");
+
+    // 💳 Limite do plano (Start = 1 atendente): barra o convite ANTES de
+    // criar, com mensagem amigável.
+    const { assertPlanLimit, PlanLimitError } = await import(
+      "@/lib/billing/limits"
+    );
+    try {
+      await assertPlanLimit(ctx.accountId, "members");
+    } catch (err) {
+      if (err instanceof PlanLimitError) {
+        return NextResponse.json({ error: err.message }, { status: 403 });
+      }
+      throw err;
+    }
 
     let body: unknown;
     try {

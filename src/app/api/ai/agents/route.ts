@@ -81,6 +81,21 @@ export async function POST(request: Request) {
       )
     }
 
+    // 💳 Limite do plano (Start = 1 agente de IA).
+    {
+      const { assertPlanLimit, PlanLimitError } = await import(
+        '@/lib/billing/limits'
+      )
+      try {
+        await assertPlanLimit(accountId, 'aiAgents')
+      } catch (err) {
+        if (err instanceof PlanLimitError) {
+          return NextResponse.json({ error: err.message }, { status: 403 })
+        }
+        throw err
+      }
+    }
+
     const inserted = firstOrNull(
       await db
         .insert(aiConfigs)

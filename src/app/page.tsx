@@ -70,6 +70,20 @@ const FEATURES = [
 
 const PLANS = [
   {
+    name: 'Start',
+    price: '139,90',
+    tagline: 'Pra quem está começando — cresce com você',
+    highlighted: false,
+    lead: null as string | null,
+    features: [
+      '1 atendente e 1 canal de WhatsApp',
+      'IA respondendo seus clientes',
+      'Funil de vendas (CRM) completo',
+      'Captação: landing, quiz e link rastreado',
+      'Disparos e cadências',
+    ],
+  },
+  {
     name: 'Essencial',
     price: '497',
     tagline: 'O atendimento e o funil organizados',
@@ -283,7 +297,7 @@ export default async function RootPage() {
           Comece com <strong className="text-foreground">7 dias grátis</strong>, sem
           cartão. Escolha o plano quando decidir continuar.
         </p>
-        <div className="grid grid-cols-1 gap-5 md:grid-cols-3">
+        <div className="grid grid-cols-1 gap-5 md:grid-cols-2 xl:grid-cols-4">
           {PLANS.map((p) => (
             <div
               key={p.name}
