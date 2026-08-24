@@ -72,7 +72,8 @@ function isProtectedPath(pathname: string): boolean {
 // domínio no banco (capture_domains.verified) e serve a página da conta.
 // APIs públicas que as páginas usam (/api/public, /api/files) passam direto.
 // ------------------------------------------------------------
-const PRIMARY_HOST_SUFFIX = '.salestecnologia.com.br'
+// Hosts do PRÓPRIO app (lista explícita — outros subdomínios da empresa,
+// como paginas.salestecnologia.com.br, podem ser domínio custom de conta).
 const PRIMARY_HOSTS = new Set([
   'crm.salestecnologia.com.br',
   'salestecnologia.com.br',
@@ -82,9 +83,7 @@ const PRIMARY_HOSTS = new Set([
 
 function isPrimaryHost(hostRaw: string): boolean {
   const host = hostRaw.split(':')[0].toLowerCase()
-  return (
-    !host || PRIMARY_HOSTS.has(host) || host.endsWith(PRIMARY_HOST_SUFFIX)
-  )
+  return !host || PRIMARY_HOSTS.has(host)
 }
 
 function customDomainRewrite(

@@ -32,6 +32,7 @@ import {
   type CaptureContent,
 } from '@/lib/capture/shared'
 import { randomWaRef } from '@/lib/capture/wa-ref'
+import { addDomainToCoolify } from '@/lib/capture/coolify'
 import { loadDefaultChannel } from '@/lib/channels/channels'
 
 const APP_URL = (
@@ -861,7 +862,7 @@ async function dohAnswers(name: string, type: 'CNAME' | 'A'): Promise<string[]> 
 
 export async function verifyCaptureDomain(
   id: string,
-): Promise<{ verified: boolean; error: string | null }> {
+): Promise<{ verified: boolean; error: string | null; sslQueued?: boolean }> {
   try {
     const ctx = await getCurrentAccount()
     const row = firstOrNull(
@@ -890,7 +891,11 @@ export async function verifyCaptureDomain(
       .update(captureDomains)
       .set({ verified: true, verifiedAt: new Date().toISOString() })
       .where(eq(captureDomains.id, row.id))
-    return { verified: true, error: null }
+    // Ativação automática no proxy (Coolify → Traefik → certificado LE).
+    // Best-effort: falhou, o domínio segue verificado e a ativação sai manual.
+    const ssl = await addDomainToCoolify(row.domain)
+    if (!ssl.ok) console.warn('[verifyCaptureDomain] coolify:', ssl.detail)
+    return { verified: true, error: null, sslQueued: ssl.ok }
   } catch (err) {
     console.error('[verifyCaptureDomain]', err)
     return { verified: false, error: 'Falha ao verificar. Tente de novo.' }

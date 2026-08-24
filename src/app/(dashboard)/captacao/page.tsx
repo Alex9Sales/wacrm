@@ -722,7 +722,11 @@ function DomainsSection() {
     const res = await verifyCaptureDomain(id);
     setBusy(null);
     if (res.verified) {
-      toast.success("Domínio verificado! 🎉 Nosso time ativa o certificado SSL em seguida.");
+      toast.success(
+        res.sslQueued
+          ? "Domínio verificado! 🎉 Certificado SSL em emissão automática — ativa em alguns minutos."
+          : "Domínio verificado! 🎉 O certificado SSL será ativado em seguida.",
+      );
     } else {
       toast.error(res.error ?? "Ainda não verificado.");
     }
@@ -776,10 +780,9 @@ function DomainsSection() {
           <strong className="text-foreground">CNAME</strong> do domínio acima
           apontando para{" "}
           <strong className="text-foreground">crm.salestecnologia.com.br</strong>{" "}
-          e clique em Verificar. Depois de verificado, nosso time ativa o
-          certificado SSL (você recebe o aviso). A página inicial do domínio
-          abre sua landing mais recente; cada página fica em
-          seu-dominio/&lt;link-da-pagina&gt;.
+          e clique em Verificar — o certificado SSL é emitido automaticamente
+          em alguns minutos. A página inicial do domínio abre sua landing mais
+          recente; cada página fica em seu-dominio/&lt;link-da-pagina&gt;.
         </p>
         {domains.length > 0 ? (
           <div className="space-y-2">

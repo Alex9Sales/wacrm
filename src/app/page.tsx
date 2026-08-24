@@ -120,6 +120,22 @@ export default async function RootPage() {
 
   return (
     <div className="min-h-screen bg-background text-foreground">
+      {/* 📈 Pixel da Meta (conta de anúncios da Fluxia) — PageView do site de
+          vendas. A conversão de Lead dispara nas páginas de captação. */}
+      <script
+        dangerouslySetInnerHTML={{
+          __html:
+            "!function(f,b,e,v,n,t,s){if(f.fbq)return;n=f.fbq=function(){n.callMethod?n.callMethod.apply(n,arguments):n.queue.push(arguments)};if(!f._fbq)f._fbq=n;n.push=n;n.loaded=!0;n.version='2.0';n.queue=[];t=b.createElement(e);t.async=!0;t.src=v;s=b.getElementsByTagName(e)[0];s.parentNode.insertBefore(t,s)}(window, document,'script','https://connect.facebook.net/en_US/fbevents.js');fbq('init', '942248305058779');fbq('track', 'PageView');",
+        }}
+      />
+      {/* 🧩 Widget da própria Captação: o balão 💬 abre a /f/fluxia (o chat
+          com a nossa IA) — o site de vendas usando o produto que vende. */}
+      <script
+        src="/widget.js"
+        data-fluxia="fluxia"
+        data-color="#7c3aed"
+        async
+      />
       {/* Cabeçalho */}
       <header className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
         <div className="flex items-center gap-2">
