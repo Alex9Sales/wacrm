@@ -25,7 +25,6 @@ import { canEditSettings } from '@/lib/auth/roles';
 import { AiPlayground } from '@/components/agents/ai-playground';
 import { AiConfig } from '@/components/settings/ai-config';
 import { KnowledgeTab } from '@/components/agents/knowledge-tab';
-import { VoiceAgentsTab } from '@/components/agents/voice-agents-tab';
 import { AgentsPanel } from '@/components/agents/agents-panel';
 import { UsageDashboard } from '@/components/agents/usage-dashboard';
 import { DealProactiveCard } from '@/components/agents/deal-proactive-card';
@@ -96,6 +95,9 @@ export default function AgentsPage() {
               onClick={() => setView({ kind: 'voice' })}
             >
               <Phone className="mr-1.5 h-4 w-4" /> Voz
+              <span className="ml-1.5 rounded-full bg-violet-500/15 px-1.5 py-0.5 text-[10px] font-medium text-violet-500">
+                em breve
+              </span>
             </Button>
           </div>
         )}
@@ -151,7 +153,21 @@ export default function AgentsPage() {
 
         {view.kind === 'knowledge' && <KnowledgeTab />}
 
-        {view.kind === 'voice' && <VoiceAgentsTab />}
+        {/* 🎙️ Agente de voz: em finalização — teaser no lugar da config até
+            liberarmos (a API também bloqueia o PUT, então nada liga por fora). */}
+        {view.kind === 'voice' && (
+          <div className="mx-auto mt-8 max-w-lg rounded-xl border border-dashed p-8 text-center">
+            <Phone className="mx-auto h-10 w-10 text-violet-500" />
+            <h2 className="mt-4 text-lg font-semibold">
+              Agente de voz — em breve
+            </h2>
+            <p className="mt-2 text-sm text-muted-foreground">
+              A IA que atende e faz ligações por você está em fase final de
+              testes. Chega primeiro no plano Enterprise — avisaremos quando
+              estiver liberada.
+            </p>
+          </div>
+        )}
       </div>
     </div>
   );

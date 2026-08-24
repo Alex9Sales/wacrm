@@ -238,7 +238,10 @@ export async function GET(request: Request) {
             credentials,
             providerMeta,
           })
-        } catch {
+        } catch (err) {
+          // 💳 limite de canal do plano: não adianta tentar de novo.
+          const { PlanLimitError } = await import('@/lib/billing/limits')
+          if (err instanceof PlanLimitError) throw err
           // conflito de nome (UNIQUE account_id+name) → desambigua com o page_id.
           await createChannel(accountId, {
             provider: 'messenger',
@@ -257,6 +260,8 @@ export async function GET(request: Request) {
     console.log('[messenger oauth] conectadas', connected, 'Página(s)')
     return back(String(connected))
   } catch (error) {
+    const { PlanLimitError } = await import('@/lib/billing/limits')
+    if (error instanceof PlanLimitError) return back('limite_plano')
     console.error('[messenger oauth] callback error:', error)
     return back('erro')
   }

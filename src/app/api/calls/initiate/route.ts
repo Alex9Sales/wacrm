@@ -22,6 +22,10 @@ export async function POST(request: Request) {
   try {
     const ctx = await getCurrentAccount()
 
+    // 💳 Ligações são recurso do Enterprise (toErrorResponse → 403 amigável).
+    const { assertPlanCalling } = await import('@/lib/billing/limits')
+    await assertPlanCalling(ctx.accountId)
+
     // Master switch: block outbound when the admin disabled CRM calling.
     const settings = await getAccountSettings(ctx.accountId)
     if (!settings.crmCallingEnabled) {

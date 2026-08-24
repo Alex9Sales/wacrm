@@ -57,8 +57,19 @@ export async function GET() {
   }
 }
 
+// 🎙️ Agente de voz em fase final de testes: PUT bloqueado pra todo mundo até
+// liberarmos (a UI mostra o teaser "em breve"; o 403 garante que nada liga por
+// fora). Vire pra true no lançamento.
+const VOICE_AGENTS_RELEASED = false
+
 export async function PUT(request: Request) {
   try {
+    if (!VOICE_AGENTS_RELEASED) {
+      return NextResponse.json(
+        { error: 'O agente de voz está em fase final de testes — em breve no plano Enterprise.' },
+        { status: 403 },
+      )
+    }
     const ctx = await requireRole('admin')
     const body = (await request.json().catch(() => ({}))) as {
       channelId?: unknown

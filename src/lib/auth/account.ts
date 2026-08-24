@@ -26,6 +26,7 @@ import { firstOrNull } from "@/db/helpers";
 import { auth } from "@/lib/auth";
 import { getSessionUserId } from "./session";
 import { hasMinRole, isAccountRole, type AccountRole } from "./roles";
+import { PlanLimitError, PlanFeatureError } from "@/lib/billing/limits";
 
 // ------------------------------------------------------------
 // Errors
@@ -113,7 +114,10 @@ export function toErrorResponse(err: unknown): NextResponse {
     err instanceof AccountSuspendedError ||
     err instanceof TrialExpiredError ||
     err instanceof AccountCanceledError ||
-    err instanceof AccountDeletedError
+    err instanceof AccountDeletedError ||
+    // 💳 Limite/recurso de plano: mensagem amigável com CTA de upgrade.
+    err instanceof PlanLimitError ||
+    err instanceof PlanFeatureError
   ) {
     return NextResponse.json({ error: err.message }, { status: err.status });
   }

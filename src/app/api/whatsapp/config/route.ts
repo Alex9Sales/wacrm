@@ -340,6 +340,10 @@ export async function POST(request: Request) {
         })
       }
     } catch (writeError) {
+      const { PlanLimitError } = await import('@/lib/billing/limits')
+      if (writeError instanceof PlanLimitError) {
+        return NextResponse.json({ error: writeError.message }, { status: 403 })
+      }
       console.error('Error saving Meta channel:', writeError)
       return NextResponse.json(
         { error: 'Failed to save configuration' },

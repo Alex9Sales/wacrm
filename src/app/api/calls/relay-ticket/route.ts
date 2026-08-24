@@ -33,6 +33,11 @@ const TICKET_TTL_MS = 60_000
 export async function POST(request: Request) {
   try {
     const ctx = await getCurrentAccount()
+
+    // 💳 Ligações são recurso do Enterprise (toErrorResponse → 403 amigável).
+    const { assertPlanCalling } = await import('@/lib/billing/limits')
+    await assertPlanCalling(ctx.accountId)
+
     const body = (await request.json().catch(() => ({}))) as {
       callId?: unknown
       mode?: unknown

@@ -218,6 +218,10 @@ export async function POST(request: Request) {
     try {
       channel = await createChannel(ctx.accountId, input);
     } catch (err) {
+      const { PlanLimitError } = await import('@/lib/billing/limits');
+      if (err instanceof PlanLimitError) {
+        return fail('plan_limit', err.message, 403);
+      }
       const e = err as { code?: string };
       if (e?.code === '23505') {
         return fail('conflict', 'Já existe um canal com esse nome ou endereço.', 409);

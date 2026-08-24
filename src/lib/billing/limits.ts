@@ -30,9 +30,17 @@ const UNLIMITED: PlanLimits = {
   calling: true,
 }
 
-/** Limites por plano. Start = porta de entrada enxuta; o resto ilimitado. */
+/**
+ * Limites por plano (24/08 — números da vitrine, calibrados por pesquisa de
+ * mercado). Chave SEMPRE minúscula: o banco carrega variantes históricas
+ * ("Pro", "PRO", "pro"), então o lookup normaliza com toLowerCase().
+ * Conta sem plano (ex.: a org da casa) segue ilimitada.
+ */
 export const PLAN_LIMITS: Record<string, PlanLimits> = {
   start: { members: 1, channels: 1, aiAgents: 1, calling: false },
+  essencial: { members: 6, channels: 3, aiAgents: 3, calling: false },
+  pro: { members: 15, channels: 6, aiAgents: null, calling: false },
+  enterprise: { members: null, channels: null, aiAgents: null, calling: true },
 }
 
 export type LimitResource = 'members' | 'channels' | 'aiAgents'
@@ -60,6 +68,15 @@ export class PlanLimitError extends Error {
   }
 }
 
+/** Recurso do plano indisponível (não é contagem — ex.: ligações). Message segura pra UI. */
+export class PlanFeatureError extends Error {
+  readonly status = 403
+  constructor(message: string) {
+    super(message)
+    this.name = 'PlanFeatureError'
+  }
+}
+
 /** Limites do plano da conta (billing vivo; sem plano/desconhecido = ilimitado). */
 export async function getAccountPlanLimits(
   accountId: string,
@@ -76,9 +93,9 @@ export async function getAccountPlanLimits(
       )
       .limit(1),
   )
-  const plan = row?.plan ?? null
+  const plan = row?.plan?.trim().toLowerCase() ?? null
   const limits = (plan && PLAN_LIMITS[plan]) || UNLIMITED
-  const planName = plan && isPlanKey(plan) ? PLANS[plan].name : plan ?? '—'
+  const planName = plan && isPlanKey(plan) ? PLANS[plan].name : row?.plan ?? '—'
   return { limits, planName }
 }
 
@@ -128,4 +145,24 @@ export async function assertPlanLimit(
   if (limit === null) return
   const current = await currentCount(accountId, resource)
   if (current >= limit) throw new PlanLimitError(resource, limit, planName)
+}
+
+/**
+ * Ligações pelo WhatsApp (webphone) são recurso do Enterprise. Mesmo
+ * fail-open de infra do assertPlanLimit.
+ */
+export async function assertPlanCalling(accountId: string): Promise<void> {
+  let limits: PlanLimits
+  let planName: string
+  try {
+    ;({ limits, planName } = await getAccountPlanLimits(accountId))
+  } catch {
+    return
+  }
+  if (!limits.calling) {
+    throw new PlanFeatureError(
+      `Ligações pelo WhatsApp fazem parte do plano Enterprise (seu plano: ${planName}). ` +
+        `Faça upgrade em Configurações → Assinatura para ativar.`,
+    )
+  }
 }

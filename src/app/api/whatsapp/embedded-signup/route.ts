@@ -196,6 +196,10 @@ export async function POST(request: Request) {
       })
     }
   } catch (writeError) {
+    const { PlanLimitError } = await import('@/lib/billing/limits')
+    if (writeError instanceof PlanLimitError) {
+      return NextResponse.json({ error: writeError.message }, { status: 403 })
+    }
     console.error('[embedded-signup] save failed:', writeError)
     return NextResponse.json(
       { error: 'Falha ao salvar o canal' },

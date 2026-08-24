@@ -46,8 +46,17 @@ export async function GET() {
   }
 }
 
+// 🎙️ Em fase final de testes — espelho do bloqueio em /api/voice-agents.
+const VOICE_AGENTS_RELEASED = false
+
 export async function PUT(request: Request) {
   try {
+    if (!VOICE_AGENTS_RELEASED) {
+      return NextResponse.json(
+        { error: 'O agente de voz está em fase final de testes — em breve no plano Enterprise.' },
+        { status: 403 },
+      )
+    }
     const ctx = await requireRole('admin')
     const body = (await request.json().catch(() => ({}))) as {
       elevenlabsApiKey?: unknown

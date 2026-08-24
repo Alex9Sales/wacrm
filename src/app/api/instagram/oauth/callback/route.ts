@@ -181,6 +181,8 @@ export async function GET(request: Request) {
     await subscribeInstagram(igId, token)
     return back('ok')
   } catch (error) {
+    const { PlanLimitError } = await import('@/lib/billing/limits')
+    if (error instanceof PlanLimitError) return back('limite_plano')
     console.error('[instagram oauth] callback error:', error)
     return back('erro')
   }

@@ -182,6 +182,32 @@ export function ChannelsTab() {
     void load();
   }, [load]);
 
+  // Resultado dos retornos OAuth (IG/Messenger) — o callback redireciona pra
+  // cá com ?ig= / ?messenger=. O caso que importa avisar é o limite do plano
+  // (senão o canal simplesmente "não aparece" e vira chamado de suporte).
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const status = params.get('ig') ?? params.get('messenger');
+    if (!status) return;
+    if (status === 'limite_plano') {
+      toast.error(
+        'Seu plano chegou ao limite de canais. Faça upgrade em Configurações → Assinatura para conectar mais.',
+        { duration: 10000 },
+      );
+    } else if (status === 'erro') {
+      toast.error('Não foi possível concluir a conexão. Tente de novo.');
+    }
+    // Limpa os params pra não re-tostar em cada remontagem.
+    params.delete('ig');
+    params.delete('messenger');
+    const rest = params.toString();
+    window.history.replaceState(
+      null,
+      '',
+      `${window.location.pathname}${rest ? `?${rest}` : ''}`,
+    );
+  }, []);
+
   // Delete a channel. `force` retries past the 409 the API raises when the
   // channel still owns conversations (cascade-deleting them). The delete is
   // independent of the channel's session state, so an errored/dropped
