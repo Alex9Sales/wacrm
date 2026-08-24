@@ -63,18 +63,23 @@ export function formatCurrency(
 ): string {
   const code = (currency || DEFAULT_CURRENCY).trim();
   const amount = Number(value) || 0;
+  // Centavos aparecem QUANDO existem (R$ 29,90 fica R$ 29,90 — nunca
+  // arredonda pra R$ 30, chamado do Rafael 24/08); valor redondo segue
+  // limpo sem ",00" (R$ 5.000).
+  const digits = Number.isInteger(amount) ? 0 : 2;
   try {
     return new Intl.NumberFormat(undefined, {
       style: "currency",
       currency: code,
-      minimumFractionDigits: 0,
-      maximumFractionDigits: 0,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
     }).format(amount);
   } catch {
     // Invalid ISO code — show the raw code + grouped number so the
     // value is still legible instead of throwing.
     return `${code} ${new Intl.NumberFormat(undefined, {
-      maximumFractionDigits: 0,
+      minimumFractionDigits: digits,
+      maximumFractionDigits: digits,
     }).format(amount)}`;
   }
 }
@@ -93,5 +98,6 @@ export function formatCurrencyShort(
   const v = Number(value || 0);
   if (v >= 1_000_000) return `${symbol}${(v / 1_000_000).toFixed(1)}M`;
   if (v >= 1_000) return `${symbol}${(v / 1_000).toFixed(1)}k`;
-  return `${symbol}${v.toFixed(0)}`;
+  // Abaixo de mil cabe o valor exato — centavos só quando existem.
+  return formatCurrency(v, code);
 }
