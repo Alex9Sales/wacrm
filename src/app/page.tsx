@@ -97,7 +97,7 @@ const PLANS = [
     highlighted: false,
     lead: null as string | null,
     features: [
-      'Até 5 atendentes e 2 canais',
+      'Até 6 atendentes, 3 canais e 3 agentes de IA',
       'Caixa de entrada compartilhada',
       'Funil de vendas (CRM), contatos e empresas',
       'Agenda com Google Calendar',
@@ -112,8 +112,8 @@ const PLANS = [
     highlighted: true,
     lead: 'Tudo do Essencial, e mais:',
     features: [
-      'Até 10 atendentes e 5 canais',
-      'Agentes de IA que atendem e qualificam sozinhos',
+      'Até 15 atendentes e 6 canais',
+      'Agentes de IA ilimitados: atendem e qualificam sozinhos',
       'Base de Conhecimento (a IA responde com os seus dados)',
       'Follow-up inteligente (reengaja quem some)',
       'IA para Negócios: sugestões no funil',
@@ -130,7 +130,7 @@ const PLANS = [
       'Ligação pelo WhatsApp',
       'Agente de voz: atende e liga por você (em breve)',
       'Prioridade no suporte e na implantação',
-      'Limites ampliados de atendentes, canais e agentes',
+      'Atendentes e canais ilimitados',
     ],
   },
 ]
