@@ -465,6 +465,15 @@ export async function handleFollowGateReply(
   if (!pendings.length) return
 
   const follows = await fetchFollowsBusiness(channel, igUserId)
+  // Etiqueta "Seguidor"/"Não seguidor" de carona na consulta (segmentação).
+  if (follows !== null) {
+    try {
+      const { tagFollowerStatus } = await import('./instagram-social')
+      await tagFollowerStatus(channel.accountId, contactId, follows)
+    } catch (err) {
+      console.error('[follow-gate] etiqueta de seguidor falhou:', err)
+    }
+  }
 
   if (follows === true) {
     for (const { pending, rule } of pendings) {

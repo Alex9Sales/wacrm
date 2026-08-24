@@ -73,6 +73,12 @@ export interface NormalizedInbound {
    */
   senderLid?: string;
   /**
+   * 📸 Instagram: a mensagem veio de STORY — 'reply' = respondeu um story
+   * nosso; 'mention' = nos mencionou no story dela. Dispara a automação de
+   * stories (instagram-social) no inbound.
+   */
+  storyContext?: 'reply' | 'mention';
+  /**
    * Id EXTERNO do remetente quando o canal não usa telefone (ex.: IGSID do
    * Instagram Direct). Quando setado, o pipeline resolve/cria o contato por
    * `contacts.external_id` em vez de telefone (`fromPhoneE164` fica vazio).

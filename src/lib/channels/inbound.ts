@@ -582,6 +582,21 @@ export async function dispatchInboundMessage(
     } catch (err) {
       console.error('[inbound] follow-gate falhou:', err);
     }
+    // 📸 Story reply/menção: auto-DM (se ligado no canal) + etiqueta de
+    // engajamento. Janela de 24h aberta — a pessoa acabou de nos escrever.
+    if (ev.storyContext) {
+      try {
+        const { handleStoryInbound } = await import('./instagram-social');
+        await handleStoryInbound(
+          channel,
+          ev.senderExternalId,
+          contactId,
+          ev.storyContext,
+        );
+      } catch (err) {
+        console.error('[inbound] story automation falhou:', err);
+      }
+    }
   }
 
   // Config da IA (carregado uma vez): decide se a IA é o respondente de

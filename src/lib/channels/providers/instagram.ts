@@ -109,6 +109,8 @@ interface IgMessaging {
     // OUTRA empresa, tipo ManyChat): chega só com mid + esta flag, sem texto.
     is_unsupported?: boolean
     is_deleted?: boolean
+    // 📸 Resposta a um STORY nosso: vem como DM normal + este contexto.
+    reply_to?: { story?: { id?: string; url?: string } }
     attachments?: IgAttachment[]
     // Quando a pessoa TOCA num botão de resposta rápida (quick reply): o texto do
     // botão vem em `text` e o id (reply_id do fluxo) em `quick_reply.payload`.
@@ -430,12 +432,23 @@ export const instagramProvider: WhatsAppProvider = {
         let contentType: NormalizedInbound['contentType'] = 'text'
         let mediaUrl: string | undefined
         let attachmentText: string | null = null
+        let storyContext: NormalizedInbound['storyContext']
         const att = m.attachments?.[0]
-        if (att) {
+        if (att?.type === 'story_mention') {
+          // 📸 Nos marcou no story dela.
+          storyContext = 'mention'
+          const u = att.payload?.url
+          attachmentText = `📌 Te mencionou no story${u ? `: ${u}` : ''}`
+        } else if (att) {
           contentType = mapAttachment(att.type)
           if (contentType !== 'text') mediaUrl = att.payload?.url
           // template/share/etc. → texto legível (ex.: echo do DM com botões).
           else attachmentText = templateText(att)
+        }
+        // 📸 Resposta a um story NOSSO: DM normal com reply_to.story.
+        if (!isEcho && m.reply_to?.story) {
+          storyContext = 'reply'
+          if (m.text) attachmentText = null
         }
 
         // Echo da NOSSA própria mensagem sem NADA renderável: o IG manda o echo
@@ -465,8 +478,12 @@ export const instagramProvider: WhatsAppProvider = {
           senderExternalId: partnerId,
           fromMe: isEcho,
           contentType,
-          contentText: m.text ?? attachmentText ?? null,
+          contentText:
+            storyContext === 'reply' && m.text
+              ? `↩️ Respondeu seu story: ${m.text}`
+              : (m.text ?? attachmentText ?? null),
         }
+        if (storyContext) norm.storyContext = storyContext
         // Toque num botão de resposta rápida → id da opção (reply_id do fluxo).
         // É o que faz o fluxo AVANÇAR e — de quebra — abre a janela de 24h do IG.
         if (!isEcho && m.quick_reply?.payload) {

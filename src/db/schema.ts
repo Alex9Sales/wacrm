@@ -600,6 +600,28 @@ export const instagramFollowGatePending = pgTable("instagram_follow_gate_pending
 	uniqueIndex("idx_ig_fgate_rule_user").using("btree", table.automationId.asc().nullsLast().op("uuid_ops"), table.igUserId.asc().nullsLast().op("text_ops")),
 ]);
 
+// 📸 Stories (social selling): auto-DM pra quem responde/menciona story.
+export const instagramStorySettings = pgTable("instagram_story_settings", {
+	channelId: uuid("channel_id").primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	replyEnabled: boolean("reply_enabled").default(false).notNull(),
+	replyMessage: text("reply_message"),
+	mentionEnabled: boolean("mention_enabled").default(false).notNull(),
+	mentionMessage: text("mention_message"),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+});
+
+// Anti-spam dos stories: 1 auto-DM por pessoa/tipo a cada 24h.
+export const instagramStoryLog = pgTable("instagram_story_log", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	channelId: uuid("channel_id").notNull(),
+	igUserId: text("ig_user_id").notNull(),
+	kind: text().notNull(),
+	lastSentAt: timestamp("last_sent_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("idx_ig_story_log_unique").using("btree", table.channelId.asc().nullsLast().op("uuid_ops"), table.igUserId.asc().nullsLast().op("text_ops"), table.kind.asc().nullsLast().op("text_ops")),
+]);
+
 export const contactNotes = pgTable("contact_notes", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	contactId: uuid("contact_id").notNull(),
@@ -2625,6 +2647,11 @@ export const instagramCommentAutomations = pgTable("instagram_comment_automation
 	// DM com o link; a mensagem pede o follow (null = texto padrão).
 	followGate: boolean("follow_gate").default(false).notNull(),
 	followGateMessage: text("follow_gate_message"),
+	// ⏰ Follow-up pós-DM: cutucada pra quem RESPONDEU a DM e sumiu (janela de
+	// 24h aberta — a API não deixa mensagear quem nunca respondeu).
+	followUpEnabled: boolean("follow_up_enabled").default(false).notNull(),
+	followUpHours: integer("follow_up_hours").default(4).notNull(),
+	followUpMessage: text("follow_up_message"),
 	// DM/resposta privada mandada a quem comentou.
 	dmMessage: text("dm_message").notNull(),
 	// não mandar o mesmo DM 2x pra mesma pessoa nessa regra.
@@ -2667,6 +2694,8 @@ export const instagramCommentEvents = pgTable("instagram_comment_events", {
 	publicReplied: boolean("public_replied").default(false).notNull(),
 	dmSent: boolean("dm_sent").default(false).notNull(),
 	error: text(),
+	// ⏰ follow-up pós-DM enviado (1x por evento).
+	followUpSentAt: timestamp("follow_up_sent_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	uniqueIndex("uniq_ig_comment_event").using("btree", table.channelId.asc().nullsLast().op("uuid_ops"), table.commentId.asc().nullsLast()),

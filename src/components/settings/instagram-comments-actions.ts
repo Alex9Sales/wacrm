@@ -8,7 +8,7 @@
 
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
 
-import { db, channels, instagramCommentAutomations, flows } from '@/db'
+import { db, channels, instagramCommentAutomations, instagramStorySettings, flows } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { loadChannelByAccount } from '@/lib/channels/channels'
@@ -36,6 +36,10 @@ export interface CommentAutomation {
   /** 🔒 Follow gate: exige seguir o perfil antes de receber o DM com o link. */
   follow_gate: boolean
   follow_gate_message: string | null
+  /** ⏰ Cutucada pós-DM pra quem respondeu e sumiu (janela de 24h). */
+  follow_up_enabled: boolean
+  follow_up_hours: number
+  follow_up_message: string | null
   created_at: string
 }
 
@@ -59,6 +63,10 @@ export interface CommentAutomationInput {
   followGate: boolean
   /** Mensagem que pede o follow (null = texto padrão). */
   followGateMessage: string | null
+  /** ⏰ Cutucada pós-DM pra quem respondeu e sumiu (janela de 24h). */
+  followUpEnabled: boolean
+  followUpHours: number
+  followUpMessage: string | null
 }
 
 /** Garante que o canal é da conta e é Instagram. Lança se não for. */
@@ -98,7 +106,68 @@ const cols = {
   start_flow_id: instagramCommentAutomations.startFlowId,
   follow_gate: instagramCommentAutomations.followGate,
   follow_gate_message: instagramCommentAutomations.followGateMessage,
+  follow_up_enabled: instagramCommentAutomations.followUpEnabled,
+  follow_up_hours: instagramCommentAutomations.followUpHours,
+  follow_up_message: instagramCommentAutomations.followUpMessage,
   created_at: instagramCommentAutomations.createdAt,
+}
+
+
+// ------------------------------------------------------------
+// 📸 Stories (social selling): auto-DM pra quem responde/menciona story.
+// Config por canal (1 linha), separada das regras de comentário.
+// ------------------------------------------------------------
+export interface StorySettings {
+  replyEnabled: boolean
+  replyMessage: string
+  mentionEnabled: boolean
+  mentionMessage: string
+}
+
+export async function getStorySettings(channelId: string): Promise<StorySettings> {
+  const ctx = await getCurrentAccount()
+  await assertIgChannel(ctx.accountId, channelId)
+  const row = firstOrNull(
+    await db
+      .select()
+      .from(instagramStorySettings)
+      .where(eq(instagramStorySettings.channelId, channelId))
+      .limit(1),
+  )
+  return {
+    replyEnabled: row?.replyEnabled ?? false,
+    replyMessage: row?.replyMessage ?? '',
+    mentionEnabled: row?.mentionEnabled ?? false,
+    mentionMessage: row?.mentionMessage ?? '',
+  }
+}
+
+export async function saveStorySettings(
+  channelId: string,
+  input: StorySettings,
+): Promise<void> {
+  const ctx = await requireRole('admin')
+  await assertIgChannel(ctx.accountId, channelId)
+  await db
+    .insert(instagramStorySettings)
+    .values({
+      channelId,
+      accountId: ctx.accountId,
+      replyEnabled: input.replyEnabled,
+      replyMessage: input.replyMessage.trim() || null,
+      mentionEnabled: input.mentionEnabled,
+      mentionMessage: input.mentionMessage.trim() || null,
+    })
+    .onConflictDoUpdate({
+      target: instagramStorySettings.channelId,
+      set: {
+        replyEnabled: input.replyEnabled,
+        replyMessage: input.replyMessage.trim() || null,
+        mentionEnabled: input.mentionEnabled,
+        mentionMessage: input.mentionMessage.trim() || null,
+        updatedAt: new Date().toISOString(),
+      },
+    })
 }
 
 /** Lista as regras de um canal Instagram (mais novas primeiro). */
@@ -190,6 +259,9 @@ export async function createCommentAutomation(
         startFlowId: input.startFlowId || null,
         followGate: input.followGate,
         followGateMessage: input.followGateMessage?.trim() || null,
+        followUpEnabled: input.followUpEnabled,
+        followUpHours: Math.min(20, Math.max(1, Math.round(input.followUpHours || 4))),
+        followUpMessage: input.followUpMessage?.trim() || null,
       })
       .returning(cols),
   )
@@ -221,6 +293,9 @@ export async function updateCommentAutomation(
       startFlowId: input.startFlowId || null,
       followGate: input.followGate,
       followGateMessage: input.followGateMessage?.trim() || null,
+      followUpEnabled: input.followUpEnabled,
+      followUpHours: Math.min(20, Math.max(1, Math.round(input.followUpHours || 4))),
+      followUpMessage: input.followUpMessage?.trim() || null,
       updatedAt: new Date().toISOString(),
     })
     .where(

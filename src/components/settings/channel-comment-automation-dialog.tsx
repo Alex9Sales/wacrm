@@ -38,9 +38,12 @@ import {
   deleteCommentAutomation,
   listInstagramPosts,
   listActiveFlows,
+  getStorySettings,
+  saveStorySettings,
   type CommentAutomation,
   type CommentPost,
   type FlowLite,
+  type StorySettings,
 } from './instagram-comments-actions';
 
 const EMPTY = {
@@ -61,6 +64,10 @@ const EMPTY = {
   // 🔒 follow gate: exige seguir o perfil antes de receber o link.
   followGate: false,
   followGateMessage: '',
+  // ⏰ cutucada pós-DM pra quem respondeu e sumiu.
+  followUpEnabled: false,
+  followUpHours: 4,
+  followUpMessage: '',
 };
 
 type FormState = typeof EMPTY;
@@ -175,6 +182,9 @@ export function ChannelCommentAutomationDialog({
       startFlowId: r.start_flow_id ?? '',
       followGate: r.follow_gate,
       followGateMessage: r.follow_gate_message ?? '',
+      followUpEnabled: r.follow_up_enabled,
+      followUpHours: r.follow_up_hours,
+      followUpMessage: r.follow_up_message ?? '',
     });
     setEditing(r.id);
     void loadPosts();
@@ -215,6 +225,9 @@ export function ChannelCommentAutomationDialog({
         startFlowId: form.startFlowId || null,
         followGate: form.followGate,
         followGateMessage: form.followGateMessage || null,
+        followUpEnabled: form.followUpEnabled,
+        followUpHours: form.followUpHours,
+        followUpMessage: form.followUpMessage || null,
       };
       if (editing === 'new') {
         await createCommentAutomation(input);
@@ -447,6 +460,64 @@ export function ChannelCommentAutomationDialog({
               ) : null}
             </div>
 
+            {/* ⏰ Follow-up pós-DM */}
+            <div className="rounded-lg border border-border p-3">
+              <label className="flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  checked={form.followUpEnabled}
+                  onChange={(e) =>
+                    setForm({ ...form, followUpEnabled: e.target.checked })
+                  }
+                  className="mt-0.5 size-4 accent-primary"
+                />
+                <span>
+                  <span className="text-sm font-semibold text-foreground">
+                    ⏰ Cutucada pra quem sumiu
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Quem respondeu a DM e parou de responder recebe UM lembrete
+                    depois de algumas horas (só dentro da janela de 24h e em
+                    horário comercial). Quem nunca respondeu não pode receber —
+                    regra do Instagram.
+                  </span>
+                </span>
+              </label>
+              {form.followUpEnabled ? (
+                <div className="mt-2.5 space-y-2">
+                  <div className="flex items-center gap-2 text-sm text-foreground">
+                    Esperar
+                    <select
+                      value={form.followUpHours}
+                      onChange={(e) =>
+                        setForm({
+                          ...form,
+                          followUpHours: Number(e.target.value),
+                        })
+                      }
+                      className="h-8 rounded-lg border border-border bg-muted px-2 text-sm text-foreground outline-none"
+                    >
+                      {[2, 4, 6, 8, 12, 18].map((h) => (
+                        <option key={h} value={h}>
+                          {h} horas
+                        </option>
+                      ))}
+                    </select>
+                    de silêncio
+                  </div>
+                  <textarea
+                    value={form.followUpMessage}
+                    onChange={(e) =>
+                      setForm({ ...form, followUpMessage: e.target.value })
+                    }
+                    placeholder="Oi! 👋 Ficou alguma dúvida sobre o que te mandei? Estou por aqui! 😊"
+                    rows={2}
+                    className={inputCls}
+                  />
+                </div>
+              ) : null}
+            </div>
+
             <div className="rounded-lg border border-border p-3">
               <p className="text-xs font-medium text-foreground">
                 Botões no DM{' '}
@@ -566,6 +637,7 @@ export function ChannelCommentAutomationDialog({
           </div>
         ) : (
           <div className="flex flex-col gap-2 py-1">
+            <StoryBox channelId={channel.id} />
             {loading ? (
               <div className="flex items-center justify-center py-8">
                 <Loader2 className="size-5 animate-spin text-primary" />
@@ -797,3 +869,118 @@ function Field({
     </div>
   );
 }
+
+// ------------------------------------------------------------
+// 📸 Stories: auto-DM pra quem responde/menciona story (config por canal).
+// ------------------------------------------------------------
+function StoryBox({ channelId }: { channelId: string }) {
+  const [st, setSt] = useState<StorySettings | null>(null);
+  const [busy, setBusy] = useState(false);
+  const [open, setOpen] = useState(false);
+
+  useEffect(() => {
+    getStorySettings(channelId)
+      .then(setSt)
+      .catch(() => setSt(null));
+  }, [channelId]);
+
+  if (!st) return null;
+  const areaCls =
+    'w-full rounded-lg border border-border bg-muted px-2.5 py-2 text-sm text-foreground outline-none focus:border-primary';
+  const active = st.replyEnabled || st.mentionEnabled;
+
+  return (
+    <div className="rounded-lg border border-violet-500/30 bg-violet-500/5 p-3">
+      <button
+        type="button"
+        onClick={() => setOpen((o) => !o)}
+        className="flex w-full items-center gap-2 text-left"
+      >
+        <span className="text-sm font-semibold text-foreground">
+          📸 Stories — resposta automática
+        </span>
+        <span
+          className={cn(
+            'rounded-full px-1.5 py-0.5 text-[10px]',
+            active
+              ? 'bg-emerald-500/15 text-emerald-600 dark:text-emerald-400'
+              : 'bg-muted text-muted-foreground',
+          )}
+        >
+          {active ? 'Ativo' : 'Desligado'}
+        </span>
+        <span className="ml-auto text-xs text-muted-foreground">
+          {open ? 'fechar' : 'configurar'}
+        </span>
+      </button>
+      {open ? (
+        <div className="mt-3 space-y-3">
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={st.replyEnabled}
+              onChange={(e) => setSt({ ...st, replyEnabled: e.target.checked })}
+              className="size-4 accent-primary"
+            />
+            Responder quem RESPONDE nosso story
+          </label>
+          {st.replyEnabled ? (
+            <textarea
+              value={st.replyMessage}
+              onChange={(e) => setSt({ ...st, replyMessage: e.target.value })}
+              placeholder="Obrigado por responder nosso story! 😊 Se quiser saber mais é só me chamar por aqui."
+              rows={2}
+              className={areaCls}
+            />
+          ) : null}
+          <label className="flex items-center gap-2 text-sm text-foreground">
+            <input
+              type="checkbox"
+              checked={st.mentionEnabled}
+              onChange={(e) =>
+                setSt({ ...st, mentionEnabled: e.target.checked })
+              }
+              className="size-4 accent-primary"
+            />
+            Agradecer quem nos MENCIONA no story
+          </label>
+          {st.mentionEnabled ? (
+            <textarea
+              value={st.mentionMessage}
+              onChange={(e) => setSt({ ...st, mentionMessage: e.target.value })}
+              placeholder="Vi que você nos marcou no story — obrigado demais! 🙌 Qualquer coisa que precisar, é só chamar."
+              rows={2}
+              className={areaCls}
+            />
+          ) : null}
+          <p className="text-[11px] text-muted-foreground">
+            Máximo de 1 resposta automática por pessoa a cada 24h (sem spam). O
+            contato ganha a etiqueta &quot;Respondeu story&quot; /
+            &quot;Mencionou no story&quot; — ótima pra segmentar disparos. Se a
+            IA do canal estiver atendendo, ela também responde: use um ou outro.
+          </p>
+          <Button
+            size="sm"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                await saveStorySettings(channelId, st);
+                toast.success('Stories salvos.');
+                setOpen(false);
+              } catch {
+                toast.error('Falha ao salvar.');
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            {busy ? <Loader2 className="mr-1.5 size-3.5 animate-spin" /> : null}
+            Salvar stories
+          </Button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+

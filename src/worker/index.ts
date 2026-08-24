@@ -94,3 +94,11 @@ import('./owner-digest-worker')
   .catch((err) => {
     console.error('[worker] owner-digest failed to start:', err);
   });
+
+// ⏰ IG follow-up — tick de 10 min: cutucada pós-DM da automação de
+// comentários pra quem respondeu e sumiu (opt-in por regra, OFF por padrão).
+import('./ig-followup-worker')
+  .then((m) => m.startIgFollowUpWorker())
+  .catch((err) => {
+    console.error('[worker] ig-followup failed to start:', err);
+  });
