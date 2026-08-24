@@ -6,21 +6,47 @@ import { useEffect, useRef, useState } from "react";
  * 💬 Landing que Conversa — o chat embutido na landing (no lugar do
  * formulário). Stateless: manda o histórico a cada turno pro endpoint
  * público; quando a IA captura o lead, mostra o selo verde + botão de
- * continuar no WhatsApp. Tema claro, cor da marca.
+ * continuar no WhatsApp. Visual "produto de IA": header em degradê da cor da
+ * marca com avatar, sugestões de pergunta no primeiro turno, balões
+ * refinados. Tema claro, cor da marca.
  */
 interface ChatMsg {
   role: "user" | "assistant";
   content: string;
 }
 
+/** Escurece um hex (pro degradê do header ancorado na cor da marca). */
+function darken(hex: string, amt = 0.24): string {
+  const m = /^#?([0-9a-f]{6})$/i.exec(hex.trim());
+  if (!m) return hex;
+  const n = parseInt(m[1], 16);
+  const f = (c: number) => Math.max(0, Math.round(c * (1 - amt)));
+  const r = f((n >> 16) & 255);
+  const g = f((n >> 8) & 255);
+  const b = f(n & 255);
+  return `#${((r << 16) | (g << 8) | b).toString(16).padStart(6, "0")}`;
+}
+
+const DEFAULT_SUGGESTIONS = [
+  "Como funciona?",
+  "Quanto custa?",
+  "Quero ver na prática",
+];
+
 export function CaptureChatClient({
   slug,
   greeting,
   accent,
+  logo,
+  suggestions,
 }: {
   slug: string;
   greeting: string;
   accent: string;
+  /** Logo da marca — vira o avatar do header. */
+  logo?: string | null;
+  /** Perguntas prontas mostradas no primeiro turno (chips clicáveis). */
+  suggestions?: string[];
 }) {
   const [messages, setMessages] = useState<ChatMsg[]>([
     { role: "assistant", content: greeting },
@@ -35,6 +61,8 @@ export function CaptureChatClient({
 
   const userTurns = messages.filter((m) => m.role === "user").length;
   const capped = userTurns >= 20;
+  const chips = suggestions?.length ? suggestions : DEFAULT_SUGGESTIONS;
+  const showChips = messages.length === 1 && !sending && !capped;
 
   useEffect(() => {
     scrollRef.current?.scrollTo({
@@ -43,9 +71,8 @@ export function CaptureChatClient({
     });
   }, [messages, sending]);
 
-  async function send(e: React.FormEvent) {
-    e.preventDefault();
-    const text = input.trim();
+  async function sendText(raw: string) {
+    const text = raw.trim();
     if (!text || sending || capped) return;
     setError("");
     setInput("");
@@ -84,36 +111,57 @@ export function CaptureChatClient({
     }
   }
 
+  function send(e: React.FormEvent) {
+    e.preventDefault();
+    void sendText(input);
+  }
+
   return (
-    <div className="w-full overflow-hidden rounded-2xl border border-slate-200 bg-white shadow-lg">
+    <div className="w-full overflow-hidden rounded-3xl bg-white shadow-2xl ring-1 ring-slate-900/10">
       <div
-        className="flex items-center gap-2 px-4 py-3 text-sm font-semibold text-white"
-        style={{ background: accent }}
+        className="flex items-center gap-2.5 px-4 py-3"
+        style={{
+          background: `linear-gradient(135deg, ${accent} 0%, ${darken(accent)} 100%)`,
+        }}
       >
-        💬 Converse com a gente
-        <span className="ml-auto flex items-center gap-1 text-[11px] font-normal opacity-90">
-          <span className="inline-block h-2 w-2 rounded-full bg-emerald-300" />
+        <span className="flex h-8 w-8 shrink-0 items-center justify-center overflow-hidden rounded-full bg-white/95 text-base shadow-sm">
+          {logo ? (
+            // eslint-disable-next-line @next/next/no-img-element
+            <img src={logo} alt="" className="h-full w-full object-cover" />
+          ) : (
+            "🤖"
+          )}
+        </span>
+        <span className="text-sm font-semibold text-white">
+          Converse com a gente
+        </span>
+        <span className="ml-auto flex items-center gap-1.5 rounded-full bg-white/15 px-2 py-0.5 text-[11px] font-medium text-white">
+          <span className="relative flex h-2 w-2">
+            <span className="absolute inline-flex h-full w-full animate-ping rounded-full bg-emerald-300 opacity-75" />
+            <span className="relative inline-flex h-2 w-2 rounded-full bg-emerald-300" />
+          </span>
           online agora
         </span>
       </div>
 
-      <div ref={scrollRef} className="h-72 space-y-2.5 overflow-y-auto p-4">
+      <div ref={scrollRef} className="h-80 space-y-2.5 overflow-y-auto bg-slate-50/60 p-4">
         {messages.map((m, i) => (
           <div
             key={i}
             className={m.role === "user" ? "flex justify-end" : "flex justify-start"}
           >
             <div
-              className="max-w-[85%] whitespace-pre-wrap rounded-2xl px-3.5 py-2 text-sm leading-relaxed"
+              className={`max-w-[85%] whitespace-pre-wrap rounded-2xl px-3.5 py-2 text-sm leading-relaxed ${
+                m.role === "user" ? "" : "border border-slate-200 bg-white shadow-sm"
+              }`}
               style={
                 m.role === "user"
                   ? {
-                      background: accent,
+                      background: `linear-gradient(135deg, ${accent} 0%, ${darken(accent, 0.16)} 100%)`,
                       color: "#ffffff",
                       borderBottomRightRadius: 6,
                     }
                   : {
-                      background: "#f1f5f9",
                       color: "#1e293b",
                       borderBottomLeftRadius: 6,
                     }
@@ -125,7 +173,7 @@ export function CaptureChatClient({
         ))}
         {sending ? (
           <div className="flex justify-start">
-            <div className="rounded-2xl bg-slate-100 px-3.5 py-2.5">
+            <div className="rounded-2xl border border-slate-200 bg-white px-3.5 py-2.5 shadow-sm">
               <span className="inline-flex gap-1">
                 {[0, 1, 2].map((d) => (
                   <span
@@ -136,6 +184,21 @@ export function CaptureChatClient({
                 ))}
               </span>
             </div>
+          </div>
+        ) : null}
+        {showChips ? (
+          <div className="flex flex-wrap gap-1.5 pt-1">
+            {chips.map((c) => (
+              <button
+                key={c}
+                type="button"
+                onClick={() => void sendText(c)}
+                className="rounded-full border bg-white px-3 py-1.5 text-xs font-medium transition hover:shadow-sm"
+                style={{ borderColor: `${accent}55`, color: accent }}
+              >
+                {c}
+              </button>
+            ))}
           </div>
         ) : null}
         {leadDone ? (
@@ -159,7 +222,7 @@ export function CaptureChatClient({
 
       <form
         onSubmit={send}
-        className="flex items-center gap-2 border-t border-slate-200 p-3"
+        className="flex items-center gap-2 border-t border-slate-200 bg-white p-3"
       >
         {/* Honeypot: invisível pra humanos, tentador pra bots. */}
         <input
@@ -195,7 +258,7 @@ export function CaptureChatClient({
         </button>
       </form>
       {error ? (
-        <p className="px-4 pb-3 text-xs text-rose-600">{error}</p>
+        <p className="bg-white px-4 pb-3 text-xs text-rose-600">{error}</p>
       ) : null}
     </div>
   );

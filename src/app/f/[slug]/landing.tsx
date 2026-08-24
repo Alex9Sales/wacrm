@@ -173,13 +173,16 @@ export function CaptureLanding({
               </p>
             ) : null}
             <div className="mt-6 flex flex-wrap items-center gap-2.5">
-              <a
-                href="#capture-form"
-                className="inline-flex items-center rounded-xl px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
-                style={{ background: accent }}
-              >
-                {content.ctaText || submitLabel}
-              </a>
+              {/* Com o chat no hero, a conversa É o CTA — o botão principal sai. */}
+              {!content.chat.enabled ? (
+                <a
+                  href="#capture-form"
+                  className="inline-flex items-center rounded-xl px-5 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
+                  style={{ background: accent }}
+                >
+                  {content.ctaText || submitLabel}
+                </a>
+              ) : null}
               {landingWaHref ? (
                 <a
                   href={landingWaHref}
@@ -201,7 +204,28 @@ export function CaptureLanding({
               ) : null}
             </div>
           </div>
-          {content.heroImage ? (
+          {content.chat.enabled ? (
+            // 💬 Landing que Conversa: o chat É o hero — com o brilho da marca
+            // atrás pra "flutuar" sobre o fundo generativo.
+            <div id="capture-form" className="relative">
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute -inset-6 rounded-[2.5rem] opacity-25 blur-2xl"
+                style={{ background: accent }}
+              />
+              <div className="relative">
+                <CaptureChatClient
+                  slug={slug}
+                  greeting={
+                    content.chat.greeting ||
+                    "Oi! 👋 Pode perguntar o que quiser — e se preferir, já deixo seu contato com a equipe."
+                  }
+                  accent={accent}
+                  logo={content.logo}
+                />
+              </div>
+            </div>
+          ) : content.heroImage ? (
             <div className="order-first md:order-last">
               {/* eslint-disable-next-line @next/next/no-img-element */}
               <img
@@ -277,18 +301,19 @@ export function CaptureLanding({
         </section>
       ) : null}
 
-      {/* Formulário — ou o chat, quando a landing conversa. */}
-      <section id="capture-form" className="mx-auto max-w-md px-5 py-14">
-        {content.chat.enabled ? (
-          <CaptureChatClient
-            slug={slug}
-            greeting={
-              content.chat.greeting ||
-              "Oi! 👋 Pode perguntar o que quiser — e se preferir, já deixo seu contato com a equipe."
-            }
-            accent={accent}
-          />
-        ) : (
+      {/* Formulário — ou, com o chat no hero, um convite de volta pra conversa. */}
+      {content.chat.enabled ? (
+        <section className="mx-auto max-w-md px-5 py-12 text-center">
+          <a
+            href="#capture-form"
+            className="inline-flex items-center gap-2 rounded-xl px-6 py-3 text-sm font-semibold text-white shadow-sm transition hover:opacity-90"
+            style={{ background: accent }}
+          >
+            💬 {content.ctaText || "Falar com a gente agora"}
+          </a>
+        </section>
+      ) : (
+        <section id="capture-form" className="mx-auto max-w-md px-5 py-14">
           <CaptureFormClient
             slug={slug}
             headline={content.ctaText || "Preencha e comece"}
@@ -302,8 +327,8 @@ export function CaptureLanding({
             successWaHref={successWaHref}
             successSchedulerUrl={schedulerUrl}
           />
-        )}
-      </section>
+        </section>
+      )}
 
       <p className="pb-8 text-center text-[11px] text-slate-400">
         Feito com Fluxia
