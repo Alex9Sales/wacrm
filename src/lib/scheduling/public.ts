@@ -443,5 +443,22 @@ export async function bookSlot(
     }
   }
 
+  // 📣 Aviso no WhatsApp do responsável (se configurado na conta): cliente
+  // marcou sozinho pela página pública. Best-effort.
+  try {
+    const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
+    await sendOwnerAlert(
+      scheduler.accountId,
+      'booking',
+      `📅 *NOVO AGENDAMENTO*\n\n` +
+        `👤 ${nome}${input.phone ? ` · ${input.phone}` : ''}\n` +
+        `🗓️ ${whenLabel} — ${scheduler.name}` +
+        (scheduler.location ? `\n📍 ${scheduler.location}` : '') +
+        `\n\nMarcado pela página pública de agendamento.`,
+    )
+  } catch (err) {
+    console.error('[agendar] aviso ao responsável falhou:', err)
+  }
+
   return { ok: true, whenLabel }
 }

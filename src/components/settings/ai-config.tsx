@@ -6,6 +6,7 @@ import { Loader2, Sparkles, CheckCircle2, Trash2, Eye, EyeOff, Check, Maximize2 
 import { useAuth } from '@/hooks/use-auth';
 import { cn } from '@/lib/utils';
 import { canEditSettings } from '@/lib/auth/roles';
+import { AgentPromptGenerator } from '@/components/agents/agent-prompt-generator';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -762,15 +763,23 @@ export function AiConfig({
             <div className="space-y-2">
               <div className="flex items-center justify-between gap-2">
                 <Label htmlFor="ai-prompt">Papel e instruções do agente</Label>
-                <button
-                  type="button"
-                  onClick={() => setPromptExpanded(true)}
-                  className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                  title="Expandir editor"
-                >
-                  <Maximize2 className="h-3.5 w-3.5" />
-                  Expandir
-                </button>
+                <div className="flex items-center gap-1">
+                  <AgentPromptGenerator
+                    hasExistingPrompt={systemPrompt.trim().length > 0}
+                    agentName={name}
+                    disabled={disabled}
+                    onGenerate={setSystemPrompt}
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setPromptExpanded(true)}
+                    className="inline-flex items-center gap-1.5 rounded-md px-2 py-1 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                    title="Expandir editor"
+                  >
+                    <Maximize2 className="h-3.5 w-3.5" />
+                    Expandir
+                  </button>
+                </div>
               </div>
               <Textarea
                 id="ai-prompt"

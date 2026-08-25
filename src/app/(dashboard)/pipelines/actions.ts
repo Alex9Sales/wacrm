@@ -1445,6 +1445,43 @@ export async function updateDeal(
           ? { stageId: patch.stage_id ?? before.stageId }
           : {}),
       })
+      // 📣 Venda fechada → aviso no WhatsApp do responsável (se configurado
+      // na conta). Best-effort — nunca trava a marcação do ganho.
+      if (patch.status === 'won' && before.status !== 'won') {
+        try {
+          const info = firstOrNull(
+            await db
+              .select({
+                title: deals.title,
+                value: deals.value,
+                currency: deals.currency,
+                contactName: contacts.name,
+                contactPhone: contacts.phone,
+              })
+              .from(deals)
+              .leftJoin(contacts, eq(deals.contactId, contacts.id))
+              .where(eq(deals.id, id))
+              .limit(1),
+          )
+          if (info) {
+            const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
+            const { formatCurrency } = await import('@/lib/currency')
+            const valor = Number(info.value ?? 0)
+            await sendOwnerAlert(
+              ctx.accountId,
+              'won',
+              `🏆 *VENDA FECHADA*\n\n` +
+                `📦 ${info.title}\n` +
+                (valor > 0 ? `💰 ${formatCurrency(valor, info.currency ?? undefined)}\n` : '') +
+                (info.contactName ? `👤 ${info.contactName}` : '') +
+                (info.contactPhone ? ` · ${info.contactPhone}` : '') +
+                `\n\nDetalhes no funil do FluxiaCRM.`,
+            )
+          }
+        } catch (err) {
+          console.error('[updateDeal] aviso de venda:', err)
+        }
+      }
       // Gatilho por status: ganhou → cadência de pós-venda; perdeu →
       // cadência de recuperação (as escolhidas na conta). Best-effort.
       if (

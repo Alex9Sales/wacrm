@@ -21,6 +21,7 @@ import { LeadDistributionPanel } from "./lead-distribution-panel";
 import { StaleDealPanel } from "./stale-deal-panel";
 import { StatusCadencePanel } from "./status-cadence-panel";
 import { OwnerDigestPanel } from "./owner-digest-panel";
+import { OwnerAlertsPanel } from "./owner-alerts-panel";
 
 /**
  * Deals settings — account-wide default currency.
@@ -132,6 +133,8 @@ export function DealsSettings() {
       <StaleDealPanel />
       <StatusCadencePanel />
       <OwnerDigestPanel />
+
+      <OwnerAlertsPanel />
       <LeadDistributionPanel />
     </section>
   );

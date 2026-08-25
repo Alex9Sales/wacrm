@@ -57,6 +57,35 @@ export async function applyTransfer(input: {
 }): Promise<TransferResult> {
   const { accountId, conversationId, contactId, tagName, summary } = input
   const result: TransferResult = { assignedUserId: null, tag: tagName }
+
+  // 📣 Aviso no WhatsApp do responsável (se configurado): a IA escalou — o
+  // gestor fica sabendo NA HORA, com o resumo, mesmo sem abrir o CRM. Roda
+  // antes do rodízio de propósito: sem atendente com a etiqueta, o aviso é
+  // ainda mais importante. Best-effort.
+  try {
+    const contact = contactId
+      ? firstOrNull(
+          await db
+            .select({ name: contacts.name, phone: contacts.phone })
+            .from(contacts)
+            .where(eq(contacts.id, contactId))
+            .limit(1),
+        )
+      : null
+    const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
+    await sendOwnerAlert(
+      accountId,
+      'handoff',
+      `🔁 *IA TRANSFERIU PRA HUMANO*\n\n` +
+        `👤 ${contact?.name?.trim() || 'Contato'}${contact?.phone ? ` · ${contact.phone}` : ''}\n` +
+        `🏷️ Setor/motivo: ${tagName}\n` +
+        (summary?.trim() ? `\n📋 Resumo: ${summary.trim()}\n` : '') +
+        `\nEntre na conversa pelo FluxiaCRM pra continuar o atendimento.`,
+    )
+  } catch (err) {
+    console.error('[ai transfer] aviso ao responsável falhou:', err)
+  }
+
   try {
     // Atendentes com essa etiqueta (casa por nome normalizado).
     const candidates = await db

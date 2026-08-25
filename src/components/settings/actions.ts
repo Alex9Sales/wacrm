@@ -1239,3 +1239,60 @@ export async function saveCompanyData(
     .where(eq(organization.id, ctx.accountId))
   return { error: null }
 }
+
+// ============================================================
+// 📣 Avisos do responsável — "manda no grupo da empresa": venda fechada,
+// IA transferiu pra humano e agendamento público avisam um WhatsApp
+// configurado. Tudo OFF por padrão; envio em lib/alerts/owner-alerts.
+// ============================================================
+
+export async function getOwnerAlerts(): Promise<{
+  phone: string
+  channelId: string | null
+  onWon: boolean
+  onHandoff: boolean
+  onBooking: boolean
+  channels: { id: string; name: string }[]
+}> {
+  const ctx = await getCurrentAccount()
+  const [s, chans] = await Promise.all([
+    getAccountSettings(ctx.accountId),
+    db
+      .select({ id: channels.id, name: channels.name, provider: channels.provider })
+      .from(channels)
+      .where(eq(channels.accountId, ctx.accountId)),
+  ])
+  return {
+    phone: s.alertPhone,
+    channelId: s.alertChannelId,
+    onWon: s.alertOnWon,
+    onHandoff: s.alertOnHandoff,
+    onBooking: s.alertOnBooking,
+    channels: chans
+      .filter((c) => WA_PROVIDERS.includes(c.provider))
+      .map((c) => ({ id: c.id, name: c.name })),
+  }
+}
+
+export async function setOwnerAlerts(input: {
+  phone: string
+  channelId: string | null
+  onWon: boolean
+  onHandoff: boolean
+  onBooking: boolean
+}): Promise<{ error: string | null }> {
+  const ctx = await requireRole('admin')
+  const phone = normalizeOwnerPhone(input.phone)
+  const anyOn = input.onWon || input.onHandoff || input.onBooking
+  if (anyOn && !phone) {
+    return { error: 'Informe o número do WhatsApp que vai receber os avisos.' }
+  }
+  await updateAccountSettings(ctx.accountId, {
+    alertPhone: phone,
+    alertChannelId: input.channelId || null,
+    alertOnWon: !!input.onWon,
+    alertOnHandoff: !!input.onHandoff,
+    alertOnBooking: !!input.onBooking,
+  })
+  return { error: null }
+}

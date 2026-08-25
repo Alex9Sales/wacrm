@@ -63,6 +63,17 @@ export interface AccountSettings {
   lostReasons: string[]
   /** Quando o admin dispensou o wizard "Ative seu Fluxia" (ISO). null = visível. */
   onboardingHiddenAt: string | null
+  /** 📣 Avisos do responsável no WhatsApp (estilo "grupo da empresa"):
+   *  telefone que RECEBE ('' = desligado), canal de envio (null = 1º WhatsApp
+   *  conectado) e quais eventos avisam. Tudo OFF por padrão. */
+  alertPhone: string
+  alertChannelId: string | null
+  /** Avisar quando um negócio for marcado como GANHO (resumo da venda). */
+  alertOnWon: boolean
+  /** Avisar quando a IA transferir um atendimento pra humano (com resumo). */
+  alertOnHandoff: boolean
+  /** Avisar quando um cliente marcar horário pela página pública de agenda. */
+  alertOnBooking: boolean
   /** Sócio IA — resumo diário do funil enviado no WhatsApp do dono.
    *  OFF por padrão (dispara mensagem real). */
   ownerDigestEnabled: boolean
@@ -118,6 +129,11 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
     'Preferiu esperar',
   ],
   onboardingHiddenAt: null,
+  alertPhone: '',
+  alertChannelId: null,
+  alertOnWon: false,
+  alertOnHandoff: false,
+  alertOnBooking: false,
   ownerDigestEnabled: false,
   ownerDigestHour: 8,
   ownerDigestPhone: '',
