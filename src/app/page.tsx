@@ -340,7 +340,7 @@ export default async function RootPage() {
           então o CTA acompanha a rolagem. */}
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
         <div className="mx-auto flex max-w-6xl items-center gap-6 px-6 py-3.5">
-          <a href="#" aria-label="FluxiaCRM, início">
+          <a href="/" aria-label="FluxiaCRM, início">
             <FluxiaLogo />
           </a>
 
