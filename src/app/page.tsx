@@ -69,7 +69,7 @@ const PILARES = [
     body: 'O agente responde em segundos, entende áudio, imagem e PDF, puxa a resposta da sua base de conhecimento e fala no seu tom. Ele qualifica, agenda, move o negócio de etapa e chama um humano na hora certa. Roda com a sua chave de IA, então o custo é seu e o controle também.',
     bullets: [
       'Responde em áudio, imagem e PDF',
-      'Aprende com os seus arquivos, não inventa',
+      'Consulta sua Base de Conhecimento antes de responder',
       'Passa pro humano quando o cliente pede',
     ],
     mockup: <AgentMockup />,
@@ -118,7 +118,7 @@ const RECURSOS = [
   },
   {
     icon: Zap,
-    title: 'Disparos e cadências blindados',
+    title: 'Disparos e cadências com proteção de reputação',
     desc: 'Campanhas por WhatsApp e e-mail com anexos, cadências que pausam na resposta, descadastro automático e ritmo humanizado pra proteger seu número.',
   },
   {
@@ -166,7 +166,7 @@ const COMPARATIVO: {
   { linha: 'Funil de vendas de verdade', chatbot: false, crm: true },
   { linha: 'A IA move o negócio de etapa', chatbot: false, crm: false },
   { linha: 'Comentário no Instagram vira lead', chatbot: 'parcial', crm: false },
-  { linha: 'Disparo com proteção anti-ban', chatbot: 'parcial', crm: false },
+  { linha: 'Disparo com controle de ritmo e opt-out', chatbot: 'parcial', crm: false },
   { linha: 'Proposta com aceite registrado', chatbot: false, crm: 'parcial' },
   { linha: 'Agendamento público que cai na agenda', chatbot: 'parcial', crm: 'parcial' },
 ]

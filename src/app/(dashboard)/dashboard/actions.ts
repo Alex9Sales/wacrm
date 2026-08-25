@@ -49,3 +49,42 @@ export async function fetchActivity(limit = 20): Promise<ActivityItem[]> {
   const ctx = await requireRole('supervisor')
   return loadActivity(ctx.accountId, limit)
 }
+
+// 🚀 Wizard "Ative seu Fluxia" — estado real do onboarding (derivado do banco)
+// + dispensa persistida. Null = wizard oculto (dispensado ou sem permissão).
+export async function fetchActivationState(): Promise<
+  | (import('@/lib/activation/activation').ActivationState & {
+      hidden: boolean
+    })
+  | null
+> {
+  try {
+    const ctx = await requireRole('supervisor')
+    const [{ getActivationState }, { getAccountSettings }] = await Promise.all([
+      import('@/lib/activation/activation'),
+      import('@/lib/settings/account-settings'),
+    ])
+    const [state, settings] = await Promise.all([
+      getActivationState(ctx.accountId),
+      getAccountSettings(ctx.accountId),
+    ])
+    return { ...state, hidden: Boolean(settings.onboardingHiddenAt) }
+  } catch {
+    return null
+  }
+}
+
+export async function hideActivationWizard(): Promise<{ error: string | null }> {
+  try {
+    const ctx = await requireRole('supervisor')
+    const { updateAccountSettings } = await import(
+      '@/lib/settings/account-settings'
+    )
+    await updateAccountSettings(ctx.accountId, {
+      onboardingHiddenAt: new Date().toISOString(),
+    })
+    return { error: null }
+  } catch {
+    return { error: 'Não foi possível ocultar o assistente.' }
+  }
+}

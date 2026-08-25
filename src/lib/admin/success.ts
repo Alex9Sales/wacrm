@@ -26,6 +26,12 @@ export interface AccountHealthRow {
   /** Dias entre criar a conta e o 1º negócio no funil (null = ainda não). */
   ttvDays: number | null
   activated: boolean
+  /** Aha Moment: horas entre criar a conta e a 1ª resposta REAL da IA
+   *  (messages.sender_type='bot'). null = a IA nunca respondeu — a conta
+   *  pode estar "ativa operacionalmente" (inbox humano) sem nunca ter
+   *  experimentado o valor central do produto. */
+  iaTtvHours: number | null
+  iaActivated: boolean
   channels: number
   contacts: number
   deals: number
@@ -58,6 +64,19 @@ export interface SuccessDashboard {
     withDeal: number
     /** Mediana de dias até o 1º negócio (contas que chegaram lá). */
     ttvMedianDays: number | null
+  }
+  /** Aha Moment (1ª resposta real da IA) — o valor central do produto.
+   *  Distinto de "ativa operacionalmente" (inbox humano em uso). */
+  aha: {
+    /** Contas que alguma vez tiveram resposta da IA. */
+    activated: number
+    total: number
+    /** % das contas que chegaram ao Aha em até 48h da criação. */
+    rate48h: number | null
+    /** Mediana de horas criação → 1ª resposta da IA (entre as que chegaram). */
+    medianTtvHours: number | null
+    /** Alerta operacional: contas com +48h de vida e IA NUNCA respondeu. */
+    neverActivated: AccountHealthRow[]
   }
   actNow: AccountHealthRow[]
   upgradeReady: AccountHealthRow[]
@@ -133,6 +152,8 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
       (SELECT count(*)::int FROM contacts ct WHERE ct.account_id = o.id) AS contacts,
       (SELECT count(*)::int FROM deals d WHERE d.account_id = o.id) AS deals,
       (SELECT min(d2.created_at) FROM deals d2 WHERE d2.account_id = o.id) AS first_deal_at,
+      (SELECT min(mb.created_at) FROM messages mb
+        WHERE mb.account_id = o.id AND mb.sender_type = 'bot') AS first_bot_at,
       (SELECT count(*)::int FROM messages m
         WHERE m.account_id = o.id AND m.sender_type <> 'customer'
           AND m.created_at > now() - interval '7 days') AS msgs7d,
@@ -171,6 +192,10 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
     const ttvDays = firstDeal
       ? Math.max(0, Math.round((firstDeal - created) / 86_400_000))
       : null
+    const firstBot = r.first_bot_at ? new Date(String(r.first_bot_at)).getTime() : null
+    const iaTtvHours = firstBot
+      ? Math.max(0, Math.round(((firstBot - created) / 3_600_000) * 10) / 10)
+      : null
     const lastAgent = r.last_agent_msg ? new Date(String(r.last_agent_msg)).getTime() : null
     const lastSession = r.last_session ? new Date(String(r.last_session)).getTime() : null
     const lastActivity = Math.max(lastAgent ?? 0, lastSession ?? 0) || null
@@ -199,6 +224,8 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
       price: planPrice((r.plan as string | null) ?? null),
       ttvDays,
       activated: channels > 0 && deals > 0,
+      iaTtvHours,
+      iaActivated: iaTtvHours !== null,
       channels,
       contacts,
       deals,
@@ -255,6 +282,35 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
     ? ttvs[Math.floor(ttvs.length / 2)]
     : null
 
+  // ---- Aha Moment (1ª resposta real da IA) — TTV do valor central ----
+  const iaActivatedRows = accounts.filter((a) => a.iaActivated)
+  const iaTtvs = iaActivatedRows
+    .map((a) => a.iaTtvHours!)
+    .sort((a, b) => a - b)
+  const within48 = accounts.filter(
+    (a) => a.iaTtvHours !== null && a.iaTtvHours <= 48,
+  ).length
+  const aha = {
+    activated: iaActivatedRows.length,
+    total: accounts.length,
+    rate48h: accounts.length
+      ? Math.round((within48 / accounts.length) * 100)
+      : null,
+    medianTtvHours: iaTtvs.length
+      ? iaTtvs[Math.floor(iaTtvs.length / 2)]
+      : null,
+    neverActivated: accounts
+      .filter(
+        (a) =>
+          !a.iaActivated &&
+          now - new Date(a.createdAt).getTime() > 48 * 3_600_000,
+      )
+      .sort(
+        (a, b) =>
+          new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime(),
+      ),
+  }
+
   // ---- Fila de atenção + expansão ----
   const actNow = accounts
     .filter(
@@ -293,6 +349,7 @@ export async function getSuccessDashboard(): Promise<SuccessDashboard> {
       withDeal: recent.filter((a) => a.deals > 0).length,
       ttvMedianDays,
     },
+    aha,
     actNow,
     upgradeReady,
     accounts,

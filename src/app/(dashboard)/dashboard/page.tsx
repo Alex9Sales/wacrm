@@ -27,6 +27,7 @@ import type {
 } from '@/lib/dashboard/types'
 
 import { MetricCard } from '@/components/dashboard/metric-card'
+import { ActivationWizard } from '@/components/dashboard/activation-wizard'
 import { SkeletonCard } from '@/components/dashboard/skeleton'
 import { QuickActions } from '@/components/dashboard/quick-actions'
 import { ConversationsChart } from '@/components/dashboard/conversations-chart'
@@ -140,6 +141,10 @@ export default function DashboardPage() {
           Análises em tempo real de conversas, contatos, negócios, disparos e automações.
         </p>
       </div>
+
+      {/* 🚀 Wizard de ativação — só aparece enquanto a conta não chegou no
+          Aha Moment (1ª resposta da IA); some sozinho depois. */}
+      <ActivationWizard />
 
       {/* Metric cards */}
       <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">

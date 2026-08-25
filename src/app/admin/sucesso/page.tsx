@@ -188,6 +188,53 @@ export default async function AdminSucessoPage() {
         </div>
       </div>
 
+      {/* 2b) Aha Moment — TTV do VALOR CENTRAL (1ª resposta real da IA).
+          "Usar o CRM" (inbox humano) ≠ "experimentar o que diferencia a
+          Fluxia" — daí a métrica separada da ativação operacional. */}
+      <div>
+        <p className="mb-2 text-sm font-semibold text-foreground">
+          ⚡ Aha Moment — 1ª resposta da IA{' '}
+          <span className="font-normal text-muted-foreground">
+            (meta: ≥70% das contas novas em até 48h · mediana &lt; 30min)
+          </span>
+        </p>
+        <div className="grid gap-3 sm:grid-cols-3">
+          <Stat
+            label="Chegaram ao Aha em 48h"
+            value={d.aha.rate48h !== null ? `${d.aha.rate48h}%` : '—'}
+            hint={`${d.aha.activated} de ${d.aha.total} contas alguma vez`}
+          />
+          <Stat
+            label="Mediana criação → IA responder"
+            value={
+              d.aha.medianTtvHours !== null
+                ? d.aha.medianTtvHours >= 48
+                  ? `${Math.round(d.aha.medianTtvHours / 24)} dias`
+                  : `${Math.round(d.aha.medianTtvHours)}h`
+                : '—'
+            }
+            hint="entre as que chegaram lá"
+          />
+          <Stat
+            label="IA nunca respondeu (+48h de vida)"
+            value={String(d.aha.neverActivated.length)}
+            hint="alerta operacional: agir manualmente"
+          />
+        </div>
+        {d.aha.neverActivated.length > 0 && (
+          <div className="mt-3">
+            <MiniList
+              title="🔕 Nunca ativaram a IA — ligar/zap/onboarding assistido"
+              empty=""
+              rows={d.aha.neverActivated}
+              detail={(r) =>
+                `${r.msgs7d > 0 ? 'usa como inbox humano' : r.channels > 0 ? 'canal ligado, IA não' : 'nem canal conectou'} · conta de ${new Date(r.createdAt).toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })}`
+              }
+            />
+          </div>
+        )}
+      </div>
+
       {/* 3) Fila de atenção + expansão */}
       <div className="grid gap-3 lg:grid-cols-2">
         <MiniList

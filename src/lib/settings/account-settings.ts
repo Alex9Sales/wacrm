@@ -61,6 +61,8 @@ export interface AccountSettings {
    *  perda. Motivo novo digitado num "Confirmar perda" entra aqui sozinho
    *  (criado na hora, fica pra próxima). */
   lostReasons: string[]
+  /** Quando o admin dispensou o wizard "Ative seu Fluxia" (ISO). null = visível. */
+  onboardingHiddenAt: string | null
   /** Sócio IA — resumo diário do funil enviado no WhatsApp do dono.
    *  OFF por padrão (dispara mensagem real). */
   ownerDigestEnabled: boolean
@@ -115,6 +117,7 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
     'Sem orçamento agora',
     'Preferiu esperar',
   ],
+  onboardingHiddenAt: null,
   ownerDigestEnabled: false,
   ownerDigestHour: 8,
   ownerDigestPhone: '',
