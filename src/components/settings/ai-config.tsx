@@ -7,6 +7,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { cn } from '@/lib/utils';
 import { canEditSettings } from '@/lib/auth/roles';
 import { AgentPromptGenerator } from '@/components/agents/agent-prompt-generator';
+import { AgentExternalTools } from '@/components/agents/agent-external-tools';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -949,6 +950,9 @@ export function AiConfig({
                 )}
               </div>
             )}
+
+            {/* 🔧 Ferramentas externas (Fase T1) — ERP/estoque/pedidos sem n8n. */}
+            {agentId && <AgentExternalTools agentId={agentId} />}
 
             {/* Bases de conhecimento deste agente (Fase K). Vazio = todas. */}
             {bases.length > 0 && (

@@ -2704,3 +2704,51 @@ export const instagramCommentEvents = pgTable("instagram_comment_events", {
 	foreignKey({ columns: [table.channelId], foreignColumns: [channels.id], name: "instagram_comment_events_channel_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.automationId], foreignColumns: [instagramCommentAutomations.id], name: "instagram_comment_events_automation_id_fkey" }).onDelete("set null"),
 ]);
+
+// 🔧 Ferramentas externas por agente (migração 0134) — tool HTTP configurável
+// que a IA chama via marcador [[FERRAMENTA: slug | {...}]]. headers_enc =
+// ciphertext AES-GCM de um JSON de headers (mesmo esquema dos canais).
+export const agentTools = pgTable("agent_tools", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	agentId: uuid("agent_id").notNull(),
+	name: text().notNull(),
+	slug: text().notNull(),
+	description: text().notNull(),
+	method: text().default('GET').notNull(),
+	url: text().notNull(),
+	headersEnc: text("headers_enc"),
+	params: jsonb().default([]).notNull(),
+	bodyTemplate: text("body_template"),
+	risk: text().default('read').notNull(),
+	enabled: boolean().default(true).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("agent_tools_account_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	index("agent_tools_agent_idx").using("btree", table.agentId.asc().nullsLast().op("uuid_ops"), table.enabled.asc().nullsLast()),
+	uniqueIndex("agent_tools_agent_slug_unique").using("btree", table.agentId.asc().nullsLast().op("uuid_ops"), table.slug.asc().nullsLast()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "agent_tools_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.agentId], foreignColumns: [aiConfigs.id], name: "agent_tools_agent_id_fkey" }).onDelete("cascade"),
+]);
+
+// Histórico de execução das ferramentas (auditoria/debug do agente).
+export const agentToolRuns = pgTable("agent_tool_runs", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	toolId: uuid("tool_id"),
+	agentId: uuid("agent_id"),
+	conversationId: uuid("conversation_id"),
+	toolSlug: text("tool_slug").notNull(),
+	args: jsonb(),
+	status: text().notNull(),
+	resultSummary: text("result_summary"),
+	httpStatus: integer("http_status"),
+	durationMs: integer("duration_ms"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("agent_tool_runs_account_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsLast()),
+	index("agent_tool_runs_tool_idx").using("btree", table.toolId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsLast()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "agent_tool_runs_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.toolId], foreignColumns: [agentTools.id], name: "agent_tool_runs_tool_id_fkey" }).onDelete("set null"),
+]);

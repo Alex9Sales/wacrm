@@ -8,7 +8,7 @@ import {
   formatCompanyProfileForPrompt,
 } from '@/lib/ai/company-profile'
 import { formatCatalogForPrompt, resolveProductPhoto } from '@/lib/ai/catalog'
-import { generateReply } from '@/lib/ai/generate'
+import { generateWithExternalTools } from '@/lib/ai/external-tools'
 import { buildSystemPrompt, PHOTO_DIRECTIVE } from '@/lib/ai/defaults'
 import { latestUserMessage } from '@/lib/ai/query'
 import { AiError, type ChatMessage } from '@/lib/ai/types'
@@ -102,10 +102,15 @@ export async function POST(request: Request) {
       catalog,
     })
 
-    const { text, handoff } = await generateReply({
+    // 🔧 Ferramentas externas rodam AQUI também — o playground é a bancada
+    // oficial de teste das tools sem tocar WhatsApp.
+    const { text, handoff } = await generateWithExternalTools({
       config,
       systemPrompt,
       messages,
+      accountId,
+      agentId: config.id ?? null,
+      conversationId: null,
       // Medidor de custo (Fase B): teste do operador — fica marcado como
       // 'playground' pra não poluir os números reais no painel.
       meta: { accountId, agentId: config.id ?? null, source: 'playground' },

@@ -9,7 +9,7 @@ import { buildConversationContext, stripLeadingTimestamp } from './context'
 import { retrieveKnowledge } from './knowledge'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
-import { generateReply } from './generate'
+import { generateWithExternalTools } from './external-tools'
 import { buildSystemPrompt, parseCloseDirectives } from './defaults'
 import {
   applyCloseActions,
@@ -206,10 +206,15 @@ export async function dispatchInboundToAiReply(
       voicePref: conv.voicePreference,
     })
 
-    const { text: rawText, handoff } = await generateReply({
+    // 🔧 Com ferramentas externas do agente (ERP do cliente etc.) — sem
+    // ferramentas, degrada pro generateReply puro.
+    const { text: rawText, handoff } = await generateWithExternalTools({
       config,
       systemPrompt,
       messages,
+      accountId,
+      agentId: config.id ?? null,
+      conversationId,
       // Medidor de custo (Fase B): atribui o uso ao agente/canal/conversa.
       meta: {
         accountId,
