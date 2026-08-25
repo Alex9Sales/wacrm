@@ -74,6 +74,12 @@ import type { ChannelCtx, NormalizedInbound } from './provider';
 /** Bucket for inbound media — public-read, same as the rest of Phase 3. */
 const MEDIA_BUCKET = 'media';
 
+/** Mensagem de texto SEM corpo = conteúdo que o WhatsApp só entrega no
+ *  aparelho principal (senha descartável/OTP, e afins). O rótulo espelha o
+ *  aviso do próprio WhatsApp Web em vez do "[text]" cru. */
+const PROTECTED_TEXT_LABEL =
+  '🔒 Conteúdo protegido pelo WhatsApp — visível só no celular principal (ex.: senha/código)';
+
 /** Maps a NormalizedInbound.contentType to a messages.content_type value. */
 const ALLOWED_CONTENT_TYPES = new Set([
   'text',
@@ -335,7 +341,13 @@ export async function dispatchInboundMessage(
       ? `[${ev.media.kind}]`
       : isViewOnce
         ? '🔒 Visualização única'
-        : `[${ev.contentType}]`);
+        : ev.contentType === 'text'
+          ? // Texto SEM corpo = conteúdo que o WhatsApp não entrega a
+            // aparelhos conectados (ex.: senha descartável/código OTP —
+            // "só no dispositivo principal"). Rótulo honesto no lugar do
+            // "[text]" cru (chamado do Alex 25/08, códigos da OpenAI).
+            PROTECTED_TEXT_LABEL
+          : `[${ev.contentType}]`);
 
   // Is this the contact's first-ever inbound in this conversation?
   let priorCustomerMsgCount = 0;
@@ -881,7 +893,12 @@ async function ingestGroupMessage(
     : 'text';
   const isFromMe = ev.fromMe === true;
   let baseText =
-    ev.contentText ?? (ev.media ? `[${ev.media.kind}]` : `[${ev.contentType}]`);
+    ev.contentText ??
+    (ev.media
+      ? `[${ev.media.kind}]`
+      : ev.contentType === 'text'
+        ? PROTECTED_TEXT_LABEL
+        : `[${ev.contentType}]`);
 
   // The stable key of THIS message's author (phone digits preferred — more
   // stable and shared with 1:1 contacts — else the LID user-part). Persisted on

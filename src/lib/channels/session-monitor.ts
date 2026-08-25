@@ -25,7 +25,13 @@ import { loadChannel } from '@/lib/channels/channels';
 import {
   wahaSessionHealth,
   wahaRestartSession,
+  wahaEnsureWebhookEvents,
+  WAHA_WEBHOOK_EVENTS,
 } from '@/lib/channels/providers/waha';
+
+// Reconciliação de webhook: 1 tentativa por canal por processo (falha
+// persistente não vira martelo na API do WAHA).
+const webhookReconciled = new Set<string>();
 import { publishEvent } from '@/lib/events/publish';
 
 // Activity older than this on a WORKING session = suspected zombie. Generous so
@@ -75,12 +81,23 @@ export async function runSessionHealthCheck(): Promise<void> {
       const ch = await loadChannel(row.id);
       if (!ch) continue;
 
-      const { wahaStatus, activityAgeMs } = await wahaSessionHealth(ch);
+      const { wahaStatus, activityAgeMs, webhookEvents } =
+        await wahaSessionHealth(ch);
       const stale = activityAgeMs !== null && activityAgeMs > STALE_MS;
       const healthy = wahaStatus === 'WORKING' && !stale;
 
       if (healthy) {
         state.delete(row.id); // recovered → forget so a future issue is fresh
+        // Sessão antiga com lista de eventos defasada (criada antes de um
+        // evento novo existir) → completa os que faltam (ex.: message.edited).
+        if (
+          !webhookReconciled.has(row.id) &&
+          webhookEvents !== null &&
+          WAHA_WEBHOOK_EVENTS.some((e) => !webhookEvents.includes(e))
+        ) {
+          webhookReconciled.add(row.id);
+          await wahaEnsureWebhookEvents(ch).catch(() => false);
+        }
         continue;
       }
 

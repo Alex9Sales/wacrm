@@ -96,6 +96,22 @@ async function httpJson(
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+/** Lista CANÔNICA de eventos do webhook. Evento novo entra AQUI — a criação
+ *  de sessão usa esta lista e o session-monitor reconcilia as sessões antigas
+ *  (que ficaram com a lista da época em que foram criadas). */
+export const WAHA_WEBHOOK_EVENTS = [
+  'message',
+  'message.any',
+  'message.ack',
+  'message.reaction',
+  'message.revoked',
+  'message.edited',
+  'session.status',
+  'call.received',
+  'call.accepted',
+  'call.rejected',
+] as const;
+
 /** Cache of resolved @lid → phone (per session). The LID↔PN map is stable, and
  *  a bare-@lid inbound can repeat in a burst, so memoize with a TTL (null =
  *  "known-unresolvable", also cached, so we don't re-hit WAHA every message). */
@@ -1603,6 +1619,16 @@ export const wahaProvider: WhatsAppProvider = {
         !isAlbumMessage(p)
       ) {
         text = textFromStructuredDeep(p);
+        // Ainda vazio = tipo que não decodificamos (ex.: senha descartável/OTP,
+        // que o WhatsApp só entrega no aparelho principal). Loga o cru pra
+        // aprendermos o formato e rotularmos com precisão no futuro; o inbound
+        // dá o rótulo honesto "conteúdo protegido" no lugar do [text].
+        if (!text) {
+          console.warn(
+            '[waha] mensagem de texto sem corpo decodificável:',
+            JSON.stringify(p).slice(0, 900),
+          );
+        }
       }
       // A template's buttons: quick-replies ("Confirmar"/"Remarcar") the agent
       // fires as a reply, or URL/CTA buttons ("Link da aula") the CRM opens.
@@ -1852,18 +1878,7 @@ export const wahaProvider: WhatsAppProvider = {
           // Includes the waha-voip native-call events so a freshly-connected
           // channel rings inbound calls in the CRM without any extra setup.
           // (Harmless on engines that don't emit them, e.g. NOWEB.)
-          events: [
-            'message',
-            'message.any',
-            'message.ack',
-            'message.reaction',
-            'message.revoked',
-            'message.edited',
-            'session.status',
-            'call.received',
-            'call.accepted',
-            'call.rejected',
-          ],
+          events: [...WAHA_WEBHOOK_EVENTS],
         },
       ],
     };
@@ -2038,18 +2053,78 @@ export const wahaProvider: WhatsAppProvider = {
 // ------------------------------------------------------------
 export async function wahaSessionHealth(
   ch: ChannelCtx,
-): Promise<{ wahaStatus: string; activityAgeMs: number | null }> {
+): Promise<{
+  wahaStatus: string;
+  activityAgeMs: number | null;
+  /** Eventos assinados no webhook da sessão (null = não deu pra ler). */
+  webhookEvents: string[] | null;
+}> {
   const { ok, body } = await httpJson(
     `${baseUrlOf(ch)}/api/sessions/${encodeURIComponent(sessionOf(ch))}`,
     { method: 'GET', headers: headersOf(ch) },
     10000,
   );
-  if (!ok) return { wahaStatus: 'UNREACHABLE', activityAgeMs: null };
-  const b = body as { status?: unknown; timestamps?: { activity?: unknown } };
+  if (!ok)
+    return { wahaStatus: 'UNREACHABLE', activityAgeMs: null, webhookEvents: null };
+  const b = body as {
+    status?: unknown;
+    timestamps?: { activity?: unknown };
+    config?: { webhooks?: Array<{ events?: unknown }> };
+  };
   const wahaStatus = String(b.status || 'UNKNOWN');
   const activity =
     typeof b.timestamps?.activity === 'number' ? b.timestamps.activity : null;
-  return { wahaStatus, activityAgeMs: activity ? Date.now() - activity : null };
+  const rawEvents = b.config?.webhooks?.[0]?.events;
+  const webhookEvents = Array.isArray(rawEvents)
+    ? rawEvents.map(String)
+    : null;
+  return {
+    wahaStatus,
+    activityAgeMs: activity ? Date.now() - activity : null,
+    webhookEvents,
+  };
+}
+
+/**
+ * Reconciliar a lista de eventos do webhook da sessão com a lista canônica.
+ * Sessão criada ANTES de um evento novo entrar na lista fica pra sempre sem
+ * ele (ex.: message.edited — edição do celular não chegava no CRM, bug do
+ * Alex 25/08). Lê a config atual, PRESERVA url/hmac/tudo e só completa os
+ * eventos que faltam. Retorna true quando atualizou.
+ */
+export async function wahaEnsureWebhookEvents(ch: ChannelCtx): Promise<boolean> {
+  const url = `${baseUrlOf(ch)}/api/sessions/${encodeURIComponent(sessionOf(ch))}`;
+  const { ok, body } = await httpJson(
+    url,
+    { method: 'GET', headers: headersOf(ch) },
+    10000,
+  );
+  if (!ok) return false;
+  const b = body as {
+    config?: { webhooks?: Array<{ events?: unknown } & Record<string, unknown>> };
+  };
+  const cfg = b.config;
+  const wh = cfg?.webhooks?.[0];
+  if (!cfg || !wh) return false;
+  const current = Array.isArray(wh.events) ? wh.events.map(String) : [];
+  const missing = WAHA_WEBHOOK_EVENTS.filter((e) => !current.includes(e));
+  if (missing.length === 0) return false;
+  wh.events = [...current, ...missing];
+  const { ok: putOk } = await httpJson(
+    url,
+    {
+      method: 'PUT',
+      headers: headersOf(ch),
+      body: JSON.stringify({ config: cfg }),
+    },
+    15000,
+  );
+  if (putOk) {
+    console.log(
+      `[waha] webhook da sessão ${sessionOf(ch)} atualizado (+${missing.join(', ')})`,
+    );
+  }
+  return putOk;
 }
 
 /** Soft-recover a zombie/broken session: POST /restart (reuses stored creds,
