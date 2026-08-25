@@ -494,6 +494,22 @@ export async function listConversations(opts?: {
   )
 
   const filters = [eq(conversations.accountId, ctx.accountId), visibility]
+
+  // Grupo DESMARCADO some da lista (chamado do Alex 24/08): a conversa de
+  // grupo só aparece enquanto o grupo estiver em monitored_groups do canal —
+  // desativar tira da lista na hora, re-marcar traz de volta com o histórico
+  // (nada é apagado). Chave: contacts.phone do "contato" de grupo = dígitos do
+  // group_jid (groupJidDigits). ⚠️ Dentro de sql`` cru, colunas externas vão
+  // como literal qualificado ("tabela"."coluna") — interpolar ${tab.col} aqui
+  // sairia sem prefixo e seria capturado pela tabela interna (gotcha Drizzle).
+  filters.push(
+    sql`("contacts"."is_group" IS NOT TRUE OR EXISTS (
+      SELECT 1 FROM monitored_groups mg
+      WHERE mg.channel_id = "conversations"."channel_id"
+        AND regexp_replace(split_part(mg.group_jid, '@', 1), '\\D', '', 'g') = "contacts"."phone"
+    ))`,
+  )
+
   const q = opts?.search?.trim()
   if (q) {
     const like = `%${q}%`
