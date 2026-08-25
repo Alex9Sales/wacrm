@@ -1252,6 +1252,9 @@ export async function getOwnerAlerts(): Promise<{
   onWon: boolean
   onHandoff: boolean
   onBooking: boolean
+  wonTemplate: string
+  handoffTemplate: string
+  bookingTemplate: string
   channels: { id: string; name: string }[]
 }> {
   const ctx = await getCurrentAccount()
@@ -1268,6 +1271,9 @@ export async function getOwnerAlerts(): Promise<{
     onWon: s.alertOnWon,
     onHandoff: s.alertOnHandoff,
     onBooking: s.alertOnBooking,
+    wonTemplate: s.alertWonTemplate,
+    handoffTemplate: s.alertHandoffTemplate,
+    bookingTemplate: s.alertBookingTemplate,
     channels: chans
       .filter((c) => WA_PROVIDERS.includes(c.provider))
       .map((c) => ({ id: c.id, name: c.name })),
@@ -1280,6 +1286,9 @@ export async function setOwnerAlerts(input: {
   onWon: boolean
   onHandoff: boolean
   onBooking: boolean
+  wonTemplate?: string
+  handoffTemplate?: string
+  bookingTemplate?: string
 }): Promise<{ error: string | null }> {
   const ctx = await requireRole('admin')
   const phone = normalizeOwnerPhone(input.phone)
@@ -1293,6 +1302,10 @@ export async function setOwnerAlerts(input: {
     alertOnWon: !!input.onWon,
     alertOnHandoff: !!input.onHandoff,
     alertOnBooking: !!input.onBooking,
+    // Template vazio = usa o padrão do sistema.
+    alertWonTemplate: (input.wonTemplate ?? '').trim().slice(0, 2_000),
+    alertHandoffTemplate: (input.handoffTemplate ?? '').trim().slice(0, 2_000),
+    alertBookingTemplate: (input.bookingTemplate ?? '').trim().slice(0, 2_000),
   })
   return { error: null }
 }

@@ -447,15 +447,13 @@ export async function bookSlot(
   // marcou sozinho pela página pública. Best-effort.
   try {
     const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
-    await sendOwnerAlert(
-      scheduler.accountId,
-      'booking',
-      `📅 *NOVO AGENDAMENTO*\n\n` +
-        `👤 ${nome}${input.phone ? ` · ${input.phone}` : ''}\n` +
-        `🗓️ ${whenLabel} — ${scheduler.name}` +
-        (scheduler.location ? `\n📍 ${scheduler.location}` : '') +
-        `\n\nMarcado pela página pública de agendamento.`,
-    )
+    await sendOwnerAlert(scheduler.accountId, 'booking', {
+      nome,
+      telefone: input.phone ?? '',
+      quando: whenLabel,
+      agenda: scheduler.name,
+      local: scheduler.location ?? '',
+    })
   } catch (err) {
     console.error('[agendar] aviso ao responsável falhou:', err)
   }

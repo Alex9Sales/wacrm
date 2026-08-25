@@ -1455,6 +1455,7 @@ export async function updateDeal(
                 title: deals.title,
                 value: deals.value,
                 currency: deals.currency,
+                notes: deals.notes,
                 contactName: contacts.name,
                 contactPhone: contacts.phone,
               })
@@ -1467,16 +1468,13 @@ export async function updateDeal(
             const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
             const { formatCurrency } = await import('@/lib/currency')
             const valor = Number(info.value ?? 0)
-            await sendOwnerAlert(
-              ctx.accountId,
-              'won',
-              `🏆 *VENDA FECHADA*\n\n` +
-                `📦 ${info.title}\n` +
-                (valor > 0 ? `💰 ${formatCurrency(valor, info.currency ?? undefined)}\n` : '') +
-                (info.contactName ? `👤 ${info.contactName}` : '') +
-                (info.contactPhone ? ` · ${info.contactPhone}` : '') +
-                `\n\nDetalhes no funil do FluxiaCRM.`,
-            )
+            await sendOwnerAlert(ctx.accountId, 'won', {
+              titulo: info.title ?? '',
+              valor: valor > 0 ? formatCurrency(valor, info.currency ?? undefined) : '',
+              cliente: info.contactName ?? '',
+              telefone: info.contactPhone ?? '',
+              notas: info.notes ?? '',
+            })
           }
         } catch (err) {
           console.error('[updateDeal] aviso de venda:', err)

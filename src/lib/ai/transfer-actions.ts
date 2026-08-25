@@ -73,15 +73,12 @@ export async function applyTransfer(input: {
         )
       : null
     const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
-    await sendOwnerAlert(
-      accountId,
-      'handoff',
-      `🔁 *IA TRANSFERIU PRA HUMANO*\n\n` +
-        `👤 ${contact?.name?.trim() || 'Contato'}${contact?.phone ? ` · ${contact.phone}` : ''}\n` +
-        `🏷️ Setor/motivo: ${tagName}\n` +
-        (summary?.trim() ? `\n📋 Resumo: ${summary.trim()}\n` : '') +
-        `\nEntre na conversa pelo FluxiaCRM pra continuar o atendimento.`,
-    )
+    await sendOwnerAlert(accountId, 'handoff', {
+      cliente: contact?.name?.trim() || 'Contato',
+      telefone: contact?.phone ?? '',
+      motivo: tagName,
+      resumo: summary?.trim() ?? '',
+    })
   } catch (err) {
     console.error('[ai transfer] aviso ao responsável falhou:', err)
   }

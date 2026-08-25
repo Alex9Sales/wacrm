@@ -11,10 +11,15 @@
 import { listChannels } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import { getAccountSettings } from '@/lib/settings/account-settings'
+import {
+  DEFAULT_ALERT_TEMPLATES,
+  renderAlertTemplate,
+  type OwnerAlertKind,
+} from './templates'
 
 const WHATSAPP_PROVIDERS = ['waha', 'meta', 'evolution', 'evogo']
 
-export type OwnerAlertKind = 'won' | 'handoff' | 'booking'
+export type { OwnerAlertKind }
 
 const KIND_TOGGLE: Record<OwnerAlertKind, 'alertOnWon' | 'alertOnHandoff' | 'alertOnBooking'> = {
   won: 'alertOnWon',
@@ -22,19 +27,33 @@ const KIND_TOGGLE: Record<OwnerAlertKind, 'alertOnWon' | 'alertOnHandoff' | 'ale
   booking: 'alertOnBooking',
 }
 
+const KIND_TEMPLATE: Record<
+  OwnerAlertKind,
+  'alertWonTemplate' | 'alertHandoffTemplate' | 'alertBookingTemplate'
+> = {
+  won: 'alertWonTemplate',
+  handoff: 'alertHandoffTemplate',
+  booking: 'alertBookingTemplate',
+}
+
 /**
  * Envia o aviso do evento pro WhatsApp do responsável — se a conta tiver
- * telefone configurado E o toggle daquele evento ligado. Nunca lança.
+ * telefone configurado E o toggle daquele evento ligado. A mensagem sai do
+ * template da CONTA (editável) ou do padrão. Nunca lança.
  */
 export async function sendOwnerAlert(
   accountId: string,
   kind: OwnerAlertKind,
-  text: string,
+  vars: Record<string, string>,
 ): Promise<boolean> {
   try {
     const s = await getAccountSettings(accountId)
     const phone = s.alertPhone.replace(/\D/g, '')
     if (!phone || !s[KIND_TOGGLE[kind]]) return false
+
+    const template = (s[KIND_TEMPLATE[kind]] || '').trim() || DEFAULT_ALERT_TEMPLATES[kind]
+    const text = renderAlertTemplate(template, vars)
+    if (!text) return false
 
     const channels = await listChannels(accountId)
     const wa =

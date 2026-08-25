@@ -11,7 +11,9 @@ import { toast } from 'sonner';
 import { Loader2, Megaphone } from 'lucide-react';
 
 import { getOwnerAlerts, setOwnerAlerts } from './actions';
+import { DEFAULT_ALERT_TEMPLATES } from '@/lib/alerts/templates';
 import { Button } from '@/components/ui/button';
+import { Textarea } from '@/components/ui/textarea';
 import {
   Card,
   CardContent,
@@ -31,6 +33,10 @@ export function OwnerAlertsPanel() {
   const [onHandoff, setOnHandoff] = useState(false);
   const [onBooking, setOnBooking] = useState(false);
   const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
+  const [showTemplates, setShowTemplates] = useState(false);
+  const [wonTemplate, setWonTemplate] = useState('');
+  const [handoffTemplate, setHandoffTemplate] = useState('');
+  const [bookingTemplate, setBookingTemplate] = useState('');
 
   useEffect(() => {
     getOwnerAlerts()
@@ -41,6 +47,12 @@ export function OwnerAlertsPanel() {
         setOnHandoff(d.onHandoff);
         setOnBooking(d.onBooking);
         setChannels(d.channels);
+        setWonTemplate(d.wonTemplate);
+        setHandoffTemplate(d.handoffTemplate);
+        setBookingTemplate(d.bookingTemplate);
+        if (d.wonTemplate || d.handoffTemplate || d.bookingTemplate) {
+          setShowTemplates(true);
+        }
       })
       .catch(() => toast.error('Não foi possível carregar os avisos.'))
       .finally(() => setLoading(false));
@@ -54,6 +66,9 @@ export function OwnerAlertsPanel() {
       onWon,
       onHandoff,
       onBooking,
+      wonTemplate,
+      handoffTemplate,
+      bookingTemplate,
     });
     setSaving(false);
     if (error) toast.error(error);
@@ -140,6 +155,66 @@ export function OwnerAlertsPanel() {
                 </label>
               ))}
             </div>
+
+            <button
+              type="button"
+              onClick={() => setShowTemplates((v) => !v)}
+              className="text-xs font-medium text-primary hover:underline"
+            >
+              {showTemplates
+                ? 'Ocultar personalização das mensagens'
+                : '✏️ Personalizar as mensagens (opcional)'}
+            </button>
+
+            {showTemplates && (
+              <div className="space-y-3 rounded-md border border-border p-3">
+                <p className="text-xs text-muted-foreground">
+                  Monte a mensagem do seu jeito — vazio = padrão do sistema.
+                  Linha cuja variável ficar sem dado é removida sozinha.
+                </p>
+                {(
+                  [
+                    {
+                      label: '🏆 Venda fechada',
+                      vars: '{{titulo}} {{valor}} {{cliente}} {{telefone}} {{notas}}',
+                      value: wonTemplate,
+                      set: setWonTemplate,
+                      def: DEFAULT_ALERT_TEMPLATES.won,
+                    },
+                    {
+                      label: '🔁 IA transferiu pra humano',
+                      vars: '{{cliente}} {{telefone}} {{motivo}} {{resumo}}',
+                      value: handoffTemplate,
+                      set: setHandoffTemplate,
+                      def: DEFAULT_ALERT_TEMPLATES.handoff,
+                    },
+                    {
+                      label: '📅 Agendamento',
+                      vars: '{{nome}} {{telefone}} {{quando}} {{agenda}} {{local}}',
+                      value: bookingTemplate,
+                      set: setBookingTemplate,
+                      def: DEFAULT_ALERT_TEMPLATES.booking,
+                    },
+                  ] as const
+                ).map((t) => (
+                  <div key={t.label} className="space-y-1">
+                    <Label className="text-xs">
+                      {t.label}{' '}
+                      <span className="font-normal text-muted-foreground">
+                        · variáveis: {t.vars}
+                      </span>
+                    </Label>
+                    <Textarea
+                      rows={4}
+                      value={t.value}
+                      onChange={(e) => t.set(e.target.value)}
+                      placeholder={t.def}
+                      className="text-xs"
+                    />
+                  </div>
+                ))}
+              </div>
+            )}
 
             <div className="flex justify-end">
               <Button size="sm" onClick={() => void save()} disabled={saving}>
