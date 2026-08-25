@@ -20,6 +20,7 @@ import {
   InboxMockup,
   PipelineMockup,
 } from '@/components/marketing/product-mockups'
+import { FluxiaLogo } from '@/components/brand/fluxia-logo'
 
 export const metadata: Metadata = {
   title: 'FluxiaCRM — CRM de atendimento e vendas no WhatsApp',
@@ -339,13 +340,8 @@ export default async function RootPage() {
           então o CTA acompanha a rolagem. */}
       <header className="sticky top-0 z-40 border-b border-border/60 bg-background/85 backdrop-blur supports-[backdrop-filter]:bg-background/70">
         <div className="mx-auto flex max-w-6xl items-center gap-6 px-6 py-3.5">
-          <a href="#" className="flex items-center gap-2">
-            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary font-heading text-base font-bold text-primary-foreground">
-              F
-            </span>
-            <span className="font-heading text-lg font-bold tracking-tight">
-              FluxiaCRM
-            </span>
+          <a href="#" aria-label="FluxiaCRM, início">
+            <FluxiaLogo />
           </a>
 
           <nav aria-label="Seções do site" className="hidden md:block">
@@ -881,14 +877,7 @@ export default async function RootPage() {
       <footer className="border-t border-border">
         <div className="mx-auto grid max-w-6xl gap-10 px-6 py-12 sm:grid-cols-2 lg:grid-cols-4">
           <div className="sm:col-span-2 lg:col-span-1">
-            <div className="flex items-center gap-2">
-              <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary font-heading text-base font-bold text-primary-foreground">
-                F
-              </span>
-              <span className="font-heading text-lg font-bold tracking-tight">
-                FluxiaCRM
-              </span>
-            </div>
+            <FluxiaLogo />
             <p className="mt-4 max-w-xs text-sm leading-relaxed text-muted-foreground">
               Atendimento e vendas no WhatsApp, Instagram e Messenger, com
               agentes de IA e funil no mesmo lugar.
