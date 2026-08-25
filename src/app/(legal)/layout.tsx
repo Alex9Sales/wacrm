@@ -1,4 +1,5 @@
 import type { ReactNode } from 'react';
+import { FluxiaMark } from '@/components/brand/fluxia-logo';
 
 // Public legal pages (Terms, Privacy, Data Deletion) live OUTSIDE the
 // (dashboard) group, so the auth middleware leaves them reachable without a
@@ -12,9 +13,7 @@ export default function LegalLayout({ children }: { children: ReactNode }) {
           href="https://crm.salestecnologia.com.br"
           className="mb-8 inline-flex items-center gap-2 text-sm font-semibold text-violet-700"
         >
-          <span className="flex size-7 items-center justify-center rounded-lg bg-violet-600 text-white">
-            F
-          </span>
+          <FluxiaMark className="size-6 text-violet-700" />
           FluxiaCRM
         </a>
         <article className="legal-prose">{children}</article>

@@ -16,7 +16,8 @@ import {
   CardHeader,
   CardTitle,
 } from "@/components/ui/card";
-import { MessageSquare, UsersRound } from "lucide-react";
+import { UsersRound } from "lucide-react";
+import { FluxiaMark } from "@/components/brand/fluxia-logo";
 
 // Fase 2: login real via Better Auth. `authClient.signIn.email` cria a
 // sessão por cookie; o hook de sessão do servidor seta a organização
@@ -75,7 +76,7 @@ function LoginPageInner() {
             {inviteToken ? (
               <UsersRound className="h-6 w-6 text-primary" />
             ) : (
-              <MessageSquare className="h-6 w-6 text-primary" />
+              <FluxiaMark className="h-6 w-6 text-primary" />
             )}
           </div>
           <CardTitle className="text-xl text-foreground">
