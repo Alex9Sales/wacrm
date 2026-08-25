@@ -59,6 +59,7 @@ import {
   listDealEvents,
   moveDealToStage,
   setDealStatus,
+  getLostReasons,
   setDealPaused,
   setDealCompany,
   duplicateDeal,
@@ -740,6 +741,13 @@ export default function DealDetailPage() {
   // Motivo de perda (estilo RD): "Marcar perda" abre o campo do porquê.
   const [lostOpen, setLostOpen] = useState(false);
   const [lostReason, setLostReason] = useState("");
+  // Chips = motivos da CONTA (motivo digitado novo entra na lista sozinho,
+  // no servidor). Carrega quando o painel abre.
+  const [reasonOptions, setReasonOptions] = useState<string[]>([]);
+  useEffect(() => {
+    if (!lostOpen || reasonOptions.length > 0) return;
+    getLostReasons().then(setReasonOptions).catch(() => {});
+  }, [lostOpen, reasonOptions.length]);
 
   const markStatus = useCallback(
     async (status: "open" | "won" | "lost", reason?: string) => {
@@ -992,13 +1000,7 @@ export default function DealDetailPage() {
             Por que este negócio foi perdido?
           </p>
           <div className="flex flex-wrap gap-1.5">
-            {[
-              "Não responde",
-              "Achou caro",
-              "Comprou concorrente",
-              "Sem orçamento agora",
-              "Preferiu esperar",
-            ].map((r) => (
+            {reasonOptions.map((r) => (
               <button
                 key={r}
                 type="button"
@@ -1018,7 +1020,7 @@ export default function DealDetailPage() {
             <Input
               value={lostReason}
               onChange={(e) => setLostReason(e.target.value)}
-              placeholder="Ou escreva o motivo…"
+              placeholder="Ou escreva um motivo novo — ele vira opção pra próxima"
               className="h-8 flex-1 border-border bg-background text-sm"
             />
             <Button

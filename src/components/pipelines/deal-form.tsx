@@ -7,6 +7,7 @@ import {
   createDeal,
   updateDeal,
   deleteDeal,
+  getLostReasons,
   openDealConversation,
   openDealWhatsApp,
 } from "@/app/(dashboard)/pipelines/actions";
@@ -138,6 +139,12 @@ export function DealForm({
   // Motivo de perda (estilo RD): ao marcar perda, pede o porquê.
   const [lostReasonOpen, setLostReasonOpen] = useState(false);
   const [lostReason, setLostReason] = useState("");
+  // Chips = motivos da CONTA (novo digitado entra na lista no servidor).
+  const [reasonOptions, setReasonOptions] = useState<string[]>([]);
+  useEffect(() => {
+    if (!lostReasonOpen || reasonOptions.length > 0) return;
+    getLostReasons().then(setReasonOptions).catch(() => {});
+  }, [lostReasonOpen, reasonOptions.length]);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // When opened from a conversation the contact is known — show it locked
@@ -712,13 +719,7 @@ export function DealForm({
                       Motivo da perda
                     </Label>
                     <div className="flex flex-wrap gap-1.5">
-                      {[
-                        "Não responde",
-                        "Achou caro",
-                        "Comprou concorrente",
-                        "Sem orçamento agora",
-                        "Preferiu esperar",
-                      ].map((r) => (
+                      {reasonOptions.map((r) => (
                         <button
                           key={r}
                           type="button"

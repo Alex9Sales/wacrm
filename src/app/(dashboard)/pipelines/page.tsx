@@ -100,6 +100,30 @@ const SORT_LABELS = {
   name: "Título (A–Z)",
 } as const;
 
+// Filtros que FICAM salvos entre visitas (chamado do Rafael: escolher
+// "Em andamento" e ele voltar pro padrão a cada entrada). Persistem por
+// navegador em localStorage; mudam só quando o humano muda.
+const FILTERS_LS_KEY = "fluxia:funil:filtros";
+type SavedFilters = {
+  status?: keyof typeof STATUS_LABELS;
+  sort?: keyof typeof SORT_LABELS;
+  view?: "board" | "list";
+};
+function loadSavedFilters(): SavedFilters {
+  if (typeof window === "undefined") return {};
+  try {
+    const raw = window.localStorage.getItem(FILTERS_LS_KEY);
+    const parsed = raw ? (JSON.parse(raw) as SavedFilters) : {};
+    return {
+      status: parsed.status && parsed.status in STATUS_LABELS ? parsed.status : undefined,
+      sort: parsed.sort && parsed.sort in SORT_LABELS ? parsed.sort : undefined,
+      view: parsed.view === "list" || parsed.view === "board" ? parsed.view : undefined,
+    };
+  } catch {
+    return {};
+  }
+}
+
 export default function PipelinesPage() {
   const canEditSettings = useCan("edit-settings");
   const canCreateDeals = useCan("send-messages");
@@ -124,6 +148,29 @@ export default function PipelinesPage() {
   const [search, setSearch] = useState("");
   // Kanban (board) ⇄ Lista (tabela) — toggle estilo RD.
   const [viewMode, setViewMode] = useState<"board" | "list">("board");
+
+  // Hidrata os filtros salvos APÓS montar (localStorage não existe no SSR —
+  // ler no initializer causaria hydration mismatch) e só então passa a salvar
+  // as mudanças do humano.
+  const filtersHydrated = useRef(false);
+  useEffect(() => {
+    if (!filtersHydrated.current) {
+      filtersHydrated.current = true;
+      const saved = loadSavedFilters();
+      if (saved.status) setStatusFilter(saved.status);
+      if (saved.sort) setSortBy(saved.sort);
+      if (saved.view) setViewMode(saved.view);
+      return;
+    }
+    try {
+      window.localStorage.setItem(
+        FILTERS_LS_KEY,
+        JSON.stringify({ status: statusFilter, sort: sortBy, view: viewMode }),
+      );
+    } catch {
+      // navegador sem localStorage (modo privado agressivo) — segue sem salvar
+    }
+  }, [statusFilter, sortBy, viewMode]);
   // "Esfriando": limite de dias (da conta) + filtro só-esfriando.
   const [staleDays, setStaleDays] = useState(0);
   const [staleOnly, setStaleOnly] = useState(false);

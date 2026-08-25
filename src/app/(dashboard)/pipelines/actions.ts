@@ -34,7 +34,10 @@ import {
 } from '@/app/(dashboard)/contacts/actions'
 import { createTask } from '@/app/(dashboard)/tarefas/actions'
 import { scheduleMessage } from '@/app/(dashboard)/inbox/schedule-actions'
-import { getAccountSettings } from '@/lib/settings/account-settings'
+import {
+  getAccountSettings,
+  updateAccountSettings,
+} from '@/lib/settings/account-settings'
 import { enrollContactInCadence } from '@/lib/cadences/cadence'
 import { runDealSuggestions } from '@/lib/ai/deal-suggest'
 import { planStageFollowUp } from '@/lib/ai/followup'
@@ -1398,6 +1401,11 @@ export async function updateDeal(
       .set(set)
       .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
 
+    // Motivo novo digitado vira chip da conta (criado na hora, estilo RD).
+    if (typeof set.lostReason === 'string' && set.lostReason) {
+      await rememberLostReason(ctx.accountId, set.lostReason)
+    }
+
     if (stageChanged) {
       const toName = await stageName(patch.stage_id!)
       await recordDealEvent(ctx.accountId, ctx.userId, id, 'stage_changed', {
@@ -1475,6 +1483,38 @@ export async function setDealStatus(
     status,
     ...(status === 'lost' ? { lost_reason: (reason ?? '').trim() || null } : {}),
   })
+}
+
+/** Motivos de perda da conta (chips do "Marcar perda", estilo RD). */
+export async function getLostReasons(): Promise<string[]> {
+  try {
+    const ctx = await getCurrentAccount()
+    const s = await getAccountSettings(ctx.accountId)
+    return s.lostReasons
+  } catch {
+    return []
+  }
+}
+
+/**
+ * Motivo digitado na hora entra na lista da conta (dedupe sem caixa; teto de
+ * 40 pra lista não virar lixão). Best-effort: falha aqui nunca derruba a
+ * marcação de perda. Só roda nos caminhos HUMANOS — a IA ([[PERDER:]]) tem
+ * motivos livres e não polui a lista.
+ */
+async function rememberLostReason(accountId: string, reason: string): Promise<void> {
+  try {
+    const r = reason.trim()
+    if (!r || r.length > 60) return
+    const s = await getAccountSettings(accountId)
+    if (s.lostReasons.some((x) => x.trim().toLowerCase() === r.toLowerCase())) return
+    if (s.lostReasons.length >= 40) return
+    await updateAccountSettings(accountId, {
+      lostReasons: [...s.lostReasons, r],
+    })
+  } catch {
+    // best-effort
+  }
 }
 
 /** Pausar / retomar um negócio (estilo RD). Fica na etapa; só marca paused_at. */

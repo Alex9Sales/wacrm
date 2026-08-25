@@ -57,6 +57,10 @@ export interface AccountSettings {
   wonCadenceId: string | null
   /** Cadência ao marcar como PERDIDO (recuperação). null = nenhuma. */
   lostCadenceId: string | null
+  /** Motivos de perda da conta (estilo RD): os chips oferecidos ao marcar
+   *  perda. Motivo novo digitado num "Confirmar perda" entra aqui sozinho
+   *  (criado na hora, fica pra próxima). */
+  lostReasons: string[]
   /** Sócio IA — resumo diário do funil enviado no WhatsApp do dono.
    *  OFF por padrão (dispara mensagem real). */
   ownerDigestEnabled: boolean
@@ -104,6 +108,13 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   staleDealDays: 7,
   wonCadenceId: null,
   lostCadenceId: null,
+  lostReasons: [
+    'Não responde',
+    'Achou caro',
+    'Comprou concorrente',
+    'Sem orçamento agora',
+    'Preferiu esperar',
+  ],
   ownerDigestEnabled: false,
   ownerDigestHour: 8,
   ownerDigestPhone: '',
