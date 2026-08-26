@@ -417,13 +417,20 @@ export function buildSystemPrompt(args: {
     if (args.contact.name) bits.push(`WhatsApp profile name: ${args.contact.name}`)
     if (args.contact.phone) {
       const digits = String(args.contact.phone).replace(/\D/g, '')
-      const local = digits.startsWith('55') ? digits.slice(2) : digits
+      const isBr = digits.startsWith('55') && digits.length >= 12
+      let lookup = isBr ? digits.slice(2) : digits
+      // Nono dígito: cadastros locais (BR) guardam DDD + 9XXXXXXXX (11 dígitos),
+      // mas JIDs antigos do WhatsApp vêm SEM o 9 (10 dígitos) — caso Day
+      // Manicure 26/08: WhatsApp 556793431165 vs ERP 67993431165. Insere o 9.
+      if (isBr && lookup.length === 10) {
+        lookup = lookup.slice(0, 2) + '9' + lookup.slice(2)
+      }
       bits.push(
-        `phone: ${digits}${local !== digits ? ` (without the country code 55: ${local})` : ''}`,
+        `phone: ${digits}${lookup !== digits ? ` (for customer-registry lookups use: ${lookup})` : ''}`,
       )
     }
     parts.push(
-      `CONTACT OF THIS CONVERSATION — ${bits.join(' · ')}. When an external tool needs the customer's phone number, use this one (never ask the customer for their own number); if the tool's registry stores numbers without the country code, pass the version without the 55. The profile name may be a nickname — prefer the registered name from your customer-registry tool when you have it.`,
+      `CONTACT OF THIS CONVERSATION — ${bits.join(' · ')}. When an external tool needs the customer's phone number, use the registry-lookup version given here exactly as written (never ask the customer for their own number, and do not re-format it). The profile name may be a nickname — prefer the registered name from your customer-registry tool when you have it.`,
     )
   }
 

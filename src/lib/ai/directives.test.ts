@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { parseCloseDirectives } from './defaults'
+import { parseCloseDirectives, buildSystemPrompt } from './defaults'
 
 describe('parseCloseDirectives', () => {
   it('extrai skip/etiqueta/resolver/funil e limpa o texto', () => {
@@ -123,5 +123,27 @@ describe('parseCloseDirectives', () => {
       tags: [],
       text: 'Oi, tudo bem?',
     })
+  })
+})
+
+describe('buildSystemPrompt — contato da conversa', () => {
+  it('JID antigo sem o nono dígito → telefone de consulta ganha o 9 (caso Day Manicure)', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      contact: { name: 'Day Manicure', phone: '556793431165' },
+    })
+    expect(p).toContain('phone: 556793431165')
+    expect(p).toContain('67993431165') // 67 9 9343-1165 — como o ERP guarda
+  })
+
+  it('número já com 11 dígitos locais fica intacto (só tira o 55)', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      contact: { name: null, phone: '5567991252907' },
+    })
+    expect(p).toContain('67991252907')
+    expect(p).not.toContain('679991252907')
   })
 })
