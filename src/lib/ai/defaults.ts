@@ -384,6 +384,10 @@ export function buildSystemPrompt(args: {
   /** 🔀 Roteamento multiagente: os OUTROS agentes ativos da conta pra quem
    *  esta conversa pode ser transferida ([] = ferramenta inerte). */
   agentRoster?: { name: string }[]
+  /** Contato da conversa (nome do WhatsApp + telefone). Com o telefone a IA
+   *  consegue consultar o cadastro do cliente em ferramentas externas SEM
+   *  pedir o número — sem isso ela não tem como preencher {telefone}. */
+  contact?: { name?: string | null; phone?: string | null } | null
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -404,6 +408,24 @@ export function buildSystemPrompt(args: {
       'If a scheduled time is in the past, do NOT talk about it as if it is happening now or still to come — instead follow up (e.g. ask how it went) or reschedule. If it is still upcoming, confirm it. Never invent or assume the current date; use the one given here. ' +
       'Also focus your reply on the customer\'s MOST RECENT message and current intent — do not resurface an old, unrelated topic from earlier in the history unless the customer brings it up.',
   ]
+
+  // Contato desta conversa — nome do WhatsApp + telefone. O telefone permite
+  // consultar o cadastro do cliente em ferramentas externas sem perguntar o
+  // número (caso Maria 26/08: pedia CPF em vez de buscar pelo telefone).
+  if (args.contact && (args.contact.name || args.contact.phone)) {
+    const bits: string[] = []
+    if (args.contact.name) bits.push(`WhatsApp profile name: ${args.contact.name}`)
+    if (args.contact.phone) {
+      const digits = String(args.contact.phone).replace(/\D/g, '')
+      const local = digits.startsWith('55') ? digits.slice(2) : digits
+      bits.push(
+        `phone: ${digits}${local !== digits ? ` (without the country code 55: ${local})` : ''}`,
+      )
+    }
+    parts.push(
+      `CONTACT OF THIS CONVERSATION — ${bits.join(' · ')}. When an external tool needs the customer's phone number, use this one (never ask the customer for their own number); if the tool's registry stores numbers without the country code, pass the version without the 55. The profile name may be a nickname — prefer the registered name from your customer-registry tool when you have it.`,
+    )
+  }
 
   if (mode === 'auto_reply') {
     const tools = args.tools ?? []

@@ -242,6 +242,17 @@ export async function dispatchInboundToAiReply(
       ? await listContactFieldNames(accountId)
       : []
 
+    // Dados do CONTATO no prompt: sem o telefone a IA não consegue chamar
+    // ferramentas externas que buscam o cliente por telefone (caso Maria 26/08
+    // — ela pedia o CPF em vez de consultar o cadastro sozinha).
+    const contactRow = firstOrNull(
+      await db
+        .select({ name: contacts.name, phone: contacts.phone })
+        .from(contacts)
+        .where(eq(contacts.id, contactId))
+        .limit(1),
+    )
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -257,6 +268,9 @@ export async function dispatchInboundToAiReply(
       voicePref: conv.voicePreference,
       audioReplies: config.audioRepliesEnabled !== false,
       agentRoster: agentRoster.map((a) => ({ name: a.name ?? 'Agente' })),
+      contact: contactRow
+        ? { name: contactRow.name, phone: contactRow.phone }
+        : null,
     })
 
     // 🔧 Com ferramentas externas do agente (ERP do cliente etc.) — sem
@@ -494,11 +508,20 @@ export async function dispatchInboundToAiReply(
             .where(eq(contacts.id, contactId))
             .limit(1),
         )
+        // Resumo automático: últimas falas do CLIENTE (o modelo raramente manda
+        // resumo no handoff, e o dono precisa de contexto no aviso — Alex 26/08).
+        const clientTail = messages
+          .filter((m) => m.role === 'user')
+          .slice(-4)
+          .map((m) => stripLeadingTimestamp(String(m.content)).slice(0, 90))
+          .filter(Boolean)
+          .join(' · ')
+          .slice(0, 380)
         await sendOwnerAlert(accountId, 'handoff', {
           cliente: c?.name ?? '',
           telefone: c?.phone ?? '',
           motivo: 'A IA pediu um humano nesta conversa',
-          resumo: text || '',
+          resumo: clientTail ? `Cliente disse: ${clientTail}` : text || '',
         })
       } catch (err) {
         console.error('[ai auto-reply] aviso de handoff falhou:', err)
