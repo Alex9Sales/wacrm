@@ -18,6 +18,7 @@ import {
   enqueueScheduledMessage,
   removeScheduledMessageJob,
 } from '@/lib/queue/queues'
+import { contactTokenValues, renderMessageVars } from '@/lib/whatsapp/message-vars'
 
 // ============================================================
 // Cadências — motor. Uma CADÊNCIA (sequência de mensagens fixas) é INSCRITA
@@ -45,13 +46,21 @@ function delayMsOf(value: number, unit: string): number {
   return v * 86_400_000 // days
 }
 
-/** Substitui {{nome}}, {{empresa}}, {{telefone}}, {{email}} no texto. */
+/**
+ * Substitui {{nome}}, {{primeiro_nome}}, {{empresa}}, {{telefone}}, {{email}}
+ * no texto. Reusa o motor CANÔNICO de variáveis (o mesmo do disparo e do
+ * agendamento), então: aceita a chave simples {nome}, o fallback
+ * {{primeiro_nome|cliente}}, e — crítico — deixa um token DESCONHECIDO
+ * VISÍVEL no lugar de apagá-lo. A versão antiga só conhecia 4 tokens e
+ * SUMIA com {{primeiro_nome}} (chamado do Rafael 26/08: "exclui e não manda
+ * nada").
+ */
 export function interpolate(
   text: string | null | undefined,
   vars: Record<string, string>,
 ): string {
   if (!text) return ''
-  return text.replace(/\{\{\s*(\w+)\s*\}\}/g, (_, k) => vars[String(k).toLowerCase()] ?? '')
+  return renderMessageVars(text, vars)
 }
 
 interface CadenceCtx {
@@ -224,12 +233,15 @@ export async function enrollContactInCadence(
         }),
     )
 
-    const vars: Record<string, string> = {
-      nome: (contact.name ?? '').trim(),
-      empresa: (contact.company ?? '').trim(),
-      telefone: (contact.phone ?? '').trim(),
-      email: (contact.email ?? '').trim(),
-    }
+    // Inclui `primeiro_nome` (1ª palavra do nome) — o token que o Rafael quer
+    // pra sair "Matheus", não "Matheus Costa". contactTokenValues é a fonte
+    // única (mesmos tokens do disparo/agendamento).
+    const vars = contactTokenValues({
+      name: contact.name,
+      phone: contact.phone,
+      email: contact.email,
+      company: contact.company,
+    })
 
     const accountChannels = await db
       .select({ id: channels.id, provider: channels.provider })
@@ -259,9 +271,14 @@ export async function enrollContactInCadence(
 
     let scheduled = 0
     let skipped = 0
-    let cumMs = 0
+    // Cada degrau agenda a partir do INÍCIO da cadência (d0, d2, d4…), NÃO
+    // "N depois do degrau anterior" (chamado do Rafael 26/08). O rótulo do
+    // editor (+2d/+4d/+7d) já era absoluto; era o motor que somava (d0→d2→d6→
+    // d13…). `enrolledAtMs` fixo pra todos os degraus caírem no offset certo
+    // desde a 1ª mensagem.
+    const enrolledAtMs = Date.now()
     for (const step of steps) {
-      cumMs += delayMsOf(step.delayValue, step.delayUnit)
+      const offsetMs = delayMsOf(step.delayValue, step.delayUnit)
       const providers = providersFor(step.channel)
 
       // Alvo: a conversa REAL do lead nesse canal. Prefere a de origem (se do
@@ -333,7 +350,7 @@ export async function enrollContactInCadence(
       }
 
       // >=60s à frente (o agendamento exige futuro; D0 sai em ~1 min).
-      const sendAt = new Date(Date.now() + Math.max(cumMs, 60_000))
+      const sendAt = new Date(enrolledAtMs + Math.max(offsetMs, 60_000))
       const body = interpolate(step.body, vars)
       const subject = step.channel === 'email' ? interpolate(step.subject, vars) || null : null
 

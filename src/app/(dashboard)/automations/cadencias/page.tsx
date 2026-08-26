@@ -327,9 +327,15 @@ export default function CadenciasPage() {
               <div className="flex items-center justify-between">
                 <Label>Degraus</Label>
                 <span className="text-xs text-muted-foreground">
-                  Variáveis: {'{{nome}}'} {'{{empresa}}'}
+                  Variáveis: {'{{primeiro_nome}}'} {'{{nome}}'} {'{{empresa}}'}{' '}
+                  {'{{telefone}}'} {'{{email}}'}
                 </span>
               </div>
+              <p className="text-xs text-muted-foreground">
+                O tempo de cada degrau conta a partir da{' '}
+                <strong>1ª mensagem</strong> (d0, d2, d4…), não do degrau
+                anterior.
+              </p>
               {draft.steps.map((step, i) => {
                 const meta = CHANNEL_META[step.channel] ?? CHANNEL_META.whatsapp
                 return (
