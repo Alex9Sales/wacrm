@@ -339,6 +339,7 @@ export async function dispatchInboundToAiReply(
           title: dirs.createCard.title,
           value: dirs.createCard.value,
           note: dirs.createCard.note,
+          pipelineId: config.pipelineId ?? null,
         })
         if (d) {
           console.log('[ai auto-reply] card criado:', JSON.stringify(d))

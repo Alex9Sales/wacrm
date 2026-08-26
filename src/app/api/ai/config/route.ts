@@ -1,6 +1,6 @@
 import { NextResponse } from 'next/server'
 import { and, asc, desc, eq } from 'drizzle-orm'
-import { db, aiConfigs, aiCredentials } from '@/db'
+import { db, aiConfigs, aiCredentials, pipelines } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import {
   getCurrentAccount,
@@ -53,6 +53,7 @@ export async function GET(request: Request) {
           auto_reply_buffer_seconds: aiConfigs.autoReplyBufferSeconds,
           barge_in_minutes: aiConfigs.bargeInMinutes,
           audio_replies_enabled: aiConfigs.audioRepliesEnabled,
+          pipeline_id: aiConfigs.pipelineId,
           deal_suggestions_proactive: aiConfigs.dealSuggestionsProactive,
           signature_name: aiConfigs.signatureName,
           signature_enabled: aiConfigs.signatureEnabled,
@@ -190,6 +191,27 @@ export async function POST(request: Request) {
 
     // 🔊 Responder por áudio (master do TTS). Ausente = ligado (compat).
     const audioRepliesEnabled = body.audio_replies_enabled !== false
+
+    // Funil DESTE agente (0139): string válida grava; null limpa; ausente preserva.
+    let pipelineId: string | null | undefined = undefined
+    if (body.pipeline_id === null) {
+      pipelineId = null
+    } else if (typeof body.pipeline_id === 'string' && body.pipeline_id.trim()) {
+      const pipe = firstOrNull(
+        await db
+          .select({ id: pipelines.id })
+          .from(pipelines)
+          .where(
+            and(
+              eq(pipelines.id, body.pipeline_id.trim()),
+              eq(pipelines.accountId, accountId),
+            ),
+          )
+          .limit(1),
+      )
+      if (!pipe) return bad('Funil não encontrado.')
+      pipelineId = pipe.id
+    }
 
     // Assinatura: nome do atendente que a IA representa + se assina as msgs.
     const signatureName =
@@ -354,6 +376,7 @@ export async function POST(request: Request) {
       autoReplyBufferSeconds: number
       bargeInMinutes: number
       audioRepliesEnabled: boolean
+      pipelineId?: string | null
       dealSuggestionsProactive?: boolean
       signatureName: string | null
       signatureEnabled: boolean
@@ -391,6 +414,8 @@ export async function POST(request: Request) {
     if (dealSuggestionsProactive !== undefined) {
       shared.dealSuggestionsProactive = dealSuggestionsProactive
     }
+    // Funil do agente: só grava quando o campo veio no body (preserva senão).
+    if (pipelineId !== undefined) shared.pipelineId = pipelineId
     if (rawEmbeddingsKey) {
       shared.embeddingsApiKey = encrypt(rawEmbeddingsKey)
     } else if (clearEmbeddingsKey) {

@@ -41,6 +41,8 @@ export interface AiConfig {
   audioRepliesEnabled?: boolean
   /** Nome do agente (multiagente/roteamento). */
   name?: string | null
+  /** Funil DESTE agente: card criado pela IA nasce nele. null = 1º da conta. */
+  pipelineId?: string | null
   /** IA proativa em Negociações (Fase 3): quando true, a IA analisa o negócio
    *  vinculado no inbound e cria sugestões pendentes. Opcional (default false)
    *  para não quebrar construções sintéticas. */

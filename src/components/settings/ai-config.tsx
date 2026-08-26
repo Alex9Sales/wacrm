@@ -36,6 +36,7 @@ import {
 import { SettingsPanelHead } from './settings-panel-head';
 import { AI_PROVIDER_DEFAULT_MODEL } from '@/lib/ai/defaults';
 import { AGENT_TOOLS } from '@/lib/ai/tools';
+import { listPipelines } from '@/app/(dashboard)/pipelines/actions';
 import type { AiProvider } from '@/lib/ai/types';
 
 const MASKED_KEY = '••••••••••••••••';
@@ -120,6 +121,9 @@ export function AiConfig({
     { id: string; name: string; provider: string }[]
   >([]);
   const [channelIds, setChannelIds] = useState<string[]>([]);
+  // Funil DESTE agente (0139): card criado pela IA nasce nele. '' = 1º da conta.
+  const [pipes, setPipes] = useState<{ id: string; name: string }[]>([]);
+  const [pipelineId, setPipelineId] = useState('');
   // Bases de conhecimento que ESTE agente usa (Fase K). Vazio = todas.
   const [bases, setBases] = useState<
     { id: string; name: string; documentCount: number }[]
@@ -183,6 +187,9 @@ export function AiConfig({
           typeof data.barge_in_minutes === 'number' ? data.barge_in_minutes : 5,
         );
         setAudioReplies(data.audio_replies_enabled !== false);
+        setPipelineId(
+          typeof data.pipeline_id === 'string' ? data.pipeline_id : '',
+        );
         setSignatureName(data.signature_name ?? '');
         setSignatureEnabled(Boolean(data.signature_enabled));
         setTools(Array.isArray(data.tools) ? data.tools : []);
@@ -222,6 +229,15 @@ export function AiConfig({
         }
       } catch {
         /* best-effort — sem canais o picker só some */
+      }
+      // Funis da conta pro seletor "Funil deste agente".
+      try {
+        const list = await listPipelines();
+        if (!cancelled && Array.isArray(list)) {
+          setPipes(list.map((p) => ({ id: p.id, name: p.name })));
+        }
+      } catch {
+        /* best-effort — sem funis o seletor só some */
       }
     })();
     return () => {
@@ -376,6 +392,7 @@ export function AiConfig({
     auto_reply_buffer_seconds: bufferSeconds,
     barge_in_minutes: bargeInMinutes,
     audio_replies_enabled: audioReplies,
+    pipeline_id: pipelineId || null,
     tools,
     signature_name: signatureName.trim() || null,
     signature_enabled: signatureEnabled && signatureName.trim().length > 0,
@@ -903,6 +920,41 @@ export function AiConfig({
                 })}
               </div>
             </div>
+
+            {/* Funil DESTE agente (0139): card criado pela IA nasce nele. */}
+            {pipes.length > 0 && (
+              <div className="rounded-md border border-border p-3">
+                <p className="text-sm font-medium text-foreground">
+                  Funil deste agente
+                </p>
+                <p className="mb-2 text-xs text-muted-foreground">
+                  Quando este agente criar um negócio (card), ele nasce na 1ª
+                  etapa deste funil. Assim cada agente trabalha o funil dele —
+                  vendas, cobrança, reunião, suporte.
+                </p>
+                <Select
+                  value={pipelineId || 'default'}
+                  onValueChange={(v) =>
+                    setPipelineId(!v || v === 'default' ? '' : v)
+                  }
+                  disabled={disabled}
+                >
+                  <SelectTrigger className="h-9 w-full sm:w-80">
+                    <SelectValue placeholder="1º funil da conta (padrão)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="default">
+                      1º funil da conta (padrão)
+                    </SelectItem>
+                    {pipes.map((p) => (
+                      <SelectItem key={p.id} value={p.id}>
+                        {p.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+            )}
 
             {/* Canais onde a IA responde (multi). Vazio = todos os canais. */}
             {autoReplyEnabled && channels.length > 0 && (

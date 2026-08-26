@@ -1916,6 +1916,9 @@ export const aiConfigs = pgTable("ai_configs", {
 	// Ferramentas do agente (migração 0089) — conjunto de ações ligadas (chaves
 	// de src/lib/ai/tools.ts). Fonte da verdade do que a IA pode fazer no CRM.
 	tools: jsonb().default(sql`'["skip_reply","tag","handoff"]'::jsonb`).notNull(),
+	// Funil DESTE agente (migração 0139): card criado pela IA nasce aqui.
+	// NULL = 1º funil da conta (comportamento antigo).
+	pipelineId: uuid("pipeline_id"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
@@ -1935,6 +1938,11 @@ export const aiConfigs = pgTable("ai_configs", {
 			columns: [table.credentialId],
 			foreignColumns: [aiCredentials.id],
 			name: "ai_configs_credential_id_fkey"
+		}).onDelete("set null"),
+	foreignKey({
+			columns: [table.pipelineId],
+			foreignColumns: [pipelines.id],
+			name: "ai_configs_pipeline_id_fkey"
 		}).onDelete("set null"),
 ]);
 

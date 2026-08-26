@@ -231,6 +231,8 @@ export async function createDealFromAi(input: {
   value?: number | null
   /** Resumo do pedido (produto, endereço, pagamento) — vira a nota do card. */
   note?: string | null
+  /** Funil do AGENTE (ai_configs.pipeline_id) — null/inválido cai no 1º funil. */
+  pipelineId?: string | null
 }): Promise<{ dealId: string; title: string } | null> {
   const { accountId, userId, conversationId, contactId } = input
   const title = (input.title || '').trim().slice(0, 200)
@@ -254,15 +256,27 @@ export async function createDealFromAi(input: {
     )
     if (existing) return null
 
-    // 1º funil da conta + 1ª etapa.
-    const pipeline = firstOrNull(
-      await db
-        .select({ id: pipelines.id })
-        .from(pipelines)
-        .where(eq(pipelines.accountId, accountId))
-        .orderBy(asc(pipelines.createdAt))
-        .limit(1),
-    )
+    // Funil do agente (quando configurado e da conta) — senão 1º funil da conta.
+    let pipeline: { id: string } | null = null
+    if (input.pipelineId) {
+      pipeline = firstOrNull(
+        await db
+          .select({ id: pipelines.id })
+          .from(pipelines)
+          .where(and(eq(pipelines.id, input.pipelineId), eq(pipelines.accountId, accountId)))
+          .limit(1),
+      )
+    }
+    if (!pipeline) {
+      pipeline = firstOrNull(
+        await db
+          .select({ id: pipelines.id })
+          .from(pipelines)
+          .where(eq(pipelines.accountId, accountId))
+          .orderBy(asc(pipelines.createdAt))
+          .limit(1),
+      )
+    }
     if (!pipeline) return null
     const stage = firstOrNull(
       await db
