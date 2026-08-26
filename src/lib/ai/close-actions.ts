@@ -22,6 +22,7 @@ import {
   messages,
   customFields,
   contactCustomValues,
+  organization,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
@@ -226,6 +227,10 @@ export async function createDealFromAi(input: {
   conversationId: string
   contactId: string | null
   title: string
+  /** Valor fechado com o cliente (moeda da conta). null = sem valor. */
+  value?: number | null
+  /** Resumo do pedido (produto, endereço, pagamento) — vira a nota do card. */
+  note?: string | null
 }): Promise<{ dealId: string; title: string } | null> {
   const { accountId, userId, conversationId, contactId } = input
   const title = (input.title || '').trim().slice(0, 200)
@@ -269,6 +274,21 @@ export async function createDealFromAi(input: {
     )
     if (!stage) return null
 
+    // Moeda da CONTA — sem isso o insert caía no default 'USD' do banco e o
+    // card da Maria nasceu em dólar (review da 1ª venda, 26/08).
+    const org = firstOrNull(
+      await db
+        .select({ currency: organization.default_currency })
+        .from(organization)
+        .where(eq(organization.id, accountId))
+        .limit(1),
+    )
+    const value =
+      typeof input.value === 'number' && Number.isFinite(input.value) && input.value >= 0
+        ? input.value
+        : null
+    const note = (input.note ?? '').trim().slice(0, 2000) || null
+
     const [created] = await db
       .insert(deals)
       .values({
@@ -278,6 +298,9 @@ export async function createDealFromAi(input: {
         contactId: contactId || null,
         conversationId,
         title,
+        ...(value != null ? { value: String(value) } : {}),
+        currency: org?.currency ?? 'BRL',
+        ...(note ? { notes: note } : {}),
         status: 'open',
         userId,
         stageChangedAt: sql`now()`,

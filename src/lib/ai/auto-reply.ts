@@ -283,9 +283,37 @@ export async function dispatchInboundToAiReply(
           userId: configOwnerUserId || null,
           conversationId,
           contactId,
-          title: dirs.createCard,
+          title: dirs.createCard.title,
+          value: dirs.createCard.value,
+          note: dirs.createCard.note,
         })
-        if (d) console.log('[ai auto-reply] card criado:', JSON.stringify(d))
+        if (d) {
+          console.log('[ai auto-reply] card criado:', JSON.stringify(d))
+          // 📣 Aviso do responsável: pedido confirmado pela IA ("manda no grupo
+          // do despacho"). Best-effort — o toggle/telefone é checado lá dentro.
+          try {
+            const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
+            const c = firstOrNull(
+              await db
+                .select({ name: contacts.name, phone: contacts.phone })
+                .from(contacts)
+                .where(eq(contacts.id, contactId))
+                .limit(1),
+            )
+            await sendOwnerAlert(accountId, 'order', {
+              titulo: dirs.createCard.title,
+              valor:
+                dirs.createCard.value != null
+                  ? `R$ ${dirs.createCard.value.toFixed(2).replace('.', ',')}`
+                  : '',
+              resumo: dirs.createCard.note ?? '',
+              cliente: c?.name ?? '',
+              telefone: c?.phone ?? '',
+            })
+          } catch (err) {
+            console.error('[ai auto-reply] aviso de pedido falhou:', err)
+          }
+        }
       }
     }
     // Transferir pra humano por etiqueta (ferramenta 'handoff' + [[TRANSFERIR]]).

@@ -21,19 +21,27 @@ const WHATSAPP_PROVIDERS = ['waha', 'meta', 'evolution', 'evogo']
 
 export type { OwnerAlertKind }
 
-const KIND_TOGGLE: Record<OwnerAlertKind, 'alertOnWon' | 'alertOnHandoff' | 'alertOnBooking'> = {
+const KIND_TOGGLE: Record<
+  OwnerAlertKind,
+  'alertOnWon' | 'alertOnHandoff' | 'alertOnBooking' | 'alertOnOrder'
+> = {
   won: 'alertOnWon',
   handoff: 'alertOnHandoff',
   booking: 'alertOnBooking',
+  order: 'alertOnOrder',
 }
 
 const KIND_TEMPLATE: Record<
   OwnerAlertKind,
-  'alertWonTemplate' | 'alertHandoffTemplate' | 'alertBookingTemplate'
+  | 'alertWonTemplate'
+  | 'alertHandoffTemplate'
+  | 'alertBookingTemplate'
+  | 'alertOrderTemplate'
 > = {
   won: 'alertWonTemplate',
   handoff: 'alertHandoffTemplate',
   booking: 'alertBookingTemplate',
+  order: 'alertOrderTemplate',
 }
 
 /**

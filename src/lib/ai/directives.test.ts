@@ -45,8 +45,29 @@ describe('parseCloseDirectives', () => {
     const d = parseCloseDirectives(
       'Show! Vou registrar aqui.\n[[CRIARCARD:Matheus - interesse plano Pro]]',
     )
-    expect(d.createCard).toBe('Matheus - interesse plano Pro')
+    expect(d.createCard).toEqual({
+      title: 'Matheus - interesse plano Pro',
+      value: null,
+      note: null,
+    })
     expect(d.text).toBe('Show! Vou registrar aqui.')
+  })
+
+  it('extrai [[CRIARCARD:título | valor | observação]]', () => {
+    const d = parseCloseDirectives(
+      'Pedido confirmado!\n[[CRIARCARD:Zulma — botijão P-13 | R$ 125,00 | 1 Ultragaz P-13 · Rua Farol 37 · cartão]]',
+    )
+    expect(d.createCard).toEqual({
+      title: 'Zulma — botijão P-13',
+      value: 125,
+      note: '1 Ultragaz P-13 · Rua Farol 37 · cartão',
+    })
+    expect(d.text).toBe('Pedido confirmado!')
+  })
+
+  it('CRIARCARD com valor ilegível vira null (não trava o card)', () => {
+    const d = parseCloseDirectives('[[CRIARCARD:Lead novo | a combinar]]')
+    expect(d.createCard).toEqual({ title: 'Lead novo', value: null, note: null })
   })
 
   it('extrai nota/atributo/voz', () => {

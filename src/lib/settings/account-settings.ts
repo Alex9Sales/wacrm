@@ -78,11 +78,15 @@ export interface AccountSettings {
   alertOnHandoff: boolean
   /** Avisar quando um cliente marcar horário pela página pública de agenda. */
   alertOnBooking: boolean
+  /** Avisar quando a IA confirmar um PEDIDO (criou card com valor/resumo) —
+   *  o "manda no grupo do despacho" da Família do Gás. */
+  alertOnOrder: boolean
   /** Templates dos avisos ('' = padrão do sistema). Variáveis {{assim}} por
    *  evento — ver DEFAULT_ALERT_TEMPLATES em lib/alerts/owner-alerts. */
   alertWonTemplate: string
   alertHandoffTemplate: string
   alertBookingTemplate: string
+  alertOrderTemplate: string
   /** Sócio IA — resumo diário do funil enviado no WhatsApp do dono.
    *  OFF por padrão (dispara mensagem real). */
   ownerDigestEnabled: boolean
@@ -144,9 +148,11 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   alertOnWon: false,
   alertOnHandoff: false,
   alertOnBooking: false,
+  alertOnOrder: false,
   alertWonTemplate: '',
   alertHandoffTemplate: '',
   alertBookingTemplate: '',
+  alertOrderTemplate: '',
   ownerDigestEnabled: false,
   ownerDigestHour: 8,
   ownerDigestPhone: '',

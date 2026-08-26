@@ -90,7 +90,9 @@ export const SCHEDULE_DIRECTIVE =
 /** Transferir pra humano por etiqueta: [[TRANSFERIR:etiqueta|resumo]]. */
 export const TRANSFER_DIRECTIVE =
   /\[\[\s*transferir\s*:\s*([^\]|]+?)\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
-/** Criar card no funil: [[CRIARCARD:título]]. */
+/** Criar card no funil: [[CRIARCARD:título | valor | observação]] (valor e
+ *  observação opcionais — review da 1ª venda da Maria 26/08: card nascia sem
+ *  valor nem resumo do pedido). */
 export const CREATE_CARD_DIRECTIVE = /\[\[\s*criarcard\s*:\s*([^\]]+?)\s*\]\]/i
 /** Nota interna: [[NOTA:texto]]. */
 export const NOTE_DIRECTIVE = /\[\[\s*nota\s*:\s*([^\]]+?)\s*\]\]/i
@@ -117,7 +119,7 @@ export interface AgentDirectives {
   /** Transferência: etiqueta de roteamento + resumo pro atendente. */
   transfer: { tag: string; summary: string } | null
   /** Criar card no funil: título do negócio, ou null. */
-  createCard: string | null
+  createCard: { title: string; value: number | null; note: string | null } | null
   /** Nota interna pra equipe, ou null. */
   note: string | null
   /** Atributo a gravar no contato: { field, value }, ou null. */
@@ -143,7 +145,18 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     ? { tag: tm[1].trim(), summary: (tm[2] || '').trim() }
     : null
   const cm = raw.match(CREATE_CARD_DIRECTIVE)
-  const createCard = cm ? cm[1].trim() : null
+  // "título | valor | observação" — valor/observação opcionais. O valor aceita
+  // "125", "125,00", "R$ 125,00"; o que não parsear vira null (não trava o card).
+  let createCard: { title: string; value: number | null; note: string | null } | null =
+    null
+  if (cm) {
+    const [t, v, ...rest] = cm[1].split('|')
+    const title = (t ?? '').trim()
+    const rawValue = (v ?? '').replace(/[^\d,.]/g, '').replace(/\.(?=\d{3})/g, '').replace(',', '.')
+    const value = rawValue && Number.isFinite(Number(rawValue)) ? Number(rawValue) : null
+    const note = rest.join('|').trim() || null
+    createCard = title ? { title, value, note } : null
+  }
   const nm = raw.match(NOTE_DIRECTIVE)
   const note = nm ? nm[1].trim() : null
   const am = raw.match(ATTR_DIRECTIVE)
@@ -215,7 +228,7 @@ export function voiceInstruction(): string {
 /** Instrução: criar um card no funil quando surge uma oportunidade não rastreada. */
 export function createCardInstruction(): string {
   return (
-    'Creating a deal card: when you identify a REAL sales opportunity or a qualified lead that is not yet tracked in the pipeline (e.g. the customer shows clear buying intent, asks for a quote, or agrees to move forward), you may create a deal card ONCE by emitting "[[CRIARCARD:<short title>]]" — where <title> briefly names the opportunity (e.g. the customer name + product/interest, in Portuguese). Do this at most once per conversation and only for a genuine opportunity, not for every message. The marker is control metadata: never show it to the customer.'
+    'Creating a deal card: when you identify a REAL sales opportunity or a qualified lead that is not yet tracked in the pipeline (e.g. the customer shows clear buying intent, asks for a quote, or agrees to move forward), you may create a deal card ONCE by emitting "[[CRIARCARD:<short title> | <value> | <note>]]" — <title> briefly names the opportunity (customer name + product, in Portuguese); <value> (optional) is the deal amount as a plain number like 125,00 when a price was agreed; <note> (optional) is a short order summary in Portuguese (product, address, payment method). Example: "[[CRIARCARD:Zulma — botijão P-13 | 125,00 | 1 Ultragaz P-13 · Rua Farol 37, Novo Paraná · cartão de crédito]]". Do this at most once per conversation and only for a genuine opportunity. The marker is control metadata: never show it to the customer.'
   )
 }
 

@@ -32,11 +32,13 @@ export function OwnerAlertsPanel() {
   const [onWon, setOnWon] = useState(false);
   const [onHandoff, setOnHandoff] = useState(false);
   const [onBooking, setOnBooking] = useState(false);
+  const [onOrder, setOnOrder] = useState(false);
   const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [wonTemplate, setWonTemplate] = useState('');
   const [handoffTemplate, setHandoffTemplate] = useState('');
   const [bookingTemplate, setBookingTemplate] = useState('');
+  const [orderTemplate, setOrderTemplate] = useState('');
 
   useEffect(() => {
     getOwnerAlerts()
@@ -46,11 +48,13 @@ export function OwnerAlertsPanel() {
         setOnWon(d.onWon);
         setOnHandoff(d.onHandoff);
         setOnBooking(d.onBooking);
+        setOnOrder(d.onOrder);
         setChannels(d.channels);
         setWonTemplate(d.wonTemplate);
         setHandoffTemplate(d.handoffTemplate);
         setBookingTemplate(d.bookingTemplate);
-        if (d.wonTemplate || d.handoffTemplate || d.bookingTemplate) {
+        setOrderTemplate(d.orderTemplate);
+        if (d.wonTemplate || d.handoffTemplate || d.bookingTemplate || d.orderTemplate) {
           setShowTemplates(true);
         }
       })
@@ -66,9 +70,11 @@ export function OwnerAlertsPanel() {
       onWon,
       onHandoff,
       onBooking,
+      onOrder,
       wonTemplate,
       handoffTemplate,
       bookingTemplate,
+      orderTemplate,
     });
     setSaving(false);
     if (error) toast.error(error);
@@ -140,6 +146,11 @@ export function OwnerAlertsPanel() {
                   set: setOnBooking,
                   label: '📅 Um cliente marcar horário pela página pública',
                 },
+                {
+                  checked: onOrder,
+                  set: setOnOrder,
+                  label: '🛒 A IA confirmar um pedido (com produto, endereço e valor)',
+                },
               ].map((o) => (
                 <label
                   key={o.label}
@@ -194,6 +205,13 @@ export function OwnerAlertsPanel() {
                       value: bookingTemplate,
                       set: setBookingTemplate,
                       def: DEFAULT_ALERT_TEMPLATES.booking,
+                    },
+                    {
+                      label: '🛒 Pedido confirmado pela IA',
+                      vars: '{{titulo}} {{valor}} {{cliente}} {{telefone}} {{resumo}}',
+                      value: orderTemplate,
+                      set: setOrderTemplate,
+                      def: DEFAULT_ALERT_TEMPLATES.order,
                     },
                   ] as const
                 ).map((t) => (

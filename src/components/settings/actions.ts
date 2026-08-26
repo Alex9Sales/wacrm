@@ -1282,9 +1282,11 @@ export async function getOwnerAlerts(): Promise<{
   onWon: boolean
   onHandoff: boolean
   onBooking: boolean
+  onOrder: boolean
   wonTemplate: string
   handoffTemplate: string
   bookingTemplate: string
+  orderTemplate: string
   channels: { id: string; name: string }[]
 }> {
   const ctx = await getCurrentAccount()
@@ -1301,9 +1303,11 @@ export async function getOwnerAlerts(): Promise<{
     onWon: s.alertOnWon,
     onHandoff: s.alertOnHandoff,
     onBooking: s.alertOnBooking,
+    onOrder: s.alertOnOrder,
     wonTemplate: s.alertWonTemplate,
     handoffTemplate: s.alertHandoffTemplate,
     bookingTemplate: s.alertBookingTemplate,
+    orderTemplate: s.alertOrderTemplate,
     channels: chans
       .filter((c) => WA_PROVIDERS.includes(c.provider))
       .map((c) => ({ id: c.id, name: c.name })),
@@ -1316,13 +1320,15 @@ export async function setOwnerAlerts(input: {
   onWon: boolean
   onHandoff: boolean
   onBooking: boolean
+  onOrder?: boolean
   wonTemplate?: string
   handoffTemplate?: string
   bookingTemplate?: string
+  orderTemplate?: string
 }): Promise<{ error: string | null }> {
   const ctx = await requireRole('admin')
   const phone = normalizeOwnerPhone(input.phone)
-  const anyOn = input.onWon || input.onHandoff || input.onBooking
+  const anyOn = input.onWon || input.onHandoff || input.onBooking || !!input.onOrder
   if (anyOn && !phone) {
     return { error: 'Informe o número do WhatsApp que vai receber os avisos.' }
   }
@@ -1332,10 +1338,12 @@ export async function setOwnerAlerts(input: {
     alertOnWon: !!input.onWon,
     alertOnHandoff: !!input.onHandoff,
     alertOnBooking: !!input.onBooking,
+    alertOnOrder: !!input.onOrder,
     // Template vazio = usa o padrão do sistema.
     alertWonTemplate: (input.wonTemplate ?? '').trim().slice(0, 2_000),
     alertHandoffTemplate: (input.handoffTemplate ?? '').trim().slice(0, 2_000),
     alertBookingTemplate: (input.bookingTemplate ?? '').trim().slice(0, 2_000),
+    alertOrderTemplate: (input.orderTemplate ?? '').trim().slice(0, 2_000),
   })
   return { error: null }
 }
