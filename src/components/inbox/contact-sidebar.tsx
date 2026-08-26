@@ -24,7 +24,7 @@ import {
   listPipelines,
   listStages,
   setDealStatus,
-  getLostReasons,
+  getLostReasonsConfig,
 } from "@/app/(dashboard)/pipelines/actions";
 import {
   listTasksByContact,
@@ -260,6 +260,9 @@ export function ContactSidebar({
   const [dealStatusBusy, setDealStatusBusy] = useState<string | null>(null);
   const [lostPanelDealId, setLostPanelDealId] = useState<string | null>(null);
   const [lostReasonOptions, setLostReasonOptions] = useState<string[]>([]);
+  // Lista FECHADA (Config→Negócios): sem texto livre, chip obrigatório.
+  const [lostReasonsLocked, setLostReasonsLocked] = useState(false);
+  const [lostReasonsLoaded, setLostReasonsLoaded] = useState(false);
   const [lostReasonText, setLostReasonText] = useState("");
 
   const contactId = contact?.id;
@@ -527,13 +530,17 @@ export function ContactSidebar({
     (dealId: string) => {
       setLostReasonText("");
       setLostPanelDealId((cur) => (cur === dealId ? null : dealId));
-      if (lostReasonOptions.length === 0) {
-        void getLostReasons()
-          .then(setLostReasonOptions)
+      if (!lostReasonsLoaded) {
+        void getLostReasonsConfig()
+          .then((res) => {
+            setLostReasonOptions(res.reasons);
+            setLostReasonsLocked(res.locked);
+            setLostReasonsLoaded(true);
+          })
           .catch(() => {});
       }
     },
-    [lostReasonOptions.length],
+    [lostReasonsLoaded],
   );
 
   // Refetch just this contact's tasks after a create/toggle/delete.
@@ -885,16 +892,28 @@ export function ContactSidebar({
                                 ))}
                               </div>
                             )}
-                            <input
-                              value={lostReasonText}
-                              onChange={(e) => setLostReasonText(e.target.value)}
-                              placeholder="Ou escreva um motivo novo"
-                              className="h-7 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-red-400"
-                            />
+                            {lostReasonsLocked &&
+                              lostReasonOptions.length === 0 && (
+                                <p className="text-[10px] text-muted-foreground">
+                                  Lista de motivos fechada e vazia — cadastre
+                                  em <strong>Configurações → Negócios</strong>.
+                                </p>
+                              )}
+                            {!lostReasonsLocked && (
+                              <input
+                                value={lostReasonText}
+                                onChange={(e) => setLostReasonText(e.target.value)}
+                                placeholder="Ou escreva um motivo novo"
+                                className="h-7 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-red-400"
+                              />
+                            )}
                             <div className="flex items-center gap-1.5">
                               <button
                                 type="button"
-                                disabled={dealStatusBusy === deal.id}
+                                disabled={
+                                  dealStatusBusy === deal.id ||
+                                  (lostReasonsLocked && !lostReasonText)
+                                }
                                 onClick={() =>
                                   void markDealStatus(deal.id, "lost", lostReasonText)
                                 }

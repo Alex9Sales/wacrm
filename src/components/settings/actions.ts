@@ -1020,6 +1020,36 @@ export async function setStatusCadences(input: {
 }
 
 // ============================================================
+// Motivos de perda — lista da conta + trava "somente pré-definidos"
+// (estilo RD, pedido do Rafael 26/08).
+// ============================================================
+
+export async function getLostReasonsSettings(): Promise<{
+  reasons: string[]
+  locked: boolean
+}> {
+  const ctx = await getCurrentAccount()
+  const s = await getAccountSettings(ctx.accountId)
+  return { reasons: s.lostReasons, locked: s.lostReasonsLocked }
+}
+
+export async function setLostReasonsSettings(input: {
+  reasons: string[]
+  locked: boolean
+}): Promise<{ error: string | null }> {
+  const ctx = await requireRole('admin')
+  const { dedupeReasons } = await import('@/lib/deals/lost-reasons')
+  const reasons = dedupeReasons(input.reasons)
+    .map((r) => r.slice(0, 60))
+    .slice(0, 40)
+  await updateAccountSettings(ctx.accountId, {
+    lostReasons: reasons,
+    lostReasonsLocked: !!input.locked,
+  })
+  return { error: null }
+}
+
+// ============================================================
 // Sócio IA — resumo diário do funil no WhatsApp do dono.
 // ============================================================
 

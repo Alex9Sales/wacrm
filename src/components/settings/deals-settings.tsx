@@ -20,6 +20,7 @@ import { SettingsPanelHead } from "./settings-panel-head";
 import { LeadDistributionPanel } from "./lead-distribution-panel";
 import { StaleDealPanel } from "./stale-deal-panel";
 import { StatusCadencePanel } from "./status-cadence-panel";
+import { LostReasonsPanel } from "./lost-reasons-panel";
 import { OwnerDigestPanel } from "./owner-digest-panel";
 import { OwnerAlertsPanel } from "./owner-alerts-panel";
 
@@ -132,6 +133,7 @@ export function DealsSettings() {
 
       <StaleDealPanel />
       <StatusCadencePanel />
+      <LostReasonsPanel />
       <OwnerDigestPanel />
 
       <OwnerAlertsPanel />

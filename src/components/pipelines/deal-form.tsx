@@ -7,7 +7,7 @@ import {
   createDeal,
   updateDeal,
   deleteDeal,
-  getLostReasons,
+  getLostReasonsConfig,
   openDealConversation,
   openDealWhatsApp,
 } from "@/app/(dashboard)/pipelines/actions";
@@ -139,12 +139,21 @@ export function DealForm({
   // Motivo de perda (estilo RD): ao marcar perda, pede o porquê.
   const [lostReasonOpen, setLostReasonOpen] = useState(false);
   const [lostReason, setLostReason] = useState("");
-  // Chips = motivos da CONTA (novo digitado entra na lista no servidor).
+  // Chips = motivos da CONTA. Lista FECHADA (Config→Negócios) = sem texto
+  // livre, chip obrigatório.
   const [reasonOptions, setReasonOptions] = useState<string[]>([]);
+  const [reasonsLocked, setReasonsLocked] = useState(false);
+  const [reasonsLoaded, setReasonsLoaded] = useState(false);
   useEffect(() => {
-    if (!lostReasonOpen || reasonOptions.length > 0) return;
-    getLostReasons().then(setReasonOptions).catch(() => {});
-  }, [lostReasonOpen, reasonOptions.length]);
+    if (!lostReasonOpen || reasonsLoaded) return;
+    getLostReasonsConfig()
+      .then((res) => {
+        setReasonOptions(res.reasons);
+        setReasonsLocked(res.locked);
+        setReasonsLoaded(true);
+      })
+      .catch(() => {});
+  }, [lostReasonOpen, reasonsLoaded]);
   const [deleting, setDeleting] = useState(false);
   const [confirmDelete, setConfirmDelete] = useState(false);
   // When opened from a conversation the contact is known — show it locked
@@ -734,16 +743,24 @@ export function DealForm({
                         </button>
                       ))}
                     </div>
-                    <Input
-                      value={lostReason}
-                      onChange={(e) => setLostReason(e.target.value)}
-                      placeholder="Ou escreva o motivo…"
-                      className="h-8 border-border bg-muted text-sm text-foreground"
-                    />
+                    {reasonsLocked && reasonOptions.length === 0 && (
+                      <p className="text-xs text-muted-foreground">
+                        Lista de motivos fechada e vazia — cadastre em{" "}
+                        <strong>Configurações → Negócios</strong>.
+                      </p>
+                    )}
+                    {!reasonsLocked && (
+                      <Input
+                        value={lostReason}
+                        onChange={(e) => setLostReason(e.target.value)}
+                        placeholder="Ou escreva o motivo…"
+                        className="h-8 border-border bg-muted text-sm text-foreground"
+                      />
+                    )}
                     <Button
                       type="button"
                       onClick={() => handleStatusChange("lost", lostReason)}
-                      disabled={!!statusAction}
+                      disabled={!!statusAction || (reasonsLocked && !lostReason)}
                       className="w-full bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
                     >
                       {statusAction === "lost" ? (

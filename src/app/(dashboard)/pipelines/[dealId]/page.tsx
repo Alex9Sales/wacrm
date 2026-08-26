@@ -59,7 +59,7 @@ import {
   listDealEvents,
   moveDealToStage,
   setDealStatus,
-  getLostReasons,
+  getLostReasonsConfig,
   setDealPaused,
   setDealCompany,
   duplicateDeal,
@@ -741,13 +741,21 @@ export default function DealDetailPage() {
   // Motivo de perda (estilo RD): "Marcar perda" abre o campo do porquê.
   const [lostOpen, setLostOpen] = useState(false);
   const [lostReason, setLostReason] = useState("");
-  // Chips = motivos da CONTA (motivo digitado novo entra na lista sozinho,
-  // no servidor). Carrega quando o painel abre.
+  // Chips = motivos da CONTA. Com a lista FECHADA (Config→Negócios), o
+  // texto livre some e é obrigatório escolher um chip.
   const [reasonOptions, setReasonOptions] = useState<string[]>([]);
+  const [reasonsLocked, setReasonsLocked] = useState(false);
+  const [reasonsLoaded, setReasonsLoaded] = useState(false);
   useEffect(() => {
-    if (!lostOpen || reasonOptions.length > 0) return;
-    getLostReasons().then(setReasonOptions).catch(() => {});
-  }, [lostOpen, reasonOptions.length]);
+    if (!lostOpen || reasonsLoaded) return;
+    getLostReasonsConfig()
+      .then((res) => {
+        setReasonOptions(res.reasons);
+        setReasonsLocked(res.locked);
+        setReasonsLoaded(true);
+      })
+      .catch(() => {});
+  }, [lostOpen, reasonsLoaded]);
 
   const markStatus = useCallback(
     async (status: "open" | "won" | "lost", reason?: string) => {
@@ -1016,16 +1024,24 @@ export default function DealDetailPage() {
               </button>
             ))}
           </div>
+          {reasonsLocked && reasonOptions.length === 0 && (
+            <p className="text-xs text-muted-foreground">
+              A lista de motivos está fechada e vazia — cadastre os motivos em{" "}
+              <strong>Configurações → Negócios</strong>.
+            </p>
+          )}
           <div className="flex items-center gap-2">
-            <Input
-              value={lostReason}
-              onChange={(e) => setLostReason(e.target.value)}
-              placeholder="Ou escreva um motivo novo — ele vira opção pra próxima"
-              className="h-8 flex-1 border-border bg-background text-sm"
-            />
+            {!reasonsLocked && (
+              <Input
+                value={lostReason}
+                onChange={(e) => setLostReason(e.target.value)}
+                placeholder="Ou escreva um motivo novo — ele vira opção pra próxima"
+                className="h-8 flex-1 border-border bg-background text-sm"
+              />
+            )}
             <Button
               size="sm"
-              disabled={busy}
+              disabled={busy || (reasonsLocked && !lostReason)}
               onClick={() => void markStatus("lost", lostReason)}
               className="bg-red-600 text-white hover:bg-red-700"
             >

@@ -24,6 +24,7 @@ import { and, asc, eq, gte, inArray, lte, sql } from 'drizzle-orm'
 import { db, deals, member, pipelines, pipelineStages, salesGoals, user } from '@/db'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
+import { canonReason } from '@/lib/deals/lost-reasons'
 
 // Brasil não observa horário de verão desde 2019 → offset fixo -03.
 const BR_TZ = 'America/Sao_Paulo'
@@ -376,11 +377,14 @@ export async function getComercialReport(
       perdas += 1
       valorPerdas += v
       ensureResp(row.assigned_to).perdidas += 1
+      // Agrupa sem caixa/acento ("Não responde" ≡ "nao responde") pra
+      // variação de grafia não dividir a contagem; exibe a 1ª grafia vista.
       const reason = (row.lost_reason ?? '').trim() || 'Sem motivo'
-      const lr = lossMap.get(reason) ?? { reason, count: 0, value: 0 }
+      const key = canonReason(reason) || 'sem motivo'
+      const lr = lossMap.get(key) ?? { reason, count: 0, value: 0 }
       lr.count += 1
       lr.value += v
-      lossMap.set(reason, lr)
+      lossMap.set(key, lr)
     }
   }
 

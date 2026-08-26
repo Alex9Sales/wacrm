@@ -59,8 +59,12 @@ export interface AccountSettings {
   lostCadenceId: string | null
   /** Motivos de perda da conta (estilo RD): os chips oferecidos ao marcar
    *  perda. Motivo novo digitado num "Confirmar perda" entra aqui sozinho
-   *  (criado na hora, fica pra próxima). */
+   *  (criado na hora, fica pra próxima) — a menos que a lista esteja travada. */
   lostReasons: string[]
+  /** Lista de motivos FECHADA (estilo RD "barra fechado"): vendedor só
+   *  escolhe um chip, sem texto livre; só o admin edita a lista na Config.
+   *  Evita duplicata por acento/grafia poluindo o relatório. */
+  lostReasonsLocked: boolean
   /** Quando o admin dispensou o wizard "Ative seu Fluxia" (ISO). null = visível. */
   onboardingHiddenAt: string | null
   /** 📣 Avisos do responsável no WhatsApp (estilo "grupo da empresa"):
@@ -133,6 +137,7 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
     'Sem orçamento agora',
     'Preferiu esperar',
   ],
+  lostReasonsLocked: false,
   onboardingHiddenAt: null,
   alertPhone: '',
   alertChannelId: null,

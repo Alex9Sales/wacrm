@@ -38,6 +38,7 @@ import {
   getAccountSettings,
   updateAccountSettings,
 } from '@/lib/settings/account-settings'
+import { canonReason } from '@/lib/deals/lost-reasons'
 import { enrollContactInCadence } from '@/lib/cadences/cadence'
 import { runDealSuggestions } from '@/lib/ai/deal-suggest'
 import { planStageFollowUp } from '@/lib/ai/followup'
@@ -1531,6 +1532,21 @@ export async function getLostReasons(): Promise<string[]> {
   }
 }
 
+/** Chips + se a lista é FECHADA (estilo RD): travada, o vendedor só escolhe
+ *  um motivo pré-definido — o campo de texto livre some das telas de perda. */
+export async function getLostReasonsConfig(): Promise<{
+  reasons: string[]
+  locked: boolean
+}> {
+  try {
+    const ctx = await getCurrentAccount()
+    const s = await getAccountSettings(ctx.accountId)
+    return { reasons: s.lostReasons, locked: s.lostReasonsLocked }
+  } catch {
+    return { reasons: [], locked: false }
+  }
+}
+
 /**
  * Motivo digitado na hora entra na lista da conta (dedupe sem caixa; teto de
  * 40 pra lista não virar lixão). Best-effort: falha aqui nunca derruba a
@@ -1542,7 +1558,11 @@ async function rememberLostReason(accountId: string, reason: string): Promise<vo
     const r = reason.trim()
     if (!r || r.length > 60) return
     const s = await getAccountSettings(accountId)
-    if (s.lostReasons.some((x) => x.trim().toLowerCase() === r.toLowerCase())) return
+    // Lista fechada: nada novo entra — só o admin edita na Config.
+    if (s.lostReasonsLocked) return
+    // Dedupe sem caixa E sem acento ("Não responde" ≡ "nao responde") —
+    // variação de grafia duplicava o motivo e dividia o relatório (Rafael).
+    if (s.lostReasons.some((x) => canonReason(x) === canonReason(r))) return
     if (s.lostReasons.length >= 40) return
     await updateAccountSettings(accountId, {
       lostReasons: [...s.lostReasons, r],
