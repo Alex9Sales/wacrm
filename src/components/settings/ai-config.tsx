@@ -106,6 +106,7 @@ export function AiConfig({
   );
   const [bufferSeconds, setBufferSeconds] = useState(8);
   const [bargeInMinutes, setBargeInMinutes] = useState(5);
+  const [audioReplies, setAudioReplies] = useState(true);
   const [signatureName, setSignatureName] = useState('');
   const [signatureEnabled, setSignatureEnabled] = useState(false);
   // Ferramentas do agente (Fase A): conjunto de ações ligadas (chaves de tools.ts).
@@ -181,6 +182,7 @@ export function AiConfig({
         setBargeInMinutes(
           typeof data.barge_in_minutes === 'number' ? data.barge_in_minutes : 5,
         );
+        setAudioReplies(data.audio_replies_enabled !== false);
         setSignatureName(data.signature_name ?? '');
         setSignatureEnabled(Boolean(data.signature_enabled));
         setTools(Array.isArray(data.tools) ? data.tools : []);
@@ -373,6 +375,7 @@ export function AiConfig({
     auto_reply_hours_mode: hoursMode,
     auto_reply_buffer_seconds: bufferSeconds,
     barge_in_minutes: bargeInMinutes,
+    audio_replies_enabled: audioReplies,
     tools,
     signature_name: signatureName.trim() || null,
     signature_enabled: signatureEnabled && signatureName.trim().length > 0,
@@ -1065,6 +1068,26 @@ export function AiConfig({
                 }
                 disabled={disabled || !autoReplyEnabled}
                 className="w-20"
+              />
+            </div>
+
+            {/* 🔊 Responder por áudio — master do TTS: OFF = entende áudio
+                normalmente, mas responde SÓ em texto (e a preferência de áudio
+                da conversa fica inerte). */}
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="ai-audio-replies">Responder por áudio (voz)</Label>
+                <p className="text-xs text-muted-foreground">
+                  A IA pode mandar nota de voz quando fizer sentido. Desligado:
+                  ela continua entendendo áudio, imagem e documento — mas
+                  responde só em texto.
+                </p>
+              </div>
+              <Switch
+                id="ai-audio-replies"
+                checked={audioReplies}
+                onCheckedChange={setAudioReplies}
+                disabled={disabled || !autoReplyEnabled}
               />
             </div>
 

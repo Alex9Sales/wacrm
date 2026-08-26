@@ -360,6 +360,8 @@ export function buildSystemPrompt(args: {
   customFieldNames?: string[]
   /** Preferência de voz já registrada nesta conversa ('audio'|'text'). */
   voicePref?: string | null
+  /** 🔊 Master do agente: pode responder em ÁUDIO? false → só texto. */
+  audioReplies?: boolean
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -408,8 +410,10 @@ export function buildSystemPrompt(args: {
     if (has('handoff') && routingTags.length > 0) {
       parts.push(transferInstruction(routingTags))
     }
-    // Voz (TTS): a IA decide texto vs áudio pelo padrão da conversa.
-    parts.push(
+    // Voz (TTS): a IA decide texto vs áudio pelo padrão da conversa —
+    // só quando o interruptor "Responder por áudio" do agente está ligado.
+    const audioOn = args.audioReplies !== false
+    if (audioOn) parts.push(
       `You can reply with a VOICE message when it fits. To send a message as audio, start THAT message with the exact marker ${AUDIO_MARKER} at the very beginning. Use AUDIO when: the customer sent you a voice message (their message is shown prefixed with "[áudio]"), the customer asked you to answer by audio, or you are explaining a procedure or something longer that is easier to listen to. Use TEXT (no marker) for confirmations and for any data the customer must read exactly — scheduled appointment/consultation details, dates, times, addresses, numbers, prices. When you confirm an appointment/consultation, send the explanation/confirmation as an audio message (starting with ${AUDIO_MARKER}) and then send the exact data as a separate TEXT message right after. Separate distinct messages with a blank line, and keep each one short.`,
     )
     // Ferramentas ligadas → ensina o marcador de cada uma.
@@ -427,9 +431,11 @@ export function buildSystemPrompt(args: {
     ) {
       parts.push(attributeInstruction(args.customFieldNames))
     }
-    if (has('voice_pref')) parts.push(voiceInstruction())
-    // Enviesa o formato pela preferência já registrada do cliente.
-    if (args.voicePref === 'audio') {
+    if (audioOn && has('voice_pref')) parts.push(voiceInstruction())
+    // Enviesa o formato pela preferência já registrada do cliente — a
+    // preferência por ÁUDIO só vale com o master ligado (Alex 26/08:
+    // "desligou a resposta por áudio, a preferência também não ativa").
+    if (audioOn && args.voicePref === 'audio') {
       parts.push(
         'This customer has told us they prefer AUDIO replies — prefer answering with a voice note (start the message with the audio marker) when it fits.',
       )

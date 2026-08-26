@@ -1896,6 +1896,8 @@ export const aiConfigs = pgTable("ai_configs", {
 	autoReplyBufferSeconds: integer("auto_reply_buffer_seconds").default(8).notNull(),
 	// 🤫 Barge-in: humano respondeu → IA muda pra observação por N min (0 = off).
 	bargeInMinutes: integer("barge_in_minutes").default(5).notNull(),
+	// 🔊 Responder por áudio (TTS). OFF → entende áudio, responde só texto.
+	audioRepliesEnabled: boolean("audio_replies_enabled").default(true).notNull(),
 	// IA proativa em Negociações (Fase 3): analisa sozinha o negócio no inbound
 	// e cria sugestões pendentes. Migração 0066. OPT-IN, default OFF.
 	dealSuggestionsProactive: boolean("deal_suggestions_proactive").default(false).notNull(),

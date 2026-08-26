@@ -225,6 +225,7 @@ export async function dispatchInboundToAiReply(
       routingTags,
       customFieldNames,
       voicePref: conv.voicePreference,
+      audioReplies: config.audioRepliesEnabled !== false,
     })
 
     // 🔧 Com ferramentas externas do agente (ERP do cliente etc.) — sem
@@ -538,7 +539,7 @@ export async function dispatchInboundToAiReply(
         /* presença é best-effort — nunca bloqueia o envio */
       }
 
-      if (wantsAudio && ttsKey) {
+      if (wantsAudio && ttsKey && config.audioRepliesEnabled !== false) {
         try {
           const bytes = await synthesizeSpeech(ttsKey, clean)
           const key = `ai-audio/${randomUUID()}.ogg`

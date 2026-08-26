@@ -37,6 +37,8 @@ export interface AiConfig {
   autoReplyBufferSeconds?: number
   /** 🤫 Barge-in: humano respondeu → IA observa por N min (0 = off). */
   bargeInMinutes?: number
+  /** 🔊 Responder por áudio (TTS). false → entende áudio, responde só texto. */
+  audioRepliesEnabled?: boolean
   /** IA proativa em Negociações (Fase 3): quando true, a IA analisa o negócio
    *  vinculado no inbound e cria sugestões pendentes. Opcional (default false)
    *  para não quebrar construções sintéticas. */

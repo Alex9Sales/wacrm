@@ -183,6 +183,15 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.state.updatePayload).toBeNull()
   })
 
+  it('🔊 responder por áudio OFF: [[AUDIO]] vira texto normal', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ audioRepliesEnabled: false }))
+    h.generateReply.mockResolvedValue({ text: '[[AUDIO]]Oi, tudo bem?', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({ text: 'Oi, tudo bem?' }),
+    )
+  })
+
   it('does not send when the atomic slot claim loses the race', async () => {
     h.state.claim = false
     await dispatchInboundToAiReply(ARGS)
