@@ -361,12 +361,49 @@ export async function dispatchInboundToAiReply(
       await applyTags()
       return
     }
-    if (handoff) {
-      // Pediu humano — para de auto-responder aqui até um admin reativar.
+    // Handoff (sentinel "pediu humano"): desliga a IA na conversa + avisa o
+    // responsável. NÃO retorna antes do envio — o bug da 1ª transferência da
+    // Maria (26/08): o modelo escreveu a despedida ("o responsável já vai te
+    // chamar") e o código descartava o texto, deixando o cliente no vácuo.
+    const finishHandoff = async () => {
       await db
         .update(conversations)
         .set({ aiAutoreplyDisabled: true })
         .where(eq(conversations.id, conversationId))
+      try {
+        const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
+        const c = firstOrNull(
+          await db
+            .select({ name: contacts.name, phone: contacts.phone })
+            .from(contacts)
+            .where(eq(contacts.id, contactId))
+            .limit(1),
+        )
+        await sendOwnerAlert(accountId, 'handoff', {
+          cliente: c?.name ?? '',
+          telefone: c?.phone ?? '',
+          motivo: 'A IA pediu um humano nesta conversa',
+          resumo: text || '',
+        })
+      } catch (err) {
+        console.error('[ai auto-reply] aviso de handoff falhou:', err)
+      }
+    }
+    if (handoff && !text) {
+      // Sem despedida do modelo: manda uma curta padrão pra não sumir do nada.
+      try {
+        await engineSendText({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          text: 'Perfeito! Já estou te passando para um responsável — ele continua o atendimento daqui. 🙏',
+        })
+      } catch (err) {
+        console.error('[ai auto-reply] despedida do handoff falhou:', err)
+      }
+      await applyTags()
+      await finishHandoff()
       return
     }
     if (!text) {
@@ -520,6 +557,12 @@ export async function dispatchInboundToAiReply(
     // (transfer tem prioridade — se transferiu, não resolve/move).
     await applyTags()
     await runCreateCard()
+    // Handoff COM texto: a despedida já foi enviada acima — agora desliga a IA
+    // e avisa o responsável. Sem agendar/mover depois de pedir humano.
+    if (handoff) {
+      await finishHandoff()
+      return
+    }
     await runSchedule()
     const transferred = await runTransfer()
     if (!transferred) await runClose()

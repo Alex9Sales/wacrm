@@ -34,7 +34,10 @@ const h = vi.hoisted(() => ({
 // os mocks existentes — o roteamento por canal é testado em agents.ts.
 vi.mock('./config', () => ({ loadAiConfigForChannel: h.loadAiConfig }))
 vi.mock('./agents', () => ({ hasActiveAutoReplyAgent: h.hasAgent }))
-vi.mock('./context', () => ({ buildConversationContext: h.buildConversationContext }))
+vi.mock('./context', () => ({
+  buildConversationContext: h.buildConversationContext,
+  stripLeadingTimestamp: (s: string) => s,
+}))
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
 vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
@@ -238,11 +241,28 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
 })
 
 describe('dispatchInboundToAiReply — handoff', () => {
-  it('disables auto-reply and does not send on handoff', async () => {
+  it('handoff sem texto: manda despedida padrão e desliga a IA', async () => {
+    // Bug da 1ª transferência da Maria (26/08): o cliente ficava no vácuo.
     h.generateReply.mockResolvedValue({ text: '', handoff: true })
     await dispatchInboundToAiReply(ARGS)
-    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    const sent = h.engineSendText.mock.calls[0][0] as { text: string }
+    expect(sent.text).toContain('responsável')
     expect(h.state.updatePayload).toEqual({ aiAutoreplyDisabled: true })
     expect(h.state.sqlCalls).toHaveLength(0)
+  })
+
+  it('handoff COM texto: envia a despedida do modelo e desliga a IA', async () => {
+    h.generateReply.mockResolvedValue({
+      text: 'Perfeito! O responsável já vai falar contigo.',
+      handoff: true,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledWith(
+      expect.objectContaining({
+        text: 'Perfeito! O responsável já vai falar contigo.',
+      }),
+    )
+    expect(h.state.updatePayload).toEqual({ aiAutoreplyDisabled: true })
   })
 })
