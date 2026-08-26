@@ -11,6 +11,8 @@ import {
   scheduledMessages,
   conversations,
   deals,
+  pipelines,
+  pipelineStages,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
@@ -37,6 +39,11 @@ export interface CadenceInput {
   description?: string | null
   active?: boolean
   pauseOnReply?: boolean
+  /** Automação de funil (opt-in): move o negócio ao inscrever/responder e, ao
+   *  terminar sem resposta, marca perdido + fecha a conversa. */
+  funnelAutomation?: boolean
+  /** Etapa de "contato feito" — pra onde o negócio vai ao inscrever/responder. */
+  contactedStageId?: string | null
   steps: CadenceStepInput[]
 }
 
@@ -66,7 +73,14 @@ export interface CadenceDetail {
   description: string | null
   active: boolean
   pause_on_reply: boolean
+  funnel_automation: boolean
+  contacted_stage_id: string | null
   steps: CadenceStepRow[]
+}
+
+export interface StagePickerOption {
+  id: string
+  label: string // "Funil · Etapa"
 }
 
 const UNITS = new Set(['minutes', 'hours', 'days'])
@@ -129,6 +143,8 @@ export async function getCadence(id: string): Promise<CadenceDetail | null> {
           description: cadences.description,
           active: cadences.active,
           pause_on_reply: cadences.pauseOnReply,
+          funnel_automation: cadences.funnelAutomation,
+          contacted_stage_id: cadences.contactedStageId,
         })
         .from(cadences)
         .where(and(eq(cadences.id, id), eq(cadences.accountId, ctx.accountId)))
@@ -152,6 +168,28 @@ export async function getCadence(id: string): Promise<CadenceDetail | null> {
   } catch (err) {
     console.error('[getCadence]', err)
     return null
+  }
+}
+
+/** Etapas de todos os funis pro seletor de "contato feito" da automação.
+ *  Rótulo "Funil · Etapa" (o negócio só é movido se a etapa for do funil dele). */
+export async function listStagesForCadence(): Promise<StagePickerOption[]> {
+  try {
+    const ctx = await getCurrentAccount()
+    const rows = await db
+      .select({
+        id: pipelineStages.id,
+        stage: pipelineStages.name,
+        pipeline: pipelines.name,
+      })
+      .from(pipelineStages)
+      .innerJoin(pipelines, eq(pipelines.id, pipelineStages.pipelineId))
+      .where(eq(pipelines.accountId, ctx.accountId))
+      .orderBy(asc(pipelines.createdAt), asc(pipelineStages.position))
+    return rows.map((r) => ({ id: r.id, label: `${r.pipeline} · ${r.stage}` }))
+  } catch (err) {
+    console.error('[listStagesForCadence]', err)
+    return []
   }
 }
 
@@ -191,6 +229,8 @@ export async function createCadence(
           description: (input.description ?? '').trim() || null,
           active: input.active ?? true,
           pauseOnReply: input.pauseOnReply ?? true,
+          funnelAutomation: input.funnelAutomation ?? false,
+          contactedStageId: input.contactedStageId ?? null,
           createdBy: ctx.userId,
           updatedAt: sql`now()`,
         })
@@ -227,6 +267,8 @@ export async function updateCadence(
         description: (input.description ?? '').trim() || null,
         active: input.active ?? true,
         pauseOnReply: input.pauseOnReply ?? true,
+        funnelAutomation: input.funnelAutomation ?? false,
+        contactedStageId: input.contactedStageId ?? null,
         updatedAt: sql`now()`,
       })
       .where(and(eq(cadences.id, id), eq(cadences.accountId, ctx.accountId)))

@@ -1050,6 +1050,11 @@ export const cadences = pgTable("cadences", {
 	description: text(),
 	active: boolean().default(true).notNull(),
 	pauseOnReply: boolean("pause_on_reply").default(true).notNull(),
+	// Automação de funil (opt-in): move o negócio ao inscrever/responder e
+	// marca perdido + fecha a conversa ao terminar sem resposta.
+	funnelAutomation: boolean("funnel_automation").default(false).notNull(),
+	// Etapa de "contato feito" — pra onde o negócio vai ao inscrever/responder.
+	contactedStageId: uuid("contacted_stage_id"),
 	createdBy: uuid("created_by"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),

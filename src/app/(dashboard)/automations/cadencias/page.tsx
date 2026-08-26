@@ -41,8 +41,10 @@ import {
   createCadence,
   updateCadence,
   deleteCadence,
+  listStagesForCadence,
   type CadenceRow,
   type CadenceStepInput,
+  type StagePickerOption,
 } from './actions'
 
 type Draft = {
@@ -51,6 +53,8 @@ type Draft = {
   description: string
   active: boolean
   pauseOnReply: boolean
+  funnelAutomation: boolean
+  contactedStageId: string
   steps: CadenceStepInput[]
 }
 
@@ -60,6 +64,8 @@ const EMPTY_DRAFT: Draft = {
   description: '',
   active: true,
   pauseOnReply: true,
+  funnelAutomation: false,
+  contactedStageId: '',
   steps: [{ delayValue: 0, delayUnit: 'days', channel: 'whatsapp', subject: '', body: '' }],
 }
 
@@ -85,6 +91,7 @@ export default function CadenciasPage() {
   const [draft, setDraft] = useState<Draft>(EMPTY_DRAFT)
   const [saving, setSaving] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
+  const [stageOptions, setStageOptions] = useState<StagePickerOption[]>([])
 
   const load = useCallback(async () => {
     setItems(await listCadences())
@@ -92,6 +99,7 @@ export default function CadenciasPage() {
 
   useEffect(() => {
     void load()
+    listStagesForCadence().then(setStageOptions).catch(() => {})
   }, [load])
 
   function openNew() {
@@ -113,6 +121,8 @@ export default function CadenciasPage() {
       description: cad.description ?? '',
       active: cad.active,
       pauseOnReply: cad.pause_on_reply,
+      funnelAutomation: cad.funnel_automation,
+      contactedStageId: cad.contacted_stage_id ?? '',
       steps: cad.steps.map((s) => ({
         delayValue: s.delay_value,
         delayUnit: s.delay_unit as CadenceStepInput['delayUnit'],
@@ -160,6 +170,10 @@ export default function CadenciasPage() {
       description: draft.description,
       active: draft.active,
       pauseOnReply: draft.pauseOnReply,
+      funnelAutomation: draft.funnelAutomation,
+      contactedStageId: draft.funnelAutomation && draft.contactedStageId
+        ? draft.contactedStageId
+        : null,
       steps,
     }
     const res = draft.id
@@ -320,6 +334,53 @@ export default function CadenciasPage() {
                 checked={draft.pauseOnReply}
                 onCheckedChange={(v) => setDraft((d) => ({ ...d, pauseOnReply: v }))}
               />
+            </div>
+
+            {/* Automação de funil — move o negócio sozinho (pedido do Rafael). */}
+            <div className="rounded-lg border border-border bg-muted/40 px-3 py-2">
+              <div className="flex items-center justify-between">
+                <div>
+                  <p className="text-sm font-medium text-foreground">
+                    Mover o negócio automaticamente
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Ao entrar/responder, avança o card. Se a cadência terminar
+                    sem resposta, marca <strong>perdido</strong> e fecha a
+                    conversa.
+                  </p>
+                </div>
+                <Switch
+                  checked={draft.funnelAutomation}
+                  onCheckedChange={(v) =>
+                    setDraft((d) => ({ ...d, funnelAutomation: v }))
+                  }
+                />
+              </div>
+              {draft.funnelAutomation && (
+                <div className="mt-3 grid gap-1.5 border-t border-border pt-3">
+                  <Label className="text-xs">
+                    Etapa de “contato feito” (ao entrar ou o lead responder)
+                  </Label>
+                  <select
+                    value={draft.contactedStageId}
+                    onChange={(e) =>
+                      setDraft((d) => ({ ...d, contactedStageId: e.target.value }))
+                    }
+                    className="h-9 rounded-md border border-border bg-background px-2 text-sm"
+                  >
+                    <option value="">Não mover ao entrar/responder</option>
+                    {stageOptions.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.label}
+                      </option>
+                    ))}
+                  </select>
+                  <p className="text-[11px] text-muted-foreground">
+                    O negócio só é movido se a etapa for do funil dele e estiver à
+                    frente da atual (nunca volta pra trás).
+                  </p>
+                </div>
+              )}
             </div>
 
             {/* Degraus */}

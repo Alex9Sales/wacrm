@@ -10,6 +10,9 @@ import {
   contacts,
   channels,
   conversations,
+  deals,
+  dealEvents,
+  pipelineStages,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { findOrCreateConversation } from '@/lib/channels/inbound'
@@ -66,6 +69,178 @@ export function interpolate(
 interface CadenceCtx {
   accountId: string
   userId: string
+}
+
+// ============================================================
+// Automação de funil na cadência (opt-in por cadência, pedido do Rafael 26/08).
+// Ligada → move o negócio ao inscrever/responder e, ao TERMINAR sem resposta,
+// marca perdido + fecha a conversa.
+// ============================================================
+
+/**
+ * Move o negócio pra `stageId` SE a etapa for do mesmo funil do negócio e
+ * estiver À FRENTE da atual (nunca puxa um negócio avançado pra trás). Registra
+ * o evento pro Raio-X. Best-effort — nunca derruba a cadência.
+ */
+async function moveDealForward(
+  accountId: string,
+  userId: string | null,
+  dealId: string,
+  stageId: string,
+): Promise<void> {
+  try {
+    const deal = firstOrNull(
+      await db
+        .select({
+          id: deals.id,
+          pipelineId: deals.pipelineId,
+          stageId: deals.stageId,
+          status: deals.status,
+        })
+        .from(deals)
+        .where(and(eq(deals.id, dealId), eq(deals.accountId, accountId)))
+        .limit(1),
+    )
+    if (!deal || deal.status !== 'open') return
+    if (deal.stageId === stageId) return
+    const stages = await db
+      .select({
+        id: pipelineStages.id,
+        name: pipelineStages.name,
+        position: pipelineStages.position,
+      })
+      .from(pipelineStages)
+      .where(eq(pipelineStages.pipelineId, deal.pipelineId))
+    const target = stages.find((s) => s.id === stageId)
+    if (!target) return // etapa de OUTRO funil — a cadência serve vários, ignora
+    const current = stages.find((s) => s.id === deal.stageId)
+    // Só pra frente: não regride um negócio que já avançou.
+    if (current && target.position <= current.position) return
+    await db
+      .update(deals)
+      .set({ stageId: target.id, stageChangedAt: sql`now()` })
+      .where(and(eq(deals.id, dealId), eq(deals.accountId, accountId)))
+    try {
+      await db.insert(dealEvents).values({
+        accountId,
+        actorUserId: userId,
+        dealId,
+        type: 'stage_changed',
+        data: { from: current?.name ?? null, to: target.name, by: 'cadence' },
+      })
+    } catch (err) {
+      console.error('[cadence] deal event (stage) falhou:', err)
+    }
+  } catch (err) {
+    console.error('[cadence] moveDealForward:', err)
+  }
+}
+
+/** Ao inscrever ou o lead responder: se a cadência tem automação + etapa de
+ *  "contato feito" + o enrollment tem negócio → move o negócio pra frente. */
+async function applyContactedStage(
+  accountId: string,
+  userId: string | null,
+  cad: { funnelAutomation: boolean; contactedStageId: string | null },
+  dealId: string | null,
+): Promise<void> {
+  if (!cad.funnelAutomation || !cad.contactedStageId || !dealId) return
+  await moveDealForward(accountId, userId, dealId, cad.contactedStageId)
+}
+
+/** Cadência TERMINOU sem o lead responder (todos os toques enviados, nunca
+ *  pausou): marca o negócio como perdido + fecha a conversa. Só se a automação
+ *  estiver ligada. Best-effort. */
+async function onCadenceCompletedWithoutReply(
+  accountId: string,
+  enr: { cadenceId: string; dealId: string | null; conversationId: string | null },
+): Promise<void> {
+  try {
+    const cad = firstOrNull(
+      await db
+        .select({ funnelAutomation: cadences.funnelAutomation })
+        .from(cadences)
+        .where(eq(cadences.id, enr.cadenceId))
+        .limit(1),
+    )
+    if (!cad?.funnelAutomation) return
+    if (!enr.dealId && !enr.conversationId) return
+
+    // Perde EM PÉ: negócio ABERTO (por id, senão o mais recente da conversa) →
+    // status='lost' + motivo + evento datado (o Raio-X data a perda pelo evento).
+    // Inline (sem importar close-actions) p/ manter o motor worker-safe.
+    try {
+      const deal = firstOrNull(
+        await db
+          .select({ id: deals.id, stageId: deals.stageId })
+          .from(deals)
+          .where(
+            and(
+              eq(deals.accountId, accountId),
+              eq(deals.status, 'open'),
+              enr.dealId
+                ? eq(deals.id, enr.dealId)
+                : enr.conversationId
+                  ? eq(deals.conversationId, enr.conversationId)
+                  : sql`false`,
+            ),
+          )
+          .orderBy(desc(deals.createdAt))
+          .limit(1),
+      )
+      if (deal) {
+        const stageName =
+          firstOrNull(
+            await db
+              .select({ name: pipelineStages.name })
+              .from(pipelineStages)
+              .where(eq(pipelineStages.id, deal.stageId))
+              .limit(1),
+          )?.name ?? null
+        await db.transaction(async (tx) => {
+          await tx
+            .update(deals)
+            .set({ status: 'lost', lostReason: 'Não respondeu à cadência' })
+            .where(and(eq(deals.id, deal.id), eq(deals.accountId, accountId)))
+          await tx.insert(dealEvents).values({
+            accountId,
+            actorUserId: null,
+            dealId: deal.id,
+            type: 'status_changed',
+            data: {
+              from: 'open',
+              to: 'lost',
+              reason: 'Não respondeu à cadência',
+              stageId: deal.stageId,
+              stageName,
+              by: 'cadence',
+            },
+          })
+        })
+      }
+    } catch (err) {
+      console.error('[cadence] auto-perder falhou:', err)
+    }
+
+    // Fecha a conversa de origem.
+    if (enr.conversationId) {
+      try {
+        await db
+          .update(conversations)
+          .set({ status: 'closed' })
+          .where(
+            and(
+              eq(conversations.id, enr.conversationId),
+              eq(conversations.accountId, accountId),
+            ),
+          )
+      } catch (err) {
+        console.error('[cadence] auto-fechar conversa falhou:', err)
+      }
+    }
+  } catch (err) {
+    console.error('[cadence] onCadenceCompletedWithoutReply:', err)
+  }
 }
 
 async function recordCadenceEvent(
@@ -349,7 +524,13 @@ export async function enrollContactInCadence(
   try {
     const cadence = firstOrNull(
       await db
-        .select({ id: cadences.id, name: cadences.name, active: cadences.active })
+        .select({
+          id: cadences.id,
+          name: cadences.name,
+          active: cadences.active,
+          funnelAutomation: cadences.funnelAutomation,
+          contactedStageId: cadences.contactedStageId,
+        })
         .from(cadences)
         .where(and(eq(cadences.id, input.cadenceId), eq(cadences.accountId, ctx.accountId)))
         .limit(1),
@@ -456,6 +637,9 @@ export async function enrollContactInCadence(
       await recordCadenceEvent(ctx.accountId, enrollment, 'completed', {
         data: { reason: 'nenhum degrau aplicável (canais/campos ausentes)' },
       })
+    } else {
+      // 🔁 Automação de funil: inscreveu = "contato feito" → move o negócio.
+      await applyContactedStage(ctx.accountId, ctx.userId, cadence, input.dealId ?? null)
     }
 
     return { ok: true, enrollmentId: enrollment.id, scheduled, skipped }
@@ -487,7 +671,10 @@ export async function maybePauseCadenceOnReply(
           cadenceId: cadenceEnrollments.cadenceId,
           contactId: cadenceEnrollments.contactId,
           dealId: cadenceEnrollments.dealId,
+          enrolledBy: cadenceEnrollments.enrolledBy,
           pauseOnReply: cadences.pauseOnReply,
+          funnelAutomation: cadences.funnelAutomation,
+          contactedStageId: cadences.contactedStageId,
         })
         .from(cadenceEnrollments)
         .innerJoin(cadences, eq(cadences.id, cadenceEnrollments.cadenceId))
@@ -500,7 +687,20 @@ export async function maybePauseCadenceOnReply(
         )
         .limit(1),
     )
-    if (!enr || !enr.pauseOnReply) return
+    if (!enr) return
+    // 🔁 Automação de funil: o lead respondeu = "contato feito" → move o negócio
+    // (mesmo que a cadência não pause; respondeu é sinal comercial).
+    await applyContactedStage(
+      accountId,
+      enr.enrolledBy ?? null,
+      { funnelAutomation: enr.funnelAutomation, contactedStageId: enr.contactedStageId },
+      enr.dealId,
+    )
+    // Pausa ao responder OU quando a automação de funil está ligada: se a
+    // automação está on e a cadência NÃO pausasse, o lead que respondeu seguiria
+    // até o fim e cairia no "perdido" (contraditório). Pausar sela isso — quem
+    // respondeu nunca é auto-perdido.
+    if (!enr.pauseOnReply && !enr.funnelAutomation) return
     await endEnrollment(accountId, enr, 'paused', 'lead respondeu')
   } catch (err) {
     console.error('[cadence] maybePauseCadenceOnReply:', err)
@@ -679,6 +879,7 @@ export async function finalizeEnrollmentIfDrained(
           cadenceId: cadenceEnrollments.cadenceId,
           contactId: cadenceEnrollments.contactId,
           dealId: cadenceEnrollments.dealId,
+          conversationId: cadenceEnrollments.conversationId,
           status: cadenceEnrollments.status,
         })
         .from(cadenceEnrollments)
@@ -710,6 +911,14 @@ export async function finalizeEnrollmentIfDrained(
       .where(eq(cadenceEnrollments.id, enrollmentId))
     await recordCadenceEvent(accountId, enr, 'completed', {
       data: { reason: 'sem degraus pendentes' },
+    })
+    // 🔁 Chegou aqui = ATIVA drenou todos os toques SEM o lead responder (uma
+    // resposta teria PAUSADO, saindo deste caminho). Automação de funil: perde
+    // + fecha a conversa.
+    await onCadenceCompletedWithoutReply(accountId, {
+      cadenceId: enr.cadenceId,
+      dealId: enr.dealId,
+      conversationId: enr.conversationId,
     })
   } catch (err) {
     console.error('[cadence] finalizeEnrollmentIfDrained:', err)
