@@ -17,7 +17,7 @@ import {
   DOW_SHORT_MON_FIRST,
   lastNDayKeys,
   mondayIndex,
-  startOfLocalDay,
+  startOfDayInTz,
 } from './date-utils'
 import type {
   ActivityItem,
@@ -41,8 +41,16 @@ import type {
 // --- 1. Metric cards ---------------------------------------------------
 
 export async function loadMetrics(accountId: string): Promise<MetricsBundle> {
-  const todayStart = startOfLocalDay().toISOString()
-  const yesterdayStart = daysAgoStart(1).toISOString()
+  // "Hoje" no relógio do CLIENTE (businessTimezone da conta), não no UTC.
+  let tz = 'America/Sao_Paulo'
+  try {
+    const { getAccountSettings } = await import('@/lib/settings/account-settings')
+    tz = (await getAccountSettings(accountId)).businessTimezone || tz
+  } catch {
+    // sem settings → padrão BR
+  }
+  const todayStart = startOfDayInTz(tz, 0).toISOString()
+  const yesterdayStart = startOfDayInTz(tz, 1).toISOString()
 
   const countConversations = async (extra?: 'today' | 'yesterday') => {
     const conds = [

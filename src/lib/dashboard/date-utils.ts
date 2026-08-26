@@ -50,3 +50,23 @@ export function mondayIndex(d: Date): number {
 }
 
 export const DOW_SHORT_MON_FIRST = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'] as const
+
+/**
+ * Início do dia N dias atrás NO FUSO INFORMADO (não no UTC do container).
+ * Bug do Rafael 25/08: "hoje" virava às 20h/21h locais (meia-noite UTC) e o
+ * card "Mensagens enviadas hoje" zerava no meio da noite de trabalho.
+ */
+export function startOfDayInTz(tz: string, daysAgo: number): Date {
+  const now = new Date()
+  const parts = new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(now) // en-CA → "YYYY-MM-DD"
+  const base = new Date(`${parts}T00:00:00Z`)
+  base.setUTCDate(base.getUTCDate() - daysAgo)
+  const local = new Date(base.toLocaleString('en-US', { timeZone: tz }))
+  const utc = new Date(base.toLocaleString('en-US', { timeZone: 'UTC' }))
+  return new Date(base.getTime() + (utc.getTime() - local.getTime()))
+}

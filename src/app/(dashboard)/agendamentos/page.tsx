@@ -89,6 +89,8 @@ export default function AgendamentosPage() {
   const [status, setStatus] = useState<SchedStatus | 'all'>('pending')
   const [search, setSearch] = useState('')
   const [assignedTo, setAssignedTo] = useState<string>('all')
+  // Filtro de período (pedido do Rafael): hoje / ontem / últimos 7 dias.
+  const [period, setPeriod] = useState<'all' | 'today' | 'yesterday' | '7d'>('all')
   const [members, setMembers] = useState<Member[]>([])
   const [busyId, setBusyId] = useState<string | null>(null)
 
@@ -99,6 +101,7 @@ export default function AgendamentosPage() {
         status,
         search,
         assignedTo: assignedTo === 'all' ? undefined : assignedTo,
+        period,
       }).catch(() => [] as ScheduledRow[]),
       getScheduledCounts().catch(() => ({
         pending: 0,
@@ -110,7 +113,7 @@ export default function AgendamentosPage() {
     setRows(list)
     setCounts(c)
     setLoading(false)
-  }, [status, search, assignedTo])
+  }, [status, search, assignedTo, period])
 
   useEffect(() => {
     const t = setTimeout(() => void load(), 200)
@@ -230,6 +233,17 @@ export default function AgendamentosPage() {
             className="pl-9"
           />
         </div>
+        <select
+          value={period}
+          onChange={(e) => setPeriod(e.target.value as typeof period)}
+          className="h-9 rounded-lg border border-border bg-card px-2.5 text-sm text-foreground"
+          title="Filtrar por período (fuso da conta)"
+        >
+          <option value="all">Todo o período</option>
+          <option value="today">Hoje</option>
+          <option value="yesterday">Ontem</option>
+          <option value="7d">Últimos 7 dias</option>
+        </select>
         {canManage && members.length > 0 && (
           <select
             value={assignedTo}

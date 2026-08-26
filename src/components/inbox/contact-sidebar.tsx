@@ -20,7 +20,12 @@ import {
   listContactCustomValues,
   saveContactCustomValues,
 } from "@/app/(dashboard)/contacts/actions";
-import { listPipelines, listStages } from "@/app/(dashboard)/pipelines/actions";
+import {
+  listPipelines,
+  listStages,
+  setDealStatus,
+  getLostReasons,
+} from "@/app/(dashboard)/pipelines/actions";
 import {
   listTasksByContact,
   type TaskLite,
@@ -73,6 +78,9 @@ import {
   Trash2,
   ExternalLink,
   Loader2,
+  Trophy,
+  XCircle,
+  RotateCcw,
 } from "lucide-react";
 import Link from "next/link";
 import { Button } from "@/components/ui/button";
@@ -246,6 +254,13 @@ export function ContactSidebar({
     Record<string, PipelineStage[]>
   >({});
   const [dealPipelineId, setDealPipelineId] = useState<string>("");
+
+  // Ganho/Perda direto no card da lateral (pedido do Rafael) — sem precisar
+  // abrir o funil. A perda abre um mini-painel com os motivos da conta.
+  const [dealStatusBusy, setDealStatusBusy] = useState<string | null>(null);
+  const [lostPanelDealId, setLostPanelDealId] = useState<string | null>(null);
+  const [lostReasonOptions, setLostReasonOptions] = useState<string[]>([]);
+  const [lostReasonText, setLostReasonText] = useState("");
 
   const contactId = contact?.id;
   const conversationId = conversation?.id;
@@ -475,6 +490,51 @@ export function ContactSidebar({
       .then(setDeals)
       .catch((e) => console.error("Failed to refresh deals:", e));
   }, [contactId]);
+
+  // Ganho / Perda / Reabrir direto da lateral. A perda vai com o motivo
+  // escolhido no mini-painel (mesmos chips do detalhe do negócio).
+  const markDealStatus = useCallback(
+    async (dealId: string, status: "open" | "won" | "lost", reason?: string) => {
+      setDealStatusBusy(dealId);
+      try {
+        const { error } = await setDealStatus(dealId, status, reason ?? null);
+        if (error) {
+          toast.error(error);
+          return;
+        }
+        toast.success(
+          status === "won"
+            ? "Negócio marcado como ganho 🏆"
+            : status === "lost"
+              ? "Negócio marcado como perda"
+              : "Negócio reaberto",
+        );
+        setLostPanelDealId(null);
+        setLostReasonText("");
+        handleDealSaved();
+      } catch (e) {
+        console.error("Failed to set deal status:", e);
+        toast.error("Falha ao atualizar o negócio");
+      } finally {
+        setDealStatusBusy(null);
+      }
+    },
+    [handleDealSaved],
+  );
+
+  // Abre o mini-painel de perda e carrega os motivos da conta (uma vez).
+  const openLostPanel = useCallback(
+    (dealId: string) => {
+      setLostReasonText("");
+      setLostPanelDealId((cur) => (cur === dealId ? null : dealId));
+      if (lostReasonOptions.length === 0) {
+        void getLostReasons()
+          .then(setLostReasonOptions)
+          .catch(() => {});
+      }
+    },
+    [lostReasonOptions.length],
+  );
 
   // Refetch just this contact's tasks after a create/toggle/delete.
   const refreshTasks = useCallback(() => {
@@ -715,16 +775,26 @@ export function ContactSidebar({
                               {deal.currency ?? "$"}
                               {deal.value.toLocaleString()}
                             </span>
-                            {deal.stage && (
-                              <span
-                                className="rounded-full px-1.5 py-0.5 text-[10px]"
-                                style={{
-                                  backgroundColor: `${deal.stage.color}20`,
-                                  color: deal.stage.color,
-                                }}
-                              >
-                                {deal.stage.name}
+                            {deal.status === "won" ? (
+                              <span className="rounded-full bg-emerald-500/15 px-1.5 py-0.5 text-[10px] font-medium text-emerald-600 dark:text-emerald-400">
+                                Ganho
                               </span>
+                            ) : deal.status === "lost" ? (
+                              <span className="rounded-full bg-red-500/15 px-1.5 py-0.5 text-[10px] font-medium text-red-600 dark:text-red-400">
+                                Perda
+                              </span>
+                            ) : (
+                              deal.stage && (
+                                <span
+                                  className="rounded-full px-1.5 py-0.5 text-[10px]"
+                                  style={{
+                                    backgroundColor: `${deal.stage.color}20`,
+                                    color: deal.stage.color,
+                                  }}
+                                >
+                                  {deal.stage.name}
+                                </span>
+                              )
                             )}
                           </div>
                           {/* Fonte • Origem gravadas no negócio (estilo RD) —
@@ -740,9 +810,9 @@ export function ContactSidebar({
                             </p>
                           )}
                         </button>
-                        {/* Ver no funil — leva direto pro detalhe do negócio,
-                            que mostra a etapa atual no topo (pedido do Alex). */}
-                        <div className="border-t border-border/50 px-3 py-1.5">
+                        {/* Rodapé do card: Ver no funil + Ganho/Perda direto
+                            da lateral (pedido do Rafael — sem abrir o funil). */}
+                        <div className="flex items-center justify-between gap-2 border-t border-border/50 px-3 py-1.5">
                           <button
                             type="button"
                             onClick={() => {
@@ -753,7 +823,95 @@ export function ContactSidebar({
                             <ExternalLink className="h-3 w-3" />
                             Ver no funil
                           </button>
+                          <div className="flex items-center gap-1">
+                            {dealStatusBusy === deal.id ? (
+                              <Loader2 className="h-3.5 w-3.5 animate-spin text-muted-foreground" />
+                            ) : deal.status === "won" || deal.status === "lost" ? (
+                              <button
+                                type="button"
+                                onClick={() => void markDealStatus(deal.id, "open")}
+                                title="Reabrir negócio"
+                                className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                              >
+                                <RotateCcw className="h-3 w-3" />
+                                Reabrir
+                              </button>
+                            ) : (
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() => void markDealStatus(deal.id, "won")}
+                                  title="Marcar venda"
+                                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-emerald-600 transition-colors hover:bg-emerald-500/10 dark:text-emerald-400"
+                                >
+                                  <Trophy className="h-3 w-3" />
+                                  Ganho
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => openLostPanel(deal.id)}
+                                  title="Marcar perda"
+                                  className="inline-flex items-center gap-1 rounded-md px-1.5 py-0.5 text-[11px] font-medium text-red-600 transition-colors hover:bg-red-500/10 dark:text-red-400"
+                                >
+                                  <XCircle className="h-3 w-3" />
+                                  Perda
+                                </button>
+                              </>
+                            )}
+                          </div>
                         </div>
+                        {/* Motivo da perda (mesmos chips do detalhe do negócio). */}
+                        {lostPanelDealId === deal.id && deal.status !== "lost" && (
+                          <div className="space-y-2 border-t border-red-500/30 bg-red-500/5 px-3 py-2">
+                            <p className="text-[11px] font-medium text-muted-foreground">
+                              Por que este negócio foi perdido?
+                            </p>
+                            {lostReasonOptions.length > 0 && (
+                              <div className="flex flex-wrap gap-1">
+                                {lostReasonOptions.map((r) => (
+                                  <button
+                                    key={r}
+                                    type="button"
+                                    onClick={() => setLostReasonText(r)}
+                                    className={cn(
+                                      "rounded-full border px-2 py-0.5 text-[10px] transition-colors",
+                                      lostReasonText === r
+                                        ? "border-red-500 bg-red-500/20 text-red-500"
+                                        : "border-border text-muted-foreground hover:bg-muted",
+                                    )}
+                                  >
+                                    {r}
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                            <input
+                              value={lostReasonText}
+                              onChange={(e) => setLostReasonText(e.target.value)}
+                              placeholder="Ou escreva um motivo novo"
+                              className="h-7 w-full rounded-md border border-border bg-background px-2 text-xs text-foreground outline-none focus:border-red-400"
+                            />
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                disabled={dealStatusBusy === deal.id}
+                                onClick={() =>
+                                  void markDealStatus(deal.id, "lost", lostReasonText)
+                                }
+                                className="rounded-md bg-red-600 px-2 py-1 text-[11px] font-medium text-white transition-colors hover:bg-red-700 disabled:opacity-50"
+                              >
+                                Confirmar perda
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => setLostPanelDealId(null)}
+                                className="rounded-md px-2 py-1 text-[11px] text-muted-foreground transition-colors hover:bg-muted"
+                              >
+                                Cancelar
+                              </button>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     );
                   })}

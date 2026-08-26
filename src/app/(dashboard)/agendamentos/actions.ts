@@ -98,11 +98,15 @@ function visibilityWhere(visible: string[] | null, userId: string) {
 const nameSub = (col: string) =>
   sql<string | null>`(SELECT u.name FROM "user" u WHERE u.id = "scheduled_messages"."${sql.raw(col)}")`
 
-/** Lista as agendadas visíveis, com filtros de status/responsável/busca. */
+/** Filtro de período (pedido do Rafael 25/08) — janela no FUSO da conta. */
+export type SchedPeriod = 'all' | 'today' | 'yesterday' | '7d'
+
+/** Lista as agendadas visíveis, com filtros de status/responsável/busca/período. */
 export async function listScheduled(input: {
   status?: SchedStatus | 'all'
   assignedTo?: string
   search?: string
+  period?: SchedPeriod
 } = {}): Promise<ScheduledRow[]> {
   const ctx = await getCurrentAccount()
   const visible = await visibleUserIds(ctx)
@@ -112,6 +116,28 @@ export async function listScheduled(input: {
   if (vis) where.push(vis)
   if (input.status && input.status !== 'all')
     where.push(eq(scheduledMessages.status, input.status))
+  if (input.period && input.period !== 'all') {
+    const { getAccountSettings } = await import('@/lib/settings/account-settings')
+    const { startOfDayInTz } = await import('@/lib/dashboard/date-utils')
+    const tz = (await getAccountSettings(ctx.accountId)).businessTimezone || 'America/Sao_Paulo'
+    const tomorrowStart = startOfDayInTz(tz, -1).toISOString()
+    if (input.period === 'today') {
+      where.push(
+        sql`${scheduledMessages.scheduledAt} >= ${startOfDayInTz(tz, 0).toISOString()}`,
+        sql`${scheduledMessages.scheduledAt} < ${tomorrowStart}`,
+      )
+    } else if (input.period === 'yesterday') {
+      where.push(
+        sql`${scheduledMessages.scheduledAt} >= ${startOfDayInTz(tz, 1).toISOString()}`,
+        sql`${scheduledMessages.scheduledAt} < ${startOfDayInTz(tz, 0).toISOString()}`,
+      )
+    } else {
+      where.push(
+        sql`${scheduledMessages.scheduledAt} >= ${startOfDayInTz(tz, 6).toISOString()}`,
+        sql`${scheduledMessages.scheduledAt} < ${tomorrowStart}`,
+      )
+    }
+  }
   if (input.assignedTo)
     where.push(eq(scheduledMessages.assignedTo, input.assignedTo))
   const term = (input.search ?? '').trim()
