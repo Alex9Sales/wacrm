@@ -143,11 +143,15 @@ export async function pickAgentIdForChannel(
     }
   }
 
-  // 2) catch-all (empty channel list) — prefer the default.
+  // 2) catch-all (empty channel list) — só o DEFAULT cobre canal não listado.
+  //    Especialista de roteamento (não-default, lista vazia) NÃO captura canal
+  //    sozinho: ele só assume conversa por transferência ([[AGENTE:]] →
+  //    conversations.ai_agent_id). Exceção: conta mono-agente sem default
+  //    marcado mantém o comportamento antigo de catch-all.
   const catchAll = rows.filter((r) => (r.channelIds ?? []).length === 0)
-  if (catchAll.length > 0) {
-    return (catchAll.find((r) => r.isDefault) ?? catchAll[0]).id
-  }
+  const defaultCatchAll = catchAll.find((r) => r.isDefault)
+  if (defaultCatchAll) return defaultCatchAll.id
+  if (catchAll.length > 0 && rows.length === 1) return catchAll[0].id
 
   // 3) no agent covers this channel.
   return null
