@@ -100,6 +100,9 @@ export const NOTE_DIRECTIVE = /\[\[\s*nota\s*:\s*([^\]]+?)\s*\]\]/i
 export const ATTR_DIRECTIVE = /\[\[\s*atributo\s*:\s*([^\]=|]+?)\s*=\s*([^\]]+?)\s*\]\]/i
 /** Preferência de voz: [[VOZ:audio]] ou [[VOZ:texto]]. */
 export const VOICE_DIRECTIVE = /\[\[\s*voz\s*:\s*(a[uú]dio|texto)\s*\]\]/i
+/** Roteamento multiagente: [[AGENTE:nome do agente|resumo da transferência]]. */
+export const AGENT_ROUTE_DIRECTIVE =
+  /\[\[\s*agente\s*:\s*([^\]|]+?)\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
 
 export interface AgentDirectives {
   /** Texto limpo (sem os marcadores) a enviar ao cliente. */
@@ -126,6 +129,8 @@ export interface AgentDirectives {
   attribute: { field: string; value: string } | null
   /** Preferência de voz do cliente: 'audio' | 'text' | null. */
   voicePref: 'audio' | 'text' | null
+  /** Roteamento multiagente: passar a conversa pra outro agente de IA. */
+  routeAgent: { name: string; summary: string } | null
 }
 
 /** Extrai os marcadores de ação do texto gerado e devolve o texto limpo. */
@@ -161,6 +166,10 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const note = nm ? nm[1].trim() : null
   const am = raw.match(ATTR_DIRECTIVE)
   const attribute = am ? { field: am[1].trim(), value: am[2].trim() } : null
+  const rm = raw.match(AGENT_ROUTE_DIRECTIVE)
+  const routeAgent = rm
+    ? { name: rm[1].trim(), summary: (rm[2] || '').trim() }
+    : null
   const vm = raw.match(VOICE_DIRECTIVE)
   const voicePref: 'audio' | 'text' | null = vm
     ? /texto/i.test(vm[1])
@@ -180,6 +189,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     .replace(new RegExp(NOTE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(ATTR_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(VOICE_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(AGENT_ROUTE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(FUNNEL_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(LOSE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(RESOLVE_DIRECTIVE.source, 'gi'), '')
@@ -199,6 +209,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     note,
     attribute,
     voicePref,
+    routeAgent,
   }
 }
 
@@ -219,6 +230,14 @@ export function attributeInstruction(fieldNames: string[]): string {
 }
 
 /** Instrução: registrar preferência de voz do cliente. */
+function routeAgentInstruction(roster: { name: string }[]): string {
+  const names = roster.map((r) => `"${r.name}"`).join(', ')
+  return (
+    `Agent routing: you are one of several AI agents on this account. When the conversation clearly belongs to another specialist, TRANSFER it by emitting [[AGENTE:<agent name>|<one-line handover summary in Portuguese>]] with NO other text in your reply — the specialist answers the customer immediately, on the same number, with the full history; the customer must not notice the switch. Available agents: ${names}. ` +
+    `Transfer ONLY when the topic is clearly the other agent's specialty and you are not the right one to continue. Never invent agent names, never mention agents or transfers to the customer, and do not transfer back and forth.`
+  )
+}
+
 export function voiceInstruction(): string {
   return (
     'Voice preference: if the customer says they prefer to receive replies as AUDIO (voice notes) or as TEXT, record it by emitting "[[VOZ:audio]]" or "[[VOZ:texto]]" once. This is control metadata — never show it to the customer.'
@@ -362,6 +381,9 @@ export function buildSystemPrompt(args: {
   voicePref?: string | null
   /** 🔊 Master do agente: pode responder em ÁUDIO? false → só texto. */
   audioReplies?: boolean
+  /** 🔀 Roteamento multiagente: os OUTROS agentes ativos da conta pra quem
+   *  esta conversa pode ser transferida ([] = ferramenta inerte). */
+  agentRoster?: { name: string }[]
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -430,6 +452,9 @@ export function buildSystemPrompt(args: {
       args.customFieldNames.length > 0
     ) {
       parts.push(attributeInstruction(args.customFieldNames))
+    }
+    if (has('route_agent') && (args.agentRoster?.length ?? 0) > 0) {
+      parts.push(routeAgentInstruction(args.agentRoster!))
     }
     if (audioOn && has('voice_pref')) parts.push(voiceInstruction())
     // Enviesa o formato pela preferência já registrada do cliente — a

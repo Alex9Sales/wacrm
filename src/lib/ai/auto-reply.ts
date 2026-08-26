@@ -1,7 +1,7 @@
 import { and, eq, inArray, sql } from 'drizzle-orm'
-import { db, automations, conversations, contacts, messages as messagesTable } from '@/db'
+import { db, automations, conversations, contacts, messages as messagesTable, aiConfigs } from '@/db'
 import { firstOrNull } from '@/db/helpers'
-import { loadAiConfigForChannel } from './config'
+import { loadAiConfigForChannel, loadAiConfigById } from './config'
 import { hasActiveAutoReplyAgent } from './agents'
 import { aiHoursAllows } from './hours-gate'
 import { getAccountSettings } from '@/lib/settings/account-settings'
@@ -54,6 +54,9 @@ interface DispatchArgs {
   /** The account's WhatsApp config owner, used for the outbound send's
    *  audit columns (mirrors how the flow runner passes it through). */
   configOwnerUserId: string
+  /** 🔀 Interno: nº de transferências entre agentes já feitas NESTE inbound
+   *  (guarda anti ping-pong — máx. 1). Nunca passar de fora. */
+  routeHop?: number
 }
 
 /**
@@ -114,6 +117,7 @@ export async function dispatchInboundToAiReply(
         .select({
           assignedAgentId: conversations.assignedAgentId,
           aiAutoreplyDisabled: conversations.aiAutoreplyDisabled,
+          aiAgentId: conversations.aiAgentId,
           aiReplyCount: conversations.aiReplyCount,
           channelId: conversations.channelId,
           voicePreference: conversations.voicePreference,
@@ -130,9 +134,19 @@ export async function dispatchInboundToAiReply(
     // requireAutoReply → só um agente ativo e com auto-resposta ligada é
     // elegível; o roteamento por canal (incl. "lista vazia = todos os canais")
     // vive em pickAgentIdForChannel, então não há gate de canal separado aqui.
-    const config = await loadAiConfigForChannel(accountId, conv.channelId, {
-      requireAutoReply: true,
-    })
+    // 🔀 Agente DONO da conversa (roteamento multiagente): se um agente já
+    // assumiu esta conversa, é ele quem responde — senão resolve pelo canal.
+    // Dono inválido (apagado/desativado/sem auto-resposta) → fallback canal.
+    let config =
+      conv.aiAgentId != null
+        ? await loadAiConfigById(accountId, conv.aiAgentId)
+        : null
+    if (config && !config.autoReplyEnabled) config = null
+    if (!config) {
+      config = await loadAiConfigForChannel(accountId, conv.channelId, {
+        requireAutoReply: true,
+      })
+    }
     if (!config || !config.autoReplyEnabled) return
 
     // Horário de atendimento da IA: só responde conforme o modo
@@ -207,6 +221,22 @@ export async function dispatchInboundToAiReply(
     const accountTags = has('tag') ? await listAccountTagNames(accountId) : []
     // handoff: etiquetas de roteamento (atendentes etiquetados) pra transferir.
     const routingTags = has('handoff') ? await listRoutingTags(accountId) : []
+    // 🔀 route_agent: os OUTROS agentes ativos da conta (candidatos a receber
+    // a conversa). Sem outros agentes → a ferramenta fica inerte.
+    const agentRoster = has('route_agent')
+      ? (
+          await db
+            .select({ id: aiConfigs.id, name: aiConfigs.name })
+            .from(aiConfigs)
+            .where(
+              and(
+                eq(aiConfigs.accountId, accountId),
+                eq(aiConfigs.isActive, true),
+                eq(aiConfigs.autoReplyEnabled, true),
+              ),
+            )
+        ).filter((a) => a.id !== config!.id)
+      : []
     // set_attribute: nomes dos campos personalizados do contato.
     const customFieldNames = has('set_attribute')
       ? await listContactFieldNames(accountId)
@@ -226,6 +256,7 @@ export async function dispatchInboundToAiReply(
       customFieldNames,
       voicePref: conv.voicePreference,
       audioReplies: config.audioRepliesEnabled !== false,
+      agentRoster: agentRoster.map((a) => ({ name: a.name ?? 'Agente' })),
     })
 
     // 🔧 Com ferramentas externas do agente (ERP do cliente etc.) — sem
@@ -375,6 +406,67 @@ export async function dispatchInboundToAiReply(
           await planStageFollowUp({ accountId, conversationId, stageName: r.movedTo })
         }
       }
+    }
+
+    // 🔀 Transferência entre agentes ([[AGENTE:nome|resumo]]): muda o dono da
+    // conversa e RE-DESPACHA — o especialista responde na hora, no mesmo
+    // número, com o histórico inteiro. Máx. 1 salto por inbound (anti
+    // ping-pong). Nome não resolvido → ignora em silêncio (nunca desliga a IA
+    // por causa de um nome inventado).
+    if (dirs.routeAgent && (args.routeHop ?? 0) === 0) {
+      const norm = (v: string) =>
+        v
+          .toLowerCase()
+          .normalize('NFD')
+          .replace(/[\u0300-\u036f]/g, '')
+          .trim()
+      const want = norm(dirs.routeAgent.name)
+      const candidates = agentRoster.length
+        ? agentRoster
+        : (
+            await db
+              .select({ id: aiConfigs.id, name: aiConfigs.name })
+              .from(aiConfigs)
+              .where(
+                and(
+                  eq(aiConfigs.accountId, accountId),
+                  eq(aiConfigs.isActive, true),
+                  eq(aiConfigs.autoReplyEnabled, true),
+                ),
+              )
+          ).filter((a) => a.id !== config!.id)
+      const target =
+        candidates.find((a) => norm(a.name ?? '') === want) ??
+        candidates.find(
+          (a) => norm(a.name ?? '').includes(want) || want.includes(norm(a.name ?? '')),
+        )
+      if (target) {
+        await db
+          .update(conversations)
+          .set({ aiAgentId: target.id })
+          .where(eq(conversations.id, conversationId))
+        await postInternalNote({
+          conversationId,
+          text: `🔀 IA: ${config.name ?? 'agente'} → ${target.name ?? 'agente'}${
+            dirs.routeAgent.summary ? ` — ${dirs.routeAgent.summary}` : ''
+          }`,
+        })
+        await applyTags()
+        // O especialista gera e envia a resposta agora (mesmo inbound).
+        await dispatchInboundToAiReply({ ...args, routeHop: 1 })
+        return
+      }
+      console.warn(
+        '[ai auto-reply] transferência ignorada — agente não encontrado:',
+        dirs.routeAgent.name,
+      )
+      if (!text) return // só o marcador inválido: silêncio, sem desligar
+    }
+    // Hop 1 tentando transferir DE NOVO (ping-pong): ignora o marcador; se
+    // não sobrou texto, silêncio — nunca desliga a IA por causa disso.
+    if (dirs.routeAgent && (args.routeHop ?? 0) > 0 && !text) {
+      console.warn('[ai auto-reply] transferência em cadeia bloqueada (hop>0)')
+      return
     }
 
     // skip_reply: a msg não pedia resposta — NÃO responde, mas mantém a IA

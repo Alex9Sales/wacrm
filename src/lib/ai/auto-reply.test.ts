@@ -33,7 +33,10 @@ const h = vi.hoisted(() => ({
 // Multi-agente: o auto-reply agora roteia por canal (loadAiConfigForChannel)
 // e faz um early-out barato (hasActiveAutoReplyAgent). Mapeamos os dois para
 // os mocks existentes — o roteamento por canal é testado em agents.ts.
-vi.mock('./config', () => ({ loadAiConfigForChannel: h.loadAiConfig }))
+vi.mock('./config', () => ({
+  loadAiConfigForChannel: h.loadAiConfig,
+  loadAiConfigById: vi.fn(async () => null),
+}))
 vi.mock('./agents', () => ({ hasActiveAutoReplyAgent: h.hasAgent }))
 vi.mock('./context', () => ({
   buildConversationContext: h.buildConversationContext,

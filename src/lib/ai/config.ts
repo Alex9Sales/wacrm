@@ -25,6 +25,7 @@ const agentSelect = {
   autoReplyHoursMode: aiConfigs.autoReplyHoursMode,
   autoReplyBufferSeconds: aiConfigs.autoReplyBufferSeconds,
   bargeInMinutes: aiConfigs.bargeInMinutes,
+  name: aiConfigs.name,
   audioRepliesEnabled: aiConfigs.audioRepliesEnabled,
   dealSuggestionsProactive: aiConfigs.dealSuggestionsProactive,
   embeddingsApiKey: aiConfigs.embeddingsApiKey,
@@ -52,6 +53,7 @@ type AgentRow = {
   autoReplyBufferSeconds: number
   bargeInMinutes: number
   audioRepliesEnabled: boolean
+  name: string | null
   dealSuggestionsProactive: boolean
   embeddingsApiKey: string | null
   signatureName: string | null
@@ -110,6 +112,7 @@ function finalizeAgent(
     autoReplyHoursMode: toAiHoursMode(row.autoReplyHoursMode),
     autoReplyBufferSeconds: row.autoReplyBufferSeconds,
     bargeInMinutes: row.bargeInMinutes,
+    name: row.name,
     audioRepliesEnabled: row.audioRepliesEnabled,
     dealSuggestionsProactive: row.dealSuggestionsProactive,
     embeddingsApiKey,

@@ -39,6 +39,8 @@ export interface AiConfig {
   bargeInMinutes?: number
   /** 🔊 Responder por áudio (TTS). false → entende áudio, responde só texto. */
   audioRepliesEnabled?: boolean
+  /** Nome do agente (multiagente/roteamento). */
+  name?: string | null
   /** IA proativa em Negociações (Fase 3): quando true, a IA analisa o negócio
    *  vinculado no inbound e cria sugestões pendentes. Opcional (default false)
    *  para não quebrar construções sintéticas. */

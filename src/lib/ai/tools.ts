@@ -19,6 +19,7 @@ export type AgentToolKey =
   | 'private_note'
   | 'set_attribute'
   | 'voice_pref'
+  | 'route_agent'
 
 export interface AgentToolDef {
   key: AgentToolKey
@@ -48,6 +49,15 @@ export const AGENT_TOOLS: AgentToolDef[] = [
       'Etiqueta o contato pra qualificar/organizar (usa só as etiquetas que já existem).',
     group: 'Conversa',
     defaultOn: true,
+    implemented: true,
+  },
+  {
+    key: 'route_agent',
+    label: 'Transferir entre agentes (roteador)',
+    description:
+      'Passa a conversa pra outro agente de IA da conta (SDR → Vendas, Suporte…) no mesmo número, levando o contexto. A conversa fica com um agente "dono" por vez.',
+    group: 'Conversa',
+    defaultOn: false,
     implemented: true,
   },
   {

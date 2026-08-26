@@ -70,6 +70,23 @@ describe('parseCloseDirectives', () => {
     expect(d.createCard).toEqual({ title: 'Lead novo', value: null, note: null })
   })
 
+  it('extrai [[AGENTE:nome | resumo]] (roteamento multiagente)', () => {
+    const d = parseCloseDirectives(
+      '[[AGENTE:Agente de Vendas|Empresa X, 4 atendentes, quer o plano Pro]]',
+    )
+    expect(d.routeAgent).toEqual({
+      name: 'Agente de Vendas',
+      summary: 'Empresa X, 4 atendentes, quer o plano Pro',
+    })
+    expect(d.text).toBe('')
+  })
+
+  it('[[AGENTE]] sem resumo também vale', () => {
+    const d = parseCloseDirectives('Um instante!\n[[AGENTE:Suporte]]')
+    expect(d.routeAgent).toEqual({ name: 'Suporte', summary: '' })
+    expect(d.text).toBe('Um instante!')
+  })
+
   it('extrai nota/atributo/voz', () => {
     const d = parseCloseDirectives(
       'Anotado!\n[[NOTA:cliente pediu desconto]]\n[[ATRIBUTO:Qualificação=Quente]]\n[[VOZ:audio]]',
