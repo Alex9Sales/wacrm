@@ -57,6 +57,11 @@ export interface AccountSettings {
   wonCadenceId: string | null
   /** Cadência ao marcar como PERDIDO (recuperação). null = nenhuma. */
   lostCadenceId: string | null
+  /** Funil→funil (ideia do cliente Dentai, 26/08): ao GANHAR, abre um novo
+   *  negócio no funil escolhido (ex.: pós-venda). null = não move. */
+  wonPipelineId: string | null
+  /** Ao PERDER, abre um novo negócio no funil escolhido (ex.: resgate). */
+  lostPipelineId: string | null
   /** Motivos de perda da conta (estilo RD): os chips oferecidos ao marcar
    *  perda. Motivo novo digitado num "Confirmar perda" entra aqui sozinho
    *  (criado na hora, fica pra próxima) — a menos que a lista esteja travada. */
@@ -134,6 +139,8 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   staleDealDays: 7,
   wonCadenceId: null,
   lostCadenceId: null,
+  wonPipelineId: null,
+  lostPipelineId: null,
   lostReasons: [
     'Não responde',
     'Achou caro',

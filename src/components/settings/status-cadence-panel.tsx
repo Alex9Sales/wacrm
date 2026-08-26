@@ -28,15 +28,21 @@ export function StatusCadencePanel() {
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
   const [cadences, setCadences] = useState<CadenceOpt[]>([]);
+  const [pipes, setPipes] = useState<{ id: string; name: string }[]>([]);
   const [wonId, setWonId] = useState("");
   const [lostId, setLostId] = useState("");
+  const [wonPipeId, setWonPipeId] = useState("");
+  const [lostPipeId, setLostPipeId] = useState("");
 
   useEffect(() => {
     getStatusCadences()
       .then((res) => {
         setCadences(res.cadences);
+        setPipes(res.pipelines);
         setWonId(res.wonCadenceId ?? "");
         setLostId(res.lostCadenceId ?? "");
+        setWonPipeId(res.wonPipelineId ?? "");
+        setLostPipeId(res.lostPipelineId ?? "");
       })
       .catch(() => toast.error("Falha ao carregar as cadências."))
       .finally(() => setLoading(false));
@@ -47,6 +53,8 @@ export function StatusCadencePanel() {
     const res = await setStatusCadences({
       wonCadenceId: wonId || null,
       lostCadenceId: lostId || null,
+      wonPipelineId: wonPipeId || null,
+      lostPipelineId: lostPipeId || null,
     });
     setSaving(false);
     if (res.error) {
@@ -77,13 +85,16 @@ export function StatusCadencePanel() {
           <div className="flex justify-center py-4 text-muted-foreground">
             <Loader2 className="size-5 animate-spin" />
           </div>
-        ) : cadences.length === 0 ? (
-          <p className="text-sm text-muted-foreground">
-            Você ainda não tem cadências. Crie em{" "}
-            <strong>Automações → Cadências</strong> e volte aqui para escolher.
-          </p>
         ) : (
           <>
+            {cadences.length === 0 ? (
+              <p className="text-sm text-muted-foreground">
+                Você ainda não tem cadências. Crie em{" "}
+                <strong>Automações → Cadências</strong> e volte aqui para
+                escolher.
+              </p>
+            ) : (
+              <>
             <div className="grid gap-2 sm:max-w-md">
               <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
                 <Trophy className="size-3.5 text-emerald-600" /> Ao GANHAR, inscrever em
@@ -123,6 +134,63 @@ export function StatusCadencePanel() {
                 ))}
               </select>
             </div>
+
+              </>
+            )}
+
+            {/* 🔀 Funil→funil (ideia do cliente Dentai): ganhou/perdeu → abre
+                um NOVO negócio no funil escolhido (o original fica onde está,
+                preservando os relatórios). Opt-in — nenhum = como sempre foi. */}
+            {pipes.length > 1 && (
+              <div className="space-y-4 border-t border-border pt-4">
+                <p className="text-sm text-muted-foreground">
+                  <strong className="text-foreground">
+                    Mover para outro funil
+                  </strong>{" "}
+                  — ao ganhar/perder, abre automaticamente um novo negócio no
+                  funil escolhido (ex.: pós-venda no ganho, resgate na perda). O
+                  negócio original fica no funil dele, mantendo os relatórios.
+                </p>
+                <div className="grid gap-2 sm:max-w-md">
+                  <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                    <Trophy className="size-3.5 text-emerald-600" /> Ao GANHAR,
+                    abrir negócio no funil
+                  </span>
+                  <select
+                    value={wonPipeId}
+                    onChange={(e) => setWonPipeId(e.target.value)}
+                    disabled={!canEditSettings}
+                    className={selectCls}
+                  >
+                    <option value="">Não mover (padrão)</option>
+                    {pipes.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div className="grid gap-2 sm:max-w-md">
+                  <span className="flex items-center gap-1.5 text-sm text-muted-foreground">
+                    <XCircle className="size-3.5 text-rose-500" /> Ao PERDER,
+                    abrir negócio no funil
+                  </span>
+                  <select
+                    value={lostPipeId}
+                    onChange={(e) => setLostPipeId(e.target.value)}
+                    disabled={!canEditSettings}
+                    className={selectCls}
+                  >
+                    <option value="">Não mover (padrão)</option>
+                    {pipes.map((p) => (
+                      <option key={p.id} value={p.id}>
+                        {p.name}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+              </div>
+            )}
 
             {!canEditSettings ? (
               <p className="text-xs text-muted-foreground">

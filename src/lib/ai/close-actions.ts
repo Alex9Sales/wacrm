@@ -425,6 +425,15 @@ export async function markDealLostInPlace(input: {
         }${ctx} — motivo: ${reason}. (${by === 'ai' ? 'IA' : by})`,
       })
     }
+    // 🔀 Funil→funil: perda automática também abre o negócio de resgate.
+    try {
+      const { maybeSpawnCrossFunnelDeal } = await import(
+        '@/lib/pipelines/cross-funnel'
+      )
+      await maybeSpawnCrossFunnelDeal(accountId, userId, deal.id, 'lost')
+    } catch (err) {
+      console.error('[ai lose] cross-funnel falhou:', err)
+    }
     return { dealId: deal.id, stageName }
   } catch (err) {
     console.error('[ai lose] falhou:', err)

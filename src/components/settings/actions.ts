@@ -29,6 +29,7 @@ import {
   conversations,
   quickReplies,
   aiCompanyProfile,
+  pipelines,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { isUniqueViolation } from '@/lib/contacts/dedupe'
@@ -988,33 +989,48 @@ export async function setDealAlertDays(days: number): Promise<{ error: string | 
 
 export async function getStatusCadences(): Promise<{
   cadences: { id: string; name: string; active: boolean }[]
+  pipelines: { id: string; name: string }[]
   wonCadenceId: string | null
   lostCadenceId: string | null
+  wonPipelineId: string | null
+  lostPipelineId: string | null
 }> {
   const ctx = await getCurrentAccount()
-  const [list, s] = await Promise.all([
+  const [list, pipes, s] = await Promise.all([
     db
       .select({ id: cadences.id, name: cadences.name, active: cadences.active })
       .from(cadences)
       .where(eq(cadences.accountId, ctx.accountId))
       .orderBy(asc(cadences.name)),
+    db
+      .select({ id: pipelines.id, name: pipelines.name })
+      .from(pipelines)
+      .where(eq(pipelines.accountId, ctx.accountId))
+      .orderBy(asc(pipelines.createdAt)),
     getAccountSettings(ctx.accountId),
   ])
   return {
     cadences: list,
+    pipelines: pipes,
     wonCadenceId: s.wonCadenceId ?? null,
     lostCadenceId: s.lostCadenceId ?? null,
+    wonPipelineId: s.wonPipelineId ?? null,
+    lostPipelineId: s.lostPipelineId ?? null,
   }
 }
 
 export async function setStatusCadences(input: {
   wonCadenceId: string | null
   lostCadenceId: string | null
+  wonPipelineId?: string | null
+  lostPipelineId?: string | null
 }): Promise<{ error: string | null }> {
   const ctx = await requireRole('admin')
   await updateAccountSettings(ctx.accountId, {
     wonCadenceId: input.wonCadenceId || null,
     lostCadenceId: input.lostCadenceId || null,
+    wonPipelineId: input.wonPipelineId || null,
+    lostPipelineId: input.lostPipelineId || null,
   })
   return { error: null }
 }

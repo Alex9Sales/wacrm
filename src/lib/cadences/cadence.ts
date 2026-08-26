@@ -217,6 +217,15 @@ async function onCadenceCompletedWithoutReply(
             },
           })
         })
+        // 🔀 Funil→funil: a perda automática também abre o negócio de resgate.
+        try {
+          const { maybeSpawnCrossFunnelDeal } = await import(
+            '@/lib/pipelines/cross-funnel'
+          )
+          await maybeSpawnCrossFunnelDeal(accountId, null, deal.id, 'lost')
+        } catch (err) {
+          console.error('[cadence] cross-funnel falhou:', err)
+        }
       }
     } catch (err) {
       console.error('[cadence] auto-perder falhou:', err)

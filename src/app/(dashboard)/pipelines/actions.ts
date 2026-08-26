@@ -1501,6 +1501,23 @@ export async function updateDeal(
           console.error('[updateDeal] status cadence trigger:', err)
         }
       }
+      // 🔀 Funil→funil: ganhou → abre negócio no funil de pós-venda; perdeu →
+      // no funil de resgate (se a conta configurou). Best-effort.
+      if (patch.status === 'won' || patch.status === 'lost') {
+        try {
+          const { maybeSpawnCrossFunnelDeal } = await import(
+            '@/lib/pipelines/cross-funnel'
+          )
+          await maybeSpawnCrossFunnelDeal(
+            ctx.accountId,
+            ctx.userId,
+            id,
+            patch.status,
+          )
+        } catch (err) {
+          console.error('[updateDeal] cross-funnel trigger:', err)
+        }
+      }
     }
     return { error: null }
   } catch (err) {
