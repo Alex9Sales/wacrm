@@ -9,7 +9,7 @@
 
 import { useCallback, useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Repeat, Loader2, Check, Square } from 'lucide-react'
+import { Repeat, Loader2, Check, Square, Play } from 'lucide-react'
 
 import {
   Popover,
@@ -23,6 +23,7 @@ import {
   listCadenceOptions,
   enrollLeadInCadence,
   stopLeadCadence,
+  resumeLeadCadence,
   type CadenceState,
 } from '@/app/(dashboard)/automations/cadencias/actions'
 import { onCadenceChange, emitCadenceChange } from './cadence-bus'
@@ -159,6 +160,23 @@ export function CadenceButton({
     onChanged?.()
   }
 
+  async function resume() {
+    if (!state || state.status !== 'paused') return
+    setBusy(true)
+    const res = await resumeLeadCadence(state.enrollment_id)
+    setBusy(false)
+    if (!res.ok) {
+      toast.error(res.error ?? 'Falha ao retomar a cadência.')
+      return
+    }
+    toast.success(
+      `Cadência retomada — ${res.scheduled ?? 0} toque(s) restante(s) reagendado(s).`,
+    )
+    void refresh()
+    emitCadenceChange(busKey)
+    onChanged?.()
+  }
+
   return (
     <Popover open={open} onOpenChange={onOpenChange}>
       {variant === 'button' ? (
@@ -245,6 +263,22 @@ export function CadenceButton({
               <p className="mt-0.5 text-[11px] text-muted-foreground">
                 Última: {state.cadence_name} ({EVENT_LABEL[state.status] ?? state.status})
               </p>
+            )}
+            {/* Pausada (o lead respondeu) → retomar de onde parou, sem
+                recomeçar do degrau 1. Só reagenda os toques que faltam. */}
+            {state && state.status === 'paused' && (
+              <button
+                onClick={() => void resume()}
+                disabled={busy}
+                className="mt-2 flex w-full items-center justify-center gap-1.5 rounded-lg border border-primary/40 bg-primary/10 px-3 py-2 text-sm font-medium text-primary hover:bg-primary/20 disabled:opacity-50"
+              >
+                {busy ? (
+                  <Loader2 className="h-4 w-4 animate-spin" />
+                ) : (
+                  <Play className="h-3.5 w-3.5" />
+                )}
+                Retomar de onde parou
+              </button>
             )}
             {loadError ? (
               <p className="mt-2 rounded-lg border border-amber-500/40 bg-amber-500/10 px-3 py-2 text-xs text-amber-600 dark:text-amber-400">

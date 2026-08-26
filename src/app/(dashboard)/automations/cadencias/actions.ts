@@ -17,6 +17,7 @@ import { getCurrentAccount } from '@/lib/auth/account'
 import {
   enrollContactInCadence,
   cancelEnrollment,
+  resumeEnrollment,
   type StepChannel,
 } from '@/lib/cadences/cadence'
 
@@ -342,6 +343,21 @@ export async function stopLeadCadence(enrollmentId: string): Promise<{ error: st
   } catch (err) {
     console.error('[stopLeadCadence]', err)
     return { error: 'Falha ao encerrar a cadência.' }
+  }
+}
+
+/** Retoma uma cadência PAUSADA de onde parou (reagenda só os degraus que
+ *  faltam, a partir de agora). Ver resumeEnrollment. */
+export async function resumeLeadCadence(
+  enrollmentId: string,
+): Promise<{ ok: boolean; scheduled?: number; error?: string }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const res = await resumeEnrollment(ctx.accountId, enrollmentId)
+    return res.ok ? { ok: true, scheduled: res.scheduled } : { ok: false, error: res.error }
+  } catch (err) {
+    console.error('[resumeLeadCadence]', err)
+    return { ok: false, error: 'Falha ao retomar a cadência.' }
   }
 }
 

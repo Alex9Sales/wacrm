@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
 
 import {
   db,
@@ -142,6 +142,196 @@ export interface EnrollResult {
   error?: string
 }
 
+type CadenceStepRow = typeof cadenceSteps.$inferSelect
+
+interface RoutingContext {
+  accountChannels: { id: string; provider: string }[]
+  existingConvs: { id: string; channelId: string | null; provider: string }[]
+  originConv: { id: string; channelId: string | null; provider: string } | null
+}
+
+/** Contexto de roteamento: canais da conta + conversas EXISTENTES do lead (por
+ *  provider) + a conversa de origem. Base pra mandar cada degrau no canal REAL
+ *  do lead (não num canal qualquer da família — Felipe tem 8 WA). Reusado por
+ *  enroll e resume. */
+async function loadRoutingContext(
+  accountId: string,
+  contactId: string,
+  conversationId: string | null,
+): Promise<RoutingContext> {
+  const accountChannels = await db
+    .select({ id: channels.id, provider: channels.provider })
+    .from(channels)
+    .where(eq(channels.accountId, accountId))
+  const existingConvs = await db
+    .select({
+      id: conversations.id,
+      channelId: conversations.channelId,
+      provider: channels.provider,
+    })
+    .from(conversations)
+    .innerJoin(channels, eq(channels.id, conversations.channelId))
+    .where(
+      and(
+        eq(conversations.accountId, accountId),
+        eq(conversations.contactId, contactId),
+      ),
+    )
+  const originConv = conversationId
+    ? existingConvs.find((c) => c.id === conversationId) ?? null
+    : null
+  return { accountChannels, existingConvs, originConv }
+}
+
+interface SchedulableContact {
+  id: string
+  userId: string
+  name: string | null
+  phone: string | null
+  email: string | null
+  company: string | null
+}
+
+/** Agenda uma lista de degraus como scheduled_messages sob uma inscrição:
+ *  roteia pro canal certo (pula o que o lead não tem), interpola as variáveis
+ *  e enfileira. `sendAtMsFor` decide QUANDO cada degrau sai (epoch ms). Reusado
+ *  por enroll (offset desde o início) e resume (offset relativo à retomada). */
+async function scheduleCadenceSteps(
+  ctx: CadenceCtx,
+  enrollment: { id: string; cadenceId: string; contactId: string; dealId: string | null },
+  contact: SchedulableContact,
+  routing: RoutingContext,
+  steps: CadenceStepRow[],
+  sendAtMsFor: (step: CadenceStepRow) => number,
+): Promise<{ scheduled: number; skipped: number }> {
+  // Inclui `primeiro_nome` (1ª palavra do nome). contactTokenValues é a fonte
+  // única (mesmos tokens do disparo/agendamento).
+  const vars = contactTokenValues({
+    name: contact.name,
+    phone: contact.phone,
+    email: contact.email,
+    company: contact.company,
+  })
+  let scheduled = 0
+  let skipped = 0
+  for (const step of steps) {
+    const providers = providersFor(step.channel)
+
+    // Alvo: a conversa REAL do lead nesse canal. Prefere a de origem (se do
+    // mesmo provider), senão qualquer conversa existente do provider.
+    let targetConvId: string | null =
+      routing.originConv && providers.includes(routing.originConv.provider)
+        ? routing.originConv.id
+        : null
+    if (!targetConvId) {
+      const ex = routing.existingConvs.find((c) => providers.includes(c.provider))
+      if (ex) targetConvId = ex.id
+    }
+
+    if (step.channel === 'instagram') {
+      // external_id é AMBÍGUO (e-mail p/ e-mail, PSID p/ Messenger, IGSID p/ IG).
+      // Só manda no IG se o lead JÁ tem conversa de Instagram. Senão, pula.
+      if (!targetConvId) {
+        skipped++
+        await recordCadenceEvent(ctx.accountId, enrollment, 'step_skipped', {
+          stepPosition: step.position,
+          channel: step.channel,
+          data: { reason: 'lead não está no Instagram' },
+        })
+        continue
+      }
+    } else {
+      // WhatsApp/E-mail: precisa do campo (telefone/e-mail). Sem conversa no
+      // canal → abre uma no canal certo (prefere o de origem).
+      const hasField = step.channel === 'email' ? !!vars.email : !!vars.telefone
+      if (!hasField) {
+        skipped++
+        await recordCadenceEvent(ctx.accountId, enrollment, 'step_skipped', {
+          stepPosition: step.position,
+          channel: step.channel,
+          data: { reason: 'lead sem o campo do canal' },
+        })
+        continue
+      }
+      if (!targetConvId) {
+        const channelId =
+          routing.originConv && providers.includes(routing.originConv.provider)
+            ? routing.originConv.channelId
+            : routing.accountChannels.find((c) => providers.includes(c.provider))?.id ?? null
+        if (!channelId) {
+          skipped++
+          await recordCadenceEvent(ctx.accountId, enrollment, 'step_skipped', {
+            stepPosition: step.position,
+            channel: step.channel,
+            data: { reason: 'sem canal' },
+          })
+          continue
+        }
+        const conv = await findOrCreateConversation(
+          ctx.accountId,
+          contact.userId,
+          enrollment.contactId,
+          channelId,
+        )
+        if (!conv) {
+          skipped++
+          await recordCadenceEvent(ctx.accountId, enrollment, 'step_skipped', {
+            stepPosition: step.position,
+            channel: step.channel,
+            data: { reason: 'não abriu conversa' },
+          })
+          continue
+        }
+        targetConvId = conv.conversation.id
+      }
+    }
+
+    const sendAt = new Date(sendAtMsFor(step))
+    const body = interpolate(step.body, vars)
+    const subject = step.channel === 'email' ? interpolate(step.subject, vars) || null : null
+
+    let insertedId: string | null = null
+    try {
+      const row = firstOrThrow(
+        await db
+          .insert(scheduledMessages)
+          .values({
+            accountId: ctx.accountId,
+            conversationId: targetConvId,
+            contactId: enrollment.contactId,
+            messageType: 'text',
+            contentText: body,
+            subject,
+            scheduledAt: sendAt.toISOString(),
+            status: 'pending',
+            createdBy: ctx.userId,
+            assignedTo: ctx.userId,
+            assignedBy: ctx.userId,
+            cadenceEnrollmentId: enrollment.id,
+            cadenceStepPosition: step.position,
+          })
+          .returning({ id: scheduledMessages.id }),
+      )
+      insertedId = row.id
+      await enqueueScheduledMessage(row.id, { delayMs: sendAt.getTime() - Date.now() })
+      scheduled++
+      await recordCadenceEvent(ctx.accountId, enrollment, 'step_scheduled', {
+        stepPosition: step.position,
+        channel: step.channel,
+        data: { scheduledAt: sendAt.toISOString(), scheduledMessageId: row.id },
+      })
+    } catch (err) {
+      // Rollback do row órfão se o enqueue falhou.
+      if (insertedId) {
+        await db.delete(scheduledMessages).where(eq(scheduledMessages.id, insertedId)).catch(() => {})
+      }
+      console.error('[cadence] agendar degrau falhou:', err)
+      skipped++
+    }
+  }
+  return { scheduled, skipped }
+}
+
 /**
  * Inscreve um contato numa cadência: agenda cada degrau como scheduled_message
  * no canal certo (pulando os que o lead não tem). Substitui a inscrição ativa
@@ -233,166 +423,25 @@ export async function enrollContactInCadence(
         }),
     )
 
-    // Inclui `primeiro_nome` (1ª palavra do nome) — o token que o Rafael quer
-    // pra sair "Matheus", não "Matheus Costa". contactTokenValues é a fonte
-    // única (mesmos tokens do disparo/agendamento).
-    const vars = contactTokenValues({
-      name: contact.name,
-      phone: contact.phone,
-      email: contact.email,
-      company: contact.company,
-    })
+    const routing = await loadRoutingContext(
+      ctx.accountId,
+      input.contactId,
+      input.conversationId ?? null,
+    )
 
-    const accountChannels = await db
-      .select({ id: channels.id, provider: channels.provider })
-      .from(channels)
-      .where(eq(channels.accountId, ctx.accountId))
-
-    // Conversas EXISTENTES do lead (por provider). Base do roteamento: mandar no
-    // canal REAL do lead, não num canal qualquer da família (Felipe tem 8 WA).
-    const existingConvs = await db
-      .select({
-        id: conversations.id,
-        channelId: conversations.channelId,
-        provider: channels.provider,
-      })
-      .from(conversations)
-      .innerJoin(channels, eq(channels.id, conversations.channelId))
-      .where(
-        and(
-          eq(conversations.accountId, ctx.accountId),
-          eq(conversations.contactId, input.contactId),
-        ),
-      )
-    // Conversa de origem (a que acionou a cadência), se veio de uma.
-    const originConv = input.conversationId
-      ? existingConvs.find((c) => c.id === input.conversationId) ?? null
-      : null
-
-    let scheduled = 0
-    let skipped = 0
     // Cada degrau agenda a partir do INÍCIO da cadência (d0, d2, d4…), NÃO
     // "N depois do degrau anterior" (chamado do Rafael 26/08). O rótulo do
     // editor (+2d/+4d/+7d) já era absoluto; era o motor que somava (d0→d2→d6→
-    // d13…). `enrolledAtMs` fixo pra todos os degraus caírem no offset certo
-    // desde a 1ª mensagem.
+    // d13…). Piso de 60s (o agendamento exige futuro; D0 sai em ~1 min).
     const enrolledAtMs = Date.now()
-    for (const step of steps) {
-      const offsetMs = delayMsOf(step.delayValue, step.delayUnit)
-      const providers = providersFor(step.channel)
-
-      // Alvo: a conversa REAL do lead nesse canal. Prefere a de origem (se do
-      // mesmo provider), senão qualquer conversa existente do provider.
-      let targetConvId: string | null =
-        originConv && providers.includes(originConv.provider) ? originConv.id : null
-      if (!targetConvId) {
-        const ex = existingConvs.find((c) => providers.includes(c.provider))
-        if (ex) targetConvId = ex.id
-      }
-
-      if (step.channel === 'instagram') {
-        // external_id é AMBÍGUO (guarda e-mail p/ contatos de e-mail, PSID p/
-        // Messenger, IGSID p/ Instagram). Só manda no IG se o lead JÁ tem uma
-        // conversa de Instagram — prova que é IGSID de verdade. Senão, pula.
-        if (!targetConvId) {
-          skipped++
-          await recordCadenceEvent(ctx.accountId, enrollment, 'step_skipped', {
-            stepPosition: step.position,
-            channel: step.channel,
-            data: { reason: 'lead não está no Instagram' },
-          })
-          continue
-        }
-      } else {
-        // WhatsApp/E-mail: precisa do campo (telefone/e-mail). Se ainda não tem
-        // conversa nesse canal, abre uma no canal certo (prefere o de origem).
-        const hasField = step.channel === 'email' ? !!vars.email : !!vars.telefone
-        if (!hasField) {
-          skipped++
-          await recordCadenceEvent(ctx.accountId, enrollment, 'step_skipped', {
-            stepPosition: step.position,
-            channel: step.channel,
-            data: { reason: 'lead sem o campo do canal' },
-          })
-          continue
-        }
-        if (!targetConvId) {
-          const channelId =
-            originConv && providers.includes(originConv.provider)
-              ? originConv.channelId
-              : accountChannels.find((c) => providers.includes(c.provider))?.id ?? null
-          if (!channelId) {
-            skipped++
-            await recordCadenceEvent(ctx.accountId, enrollment, 'step_skipped', {
-              stepPosition: step.position,
-              channel: step.channel,
-              data: { reason: 'sem canal' },
-            })
-            continue
-          }
-          const conv = await findOrCreateConversation(
-            ctx.accountId,
-            contact.userId,
-            input.contactId,
-            channelId,
-          )
-          if (!conv) {
-            skipped++
-            await recordCadenceEvent(ctx.accountId, enrollment, 'step_skipped', {
-              stepPosition: step.position,
-              channel: step.channel,
-              data: { reason: 'não abriu conversa' },
-            })
-            continue
-          }
-          targetConvId = conv.conversation.id
-        }
-      }
-
-      // >=60s à frente (o agendamento exige futuro; D0 sai em ~1 min).
-      const sendAt = new Date(enrolledAtMs + Math.max(offsetMs, 60_000))
-      const body = interpolate(step.body, vars)
-      const subject = step.channel === 'email' ? interpolate(step.subject, vars) || null : null
-
-      let insertedId: string | null = null
-      try {
-        const row = firstOrThrow(
-          await db
-            .insert(scheduledMessages)
-            .values({
-              accountId: ctx.accountId,
-              conversationId: targetConvId,
-              contactId: input.contactId,
-              messageType: 'text',
-              contentText: body,
-              subject,
-              scheduledAt: sendAt.toISOString(),
-              status: 'pending',
-              createdBy: ctx.userId,
-              assignedTo: ctx.userId,
-              assignedBy: ctx.userId,
-              cadenceEnrollmentId: enrollment.id,
-              cadenceStepPosition: step.position,
-            })
-            .returning({ id: scheduledMessages.id }),
-        )
-        insertedId = row.id
-        await enqueueScheduledMessage(row.id, { delayMs: sendAt.getTime() - Date.now() })
-        scheduled++
-        await recordCadenceEvent(ctx.accountId, enrollment, 'step_scheduled', {
-          stepPosition: step.position,
-          channel: step.channel,
-          data: { scheduledAt: sendAt.toISOString(), scheduledMessageId: row.id },
-        })
-      } catch (err) {
-        // Rollback do row órfão se o enqueue falhou.
-        if (insertedId) {
-          await db.delete(scheduledMessages).where(eq(scheduledMessages.id, insertedId)).catch(() => {})
-        }
-        console.error('[cadence] agendar degrau falhou:', err)
-        skipped++
-      }
-    }
+    const { scheduled, skipped } = await scheduleCadenceSteps(
+      ctx,
+      enrollment,
+      contact,
+      routing,
+      steps,
+      (step) => enrolledAtMs + Math.max(delayMsOf(step.delayValue, step.delayUnit), 60_000),
+    )
 
     await recordCadenceEvent(ctx.accountId, enrollment, 'enrolled', {
       data: { cadence: cadence.name, scheduled, skipped },
@@ -479,6 +528,140 @@ export async function cancelEnrollment(
   if (!enr) return false
   await endEnrollment(accountId, enr, 'cancelled', 'cancelada manualmente')
   return true
+}
+
+/**
+ * RETOMA uma inscrição PAUSADA (o lead respondeu, a cadência parou): reativa e
+ * reagenda SÓ os degraus ainda não enviados, a partir de AGORA, preservando o
+ * espaçamento entre eles. Ex.: pausou após o degrau 2 (d2) → os degraus 3/4/5
+ * (originais d4/d7/d10) saem agora, +3d, +6d. Não reenvia o que já foi.
+ * Recomeçar do zero = re-inscrever no botão de cadência.
+ */
+export async function resumeEnrollment(
+  accountId: string,
+  enrollmentId: string,
+): Promise<EnrollResult> {
+  try {
+    const enr = firstOrNull(
+      await db
+        .select({
+          id: cadenceEnrollments.id,
+          cadenceId: cadenceEnrollments.cadenceId,
+          contactId: cadenceEnrollments.contactId,
+          conversationId: cadenceEnrollments.conversationId,
+          dealId: cadenceEnrollments.dealId,
+          status: cadenceEnrollments.status,
+          enrolledBy: cadenceEnrollments.enrolledBy,
+        })
+        .from(cadenceEnrollments)
+        .where(and(eq(cadenceEnrollments.id, enrollmentId), eq(cadenceEnrollments.accountId, accountId)))
+        .limit(1),
+    )
+    if (!enr) return { ok: false, error: 'Inscrição não encontrada.' }
+    if (enr.status === 'active') return { ok: false, error: 'A cadência já está ativa.' }
+    if (enr.status !== 'paused') {
+      return { ok: false, error: 'Só dá pra retomar uma cadência que foi pausada.' }
+    }
+
+    // 1 cadência ativa por lead: se já entrou em outra, não retoma esta.
+    const otherActive = firstOrNull(
+      await db
+        .select({ id: cadenceEnrollments.id })
+        .from(cadenceEnrollments)
+        .where(
+          and(
+            eq(cadenceEnrollments.accountId, accountId),
+            eq(cadenceEnrollments.contactId, enr.contactId),
+            eq(cadenceEnrollments.status, 'active'),
+          ),
+        )
+        .limit(1),
+    )
+    if (otherActive) return { ok: false, error: 'Esse lead já está em outra cadência ativa.' }
+
+    const steps = await db
+      .select()
+      .from(cadenceSteps)
+      .where(and(eq(cadenceSteps.cadenceId, enr.cadenceId), eq(cadenceSteps.accountId, accountId)))
+      .orderBy(asc(cadenceSteps.position))
+    if (steps.length === 0) return { ok: false, error: 'A cadência não tem degraus.' }
+
+    // Último degrau já ENVIADO nessa inscrição — retoma daqui pra frente.
+    const lastSent = firstOrNull(
+      await db
+        .select({ pos: sql<number>`max(cadence_step_position)::int` })
+        .from(scheduledMessages)
+        .where(
+          and(
+            eq(scheduledMessages.cadenceEnrollmentId, enrollmentId),
+            eq(scheduledMessages.status, 'sent'),
+          ),
+        ),
+    )
+    const lastSentPos = lastSent?.pos ?? -1
+    const remaining = steps.filter((s) => s.position > lastSentPos)
+    if (remaining.length === 0) {
+      return { ok: false, error: 'Todos os degraus já foram enviados — nada a retomar.' }
+    }
+
+    const contact = firstOrNull(
+      await db
+        .select({
+          id: contacts.id,
+          userId: contacts.userId,
+          name: contacts.name,
+          phone: contacts.phone,
+          email: contacts.email,
+          company: contacts.company,
+        })
+        .from(contacts)
+        .where(and(eq(contacts.id, enr.contactId), eq(contacts.accountId, accountId)))
+        .limit(1),
+    )
+    if (!contact) return { ok: false, error: 'Contato não encontrado.' }
+
+    const routing = await loadRoutingContext(accountId, enr.contactId, enr.conversationId)
+    const ctx: CadenceCtx = { accountId, userId: enr.enrolledBy ?? contact.userId }
+
+    // Re-anchor: o 1º degrau restante sai agora; os seguintes mantêm o
+    // espaçamento relativo (offset − offset do 1º restante).
+    const baseOffset = delayMsOf(remaining[0].delayValue, remaining[0].delayUnit)
+    const nowMs = Date.now()
+    const { scheduled, skipped } = await scheduleCadenceSteps(
+      ctx,
+      { id: enr.id, cadenceId: enr.cadenceId, contactId: enr.contactId, dealId: enr.dealId },
+      contact,
+      routing,
+      remaining,
+      (step) => nowMs + Math.max(delayMsOf(step.delayValue, step.delayUnit) - baseOffset, 60_000),
+    )
+
+    if (scheduled === 0) {
+      return {
+        ok: false,
+        error: 'Não deu pra retomar — o lead não tem os canais dos próximos degraus.',
+      }
+    }
+
+    await db
+      .update(cadenceEnrollments)
+      .set({ status: 'active', updatedAt: new Date().toISOString() })
+      .where(eq(cadenceEnrollments.id, enr.id))
+    await recordCadenceEvent(
+      accountId,
+      { id: enr.id, cadenceId: enr.cadenceId, contactId: enr.contactId, dealId: enr.dealId },
+      'resumed',
+      { data: { scheduled, skipped, fromPosition: remaining[0].position } },
+    )
+
+    return { ok: true, enrollmentId: enr.id, scheduled, skipped }
+  } catch (err) {
+    if (isUniqueViolation(err)) {
+      return { ok: false, error: 'Esse lead acabou de entrar noutra cadência. Recarregue.' }
+    }
+    console.error('[cadence] resumeEnrollment:', err)
+    return { ok: false, error: 'Falha ao retomar a cadência.' }
+  }
 }
 
 /** Conclui a inscrição se não sobrou NENHUM degrau pendente (enviados, ou
