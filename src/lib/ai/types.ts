@@ -35,6 +35,8 @@ export interface AiConfig {
   /** Buffer (s): espera após a última msg do cliente antes de responder.
    *  Opcional (default 8) para não quebrar construções sintéticas. */
   autoReplyBufferSeconds?: number
+  /** 🤫 Barge-in: humano respondeu → IA observa por N min (0 = off). */
+  bargeInMinutes?: number
   /** IA proativa em Negociações (Fase 3): quando true, a IA analisa o negócio
    *  vinculado no inbound e cria sugestões pendentes. Opcional (default false)
    *  para não quebrar construções sintéticas. */

@@ -398,6 +398,13 @@ export function buildSystemPrompt(args: {
         simpleHandoff +
         ` Do NOT hand off just because you lack a specific detail: if you don't know a price, availability, or a fact, do not invent it — instead ask a clarifying question, collect the customer's need, or say you'll check and get back to them, and keep the conversation moving. Never go silent.`,
     )
+    // 🤫 Barge-in: depois que um humano entrou na conversa, a IA volta em modo
+    // OBSERVAÇÃO — não atropela o que o atendente já conduziu/resolveu.
+    parts.push(
+      `IMPORTANT — when the recent conversation history shows a HUMAN attendant from your own team replied (their messages appear as the business side but were not written by you), do NOT take the conversation back over. Only reply if the customer's latest message asks something that is still unanswered. If the human already handled it (confirmed the order, answered the question, closed the topic), stay silent${
+        has('skip_reply') ? ' by replying with exactly "[[IGNORAR]]"' : ' by replying with an empty acknowledgement only if strictly needed'
+      }. Never contradict or repeat what the human attendant already said.`,
+    )
     if (has('handoff') && routingTags.length > 0) {
       parts.push(transferInstruction(routingTags))
     }

@@ -51,6 +51,7 @@ export async function GET(request: Request) {
           auto_reply_max_per_conversation: aiConfigs.autoReplyMaxPerConversation,
           auto_reply_hours_mode: aiConfigs.autoReplyHoursMode,
           auto_reply_buffer_seconds: aiConfigs.autoReplyBufferSeconds,
+          barge_in_minutes: aiConfigs.bargeInMinutes,
           deal_suggestions_proactive: aiConfigs.dealSuggestionsProactive,
           signature_name: aiConfigs.signatureName,
           signature_enabled: aiConfigs.signatureEnabled,
@@ -180,6 +181,11 @@ export async function POST(request: Request) {
     let bufferSeconds = Number(body.auto_reply_buffer_seconds)
     if (!Number.isFinite(bufferSeconds)) bufferSeconds = 8
     bufferSeconds = Math.min(300, Math.max(0, Math.floor(bufferSeconds)))
+
+    // 🤫 Barge-in (min): humano respondeu → IA observa por N min (0..120; 0 = off).
+    let bargeInMinutes = Number(body.barge_in_minutes)
+    if (!Number.isFinite(bargeInMinutes)) bargeInMinutes = 5
+    bargeInMinutes = Math.min(120, Math.max(0, Math.floor(bargeInMinutes)))
 
     // Assinatura: nome do atendente que a IA representa + se assina as msgs.
     const signatureName =
@@ -342,6 +348,7 @@ export async function POST(request: Request) {
       autoReplyMaxPerConversation: number
       autoReplyHoursMode: string
       autoReplyBufferSeconds: number
+      bargeInMinutes: number
       dealSuggestionsProactive?: boolean
       signatureName: string | null
       signatureEnabled: boolean
@@ -362,6 +369,7 @@ export async function POST(request: Request) {
       autoReplyMaxPerConversation: maxPer,
       autoReplyHoursMode,
       autoReplyBufferSeconds: bufferSeconds,
+      bargeInMinutes,
       signatureName,
       signatureEnabled,
     }

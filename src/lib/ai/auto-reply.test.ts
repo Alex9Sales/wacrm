@@ -23,6 +23,7 @@ const h = vi.hoisted(() => ({
   state: {
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
+    recentHumanMsgs: [] as { id: string }[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     sqlCalls: [] as string[],
@@ -71,6 +72,10 @@ vi.mock('@/db', async (importOriginal) => {
               limit: () => {
                 if (table === actual.automations) {
                   return Promise.resolve(h.state.autoResponders)
+                }
+                if (table === actual.messages) {
+                  // 🤫 gate do barge-in: msgs de HUMANO recentes na conversa.
+                  return Promise.resolve(h.state.recentHumanMsgs ?? [])
                 }
                 return Promise.resolve(h.state.conv ? [h.state.conv] : [])
               },
@@ -131,6 +136,7 @@ beforeEach(() => {
     isGroup: false,
   }
   h.state.autoResponders = []
+  h.state.recentHumanMsgs = []
   h.state.claim = true
   h.state.updatePayload = null
   h.state.sqlCalls = []
@@ -166,6 +172,15 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('🤫 barge-in: humano respondeu há pouco → IA fica em silêncio', async () => {
+    h.state.recentHumanMsgs = [{ id: 'm-human' }]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    // silêncio temporário: NÃO desliga a IA
+    expect(h.state.updatePayload).toBeNull()
   })
 
   it('does not send when the atomic slot claim loses the race', async () => {

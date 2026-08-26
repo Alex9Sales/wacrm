@@ -1,5 +1,5 @@
 import { and, eq, inArray, sql } from 'drizzle-orm'
-import { db, automations, conversations, contacts } from '@/db'
+import { db, automations, conversations, contacts, messages as messagesTable } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfigForChannel } from './config'
 import { hasActiveAutoReplyAgent } from './agents'
@@ -150,6 +150,27 @@ export async function dispatchInboundToAiReply(
     if (conv.isGroup) return
     if (conv.assignedAgentId) return // a human owns this thread
     if (conv.aiAutoreplyDisabled) return // handed off / turned off here
+    // 🤫 Barge-in: um HUMANO respondeu há pouco nesta conversa (pelo CRM ou
+    // pelo celular — fromMe vira sender_type 'agent')? A IA fica quieta pela
+    // janela configurada, SEM desligar — o humano está conduzindo. Depois da
+    // janela ela volta observando (o prompt instrui a não atropelar).
+    const bargeInMin = config.bargeInMinutes ?? 5
+    if (bargeInMin > 0) {
+      const recentHuman = firstOrNull(
+        await db
+          .select({ id: messagesTable.id })
+          .from(messagesTable)
+          .where(
+            and(
+              eq(messagesTable.conversationId, conversationId),
+              eq(messagesTable.senderType, 'agent'),
+              sql`${messagesTable.createdAt} > now() - make_interval(mins => ${bargeInMin})`,
+            ),
+          )
+          .limit(1),
+      )
+      if (recentHuman) return
+    }
     // Cheap early-out; the authoritative cap check is the atomic claim
     // below (this read can race a concurrent inbound).
     if (conv.aiReplyCount >= config.autoReplyMaxPerConversation) return

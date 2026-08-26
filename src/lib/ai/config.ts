@@ -24,6 +24,7 @@ const agentSelect = {
   autoReplyMaxPerConversation: aiConfigs.autoReplyMaxPerConversation,
   autoReplyHoursMode: aiConfigs.autoReplyHoursMode,
   autoReplyBufferSeconds: aiConfigs.autoReplyBufferSeconds,
+  bargeInMinutes: aiConfigs.bargeInMinutes,
   dealSuggestionsProactive: aiConfigs.dealSuggestionsProactive,
   embeddingsApiKey: aiConfigs.embeddingsApiKey,
   signatureName: aiConfigs.signatureName,
@@ -48,6 +49,7 @@ type AgentRow = {
   autoReplyMaxPerConversation: number
   autoReplyHoursMode: string
   autoReplyBufferSeconds: number
+  bargeInMinutes: number
   dealSuggestionsProactive: boolean
   embeddingsApiKey: string | null
   signatureName: string | null
@@ -105,6 +107,7 @@ function finalizeAgent(
     autoReplyMaxPerConversation: row.autoReplyMaxPerConversation,
     autoReplyHoursMode: toAiHoursMode(row.autoReplyHoursMode),
     autoReplyBufferSeconds: row.autoReplyBufferSeconds,
+    bargeInMinutes: row.bargeInMinutes,
     dealSuggestionsProactive: row.dealSuggestionsProactive,
     embeddingsApiKey,
     signatureName: row.signatureName,

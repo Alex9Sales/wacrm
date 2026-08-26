@@ -105,6 +105,7 @@ export function AiConfig({
     'always',
   );
   const [bufferSeconds, setBufferSeconds] = useState(8);
+  const [bargeInMinutes, setBargeInMinutes] = useState(5);
   const [signatureName, setSignatureName] = useState('');
   const [signatureEnabled, setSignatureEnabled] = useState(false);
   // Ferramentas do agente (Fase A): conjunto de ações ligadas (chaves de tools.ts).
@@ -176,6 +177,9 @@ export function AiConfig({
           typeof data.auto_reply_buffer_seconds === 'number'
             ? data.auto_reply_buffer_seconds
             : 8,
+        );
+        setBargeInMinutes(
+          typeof data.barge_in_minutes === 'number' ? data.barge_in_minutes : 5,
         );
         setSignatureName(data.signature_name ?? '');
         setSignatureEnabled(Boolean(data.signature_enabled));
@@ -368,6 +372,7 @@ export function AiConfig({
     auto_reply_max_per_conversation: maxPerConversation,
     auto_reply_hours_mode: hoursMode,
     auto_reply_buffer_seconds: bufferSeconds,
+    barge_in_minutes: bargeInMinutes,
     tools,
     signature_name: signatureName.trim() || null,
     signature_enabled: signatureEnabled && signatureName.trim().length > 0,
@@ -1056,6 +1061,35 @@ export function AiConfig({
                 onChange={(e) =>
                   setBufferSeconds(
                     Math.min(300, Math.max(0, Number(e.target.value) || 0)),
+                  )
+                }
+                disabled={disabled || !autoReplyEnabled}
+                className="w-20"
+              />
+            </div>
+
+            {/* 🤫 Barge-in — um humano respondeu (CRM ou celular)? A IA fica
+                em observação por N minutos, sem precisar desligar o botão. */}
+            <div className="flex items-center justify-between gap-4">
+              <div>
+                <Label htmlFor="ai-barge-in">
+                  Silêncio quando um humano responder (min)
+                </Label>
+                <p className="text-xs text-muted-foreground">
+                  Se alguém da equipe responder (pelo CRM ou pelo celular), a IA
+                  fica só observando por esse tempo — e depois volta sem
+                  atropelar o que o humano já resolveu. 0 = desligado.
+                </p>
+              </div>
+              <Input
+                id="ai-barge-in"
+                type="number"
+                min={0}
+                max={120}
+                value={bargeInMinutes}
+                onChange={(e) =>
+                  setBargeInMinutes(
+                    Math.min(120, Math.max(0, Number(e.target.value) || 0)),
                   )
                 }
                 disabled={disabled || !autoReplyEnabled}
