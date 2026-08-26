@@ -172,8 +172,14 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
     setTestResult(null);
     try {
       const out = await testAgentTool(testing.id, testArgs);
+      let body = out.summary;
+      try {
+        body = JSON.stringify(JSON.parse(body), null, 2);
+      } catch {
+        // resposta não-JSON (texto puro, HTML, JSON truncado) — mostra como veio
+      }
       setTestResult(
-        `${out.status.toUpperCase()}${out.httpStatus ? ` · HTTP ${out.httpStatus}` : ''}\n\n${out.summary}`,
+        `${out.status.toUpperCase()}${out.httpStatus ? ` · HTTP ${out.httpStatus}` : ''}\n\n${body}`,
       );
     } catch {
       setTestResult('Falha ao executar o teste.');
@@ -528,7 +534,7 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
 
       {/* ------- teste manual ------- */}
       <Dialog open={!!testing} onOpenChange={(o) => !o && setTesting(null)}>
-        <DialogContent className="max-w-md">
+        <DialogContent className="max-h-[85vh] max-w-md overflow-y-auto">
           <DialogHeader>
             <DialogTitle>Testar “{testing?.name}”</DialogTitle>
             <DialogDescription>
@@ -557,7 +563,7 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
               <p className="text-xs text-muted-foreground">Sem parâmetros.</p>
             )}
             {testResult && (
-              <pre className="max-h-48 overflow-auto rounded-md bg-muted p-2 text-[11px] whitespace-pre-wrap">
+              <pre className="max-h-56 w-full min-w-0 overflow-auto rounded-md bg-muted p-2 text-[11px] break-all whitespace-pre-wrap">
                 {testResult}
               </pre>
             )}
