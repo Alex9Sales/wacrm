@@ -72,6 +72,7 @@ export async function buildConversationContext(
       contentText: messages.contentText,
       transcription: messages.transcription,
       createdAt: messages.createdAt,
+      replyToMessageId: messages.replyToMessageId,
     })
     .from(messages)
     .where(
@@ -88,6 +89,43 @@ export async function buildConversationContext(
     )
     .orderBy(desc(messages.createdAt))
     .limit(limit)
+
+  // Citações: quando a msg RESPONDE outra (reply do WhatsApp), busca o texto
+  // citado pra IA saber a que o "Sim"/"Isso"/"Não" se refere. Sem isso o modelo
+  // recebia a resposta solta, ficava inseguro e transferia à toa (26/08:
+  // Vanuza/Glauciane/Wagner — venda pronta travando no reply).
+  const quotedIds = Array.from(
+    new Set(
+      rows
+        .map((r) => r.replyToMessageId)
+        .filter((id): id is string => typeof id === 'string' && !!id),
+    ),
+  )
+  const quotePrefixById = new Map<string, string>()
+  if (quotedIds.length > 0) {
+    try {
+      const quoted = await db
+        .select({
+          id: messages.id,
+          senderType: messages.senderType,
+          contentText: messages.contentText,
+          transcription: messages.transcription,
+        })
+        .from(messages)
+        .where(inArray(messages.id, quotedIds))
+      for (const q of quoted) {
+        const txt = (q.contentText || q.transcription || '')
+          .trim()
+          .replace(/\s+/g, ' ')
+          .slice(0, 120)
+        if (!txt) continue
+        const who = q.senderType === 'customer' ? 'do cliente' : 'sua'
+        quotePrefixById.set(q.id, `[em resposta à mensagem ${who}: "${txt}"] `)
+      }
+    } catch {
+      /* best-effort — sem a citação o contexto segue como antes */
+    }
+  }
 
   return rows
     .reverse()
@@ -122,9 +160,12 @@ export async function buildConversationContext(
               : ''
       // Carimbo de data/hora no início (metadata p/ a IA; o prompt manda não repetir).
       const stamp = stampFor(m.createdAt, timezone)
+      const quote = m.replyToMessageId
+        ? (quotePrefixById.get(m.replyToMessageId) ?? '')
+        : ''
       return {
         role: isCustomer ? ('user' as const) : ('assistant' as const),
-        content: `${stamp}${prefix}${trimmed}`,
+        content: `${stamp}${prefix}${quote}${trimmed}`,
       }
     })
     .filter((m): m is ChatMessage => m !== null)
