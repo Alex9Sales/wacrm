@@ -15,10 +15,13 @@ const AUTH_BASE = 'https://www.linkedin.com/oauth/v2/authorization'
 const TOKEN_URL = 'https://www.linkedin.com/oauth/v2/accessToken'
 const API_BASE = 'https://api.linkedin.com/rest'
 
-// Escopo mínimo do Lead Sync. rw_organization_admin (opcional) permite listar as
-// organizações que o usuário administra no callback; sem ele, o admin informa o
-// organization id na mão.
-export const LINKEDIN_SCOPES = 'r_marketing_leadgen_automation'
+// Escopos do Lead Sync. r_organization_admin permite LISTAR as organizações que
+// o usuário administra no callback → o organization id preenche SOZINHO (o
+// cliente não digita nada). Sobrescrevível por env LINKEDIN_SCOPES caso algum
+// escopo não esteja liberado no app (aí cai no preenchimento manual do id).
+export const LINKEDIN_SCOPES =
+  process.env.LINKEDIN_SCOPES ||
+  'r_marketing_leadgen_automation r_organization_admin'
 
 /** Precisa casar EXATAMENTE uma das "Authorized redirect URLs" cadastradas no app. */
 export const LINKEDIN_REDIRECT_URI =
