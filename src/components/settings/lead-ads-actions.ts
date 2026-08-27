@@ -123,7 +123,7 @@ export async function listPipelinesForSelect(): Promise<
   return rows
 }
 
-function validate(input: LeadSourceInput): void {
+function validate(input: LeadSourceInput, requireToken = true): void {
   if (
     input.provider !== 'tiktok' &&
     input.provider !== 'meta' &&
@@ -141,7 +141,11 @@ function validate(input: LeadSourceInput): void {
           : 'Informe o advertiser_id da conta de anúncios.',
     )
   }
-  if (!input.accessToken.trim()) throw new Error('Cole o token de acesso.')
+  // Na EDIÇÃO o token fica em branco = "manter o atual" (o token da fonte veio do
+  // OAuth, o admin nunca o vê pra redigitar). Exigir só na CRIAÇÃO.
+  if (requireToken && !input.accessToken.trim()) {
+    throw new Error('Cole o token de acesso.')
+  }
 }
 
 function buildProviderMeta(input: LeadSourceInput): Record<string, unknown> {
@@ -190,7 +194,7 @@ export async function updateLeadSource(
   input: LeadSourceInput,
 ): Promise<void> {
   const ctx = await requireRole('admin')
-  validate(input)
+  validate(input, false) // token em branco = mantém o atual
   const set: Record<string, unknown> = {
     name: input.name.trim(),
     externalAccountId: input.externalAccountId.trim(),
@@ -198,8 +202,14 @@ export async function updateLeadSource(
     pipelineId: input.pipelineId?.trim() || null,
     deliverToAi: input.deliverToAi,
     enabled: input.enabled,
-    providerMeta: buildProviderMeta(input),
     updatedAt: new Date().toISOString(),
+  }
+  // provider_meta (appSecret) só é reescrito quando o admin DIGITAR um secret.
+  // Campo em branco = mantém o atual — evita que o autofill do navegador (que
+  // preenche o campo password com a senha salva) apague/estrague o secret e
+  // derrube a validação da assinatura do webhook.
+  if (input.appSecret?.trim()) {
+    set.providerMeta = buildProviderMeta(input)
   }
   if (input.accessToken.trim()) {
     set.accessToken = encrypt(input.accessToken.trim())
