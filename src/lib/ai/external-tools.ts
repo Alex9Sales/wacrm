@@ -11,7 +11,7 @@
 // Sem 'server-only' — worker-reachable.
 // ============================================================
 
-import { and, eq } from 'drizzle-orm'
+import { and, desc, eq, gte } from 'drizzle-orm'
 
 import { db, agentTools, agentToolRuns } from '@/db'
 import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
@@ -156,6 +156,57 @@ export interface ToolRunResult {
 }
 
 /** Executa uma ferramenta (com log em agent_tool_runs). Nunca lança. */
+// 🔁 Dedup de ESCRITA: janela que cobre uma conversa de pedido inteira.
+const WRITE_DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000
+
+/** Chave estável dos argumentos (chaves ordenadas, strings normalizadas) pra
+ *  comparar duas chamadas da mesma ferramenta. */
+function stableArgsKey(args: Record<string, unknown>): string {
+  const norm = (v: unknown): unknown => {
+    if (Array.isArray(v)) return v.map(norm)
+    if (v && typeof v === 'object') {
+      return Object.keys(v as Record<string, unknown>)
+        .sort()
+        .reduce<Record<string, unknown>>((acc, k) => {
+          acc[k] = norm((v as Record<string, unknown>)[k])
+          return acc
+        }, {})
+    }
+    if (typeof v === 'string') return v.trim().toLowerCase()
+    return v
+  }
+  return JSON.stringify(norm(args))
+}
+
+/** Esta MESMA ferramenta de escrita já rodou COM SUCESSO nesta conversa, com
+ *  argumentos iguais, na janela recente? Evita pedido/card duplicado quando o
+ *  modelo re-chama numa mensagem seguinte (ex.: cliente manda o comprovante e a
+ *  IA "confirma" de novo). Best-effort: erro na checagem nunca bloqueia. */
+async function alreadyRanIdentical(
+  toolId: string,
+  conversationId: string,
+  args: Record<string, unknown>,
+): Promise<boolean> {
+  const cutoff = new Date(Date.now() - WRITE_DEDUP_WINDOW_MS).toISOString()
+  const rows = await db
+    .select({ args: agentToolRuns.args })
+    .from(agentToolRuns)
+    .where(
+      and(
+        eq(agentToolRuns.toolId, toolId),
+        eq(agentToolRuns.conversationId, conversationId),
+        eq(agentToolRuns.status, 'ok'),
+        gte(agentToolRuns.createdAt, cutoff),
+      ),
+    )
+    .orderBy(desc(agentToolRuns.createdAt))
+    .limit(10)
+  const key = stableArgsKey(args)
+  return rows.some(
+    (r) => stableArgsKey((r.args ?? {}) as Record<string, unknown>) === key,
+  )
+}
+
 export async function executeTool(
   tool: ExternalTool,
   args: Record<string, unknown>,
@@ -164,7 +215,18 @@ export async function executeTool(
   const started = Date.now()
   let result: ToolRunResult
 
-  if (tool.risk === 'critical') {
+  const dupe =
+    tool.risk === 'write' && ctx.conversationId
+      ? await alreadyRanIdentical(tool.id, ctx.conversationId, args).catch(() => false)
+      : false
+
+  if (dupe) {
+    result = {
+      status: 'ok',
+      summary:
+        'Este pedido/ação já foi registrado nesta conversa há pouco — não repeti pra não duplicar. Considere que JÁ ESTÁ no sistema e apenas confirme ao cliente, sem criar de novo.',
+    }
+  } else if (tool.risk === 'critical') {
     result = {
       status: 'blocked',
       summary:
