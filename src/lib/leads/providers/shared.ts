@@ -58,11 +58,14 @@ export function mapContactFields(fields: Record<string, string>): {
   return {
     name:
       // nome: exato só (sem fuzzy) → senão junta first+last (exato) — pra
-      // "name" não engolir "first_name" e perder o sobrenome.
-      pickField(fields, ['full_name', 'name', 'nome'], false) ??
+      // "name" não engolir "first_name" e perder o sobrenome. Aceita as duas
+      // grafias: com underscore (Meta/TikTok: first_name) e sem (LinkedIn manda
+      // firstName/lastName → minúsculo firstname/lastname). Bug real do 1º teste
+      // do LinkedIn (27/08): o nome vinha NULL por só reconhecer first_name.
+      pickField(fields, ['full_name', 'fullname', 'name', 'nome'], false) ??
       joinName(
-        pickField(fields, ['first_name', 'primeiro_nome'], false),
-        pickField(fields, ['last_name', 'sobrenome'], false),
+        pickField(fields, ['first_name', 'firstname', 'primeiro_nome'], false),
+        pickField(fields, ['last_name', 'lastname', 'sobrenome'], false),
       ),
     phone: pickField(fields, [
       'phone_number',

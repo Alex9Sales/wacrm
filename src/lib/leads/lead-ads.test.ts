@@ -95,6 +95,21 @@ describe('mapeamento de campos do formulário (Meta/TikTok)', () => {
     expect(c.email).toBe('ana@ex.com')
   })
 
+  it('LinkedIn: nome camelCase minúsculo (firstname/lastname) — bug do 1º teste 27/08', () => {
+    const fields = {
+      firstname: 'Carlos',
+      lastname: 'Teste Fluxia',
+      emailaddress: 'carlos@ex.com',
+      phonenumber: '5567988887777',
+      companyname: 'Padaria Modelo',
+    }
+    const c = mapContactFields(fields)
+    expect(c.name).toBe('Carlos Teste Fluxia')
+    expect(c.phone).toBe('5567988887777') // contains "phone"
+    expect(c.email).toBe('carlos@ex.com') // contains "email"
+    expect(c.company).toBe('Padaria Modelo') // contains "company"
+  })
+
   it('buildLeadNotes inclui extras + metadados e exclui os campos já usados', () => {
     const fields = {
       full_name: 'Fulano de Tal',
