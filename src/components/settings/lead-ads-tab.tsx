@@ -83,8 +83,11 @@ const ACCOUNT_ID_LABEL: Record<LeadProvider, string> = {
 };
 
 export function LeadAdsTab() {
-  const { profile } = useAuth();
-  const isAdmin = profile?.account_role === 'admin';
+  // Owner + admin podem conectar/editar fontes — casa com requireRole('admin')
+  // das server actions (hasMinRole). O check cru `=== 'admin'` escondia os
+  // botões do PROPRIETÁRIO (owner), que é a role do dono da conta.
+  const { isOwner, isAdmin: isAdminRole } = useAuth();
+  const isAdmin = isOwner || isAdminRole;
 
   const [sources, setSources] = useState<LeadSourceRow[]>([]);
   const [pipelines, setPipelines] = useState<{ id: string; name: string }[]>([]);
