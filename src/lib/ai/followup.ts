@@ -359,7 +359,12 @@ export function readFollowUpConfig(raw: unknown): FollowUpConfig {
   let steps: FollowUpStep[] = Array.isArray(bag.steps)
     ? bag.steps.slice(0, FOLLOW_UP_MAX_STEPS).map(readStep).filter((s): s is FollowUpStep => s !== null)
     : []
-  if (steps.length === 0) {
+  // RETROCOMPAT v1 SÓ quando a config nem tem a chave `steps` (formato plano
+  // antigo). Um `steps: []` EXPLÍCITO significa "sem reengajamento por
+  // silêncio" (ex.: agente só com lembretes de reunião) — sintetizar um degrau
+  // default de 60min aqui foi o bug de 26/08 (follow-up fantasma na conta
+  // Fluxia mandando msg pro sogro do Alex e pro canal de avisos).
+  if (steps.length === 0 && !Array.isArray(bag.steps)) {
     // v1: um único degrau vindo do formato plano.
     const dm = Number(bag.delayMinutes)
     const delayMinutes = Number.isFinite(dm) && dm >= 1 ? Math.round(dm) : 60
@@ -545,6 +550,42 @@ interface AgentRow {
   created_by: string | null
   auto_reply_channel_ids: string[] | null
   follow_up: unknown
+  is_default: boolean
+  /** true quando é o ÚNICO agente ativo da conta (mono-agente legado). */
+  sole_active: boolean
+}
+
+/** Colunas + flag mono-agente dos agentes com follow-up ligado (as 3 varreduras). */
+const AGENT_SWEEP_SELECT = sql`
+  SELECT id, account_id, created_by, auto_reply_channel_ids, follow_up, is_default,
+         (SELECT count(*) = 1 FROM ai_configs a2
+            WHERE a2.account_id = ai_configs.account_id AND a2.is_active = true) AS sole_active
+  FROM ai_configs
+  WHERE is_active = true AND follow_up->>'enabled' = 'true'
+`
+
+/**
+ * Cobertura MULTIAGENTE da varredura: quais conversas ESTE agente pode
+ * reengajar. Espelha o roteamento (pickAgentIdForChannel):
+ *   - conversa com dono (ai_agent_id) → só o próprio dono;
+ *   - sem dono + lista de canais explícita → só nesses canais;
+ *   - sem dono + catch-all (lista vazia) → só o DEFAULT (ou o único agente
+ *     ativo da conta). Especialista de roteamento NUNCA varre a conta —
+ *     bug 26/08: follow-up do Agendamento (Fluxia) mandou mensagem no canal
+ *     pessoal do Alex (sogro, bot de marketing, canal de avisos).
+ */
+function agentCoverageCond(agent: AgentRow): ReturnType<typeof sql> {
+  const channels = agent.auto_reply_channel_ids ?? []
+  if (channels.length > 0) {
+    return sql`AND (c.ai_agent_id = ${agent.id}::uuid OR (c.ai_agent_id IS NULL AND c.channel_id = ANY(ARRAY[${sql.join(
+      channels.map((id) => sql`${id}::uuid`),
+      sql`, `,
+    )}]::uuid[])))`
+  }
+  if (agent.is_default || agent.sole_active) {
+    return sql`AND (c.ai_agent_id = ${agent.id}::uuid OR c.ai_agent_id IS NULL)`
+  }
+  return sql`AND c.ai_agent_id = ${agent.id}::uuid`
 }
 interface CandRow {
   id: string
@@ -559,11 +600,7 @@ interface CandRow {
 
 export async function runFollowUpSweep(): Promise<{ sent: number; agents: number }> {
   let sent = 0
-  const agentsRes = await db.execute(sql`
-    SELECT id, account_id, created_by, auto_reply_channel_ids, follow_up
-    FROM ai_configs
-    WHERE is_active = true AND follow_up->>'enabled' = 'true'
-  `)
+  const agentsRes = await db.execute(AGENT_SWEEP_SELECT)
   const agents = agentsRes.rows as unknown as AgentRow[]
 
   for (const agent of agents) {
@@ -584,14 +621,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
     // Filtro grosso: pelo MENOR delay entre os degraus (o mais permissivo).
     const minDelay = Math.min(...cfg.steps.map(stepDelayMinutes))
 
-    const channels = agent.auto_reply_channel_ids ?? []
-    const channelCond =
-      channels.length > 0
-        ? sql`AND c.channel_id = ANY(ARRAY[${sql.join(
-            channels.map((id) => sql`${id}::uuid`),
-            sql`, `,
-          )}]::uuid[])`
-        : sql``
+    const channelCond = agentCoverageCond(agent)
 
     const candRes = await db.execute(sql`
       SELECT c.id, c.contact_id, c.last_message_at, c.last_follow_up_at, c.follow_up_step,
@@ -985,11 +1015,7 @@ function normStage(s: string): string {
  */
 export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
   let sent = 0
-  const agentsRes = await db.execute(sql`
-    SELECT id, account_id, created_by, auto_reply_channel_ids, follow_up
-    FROM ai_configs
-    WHERE is_active = true AND follow_up->>'enabled' = 'true'
-  `)
+  const agentsRes = await db.execute(AGENT_SWEEP_SELECT)
   const agents = agentsRes.rows as unknown as AgentRow[]
 
   for (const agent of agents) {
@@ -1005,14 +1031,7 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
       /* fail-open */
     }
 
-    const channels = agent.auto_reply_channel_ids ?? []
-    const channelCond =
-      channels.length > 0
-        ? sql`AND c.channel_id = ANY(ARRAY[${sql.join(
-            channels.map((id) => sql`${id}::uuid`),
-            sql`, `,
-          )}]::uuid[])`
-        : sql``
+    const channelCond = agentCoverageCond(agent)
 
     // Só os deals nas etapas-gatilho deste agente (case-insensitive no SQL;
     // refino final por normStage). Sem filtro de delay: queremos ver o card já
@@ -1341,19 +1360,18 @@ interface ConvMeta {
 /** Meta da conversa (canal/último inbound/contato). null se não está nos canais
  *  do agente ou não está aberta. */
 async function loadConvMeta(
-  accountId: string,
+  agent: AgentRow,
   conversationId: string,
-  channels: string[],
 ): Promise<ConvMeta | null> {
   const res = await db.execute(sql`
-    SELECT c.contact_id, c.channel_id, ch.provider, ct.name AS contact_name,
+    SELECT c.contact_id, c.channel_id, c.ai_agent_id, ch.provider, ct.name AS contact_name,
            (SELECT max(m.created_at) FROM messages m
               WHERE m.conversation_id = c.id
                 AND m.sender_type = 'customer' AND m.is_internal = false) AS last_inbound_at
     FROM conversations c
     LEFT JOIN channels ch ON ch.id = c.channel_id
     LEFT JOIN contacts ct ON ct.id = c.contact_id
-    WHERE c.id = ${conversationId} AND c.account_id = ${accountId}
+    WHERE c.id = ${conversationId} AND c.account_id = ${agent.account_id}
       AND c.status IN ('open','pending')
     LIMIT 1
   `)
@@ -1361,15 +1379,23 @@ async function loadConvMeta(
     | {
         contact_id: string | null
         channel_id: string | null
+        ai_agent_id: string | null
         provider: string | null
         contact_name: string | null
         last_inbound_at: string | null
       }
     | undefined
   if (!row) return null
-  // Respeita os canais do agente (lista vazia = todos).
-  if (channels.length > 0 && (!row.channel_id || !channels.includes(row.channel_id)))
-    return null
+  // Cobertura multiagente — mesma regra de agentCoverageCond.
+  if (row.ai_agent_id !== agent.id) {
+    if (row.ai_agent_id) return null // conversa de OUTRO agente
+    const channels = agent.auto_reply_channel_ids ?? []
+    if (channels.length > 0) {
+      if (!row.channel_id || !channels.includes(row.channel_id)) return null
+    } else if (!(agent.is_default || agent.sole_active)) {
+      return null // especialista catch-all: só conversas transferidas pra ele
+    }
+  }
   return {
     provider: row.provider,
     lastInboundAt: row.last_inbound_at,
@@ -1425,11 +1451,7 @@ function buildMeetingReminderPrompt(
  */
 export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
   let sent = 0
-  const agentsRes = await db.execute(sql`
-    SELECT id, account_id, created_by, auto_reply_channel_ids, follow_up
-    FROM ai_configs
-    WHERE is_active = true AND follow_up->>'enabled' = 'true'
-  `)
+  const agentsRes = await db.execute(AGENT_SWEEP_SELECT)
   const agents = agentsRes.rows as unknown as AgentRow[]
 
   for (const agent of agents) {
@@ -1451,7 +1473,6 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       (a, b) => reminderSignedMinutes(a) - reminderSignedMinutes(b),
     )
     const total = reminders.length
-    const channels = agent.auto_reply_channel_ids ?? []
 
     const rows = await db.execute(sql`
       SELECT e.id AS event_id, e.starts_at, e.reminders_sent, e.contact_id,
@@ -1488,7 +1509,7 @@ export async function runMeetingReminderSweep(): Promise<{ sent: number }> {
       if (dueIdx < 0) continue // nenhum venceu ainda
       if (e.reminders_sent > dueIdx) continue // já mandou este (e anteriores)
 
-      const meta = await loadConvMeta(agent.account_id, e.conversation_id, channels)
+      const meta = await loadConvMeta(agent, e.conversation_id)
       if (!meta) {
         await stampReminder(e.event_id, dueIdx + 1)
         continue
