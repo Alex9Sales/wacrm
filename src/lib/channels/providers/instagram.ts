@@ -172,6 +172,52 @@ export async function fetchInstagramProfile(
 }
 
 /**
+ * 🎯 Business Discovery: dados públicos de um perfil pelo @username — bio,
+ * nº de seguidores, nº de posts, nome. SÓ funciona pra contas BUSINESS/CREATOR
+ * (perfil pessoal não é descobrível); qualquer falha → null (o chamador
+ * qualifica só pelo comentário). Chamada no nó da PRÓPRIA conta (ig_id).
+ */
+export async function fetchBusinessDiscovery(
+  ch: ChannelCtx,
+  username: string,
+): Promise<{
+  name?: string
+  biography?: string
+  followersCount?: number
+  mediaCount?: number
+} | null> {
+  try {
+    const ownId = (ch.providerMeta as Record<string, unknown> | undefined)?.ig_id
+    const uname = (username ?? '').trim().replace(/^@/, '')
+    if (!ownId || !uname) return null
+    const fields = `business_discovery.username(${uname})%7Bname,biography,followers_count,media_count%7D`
+    const url = `${graphBaseOf(ch)}/${String(ownId)}?fields=${fields}`
+    const res = await fetch(url, {
+      headers: { Authorization: `Bearer ${accessTokenOf(ch)}` },
+    })
+    if (!res.ok) return null
+    const d = (await res.json()) as {
+      business_discovery?: {
+        name?: string
+        biography?: string
+        followers_count?: number
+        media_count?: number
+      }
+    }
+    const bd = d.business_discovery
+    if (!bd) return null
+    return {
+      name: bd.name,
+      biography: bd.biography,
+      followersCount: bd.followers_count,
+      mediaCount: bd.media_count,
+    }
+  } catch {
+    return null
+  }
+}
+
+/**
  * 🔒 Follow gate: a pessoa segue o perfil? A Graph API expõe
  * `is_user_follow_business` no perfil do usuário. null = não deu pra saber
  * (sem conversa ainda / erro) — o chamador decide o fallback.

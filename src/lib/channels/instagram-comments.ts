@@ -33,10 +33,14 @@ import {
   replyToComment,
   sendCommentPrivateReply,
   fetchFollowsBusiness,
+  fetchInstagramProfile,
+  fetchBusinessDiscovery,
   instagramProvider,
   type DmButton,
   type DmQuickReply,
 } from './providers/instagram'
+import { loadAiConfig } from '@/lib/ai/config'
+import { generateReply } from '@/lib/ai/generate'
 
 type Rule = typeof instagramCommentAutomations.$inferSelect
 
@@ -117,6 +121,93 @@ export function hasCommentChanges(body: unknown): boolean {
   return (b.entry ?? []).some((e) =>
     (e.changes ?? []).some((c) => c.field === 'comments'),
   )
+}
+
+/**
+ * 🎯 Qualificação por IA (social selling): antes de mandar o DM com o link, a
+ * IA lê o @perfil (nome/bio/seguidores via Business Discovery — só funciona p/
+ * conta business/creator) + o texto do comentário e decide se a pessoa bate com
+ * o CLIENTE IDEAL descrito na regra. Retorna:
+ *   qualified=true  → manda o DM (ou não deu pra avaliar: FAIL-OPEN, não trava)
+ *   qualified=false → claramente FORA do perfil (concorrente / perfil pessoal…)
+ * Best-effort: qualquer erro técnico (sem IA, falha na chamada) → true, pra
+ * nunca perder um lead por causa de infra.
+ */
+async function qualifyCommenter(
+  channel: ChannelCtx,
+  rule: Rule,
+  c: CommentChange,
+): Promise<{ qualified: boolean; reason: string }> {
+  const criteria = (rule.qualificationPrompt ?? '').trim()
+  if (!criteria) return { qualified: true, reason: 'sem critério' }
+  try {
+    const config = await loadAiConfig(channel.accountId, { requireActive: false })
+    if (!config) return { qualified: true, reason: 'sem IA configurada' }
+
+    // Sinais do perfil (best-effort; qualquer um pode faltar).
+    const [profile, disco] = await Promise.all([
+      c.fromId ? fetchInstagramProfile(channel, c.fromId) : Promise.resolve(null),
+      c.fromUsername
+        ? fetchBusinessDiscovery(channel, c.fromUsername)
+        : Promise.resolve(null),
+    ])
+    const username = c.fromUsername || profile?.username || null
+    const nome = profile?.name || disco?.name || null
+    const perfil = [
+      username ? `@username: ${username}` : null,
+      nome ? `Nome: ${nome}` : null,
+      disco?.biography ? `Bio: ${disco.biography}` : null,
+      typeof disco?.followersCount === 'number'
+        ? `Seguidores: ${disco.followersCount}`
+        : null,
+      typeof disco?.mediaCount === 'number' ? `Posts: ${disco.mediaCount}` : null,
+      disco
+        ? 'Tipo de conta: profissional/criador'
+        : 'Tipo de conta: pessoal ou não-descobrível pela API',
+      `Comentário que a pessoa deixou: "${(c.text ?? '').trim()}"`,
+    ]
+      .filter(Boolean)
+      .join('\n')
+
+    const systemPrompt = [
+      'Você é um filtro de qualificação de leads para social selling no Instagram.',
+      'Analise os dados do perfil e o comentário e decida se a pessoa se encaixa no CLIENTE IDEAL descrito abaixo.',
+      '',
+      'CLIENTE IDEAL:',
+      criteria,
+      '',
+      'Responda SÓ com um JSON, nada mais: {"qualificado": true|false, "motivo": "bem curto"}.',
+      'Na dúvida, responda true — não trave um lead sem certeza. Só responda false se estiver CLARO que a pessoa não é o cliente ideal.',
+    ].join('\n')
+
+    const res = await generateReply({
+      config,
+      systemPrompt,
+      messages: [{ role: 'user', content: perfil }],
+    })
+    const raw = (res.text ?? '').trim()
+    let qualified = true
+    let reason = raw.slice(0, 120)
+    const m = raw.match(/\{[\s\S]*\}/)
+    if (m) {
+      try {
+        const j = JSON.parse(m[0]) as { qualificado?: boolean; motivo?: string }
+        if (typeof j.qualificado === 'boolean') qualified = j.qualificado
+        if (j.motivo) reason = String(j.motivo).slice(0, 120)
+      } catch {
+        /* cai no fallback textual abaixo */
+      }
+    } else if (
+      /\b(false|nao|não)\b/i.test(raw) &&
+      !/\b(true|sim)\b/i.test(raw)
+    ) {
+      qualified = false
+    }
+    return { qualified, reason }
+  } catch (e) {
+    // FAIL-OPEN: infra quebrou → não perde o lead.
+    return { qualified: true, reason: `erro: ${(e as Error).message}` }
+  }
 }
 
 /**
@@ -244,6 +335,28 @@ export async function processCommentWebhook(
         publicReplied = true
       } catch (e) {
         errMsg = `public: ${(e as Error).message}`
+      }
+    }
+
+    // 🎯 Qualificação por IA: não qualificado NÃO recebe DM (mas a resposta
+    // pública já saiu). Fail-open embutido no qualifyCommenter — nunca trava
+    // um lead por erro de infra.
+    if (rule.qualificationEnabled) {
+      const q = await qualifyCommenter(channel, rule, c)
+      if (!q.qualified) {
+        await db
+          .update(instagramCommentEvents)
+          .set({
+            matched: true,
+            automationId: rule.id,
+            publicReplied,
+            dmSent: false,
+            error: [errMsg, `não qualificado: ${q.reason}`]
+              .filter(Boolean)
+              .join(' | '),
+          })
+          .where(eq(instagramCommentEvents.id, inserted.id))
+        continue
       }
     }
 

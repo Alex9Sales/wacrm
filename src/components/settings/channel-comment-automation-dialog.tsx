@@ -68,6 +68,9 @@ const EMPTY = {
   followUpEnabled: false,
   followUpHours: 4,
   followUpMessage: '',
+  // 🎯 qualificação por IA: só manda o DM pra quem bate com o cliente ideal.
+  qualificationEnabled: false,
+  qualificationPrompt: '',
 };
 
 type FormState = typeof EMPTY;
@@ -185,6 +188,8 @@ export function ChannelCommentAutomationDialog({
       followUpEnabled: r.follow_up_enabled,
       followUpHours: r.follow_up_hours,
       followUpMessage: r.follow_up_message ?? '',
+      qualificationEnabled: r.qualification_enabled,
+      qualificationPrompt: r.qualification_prompt ?? '',
     });
     setEditing(r.id);
     void loadPosts();
@@ -228,6 +233,8 @@ export function ChannelCommentAutomationDialog({
         followUpEnabled: form.followUpEnabled,
         followUpHours: form.followUpHours,
         followUpMessage: form.followUpMessage || null,
+        qualificationEnabled: form.qualificationEnabled,
+        qualificationPrompt: form.qualificationPrompt || null,
       };
       if (editing === 'new') {
         await createCommentAutomation(input);
@@ -455,6 +462,50 @@ export function ChannelCommentAutomationDialog({
                   <p className="mt-1 text-[11px] text-muted-foreground">
                     Mensagem que pede o follow (vazio = usamos o texto acima).
                     Quem já segue recebe o link direto, sem essa etapa.
+                  </p>
+                </div>
+              ) : null}
+            </div>
+
+            {/* 🎯 Qualificação por IA (social selling) */}
+            <div className="rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-3">
+              <label className="flex items-start gap-2.5">
+                <input
+                  type="checkbox"
+                  checked={form.qualificationEnabled}
+                  onChange={(e) =>
+                    setForm({ ...form, qualificationEnabled: e.target.checked })
+                  }
+                  className="mt-0.5 size-4 accent-primary"
+                />
+                <span>
+                  <span className="text-sm font-semibold text-foreground">
+                    🎯 Filtrar com IA (só cliente ideal recebe DM)
+                  </span>
+                  <span className="mt-0.5 block text-xs text-muted-foreground">
+                    Antes de mandar a DM, a IA lê o perfil de quem comentou (@,
+                    nome, bio e seguidores) e o comentário, e decide se a pessoa
+                    é o seu cliente ideal. Quem não é recebe só a resposta
+                    pública — a DM com o link vai só pra quem qualifica. Na
+                    dúvida, ela libera (não trava lead sem certeza).
+                  </span>
+                </span>
+              </label>
+              {form.qualificationEnabled ? (
+                <div className="mt-2.5">
+                  <textarea
+                    value={form.qualificationPrompt}
+                    onChange={(e) =>
+                      setForm({ ...form, qualificationPrompt: e.target.value })
+                    }
+                    placeholder={
+                      'Descreva o seu cliente ideal. Ex.: donos de pequenos negócios, autônomos e clínicas que atendem cliente pelo WhatsApp e querem organizar o atendimento. NÃO é cliente ideal: perfil pessoal sem negócio, concorrente (outra agência/CRM), quem só quer emprego.'
+                    }
+                    rows={4}
+                    className={inputCls}
+                  />
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Quanto mais claro o perfil (e o que NÃO é), melhor o filtro.
                   </p>
                 </div>
               ) : null}

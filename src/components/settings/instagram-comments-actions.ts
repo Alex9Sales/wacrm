@@ -40,6 +40,9 @@ export interface CommentAutomation {
   follow_up_enabled: boolean
   follow_up_hours: number
   follow_up_message: string | null
+  /** 🎯 Qualificação por IA: só manda o DM pra quem bate com o cliente ideal. */
+  qualification_enabled: boolean
+  qualification_prompt: string | null
   created_at: string
 }
 
@@ -67,6 +70,9 @@ export interface CommentAutomationInput {
   followUpEnabled: boolean
   followUpHours: number
   followUpMessage: string | null
+  /** 🎯 Qualificação por IA: só manda o DM pra quem bate com o cliente ideal. */
+  qualificationEnabled: boolean
+  qualificationPrompt: string | null
 }
 
 /** Garante que o canal é da conta e é Instagram. Lança se não for. */
@@ -109,6 +115,8 @@ const cols = {
   follow_up_enabled: instagramCommentAutomations.followUpEnabled,
   follow_up_hours: instagramCommentAutomations.followUpHours,
   follow_up_message: instagramCommentAutomations.followUpMessage,
+  qualification_enabled: instagramCommentAutomations.qualificationEnabled,
+  qualification_prompt: instagramCommentAutomations.qualificationPrompt,
   created_at: instagramCommentAutomations.createdAt,
 }
 
@@ -262,6 +270,8 @@ export async function createCommentAutomation(
         followUpEnabled: input.followUpEnabled,
         followUpHours: Math.min(20, Math.max(1, Math.round(input.followUpHours || 4))),
         followUpMessage: input.followUpMessage?.trim() || null,
+        qualificationEnabled: input.qualificationEnabled,
+        qualificationPrompt: input.qualificationPrompt?.trim() || null,
       })
       .returning(cols),
   )
@@ -296,6 +306,8 @@ export async function updateCommentAutomation(
       followUpEnabled: input.followUpEnabled,
       followUpHours: Math.min(20, Math.max(1, Math.round(input.followUpHours || 4))),
       followUpMessage: input.followUpMessage?.trim() || null,
+      qualificationEnabled: input.qualificationEnabled,
+      qualificationPrompt: input.qualificationPrompt?.trim() || null,
       updatedAt: new Date().toISOString(),
     })
     .where(

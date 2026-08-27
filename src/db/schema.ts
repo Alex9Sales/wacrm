@@ -2690,6 +2690,12 @@ export const instagramCommentAutomations = pgTable("instagram_comment_automation
 	// Depois de mandar o DM, INICIA este Fluxo pro contato (sequência visual).
 	// NULL = só o DM. FK ON DELETE SET NULL (excluir o fluxo não apaga a regra).
 	startFlowId: uuid("start_flow_id"),
+	// 🎯 Qualificação por IA (social selling): antes de mandar o DM, a IA analisa
+	// o perfil (@username + bio/seguidores via Business Discovery, quando é conta
+	// business/creator) e o texto do comentário contra os critérios. Não
+	// qualificado → só a resposta pública, sem DM. NULL = sem critério (não filtra).
+	qualificationEnabled: boolean("qualification_enabled").default(false).notNull(),
+	qualificationPrompt: text("qualification_prompt"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
