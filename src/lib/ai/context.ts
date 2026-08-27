@@ -1,5 +1,5 @@
-import { and, desc, eq, inArray } from 'drizzle-orm'
-import { db, messages } from '@/db'
+import { and, desc, eq, gte, inArray, ne, sql } from 'drizzle-orm'
+import { db, messages, conversations } from '@/db'
 import type { ChatMessage } from './types'
 import { aiContextMessageLimit } from './defaults'
 
@@ -60,6 +60,72 @@ export function stripLeadingTimestamp(text: string): string {
  * Ordered oldest-first (chronological) so the transcript reads naturally and
  * the most recent customer message lands last.
  */
+/**
+ * "Não perde venda" — resumo do que este MESMO contato falou em OUTRAS conversas
+ * (ex.: mandou mensagem pra outro número de WhatsApp da loja). O contato é o
+ * mesmo (mesmo telefone → mesmo contato na conta), então dá pra dar continuidade:
+ * se o cliente já perguntou preço e recuou num número, a IA reconhece no outro e
+ * já oferece o desconto. Devolve um bloco de texto (Cliente/Atendimento carimbado)
+ * ou null quando não há histórico em outras conversas. Best-effort: erro → null.
+ */
+export async function loadContactHistoryDigest(
+  accountId: string,
+  contactId: string | null,
+  currentConversationId: string,
+  timezone: string = 'America/Sao_Paulo',
+  limit = 14,
+): Promise<string | null> {
+  if (!contactId) return null
+  let rows: {
+    senderType: string
+    contentType: string
+    contentText: string | null
+    transcription: string | null
+    createdAt: string | null
+  }[]
+  try {
+    rows = await db
+      .select({
+        senderType: messages.senderType,
+        contentType: messages.contentType,
+        contentText: messages.contentText,
+        transcription: messages.transcription,
+        createdAt: messages.createdAt,
+      })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .where(
+        and(
+          eq(conversations.accountId, accountId),
+          eq(conversations.contactId, contactId),
+          ne(conversations.id, currentConversationId),
+          eq(messages.isInternal, false),
+          inArray(messages.contentType, ['text', ...AUDIO_KINDS, ...IMAGE_KINDS]),
+          gte(messages.createdAt, sql`now() - interval '30 days'`),
+        ),
+      )
+      .orderBy(desc(messages.createdAt))
+      .limit(limit)
+  } catch {
+    return null
+  }
+  const lines = rows
+    .reverse()
+    .map((m) => {
+      const isMedia =
+        AUDIO_KINDS.includes(m.contentType) || IMAGE_KINDS.includes(m.contentType)
+      const raw = ((isMedia ? m.transcription : m.contentText) ?? '')
+        .trim()
+        .replace(/\s+/g, ' ')
+        .slice(0, 160)
+      if (!raw) return null
+      const who = m.senderType === 'customer' ? 'Cliente' : 'Atendimento'
+      return `${stampFor(m.createdAt, timezone)}${who}: ${raw}`
+    })
+    .filter((l): l is string => l !== null)
+  return lines.length ? lines.join('\n') : null
+}
+
 export async function buildConversationContext(
   conversationId: string,
   limit: number = aiContextMessageLimit(),

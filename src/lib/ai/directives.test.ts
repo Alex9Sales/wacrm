@@ -146,4 +146,20 @@ describe('buildSystemPrompt — contato da conversa', () => {
     expect(p).toContain('67991252907')
     expect(p).not.toContain('679991252907')
   })
+
+  it('não perde venda: histórico de outra conversa entra como PRIOR CONTEXT', () => {
+    const p = buildSystemPrompt({
+      userPrompt: null,
+      mode: 'auto_reply',
+      priorContactContext: '[27/08 15:15] Cliente: Qual valor do gás?\n[27/08 15:18] Cliente: vou ver e já te falo',
+    })
+    expect(p).toContain('PRIOR CONTEXT')
+    expect(p).toContain('vou ver e já te falo')
+    expect(p).toContain('PROACTIVELY offer the available discount')
+  })
+
+  it('sem priorContactContext, nada de PRIOR CONTEXT no prompt', () => {
+    const p = buildSystemPrompt({ userPrompt: null, mode: 'auto_reply' })
+    expect(p).not.toContain('PRIOR CONTEXT')
+  })
 })

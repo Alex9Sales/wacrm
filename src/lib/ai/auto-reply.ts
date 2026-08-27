@@ -5,7 +5,11 @@ import { loadAiConfigForChannel, loadAiConfigById } from './config'
 import { hasActiveAutoReplyAgent } from './agents'
 import { aiHoursAllows } from './hours-gate'
 import { getAccountSettings } from '@/lib/settings/account-settings'
-import { buildConversationContext, stripLeadingTimestamp } from './context'
+import {
+  buildConversationContext,
+  loadContactHistoryDigest,
+  stripLeadingTimestamp,
+} from './context'
 import { retrieveKnowledge } from './knowledge'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
@@ -253,6 +257,17 @@ export async function dispatchInboundToAiReply(
         .limit(1),
     )
 
+    // 🔁 "Não perde venda": o MESMO contato pode ter falado em OUTRO número de
+    // WhatsApp da loja. Puxa o que ele disse nas outras conversas pra a IA dar
+    // continuidade (ex.: recuou do preço num número → reconhece no outro e já
+    // oferece o desconto). Best-effort.
+    const priorContactContext = await loadContactHistoryDigest(
+      accountId,
+      contactId,
+      conversationId,
+      settings.businessTimezone,
+    )
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -271,6 +286,7 @@ export async function dispatchInboundToAiReply(
       contact: contactRow
         ? { name: contactRow.name, phone: contactRow.phone }
         : null,
+      priorContactContext,
     })
 
     // 🔧 Com ferramentas externas do agente (ERP do cliente etc.) — sem

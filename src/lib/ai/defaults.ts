@@ -388,6 +388,9 @@ export function buildSystemPrompt(args: {
    *  consegue consultar o cadastro do cliente em ferramentas externas SEM
    *  pedir o número — sem isso ela não tem como preencher {telefone}. */
   contact?: { name?: string | null; phone?: string | null } | null
+  /** "Não perde venda": resumo do que o MESMO contato falou em OUTRAS conversas
+   *  (ex.: outro número de WhatsApp da loja). Background pra dar continuidade. */
+  priorContactContext?: string | null
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -438,6 +441,15 @@ export function buildSystemPrompt(args: {
   if (mode === 'auto_reply') {
     const tools = args.tools ?? []
     const has = (k: string) => tools.includes(k)
+
+    // 🔁 "Não perde venda": este cliente já falou com a gente em OUTRA conversa
+    // (talvez outro número de WhatsApp da loja). Background pra dar continuidade.
+    if (args.priorContactContext) {
+      parts.push(
+        `PRIOR CONTEXT — this SAME customer already talked to us before, in a DIFFERENT conversation (possibly on another of our WhatsApp numbers). Earlier exchange (oldest first):\n${args.priorContactContext}\n` +
+          'Use this ONLY as background: these are NOT new messages to reply to — reply only to the CURRENT conversation\'s latest message. Do not make the customer repeat what they already told us (name, address, product, quantity). If they previously asked about the price and did NOT close, greet them and, on this new contact, PROACTIVELY offer the available discount to win the sale, instead of just repeating the full price. Never mention that you saw another conversation or another number — just continue naturally.',
+      )
+    }
 
     const routingTags = args.routingTags ?? []
     // Base: responder sozinho e manter a conversa andando (sempre).

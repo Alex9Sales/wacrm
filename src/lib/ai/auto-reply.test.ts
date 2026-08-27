@@ -41,6 +41,7 @@ vi.mock('./agents', () => ({ hasActiveAutoReplyAgent: h.hasAgent }))
 vi.mock('./context', () => ({
   buildConversationContext: h.buildConversationContext,
   stripLeadingTimestamp: (s: string) => s,
+  loadContactHistoryDigest: vi.fn(async () => null),
 }))
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
