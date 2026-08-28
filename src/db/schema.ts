@@ -2839,3 +2839,29 @@ export const customerTransactionItems = pgTable("customer_transaction_items", {
 	foreignKey({ columns: [table.transactionId], foreignColumns: [customerTransactions.id], name: "customer_transaction_items_transaction_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "customer_transaction_items_account_id_fkey" }).onDelete("cascade"),
 ]);
+
+// 📊 Customer Data Layer (Fase 3, migr 0144) — métricas recomputáveis (CACHE, nunca
+// fonte de verdade) a partir de customer_transactions. 1 por (conta, contato). As
+// métricas dependentes do "agora" (dias sem comprar) o digest calcula na hora.
+export const customerMetrics = pgTable("customer_metrics", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	contactId: uuid("contact_id").notNull(),
+	transactionCount: integer("transaction_count").default(0).notNull(),
+	totalRevenue: numeric("total_revenue", { precision: 14, scale: 2 }).default('0').notNull(),
+	averageTicket: numeric("average_ticket", { precision: 12, scale: 2 }).default('0').notNull(),
+	firstTransactionAt: timestamp("first_transaction_at", { withTimezone: true, mode: 'string' }),
+	lastTransactionAt: timestamp("last_transaction_at", { withTimezone: true, mode: 'string' }),
+	lastTransactionAmount: numeric("last_transaction_amount", { precision: 12, scale: 2 }),
+	averageRepurchaseDays: numeric("average_repurchase_days", { precision: 10, scale: 2 }),
+	preferredProduct: text("preferred_product"),
+	preferredPaymentMethod: text("preferred_payment_method"),
+	nextExpectedAt: timestamp("next_expected_at", { withTimezone: true, mode: 'string' }),
+	churnScore: integer("churn_score"),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("customer_metrics_account_contact_uidx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops")),
+	index("customer_metrics_next_expected_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.nextExpectedAt.asc().nullsLast()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "customer_metrics_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "customer_metrics_contact_id_fkey" }).onDelete("cascade"),
+]);

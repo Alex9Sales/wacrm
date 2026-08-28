@@ -24,6 +24,7 @@ import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { findOrCreateContact } from '@/lib/api/v1/contacts'
 import { normalizeInboundPhoneBR } from '@/lib/whatsapp/phone-utils'
+import { recomputeMetricsForContacts } from '@/lib/cdl/metrics'
 
 function clean(v: unknown): string | null {
   const t = String(v ?? '').trim()
@@ -482,6 +483,7 @@ export async function importTransactions(
     contactsCreated: 0,
     skipped: 0,
   }
+  const touched = new Set<string>()
   try {
     const ctx = await requireRole('agent')
     if (!Array.isArray(rows) || rows.length === 0)
@@ -502,6 +504,7 @@ export async function importTransactions(
           name: clean(row.contactName) ?? undefined,
         })
         contactId = c.id
+        touched.add(contactId)
         if (c.created) res.contactsCreated++
       } catch {
         res.skipped++
@@ -564,6 +567,14 @@ export async function importTransactions(
         else res.transactionsUpdated++
       } catch {
         res.skipped++
+      }
+    }
+    // 📊 Recomputa as métricas (CDL Fase 3) dos contatos que receberam vendas.
+    if (touched.size > 0) {
+      try {
+        await recomputeMetricsForContacts(ctx.accountId, [...touched])
+      } catch (err) {
+        console.error('[import] recompute de métricas falhou:', err)
       }
     }
     revalidatePath('/contacts')
