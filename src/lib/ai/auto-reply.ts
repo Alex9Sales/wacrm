@@ -125,6 +125,7 @@ export async function dispatchInboundToAiReply(
           aiReplyCount: conversations.aiReplyCount,
           channelId: conversations.channelId,
           voicePreference: conversations.voicePreference,
+          humanPresentUntil: conversations.humanPresentUntil,
           isGroup: contacts.isGroup,
         })
         .from(conversations)
@@ -168,6 +169,14 @@ export async function dispatchInboundToAiReply(
     if (conv.isGroup) return
     if (conv.assignedAgentId) return // a human owns this thread
     if (conv.aiAutoreplyDisabled) return // handed off / turned off here
+    // 👤 Humano DIGITANDO: o atendente começou a responder no inbox (marca
+    // renovada a cada digitada). A IA recua na hora, antes mesmo dele enviar —
+    // não atropela quem está compondo. Volta sozinha quando ele para de digitar.
+    if (
+      conv.humanPresentUntil &&
+      new Date(conv.humanPresentUntil).getTime() > Date.now()
+    )
+      return
     // 🤫 Barge-in: um HUMANO respondeu há pouco nesta conversa (pelo CRM ou
     // pelo celular — fromMe vira sender_type 'agent')? A IA fica quieta pela
     // janela configurada, SEM desligar — o humano está conduzindo. Depois da
@@ -670,6 +679,18 @@ export async function dispatchInboundToAiReply(
       } catch {
         /* presença é best-effort — nunca bloqueia o envio */
       }
+
+      // 👤 Re-checagem: o atendente começou a digitar ENQUANTO a IA compunha?
+      // Aborta o envio na hora — ele assumiu a conversa. (Pega o caso que o
+      // gate inicial não pega: presença marcada durante o delay de digitação.)
+      const stillClear = firstOrNull(
+        await db
+          .select({ h: conversations.humanPresentUntil })
+          .from(conversations)
+          .where(eq(conversations.id, conversationId))
+          .limit(1),
+      )
+      if (stillClear?.h && new Date(stillClear.h).getTime() > Date.now()) return
 
       if (wantsAudio && ttsKey && config.audioRepliesEnabled !== false) {
         try {

@@ -1781,3 +1781,27 @@ export async function startNewEmailConversation(input: {
     )
   }
 }
+
+/**
+ * 👤 Presença do atendente na conversa. Chamado enquanto ele DIGITA no inbox
+ * (debounced). Segura a auto-resposta da IA por ~45s (renovado a cada digitada),
+ * pra a IA não atropelar quem começou a responder. Barato e account-scoped;
+ * silencioso em erro (é só um "hold" best-effort).
+ */
+export async function noteHumanPresence(conversationId: string): Promise<void> {
+  try {
+    if (!conversationId) return
+    const ctx = await getCurrentAccount()
+    await db
+      .update(conversations)
+      .set({ humanPresentUntil: sql`now() + interval '45 seconds'` })
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.accountId, ctx.accountId),
+        ),
+      )
+  } catch {
+    /* best-effort: presença é conforto, nunca bloqueia a digitação */
+  }
+}

@@ -53,6 +53,7 @@ import { ReplyQuote } from "./reply-quote";
 import { useMyStatus } from "@/hooks/use-my-status";
 import { presenceStatusPt } from "@/lib/presence";
 import { PresenceDot } from "@/components/presence/presence-dot";
+import { noteHumanPresence } from "@/app/(dashboard)/inbox/actions";
 
 /** Media content types an agent can send from the composer. */
 export type ComposerMediaKind = "image" | "video" | "document" | "audio";
@@ -196,6 +197,15 @@ export function MessageComposer({
   const sessionGated = sessionExpired && caps.session24hWindow;
 
   const [text, setText] = useState("");
+  // 👤 Presença: enquanto o atendente digita, avisa o servidor (no máx. 1x/15s)
+  // pra a IA recuar e não atropelar. O hold no servidor dura ~45s.
+  const lastPresencePing = useRef(0);
+  const pingPresence = useCallback(() => {
+    const now = Date.now();
+    if (now - lastPresencePing.current < 15000) return;
+    lastPresencePing.current = now;
+    void noteHumanPresence(conversationId);
+  }, [conversationId]);
   const [sending, setSending] = useState(false);
   const [drafting, setDrafting] = useState(false);
   // Group @mention autocomplete (reply textarea, groups only).
@@ -323,6 +333,7 @@ export function MessageComposer({
     (e: React.ChangeEvent<HTMLTextAreaElement>) => {
       const v = e.target.value;
       setText(v);
+      if (v.trim()) pingPresence();
       setMentionCaret(e.target.selectionStart ?? v.length);
       adjustHeight();
       // "/atalho" as the WHOLE input opens the quick-replies picker, seeded
@@ -335,7 +346,7 @@ export function MessageComposer({
         setQrOpen(false);
       }
     },
-    [adjustHeight, qrOpen]
+    [adjustHeight, qrOpen, pingPresence]
   );
 
   // Insert a quick-reply's content. When the input was just the "/atalho"

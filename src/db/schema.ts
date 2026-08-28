@@ -787,6 +787,10 @@ export const conversations = pgTable("conversations", {
 	followUpStep: integer("follow_up_step").default(0).notNull(),
 	unreadCount: integer("unread_count").default(0),
 	aiAutoreplyDisabled: boolean("ai_autoreply_disabled").default(false).notNull(),
+	// 👤 "IA recua quando o humano entra" (migr 0142): setado quando o atendente
+	// DIGITA no inbox. A auto-resposta pula enquanto > now(), mesmo antes dele
+	// enviar — evita a IA atropelar quem começou a responder.
+	humanPresentUntil: timestamp("human_present_until", { withTimezone: true, mode: 'string' }),
 	// 🔀 Agente de IA "dono" da conversa (roteamento multiagente). NULL = por canal.
 	aiAgentId: uuid("ai_agent_id"),
 	aiReplyCount: integer("ai_reply_count").default(0).notNull(),
