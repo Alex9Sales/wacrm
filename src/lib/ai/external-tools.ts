@@ -159,13 +159,19 @@ export interface ToolRunResult {
 // 🔁 Dedup de ESCRITA: janela que cobre uma conversa de pedido inteira.
 const WRITE_DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000
 
-/** Chave estável dos argumentos (chaves ordenadas, strings normalizadas) pra
- *  comparar duas chamadas da mesma ferramenta. */
+/** Campos "cosméticos" (observação, referência, nota…) NÃO definem a identidade
+ *  de um pedido/ação — o modelo às vezes muda só eles entre uma chamada e outra.
+ *  Ignorados na comparação de dedup pra a trava não furar por causa disso. */
+const COSMETIC_ARG_KEY = /^(obs|observ|referenc|reference|note|nota|coment|descr)/i
+
+/** Chave estável dos argumentos (chaves ordenadas, strings normalizadas, campos
+ *  cosméticos removidos) pra comparar duas chamadas da mesma ferramenta. */
 function stableArgsKey(args: Record<string, unknown>): string {
   const norm = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(norm)
     if (v && typeof v === 'object') {
       return Object.keys(v as Record<string, unknown>)
+        .filter((k) => !COSMETIC_ARG_KEY.test(k))
         .sort()
         .reduce<Record<string, unknown>>((acc, k) => {
           acc[k] = norm((v as Record<string, unknown>)[k])
