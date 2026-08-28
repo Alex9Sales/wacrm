@@ -2051,6 +2051,33 @@ export const wahaProvider: WhatsAppProvider = {
 // (a freshly (re)started or genuinely idle session) — the monitor treats that
 // as unknown, not stale, to avoid false alarms.
 // ------------------------------------------------------------
+/**
+ * Participantes de um grupo (pra importar como contatos e disparar 1:1).
+ * WAHA: GET /api/{session}/groups/{id}/participants. Cada participante traz o
+ * jid; extraímos o TELEFONE do jid `@c.us`/`@s.whatsapp.net`. Quem só tem `@lid`
+ * (privacidade / nunca postou) fica sem telefone e é pulado. Best-effort: [].
+ */
+export async function wahaGroupParticipants(
+  ch: ChannelCtx,
+  groupJid: string,
+): Promise<string[]> {
+  const url = `${baseUrlOf(ch)}/api/${encodeURIComponent(sessionOf(ch))}/groups/${encodeURIComponent(groupJid)}/participants`;
+  const { ok, body } = await httpJson(
+    url,
+    { method: 'GET', headers: headersOf(ch) },
+    15000,
+  );
+  if (!ok || !Array.isArray(body)) return [];
+  const phones = new Set<string>();
+  for (const p of body as Array<Record<string, unknown>>) {
+    const id = String(p?.id ?? p?.jid ?? p?.participant ?? '');
+    // jid de telefone: "5511999999999@c.us" / "@s.whatsapp.net" → só dígitos.
+    const m = id.match(/^(\d{8,15})@(?:c\.us|s\.whatsapp\.net)/i);
+    if (m) phones.add(m[1]);
+  }
+  return [...phones];
+}
+
 export async function wahaSessionHealth(
   ch: ChannelCtx,
 ): Promise<{

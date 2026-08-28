@@ -41,6 +41,7 @@ import { ScheduleMiniList } from "./schedule-mini-list";
 import { CadenceSidebar } from "./cadence-sidebar";
 import { Repeat } from "lucide-react";
 import { CustomerCodesEditor } from "./customer-codes-editor";
+import { importGroupMembers } from "@/app/(dashboard)/inbox/group-actions";
 import { CustomFieldInput } from "@/components/contacts/custom-field-input";
 import { CallButton } from "@/components/calls/call-button";
 import type {
@@ -267,6 +268,28 @@ export function ContactSidebar({
 
   const contactId = contact?.id;
   const conversationId = conversation?.id;
+
+  // 👥 Importar membros do grupo (pedido do Rafael): vira contatos com etiqueta
+  // "Grupo: <nome>" pra disparar 1:1 em Disparos.
+  const [importingGroup, setImportingGroup] = useState(false);
+  const handleImportGroup = useCallback(async () => {
+    if (!conversationId || importingGroup) return;
+    setImportingGroup(true);
+    try {
+      const r = await importGroupMembers(conversationId);
+      if (!r.ok) {
+        toast.error(r.error || "Não consegui importar os membros.");
+        return;
+      }
+      toast.success(
+        `${r.tagged} membro(s) na etiqueta "${r.tagName}" (${r.contactsCreated} novo(s)). Use em Disparos.`,
+      );
+    } catch {
+      toast.error("Falha ao importar os membros do grupo.");
+    } finally {
+      setImportingGroup(false);
+    }
+  }, [conversationId, importingGroup]);
 
   const fetchContactData = useCallback(async () => {
     if (!contactId) return;
@@ -664,6 +687,30 @@ export function ContactSidebar({
                 )}
               </span>
             </div>
+
+            {contact.is_group && conversationId && (
+              <div className="mt-1">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  className="w-full"
+                  onClick={handleImportGroup}
+                  disabled={importingGroup}
+                  title="Cria um contato pra cada membro (com etiqueta do grupo) pra disparar 1:1 em Disparos"
+                >
+                  {importingGroup ? (
+                    <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
+                  ) : (
+                    <UserPlus className="mr-1.5 h-4 w-4" />
+                  )}
+                  Importar membros do grupo
+                </Button>
+                <p className="mt-1 px-1 text-[11px] text-muted-foreground">
+                  Vira contatos com etiqueta “Grupo…” pra disparar 1:1. Quem tem
+                  privacidade pode não vir.
+                </p>
+              </div>
+            )}
           </div>
 
           {/* Action buttons: Editar / Abrir contato / Excluir conversa */}
