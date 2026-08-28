@@ -1,10 +1,17 @@
 // Templates padrão dos Avisos do responsável + render — módulo PURO
 // (client-safe: a UI mostra como placeholder; o runtime usa pra enviar).
 
-export type OwnerAlertKind = 'won' | 'handoff' | 'booking' | 'order'
+export type OwnerAlertKind = 'won' | 'handoff' | 'booking' | 'order' | 'demo'
 
 /** O cliente pode substituir por conta (Config→Negócios). Variáveis {{assim}}. */
 export const DEFAULT_ALERT_TEMPLATES: Record<OwnerAlertKind, string> = {
+  demo: `🎯 *TESTE/DEMO AGENDADO PELO SDR*
+
+👤 {{cliente}} · {{telefone}}
+🏢 {{empresa}}
+📋 {{resumo}}
+
+O card já está no funil — entre no FluxiaCRM pra dar sequência.`,
   order: `🛒 *PEDIDO CONFIRMADO PELA IA*
 
 📦 {{titulo}}

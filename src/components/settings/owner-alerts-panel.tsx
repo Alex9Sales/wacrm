@@ -33,12 +33,14 @@ export function OwnerAlertsPanel() {
   const [onHandoff, setOnHandoff] = useState(false);
   const [onBooking, setOnBooking] = useState(false);
   const [onOrder, setOnOrder] = useState(false);
+  const [onDemo, setOnDemo] = useState(false);
   const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
   const [wonTemplate, setWonTemplate] = useState('');
   const [handoffTemplate, setHandoffTemplate] = useState('');
   const [bookingTemplate, setBookingTemplate] = useState('');
   const [orderTemplate, setOrderTemplate] = useState('');
+  const [demoTemplate, setDemoTemplate] = useState('');
 
   useEffect(() => {
     getOwnerAlerts()
@@ -49,12 +51,20 @@ export function OwnerAlertsPanel() {
         setOnHandoff(d.onHandoff);
         setOnBooking(d.onBooking);
         setOnOrder(d.onOrder);
+        setOnDemo(d.onDemo);
         setChannels(d.channels);
         setWonTemplate(d.wonTemplate);
         setHandoffTemplate(d.handoffTemplate);
         setBookingTemplate(d.bookingTemplate);
         setOrderTemplate(d.orderTemplate);
-        if (d.wonTemplate || d.handoffTemplate || d.bookingTemplate || d.orderTemplate) {
+        setDemoTemplate(d.demoTemplate);
+        if (
+          d.wonTemplate ||
+          d.handoffTemplate ||
+          d.bookingTemplate ||
+          d.orderTemplate ||
+          d.demoTemplate
+        ) {
           setShowTemplates(true);
         }
       })
@@ -71,10 +81,12 @@ export function OwnerAlertsPanel() {
       onHandoff,
       onBooking,
       onOrder,
+      onDemo,
       wonTemplate,
       handoffTemplate,
       bookingTemplate,
       orderTemplate,
+      demoTemplate,
     });
     setSaving(false);
     if (error) toast.error(error);
@@ -151,6 +163,11 @@ export function OwnerAlertsPanel() {
                   set: setOnOrder,
                   label: '🛒 A IA confirmar um pedido (com produto, endereço e valor)',
                 },
+                {
+                  checked: onDemo,
+                  set: setOnDemo,
+                  label: '🎯 O SDR marcar um teste/demonstração (com empresa e resumo)',
+                },
               ].map((o) => (
                 <label
                   key={o.label}
@@ -212,6 +229,13 @@ export function OwnerAlertsPanel() {
                       value: orderTemplate,
                       set: setOrderTemplate,
                       def: DEFAULT_ALERT_TEMPLATES.order,
+                    },
+                    {
+                      label: '🎯 Teste/demo agendado pelo SDR',
+                      vars: '{{cliente}} {{telefone}} {{empresa}} {{resumo}}',
+                      value: demoTemplate,
+                      set: setDemoTemplate,
+                      def: DEFAULT_ALERT_TEMPLATES.demo,
                     },
                   ] as const
                 ).map((t) => (

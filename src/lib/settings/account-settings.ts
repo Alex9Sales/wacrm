@@ -86,12 +86,15 @@ export interface AccountSettings {
   /** Avisar quando a IA confirmar um PEDIDO (criou card com valor/resumo) —
    *  o "manda no grupo do despacho" da Família do Gás. */
   alertOnOrder: boolean
+  /** Avisar quando o SDR marcar um TESTE/DEMONSTRAÇÃO (via [[AVISARDONO:]]). */
+  alertOnDemo: boolean
   /** Templates dos avisos ('' = padrão do sistema). Variáveis {{assim}} por
    *  evento — ver DEFAULT_ALERT_TEMPLATES em lib/alerts/owner-alerts. */
   alertWonTemplate: string
   alertHandoffTemplate: string
   alertBookingTemplate: string
   alertOrderTemplate: string
+  alertDemoTemplate: string
   /** Sócio IA — resumo diário do funil enviado no WhatsApp do dono.
    *  OFF por padrão (dispara mensagem real). */
   ownerDigestEnabled: boolean
@@ -156,10 +159,12 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   alertOnHandoff: false,
   alertOnBooking: false,
   alertOnOrder: false,
+  alertOnDemo: false,
   alertWonTemplate: '',
   alertHandoffTemplate: '',
   alertBookingTemplate: '',
   alertOrderTemplate: '',
+  alertDemoTemplate: '',
   ownerDigestEnabled: false,
   ownerDigestHour: 8,
   ownerDigestPhone: '',

@@ -23,12 +23,13 @@ export type { OwnerAlertKind }
 
 const KIND_TOGGLE: Record<
   OwnerAlertKind,
-  'alertOnWon' | 'alertOnHandoff' | 'alertOnBooking' | 'alertOnOrder'
+  'alertOnWon' | 'alertOnHandoff' | 'alertOnBooking' | 'alertOnOrder' | 'alertOnDemo'
 > = {
   won: 'alertOnWon',
   handoff: 'alertOnHandoff',
   booking: 'alertOnBooking',
   order: 'alertOnOrder',
+  demo: 'alertOnDemo',
 }
 
 const KIND_TEMPLATE: Record<
@@ -37,11 +38,13 @@ const KIND_TEMPLATE: Record<
   | 'alertHandoffTemplate'
   | 'alertBookingTemplate'
   | 'alertOrderTemplate'
+  | 'alertDemoTemplate'
 > = {
   won: 'alertWonTemplate',
   handoff: 'alertHandoffTemplate',
   booking: 'alertBookingTemplate',
   order: 'alertOrderTemplate',
+  demo: 'alertDemoTemplate',
 }
 
 /**

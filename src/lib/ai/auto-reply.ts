@@ -361,6 +361,32 @@ export async function dispatchInboundToAiReply(
           pref: dirs.voicePref,
         })
       }
+      // 📣 Avisar o dono no WhatsApp (ex.: SDR marcou teste/demo). NÃO é travado
+      // por ferramenta — best-effort, gated pelo telefone + toggle 'demo' da conta.
+      if (dirs.ownerAlert) {
+        try {
+          const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
+          const c = firstOrNull(
+            await db
+              .select({
+                name: contacts.name,
+                phone: contacts.phone,
+                company: contacts.company,
+              })
+              .from(contacts)
+              .where(eq(contacts.id, contactId))
+              .limit(1),
+          )
+          await sendOwnerAlert(accountId, 'demo', {
+            cliente: c?.name ?? '',
+            telefone: c?.phone ?? '',
+            empresa: c?.company ?? c?.name ?? '',
+            resumo: dirs.ownerAlert.message,
+          })
+        } catch (err) {
+          console.error('[ai auto-reply] aviso ao dono falhou:', err)
+        }
+      }
     }
     // Agendar (ferramenta 'schedule').
     const runSchedule = async () => {
