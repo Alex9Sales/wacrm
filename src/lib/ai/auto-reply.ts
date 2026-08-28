@@ -5,6 +5,7 @@ import { loadAiConfigForChannel, loadAiConfigById } from './config'
 import { hasActiveAutoReplyAgent } from './agents'
 import { aiHoursAllows } from './hours-gate'
 import { getAccountSettings } from '@/lib/settings/account-settings'
+import { buildCustomerFactsBlock } from '@/lib/cdl/metrics'
 import {
   buildConversationContext,
   loadContactHistoryDigest,
@@ -277,6 +278,14 @@ export async function dispatchInboundToAiReply(
       settings.businessTimezone,
     )
 
+    // 📊 CUSTOMER FACTS (CDL Fase 4): memória comercial NATIVA do cliente
+    // (histórico + métricas). Determinístico. Best-effort — null se sem histórico.
+    const customerFacts = await buildCustomerFactsBlock(
+      accountId,
+      contactId,
+      settings.businessTimezone,
+    ).catch(() => null)
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -296,6 +305,7 @@ export async function dispatchInboundToAiReply(
         ? { name: contactRow.name, phone: contactRow.phone }
         : null,
       priorContactContext,
+      customerFacts,
     })
 
     // 🔧 Com ferramentas externas do agente (ERP do cliente etc.) — sem

@@ -44,6 +44,9 @@ vi.mock('./context', () => ({
   loadContactHistoryDigest: vi.fn(async () => null),
 }))
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
+vi.mock('@/lib/cdl/metrics', () => ({
+  buildCustomerFactsBlock: vi.fn(async () => null),
+}))
 vi.mock('./generate', () => ({ generateReply: h.generateReply }))
 vi.mock('@/lib/flows/meta-send', () => ({ engineSendText: h.engineSendText }))
 // Ações do agente (Fase 1/2): no-op nos testes de elegibilidade do auto-reply.

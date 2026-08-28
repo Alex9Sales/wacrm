@@ -391,6 +391,10 @@ export function buildSystemPrompt(args: {
   /** "Não perde venda": resumo do que o MESMO contato falou em OUTRAS conversas
    *  (ex.: outro número de WhatsApp da loja). Background pra dar continuidade. */
   priorContactContext?: string | null
+  /** 📊 CUSTOMER FACTS (CDL Fase 4): fatos comerciais DETERMINÍSTICOS do cliente
+   *  (nº de compras, última compra, ticket, frequência, preferências) — dados
+   *  estruturados, separados do resumo de conversa. */
+  customerFacts?: string | null
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -441,6 +445,15 @@ export function buildSystemPrompt(args: {
   if (mode === 'auto_reply') {
     const tools = args.tools ?? []
     const has = (k: string) => tools.includes(k)
+
+    // 📊 CUSTOMER FACTS (CDL): memória comercial NATIVA do cliente (fatos, não
+    // resumo de conversa). Determinístico. Separado do PRIOR CONTEXT de propósito
+    // — uma coisa é dado estruturado, outra é resumo do que ele falou.
+    if (args.customerFacts) {
+      parts.push(
+        `CUSTOMER FACTS — histórico comercial REAL deste cliente (dados do sistema, não invente nada além disto). Use pra atender melhor: reconheça o cliente, use o produto/valor da última compra pra negociar, e considere se a recompra está na hora.\n${args.customerFacts}`,
+      )
+    }
 
     // 🔁 "Não perde venda": este cliente já falou com a gente em OUTRA conversa
     // (talvez outro número de WhatsApp da loja). Background pra dar continuidade.
