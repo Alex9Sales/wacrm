@@ -36,6 +36,16 @@ export interface ExternalTool {
   params: ToolParamDef[]
   bodyTemplate: string | null
   risk: 'read' | 'write' | 'critical'
+  /** Ao rodar com sucesso, também cria o card no funil do Fluxia (fallback). */
+  createsDeal: boolean
+}
+
+/** Dados de um pedido criado por uma ferramenta `createsDeal`, pra virar card
+ *  no funil quando o modelo não emitir [[CRIARCARD]] (fallback). */
+export interface OrderForCard {
+  title: string
+  value: number | null
+  note: string | null
 }
 
 const MAX_TOOL_STEPS = 4
@@ -88,7 +98,36 @@ export async function listEnabledTools(
     params: Array.isArray(r.params) ? (r.params as ToolParamDef[]) : [],
     bodyTemplate: r.bodyTemplate,
     risk: (r.risk as ExternalTool['risk']) ?? 'read',
+    createsDeal: r.createsDeal === true,
   }))
+}
+
+/** Deriva os dados do card (título/valor/nota) dos argumentos de um pedido —
+ *  mapeamento tolerante a nomes de campo (nome, valor_unitario, obs_entrega…). */
+export function orderForCardFromArgs(
+  args: Record<string, unknown>,
+): OrderForCard {
+  const s = (k: string) => {
+    const v = args[k]
+    return v == null ? '' : String(v).trim()
+  }
+  const num = (k: string): number | null => {
+    const v = args[k]
+    const n = typeof v === 'number' ? v : parseFloat(String(v ?? '').replace(',', '.'))
+    return Number.isFinite(n) ? n : null
+  }
+  const nome = s('nome') || s('name') || s('cliente') || s('contato')
+  const qtd = num('quantidade') ?? num('qtd') ?? 1
+  const unit = num('valor_unitario') ?? num('valor') ?? num('preco') ?? num('amount')
+  const value = unit != null ? unit * (qtd || 1) : null
+  const obs = s('obs_entrega') || s('observacao') || s('obs') || s('descricao')
+  const endereco = [s('endereco'), s('bairro')].filter(Boolean).join(', ')
+  const pagamento = s('pagamento') || s('forma_pagamento') || s('payment')
+  const note =
+    [obs || null, endereco || null, pagamento ? `pagamento: ${pagamento}` : null]
+      .filter(Boolean)
+      .join(' · ') || null
+  return { title: (nome ? `${nome} — pedido` : 'Pedido').slice(0, 200), value, note }
 }
 
 /** Seção do prompt: o cardápio de ferramentas + o protocolo do marcador. */
@@ -329,7 +368,7 @@ export async function generateWithExternalTools(
     agentId: string | null
     conversationId: string | null
   },
-): Promise<GenerateResult> {
+): Promise<GenerateResult & { orderForCard?: OrderForCard | null }> {
   const tools = await listEnabledTools(args.accountId, args.agentId).catch((err) => {
     console.error('[external-tools] listagem falhou:', err)
     return [] as ExternalTool[]
@@ -338,6 +377,9 @@ export async function generateWithExternalTools(
 
   const systemPrompt = `${args.systemPrompt}\n\n${buildToolsPromptSection(tools)}`
   const messages = [...args.messages]
+  // Ferramenta `createsDeal` que rodou COM SUCESSO → vira card no funil (fallback
+  // no chamador, se o modelo não emitir [[CRIARCARD]]).
+  let orderForCard: OrderForCard | null = null
 
   for (let step = 0; step <= MAX_TOOL_STEPS; step++) {
     const res = await generateReply({ ...args, systemPrompt, messages })
@@ -345,9 +387,9 @@ export async function generateWithExternalTools(
     if (!call || step === MAX_TOOL_STEPS) {
       // Segurança: nunca deixa um marcador cru vazar pro cliente.
       if (call) {
-        return { ...res, text: res.text.replace(TOOL_MARKER_RE, '').trim() }
+        return { ...res, text: res.text.replace(TOOL_MARKER_RE, '').trim(), orderForCard }
       }
-      return res
+      return { ...res, orderForCard }
     }
     const tool = tools.find((t) => t.slug === call.slug)
     const outcome: ToolRunResult = tool
@@ -358,6 +400,10 @@ export async function generateWithExternalTools(
         })
       : { status: 'invalid', summary: `Ferramenta "${call.slug}" não existe. Use apenas as listadas.` }
 
+    if (tool?.createsDeal && outcome.status === 'ok') {
+      orderForCard = orderForCardFromArgs(call.args)
+    }
+
     // Alimenta o resultado de volta e re-gera.
     messages.push({ role: 'assistant', content: call.marker })
     messages.push({
@@ -366,5 +412,5 @@ export async function generateWithExternalTools(
     })
   }
   // inalcançável (o loop retorna antes), mas o TS quer um retorno.
-  return generateReply({ ...args, systemPrompt, messages })
+  return { ...(await generateReply({ ...args, systemPrompt, messages })), orderForCard }
 }

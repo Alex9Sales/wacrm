@@ -300,7 +300,7 @@ export async function dispatchInboundToAiReply(
 
     // 🔧 Com ferramentas externas do agente (ERP do cliente etc.) — sem
     // ferramentas, degrada pro generateReply puro.
-    const { text: rawText, handoff } = await generateWithExternalTools({
+    const { text: rawText, handoff, orderForCard } = await generateWithExternalTools({
       config,
       systemPrompt,
       messages,
@@ -367,46 +367,61 @@ export async function dispatchInboundToAiReply(
         if (ev) console.log('[ai auto-reply] agendou:', JSON.stringify(ev))
       }
     }
-    // Criar card no funil (ferramenta 'create_card' + [[CRIARCARD]]).
+    // Cria o card no funil + dispara o aviso do responsável. createDealFromAi
+    // dedupe por conversa, então chamar 2x (marcador + fallback) NÃO duplica —
+    // a 2ª chamada volta null e não alerta de novo.
+    const createDealAndAlert = async (card: {
+      title: string
+      value: number | null
+      note: string | null
+    }) => {
+      const d = await createDealFromAi({
+        accountId,
+        userId: configOwnerUserId || null,
+        conversationId,
+        contactId,
+        title: card.title,
+        value: card.value,
+        note: card.note,
+        pipelineId: config.pipelineId ?? null,
+      })
+      if (!d) return
+      console.log('[ai auto-reply] card criado:', JSON.stringify(d))
+      // 📣 Aviso do responsável: pedido confirmado pela IA ("manda no grupo do
+      // despacho"). Best-effort — o toggle/telefone é checado lá dentro.
+      try {
+        const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
+        const c = firstOrNull(
+          await db
+            .select({ name: contacts.name, phone: contacts.phone })
+            .from(contacts)
+            .where(eq(contacts.id, contactId))
+            .limit(1),
+        )
+        await sendOwnerAlert(accountId, 'order', {
+          titulo: card.title,
+          valor:
+            card.value != null
+              ? `R$ ${card.value.toFixed(2).replace('.', ',')}`
+              : '',
+          resumo: card.note ?? '',
+          cliente: c?.name ?? '',
+          telefone: c?.phone ?? '',
+        })
+      } catch (err) {
+        console.error('[ai auto-reply] aviso de pedido falhou:', err)
+      }
+    }
+    // Criar card no funil: (1) marcador [[CRIARCARD]] do modelo (título bonito);
+    // (2) FALLBACK — uma ferramenta createsDeal (ex.: criar_pedido) rodou com
+    // sucesso e o modelo NÃO emitiu o marcador → cria mesmo assim (não depende
+    // do modelo lembrar). O fallback NÃO é travado por 'create_card'.
     const runCreateCard = async () => {
       if (has('create_card') && dirs.createCard) {
-        const d = await createDealFromAi({
-          accountId,
-          userId: configOwnerUserId || null,
-          conversationId,
-          contactId,
-          title: dirs.createCard.title,
-          value: dirs.createCard.value,
-          note: dirs.createCard.note,
-          pipelineId: config.pipelineId ?? null,
-        })
-        if (d) {
-          console.log('[ai auto-reply] card criado:', JSON.stringify(d))
-          // 📣 Aviso do responsável: pedido confirmado pela IA ("manda no grupo
-          // do despacho"). Best-effort — o toggle/telefone é checado lá dentro.
-          try {
-            const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
-            const c = firstOrNull(
-              await db
-                .select({ name: contacts.name, phone: contacts.phone })
-                .from(contacts)
-                .where(eq(contacts.id, contactId))
-                .limit(1),
-            )
-            await sendOwnerAlert(accountId, 'order', {
-              titulo: dirs.createCard.title,
-              valor:
-                dirs.createCard.value != null
-                  ? `R$ ${dirs.createCard.value.toFixed(2).replace('.', ',')}`
-                  : '',
-              resumo: dirs.createCard.note ?? '',
-              cliente: c?.name ?? '',
-              telefone: c?.phone ?? '',
-            })
-          } catch (err) {
-            console.error('[ai auto-reply] aviso de pedido falhou:', err)
-          }
-        }
+        await createDealAndAlert(dirs.createCard)
+      }
+      if (orderForCard) {
+        await createDealAndAlert(orderForCard)
       }
     }
     // Transferir pra humano por etiqueta (ferramenta 'handoff' + [[TRANSFERIR]]).

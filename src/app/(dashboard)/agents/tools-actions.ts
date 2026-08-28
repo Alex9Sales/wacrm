@@ -251,6 +251,7 @@ export async function testAgentTool(
     params: Array.isArray(r.params) ? (r.params as ToolParamDef[]) : [],
     bodyTemplate: r.bodyTemplate,
     risk: (r.risk as ExternalTool['risk']) ?? 'read',
+    createsDeal: r.createsDeal === true,
   }
   // Teste manual ignora o bloqueio de crítica (é o ADMIN validando a config).
   const testTool = tool.risk === 'critical' ? { ...tool, risk: 'write' as const } : tool

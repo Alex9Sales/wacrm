@@ -2751,6 +2751,8 @@ export const agentTools = pgTable("agent_tools", {
 	bodyTemplate: text("body_template"),
 	risk: text().default('read').notNull(),
 	enabled: boolean().default(true).notNull(),
+	// Ao rodar com sucesso, cria também o card no funil do Fluxia (migr 0143).
+	createsDeal: boolean("creates_deal").default(false).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
