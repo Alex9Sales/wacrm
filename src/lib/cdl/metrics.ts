@@ -19,9 +19,14 @@ export async function recomputeMetricsForContacts(
   accountId: string,
   contactIds?: string[] | null,
 ): Promise<void> {
+  // ⚠️ array JS com `::uuid[]` no sql quebra no drizzle — usar ARRAY[...] com
+  // sql.join (ver memória crmfluxia-drizzle-array-cast-gotcha).
   const filterByContacts =
     Array.isArray(contactIds) && contactIds.length > 0
-      ? sql`AND ct.contact_id = ANY(${contactIds}::uuid[])`
+      ? sql`AND ct.contact_id = ANY(ARRAY[${sql.join(
+          contactIds.map((c) => sql`${c}::uuid`),
+          sql`, `,
+        )}])`
       : sql``
 
   await db.execute(sql`
