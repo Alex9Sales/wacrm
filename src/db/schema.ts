@@ -2777,3 +2777,59 @@ export const agentToolRuns = pgTable("agent_tool_runs", {
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "agent_tool_runs_account_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.toolId], foreignColumns: [agentTools.id], name: "agent_tool_runs_tool_id_fkey" }).onDelete("set null"),
 ]);
+
+// ============================================================
+// 💾 Customer Data Layer (Fase 1, migração 0141) — razão comercial NATIVO.
+// customer_transactions = LEDGER COMERCIAL IMUTÁVEL (fatos: compra/serviço/
+// agendamento/renovação/proposta/assinatura). NÃO é `deals` (oportunidades
+// MUTÁVEIS do funil). Um deal ganho PODE gerar uma transação (dealId); uma
+// transação NÃO precisa vir de um deal (permite importar histórico sem criar
+// deals artificiais). Idempotência de sync: unique parcial (account, source,
+// external_id) WHERE external_id NOT NULL — nativos (external_id NULL) não
+// deduplicam. source_updated_at = quando a ORIGEM alterou (sync incremental).
+// ============================================================
+export const customerTransactions = pgTable("customer_transactions", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	contactId: uuid("contact_id").notNull(),
+	dealId: uuid("deal_id"),
+	type: text().default('purchase').notNull(),
+	source: text().default('native').notNull(),
+	externalId: text("external_id"),
+	occurredAt: timestamp("occurred_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	amount: numeric({ precision: 12, scale: 2 }).default('0').notNull(),
+	currency: text().default('BRL').notNull(),
+	paymentMethod: text("payment_method"),
+	status: text().default('completed').notNull(),
+	metadata: jsonb().default({}).notNull(),
+	sourceUpdatedAt: timestamp("source_updated_at", { withTimezone: true, mode: 'string' }),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("customer_transactions_source_extid_uidx")
+		.using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.source.asc().nullsLast(), table.externalId.asc().nullsLast())
+		.where(sql`external_id IS NOT NULL`),
+	index("customer_transactions_contact_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops"), table.occurredAt.desc().nullsLast()),
+	index("customer_transactions_account_occurred_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.occurredAt.desc().nullsLast()),
+	index("customer_transactions_deal_idx").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "customer_transactions_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "customer_transactions_contact_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.dealId], foreignColumns: [deals.id], name: "customer_transactions_deal_id_fkey" }).onDelete("set null"),
+]);
+
+export const customerTransactionItems = pgTable("customer_transaction_items", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	transactionId: uuid("transaction_id").notNull(),
+	accountId: uuid("account_id").notNull(),
+	productRef: text("product_ref"),
+	name: text().notNull(),
+	quantity: numeric({ precision: 12, scale: 3 }).default('1').notNull(),
+	unitAmount: numeric("unit_amount", { precision: 12, scale: 2 }).default('0').notNull(),
+	metadata: jsonb().default({}).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("customer_transaction_items_txn_idx").using("btree", table.transactionId.asc().nullsLast().op("uuid_ops")),
+	index("customer_transaction_items_account_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.transactionId], foreignColumns: [customerTransactions.id], name: "customer_transaction_items_transaction_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "customer_transaction_items_account_id_fkey" }).onDelete("cascade"),
+]);
