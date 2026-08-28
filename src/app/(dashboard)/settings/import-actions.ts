@@ -438,6 +438,9 @@ export interface ImportTransactionRow {
   externalId?: string | null // número do pedido (idempotência)
   type?: string | null
   status?: string | null
+  /** Colunas extras da planilha (especialista, canal, bairro…) → vão pro
+   *  metadata da transação, preservadas por nicho. */
+  extra?: Record<string, string> | null
 }
 
 export interface ImportTransactionsResult {
@@ -523,6 +526,12 @@ export async function importTransactions(
         ['imp', phone, occurredAt ?? '', String(amount), (product ?? '').toLowerCase()].join('|')
       const metadata: Record<string, unknown> = {}
       if (product) metadata.product = product
+      // Colunas extras da planilha (especialista, canal…) preservadas no metadata.
+      if (row.extra) {
+        for (const [k, v] of Object.entries(row.extra)) {
+          if (v != null && String(v).trim() !== '') metadata[k] = v
+        }
+      }
 
       try {
         const ins = firstOrNull(

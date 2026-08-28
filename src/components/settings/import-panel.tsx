@@ -81,7 +81,8 @@ const TRANSACTION_SPEC: Record<string, RegExp> = {
   contactName: /cliente|contato|contact|^nome/,
   occurredAt: /data|date|dia|quando/,
   amount: /valor|preco|price|amount|total/,
-  product: /produto|servico|serviço|item|descri|product|marca/,
+  // "O que foi" — cobre vários nichos (produto, procedimento, consulta, banho…).
+  product: /produto|servi[çc]o|item|descri|product|marca|procedimento|consulta|atendimento|tratamento|exame|banho|tosa|corte|plano|sess[ãa]o|aula|im[óo]vel|refei[çc]|prato|pe[çc]a/,
   paymentMethod: /pagamento|pagto|payment|forma/,
   externalId: /pedido|nº|numero|nota|external|order|venda/,
   type: /^tipo$|type/,
@@ -170,18 +171,32 @@ export function ImportPanel() {
           )
           return
         }
+        // Colunas que já têm um campo próprio; o RESTO vira "extra" no metadata
+        // (especialista, canal, bairro, obs… — preservado por nicho).
+        const mappedCols = new Set(
+          Object.values(cmap).filter(Boolean) as string[],
+        )
         setRowsT(
-          json.map((r) => ({
-            phone: get(r, 'phone') || null,
-            contactName: get(r, 'contactName') || null,
-            occurredAt: get(r, 'occurredAt') || null,
-            amount: cmap.amount ? String(r[cmap.amount] ?? '') : null,
-            product: get(r, 'product') || null,
-            paymentMethod: get(r, 'paymentMethod') || null,
-            externalId: get(r, 'externalId') || null,
-            type: get(r, 'type') || null,
-            status: get(r, 'status') || null,
-          })),
+          json.map((r) => {
+            const extra: Record<string, string> = {}
+            for (const [k, v] of Object.entries(r)) {
+              if (mappedCols.has(k)) continue
+              const s = String(v ?? '').trim()
+              if (s) extra[k.trim()] = s
+            }
+            return {
+              phone: get(r, 'phone') || null,
+              contactName: get(r, 'contactName') || null,
+              occurredAt: get(r, 'occurredAt') || null,
+              amount: cmap.amount ? String(r[cmap.amount] ?? '') : null,
+              product: get(r, 'product') || null,
+              paymentMethod: get(r, 'paymentMethod') || null,
+              externalId: get(r, 'externalId') || null,
+              type: get(r, 'type') || null,
+              status: get(r, 'status') || null,
+              extra: Object.keys(extra).length ? extra : undefined,
+            }
+          }),
         )
       } else {
         if (!cmap.title && !cmap.companyName && !cmap.contactName) {
