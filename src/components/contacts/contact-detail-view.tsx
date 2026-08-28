@@ -66,6 +66,7 @@ import {
   LayoutTemplate,
   MessageSquare,
 } from 'lucide-react';
+import { CommercialHistory } from '@/components/inbox/commercial-history';
 
 interface ContactDetailViewProps {
   open: boolean;
@@ -558,6 +559,13 @@ export function ContactDetailView({
                 </Button>
               </div>
             </SheetHeader>
+
+            {/* 📊 Histórico de compras (CDL) — logo abaixo do cabeçalho. */}
+            {contactId && (
+              <div className="mx-4">
+                <CommercialHistory contactId={contactId} />
+              </div>
+            )}
 
             {/* Tabs */}
             <Tabs defaultValue="details" className="flex-1 flex flex-col min-h-0">
