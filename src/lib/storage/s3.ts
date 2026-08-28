@@ -58,10 +58,24 @@ export function getS3Client(): S3Client {
  * to the raw S3_ENDPOINT when it isn't configured.
  */
 export function publicUrl(bucket: string, key: string): string {
-  const base = (process.env.S3_PUBLIC_URL ?? requireEnv("S3_ENDPOINT")).replace(
+  let base = (process.env.S3_PUBLIC_URL ?? requireEnv("S3_ENDPOINT")).replace(
     /\/+$/,
     "",
   );
+  // ⚠️ URL voltada pro NAVEGADOR precisa ser o proxy https (/api/files), não o
+  // object store cru. O container do WORKER tem S3_PUBLIC_URL apontando pro
+  // MinIO direto (http + IP:9000) → o áudio da IA gravava com essa URL e o CRM
+  // não tocava (mixed-content bloqueado; só chegava no WhatsApp). Se a base for
+  // http:// OU tiver porta interna (:NNNN) e NÃO for o proxy, reescreve pro
+  // /api/files do site. (No web a base já é o proxy → passa direto.)
+  const site = process.env.NEXT_PUBLIC_SITE_URL?.replace(/\/+$/, "");
+  if (
+    site &&
+    !base.includes("/api/files") &&
+    (base.startsWith("http://") || /:\d{4,5}(\/|$)/.test(base))
+  ) {
+    base = `${site}/api/files`;
+  }
   return `${base}/${bucket}/${key}`;
 }
 

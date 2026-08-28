@@ -1481,6 +1481,76 @@ export async function updateDeal(
           console.error('[updateDeal] aviso de venda:', err)
         }
       }
+      // 📊 CDL — venda ganha → registra no HISTÓRICO DE COMPRAS
+      // (customer_transactions). Idempotente por deal (source='deal',
+      // external_id = id do negócio): re-ganhar não duplica; reabrir/perder
+      // CANCELA a transação (as métricas ignoram canceladas). Assim um cliente
+      // SEM ERP constrói o histórico só fechando negócios. Best-effort — nunca
+      // trava a marcação. (Contas que sincronizam de um ERP via importação já
+      // têm o histórico de lá; aqui entram as vendas fechadas daqui pra frente.)
+      const wonNow = patch.status === 'won' && before.status !== 'won'
+      const undoneWon = before.status === 'won' && patch.status && patch.status !== 'won'
+      if (before.contactId && (wonNow || undoneWon)) {
+        try {
+          const { customerTransactions } = await import('@/db')
+          const { recomputeMetricsForContacts } = await import('@/lib/cdl/metrics')
+          if (wonNow) {
+            const d = firstOrNull(
+              await db
+                .select({ title: deals.title, value: deals.value, currency: deals.currency })
+                .from(deals)
+                .where(eq(deals.id, id))
+                .limit(1),
+            )
+            const amount = Number(d?.value ?? 0)
+            const meta = d?.title ? { product: d.title } : {}
+            await db
+              .insert(customerTransactions)
+              .values({
+                accountId: ctx.accountId,
+                contactId: before.contactId,
+                dealId: id,
+                type: 'purchase',
+                source: 'deal',
+                externalId: id,
+                occurredAt: new Date().toISOString(),
+                amount: String(amount),
+                currency: d?.currency ?? 'BRL',
+                status: 'completed',
+                metadata: meta,
+              })
+              .onConflictDoUpdate({
+                target: [
+                  customerTransactions.accountId,
+                  customerTransactions.source,
+                  customerTransactions.externalId,
+                ],
+                targetWhere: sql`external_id IS NOT NULL`,
+                set: {
+                  amount: String(amount),
+                  status: 'completed',
+                  metadata: meta,
+                  updatedAt: sql`now()`,
+                },
+              })
+          } else {
+            // Reaberto ou marcado como perdido a partir de ganho → cancela.
+            await db
+              .update(customerTransactions)
+              .set({ status: 'canceled', updatedAt: sql`now()` })
+              .where(
+                and(
+                  eq(customerTransactions.accountId, ctx.accountId),
+                  eq(customerTransactions.source, 'deal'),
+                  eq(customerTransactions.externalId, id),
+                ),
+              )
+          }
+          await recomputeMetricsForContacts(ctx.accountId, [before.contactId])
+        } catch (err) {
+          console.error('[updateDeal] CDL transação de venda:', err)
+        }
+      }
       // Gatilho por status: ganhou → cadência de pós-venda; perdeu →
       // cadência de recuperação (as escolhidas na conta). Best-effort.
       if (
