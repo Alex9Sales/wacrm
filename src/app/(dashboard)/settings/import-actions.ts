@@ -18,6 +18,7 @@ import {
   pipelineStages,
   user,
   member,
+  customerTransactions,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
@@ -418,4 +419,159 @@ export async function exportDealsData(
     responsible: r.responsible ?? null,
     source: r.source ?? null,
   }))
+}
+
+// ---- (C) Histórico comercial / Vendas (Customer Data Layer, Fase 2) ----
+// Escreve em customer_transactions (razão comercial). Resolve o cliente pelo
+// TELEFONE (mesma dedupe do importador de contatos) e liga a venda a ele.
+// Idempotente: usa o número do pedido; sem ele, uma chave sintética estável —
+// re-importar o MESMO arquivo não duplica.
+
+export interface ImportTransactionRow {
+  phone?: string | null
+  contactName?: string | null
+  occurredAt?: string | null // dd/mm/aaaa ou ISO
+  amount?: string | number | null
+  product?: string | null
+  paymentMethod?: string | null
+  externalId?: string | null // número do pedido (idempotência)
+  type?: string | null
+  status?: string | null
+}
+
+export interface ImportTransactionsResult {
+  transactionsCreated: number
+  transactionsUpdated: number
+  contactsCreated: number
+  skipped: number
+  error?: string
+}
+
+/** "R$ 1.234,56" | "1234.56" | "1.234,56" → 1234.56 */
+function parseImportAmount(v: unknown): number {
+  if (typeof v === 'number') return isFinite(v) ? v : 0
+  const s = String(v ?? '').replace(/[^\d.,-]/g, '')
+  if (!s) return 0
+  const n = parseFloat(s.replace(/\.(?=\d{3}(\D|$))/g, '').replace(',', '.'))
+  return isFinite(n) ? n : 0
+}
+
+/** "dd/mm/aaaa" | "aaaa-mm-dd" | ISO → ISO string; null se não parsear.
+ *  Ancora ao meio-dia UTC pra a data não "virar" o dia por fuso. */
+function parseImportDate(v: unknown): string | null {
+  const s = String(v ?? '').trim()
+  if (!s) return null
+  const br = s.match(/^(\d{1,2})[/\-.](\d{1,2})[/\-.](\d{2,4})/)
+  if (br) {
+    const d = br[1].padStart(2, '0')
+    const m = br[2].padStart(2, '0')
+    const y = br[3].length === 2 ? '20' + br[3] : br[3]
+    const dt = new Date(`${y}-${m}-${d}T12:00:00Z`)
+    return isNaN(dt.getTime()) ? null : dt.toISOString()
+  }
+  const dt = new Date(s)
+  return isNaN(dt.getTime()) ? null : dt.toISOString()
+}
+
+export async function importTransactions(
+  rows: ImportTransactionRow[],
+): Promise<ImportTransactionsResult> {
+  const res: ImportTransactionsResult = {
+    transactionsCreated: 0,
+    transactionsUpdated: 0,
+    contactsCreated: 0,
+    skipped: 0,
+  }
+  try {
+    const ctx = await requireRole('agent')
+    if (!Array.isArray(rows) || rows.length === 0)
+      return { ...res, error: 'Nada para importar.' }
+
+    for (const row of rows) {
+      const phone = importPhone(row.phone)
+      // Sem telefone não dá pra resolver identidade — pula.
+      if (!phone) {
+        res.skipped++
+        continue
+      }
+
+      let contactId: string
+      try {
+        const c = await findOrCreateContact(ctx.accountId, ctx.userId, {
+          phone,
+          name: clean(row.contactName) ?? undefined,
+        })
+        contactId = c.id
+        if (c.created) res.contactsCreated++
+      } catch {
+        res.skipped++
+        continue
+      }
+
+      const amount = parseImportAmount(row.amount)
+      const occurredAt = parseImportDate(row.occurredAt)
+      const product = clean(row.product)
+      const paymentMethod = clean(row.paymentMethod)
+      const type = clean(row.type) || 'purchase'
+      const status = clean(row.status) || 'completed'
+      // Idempotência: número do pedido; sem ele, chave sintética estável.
+      const externalId =
+        clean(row.externalId) ||
+        ['imp', phone, occurredAt ?? '', String(amount), (product ?? '').toLowerCase()].join('|')
+      const metadata: Record<string, unknown> = {}
+      if (product) metadata.product = product
+
+      try {
+        const ins = firstOrNull(
+          await db
+            .insert(customerTransactions)
+            .values({
+              accountId: ctx.accountId,
+              contactId,
+              type,
+              source: 'import',
+              externalId,
+              ...(occurredAt ? { occurredAt } : {}),
+              amount: String(amount),
+              currency: 'BRL',
+              paymentMethod,
+              status,
+              metadata,
+            })
+            .onConflictDoUpdate({
+              target: [
+                customerTransactions.accountId,
+                customerTransactions.source,
+                customerTransactions.externalId,
+              ],
+              targetWhere: sql`external_id IS NOT NULL`,
+              set: {
+                type,
+                amount: String(amount),
+                paymentMethod,
+                status,
+                metadata,
+                ...(occurredAt ? { occurredAt } : {}),
+                updatedAt: sql`now()`,
+              },
+            })
+            .returning({
+              id: customerTransactions.id,
+              inserted: sql<boolean>`(xmax = 0)`,
+            }),
+        )
+        if (ins?.inserted) res.transactionsCreated++
+        else res.transactionsUpdated++
+      } catch {
+        res.skipped++
+      }
+    }
+    revalidatePath('/contacts')
+    return res
+  } catch (err) {
+    return {
+      ...res,
+      error: err instanceof Error ? err.message : 'Falha ao importar.',
+    }
+  }
 }

@@ -5,8 +5,10 @@ import { toast } from 'sonner'
 import {
   importCompaniesContacts,
   importDeals,
+  importTransactions,
   type ImportContactRow,
   type ImportDealRow,
+  type ImportTransactionRow,
 } from '@/app/(dashboard)/settings/import-actions'
 import {
   exportContactsData,
@@ -24,9 +26,10 @@ import {
   Handshake,
   Users,
   CheckCircle2,
+  Receipt,
 } from 'lucide-react'
 
-type ImportType = 'contacts' | 'deals'
+type ImportType = 'contacts' | 'deals' | 'transactions'
 
 function norm(s: string) {
   return s
@@ -73,6 +76,17 @@ const DEAL_SPEC: Record<string, RegExp> = {
   stage: /etapa|estagio|fase|stage/,
   value: /valor|preco|price|amount/,
 }
+const TRANSACTION_SPEC: Record<string, RegExp> = {
+  phone: /telefone|fone|phone|celular|whats/,
+  contactName: /cliente|contato|contact|^nome/,
+  occurredAt: /data|date|dia|quando/,
+  amount: /valor|preco|price|amount|total/,
+  product: /produto|servico|serviço|item|descri|product|marca/,
+  paymentMethod: /pagamento|pagto|payment|forma/,
+  externalId: /pedido|nº|numero|nota|external|order|venda/,
+  type: /^tipo$|type/,
+  status: /status|situacao|situação/,
+}
 
 export function ImportPanel() {
   const [type, setType] = useState<ImportType>('contacts')
@@ -80,6 +94,7 @@ export function ImportPanel() {
   const [pipelineId, setPipelineId] = useState('')
   const [rowsC, setRowsC] = useState<ImportContactRow[]>([])
   const [rowsD, setRowsD] = useState<ImportDealRow[]>([])
+  const [rowsT, setRowsT] = useState<ImportTransactionRow[]>([])
   const [matched, setMatched] = useState<string[]>([])
   const [fileName, setFileName] = useState('')
   const [parsing, setParsing] = useState(false)
@@ -101,6 +116,7 @@ export function ImportPanel() {
   const reset = useCallback(() => {
     setRowsC([])
     setRowsD([])
+    setRowsT([])
     setMatched([])
     setFileName('')
     setDone(null)
@@ -117,7 +133,12 @@ export function ImportPanel() {
         return
       }
       const keys = Object.keys(json[0])
-      const spec = type === 'contacts' ? CONTACT_SPEC : DEAL_SPEC
+      const spec =
+        type === 'contacts'
+          ? CONTACT_SPEC
+          : type === 'transactions'
+            ? TRANSACTION_SPEC
+            : DEAL_SPEC
       const cmap = mapColumns(keys, spec)
       setMatched(
         Object.entries(cmap)
@@ -140,6 +161,26 @@ export function ImportPanel() {
             phone: get(r, 'phone') || null,
             email: get(r, 'email') || null,
             segment: get(r, 'segment') || null,
+          })),
+        )
+      } else if (type === 'transactions') {
+        if (!cmap.phone) {
+          toast.error(
+            'Preciso da coluna de Telefone do cliente. Cabeçalhos ex.: "Telefone", "Celular", "WhatsApp".',
+          )
+          return
+        }
+        setRowsT(
+          json.map((r) => ({
+            phone: get(r, 'phone') || null,
+            contactName: get(r, 'contactName') || null,
+            occurredAt: get(r, 'occurredAt') || null,
+            amount: cmap.amount ? String(r[cmap.amount] ?? '') : null,
+            product: get(r, 'product') || null,
+            paymentMethod: get(r, 'paymentMethod') || null,
+            externalId: get(r, 'externalId') || null,
+            type: get(r, 'type') || null,
+            status: get(r, 'status') || null,
           })),
         )
       } else {
@@ -179,6 +220,10 @@ export function ImportPanel() {
   }
 
   async function exportData() {
+    if (type === 'transactions') {
+      toast.info('Exportação de histórico de vendas em breve.')
+      return
+    }
     setExporting(true)
     try {
       if (type === 'contacts') {
@@ -225,7 +270,12 @@ export function ImportPanel() {
     }
   }
 
-  const count = type === 'contacts' ? rowsC.length : rowsD.length
+  const count =
+    type === 'contacts'
+      ? rowsC.length
+      : type === 'transactions'
+        ? rowsT.length
+        : rowsD.length
 
   async function runImport() {
     if (count === 0) return
@@ -240,6 +290,15 @@ export function ImportPanel() {
         }
         setDone(
           `${r.companiesCreated} empresa(s) e ${r.contactsCreated} contato(s) criados · ${r.contactsLinked} vinculado(s)${r.skipped ? ` · ${r.skipped} ignorado(s)` : ''}.`,
+        )
+      } else if (type === 'transactions') {
+        const r = await importTransactions(rowsT)
+        if (r.error) {
+          toast.error(r.error)
+          return
+        }
+        setDone(
+          `${r.transactionsCreated} venda(s) importada(s)${r.transactionsUpdated ? ` · ${r.transactionsUpdated} atualizada(s)` : ''} · ${r.contactsCreated} cliente(s) novo(s)${r.skipped ? ` · ${r.skipped} ignorada(s)` : ''}.`,
         )
       } else {
         if (!pipelineId) {
@@ -258,6 +317,7 @@ export function ImportPanel() {
       toast.success('Importação concluída')
       setRowsC([])
       setRowsD([])
+      setRowsT([])
       setFileName('')
       setMatched([])
     } finally {
@@ -275,7 +335,7 @@ export function ImportPanel() {
       </div>
 
       {/* Tipo */}
-      <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+      <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
         {(
           [
             {
@@ -283,6 +343,12 @@ export function ImportPanel() {
               icon: Building2,
               title: 'Empresas e contatos',
               desc: 'Organização, contato, telefone, e-mail, segmento.',
+            },
+            {
+              id: 'transactions' as const,
+              icon: Receipt,
+              title: 'Histórico de vendas',
+              desc: 'Compras/serviços do cliente: telefone, data, valor, produto, pagamento.',
             },
             {
               id: 'deals' as const,
@@ -409,8 +475,9 @@ export function ImportPanel() {
             </div>
           )}
           <p className="text-[11px] text-muted-foreground">
-            Empresas/contatos já existentes são reaproveitados (casa por nome /
-            telefone) — não duplica.
+            {type === 'transactions'
+              ? 'Casa o cliente pelo telefone e liga a venda a ele (cria o cliente se não existir). Re-importar o mesmo arquivo não duplica.'
+              : 'Empresas/contatos já existentes são reaproveitados (casa por nome / telefone) — não duplica.'}
           </p>
           <Button onClick={() => void runImport()} disabled={importing}>
             {importing && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}
