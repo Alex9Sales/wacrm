@@ -789,7 +789,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         const closeCtx = moveOn
           ? await loadDealCloseContext(agent.account_id, c.id)
           : null
-        const systemPrompt = buildFollowUpPrompt(
+        let systemPrompt = buildFollowUpPrompt(
           step.instructions,
           currentStep + 1,
           cfg.steps.length,
@@ -800,6 +800,18 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
           closeCtx?.stageNames ?? [],
           tz,
         )
+        // 📊 CDL: injeta o histórico do cliente (última compra, frequência,
+        // ticket) pra o reengajamento ser personalizado ("quer o mesmo de
+        // sempre?"), não genérico. Determinístico, best-effort.
+        try {
+          const { buildCustomerFactsBlock } = await import('@/lib/cdl/metrics')
+          const facts = await buildCustomerFactsBlock(agent.account_id, c.contact_id, tz)
+          if (facts) {
+            systemPrompt += `\n\nCUSTOMER FACTS (histórico deste cliente — use pra personalizar o reengajamento; NÃO invente):\n${facts}`
+          }
+        } catch {
+          /* best-effort: sem histórico, reengaja normal */
+        }
         const r = await generateReply({ config, systemPrompt, messages })
         const raw = (r.text || '').trim()
         closeDirs = resolveOn || moveOn ? parseCloseDirectives(raw) : null

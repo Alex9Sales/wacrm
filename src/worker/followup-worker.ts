@@ -15,7 +15,10 @@ import {
 } from '@/lib/ai/followup';
 
 const FOLLOWUP_QUEUE = 'ai-followup';
-const TICK_MS = 5 * 60_000; // 5 min
+// Tick de 1 min: negócios rápidos (gás) precisam de follow-up quase imediato
+// (ex.: cliente sem resposta há 2 min). O scan é account-scoped, indexado e
+// capado (PER_AGENT_CAP), então rodar mais vezes é barato.
+const TICK_MS = 60_000; // 1 min
 
 export function startFollowupWorker(): Worker {
   const queue = new Queue(FOLLOWUP_QUEUE, { connection: bullConnection() });
