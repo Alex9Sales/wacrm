@@ -135,6 +135,17 @@ function money(v: unknown): string {
   return `R$ ${n.toFixed(2).replace('.', ',')}`
 }
 
+/** Substantivo do histórico por tipo de transação: clínica/serviço = "atendimento",
+ *  venda = "compra", senão neutro. Pega o tipo da última transação. */
+function nounFor(type: string | null | undefined): { one: string; many: string } {
+  const t = (type ?? '').toLowerCase()
+  if (/servi|consult|atend|procedi|agend|appoint|sess|exam|visit/.test(t))
+    return { one: 'atendimento', many: 'atendimentos' }
+  if (/renov|assin|subscri|plano/.test(t))
+    return { one: 'renovação', many: 'renovações' }
+  return { one: 'compra', many: 'compras' }
+}
+
 /**
  * Monta o bloco CUSTOMER FACTS do cliente (ou null se não houver histórico).
  * Determinístico — usado no ponto de injeção do prompt (auto-reply).
@@ -166,6 +177,7 @@ export async function buildCustomerFactsBlock(
         payment: customerTransactions.paymentMethod,
         occurredAt: customerTransactions.occurredAt,
         amount: customerTransactions.amount,
+        type: customerTransactions.type,
       })
       .from(customerTransactions)
       .where(
@@ -191,24 +203,33 @@ export async function buildCustomerFactsBlock(
       ? daysSince - avgDays
       : null
 
+  const noun = nounFor(last?.type)
+  const isService = noun.one === 'atendimento'
+
   const lines: string[] = []
-  lines.push(`Cliente recorrente: ${m.transactionCount} compra(s) registrada(s).`)
+  lines.push(
+    `Cliente recorrente: ${m.transactionCount} ${
+      m.transactionCount === 1 ? noun.one : noun.many
+    } no histórico.`,
+  )
   if (last?.occurredAt) {
     const parts = [fmtDateInTz(last.occurredAt, timezone)]
     if (last.product) parts.push(String(last.product))
-    if (last.amount != null) parts.push(money(last.amount))
+    if (last.amount != null && Number(last.amount) > 0) parts.push(money(last.amount))
     if (last.payment) parts.push(String(last.payment))
-    lines.push(`Última compra: ${parts.join(' — ')}.`)
+    lines.push(`${isService ? 'Último atendimento' : 'Última compra'}: ${parts.join(' — ')}.`)
   }
-  if (daysSince != null) lines.push(`${daysSince} dia(s) desde a última compra.`)
+  if (daysSince != null)
+    lines.push(`${daysSince} dia(s) desde ${isService ? 'o último atendimento' : 'a última compra'}.`)
   if (avgDays != null) {
-    let freq = `Frequência média: ${Math.round(avgDays)} dia(s) entre compras`
+    let freq = `Frequência média: a cada ${Math.round(avgDays)} dia(s)`
     if (overdue != null && overdue > 3)
-      freq += ` (recompra ATRASADA em ~${Math.round(overdue)} dia(s))`
+      freq += ` (${isService ? 'retorno' : 'recompra'} ATRASADO em ~${Math.round(overdue)} dia(s))`
     lines.push(freq + '.')
   }
   if (Number(m.averageTicket) > 0) lines.push(`Ticket médio: ${money(m.averageTicket)}.`)
-  if (m.preferredProduct) lines.push(`Produto mais comprado: ${m.preferredProduct}.`)
+  if (m.preferredProduct)
+    lines.push(`${isService ? 'Mais frequente' : 'Produto mais comprado'}: ${m.preferredProduct}.`)
   if (m.preferredPaymentMethod)
     lines.push(`Pagamento mais frequente: ${m.preferredPaymentMethod}.`)
   return lines.join('\n')
