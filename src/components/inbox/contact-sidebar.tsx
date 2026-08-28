@@ -41,6 +41,7 @@ import { ScheduleMiniList } from "./schedule-mini-list";
 import { CadenceSidebar } from "./cadence-sidebar";
 import { Repeat } from "lucide-react";
 import { CustomerCodesEditor } from "./customer-codes-editor";
+import { CommercialHistory } from "./commercial-history";
 import { importGroupMembers } from "@/app/(dashboard)/inbox/group-actions";
 import { CustomFieldInput } from "@/components/contacts/custom-field-input";
 import { CallButton } from "@/components/calls/call-button";
@@ -712,6 +713,11 @@ export function ContactSidebar({
               </div>
             )}
           </div>
+
+          {/* 📊 Histórico de compras (CDL) — o humano vê o que a IA vê. */}
+          {!contact.is_group && (
+            <CommercialHistory contactId={contact.id} />
+          )}
 
           {/* Action buttons: Editar / Abrir contato / Excluir conversa */}
           <div className="mt-3 flex flex-wrap gap-1.5">

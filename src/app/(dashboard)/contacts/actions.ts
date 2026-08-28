@@ -1222,3 +1222,119 @@ export async function deleteCustomField(
     return { error: err instanceof Error ? err.message : 'Could not delete field.' }
   }
 }
+
+// ============================================================
+// 📊 Perfil comercial do contato (CDL Fase 5) — "o humano vê o que a IA vê".
+// Lê customer_metrics (cache) + as transações recentes + o MESMO bloco
+// CUSTOMER FACTS injetado no prompt do agente. Usado no painel da conversa.
+// ============================================================
+export interface ContactCommercialTx {
+  occurredAt: string | null
+  amount: string | null
+  paymentMethod: string | null
+  product: string | null
+  type: string | null
+}
+export interface ContactCommercialProfile {
+  hasData: boolean
+  transactionCount: number
+  totalRevenue: string | null
+  averageTicket: string | null
+  lastTransactionAt: string | null
+  averageRepurchaseDays: string | null
+  nextExpectedAt: string | null
+  preferredProduct: string | null
+  preferredPaymentMethod: string | null
+  factsText: string | null
+  transactions: ContactCommercialTx[]
+}
+
+export async function getContactCommercialProfile(
+  contactId: string,
+): Promise<ContactCommercialProfile> {
+  const empty: ContactCommercialProfile = {
+    hasData: false,
+    transactionCount: 0,
+    totalRevenue: null,
+    averageTicket: null,
+    lastTransactionAt: null,
+    averageRepurchaseDays: null,
+    nextExpectedAt: null,
+    preferredProduct: null,
+    preferredPaymentMethod: null,
+    factsText: null,
+    transactions: [],
+  }
+  try {
+    const ctx = await getCurrentAccount()
+    const { customerMetrics, customerTransactions } = await import('@/db')
+    const { buildCustomerFactsBlock } = await import('@/lib/cdl/metrics')
+    const { getAccountSettings } = await import('@/lib/settings/account-settings')
+
+    const m = firstOrNull(
+      await db
+        .select()
+        .from(customerMetrics)
+        .where(
+          and(
+            eq(customerMetrics.accountId, ctx.accountId),
+            eq(customerMetrics.contactId, contactId),
+          ),
+        )
+        .limit(1),
+    )
+
+    const txs = await db
+      .select({
+        occurredAt: customerTransactions.occurredAt,
+        amount: customerTransactions.amount,
+        paymentMethod: customerTransactions.paymentMethod,
+        product: sql<string | null>`${customerTransactions.metadata}->>'product'`,
+        type: customerTransactions.type,
+      })
+      .from(customerTransactions)
+      .where(
+        and(
+          eq(customerTransactions.accountId, ctx.accountId),
+          eq(customerTransactions.contactId, contactId),
+          sql`${customerTransactions.status} <> 'canceled'`,
+        ),
+      )
+      .orderBy(desc(customerTransactions.occurredAt))
+      .limit(60)
+
+    if (!m && txs.length === 0) return empty
+
+    const tz =
+      (await getAccountSettings(ctx.accountId)).businessTimezone ||
+      'America/Sao_Paulo'
+    const factsText = await buildCustomerFactsBlock(ctx.accountId, contactId, tz)
+
+    return {
+      hasData: true,
+      transactionCount: m?.transactionCount ?? txs.length,
+      totalRevenue: m?.totalRevenue != null ? String(m.totalRevenue) : null,
+      averageTicket: m?.averageTicket != null ? String(m.averageTicket) : null,
+      lastTransactionAt: m?.lastTransactionAt
+        ? new Date(m.lastTransactionAt).toISOString()
+        : null,
+      averageRepurchaseDays:
+        m?.averageRepurchaseDays != null ? String(m.averageRepurchaseDays) : null,
+      nextExpectedAt: m?.nextExpectedAt
+        ? new Date(m.nextExpectedAt).toISOString()
+        : null,
+      preferredProduct: m?.preferredProduct ?? null,
+      preferredPaymentMethod: m?.preferredPaymentMethod ?? null,
+      factsText,
+      transactions: txs.map((t) => ({
+        occurredAt: t.occurredAt ? new Date(t.occurredAt).toISOString() : null,
+        amount: t.amount != null ? String(t.amount) : null,
+        paymentMethod: t.paymentMethod ?? null,
+        product: t.product ?? null,
+        type: t.type ?? null,
+      })),
+    }
+  } catch {
+    return empty
+  }
+}
