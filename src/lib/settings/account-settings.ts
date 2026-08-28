@@ -52,6 +52,10 @@ export interface AccountSettings {
   /** Negócio ABERTO parado nesta MESMA etapa por mais dias que isto vira
    *  "esfriando" (alerta no card + filtro no funil). 0 = desligado. Padrão 7. */
   staleDealDays: number
+  /** CDL: ao marcar um negócio como GANHO, registra a compra no histórico
+   *  (customer_transactions). Ligado por padrão; desligue em contas que já
+   *  sincronizam o histórico de um ERP (evita duplicar na re-importação). */
+  recordSaleOnWon: boolean
   /** Cadência que inscreve o contato ao marcar o negócio como GANHO
    *  (pós-venda/onboarding). null = nenhuma. */
   wonCadenceId: string | null
@@ -140,6 +144,7 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
     'Obrigado pela nota! Se quiser, deixe um comentário sobre o atendimento — é rapidinho. 🙏',
   crmCallingEnabled: true,
   staleDealDays: 7,
+  recordSaleOnWon: true,
   wonCadenceId: null,
   lostCadenceId: null,
   wonPipelineId: null,

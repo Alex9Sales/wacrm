@@ -994,6 +994,7 @@ export async function getStatusCadences(): Promise<{
   lostCadenceId: string | null
   wonPipelineId: string | null
   lostPipelineId: string | null
+  recordSaleOnWon: boolean
 }> {
   const ctx = await getCurrentAccount()
   const [list, pipes, s] = await Promise.all([
@@ -1016,6 +1017,7 @@ export async function getStatusCadences(): Promise<{
     lostCadenceId: s.lostCadenceId ?? null,
     wonPipelineId: s.wonPipelineId ?? null,
     lostPipelineId: s.lostPipelineId ?? null,
+    recordSaleOnWon: s.recordSaleOnWon,
   }
 }
 
@@ -1024,9 +1026,13 @@ export async function setStatusCadences(input: {
   lostCadenceId: string | null
   wonPipelineId?: string | null
   lostPipelineId?: string | null
+  recordSaleOnWon?: boolean
 }): Promise<{ error: string | null }> {
   const ctx = await requireRole('admin')
   await updateAccountSettings(ctx.accountId, {
+    ...(input.recordSaleOnWon === undefined
+      ? {}
+      : { recordSaleOnWon: !!input.recordSaleOnWon }),
     wonCadenceId: input.wonCadenceId || null,
     lostCadenceId: input.lostCadenceId || null,
     wonPipelineId: input.wonPipelineId || null,

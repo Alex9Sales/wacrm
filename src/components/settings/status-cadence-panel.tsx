@@ -33,6 +33,7 @@ export function StatusCadencePanel() {
   const [lostId, setLostId] = useState("");
   const [wonPipeId, setWonPipeId] = useState("");
   const [lostPipeId, setLostPipeId] = useState("");
+  const [recordOnWon, setRecordOnWon] = useState(true);
 
   useEffect(() => {
     getStatusCadences()
@@ -43,6 +44,7 @@ export function StatusCadencePanel() {
         setLostId(res.lostCadenceId ?? "");
         setWonPipeId(res.wonPipelineId ?? "");
         setLostPipeId(res.lostPipelineId ?? "");
+        setRecordOnWon(res.recordSaleOnWon);
       })
       .catch(() => toast.error("Falha ao carregar as cadências."))
       .finally(() => setLoading(false));
@@ -55,6 +57,7 @@ export function StatusCadencePanel() {
       lostCadenceId: lostId || null,
       wonPipelineId: wonPipeId || null,
       lostPipelineId: lostPipeId || null,
+      recordSaleOnWon: recordOnWon,
     });
     setSaving(false);
     if (res.error) {
@@ -87,6 +90,27 @@ export function StatusCadencePanel() {
           </div>
         ) : (
           <>
+            {/* CDL: registrar a venda ganha no histórico de compras. */}
+            <label className="flex cursor-pointer items-start gap-2.5 rounded-lg border border-border bg-muted/30 p-3">
+              <input
+                type="checkbox"
+                checked={recordOnWon}
+                onChange={(e) => setRecordOnWon(e.target.checked)}
+                disabled={!canEditSettings}
+                className="mt-0.5 size-4 accent-[var(--primary)]"
+              />
+              <span className="text-sm">
+                <span className="font-medium text-foreground">
+                  Registrar a venda no histórico ao GANHAR
+                </span>
+                <span className="mt-0.5 block text-xs text-muted-foreground">
+                  Ao marcar um negócio como ganho, a compra entra no “Histórico
+                  de compras” do cliente (a IA passa a conhecer o cliente).
+                  Desligue em contas que já sincronizam o histórico de um ERP.
+                </span>
+              </span>
+            </label>
+
             {cadences.length === 0 ? (
               <p className="text-sm text-muted-foreground">
                 Você ainda não tem cadências. Crie em{" "}

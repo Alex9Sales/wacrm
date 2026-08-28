@@ -1490,7 +1490,12 @@ export async function updateDeal(
       // têm o histórico de lá; aqui entram as vendas fechadas daqui pra frente.)
       const wonNow = patch.status === 'won' && before.status !== 'won'
       const undoneWon = before.status === 'won' && patch.status && patch.status !== 'won'
-      if (before.contactId && (wonNow || undoneWon)) {
+      // Liga/desliga por conta (Config → Negócios). Desligado = a venda ganha
+      // NÃO vira histórico (contas que sincronizam de um ERP).
+      const recordOnWon = before.contactId
+        ? (await getAccountSettings(ctx.accountId)).recordSaleOnWon
+        : false
+      if (recordOnWon && before.contactId && (wonNow || undoneWon)) {
         try {
           const { customerTransactions } = await import('@/db')
           const { recomputeMetricsForContacts } = await import('@/lib/cdl/metrics')
