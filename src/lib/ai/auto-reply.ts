@@ -387,6 +387,34 @@ export async function dispatchInboundToAiReply(
           console.error('[ai auto-reply] aviso ao dono falhou:', err)
         }
       }
+      // 📞 Telefone informado pelo contato (ex.: lead do IG deu o WhatsApp) →
+      // grava no contato pra dar pra chamar depois. Best-effort; só grava se o
+      // contato ainda NÃO tem telefone (não sobrescreve um número já existente)
+      // e engole conflito de unicidade (outro contato já usa esse número).
+      if (dirs.setPhone) {
+        try {
+          let d = dirs.setPhone.replace(/\D/g, '')
+          if ((d.length === 10 || d.length === 11) && !d.startsWith('55')) d = '55' + d
+          if (d.length >= 12 && d.length <= 13) {
+            const cur = firstOrNull(
+              await db
+                .select({ phone: contacts.phone })
+                .from(contacts)
+                .where(eq(contacts.id, contactId))
+                .limit(1),
+            )
+            if (!cur?.phone || cur.phone.replace(/\D/g, '').length < 10) {
+              await db
+                .update(contacts)
+                .set({ phone: d })
+                .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+              console.log('[ai auto-reply] telefone do contato registrado')
+            }
+          }
+        } catch (err) {
+          console.error('[ai auto-reply] registrar telefone falhou:', err)
+        }
+      }
     }
     // Agendar (ferramenta 'schedule').
     const runSchedule = async () => {

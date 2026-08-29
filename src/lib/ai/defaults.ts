@@ -106,6 +106,9 @@ export const AGENT_ROUTE_DIRECTIVE =
 /** Avisar o responsável no WhatsApp: [[AVISARDONO:<resumo do teste/demo>]].
  *  Best-effort — só envia se a conta tiver telefone + o toggle 'demo' ligado. */
 export const OWNER_ALERT_DIRECTIVE = /\[\[\s*avisardono\s*:\s*([^\]]+?)\s*\]\]/i
+/** Registrar o telefone/WhatsApp do contato (ex.: lead do Instagram deu o zap):
+ *  [[TELEFONE:<numero>]]. Grava no contato pra dar pra chamar no WhatsApp. */
+export const SET_PHONE_DIRECTIVE = /\[\[\s*telefone\s*:\s*([+\d][\d\s()\-.]{7,20})\s*\]\]/i
 
 export interface AgentDirectives {
   /** Texto limpo (sem os marcadores) a enviar ao cliente. */
@@ -136,6 +139,8 @@ export interface AgentDirectives {
   routeAgent: { name: string; summary: string } | null
   /** Avisar o responsável (dono) no WhatsApp — resumo do teste/demo agendado. */
   ownerAlert: { message: string } | null
+  /** Telefone/WhatsApp que o contato informou (ex.: lead do IG) — só dígitos. */
+  setPhone: string | null
 }
 
 /** Extrai os marcadores de ação do texto gerado e devolve o texto limpo. */
@@ -177,6 +182,8 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     : null
   const oam = raw.match(OWNER_ALERT_DIRECTIVE)
   const ownerAlert = oam ? { message: oam[1].trim() } : null
+  const phm = raw.match(SET_PHONE_DIRECTIVE)
+  const setPhone = phm ? phm[1].replace(/\D/g, '') || null : null
   const vm = raw.match(VOICE_DIRECTIVE)
   const voicePref: 'audio' | 'text' | null = vm
     ? /texto/i.test(vm[1])
@@ -198,6 +205,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     .replace(new RegExp(VOICE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(AGENT_ROUTE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(OWNER_ALERT_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(SET_PHONE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(FUNNEL_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(LOSE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(RESOLVE_DIRECTIVE.source, 'gi'), '')
@@ -219,6 +227,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     voicePref,
     routeAgent,
     ownerAlert,
+    setPhone,
   }
 }
 

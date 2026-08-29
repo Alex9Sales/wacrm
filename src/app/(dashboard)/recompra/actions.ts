@@ -6,9 +6,9 @@
 // e a conversa mais recente pra abrir com 1 clique.
 // ============================================================
 
-import { and, desc, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 
-import { db, contacts, conversations } from '@/db'
+import { db, contacts, conversations, customerSignals } from '@/db'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { recomputeSignalsForAccount, listOpenSignals } from '@/lib/cdl/signals'
 
@@ -65,4 +65,42 @@ export async function getRepurchaseBoard(): Promise<RepurchaseRow[]> {
     severity: s.severity,
     payload: s.payload ?? {},
   }))
+}
+
+// 🔁 Motor de recompra SEMI-automático (a lista sugere, o humano aprova):
+// envia a mensagem de reativação pela conversa do cliente e RESOLVE o sinal
+// (sai da lista). O texto vem aprovado/editado pelo humano no clique.
+export async function sendReactivation(input: {
+  conversationId: string
+  contactId: string
+  signalType: string
+  text: string
+}): Promise<{ error: string | null }> {
+  const text = (input.text ?? '').trim()
+  if (!input.conversationId || !text) return { error: 'Sem conversa ou mensagem.' }
+  try {
+    const ctx = await getCurrentAccount()
+    const { engineSendText } = await import('@/lib/flows/meta-send')
+    await engineSendText({
+      accountId: ctx.accountId,
+      userId: ctx.userId,
+      conversationId: input.conversationId,
+      contactId: input.contactId,
+      text,
+    })
+    await db
+      .update(customerSignals)
+      .set({ resolvedAt: sql`now()`, updatedAt: sql`now()` })
+      .where(
+        and(
+          eq(customerSignals.accountId, ctx.accountId),
+          eq(customerSignals.contactId, input.contactId),
+          eq(customerSignals.signalType, input.signalType),
+          isNull(customerSignals.resolvedAt),
+        ),
+      )
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao enviar.' }
+  }
 }

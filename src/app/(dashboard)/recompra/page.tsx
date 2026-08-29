@@ -16,8 +16,29 @@ import {
   MessageSquare,
   Loader2,
   RefreshCw,
+  Check,
 } from "lucide-react";
-import { getRepurchaseBoard, type RepurchaseRow } from "./actions";
+import { getRepurchaseBoard, sendReactivation, type RepurchaseRow } from "./actions";
+import { toast } from "sonner";
+
+/** Rascunho de reativação sugerido (o humano edita/aprova antes de enviar). */
+function draftFor(row: RepurchaseRow): string {
+  const p = row.payload as Record<string, unknown>;
+  const nome = (row.name || "").split(" ")[0] || "";
+  const oi = nome ? `Oi ${nome}!` : "Oi!";
+  const prod = p.product ? String(p.product) : "seu pedido";
+  if (row.signalType === "inactive")
+    return `${oi} Sumiu, hein 😄 Faz um tempo que não passa aqui. Tá precisando de ${prod}? Consigo te atender rapidinho.`;
+  if (row.signalType === "repurchase_overdue")
+    return `${oi} 😊 Vi que já faz ${p.days_since ?? "uns"} dias do seu último ${prod}. Quer que eu já separe pra você?`;
+  return `${oi} Passando pra ver se tá na hora de repor o ${prod}. Quer que eu já deixe separado? 😊`;
+}
+
+const CAN_REACTIVATE = new Set([
+  "repurchase_overdue",
+  "repurchase_due",
+  "inactive",
+]);
 
 type GroupKey = "repurchase_overdue" | "repurchase_due" | "inactive" | "high_value";
 
@@ -89,6 +110,10 @@ function detail(row: RepurchaseRow): string {
 export default function RecompraPage() {
   const [rows, setRows] = useState<RepurchaseRow[] | null>(null);
   const [loading, setLoading] = useState(true);
+  const [draftKey, setDraftKey] = useState<string | null>(null);
+  const [draftText, setDraftText] = useState("");
+  const [sending, setSending] = useState(false);
+  const [sent, setSent] = useState<Set<string>>(new Set());
 
   const load = () => {
     setLoading(true);
@@ -100,6 +125,32 @@ export default function RecompraPage() {
   useEffect(() => {
     load();
   }, []);
+
+  const rowKey = (r: RepurchaseRow) => r.contactId + r.signalType;
+
+  function openDraft(r: RepurchaseRow) {
+    setDraftKey(rowKey(r));
+    setDraftText(draftFor(r));
+  }
+
+  async function handleSend(r: RepurchaseRow) {
+    if (!r.conversationId) return;
+    setSending(true);
+    const res = await sendReactivation({
+      conversationId: r.conversationId,
+      contactId: r.contactId,
+      signalType: r.signalType,
+      text: draftText,
+    });
+    setSending(false);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("Mensagem enviada 👍");
+    setSent((prev) => new Set(prev).add(rowKey(r)));
+    setDraftKey(null);
+  }
 
   const grouped = useMemo(() => {
     const g: Record<string, RepurchaseRow[]> = {};
@@ -181,41 +232,102 @@ export default function RecompraPage() {
                 </div>
                 <p className="mb-3 text-xs text-muted-foreground">{grp.desc}</p>
                 <ul className="overflow-hidden rounded-xl border border-border">
-                  {list.map((row, i) => (
-                    <li
-                      key={row.contactId + row.signalType}
-                      className={`flex items-center gap-3 bg-card px-4 py-3 ${
-                        i > 0 ? "border-t border-border" : ""
-                      }`}
-                    >
-                      <span className={`h-9 w-1 shrink-0 rounded-full ${grp.bar}`} />
-                      <div className="min-w-0 flex-1">
-                        <div className="truncate font-medium text-foreground">
-                          {row.name || row.phone || "Sem nome"}
+                  {list.map((row, i) => {
+                    const key = row.contactId + row.signalType;
+                    const isSent = sent.has(key);
+                    const isDrafting = draftKey === key;
+                    const canReactivate =
+                      CAN_REACTIVATE.has(row.signalType) && !!row.conversationId;
+                    return (
+                      <li
+                        key={key}
+                        className={`bg-card px-4 py-3 ${
+                          i > 0 ? "border-t border-border" : ""
+                        } ${isSent ? "opacity-55" : ""}`}
+                      >
+                        <div className="flex items-center gap-3">
+                          <span
+                            className={`h-9 w-1 shrink-0 rounded-full ${grp.bar}`}
+                          />
+                          <div className="min-w-0 flex-1">
+                            <div className="truncate font-medium text-foreground">
+                              {row.name || row.phone || "Sem nome"}
+                            </div>
+                            <div className="truncate text-xs text-muted-foreground">
+                              {detail(row)}
+                            </div>
+                          </div>
+                          {isSent ? (
+                            <span className="inline-flex shrink-0 items-center gap-1.5 text-sm font-medium text-emerald-600 dark:text-emerald-400">
+                              <Check className="size-4" /> Enviado
+                            </span>
+                          ) : (
+                            <div className="flex shrink-0 items-center gap-2">
+                              {canReactivate && !isDrafting && (
+                                <button
+                                  onClick={() => openDraft(row)}
+                                  className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
+                                >
+                                  <Repeat className="size-4" /> Reativar
+                                </button>
+                              )}
+                              {row.conversationId ? (
+                                <Link
+                                  href={`/inbox?c=${row.conversationId}`}
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                                >
+                                  <MessageSquare className="size-4" /> Abrir
+                                </Link>
+                              ) : row.phone ? (
+                                <a
+                                  href={`https://wa.me/${row.phone.replace(/\D/g, "")}`}
+                                  target="_blank"
+                                  rel="noopener noreferrer"
+                                  className="inline-flex items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
+                                >
+                                  <MessageSquare className="size-4" /> WhatsApp
+                                </a>
+                              ) : null}
+                            </div>
+                          )}
                         </div>
-                        <div className="truncate text-xs text-muted-foreground">
-                          {detail(row)}
-                        </div>
-                      </div>
-                      {row.conversationId ? (
-                        <Link
-                          href={`/inbox?c=${row.conversationId}`}
-                          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-                        >
-                          <MessageSquare className="size-4" /> Abrir
-                        </Link>
-                      ) : row.phone ? (
-                        <a
-                          href={`https://wa.me/${row.phone.replace(/\D/g, "")}`}
-                          target="_blank"
-                          rel="noopener noreferrer"
-                          className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-3 py-1.5 text-sm font-medium text-foreground transition-colors hover:bg-muted"
-                        >
-                          <MessageSquare className="size-4" /> WhatsApp
-                        </a>
-                      ) : null}
-                    </li>
-                  ))}
+
+                        {isDrafting && (
+                          <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3">
+                            <p className="mb-1.5 text-xs text-muted-foreground">
+                              Sugestão da IA — edite se quiser e envie:
+                            </p>
+                            <textarea
+                              value={draftText}
+                              onChange={(e) => setDraftText(e.target.value)}
+                              rows={3}
+                              className="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                            />
+                            <div className="mt-2 flex items-center justify-end gap-2">
+                              <button
+                                onClick={() => setDraftKey(null)}
+                                className="rounded-lg px-3 py-1.5 text-sm text-muted-foreground hover:text-foreground"
+                              >
+                                Cancelar
+                              </button>
+                              <button
+                                onClick={() => void handleSend(row)}
+                                disabled={sending || !draftText.trim()}
+                                className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
+                              >
+                                {sending ? (
+                                  <Loader2 className="size-4 animate-spin" />
+                                ) : (
+                                  <MessageSquare className="size-4" />
+                                )}
+                                Enviar agora
+                              </button>
+                            </div>
+                          </div>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             );
