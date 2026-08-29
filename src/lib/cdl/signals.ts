@@ -53,9 +53,14 @@ export async function recomputeSignalsForAccount(accountId: string): Promise<voi
       SELECT
         contact_id,
         CASE
-          WHEN ds >= GREATEST(avg * 3, 45)   THEN 'inactive'
-          WHEN ds >= GREATEST(avg * 1.25, 3) THEN 'repurchase_overdue'
-          WHEN ds >= avg * 0.85              THEN 'repurchase_due'
+          -- inactive vale mesmo com poucas compras (cliente sumido é sumido).
+          WHEN ds >= GREATEST(avg * 3, 45)             THEN 'inactive'
+          -- recompra (due/overdue) EXIGE >=3 compras: com 1-2 compras a média
+          -- de cadência é ruído (precisa de >=2 intervalos), e flagar "atrasado"
+          -- 3 dias após uma compra ocasional gera nudge cedo demais (gás dura
+          -- semanas). Análise 29/08: 70% dos sinais de recompra eram <3 compras.
+          WHEN cnt >= 3 AND ds >= GREATEST(avg * 1.25, 3) THEN 'repurchase_overdue'
+          WHEN cnt >= 3 AND ds >= avg * 0.85              THEN 'repurchase_due'
           ELSE NULL
         END AS signal_type,
         ds, avg, product, last_amount, next_at
