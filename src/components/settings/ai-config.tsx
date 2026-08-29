@@ -112,6 +112,8 @@ export function AiConfig({
   const [voices, setVoices] = useState<{ id: string; name: string }[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [voicesError, setVoicesError] = useState<string | null>(null);
+  const [elevenKeyInput, setElevenKeyInput] = useState("");
+  const [savingElevenKey, setSavingElevenKey] = useState(false);
   const [signatureName, setSignatureName] = useState('');
   const [signatureEnabled, setSignatureEnabled] = useState(false);
   // Ferramentas do agente (Fase A): conjunto de ações ligadas (chaves de tools.ts).
@@ -420,6 +422,31 @@ export function AiConfig({
       setVoicesError('Falha ao carregar as vozes.');
     } finally {
       setLoadingVoices(false);
+    }
+  };
+
+  const saveElevenKey = async () => {
+    if (!elevenKeyInput.trim()) return;
+    setSavingElevenKey(true);
+    setVoicesError(null);
+    try {
+      const res = await fetch("/api/ai/voice-key", {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ elevenlabsApiKey: elevenKeyInput.trim() }),
+      });
+      const data = await res.json().catch(() => ({}));
+      if (res.ok) {
+        setVoices(Array.isArray(data.voices) ? data.voices : []);
+        setElevenKeyInput("");
+        toast.success("Chave ElevenLabs salva 🎙️");
+      } else {
+        setVoicesError(data.error || "Falha ao salvar a chave.");
+      }
+    } catch {
+      setVoicesError("Falha ao salvar a chave.");
+    } finally {
+      setSavingElevenKey(false);
     }
   };
 
@@ -1211,6 +1238,26 @@ export function AiConfig({
                     {loadingVoices ? "Carregando…" : "Carregar vozes"}
                   </Button>
                 </div>
+                {voices.length === 0 && (
+                  <div className="mt-2 flex flex-wrap items-center gap-2">
+                    <Input
+                      type="password"
+                      value={elevenKeyInput}
+                      onChange={(e) => setElevenKeyInput(e.target.value)}
+                      disabled={disabled || savingElevenKey}
+                      placeholder="Cole aqui sua chave do ElevenLabs (sk_…)"
+                      className="min-w-[200px] flex-1"
+                    />
+                    <Button
+                      type="button"
+                      size="sm"
+                      onClick={() => void saveElevenKey()}
+                      disabled={disabled || savingElevenKey || !elevenKeyInput.trim()}
+                    >
+                      {savingElevenKey ? "Salvando…" : "Salvar chave"}
+                    </Button>
+                  </div>
+                )}
                 {voicesError && (
                   <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-500">
                     {voicesError}
