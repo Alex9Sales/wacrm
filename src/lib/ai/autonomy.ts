@@ -19,6 +19,7 @@ import {
   customerSignals,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { greeting } from '@/lib/cdl/names'
 
 export type AutonomyLevel = 'suggest' | 'approve' | 'auto'
 
@@ -72,8 +73,7 @@ function draftReactivation(
   signalType: string,
   payload: Record<string, unknown>,
 ): string {
-  const nome = (name || '').split(' ')[0] || ''
-  const oi = nome ? `Oi ${nome}!` : 'Oi!'
+  const oi = greeting(name)
   const prod = payload.product ? String(payload.product) : 'seu pedido'
   if (signalType === 'inactive')
     return `${oi} Sumiu, hein 😄 Faz um tempo que não passa aqui. Tá precisando de ${prod}? Consigo te atender rapidinho.`

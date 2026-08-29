@@ -30,12 +30,12 @@ import {
   type PendingRequestRow,
 } from "./actions";
 import { toast } from "sonner";
+import { greeting } from "@/lib/cdl/names";
 
 /** Rascunho de reativação sugerido (o humano edita/aprova antes de enviar). */
 function draftFor(row: RepurchaseRow): string {
   const p = row.payload as Record<string, unknown>;
-  const nome = (row.name || "").split(" ")[0] || "";
-  const oi = nome ? `Oi ${nome}!` : "Oi!";
+  const oi = greeting(row.name);
   const prod = p.product ? String(p.product) : "seu pedido";
   if (row.signalType === "inactive")
     return `${oi} Sumiu, hein 😄 Faz um tempo que não passa aqui. Tá precisando de ${prod}? Consigo te atender rapidinho.`;
