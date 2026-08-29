@@ -73,8 +73,13 @@ jobs:
           mkdir -p ~/.ssh
           printf '%s\n' "$VPS_DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          # Pin the host key (no blind accept-new → no MITM on first connect).
-          ssh-keyscan -t ed25519 72.60.137.234 >> ~/.ssh/known_hosts 2>/dev/null
+          # Pin the host key HARDCODED (no blind accept-new → no MITM). Antes era
+          # `ssh-keyscan` a cada run, mas com `bash -e` um blip de rede runner→VPS
+          # no keyscan matava o passo em ~5s SEM nem tentar o deploy (falha
+          # silenciosa por causa do 2>/dev/null). Fixar a chave = zero dependência
+          # de rede aqui + mesmo pinning. Se o VPS for recriado e a host key mudar,
+          # atualizar esta linha (`ssh-keyscan -t ed25519 72.60.137.234`).
+          echo '72.60.137.234 ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIAwb52jKXcwpLY83BWqWv75/G4Gky6Vo6zZEKE7hHVmi' >> ~/.ssh/known_hosts
           # Retry: the deploy fires right after the push, so the VPS's
           # `docker pull` can briefly race GHCR (fresh manifest not yet
           # available) and fail fast with `set -e`. A couple of retries makes
