@@ -48,7 +48,12 @@ export interface OrderForCard {
   note: string | null
 }
 
-const MAX_TOOL_STEPS = 4
+// Quantas rodadas de ferramenta a IA pode encadear num único turno antes de ser
+// FORÇADA a responder o cliente. 4 era baixo pra fluxos de venda com muitas
+// tools: a Maria (gás) gasta buscar_cliente→última_compra→estoque→distância→
+// criar_cliente e estourava ANTES do criar_pedido+confirmação, terminando muda
+// (Rosane, 29/08). 8 dá folga pra fechar sem virar loop infinito.
+const MAX_TOOL_STEPS = 8
 const FETCH_TIMEOUT_MS = 12_000
 const RESULT_CAP = 4_000
 
