@@ -94,6 +94,28 @@ export async function generateReactivationRequests(accountId: string): Promise<n
   if (!agent) return 0
   if (autonomyLevel(agent.autonomy, 'reactivation') !== 'approve') return 0
 
+  // 🧹 Auto-cura: expira rascunhos PENDENTES cujo contato não tem mais sinal de
+  // reativação aberto (cliente comprou → sinal resolvido → não faz sentido
+  // "chamar de volta"). Subquery com coluna externa QUALIFICADA por literal
+  // (gotcha do drizzle: `${tab.col}` em sql raw sai sem prefixo). [[crmfluxia-drizzle-subquery-unqualified]]
+  await db
+    .update(agentActionRequests)
+    .set({ status: 'expired', resolvedAt: sql`now()` })
+    .where(
+      and(
+        eq(agentActionRequests.accountId, accountId),
+        eq(agentActionRequests.actionType, 'reactivation'),
+        eq(agentActionRequests.status, 'pending'),
+        sql`NOT EXISTS (
+          SELECT 1 FROM customer_signals cs
+          WHERE cs.account_id = ${accountId}
+            AND cs.contact_id = "agent_action_requests"."contact_id"
+            AND cs.resolved_at IS NULL
+            AND cs.signal_type IN ('repurchase_overdue', 'inactive', 'repurchase_due')
+        )`,
+      ),
+    )
+
   const sigs = await db
     .select({
       contactId: customerSignals.contactId,
