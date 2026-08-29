@@ -247,9 +247,10 @@ export async function getConversationWithContact(
   } as unknown as Conversation
 }
 
-/** Pausar (paused=true) ou reativar (false) a IA numa conversa. Ao reativar, o
- *  auto-reply volta a responder — buildConversationContext já lê o histórico,
- *  então a IA continua de onde o atendente parou quando chegar nova mensagem. */
+/** Pausar (paused=true) ou reativar (false) a IA numa conversa. Ao LIGAR a IA,
+ *  se a última mensagem é do cliente (sem resposta), a IA responde JÁ — lê o
+ *  contexto e retoma, sem esperar o cliente escrever de novo (era a confusão do
+ *  "desatribuo + ligo a IA e ela não responde" — Rafael/Alex 29/08). */
 export async function setConversationAiPaused(
   conversationId: string,
   paused: boolean,
@@ -265,9 +266,61 @@ export async function setConversationAiPaused(
           eq(conversations.accountId, ctx.accountId),
         ),
       )
+    // 🆕 Ao LIGAR a IA, retoma na hora se houver mensagem do cliente parada.
+    if (!paused) await aiCatchUpOnEnable(ctx.accountId, conversationId)
     return { error: null }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao alterar a IA' }
+  }
+}
+
+/** Ao LIGAR a IA numa conversa cuja ÚLTIMA mensagem é do CLIENTE (sem resposta),
+ *  enfileira a resposta pelo MESMO caminho do inbound (debounced). Se a última
+ *  for do bot (já respondeu) ou do atendente (humano assumiu), não faz nada — e
+ *  o dispatch ainda revalida todos os gates (atribuição, teto, barge-in, etc.).
+ *  Best-effort: nunca lança (não pode quebrar o toggle). */
+async function aiCatchUpOnEnable(
+  accountId: string,
+  conversationId: string,
+): Promise<void> {
+  try {
+    const last = firstOrNull(
+      await db
+        .select({ senderType: messages.senderType, isInternal: messages.isInternal })
+        .from(messages)
+        .where(eq(messages.conversationId, conversationId))
+        .orderBy(desc(messages.createdAt))
+        .limit(1),
+    )
+    if (!last || last.senderType !== 'customer' || last.isInternal) return
+
+    const conv = firstOrNull(
+      await db
+        .select({ contactId: conversations.contactId })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .limit(1),
+    )
+    if (!conv?.contactId) return
+    const contact = firstOrNull(
+      await db
+        .select({ userId: contacts.userId })
+        .from(contacts)
+        .where(eq(contacts.id, conv.contactId))
+        .limit(1),
+    )
+    const { enqueueAiReplyDebounced } = await import('@/lib/queue/queues')
+    await enqueueAiReplyDebounced(
+      {
+        accountId,
+        conversationId,
+        contactId: conv.contactId,
+        configOwnerUserId: contact?.userId ?? '',
+      },
+      0,
+    )
+  } catch (err) {
+    console.error('[ai catch-up on enable] falhou:', err)
   }
 }
 
@@ -1164,6 +1217,18 @@ export async function updateConversationAssignment(
         eq(conversations.accountId, ctx.accountId),
       ),
     )
+  // 🆕 Ao DESATRIBUIR com a IA ligada, a IA retoma na hora se houver mensagem do
+  // cliente parada (fluxo "desatribuo o agente e a IA assume" do Rafael/Alex).
+  if (assignedAgentId === null) {
+    const c = firstOrNull(
+      await db
+        .select({ off: conversations.aiAutoreplyDisabled })
+        .from(conversations)
+        .where(eq(conversations.id, conversationId))
+        .limit(1),
+    )
+    if (c && !c.off) await aiCatchUpOnEnable(ctx.accountId, conversationId)
+  }
 }
 
 /**
