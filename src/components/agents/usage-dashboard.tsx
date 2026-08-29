@@ -50,6 +50,7 @@ interface Dashboard {
     costUsd: number;
     promptTokens: number;
     completionTokens: number;
+    estimated: boolean;
   }[];
   byAgent: {
     agentId: string | null;
@@ -290,7 +291,9 @@ export function UsageDashboard() {
               rows={data.byModel.map((m) => ({
                 name: m.model,
                 costUsd: m.costUsd,
-                meta: `${int(m.calls)} req`,
+                meta: m.estimated
+                  ? `${int(m.calls)} req · custo estimado`
+                  : `${int(m.calls)} req`,
               }))}
             />
             <Breakdown

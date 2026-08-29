@@ -14,7 +14,7 @@
 import { eq, sql } from 'drizzle-orm'
 
 import { db, aiConfigs, channels } from '@/db'
-import { costUsd, toBrl, type UsageTokens } from './pricing'
+import { costUsd, priceForModel, toBrl, type UsageTokens } from './pricing'
 
 // ============================================================
 // Fase 4 — Funil de automação (quanto a IA resolve sozinha). Inspirado no
@@ -265,6 +265,8 @@ export interface UsageDashboard {
     costUsd: number
     promptTokens: number
     completionTokens: number
+    /** true = preço é uma ESTIMATIVA (modelo sem preço exato cadastrado). */
+    estimated: boolean
   }[]
   byAgent: {
     agentId: string | null
@@ -391,7 +393,7 @@ export async function getUsageDashboard(
   }
 
   const byModel = Array.from(modelMap.entries())
-    .map(([model, v]) => ({ model, ...v }))
+    .map(([model, v]) => ({ model, ...v, estimated: !priceForModel(model).known }))
     .sort((a, b) => b.costUsd - a.costUsd)
     .slice(0, TOP_N)
 

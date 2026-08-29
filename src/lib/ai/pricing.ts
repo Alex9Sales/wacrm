@@ -80,7 +80,14 @@ export function priceForModel(model: string): { price: ModelPrice; known: boolea
       best = prefix
     }
   }
-  if (best) return { price: PRICES[best], known: true }
+  if (best) {
+    // Sufixo do modelo além do prefixo casado. "-2026-05-01" ou "" = data/
+    // versão do MESMO modelo → preço confiável. ".5" (gpt-5 → gpt-5.5) = MINOR
+    // VERSION diferente → é OUTRO modelo com outro preço; não fingir que sabe.
+    const remainder = key.slice(best.length)
+    const versionMismatch = /^\.\d/.test(remainder)
+    return { price: PRICES[best], known: !versionMismatch }
+  }
   return { price: FALLBACK, known: false }
 }
 
