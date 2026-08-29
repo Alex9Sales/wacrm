@@ -38,6 +38,9 @@ const PRICES: Record<string, ModelPrice> = {
   'gpt-5-mini': { input: 0.25, output: 2, cachedInput: 0.025 },
   'gpt-5-nano': { input: 0.05, output: 0.4, cachedInput: 0.005 },
   'gpt-5': { input: 1.25, output: 10, cachedInput: 0.125 },
+  // gpt-5.4/5.5/5.6 são mais específicos que 'gpt-5' (prefixo mais longo vence).
+  'gpt-5.5': { input: 5, output: 30, cachedInput: 0.5 },
+  'gpt-5.6-luna': { input: 0.2, output: 1.2, cachedInput: 0.02 },
   'o4-mini': { input: 1.1, output: 4.4, cachedInput: 0.275 },
   'o3-mini': { input: 1.1, output: 4.4, cachedInput: 0.55 },
   'o3': { input: 2, output: 8, cachedInput: 0.5 },
