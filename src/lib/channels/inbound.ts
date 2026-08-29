@@ -399,20 +399,29 @@ export async function dispatchInboundMessage(
   // side effect below. Messages the CRM itself sent are deduped upstream by
   // external id, so this only covers phone-typed replies.
   try {
-    await db.insert(messages).values({
-      conversationId: conversation.id,
-      senderType: isFromMe ? 'agent' : 'customer',
-      contentType,
-      contentText,
-      mediaUrl,
-      transcription,
-      viewOnce: isViewOnce,
-      messageId: ev.externalMessageId || null,
-      replyToMessageId,
-      status: isFromMe ? 'sent' : 'delivered',
-      createdAt: new Date().toISOString(),
-      interactiveReplyId: ev.interactiveReplyId ?? null,
-    });
+    // onConflictDoNothing: o dedup por externalMessageId acima (SELECT→skip) NÃO
+    // segura a CORRIDA — o echo fromMe do WAHA chega ~1s depois e o SELECT roda
+    // antes do INSERT do envio commitar → grava a 2ª linha (mesmo wamid). A
+    // trava real é o índice único parcial (conversation_id, message_id) no banco
+    // + este ON CONFLICT (sem alvo = no-op até o índice existir; seguro deployar
+    // antes). Afonso 29/08: "Pagamento confirmado" 2x no CRM, 1x no WhatsApp.
+    await db
+      .insert(messages)
+      .values({
+        conversationId: conversation.id,
+        senderType: isFromMe ? 'agent' : 'customer',
+        contentType,
+        contentText,
+        mediaUrl,
+        transcription,
+        viewOnce: isViewOnce,
+        messageId: ev.externalMessageId || null,
+        replyToMessageId,
+        status: isFromMe ? 'sent' : 'delivered',
+        createdAt: new Date().toISOString(),
+        interactiveReplyId: ev.interactiveReplyId ?? null,
+      })
+      .onConflictDoNothing();
   } catch (msgError) {
     console.error('[inbound] Error inserting message:', msgError);
     return null;
