@@ -53,12 +53,13 @@ jobs:
 
       # Deploy over SSH: pull the just-pushed image and recreate both apps
       # (web + worker). Replaces the flaky Coolify /api/v1/deploy trigger
-      # (timed out OR returned OK-but-didn't-pull repeatedly). The SSH key
-      # (VPS_DEPLOY_SSH_KEY secret) is LOCKED on the VPS to a forced command
-      # in authorized_keys — it can ONLY run /root/deploy-crm.sh (docker pull
-      # + compose up --force-recreate for both apps), no shell, no arbitrary
-      # commands. SSH (22) is already open; no firewall/port change. Coolify
-      # still owns the apps — this just does the same recreate it would.
+      # (timed out OR returned OK-but-didn't-pull repeatedly). We invoke the
+      # deploy script by its ABSOLUTE PATH (/root/deploy-crm.sh: docker pull +
+      # compose up --force-recreate for both apps). This is forward-compatible
+      # with hardening: if the VPS key is later LOCKED to a forced command in
+      # authorized_keys, sshd ignores this arg and runs the script anyway.
+      # SSH (22) is already open; no firewall/port change. Coolify still owns
+      # the apps — this just does the same recreate it would.
       - name: Deploy via SSH (pull + recreate web + worker)
         if: success()
         env:
@@ -74,7 +75,6 @@ jobs:
           chmod 600 ~/.ssh/deploy_key
           # Pin the host key (no blind accept-new → no MITM on first connect).
           ssh-keyscan -t ed25519 72.60.137.234 >> ~/.ssh/known_hosts 2>/dev/null
-          # The forced command on the VPS ignores this arg and runs the deploy.
           # Retry: the deploy fires right after the push, so the VPS's
           # `docker pull` can briefly race GHCR (fresh manifest not yet
           # available) and fail fast with `set -e`. A couple of retries makes
@@ -82,7 +82,7 @@ jobs:
           n=0
           until [ "$n" -ge 3 ]; do
             if ssh -i ~/.ssh/deploy_key -o ConnectTimeout=20 \
-                 -o StrictHostKeyChecking=yes root@72.60.137.234 deploy; then
+                 -o StrictHostKeyChecking=yes root@72.60.137.234 /root/deploy-crm.sh; then
               echo "[deploy] succeeded on attempt $((n + 1))"
               exit 0
             fi
