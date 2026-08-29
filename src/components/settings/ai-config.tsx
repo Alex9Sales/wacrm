@@ -109,6 +109,10 @@ export function AiConfig({
   const [bargeInMinutes, setBargeInMinutes] = useState(5);
   const [audioReplies, setAudioReplies] = useState(true);
   const [voiceId, setVoiceId] = useState("");
+  // 🎛️ Autonomia governada (Fase 8): política da reativação proativa.
+  const [reactivationLevel, setReactivationLevel] = useState<
+    "suggest" | "approve"
+  >("suggest");
   const [voices, setVoices] = useState<{ id: string; name: string }[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [voicesError, setVoicesError] = useState<string | null>(null);
@@ -194,6 +198,9 @@ export function AiConfig({
         );
         setAudioReplies(data.audio_replies_enabled !== false);
         setVoiceId(data.voice_id ?? "");
+        setReactivationLevel(
+          data.autonomy?.reactivation === "approve" ? "approve" : "suggest",
+        );
         setPipelineId(
           typeof data.pipeline_id === 'string' ? data.pipeline_id : '',
         );
@@ -400,6 +407,7 @@ export function AiConfig({
     barge_in_minutes: bargeInMinutes,
     audio_replies_enabled: audioReplies,
     voice_id: voiceId || null,
+    autonomy: { reactivation: reactivationLevel },
     pipeline_id: pipelineId || null,
     tools,
     signature_name: signatureName.trim() || null,
@@ -1293,6 +1301,66 @@ export function AiConfig({
                 disabled={disabled || !autoReplyEnabled}
                 className="w-20"
               />
+            </div>
+
+            {/* 🎛️ Autonomia governada (Fase 8): reativação proativa. A IA lê o
+                histórico (recompra atrasada / cliente sumido) e, conforme a
+                política, sugere na lista ou rascunha pra você aprovar. */}
+            <div className="rounded-lg border border-border bg-muted/30 p-3">
+              <Label className="text-sm">Reativar clientes (proativo)</Label>
+              <p className="mb-2 mt-0.5 text-xs text-muted-foreground">
+                A IA olha o histórico e aponta quem chamar de volta. Você decide
+                o quanto ela age — nada sai sem passar por você.
+              </p>
+              <div className="grid gap-2 sm:grid-cols-3">
+                {(
+                  [
+                    {
+                      v: "suggest" as const,
+                      t: "Só sugere",
+                      d: 'Aparece na lista "Chamar de volta". Você inicia.',
+                    },
+                    {
+                      v: "approve" as const,
+                      t: "Rascunha p/ aprovar",
+                      d: "A IA escreve a mensagem e você aprova com 1 clique.",
+                    },
+                  ]
+                ).map((opt) => (
+                  <button
+                    key={opt.v}
+                    type="button"
+                    onClick={() => setReactivationLevel(opt.v)}
+                    disabled={disabled}
+                    className={`rounded-lg border p-2.5 text-left transition-colors ${
+                      reactivationLevel === opt.v
+                        ? "border-primary bg-primary/[0.06] ring-1 ring-primary"
+                        : "border-border hover:bg-muted"
+                    }`}
+                  >
+                    <div className="text-sm font-medium text-foreground">
+                      {opt.t}
+                    </div>
+                    <div className="mt-0.5 text-xs text-muted-foreground">
+                      {opt.d}
+                    </div>
+                  </button>
+                ))}
+                <div className="rounded-lg border border-dashed border-border p-2.5 text-left opacity-60">
+                  <div className="text-sm font-medium text-foreground">
+                    Automático
+                  </div>
+                  <div className="mt-0.5 text-xs text-muted-foreground">
+                    Envia sozinha (com limites). Em breve.
+                  </div>
+                </div>
+              </div>
+              {reactivationLevel === "approve" && (
+                <p className="mt-2 text-xs text-primary">
+                  Os rascunhos da IA aparecem em{" "}
+                  <strong>Chamar de volta</strong> pra você aprovar ou recusar.
+                </p>
+              )}
             </div>
 
             {/* Horário de atendimento da IA — reusa o horário da conta

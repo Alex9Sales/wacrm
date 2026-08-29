@@ -17,8 +17,18 @@ import {
   Loader2,
   RefreshCw,
   Check,
+  Sparkles,
+  X,
 } from "lucide-react";
-import { getRepurchaseBoard, sendReactivation, type RepurchaseRow } from "./actions";
+import {
+  getRepurchaseBoard,
+  sendReactivation,
+  listPendingRequests,
+  approveRequest,
+  rejectRequest,
+  type RepurchaseRow,
+  type PendingRequestRow,
+} from "./actions";
 import { toast } from "sonner";
 
 /** Rascunho de reativação sugerido (o humano edita/aprova antes de enviar). */
@@ -115,16 +125,54 @@ export default function RecompraPage() {
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<Set<string>>(new Set());
 
+  // 🎛️ Fila de aprovação (Fase 8): rascunhos da IA esperando 1 clique.
+  const [pending, setPending] = useState<PendingRequestRow[]>([]);
+  const [pendingText, setPendingText] = useState<Record<string, string>>({});
+  const [pendingBusy, setPendingBusy] = useState<string | null>(null);
+
   const load = () => {
     setLoading(true);
     getRepurchaseBoard()
       .then(setRows)
       .catch(() => setRows([]))
       .finally(() => setLoading(false));
+    listPendingRequests()
+      .then((p) => {
+        setPending(p);
+        setPendingText((prev) => {
+          const next = { ...prev };
+          for (const r of p) if (next[r.id] === undefined) next[r.id] = r.suggestedText;
+          return next;
+        });
+      })
+      .catch(() => setPending([]));
   };
   useEffect(() => {
     load();
   }, []);
+
+  async function handleApprove(r: PendingRequestRow) {
+    setPendingBusy(r.id);
+    const res = await approveRequest({ id: r.id, text: pendingText[r.id] ?? r.suggestedText });
+    setPendingBusy(null);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    toast.success("Aprovado e enviado 👍");
+    setPending((prev) => prev.filter((x) => x.id !== r.id));
+  }
+
+  async function handleReject(r: PendingRequestRow) {
+    setPendingBusy(r.id);
+    const res = await rejectRequest({ id: r.id });
+    setPendingBusy(null);
+    if (res.error) {
+      toast.error(res.error);
+      return;
+    }
+    setPending((prev) => prev.filter((x) => x.id !== r.id));
+  }
 
   const rowKey = (r: RepurchaseRow) => r.contactId + r.signalType;
 
@@ -180,6 +228,76 @@ export default function RecompraPage() {
           Atualizar
         </button>
       </div>
+
+      {/* 🎛️ Fila de aprovação — rascunhos da IA (agente em modo "Aprova") */}
+      {pending.length > 0 && (
+        <section className="mb-6 rounded-xl border border-primary/30 bg-primary/[0.04] p-4">
+          <div className="mb-3 flex items-center gap-2">
+            <span className="inline-flex items-center gap-1.5 rounded-full bg-primary/12 px-2.5 py-1 text-sm font-medium text-primary">
+              <Sparkles className="size-4" /> A IA sugeriu — aprove pra enviar
+            </span>
+            <span className="text-sm text-muted-foreground">{pending.length}</span>
+          </div>
+          <ul className="space-y-3">
+            {pending.map((r) => {
+              const busy = pendingBusy === r.id;
+              return (
+                <li key={r.id} className="rounded-lg border border-border bg-card p-3">
+                  <div className="mb-2 flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <div className="truncate font-medium text-foreground">
+                        {r.name || r.phone || "Sem nome"}
+                      </div>
+                      {r.reason && (
+                        <div className="truncate text-xs text-muted-foreground">
+                          {r.reason}
+                        </div>
+                      )}
+                    </div>
+                    {r.conversationId && (
+                      <Link
+                        href={`/inbox?c=${r.conversationId}`}
+                        className="inline-flex shrink-0 items-center gap-1.5 rounded-lg border border-border px-2.5 py-1 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+                      >
+                        <MessageSquare className="size-3.5" /> Abrir
+                      </Link>
+                    )}
+                  </div>
+                  <textarea
+                    value={pendingText[r.id] ?? r.suggestedText}
+                    onChange={(e) =>
+                      setPendingText((prev) => ({ ...prev, [r.id]: e.target.value }))
+                    }
+                    rows={2}
+                    className="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
+                  />
+                  <div className="mt-2 flex items-center justify-end gap-2">
+                    <button
+                      onClick={() => void handleReject(r)}
+                      disabled={busy}
+                      className="inline-flex items-center gap-1.5 rounded-lg px-3 py-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground disabled:opacity-60"
+                    >
+                      <X className="size-4" /> Recusar
+                    </button>
+                    <button
+                      onClick={() => void handleApprove(r)}
+                      disabled={busy || !(pendingText[r.id] ?? r.suggestedText).trim()}
+                      className="inline-flex items-center gap-1.5 rounded-lg bg-primary px-3 py-1.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
+                    >
+                      {busy ? (
+                        <Loader2 className="size-4 animate-spin" />
+                      ) : (
+                        <Check className="size-4" />
+                      )}
+                      Aprovar e enviar
+                    </button>
+                  </div>
+                </li>
+              );
+            })}
+          </ul>
+        </section>
+      )}
 
       {/* Resumo por grupo */}
       <div className="mb-6 grid grid-cols-2 gap-3 sm:grid-cols-4">

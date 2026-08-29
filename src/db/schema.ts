@@ -1907,6 +1907,9 @@ export const aiConfigs = pgTable("ai_configs", {
 	// Voz do áudio da IA (ElevenLabs voice_id). NULL = OpenAI 'nova'. A chave
 	// ElevenLabs vem de voice_settings (por conta, em Agentes de voz).
 	voiceId: text("voice_id"),
+	// 🎛️ Autonomia governada (Fase 8): política POR AÇÃO.
+	// { reactivation: 'suggest'|'approve'|'auto', ... }.
+	autonomy: jsonb("autonomy").default({}).notNull(),
 	// IA proativa em Negociações (Fase 3): analisa sozinha o negócio no inbound
 	// e cria sugestões pendentes. Migração 0066. OPT-IN, default OFF.
 	dealSuggestionsProactive: boolean("deal_suggestions_proactive").default(false).notNull(),
@@ -2888,4 +2891,27 @@ export const customerSignals = pgTable("customer_signals", {
 	index("customer_signals_open_list_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.signalType.asc().nullsLast(), table.severity.desc()).where(sql`resolved_at IS NULL`),
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "customer_signals_account_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "customer_signals_contact_id_fkey" }).onDelete("cascade"),
+]);
+
+// 🎛️ CDL Fase 8 — Fila de aprovação: ações que a IA PROPÔS e aguardam o humano
+// (aprovar/editar/recusar). Uma pendência por (conta, contato, tipo).
+export const agentActionRequests = pgTable("agent_action_requests", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	agentId: uuid("agent_id"),
+	contactId: uuid("contact_id").notNull(),
+	conversationId: uuid("conversation_id"),
+	actionType: text("action_type").notNull(),
+	payload: jsonb("payload").default({}).notNull(),
+	suggestedText: text("suggested_text"),
+	reason: text("reason"),
+	status: text("status").default('pending').notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	resolvedAt: timestamp("resolved_at", { withTimezone: true, mode: 'string' }),
+	resolvedBy: uuid("resolved_by"),
+}, (table) => [
+	uniqueIndex("agent_action_requests_pending_uidx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops"), table.actionType.asc().nullsLast()).where(sql`status = 'pending'`),
+	index("agent_action_requests_queue_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.status.asc().nullsLast(), table.createdAt.desc()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "agent_action_requests_account_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "agent_action_requests_contact_fkey" }).onDelete("cascade"),
 ]);

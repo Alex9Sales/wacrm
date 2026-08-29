@@ -8,6 +8,7 @@ import { Queue, Worker } from 'bullmq';
 
 import { bullConnection } from '@/lib/queue/connection';
 import { recomputeAllAccountSignals } from '@/lib/cdl/signals';
+import { generateAllReactivationRequests } from '@/lib/ai/autonomy';
 
 const SIGNALS_QUEUE = 'cdl-signals';
 // Sinais dependem do "agora" (dias sem comprar), mas mudam devagar — 30 min
@@ -40,6 +41,13 @@ export function startSignalsWorker(): Worker {
         console.log(`[signals] recomputou sinais de ${n} conta(s)`);
       } catch (err) {
         console.error('[signals] sweep failed:', err);
+      }
+      // 🎛️ Fase 8: rascunha os pedidos de reativação pras contas em 'approve'
+      // (idempotente + cooldown de 7 dias). A fila espera aprovação humana.
+      try {
+        await generateAllReactivationRequests();
+      } catch (err) {
+        console.error('[signals] gerar pedidos falhou:', err);
       }
     },
     { connection: bullConnection(), concurrency: 1 },

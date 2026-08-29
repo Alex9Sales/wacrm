@@ -14,6 +14,7 @@ import { embedTexts } from '@/lib/ai/embeddings'
 import { AiError, type AiProvider } from '@/lib/ai/types'
 import { toAiHoursMode } from '@/lib/ai/hours-gate'
 import { sanitizeTools } from '@/lib/ai/tools'
+import { sanitizeAutonomy } from '@/lib/ai/autonomy'
 
 function bad(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
@@ -54,6 +55,7 @@ export async function GET(request: Request) {
           barge_in_minutes: aiConfigs.bargeInMinutes,
           audio_replies_enabled: aiConfigs.audioRepliesEnabled,
           voice_id: aiConfigs.voiceId,
+          autonomy: aiConfigs.autonomy,
           pipeline_id: aiConfigs.pipelineId,
           deal_suggestions_proactive: aiConfigs.dealSuggestionsProactive,
           signature_name: aiConfigs.signatureName,
@@ -197,6 +199,11 @@ export async function POST(request: Request) {
       typeof body.voice_id === 'string' && body.voice_id.trim()
         ? body.voice_id.trim().slice(0, 100)
         : null
+
+    // 🎛️ Autonomia governada (Fase 8): política por ação. Só grava quando o
+    // form mandou o campo (preserva senão). sanitizeAutonomy filtra chaves/níveis.
+    const autonomy =
+      body.autonomy === undefined ? undefined : sanitizeAutonomy(body.autonomy)
 
     // Funil DESTE agente (0139): string válida grava; null limpa; ausente preserva.
     let pipelineId: string | null | undefined = undefined
@@ -383,6 +390,7 @@ export async function POST(request: Request) {
       bargeInMinutes: number
       audioRepliesEnabled: boolean
       voiceId: string | null
+      autonomy?: Record<string, string>
       pipelineId?: string | null
       dealSuggestionsProactive?: boolean
       signatureName: string | null
@@ -424,6 +432,8 @@ export async function POST(request: Request) {
     }
     // Funil do agente: só grava quando o campo veio no body (preserva senão).
     if (pipelineId !== undefined) shared.pipelineId = pipelineId
+    // Autonomia governada: só grava quando o form mandou (preserva senão).
+    if (autonomy !== undefined) shared.autonomy = autonomy
     if (rawEmbeddingsKey) {
       shared.embeddingsApiKey = encrypt(rawEmbeddingsKey)
     } else if (clearEmbeddingsKey) {
