@@ -283,6 +283,17 @@ export interface UsageDashboard {
     conversations: number
   }[]
   status: { open: number; pending: number; closed: number }
+  /** Qualidade operacional (conta inteira, pra comparar modelos por QUALIDADE,
+   *  não só custo). */
+  quality: {
+    toolCalls: number
+    toolCallsPerConversation: number
+    ordersCreated: number
+    handoffs: number
+    handoffRatePct: number
+    aiOnlyConversations: number
+    aiOnlyPct: number
+  }
 }
 
 interface DayModelRow extends TokenRow {
@@ -459,6 +470,53 @@ export async function getUsageDashboard(
     else if (row.status === 'closed') status.closed = n(row.n)
   }
 
+  // 6) 📊 Qualidade operacional (conta inteira, no período) — pra comparar
+  // modelos por QUALIDADE, não só custo. Ignora o filtro de agente de propósito
+  // (é saúde geral do atendimento).
+  const [toolCallsRes, ordersRes, handoffRes, withHumanRes] = await Promise.all([
+    db.execute(sql`
+      SELECT count(*) AS n FROM agent_tool_runs
+      WHERE account_id = ${accountId} AND created_at >= ${rangeStart}::timestamptz
+    `),
+    db.execute(sql`
+      SELECT count(*) AS n FROM agent_tool_runs r
+      JOIN agent_tools t ON t.id = r.tool_id
+      WHERE r.account_id = ${accountId} AND r.created_at >= ${rangeStart}::timestamptz
+        AND r.status = 'ok' AND t.creates_deal = true
+    `),
+    db.execute(sql`
+      SELECT count(*) AS n FROM messages
+      WHERE account_id = ${accountId} AND is_internal = true
+        AND content_text LIKE '%Transferido pela IA%'
+        AND created_at >= ${rangeStart}::timestamptz
+    `),
+    db.execute(sql`
+      SELECT count(DISTINCT c.id) AS n
+      FROM conversations c
+      JOIN ai_usage u ON u.conversation_id = c.id
+      WHERE u.account_id = ${accountId} AND u.created_at >= ${rangeStart}::timestamptz ${src}
+        AND EXISTS (
+          SELECT 1 FROM messages m
+          WHERE m.conversation_id = c.id AND m.sender_type = 'agent' AND m.is_internal = false
+        )
+    `),
+  ])
+  const toolCalls = n((toolCallsRes.rows as { n: unknown }[])[0]?.n)
+  const ordersCreated = n((ordersRes.rows as { n: unknown }[])[0]?.n)
+  const handoffs = n((handoffRes.rows as { n: unknown }[])[0]?.n)
+  const withHuman = n((withHumanRes.rows as { n: unknown }[])[0]?.n)
+  const convs = totals.conversations
+  const aiOnlyConversations = Math.max(0, convs - withHuman)
+  const quality = {
+    toolCalls,
+    toolCallsPerConversation: convs > 0 ? toolCalls / convs : 0,
+    ordersCreated,
+    handoffs,
+    handoffRatePct: convs > 0 ? (handoffs / convs) * 100 : 0,
+    aiOnlyConversations,
+    aiOnlyPct: convs > 0 ? (aiOnlyConversations / convs) * 100 : 0,
+  }
+
   // Resolve nomes de agentes/canais.
   const agentNames = new Map<string, string>()
   for (const a of await db
@@ -501,6 +559,7 @@ export async function getUsageDashboard(
     byAgent,
     byChannel,
     status,
+    quality,
   }
 }
 

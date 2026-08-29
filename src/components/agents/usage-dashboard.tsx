@@ -25,6 +25,8 @@ import {
   Bot,
   Target,
   ArrowRightLeft,
+  ShoppingCart,
+  Wrench,
 } from 'lucide-react';
 
 interface Dashboard {
@@ -67,6 +69,15 @@ interface Dashboard {
     conversations: number;
   }[];
   status: { open: number; pending: number; closed: number };
+  quality: {
+    toolCalls: number;
+    toolCallsPerConversation: number;
+    ordersCreated: number;
+    handoffs: number;
+    handoffRatePct: number;
+    aiOnlyConversations: number;
+    aiOnlyPct: number;
+  };
   funnel?: {
     total: number;
     aiEngaged: number;
@@ -281,6 +292,42 @@ export function UsageDashboard() {
                   />
                 </AreaChart>
               </ResponsiveContainer>
+            </div>
+          </div>
+
+          {/* Qualidade do atendimento — pra comparar modelos por QUALIDADE,
+              não só custo (ex.: o luna manteve a taxa de transferência baixa?). */}
+          <div>
+            <div className="mb-2 text-sm font-medium text-foreground">
+              Qualidade do atendimento
+            </div>
+            <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-4">
+              <Kpi
+                icon={<Bot className="h-4 w-4" />}
+                label="Atendidas só pela IA"
+                value={`${data.quality.aiOnlyPct.toFixed(0)}%`}
+                sub={`${int(data.quality.aiOnlyConversations)} de ${int(
+                  data.totals.conversations,
+                )} sem humano`}
+              />
+              <Kpi
+                icon={<ArrowRightLeft className="h-4 w-4" />}
+                label="Transferências p/ humano"
+                value={int(data.quality.handoffs)}
+                sub={`${data.quality.handoffRatePct.toFixed(0)}% das conversas`}
+              />
+              <Kpi
+                icon={<ShoppingCart className="h-4 w-4" />}
+                label="Pedidos criados pela IA"
+                value={int(data.quality.ordersCreated)}
+                sub="no período"
+              />
+              <Kpi
+                icon={<Wrench className="h-4 w-4" />}
+                label="Ferramentas / conversa"
+                value={data.quality.toolCallsPerConversation.toFixed(1)}
+                sub={`${int(data.quality.toolCalls)} chamadas no total`}
+              />
             </div>
           </div>
 
