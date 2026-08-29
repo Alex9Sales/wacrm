@@ -634,6 +634,11 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
       LEFT JOIN contacts ct ON ct.id = c.contact_id
       WHERE c.account_id = ${agent.account_id}
         AND c.status IN ('open','pending')
+        -- Respeita quem "dono" da conversa é: se o humano DESLIGOU a IA ali
+        -- (IA off) ou ASSUMIU (atribuída a um atendente), a IA não reengaja —
+        -- mesmo gate do auto-reply, pra não falar por cima do humano.
+        AND c.ai_autoreply_disabled = false
+        AND c.assigned_agent_id IS NULL
         AND c.last_message_at IS NOT NULL
         AND c.last_message_at <= now() - (${minDelay} * interval '1 minute')
         AND c.last_message_at >= ${cfg.armedAt}::timestamptz
@@ -1072,6 +1077,8 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
         AND d.stage_changed_at IS NOT NULL
         AND (d.stage_follow_up_at IS NULL OR d.stage_changed_at > d.stage_follow_up_at)
         AND c.status IN ('open','pending')
+        AND c.ai_autoreply_disabled = false
+        AND c.assigned_agent_id IS NULL
         ${stageCond}
         ${channelCond}
       ORDER BY d.stage_changed_at ASC
@@ -1385,6 +1392,8 @@ async function loadConvMeta(
     LEFT JOIN contacts ct ON ct.id = c.contact_id
     WHERE c.id = ${conversationId} AND c.account_id = ${agent.account_id}
       AND c.status IN ('open','pending')
+      AND c.ai_autoreply_disabled = false
+      AND c.assigned_agent_id IS NULL
     LIMIT 1
   `)
   const row = res.rows[0] as
