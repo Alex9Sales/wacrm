@@ -23,6 +23,7 @@ import {
 import {
   getRepurchaseBoard,
   sendReactivation,
+  listReactivationChannels,
   listPendingRequests,
   approveRequest,
   rejectRequest,
@@ -124,6 +125,9 @@ export default function RecompraPage() {
   const [draftText, setDraftText] = useState("");
   const [sending, setSending] = useState(false);
   const [sent, setSent] = useState<Set<string>>(new Set());
+  // 📞 Linhas de WhatsApp — pra reativar quem ainda NÃO tem conversa (importado).
+  const [waChannels, setWaChannels] = useState<{ id: string; name: string }[]>([]);
+  const [sendChannel, setSendChannel] = useState("");
 
   // 🎛️ Fila de aprovação (Fase 8): rascunhos da IA esperando 1 clique.
   const [pending, setPending] = useState<PendingRequestRow[]>([]);
@@ -146,6 +150,12 @@ export default function RecompraPage() {
         });
       })
       .catch(() => setPending([]));
+    listReactivationChannels()
+      .then((c) => {
+        setWaChannels(c);
+        setSendChannel((prev) => prev || c[0]?.id || "");
+      })
+      .catch(() => setWaChannels([]));
   };
   useEffect(() => {
     load();
@@ -182,13 +192,19 @@ export default function RecompraPage() {
   }
 
   async function handleSend(r: RepurchaseRow) {
-    if (!r.conversationId) return;
+    // Sem conversa (importado) → manda pela linha escolhida (cria a conversa).
+    const channelId = r.conversationId ? undefined : sendChannel || waChannels[0]?.id;
+    if (!r.conversationId && !channelId) {
+      toast.error("Nenhuma linha de WhatsApp disponível.");
+      return;
+    }
     setSending(true);
     const res = await sendReactivation({
-      conversationId: r.conversationId,
+      conversationId: r.conversationId ?? undefined,
       contactId: r.contactId,
       signalType: r.signalType,
       text: draftText,
+      channelId,
     });
     setSending(false);
     if (res.error) {
@@ -354,8 +370,12 @@ export default function RecompraPage() {
                     const key = row.contactId + row.signalType;
                     const isSent = sent.has(key);
                     const isDrafting = draftKey === key;
+                    // Reativar aparece pra quem tem conversa OU (importado) tem
+                    // telefone + há linha de WhatsApp pra criar a conversa.
                     const canReactivate =
-                      CAN_REACTIVATE.has(row.signalType) && !!row.conversationId;
+                      CAN_REACTIVATE.has(row.signalType) &&
+                      (!!row.conversationId ||
+                        (!!row.phone && waChannels.length > 0));
                     return (
                       <li
                         key={key}
@@ -413,7 +433,9 @@ export default function RecompraPage() {
                         {isDrafting && (
                           <div className="mt-3 rounded-lg border border-border bg-muted/40 p-3">
                             <p className="mb-1.5 text-xs text-muted-foreground">
-                              Sugestão da IA — edite se quiser e envie:
+                              {row.conversationId
+                                ? "Sugestão da IA — edite se quiser e envie:"
+                                : "Cliente novo por aqui — a IA abre a conversa. Edite se quiser e envie:"}
                             </p>
                             <textarea
                               value={draftText}
@@ -421,6 +443,24 @@ export default function RecompraPage() {
                               rows={3}
                               className="w-full resize-none rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground focus:outline-none focus:ring-1 focus:ring-primary"
                             />
+                            {!row.conversationId && waChannels.length > 0 && (
+                              <div className="mt-2 flex items-center gap-2">
+                                <span className="text-xs text-muted-foreground">
+                                  Enviar pela linha:
+                                </span>
+                                <select
+                                  value={sendChannel}
+                                  onChange={(e) => setSendChannel(e.target.value)}
+                                  className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+                                >
+                                  {waChannels.map((c) => (
+                                    <option key={c.id} value={c.id}>
+                                      {c.name}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                            )}
                             <div className="mt-2 flex items-center justify-end gap-2">
                               <button
                                 onClick={() => setDraftKey(null)}

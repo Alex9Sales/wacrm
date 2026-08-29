@@ -11,6 +11,7 @@ import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 import {
   db,
   agentActionRequests,
+  channels,
   contacts,
   conversations,
   customerSignals,
@@ -75,24 +76,59 @@ export async function getRepurchaseBoard(): Promise<RepurchaseRow[]> {
   }))
 }
 
+/** Linhas de WhatsApp da conta — pra escolher por onde reativar quem não tem
+ *  conversa ainda (cliente importado). */
+export async function listReactivationChannels(): Promise<
+  { id: string; name: string }[]
+> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: channels.id,
+      name: channels.name,
+      provider: channels.provider,
+      status: channels.status,
+    })
+    .from(channels)
+    .where(eq(channels.accountId, ctx.accountId))
+  return rows
+    .filter((c) => ['waha', 'meta', 'whatsapp'].includes(c.provider))
+    .map((c) => ({ id: c.id, name: c.name ?? 'WhatsApp' }))
+}
+
 // 🔁 Motor de recompra SEMI-automático (a lista sugere, o humano aprova):
-// envia a mensagem de reativação pela conversa do cliente e RESOLVE o sinal
-// (sai da lista). O texto vem aprovado/editado pelo humano no clique.
+// envia a mensagem de reativação e RESOLVE o sinal (sai da lista). O texto vem
+// aprovado/editado pelo humano no clique. Cliente IMPORTADO (sem conversa): cria
+// a conversa na linha escolhida (channelId) e a IA abre o papo do zero.
 export async function sendReactivation(input: {
-  conversationId: string
+  conversationId?: string | null
   contactId: string
   signalType: string
   text: string
+  channelId?: string | null
 }): Promise<{ error: string | null }> {
   const text = (input.text ?? '').trim()
-  if (!input.conversationId || !text) return { error: 'Sem conversa ou mensagem.' }
+  if (!text) return { error: 'Sem mensagem.' }
   try {
     const ctx = await getCurrentAccount()
+    let conversationId: string | null = input.conversationId ?? null
+    if (!conversationId) {
+      if (!input.channelId) return { error: 'Escolha a linha de WhatsApp.' }
+      const { findOrCreateConversation } = await import('@/lib/channels/inbound')
+      const result = await findOrCreateConversation(
+        ctx.accountId,
+        ctx.userId,
+        input.contactId,
+        input.channelId,
+      )
+      if (!result?.conversation) return { error: 'Não consegui abrir a conversa.' }
+      conversationId = result.conversation.id
+    }
     const { engineSendText } = await import('@/lib/flows/meta-send')
     await engineSendText({
       accountId: ctx.accountId,
       userId: ctx.userId,
-      conversationId: input.conversationId,
+      conversationId,
       contactId: input.contactId,
       text,
     })
