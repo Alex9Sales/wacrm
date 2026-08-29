@@ -32,7 +32,7 @@
 // with a fake wamid so the whole pipeline can be exercised offline.
 // ============================================================
 
-import { Worker, UnrecoverableError, type Job } from 'bullmq';
+import { Worker, UnrecoverableError, DelayedError, type Job } from 'bullmq';
 
 import { bullConnection, createRedisClient } from '@/lib/queue/connection';
 import {
@@ -149,10 +149,13 @@ async function processRecipientJob(job: Job<RecipientJob>): Promise<void> {
       return; // ack, no send
     }
     if (status === 'paused') {
-      // Re-check later so a resume naturally picks it back up.
+      // Re-check later so a resume naturally picks it back up. Depois de
+      // moveToDelayed é OBRIGATÓRIO lançar DelayedError — se der `return`, o
+      // Worker tenta moveToFinished num job cujo lock já foi consumido →
+      // "Missing lock for job … moveToFinished" (flood). [BullMQ v5]
       await job.moveToDelayed(Date.now() + PAUSE_RECHECK_MS, job.token);
       log(`recipient ${recipientRowId} deferred: broadcast paused`);
-      return;
+      throw new DelayedError();
     }
     // Any other non-sending terminal state (sent/failed) → nothing to do.
     log(`recipient ${recipientRowId} skipped: broadcast status ${status}`);
@@ -192,7 +195,7 @@ async function processRecipientJob(job: Job<RecipientJob>): Promise<void> {
       if (next && next > nowMs) {
         await job.moveToDelayed(next, job.token);
         log(`recipient ${recipient.id} deferred to next business window`);
-        return;
+        throw new DelayedError(); // ver nota acima: moveToDelayed exige DelayedError
       }
     }
   }
