@@ -1904,6 +1904,9 @@ export const aiConfigs = pgTable("ai_configs", {
 	bargeInMinutes: integer("barge_in_minutes").default(5).notNull(),
 	// 🔊 Responder por áudio (TTS). OFF → entende áudio, responde só texto.
 	audioRepliesEnabled: boolean("audio_replies_enabled").default(true).notNull(),
+	// Voz do áudio da IA (ElevenLabs voice_id). NULL = OpenAI 'nova'. A chave
+	// ElevenLabs vem de voice_settings (por conta, em Agentes de voz).
+	voiceId: text("voice_id"),
 	// IA proativa em Negociações (Fase 3): analisa sozinha o negócio no inbound
 	// e cria sugestões pendentes. Migração 0066. OPT-IN, default OFF.
 	dealSuggestionsProactive: boolean("deal_suggestions_proactive").default(false).notNull(),

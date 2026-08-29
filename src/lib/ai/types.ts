@@ -39,6 +39,8 @@ export interface AiConfig {
   bargeInMinutes?: number
   /** 🔊 Responder por áudio (TTS). false → entende áudio, responde só texto. */
   audioRepliesEnabled?: boolean
+  /** 🗣️ Voz ElevenLabs (voice_id). null/undefined → OpenAI 'nova' (padrão). */
+  voiceId?: string | null
   /** Nome do agente (multiagente/roteamento). */
   name?: string | null
   /** Funil DESTE agente: card criado pela IA nasce nele. null = 1º da conta. */

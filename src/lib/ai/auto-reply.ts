@@ -692,6 +692,25 @@ export async function dispatchInboundToAiReply(
       config.provider === 'openai'
         ? config.apiKey
         : config.embeddingsApiKey || null
+    // 🗣️ Voz ElevenLabs (brasileira, ex.: Karen): só quando o agente tem
+    // voice_id E a conta tem a chave em voice_settings (Agentes de voz).
+    let elevenKey: string | null = null
+    if (config.voiceId) {
+      try {
+        const { voiceSettings } = await import('@/db')
+        const { decrypt } = await import('@/lib/whatsapp/encryption')
+        const vs = firstOrNull(
+          await db
+            .select({ k: voiceSettings.elevenlabsApiKey })
+            .from(voiceSettings)
+            .where(eq(voiceSettings.accountId, accountId))
+            .limit(1),
+        )
+        if (vs?.k) elevenKey = decrypt(vs.k)
+      } catch (err) {
+        console.error('[ai auto-reply] chave ElevenLabs falhou:', err)
+      }
+    }
 
     // Assinatura do atendente: quando ligada, a 1ª mensagem de TEXTO vai
     // prefixada com "*Nome:*\n…" — MESMO formato do atendente humano
@@ -771,9 +790,16 @@ export async function dispatchInboundToAiReply(
       )
       if (stillClear?.h && new Date(stillClear.h).getTime() > Date.now()) return
 
-      if (wantsAudio && ttsKey && config.audioRepliesEnabled !== false) {
+      if (
+        wantsAudio &&
+        (ttsKey || (elevenKey && config.voiceId)) &&
+        config.audioRepliesEnabled !== false
+      ) {
         try {
-          const bytes = await synthesizeSpeech(ttsKey, clean)
+          const bytes = await synthesizeSpeech(
+            { openaiKey: ttsKey, elevenKey, voiceId: config.voiceId },
+            clean,
+          )
           const key = `ai-audio/${randomUUID()}.ogg`
           await putObject(TTS_BUCKET, key, bytes, 'audio/ogg; codecs=opus')
           await engineSendMedia({

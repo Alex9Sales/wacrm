@@ -53,6 +53,7 @@ export async function GET(request: Request) {
           auto_reply_buffer_seconds: aiConfigs.autoReplyBufferSeconds,
           barge_in_minutes: aiConfigs.bargeInMinutes,
           audio_replies_enabled: aiConfigs.audioRepliesEnabled,
+          voice_id: aiConfigs.voiceId,
           pipeline_id: aiConfigs.pipelineId,
           deal_suggestions_proactive: aiConfigs.dealSuggestionsProactive,
           signature_name: aiConfigs.signatureName,
@@ -191,6 +192,11 @@ export async function POST(request: Request) {
 
     // 🔊 Responder por áudio (master do TTS). Ausente = ligado (compat).
     const audioRepliesEnabled = body.audio_replies_enabled !== false
+    // 🗣️ Voz ElevenLabs (voice_id). '' → null (volta pro OpenAI padrão).
+    const voiceId =
+      typeof body.voice_id === 'string' && body.voice_id.trim()
+        ? body.voice_id.trim().slice(0, 100)
+        : null
 
     // Funil DESTE agente (0139): string válida grava; null limpa; ausente preserva.
     let pipelineId: string | null | undefined = undefined
@@ -376,6 +382,7 @@ export async function POST(request: Request) {
       autoReplyBufferSeconds: number
       bargeInMinutes: number
       audioRepliesEnabled: boolean
+      voiceId: string | null
       pipelineId?: string | null
       dealSuggestionsProactive?: boolean
       signatureName: string | null
@@ -399,6 +406,7 @@ export async function POST(request: Request) {
       autoReplyBufferSeconds: bufferSeconds,
       bargeInMinutes,
       audioRepliesEnabled,
+      voiceId,
       signatureName,
       signatureEnabled,
     }

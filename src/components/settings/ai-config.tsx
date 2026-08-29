@@ -108,6 +108,10 @@ export function AiConfig({
   const [bufferSeconds, setBufferSeconds] = useState(8);
   const [bargeInMinutes, setBargeInMinutes] = useState(5);
   const [audioReplies, setAudioReplies] = useState(true);
+  const [voiceId, setVoiceId] = useState("");
+  const [voices, setVoices] = useState<{ id: string; name: string }[]>([]);
+  const [loadingVoices, setLoadingVoices] = useState(false);
+  const [voicesError, setVoicesError] = useState<string | null>(null);
   const [signatureName, setSignatureName] = useState('');
   const [signatureEnabled, setSignatureEnabled] = useState(false);
   // Ferramentas do agente (Fase A): conjunto de ações ligadas (chaves de tools.ts).
@@ -187,6 +191,7 @@ export function AiConfig({
           typeof data.barge_in_minutes === 'number' ? data.barge_in_minutes : 5,
         );
         setAudioReplies(data.audio_replies_enabled !== false);
+        setVoiceId(data.voice_id ?? "");
         setPipelineId(
           typeof data.pipeline_id === 'string' ? data.pipeline_id : '',
         );
@@ -392,11 +397,31 @@ export function AiConfig({
     auto_reply_buffer_seconds: bufferSeconds,
     barge_in_minutes: bargeInMinutes,
     audio_replies_enabled: audioReplies,
+    voice_id: voiceId || null,
     pipeline_id: pipelineId || null,
     tools,
     signature_name: signatureName.trim() || null,
     signature_enabled: signatureEnabled && signatureName.trim().length > 0,
   });
+
+  const fetchVoices = async () => {
+    setLoadingVoices(true);
+    setVoicesError(null);
+    try {
+      const res = await fetch('/api/ai/voices');
+      const data = await res.json().catch(() => ({}));
+      if (Array.isArray(data.voices) && data.voices.length > 0) {
+        setVoices(data.voices);
+      } else {
+        setVoices([]);
+        setVoicesError(data.error || 'Nenhuma voz encontrada.');
+      }
+    } catch {
+      setVoicesError('Falha ao carregar as vozes.');
+    } finally {
+      setLoadingVoices(false);
+    }
+  };
 
   const handleTest = async () => {
     setTesting(true);
@@ -1142,6 +1167,57 @@ export function AiConfig({
                 disabled={disabled || !autoReplyEnabled}
               />
             </div>
+
+            {/* 🗣️ Voz do áudio (ElevenLabs). Vazio = OpenAI 'nova' (padrão). */}
+            {audioReplies && (
+              <div className="rounded-lg border border-border bg-muted/30 p-3">
+                <Label className="text-sm">Voz do áudio (ElevenLabs)</Label>
+                <p className="mb-2 mt-0.5 text-xs text-muted-foreground">
+                  Vazio = voz padrão da OpenAI. Pra uma voz brasileira de
+                  verdade, configure a chave do ElevenLabs em{" "}
+                  <strong>Agentes de voz</strong> e escolha a voz aqui.
+                </p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {voices.length > 0 ? (
+                    <select
+                      value={voiceId}
+                      onChange={(e) => setVoiceId(e.target.value)}
+                      disabled={disabled}
+                      className="h-9 min-w-[200px] flex-1 rounded-md border border-border bg-background px-2 text-sm"
+                    >
+                      <option value="">Voz padrão (OpenAI)</option>
+                      {voices.map((v) => (
+                        <option key={v.id} value={v.id}>
+                          {v.name}
+                        </option>
+                      ))}
+                    </select>
+                  ) : (
+                    <Input
+                      value={voiceId}
+                      onChange={(e) => setVoiceId(e.target.value)}
+                      disabled={disabled}
+                      placeholder="voice_id do ElevenLabs (ou carregue as vozes)"
+                      className="min-w-[200px] flex-1"
+                    />
+                  )}
+                  <Button
+                    type="button"
+                    variant="outline"
+                    size="sm"
+                    onClick={() => void fetchVoices()}
+                    disabled={disabled || loadingVoices}
+                  >
+                    {loadingVoices ? "Carregando…" : "Carregar vozes"}
+                  </Button>
+                </div>
+                {voicesError && (
+                  <p className="mt-1.5 text-xs text-amber-600 dark:text-amber-500">
+                    {voicesError}
+                  </p>
+                )}
+              </div>
+            )}
 
             {/* 🤫 Barge-in — um humano respondeu (CRM ou celular)? A IA fica
                 em observação por N minutos, sem precisar desligar o botão. */}
