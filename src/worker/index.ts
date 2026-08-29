@@ -63,6 +63,14 @@ import('./followup-worker')
     console.error('[worker] followup failed to start:', err);
   });
 
+// 📡 CDL — recomputa os sinais de recompra (customer_signals) de tempos em
+// tempos, pra a lista "chamar de volta" e o motor de recompra.
+import('./signals-worker')
+  .then((m) => m.startSignalsWorker())
+  .catch((err) => {
+    console.error('[worker] signals failed to start:', err);
+  });
+
 // AI auto-reply — the message buffer: fires the debounced reply once the
 // customer stops sending (see enqueueAiReplyDebounced in the webhook).
 import('./ai-reply-worker')

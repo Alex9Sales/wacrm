@@ -2865,3 +2865,24 @@ export const customerMetrics = pgTable("customer_metrics", {
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "customer_metrics_account_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "customer_metrics_contact_id_fkey" }).onDelete("cascade"),
 ]);
+
+// 📡 Customer Data Layer (Fase 7) — sinais comerciais ABERTOS por cliente
+// (recompra_due/overdue, inactive, high_value). Derivados de customer_metrics
+// pelo detector; upsert no alvo (account,contact,signal_type) dos ABERTOS.
+export const customerSignals = pgTable("customer_signals", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	contactId: uuid("contact_id").notNull(),
+	signalType: text("signal_type").notNull(),
+	severity: integer("severity").default(0).notNull(),
+	payload: jsonb("payload").default({}).notNull(),
+	detectedAt: timestamp("detected_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	expiresAt: timestamp("expires_at", { withTimezone: true, mode: 'string' }),
+	resolvedAt: timestamp("resolved_at", { withTimezone: true, mode: 'string' }),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("customer_signals_open_uidx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops"), table.signalType.asc().nullsLast()).where(sql`resolved_at IS NULL`),
+	index("customer_signals_open_list_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.signalType.asc().nullsLast(), table.severity.desc()).where(sql`resolved_at IS NULL`),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "customer_signals_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "customer_signals_contact_id_fkey" }).onDelete("cascade"),
+]);
