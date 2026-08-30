@@ -121,6 +121,8 @@ export function AiConfig({
   // pra abrir conversa com quem é importado (sem conversa ainda).
   const [reactivationCap, setReactivationCap] = useState(20);
   const [reactivationChannel, setReactivationChannel] = useState("");
+  // 📅 Data de início do auto (YYYY-MM-DD). '' = começa já.
+  const [reactivationStart, setReactivationStart] = useState("");
   // 🛑 Kill switch da conta (freio de emergência, account-level). Carrega/salva
   // separado do agente (via settings actions).
   const [autonomyPaused, setAutonomyPaused] = useState(false);
@@ -225,6 +227,11 @@ export function AiConfig({
         setReactivationChannel(
           typeof data.autonomy?.reactivationChannelId === "string"
             ? data.autonomy.reactivationChannelId
+            : "",
+        );
+        setReactivationStart(
+          typeof data.autonomy?.reactivationStartsAt === "string"
+            ? data.autonomy.reactivationStartsAt
             : "",
         );
         setPipelineId(
@@ -451,6 +458,9 @@ export function AiConfig({
             reactivationDailyCap: reactivationCap,
             ...(reactivationChannel
               ? { reactivationChannelId: reactivationChannel }
+              : {}),
+            ...(reactivationStart
+              ? { reactivationStartsAt: reactivationStart }
               : {}),
           }
         : {}),
@@ -1443,6 +1453,23 @@ export function AiConfig({
                         disabled={disabled}
                         className="mt-1 w-28"
                       />
+                    </div>
+                    <div>
+                      <Label htmlFor="ai-reactivation-start" className="text-xs">
+                        Começar a partir de
+                      </Label>
+                      <Input
+                        id="ai-reactivation-start"
+                        type="date"
+                        value={reactivationStart}
+                        onChange={(e) => setReactivationStart(e.target.value)}
+                        disabled={disabled}
+                        className="mt-1 w-44"
+                      />
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Vazio = já. Antes dessa data a IA fica pronta mas não
+                        envia.
+                      </p>
                     </div>
                     <div>
                       <Label

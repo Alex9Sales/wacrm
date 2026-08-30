@@ -51,6 +51,11 @@ export function sanitizeAutonomy(input: unknown): Record<string, unknown> {
     out.reactivationDailyCap = Math.min(500, Math.floor(cap))
   if (typeof o.reactivationChannelId === 'string' && o.reactivationChannelId.trim())
     out.reactivationChannelId = o.reactivationChannelId.trim()
+  if (
+    typeof o.reactivationStartsAt === 'string' &&
+    /^\d{4}-\d{2}-\d{2}$/.test(o.reactivationStartsAt.trim())
+  )
+    out.reactivationStartsAt = o.reactivationStartsAt.trim()
   return out
 }
 
@@ -64,6 +69,13 @@ export function reactivationDailyCap(autonomy: unknown): number {
 export function reactivationChannelId(autonomy: unknown): string | null {
   const v = (autonomy as Record<string, unknown> | null)?.reactivationChannelId
   return typeof v === 'string' && v ? v : null
+}
+
+/** 📅 Data de início do modo auto ("YYYY-MM-DD"). Antes dela, o auto fica
+ *  dormente (configurado mas sem enviar). null = começa já. */
+export function reactivationStartsAt(autonomy: unknown): string | null {
+  const v = (autonomy as Record<string, unknown> | null)?.reactivationStartsAt
+  return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null
 }
 
 /** Agente PADRÃO ativo da conta (é a política dele que vale pra reativação). */
@@ -292,6 +304,21 @@ function isSafeDaytime(tz: string): boolean {
   return h >= 8 && h < 20
 }
 
+/** Data local "YYYY-MM-DD" no fuso, ou null se o fuso for inválido. */
+function localDate(tz: string): string | null {
+  try {
+    // en-CA formata como YYYY-MM-DD, que ordena lexicograficamente.
+    return new Intl.DateTimeFormat('en-CA', {
+      timeZone: tz || 'America/Sao_Paulo',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+    }).format(new Date())
+  } catch {
+    return null
+  }
+}
+
 export async function runAutoReactivations(accountId: string): Promise<AutoRunResult> {
   // 🛑 1) Kill switch da conta — freio de emergência, ignora tudo.
   const { getAccountSettings } = await import('@/lib/settings/account-settings')
@@ -303,6 +330,15 @@ export async function runAutoReactivations(accountId: string): Promise<AutoRunRe
   if (!agent) return { sent: 0, skipped: 'no-agent' }
   if (autonomyLevel(agent.autonomy, 'reactivation') !== 'auto')
     return { sent: 0, skipped: 'not-auto' }
+
+  // 📅 2b) Data de início: antes dela o auto fica DORMENTE (configurado, mas
+  // não envia). Compara a data local da conta — começa no início daquele dia
+  // (o horário de atendimento ainda decide a hora real do 1º envio).
+  const startsAt = reactivationStartsAt(agent.autonomy)
+  if (startsAt) {
+    const today = localDate(settings.businessTimezone)
+    if (!today || today < startsAt) return { sent: 0, skipped: 'not-started' }
+  }
 
   // ⏰ 3) Horário: respeita o atendimento da conta se configurado; senão, cai
   // na janela-segura 8h–20h (o isWithinBusinessHours retorna true quando o
