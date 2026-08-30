@@ -37,6 +37,10 @@ export interface IngestLeadInput {
   company?: string | null
   /** Bloco de observações já montado (vai pras notas do card + descrição da tarefa). */
   notes?: string | null
+  /** Observação pro HISTÓRICO do card (timeline "anotações") — o padrão que o
+   *  cliente vê como "observação". undefined = usa `notes`; '' = NÃO gravar
+   *  (o chamador cuida do próprio evento, ex.: /diagnostico). */
+  historyNote?: string | null
   /** Etiquetas a aplicar (unidas às já existentes no contato). */
   tags?: string[]
   /** Funil/etapa de destino (null → primeiro funil/etapa da conta). */
@@ -141,6 +145,29 @@ export async function ingestLead(
       dealId = inserted?.id ?? null
       // Atividades automáticas da etapa de entrada (best-effort).
       if (dealId) {
+        // 📝 Observações do lead → HISTÓRICO do card (timeline "anotações"),
+        // padronizado pra TODA origem (API/n8n, anúncio, formulário, chat) —
+        // não só despejado no campo Observações. Pedido do Rafael: formulário
+        // de fora tem que cair igual ao do CRM.
+        const historyText =
+          input.historyNote === undefined
+            ? notes
+            : input.historyNote?.trim() || null
+        if (historyText) {
+          try {
+            const originLabel =
+              input.origin?.trim() || input.source?.trim() || 'Formulário'
+            await db.insert(dealEvents).values({
+              accountId,
+              dealId,
+              actorUserId: auditUserId,
+              type: 'note',
+              data: { text: `📝 ${originLabel} — dados do lead:\n${historyText}` },
+            })
+          } catch (err) {
+            console.error('[ingestLead] history note failed:', err)
+          }
+        }
         try {
           await autoCreateStageTasks({ accountId, userId: auditUserId }, dealId, stageId)
         } catch (err) {

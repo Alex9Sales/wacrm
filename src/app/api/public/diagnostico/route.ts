@@ -107,6 +107,9 @@ export async function POST(req: Request) {
       email: email || null,
       company: empresa || null,
       notes: shortNote,
+      // O histórico ganha o diagnóstico COMPLETO logo abaixo (fullNote) —
+      // '' desliga a nota automática do ingestLead pra não duplicar.
+      historyNote: '',
       pipelineId: PIPELINE_ID,
       stageId: STAGE_ID,
       origin: 'Diagnóstico',
