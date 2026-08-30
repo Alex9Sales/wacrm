@@ -390,7 +390,7 @@ export async function POST(request: Request) {
       bargeInMinutes: number
       audioRepliesEnabled: boolean
       voiceId: string | null
-      autonomy?: Record<string, string>
+      autonomy?: Record<string, unknown>
       pipelineId?: string | null
       dealSuggestionsProactive?: boolean
       signatureName: string | null

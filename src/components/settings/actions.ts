@@ -294,6 +294,20 @@ export async function setCrmCallingEnabled(enabled: boolean): Promise<void> {
   await updateAccountSettings(ctx.accountId, { crmCallingEnabled: enabled })
 }
 
+// 🛑 Fase 8 — KILL SWITCH da autonomia (freio de emergência da conta). Quando
+// pausado, nenhuma ação do modo Automático dispara, seja qual for a config dos
+// agentes. Admin/supervisor controla; leitura é livre pra a UI mostrar o estado.
+export async function getAutonomyPaused(): Promise<boolean> {
+  const ctx = await getCurrentAccount()
+  const settings = await getAccountSettings(ctx.accountId)
+  return settings.autonomyPaused
+}
+
+export async function setAutonomyPaused(paused: boolean): Promise<void> {
+  const ctx = await requireRole('supervisor')
+  await updateAccountSettings(ctx.accountId, { autonomyPaused: paused })
+}
+
 /** Whether outbound agent messages are prefixed with the sender's name. */
 export async function getAgentSignatureEnabled(): Promise<boolean> {
   const ctx = await getCurrentAccount()

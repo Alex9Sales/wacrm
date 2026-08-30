@@ -56,6 +56,10 @@ export interface AccountSettings {
    *  (customer_transactions). Ligado por padrão; desligue em contas que já
    *  sincronizam o histórico de um ERP (evita duplicar na re-importação). */
   recordSaleOnWon: boolean
+  /** 🛑 Fase 8 — KILL SWITCH da autonomia. Quando true, NENHUMA ação autônoma
+   *  (modo Automático) dispara na conta, independente da config dos agentes.
+   *  Freio de emergência. Padrão false (não pausado). */
+  autonomyPaused: boolean
   /** Cadência que inscreve o contato ao marcar o negócio como GANHO
    *  (pós-venda/onboarding). null = nenhuma. */
   wonCadenceId: string | null
@@ -145,6 +149,7 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   crmCallingEnabled: true,
   staleDealDays: 7,
   recordSaleOnWon: true,
+  autonomyPaused: false,
   wonCadenceId: null,
   lostCadenceId: null,
   wonPipelineId: null,

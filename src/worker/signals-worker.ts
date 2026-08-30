@@ -8,7 +8,10 @@ import { Queue, Worker } from 'bullmq';
 
 import { bullConnection } from '@/lib/queue/connection';
 import { recomputeAllAccountSignals } from '@/lib/cdl/signals';
-import { generateAllReactivationRequests } from '@/lib/ai/autonomy';
+import {
+  generateAllReactivationRequests,
+  runAllAutoReactivations,
+} from '@/lib/ai/autonomy';
 
 const SIGNALS_QUEUE = 'cdl-signals';
 // Sinais dependem do "agora" (dias sem comprar), mas mudam devagar — 30 min
@@ -48,6 +51,13 @@ export function startSignalsWorker(): Worker {
         await generateAllReactivationRequests();
       } catch (err) {
         console.error('[signals] gerar pedidos falhou:', err);
+      }
+      // 🤖 Fase 8 v2: modo AUTOMÁTICO — pras contas em 'auto', a IA reativa
+      // sozinha (com kill switch, teto 24h, horário, opt-out, cooldown, breaker).
+      try {
+        await runAllAutoReactivations();
+      } catch (err) {
+        console.error('[signals] auto-reativação falhou:', err);
       }
     },
     { connection: bullConnection(), concurrency: 1 },

@@ -37,6 +37,10 @@ import { SettingsPanelHead } from './settings-panel-head';
 import { AI_PROVIDER_DEFAULT_MODEL } from '@/lib/ai/defaults';
 import { AGENT_TOOLS } from '@/lib/ai/tools';
 import { listPipelines } from '@/app/(dashboard)/pipelines/actions';
+import {
+  getAutonomyPaused,
+  setAutonomyPaused as saveAutonomyPaused,
+} from '@/components/settings/actions';
 import type { AiProvider } from '@/lib/ai/types';
 
 const MASKED_KEY = '••••••••••••••••';
@@ -111,8 +115,16 @@ export function AiConfig({
   const [voiceId, setVoiceId] = useState("");
   // 🎛️ Autonomia governada (Fase 8): política da reativação proativa.
   const [reactivationLevel, setReactivationLevel] = useState<
-    "suggest" | "approve"
+    "suggest" | "approve" | "auto"
   >("suggest");
+  // 🤖 Travas do modo Automático: teto de envios por 24h + linha de WhatsApp
+  // pra abrir conversa com quem é importado (sem conversa ainda).
+  const [reactivationCap, setReactivationCap] = useState(20);
+  const [reactivationChannel, setReactivationChannel] = useState("");
+  // 🛑 Kill switch da conta (freio de emergência, account-level). Carrega/salva
+  // separado do agente (via settings actions).
+  const [autonomyPaused, setAutonomyPaused] = useState(false);
+  const [autonomyPausedLoaded, setAutonomyPausedLoaded] = useState(false);
   const [voices, setVoices] = useState<{ id: string; name: string }[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
   const [voicesError, setVoicesError] = useState<string | null>(null);
@@ -199,7 +211,21 @@ export function AiConfig({
         setAudioReplies(data.audio_replies_enabled !== false);
         setVoiceId(data.voice_id ?? "");
         setReactivationLevel(
-          data.autonomy?.reactivation === "approve" ? "approve" : "suggest",
+          data.autonomy?.reactivation === "auto"
+            ? "auto"
+            : data.autonomy?.reactivation === "approve"
+              ? "approve"
+              : "suggest",
+        );
+        setReactivationCap(
+          typeof data.autonomy?.reactivationDailyCap === "number"
+            ? data.autonomy.reactivationDailyCap
+            : 20,
+        );
+        setReactivationChannel(
+          typeof data.autonomy?.reactivationChannelId === "string"
+            ? data.autonomy.reactivationChannelId
+            : "",
         );
         setPipelineId(
           typeof data.pipeline_id === 'string' ? data.pipeline_id : '',
@@ -252,6 +278,16 @@ export function AiConfig({
         }
       } catch {
         /* best-effort — sem funis o seletor só some */
+      }
+      // 🛑 Estado do kill switch da conta (freio de emergência da autonomia).
+      try {
+        const paused = await getAutonomyPaused();
+        if (!cancelled) {
+          setAutonomyPaused(paused);
+          setAutonomyPausedLoaded(true);
+        }
+      } catch {
+        if (!cancelled) setAutonomyPausedLoaded(true);
       }
     })();
     return () => {
@@ -407,7 +443,18 @@ export function AiConfig({
     barge_in_minutes: bargeInMinutes,
     audio_replies_enabled: audioReplies,
     voice_id: voiceId || null,
-    autonomy: { reactivation: reactivationLevel },
+    autonomy: {
+      reactivation: reactivationLevel,
+      // Travas só fazem sentido (e só vão pro banco) no modo automático.
+      ...(reactivationLevel === "auto"
+        ? {
+            reactivationDailyCap: reactivationCap,
+            ...(reactivationChannel
+              ? { reactivationChannelId: reactivationChannel }
+              : {}),
+          }
+        : {}),
+    },
     pipeline_id: pipelineId || null,
     tools,
     signature_name: signatureName.trim() || null,
@@ -1325,6 +1372,11 @@ export function AiConfig({
                       t: "Rascunha p/ aprovar",
                       d: "A IA escreve a mensagem e você aprova com 1 clique.",
                     },
+                    {
+                      v: "auto" as const,
+                      t: "Automático",
+                      d: "A IA envia sozinha — com limite diário e travas.",
+                    },
                   ]
                 ).map((opt) => (
                   <button
@@ -1334,7 +1386,9 @@ export function AiConfig({
                     disabled={disabled}
                     className={`rounded-lg border p-2.5 text-left transition-colors ${
                       reactivationLevel === opt.v
-                        ? "border-primary bg-primary/[0.06] ring-1 ring-primary"
+                        ? opt.v === "auto"
+                          ? "border-amber-500 bg-amber-500/[0.08] ring-1 ring-amber-500"
+                          : "border-primary bg-primary/[0.06] ring-1 ring-primary"
                         : "border-border hover:bg-muted"
                     }`}
                   >
@@ -1346,20 +1400,119 @@ export function AiConfig({
                     </div>
                   </button>
                 ))}
-                <div className="rounded-lg border border-dashed border-border p-2.5 text-left opacity-60">
-                  <div className="text-sm font-medium text-foreground">
-                    Automático
-                  </div>
-                  <div className="mt-0.5 text-xs text-muted-foreground">
-                    Envia sozinha (com limites). Em breve.
-                  </div>
-                </div>
               </div>
               {reactivationLevel === "approve" && (
                 <p className="mt-2 text-xs text-primary">
                   Os rascunhos da IA aparecem em{" "}
                   <strong>Chamar de volta</strong> pra você aprovar ou recusar.
                 </p>
+              )}
+
+              {/* 🤖 Modo Automático: travas + linha de envio. Só aparece quando
+                  'auto' está escolhido. O kill switch é da CONTA (freio geral). */}
+              {reactivationLevel === "auto" && (
+                <div className="mt-3 space-y-3 rounded-lg border border-amber-500/40 bg-amber-500/[0.05] p-3">
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    ⚠️ <strong>A IA vai enviar sozinha</strong>, sem passar por
+                    você. Ela só dispara com estas travas: dentro do horário de
+                    atendimento (ou 8h–20h), no máximo{" "}
+                    <strong>{reactivationCap}/dia</strong>, 1× a cada 7 dias por
+                    cliente, respeitando quem pediu pra não receber, e nunca por
+                    cima de uma conversa que um humano está tocando.
+                  </p>
+
+                  <div className="grid gap-3 sm:grid-cols-2">
+                    <div>
+                      <Label htmlFor="ai-reactivation-cap" className="text-xs">
+                        Máximo de envios por dia
+                      </Label>
+                      <Input
+                        id="ai-reactivation-cap"
+                        type="number"
+                        min={1}
+                        max={500}
+                        value={reactivationCap}
+                        onChange={(e) =>
+                          setReactivationCap(
+                            Math.min(
+                              500,
+                              Math.max(1, Number(e.target.value) || 1),
+                            ),
+                          )
+                        }
+                        disabled={disabled}
+                        className="mt-1 w-28"
+                      />
+                    </div>
+                    <div>
+                      <Label
+                        htmlFor="ai-reactivation-channel"
+                        className="text-xs"
+                      >
+                        Linha de WhatsApp (p/ clientes importados)
+                      </Label>
+                      <Select
+                        value={reactivationChannel || "none"}
+                        onValueChange={(v) =>
+                          setReactivationChannel(v && v !== "none" ? v : "")
+                        }
+                      >
+                        <SelectTrigger
+                          id="ai-reactivation-channel"
+                          className="mt-1"
+                          disabled={disabled}
+                        >
+                          <SelectValue placeholder="Escolha a linha" />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value="none">
+                            Só quem já tem conversa
+                          </SelectItem>
+                          {channels
+                            .filter((c) =>
+                              ["waha", "meta", "whatsapp"].includes(c.provider),
+                            )
+                            .map((c) => (
+                              <SelectItem key={c.id} value={c.id}>
+                                {c.name}
+                              </SelectItem>
+                            ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
+                  </div>
+                  <p className="text-[11px] text-muted-foreground">
+                    Sem uma linha escolhida, a IA só reativa quem já tem uma
+                    conversa aberta. Escolha uma linha pra ela também abrir o
+                    papo com clientes da sua base importada.
+                  </p>
+
+                  {/* 🛑 Kill switch — freio de emergência de TODA a conta. */}
+                  <div className="flex items-center justify-between gap-4 rounded-md border border-border bg-background/60 px-3 py-2">
+                    <div>
+                      <Label className="text-xs font-semibold text-foreground">
+                        🛑 Pausar toda a autonomia (freio de emergência)
+                      </Label>
+                      <p className="text-[11px] text-muted-foreground">
+                        Vale pra conta inteira. Ligado, nenhuma IA envia
+                        reativação automática — mesmo com o modo automático
+                        ligado. Use se algo sair do controle.
+                      </p>
+                    </div>
+                    <Switch
+                      checked={autonomyPaused}
+                      disabled={disabled || !autonomyPausedLoaded}
+                      onCheckedChange={async (v) => {
+                        setAutonomyPaused(v);
+                        try {
+                          await saveAutonomyPaused(v);
+                        } catch {
+                          setAutonomyPaused(!v); // reverte no erro
+                        }
+                      }}
+                    />
+                  </div>
+                </div>
               )}
             </div>
 
