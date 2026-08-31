@@ -66,6 +66,7 @@ const GROUPS: Group[] = [
       { method: "POST", path: "/conversations/{id}/assign", scope: "conversations:write", desc: "Atribui a conversa a um membro (notifica) ou devolve pra fila/IA (member_id: null).", fields: "member_id | null" },
       { method: "POST", path: "/conversations/{id}/ai", scope: "conversations:write", desc: "Liga/desliga a IA da conta NESTA conversa. Ao ligar com mensagem parada do cliente, a IA responde na hora.", fields: "enabled: true|false" },
       { method: "GET", path: "/members", scope: "members:read", desc: "Lista os membros da conta (id + nome) — use os ids nas menções/atribuições." },
+      { method: "POST", path: "/conversations/{id}/import-group", scope: "contacts:write", desc: "Grupo de WhatsApp → importa os participantes como CONTATOS etiquetados ('Grupo: <nome>' ou tag_name) — prontos pra segmentar um disparo.", fields: "tag_name?" },
     ],
   },
   {
@@ -87,6 +88,15 @@ const GROUPS: Group[] = [
       { method: "GET", path: "/tasks", scope: "tasks:read", desc: "Lista tarefas (paginado)." },
       { method: "POST", path: "/tasks", scope: "tasks:write", desc: "Cria tarefa (pode ligar a contato/negócio e atribuir a um membro).", fields: "title, description?, due_at?, type?, contact_id?, deal_id?, assigned_to?" },
       { method: "PATCH", path: "/tasks/{id}", scope: "tasks:write", desc: "Atualiza/conclui (status: open|done|cancelled)." },
+    ],
+  },
+  {
+    title: "Memória & Reativação 🆕",
+    blurb: "A memória comercial (CDL): quem é o cliente, quem chamar de volta hoje, e agir.",
+    endpoints: [
+      { method: "GET", path: "/customers/{contactId}/history", scope: "contacts:read", desc: "Histórico comercial completo: métricas (nº de compras, total, ticket, frequência, preferências), últimas transações e o bloco `facts` em texto — pronto pra colar no contexto do seu LLM." },
+      { method: "GET", path: "/reactivation/signals", scope: "contacts:read", desc: '"Quem devo chamar hoje?" — sinais abertos de recompra atrasada, na hora de recomprar e clientes sumidos, com nome/telefone/conversa.', fields: "?type=repurchase_overdue|repurchase_due|inactive|high_value, ?limit", curl: `curl ${BASE}/reactivation/signals?type=repurchase_overdue -H "Authorization: Bearer $CHAVE"` },
+      { method: "POST", path: "/reactivation/send", scope: "messages:send", desc: "Envia a mensagem de reativação e resolve o sinal (sai da lista). Respeita opt-out. Importado sem conversa: informe channel_id que a conversa é criada.", fields: "contact_id, signal_type, text, channel_id?" },
     ],
   },
   {
