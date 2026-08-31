@@ -283,13 +283,15 @@ export async function dispatchInboundMessage(
   // vê no card o que ela entendeu. Best-effort: null em qualquer falha.
   if (contentType === 'image' && mediaUrl && !isFromMe) {
     try {
-      // Descreve a imagem só quando a IA ATENDE ESTE CANAL — resolvido pelo
-      // MESMO seletor por canal do auto-reply (pickAgentIdForChannel), não pelo
-      // agente default da conta. Com vários agentes ligados a canais diferentes,
-      // o default podia não cobrir este canal → a visão era pulada em silêncio
-      // (a IA respondia sem "ver" a foto e pedia a imagem de novo).
+      // Resolve o agente pelo canal (mesmo seletor do auto-reply); se NENHUM
+      // agente de auto-resposta cobre este canal, cai pro agente ATIVO padrão
+      // da conta (fallbackDefault) — a transcrição da foto serve ao atendente
+      // e ao ✨ rascunho, não só ao auto-reply. Caso Felipe 31/08: agente
+      // restrito a 1 canal → fotos dos outros 7 ficavam sem "visão" em
+      // silêncio.
       const cfg = await loadAiConfigForChannel(accountId, channel.id, {
         requireAutoReply: true,
+        fallbackDefault: true,
       });
       const visionKey = cfg
         ? cfg.provider === 'openai'
@@ -309,8 +311,11 @@ export async function dispatchInboundMessage(
   // vira a transcrição — a IA responde e o atendente vê no card.
   if (contentType === 'document' && mediaUrl && !isFromMe) {
     try {
+      // Mesmo fallback da visão: sem agente de auto-reply no canal, usa o
+      // agente ativo padrão da conta (a transcrição serve além do auto-reply).
       const cfg = await loadAiConfigForChannel(accountId, channel.id, {
         requireAutoReply: true,
+        fallbackDefault: true,
       });
       const docKey = cfg
         ? cfg.provider === 'openai'
