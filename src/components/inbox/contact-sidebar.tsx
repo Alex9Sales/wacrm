@@ -539,6 +539,16 @@ export function ContactSidebar({
         setLostPanelDealId(null);
         setLostReasonText("");
         handleDealSaved();
+        // 🔄 Histórico de compras INSTANTÂNEO: ganho registra a venda no
+        // histórico (recordSaleOnWon) — avisa o painel comercial pra
+        // recarregar sem F5 (pedido do Alex, 31/08).
+        if (contactId) {
+          window.dispatchEvent(
+            new CustomEvent("fluxia:commercial-refresh", {
+              detail: { contactId },
+            }),
+          );
+        }
       } catch (e) {
         console.error("Failed to set deal status:", e);
         toast.error("Falha ao atualizar o negócio");
@@ -546,7 +556,7 @@ export function ContactSidebar({
         setDealStatusBusy(null);
       }
     },
-    [handleDealSaved],
+    [handleDealSaved, contactId],
   );
 
   // Abre o mini-painel de perda e carrega os motivos da conta (uma vez).

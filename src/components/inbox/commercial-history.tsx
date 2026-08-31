@@ -68,6 +68,18 @@ export function CommercialHistory({ contactId }: { contactId: string }) {
     load();
   }, [load]);
 
+  // 🔄 Recarrega na hora quando uma venda é registrada pra ESTE contato
+  // (Ganho na lateral da conversa dispara o evento) — sem F5.
+  useEffect(() => {
+    const onRefresh = (e: Event) => {
+      const detail = (e as CustomEvent<{ contactId?: string }>).detail;
+      if (detail?.contactId === contactId) load();
+    };
+    window.addEventListener("fluxia:commercial-refresh", onRefresh);
+    return () =>
+      window.removeEventListener("fluxia:commercial-refresh", onRefresh);
+  }, [contactId, load]);
+
   // Sem histórico: não polui o painel (mensagem discreta).
   if (loading) {
     return (

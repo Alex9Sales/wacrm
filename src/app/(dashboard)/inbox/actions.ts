@@ -755,16 +755,38 @@ export async function listProfiles(): Promise<Profile[]> {
 }
 
 /** Messages for one conversation, ascending by creation time. */
-export async function listMessages(conversationId: string): Promise<Message[]> {
+// Tamanho da página do thread ('use server' não exporta const — o
+// message-thread declara o espelho dele). Conversas grandes (6k+ msgs)
+// carregavam INTEIRAS a cada abertura E a cada resync — 5s+ pra abrir e
+// espelhamento atrasado (caso Alex/Rafael, 31/08). Agora: últimas 200 +
+// "Carregar anteriores" pagina pra trás.
+const THREAD_PAGE_SIZE = 200
+
+export async function listMessages(
+  conversationId: string,
+  opts: { before?: string; limit?: number } = {},
+): Promise<Message[]> {
   const ctx = await getCurrentAccount()
   if (!(await assertConversationInAccount(conversationId, ctx))) {
     return []
   }
+  const limit = Math.min(Math.max(opts.limit ?? THREAD_PAGE_SIZE, 1), 500)
+  // Pega as N mais RECENTES (ou anteriores ao cursor `before`) e devolve em
+  // ordem cronológica — o shape que o thread sempre consumiu.
   const rows = (await db
     .select(messageColumns)
     .from(messages)
-    .where(eq(messages.conversationId, conversationId))
-    .orderBy(asc(messages.createdAt))) as unknown as Message[]
+    .where(
+      opts.before
+        ? and(
+            eq(messages.conversationId, conversationId),
+            lt(messages.createdAt, opts.before),
+          )
+        : eq(messages.conversationId, conversationId),
+    )
+    .orderBy(desc(messages.createdAt))
+    .limit(limit)) as unknown as Message[]
+  rows.reverse()
 
   // Resolve each group author's re-hosted photo (group_participant_names,
   // keyed by wa_key) in ONE batch query and attach it per message, so the inbox

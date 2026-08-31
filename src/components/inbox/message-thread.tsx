@@ -598,6 +598,8 @@ export function MessageThread({
         const data = await listMessages(conversationId);
         if (cancelled) return;
         loadedConvRef.current = conversationId;
+        // Página cheia = provavelmente existem mensagens mais antigas.
+        if (isSwitch) setHasOlder(data.length >= 200);
         onMessagesLoadedRef.current(data);
       } catch (error) {
         if (cancelled) return;
@@ -669,13 +671,52 @@ export function MessageThread({
     });
   }, [conversationId, hasUnread]);
 
-  // Auto-scroll to bottom on new messages
+  // Auto-scroll to bottom on new messages. Suprimido quando o change veio de
+  // "Carregar mensagens anteriores" (prepend) — senão a tela pula pro fim e o
+  // usuário perde onde estava lendo.
+  const suppressAutoScrollRef = useRef(false);
   useEffect(() => {
+    if (suppressAutoScrollRef.current) {
+      suppressAutoScrollRef.current = false;
+      return;
+    }
     if (scrollRef.current) {
       const el = scrollRef.current;
       el.scrollTop = el.scrollHeight;
     }
   }, [messages]);
+
+  // 📜 Paginação do thread (espelho do THREAD_PAGE_SIZE do server): o load
+  // inicial traz as últimas 200; este handler puxa a página ANTERIOR ao topo,
+  // preservando a posição de leitura (compensa o scrollHeight pós-prepend).
+  const PAGE = 200;
+  const [hasOlder, setHasOlder] = useState(false);
+  const [loadingOlder, setLoadingOlder] = useState(false);
+  const handleLoadOlder = useCallback(async () => {
+    if (!conversationId || loadingOlder || messages.length === 0) return;
+    setLoadingOlder(true);
+    const el = scrollRef.current;
+    const prevHeight = el?.scrollHeight ?? 0;
+    const prevTop = el?.scrollTop ?? 0;
+    try {
+      const older = await listMessages(conversationId, {
+        before: messages[0].created_at,
+      });
+      setHasOlder(older.length >= PAGE);
+      if (older.length > 0) {
+        suppressAutoScrollRef.current = true;
+        onMessagesLoadedRef.current(older);
+        requestAnimationFrame(() => {
+          const el2 = scrollRef.current;
+          if (el2) el2.scrollTop = el2.scrollHeight - prevHeight + prevTop;
+        });
+      }
+    } catch (error) {
+      console.error("Failed to load older messages:", error);
+    } finally {
+      setLoadingOlder(false);
+    }
+  }, [conversationId, loadingOlder, messages]);
 
   const handleSend = useCallback(
     async (text: string, replyToId?: string) => {
@@ -1881,6 +1922,21 @@ export function MessageThread({
           </div>
         ) : (
           <div className="space-y-4">
+            {/* 📜 Conversa longa: puxa a página anterior sem perder a posição. */}
+            {hasOlder && (
+              <div className="flex justify-center">
+                <button
+                  type="button"
+                  onClick={() => void handleLoadOlder()}
+                  disabled={loadingOlder}
+                  className="rounded-full border border-border bg-muted px-4 py-1.5 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted/70 disabled:opacity-60"
+                >
+                  {loadingOlder
+                    ? "Carregando…"
+                    : "Carregar mensagens anteriores"}
+                </button>
+              </div>
+            )}
             {messageGroups.map((group) => (
               <div key={group.date}>
                 {/* Date separator */}

@@ -635,12 +635,13 @@ export default function InboxPage() {
       // flight (temp ids not yet persisted) so a "sending" bubble doesn't
       // blink out. Merging (a) stops the whole thread from re-mounting on
       // every incoming message and (b) dedupes, killing the double-render.
-      const loadedIds = new Set(loaded.map((m) => m.id));
-      const pending = prev.filter(
-        (m) => m.id.startsWith("temp-") && !loadedIds.has(m.id),
-      );
-      if (pending.length === 0) return loaded;
-      return [...loaded, ...pending].sort(
+      // UNIÃO por id (fetched é autoridade), não substituição: o thread agora é
+      // PAGINADO (últimas 200) — um resync trazendo só a página recente não
+      // pode descartar as mensagens antigas que o usuário paginou pra ver, nem
+      // os otimistas temp- em voo.
+      const byId = new Map(prev.map((m) => [m.id, m]));
+      for (const m of loaded) byId.set(m.id, m);
+      return Array.from(byId.values()).sort(
         (a, b) =>
           new Date(a.created_at).getTime() - new Date(b.created_at).getTime(),
       );
