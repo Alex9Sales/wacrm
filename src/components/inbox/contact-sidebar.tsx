@@ -80,6 +80,7 @@ import {
   Trash2,
   ExternalLink,
   Loader2,
+  Sparkles,
   Trophy,
   XCircle,
   RotateCcw,
@@ -518,6 +519,68 @@ export function ContactSidebar({
       .catch((e) => console.error("Failed to refresh deals:", e));
   }, [contactId]);
 
+  // 🪄 "Criar negócio com IA": a IA lê a conversa, propõe título/valor/
+  // pagamento e o humano confirma/ajusta antes de criar. Nada vai pro cliente.
+  const [aiDealBusy, setAiDealBusy] = useState(false);
+  const [aiProposal, setAiProposal] = useState<{
+    title: string;
+    value: string;
+    payment: string;
+    summary: string;
+  } | null>(null);
+  const handleAiProposeDeal = useCallback(async () => {
+    if (!conversation?.id || aiDealBusy) return;
+    setAiDealBusy(true);
+    try {
+      const { proposeDealFromConversation } = await import(
+        "@/app/(dashboard)/inbox/deal-from-conversation"
+      );
+      const res = await proposeDealFromConversation(conversation.id);
+      if (res.error || !res.proposal) {
+        toast.error(res.error ?? "Não consegui analisar a conversa.");
+        return;
+      }
+      setAiProposal({
+        title: res.proposal.title,
+        value: res.proposal.value != null ? String(res.proposal.value) : "",
+        payment: res.proposal.payment ?? "",
+        summary: res.proposal.summary,
+      });
+    } catch (e) {
+      console.error("AI deal propose failed:", e);
+      toast.error("Falha ao analisar a conversa.");
+    } finally {
+      setAiDealBusy(false);
+    }
+  }, [conversation?.id, aiDealBusy]);
+  const handleAiCreateDeal = useCallback(async () => {
+    if (!conversation?.id || !aiProposal || aiDealBusy) return;
+    setAiDealBusy(true);
+    try {
+      const { createDealFromProposal } = await import(
+        "@/app/(dashboard)/inbox/deal-from-conversation"
+      );
+      const res = await createDealFromProposal(conversation.id, {
+        title: aiProposal.title,
+        value: aiProposal.value ? Number(aiProposal.value) : null,
+        payment: aiProposal.payment || null,
+        summary: aiProposal.summary,
+      });
+      if (res.error) {
+        toast.error(res.error);
+        return;
+      }
+      toast.success("Negócio criado a partir da conversa 🪄");
+      setAiProposal(null);
+      handleDealSaved();
+    } catch (e) {
+      console.error("AI deal create failed:", e);
+      toast.error("Falha ao criar o negócio.");
+    } finally {
+      setAiDealBusy(false);
+    }
+  }, [conversation?.id, aiProposal, aiDealBusy, handleDealSaved]);
+
   // Ganho / Perda / Reabrir direto da lateral. A perda vai com o motivo
   // escolhido no mini-painel (mesmos chips do detalhe do negócio).
   const markDealStatus = useCallback(
@@ -799,17 +862,99 @@ export function ContactSidebar({
               title="Negócio"
               defaultOpen
               action={
-                <button
-                  type="button"
-                  onClick={() => void openDealEditor(null)}
-                  aria-label="Criar negócio"
-                  title="Criar negócio"
-                  className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-                >
-                  <Plus className="h-3.5 w-3.5" />
-                </button>
+                <div className="flex items-center gap-1">
+                  {conversation?.id && (
+                    <button
+                      type="button"
+                      onClick={() => void handleAiProposeDeal()}
+                      disabled={aiDealBusy}
+                      aria-label="Criar negócio com IA"
+                      title="IA lê a conversa e propõe o negócio (você confirma)"
+                      className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground disabled:opacity-50"
+                    >
+                      {aiDealBusy && !aiProposal ? (
+                        <Loader2 className="h-3.5 w-3.5 animate-spin" />
+                      ) : (
+                        <Sparkles className="h-3.5 w-3.5" />
+                      )}
+                    </button>
+                  )}
+                  <button
+                    type="button"
+                    onClick={() => void openDealEditor(null)}
+                    aria-label="Criar negócio"
+                    title="Criar negócio"
+                    className="flex h-6 w-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+                  >
+                    <Plus className="h-3.5 w-3.5" />
+                  </button>
+                </div>
               }
             >
+              {/* 🪄 Proposta da IA — confirmar/ajustar antes de criar. */}
+              {aiProposal && (
+                <div className="mb-2 space-y-2 rounded-lg border border-primary/40 bg-primary/[0.04] p-2.5">
+                  <p className="text-[11px] font-medium text-primary">
+                    🪄 A IA leu a conversa e propõe:
+                  </p>
+                  <input
+                    value={aiProposal.title}
+                    onChange={(e) =>
+                      setAiProposal((p) =>
+                        p ? { ...p, title: e.target.value } : p,
+                      )
+                    }
+                    placeholder="Título do negócio"
+                    className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
+                  />
+                  <div className="flex gap-2">
+                    <input
+                      value={aiProposal.value}
+                      onChange={(e) =>
+                        setAiProposal((p) =>
+                          p ? { ...p, value: e.target.value } : p,
+                        )
+                      }
+                      placeholder="Valor (R$)"
+                      inputMode="decimal"
+                      className="w-24 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
+                    />
+                    <input
+                      value={aiProposal.payment}
+                      onChange={(e) =>
+                        setAiProposal((p) =>
+                          p ? { ...p, payment: e.target.value } : p,
+                        )
+                      }
+                      placeholder="Pagamento"
+                      className="flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
+                    />
+                  </div>
+                  {aiProposal.summary && (
+                    <p className="text-[11px] leading-snug text-muted-foreground">
+                      {aiProposal.summary}
+                    </p>
+                  )}
+                  <div className="flex gap-2">
+                    <button
+                      type="button"
+                      onClick={() => void handleAiCreateDeal()}
+                      disabled={aiDealBusy}
+                      className="flex-1 rounded-md bg-primary px-2 py-1.5 text-xs font-medium text-primary-foreground transition-colors hover:bg-primary/90 disabled:opacity-60"
+                    >
+                      {aiDealBusy ? "Criando…" : "Criar negócio"}
+                    </button>
+                    <button
+                      type="button"
+                      onClick={() => setAiProposal(null)}
+                      disabled={aiDealBusy}
+                      className="rounded-md border border-border px-2 py-1.5 text-xs text-muted-foreground transition-colors hover:bg-muted"
+                    >
+                      Cancelar
+                    </button>
+                  </div>
+                </div>
+              )}
               {deals.length === 0 ? (
                 <button
                   type="button"
