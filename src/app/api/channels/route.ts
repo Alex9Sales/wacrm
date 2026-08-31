@@ -519,6 +519,13 @@ export async function POST(request: Request) {
     try {
       channel = await createChannel(ctx.accountId, input)
     } catch (err) {
+      // 💳 Limite do plano estourado: mensagem CLARA em vez de 500 genérico —
+      // o cliente via "Falha ao criar o canal" sem saber o porquê (caso
+      // Rafael 31/08: Pro = 6 canais, conta com 8).
+      const { PlanLimitError } = await import('@/lib/billing/limits')
+      if (err instanceof PlanLimitError) {
+        return NextResponse.json({ error: err.message }, { status: 403 })
+      }
       if (isDuplicateEmailAddressError(err)) {
         return NextResponse.json(
           { error: 'Esse endereço de e-mail já está em uso. Escolha outro apelido.' },
