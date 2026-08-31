@@ -1,4 +1,4 @@
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 import { db, automations, conversations, contacts, messages as messagesTable, aiConfigs } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfigForChannel, loadAiConfigById } from './config'
@@ -92,6 +92,27 @@ export async function dispatchInboundToAiReply(
     // Cheap early-out: no active auto-reply agent on this account → nothing to
     // do (avoids the conversation load + routing for non-AI accounts).
     if (!(await hasActiveAutoReplyAgent(accountId))) return
+
+    // 🏁 Anti-eco de corrida: se a ÚLTIMA mensagem não-interna já NÃO é do
+    // cliente (a resposta em voo cobriu tudo, ou um humano respondeu), não
+    // gera outra. É o que torna seguro o ciclo de RECHECAGEM ("chase") que o
+    // enqueue agenda quando uma mensagem chega durante uma geração — caso
+    // Cristina 31/08: pergunta 2s após a leitura do histórico ficou sem
+    // resposta porque o re-add era engolido pelo job ativo.
+    const lastMsg = firstOrNull(
+      await db
+        .select({ senderType: messagesTable.senderType })
+        .from(messagesTable)
+        .where(
+          and(
+            eq(messagesTable.conversationId, conversationId),
+            eq(messagesTable.isInternal, false),
+          ),
+        )
+        .orderBy(desc(messagesTable.createdAt))
+        .limit(1),
+    )
+    if (lastMsg && lastMsg.senderType !== 'customer') return
 
     // Deterministic, user-configured responders win over the LLM — the
     // caller already excludes messages a Flow consumed. Message-level

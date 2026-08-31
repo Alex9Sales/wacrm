@@ -141,10 +141,25 @@ export async function enqueueAiReplyDebounced(
   const q = aiReplyQueue();
   try {
     // Reset the timer: drop the still-delayed job so the re-add below starts a
-    // fresh countdown. An already-running job is left to finish (its dispatch
-    // reads the live history, so the newest message is included anyway).
+    // fresh countdown.
     const existing = await q.getJob(jobId);
-    if (existing) await existing.remove().catch(() => {});
+    if (existing) {
+      const state = await existing.getState().catch(() => 'unknown');
+      if (state === 'active') {
+        // ⚠️ Job RODANDO: a geração pode já ter lido o histórico SEM esta
+        // mensagem (corrida de segundos — caso Cristina 31/08). O add abaixo
+        // seria IGNORADO pelo BullMQ (jobId duplicado de job vivo) e a
+        // mensagem ficava pra sempre sem resposta. Agenda uma RECHECAGEM com
+        // id único; o dispatch dá skip se a resposta em voo já tiver coberto
+        // (guard "última msg é do cliente").
+        await q.add('ai-reply', job, {
+          jobId: `${jobId}-chase-${Date.now()}`,
+          delay: Math.max(delayMs, 8_000),
+        });
+        return;
+      }
+      await existing.remove().catch(() => {});
+    }
   } catch {
     /* ignore — still try to add below */
   }

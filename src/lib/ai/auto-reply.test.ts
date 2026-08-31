@@ -24,6 +24,8 @@ const h = vi.hoisted(() => ({
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
     recentHumanMsgs: [] as { id: string }[],
+    // 🏁 guard anti-eco: a última msg não-interna da conversa (com orderBy).
+    lastMessages: [{ senderType: 'customer' }] as { senderType: string }[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     sqlCalls: [] as string[],
@@ -72,7 +74,10 @@ vi.mock('@/db', async (importOriginal) => {
           // resolve through the same where().limit().
           const chain: {
             innerJoin: () => typeof chain
-            where: () => { limit: () => Promise<unknown[]> }
+            where: () => {
+              limit: () => Promise<unknown[]>
+              orderBy: () => { limit: () => Promise<unknown[]> }
+            }
           } = {
             innerJoin: () => chain,
             where: () => ({
@@ -86,6 +91,10 @@ vi.mock('@/db', async (importOriginal) => {
                 }
                 return Promise.resolve(h.state.conv ? [h.state.conv] : [])
               },
+              // 🏁 guard anti-eco (messages + orderBy + limit): última msg.
+              orderBy: () => ({
+                limit: () => Promise.resolve(h.state.lastMessages ?? []),
+              }),
             }),
           }
           return chain
@@ -144,6 +153,7 @@ beforeEach(() => {
   }
   h.state.autoResponders = []
   h.state.recentHumanMsgs = []
+  h.state.lastMessages = [{ senderType: 'customer' }]
   h.state.claim = true
   h.state.updatePayload = null
   h.state.sqlCalls = []
@@ -156,6 +166,19 @@ beforeEach(() => {
 })
 
 describe('dispatchInboundToAiReply — eligibility gates', () => {
+  it('🏁 anti-eco: última msg NÃO é do cliente → não gera (chase já coberto)', async () => {
+    h.state.lastMessages = [{ senderType: 'bot' }]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).not.toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('🏁 anti-eco: humano respondeu por último → IA não fala por cima', async () => {
+    h.state.lastMessages = [{ senderType: 'agent' }]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
   it('claims a slot and sends on the happy path', async () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.sqlCalls).toHaveLength(1)
