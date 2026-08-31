@@ -20,6 +20,7 @@
 
 import { useCallback, useEffect, useState } from 'react';
 import { toast } from 'sonner';
+import { ApiDocs } from "@/components/settings/api-docs";
 import {
   AlertTriangle,
   Copy,
@@ -385,6 +386,10 @@ export function IntegrationsSettings() {
         onCancel={() => setConfirmDelete(null)}
         onConfirm={() => confirmDelete && handleDelete(confirmDelete)}
       />
+
+      {/* 📖 Documentação completa da API — pro dev do cliente e pro agente
+          de IA dele (inclui o prompt pronto de colar). */}
+      <ApiDocs />
     </section>
   );
 }
