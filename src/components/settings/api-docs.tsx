@@ -107,6 +107,18 @@ const GROUPS: Group[] = [
     ],
   },
   {
+    title: "Agendadas & Cadências 🆕",
+    blurb: "Mensagem no futuro e sequências automáticas.",
+    endpoints: [
+      { method: "POST", path: "/scheduled-messages", scope: "messages:send", desc: '"Manda amanhã às 9h": agenda uma mensagem — o CRM envia na hora marcada.', fields: "conversation_id | (contact_id + channel_id), text, scheduled_at (ISO-8601 com fuso)", curl: `curl -X POST ${BASE}/scheduled-messages -H "Authorization: Bearer $CHAVE" -H "Content-Type: application/json" -d '{"conversation_id":"$CONV","text":"Bom dia! Posso confirmar seu pedido?","scheduled_at":"2026-09-01T09:00:00-04:00"}'` },
+      { method: "GET", path: "/scheduled-messages", scope: "messages:read", desc: "Lista agendadas (?status=pending|sent|failed)." },
+      { method: "DELETE", path: "/scheduled-messages/{id}", scope: "messages:send", desc: "Cancela uma agendada pendente." },
+      { method: "GET", path: "/cadences", scope: "cadences:read", desc: "Lista as cadências da conta (id, nome, nº de degraus)." },
+      { method: "POST", path: "/cadences/{id}/enroll", scope: "cadences:write", desc: "Inscreve um contato na cadência (pausa sozinha quando ele responde).", fields: "contact_id, conversation_id?, deal_id?" },
+      { method: "POST", path: "/contacts/{id}/opt-out", scope: "contacts:write", desc: 'Marca/desmarca "não perturbe" — opted-out nunca recebe disparo/cadência/reativação.', fields: "opted_out: true|false, reason?" },
+    ],
+  },
+  {
     title: "Disparos (broadcasts)",
     blurb: "Mensagem em massa com fila, ritmo e opt-out automático (quem responder SAIR nunca mais recebe).",
     endpoints: [

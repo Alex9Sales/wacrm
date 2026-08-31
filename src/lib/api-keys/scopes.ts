@@ -23,6 +23,8 @@ export const API_SCOPES = [
   'channels:write',
   'tags:read',
   'tags:write',
+  'cadences:read',
+  'cadences:write',
   'internal:read',
   'internal:write',
   'members:read',
@@ -56,6 +58,8 @@ export const SCOPE_DESCRIPTIONS: Record<ApiScope, string> = {
   'tags:read': 'List the account tags (labels)',
   'tags:write':
     'Create tags and add/remove them on conversations (contacts)',
+  'cadences:read': 'List the account cadences (message sequences)',
+  'cadences:write': 'Enroll contacts in cadences',
   'internal:read': 'List internal team channels and read their messages',
   'internal:write': 'Create internal channels and post internal messages',
   'members:read': 'List team members (ids, names) — to assign/transfer or post',
