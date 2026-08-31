@@ -174,10 +174,14 @@ export async function checkRateLimit(
       limit,
     };
   } catch (err) {
-    // FAIL OPEN — a Redis hiccup must not take the whole app down.
+    // FAIL OPEN — a Redis hiccup must not take the whole app down. Típico no
+    // BOOT do container pós-deploy (conexão ainda subindo, offline queue off
+    // de propósito): 1 request passa sem contador e a reconexão resolve.
+    // BENIGNO — warn, não error (assustava no log; investigado 31/08: 1
+    // ocorrência/24h, sempre colada num deploy).
     // eslint-disable-next-line no-console
-    console.error(
-      `[rate-limit] redis error for key "${key}" — failing open:`,
+    console.warn(
+      `[rate-limit] redis indisponível neste instante (boot/reconexão?) — seguindo SEM contador (fail-open, nada bloqueado). key="${key}":`,
       err instanceof Error ? err.message : err,
     );
     return { success: true, remaining: limit - 1, reset: now + windowMs, limit };
