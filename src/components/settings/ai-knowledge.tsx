@@ -117,6 +117,82 @@ export function AiKnowledgeCard({
     setContent('');
   };
 
+  // 📥 Importar Q&A por planilha: parseia no navegador (parseSheet) e manda
+  // em lotes de 200 pra /api/ai/knowledge/import. Detecta as colunas pelo
+  // cabeçalho (pergunta/question, resposta/answer); sem cabeçalho casando,
+  // usa as duas primeiras colunas.
+  const qaFileRef = useRef<HTMLInputElement>(null);
+  const [importingQa, setImportingQa] = useState(false);
+  const importQaSheet = async (file: File) => {
+    setImportingQa(true);
+    try {
+      const { parseSheet } = await import('@/lib/import/sheet');
+      const rows = await parseSheet(file);
+      if (rows.length === 0) {
+        toast.error('Planilha vazia.');
+        return;
+      }
+      const headers = Object.keys(rows[0] ?? {});
+      const qCol =
+        headers.find((h) => /pergunta|question/i.test(h)) ?? headers[0];
+      const aCol =
+        headers.find((h) => /resposta|answer/i.test(h)) ??
+        headers.find((h) => h !== qCol) ??
+        headers[1];
+      if (!qCol || !aCol) {
+        toast.error('Não achei as colunas de Pergunta e Resposta.');
+        return;
+      }
+      const items = rows
+        .map((r) => ({
+          question: String(r[qCol] ?? '').trim(),
+          answer: String(r[aCol] ?? '').trim(),
+        }))
+        .filter((it) => it.question && it.answer);
+      if (items.length === 0) {
+        toast.error('Nenhum par pergunta/resposta válido na planilha.');
+        return;
+      }
+      let created = 0;
+      let pendingIndex = 0;
+      for (let i = 0; i < items.length; i += 200) {
+        const batch = items.slice(i, i + 200);
+        const res = await fetch('/api/ai/knowledge/import', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ baseId, items: batch }),
+        });
+        const data = (await res.json().catch(() => ({}))) as {
+          created?: number;
+          pending_index?: number;
+          error?: string;
+        };
+        if (!res.ok) {
+          toast.error(data.error || 'Falha no import.');
+          break;
+        }
+        created += data.created ?? 0;
+        pendingIndex += data.pending_index ?? 0;
+        toast.success(
+          `Importadas ${created}/${items.length} perguntas…`,
+        );
+      }
+      if (created > 0) {
+        toast.success(
+          pendingIndex > 0
+            ? `Import concluído: ${created} Q&As. ${pendingIndex} ainda indexando — clique em Reindexar em alguns minutos.`
+            : `Import concluído: ${created} Q&As na base! 🎉`,
+        );
+        await fetchDocs();
+      }
+    } catch (e) {
+      console.error('QA import failed:', e);
+      toast.error('Falha ao ler a planilha.');
+    } finally {
+      setImportingQa(false);
+    }
+  };
+
   const importUrl = async () => {
     const url = window.prompt('Cole a URL da página (site, FAQ, etc.):');
     if (!url || !url.trim()) return;
@@ -411,6 +487,34 @@ export function AiKnowledgeCard({
                   >
                     <HelpCircle className="mr-2 h-4 w-4" /> Pergunta e resposta
                   </Button>
+                  {/* 📥 Import em massa de Q&A por planilha (pedido do Rafael:
+                      995 linhas não dá pra digitar). Colunas: Pergunta |
+                      Resposta (detectadas pelo cabeçalho; fallback = 1ª/2ª). */}
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    onClick={() => qaFileRef.current?.click()}
+                    disabled={importingQa}
+                    title="Importar planilha (xlsx/csv) com colunas Pergunta e Resposta"
+                  >
+                    {importingQa ? (
+                      <Loader2 className="mr-2 h-4 w-4 animate-spin" />
+                    ) : (
+                      <Upload className="mr-2 h-4 w-4" />
+                    )}
+                    Importar planilha (Q&A)
+                  </Button>
+                  <input
+                    ref={qaFileRef}
+                    type="file"
+                    accept=".xlsx,.xls,.csv"
+                    className="hidden"
+                    onChange={(e) => {
+                      const f = e.target.files?.[0];
+                      if (f) void importQaSheet(f);
+                      e.target.value = '';
+                    }}
+                  />
                   <Button
                     variant="outline"
                     size="sm"
