@@ -123,6 +123,10 @@ export function AiConfig({
   const [reactivationChannel, setReactivationChannel] = useState("");
   // 📅 Data de início do auto (YYYY-MM-DD). '' = começa já.
   const [reactivationStart, setReactivationStart] = useState("");
+  // ⏰ Janela de envio (horas locais). -1 = sem janela própria (usa o horário
+  // de atendimento da conta).
+  const [reactivationStartHour, setReactivationStartHour] = useState(-1);
+  const [reactivationEndHour, setReactivationEndHour] = useState(-1);
   // 🛑 Kill switch da conta (freio de emergência, account-level). Carrega/salva
   // separado do agente (via settings actions).
   const [autonomyPaused, setAutonomyPaused] = useState(false);
@@ -233,6 +237,16 @@ export function AiConfig({
           typeof data.autonomy?.reactivationStartsAt === "string"
             ? data.autonomy.reactivationStartsAt
             : "",
+        );
+        setReactivationStartHour(
+          typeof data.autonomy?.reactivationStartHour === "number"
+            ? data.autonomy.reactivationStartHour
+            : -1,
+        );
+        setReactivationEndHour(
+          typeof data.autonomy?.reactivationEndHour === "number"
+            ? data.autonomy.reactivationEndHour
+            : -1,
         );
         setPipelineId(
           typeof data.pipeline_id === 'string' ? data.pipeline_id : '',
@@ -461,6 +475,13 @@ export function AiConfig({
               : {}),
             ...(reactivationStart
               ? { reactivationStartsAt: reactivationStart }
+              : {}),
+            ...(reactivationStartHour >= 0 &&
+            reactivationEndHour > reactivationStartHour
+              ? {
+                  reactivationStartHour,
+                  reactivationEndHour,
+                }
               : {}),
           }
         : {}),
@@ -1424,11 +1445,12 @@ export function AiConfig({
                 <div className="mt-3 space-y-3 rounded-lg border border-amber-500/40 bg-amber-500/[0.05] p-3">
                   <p className="text-xs text-amber-700 dark:text-amber-400">
                     ⚠️ <strong>A IA vai enviar sozinha</strong>, sem passar por
-                    você. Ela só dispara com estas travas: dentro do horário de
-                    atendimento (ou 8h–20h), no máximo{" "}
-                    <strong>{reactivationCap}/dia</strong>, 1× a cada 7 dias por
-                    cliente, respeitando quem pediu pra não receber, e nunca por
-                    cima de uma conversa que um humano está tocando.
+                    você. Travas: só no horário configurado, no máximo{" "}
+                    <strong>{reactivationCap}/dia</strong> — e devagar (até 3 a
+                    cada meia hora, com 1–2 min entre cada envio, pra proteger a
+                    linha) — 1× a cada 7 dias por cliente, respeitando quem
+                    pediu pra não receber, e nunca por cima de uma conversa que
+                    um humano está tocando.
                   </p>
 
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -1469,6 +1491,59 @@ export function AiConfig({
                       <p className="mt-1 text-[11px] text-muted-foreground">
                         Vazio = já. Antes dessa data a IA fica pronta mas não
                         envia.
+                      </p>
+                    </div>
+                    <div className="sm:col-span-2">
+                      <Label className="text-xs">
+                        Horário dos envios (hora local)
+                      </Label>
+                      <div className="mt-1 flex items-center gap-2">
+                        <Select
+                          value={String(reactivationStartHour)}
+                          onValueChange={(v) =>
+                            setReactivationStartHour(Number(v ?? -1))
+                          }
+                        >
+                          <SelectTrigger className="w-40" disabled={disabled}>
+                            <SelectValue />
+                          </SelectTrigger>
+                          <SelectContent>
+                            <SelectItem value="-1">
+                              Horário de atendimento
+                            </SelectItem>
+                            {Array.from({ length: 24 }, (_, h) => (
+                              <SelectItem key={h} value={String(h)}>
+                                a partir das {h}h
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                        {reactivationStartHour >= 0 && (
+                          <Select
+                            value={String(reactivationEndHour)}
+                            onValueChange={(v) =>
+                              setReactivationEndHour(Number(v ?? -1))
+                            }
+                          >
+                            <SelectTrigger className="w-32" disabled={disabled}>
+                              <SelectValue placeholder="até…" />
+                            </SelectTrigger>
+                            <SelectContent>
+                              {Array.from({ length: 24 }, (_, i) => i + 1)
+                                .filter((h) => h > reactivationStartHour)
+                                .map((h) => (
+                                  <SelectItem key={h} value={String(h)}>
+                                    até as {h}h
+                                  </SelectItem>
+                                ))}
+                            </SelectContent>
+                          </Select>
+                        )}
+                      </div>
+                      <p className="mt-1 text-[11px] text-muted-foreground">
+                        Os envios saem espaçados dentro dessa janela (até 3 a
+                        cada meia hora). Ex.: 9h–12h manda o dia todo entre 9h e
+                        meio-dia.
                       </p>
                     </div>
                     <div>

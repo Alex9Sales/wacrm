@@ -56,7 +56,24 @@ export function sanitizeAutonomy(input: unknown): Record<string, unknown> {
     /^\d{4}-\d{2}-\d{2}$/.test(o.reactivationStartsAt.trim())
   )
     out.reactivationStartsAt = o.reactivationStartsAt.trim()
+  const sh = Number(o.reactivationStartHour)
+  if (Number.isInteger(sh) && sh >= 0 && sh <= 23) out.reactivationStartHour = sh
+  const eh = Number(o.reactivationEndHour)
+  if (Number.isInteger(eh) && eh >= 1 && eh <= 24) out.reactivationEndHour = eh
   return out
+}
+
+/** Janela de envio do auto (horas locais [início, fim)). null = sem janela
+ *  própria (usa o horário de atendimento / janela-segura). */
+export function reactivationWindow(
+  autonomy: unknown,
+): { start: number; end: number } | null {
+  const a = autonomy as Record<string, unknown> | null
+  const start = Number(a?.reactivationStartHour)
+  const end = Number(a?.reactivationEndHour)
+  if (!Number.isInteger(start) || !Number.isInteger(end)) return null
+  if (start < 0 || start > 23 || end <= start || end > 24) return null
+  return { start, end }
 }
 
 /** Teto de reativações automáticas por 24h (default 20, máx 500). */
@@ -340,12 +357,22 @@ export async function runAutoReactivations(accountId: string): Promise<AutoRunRe
     if (!today || today < startsAt) return { sent: 0, skipped: 'not-started' }
   }
 
-  // ⏰ 3) Horário: respeita o atendimento da conta se configurado; senão, cai
-  // na janela-segura 8h–20h (o isWithinBusinessHours retorna true quando o
-  // horário está desligado — no auto isso vazaria envio de madrugada).
-  const okHours = settings.businessHoursEnabled
-    ? (await import('@/lib/settings/business-hours')).isWithinBusinessHours(settings)
-    : isSafeDaytime(settings.businessTimezone)
+  // ⏰ 3) Horário. Prioridade: janela PRÓPRIA do auto (ex.: 9h–11h) se o dono
+  // configurou; senão o horário de atendimento; senão a janela-segura 8h–20h
+  // (o isWithinBusinessHours retorna true quando o horário está desligado —
+  // no auto isso vazaria envio de madrugada).
+  const window = reactivationWindow(agent.autonomy)
+  let okHours: boolean
+  if (window) {
+    const h = localHour(settings.businessTimezone)
+    okHours = h != null && h >= window.start && h < window.end
+  } else if (settings.businessHoursEnabled) {
+    okHours = (
+      await import('@/lib/settings/business-hours')
+    ).isWithinBusinessHours(settings)
+  } else {
+    okHours = isSafeDaytime(settings.businessTimezone)
+  }
   if (!okHours) return { sent: 0, skipped: 'off-hours' }
 
   // 🔢 4) Rate-limit: teto de envios AUTO (resolved_by IS NULL) nas últimas 24h.
@@ -364,7 +391,10 @@ export async function runAutoReactivations(accountId: string): Promise<AutoRunRe
         ),
       ),
   )
-  let budget = cap - (sentRow?.n ?? 0)
+  // 🐢 Anti-ban: além do teto diário, no máx 3 envios POR TICK (30min) com
+  // 60–120s entre um e outro — nada de rajada 1/segundo numa linha WhatsApp.
+  const PER_TICK = 3
+  let budget = Math.min(cap - (sentRow?.n ?? 0), PER_TICK)
   if (budget <= 0) return { sent: 0, skipped: 'rate-limit' }
 
   const channelId = reactivationChannelId(agent.autonomy)
@@ -477,6 +507,11 @@ export async function runAutoReactivations(accountId: string): Promise<AutoRunRe
         : s.signalType === 'repurchase_overdue'
           ? `[AUTO] Recompra atrasada — ${p.days_since ?? '?'} dias`
           : `[AUTO] Na hora da recompra — ${p.days_since ?? '?'} dias`
+    // 🐢 Espaço entre envios (60–120s, com jitter pra parecer humano). Não
+    // espera antes do primeiro.
+    if (sent > 0) {
+      await new Promise((r) => setTimeout(r, 60_000 + Math.random() * 60_000))
+    }
     try {
       await engineSendText({ accountId, userId, conversationId, contactId: s.contactId, text })
       // 📝 log da decisão (resolved_by NULL = foi a IA, não humano)
