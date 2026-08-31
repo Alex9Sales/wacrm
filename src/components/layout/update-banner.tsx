@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from "react";
 import { usePathname } from "next/navigation";
-import { Sparkles, RotateCw, X } from "lucide-react";
+import { RotateCw, Sparkles } from "lucide-react";
 
 import { isEmbeddedSignupActive } from "@/lib/embedded-signup-flag";
 
@@ -22,23 +22,39 @@ function isEditingDirtyText(): boolean {
   return false;
 }
 
-// "Nova versão disponível" banner. The server rendered this page from build
-// `initialBuildId`; we poll /api/version and, when the running server reports
-// a newer id, surface a one-click refresh so clients pick up new features
-// without a manual hard-reload.
-//
-// A stale tab is effectively BROKEN: every Server Action it fires hits "Failed
-// to find Server Action" and no-ops, AND a client-side navigation to a page
-// added/changed by the new build renders the OLD component silently (no error
-// to catch — e.g. a new button just doesn't appear). So we don't only nudge —
-// we auto-reload a visible, idle tab that sees a newer build, and we re-check
-// on three edges besides the 20s poll: return-from-hidden, window focus, and
-// EVERY client-side route change (closes the "navigated on a stale bundle"
-// gap that a plain interval leaves open for up to one tick). Guarded so it's
-// safe: once per build, never while typing a draft, never mid Embedded-Signup.
+/** Recarrega FURANDO caches intermediários: muda a URL com `?_v=<build>` —
+ *  qualquer cache de HTML (proxy/navegador) vira miss e busca a origem. O
+ *  parâmetro é limpo no boot seguinte (stripVersionParam). Foi a causa do
+ *  "só resolve com reload forçado" (Dentai/Felipe, 31/08): reload normal às
+ *  vezes reaproveitava HTML cacheado e voltava no bundle velho. */
+function reloadBusted(build: string): void {
+  try {
+    const u = new URL(window.location.href);
+    u.searchParams.set("_v", build);
+    window.location.replace(u.toString());
+  } catch {
+    window.location.reload();
+  }
+}
+
+// "Nova versão disponível" — o servidor rendeu esta página no build
+// `initialBuildId`; a gente sonda /api/version e, quando o servidor reporta
+// outro id, a aba num bundle velho está efetivamente QUEBRADA (Server Actions
+// falham, páginas novas renderizam o componente antigo). Política "nunca
+// deixar bundle velho ativo" (pedido do Alex, 31/08):
+//   1. auto-reload silencioso quando é seguro (campo com rascunho persistido
+//      incluso) — com CACHE-BUSTING e re-tentativa a cada 5 min (self-heal);
+//   2. quando não dá (rascunho não-persistido em edição), barra fixa no TOPO,
+//      SEM botão de dispensar;
+//   3. persistindo por mais de 3 min, vira OVERLAY bloqueante — o cliente só
+//      segue depois de atualizar.
+const AUTO_RELOAD_RETRY_MS = 5 * 60_000;
+const BLOCK_AFTER_MS = 3 * 60_000;
+
 export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
   const [latest, setLatest] = useState<string | null>(null);
-  const [dismissed, setDismissed] = useState<string | null>(null);
+  const [blocked, setBlocked] = useState(false);
+  const staleSince = useRef<number | null>(null);
   const checking = useRef(false);
   const pathname = usePathname();
 
@@ -54,17 +70,36 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
       if (typeof data.buildId !== "string") return;
       const build = data.buildId;
       if (build === initialBuildId) return;
-      // Newer build in the air. Auto-recover unless it would clobber a draft
-      // or an in-flight Embedded-Signup popup — then fall back to the banner.
+      // Bundle velho no ar. Primeiro tenta se recuperar sozinho — guard
+      // TEMPORAL (não once-per-build): se um reload anterior não colou (cache
+      // servindo HTML velho), tenta de novo a cada 5 min em vez de desistir.
       if (!isEditingDirtyText() && !isEmbeddedSignupActive()) {
-        const guardKey = "fluxia:autoReloadedFor";
-        if (sessionStorage.getItem(guardKey) !== build) {
-          sessionStorage.setItem(guardKey, build);
-          window.location.reload();
+        const KEY = "fluxia:autoReload";
+        let last: { build?: string; at?: number } = {};
+        try {
+          last = JSON.parse(sessionStorage.getItem(KEY) || "{}") as typeof last;
+        } catch {
+          /* corrompido → trata como nunca tentado */
+        }
+        const retryOk =
+          last.build !== build ||
+          Date.now() - (last.at ?? 0) > AUTO_RELOAD_RETRY_MS;
+        if (retryOk) {
+          try {
+            sessionStorage.setItem(
+              KEY,
+              JSON.stringify({ build, at: Date.now() }),
+            );
+          } catch {
+            /* sem storage — segue mesmo assim */
+          }
+          reloadBusted(build);
           return;
         }
       }
+      if (staleSince.current == null) staleSince.current = Date.now();
       setLatest(build);
+      if (Date.now() - staleSince.current > BLOCK_AFTER_MS) setBlocked(true);
     } catch {
       // offline / transient — try again on the next edge.
     } finally {
@@ -75,6 +110,17 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
   // Poll + focus/visibility + a global catch for the stale Server-Action error.
   useEffect(() => {
     if (!initialBuildId || initialBuildId === "dev") return;
+
+    // Limpa o `?_v=` cosmético do reload cache-busted anterior.
+    try {
+      const u = new URL(window.location.href);
+      if (u.searchParams.has("_v")) {
+        u.searchParams.delete("_v");
+        window.history.replaceState(null, "", u.toString());
+      }
+    } catch {
+      /* cosmético */
+    }
 
     // Belt-and-suspenders: a click that fires a Server Action whose id changed
     // across a deploy throws "Failed to find Server Action … older or newer
@@ -128,41 +174,56 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
     void check();
   }, [pathname, check]);
 
-  const hasUpdate =
-    !!latest && latest !== initialBuildId && latest !== dismissed;
+  const hasUpdate = !!latest && latest !== initialBuildId;
   if (!hasUpdate) return null;
 
-  return (
-    <div className="fixed inset-x-0 bottom-4 z-[60] flex justify-center px-4">
-      <div className="flex items-center gap-3 rounded-full border border-primary/30 bg-card/95 px-4 py-2.5 shadow-lg shadow-black/10 backdrop-blur supports-[backdrop-filter]:bg-card/80">
-        <span className="flex size-7 shrink-0 items-center justify-center rounded-full bg-primary/15 text-primary">
-          <Sparkles className="size-4" />
-        </span>
-        <div className="min-w-0">
-          <p className="text-sm font-medium text-foreground">
-            Nova versão disponível
-          </p>
-          <p className="hidden text-xs text-muted-foreground sm:block">
-            Atualize para pegar as últimas melhorias.
-          </p>
+  const refresh = () => reloadBusted(latest as string);
+
+  // 🚧 Stale há 3+ min: overlay BLOQUEANTE — nada de operar num bundle velho.
+  if (blocked) {
+    return (
+      <div className="fixed inset-0 z-[100] flex items-center justify-center bg-background/80 backdrop-blur-sm">
+        <div className="mx-4 flex max-w-md flex-col items-center gap-4 rounded-2xl border border-border bg-card p-8 text-center shadow-2xl">
+          <span className="flex size-12 items-center justify-center rounded-full bg-primary/15 text-primary">
+            <Sparkles className="size-6" />
+          </span>
+          <div>
+            <p className="text-lg font-semibold text-foreground">
+              Atualização necessária
+            </p>
+            <p className="mt-1 text-sm text-muted-foreground">
+              Uma nova versão do FluxiaCRM está no ar. Atualize para continuar —
+              leva 2 segundos e suas conversas ficam onde estão.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={refresh}
+            className="inline-flex h-11 items-center gap-2 rounded-full bg-primary px-6 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+          >
+            <RotateCw className="size-4" />
+            Atualizar agora
+          </button>
         </div>
-        <button
-          type="button"
-          onClick={() => window.location.reload()}
-          className="ml-1 inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-primary px-3.5 text-sm font-medium text-primary-foreground transition-colors hover:bg-primary/90"
-        >
-          <RotateCw className="size-3.5" />
-          Atualizar
-        </button>
-        <button
-          type="button"
-          onClick={() => setDismissed(latest)}
-          aria-label="Depois"
-          className="flex size-7 shrink-0 items-center justify-center rounded-full text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
-        >
-          <X className="size-4" />
-        </button>
       </div>
+    );
+  }
+
+  // Barra fixa no topo — SEM dispensar (bundle velho não fica ativo por opção).
+  return (
+    <div className="fixed inset-x-0 top-0 z-[90] flex items-center justify-center gap-3 border-b border-primary/30 bg-primary px-4 py-2 text-primary-foreground shadow-md">
+      <Sparkles className="size-4 shrink-0" />
+      <p className="min-w-0 truncate text-sm font-medium">
+        Nova versão disponível — atualize para continuar sem erros.
+      </p>
+      <button
+        type="button"
+        onClick={refresh}
+        className="inline-flex h-8 shrink-0 items-center gap-1.5 rounded-full bg-primary-foreground px-3.5 text-sm font-semibold text-primary transition-colors hover:opacity-90"
+      >
+        <RotateCw className="size-3.5" />
+        Atualizar agora
+      </button>
     </div>
   );
 }
