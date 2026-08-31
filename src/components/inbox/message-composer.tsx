@@ -196,7 +196,37 @@ export function MessageComposer({
   // never disable the composer.
   const sessionGated = sessionExpired && caps.session24hWindow;
 
+  // Rascunho PERSISTIDO por conversa (sessionStorage): sobrevive ao reload da
+  // aba — inclusive o auto-reload de versão nova (update-banner), que antes
+  // era suprimido pra não perder o texto e virava o aviso "recarregue" em
+  // loop pro time que vive com o cursor na caixa (caso Felipe, 31/08).
   const [text, setText] = useState("");
+  const skipDraftSave = useRef(true);
+  useEffect(() => {
+    skipDraftSave.current = true;
+    let v = "";
+    try {
+      v = sessionStorage.getItem(`fluxia:draft:${conversationId}`) ?? "";
+    } catch {
+      /* storage indisponível — segue sem rascunho */
+    }
+    setText(v);
+  }, [conversationId]);
+  useEffect(() => {
+    if (skipDraftSave.current) {
+      skipDraftSave.current = false;
+      return;
+    }
+    try {
+      const key = `fluxia:draft:${conversationId}`;
+      if (text) sessionStorage.setItem(key, text);
+      else sessionStorage.removeItem(key);
+    } catch {
+      /* best-effort */
+    }
+    // Salva só quando o TEXTO muda; a troca de conversa passa pelo load acima.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [text]);
   // 👤 Presença: enquanto o atendente digita, avisa o servidor (no máx. 1x/15s)
   // pra a IA recuar e não atropelar. O hold no servidor dura ~45s.
   const lastPresencePing = useRef(0);
@@ -1160,6 +1190,9 @@ export function MessageComposer({
             )}
             <textarea
               ref={textareaRef}
+              // Rascunho persistido (sessionStorage) → o auto-reload de versão
+              // nova pode recarregar por cima sem perder nada.
+              data-draft-safe="true"
               value={text}
               onChange={handleChange}
               onPaste={handlePaste}

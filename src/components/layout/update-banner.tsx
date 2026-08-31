@@ -11,6 +11,9 @@ import { isEmbeddedSignupActive } from "@/lib/embedded-signup-flag";
 function isEditingDirtyText(): boolean {
   const el = document.activeElement as HTMLElement | null;
   if (!el) return false;
+  // Campo com rascunho PERSISTIDO (ex.: caixa do inbox salva em
+  // sessionStorage) — recarregar não perde nada, então não segura o reload.
+  if (el.getAttribute?.("data-draft-safe") === "true") return false;
   if (el.isContentEditable) return true;
   const tag = el.tagName;
   if (tag === "TEXTAREA" || tag === "INPUT") {
