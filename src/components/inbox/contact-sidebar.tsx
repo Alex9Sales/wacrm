@@ -526,6 +526,7 @@ export function ContactSidebar({
     title: string;
     value: string;
     payment: string;
+    address: string;
     summary: string;
   } | null>(null);
   const handleAiProposeDeal = useCallback(async () => {
@@ -544,6 +545,7 @@ export function ContactSidebar({
         title: res.proposal.title,
         value: res.proposal.value != null ? String(res.proposal.value) : "",
         payment: res.proposal.payment ?? "",
+        address: res.proposal.address ?? "",
         summary: res.proposal.summary,
       });
     } catch (e) {
@@ -564,6 +566,7 @@ export function ContactSidebar({
         title: aiProposal.title,
         value: aiProposal.value ? Number(aiProposal.value) : null,
         payment: aiProposal.payment || null,
+        address: aiProposal.address || null,
         summary: aiProposal.summary,
       });
       if (res.error) {
@@ -930,6 +933,16 @@ export function ContactSidebar({
                       className="flex-1 rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
                     />
                   </div>
+                  <input
+                    value={aiProposal.address}
+                    onChange={(e) =>
+                      setAiProposal((p) =>
+                        p ? { ...p, address: e.target.value } : p,
+                      )
+                    }
+                    placeholder="Endereço (se falado na conversa)"
+                    className="w-full rounded-md border border-border bg-background px-2 py-1.5 text-xs text-foreground"
+                  />
                   {aiProposal.summary && (
                     <p className="text-[11px] leading-snug text-muted-foreground">
                       {aiProposal.summary}

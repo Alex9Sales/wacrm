@@ -57,6 +57,10 @@ export interface AiConfig {
   signatureName: string | null
   /** Quando true, as mensagens da IA vão assinadas com `signatureName`. */
   signatureEnabled: boolean
+  /** 🔒 Trava de acesso (migr 0149): o agente só conversa com contatos que
+   *  têm a etiqueta `tagId`; os demais recebem `deniedMessage` UMA vez.
+   *  Vazio/undefined = sem trava. */
+  access?: { tagId?: string; deniedMessage?: string }
   /** Encerramento inteligente (opt-in): a IA pode se despedir, resolver a
    *  conversa e mover o card do funil ao terminar. Default false. */
   autoCloseEnabled?: boolean

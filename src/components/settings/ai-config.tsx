@@ -131,8 +131,15 @@ export function AiConfig({
   // separado do agente (via settings actions).
   const [autonomyPaused, setAutonomyPaused] = useState(false);
   const [autonomyPausedLoaded, setAutonomyPausedLoaded] = useState(false);
+  // 🔒 Trava de acesso: agente só conversa com contatos da etiqueta.
+  const [accessTagId, setAccessTagId] = useState("");
+  const [accessDeniedMsg, setAccessDeniedMsg] = useState("");
+  const [accountTags, setAccountTags] = useState<{ id: string; name: string }[]>([]);
   const [voices, setVoices] = useState<{ id: string; name: string }[]>([]);
   const [loadingVoices, setLoadingVoices] = useState(false);
+  // Auto-carrega as vozes quando já existe uma voz salva — assim o campo
+  // mostra "Karen" em vez do voice_id cru (1 tentativa; sem chave, fica o id).
+  const triedAutoVoices = useRef(false);
   const [voicesError, setVoicesError] = useState<string | null>(null);
   const [elevenKeyInput, setElevenKeyInput] = useState("");
   const [savingElevenKey, setSavingElevenKey] = useState(false);
@@ -238,6 +245,22 @@ export function AiConfig({
             ? data.autonomy.reactivationStartsAt
             : "",
         );
+        setAccessTagId(
+          typeof data.access?.tagId === "string" ? data.access.tagId : "",
+        );
+        setAccessDeniedMsg(
+          typeof data.access?.deniedMessage === "string"
+            ? data.access.deniedMessage
+            : "",
+        );
+        setAccessTagId(
+          typeof data.access?.tagId === "string" ? data.access.tagId : "",
+        );
+        setAccessDeniedMsg(
+          typeof data.access?.deniedMessage === "string"
+            ? data.access.deniedMessage
+            : "",
+        );
         setReactivationStartHour(
           typeof data.autonomy?.reactivationStartHour === "number"
             ? data.autonomy.reactivationStartHour
@@ -276,6 +299,15 @@ export function AiConfig({
     void fetchConfig();
   }, [accountId, agentId, fetchConfig]);
 
+  // 🔊 Auto-carrega as vozes do ElevenLabs quando já há uma voz salva, pra
+  // exibir o NOME (ex.: Karen) em vez do voice_id cru (bug reportado 31/08).
+  useEffect(() => {
+    if (!voiceId || voices.length > 0 || triedAutoVoices.current) return;
+    triedAutoVoices.current = true;
+    void fetchVoices();
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [voiceId]);
+
   // Load the account's channels for the "canais onde a IA responde" picker.
   useEffect(() => {
     let cancelled = false;
@@ -299,6 +331,16 @@ export function AiConfig({
         }
       } catch {
         /* best-effort — sem funis o seletor só some */
+      }
+      // Etiquetas da conta pro seletor da trava de acesso.
+      try {
+        const { listTags } = await import("@/components/settings/actions");
+        const ts = await listTags();
+        if (!cancelled && Array.isArray(ts)) {
+          setAccountTags(ts.map((t) => ({ id: t.id, name: t.name })));
+        }
+      } catch {
+        /* best-effort */
       }
       // 🛑 Estado do kill switch da conta (freio de emergência da autonomia).
       try {
@@ -487,6 +529,10 @@ export function AiConfig({
         : {}),
     },
     pipeline_id: pipelineId || null,
+    access: {
+      tag_id: accessTagId || "",
+      denied_message: accessDeniedMsg,
+    },
     tools,
     signature_name: signatureName.trim() || null,
     signature_enabled: signatureEnabled && signatureName.trim().length > 0,
@@ -1084,6 +1130,13 @@ export function AiConfig({
                     <SelectItem value="default">
                       1º funil da conta (padrão)
                     </SelectItem>
+                    {/* Funil salvo que não veio na lista (ex.: excluído):
+                        rótulo legível em vez do id cru no trigger. */}
+                    {pipelineId && !pipes.some((p) => p.id === pipelineId) && (
+                      <SelectItem value={pipelineId}>
+                        Funil salvo (fora da lista — confira em Funis)
+                      </SelectItem>
+                    )}
                     {pipes.map((p) => (
                       <SelectItem key={p.id} value={p.id}>
                         {p.name}
@@ -1379,6 +1432,57 @@ export function AiConfig({
                 disabled={disabled || !autoReplyEnabled}
                 className="w-20"
               />
+            </div>
+
+            {/* 🔒 Trava de acesso: agente exclusivo pra clientes (etiqueta). */}
+            <div className="rounded-lg border border-border bg-muted/30 p-3">
+              <Label className="text-sm">
+                🔒 Atender somente clientes (trava de acesso)
+              </Label>
+              <p className="mb-2 mt-0.5 text-xs text-muted-foreground">
+                O agente só conversa com contatos que têm a etiqueta escolhida
+                (ex.: “Aluno”, “Assinante”). Quem não tem recebe a mensagem
+                abaixo uma única vez — e a IA fica em silêncio. Perfeito pra
+                agente de suporte exclusivo.
+              </p>
+              <div className="flex flex-wrap items-center gap-2">
+                <Select
+                  value={accessTagId || "off"}
+                  onValueChange={(v) =>
+                    setAccessTagId(!v || v === "off" ? "" : v)
+                  }
+                  disabled={disabled}
+                >
+                  <SelectTrigger className="h-9 w-full sm:w-72">
+                    <SelectValue placeholder="Sem trava (atende todos)" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="off">Sem trava (atende todos)</SelectItem>
+                    {accessTagId &&
+                      !accountTags.some((t) => t.id === accessTagId) && (
+                        <SelectItem value={accessTagId}>
+                          Etiqueta salva (fora da lista)
+                        </SelectItem>
+                      )}
+                    {accountTags.map((t) => (
+                      <SelectItem key={t.id} value={t.id}>
+                        {t.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              {accessTagId && (
+                <textarea
+                  value={accessDeniedMsg}
+                  onChange={(e) => setAccessDeniedMsg(e.target.value)}
+                  disabled={disabled}
+                  rows={2}
+                  maxLength={500}
+                  placeholder="Mensagem pra quem não é cliente (padrão: “Este canal é exclusivo para clientes…”)"
+                  className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
+                />
+              )}
             </div>
 
             {/* 🎛️ Autonomia governada (Fase 8): reativação proativa. A IA lê o

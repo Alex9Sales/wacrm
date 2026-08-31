@@ -36,6 +36,7 @@ const agentSelect = {
   autoScheduleEnabled: aiConfigs.autoScheduleEnabled,
   tools: aiConfigs.tools,
   pipelineId: aiConfigs.pipelineId,
+  access: aiConfigs.access,
 }
 
 type AgentRow = {
@@ -65,6 +66,7 @@ type AgentRow = {
   autoScheduleEnabled: boolean
   tools: unknown
   pipelineId: string | null
+  access: unknown
 }
 
 /** Turn a raw agent row into a usable, decrypted AiConfig (or null when it
@@ -127,6 +129,7 @@ function finalizeAgent(
     autoScheduleEnabled: row.autoScheduleEnabled,
     tools: sanitizeTools(row.tools),
     pipelineId: row.pipelineId,
+    access: (row.access ?? {}) as AiConfig['access'],
   }
 }
 

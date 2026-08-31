@@ -11,7 +11,7 @@
 
 import { and, eq } from 'drizzle-orm'
 
-import { db, conversations, deals, dealEvents } from '@/db'
+import { db, conversations, deals, dealEvents, organization } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { loadAiConfig } from '@/lib/ai/config'
@@ -23,13 +23,14 @@ export interface DealProposal {
   title: string
   value: number | null
   payment: string | null
+  address: string | null
   summary: string
 }
 
 const EXTRACT_PROMPT = `Você analisa a transcrição de uma conversa entre uma empresa e um cliente e extrai a OPORTUNIDADE/VENDA discutida, para virar um card de CRM. Serve para qualquer nicho: produto, serviço, agendamento, orçamento.
 
 Responda APENAS com um JSON válido neste formato exato:
-{"title":"<curto: o que está sendo vendido/contratado, ex. '1 Ultragaz P-13' ou 'Limpeza dental — avaliação'>","value":<número em reais SEM símbolo, ou null se o valor não apareceu na conversa>,"payment":"<dinheiro|pix|débito|crédito|boleto|null se não dito>","summary":"<1 frase objetiva do que foi combinado, com o que faltar definir>"}
+{"title":"<curto: o que está sendo vendido/contratado, ex. '1 Ultragaz P-13' ou 'Limpeza dental — avaliação'>","value":<número em reais SEM símbolo, ou null se o valor não apareceu na conversa>,"payment":"<dinheiro|pix|débito|crédito|boleto|null se não dito>","address":"<endereço de entrega/atendimento EXATAMENTE como dito na conversa, ou null se não apareceu>","summary":"<1 frase objetiva do que foi combinado, com o que faltar definir>"}
 
 Regras: use SOMENTE o que está na conversa — nunca invente valor nem forma de pagamento (use null). Se houver mais de um item, some no título ("2 P-13"). Título em português, máx. 60 caracteres.`
 
@@ -50,9 +51,13 @@ function parseProposal(text: string): DealProposal | null {
       typeof o.payment === 'string' && o.payment.trim() && o.payment !== 'null'
         ? o.payment.trim().slice(0, 30)
         : null
+    const address =
+      typeof o.address === 'string' && o.address.trim() && o.address !== 'null'
+        ? o.address.trim().slice(0, 200)
+        : null
     const summary =
       typeof o.summary === 'string' ? o.summary.trim().slice(0, 300) : ''
-    return { title, value, payment, summary }
+    return { title, value, payment, address, summary }
   } catch {
     return null
   }
@@ -140,6 +145,17 @@ export async function createDealFromProposal(
     )
     if (!conv?.contactId) return { error: 'Conversa sem contato.' }
 
+    // 💱 Moeda da CONTA (bug 31/08: card nascia em USD, default do schema,
+    // mesmo com a conta em BRL).
+    const org = firstOrNull(
+      await db
+        .select({ currency: organization.default_currency })
+        .from(organization)
+        .where(eq(organization.id, ctx.accountId))
+        .limit(1),
+    )
+    const currency = org?.currency || 'BRL'
+
     const pipelineId = await firstPipelineOf(ctx.accountId)
     const stageId = pipelineId ? await firstStageOf(pipelineId) : null
     if (!pipelineId || !stageId)
@@ -152,6 +168,7 @@ export async function createDealFromProposal(
     const noteBits = [
       proposal.summary?.trim(),
       proposal.payment ? `Forma de pagamento: ${proposal.payment}` : null,
+      proposal.address ? `Endereço: ${proposal.address}` : null,
     ].filter(Boolean)
     const created = firstOrNull(
       await db
@@ -164,6 +181,7 @@ export async function createDealFromProposal(
           contactId: conv.contactId,
           title,
           value: String(value),
+          currency,
           status: 'open',
           origin: 'Análise da conversa (IA)',
           notes: noteBits.join('\n') || null,

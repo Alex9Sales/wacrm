@@ -56,6 +56,7 @@ export async function GET(request: Request) {
           audio_replies_enabled: aiConfigs.audioRepliesEnabled,
           voice_id: aiConfigs.voiceId,
           autonomy: aiConfigs.autonomy,
+          access: aiConfigs.access,
           pipeline_id: aiConfigs.pipelineId,
           deal_suggestions_proactive: aiConfigs.dealSuggestionsProactive,
           signature_name: aiConfigs.signatureName,
@@ -204,6 +205,32 @@ export async function POST(request: Request) {
     // form mandou o campo (preserva senão). sanitizeAutonomy filtra chaves/níveis.
     const autonomy =
       body.autonomy === undefined ? undefined : sanitizeAutonomy(body.autonomy)
+
+    // 🔒 Trava de acesso (migr 0149): {tag_id, denied_message}. tag_id vazio
+    // limpa a trava; tag inexistente na conta é rejeitada.
+    let access: Record<string, string> | undefined = undefined
+    if (body.access !== undefined) {
+      const a = (body.access ?? {}) as Record<string, unknown>
+      const tagId = typeof a.tag_id === 'string' && a.tag_id ? a.tag_id : null
+      const deniedMessage =
+        typeof a.denied_message === 'string'
+          ? a.denied_message.trim().slice(0, 500)
+          : ''
+      if (tagId) {
+        const { tags } = await import('@/db')
+        const t = firstOrNull(
+          await db
+            .select({ id: tags.id })
+            .from(tags)
+            .where(and(eq(tags.id, tagId), eq(tags.accountId, accountId)))
+            .limit(1),
+        )
+        if (!t) return bad('Etiqueta da trava de acesso não encontrada.')
+        access = { tagId, ...(deniedMessage ? { deniedMessage } : {}) }
+      } else {
+        access = {}
+      }
+    }
 
     // Funil DESTE agente (0139): string válida grava; null limpa; ausente preserva.
     let pipelineId: string | null | undefined = undefined
@@ -391,6 +418,7 @@ export async function POST(request: Request) {
       audioRepliesEnabled: boolean
       voiceId: string | null
       autonomy?: Record<string, unknown>
+      access?: Record<string, string>
       pipelineId?: string | null
       dealSuggestionsProactive?: boolean
       signatureName: string | null
@@ -434,6 +462,8 @@ export async function POST(request: Request) {
     if (pipelineId !== undefined) shared.pipelineId = pipelineId
     // Autonomia governada: só grava quando o form mandou (preserva senão).
     if (autonomy !== undefined) shared.autonomy = autonomy
+    // Trava de acesso: só grava quando o form mandou (preserva senão).
+    if (access !== undefined) shared.access = access
     if (rawEmbeddingsKey) {
       shared.embeddingsApiKey = encrypt(rawEmbeddingsKey)
     } else if (clearEmbeddingsKey) {

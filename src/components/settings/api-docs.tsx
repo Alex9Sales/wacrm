@@ -150,8 +150,10 @@ const GROUPS: Group[] = [
       { method: "GET", path: "/tags", scope: "tags:read", desc: "Etiquetas da conta." },
       { method: "POST", path: "/tags", scope: "tags:write", desc: "Cria etiqueta.", fields: "name, color?" },
       { method: "GET", path: "/me", scope: "(qualquer chave)", desc: "Identidade da chave (conta, escopos) — bom pra testar a conexão." },
-      { method: "GET", path: "/agent", scope: "agent:read", desc: "Config do agente de IA da conta." },
-      { method: "PUT", path: "/agent", scope: "agent:write", desc: "Atualiza o agente (prompt etc.)." },
+      { method: "GET", path: "/agent", scope: "agent:read", desc: "Config do agente de IA padrão da conta." },
+      { method: "PUT", path: "/agent", scope: "agent:write", desc: "Atualiza o agente padrão (prompt etc.)." },
+      { method: "GET", path: "/agents", scope: "agent:read", desc: "Lista TODOS os agentes da conta (id, nome, canais, ativo)." },
+      { method: "POST", path: "/agents", scope: "agent:write", desc: "CRIA um agente novo herdando o motor do padrão (chave/modelo) — seu agente externo monta o time: nome, prompt, canais, ferramentas.", fields: "name, system_prompt, channel_ids[]?, tools[]?, active?, auto_reply?" },
     ],
   },
   {

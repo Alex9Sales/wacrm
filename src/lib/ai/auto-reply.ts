@@ -176,6 +176,61 @@ export async function dispatchInboundToAiReply(
     }
     if (!config || !config.autoReplyEnabled) return
 
+    // 🔒 Trava de acesso (caso "agente de suporte só pra clientes"): quando o
+    // agente tem uma etiqueta de acesso, só conversa com contatos que a têm.
+    // Quem não tem recebe a mensagem padrão UMA vez por conversa e a IA se
+    // cala (o humano vê a conversa normalmente no inbox).
+    const accessTagId = config.access?.tagId
+    if (accessTagId) {
+      const { contactTags } = await import('@/db')
+      const hasTag = firstOrNull(
+        await db
+          .select({ id: contactTags.contactId })
+          .from(contactTags)
+          .where(
+            and(
+              eq(contactTags.contactId, contactId),
+              eq(contactTags.tagId, accessTagId),
+            ),
+          )
+          .limit(1),
+      )
+      if (!hasTag) {
+        const denied =
+          config.access?.deniedMessage?.trim() ||
+          'Olá! Este canal é exclusivo para clientes. Fale com a nossa equipe para se tornar um. 😊'
+        // Já avisamos nesta conversa? Não repete a cada mensagem.
+        const already = firstOrNull(
+          await db
+            .select({ id: messagesTable.id })
+            .from(messagesTable)
+            .where(
+              and(
+                eq(messagesTable.conversationId, conversationId),
+                eq(messagesTable.senderType, 'bot'),
+                eq(messagesTable.contentText, denied),
+              ),
+            )
+            .limit(1),
+        )
+        if (!already) {
+          try {
+            const { engineSendText } = await import('@/lib/flows/meta-send')
+            await engineSendText({
+              accountId,
+              userId: configOwnerUserId,
+              conversationId,
+              contactId,
+              text: denied,
+            })
+          } catch (err) {
+            console.error('[ai access-gate] denied message failed:', err)
+          }
+        }
+        return
+      }
+    }
+
     // Horário de atendimento da IA: só responde conforme o modo
     // (sempre / só dentro / só fora do horário da conta). Fora da janela
     // permitida, fica muda (um humano cuida no horário certo).

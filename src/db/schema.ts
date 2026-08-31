@@ -1910,6 +1910,10 @@ export const aiConfigs = pgTable("ai_configs", {
 	// 🎛️ Autonomia governada (Fase 8): política POR AÇÃO.
 	// { reactivation: 'suggest'|'approve'|'auto', ... }.
 	autonomy: jsonb("autonomy").default({}).notNull(),
+	// 🔒 Trava de acesso (migração 0149): {tagId, deniedMessage} — o agente só
+	// conversa com contatos que têm a etiqueta; os demais recebem a mensagem
+	// padrão UMA vez. Vazio = sem trava (comportamento antigo).
+	access: jsonb("access").default({}).notNull(),
 	// IA proativa em Negociações (Fase 3): analisa sozinha o negócio no inbound
 	// e cria sugestões pendentes. Migração 0066. OPT-IN, default OFF.
 	dealSuggestionsProactive: boolean("deal_suggestions_proactive").default(false).notNull(),
