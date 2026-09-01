@@ -656,6 +656,11 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         -- (Sem interpolação aqui dentro: um placeholder num comentário vira
         -- parâmetro bound que o Postgres não consegue tipar — quebrou o sweep
         -- em prod por 2 ticks em 01/09.)
+        -- Grupo NUNCA recebe reengajamento (01/09: o sweep pegou o grupo
+        -- "MEDIT LINK USUÁRIOS" do Rafael; só não saiu porque o JID de grupo
+        -- falhou na validação de telefone — com JID aceito teria mandado
+        -- "oi, ainda precisa?" dentro do grupo).
+        AND coalesce(ct.is_group, false) = false
         -- Só quem JÁ escreveu alguma vez (senão não é reengajamento):
         AND EXISTS (
           SELECT 1 FROM messages mi
