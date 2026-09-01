@@ -165,6 +165,39 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
     window.addEventListener("error", onError);
     window.addEventListener("unhandledrejection", onRejection);
 
+    // 🕳️ O buraco que deixava aba presa PRA SEMPRE (caso Lorrayne/Dentai,
+    // 01/09): quase toda chamada de Server Action nossa tem `.catch(() => [])`
+    // pra não quebrar a tela. Com bundle velho, a ação falha, o catch engole,
+    // e NADA chega no window.onerror — a aba fica batendo numa ação que não
+    // existe mais (2 req/min no log) sem nunca se curar.
+    // Aqui interceptamos no transporte: requisição de Server Action (header
+    // Next-Action) que volta com erro dispara a checagem de versão — que
+    // recarrega sozinha se o build mudou. Se o build é o mesmo, foi erro real
+    // do servidor e nada acontece.
+    const origFetch = window.fetch;
+    const isActionRequest = (
+      input: RequestInfo | URL,
+      init?: RequestInit,
+    ): boolean => {
+      // O Next pode mandar os headers no init OU num objeto Request.
+      if (typeof Request !== "undefined" && input instanceof Request) {
+        if (input.headers.has("next-action")) return true;
+      }
+      const h = init?.headers;
+      if (!h) return false;
+      if (h instanceof Headers) return h.has("next-action");
+      if (Array.isArray(h)) {
+        return h.some(([k]) => k.toLowerCase() === "next-action");
+      }
+      return Object.keys(h).some((k) => k.toLowerCase() === "next-action");
+    };
+    const patched: typeof window.fetch = async (input, init) => {
+      const res = await origFetch(input, init);
+      if (!res.ok && isActionRequest(input, init)) void check();
+      return res;
+    };
+    window.fetch = patched;
+
     void check();
     // Poll agressivo (20s): detecta o deploy novo rápido e auto-recarrega a aba
     // ociosa antes de o usuário clicar numa ação de bundle velho.
@@ -181,6 +214,8 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
       window.removeEventListener("focus", onFocus);
       window.removeEventListener("error", onError);
       window.removeEventListener("unhandledrejection", onRejection);
+      // Só devolve o fetch original se ninguém encadeou outro patch por cima.
+      if (window.fetch === patched) window.fetch = origFetch;
     };
   }, [initialBuildId, check]);
 
