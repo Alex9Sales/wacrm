@@ -90,6 +90,8 @@ export default function SuportePage() {
   const [type, setType] = useState<SupportTicketType>("problem");
   const [subject, setSubject] = useState("");
   const [description, setDescription] = useState("");
+  // WhatsApp de retorno: é por onde a gente avisa quando resolve.
+  const [whatsapp, setWhatsapp] = useState("");
   const [shots, setShots] = useState<Shot[]>([]);
   const [uploading, setUploading] = useState(0);
   const [dragActive, setDragActive] = useState(false);
@@ -99,6 +101,16 @@ export default function SuportePage() {
   const [loadingList, setLoadingList] = useState(true);
 
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Prefill do WhatsApp com o do último chamado desta pessoa.
+  useEffect(() => {
+    try {
+      const saved = localStorage.getItem("fluxia:suporte:zap");
+      if (saved) setWhatsapp(saved);
+    } catch {
+      /* sem storage — abre vazio */
+    }
+  }, []);
 
   const load = useCallback(async () => {
     try {
@@ -196,6 +208,7 @@ export default function SuportePage() {
           type,
           subject: s,
           description: description.trim() || null,
+          whatsapp: whatsapp.trim() || null,
           screenshot_urls: shots.map((x) => x.url),
           context,
         }),
@@ -214,7 +227,14 @@ export default function SuportePage() {
           ? "Chamado enviado! Nossa equipe já recebeu no WhatsApp. 🙌"
           : "Chamado registrado! Nossa equipe vai olhar.",
       );
-      // Reset + prepend to history.
+      // Guarda o zap pro próximo chamado (mesma pessoa, mesmo número).
+      try {
+        const z = whatsapp.trim();
+        if (z) localStorage.setItem("fluxia:suporte:zap", z);
+      } catch {
+        /* sem storage — só não lembra */
+      }
+      // Reset + prepend to history (o WhatsApp fica, é sempre o mesmo).
       setSubject("");
       setDescription("");
       setShots([]);
@@ -295,6 +315,24 @@ export default function SuportePage() {
               placeholder="Resumo curto (ex.: não consigo conectar o WhatsApp)"
               maxLength={200}
             />
+          </div>
+
+          {/* WhatsApp de retorno */}
+          <div className="space-y-2">
+            <Label htmlFor="zap" className="text-muted-foreground">
+              Seu WhatsApp
+            </Label>
+            <Input
+              id="zap"
+              value={whatsapp}
+              onChange={(e) => setWhatsapp(e.target.value)}
+              placeholder="(67) 99999-9999"
+              inputMode="tel"
+              maxLength={20}
+            />
+            <p className="text-xs text-muted-foreground">
+              Assim que resolvermos, te avisamos por aqui.
+            </p>
           </div>
 
           {/* Descrição */}

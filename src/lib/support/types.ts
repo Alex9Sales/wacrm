@@ -65,8 +65,26 @@ export interface SupportTicketDTO {
   context: SupportContext;
   status: SupportTicketStatus;
   alertedAt: string | null;
+  /** WhatsApp do cliente (só dígitos) — por onde avisamos ao resolver. */
+  whatsapp: string | null;
+  /** O que foi feito, escrito por quem resolveu. Vai no aviso ao cliente. */
+  resolutionNote: string | null;
+  /** Quando o cliente foi avisado da resolução (trava contra aviso repetido). */
+  clientNotifiedAt: string | null;
   createdAt: string;
   updatedAt: string;
+}
+
+/** Telefone BR digitado de qualquer jeito → só dígitos com DDI 55. */
+export function normalizeSupportWhatsapp(raw: unknown): string | null {
+  if (typeof raw !== "string") return null;
+  let d = raw.replace(/\D/g, "");
+  if (!d) return null;
+  // Sem DDI: 10 (fixo) ou 11 (celular) dígitos = número BR → prefixa 55.
+  if (d.length === 10 || d.length === 11) d = `55${d}`;
+  // 12–13 já vem com DDI. Fora disso não é telefone válido pra nós.
+  if (d.length < 12 || d.length > 13) return null;
+  return d;
 }
 
 /** Linha do setor Suporte no /admin — o chamado + de quem/qual org veio. */

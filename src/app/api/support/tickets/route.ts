@@ -19,7 +19,7 @@ import {
   rateLimitResponse,
   RATE_LIMITS,
 } from "@/lib/rate-limit";
-import { isSupportTicketType, type SupportContext } from "@/lib/support/types";
+import { normalizeSupportWhatsapp, isSupportTicketType, type SupportContext } from "@/lib/support/types";
 import { listOrgTickets, serializeTicket } from "@/lib/support/queries";
 import { sendSupportAlert } from "@/lib/support/alert";
 
@@ -99,6 +99,15 @@ export async function POST(request: Request) {
 
     const screenshotUrls = sanitizeScreenshots(body.screenshot_urls);
 
+    // WhatsApp do cliente — é por onde a gente responde quando resolve.
+    const whatsapp = normalizeSupportWhatsapp(body.whatsapp);
+    if (body.whatsapp && !whatsapp) {
+      return NextResponse.json(
+        { error: "WhatsApp inválido — use DDD + número (ex.: 67 99999-9999)." },
+        { status: 400 },
+      );
+    }
+
     // Contexto do cliente (diagnóstico) — enriquecido com dados autoritativos.
     const rawCtx = (body.context ?? {}) as Record<string, unknown>;
     const authUser = firstOrNull(
@@ -130,6 +139,7 @@ export async function POST(request: Request) {
           description,
           screenshotUrls,
           context,
+          whatsapp,
         })
         .returning(),
     );
@@ -149,6 +159,7 @@ export async function POST(request: Request) {
       description,
       screenshotUrls,
       context,
+      whatsapp,
     });
 
     let row = inserted;

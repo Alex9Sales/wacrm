@@ -1822,6 +1822,10 @@ export const supportTickets = pgTable("support_tickets", {
 	// 'open' | 'in_progress' | 'resolved'
 	status: text().default('open').notNull(),
 	alertedAt: timestamp("alerted_at", { withTimezone: true, mode: 'string' }),
+	// WhatsApp do cliente (só dígitos) — por onde avisamos quando resolve.
+	whatsapp: text(),
+	resolutionNote: text("resolution_note"),
+	clientNotifiedAt: timestamp("client_notified_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

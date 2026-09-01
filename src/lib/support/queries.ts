@@ -35,6 +35,9 @@ export function serializeTicket(row: any): SupportTicketDTO {
     context: (row.context ?? {}) as SupportContext,
     status: (row.status ?? "open") as SupportTicketStatus,
     alertedAt: (row.alertedAt as string | null) ?? null,
+    whatsapp: (row.whatsapp as string | null) ?? null,
+    resolutionNote: (row.resolutionNote as string | null) ?? null,
+    clientNotifiedAt: (row.clientNotifiedAt as string | null) ?? null,
     createdAt: row.createdAt as string,
     updatedAt: row.updatedAt as string,
   };

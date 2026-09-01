@@ -161,18 +161,50 @@ export function AdminSupport() {
     void load();
   }, [load]);
 
-  async function setStatus(t: AdminSupportTicketDTO, status: SupportTicketStatus) {
+  // "Resolver" abre um campo pra contar ao cliente o que foi feito — esse
+  // texto vai no WhatsApp dele junto com o aviso de resolvido.
+  const [resolvingId, setResolvingId] = useState<string | null>(null);
+  const [note, setNote] = useState("");
+  const [zap, setZap] = useState("");
+
+  function resolveWithNote(t: AdminSupportTicketDTO) {
+    setResolvingId(t.id);
+    setNote("");
+    setZap(t.whatsapp ?? "");
+  }
+
+  async function setStatus(
+    t: AdminSupportTicketDTO,
+    status: SupportTicketStatus,
+    resolutionNote?: string | null,
+    whatsapp?: string | null,
+  ) {
     setBusyId(t.id);
     try {
       const res = await fetch(`/api/admin/support/${t.id}`, {
         method: "PATCH",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ status }),
+        body: JSON.stringify({
+          status,
+          resolution_note: resolutionNote ?? null,
+          whatsapp: whatsapp?.trim() || null,
+        }),
       });
       if (!res.ok) {
         const p = await res.json().catch(() => ({}));
         toast.error(p.error || "Não foi possível atualizar o status.");
         return;
+      }
+      // A rota devolve se o cliente foi avisado no WhatsApp dele.
+      const payload = (await res.json().catch(() => ({}))) as {
+        clientNotified?: { sent: boolean; error?: string } | null;
+      };
+      if (payload.clientNotified?.sent) {
+        toast.success("Resolvido — cliente avisado no WhatsApp. 🙌");
+      } else if (payload.clientNotified && !payload.clientNotified.sent) {
+        toast.warning(
+          `Resolvido, mas não deu pra avisar o cliente: ${payload.clientNotified.error ?? "falha no envio"}`,
+        );
       }
       await load();
     } catch (err) {
@@ -289,9 +321,27 @@ export function AdminSupport() {
                           .join(" · ") || "—"}
                         {" · "}
                         {fmt(t.createdAt)}
+                        {t.whatsapp ? (
+                          <>
+                            {" · "}
+                            <a
+                              href={`https://wa.me/${t.whatsapp}`}
+                              target="_blank"
+                              rel="noreferrer"
+                              className="text-primary hover:underline"
+                            >
+                              {t.whatsapp}
+                            </a>
+                          </>
+                        ) : null}
                         {t.alertedAt ? (
                           <span className="ml-1 inline-flex items-center gap-0.5 text-emerald-400">
                             <MessageCircle className="size-3" /> zap enviado
+                          </span>
+                        ) : null}
+                        {t.clientNotifiedAt ? (
+                          <span className="ml-1 inline-flex items-center gap-0.5 text-emerald-400">
+                            <MessageCircle className="size-3" /> cliente avisado
                           </span>
                         ) : null}
                       </p>
@@ -334,6 +384,59 @@ export function AdminSupport() {
                     </div>
                   ) : null}
 
+                  {/* Resolver: conta ao cliente o que foi feito (vai no zap dele). */}
+                  {resolvingId === t.id ? (
+                    <div className="mt-3 space-y-2 rounded-lg border border-border bg-muted/30 p-3">
+                      <p className="text-xs text-muted-foreground">
+                        {t.whatsapp
+                          ? `O cliente vai receber esta mensagem no WhatsApp ${t.whatsapp}:`
+                          : "Este chamado foi aberto sem WhatsApp. Informe o número para avisar o cliente (ou deixe vazio para só resolver)."}
+                      </p>
+                      {!t.whatsapp ? (
+                        <input
+                          value={zap}
+                          onChange={(e) => setZap(e.target.value)}
+                          placeholder="WhatsApp do cliente — (67) 99999-9999"
+                          inputMode="tel"
+                          maxLength={20}
+                          className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50"
+                        />
+                      ) : null}
+                      <textarea
+                        value={note}
+                        onChange={(e) => setNote(e.target.value)}
+                        rows={3}
+                        maxLength={600}
+                        placeholder="O que foi feito (opcional). Ex.: Ajustamos e já está funcionando — atualize a página com Cmd+Shift+R."
+                        className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50"
+                      />
+                      <div className="flex flex-wrap justify-end gap-2">
+                        <Button
+                          size="sm"
+                          variant="ghost"
+                          onClick={() => setResolvingId(null)}
+                        >
+                          Cancelar
+                        </Button>
+                        <Button
+                          size="sm"
+                          disabled={rowBusy}
+                          onClick={() => {
+                            setResolvingId(null);
+                            void setStatus(t, "resolved", note, zap);
+                          }}
+                        >
+                          {rowBusy ? (
+                            <Loader2 className="size-3.5 animate-spin" />
+                          ) : null}
+                          {t.whatsapp || zap.trim()
+                            ? "Resolver e avisar cliente"
+                            : "Resolver"}
+                        </Button>
+                      </div>
+                    </div>
+                  ) : null}
+
                   {/* Ações */}
                   <div className="flex flex-wrap items-center justify-end gap-2 border-t border-border pt-3">
                     <Button
@@ -361,7 +464,7 @@ export function AdminSupport() {
                       <Button
                         size="sm"
                         disabled={rowBusy}
-                        onClick={() => void setStatus(t, "resolved")}
+                        onClick={() => void resolveWithNote(t)}
                       >
                         {rowBusy ? (
                           <Loader2 className="size-3.5 animate-spin" />
