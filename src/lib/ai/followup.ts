@@ -857,6 +857,16 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
           closeCtx?.stageNames ?? [],
           tz,
         )
+        // 🚫 Este caminho gera com generateReply — SEM executar ferramentas
+        // (criar_pedido, cadastro, etc.). O prompt do agente descreve essas
+        // ferramentas, e o modelo narrava ações que não aconteceram: 01/09 o
+        // follow-up disse à Madalena "pedido registrado" sem pedido nenhum no
+        // ERP (ela tinha pago por Pix). Aqui a IA só conversa.
+        systemPrompt +=
+          '\n\nREGRA DURA DESTE REENGAJAMENTO: aqui você NÃO executa ferramentas ' +
+          '(pedido, cadastro, pagamento, agenda). NUNCA diga que registrou, ' +
+          'confirmou ou encaminhou algo AGORA. Se algo ainda precisa ser registrado, ' +
+          'peça ao cliente confirmar e diga que a equipe conclui em seguida.'
         // 📊 CDL: injeta o histórico do cliente (última compra, frequência,
         // ticket) pra o reengajamento ser personalizado ("quer o mesmo de
         // sempre?"), não genérico. Determinístico, best-effort.
