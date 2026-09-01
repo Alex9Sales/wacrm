@@ -5,8 +5,11 @@
 
 import { useCallback, useEffect, useState } from 'react'
 
+import { toast } from 'sonner'
+
 import {
   getContactCadenceState,
+  resumeLeadCadence,
   type CadenceState,
 } from '@/app/(dashboard)/automations/cadencias/actions'
 import { CadenceButton } from './cadence-button'
@@ -46,6 +49,30 @@ function fmt(iso: string | null): string {
 export function CadenceSidebar({ conversationId }: { conversationId: string }) {
   const [state, setState] = useState<CadenceState | null>(null)
   const [loaded, setLoaded] = useState(false)
+  const [resuming, setResuming] = useState(false)
+
+  // ▶️ Retomar de onde parou (pedido do Rafael, 01/09): a cadência pausa
+  // quando o lead responde; se o atendente quer que ela siga, reagenda só os
+  // degraus que faltam, a partir de agora.
+  async function resume() {
+    if (!state || state.status !== 'paused') return
+    setResuming(true)
+    try {
+      const r = await resumeLeadCadence(state.enrollment_id)
+      if (!r.ok) {
+        toast.error(r.error ?? 'Não deu pra retomar a cadência.')
+        return
+      }
+      toast.success(
+        r.scheduled
+          ? `Cadência retomada — ${r.scheduled} toque(s) reagendado(s).`
+          : 'Cadência retomada.',
+      )
+      await refresh()
+    } finally {
+      setResuming(false)
+    }
+  }
 
   const refresh = useCallback(async () => {
     const st = await getContactCadenceState({ conversationId })
@@ -83,6 +110,16 @@ export function CadenceSidebar({ conversationId }: { conversationId: string }) {
               ? ` · próximo ${fmt(state.next_at)}`
               : ''}
           </p>
+          {state.status === 'paused' && (
+            <button
+              type="button"
+              onClick={() => void resume()}
+              disabled={resuming}
+              className="mt-2 w-full rounded-md border border-primary/40 bg-primary/10 px-2 py-1.5 text-xs font-medium text-primary transition-colors hover:bg-primary/15 disabled:opacity-50"
+            >
+              {resuming ? 'Retomando…' : '▶ Retomar de onde parou'}
+            </button>
+          )}
           {state.events.length > 0 && (
             <ul className="mt-2 max-h-32 space-y-1 overflow-y-auto border-t border-border pt-2">
               {state.events.slice(0, 6).map((e, i) => (

@@ -103,6 +103,22 @@ import('./owner-digest-worker')
     console.error('[worker] owner-digest failed to start:', err);
   });
 
+// 🔄 Sync ERP → CRM — 1x/dia (05h locais) por conta com `historico_compras`:
+// compras feitas fora do CRM entram no CDL (caso Poleana, 01/09).
+import('./erp-sync-worker')
+  .then((m) => m.startErpSyncWorker())
+  .catch((err) => {
+    console.error('[worker] erp-sync failed to start:', err);
+  });
+
+// 🎂 Aniversário — tick de 15 min: parabéns automático na hora configurada
+// (opt-in por conta, OFF por padrão; 1 por contato por ano).
+import('./birthday-worker')
+  .then((m) => m.startBirthdayWorker())
+  .catch((err) => {
+    console.error('[worker] birthday failed to start:', err);
+  });
+
 // ⏰ IG follow-up — tick de 10 min: cutucada pós-DM da automação de
 // comentários pra quem respondeu e sumiu (opt-in por regra, OFF por padrão).
 import('./ig-followup-worker')

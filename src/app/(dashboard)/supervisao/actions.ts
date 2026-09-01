@@ -13,6 +13,7 @@ import { isAdminUser } from '@/lib/sectors/access';
 import {
   loadSupervision,
   loadAgentConversations,
+  loadWaitingConversations,
   loadCsatSummary,
   type CsatSummary,
 } from '@/lib/supervision/queries';
@@ -45,4 +46,16 @@ export async function getAgentConversations(
 export async function getCsatSummary(): Promise<CsatSummary> {
   const ctx = await requireRole('supervisor');
   return loadCsatSummary(ctx.accountId);
+}
+
+/** Lista da conta inteira de quem está AGUARDANDO resposta (mais demorada
+ *  primeiro). Supervisor não vê conversa de admin/owner. */
+export async function getWaitingConversations(): Promise<AgentConversationRow[]> {
+  const ctx = await requireRole('supervisor');
+  const hideAdmins = !hasMinRole(ctx.role, 'admin');
+  const rows = await loadWaitingConversations(ctx.accountId);
+  if (!hideAdmins) return rows;
+  const overview = await loadSupervision(ctx.accountId, true);
+  const allowed = new Set(overview.agents.map((a) => a.id));
+  return rows.filter((r) => !r.agentId || allowed.has(r.agentId));
 }

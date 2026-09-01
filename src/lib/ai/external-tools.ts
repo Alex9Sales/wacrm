@@ -261,6 +261,11 @@ export async function executeTool(
   tool: ExternalTool,
   args: Record<string, unknown>,
   ctx: { accountId: string; agentId: string | null; conversationId: string | null },
+  opts?: {
+    /** false = não grava em agent_tool_runs (sync em massa do ERP, 01/09:
+     *  milhares de chamadas/dia poluiriam o Histórico de ações). */
+    log?: boolean
+  },
 ): Promise<ToolRunResult> {
   const started = Date.now()
   let result: ToolRunResult
@@ -342,6 +347,7 @@ export async function executeTool(
   }
 
   // Histórico de ações — best-effort, nunca derruba a resposta.
+  if (opts?.log === false) return result
   try {
     await db.insert(agentToolRuns).values({
       accountId: ctx.accountId,

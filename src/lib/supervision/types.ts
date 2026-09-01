@@ -32,4 +32,7 @@ export interface AgentConversationRow {
   /** Minutes the customer has been waiting for a reply (null = not waiting). */
   waitingMin: number | null;
   unread: number;
+  /** Quem está com a conversa (só na visão "aguardando resposta" da conta). */
+  agentId?: string | null;
+  agentName?: string | null;
 }

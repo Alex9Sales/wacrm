@@ -56,6 +56,8 @@ export function ContactForm({
   const [phone, setPhone] = useState('');
   const [email, setEmail] = useState('');
   const [company, setCompany] = useState('');
+  // 🎂 Aniversário (YYYY-MM-DD no input type=date).
+  const [birthday, setBirthday] = useState('');
   const [saving, setSaving] = useState(false);
 
   // Duplicate-phone detection for NEW contacts. `exact` (same digits)
@@ -77,6 +79,7 @@ export function ContactForm({
       setPhone(contact?.phone ?? initialPhone ?? '');
       setEmail(contact?.email ?? '');
       setCompany(contact?.company ?? '');
+      setBirthday((contact?.birthday ?? '').slice(0, 10));
       setSelectedTagIds(contactTags.map((ct) => ct.tag_id));
       setDupMatch(null);
       fetchTags();
@@ -153,6 +156,7 @@ export function ContactForm({
         phone,
         email,
         company,
+        birthday: birthday || null,
         tagIds: selectedTagIds,
       });
 
@@ -285,6 +289,22 @@ export function ContactForm({
               placeholder="Empresa Ltda."
               className="bg-muted border-border text-foreground placeholder:text-muted-foreground"
             />
+          </div>
+
+          <div className="space-y-2">
+            <Label htmlFor="cf-birthday" className="text-muted-foreground">
+              Aniversário
+            </Label>
+            <Input
+              id="cf-birthday"
+              type="date"
+              value={birthday}
+              onChange={(e) => setBirthday(e.target.value)}
+              className="bg-muted border-border text-foreground"
+            />
+            <p className="text-[11px] text-muted-foreground">
+              Com a data, o CRM pode mandar parabéns automático (Configurações → Atendimento).
+            </p>
           </div>
 
           <div className="space-y-2">

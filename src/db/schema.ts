@@ -224,6 +224,9 @@ export const contacts = pgTable("contacts", {
 	// + import CSV). `companyId` = vínculo com a entidade Empresa (migração 0067).
 	company: text(),
 	companyId: uuid("company_id"),
+	// 🎂 Aniversário (data) + carimbo do último parabéns (1 por ano). Migr 0151.
+	birthday: date(),
+	lastBirthdayGreetingAt: timestamp("last_birthday_greeting_at", { withTimezone: true, mode: 'string' }),
 	// Código(s) do cliente no ERP do cliente (múltiplos por contato). Exibido
 	// ao lado do nome, editável, exportável/importável em CSV e via API v1.
 	customerCodes: text("customer_codes").array().notNull().default(sql`'{}'::text[]`),

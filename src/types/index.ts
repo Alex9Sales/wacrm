@@ -97,6 +97,8 @@ export interface Contact {
   name?: string;
   email?: string;
   company?: string;
+  /** 🎂 Aniversário YYYY-MM-DD (migr 0151). */
+  birthday?: string | null;
   /** Código(s) do cliente no ERP (múltiplos por contato). Mostrado ao lado
    *  do nome, editável, e exportado/importado em CSV + API v1. */
   customer_codes?: string[];

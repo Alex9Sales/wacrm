@@ -2,7 +2,7 @@
 
 import { useEffect, useState, type ReactNode } from "react";
 import { toast } from "sonner";
-import { Loader2, PenLine, AudioLines, Timer, Clock, Star } from "lucide-react";
+import { Loader2, PenLine, AudioLines, Timer, Clock, Star, Cake } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
 import {
@@ -18,6 +18,9 @@ import {
   getCsatConfig,
   setCsatConfig,
   type CsatConfig,
+  getBirthdayGreetingConfig,
+  setBirthdayGreetingConfig,
+  type BirthdayGreetingConfig,
 } from "./actions";
 import { Switch } from "@/components/ui/switch";
 import { Input } from "@/components/ui/input";
@@ -57,6 +60,7 @@ export function ServicePanel() {
     null,
   );
   const [csat, setCsat] = useState<CsatConfig | null>(null);
+  const [birthday, setBirthday] = useState<BirthdayGreetingConfig | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
@@ -67,8 +71,9 @@ export function ServicePanel() {
       getAutoReassignConfig(),
       getBusinessHoursConfig(),
       getCsatConfig(),
+      getBirthdayGreetingConfig(),
     ])
-      .then(([sig, tr, rc, bh, cs]) => {
+      .then(([sig, tr, rc, bh, cs, bd]) => {
         if (!active) return;
         setSignature(sig);
         setTranscription(tr);
@@ -76,6 +81,7 @@ export function ServicePanel() {
         setReassignMin(rc.minutes);
         setBusinessHours(bh);
         setCsat(cs);
+        setBirthday(bd);
       })
       .catch(() => {})
       .finally(() => {
@@ -145,6 +151,8 @@ export function ServicePanel() {
         />
 
         <CsatCard initial={csat} canEdit={canEditSettings} loading={loading} />
+
+        <BirthdayCard initial={birthday} canEdit={canEditSettings} loading={loading} />
       </div>
     </div>
   );
@@ -297,6 +305,139 @@ const TIMEZONE_OPTIONS: { value: string; label: string }[] = [
   { value: "America/Rio_Branco", label: "Acre (GMT-5)" },
   { value: "America/Noronha", label: "Fernando de Noronha (GMT-2)" },
 ];
+
+// ------------------------------------------------------------
+// 🎂 Parabéns automático de aniversário (pedido do Rafael, 01/09)
+// ------------------------------------------------------------
+
+const BIRTHDAY_HOURS = [7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20];
+
+function renderBirthdayPreview(template: string, name: string): string {
+  return template.replace(/\{\{\s*nome\s*\}\}/gi, name).replace(/\s{2,}/g, " ").trim();
+}
+
+function BirthdayCard({
+  initial,
+  canEdit,
+  loading,
+}: {
+  initial: BirthdayGreetingConfig | null;
+  canEdit: boolean;
+  loading: boolean;
+}) {
+  const [enabled, setEnabled] = useState(false);
+  const [hour, setHour] = useState(9);
+  const [message, setMessage] = useState("");
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    if (!initial) return;
+    setEnabled(initial.enabled);
+    setHour(initial.hour);
+    setMessage(initial.message);
+  }, [initial]);
+
+  const save = async () => {
+    setSaving(true);
+    try {
+      await setBirthdayGreetingConfig({ enabled, hour, message });
+      toast.success(
+        enabled
+          ? `Parabéns automático ligado — sai todo dia às ${String(hour).padStart(2, "0")}h para quem faz aniversário.`
+          : "Parabéns automático salvo (desligado).",
+      );
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : "Não foi possível salvar.");
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle className="flex items-center gap-2 text-base">
+          <Cake className="h-4 w-4 text-primary" />
+          Parabéns de aniversário
+        </CardTitle>
+        <CardDescription>
+          Manda uma mensagem automática no dia do aniversário de cada contato
+          (campo &quot;Aniversário&quot; no cadastro — ou importe a coluna da sua
+          planilha). Uma vez por ano, no canal em que o cliente costuma falar com
+          você. Contatos em &quot;não perturbe&quot; não recebem.
+        </CardDescription>
+      </CardHeader>
+      <CardContent className="space-y-4">
+        <div className="flex items-center justify-between gap-4 rounded-lg border border-border bg-muted/40 p-3">
+          <Label className="text-sm font-medium text-foreground">
+            Enviar parabéns automaticamente
+          </Label>
+          <div className="flex shrink-0 items-center gap-2">
+            {(loading || saving) && (
+              <Loader2 className="h-4 w-4 animate-spin text-muted-foreground" />
+            )}
+            <Switch
+              checked={enabled}
+              onCheckedChange={setEnabled}
+              disabled={loading || saving || !canEdit}
+            />
+          </div>
+        </div>
+
+        <div className="grid gap-4 sm:grid-cols-[160px_1fr]">
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">Horário do envio</Label>
+            <Select
+              value={String(hour)}
+              onValueChange={(v) => setHour(Number(v))}
+              disabled={loading || saving || !canEdit}
+            >
+              <SelectTrigger className="bg-muted">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {BIRTHDAY_HOURS.map((h) => (
+                  <SelectItem key={h} value={String(h)}>
+                    {String(h).padStart(2, "0")}:00
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <p className="text-[11px] text-muted-foreground">No fuso da conta.</p>
+          </div>
+          <div className="space-y-1.5">
+            <Label className="text-xs text-muted-foreground">
+              Mensagem — use <code className="rounded bg-muted px-1">{"{{nome}}"}</code> pro primeiro nome
+            </Label>
+            <textarea
+              value={message}
+              onChange={(e) => setMessage(e.target.value)}
+              disabled={loading || saving || !canEdit}
+              rows={4}
+              maxLength={800}
+              className="w-full rounded-md border border-border bg-muted px-3 py-2 text-sm text-foreground placeholder:text-muted-foreground focus:outline-none focus:ring-1 focus:ring-primary disabled:opacity-60"
+              placeholder="Feliz aniversário, {{nome}}! 🎉"
+            />
+            {message.trim() && (
+              <p className="rounded-md border border-dashed border-border bg-background px-3 py-2 text-xs text-muted-foreground">
+                <span className="font-medium text-foreground">Prévia:</span>{" "}
+                {renderBirthdayPreview(message, "Maria")}
+              </p>
+            )}
+          </div>
+        </div>
+
+        {canEdit && (
+          <div className="flex justify-end">
+            <Button size="sm" onClick={save} disabled={loading || saving}>
+              {saving ? "Salvando…" : "Salvar"}
+            </Button>
+          </div>
+        )}
+      </CardContent>
+    </Card>
+  );
+}
 
 function BusinessHoursCard({
   initial,

@@ -22,6 +22,7 @@ import {
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { optOutContact, resubscribeContact } from '@/lib/contacts/opt-out'
+import { normalizeBirthday } from '@/lib/contacts/birthday'
 import { dispatchTagAddedToFlows } from '@/lib/flows/engine'
 import {
   sanitizePhoneForMeta,
@@ -61,6 +62,7 @@ const contactColumns = {
   name: contacts.name,
   email: contacts.email,
   company: contacts.company,
+      birthday: contacts.birthday,
   customer_codes: contacts.customerCodes,
   avatar_url: contacts.avatarUrl,
   opted_out: contacts.optedOut,
@@ -110,6 +112,7 @@ export async function exportContacts(): Promise<ContactExportRow[]> {
       name: contacts.name,
       email: contacts.email,
       company: contacts.company,
+      birthday: contacts.birthday,
       codes: contacts.customerCodes,
     })
     .from(contacts)
@@ -300,6 +303,8 @@ export interface SaveContactInput {
   phone: string
   email: string
   company: string
+  /** 🎂 YYYY-MM-DD | DD/MM/YYYY | DD/MM; null limpa; ausente não mexe. */
+  birthday?: string | null
   /** Full desired set of tag ids (delete + reinsert to match). */
   tagIds: string[]
 }
@@ -379,6 +384,8 @@ export async function saveContact(
   const name = input.name.trim() || null
   const email = input.email.trim() || null
   const company = input.company.trim() || null
+  // 🎂 Aniversário (migr 0151): inválido vira null (não bloqueia o cadastro).
+  const birthday = normalizeBirthday(input.birthday)
   // Empresa como entidade: acha/cria a Empresa pelo texto e vincula (company_id).
   const companyId = await resolveCompanyId(ctx.accountId, ctx.userId, company)
 
@@ -395,6 +402,7 @@ export async function saveContact(
           email,
           company,
           companyId,
+          ...(input.birthday !== undefined ? { birthday } : {}),
           updatedAt: new Date().toISOString(),
         })
         .where(and(eq(contacts.id, contactId), eq(contacts.accountId, ctx.accountId)))
@@ -413,6 +421,7 @@ export async function saveContact(
           email,
           company,
           companyId,
+          birthday,
         })
         .returning({ id: contacts.id })
       contactId = firstOrThrow(inserted).id
@@ -457,6 +466,8 @@ export interface ImportContactRow {
   name?: string
   email?: string
   company?: string
+  /** 🎂 Aniversário em qualquer formato aceito por normalizeBirthday. */
+  birthday?: string | null
   tagNames: string[]
   /** Customer codes from the código column (Felipe/cema). */
   codes?: string[]
@@ -594,6 +605,7 @@ export async function importContacts(
       name: row.name || null,
       email: row.email || null,
       company: row.company || null,
+      ...(row.birthday !== undefined ? { birthday: normalizeBirthday(row.birthday) } : {}),
       customerCodes: row.codes ?? [],
     }))
 

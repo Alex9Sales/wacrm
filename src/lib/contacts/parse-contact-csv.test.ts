@@ -34,6 +34,7 @@ describe('parseContactCsv', () => {
       hasTagsColumn: true,
       hasCompanyColumn: false,
       hasCodesColumn: false,
+      hasBirthdayColumn: false,
       rows: [
         {
           phone: '+15551234567',
@@ -63,6 +64,7 @@ describe('parseContactCsv', () => {
       hasTagsColumn: false,
       hasCompanyColumn: false,
       hasCodesColumn: false,
+      hasBirthdayColumn: false,
       rows: [
         {
           phone: '+15551234567',

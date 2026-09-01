@@ -25,6 +25,7 @@ import {
 import {
   getSupervisionOverview,
   getAgentConversations,
+  getWaitingConversations,
   getCsatSummary,
 } from "./actions";
 import type {
@@ -53,6 +54,10 @@ export default function SupervisaoPage() {
   const [convs, setConvs] = useState<AgentConversationRow[]>([]);
   const [loadingConvs, setLoadingConvs] = useState(false);
   const [csat, setCsat] = useState<CsatSummary | null>(null);
+  // 📋 Visão "Aguardando resposta" da conta inteira (clique no card) — a lista
+  // pronta, mais demorada primeiro, sem rolar atendente por atendente
+  // (pedido do Rafael, 01/09).
+  const [waitingMode, setWaitingMode] = useState(false);
 
   const load = useCallback(async (isRefresh = false) => {
     if (isRefresh) setRefreshing(true);
@@ -80,9 +85,29 @@ export default function SupervisaoPage() {
 
   const selectAgent = useCallback(async (agent: AgentStat) => {
     setSelected(agent);
+    setWaitingMode(false);
     setLoadingConvs(true);
     try {
-      setConvs(await getAgentConversations(agent.id));
+      // Quem está esperando resposta vai pro TOPO (mais demorado primeiro).
+      const rows = await getAgentConversations(agent.id);
+      setConvs(
+        [...rows].sort(
+          (a, b) => (b.waitingMin ?? -1) - (a.waitingMin ?? -1),
+        ),
+      );
+    } catch {
+      setConvs([]);
+    } finally {
+      setLoadingConvs(false);
+    }
+  }, []);
+
+  const selectWaiting = useCallback(async () => {
+    setSelected(null);
+    setWaitingMode(true);
+    setLoadingConvs(true);
+    try {
+      setConvs(await getWaitingConversations());
     } catch {
       setConvs([]);
     } finally {
@@ -147,6 +172,8 @@ export default function SupervisaoPage() {
               label="Aguardando resposta"
               value={overview.totalWaiting}
               tone={overview.totalWaiting > 0 ? "warn" : "default"}
+              onClick={() => void selectWaiting()}
+              active={waitingMode}
             />
             <StatCard
               icon={<Inbox className="h-4 w-4" />}
@@ -325,9 +352,11 @@ export default function SupervisaoPage() {
             <div className="rounded-xl border border-border bg-card">
               <div className="border-b border-border px-4 py-3">
                 <h2 className="text-sm font-semibold text-foreground">
-                  {selected
-                    ? `Conversas de ${selected.name}`
-                    : "Selecione um atendente"}
+                  {waitingMode
+                    ? `Aguardando resposta (${convs.length})`
+                    : selected
+                      ? `Conversas de ${selected.name}`
+                      : "Selecione um atendente"}
                 </h2>
                 {selected && (
                   <p className="mt-0.5 text-xs text-muted-foreground">
@@ -335,10 +364,11 @@ export default function SupervisaoPage() {
                   </p>
                 )}
               </div>
-              {!selected ? (
+              {!selected && !waitingMode ? (
                 <p className="px-4 py-10 text-center text-xs text-muted-foreground">
-                  Escolha um atendente à esquerda para ver quem ele está
-                  atendendo, de qual canal, e há quanto tempo.
+                  Escolha um atendente à esquerda — ou clique em
+                  &quot;Aguardando resposta&quot; para ver todo mundo que está
+                  esperando, do mais demorado pro mais recente.
                 </p>
               ) : loadingConvs ? (
                 <div className="flex justify-center py-10">
@@ -346,7 +376,9 @@ export default function SupervisaoPage() {
                 </div>
               ) : convs.length === 0 ? (
                 <p className="px-4 py-10 text-center text-xs text-muted-foreground">
-                  Nenhuma conversa aberta atribuída a este atendente.
+                  {waitingMode
+                    ? "Ninguém esperando resposta agora. 🎉"
+                    : "Nenhuma conversa aberta atribuída a este atendente."}
                 </p>
               ) : (
                 <div className="max-h-[70vh] divide-y divide-border overflow-y-auto">
@@ -362,6 +394,9 @@ export default function SupervisaoPage() {
                         </p>
                         <p className="truncate text-xs text-muted-foreground">
                           {c.channelName ?? "Canal"}
+                          {waitingMode
+                            ? ` · ${c.agentName ?? "sem atendente (fila)"}`
+                            : ""}
                         </p>
                       </div>
                       {c.waitingMin != null ? (
@@ -391,14 +426,26 @@ function StatCard({
   label,
   value,
   tone = "default",
+  onClick,
+  active = false,
 }: {
   icon: React.ReactNode;
   label: string;
   value: number;
   tone?: "default" | "warn";
+  /** Card clicável (ex.: "Aguardando resposta" abre a lista da conta). */
+  onClick?: () => void;
+  active?: boolean;
 }) {
+  const Tag = onClick ? "button" : "div";
   return (
-    <div className="rounded-xl border border-border bg-card p-4">
+    <Tag
+      type={onClick ? "button" : undefined}
+      onClick={onClick}
+      className={`w-full rounded-xl border bg-card p-4 text-left ${
+        active ? "border-primary ring-1 ring-primary/30" : "border-border"
+      } ${onClick ? "cursor-pointer transition-colors hover:bg-muted/40" : ""}`}
+    >
       <div className="flex items-center gap-2 text-xs font-medium uppercase tracking-wide text-muted-foreground">
         <span
           className={cn(
@@ -420,6 +467,6 @@ function StatCard({
       >
         {value}
       </p>
-    </div>
+    </Tag>
   );
 }

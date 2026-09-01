@@ -39,8 +39,7 @@ import { hasMinRole } from '@/lib/auth/roles'
 import { loadLeadDistribution } from '@/lib/leads/distribution'
 import {
   getAccountSettings,
-  updateAccountSettings,
-} from '@/lib/settings/account-settings'
+  updateAccountSettings, DEFAULT_ACCOUNT_SETTINGS } from '@/lib/settings/account-settings'
 import { previewDigest, sendDigestNow } from '@/lib/reports/owner-digest'
 import { getCompanyProfile } from '@/lib/ai/company-profile'
 import type { Tag, MessageTemplate, WhatsAppConfig } from '@/types'
@@ -442,6 +441,42 @@ export async function setCsatConfig(input: CsatConfig): Promise<void> {
     csatCommentPrompt:
       input.commentPrompt?.trim() ||
       'Obrigado pela nota! Se quiser, deixe um comentário sobre o atendimento. 🙏',
+  })
+}
+
+// ------------------------------------------------------------
+// 🎂 Parabéns automático de aniversário (service-panel.tsx)
+// ------------------------------------------------------------
+
+export interface BirthdayGreetingConfig {
+  enabled: boolean
+  /** Hora local (0–23) em que a mensagem sai. */
+  hour: number
+  /** Aceita {{nome}} (primeiro nome do contato). */
+  message: string
+}
+
+export async function getBirthdayGreetingConfig(): Promise<BirthdayGreetingConfig> {
+  const ctx = await getCurrentAccount()
+  const s = await getAccountSettings(ctx.accountId)
+  return {
+    enabled: s.birthdayGreeting.enabled,
+    hour: s.birthdayGreeting.hour,
+    message: s.birthdayGreeting.message,
+  }
+}
+
+/** Salva o parabéns automático (admins only). Mensagem vazia volta pro padrão. */
+export async function setBirthdayGreetingConfig(input: BirthdayGreetingConfig): Promise<void> {
+  const ctx = await requireRole('admin')
+  const hour = Math.min(21, Math.max(6, Math.round(Number(input.hour) || 9)))
+  const message = (input.message ?? '').trim().slice(0, 800)
+  await updateAccountSettings(ctx.accountId, {
+    birthdayGreeting: {
+      enabled: input.enabled === true,
+      hour,
+      message: message || DEFAULT_ACCOUNT_SETTINGS.birthdayGreeting.message,
+    },
   })
 }
 

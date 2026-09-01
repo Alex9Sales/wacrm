@@ -354,6 +354,135 @@ const COMMENT_TO_DM: FlowTemplate = {
 };
 
 // ============================================================
+// 5. Qualificação por produto — multicanal (pedido do Rafael, 01/09)
+//
+// O mesmo fluxo que ele monta no ManyChat: o cliente escolhe o modelo/marca
+// numa lista, recebe a informação certa daquele modelo e decide se quer
+// falar com um especialista. Roda em QUALQUER canal com fluxo: WhatsApp
+// (oficial ou não — no WAHA a lista vira texto numerado), Instagram
+// (comentário → DM inicia o fluxo) e Messenger. Os textos são modelo de
+// exemplo: o cliente edita marcas, descrições e mensagens no construtor.
+// ============================================================
+const PRODUCT_QUALIFIER: FlowTemplate = {
+  slug: "product_qualifier",
+  name: "Qualificação por produto (multicanal)",
+  description:
+    "O cliente escolhe o modelo/marca que tem, recebe a informação daquele produto e pode pedir um especialista. Funciona igual no WhatsApp, Instagram e Messenger.",
+  icon: "HelpCircle",
+  trigger_type: "keyword",
+  trigger_config: {
+    keywords: ["produtos", "modelos", "catalogo", "catálogo", "compatível", "compativel"],
+    match_type: "contains",
+  },
+  entry_node_id: "start",
+  nodes: [
+    {
+      node_key: "start",
+      node_type: "start",
+      config: { next_node_key: "which_model" },
+    },
+    {
+      node_key: "which_model",
+      node_type: "send_list",
+      config: {
+        text: "Oi! 👋 Pra te passar a informação certa, me diz: qual modelo/marca você tem?",
+        button_label: "Escolher modelo",
+        sections: [
+          {
+            title: "Modelos",
+            rows: [
+              { reply_id: "brand_a", title: "Marca A", next_node_key: "info_a" },
+              { reply_id: "brand_b", title: "Marca B", next_node_key: "info_b" },
+              { reply_id: "brand_c", title: "Marca C", next_node_key: "info_c" },
+              { reply_id: "brand_d", title: "Marca D", next_node_key: "info_d" },
+            ],
+          },
+          {
+            title: "Outros",
+            rows: [
+              { reply_id: "other", title: "Outra marca / não sei", next_node_key: "info_other" },
+            ],
+          },
+        ],
+      } as SendListNodeConfig,
+    },
+    {
+      node_key: "info_a",
+      node_type: "send_message",
+      config: {
+        text: "Perfeito! Para a *Marca A* temos o kit compatível e já testado. 👉 [descreva aqui o produto, o que inclui e o valor]",
+        next_node_key: "want_more",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "info_b",
+      node_type: "send_message",
+      config: {
+        text: "Perfeito! Para a *Marca B* temos o kit compatível e já testado. 👉 [descreva aqui o produto, o que inclui e o valor]",
+        next_node_key: "want_more",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "info_c",
+      node_type: "send_message",
+      config: {
+        text: "Perfeito! Para a *Marca C* temos o kit compatível e já testado. 👉 [descreva aqui o produto, o que inclui e o valor]",
+        next_node_key: "want_more",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "info_d",
+      node_type: "send_message",
+      config: {
+        text: "Perfeito! Para a *Marca D* temos o kit compatível e já testado. 👉 [descreva aqui o produto, o que inclui e o valor]",
+        next_node_key: "want_more",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "info_other",
+      node_type: "send_message",
+      config: {
+        text: "Sem problema! Me conta o modelo exato (ou manda uma foto da etiqueta) que eu confirmo a compatibilidade pra você. 📸",
+        next_node_key: "specialist",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "want_more",
+      node_type: "send_buttons",
+      config: {
+        text: "Quer que um especialista te ajude a fechar ou tirar dúvidas?",
+        buttons: [
+          { reply_id: "yes", title: "Falar com especialista", next_node_key: "specialist" },
+          { reply_id: "no", title: "Só olhando por enquanto", next_node_key: "bye" },
+        ],
+      } as SendButtonsNodeConfig,
+    },
+    {
+      node_key: "specialist",
+      node_type: "handoff",
+      config: {
+        customer_message:
+          "Combinado! Já estou te passando para um especialista. Um instante 🙂",
+        note: "Lead qualificado pelo fluxo de produto — veja o modelo escolhido acima antes de responder.",
+      } as HandoffNodeConfig,
+    },
+    {
+      node_key: "bye",
+      node_type: "send_message",
+      config: {
+        text: "Tranquilo! Quando quiser, é só mandar *produtos* aqui de novo. 😉",
+        next_node_key: "end",
+      } as SendMessageNodeConfig,
+    },
+    {
+      node_key: "end",
+      node_type: "end",
+      config: {},
+    },
+  ],
+};
+
+// ============================================================
 // Registry
 // ============================================================
 
@@ -362,6 +491,7 @@ const TEMPLATES: Record<string, FlowTemplate> = {
   welcome_menu: WELCOME_MENU,
   faq_bot: FAQ_BOT,
   lead_capture: LEAD_CAPTURE,
+  product_qualifier: PRODUCT_QUALIFIER,
 };
 
 export function getFlowTemplate(slug: string): FlowTemplate | null {

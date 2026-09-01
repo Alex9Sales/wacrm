@@ -218,6 +218,7 @@ export function ImportModal({
             name: row.name,
             email: row.email,
             company: row.company,
+            birthday: row.birthday,
             tagNames: row.tagNames,
             codes: row.codes,
           }))
@@ -255,6 +256,7 @@ export function ImportModal({
           name: row.name,
           email: row.email,
           company: row.company,
+          birthday: row.birthday,
           tagNames: row.tagNames,
           codes: row.codes,
         })),

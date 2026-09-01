@@ -224,6 +224,57 @@ export async function loadAgentConversations(
   });
 }
 
+/**
+ * Todas as conversas da conta que estão AGUARDANDO resposta (cliente falou
+ * por último), mais demorada primeiro — a visão que o Rafael pediu (01/09):
+ * clicar em "Aguardando resposta" e ver a lista pronta, sem rolar atendente
+ * por atendente. Inclui as sem atendente (fila).
+ */
+export async function loadWaitingConversations(
+  accountId: string,
+): Promise<AgentConversationRow[]> {
+  const now = Date.now();
+  const rows = await db
+    .select({
+      id: conversations.id,
+      status: conversations.status,
+      lastMessageAt: conversations.lastMessageAt,
+      unread: conversations.unreadCount,
+      contactName: contacts.name,
+      channelName: channels.name,
+      agentId: conversations.assignedAgentId,
+      agentName: user.name,
+    })
+    .from(conversations)
+    .leftJoin(contacts, eq(conversations.contactId, contacts.id))
+    .leftJoin(channels, eq(conversations.channelId, channels.id))
+    .leftJoin(user, eq(conversations.assignedAgentId, user.id))
+    .where(
+      and(eq(conversations.accountId, accountId), eq(conversations.status, 'open')),
+    );
+
+  const { pendingByConv } = await walkAccountMessages(accountId);
+
+  return rows
+    .map((r) => {
+      const waitingSince = pendingByConv.get(r.id) ?? null;
+      return {
+        id: r.id,
+        contactName: r.contactName ?? 'Sem nome',
+        channelName: r.channelName,
+        status: r.status,
+        lastMessageAt: r.lastMessageAt,
+        waitingMin:
+          waitingSince != null ? Math.floor((now - waitingSince) / 60_000) : null,
+        unread: r.unread ?? 0,
+        agentId: r.agentId ?? null,
+        agentName: r.agentName ?? null,
+      };
+    })
+    .filter((r) => r.waitingMin != null)
+    .sort((a, b) => (b.waitingMin ?? 0) - (a.waitingMin ?? 0));
+}
+
 // ------------------------------------------------------------
 // CSAT summary — last 30 days of satisfaction scores for the account.
 // ------------------------------------------------------------

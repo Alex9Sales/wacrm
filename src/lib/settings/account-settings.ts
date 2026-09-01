@@ -16,6 +16,14 @@ export interface BusinessDay {
   close: string | null
 }
 
+export interface BirthdayGreetingSettings {
+  enabled: boolean
+  /** Hora local (0–23) em que o parabéns sai. */
+  hour: number
+  /** Mensagem; aceita {{nome}} (primeiro nome do contato). */
+  message: string
+}
+
 export interface AccountSettings {
   /** Prefix outbound agent messages with the sender's name (WhatsApp
    *  shows it in bold), so the customer knows who is replying. */
@@ -68,6 +76,8 @@ export interface AccountSettings {
   /** Funil→funil (ideia do cliente Dentai, 26/08): ao GANHAR, abre um novo
    *  negócio no funil escolhido (ex.: pós-venda). null = não move. */
   wonPipelineId: string | null
+  /** 🎂 Parabéns automático no aniversário do contato (OFF por padrão). */
+  birthdayGreeting: BirthdayGreetingSettings
   /** Ao PERDER, abre um novo negócio no funil escolhido (ex.: resgate). */
   lostPipelineId: string | null
   /** Motivos de perda da conta (estilo RD): os chips oferecidos ao marcar
@@ -153,6 +163,12 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   wonCadenceId: null,
   lostCadenceId: null,
   wonPipelineId: null,
+  birthdayGreeting: {
+    enabled: false,
+    hour: 9,
+    message:
+      'Feliz aniversário, {{nome}}! 🎉 Que o seu dia seja incrível. Obrigado por fazer parte da nossa história — conte com a gente sempre! 🎂',
+  },
   lostPipelineId: null,
   lostReasons: [
     'Não responde',

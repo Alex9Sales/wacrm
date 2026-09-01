@@ -8,6 +8,8 @@ export interface ParsedContactRow {
   name?: string;
   email?: string;
   company?: string;
+  /** 🎂 Aniversário cru da planilha (DD/MM/AAAA, AAAA-MM-DD, DD/MM…); o servidor normaliza. */
+  birthday?: string;
   /** Tag names from the optional `tags` column (comma/semicolon separated). */
   tagNames: string[];
   /** Customer codes from the optional código column (comma/semicolon split). */
@@ -83,6 +85,21 @@ const COMPANY_HEADERS = [
   'organização',
 ];
 const TAGS_HEADERS = ['tags', 'tag', 'etiquetas', 'etiqueta'];
+/** 🎂 Header aliases for the birthday column (lowercased). */
+const BIRTHDAY_HEADERS = [
+  'aniversario',
+  'aniversário',
+  'nascimento',
+  'data de nascimento',
+  'data_nascimento',
+  'data_de_nascimento',
+  'dt_nascimento',
+  'dt nascimento',
+  'birthday',
+  'birthdate',
+  'date of birth',
+  'dob',
+];
 
 /** Header aliases accepted for the customer-code column (lowercased). */
 const CODE_HEADERS = [
@@ -106,6 +123,8 @@ export interface ParseContactCsvResult {
   hasCompanyColumn: boolean;
   /** True when the CSV header includes a customer-code column. */
   hasCodesColumn: boolean;
+  /** 🎂 True when the CSV header includes a birthday column. */
+  hasBirthdayColumn?: boolean;
 }
 
 export function parseContactCsv(text: string): ParseContactCsvResult {
@@ -140,6 +159,7 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
   const nameIdx = findCol(headers, NAME_HEADERS);
   const emailIdx = findCol(headers, EMAIL_HEADERS);
   const companyIdx = findCol(headers, COMPANY_HEADERS);
+  const birthdayIdx = findCol(headers, BIRTHDAY_HEADERS);
   const tagsIdx = findCol(headers, TAGS_HEADERS);
   const codesIdx = headers.findIndex((h) => CODE_HEADERS.includes(h));
 
@@ -167,6 +187,10 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
         companyIdx >= 0
           ? values[companyIdx]?.replace(/["']/g, '').trim() || undefined
           : undefined,
+      birthday:
+        birthdayIdx >= 0
+          ? values[birthdayIdx]?.replace(/["']/g, '').trim() || undefined
+          : undefined,
       tagNames:
         tagsIdx >= 0 ? parseTagCell(values[tagsIdx]?.replace(/["']/g, '')) : [],
       codes:
@@ -178,6 +202,7 @@ export function parseContactCsv(text: string): ParseContactCsvResult {
     rows,
     hasTagsColumn: tagsIdx >= 0,
     hasCompanyColumn: companyIdx >= 0,
+    hasBirthdayColumn: birthdayIdx >= 0,
     hasCodesColumn: codesIdx >= 0,
   };
 }
