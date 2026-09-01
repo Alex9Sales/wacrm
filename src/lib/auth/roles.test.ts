@@ -20,12 +20,14 @@ describe("roleRank", () => {
     expect(roleRank("agent")).toBeGreaterThan(roleRank("viewer"));
   });
 
-  it("matches the SQL helper's numeric mapping", () => {
-    // Keep these in lockstep with `is_account_member`'s CASE expression
-    // in supabase/migrations/017_account_sharing.sql — any change here
-    // means the SQL helper needs the same change.
-    expect(roleRank("owner")).toBe(4);
-    expect(roleRank("admin")).toBe(3);
+  it("uses a stable 5-level ordinal (supervisor between agent and admin)", () => {
+    // `is_account_member` (supabase/migrations/017) was the Supabase-era SQL
+    // twin of this mapping. It is NOT deployed in prod (function absent, RLS
+    // off, nothing in src/ calls it) — the TypeScript rank is the only
+    // authority now, so this pins the ordinal itself, not a SQL mirror.
+    expect(roleRank("owner")).toBe(5);
+    expect(roleRank("admin")).toBe(4);
+    expect(roleRank("supervisor")).toBe(3);
     expect(roleRank("agent")).toBe(2);
     expect(roleRank("viewer")).toBe(1);
   });

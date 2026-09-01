@@ -9,14 +9,15 @@ import {
 } from '@/lib/billing/webhook'
 
 describe('planos', () => {
-  it('resolve os 3 planos e rejeita chave inválida', () => {
+  it('resolve os 4 planos e rejeita chave inválida', () => {
+    expect(getPlan('start')?.price).toBe(139.9)
     expect(getPlan('pro')?.price).toBe(799)
     expect(getPlan('essencial')?.name).toBe('Essencial')
     expect(getPlan('enterprise')?.price).toBe(1999)
     expect(getPlan('xpto')).toBeNull()
     expect(isPlanKey('pro')).toBe(true)
     expect(isPlanKey('nope')).toBe(false)
-    expect(PLAN_LIST).toHaveLength(3)
+    expect(PLAN_LIST).toHaveLength(4)
   })
 
   it('formata o preço em reais', () => {

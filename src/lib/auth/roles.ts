@@ -1,12 +1,12 @@
 // ============================================================
 // Account role helpers — pure, unit-testable, no I/O.
 //
-// Mirrors the `account_role_enum` Postgres type from migration
-// 017_account_sharing.sql. The hierarchy is intentionally a flat
-// ordinal (owner=4 … viewer=1) — it matches the same CASE
-// expression the `is_account_member(account_id, min_role)` SQL
-// helper uses, so server-side TypeScript guards and database-side
-// RLS speak the same language.
+// The hierarchy is intentionally a flat ordinal (owner=5 … viewer=1).
+// Historically it mirrored the CASE expression of the Supabase-era
+// `is_account_member(account_id, min_role)` SQL helper (migration
+// 017_account_sharing.sql); that helper is NOT deployed in production
+// (RLS is off and nothing calls it), so this file is the single
+// authority on role ordering.
 //
 // Predicates (`canManageMembers`, `canEditSettings`, …) are the
 // single source of truth for "what can this role do?" — both
@@ -27,8 +27,8 @@ export const ACCOUNT_ROLES: readonly AccountRole[] = [
 ] as const;
 
 /**
- * Numeric rank of a role. Higher = more privileged. Mirrors the
- * CASE expression in `is_account_member` so JS/SQL stay aligned.
+ * Numeric rank of a role. Higher = more privileged. (The old SQL twin
+ * `is_account_member` is legacy — see the header note.)
  *
  * `supervisor` sits between agent and admin: it gets the operational
  * management powers (sectors, assignment, members, settings, dashboard,

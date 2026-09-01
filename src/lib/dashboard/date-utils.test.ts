@@ -105,19 +105,21 @@ describe("lastNDayKeys", () => {
 });
 
 describe("mondayIndex", () => {
+  // Local-time constructors on purpose: `new Date("2026-05-18")` parses as
+  // UTC midnight, which is still SUNDAY evening anywhere west of UTC (this
+  // team runs at UTC-4), and mondayIndex reads the LOCAL weekday — the same
+  // convention every caller in the dashboard uses.
+  const local = (y: number, m: number, d: number) => new Date(y, m - 1, d, 12);
+
   it("maps Monday → 0 and Sunday → 6", () => {
-    expect(mondayIndex(new Date("2026-05-18"))).toBe(0); // Mon
-    expect(mondayIndex(new Date("2026-05-19"))).toBe(1); // Tue
-    expect(mondayIndex(new Date("2026-05-23"))).toBe(5); // Sat
-    expect(mondayIndex(new Date("2026-05-24"))).toBe(6); // Sun
+    expect(mondayIndex(local(2026, 5, 18))).toBe(0); // Mon
+    expect(mondayIndex(local(2026, 5, 19))).toBe(1); // Tue
+    expect(mondayIndex(local(2026, 5, 23))).toBe(5); // Sat
+    expect(mondayIndex(local(2026, 5, 24))).toBe(6); // Sun
   });
 
   it("aligns with DOW_SHORT_MON_FIRST labels", () => {
-    expect(DOW_SHORT_MON_FIRST[mondayIndex(new Date("2026-05-18"))]).toBe(
-      "Mon",
-    );
-    expect(DOW_SHORT_MON_FIRST[mondayIndex(new Date("2026-05-24"))]).toBe(
-      "Sun",
-    );
+    expect(DOW_SHORT_MON_FIRST[mondayIndex(local(2026, 5, 18))]).toBe("Mon");
+    expect(DOW_SHORT_MON_FIRST[mondayIndex(local(2026, 5, 24))]).toBe("Sun");
   });
 });
