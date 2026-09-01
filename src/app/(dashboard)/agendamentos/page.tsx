@@ -15,6 +15,7 @@ import {
 import { cancelScheduledMessage } from '@/app/(dashboard)/inbox/schedule-actions'
 import { listTeamMembers } from '@/app/(dashboard)/internal-chat/actions'
 import { ScheduleMessageDialog } from '@/components/agendamentos/schedule-message-dialog'
+import { BrokenChannelAlert } from '@/components/agendamentos/broken-channel-alert'
 import { useAuth } from '@/hooks/use-auth'
 import { hasMinRole } from '@/lib/auth/roles'
 import { Input } from '@/components/ui/input'
@@ -197,6 +198,10 @@ export default function AgendamentosPage() {
         </div>
         <ScheduleMessageDialog onScheduled={load} />
       </div>
+
+      {/* Número fora do ar com agendadas presas nele — some sozinho quando
+          não há nenhum. */}
+      <BrokenChannelAlert onFixed={load} />
 
       {/* Painel de contadores (clicáveis → filtram por status). */}
       <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">

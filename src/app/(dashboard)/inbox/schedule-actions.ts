@@ -17,7 +17,8 @@
 
 import { and, desc, eq, or, sql } from 'drizzle-orm'
 
-import { db, scheduledMessages, conversations } from '@/db'
+import { db, scheduledMessages, conversations, contacts, channels } from '@/db'
+import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { notifyScheduledAssignee } from '@/lib/scheduled/notify'
@@ -50,6 +51,13 @@ export interface ScheduleMessageInput {
   assignedTo?: string | null
   /** Anti-ban: anexa "responda SAIR" no fim da mensagem agendada. */
   includeOptOut?: boolean
+  /**
+   * Enviar POR OUTRO NÚMERO (canal) que não o desta conversa. Vazio/igual =
+   * usa o canal da própria conversa. Quando diferente, a agendada é ancorada
+   * na conversa do MESMO contato naquele canal (criada se ainda não existir),
+   * porque o canal de uma agendada é sempre o canal da sua conversa.
+   */
+  channelId?: string | null
 }
 
 const liteSelect = {
@@ -133,6 +141,49 @@ export async function countScheduledPendingOnDay(
  * enqueue fails the row is rolled back so we never leave a pending row
  * with no job behind it.
  */
+/**
+ * Canal (número) por onde as mensagens desta conversa saem — e se ele está
+ * no ar. O modal usa isso pra pré-selecionar o número certo e pra avisar
+ * quando o número da conversa caiu/foi banido (aí a pessoa escolhe outro).
+ */
+export async function getConversationChannel(conversationId: string): Promise<{
+  channelId: string | null
+  channelName: string | null
+  isDown: boolean
+}> {
+  const empty = { channelId: null, channelName: null, isDown: false }
+  try {
+    const ctx = await getCurrentAccount()
+    const id = conversationId?.trim()
+    if (!id) return empty
+    const row = firstOrNull(
+      await db
+        .select({
+          channelId: conversations.channelId,
+          channelName: channels.name,
+          channelStatus: channels.status,
+        })
+        .from(conversations)
+        .leftJoin(channels, eq(conversations.channelId, channels.id))
+        .where(
+          and(
+            eq(conversations.id, id),
+            eq(conversations.accountId, ctx.accountId),
+          ),
+        )
+        .limit(1),
+    )
+    if (!row) return empty
+    return {
+      channelId: row.channelId ?? null,
+      channelName: row.channelName ?? null,
+      isDown: !!row.channelId && row.channelStatus !== 'connected',
+    }
+  } catch {
+    return empty
+  }
+}
+
 export async function scheduleMessage(
   input: ScheduleMessageInput,
 ): Promise<
@@ -159,7 +210,12 @@ export async function scheduleMessage(
 
     // Ownership + denormalized contact + responsável (dono do lead), account-scoped.
     let conv:
-      | { id: string; contactId: string; assignedAgentId: string | null }
+      | {
+          id: string
+          contactId: string
+          assignedAgentId: string | null
+          channelId: string | null
+        }
       | null = null
     try {
       conv = firstOrNull(
@@ -168,6 +224,7 @@ export async function scheduleMessage(
             id: conversations.id,
             contactId: conversations.contactId,
             assignedAgentId: conversations.assignedAgentId,
+            channelId: conversations.channelId,
           })
           .from(conversations)
           .where(
@@ -182,6 +239,65 @@ export async function scheduleMessage(
       conv = null
     }
     if (!conv) return { ok: false, error: 'Conversa não encontrada.' }
+
+    // "Enviar por outro número": a agendada sai pelo canal da CONVERSA dela,
+    // então mandar por outro número = ancorar na conversa do mesmo contato
+    // naquele canal (a mesma mecânica do "Abrir conversa" com seletor).
+    const wantedChannelId = input.channelId?.trim() || ''
+    if (wantedChannelId && wantedChannelId !== conv.channelId) {
+      const target = firstOrNull(
+        await db
+          .select({ id: channels.id, status: channels.status })
+          .from(channels)
+          .where(
+            and(
+              eq(channels.id, wantedChannelId),
+              eq(channels.accountId, ctx.accountId),
+            ),
+          )
+          .limit(1),
+      )
+      if (!target) return { ok: false, error: 'Canal não encontrado.' }
+      if (target.status !== 'connected') {
+        return {
+          ok: false,
+          error: 'Esse número está fora do ar. Escolha outro para agendar.',
+        }
+      }
+      const contact = firstOrNull(
+        await db
+          .select({ phone: contacts.phone, name: contacts.name })
+          .from(contacts)
+          .where(eq(contacts.id, conv.contactId))
+          .limit(1),
+      )
+      if (!contact?.phone) {
+        return {
+          ok: false,
+          error: 'Este contato não tem telefone para enviar por outro número.',
+        }
+      }
+      try {
+        const resolved = await resolveConversationByPhone(
+          ctx.accountId,
+          contact.phone,
+          contact.name,
+          wantedChannelId,
+        )
+        conv = {
+          id: resolved.conversationId,
+          contactId: resolved.contactId,
+          assignedAgentId: conv.assignedAgentId,
+          channelId: wantedChannelId,
+        }
+      } catch (err) {
+        console.error('[schedule] troca de canal falhou:', err)
+        return {
+          ok: false,
+          error: 'Não foi possível agendar por esse número.',
+        }
+      }
+    }
 
     // Responsável pela agendada = quem foi passado explicitamente (picker do
     // admin/supervisor), senão o dono atual do lead, senão o próprio criador.

@@ -27,8 +27,13 @@ import { QuickReplyPicker } from '@/components/inbox/quick-reply-picker'
 import {
   scheduleMessage,
   updateScheduledMessage,
+  getConversationChannel,
   type ScheduledMessageLite,
 } from '@/app/(dashboard)/inbox/schedule-actions'
+import {
+  listSendableChannels,
+  type SendableChannel,
+} from '@/app/(dashboard)/inbox/actions'
 import { listTeamMembers } from '@/app/(dashboard)/internal-chat/actions'
 import { useAuth } from '@/hooks/use-auth'
 import { hasMinRole } from '@/lib/auth/roles'
@@ -88,6 +93,17 @@ export function ScheduleMessageForm({
     [],
   )
   const [saving, setSaving] = useState(false)
+  // "Enviar pelo número" — igual à Central de Agendamentos. Pré-selecionado no
+  // canal da própria conversa; se esse canal caiu/foi banido, avisa e obriga a
+  // escolher outro (nada de fallback automático: cair pra um número que também
+  // está banido só espalha o problema).
+  const [channels, setChannels] = useState<SendableChannel[]>([])
+  const [channelId, setChannelId] = useState('')
+  const [convChannel, setConvChannel] = useState<{
+    channelId: string | null
+    channelName: string | null
+    isDown: boolean
+  } | null>(null)
 
   // Ao abrir: se estiver editando, prefill com o agendamento; senão, novo
   // (padrão daqui a 1 hora).
@@ -103,6 +119,28 @@ export function ScheduleMessageForm({
       setOptOut(false)
     }
   }, [open, editing])
+
+  // Canais disponíveis + qual é o da conversa (pra pré-selecionar / avisar).
+  useEffect(() => {
+    if (!open || editing) return
+    let alive = true
+    void Promise.all([
+      listSendableChannels().catch(() => [] as SendableChannel[]),
+      getConversationChannel(conversationId).catch(() => null),
+    ]).then(([list, current]) => {
+      if (!alive) return
+      setChannels(list)
+      setConvChannel(current)
+      // Canal da conversa quando ele está no ar; se caiu, deixa VAZIO pra
+      // pessoa escolher conscientemente por qual número vai sair.
+      const usable =
+        current?.channelId && list.some((c) => c.id === current.channelId)
+      setChannelId(usable ? (current!.channelId as string) : '')
+    })
+    return () => {
+      alive = false
+    }
+  }, [open, editing, conversationId])
 
   // Carrega os membros p/ o seletor de responsável (só admin/supervisor).
   useEffect(() => {
@@ -132,6 +170,12 @@ export function ScheduleMessageForm({
       toast.error('Escolha um horário pelo menos 1 min à frente.')
       return
     }
+    // Número da conversa fora do ar e nenhum outro escolhido: a mensagem
+    // nasceria condenada a falhar na hora do envio.
+    if (!editing && convChannel?.isDown && !channelId) {
+      toast.error('Escolha por qual número enviar — o desta conversa está fora do ar.')
+      return
+    }
 
     setSaving(true)
     try {
@@ -148,6 +192,7 @@ export function ScheduleMessageForm({
             // '' = herda o dono do lead; admin/supervisor podem atribuir.
             assignedTo: assignee || null,
             includeOptOut: optOut,
+            channelId: channelId || null,
           })
       if (!res.ok) {
         toast.error(res.error)
@@ -221,6 +266,45 @@ export function ScheduleMessageForm({
               </label>
             )}
           </div>
+
+          {/* Enviar pelo número — só ao criar (editar não muda o canal). */}
+          {!editing && (channels.length > 1 || convChannel?.isDown) && (
+            <div className="space-y-1.5">
+              <Label htmlFor="sched-channel">
+                Enviar pelo número
+                {convChannel?.isDown && (
+                  <span className="text-destructive"> *</span>
+                )}
+              </Label>
+              {convChannel?.isDown && (
+                <p className="rounded-lg border border-destructive/40 bg-destructive/10 px-3 py-2 text-xs text-destructive">
+                  O número desta conversa
+                  {convChannel.channelName ? ` (${convChannel.channelName})` : ''}{' '}
+                  está fora do ar — desconectado ou banido. Escolha outro número
+                  para a mensagem sair no horário marcado.
+                </p>
+              )}
+              <select
+                id="sched-channel"
+                value={channelId}
+                onChange={(e) => setChannelId(e.target.value)}
+                className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground outline-none focus:border-primary/50"
+              >
+                <option value="">Escolha o número…</option>
+                {channels.map((ch) => (
+                  <option key={ch.id} value={ch.id}>
+                    {ch.name}
+                    {ch.phoneNumber ? ` · ${ch.phoneNumber}` : ''}
+                  </option>
+                ))}
+              </select>
+              {channels.length === 0 && (
+                <p className="text-[11px] text-destructive">
+                  Nenhum número conectado no momento.
+                </p>
+              )}
+            </div>
+          )}
 
           <div className="space-y-1.5">
             <Label htmlFor="sched-when">

@@ -30,6 +30,7 @@ import {
   enqueueScheduledMessage,
   removeScheduledMessageJob,
 } from '@/lib/queue/queues'
+import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 
 export type SchedStatus = 'pending' | 'sent' | 'cancelled' | 'failed'
 
@@ -360,4 +361,263 @@ export async function searchDealsForSchedule(query: string): Promise<DealPick[]>
     .orderBy(desc(deals.createdAt))
     .limit(8)
   return rows.filter((r) => r.contactPhone) as DealPick[]
+}
+
+// ============================================================
+// Número fora do ar (banido / desconectado) com agendadas presas nele.
+//
+// O canal de uma agendada é o canal da CONVERSA dela. Se esse número cai
+// (ban do WhatsApp, logout no aparelho), tudo que estava marcado ali vira
+// falha na hora do envio — silenciosamente. Estas duas ações fazem o CRM
+// AVISAR e deixar a pessoa escolher outro número.
+//
+// Decisão de produto (Alex, 01/09): NADA de fallback automático — cair
+// sozinho pra outro número pode jogar a fila num número que também está
+// banido. A escolha é sempre explícita.
+// ============================================================
+
+export interface BrokenChannelSchedules {
+  channel_id: string
+  channel_name: string | null
+  channel_status: string | null
+  /** true = o número está fora do ar AGORA (nada marcado nele vai sair). */
+  is_down: boolean
+  /** Agendadas ainda por enviar presas nesse número (só quando is_down). */
+  pending: number
+  /** Falhas causadas por queda do número (sessão fora do ar na hora do envio). */
+  failed: number
+  /** Data da falha mais antiga — pra pessoa saber se ainda faz sentido reenviar. */
+  failed_oldest: string | null
+}
+
+/**
+ * Erro de envio que veio de NÚMERO FORA DO AR (e não de conteúdo/destinatário).
+ * É o texto que o WAHA devolve quando a sessão caiu — foi o que matou 200+
+ * agendadas em silêncio antes deste aviso existir.
+ */
+const DOWN_ERROR_SQL = sql`(
+  ${scheduledMessages.lastError} ILIKE '%session status%'
+  OR ${scheduledMessages.lastError} ILIKE '%not connected%'
+  OR ${scheduledMessages.lastError} ILIKE '%desconect%'
+)`
+
+/**
+ * Números com agendadas travadas — nos DOIS cenários:
+ *   (a) o número está fora do ar agora → o que está marcado nele não vai sair;
+ *   (b) o número já voltou, mas ficaram falhas de quando ele estava fora.
+ * O (b) é o silencioso: a mensagem morreu, o número voltou, e ninguém viu.
+ */
+export async function listBrokenChannelSchedules(): Promise<
+  BrokenChannelSchedules[]
+> {
+  try {
+    const ctx = await getCurrentAccount()
+    const rows = await db
+      .select({
+        channel_id: channels.id,
+        channel_name: channels.name,
+        channel_status: channels.status,
+        pending: sql<number>`count(*) FILTER (WHERE ${scheduledMessages.status} = 'pending' AND ${channels.status} <> 'connected')::int`,
+        failed: sql<number>`count(*) FILTER (WHERE ${scheduledMessages.status} = 'failed' AND ${DOWN_ERROR_SQL})::int`,
+        failed_oldest: sql<
+          string | null
+        >`min(${scheduledMessages.scheduledAt}) FILTER (WHERE ${scheduledMessages.status} = 'failed' AND ${DOWN_ERROR_SQL})`,
+      })
+      .from(scheduledMessages)
+      .innerJoin(
+        conversations,
+        eq(scheduledMessages.conversationId, conversations.id),
+      )
+      .innerJoin(channels, eq(conversations.channelId, channels.id))
+      .where(
+        and(
+          eq(scheduledMessages.accountId, ctx.accountId),
+          inArray(scheduledMessages.status, ['pending', 'failed']),
+        ),
+      )
+      .groupBy(channels.id, channels.name, channels.status)
+    return rows
+      .map((r) => ({ ...r, is_down: r.channel_status !== 'connected' }))
+      .filter((r) => r.pending > 0 || r.failed > 0)
+  } catch (err) {
+    console.error('[agendamentos] listBrokenChannelSchedules falhou:', err)
+    return []
+  }
+}
+
+/**
+ * Move as agendadas de um número que caiu para OUTRO número escolhido.
+ *
+ * Como o canal vem da conversa, mover = reancorar cada agendada na conversa
+ * do mesmo contato no canal novo (criada se não existir). As pendentes
+ * mantêm o job da fila (o worker relê a linha e já sai pelo canal novo).
+ *
+ * As que já FALHARAM (e as pendentes com horário vencido) voltam pra fila
+ * ESPAÇADAS — 1 a cada ~75s. Soltar 50 mensagens de uma vez num número que
+ * acabou de assumir é receita de tomar outro ban.
+ */
+export async function reassignScheduledChannel(input: {
+  fromChannelId: string
+  toChannelId: string
+  includeFailed?: boolean
+}): Promise<{ ok: true; moved: number; requeued: number } | { ok: false; error: string }> {
+  try {
+    const ctx = await requireRole('supervisor')
+    const from = input.fromChannelId?.trim()
+    const to = input.toChannelId?.trim()
+    if (!from || !to) return { ok: false, error: 'Escolha o número de destino.' }
+    // from === to é VÁLIDO no caso "o número voltou e ficaram falhas": aí não
+    // há troca de canal, só reenvio espaçado pelo mesmo número.
+    if (from === to && !input.includeFailed) {
+      return { ok: false, error: 'Escolha um número diferente.' }
+    }
+
+    const target = firstOrNull(
+      await db
+        .select({ id: channels.id, status: channels.status })
+        .from(channels)
+        .where(and(eq(channels.id, to), eq(channels.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!target) return { ok: false, error: 'Número não encontrado.' }
+    if (target.status !== 'connected') {
+      return { ok: false, error: 'Esse número também está fora do ar.' }
+    }
+
+    // O que é elegível depende do cenário:
+    //  - número de origem FORA DO AR: as pendentes (nada ali vai sair) e, se
+    //    pedido, as que já falharam por causa da queda;
+    //  - número de origem NO AR (só sobraram falhas da queda): apenas essas —
+    //    as pendentes estão num número que funciona, não se mexe nelas.
+    const source = firstOrNull(
+      await db
+        .select({ status: channels.status })
+        .from(channels)
+        .where(and(eq(channels.id, from), eq(channels.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    const sourceDown = !!source && source.status !== 'connected'
+    const wanted: SchedStatus[] = sourceDown
+      ? input.includeFailed
+        ? ['pending', 'failed']
+        : ['pending']
+      : ['failed']
+    const rows = await db
+      .select({
+        id: scheduledMessages.id,
+        status: scheduledMessages.status,
+        scheduledAt: scheduledMessages.scheduledAt,
+        contactId: scheduledMessages.contactId,
+        conversationId: scheduledMessages.conversationId,
+        phone: contacts.phone,
+        name: contacts.name,
+      })
+      .from(scheduledMessages)
+      .innerJoin(
+        conversations,
+        eq(scheduledMessages.conversationId, conversations.id),
+      )
+      .leftJoin(contacts, eq(scheduledMessages.contactId, contacts.id))
+      .where(
+        and(
+          eq(scheduledMessages.accountId, ctx.accountId),
+          eq(conversations.channelId, from),
+          inArray(scheduledMessages.status, wanted),
+          // Falha só entra se foi por QUEDA do número. Mensagem que falhou por
+          // número inválido ou janela fechada vai falhar de novo — reenviar só
+          // gasta a reputação do número.
+          or(
+            eq(scheduledMessages.status, 'pending'),
+            DOWN_ERROR_SQL,
+          ),
+        ),
+      )
+      .orderBy(scheduledMessages.scheduledAt)
+      .limit(500)
+
+    // Espaçamento anti-ban: a 1ª sai em ~1min, as demais de ~75 em ~75s.
+    const SPACING_MS = 75_000
+    let slot = 0
+    let moved = 0
+    let requeued = 0
+
+    const sameChannel = from === to
+    for (const row of rows) {
+      // Reenvio pelo MESMO número não mexe na conversa — resolver de novo só
+      // arriscaria criar contato/conversa duplicada por diferença de formato
+      // no telefone.
+      let conversationId = row.conversationId
+      if (!sameChannel) {
+        if (!row.phone) continue
+        try {
+          const resolved = await resolveConversationByPhone(
+            ctx.accountId,
+            row.phone,
+            row.name,
+            to,
+          )
+          conversationId = resolved.conversationId
+        } catch (err) {
+          console.error('[agendamentos] reancorar falhou:', row.id, err)
+          continue
+        }
+      }
+
+      const dueMs = new Date(row.scheduledAt as string).getTime()
+      const isLate = !Number.isFinite(dueMs) || dueMs <= Date.now()
+      const needsRequeue = row.status === 'failed' || isLate
+      const nextAt = needsRequeue
+        ? new Date(Date.now() + 60_000 + slot * SPACING_MS)
+        : new Date(dueMs)
+
+      await db
+        .update(scheduledMessages)
+        .set({
+          conversationId,
+          ...(needsRequeue
+            ? {
+                status: 'pending' as const,
+                scheduledAt: nextAt.toISOString(),
+                lastError: null,
+                attempts: 0,
+              }
+            : {}),
+        })
+        .where(
+          and(
+            eq(scheduledMessages.id, row.id),
+            eq(scheduledMessages.accountId, ctx.accountId),
+          ),
+        )
+      moved += 1
+
+      if (needsRequeue) {
+        // Solta o job velho (se sobrou) e reagenda no horário espaçado.
+        try {
+          await removeScheduledMessageJob(row.id)
+        } catch {
+          /* job já não existe — segue */
+        }
+        try {
+          await enqueueScheduledMessage(row.id, {
+            delayMs: Math.max(nextAt.getTime() - Date.now(), 1_000),
+          })
+          requeued += 1
+          slot += 1
+        } catch (err) {
+          console.error('[agendamentos] reenfileirar falhou:', row.id, err)
+          await db
+            .update(scheduledMessages)
+            .set({ status: 'failed', lastError: 'fila indisponível' })
+            .where(eq(scheduledMessages.id, row.id))
+        }
+      }
+    }
+
+    revalidatePath('/agendamentos')
+    return { ok: true, moved, requeued }
+  } catch (err) {
+    console.error('[agendamentos] reassignScheduledChannel falhou:', err)
+    return { ok: false, error: 'Falha ao trocar o número das agendadas.' }
+  }
 }
