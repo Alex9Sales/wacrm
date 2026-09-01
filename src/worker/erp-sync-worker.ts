@@ -76,6 +76,21 @@ function parsePurchases(summary: string): ErpPurchase[] {
 
 const CANCELED = /cancel/i;
 
+/**
+ * Telefones a tentar no ERP, em ordem. O ERP da Família do Gás casa SÓ por
+ * telefone (decisão do Alex: "telefone é único") e guarda celular COM o nono
+ * dígito; parte dos contatos do CRM está sem ele (JID antigo do WhatsApp).
+ * Provado 01/09: 3 dos 6 maiores compradores voltavam found:false com 10
+ * dígitos e found:true (5 compras) com o 9 inserido. Base primeiro; depois
+ * a variante com o 9 (ou sem, pro caso inverso).
+ */
+export function erpPhoneCandidates(digitsNoCountry: string): string[] {
+  const out = [digitsNoCountry];
+  const m = digitsNoCountry.match(/^(\d{2})(9?)([6-9]\d{7})$/);
+  if (m) out.push(m[2] ? `${m[1]}${m[3]}` : `${m[1]}9${m[3]}`);
+  return out;
+}
+
 export async function runErpSyncForAccount(accountId: string, agentId: string): Promise<{
   contacts: number;
   created: number;
@@ -104,17 +119,29 @@ export async function runErpSyncForAccount(accountId: string, agentId: string): 
     if (digits.length < 10) continue;
     // A view do ERP casa por SUFIXO (like.*{telefone}) e a Maria consulta
     // "sem o 55" — mesma convenção aqui.
-    const telefone = digits.replace(/^55/, '');
+    const base = digits.replace(/^55/, '');
     res.contacts += 1;
     try {
-      const r = await executeTool(
-        tool,
-        { telefone },
-        { accountId, agentId, conversationId: null },
-        { log: false },
-      );
-      if (r.status !== 'ok') continue;
-      const purchases = parsePurchases(r.summary);
+      let purchases: ErpPurchase[] = [];
+      for (const telefone of erpPhoneCandidates(base)) {
+        const r = await executeTool(
+          tool,
+          { telefone },
+          { accountId, agentId, conversationId: null },
+          { log: false },
+        );
+        if (r.status !== 'ok') break;
+        let found = true;
+        try {
+          found = (JSON.parse(r.summary) as { found?: boolean }).found !== false;
+        } catch {
+          found = false;
+        }
+        if (found) {
+          purchases = parsePurchases(r.summary);
+          break;
+        }
+      }
       let any = false;
       for (const p of purchases) {
         if (!p.sale_id || !p.sale_date) continue;
