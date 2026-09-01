@@ -31,6 +31,10 @@ import { scheduleEventFromAi } from './schedule-actions'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
 import { getCoveredUntil, setCoveredUntil } from './reply-marker'
+import { enqueueAiReplyDebounced } from '@/lib/queue/queues'
+
+/** Ver guard anti-eco: folga entre o snapshot e o created_at da msg do cliente. */
+const COVER_MARGIN_MS = 1_500
 import { randomUUID } from 'crypto'
 import {
   engineSendText,
@@ -89,6 +93,28 @@ interface DispatchArgs {
  * reacting to a customer message that just landed — so no separate
  * window check is needed.
  */
+/**
+ * Reagenda a resposta da IA pra DEPOIS de uma janela em que ela recuou
+ * (humano digitando / barge-in). Best-effort: fila fora não pode derrubar
+ * o dispatch — a mensagem só fica sem a retomada automática.
+ */
+async function scheduleRecheckAfter(args: DispatchArgs, msUntilFree: number): Promise<void> {
+  const delayMs = Math.max(0, msUntilFree) + 2_000
+  try {
+    await enqueueAiReplyDebounced(
+      {
+        accountId: args.accountId,
+        conversationId: args.conversationId,
+        contactId: args.contactId,
+        configOwnerUserId: args.configOwnerUserId,
+      },
+      delayMs,
+    )
+  } catch (err) {
+    console.error('[ai auto-reply] reagendar pós-janela falhou:', err)
+  }
+}
+
 export async function dispatchInboundToAiReply(
   args: DispatchArgs,
 ): Promise<void> {
@@ -138,10 +164,15 @@ export async function dispatchInboundToAiReply(
       if (!newestCustomer) return // nada do cliente pra responder
       const covered = await getCoveredUntil(conversationId)
       if (covered instanceof Date) {
+        // Margem de segurança: a msg do cliente pode ter created_at ANTERIOR
+        // ao snapshot e ainda assim não estar visível na leitura (insert que
+        // commitou depois). Só conta como coberta se veio claramente antes;
+        // no limite, uma resposta repetida é menos ruim que uma engolida.
         // createdAt nulo (não deveria acontecer) = não dá pra provar cobertura → responde.
         if (
           newestCustomer.createdAt &&
-          new Date(newestCustomer.createdAt) <= covered
+          new Date(newestCustomer.createdAt).getTime() <=
+            covered.getTime() - COVER_MARGIN_MS
         ) {
           return // já coberta pela última resposta
         }
@@ -288,8 +319,13 @@ export async function dispatchInboundToAiReply(
     if (
       conv.humanPresentUntil &&
       new Date(conv.humanPresentUntil).getTime() > Date.now()
-    )
+    ) {
+      await scheduleRecheckAfter(
+        args,
+        new Date(conv.humanPresentUntil).getTime() - Date.now(),
+      )
       return
+    }
     // 🤫 Barge-in: um HUMANO respondeu há pouco nesta conversa (pelo CRM ou
     // pelo celular — fromMe vira sender_type 'agent')? A IA fica quieta pela
     // janela configurada, SEM desligar — o humano está conduzindo. Depois da
@@ -298,7 +334,7 @@ export async function dispatchInboundToAiReply(
     if (bargeInMin > 0) {
       const recentHuman = firstOrNull(
         await db
-          .select({ id: messagesTable.id })
+          .select({ id: messagesTable.id, createdAt: messagesTable.createdAt })
           .from(messagesTable)
           .where(
             and(
@@ -309,7 +345,18 @@ export async function dispatchInboundToAiReply(
           )
           .limit(1),
       )
-      if (recentHuman) return
+      if (recentHuman) {
+        // 🔁 Não deixa a mensagem do cliente pendurada: reagenda pro FIM da
+        // janela. Se o humano continuar respondendo, o guard "humano falou por
+        // último" segura; se ele sumir, a IA retoma (caso Moacyr/Rafael 01/09:
+        // cliente escreveu 18:38 dentro da janela, ninguém respondeu, a IA
+        // nunca voltou — "a IA parou de novo").
+        const humanAt = recentHuman.createdAt
+          ? new Date(recentHuman.createdAt).getTime()
+          : Date.now()
+        await scheduleRecheckAfter(args, humanAt + bargeInMin * 60_000 - Date.now())
+        return
+      }
     }
     // Cheap early-out; the authoritative cap check is the atomic claim
     // below (this read can race a concurrent inbound).

@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
   generateReply: vi.fn(),
   engineSendText: vi.fn(),
   setCoveredUntil: vi.fn(),
+  // 🔁 reagendamento pós-janela (humano digitando / barge-in) → fila mockada.
+  enqueueRecheck: vi.fn(),
   state: {
     // 🏁 marcador "até onde a última resposta viu" (reply-marker.ts):
     // string ISO = há marca · null = sem marca · undefined = Redis fora.
@@ -53,6 +55,9 @@ vi.mock('./context', () => ({
   loadContactHistoryDigest: vi.fn(async () => null),
 }))
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
+vi.mock('@/lib/queue/queues', () => ({
+  enqueueAiReplyDebounced: h.enqueueRecheck,
+}))
 vi.mock('./reply-marker', () => ({
   getCoveredUntil: async () =>
     h.state.coveredUntil === undefined
@@ -172,6 +177,7 @@ beforeEach(() => {
   h.state.lastMessages = [{ senderType: 'customer', createdAt: '2026-09-01T15:00:00.000Z' }]
   h.state.coveredUntil = null
   h.setCoveredUntil.mockReset()
+  h.enqueueRecheck.mockReset()
   h.state.claim = true
   h.state.updatePayload = null
   h.state.sqlCalls = []
@@ -270,13 +276,37 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('🤫 barge-in: humano respondeu há pouco → IA fica em silêncio', async () => {
+  it('🤫 barge-in: humano respondeu há pouco → IA fica em silêncio E reagenda pro fim da janela', async () => {
     h.state.recentHumanMsgs = [{ id: 'm-human' }]
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
     // silêncio temporário: NÃO desliga a IA
     expect(h.state.updatePayload).toBeNull()
+    // …mas a msg do cliente não fica pendurada: volta a checar quando a janela acabar
+    // (caso Moacyr/Rafael 01/09).
+    expect(h.enqueueRecheck).toHaveBeenCalledWith(
+      expect.objectContaining({ conversationId: 'conv-1' }),
+      expect.any(Number),
+    )
+    const delay = h.enqueueRecheck.mock.calls[0][1] as number
+    expect(delay).toBeGreaterThan(0)
+  })
+
+  it('👤 humano digitando (humanPresentUntil no futuro) → IA recua e reagenda pro fim da trava', async () => {
+    h.state.conv = { ...(h.state.conv as object), humanPresentUntil: new Date(Date.now() + 30_000).toISOString() }
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.enqueueRecheck).toHaveBeenCalledTimes(1)
+    const delay = h.enqueueRecheck.mock.calls[0][1] as number
+    expect(delay).toBeGreaterThanOrEqual(30_000)
+    expect(delay).toBeLessThan(40_000)
+  })
+
+  it('caminho feliz NÃO reagenda nada', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalled()
+    expect(h.enqueueRecheck).not.toHaveBeenCalled()
   })
 
   it('🔊 responder por áudio OFF: [[AUDIO]] vira texto normal', async () => {
