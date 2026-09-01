@@ -179,6 +179,20 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
+  it('🏁 RECHECAGEM de corrida: IA falou por último mas a msg do cliente chegou durante a geração → RESPONDE', async () => {
+    // Caso Debora/Rafaela 01/09: cliente manda endereço enquanto a IA está
+    // gerando; a resposta em voo não viu a mensagem e o anti-eco a engolia.
+    h.state.lastMessages = [{ senderType: 'bot' }]
+    await dispatchInboundToAiReply({ ...ARGS, raceChase: true })
+    expect(h.engineSendText).toHaveBeenCalled()
+  })
+
+  it('🏁 RECHECAGEM de corrida NÃO atropela humano: se o atendente falou por último, a IA cala', async () => {
+    h.state.lastMessages = [{ senderType: 'agent' }]
+    await dispatchInboundToAiReply({ ...ARGS, raceChase: true })
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
   it('claims a slot and sends on the happy path', async () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.sqlCalls).toHaveLength(1)

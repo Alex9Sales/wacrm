@@ -62,6 +62,11 @@ interface DispatchArgs {
   /** 🔀 Interno: nº de transferências entre agentes já feitas NESTE inbound
    *  (guarda anti ping-pong — máx. 1). Nunca passar de fora. */
   routeHop?: number
+  /** 🏁 RECHECAGEM de corrida (ver AiReplyJob.raceChase): a mensagem que
+   *  disparou este dispatch chegou DURANTE uma geração, então não estava no
+   *  histórico que a resposta em voo leu — precisa de resposta mesmo que a
+   *  última mensagem do thread já seja da própria IA. */
+  raceChase?: boolean
 }
 
 /**
@@ -112,7 +117,15 @@ export async function dispatchInboundToAiReply(
         .orderBy(desc(messagesTable.createdAt))
         .limit(1),
     )
-    if (lastMsg && lastMsg.senderType !== 'customer') return
+    if (lastMsg && lastMsg.senderType !== 'customer') {
+      // Exceção: RECHECAGEM de corrida em que quem falou por último foi a
+      // PRÓPRIA IA. A mensagem que disparou a rechecagem não estava no
+      // histórico lido pela resposta em voo, então segue sem resposta — era
+      // aqui que endereço/pagamento do cliente sumiam (Debora e Rafaela,
+      // 01/09). Se quem falou por último foi um HUMANO, a IA fica quieta:
+      // atendente no meio da conversa sempre ganha.
+      if (!(args.raceChase && lastMsg.senderType === 'bot')) return
+    }
 
     // Deterministic, user-configured responders win over the LLM — the
     // caller already excludes messages a Flow consumed. Message-level

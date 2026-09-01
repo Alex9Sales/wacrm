@@ -300,7 +300,7 @@ export function DealCard({
         e.stopPropagation();
         window.location.href = `/pipelines/${deal.id}`;
       }}
-      className={`group relative w-full cursor-pointer rounded-xl border bg-muted/70 pl-4 pr-3 py-3 text-left shadow-sm transition-all ${
+      className={`group relative w-full cursor-pointer overflow-hidden rounded-xl border bg-muted/70 pl-4 pr-3 py-3 text-left shadow-sm transition-all ${
         isStale ? "border-amber-500/40 ring-1 ring-amber-500/25" : "border-border/50"
       } ${
         isOverlay
@@ -549,7 +549,10 @@ export function DealCard({
             {deal.origin && (
               <span
                 title={`Origem: ${deal.origin}`}
-                className="inline-flex shrink-0 items-center rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
+                // ⚠️ shrink-0 SEM truncate estourava o card com origem longa
+                // (caso Rafael 01/09: "Site Rafael Aranha - Downloads - Quero
+                // treinar caso e evoluir no digital" vazava pra fora do card).
+                className="inline-flex min-w-0 max-w-[60%] items-center truncate rounded bg-muted px-1.5 py-0.5 text-[10px] font-medium text-muted-foreground"
               >
                 {deal.origin}
               </span>
@@ -634,7 +637,7 @@ export function DealCard({
           }`}
         >
           <NextTaskIcon className="h-3 w-3 shrink-0" />
-          <span className="truncate">{nextTitle}</span>
+          <span className="min-w-0 truncate">{nextTitle}</span>
           {nextDueAt && (
             <span className="ml-auto shrink-0 tabular-nums">
               {formatDateTime(nextDueAt)}
@@ -652,7 +655,7 @@ export function DealCard({
           className="mt-2 flex items-center gap-1.5 rounded-md border border-violet-500/25 bg-violet-500/10 px-2 py-1 text-[11px] text-violet-300"
         >
           <Sparkles className="h-3 w-3 shrink-0" />
-          <span className="truncate">{aiHint.nextStep}</span>
+          <span className="min-w-0 truncate">{aiHint.nextStep}</span>
           {aiHint.pending > 1 && (
             <span className="ml-auto shrink-0 rounded-full bg-violet-500/20 px-1.5 tabular-nums">
               {aiHint.pending}

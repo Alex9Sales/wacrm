@@ -51,6 +51,15 @@ export interface AiReplyJob {
   conversationId: string;
   contactId: string;
   configOwnerUserId: string;
+  /**
+   * RECHECAGEM de corrida: a mensagem que disparou este job chegou ENQUANTO
+   * uma geração já estava rodando, então ela com certeza NÃO estava no
+   * histórico que a resposta em voo leu. Sem esta marca, o anti-eco do
+   * dispatch ("última mensagem já não é do cliente") engolia a mensagem pra
+   * sempre — caso Debora/Rafaela 01/09: mandaram endereço + pagamento e a
+   * Maria seguiu pedindo o que já tinha sido dito, e depois emudeceu.
+   */
+  raceChase?: boolean;
 }
 
 /** Payload of a debounced proactive deal-suggestion job (IA v2 — Fase 3). */
@@ -146,14 +155,33 @@ export async function enqueueAiReplyDebounced(
     if (existing) {
       const state = await existing.getState().catch(() => 'unknown');
       if (state === 'active') {
-        // ⚠️ Job RODANDO: a geração pode já ter lido o histórico SEM esta
-        // mensagem (corrida de segundos — caso Cristina 31/08). O add abaixo
-        // seria IGNORADO pelo BullMQ (jobId duplicado de job vivo) e a
-        // mensagem ficava pra sempre sem resposta. Agenda uma RECHECAGEM com
-        // id único; o dispatch dá skip se a resposta em voo já tiver coberto
-        // (guard "última msg é do cliente").
-        await q.add('ai-reply', job, {
-          jobId: `${jobId}-chase-${Date.now()}`,
+        // ⚠️ Job RODANDO: a geração já leu o histórico SEM esta mensagem
+        // (corrida de segundos — caso Cristina 31/08). O add normal seria
+        // IGNORADO pelo BullMQ (jobId duplicado de job vivo) e a mensagem
+        // ficava sem resposta. Agenda uma RECHECAGEM marcada com `raceChase`.
+        //
+        // O id da rechecagem é ESTÁVEL por conversa: cliente que manda 3
+        // mensagens seguidas durante a geração vira UMA rechecagem (o timer
+        // reinicia a cada uma), não três respostas. ⚠️ Job concluído fica
+        // retido pelo removeOnComplete e faria o BullMQ ignorar o próximo add
+        // com o mesmo id — por isso removemos em QUALQUER estado não-ativo.
+        const chaseId = `${jobId}-chase`;
+        const chaseJob = { ...job, raceChase: true };
+        const existingChase = await q.getJob(chaseId);
+        if (existingChase) {
+          const chaseState = await existingChase.getState().catch(() => 'unknown');
+          if (chaseState === 'active') {
+            // Rechecagem já rodando: precisa de outra, com id próprio.
+            await q.add('ai-reply', chaseJob, {
+              jobId: `${chaseId}-${Date.now()}`,
+              delay: Math.max(delayMs, 8_000),
+            });
+            return;
+          }
+          await existingChase.remove().catch(() => {});
+        }
+        await q.add('ai-reply', chaseJob, {
+          jobId: chaseId,
           delay: Math.max(delayMs, 8_000),
         });
         return;

@@ -15,6 +15,8 @@
 // 2–5 são BEST-EFFORT: falhar ali nunca perde o contato.
 // ============================================================
 
+import { and, desc, eq } from 'drizzle-orm'
+
 import { db, dealEvents, deals, notifications, tasks } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { pickAssignee } from '@/lib/leads/distribution'
@@ -41,6 +43,11 @@ export interface IngestLeadInput {
    *  cliente vê como "observação". undefined = usa `notes`; '' = NÃO gravar
    *  (o chamador cuida do próprio evento, ex.: /diagnostico). */
   historyNote?: string | null
+  /**
+   * Força criar card NOVO mesmo que o contato já tenha um aberto no funil.
+   * Padrão (false) = comportamento RD: anexa ao card existente.
+   */
+  allowDuplicateDeal?: boolean
   /** Etiquetas a aplicar (unidas às já existentes no contato). */
   tags?: string[]
   /** Funil/etapa de destino (null → primeiro funil/etapa da conta). */
@@ -113,6 +120,8 @@ export async function ingestLead(
 
   // 2) Card/negócio no Kanban (best-effort).
   let dealId: string | null = null
+  /** true = reaproveitamos o card aberto do contato em vez de criar outro. */
+  let dealReused = false
   // Responsável: explícito, senão o rodízio (distribuição automática). Null =
   // rodízio desligado / sem membros → cai sem dono, como antes.
   let assignee: string | null = null
@@ -122,9 +131,36 @@ export async function ingestLead(
       ? input.stageId || (await firstStageOf(pipelineId))
       : null
     if (pipelineId && stageId) {
+      // 🔁 TRAVA ANTI-DUPLICADO (padrão RD, pedido do Rafael 01/09): se este
+      // contato JÁ tem card ABERTO neste funil, a submissão nova NÃO vira
+      // outro card — ela é ANEXADA ao card existente (a observação entra no
+      // histórico dele logo abaixo). Sem isso, o mesmo lead preenchendo o
+      // formulário 2x virava dois "Lead — Fulano" lado a lado no Kanban.
+      // Card ganho/perdido não conta: aí um contato que volta merece card novo.
+      const reused = input.allowDuplicateDeal
+        ? null
+        : firstOrNull(
+            await db
+              .select({ id: deals.id })
+              .from(deals)
+              .where(
+                and(
+                  eq(deals.accountId, accountId),
+                  eq(deals.contactId, contactId),
+                  eq(deals.pipelineId, pipelineId),
+                  eq(deals.status, 'open'),
+                ),
+              )
+              .orderBy(desc(deals.createdAt))
+              .limit(1),
+          )
+      if (reused) {
+        dealId = reused.id
+        dealReused = true
+      }
       assignee =
         input.assignedTo ?? (await pickAssignee(accountId).catch(() => null))
-      const inserted = firstOrNull(
+      const inserted = dealReused ? null : firstOrNull(
         await db
           .insert(deals)
           .values({
@@ -142,7 +178,7 @@ export async function ingestLead(
           })
           .returning({ id: deals.id }),
       )
-      dealId = inserted?.id ?? null
+      if (!dealReused) dealId = inserted?.id ?? null
       // Atividades automáticas da etapa de entrada (best-effort).
       if (dealId) {
         // 📝 Observações do lead → HISTÓRICO do card (timeline "anotações"),
@@ -162,19 +198,29 @@ export async function ingestLead(
               dealId,
               actorUserId: auditUserId,
               type: 'note',
-              data: { text: `📝 ${originLabel} — dados do lead:\n${historyText}` },
+              data: {
+                text: dealReused
+                  ? `📝 ${originLabel} — NOVA submissão do mesmo lead (anexada a este card):\n${historyText}`
+                  : `📝 ${originLabel} — dados do lead:\n${historyText}`,
+              },
             })
           } catch (err) {
             console.error('[ingestLead] history note failed:', err)
           }
         }
         try {
-          await autoCreateStageTasks({ accountId, userId: auditUserId }, dealId, stageId)
+          // Card reaproveitado já recebeu as tarefas de entrada quando nasceu
+          // (e pode já ter avançado de etapa) — não recria.
+          if (!dealReused) {
+            await autoCreateStageTasks({ accountId, userId: auditUserId }, dealId, stageId)
+          }
         } catch (err) {
           console.error('[ingestLead] autoCreateStageTasks:', err)
         }
         // Distribuição: registra no histórico + notifica o responsável.
-        if (assignee) {
+        // Card reaproveitado NÃO é redistribuído — ele já tem dono, e trocar
+        // por rodízio roubaria o lead de quem já está tocando.
+        if (assignee && !dealReused) {
           try {
             await db.insert(dealEvents).values({
               accountId,
