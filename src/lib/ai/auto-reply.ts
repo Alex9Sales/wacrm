@@ -30,6 +30,7 @@ import {
 import { scheduleEventFromAi } from './schedule-actions'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
+import { getCoveredUntil, setCoveredUntil } from './reply-marker'
 import { randomUUID } from 'crypto'
 import {
   engineSendText,
@@ -104,27 +105,49 @@ export async function dispatchInboundToAiReply(
     // enqueue agenda quando uma mensagem chega durante uma geração — caso
     // Cristina 31/08: pergunta 2s após a leitura do histórico ficou sem
     // resposta porque o re-add era engolido pelo job ativo.
-    const lastMsg = firstOrNull(
-      await db
-        .select({ senderType: messagesTable.senderType })
-        .from(messagesTable)
-        .where(
-          and(
-            eq(messagesTable.conversationId, conversationId),
-            eq(messagesTable.isInternal, false),
-          ),
-        )
-        .orderBy(desc(messagesTable.createdAt))
-        .limit(1),
-    )
+    //
+    // v3 (01/09, caso Rose): "quem falou por último" não basta. A pergunta
+    // certa é "existe mensagem do CLIENTE que a última resposta NÃO viu?" —
+    // e quem sabe isso é o marcador `coveredUntil` (instante em que a última
+    // geração leu o histórico, gravado depois de a resposta sair). Ver
+    // reply-marker.ts. Regras, em ordem:
+    //   1. humano falou por último → a IA cala (sempre);
+    //   2. IA falou por último e a msg mais nova do cliente é ANTERIOR ao
+    //      marcador → já coberta, não repete (Rose);
+    //   3. IA falou por último e há msg do cliente DEPOIS do marcador → responde
+    //      (Debora/Rafaela), mesmo sem ser rechecagem;
+    //   4. sem marcador / Redis fora → regra antiga (rechecagem passa).
+    const recent = await db
+      .select({
+        senderType: messagesTable.senderType,
+        createdAt: messagesTable.createdAt,
+      })
+      .from(messagesTable)
+      .where(
+        and(
+          eq(messagesTable.conversationId, conversationId),
+          eq(messagesTable.isInternal, false),
+        ),
+      )
+      .orderBy(desc(messagesTable.createdAt))
+      .limit(20)
+    const lastMsg = recent[0]
     if (lastMsg && lastMsg.senderType !== 'customer') {
-      // Exceção: RECHECAGEM de corrida em que quem falou por último foi a
-      // PRÓPRIA IA. A mensagem que disparou a rechecagem não estava no
-      // histórico lido pela resposta em voo, então segue sem resposta — era
-      // aqui que endereço/pagamento do cliente sumiam (Debora e Rafaela,
-      // 01/09). Se quem falou por último foi um HUMANO, a IA fica quieta:
-      // atendente no meio da conversa sempre ganha.
-      if (!(args.raceChase && lastMsg.senderType === 'bot')) return
+      if (lastMsg.senderType !== 'bot') return // humano no meio: sempre ganha
+      const newestCustomer = recent.find((m) => m.senderType === 'customer')
+      if (!newestCustomer) return // nada do cliente pra responder
+      const covered = await getCoveredUntil(conversationId)
+      if (covered instanceof Date) {
+        // createdAt nulo (não deveria acontecer) = não dá pra provar cobertura → responde.
+        if (
+          newestCustomer.createdAt &&
+          new Date(newestCustomer.createdAt) <= covered
+        ) {
+          return // já coberta pela última resposta
+        }
+      } else if (!args.raceChase) {
+        return // sem marca: só a rechecagem de corrida passa
+      }
     }
 
     // Deterministic, user-configured responders win over the LLM — the
@@ -292,6 +315,10 @@ export async function dispatchInboundToAiReply(
     // below (this read can race a concurrent inbound).
     if (conv.aiReplyCount >= config.autoReplyMaxPerConversation) return
 
+    // Instante da leitura do histórico: tudo que chegou ANTES daqui esta
+    // resposta cobre; o que chegar DEPOIS precisa de outra. Vira o marcador
+    // `coveredUntil` quando a resposta sair (reply-marker.ts).
+    const snapshotAt = new Date()
     const messages = await buildConversationContext(
       conversationId,
       undefined,
@@ -730,6 +757,7 @@ export async function dispatchInboundToAiReply(
           contactId,
           text: 'Perfeito! Já estou te passando para um responsável — ele continua o atendimento daqui. 🙏',
         })
+        await setCoveredUntil(conversationId, snapshotAt)
       } catch (err) {
         console.error('[ai auto-reply] despedida do handoff falhou:', err)
       }
@@ -921,6 +949,9 @@ export async function dispatchInboundToAiReply(
         text: textToSend,
       })
     }
+
+    // Respondemos tudo que estava no histórico até `snapshotAt`.
+    await setCoveredUntil(conversationId, snapshotAt)
 
     // Depois de enviar: etiqueta, cria card, agenda, transfere OU encerra
     // (transfer tem prioridade — se transferiu, não resolve/move).

@@ -20,12 +20,19 @@ const h = vi.hoisted(() => ({
   retrieveKnowledge: vi.fn(),
   generateReply: vi.fn(),
   engineSendText: vi.fn(),
+  setCoveredUntil: vi.fn(),
   state: {
+    // 🏁 marcador "até onde a última resposta viu" (reply-marker.ts):
+    // string ISO = há marca · null = sem marca · undefined = Redis fora.
+    coveredUntil: null as string | null | undefined,
     conv: null as Record<string, unknown> | null,
     autoResponders: [] as { id: string }[],
     recentHumanMsgs: [] as { id: string }[],
     // 🏁 guard anti-eco: a última msg não-interna da conversa (com orderBy).
-    lastMessages: [{ senderType: 'customer' }] as { senderType: string }[],
+    lastMessages: [{ senderType: 'customer', createdAt: '2026-09-01T15:00:00.000Z' }] as {
+      senderType: string
+      createdAt?: string
+    }[],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     sqlCalls: [] as string[],
@@ -46,6 +53,15 @@ vi.mock('./context', () => ({
   loadContactHistoryDigest: vi.fn(async () => null),
 }))
 vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
+vi.mock('./reply-marker', () => ({
+  getCoveredUntil: async () =>
+    h.state.coveredUntil === undefined
+      ? undefined
+      : h.state.coveredUntil
+        ? new Date(h.state.coveredUntil)
+        : null,
+  setCoveredUntil: h.setCoveredUntil,
+}))
 vi.mock('@/lib/cdl/metrics', () => ({
   buildCustomerFactsBlock: vi.fn(async () => null),
 }))
@@ -153,7 +169,9 @@ beforeEach(() => {
   }
   h.state.autoResponders = []
   h.state.recentHumanMsgs = []
-  h.state.lastMessages = [{ senderType: 'customer' }]
+  h.state.lastMessages = [{ senderType: 'customer', createdAt: '2026-09-01T15:00:00.000Z' }]
+  h.state.coveredUntil = null
+  h.setCoveredUntil.mockReset()
   h.state.claim = true
   h.state.updatePayload = null
   h.state.sqlCalls = []
@@ -179,18 +197,52 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('🏁 RECHECAGEM de corrida: IA falou por último mas a msg do cliente chegou durante a geração → RESPONDE', async () => {
-    // Caso Debora/Rafaela 01/09: cliente manda endereço enquanto a IA está
-    // gerando; a resposta em voo não viu a mensagem e o anti-eco a engolia.
-    h.state.lastMessages = [{ senderType: 'bot' }]
-    await dispatchInboundToAiReply({ ...ARGS, raceChase: true })
+  it('🏁 marcador: IA falou por último, mas o cliente falou DEPOIS do que a última resposta viu → RESPONDE (Debora)', async () => {
+    h.state.coveredUntil = '2026-09-01T15:52:10.000Z'
+    h.state.lastMessages = [
+      { senderType: 'bot', createdAt: '2026-09-01T15:52:39.000Z' },
+      { senderType: 'customer', createdAt: '2026-09-01T15:52:31.000Z' },
+    ]
+    await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).toHaveBeenCalled()
   })
 
-  it('🏁 RECHECAGEM de corrida NÃO atropela humano: se o atendente falou por último, a IA cala', async () => {
-    h.state.lastMessages = [{ senderType: 'agent' }]
+  it('🏁 marcador: msg do cliente JÁ COBERTA pela última resposta → não repete, nem em rechecagem (Rose)', async () => {
+    h.state.coveredUntil = '2026-09-01T15:52:35.000Z'
+    h.state.lastMessages = [
+      { senderType: 'bot', createdAt: '2026-09-01T15:52:39.000Z' },
+      { senderType: 'customer', createdAt: '2026-09-01T15:52:31.000Z' },
+    ]
     await dispatchInboundToAiReply({ ...ARGS, raceChase: true })
     expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('🏁 marcador ausente (Redis fora): rechecagem de corrida passa, job normal não', async () => {
+    h.state.coveredUntil = undefined
+    h.state.lastMessages = [
+      { senderType: 'bot', createdAt: '2026-09-01T15:52:39.000Z' },
+      { senderType: 'customer', createdAt: '2026-09-01T15:52:31.000Z' },
+    ]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    await dispatchInboundToAiReply({ ...ARGS, raceChase: true })
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+  })
+
+  it('🏁 humano falou por último → a IA cala, mesmo com msg não coberta e em rechecagem', async () => {
+    h.state.coveredUntil = '2026-09-01T15:52:10.000Z'
+    h.state.lastMessages = [
+      { senderType: 'agent', createdAt: '2026-09-01T15:52:39.000Z' },
+      { senderType: 'customer', createdAt: '2026-09-01T15:52:31.000Z' },
+    ]
+    await dispatchInboundToAiReply({ ...ARGS, raceChase: true })
+    expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('🏁 marcador é gravado depois de a resposta sair', async () => {
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalled()
+    expect(h.setCoveredUntil).toHaveBeenCalledWith('conv-1', expect.any(Date))
   })
 
   it('claims a slot and sends on the happy path', async () => {

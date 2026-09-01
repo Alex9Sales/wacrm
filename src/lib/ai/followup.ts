@@ -82,6 +82,10 @@ function shiftOutOfQuiet(ms: number, tz: string): number {
 const SILENT = '[[SILENT]]'
 const WINDOW_MS = 24 * 60 * 60 * 1000
 const PER_AGENT_CAP = 40
+/** Envios por agente por tick (1 min): drena fila represada sem rajada. */
+const MAX_SENDS_PER_TICK = 8
+/** 1º toque só se o silêncio tem menos de 24h (ver loop do sweep). */
+const FIRST_TOUCH_MAX_AGE_MS = 24 * 60 * 60_000
 export const FOLLOW_UP_MAX_STEPS = 5
 
 export type FollowUpDelayUnit = 'minutes' | 'hours' | 'days'
@@ -159,7 +163,9 @@ export function stepDelayMinutes(step: {
 }): number {
   const v = Math.max(1, Math.round(step.delayValue || 0))
   const mult = step.delayUnit === 'days' ? 1440 : step.delayUnit === 'hours' ? 60 : 1
-  return Math.min(43200, Math.max(5, v * mult))
+  // Piso 2 min (era 5 escondido: a tela aceitava "2 minutos" e o código
+  // silenciosamente esperava 5 — negócio rápido tipo gás quer os 2 mesmo).
+  return Math.min(43200, Math.max(2, v * mult))
 }
 
 function readStep(raw: unknown): FollowUpStep | null {
@@ -643,11 +649,37 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         AND c.last_message_at <= now() - (${minDelay} * interval '1 minute')
         AND c.last_message_at >= ${cfg.armedAt}::timestamptz
         ${channelCond}
-      ORDER BY c.last_message_at ASC
+        -- ⚠️ As duas exclusões abaixo viviam no JS, DEPOIS do LIMIT: conversa
+        -- morta (sem inbound nunca / escada esgotada sem resposta) ocupava as
+        -- ${PER_AGENT_CAP} vagas pra sempre e a fila crescia todo dia. Caso Gerson
+        -- 01/09: 101 candidatas, ele na posição 99, follow-up "parou do nada".
+        -- Só quem JÁ escreveu alguma vez (senão não é reengajamento):
+        AND EXISTS (
+          SELECT 1 FROM messages mi
+          WHERE mi.conversation_id = c.id
+            AND mi.sender_type = 'customer' AND mi.is_internal = false
+        )
+        -- Só quem AINDA tem degrau pra receber (o cliente não respondeu desde
+        -- o último follow-up E a escada acabou). Com desistência ligada, o
+        -- degrau "esgotado" ainda precisa ser visitado pra marcar a perda.
+        AND NOT (
+          c.last_follow_up_at IS NOT NULL
+          AND c.follow_up_step >= ${cfg.giveUpEnabled ? cfg.steps.length + 1 : cfg.steps.length}
+          AND c.last_follow_up_at >= COALESCE(
+            (SELECT max(mi2.created_at) FROM messages mi2
+              WHERE mi2.conversation_id = c.id
+                AND mi2.sender_type = 'customer' AND mi2.is_internal = false),
+            c.last_follow_up_at)
+        )
+      -- Mais NOVO primeiro: é a conversa que o time está olhando agora.
+      ORDER BY c.last_message_at DESC
       LIMIT ${PER_AGENT_CAP}
     `)
     const cands = candRes.rows as unknown as CandRow[]
     if (cands.length === 0) continue
+    // Teto por tick: uma fila represada (como a do Gerson) não pode virar
+    // rajada de 40 mensagens num minuto — drena aos poucos, 1 tick/min.
+    const sentBefore = sent
 
     let config: AiConfig | null = null
     let loaded = false
@@ -655,6 +687,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
     let emailChannel: WorkerChannelCtx | null | undefined = undefined
 
     for (const c of cands) {
+      if (sent - sentBefore >= MAX_SENDS_PER_TICK) break
       if (!c.last_message_at) continue
       // Só reengaja quem já mandou mensagem alguma vez (o cliente precisa ter
       // escrito). Guard no TOPO: conversas SEM inbound (ex.: a conversa de e-mail
@@ -711,6 +744,10 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
           ? new Date(c.last_message_at).getTime()
           : new Date(c.last_follow_up_at as string).getTime()
       if (Date.now() - anchor < stepDelayMinutes(step) * 60_000) continue // ainda não está na hora
+      // 1º toque só pra silêncio RECENTE: "oi, ainda precisa?" 3 dias depois
+      // não é reengajamento leve, é estranheza — e conversa velha é papel da
+      // reativação (autonomy), não daqui.
+      if (currentStep === 0 && Date.now() - anchor > FIRST_TOUCH_MAX_AGE_MS) continue
 
       // Roteamento MULTICANAL: passo de e-mail → entrega no e-mail do MESMO lead
       // (contacts.email) quando há e-mail + canal de e-mail; senão CAI no
