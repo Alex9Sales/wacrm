@@ -48,11 +48,38 @@ declare global {
   }
 }
 
-function loadFbSdk(): Promise<FbSdk> {
+function loadFbSdk(timeoutMs = 12_000): Promise<FbSdk> {
   return new Promise((resolve, reject) => {
     if (typeof window === 'undefined') return reject(new Error('no window'));
     if (window.FB) return resolve(window.FB);
     if (!APP_ID) return reject(new Error('NEXT_PUBLIC_META_APP_ID não configurado'));
+
+    // ⏱️ Sem timeout o "Conectando…" ficava ETERNO (caso Rafael 31/08):
+    // bloqueador de anúncios mata o sdk.js do Facebook em silêncio (sem
+    // onerror em alguns), e a espera nunca resolvia.
+    let settled = false;
+    const finish = (fn: () => void) => {
+      if (settled) return;
+      settled = true;
+      window.clearTimeout(timer);
+      window.clearInterval(poll);
+      fn();
+    };
+    const timer = window.setTimeout(() => {
+      finish(() =>
+        reject(
+          new Error(
+            'O componente do Facebook não carregou. Desative bloqueadores de anúncio/privacidade para este site (ou tente em janela normal de outro navegador) e clique de novo.',
+          ),
+        ),
+      );
+    }, timeoutMs);
+    // Cobre o caso "script já injetado numa tentativa anterior, FB chegando":
+    // antes, retornava sem nada pendurado → promise nunca resolvia.
+    const poll = window.setInterval(() => {
+      if (window.FB) finish(() => resolve(window.FB!));
+    }, 300);
+
     window.fbAsyncInit = () => {
       window.FB!.init({
         appId: APP_ID,
@@ -60,9 +87,8 @@ function loadFbSdk(): Promise<FbSdk> {
         xfbml: false,
         version: GRAPH_VERSION,
       });
-      resolve(window.FB!);
+      finish(() => resolve(window.FB!));
     };
-    // The <script> only needs to be injected once; fbAsyncInit fires on load.
     if (document.getElementById('facebook-jssdk')) return;
     const s = document.createElement('script');
     s.id = 'facebook-jssdk';
@@ -70,7 +96,14 @@ function loadFbSdk(): Promise<FbSdk> {
     s.async = true;
     s.defer = true;
     s.crossOrigin = 'anonymous';
-    s.onerror = () => reject(new Error('Falha ao carregar o SDK do Facebook'));
+    s.onerror = () =>
+      finish(() =>
+        reject(
+          new Error(
+            'Falha ao carregar o SDK do Facebook — desative bloqueadores de anúncio para este site e tente de novo.',
+          ),
+        ),
+      );
     document.body.appendChild(s);
   });
 }
@@ -85,6 +118,14 @@ export function EmbeddedSignupButton({
   // The ES session-info message arrives on `window` independently of the
   // FB.login callback, so stash the ids here for the callback to read.
   const sessionRef = useRef<{ phone_number_id?: string; waba_id?: string }>({});
+
+  // Pré-carrega o SDK assim que o botão aparece: se o download (1–3s) rodar
+  // DENTRO do clique, o FB.login abre o popup fora do gesto do usuário e o
+  // navegador bloqueia em silêncio → "Conectando…" preso (caso Rafael 31/08).
+  // Com o SDK já em memória, o popup abre na hora do clique.
+  useEffect(() => {
+    void loadFbSdk().catch(() => {})
+  }, []);
 
   useEffect(() => {
     const onMessage = (event: MessageEvent) => {
