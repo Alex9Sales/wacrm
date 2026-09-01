@@ -656,6 +656,13 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         -- (Sem interpolação aqui dentro: um placeholder num comentário vira
         -- parâmetro bound que o Postgres não consegue tipar — quebrou o sweep
         -- em prod por 2 ticks em 01/09.)
+        -- Humano falou por último → a IA NÃO reengaja (mesma regra do
+        -- auto-reply: atendente que assumiu a linha é dono dela). 01/09: o
+        -- sweep mandou follow-up por cima da resposta humana ao Gerson, com
+        -- preço diferente do que o atendente tinha acabado de passar.
+        AND coalesce((SELECT ml.sender_type FROM messages ml
+                       WHERE ml.conversation_id = c.id AND ml.is_internal = false
+                       ORDER BY ml.created_at DESC LIMIT 1), 'customer') <> 'agent'
         -- Grupo NUNCA recebe reengajamento (01/09: o sweep pegou o grupo
         -- "MEDIT LINK USUÁRIOS" do Rafael; só não saiu porque o JID de grupo
         -- falhou na validação de telefone — com JID aceito teria mandado
