@@ -40,6 +40,9 @@ export interface ScheduledRow {
   contact_name: string | null
   contact_phone: string | null
   channel_provider: string | null
+  /** Número/canal por onde a agendada sai (Rafael 01/09: ver ao lado do responsável). */
+  channel_name: string | null
+  channel_phone: string | null
   message_type: string
   content_text: string | null
   scheduled_at: string
@@ -158,6 +161,8 @@ export async function listScheduled(input: {
       contact_name: contacts.name,
       contact_phone: contacts.phone,
       channel_provider: channels.provider,
+      channel_name: channels.name,
+      channel_phone: channels.phoneNumber,
       message_type: scheduledMessages.messageType,
       content_text: scheduledMessages.contentText,
       scheduled_at: scheduledMessages.scheduledAt,

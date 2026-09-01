@@ -319,6 +319,12 @@ export default function AgendamentosPage() {
 
                   <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-0.5 text-[10px] text-muted-foreground">
                     {r.created_by_name && <span>criada por {r.created_by_name}</span>}
+                    {r.channel_name && (
+                      <span>
+                        · número {r.channel_name}
+                        {r.channel_phone ? ` (${r.channel_phone})` : ''}
+                      </span>
+                    )}
                     {r.assigned_to_name && (
                       <span>· responsável {r.assigned_to_name}</span>
                     )}
