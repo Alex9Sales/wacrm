@@ -649,10 +649,13 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         AND c.last_message_at <= now() - (${minDelay} * interval '1 minute')
         AND c.last_message_at >= ${cfg.armedAt}::timestamptz
         ${channelCond}
-        -- ⚠️ As duas exclusões abaixo viviam no JS, DEPOIS do LIMIT: conversa
+        -- As duas exclusões abaixo viviam no JS, DEPOIS do LIMIT: conversa
         -- morta (sem inbound nunca / escada esgotada sem resposta) ocupava as
-        -- ${PER_AGENT_CAP} vagas pra sempre e a fila crescia todo dia. Caso Gerson
+        -- vagas do LIMIT pra sempre e a fila crescia todo dia. Caso Gerson
         -- 01/09: 101 candidatas, ele na posição 99, follow-up "parou do nada".
+        -- (Sem interpolação aqui dentro: um placeholder num comentário vira
+        -- parâmetro bound que o Postgres não consegue tipar — quebrou o sweep
+        -- em prod por 2 ticks em 01/09.)
         -- Só quem JÁ escreveu alguma vez (senão não é reengajamento):
         AND EXISTS (
           SELECT 1 FROM messages mi
@@ -664,7 +667,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         -- degrau "esgotado" ainda precisa ser visitado pra marcar a perda.
         AND NOT (
           c.last_follow_up_at IS NOT NULL
-          AND c.follow_up_step >= ${cfg.giveUpEnabled ? cfg.steps.length + 1 : cfg.steps.length}
+          AND c.follow_up_step >= ${cfg.giveUpEnabled ? cfg.steps.length + 1 : cfg.steps.length}::int
           AND c.last_follow_up_at >= COALESCE(
             (SELECT max(mi2.created_at) FROM messages mi2
               WHERE mi2.conversation_id = c.id
