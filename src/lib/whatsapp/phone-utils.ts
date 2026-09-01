@@ -46,7 +46,7 @@ export function isValidE164(phone: string): boolean {
 const BR_CSP = new Set(['12', '14', '15', '17', '21', '23', '25', '31', '32', '41', '43'])
 
 /** A plausible Brazilian area code (DDD): 11–99, first digit non-zero. */
-function isPlausibleDDD(dd: string): boolean {
+export function isPlausibleDDD(dd: string): boolean {
   const n = Number(dd)
   return Number.isInteger(n) && n >= 11 && n <= 99
 }
@@ -88,6 +88,26 @@ export function normalizeInboundPhoneBR(raw: string): string {
     }
   }
   return d // fallback: at least the leading zeros are gone
+}
+
+/**
+ * Número NACIONAL brasileiro sem o 55 (DDD + 8/9 dígitos) → E.164 com 55.
+ * Qualquer outra forma volta intacta.
+ *
+ * Por que existe (01/09, caso Gerson): o import do ERP grava telefone como
+ * "6792361631" (DDD + local, sem 55). Ao enviar, o check-exists do WhatsApp
+ * recebia esse número cru e lia como +679 (Fiji) → numberExists:false →
+ * fallback "6792361631@c.us" → a mensagem ficava em "sent" pra sempre e o
+ * cliente nunca via nada (11 mensagens do Gerson, a chave Pix incluída).
+ * Com 11 dígitos o WhatsApp ainda adivinha o país; com 10 (número antigo sem
+ * o 9º dígito), não.
+ */
+export function toBrE164IfNational(digits: string): string {
+  const d = (digits || '').replace(/\D/g, '')
+  if ((d.length === 10 || d.length === 11) && isPlausibleDDD(d.slice(0, 2))) {
+    return '55' + d
+  }
+  return d
 }
 
 /**

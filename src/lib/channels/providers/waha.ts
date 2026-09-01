@@ -54,7 +54,7 @@ import type {
   WebhookVerifyCtx,
   WhatsAppProvider,
 } from '../provider';
-import { normalizePhone } from '@/lib/whatsapp/phone-utils';
+import { normalizePhone, toBrE164IfNational } from '@/lib/whatsapp/phone-utils';
 import {
   groupJidDigits,
   isGroupJid,
@@ -323,7 +323,10 @@ async function resolveChatId(ch: ChannelCtx, toE164: string): Promise<string> {
   // hyphen) — use it verbatim. Normalizing would strip the hyphen and break the
   // id, and check-exists is for 1:1 phones only.
   if (/@g\.us$/i.test(toE164)) return toE164;
-  const digits = normalizePhone(toE164);
+  // Telefone nacional sem 55 (formato do ERP importado) vira E.164 ANTES do
+  // check-exists — senão o WhatsApp lê "67…" como Fiji e a mensagem morre
+  // em "sent" (caso Gerson 01/09). Ver toBrE164IfNational.
+  const digits = toBrE164IfNational(normalizePhone(toE164));
   // A GROUP target passed as bare digits (16+) — best-effort `<digits>@g.us`.
   // (Legacy hyphen jids should arrive already suffixed via the line above; this
   // covers the modern `120363…` ids whose digits ARE the jid.)
