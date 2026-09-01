@@ -16,8 +16,20 @@ function isEditingDirtyText(): boolean {
   if (el.getAttribute?.("data-draft-safe") === "true") return false;
   if (el.isContentEditable) return true;
   const tag = el.tagName;
-  if (tag === "TEXTAREA" || tag === "INPUT") {
-    return !!(el as HTMLInputElement | HTMLTextAreaElement).value;
+  // Só TEXTO LONGO segura o auto-reload. Campo de BUSCA/FILTRO com texto
+  // (ex.: "Buscar conversas…") não é rascunho — e prendia a aba no bundle
+  // velho a manhã inteira (caso Dentai: funcionária busca o cliente, deixa o
+  // texto no campo, e o auto-reload nunca acontecia).
+  if (tag === "TEXTAREA") {
+    return !!(el as HTMLTextAreaElement).value;
+  }
+  if (tag === "INPUT") {
+    const input = el as HTMLInputElement;
+    const kind = (input.type || "text").toLowerCase();
+    if (kind === "search" || input.getAttribute("role") === "searchbox") {
+      return false;
+    }
+    return !!input.value;
   }
   return false;
 }
@@ -61,7 +73,13 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
   const check = useCallback(async () => {
     // Dormant in dev (no BUILD_ID) — nothing to compare against.
     if (!initialBuildId || initialBuildId === "dev") return;
-    if (checking.current || document.hidden) return;
+    // ⚠️ NÃO pule quando a aba está oculta. Era exatamente aí que o bundle
+    // velho sobrevivia: a pessoa deixa o CRM numa aba de fundo, a gente
+    // deploya, e quando ela volta e clica numa conversa a Server Action já
+    // falha ANTES do primeiro check (o de visibilitychange é assíncrono).
+    // Checando de fundo, a aba se recarrega sozinha e a pessoa volta pro
+    // CRM já atualizado — sem ver banner nenhum (caso Dentai, 01/09).
+    if (checking.current) return;
     checking.current = true;
     try {
       const res = await fetch("/api/version", { cache: "no-store" });

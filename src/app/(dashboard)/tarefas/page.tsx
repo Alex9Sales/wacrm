@@ -300,11 +300,23 @@ export default function TarefasPage() {
                       >
                         {row.title}
                       </span>
-                      {row.deal_title && (
-                        <span className="block truncate text-xs text-muted-foreground">
-                          Card: {row.deal_title}
-                        </span>
-                      )}
+                      {row.deal_title &&
+                        (row.deal_id ? (
+                          // Dica do Rafael: dá pra VER e ABRIR o card a que a
+                          // tarefa está presa, sem caçar no funil.
+                          <a
+                            href={`/pipelines/${row.deal_id}`}
+                            onClick={(e) => e.stopPropagation()}
+                            className="block truncate text-xs text-primary hover:underline"
+                            title={`Abrir card: ${row.deal_title}`}
+                          >
+                            Card: {row.deal_title}
+                          </a>
+                        ) : (
+                          <span className="block truncate text-xs text-muted-foreground">
+                            Card: {row.deal_title}
+                          </span>
+                        ))}
                       {/* Quem é dono da tarefa: atribuída a X (, Y, …) · criada por Z */}
                       <span className="mt-0.5 block truncate text-[11px] text-muted-foreground">
                         {row.assignee_names.length > 0
