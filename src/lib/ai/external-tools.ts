@@ -12,6 +12,7 @@
 // ============================================================
 
 import { and, desc, eq, gte } from 'drizzle-orm'
+import { assertPublicUrl } from '@/lib/net/safe-url'
 
 import { db, agentTools, agentToolRuns } from '@/db'
 import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
@@ -297,7 +298,8 @@ export async function executeTool(
     } else {
       try {
         const { out: baseUrl, used } = fillPlaceholders(tool.url, args, true)
-        const url = new URL(baseUrl)
+        // 🛡️ Anti-SSRF: só destino público (auditoria 02/09).
+        const url = await assertPublicUrl(new URL(baseUrl))
         const isGet = tool.method === 'GET' || tool.method === 'DELETE'
         // GET: params que não entraram na URL viram query string.
         if (isGet) {

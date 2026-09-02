@@ -9,6 +9,7 @@
 // Custo roda na chave de IA da própria conta (usage source 'capture').
 // ============================================================
 import { NextResponse, after } from 'next/server'
+import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/rate-limit';
 import { and, eq } from 'drizzle-orm'
 
 import { db, member, products } from '@/db'
@@ -29,6 +30,10 @@ const MAX_LEN = 600
 const LEAD_MARKER = /\[\[\s*LEAD\s*:([^\]]+)\]\]/i
 
 export async function POST(req: Request) {
+  // 🛡️ Rate limit por IP (rota pública, auditoria 02/09).
+  const rl = await checkRateLimit(`public:capture-chat:${clientIp(req)}`, { limit: 30, windowMs: 60_000 });
+  if (!rl.success) return rateLimitResponse(rl);
+
   try {
     const body = (await req.json().catch(() => null)) as Record<
       string,

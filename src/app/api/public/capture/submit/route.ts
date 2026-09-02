@@ -2,6 +2,7 @@
 // valida (honeypot + obrigatórios), e joga o lead no funil da conta via ingestLead
 // (contato + card + tarefa + rodízio). Sob /api/public (liberado no middleware).
 import { NextResponse, after } from 'next/server'
+import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/rate-limit';
 import { eq, sql } from 'drizzle-orm'
 
 import { db, captureForms, member } from '@/db'
@@ -14,6 +15,10 @@ import { enrollContactInCadence } from '@/lib/cadences/cadence'
 export const dynamic = 'force-dynamic'
 
 export async function POST(req: Request) {
+  // 🛡️ Rate limit por IP (rota pública, auditoria 02/09).
+  const rl = await checkRateLimit(`public:capture-submit:${clientIp(req)}`, { limit: 20, windowMs: 60_000 });
+  if (!rl.success) return rateLimitResponse(rl);
+
   try {
     const body = (await req.json().catch(() => null)) as Record<
       string,

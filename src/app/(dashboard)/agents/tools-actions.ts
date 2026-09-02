@@ -8,6 +8,7 @@
 // ============================================================
 
 import { and, desc, eq } from 'drizzle-orm'
+import { classifyUrl } from '@/lib/net/safe-url'
 
 import { db, agentTools, agentToolRuns, aiConfigs } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -127,6 +128,9 @@ export async function saveAgentTool(input: {
     if (url.protocol !== 'https:' && url.protocol !== 'http:') {
       return { error: 'A URL precisa ser http(s).' }
     }
+    // 🛡️ Anti-SSRF: sem rede interna, sem porta fora de 80/443 (auditoria 02/09).
+    const shape = classifyUrl(url)
+    if (!shape.ok) return { error: `URL não permitida: ${shape.reason}` }
     const method = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(input.method)
       ? input.method
       : 'GET'

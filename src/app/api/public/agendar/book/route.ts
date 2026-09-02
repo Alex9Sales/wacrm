@@ -1,12 +1,17 @@
 // Reserva pública de um horário. Valida (honeypot + nome + WhatsApp com DDD),
 // e delega pro núcleo (evento + lead + confirmação). Sob /api/public.
 import { NextResponse } from 'next/server'
+import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/rate-limit';
 
 import { getPublicScheduler, bookSlot } from '@/lib/scheduling/public'
 
 export const dynamic = 'force-dynamic'
 
 export async function POST(req: Request) {
+  // 🛡️ Rate limit por IP (rota pública, auditoria 02/09).
+  const rl = await checkRateLimit(`public:agendar-book:${clientIp(req)}`, { limit: 10, windowMs: 60_000 });
+  if (!rl.success) return rateLimitResponse(rl);
+
   try {
     const body = (await req.json().catch(() => null)) as Record<
       string,

@@ -273,3 +273,17 @@ export async function __resetRateLimitForTests(): Promise<void> {
     // ignore — tests that need a clean slate mock ioredis directly.
   }
 }
+
+/**
+ * IP do cliente atrás do Cloudflare/Traefik (cf-connecting-ip → 1º x-forwarded-for →
+ * x-real-ip). Chave de rate limit por IP nas rotas PÚBLICAS (auditoria 02/09).
+ */
+export function clientIp(req: Request): string {
+  const h = req.headers;
+  return (
+    h.get("cf-connecting-ip")?.trim() ||
+    (h.get("x-forwarded-for") || "").split(",")[0].trim() ||
+    h.get("x-real-ip")?.trim() ||
+    "unknown"
+  );
+}

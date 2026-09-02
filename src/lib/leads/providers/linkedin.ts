@@ -16,6 +16,7 @@
 // ============================================================
 
 import crypto from 'node:crypto'
+import { restrictBase } from '@/lib/net/safe-url'
 
 import type { LoadedLeadSource } from '@/lib/leads/sources'
 import {
@@ -208,10 +209,8 @@ export async function resolveLinkedInLead(
   const meta: Record<string, string> = {}
 
   if (!fieldMap) {
-    const base =
-      (typeof source.providerMeta.apiBase === 'string' &&
-        source.providerMeta.apiBase) ||
-      DEFAULT_API
+    // 🛡️ Base só no host oficial (auditoria 02/09).
+    const base = restrictBase(source.providerMeta.apiBase, DEFAULT_API, ['api.linkedin.com', 'linkedin.com'])
     const version =
       (typeof source.providerMeta.apiVersion === 'string' &&
         source.providerMeta.apiVersion) ||

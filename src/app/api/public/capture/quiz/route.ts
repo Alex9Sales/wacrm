@@ -8,6 +8,7 @@
 // está garantido no funil antes de qualquer geração.
 // ============================================================
 import { NextResponse, after } from 'next/server'
+import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/rate-limit';
 import { eq, sql } from 'drizzle-orm'
 
 import { db, captureForms, dealEvents, deals, member } from '@/db'
@@ -32,6 +33,10 @@ const DEFAULT_RESULT =
 const AI_TIMEOUT_MS = 25_000
 
 export async function POST(req: Request) {
+  // 🛡️ Rate limit por IP (rota pública, auditoria 02/09).
+  const rl = await checkRateLimit(`public:capture-quiz:${clientIp(req)}`, { limit: 30, windowMs: 60_000 });
+  if (!rl.success) return rateLimitResponse(rl);
+
   try {
     const body = (await req.json().catch(() => null)) as Record<
       string,

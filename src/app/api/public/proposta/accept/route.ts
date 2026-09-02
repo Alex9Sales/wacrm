@@ -2,12 +2,17 @@
 // opcional) → carimba accepted_at + aceitante + IP, notifica o vendedor e joga na
 // timeline do negócio. Sob /api/public (liberado no middleware).
 import { NextResponse } from 'next/server'
+import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/rate-limit';
 
 import { acceptProposal } from '@/lib/proposals/tracking'
 
 export const dynamic = 'force-dynamic'
 
 export async function POST(req: Request) {
+  // 🛡️ Rate limit por IP (rota pública, auditoria 02/09).
+  const rl = await checkRateLimit(`public:proposta-accept:${clientIp(req)}`, { limit: 10, windowMs: 60_000 });
+  if (!rl.success) return rateLimitResponse(rl);
+
   try {
     const body = (await req.json().catch(() => null)) as {
       id?: unknown

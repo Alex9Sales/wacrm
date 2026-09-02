@@ -1,4 +1,5 @@
 import { NextResponse } from 'next/server'
+import { checkRateLimit, clientIp, rateLimitResponse } from '@/lib/rate-limit';
 
 import { db, dealCustomValues, dealEvents } from '@/db'
 import { ingestLead, LeadPhoneError } from '@/lib/leads/ingest'
@@ -32,6 +33,10 @@ interface Answer {
 }
 
 export async function POST(req: Request) {
+  // 🛡️ Rate limit por IP (rota pública, auditoria 02/09).
+  const rl = await checkRateLimit(`public:diagnostico:${clientIp(req)}`, { limit: 10, windowMs: 60_000 });
+  if (!rl.success) return rateLimitResponse(rl);
+
   let body: Record<string, unknown>
   try {
     body = (await req.json()) as Record<string, unknown>

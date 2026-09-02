@@ -1,3 +1,4 @@
+import { assertPublicUrl } from '@/lib/net/safe-url'
 // ============================================================
 // Leitura de DOCUMENTO (PDF/DOCX/texto) que o cliente envia no WhatsApp. Extrai
 // o texto (unpdf/mammoth) e devolve um RESUMO curto em PT-BR (via OpenAI chat) —
@@ -64,6 +65,8 @@ export async function describeDocument(input: {
   mimetype?: string
   filename?: string
 }): Promise<string | null> {
+  // 🛡️ Anti-SSRF: a URL vem do tenant (import por URL) — só destino público.
+  await assertPublicUrl(input.url)
   const res = await fetch(input.url)
   if (!res.ok) throw new Error(`document fetch falhou: ${res.status}`)
   const bytes = new Uint8Array(await res.arrayBuffer())

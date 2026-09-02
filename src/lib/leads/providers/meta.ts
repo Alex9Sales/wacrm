@@ -8,6 +8,7 @@
 // ============================================================
 
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
+import { restrictBase } from '@/lib/net/safe-url'
 import type { LoadedLeadSource } from '@/lib/leads/sources'
 import {
   type FetchedLead,
@@ -74,10 +75,8 @@ export async function fetchMetaLead(
   source: LoadedLeadSource,
   leadgenId: string,
 ): Promise<FetchedLead | null> {
-  const graph =
-    (typeof source.providerMeta.graphBase === 'string' &&
-      source.providerMeta.graphBase) ||
-    DEFAULT_GRAPH
+  // 🛡️ Base só no host oficial (auditoria 02/09: provider_meta é do tenant).
+  const graph = restrictBase(source.providerMeta.graphBase, DEFAULT_GRAPH, ['graph.facebook.com'])
   const fields =
     'field_data,ad_id,ad_name,adset_id,adset_name,campaign_id,campaign_name,form_id,created_time'
   const url = `${graph}/${encodeURIComponent(

@@ -11,6 +11,7 @@
 // ============================================================
 
 import crypto from 'node:crypto'
+import { restrictBase } from '@/lib/net/safe-url'
 
 import type { LoadedLeadSource } from '@/lib/leads/sources'
 import {
@@ -136,10 +137,8 @@ export async function resolveTikTokLead(
   const meta: Record<string, string> = {}
 
   if (!fieldMap) {
-    const base =
-      (typeof source.providerMeta.apiBase === 'string' &&
-        source.providerMeta.apiBase) ||
-      DEFAULT_BASE
+    // 🛡️ Base só no host oficial (auditoria 02/09).
+    const base = restrictBase(source.providerMeta.apiBase, DEFAULT_BASE, ['business-api.tiktok.com', 'tiktok.com'])
     // Endpoint de Lead Generation. Confirmado nos escopos do app (Lead
     // Management → /lead/get/). Sobrescrevível por provider_meta.leadEndpoint
     // se a versão exigir outro caminho (ex.: /page/lead/task/download/).
