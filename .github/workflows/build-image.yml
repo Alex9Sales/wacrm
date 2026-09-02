@@ -73,12 +73,12 @@ jobs:
           push: true
           build-args: |
             NEXT_PUBLIC_SITE_URL=${{ env.SITE_URL }}
+            DEPLOYMENT_ID=${{ github.sha }}
           tags: |
             ${{ env.IMAGE }}:fluxia-core
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
-            DEPLOYMENT_ID=${{ github.sha }}
 
       # Deploy over SSH: pull the just-pushed image and recreate both apps
       # (web + worker). Replaces the flaky Coolify /api/v1/deploy trigger
