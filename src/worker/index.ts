@@ -103,6 +103,14 @@ import('./owner-digest-worker')
     console.error('[worker] owner-digest failed to start:', err);
   });
 
+// 🩺 Saúde dos canais Meta (API oficial) — tick de 30 min: número/token morto
+// na Meta vira 'disconnected' + aviso (antes ficava verde pra sempre).
+import('./meta-health-worker')
+  .then((m) => m.startMetaHealthWorker())
+  .catch((err) => {
+    console.error('[worker] meta-health failed to start:', err);
+  });
+
 // 🔄 Sync ERP → CRM — 1x/dia (05h locais) por conta com `historico_compras`:
 // compras feitas fora do CRM entram no CDL (caso Poleana, 01/09).
 import('./erp-sync-worker')

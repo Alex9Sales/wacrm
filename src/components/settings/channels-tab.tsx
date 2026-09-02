@@ -86,6 +86,14 @@ export const PROVIDER_LABELS: Record<ProviderId, string> = {
   evogo: 'EvoGo',
 };
 
+function fmtHealthTime(iso: string): string {
+  try {
+    return new Date(iso).toLocaleString('pt-BR', { day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' });
+  } catch {
+    return '';
+  }
+}
+
 const STATUS_META: Record<
   ChannelStatus,
   { label: string; dot: string; badge: string }
@@ -578,6 +586,7 @@ function ChannelRow({
   onConfigureDomain: () => void;
 }) {
   const isMeta = channel.provider === 'meta';
+  const metaHealth = (channel.provider_meta as { health?: { last_error?: string | null; last_at?: string | null; warning?: string | null } }).health ?? null;
   const isInstagram = channel.provider === 'instagram';
   const canPair = CAPABILITIES[channel.provider]?.qrPairing ?? false;
   const isBrandedEmail =
@@ -606,6 +615,19 @@ function ChannelRow({
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
               {channel.phone_number || 'Número não vinculado'}
             </p>
+            {/* 🩺 Saúde real na Meta (monitor a cada 30 min). */}
+            {isMeta && metaHealth?.last_error && channel.status !== 'connected' && (
+              <p className="mt-0.5 text-[11px] text-red-500" title={metaHealth.last_error}>
+                Meta: {metaHealth.last_error}
+                {metaHealth.last_at ? ` · verificado ${fmtHealthTime(metaHealth.last_at)}` : ''}
+                {' · reconecte pelo botão Meta em Canais'}
+              </p>
+            )}
+            {isMeta && !metaHealth?.last_error && metaHealth?.warning && (
+              <p className="mt-0.5 text-[11px] text-amber-500" title={metaHealth.warning}>
+                Meta: {metaHealth.warning}
+              </p>
+            )}
           </div>
         </div>
 

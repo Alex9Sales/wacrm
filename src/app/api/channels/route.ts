@@ -84,6 +84,8 @@ function safeProviderMeta(
     return {
       phone_number_id: meta.phone_number_id ?? null,
       waba_id: meta.waba_id ?? null,
+      // 🩺 Resultado do monitor de saúde (meta-health): sem segredo nenhum.
+      health: meta.health ?? null,
       location,
       pix,
     }
