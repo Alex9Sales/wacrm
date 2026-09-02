@@ -45,6 +45,7 @@ import {
   getAdminUserIds,
   getParticipantConversationIds,
   getUserSectorIds,
+  getDedicatedChannelMap,
 } from '@/lib/sectors/access'
 import { formatConversationPreview } from '@/lib/inbox/preview'
 import { loadChannel } from '@/lib/channels/channels'
@@ -382,6 +383,7 @@ const conversationColumns = {
   assigned_agent_id: conversations.assignedAgentId,
   sector_id: conversations.sectorId,
   is_private: conversations.isPrivate,
+  channel_id: conversations.channelId,
   last_message_text: conversations.lastMessageText,
   last_message_at: conversations.lastMessageAt,
   unread_count: conversations.unreadCount,
@@ -629,13 +631,14 @@ export async function listConversations(opts?: {
   const isAgentTier = !hasMinRole(ctx.role, 'supervisor')
   // As três listas de visibilidade são independentes — busca em paralelo (antes
   // era 1 round-trip atrás do outro) e só pra o tier de agente.
-  const [adminIdsArr, sectorIdsArr, participantIdsArr] = isAgentTier
+  const [adminIdsArr, sectorIdsArr, participantIdsArr, dedicatedByChannel] = isAgentTier
     ? await Promise.all([
         getAdminUserIds(ctx.accountId),
         getUserSectorIds(ctx.userId),
         getParticipantConversationIds(ctx.userId),
+        getDedicatedChannelMap(ctx.accountId),
       ])
-    : [[] as string[], [] as string[], [] as string[]]
+    : [[] as string[], [] as string[], [] as string[], new Map<string, string>()]
   const adminIds = new Set(adminIdsArr)
   const sectorIds = new Set(sectorIdsArr)
   const participantIds = new Set(participantIdsArr)
@@ -653,6 +656,8 @@ export async function listConversations(opts?: {
         sectorIds,
         adminIds,
         participantIds,
+        channelId: conv.channel_id,
+        dedicatedByChannel,
       })
     return {
       ...conv,

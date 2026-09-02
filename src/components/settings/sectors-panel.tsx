@@ -35,6 +35,7 @@ import {
   deleteSector,
   listChannelsForRouting,
   setChannelDefaultSector,
+  setChannelDedicatedUser,
   type SectorWithMembers,
   type ChannelRouting,
 } from "./actions";
@@ -234,6 +235,51 @@ export function SectorsPanel() {
                     {sectors.map((s) => (
                       <SelectItem key={s.id} value={s.id}>
                         {s.name}
+                      </SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {/* 📌 Canal dedicado a UM membro: só ele vê as conversas deste
+                    canal (admin/owner e supervisor veem tudo). Pra mais de uma
+                    pessoa, usa setor. */}
+                <Select
+                  value={ch.dedicatedUserId ?? "none"}
+                  disabled={!canEditSettings}
+                  onValueChange={async (v) => {
+                    const next = v === "none" ? null : v;
+                    setChannelsList((prev) =>
+                      prev.map((c) =>
+                        c.id === ch.id ? { ...c, dedicatedUserId: next } : c,
+                      ),
+                    );
+                    try {
+                      await setChannelDedicatedUser(ch.id, next);
+                      toast.success(
+                        next
+                          ? `Canal dedicado a ${nameOf(next)}: só essa pessoa vê as conversas dele.`
+                          : "Canal liberado: volta a seguir a regra do setor.",
+                      );
+                    } catch {
+                      toast.error("Não foi possível salvar.");
+                      void reload();
+                    }
+                  }}
+                >
+                  <SelectTrigger
+                    className="w-44 shrink-0"
+                    title="Dedicar este canal a um membro: só ele vê as conversas que chegam por aqui"
+                  >
+                    <SelectValue placeholder="Dedicado a ninguém">
+                      {ch.dedicatedUserId
+                        ? `Dedicado: ${nameOf(ch.dedicatedUserId)}`
+                        : "Dedicado a ninguém"}
+                    </SelectValue>
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="none">Dedicado a ninguém</SelectItem>
+                    {members.map((m) => (
+                      <SelectItem key={m.id} value={m.id}>
+                        {m.name}
                       </SelectItem>
                     ))}
                   </SelectContent>

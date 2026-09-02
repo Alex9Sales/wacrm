@@ -34,6 +34,7 @@ import {
   or,
   sql,
   type SQL,
+  isNotNull,
 } from 'drizzle-orm';
 
 import {
@@ -42,6 +43,7 @@ import {
   sectorMembers,
   conversations,
   conversationParticipants,
+  channels,
 } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { hasMinRole, type AccountRole } from '@/lib/auth/roles';
@@ -106,6 +108,36 @@ export async function getParticipantConversationIds(
  * LIST tier — a WHERE condition restricting `conversations` to what the caller
  * may see in the inbox list, or `undefined` for admins/owner (no restriction).
  */
+/**
+ * 📌 Canais DEDICADOS da conta: channel_id → user_id do dono exclusivo.
+ * As conversas desses canais só aparecem pro dono (admin/owner e supervisor
+ * veem tudo). Pra mais de uma pessoa por canal existe o setor.
+ */
+export async function getDedicatedChannelMap(
+  accountId: string,
+): Promise<Map<string, string>> {
+  const rows = await db
+    .select({ id: channels.id, userId: channels.dedicatedUserId })
+    .from(channels)
+    .where(and(eq(channels.accountId, accountId), isNotNull(channels.dedicatedUserId)));
+  const map = new Map<string, string>();
+  for (const r of rows) if (r.userId) map.set(r.id, r.userId);
+  return map;
+}
+
+/** Dono exclusivo do canal desta conversa (null = canal comum). */
+async function dedicatedOwnerOfConversation(conversationId: string): Promise<string | null> {
+  const row = firstOrNull(
+    await db
+      .select({ userId: channels.dedicatedUserId })
+      .from(conversations)
+      .innerJoin(channels, eq(conversations.channelId, channels.id))
+      .where(eq(conversations.id, conversationId))
+      .limit(1),
+  );
+  return row?.userId ?? null;
+}
+
 export async function conversationVisibility(
   role: AccountRole,
   userId: string,
@@ -142,7 +174,16 @@ export async function conversationVisibility(
   // tweak. A private thread has no sector match only when it's outside the
   // caller's sectors, and openQueue never matches a private (always assigned),
   // so a no-sector private stays hidden. read_blocked masks the preview.
-  const base = or(mine, participant, sectorScope) as SQL;
+  // 📌 Canal dedicado: o dono vê TODAS as conversas do canal dele; ninguém
+  // mais (abaixo de supervisor) vê conversa de canal dedicado a outra pessoa.
+  // ⚠️ Subquery raw: a coluna externa vai como literal "conversations"."channel_id"
+  // (ver memória drizzle-subquery-unqualified).
+  const mineDedicated = sql`"conversations"."channel_id" IN (SELECT id FROM channels WHERE account_id = ${accountId} AND dedicated_user_id = ${userId})`;
+  const notOthersDedicated = sql`("conversations"."channel_id" IS NULL OR "conversations"."channel_id" NOT IN (SELECT id FROM channels WHERE account_id = ${accountId} AND dedicated_user_id IS NOT NULL AND dedicated_user_id <> ${userId}))`;
+  const base = and(
+    notOthersDedicated,
+    or(mine, participant, sectorScope, mineDedicated),
+  ) as SQL;
   // "Ninguém vê as do admin": exclude admin/owner-assigned entirely.
   const adminIds = await getAdminUserIds(accountId);
   if (adminIds.length === 0) return base;
@@ -181,6 +222,11 @@ export async function canReadConversation(
   // "Ninguém vê as do admin" — before the @mention exception.
   if (assignedAgentId && (await isAdminUser(accountId, assignedAgentId))) {
     return false;
+  }
+  // 📌 Canal dedicado: abaixo de supervisor, só o dono do canal abre.
+  if (conversationId) {
+    const dedicated = await dedicatedOwnerOfConversation(conversationId);
+    if (dedicated) return dedicated === userId;
   }
   // @mention participant — reads this one thread regardless of owner/sector.
   if (conversationId && (await isParticipant(conversationId, userId))) {
@@ -223,6 +269,11 @@ export async function canListConversation(
   }
   if (hasMinRole(role, 'supervisor')) return true;
   if (assignedAgentId && assignedAgentId === userId) return true;
+  // 📌 Canal dedicado: só o dono lista.
+  if (conversationId) {
+    const dedicated = await dedicatedOwnerOfConversation(conversationId);
+    if (dedicated) return dedicated === userId;
+  }
   if (conversationId && (await isParticipant(conversationId, userId))) {
     return true;
   }
@@ -253,6 +304,9 @@ export function agentCanReadRow(args: {
   sectorIds: Set<string>;
   adminIds: Set<string>;
   participantIds: Set<string>;
+  /** 📌 Canal da conversa + mapa canal→dono (canais dedicados). Opcionais. */
+  channelId?: string | null;
+  dedicatedByChannel?: Map<string, string>;
 }): boolean {
   const {
     userId,
@@ -263,9 +317,15 @@ export function agentCanReadRow(args: {
     sectorIds,
     adminIds,
     participantIds,
+    channelId,
+    dedicatedByChannel,
   } = args;
   if (assignedAgentId && assignedAgentId === userId) return true;
   if (assignedAgentId && adminIds.has(assignedAgentId)) return false;
+  // 📌 Canal dedicado: só o dono lê as conversas dele.
+  if (channelId && dedicatedByChannel?.has(channelId)) {
+    return dedicatedByChannel.get(channelId) === userId;
+  }
   if (participantIds.has(conversationId)) return true;
   if (isPrivate) return false;
   // Sector-mate reads teammates' threads (assigned or not); a no-sector thread

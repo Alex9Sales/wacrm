@@ -746,6 +746,8 @@ export interface ChannelRouting {
   provider: string
   phoneNumber: string | null
   defaultSectorId: string | null
+  /** 📌 Membro dono exclusivo das conversas deste canal (null = regra normal). */
+  dedicatedUserId: string | null
 }
 
 /** List the account's channels with their default sector (admins). */
@@ -758,11 +760,38 @@ export async function listChannelsForRouting(): Promise<ChannelRouting[]> {
       provider: channels.provider,
       phoneNumber: channels.phoneNumber,
       defaultSectorId: channels.defaultSectorId,
+      dedicatedUserId: channels.dedicatedUserId,
     })
     .from(channels)
     .where(eq(channels.accountId, ctx.accountId))
     .orderBy(asc(channels.name))
   return rows
+}
+
+/**
+ * 📌 Dedica (ou libera) um canal a UM membro da conta (admins). Com dono, as
+ * conversas do canal só aparecem pra ele — admin/owner e supervisor seguem
+ * vendo tudo. Pra mais de uma pessoa, o caminho é setor.
+ */
+export async function setChannelDedicatedUser(
+  channelId: string,
+  userId: string | null,
+): Promise<void> {
+  const ctx = await requireRole('admin')
+  if (userId) {
+    const m = firstOrNull(
+      await db
+        .select({ id: member.id })
+        .from(member)
+        .where(and(eq(member.userId, userId), eq(member.organizationId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!m) throw new Error('Membro não encontrado nesta conta.')
+  }
+  await db
+    .update(channels)
+    .set({ dedicatedUserId: userId, updatedAt: new Date().toISOString() })
+    .where(and(eq(channels.id, channelId), eq(channels.accountId, ctx.accountId)))
 }
 
 /** Set (or clear) a channel's default routing sector (admins). */

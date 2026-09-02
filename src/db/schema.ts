@@ -674,6 +674,8 @@ export const channels = pgTable("channels", {
 	// can still override). Null = no default → the general (null) queue. FK
 	// to sectors is declared in the migration (sectors is defined below).
 	defaultSectorId: uuid("default_sector_id"),
+	// 📌 Canal dedicado a UM membro: só ele vê as conversas deste canal (migr 0153).
+	dedicatedUserId: uuid("dedicated_user_id"),
 	// Per-channel token used to validate non-Meta webhook deliveries.
 	webhookSecret: text("webhook_secret").notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
