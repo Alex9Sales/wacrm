@@ -259,7 +259,14 @@ export async function setConversationAiPaused(
     const ctx = await getCurrentAccount()
     await db
       .update(conversations)
-      .set({ aiAutoreplyDisabled: paused, updatedAt: new Date().toISOString() })
+      .set({
+        aiAutoreplyDisabled: paused,
+        // ▶️ Ligar a IA de novo = novo "episódio": zera o limite de respostas
+        // por conversa (Rafael 01/09: "desativei e ativei e não voltou" — o
+        // contador ai_reply_count nunca zerava, só crescia).
+        ...(paused ? {} : { aiReplyCount: 0 }),
+        updatedAt: new Date().toISOString(),
+      })
       .where(
         and(
           eq(conversations.id, conversationId),
@@ -1015,7 +1022,11 @@ export async function updateConversationStatus(
   )
   await db
     .update(conversations)
-    .set({ status })
+    .set({
+      status,
+      // Reabrir = novo episódio → zera o limite de respostas da IA.
+      ...(status === 'open' && prev?.status !== 'open' ? { aiReplyCount: 0 } : {}),
+    })
     .where(
       and(
         eq(conversations.id, conversationId),
@@ -1343,7 +1354,13 @@ export async function transferConversationToAgent(
 
   await db
     .update(conversations)
-    .set({ assignedAgentId: targetUserId, assignedAt: new Date().toISOString() })
+    .set({
+      assignedAgentId: targetUserId,
+      assignedAt: new Date().toISOString(),
+      // Atribuir/desatribuir = humano mexeu na conversa → zera o limite de
+      // respostas da IA (Rafael 01/09: "atribui e desatribui não deveria zerar?").
+      aiReplyCount: 0,
+    })
     .where(
       and(
         eq(conversations.id, conversationId),

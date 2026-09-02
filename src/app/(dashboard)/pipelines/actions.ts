@@ -22,7 +22,7 @@ import { findOrCreateConversation } from '@/lib/channels/inbound'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
-import { getAdminUserIds } from '@/lib/sectors/access'
+import { getAdminUserIds, canReadConversation } from '@/lib/sectors/access'
 import type { Contact, Conversation, Deal, Pipeline, PipelineStage, Profile, CustomField } from '@/types'
 import { loadAiConfig } from '@/lib/ai/config'
 import { generateReply } from '@/lib/ai/generate'
@@ -366,7 +366,56 @@ export async function openDealConversation(
       return { conversationId: null, error: 'Sem acesso a este negócio' }
     }
     if (deal.conversationId) {
-      return { conversationId: deal.conversationId, error: null }
+      // A conversa vinculada pode estar atribuída a OUTRA pessoa (Barbara
+      // 01/09: card dela apontava pra conversa da Paula/do Rafael → o inbox
+      // abria vazio, sem explicar). Checa com a mesma regra do inbox e devolve
+      // um motivo claro em vez de mandar pra um link que não abre.
+      const conv = firstOrNull(
+        await db
+          .select({
+            sectorId: conversations.sectorId,
+            assignedAgentId: conversations.assignedAgentId,
+            isPrivate: conversations.isPrivate,
+          })
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.id, deal.conversationId),
+              eq(conversations.accountId, ctx.accountId),
+            ),
+          )
+          .limit(1),
+      )
+      if (conv) {
+        const ok = await canReadConversation(
+          ctx.role,
+          ctx.userId,
+          ctx.accountId,
+          conv.sectorId,
+          conv.assignedAgentId,
+          deal.conversationId,
+          conv.isPrivate,
+        )
+        if (!ok) {
+          let who = 'outro atendente'
+          if (conv.assignedAgentId) {
+            const u = firstOrNull(
+              await db
+                .select({ name: user.name })
+                .from(user)
+                .where(eq(user.id, conv.assignedAgentId))
+                .limit(1),
+            )
+            if (u?.name) who = u.name
+          }
+          return {
+            conversationId: null,
+            error: `Esta conversa está com ${who}. Peça a transferência ou fale com o cliente pelo botão do WhatsApp.`,
+          }
+        }
+        return { conversationId: deal.conversationId, error: null }
+      }
+      // Conversa vinculada não existe mais → cai no fluxo de resolver pelo telefone.
     }
     if (!deal.contactId) {
       return { conversationId: null, error: 'Negócio sem contato' }

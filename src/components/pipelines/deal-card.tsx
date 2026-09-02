@@ -218,9 +218,11 @@ export function DealCard({
   };
   const openConversation = async (e: SyntheticEvent) => {
     e.stopPropagation();
-    // Já tem conversa vinculada → abre direto.
+    // Já tem conversa vinculada → passa pela action mesmo assim: ela checa se
+    // QUEM clicou pode abrir a conversa (Barbara 01/09: card dela apontava
+    // pra conversa atribuída à Paula/Rafael → o inbox abria VAZIO, sem aviso).
     if (deal.conversation_id) {
-      window.location.href = `/inbox?c=${deal.conversation_id}`;
+      void goConversation();
       return;
     }
     // Captura a posição ANTES do await (React zera currentTarget depois).

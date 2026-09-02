@@ -309,6 +309,16 @@ export async function POST(request: Request) {
     // `SendMessageError` carries a machine code + HTTP status; the
     // dashboard maps it to the internal `{ error }` shape.
     try {
+      // 👤 Humano respondeu pelo CRM → novo episódio: zera o limite de respostas
+      // automáticas da IA nesta conversa (best-effort; Rafael 01/09).
+      try {
+        await db
+          .update(conversations)
+          .set({ aiReplyCount: 0 })
+          .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, accountId)))
+      } catch (err) {
+        console.error('[send] reset do limite da IA falhou:', err)
+      }
       const result = await sendMessageToConversation(accountId, {
         conversationId,
         messageType: message_type,

@@ -360,7 +360,43 @@ export async function dispatchInboundToAiReply(
     }
     // Cheap early-out; the authoritative cap check is the atomic claim
     // below (this read can race a concurrent inbound).
-    if (conv.aiReplyCount >= config.autoReplyMaxPerConversation) return
+    if (conv.aiReplyCount >= config.autoReplyMaxPerConversation) {
+      // 🛑 Limite de respostas por conversa atingido. Antes (01/09, Rafael/
+      // Moacyr) a IA simplesmente calava e ninguém sabia por quê. Agora: log +
+      // UMA nota interna no thread explicando como destravar (o contador zera
+      // ao ligar a IA de novo, atribuir, reabrir ou responder).
+      console.log(
+        `[ai-reply] limite por conversa atingido conv=${conversationId} (${conv.aiReplyCount}/${config.autoReplyMaxPerConversation})`,
+      )
+      try {
+        const already = firstOrNull(
+          await db
+            .select({ id: messagesTable.id })
+            .from(messagesTable)
+            .where(
+              and(
+                eq(messagesTable.conversationId, conversationId),
+                eq(messagesTable.isInternal, true),
+                sql`${messagesTable.contentText} LIKE '🛑 IA pausada%'`,
+              ),
+            )
+            .limit(1),
+        )
+        if (!already) {
+          await db.insert(messagesTable).values({
+            conversationId,
+            senderType: 'bot',
+            contentType: 'text',
+            contentText: `🛑 IA pausada nesta conversa: chegou ao limite de ${config.autoReplyMaxPerConversation} respostas automáticas do agente (Configurações → Agentes IA → "máximo por conversa"). Pra ela voltar: responda o cliente, ligue a IA de novo, atribua a conversa ou reabra — o contador zera.`,
+            isInternal: true,
+            status: 'sent',
+          })
+        }
+      } catch (err) {
+        console.error('[ai-reply] nota de limite falhou:', err)
+      }
+      return
+    }
 
     // Instante da leitura do histórico: tudo que chegou ANTES daqui esta
     // resposta cobre; o que chegar DEPOIS precisa de outra. Vira o marcador
