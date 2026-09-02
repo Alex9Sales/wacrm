@@ -8,6 +8,7 @@ import { cn } from '@/lib/utils';
 import { canEditSettings } from '@/lib/auth/roles';
 import { AgentPromptGenerator } from '@/components/agents/agent-prompt-generator';
 import { AgentExternalTools } from '@/components/agents/agent-external-tools';
+import { AgentMaterials } from '@/components/agents/agent-materials';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -1104,6 +1105,9 @@ export function AiConfig({
                 })}
               </div>
             </div>
+
+            {/* 📎 Materiais que a IA pode enviar ([[ENVIAR:nome]]) — 01/09. */}
+            <AgentMaterials agentId={agentId ?? null} disabled={disabled || !isActive} />
 
             {/* Funil DESTE agente (0139): card criado pela IA nasce nele. */}
             {pipes.length > 0 && (

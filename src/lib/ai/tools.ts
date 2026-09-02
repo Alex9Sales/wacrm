@@ -20,6 +20,7 @@ export type AgentToolKey =
   | 'set_attribute'
   | 'voice_pref'
   | 'route_agent'
+  | 'send_material'
 
 export interface AgentToolDef {
   key: AgentToolKey
@@ -38,6 +39,15 @@ export const AGENT_TOOLS: AgentToolDef[] = [
     label: 'Não responder',
     description:
       'Ignora mensagens que não pedem resposta (só "ok", um emoji, agradecimento).',
+    group: 'Conversa',
+    defaultOn: true,
+    implemented: true,
+  },
+  {
+    key: 'send_material',
+    label: 'Enviar material (arquivo, imagem, vídeo)',
+    description:
+      'Manda na conversa um dos "Materiais do agente" (catálogo, contrato, circular, vídeo) quando o prompt mandar ou o cliente pedir. Escreve [[ENVIAR:nome]].',
     group: 'Conversa',
     defaultOn: true,
     implemented: true,

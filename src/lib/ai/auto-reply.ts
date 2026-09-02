@@ -30,6 +30,7 @@ import {
 import { scheduleEventFromAi } from './schedule-actions'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
+import { extractMaterialDirectives, findMaterialByName, listMaterialsForAgent } from './materials'
 import { getCoveredUntil, setCoveredUntil } from './reply-marker'
 import { enqueueAiReplyDebounced } from '@/lib/queue/queues'
 
@@ -485,9 +486,25 @@ export async function dispatchInboundToAiReply(
       settings.businessTimezone,
     ).catch(() => null)
 
+    // 📎 Materiais que este agente pode enviar ([[ENVIAR:nome]]).
+    let materials: Awaited<ReturnType<typeof listMaterialsForAgent>> = []
+    if (tools.includes('send_material')) {
+      try {
+        materials = await listMaterialsForAgent(accountId, config.id ?? null)
+      } catch (err) {
+        console.error('[ai auto-reply] materiais falharam (segue sem):', err)
+      }
+    }
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
+      materials: materials.map((m) => ({
+        name: m.name,
+        description: m.description,
+        mediaType: m.mediaType,
+        filename: m.filename,
+      })),
       knowledge,
       companyProfile,
       catalog,
@@ -528,6 +545,13 @@ export async function dispatchInboundToAiReply(
 
     // Extrai TODOS os marcadores de ação do texto (skip/etiqueta/resolver/funil).
     const dirs = parseCloseDirectives(rawText)
+    // 📎 [[ENVIAR:nome]] sai do texto aqui; os arquivos vão DEPOIS do texto.
+    const materialNames: string[] = []
+    if (materials.length > 0) {
+      const ex = extractMaterialDirectives(dirs.text)
+      dirs.text = ex.text
+      materialNames.push(...ex.names)
+    }
     const text = dirs.text
 
     // Ações "leves" da conversa: etiquetar, nota interna, atributo, voz.
@@ -848,7 +872,7 @@ export async function dispatchInboundToAiReply(
       await finishHandoff()
       return
     }
-    if (!text) {
+    if (!text && materialNames.length === 0) {
       // Sem texto: se foi transferência/encerramento (marcadores sem despedida),
       // executa e sai; senão, desabilita a IA (nada útil pra responder).
       if (has('handoff') && dirs.transfer) {
@@ -1031,6 +1055,33 @@ export async function dispatchInboundToAiReply(
         contactId,
         text: textToSend,
       })
+    }
+
+    // 📎 Materiais pedidos pela IA ([[ENVIAR:nome]]) — depois do texto, na ordem.
+    for (const name of materialNames) {
+      const mat = findMaterialByName(materials, name)
+      if (!mat) {
+        console.warn('[ai auto-reply] material não encontrado:', name)
+        continue
+      }
+      try {
+        await engineSendTyping({ accountId, conversationId, contactId, on: true })
+        await sleep(800)
+        await engineSendMedia({
+          accountId,
+          userId: configOwnerUserId,
+          conversationId,
+          contactId,
+          kind: mat.mediaType,
+          link: mat.mediaUrl,
+          filename: mat.filename ?? undefined,
+          mimetype: mat.mimetype ?? undefined,
+          caption: mat.mediaType === 'document' ? undefined : mat.name,
+        })
+        console.log('[ai auto-reply] material enviado:', mat.name)
+      } catch (err) {
+        console.error('[ai auto-reply] envio de material falhou:', mat.name, err)
+      }
     }
 
     // Respondemos tudo que estava no histórico até `snapshotAt`.

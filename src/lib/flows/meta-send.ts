@@ -238,6 +238,9 @@ interface SendMediaEngineArgs {
   caption?: string
   /** Document-only; ignored by Meta for image/video. */
   filename?: string
+  /** MIME real do arquivo (documentos): sem isso o WAHA deriva pela extensão do
+   *  nome; se o nome não tiver extensão, o WhatsApp mostra "dados". */
+  mimetype?: string
   /** For AI voice notes: the text that was spoken, stored so the CRM
    *  thread shows a "Transcrição" under the bubble (same as inbound audio). */
   transcription?: string
@@ -268,6 +271,7 @@ export async function engineSendMedia(
           url: args.link,
           caption: args.caption,
           filename: args.filename,
+          mimetype: args.mimetype,
         })
       ).externalMessageId,
   )

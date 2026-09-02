@@ -1,4 +1,5 @@
 import type { AiProvider } from './types'
+import { materialsInstruction } from './materials-shared'
 
 // ============================================================
 // Tunables + prompt scaffold for the AI reply assistant.
@@ -413,6 +414,9 @@ export function buildSystemPrompt(args: {
    *  (nº de compras, última compra, ticket, frequência, preferências) — dados
    *  estruturados, separados do resumo de conversa. */
   customerFacts?: string | null
+  /** 📎 Materiais que ESTE agente pode enviar ([[ENVIAR:nome]]) — só no auto_reply
+   *  e só com a ferramenta send_material ligada. [] = seção omitida. */
+  materials?: { name: string; description: string | null; mediaType: 'image' | 'video' | 'document'; filename?: string | null }[]
 }): string {
   const { userPrompt, mode, knowledge, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
@@ -519,6 +523,21 @@ export function buildSystemPrompt(args: {
     if (has('schedule')) parts.push(scheduleInstruction())
     if (has('create_card')) parts.push(createCardInstruction())
     if (has('private_note')) parts.push(noteInstruction())
+    if (has('send_material') && args.materials && args.materials.length > 0) {
+      parts.push(
+        materialsInstruction(
+          args.materials.map((m) => ({
+            id: '',
+            name: m.name,
+            description: m.description,
+            mediaType: m.mediaType,
+            mediaUrl: '',
+            filename: m.filename ?? null,
+            mimetype: null,
+          })),
+        ),
+      )
+    }
     if (
       has('set_attribute') &&
       args.customFieldNames &&

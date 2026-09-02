@@ -2533,6 +2533,28 @@ export const sectorMembers = pgTable("sector_members", {
 ]);
 
 // ============================================================
+// 📎 Materiais do agente — arquivos/imagens/vídeos que a IA pode ENVIAR na
+// conversa via [[ENVIAR:nome]] quando o prompt mandar (migr 0152, 01/09).
+// agent_id NULL = disponível pra todos os agentes da conta.
+export const agentMaterials = pgTable("agent_materials", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	agentId: uuid("agent_id"),
+	name: text().notNull(),
+	description: text(),
+	mediaType: text("media_type").notNull(),
+	mediaUrl: text("media_url").notNull(),
+	filename: text(),
+	mimetype: text(),
+	sizeBytes: integer("size_bytes"),
+	createdBy: uuid("created_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_agent_materials_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	uniqueIndex("agent_materials_account_name").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), sql`lower(name)`),
+]);
+
 // Quick replies (respostas rápidas) — canned messages an agent inserts in
 // the composer by shortcut. Account-shared; managed by admins, used by all.
 // ============================================================
