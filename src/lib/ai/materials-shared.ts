@@ -78,7 +78,7 @@ export function materialsInstruction(materials: AgentMaterial[]): string {
     .join('\n')
   return (
     'You can SEND FILES the business prepared (documents, images, videos). To send one, write the marker [[ENVIAR:<exact name>]] on its own line, anywhere in your reply — the system removes the marker and delivers the file right after your text. ' +
-    'Send a file only when the business instructions say so or when the customer asks for it; introduce it in one short sentence (e.g. "Segue o documento 👇"); never claim you sent something without the marker; never invent names not in this list; do not send the same file twice in a conversation unless asked. ' +
+    'Send a file only when the business instructions say so or when the customer asks for it; introduce it in one short sentence (e.g. "Segue o documento 👇"); never claim you sent something without the marker; never invent names not in this list; avoid sending the same file twice in a conversation unless the customer asks again or the business instructions explicitly say to resend (e.g. together with a meeting confirmation). ' +
     'Available files:\n' +
     list
   )
