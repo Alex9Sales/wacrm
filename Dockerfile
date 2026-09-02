@@ -42,6 +42,9 @@ COPY . .
 # (DATABASE_URL, REDIS_URL, secrets…) is NOT needed here and must NOT be baked.
 ARG NEXT_PUBLIC_SITE_URL=http://localhost:3000
 ENV NEXT_PUBLIC_SITE_URL=${NEXT_PUBLIC_SITE_URL}
+# 🛡️ id do deploy (SHA) → next.config deploymentId (skew protection)
+ARG DEPLOYMENT_ID=dev
+ENV DEPLOYMENT_ID=${DEPLOYMENT_ID}
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV NODE_ENV=production
 
@@ -58,6 +61,8 @@ RUN apt-get update \
   && apt-get install -y --no-install-recommends wget \
   && rm -rf /var/lib/apt/lists/*
 
+ARG DEPLOYMENT_ID=dev
+ENV DEPLOYMENT_ID=${DEPLOYMENT_ID}
 ENV NODE_ENV=production
 ENV NEXT_TELEMETRY_DISABLED=1
 ENV PORT=3000

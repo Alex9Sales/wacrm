@@ -78,6 +78,7 @@ jobs:
             ${{ env.IMAGE }}:${{ github.sha }}
           cache-from: type=gha
           cache-to: type=gha,mode=max
+            DEPLOYMENT_ID=${{ github.sha }}
 
       # Deploy over SSH: pull the just-pushed image and recreate both apps
       # (web + worker). Replaces the flaky Coolify /api/v1/deploy trigger

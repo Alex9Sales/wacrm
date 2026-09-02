@@ -77,6 +77,15 @@ const nextConfig: NextConfig = {
    * build and needs the raw src/ + tsx at runtime — the Dockerfile keeps
    * a full `node_modules` (with tsx) in the image for that. See Dockerfile.
    */
+  /**
+   * 🛡️ Version-skew protection (Next): com um id por deploy, os assets levam
+   * `?dpl=<id>`, as navegações mandam `x-deployment-id` e, se o cliente é de
+   * um build antigo, o Next faz reload completo em vez de chamar Server
+   * Action com id velho ("Failed to find Server Action" / "Não foi possível
+   * carregar esta página" depois de cada deploy — Dentai, Barbara, GoLink).
+   * Vem do build (Dockerfile ARG DEPLOYMENT_ID = SHA do commit).
+   */
+  deploymentId: process.env.DEPLOYMENT_ID || undefined,
   output: 'standalone',
 
   /**

@@ -1,5 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server'
 import { getSessionCookie } from 'better-auth/cookies'
+import { isAppPath } from '@/lib/auth/protected-paths'
 
 // ============================================================
 // Better Auth route-protection middleware (Phase 2).
@@ -48,13 +49,11 @@ const PUBLIC_API_PREFIXES = [
 ]
 
 function isProtectedPath(pathname: string): boolean {
-  if (pathname === '/dashboard' || pathname.startsWith('/dashboard/')) {
-    return true
-  }
-  // Phase 8: super-admin panel. Cookie presence only here; the real
-  // platform-admin allowlist check runs server-side in each /admin
-  // page / route via requirePlatformAdmin (middleware can't read the DB).
-  if (pathname === '/admin' || pathname.startsWith('/admin/')) {
+  // Toda tela da área logada (inbox, settings, supervisão, funis…) exige o
+  // cookie de sessão — antes só /dashboard e /admin (02/09: /inbox sem sessão
+  // devolvia a casca do app e virava tela quebrada + 401 em loop). O /admin
+  // continua com a checagem real de platform-admin no servidor.
+  if (isAppPath(pathname)) {
     return true
   }
   if (pathname.startsWith('/api/')) {

@@ -1,5 +1,6 @@
 "use client";
 
+import { isAppPath } from "@/lib/auth/protected-paths";
 import {
   createContext,
   useContext,
@@ -173,6 +174,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setUser(null);
         setProfile(null);
         setAccount(null);
+        // 02/09: sessão inválida numa tela da área logada → vai pro login em
+        // vez de ficar numa tela quebrada fazendo polling sem sessão (aba
+        // zumbi: 1.100 UnauthorizedError num dia; GoLink viu "Não foi
+        // possível carregar esta página"). Fora da área logada não mexe.
+        if (typeof window !== "undefined" && isAppPath(window.location.pathname)) {
+          window.location.replace("/login");
+        }
         return;
       }
       if (!res.ok) {
@@ -255,6 +263,22 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     })();
     return () => {
       mounted = false;
+    };
+  }, [fetchProfile]);
+
+  // Re-checagem da sessão: ao voltar pra aba e a cada 5 min. Uma aba deixada
+  // aberta depois de um "Sair" em outra aba (ou sessão expirada) cai no
+  // 401 acima e vai pro login, em vez de martelar o servidor sem sessão.
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const onVisible = () => {
+      if (document.visibilityState === "visible") void fetchProfile();
+    };
+    document.addEventListener("visibilitychange", onVisible);
+    const id = window.setInterval(() => void fetchProfile(), 5 * 60_000);
+    return () => {
+      document.removeEventListener("visibilitychange", onVisible);
+      window.clearInterval(id);
     };
   }, [fetchProfile]);
 
