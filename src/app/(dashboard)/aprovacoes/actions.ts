@@ -45,6 +45,10 @@ export interface ApprovalItem {
   /** Link da proposta salva (pública), quando houver. */
   proposalUrl: string | null
   contactEmail: string | null
+  /** Valor sugerido pra montar a proposta (editável antes de aprovar). */
+  proposalValue: number | null
+  /** Itens já lançados no negócio (0 = a proposta vai nascer com 1 item do valor). */
+  dealItemCount: number
   /** Conversas do contato por onde a mensagem PODE sair (ações de mensagem). */
   sendOptions: { conversationId: string; label: string }[]
   /** A conversa que será usada se não trocar (a do negócio, senão a mais recente). */
@@ -174,6 +178,7 @@ export async function listApprovalQueue(): Promise<ApprovalItem[]> {
         action: r.actionType as OrchAction,
         payload: (r.payload ?? {}) as Record<string, unknown>,
         dealTitle: deal?.title ?? null,
+        dealValue: Number(deal?.value ?? 0),
         contactEmail: r.contactEmail ?? null,
         proposal: r.dealId ? (proposalByDeal.get(r.dealId) ?? null) : null,
         items: r.dealId ? (itemsByDeal.get(r.dealId) ?? 0) : 0,
@@ -188,10 +193,14 @@ export async function listApprovalQueue(): Promise<ApprovalItem[]> {
       if (isMessage && sendOptions.length === 0) {
         warnings.push('O contato não tem conversa aberta em nenhum canal — não dá pra enviar. Abra uma conversa com ele primeiro.')
       }
+      const itemsOfDeal = r.dealId ? (itemsByDeal.get(r.dealId) ?? 0) : 0
       return {
         effect,
         warnings,
         proposalUrl,
+        proposalValue:
+          r.actionType === 'draft_proposal' && itemsOfDeal === 0 ? Number(deal?.value ?? 0) || null : null,
+        dealItemCount: itemsOfDeal,
         contactEmail: r.contactEmail ?? null,
         sendOptions,
         defaultConversationId,
@@ -286,7 +295,7 @@ async function loadPending(accountId: string, id: string) {
 }
 
 /** Aprova (e executa) um item. `text` = mensagem editada, se for ação de mensagem. */
-export async function approveQueueItem(input: { id: string; text?: string | null; payload?: Record<string, unknown>; conversationId?: string | null }): Promise<ActionResult> {
+export async function approveQueueItem(input: { id: string; text?: string | null; payload?: Record<string, unknown>; conversationId?: string | null; proposalValue?: number | null }): Promise<ActionResult> {
   const ctx = await getCurrentAccount()
   if (ctx.role === 'viewer') return { ok: false, error: 'Seu papel só permite visualizar.' }
   const row = await loadPending(ctx.accountId, input.id)
@@ -294,7 +303,11 @@ export async function approveQueueItem(input: { id: string; text?: string | null
   if (!isOrchAction(row.actionType)) return { ok: false, error: 'Tipo de ação desconhecido.' }
   const action = row.actionType
   const meta = ACTION_CATALOG[action]
-  const payload = { ...((row.payload ?? {}) as Record<string, unknown>), ...(input.payload ?? {}) }
+  const payload: Record<string, unknown> = {
+    ...((row.payload ?? {}) as Record<string, unknown>),
+    ...(input.payload ?? {}),
+    ...(typeof input.proposalValue === 'number' && input.proposalValue > 0 ? { proposalValue: input.proposalValue } : {}),
+  }
   const text = meta.kind === 'message' ? (input.text ?? row.suggestedText ?? '').trim() : null
   if (meta.kind === 'message' && !text) return { ok: false, error: 'Escreva a mensagem antes de aprovar.' }
   // Canal escolhido na fila: só aceita conversa DESTE contato, desta conta.
@@ -491,6 +504,7 @@ function describeEffect(args: {
   action: OrchAction
   payload: Record<string, unknown>
   dealTitle: string | null
+  dealValue: number
   contactEmail: string | null
   proposal: { id: string; acceptedAt: string | null } | null
   items: number
@@ -512,6 +526,26 @@ function describeEffect(args: {
         proposalUrl: args.proposal ? `/proposta/${args.proposal.id}` : null,
       }
     }
+    case 'draft_proposal': {
+      if (args.proposal) {
+        return { effect: `${deal} já tem proposta salva — nada a montar. Use "Enviar proposta".`, warnings, proposalUrl: `/proposta/${args.proposal.id}` }
+      }
+      if (args.items > 0) {
+        return { effect: `Monta a proposta de ${deal} com os ${args.items} item(ns) já lançados na aba Produtos. Nada sai pro cliente — depois você revisa e envia.`, warnings, proposalUrl: null }
+      }
+      const v = Number(args.dealValue) || 0
+      if (!v) {
+        warnings.push('O negócio não tem produtos nem valor. Defina o valor do negócio (ou lance os itens na aba Produtos) — senão a proposta nasceria zerada.')
+      }
+      return {
+        effect: v
+          ? `Monta a proposta de ${deal} com 1 item ("${args.dealTitle ?? 'Serviço'}") no valor abaixo. Nada sai pro cliente — depois você revisa e envia.`
+          : `Não dá pra montar: ${deal} está sem produtos e sem valor.`,
+        warnings,
+        proposalUrl: null,
+      }
+    }
+
     case 'apply_discount':
       return { effect: `Aplica ${Number(p.discountPct) || 0}% de desconto na proposta salva de ${deal} (só salva — não envia nada ao cliente).`, warnings, proposalUrl: args.proposal ? `/proposta/${args.proposal.id}` : null }
     case 'close_deal':

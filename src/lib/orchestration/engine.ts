@@ -450,7 +450,12 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
     }
 
     if (d.decision === 'blocked') {
-      if (!blockedRecent.has(k)) {
+      // ⚠️ Teto diário atingido é comportamento NORMAL, não bloqueio de
+      // política — registrar isso enchia a auditoria (211 linhas na conta do
+      // Rafael) e o painel mostrava "Bloqueadas: 211", que assusta à toa.
+      // Fica só o que é decisão de verdade: kill switch, opt-out, limite por negócio.
+      const isCapOnly = /teto diário/i.test(d.reason)
+      if (!isCapOnly && !blockedRecent.has(k)) {
         await db.insert(agentActionRequests).values({
           accountId,
           agentId: agent?.id ?? null,

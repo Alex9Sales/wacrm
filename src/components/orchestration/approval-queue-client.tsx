@@ -93,6 +93,8 @@ export function ApprovalQueueClient() {
   const [audit, setAudit] = useState<AuditItem[]>([]);
   const [texts, setTexts] = useState<Record<string, string>>({});
   const [channelSel, setChannelSel] = useState<Record<string, string>>({});
+  // Valor da proposta a montar (editável antes de aprovar).
+  const [values, setValues] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAudit, setShowAudit] = useState(false);
@@ -113,6 +115,11 @@ export function ApprovalQueueClient() {
         for (const it of q) if (next[it.id] === undefined && it.defaultConversationId) next[it.id] = it.defaultConversationId;
         return next;
       });
+      setValues((prev) => {
+        const next = { ...prev };
+        for (const it of q) if (next[it.id] === undefined && it.proposalValue) next[it.id] = String(it.proposalValue);
+        return next;
+      });
       setError(null);
     } catch (e) {
       setError(e instanceof Error ? e.message : 'Não foi possível carregar a fila.');
@@ -128,10 +135,13 @@ export function ApprovalQueueClient() {
   const approve = async (it: ApprovalItem) => {
     setBusy(it.id);
     try {
+      const parsedValue = Number(String(values[it.id] ?? '').replace(/\./g, '').replace(',', '.'));
       const r = await approveQueueItem({
         id: it.id,
         text: it.isMessage ? texts[it.id] ?? it.suggestedText : null,
         conversationId: it.isMessage ? channelSel[it.id] ?? it.defaultConversationId : null,
+        proposalValue:
+          it.action === 'draft_proposal' && Number.isFinite(parsedValue) && parsedValue > 0 ? parsedValue : null,
       });
       if (!r.ok) toast.error(r.error);
       else toast.success(it.isMessage ? 'Mensagem enviada.' : `${it.actionLabel}: feito.`);
@@ -313,6 +323,24 @@ export function ApprovalQueueClient() {
                       ) : null}
                     </div>
                   ) : null}
+                  {it.action === 'draft_proposal' && it.dealItemCount === 0 ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-muted-foreground">Valor da proposta:</span>
+                      <span className="text-muted-foreground">R$</span>
+                      <input
+                        type="text"
+                        inputMode="decimal"
+                        value={values[it.id] ?? ''}
+                        onChange={(e) => setValues((v) => ({ ...v, [it.id]: e.target.value }))}
+                        placeholder="0,00"
+                        className="h-7 w-28 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                      />
+                      <span className="text-muted-foreground">
+                        — vira 1 item &quot;{it.deal?.title ?? 'Serviço'}&quot; na proposta. Ajuste antes de aprovar.
+                      </span>
+                    </div>
+                  ) : null}
+
                   {it.warnings.length ? (
                     <ul className="mt-2 space-y-1">
                       {it.warnings.map((w) => (

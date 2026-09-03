@@ -65,6 +65,7 @@ async function loadDeal(accountId: string, dealId: string) {
       .select({
         id: deals.id,
         title: deals.title,
+        value: deals.value,
         assignedTo: deals.assignedTo,
         conversationId: deals.conversationId,
         stageId: deals.stageId,
@@ -295,31 +296,59 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
       }
 
       case 'draft_proposal': {
-        // Monta a proposta SALVA do negócio (nada sai pro cliente) — é o passo
-        // que faltava: "enviar proposta" travava porque não existia proposta.
+        // Monta a proposta SALVA do negócio (nada sai pro cliente).
+        // ⚠️ 03/09: a v1 criava a proposta VAZIA → página pública com R$ 0,00 e
+        // botão "Aceitar" (o Alex aprovou pra ver e virou uma proposta zerada).
+        // Agora: sem itens lançados, a proposta nasce com UM item = título do
+        // negócio × o valor (o da fila, editável, ou o valor do negócio). Sem
+        // valor nenhum, RECUSA — melhor não montar do que montar R$ 0.
         if (!deal) return { ok: false, error: 'Ação precisa de um negócio.' }
         const already = firstOrNull(
           await db.select({ id: dealProposals.id }).from(dealProposals).where(eq(dealProposals.dealId, deal.id)).limit(1),
         )
         if (already) return { ok: true, result: { proposalId: already.id, alreadyExisted: true } }
-        const items = await db
+
+        const existingItems = await db
           .select({ n: sql<number>`count(*)::int` })
           .from(dealProducts)
           .where(eq(dealProducts.dealId, deal.id))
-        const itemCount = items[0]?.n ?? 0
+        const itemCount = existingItems[0]?.n ?? 0
+
+        // Valor: o que veio da fila (humano editou) → senão o valor do negócio.
+        const askedRaw = Number(input.payload.proposalValue)
+        const dealValue = Number(deal.value ?? 0)
+        const value = Number.isFinite(askedRaw) && askedRaw > 0 ? askedRaw : dealValue
+        if (itemCount === 0 && !(value > 0)) {
+          return {
+            ok: false,
+            error: 'O negócio não tem produtos nem valor — defina o valor do negócio (ou lance os itens na aba Produtos) antes de montar a proposta.',
+          }
+        }
+
         const validUntil = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10)
         const [row] = await db
           .insert(dealProposals)
           .values({ dealId: deal.id, accountId: input.accountId, discount: '0', discountType: 'value', validUntil, terms: null })
           .returning({ id: dealProposals.id })
+
+        let createdItem: string | null = null
+        if (itemCount === 0) {
+          createdItem = deal.title || 'Serviço'
+          await db.insert(dealProducts).values({
+            accountId: input.accountId,
+            dealId: deal.id,
+            name: createdItem,
+            quantity: '1',
+            unitPrice: value.toFixed(2),
+          })
+          // O valor do negócio acompanha o da proposta quando estava zerado.
+          if (!(dealValue > 0)) {
+            await db.update(deals).set({ value: value.toFixed(2), updatedAt: new Date().toISOString() }).where(eq(deals.id, deal.id))
+          }
+        }
         return {
           ok: true,
-          result: {
-            proposalId: row?.id ?? null,
-            items: itemCount,
-            // Sem produtos lançados a proposta nasce vazia — quem revisar precisa saber.
-            note: itemCount === 0 ? 'Sem produtos no negócio: adicione os itens na aba Produtos antes de enviar.' : null,
-          },
+          result: { proposalId: row?.id ?? null, items: itemCount || 1, createdItem, value: itemCount === 0 ? value : null },
         }
       }
 
