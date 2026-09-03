@@ -626,13 +626,46 @@ export async function sendMessageToConversation(
         .returning({ id: messages.id })
     );
   } catch (err) {
-    console.error('[send-message] error inserting sent message:', err);
-    const message = err instanceof Error ? err.message : 'unknown error';
-    throw new SendMessageError(
-      'db_error',
-      `Message sent to Meta but failed to save to DB: ${message}`,
-      500
-    );
+    // ⚠️ A mensagem JÁ SAIU (temos o waMessageId). O webhook de eco/status às
+    // vezes chega ANTES deste insert e grava a linha primeiro — aí o insert
+    // bate no índice único `messages_conv_wamid_uidx` e a gente devolvia 500.
+    // Pra atendente isso aparecia como "não foi possível enviar" COM O CLIENTE
+    // JÁ TENDO RECEBIDO (caso Felipe/Isadora 03/09) — o falso negativo mais
+    // caro que existe, porque leva a mandar tudo de novo. Se a linha existe,
+    // o envio foi um SUCESSO: seguimos com ela.
+    let existing: { id: string } | null = null;
+    if (waMessageId) {
+      try {
+        existing = firstOrNull(
+          await db
+            .select({ id: messages.id })
+            .from(messages)
+            .where(
+              and(
+                eq(messages.conversationId, conversationId),
+                eq(messages.messageId, waMessageId)
+              )
+            )
+            .limit(1)
+        );
+      } catch {
+        existing = null;
+      }
+    }
+    if (existing) {
+      console.warn(
+        `[send-message] mensagem ${waMessageId} já estava gravada (eco do webhook chegou antes) — envio OK, seguindo com a linha existente`
+      );
+      messageRecord = existing;
+    } else {
+      console.error('[send-message] error inserting sent message:', err);
+      const message = err instanceof Error ? err.message : 'unknown error';
+      throw new SendMessageError(
+        'db_error',
+        `Message sent to Meta but failed to save to DB: ${message}`,
+        500
+      );
+    }
   }
 
   await db
