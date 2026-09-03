@@ -151,7 +151,10 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
     await db
       .select({ id: aiConfigs.id, autonomy: aiConfigs.autonomy, createdBy: aiConfigs.createdBy })
       .from(aiConfigs)
-      .where(and(eq(aiConfigs.accountId, accountId), eq(aiConfigs.isDefault, true), eq(aiConfigs.isActive, true)))
+      // A política é CONFIGURAÇÃO: vale mesmo com o agente desligado (auto-resposta off).
+      // Preferimos o padrão ativo; senão o padrão inativo (caso Rafael Odonto, QA da Fase 2).
+      .where(and(eq(aiConfigs.accountId, accountId), eq(aiConfigs.isDefault, true)))
+      .orderBy(desc(aiConfigs.isActive))
       .limit(1),
   )
   const policy: AutonomyPolicy = readPolicy(agent?.autonomy ?? null)
