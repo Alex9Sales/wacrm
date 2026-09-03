@@ -31,11 +31,20 @@ export async function recomputeMetricsForContacts(
 
   await db.execute(sql`
     WITH tx AS (
-      SELECT contact_id, amount, occurred_at, payment_method,
+      -- ⚠️ A MESMA venda pode chegar por 3 caminhos (planilha 'import', ERP 'erp' e
+      -- Ganho no funil 'deal'). Caso Fátima 03/09: 1 botijão em 29/08 virou "3 compras,
+      -- média 0,22 dia" e disparou reativação pra quem comprou há 4 dias. Regra:
+      -- mesmo contato + mesmo DIA + mesmo valor = mesma venda (fica 1, priorizando
+      -- erp > deal > import).
+      SELECT DISTINCT ON (contact_id, (occurred_at)::date, round(amount::numeric, 2))
+             contact_id, amount, occurred_at, payment_method,
              (metadata->>'product') AS product
       FROM customer_transactions ct
       WHERE ct.account_id = ${accountId}::uuid AND ct.status <> 'canceled'
       ${filterByContacts}
+      ORDER BY contact_id, (occurred_at)::date, round(amount::numeric, 2),
+               CASE ct.source WHEN 'erp' THEN 0 WHEN 'deal' THEN 1 WHEN 'import' THEN 2 ELSE 3 END,
+               occurred_at
     ),
     agg AS (
       SELECT

@@ -120,12 +120,11 @@ export function recommend(signal: SignalLike, ctx: NbaContext): Recommendation |
         headline: 'Enviar follow-up de fechamento',
       }
     case 'churn_risk':
-      return {
-        action: 'reactivation',
-        reason: `${who(ctx)} passou de ${Math.floor(n(p.days_since))} dias sem comprar (média ${Math.round(n(p.avg_days))}) — risco de perder o cliente.`,
-        priority: sev,
-        headline: 'Reativar: risco de churn',
-      }
+      // 03/09: o orquestrador NÃO manda reativação — quem reativa é o motor de
+      // recompra (lib/ai/autonomy.ts), com cooldown de 7d e as travas dele. Um
+      // 'auto' legado da Família do Gás vazou pra cá e mandou "sentimos sua falta"
+      // pra quem tinha comprado há 4 dias (venda triplicada nas métricas).
+      return null
     case 'ticket_declining':
       return {
         action: 'notify_seller',

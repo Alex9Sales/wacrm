@@ -103,8 +103,8 @@ describe('NBA v1', () => {
   it('parado há mais de 60 dias é backlog morto → nada', () => {
     expect(recommend({ signalType: 'stale_deal', severity: 80, payload: { days_stale: 120 }, contactId: 'c', dealId: 'd' }, ctx)).toBeNull()
   })
-  it('churn → reativação; ticket caindo → avisa; tipo desconhecido → null', () => {
-    expect(recommend({ signalType: 'churn_risk', severity: 75, payload: { days_since: 40, avg_days: 15 }, contactId: 'c', dealId: null }, ctx)?.action).toBe('reactivation')
+  it('churn NÃO vira ação aqui (motor de recompra é o dono); ticket caindo → avisa; tipo desconhecido → null', () => {
+    expect(recommend({ signalType: 'churn_risk', severity: 75, payload: { days_since: 40, avg_days: 15 }, contactId: 'c', dealId: null }, ctx)).toBeNull()
     expect(recommend({ signalType: 'ticket_declining', severity: 55, payload: { last_amount: 80, avg_ticket: 150 }, contactId: 'c', dealId: null }, ctx)?.action).toBe('notify_seller')
     expect(recommend({ signalType: 'xpto', severity: 1, payload: {}, contactId: 'c', dealId: null }, ctx)).toBeNull()
   })

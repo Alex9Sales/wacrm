@@ -11,7 +11,7 @@
 //   • stale_deal      — parado na etapa há ≥ staleDealDays (config da conta)
 //   • high_intent     — quente (temperature hot/quente ou qualificação ≥4) SEM proposta
 //   por CONTATO (deal_id NULL):
-//   • churn_risk      — ≥3 compras e ds entre 2× e 3× a média (antes do 'inactive')
+//   • churn_risk      — ≥3 compras, média ≥3 dias, ds ≥ max(2× média, 7d) e < 3× média (antes do 'inactive')
 //   • ticket_declining— ≥4 compras e última compra < 70% do ticket médio
 //   • customer_reactivated — voltou a comprar (últimos 7d) depois de ≥2× a média parado
 //   • approval_required — pedidos pendentes na fila há ≥12h (1 por contato)
@@ -114,7 +114,8 @@ export async function recomputeOrchestrationSignals(accountId: string): Promise<
              LEAST(90, 60 + FLOOR((m.ds / NULLIF(m.avg, 0) - 2) * 20))::int,
              jsonb_strip_nulls(jsonb_build_object('days_since', FLOOR(m.ds), 'avg_days', ROUND(m.avg::numeric), 'product', m.product))
       FROM metrics m
-      WHERE m.cnt >= 3 AND m.avg > 0 AND m.ds >= m.avg * 2 AND m.ds < GREATEST(m.avg * 3, 45)
+      -- média < 3 dias é artefato (venda triplicada/mesmo dia) e < 7 dias sem comprar não é churn
+      WHERE m.cnt >= 3 AND m.avg >= 3 AND m.ds >= GREATEST(m.avg * 2, 7) AND m.ds < GREATEST(m.avg * 3, 45)
       UNION ALL
       -- ticket caindo (contato)
       SELECT m.contact_id, NULL::uuid, 'ticket_declining', 55,
