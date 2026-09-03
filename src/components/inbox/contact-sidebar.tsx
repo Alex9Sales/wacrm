@@ -90,6 +90,7 @@ import { Button } from "@/components/ui/button";
 import { ContactForm } from "@/components/contacts/contact-form";
 import { DealForm } from "@/components/pipelines/deal-form";
 import { ContactAvatar } from "./contact-avatar";
+import { ContactPhotoDialog } from "./contact-photo-dialog";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { hasMinRole } from "@/lib/auth/roles";
@@ -233,6 +234,8 @@ export function ContactSidebar({
   const [addingNote, setAddingNote] = useState(false);
   // Inline contact edit — reuses the full Contacts page ContactForm in a
   // dialog so the operator can name/edit the contact right here.
+  // Foto grande do contato (clique no avatar).
+  const [photoOpen, setPhotoOpen] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
   const [editTags, setEditTags] = useState<ContactTag[]>([]);
 
@@ -681,13 +684,21 @@ export function ContactSidebar({
         <div className="p-4">
           {/* ---- Contato (always visible) ---- */}
           <div className="flex flex-col items-center text-center">
-            <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-full bg-muted text-lg font-semibold text-foreground">
+            {/* Avatar MAIOR e clicável: abre a foto grande com os dados
+                (pedido do Rafael, 03/09 — igual ao WhatsApp). */}
+            <button
+              type="button"
+              onClick={() => setPhotoOpen(true)}
+              title={`Ver foto de ${displayName}`}
+              aria-label={`Ver foto de ${displayName}`}
+              className="flex h-24 w-24 items-center justify-center overflow-hidden rounded-full bg-muted text-3xl font-semibold text-foreground transition-opacity hover:opacity-80"
+            >
               <ContactAvatar
                 avatarUrl={contact.avatar_url}
                 displayName={displayName}
-                className="h-16 w-16"
+                className="h-24 w-24"
               />
-            </div>
+            </button>
             <div className="mt-3 flex items-center gap-1">
               <h3 className="text-sm font-semibold text-foreground">
                 {displayName}
@@ -1478,6 +1489,20 @@ export function ContactSidebar({
           editing={editingSchedule}
         />
       )}
+
+      {/* Foto grande do contato + dados (clique no avatar). */}
+      <ContactPhotoDialog
+        contact={{
+          name: displayName,
+          avatarUrl: contact.avatar_url,
+          phone: contact.phone,
+          email: contact.email,
+          company: contact.company,
+          customerCodes: contact.customer_codes,
+        }}
+        open={photoOpen}
+        onOpenChange={setPhotoOpen}
+      />
 
       {/* Deal editor — reuses the pipelines DealForm sheet for create/edit
           (pipeline, stage, value, assigned agent, notes, status). */}

@@ -87,6 +87,7 @@ import {
 } from "@/components/ui/dropdown-menu";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { ContactAvatar } from "./contact-avatar";
+import { ContactPhotoDialog } from "./contact-photo-dialog";
 import { ChannelBadge, CHANNEL_PROVIDER_LABELS } from "./channel-badge";
 import { MessageBubble } from "./message-bubble";
 import { MessageActions } from "./message-actions";
@@ -275,6 +276,8 @@ export function MessageThread({
 
   // Group participant panel (WhatsApp-style): clicking a sender's avatar opens
   // a card for that number (`author_key`) → jump into their 1:1.
+  // Foto grande do contato (clique no avatar do cabeçalho).
+  const [photoOpen, setPhotoOpen] = useState(false);
   const [participant, setParticipant] = useState<GroupParticipant | null>(null);
   const [participantOpen, setParticipantOpen] = useState(false);
   const [participantBusy, setParticipantBusy] = useState(false);
@@ -1431,13 +1434,20 @@ export function MessageThread({
               <ArrowLeft className="h-5 w-5" />
             </button>
           )}
-          <div className="flex h-9 w-9 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-sm font-medium text-foreground">
+          {/* Clicar no avatar abre a foto GRANDE com os dados (igual WhatsApp). */}
+          <button
+            type="button"
+            onClick={() => setPhotoOpen(true)}
+            title={`Ver foto de ${displayName}`}
+            aria-label={`Ver foto de ${displayName}`}
+            className="flex h-10 w-10 flex-shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-sm font-medium text-foreground transition-opacity hover:opacity-80"
+          >
             <ContactAvatar
               avatarUrl={contact.avatar_url}
               displayName={displayName}
-              className="h-9 w-9"
+              className="h-10 w-10"
             />
-          </div>
+          </button>
           <div className="min-w-0">
             <div className="flex min-w-0 items-center gap-1.5">
               <h2 className="truncate text-sm font-semibold text-foreground">{displayName}</h2>
@@ -2212,6 +2222,20 @@ export function MessageThread({
           </DialogFooter>
         </DialogContent>
       </Dialog>
+
+      {/* Foto grande do contato + dados (clique no avatar do cabeçalho). */}
+      <ContactPhotoDialog
+        contact={{
+          name: displayName,
+          avatarUrl: contact.avatar_url,
+          phone: contact.phone,
+          email: contact.email,
+          company: contact.company,
+          customerCodes: contact.customer_codes,
+        }}
+        open={photoOpen}
+        onOpenChange={setPhotoOpen}
+      />
 
       <ParticipantActionSheet
         participant={participant}
