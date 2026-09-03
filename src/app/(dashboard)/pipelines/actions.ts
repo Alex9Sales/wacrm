@@ -21,6 +21,7 @@ import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { findOrCreateConversation } from '@/lib/channels/inbound'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
+import { enqueueOrchestrationNudge } from '@/lib/queue/queues'
 import { hasMinRole } from '@/lib/auth/roles'
 import { getAdminUserIds, canReadConversation } from '@/lib/sectors/access'
 import type { Contact, Conversation, Deal, Pipeline, PipelineStage, Profile, CustomField } from '@/types'
@@ -283,6 +284,10 @@ async function recordDealEvent(
   type: string,
   data: Record<string, unknown> = {},
 ): Promise<void> {
+  // 🧠 Fase 2: o negócio andou (etapa, ganho, perda) — recalcula sinais/ações
+  // desta conta agora, em vez de esperar o tick de 10 min.
+  void enqueueOrchestrationNudge(accountId, `deal_${type}`)
+
   try {
     await db.insert(dealEvents).values({ accountId, actorUserId, dealId, type, data })
   } catch (err) {

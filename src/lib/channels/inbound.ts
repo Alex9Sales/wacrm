@@ -42,6 +42,7 @@ import { maybePauseCadenceOnReply } from '@/lib/cadences/cadence';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
 import {
   enqueueAiReplyDebounced,
+  enqueueOrchestrationNudge,
   enqueueDealSuggestDebounced,
 } from '@/lib/queue/queues';
 import { aiReplyBufferMs } from '@/lib/ai/defaults';
@@ -784,6 +785,12 @@ export async function dispatchInboundMessage(
       console.error('[inbound] failed to enqueue AI reply:', err);
     }
   }
+
+  // 🧠 Fase 2: o cliente respondeu — recalcula sinais/ações DESTA conta agora
+  // (debounce de 20s por conta). É o que faz "proposta parada" e "follow-up
+  // vencido" sumirem na hora em vez de o time ver a IA cutucando quem acabou
+  // de responder. Best-effort: nunca quebra o inbound.
+  void enqueueOrchestrationNudge(accountId, 'customer_replied')
 
   // IA proativa em Negociações (v2 — Fase 3): se ligado na conta, agenda
   // (debounced por conversa) uma análise do negócio vinculado a esta conversa.

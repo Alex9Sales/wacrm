@@ -12,6 +12,7 @@ import {
   stripLeadingTimestamp,
 } from './context'
 import { hasKnowledgeChunks, retrieveKnowledge } from './knowledge'
+import { nextActionHintForContact } from '@/lib/orchestration/engine'
 import { looksLikeInjection } from './untrusted'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
@@ -468,6 +469,9 @@ export async function dispatchInboundToAiReply(
       5,
       config.knowledgeBaseIds ?? [],
     )
+    // 🎯 Próxima ação recomendada pra este cliente (Fase 2) — orientação
+    // INTERNA no prompt; o agente só usa se couber na conversa.
+    const nextAction = await nextActionHintForContact(accountId, contactId).catch(() => null)
     // Base existe mas não cobriu ESTA pergunta → o prompt manda não inventar.
     const knowledgeMiss =
       knowledge.length === 0 &&
@@ -567,6 +571,7 @@ export async function dispatchInboundToAiReply(
       })),
       knowledge,
       knowledgeMiss,
+      nextAction,
       companyProfile,
       catalog,
       timezone: settings.businessTimezone,

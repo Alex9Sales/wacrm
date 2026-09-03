@@ -20,7 +20,7 @@
 // tick), máximo de execuções automáticas por tick, pacing entre mensagens.
 // ============================================================
 
-import { and, desc, eq, gte, inArray, isNull, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 
 import { db, agentActionRequests, aiConfigs, contacts, conversations, customerSignals, dealProposals, dealSuggestions, deals, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -144,6 +144,78 @@ interface SignalRow {
   payload: Record<string, unknown>
 }
 
+/**
+ * 🎯 A próxima ação recomendada PRA ESTE CONTATO, em uma linha, pro prompt do
+ * agente que está atendendo. Sem isso a IA responde no vácuo enquanto o CRM já
+ * sabe que existe proposta parada / follow-up vencido / cliente quente sem
+ * proposta. É ORIENTAÇÃO interna: o texto nunca vai pro cliente.
+ * Best-effort e barato (1 query indexada) — falha vira null.
+ */
+export async function nextActionHintForContact(
+  accountId: string,
+  contactId: string,
+): Promise<string | null> {
+  try {
+    const rows = (await db
+      .select({
+        id: customerSignals.id,
+        contactId: customerSignals.contactId,
+        dealId: customerSignals.dealId,
+        signalType: customerSignals.signalType,
+        severity: customerSignals.severity,
+        payload: customerSignals.payload,
+      })
+      .from(customerSignals)
+      .where(
+        and(
+          eq(customerSignals.accountId, accountId),
+          eq(customerSignals.contactId, contactId),
+          isNull(customerSignals.resolvedAt),
+          inArray(customerSignals.signalType, [...ORCHESTRATED_SIGNALS]),
+        ),
+      )
+      .orderBy(desc(customerSignals.severity))
+      .limit(1)) as SignalRow[]
+    const s = rows[0]
+    if (!s) return null
+
+    let deal: { title: string; assignedTo: string | null; conversationId: string | null; status: string | null } | null = null
+    let hasProposal = false
+    let proposalAccepted = false
+    if (s.dealId) {
+      deal =
+        firstOrNull(
+          await db
+            .select({ title: deals.title, assignedTo: deals.assignedTo, conversationId: deals.conversationId, status: deals.status })
+            .from(deals)
+            .where(eq(deals.id, s.dealId))
+            .limit(1),
+        ) ?? null
+      if (!deal || deal.status !== 'open') return null
+      const pr = firstOrNull(
+        await db.select({ acceptedAt: dealProposals.acceptedAt }).from(dealProposals).where(eq(dealProposals.dealId, s.dealId)).limit(1),
+      )
+      hasProposal = !!pr
+      proposalAccepted = !!pr?.acceptedAt
+    }
+    const rec = recommend(
+      { id: s.id, signalType: s.signalType, severity: s.severity, payload: s.payload ?? {}, contactId: s.contactId, dealId: s.dealId },
+      {
+        hasProposal,
+        proposalAccepted,
+        hasConversation: true,
+        dealAssigned: !!deal?.assignedTo,
+        contactName: null,
+        dealTitle: deal?.title ?? null,
+      },
+    )
+    if (!rec) return null
+    return `${rec.headline} — ${rec.reason}`
+  } catch {
+    return null
+  }
+}
+
 export async function runOrchestrationForAccount(accountId: string): Promise<RunStats> {
   const stats: RunStats = { signals: 0, auto: 0, approvals: 0, suggestions: 0, blocked: 0, failed: 0, skipped: null }
   const settings = await getAccountSettings(accountId)
@@ -163,6 +235,28 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
     const h = localHour(tz)
     return h >= 8 && h < 20
   })()
+
+  // 🧹 Pendente que perdeu o motivo (o cliente respondeu, o negócio andou, a
+  // proposta foi aceita) sai da fila como 'expired' — sem isso o time abre
+  // "Precisa de você" e vê follow-up pra quem já respondeu.
+  try {
+    await db
+      .update(agentActionRequests)
+      .set({ status: 'expired', resolvedAt: new Date().toISOString() })
+      .where(
+        and(
+          eq(agentActionRequests.accountId, accountId),
+          eq(agentActionRequests.status, 'pending'),
+          isNotNull(agentActionRequests.signalId),
+          sql`EXISTS (
+            SELECT 1 FROM customer_signals cs
+            WHERE cs.id = "agent_action_requests"."signal_id" AND cs.resolved_at IS NOT NULL
+          )`,
+        ),
+      )
+  } catch (err) {
+    console.error('[orchestration] expirar pendentes falhou:', err instanceof Error ? err.message : err)
+  }
 
   const signals = (await db
     .select({

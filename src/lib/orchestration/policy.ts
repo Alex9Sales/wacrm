@@ -53,7 +53,9 @@ export const ACTION_CATALOG: Record<OrchAction, ActionMeta> = {
   notify_seller: { label: 'Avisar vendedor', hint: 'Notifica o responsável pelo negócio.', risk: 'low', defaultLevel: 'auto', kind: 'notify' },
   notify_owner: { label: 'Avisar dono/admin', hint: 'Notifica os administradores da conta.', risk: 'low', defaultLevel: 'auto', kind: 'notify' },
   send_proposal: { label: 'Enviar proposta', hint: 'Manda a proposta do negócio por e-mail.', risk: 'high', defaultLevel: 'approve', kind: 'money', humanOnly: true },
-  apply_discount: { label: 'Aplicar desconto', hint: 'Ajusta o desconto da proposta (até o limite, sem aprovação).', risk: 'high', defaultLevel: 'approve', kind: 'money', humanOnly: true },
+  // Não é 'só humano': aplicar desconto só GRAVA na proposta salva (nada sai
+  // pro cliente). Acima do limite configurado vira aprovação — ver decide().
+  apply_discount: { label: 'Aplicar desconto', hint: 'Ajusta o desconto da proposta salva (até o limite, sem aprovação). Não envia nada ao cliente.', risk: 'high', defaultLevel: 'approve', kind: 'money' },
   close_deal: { label: 'Fechar negócio', hint: 'Marca como ganho ou perdido.', risk: 'critical', defaultLevel: 'approve', kind: 'crm', humanOnly: true },
   escalate: { label: 'Escalar pra humano', hint: 'Tira a IA da frente e chama o time.', risk: 'low', defaultLevel: 'auto', kind: 'notify' },
   start_cadence: { label: 'Iniciar cadência', hint: 'Coloca o contato numa sequência de mensagens.', risk: 'medium', defaultLevel: 'approve', kind: 'message' },
@@ -184,7 +186,9 @@ export function decide(ctx: DecisionContext): PolicyDecision {
 
   if (level === 'suggest') return { decision: 'suggest_only', level, reason: `${base} · política = só sugerir` }
 
-  // Invariantes: crítico e "só humano" nunca rodam sozinhos.
+  // Invariantes: crítico e "só humano" nunca rodam sozinhos. O risco da
+  // FERRAMENTA externa envolvida (agent_tools.risk) sobrepõe o do catálogo
+  // quando é maior — ferramenta 'critical' força aprovação mesmo em ação leve.
   const effectiveRisk = ctx.toolRisk && RISK_RANK[ctx.toolRisk] > RISK_RANK[meta.risk] ? ctx.toolRisk : meta.risk
   if (level === 'approve' || meta.humanOnly || effectiveRisk === 'critical') {
     return {
@@ -199,8 +203,11 @@ export function decide(ctx: DecisionContext): PolicyDecision {
   }
 
   // level === 'auto'
-  if (ctx.action === 'apply_discount' && (ctx.discountPct ?? 0) > ctx.policy.discountAutoMaxPct) {
-    return { decision: 'request_approval', level, reason: `${base} · desconto ${ctx.discountPct}% acima do limite automático de ${ctx.policy.discountAutoMaxPct}%` }
+  if (ctx.action === 'apply_discount') {
+    const pct = ctx.discountPct ?? 0
+    if (pct > ctx.policy.discountAutoMaxPct) {
+      return { decision: 'request_approval', level, reason: `${base} · desconto ${pct}% acima do limite automático de ${ctx.policy.discountAutoMaxPct}%` }
+    }
   }
   if (isMessage && (ctx.humanActiveRecently || ctx.aiDisabledInConversation)) {
     return {

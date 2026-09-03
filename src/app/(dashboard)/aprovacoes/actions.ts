@@ -14,6 +14,7 @@ import { revalidatePath } from 'next/cache'
 import { db, agentActionRequests, channels, contacts, conversations, customerSignals, dealProducts, dealProposals, deals, pipelineStages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
+import { enqueueOrchestrationNudge } from '@/lib/queue/queues'
 import { executeOrchestrationAction, noteDealEvent } from '@/lib/orchestration/actions'
 import { ACTION_CATALOG, type OrchAction, type Risk } from '@/lib/orchestration/policy'
 import { loadDealProposalFields } from '@/lib/proposals/proposal'
@@ -346,6 +347,8 @@ export async function approveQueueItem(input: { id: string; text?: string | null
   if (row.dealId) {
     await noteDealEvent(ctx.accountId, row.dealId, ctx.userId, `✅ ${meta.label} aprovado e executado. Por quê: ${row.reason ?? '—'}`)
   }
+  // Decisão humana muda o estado: recalcula agora (a fila reflete na hora).
+  void enqueueOrchestrationNudge(ctx.accountId, 'approval_decided')
   revalidatePath('/aprovacoes')
   return { ok: true }
 }
@@ -363,6 +366,7 @@ export async function rejectQueueItem(id: string, note?: string): Promise<Action
   if (row.dealId) {
     await noteDealEvent(ctx.accountId, row.dealId, ctx.userId, `🚫 Sugestão da Fluxia recusada (${ACTION_CATALOG[row.actionType as OrchAction]?.label ?? row.actionType}).${note ? ` Motivo: ${note}` : ''}`)
   }
+  void enqueueOrchestrationNudge(ctx.accountId, 'approval_rejected')
   revalidatePath('/aprovacoes')
   return { ok: true }
 }

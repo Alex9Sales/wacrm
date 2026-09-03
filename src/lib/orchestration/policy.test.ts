@@ -55,11 +55,18 @@ describe('decide', () => {
     expect(decide({ ...base, action: 'send_proposal', policy: { ...DEFAULT_POLICY, levels: { send_proposal: 'auto' } } }).decision).toBe('request_approval')
     expect(decide({ ...base, toolRisk: 'critical' }).decision).toBe('request_approval')
   })
-  it('desconto acima do limite pede aprovação; dentro do limite… ainda é só-humano (v1)', () => {
+  it('desconto: dentro do limite a IA aplica; acima pede aprovação', () => {
     const p = { ...DEFAULT_POLICY, levels: { apply_discount: 'auto' as const }, discountAutoMaxPct: 5 }
+    expect(decide({ ...base, action: 'apply_discount', policy: p, discountPct: 3 }).decision).toBe('auto_execute')
     expect(decide({ ...base, action: 'apply_discount', policy: p, discountPct: 10 }).decision).toBe('request_approval')
-    expect(decide({ ...base, action: 'apply_discount', policy: p, discountPct: 3 }).decision).toBe('request_approval')
-    expect(ACTION_CATALOG.apply_discount.humanOnly).toBe(true)
+    // e continua pedindo aprovação quando a política é 'approve' (o padrão)
+    expect(decide({ ...base, action: 'apply_discount', policy: { ...DEFAULT_POLICY, levels: { apply_discount: 'approve' } }, discountPct: 1 }).decision).toBe('request_approval')
+    expect(ACTION_CATALOG.apply_discount.humanOnly).toBeUndefined()
+  })
+
+  it('risco da FERRAMENTA externa sobrepõe o do catálogo (critical força aprovação)', () => {
+    expect(decide({ ...base, toolRisk: 'critical' }).decision).toBe('request_approval')
+    expect(decide({ ...base, toolRisk: 'low' }).decision).toBe('auto_execute')
   })
   it('fora do horário adia (mensagem) mas não bloqueia ação de CRM', () => {
     expect(decide({ ...base, withinHours: false }).decision).toBe('deferred')

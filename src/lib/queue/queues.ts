@@ -28,6 +28,8 @@ export const BROADCAST_DISPATCH_QUEUE = 'broadcast-dispatch';
 export const SCHEDULED_MESSAGE_QUEUE = 'scheduled-message';
 export const AI_REPLY_QUEUE = 'ai-reply';
 export const DEAL_SUGGEST_QUEUE = 'deal-suggest';
+/** Fase 2: recálculo IMEDIATO de sinais/ações de uma conta (evento, não tick). */
+export const ORCHESTRATION_QUEUE = 'orchestration';
 
 /** Payload of a dispatch job. */
 export interface BroadcastDispatchJob {
@@ -230,6 +232,56 @@ export async function enqueueDealSuggestDebounced(
     /* ignore — still try to add below */
   }
   await q.add('deal-suggest', job, { jobId, delay: Math.max(0, delayMs) });
+}
+
+/**
+ * 🧠 Fase 2 — "cutucada" de orquestração: um EVENTO (cliente respondeu, humano
+ * decidiu na fila, negócio mudou de etapa/status, proposta vista/aceita) pede
+ * recálculo AGORA daquela conta, em vez de esperar o tick de 10 min.
+ *
+ * Debounce por CONTA: uma rajada de mensagens vira um recálculo só. O tick
+ * continua existindo como rede de segurança (sinais que dependem do relógio —
+ * "parado há 7 dias" — não têm evento pra disparar).
+ */
+export interface OrchestrationNudgeJob {
+  accountId: string;
+  /** De onde veio (log/diagnóstico). */
+  reason: string;
+}
+
+let _orchestrationQueue: Queue<OrchestrationNudgeJob> | null = null;
+export function orchestrationQueue(): Queue<OrchestrationNudgeJob> {
+  if (!_orchestrationQueue) {
+    _orchestrationQueue = new Queue<OrchestrationNudgeJob>(ORCHESTRATION_QUEUE, {
+      connection: bullConnection(),
+    });
+  }
+  return _orchestrationQueue;
+}
+
+const ORCH_NUDGE_DELAY_MS = 20_000;
+
+/** Best-effort: nunca derruba o caminho que chamou (inbound, aprovação, funil). */
+export async function enqueueOrchestrationNudge(
+  accountId: string,
+  reason: string,
+  delayMs = ORCH_NUDGE_DELAY_MS,
+): Promise<void> {
+  if (!accountId) return;
+  const jobId = `orch-nudge-${accountId}`;
+  try {
+    const q = orchestrationQueue();
+    const existing = await q.getJob(jobId);
+    // Já tem uma cutucada esperando: ela cobre este evento também.
+    if (existing) return;
+    await q.add(
+      'nudge',
+      { accountId, reason },
+      { jobId, delay: Math.max(0, delayMs), removeOnComplete: true, removeOnFail: 20 },
+    );
+  } catch (err) {
+    console.error('[orchestration] nudge não enfileirado:', err instanceof Error ? err.message : err);
+  }
 }
 
 const _outboundQueues = new Map<string, Queue<RecipientJob>>();

@@ -13,6 +13,7 @@ import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
 import {
   db,
   cadenceEnrollments,
+  dealProposals,
   conversations,
   dealEvents,
   deals,
@@ -290,6 +291,28 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
           conversationId: input.conversationId,
         })
         return { ok: true, result: { notified: n, aiPaused: input.action === 'escalate' } }
+      }
+
+      case 'apply_discount': {
+        // Só GRAVA na proposta salva (nada sai pro cliente). Acima do limite a
+        // política já mandou pra aprovação antes de chegar aqui.
+        if (!deal) return { ok: false, error: 'Ação precisa de um negócio.' }
+        const pct = Number(input.payload.discountPct)
+        if (!Number.isFinite(pct) || pct < 0 || pct > 100) return { ok: false, error: 'Desconto inválido.' }
+        const prop = firstOrNull(
+          await db
+            .select({ id: dealProposals.id, acceptedAt: dealProposals.acceptedAt })
+            .from(dealProposals)
+            .where(eq(dealProposals.dealId, deal.id))
+            .limit(1),
+        )
+        if (!prop) return { ok: false, error: 'Não há proposta salva neste negócio.' }
+        if (prop.acceptedAt) return { ok: false, error: 'A proposta já foi aceita — não dá pra mexer no desconto.' }
+        await db
+          .update(dealProposals)
+          .set({ discount: String(pct), discountType: 'percent', updatedAt: new Date().toISOString() })
+          .where(eq(dealProposals.id, prop.id))
+        return { ok: true, result: { proposalId: prop.id, discountPct: pct } }
       }
 
       case 'start_cadence': {

@@ -377,6 +377,8 @@ export function buildSystemPrompt(args: {
   knowledge?: string[]
   /** A conta TEM base indexada, mas nada nela responde a esta pergunta. */
   knowledgeMiss?: boolean
+  /** Próxima ação que o CRM recomenda pra este cliente (orientação interna). */
+  nextAction?: string | null
   /** Company profile ("Núcleo" guiado) — always-on business facts, already
    *  formatted (see formatCompanyProfileForPrompt). Null/empty = omit. */
   companyProfile?: string | null
@@ -420,7 +422,7 @@ export function buildSystemPrompt(args: {
    *  e só com a ferramenta send_material ligada. [] = seção omitida. */
   materials?: { name: string; description: string | null; mediaType: 'image' | 'video' | 'document'; filename?: string | null }[]
 }): string {
-  const { userPrompt, mode, knowledge, knowledgeMiss, companyProfile, catalog } = args
+  const { userPrompt, mode, knowledge, knowledgeMiss, nextAction, companyProfile, catalog } = args
   const tz = args.timezone || 'America/Sao_Paulo'
   const parts: string[] = [
     'You are a customer-messaging assistant for a business that uses a WhatsApp CRM. ' +
@@ -629,6 +631,18 @@ export function buildSystemPrompt(args: {
         (mode === 'auto_reply'
           ? 'Say plainly that you will confirm this and get back to them (or ask a clarifying question), and keep the conversation moving.'
           : 'Say plainly that you will confirm and follow up.'),
+    )
+  }
+
+  // 🎯 Fase 2: o CRM já sabe o que faz sentido agora com este cliente
+  // (proposta parada, follow-up vencido, cliente quente sem proposta). Entra
+  // como ORIENTAÇÃO — o agente decide se cabe na conversa, e NUNCA repete isto
+  // pro cliente nem menciona "sistema/CRM/sinal".
+  if (nextAction) {
+    parts.push(
+      `Internal next-best-action for this customer (from the CRM, NOT visible to them): ${nextAction}. ` +
+        'Use it only if it fits naturally in what the customer is talking about right now — the current message always comes first. ' +
+        'Never quote this line, never mention the CRM, a "signal" or an internal system.',
     )
   }
 
