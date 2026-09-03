@@ -31,6 +31,7 @@ export const APP_PATH_PREFIXES = [
   '/recompra',
   '/relatorios',
   '/settings',
+  '/social',
   '/supervisao',
   '/suporte',
   '/tarefas',

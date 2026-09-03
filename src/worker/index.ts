@@ -134,3 +134,11 @@ import('./ig-followup-worker')
   .catch((err) => {
     console.error('[worker] ig-followup failed to start:', err);
   });
+
+// 📸 Publicação no Instagram (posts agendados + containers em processamento).
+// Dynamic import (same env-ordering reason as above).
+import('./social-publish-worker')
+  .then((m) => m.startSocialPublishWorker())
+  .catch((err) => {
+    console.error('[worker] social-publish failed to start:', err);
+  });

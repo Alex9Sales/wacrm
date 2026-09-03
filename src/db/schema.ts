@@ -2950,3 +2950,49 @@ export const agentActionRequests = pgTable("agent_action_requests", {
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "agent_action_requests_account_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "agent_action_requests_contact_fkey" }).onDelete("cascade"),
 ]);
+
+// 📸 Publicações no Instagram feitas pelo CRM (post/carrossel/reels/story) com
+// agendamento + automação comentário→DM criada ao publicar. Migr 0154.
+export const socialPosts = pgTable("social_posts", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	channelId: uuid("channel_id").notNull(),
+	createdBy: uuid("created_by"),
+	// image | carousel | reel | story
+	kind: text().notNull(),
+	caption: text().default('').notNull(),
+	media: jsonb().$type<{ url: string; type: 'image' | 'video'; name?: string }[]>().default([]).notNull(),
+	shareToFeed: boolean("share_to_feed").default(true).notNull(),
+	coverUrl: text("cover_url"),
+	// draft | scheduled | publishing | published | failed | canceled
+	status: text().default('draft').notNull(),
+	scheduledAt: timestamp("scheduled_at", { withTimezone: true, mode: 'string' }),
+	publishedAt: timestamp("published_at", { withTimezone: true, mode: 'string' }),
+	igMediaId: text("ig_media_id"),
+	permalink: text(),
+	error: text(),
+	attempts: integer().default(0).notNull(),
+	publishState: jsonb("publish_state").$type<Record<string, unknown>>(),
+	automationDraft: jsonb("automation_draft").$type<Record<string, unknown>>(),
+	automationId: uuid("automation_id"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_social_posts_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsLast().op("timestamptz_ops")),
+	index("idx_social_posts_due").using("btree", table.scheduledAt.asc().nullsLast().op("timestamptz_ops")).where(sql`status IN ('scheduled', 'publishing')`),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "social_posts_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [channels.id],
+			name: "social_posts_channel_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.automationId],
+			foreignColumns: [instagramCommentAutomations.id],
+			name: "social_posts_automation_id_fkey"
+		}).onDelete("set null"),
+]);
