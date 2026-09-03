@@ -25,6 +25,7 @@ import {
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import {
@@ -91,6 +92,7 @@ export function ApprovalQueueClient() {
   const [metrics, setMetrics] = useState<AutonomyMetrics | null>(null);
   const [audit, setAudit] = useState<AuditItem[]>([]);
   const [texts, setTexts] = useState<Record<string, string>>({});
+  const [channelSel, setChannelSel] = useState<Record<string, string>>({});
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAudit, setShowAudit] = useState(false);
@@ -104,6 +106,11 @@ export function ApprovalQueueClient() {
       setTexts((prev) => {
         const next = { ...prev };
         for (const it of q) if (next[it.id] === undefined && it.suggestedText) next[it.id] = it.suggestedText;
+        return next;
+      });
+      setChannelSel((prev) => {
+        const next = { ...prev };
+        for (const it of q) if (next[it.id] === undefined && it.defaultConversationId) next[it.id] = it.defaultConversationId;
         return next;
       });
       setError(null);
@@ -121,7 +128,11 @@ export function ApprovalQueueClient() {
   const approve = async (it: ApprovalItem) => {
     setBusy(it.id);
     try {
-      const r = await approveQueueItem({ id: it.id, text: it.isMessage ? texts[it.id] ?? it.suggestedText : null });
+      const r = await approveQueueItem({
+        id: it.id,
+        text: it.isMessage ? texts[it.id] ?? it.suggestedText : null,
+        conversationId: it.isMessage ? channelSel[it.id] ?? it.defaultConversationId : null,
+      });
       if (!r.ok) toast.error(r.error);
       else toast.success(it.isMessage ? 'Mensagem enviada.' : `${it.actionLabel}: feito.`);
       await load();
@@ -251,6 +262,32 @@ export function ApprovalQueueClient() {
                 <div className="mt-3 rounded-md border border-border bg-muted/40 p-3 text-sm">
                   <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Ao aprovar, a Fluxia vai</div>
                   <p className="mt-1 text-foreground">{it.effect}</p>
+                  {it.isMessage && it.sendOptions.length > 0 ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-muted-foreground">Enviar por:</span>
+                      {it.sendOptions.length === 1 ? (
+                        <span className="rounded-md bg-background px-2 py-1 font-medium text-foreground ring-1 ring-border">
+                          {it.sendOptions[0].label}
+                        </span>
+                      ) : (
+                        <Select
+                          value={channelSel[it.id] ?? it.defaultConversationId ?? undefined}
+                          onValueChange={(v) => setChannelSel((s) => ({ ...s, [it.id]: String(v ?? '') }))}
+                        >
+                          <SelectTrigger className="h-7 w-auto min-w-44 text-xs">
+                            <SelectValue placeholder="Escolha o canal" />
+                          </SelectTrigger>
+                          <SelectContent>
+                            {it.sendOptions.map((o) => (
+                              <SelectItem key={o.conversationId} value={o.conversationId}>
+                                {o.label}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      )}
+                    </div>
+                  ) : null}
                   {it.proposalUrl || (it.action === 'send_proposal' && it.deal) ? (
                     <div className="mt-2 flex flex-wrap gap-3 text-xs">
                       {it.proposalUrl ? (

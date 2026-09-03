@@ -11,7 +11,7 @@
 import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
-import { db, agentActionRequests, contacts, customerSignals, dealProducts, dealProposals, deals, pipelineStages } from '@/db'
+import { db, agentActionRequests, channels, contacts, conversations, customerSignals, dealProducts, dealProposals, deals, pipelineStages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { executeOrchestrationAction, noteDealEvent } from '@/lib/orchestration/actions'
@@ -44,6 +44,10 @@ export interface ApprovalItem {
   /** Link da proposta salva (pública), quando houver. */
   proposalUrl: string | null
   contactEmail: string | null
+  /** Conversas do contato por onde a mensagem PODE sair (ações de mensagem). */
+  sendOptions: { conversationId: string; label: string }[]
+  /** A conversa que será usada se não trocar (a do negócio, senão a mais recente). */
+  defaultConversationId: string | null
 }
 
 export interface AutonomyMetrics {
@@ -104,6 +108,44 @@ export async function listApprovalQueue(): Promise<ApprovalItem[]> {
     for (const d of ds) dealMap.set(d.id, { id: d.id, title: d.title, value: String(d.value ?? '0'), stageName: d.stageName ?? null })
   }
 
+  // Conversa vinculada ao negócio (define o canal padrão do envio).
+  const dealConvByDeal = new Map<string, string | null>()
+  if (dealIds.length) {
+    const dc = await db
+      .select({ id: deals.id, conversationId: deals.conversationId })
+      .from(deals)
+      .where(and(eq(deals.accountId, ctx.accountId), inArray(deals.id, dealIds)))
+    for (const d of dc) dealConvByDeal.set(d.id, d.conversationId ?? null)
+  }
+
+  // Conversas do contato + canal (pro seletor "por onde enviar" das ações de mensagem).
+  const msgContactIds = Array.from(
+    new Set(
+      rows
+        .filter((r) => isOrchAction(r.actionType) && ACTION_CATALOG[r.actionType as OrchAction].kind === 'message')
+        .map((r) => r.contactId),
+    ),
+  )
+  const convsByContact = new Map<string, { conversationId: string; label: string }[]>()
+  if (msgContactIds.length) {
+    const convs = await db
+      .select({
+        id: conversations.id,
+        contactId: conversations.contactId,
+        channelName: channels.name,
+        provider: channels.provider,
+      })
+      .from(conversations)
+      .leftJoin(channels, eq(channels.id, conversations.channelId))
+      .where(and(eq(conversations.accountId, ctx.accountId), inArray(conversations.contactId, msgContactIds)))
+      .orderBy(desc(conversations.lastMessageAt))
+    for (const c of convs) {
+      const list = convsByContact.get(c.contactId) ?? []
+      list.push({ conversationId: c.id, label: channelLabel(c.provider, c.channelName) })
+      convsByContact.set(c.contactId, list)
+    }
+  }
+
   // Apoio pro "o que acontece ao aprovar": proposta salva + itens (send_proposal), etapas (move_deal).
   const proposalByDeal = new Map<string, { id: string; acceptedAt: string | null }>()
   const itemsByDeal = new Map<string, number>()
@@ -131,11 +173,23 @@ export async function listApprovalQueue(): Promise<ApprovalItem[]> {
         proposal: r.dealId ? (proposalByDeal.get(r.dealId) ?? null) : null,
         items: r.dealId ? (itemsByDeal.get(r.dealId) ?? 0) : 0,
       })
+      const isMessage = meta.kind === 'message'
+      const sendOptions = isMessage ? (convsByContact.get(r.contactId) ?? []) : []
+      const dealConv = r.dealId ? (dealConvByDeal.get(r.dealId) ?? null) : null
+      const preferred = r.conversationId ?? dealConv
+      const defaultConversationId = isMessage
+        ? (sendOptions.find((o) => o.conversationId === preferred)?.conversationId ?? sendOptions[0]?.conversationId ?? null)
+        : null
+      if (isMessage && sendOptions.length === 0) {
+        warnings.push('O contato não tem conversa aberta em nenhum canal — não dá pra enviar. Abra uma conversa com ele primeiro.')
+      }
       return {
         effect,
         warnings,
         proposalUrl,
         contactEmail: r.contactEmail ?? null,
+        sendOptions,
+        defaultConversationId,
         id: r.id,
         action: r.actionType as OrchAction,
         actionLabel: meta.label,
@@ -199,7 +253,7 @@ async function loadPending(accountId: string, id: string) {
 }
 
 /** Aprova (e executa) um item. `text` = mensagem editada, se for ação de mensagem. */
-export async function approveQueueItem(input: { id: string; text?: string | null; payload?: Record<string, unknown> }): Promise<ActionResult> {
+export async function approveQueueItem(input: { id: string; text?: string | null; payload?: Record<string, unknown>; conversationId?: string | null }): Promise<ActionResult> {
   const ctx = await getCurrentAccount()
   if (ctx.role === 'viewer') return { ok: false, error: 'Seu papel só permite visualizar.' }
   const row = await loadPending(ctx.accountId, input.id)
@@ -210,6 +264,19 @@ export async function approveQueueItem(input: { id: string; text?: string | null
   const payload = { ...((row.payload ?? {}) as Record<string, unknown>), ...(input.payload ?? {}) }
   const text = meta.kind === 'message' ? (input.text ?? row.suggestedText ?? '').trim() : null
   if (meta.kind === 'message' && !text) return { ok: false, error: 'Escreva a mensagem antes de aprovar.' }
+  // Canal escolhido na fila: só aceita conversa DESTE contato, desta conta.
+  let sendConversationId = row.conversationId
+  if (meta.kind === 'message' && input.conversationId) {
+    const conv = firstOrNull(
+      await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(and(eq(conversations.id, input.conversationId), eq(conversations.accountId, ctx.accountId), eq(conversations.contactId, row.contactId)))
+        .limit(1),
+    )
+    if (!conv) return { ok: false, error: 'A conversa escolhida não é deste contato.' }
+    sendConversationId = conv.id
+  }
 
   let result: Record<string, unknown> = {}
   let error: string | null = null
@@ -242,7 +309,7 @@ export async function approveQueueItem(input: { id: string; text?: string | null
       action,
       contactId: row.contactId,
       dealId: row.dealId,
-      conversationId: row.conversationId,
+      conversationId: sendConversationId,
       text,
       reason: row.reason ?? meta.label,
       payload,
@@ -355,7 +422,24 @@ export async function listRecentAudit(limit = 40): Promise<AuditItem[]> {
     }))
 }
 
-// ---------------------------------------------------------------- "o que acontece ao aprovar"
+// ---------------------------------------------------------------- canal / "o que acontece ao aprovar"
+
+const PROVIDER_LABEL: Record<string, string> = {
+  waha: 'WhatsApp',
+  meta: 'WhatsApp oficial',
+  whatsapp: 'WhatsApp',
+  evolution: 'WhatsApp',
+  evogo: 'WhatsApp',
+  instagram: 'Instagram',
+  messenger: 'Messenger',
+  email: 'E-mail',
+  gmail: 'E-mail',
+}
+
+function channelLabel(provider: string | null, name: string | null): string {
+  const kind = provider ? (PROVIDER_LABEL[provider] ?? provider) : 'Canal'
+  return name ? `${kind} · ${name}` : kind
+}
 
 function fmtWhen(v: unknown): string {
   const d = typeof v === 'string' ? new Date(v) : null
@@ -381,7 +465,7 @@ function describeEffect(args: {
   switch (args.action) {
     case 'send_followup':
     case 'reactivation':
-      return { effect: 'Envia a mensagem abaixo pelo canal da conversa (WhatsApp/Instagram/e-mail da conversa). Edite o texto antes, se quiser.', warnings, proposalUrl: null }
+      return { effect: 'Envia a mensagem abaixo pela conversa do contato no canal indicado — edite o texto e, se ele tiver mais de um canal, escolha por onde sai.', warnings, proposalUrl: null }
     case 'send_proposal': {
       if (!args.proposal) warnings.push('Não há proposta salva neste negócio. Abra o negócio → aba Propostas, salve a proposta e depois aprove aqui.')
       if (args.items === 0) warnings.push('A aba Produtos do negócio está vazia — o e-mail sairia sem itens (o envio falha).')
