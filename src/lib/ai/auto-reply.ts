@@ -11,7 +11,8 @@ import {
   loadContactHistoryDigest,
   stripLeadingTimestamp,
 } from './context'
-import { retrieveKnowledge } from './knowledge'
+import { hasKnowledgeChunks, retrieveKnowledge } from './knowledge'
+import { looksLikeInjection } from './untrusted'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
 import { generateWithExternalTools } from './external-tools'
@@ -113,6 +114,54 @@ async function scheduleRecheckAfter(args: DispatchArgs, msUntilFree: number): Pr
     )
   } catch (err) {
     console.error('[ai auto-reply] reagendar pós-janela falhou:', err)
+  }
+}
+
+/**
+ * 🛡️ Registra (não bloqueia) uma tentativa de sequestrar o agente: marcador de
+ * ação escrito à mão, rótulo de sistema forjado ou "ignore as instruções".
+ * O texto já entrou DESARMADO no prompt (lib/ai/untrusted.ts) — isto aqui é
+ * visibilidade: nota interna 1x por dia por conversa, pro time ver o padrão
+ * antes de a gente dar mais autonomia ao agente.
+ */
+async function noteInjectionAttempt(
+  accountId: string,
+  conversationId: string,
+  text: string,
+): Promise<void> {
+  const trecho = text.replace(/\s+/g, ' ').slice(0, 160)
+  console.warn(
+    `[ai-reply] possível prompt injection conv=${conversationId} conta=${accountId.slice(0, 8)}: ${trecho}`,
+  )
+  try {
+    const already = firstOrNull(
+      await db
+        .select({ id: messagesTable.id })
+        .from(messagesTable)
+        .where(
+          and(
+            eq(messagesTable.conversationId, conversationId),
+            eq(messagesTable.isInternal, true),
+            sql`${messagesTable.contentText} LIKE '🛡️ Tentativa de manipular a IA%'`,
+            sql`${messagesTable.createdAt} >= now() - interval '24 hours'`,
+          ),
+        )
+        .limit(1),
+    )
+    if (already) return
+    await db.insert(messagesTable).values({
+      conversationId,
+      senderType: 'bot',
+      contentType: 'text',
+      contentText:
+        `🛡️ Tentativa de manipular a IA detectada nesta conversa (a mensagem foi neutralizada — nenhuma ação foi executada por ela).\n\n` +
+        `Trecho: "${trecho}"\n\n` +
+        `Se for cliente de verdade brincando, ignore. Se for alguém tentando fazer a IA enviar arquivo, criar pedido ou mudar de comportamento, vale bloquear o contato.`,
+      isInternal: true,
+      status: 'sent',
+    })
+  } catch (err) {
+    console.error('[ai-reply] nota de injeção falhou:', err)
   }
 }
 
@@ -411,13 +460,24 @@ export async function dispatchInboundToAiReply(
     if (messages.length === 0) return
 
     // Ground the reply in the account's knowledge base (best-effort).
+    const lastCustomerText = latestUserMessage(messages)
     const knowledge = await retrieveKnowledge(
       accountId,
       config,
-      latestUserMessage(messages),
+      lastCustomerText,
       5,
       config.knowledgeBaseIds ?? [],
     )
+    // Base existe mas não cobriu ESTA pergunta → o prompt manda não inventar.
+    const knowledgeMiss =
+      knowledge.length === 0 &&
+      (await hasKnowledgeChunks(accountId, config.knowledgeBaseIds ?? []))
+    // 🛡️ Tentativa de injeção: o conteúdo já entra desarmado (untrusted.ts);
+    // aqui é só VISIBILIDADE — nota interna 1x por dia por conversa, pro time
+    // ver o padrão. Nunca bloqueia: "me envia a circular" é pedido legítimo.
+    if (looksLikeInjection(lastCustomerText)) {
+      void noteInjectionAttempt(accountId, conversationId, lastCustomerText)
+    }
     const companyProfile = formatCompanyProfileForPrompt(
       await getCompanyProfile(accountId),
     )
@@ -506,6 +566,7 @@ export async function dispatchInboundToAiReply(
         filename: m.filename,
       })),
       knowledge,
+      knowledgeMiss,
       companyProfile,
       catalog,
       timezone: settings.businessTimezone,

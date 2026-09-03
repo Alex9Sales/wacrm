@@ -1,5 +1,5 @@
 import { and, count, eq, inArray, sql } from 'drizzle-orm'
-import { db, aiKnowledgeChunks } from '@/db'
+import { db, aiKnowledgeChunks, aiKnowledgeDocuments } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import type { AiConfig } from './types'
 import { chunkText } from './chunk'
@@ -97,6 +97,23 @@ export async function ingestDocument(
  * any failure (no KB, embedding error, SQL error) degrades to fewer or
  * zero results and never throws into the draft / auto-reply path.
  */
+/**
+ * A conta tem QUALQUER trecho indexado (nas bases do agente)? Usado só quando a
+ * busca não trouxe nada: se TEM base e mesmo assim não achou, o prompt avisa o
+ * agente pra não inventar política/preço — sem esse aviso ele preenche o vazio.
+ */
+export async function hasKnowledgeChunks(accountId: string, baseIds: string[] = []): Promise<boolean> {
+  try {
+    const where = baseIds.length > 0
+      ? and(eq(aiKnowledgeChunks.accountId, accountId), inArray(aiKnowledgeChunks.knowledgeBaseId, baseIds))
+      : eq(aiKnowledgeChunks.accountId, accountId)
+    const row = firstOrNull(await db.select({ n: count() }).from(aiKnowledgeChunks).where(where))
+    return (row?.n ?? 0) > 0
+  } catch {
+    return false
+  }
+}
+
 export async function retrieveKnowledge(
   accountId: string,
   config: Pick<AiConfig, 'embeddingsApiKey'>,
@@ -169,5 +186,29 @@ export async function retrieveKnowledge(
     }
   }
 
-  return Array.from(picked.values()).slice(0, k)
+  const ids = Array.from(picked.keys()).slice(0, k)
+  if (ids.length === 0) return []
+
+  // 🔎 CITAÇÃO DE FONTE: o trecho vai pro prompt com o título do documento de
+  // onde saiu ("(fonte: Tabela de preços 2026)"). Sem isso o agente não sabe
+  // de onde tirou — não consegue citar, e o time não consegue auditar de qual
+  // documento veio uma resposta errada. Uma query indexada, fora do caminho
+  // caro (o embedding da pergunta já foi feito acima).
+  const titleById = new Map<string, string>()
+  try {
+    const rows = await db
+      .select({ chunkId: aiKnowledgeChunks.id, title: aiKnowledgeDocuments.title })
+      .from(aiKnowledgeChunks)
+      .innerJoin(aiKnowledgeDocuments, eq(aiKnowledgeDocuments.id, aiKnowledgeChunks.documentId))
+      .where(inArray(aiKnowledgeChunks.id, ids))
+    for (const r of rows) titleById.set(r.chunkId, r.title)
+  } catch (err) {
+    console.error('[ai knowledge] títulos das fontes falharam (segue sem citação):', err)
+  }
+
+  return ids.map((id) => {
+    const content = picked.get(id) ?? ''
+    const title = titleById.get(id)
+    return title ? `(fonte: ${neutralizeUntrusted(title, { maxChars: 200 })}) ${content}` : content
+  })
 }

@@ -54,7 +54,11 @@ vi.mock('./context', () => ({
   stripLeadingTimestamp: (s: string) => s,
   loadContactHistoryDigest: vi.fn(async () => null),
 }))
-vi.mock('./knowledge', () => ({ retrieveKnowledge: h.retrieveKnowledge }))
+vi.mock('./knowledge', () => ({
+  retrieveKnowledge: h.retrieveKnowledge,
+  // aviso "a base não cobre esta pergunta" — sem base indexada nos testes
+  hasKnowledgeChunks: vi.fn(async () => false),
+}))
 vi.mock('@/lib/queue/queues', () => ({
   enqueueAiReplyDebounced: h.enqueueRecheck,
 }))

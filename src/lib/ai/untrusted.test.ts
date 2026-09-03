@@ -59,3 +59,29 @@ describe('looksLikeInjection (só log, não bloqueia)', () => {
     expect(looksLikeInjection('quanto custa o botijão?')).toBe(false)
   })
 })
+
+describe('citação de fonte + recusa (integração com o prompt)', () => {
+  it('o bloco do prompt cita a fonte e manda não inventar quando a base não cobre', async () => {
+    const { buildSystemPrompt } = await import('./defaults')
+    const comFonte = buildSystemPrompt({
+      userPrompt: 'Você é a Zélia.',
+      mode: 'auto_reply',
+      knowledge: ['(fonte: Circular de Oferta) O investimento inicial é de R$ 90 mil.'],
+    })
+    expect(comFonte).toContain('(fonte: Circular de Oferta)')
+    expect(comFonte).toMatch(/source in parentheses/i)
+
+    const semCobertura = buildSystemPrompt({
+      userPrompt: 'Você é a Zélia.',
+      mode: 'auto_reply',
+      knowledge: [],
+      knowledgeMiss: true,
+    })
+    expect(semCobertura).toMatch(/nothing in it answers this specific question/i)
+    expect(semCobertura).toMatch(/Do NOT invent policies, prices/i)
+
+    // conta SEM base: nenhum dos dois blocos aparece (não muda quem já funciona)
+    const semBase = buildSystemPrompt({ userPrompt: 'Você é a Maria.', mode: 'auto_reply', knowledge: [] })
+    expect(semBase).not.toMatch(/nothing in it answers/i)
+  })
+})
