@@ -99,7 +99,7 @@ export async function recomputeSignalsForAccount(accountId: string): Promise<voi
         (account_id, contact_id, signal_type, severity, payload, detected_at, updated_at)
       SELECT ${accountId}::uuid, contact_id, signal_type, severity, payload, now(), now()
       FROM desired
-      ON CONFLICT (account_id, contact_id, signal_type) WHERE resolved_at IS NULL
+      ON CONFLICT (account_id, contact_id, signal_type, deal_key) WHERE resolved_at IS NULL
       DO UPDATE SET severity = EXCLUDED.severity, payload = EXCLUDED.payload, updated_at = now()
       RETURNING contact_id, signal_type
     )
@@ -107,6 +107,9 @@ export async function recomputeSignalsForAccount(accountId: string): Promise<voi
       SET resolved_at = now(), updated_at = now()
     WHERE s.account_id = ${accountId}::uuid
       AND s.resolved_at IS NULL
+      -- só os tipos DESTE detector: os sinais de negócio (Fase 2) têm o próprio sweep
+      AND s.signal_type IN ('repurchase_due', 'repurchase_overdue', 'inactive', 'high_value')
+      AND s.deal_id IS NULL
       AND NOT EXISTS (
         SELECT 1 FROM desired d
         WHERE d.contact_id = s.contact_id AND d.signal_type = s.signal_type

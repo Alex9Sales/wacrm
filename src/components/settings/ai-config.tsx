@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
+import { ACTION_CATALOG, ORCH_ACTIONS } from '@/lib/orchestration/policy';
 import { Loader2, Sparkles, CheckCircle2, Trash2, Eye, EyeOff, Check, Maximize2 } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { cn } from '@/lib/utils';
@@ -131,6 +132,13 @@ export function AiConfig({
   // 🛑 Kill switch da conta (freio de emergência, account-level). Carrega/salva
   // separado do agente (via settings actions).
   const [autonomyPaused, setAutonomyPaused] = useState(false);
+  // 🧠 Fase 2: política POR AÇÃO (Signal→Policy→Action) + travas do agente.
+  const [policyActions, setPolicyActions] = useState<Record<string, "suggest" | "approve" | "auto">>({});
+  const [policyPaused, setPolicyPaused] = useState(false);
+  const [policyDiscountPct, setPolicyDiscountPct] = useState(5);
+  const [policyHumanCooldown, setPolicyHumanCooldown] = useState(24);
+  const [policyMaxPerDeal, setPolicyMaxPerDeal] = useState(1);
+  const [policyMaxMsgs, setPolicyMaxMsgs] = useState(30);
   const [autonomyPausedLoaded, setAutonomyPausedLoaded] = useState(false);
   // 🔒 Trava de acesso: agente só conversa com contatos da etiqueta.
   const [accessTagId, setAccessTagId] = useState("");
@@ -267,6 +275,20 @@ export function AiConfig({
             ? data.autonomy.reactivationStartHour
             : -1,
         );
+        {
+          const a = (data.autonomy ?? {}) as Record<string, unknown>;
+          const acts = (a.actions && typeof a.actions === "object" ? a.actions : {}) as Record<string, unknown>;
+          const clean: Record<string, "suggest" | "approve" | "auto"> = {};
+          for (const [k, v] of Object.entries(acts)) {
+            if (v === "suggest" || v === "approve" || v === "auto") clean[k] = v;
+          }
+          setPolicyActions(clean);
+          setPolicyPaused(a.paused === true);
+          setPolicyDiscountPct(typeof a.discountAutoMaxPct === "number" ? a.discountAutoMaxPct : 5);
+          setPolicyHumanCooldown(typeof a.humanCooldownHours === "number" ? a.humanCooldownHours : 24);
+          setPolicyMaxPerDeal(typeof a.maxAutoPerDealPerDay === "number" ? a.maxAutoPerDealPerDay : 1);
+          setPolicyMaxMsgs(typeof a.maxAutoMessagesPerDay === "number" ? a.maxAutoMessagesPerDay : 30);
+        }
         setReactivationEndHour(
           typeof data.autonomy?.reactivationEndHour === "number"
             ? data.autonomy.reactivationEndHour
@@ -509,6 +531,13 @@ export function AiConfig({
     voice_id: voiceId || null,
     autonomy: {
       reactivation: reactivationLevel,
+      // Fase 2: política por ação (a reativação segue o seletor acima).
+      actions: { ...policyActions, reactivation: reactivationLevel },
+      paused: policyPaused,
+      discountAutoMaxPct: policyDiscountPct,
+      humanCooldownHours: policyHumanCooldown,
+      maxAutoPerDealPerDay: policyMaxPerDeal,
+      maxAutoMessagesPerDay: policyMaxMsgs,
       // Travas só fazem sentido (e só vão pro banco) no modo automático.
       ...(reactivationLevel === "auto"
         ? {
@@ -1487,6 +1516,104 @@ export function AiConfig({
                   className="mt-2 w-full rounded-md border border-border bg-background px-3 py-2 text-sm text-foreground"
                 />
               )}
+            </div>
+
+            {/* 🧠 Fase 2 — política POR AÇÃO: o que a IA pode fazer sozinha, o que
+                pede aprovação (fila "Precisa de você") e o que só sugere no card. */}
+            <div className="rounded-lg border border-border bg-muted/30 p-3">
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <Label className="text-sm">Autonomia por ação</Label>
+                  <p className="mt-0.5 text-xs text-muted-foreground">
+                    Sinais (proposta parada, follow-up vencido, negócio esfriando, cliente quente, risco de churn…)
+                    viram ações. Aqui você diz, ação por ação, até onde a IA vai. Fechar negócio, enviar proposta e
+                    desconto sempre passam por um humano.
+                  </p>
+                </div>
+                <label className="flex items-center gap-2 text-xs text-muted-foreground">
+                  <Switch checked={policyPaused} onCheckedChange={(v) => setPolicyPaused(!!v)} disabled={disabled} />
+                  Pausar a autonomia deste agente
+                </label>
+              </div>
+              <div className="mt-3 overflow-x-auto">
+                <table className="w-full text-sm">
+                  <thead>
+                    <tr className="text-left text-xs text-muted-foreground">
+                      <th className="py-1 pr-2 font-medium">Ação</th>
+                      <th className="py-1 pr-2 font-medium">Só sugere</th>
+                      <th className="py-1 pr-2 font-medium">Pede aprovação</th>
+                      <th className="py-1 font-medium">Automático</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {ORCH_ACTIONS.filter((a) => a !== "reactivation").map((act) => {
+                      const meta = ACTION_CATALOG[act];
+                      const current = policyActions[act] ?? meta.defaultLevel;
+                      const set = (lvl: "suggest" | "approve" | "auto") =>
+                        setPolicyActions((p) => ({ ...p, [act]: lvl }));
+                      const cell = (lvl: "suggest" | "approve" | "auto", blocked?: boolean) => (
+                        <td key={lvl} className="py-1.5 pr-2">
+                          <button
+                            type="button"
+                            disabled={disabled || blocked}
+                            onClick={() => set(lvl)}
+                            aria-pressed={current === lvl}
+                            className={`h-6 w-6 rounded-full border transition-colors disabled:opacity-30 ${
+                              current === lvl
+                                ? lvl === "auto"
+                                  ? "border-amber-500 bg-amber-500"
+                                  : "border-primary bg-primary"
+                                : "border-border bg-background hover:bg-muted"
+                            }`}
+                          />
+                        </td>
+                      );
+                      return (
+                        <tr key={act} className="border-t border-border/60">
+                          <td className="py-1.5 pr-2">
+                            <div className="font-medium text-foreground">{meta.label}</div>
+                            <div className="text-[11px] text-muted-foreground">
+                              {meta.hint}
+                              {meta.humanOnly ? " · só humano executa" : meta.risk === "critical" ? " · crítico" : ""}
+                            </div>
+                          </td>
+                          {cell("suggest")}
+                          {cell("approve")}
+                          {cell("auto", !!meta.humanOnly || meta.risk === "critical")}
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+              <div className="mt-3 grid gap-3 sm:grid-cols-4">
+                <div>
+                  <Label className="text-xs">Desconto automático até (%)</Label>
+                  <Input type="number" min={0} max={100} value={policyDiscountPct} disabled={disabled}
+                    onChange={(e) => setPolicyDiscountPct(Math.min(100, Math.max(0, Number(e.target.value) || 0)))} className="mt-1 w-24" />
+                </div>
+                <div>
+                  <Label className="text-xs">Silêncio após humano (h)</Label>
+                  <Input type="number" min={0} max={168} value={policyHumanCooldown} disabled={disabled}
+                    onChange={(e) => setPolicyHumanCooldown(Math.min(168, Math.max(0, Number(e.target.value) || 0)))} className="mt-1 w-24" />
+                  <p className="mt-1 text-[11px] text-muted-foreground">Se um atendente falou na conversa, a IA pede aprovação em vez de agir.</p>
+                </div>
+                <div>
+                  <Label className="text-xs">Ações automáticas por negócio/dia</Label>
+                  <Input type="number" min={1} max={10} value={policyMaxPerDeal} disabled={disabled}
+                    onChange={(e) => setPolicyMaxPerDeal(Math.min(10, Math.max(1, Number(e.target.value) || 1)))} className="mt-1 w-24" />
+                </div>
+                <div>
+                  <Label className="text-xs">Mensagens automáticas por dia</Label>
+                  <Input type="number" min={1} max={500} value={policyMaxMsgs} disabled={disabled}
+                    onChange={(e) => setPolicyMaxMsgs(Math.min(500, Math.max(1, Number(e.target.value) || 1)))} className="mt-1 w-24" />
+                </div>
+              </div>
+              <p className="mt-2 text-[11px] text-muted-foreground">
+                Sempre valem, mesmo no automático: kill switch da conta, horário de atendimento, quem pediu pra não
+                receber, 1 ação por negócio por dia, e nada por cima de uma conversa que um humano está tocando.
+                Tudo fica registrado em <strong>Precisa de você → Auditoria</strong>.
+              </p>
             </div>
 
             {/* 🎛️ Autonomia governada (Fase 8): reativação proativa. A IA lê o

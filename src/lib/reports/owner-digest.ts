@@ -14,6 +14,7 @@
 // não sobrescrever.
 // ============================================================
 
+import { recommend } from '@/lib/orchestration/nba'
 import { eq, sql } from 'drizzle-orm'
 
 import { db } from '@/db'
@@ -126,6 +127,9 @@ export interface DigestData {
   waitingCount: number
   monthWonValue: number
   monthGoal: number
+  // Fase 2: ações da IA esperando aprovação + próximas ações recomendadas (NBA)
+  pendingApprovals: number
+  nextActions: string[]
 }
 
 /** Agrega os sinais do dono para uma conta (account-scoped, sem auth). */
@@ -140,7 +144,7 @@ export async function buildDigestData(
 
   const num = (v: unknown) => Number(v ?? 0)
 
-  const [wonYest, open, stale, waiting, monthWon, goal] = await Promise.all([
+  const [wonYest, open, stale, waiting, monthWon, goal, approvals, nextSignals] = await Promise.all([
     // Vendas de ONTEM (via deal_events → status_changed → won).
     db.execute(sql`
       SELECT count(*)::int AS n, COALESCE(SUM(value), 0)::float8 AS total FROM (
@@ -193,7 +197,48 @@ export async function buildDigestData(
       SELECT COALESCE(SUM(target_value), 0)::float8 AS total
       FROM sales_goals WHERE account_id = ${accountId}
     `),
+    // Fase 2: fila "Precisa de você".
+    db.execute(sql`
+      SELECT count(*)::int AS n FROM agent_action_requests
+      WHERE account_id = ${accountId} AND status = 'pending'
+    `),
+    // Fase 2: sinais abertos mais fortes (NBA vira "próximas ações").
+    db.execute(sql`
+      SELECT s.signal_type, s.severity, s.payload, s.contact_id, s.deal_id,
+             c.name AS contact_name, d.title AS deal_title, d.assigned_to, d.conversation_id,
+             (p.deal_id IS NOT NULL) AS has_proposal, (p.accepted_at IS NOT NULL) AS proposal_accepted
+      FROM customer_signals s
+      JOIN contacts c ON c.id = s.contact_id
+      LEFT JOIN deals d ON d.id = s.deal_id
+      LEFT JOIN deal_proposals p ON p.deal_id = s.deal_id
+      WHERE s.account_id = ${accountId} AND s.resolved_at IS NULL
+        AND s.signal_type IN ('proposal_idle', 'followup_due', 'stale_deal', 'high_intent', 'churn_risk', 'ticket_declining')
+        AND (s.deal_id IS NULL OR d.status = 'open')
+      ORDER BY s.severity DESC, s.detected_at DESC
+      LIMIT 3
+    `),
   ])
+  const nextActions: string[] = []
+  for (const r of (nextSignals.rows ?? []) as Record<string, unknown>[]) {
+    const rec = recommend(
+      {
+        signalType: String(r.signal_type),
+        severity: Number(r.severity) || 0,
+        payload: (r.payload ?? {}) as Record<string, unknown>,
+        contactId: String(r.contact_id),
+        dealId: (r.deal_id as string | null) ?? null,
+      },
+      {
+        hasProposal: r.has_proposal === true,
+        proposalAccepted: r.proposal_accepted === true,
+        hasConversation: !!r.conversation_id,
+        dealAssigned: !!r.assigned_to,
+        contactName: (r.contact_name as string | null) ?? null,
+        dealTitle: (r.deal_title as string | null) ?? null,
+      },
+    )
+    if (rec) nextActions.push(`${rec.headline} — ${(r.contact_name as string | null) ?? 'cliente'}${r.deal_title ? ` (${r.deal_title})` : ''}`)
+  }
 
   const wy = wonYest.rows[0] as { n?: number; total?: number } | undefined
   const op = open.rows[0] as { n?: number; total?: number } | undefined
@@ -206,6 +251,8 @@ export async function buildDigestData(
     waitingCount: num((waiting.rows[0] as { n?: number } | undefined)?.n),
     monthWonValue: num((monthWon.rows[0] as { total?: number } | undefined)?.total),
     monthGoal: num((goal.rows[0] as { total?: number } | undefined)?.total),
+    pendingApprovals: num((approvals.rows[0] as { n?: number } | undefined)?.n),
+    nextActions,
   }
 }
 
@@ -265,6 +312,14 @@ export function formatDigest(
     )
   }
 
+  // Fase 2: o que a IA quer fazer e precisa de você + próximas ações (NBA).
+  if (data.pendingApprovals > 0) {
+    lines.push(`🤖 Fluxia: ${data.pendingApprovals} ação(ões) esperando sua aprovação — abra "Precisa de você"`)
+  }
+  if (data.nextActions.length > 0) {
+    lines.push('🎯 Próximas ações que valem a pena hoje:')
+    for (const a of data.nextActions) lines.push(`   • ${a}`)
+  }
   // Fechamento: aponta o foco do dia sem soar robótico.
   lines.push('')
   if (data.waitingCount > 0) {

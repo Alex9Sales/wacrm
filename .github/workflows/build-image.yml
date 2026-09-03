@@ -115,16 +115,19 @@ jobs:
           # `docker pull` can briefly race GHCR (fresh manifest not yet
           # available) and fail fast with `set -e`. A couple of retries makes
           # the auto-deploy robust instead of needing a manual re-run.
+          # 03/09: runner do GitHub tomou "connection timed out" na porta 22 três
+          # vezes seguidas (deploy caiu no manual). Mais fôlego: 6 tentativas,
+          # 30s de espera, timeout de conexão maior.
           n=0
-          until [ "$n" -ge 3 ]; do
-            if ssh -i ~/.ssh/deploy_key -o ConnectTimeout=20 \
+          until [ "$n" -ge 6 ]; do
+            if ssh -i ~/.ssh/deploy_key -o ConnectTimeout=40 \
                  -o StrictHostKeyChecking=yes root@72.60.137.234 /root/deploy-crm.sh; then
               echo "[deploy] succeeded on attempt $((n + 1))"
               exit 0
             fi
             n=$((n + 1))
-            echo "[deploy] attempt $n failed; retrying in 20s..."
-            sleep 20
+            echo "[deploy] attempt $n failed; retrying in 30s..."
+            sleep 30
           done
           echo "[deploy] all attempts failed"
           exit 1

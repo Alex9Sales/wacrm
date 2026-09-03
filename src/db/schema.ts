@@ -1779,7 +1779,7 @@ export const notifications = pgTable("notifications", {
 			foreignColumns: [contacts.id],
 			name: "notifications_contact_id_fkey"
 		}).onDelete("set null"),
-	check("notifications_type_check", sql`type = ANY (ARRAY['conversation_assigned'::text, 'sla_alert'::text, 'mention'::text, 'broadcast_halted'::text, 'deal_transferred'::text, 'deal_ai_suggestion'::text, 'scheduled_message_assigned'::text])`),
+	check("notifications_type_check", sql`type = ANY (ARRAY['conversation_assigned'::text, 'sla_alert'::text, 'mention'::text, 'broadcast_halted'::text, 'deal_transferred'::text, 'deal_ai_suggestion'::text, 'scheduled_message_assigned'::text, 'task_assigned'::text, 'flow_notification'::text, 'contact_opted_out'::text, 'agent_action'::text, 'approval_required'::text])`),
 ]);
 
 export const webhookEndpoints = pgTable("webhook_endpoints", {
@@ -2915,6 +2915,10 @@ export const customerSignals = pgTable("customer_signals", {
 	accountId: uuid("account_id").notNull(),
 	contactId: uuid("contact_id").notNull(),
 	signalType: text("signal_type").notNull(),
+	// Fase 2: sinal com escopo de NEGÓCIO (proposal_idle, followup_due…). deal_key = coluna
+	// GERADA (deal_id ou uuid zero) pro índice único aberto e pro ON CONFLICT.
+	dealId: uuid("deal_id"),
+	dealKey: uuid("deal_key").generatedAlwaysAs(sql`COALESCE(deal_id, '00000000-0000-0000-0000-000000000000'::uuid)`),
 	severity: integer("severity").default(0).notNull(),
 	payload: jsonb("payload").default({}).notNull(),
 	detectedAt: timestamp("detected_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
@@ -2937,6 +2941,18 @@ export const agentActionRequests = pgTable("agent_action_requests", {
 	contactId: uuid("contact_id").notNull(),
 	conversationId: uuid("conversation_id"),
 	actionType: text("action_type").notNull(),
+	// Fase 2 (migr 0155): fila/log GENÉRICO por ação.
+	dealId: uuid("deal_id"),
+	dealKey: uuid("deal_key").generatedAlwaysAs(sql`COALESCE(deal_id, '00000000-0000-0000-0000-000000000000'::uuid)`),
+	signalId: uuid("signal_id"),
+	// auto | approve | suggest | blocked
+	decision: text(),
+	// regra que decidiu (auditoria/explicabilidade)
+	policy: text(),
+	executedAt: timestamp("executed_at", { withTimezone: true, mode: 'string' }),
+	result: jsonb().$type<Record<string, unknown>>(),
+	error: text(),
+	attempts: integer().default(0).notNull(),
 	payload: jsonb("payload").default({}).notNull(),
 	suggestedText: text("suggested_text"),
 	reason: text("reason"),

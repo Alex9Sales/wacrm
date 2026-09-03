@@ -20,6 +20,7 @@ import {
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { greeting } from '@/lib/cdl/names'
+import { ORCH_ACTIONS } from '@/lib/orchestration/policy'
 
 export type AutonomyLevel = 'suggest' | 'approve' | 'auto'
 
@@ -60,6 +61,36 @@ export function sanitizeAutonomy(input: unknown): Record<string, unknown> {
   if (Number.isInteger(sh) && sh >= 0 && sh <= 23) out.reactivationStartHour = sh
   const eh = Number(o.reactivationEndHour)
   if (Number.isInteger(eh) && eh >= 1 && eh <= 24) out.reactivationEndHour = eh
+  // ---- Fase 2: política POR AÇÃO (+ tetos e travas) — ver lib/orchestration/policy.ts
+  const actions = o.actions && typeof o.actions === 'object' ? (o.actions as Record<string, unknown>) : null
+  if (actions) {
+    const clean: Record<string, string> = {}
+    for (const act of ORCH_ACTIONS) {
+      const v = actions[act]
+      if (typeof v === 'string' && (LEVELS as string[]).includes(v)) clean[act] = v
+    }
+    if (Object.keys(clean).length) out.actions = clean
+    // espelha no legado pra telas antigas continuarem certas
+    if (clean.reactivation && !out.reactivation) out.reactivation = clean.reactivation
+  }
+  const caps = o.caps && typeof o.caps === 'object' ? (o.caps as Record<string, unknown>) : null
+  if (caps) {
+    const clean: Record<string, number> = {}
+    for (const act of ORCH_ACTIONS) {
+      const n = Number(caps[act])
+      if (Number.isFinite(n) && n >= 1) clean[act] = Math.min(500, Math.floor(n))
+    }
+    if (Object.keys(clean).length) out.caps = clean
+  }
+  const pct = Number(o.discountAutoMaxPct)
+  if (Number.isFinite(pct) && pct >= 0 && pct <= 100) out.discountAutoMaxPct = pct
+  if (typeof o.paused === 'boolean') out.paused = o.paused
+  const hc = Number(o.humanCooldownHours)
+  if (Number.isFinite(hc) && hc >= 0 && hc <= 168) out.humanCooldownHours = hc
+  const perDeal = Number(o.maxAutoPerDealPerDay)
+  if (Number.isInteger(perDeal) && perDeal >= 1 && perDeal <= 10) out.maxAutoPerDealPerDay = perDeal
+  const perDayMsgs = Number(o.maxAutoMessagesPerDay)
+  if (Number.isInteger(perDayMsgs) && perDayMsgs >= 1 && perDayMsgs <= 500) out.maxAutoMessagesPerDay = perDayMsgs
   return out
 }
 
@@ -251,10 +282,11 @@ export async function generateReactivationRequests(accountId: string): Promise<n
         })
         .onConflictDoUpdate({
           target: [
-            agentActionRequests.accountId,
-            agentActionRequests.contactId,
-            agentActionRequests.actionType,
-          ],
+          agentActionRequests.accountId,
+          agentActionRequests.contactId,
+          agentActionRequests.actionType,
+          agentActionRequests.dealKey,
+        ],
           targetWhere: sql`status = 'pending'`,
           set: { suggestedText: text, reason, payload: { signalType: s.signalType, severity: s.severity, ...p } },
         })

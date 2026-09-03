@@ -44,6 +44,7 @@ import {
   X,
   Zap,
   Camera,
+  ClipboardCheck,
 } from "lucide-react";
 import type { AccountRole } from "@/lib/auth/roles";
 
@@ -128,6 +129,7 @@ const navItems: NavItem[] = [
   { href: "/notifications", label: "Notificações", icon: Bell },
   { href: "/contacts", label: "Contatos", icon: Users },
   { href: "/recompra", label: "Chamar de volta", icon: Repeat },
+  { href: "/aprovacoes", label: "Precisa de você", icon: ClipboardCheck },
   { href: "/empresas", label: "Empresas", icon: Building2 },
   { href: "/tarefas", label: "Tarefas", icon: ListTodo },
   { href: "/agenda", label: "Agenda", icon: CalendarDays },

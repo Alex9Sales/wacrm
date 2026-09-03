@@ -142,3 +142,10 @@ import('./social-publish-worker')
   .catch((err) => {
     console.error('[worker] social-publish failed to start:', err);
   });
+
+// 🧠 Fase 2 — orquestração (sinais de negócio + Signal→Policy→Action).
+import('./orchestration-worker')
+  .then((m) => m.startOrchestrationWorker())
+  .catch((err) => {
+    console.error('[worker] orchestration failed to start:', err);
+  });

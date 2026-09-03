@@ -13,6 +13,7 @@ export const APP_PATH_PREFIXES = [
   '/dashboard',
   '/admin',
   '/agenda',
+  '/aprovacoes',
   '/agendamentos',
   '/agents',
   '/automations',
