@@ -39,6 +39,8 @@ const MAX_NOTIFY_PER_RUN = 3
 const MAX_SUGGESTIONS_PER_RUN = 50
 const PACE_MS = 8_000
 const DEDUPE_HOURS = 48
+/** Aviso ao time repete no máximo 1x por semana por (contato, ação, negócio). */
+const DEDUPE_NOTIFY_HOURS = 24 * 7
 const BLOCKED_LOG_HOURS = 24
 const ZERO_UUID = '00000000-0000-0000-0000-000000000000'
 
@@ -229,7 +231,8 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
     const meta = ACTION_CATALOG[r.actionType as OrchAction]
     if (meta?.kind === 'message') messagesToday += 1
   }
-  const dedupeCutoff = new Date(Date.now() - DEDUPE_HOURS * 3_600_000).toISOString()
+  const dedupeCutoff = new Date(Date.now() - DEDUPE_NOTIFY_HOURS * 3_600_000).toISOString()
+  const dedupeMsgCutoff = Date.now() - DEDUPE_HOURS * 3_600_000
   const recentRows = await db
     .select({ contactId: agentActionRequests.contactId, actionType: agentActionRequests.actionType, dealId: agentActionRequests.dealId, status: agentActionRequests.status, createdAt: agentActionRequests.createdAt })
     .from(agentActionRequests)
@@ -243,7 +246,11 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
     if (r.status === 'pending') pendingKeys.add(k)
     else if (r.status === 'blocked') {
       if (new Date(r.createdAt).getTime() >= blockedCutoff) blockedRecent.add(k)
-    } else recentKeys.add(k)
+    } else {
+      // aviso: janela de 7 dias; mensagem/CRM: 48h
+      const isNotify = ACTION_CATALOG[r.actionType as OrchAction]?.kind === 'notify'
+      if (isNotify || new Date(r.createdAt).getTime() >= dedupeMsgCutoff) recentKeys.add(k)
+    }
   }
   const pendingSuggestionDeals = new Set(
     dealIds.length

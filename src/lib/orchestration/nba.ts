@@ -134,12 +134,8 @@ export function recommend(signal: SignalLike, ctx: NbaContext): Recommendation |
         headline: 'Avisar vendedor: ticket caindo',
       }
     case 'customer_reactivated':
-      return {
-        action: 'notify_seller',
-        reason: `${who(ctx)} voltou a comprar depois de um tempo sumido — vale agradecer.`,
-        priority: 30,
-        headline: 'Cliente voltou a comprar',
-      }
+      // Informativo (aparece como sinal); avisar toda vez cansaria o time.
+      return null
     case 'approval_required':
       return {
         action: 'notify_owner',

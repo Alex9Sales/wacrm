@@ -133,8 +133,9 @@ export function levelFor(policy: AutonomyPolicy, action: OrchAction): Level {
   return policy.levels[action] ?? ACTION_CATALOG[action].defaultLevel
 }
 
+/** Teto padrão por 24h: avisos são baratos mas cansam (5); o resto 20. */
 export function capFor(policy: AutonomyPolicy, action: OrchAction): number {
-  return policy.caps[action] ?? 20
+  return policy.caps[action] ?? (ACTION_CATALOG[action].kind === 'notify' ? 5 : 20)
 }
 
 export interface DecisionContext {

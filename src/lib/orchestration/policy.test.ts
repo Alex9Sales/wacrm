@@ -70,6 +70,11 @@ describe('decide', () => {
     expect(decide({ ...base, messagesToday: 30 }).decision).toBe('blocked')
     expect(decide({ ...base, usedForDealToday: 1 }).decision).toBe('blocked')
   })
+  it('aviso tem teto padrão de 5/dia; mensagem 20', () => {
+    expect(decide({ ...base, action: 'notify_seller', policy: { ...DEFAULT_POLICY }, usedToday: 5 }).decision).toBe('blocked')
+    expect(decide({ ...base, action: 'notify_seller', policy: { ...DEFAULT_POLICY }, usedToday: 4 }).decision).toBe('auto_execute')
+    expect(decide({ ...base, usedToday: 19 }).decision).toBe('auto_execute')
+  })
   it('opt-out bloqueia mensagem, não bloqueia tarefa', () => {
     expect(decide({ ...base, optedOut: true }).decision).toBe('blocked')
     expect(decide({ ...base, action: 'create_task', optedOut: true }).decision).toBe('auto_execute')
