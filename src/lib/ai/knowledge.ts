@@ -4,6 +4,7 @@ import { firstOrNull } from '@/db/helpers'
 import type { AiConfig } from './types'
 import { chunkText } from './chunk'
 import { embedTexts, toVectorLiteral } from './embeddings'
+import { neutralizeUntrusted } from './untrusted'
 
 // ============================================================
 // Knowledge base: ingest (chunk + optionally embed) and hybrid
@@ -35,7 +36,10 @@ export function buildIngestText(
   title: string,
   content: string,
 ): string {
-  return sourceType === 'qa' ? `${title}\n\n${content}` : content
+  // 🛡️ O documento da base foi escrito por gente de fora (upload/URL/colado):
+  // desarma marcador e rótulo de sistema antes de virar contexto do agente.
+  const safe = neutralizeUntrusted(content, { maxChars: 6000 })
+  return sourceType === 'qa' ? `${neutralizeUntrusted(title, { maxChars: 300 })}\n\n${safe}` : safe
 }
 
 export async function ingestDocument(

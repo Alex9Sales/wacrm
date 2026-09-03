@@ -17,6 +17,7 @@ import { assertPublicUrl } from '@/lib/net/safe-url'
 import { db, agentTools, agentToolRuns } from '@/db'
 import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
 import { generateReply, type GenerateArgs } from './generate'
+import { neutralizeUntrusted } from './untrusted'
 import type { GenerateResult } from './types'
 
 export interface ToolParamDef {
@@ -421,7 +422,7 @@ export async function generateWithExternalTools(
     messages.push({ role: 'assistant', content: call.marker })
     messages.push({
       role: 'user',
-      content: `[RESULTADO DA FERRAMENTA ${call.slug} — ${outcome.status}]\n${outcome.summary}\n[FIM DO RESULTADO — responda ao cliente agora usando esse dado; não mencione a ferramenta]`,
+      content: `[RESULTADO DA FERRAMENTA ${call.slug} — ${outcome.status}]\n${neutralizeUntrusted(outcome.summary, { maxChars: 6000 })}\n[FIM DO RESULTADO — responda ao cliente agora usando esse dado; não mencione a ferramenta]`,
     })
   }
   // inalcançável (o loop retorna antes), mas o TS quer um retorno.

@@ -41,6 +41,7 @@ import {
 } from './providers/instagram'
 import { loadAiConfig } from '@/lib/ai/config'
 import { generateReply } from '@/lib/ai/generate'
+import { neutralizeUntrusted } from '@/lib/ai/untrusted'
 
 type Rule = typeof instagramCommentAutomations.$inferSelect
 
@@ -153,10 +154,13 @@ async function qualifyCommenter(
     ])
     const username = c.fromUsername || profile?.username || null
     const nome = profile?.name || disco?.name || null
+    // 🛡️ @, nome, bio e comentário são escritos por QUALQUER pessoa da internet:
+    // desarma antes de virar prompt (ver lib/ai/untrusted.ts).
+    const safe = (v: string | null | undefined) => neutralizeUntrusted(v, { maxChars: 600 })
     const perfil = [
-      username ? `@username: ${username}` : null,
-      nome ? `Nome: ${nome}` : null,
-      disco?.biography ? `Bio: ${disco.biography}` : null,
+      username ? `@username: ${safe(username)}` : null,
+      nome ? `Nome: ${safe(nome)}` : null,
+      disco?.biography ? `Bio: ${safe(disco.biography)}` : null,
       typeof disco?.followersCount === 'number'
         ? `Seguidores: ${disco.followersCount}`
         : null,
@@ -164,7 +168,7 @@ async function qualifyCommenter(
       disco
         ? 'Tipo de conta: profissional/criador'
         : 'Tipo de conta: pessoal ou não-descobrível pela API',
-      `Comentário que a pessoa deixou: "${(c.text ?? '').trim()}"`,
+      `Comentário que a pessoa deixou: "${safe(c.text).trim()}"`,
     ]
       .filter(Boolean)
       .join('\n')

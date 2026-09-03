@@ -92,6 +92,14 @@ function finalizeAgent(
   // The embeddings key is optional and independent of the chat key —
   // a corrupt/undecryptable one should downgrade to lexical KB, not
   // take down draft/auto-reply, so decrypt failures are swallowed here.
+  // 🔎 Chave de EMBEDDINGS (busca semântica na base de conhecimento).
+  // 03/09: NENHUMA conta tinha essa chave preenchida — o RAG rodava só com
+  // busca por palavra, então "quanto custa pra abrir" não achava o documento
+  // que fala "investimento inicial" e a IA respondia sem contexto (a maior
+  // fonte de alucinação hoje). Quando o provedor de chat é a OpenAI, a MESMA
+  // chave serve pro endpoint de embeddings — usamos ela como padrão em vez de
+  // exigir um cadastro extra que ninguém fez. Campo próprio continua tendo
+  // prioridade (conta que quer separar as chaves/faturas).
   let embeddingsApiKey: string | null = null
   if (row.embeddingsApiKey) {
     try {
@@ -100,6 +108,13 @@ function finalizeAgent(
       console.error(
         `[ai config] embeddings key for account ${accountId} could not be decrypted — check ENCRYPTION_KEY; semantic search is disabled until it is re-entered.`,
       )
+      embeddingsApiKey = null
+    }
+  }
+  if (!embeddingsApiKey && effectiveProvider === 'openai') {
+    try {
+      embeddingsApiKey = decrypt(effectiveEncryptedKey)
+    } catch {
       embeddingsApiKey = null
     }
   }
