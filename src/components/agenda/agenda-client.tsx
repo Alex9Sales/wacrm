@@ -285,6 +285,12 @@ export function AgendaClient() {
         // muda o mês → o efeito de load dispara sozinho e mostra o evento
         setAnchor(new Date(eventDate.getFullYear(), eventDate.getMonth(), 1))
       }
+      toast.success(draft.id ? 'Evento atualizado.' : 'Evento criado.')
+    } catch (err) {
+      // Era try/finally SEM catch: falhando, o modal ficava aberto e nada
+      // explicava (em produção o erro de Server Action chega sanitizado).
+      console.error('[agenda] salvar falhou:', err)
+      toast.error('Não foi possível salvar o evento. Tente de novo.')
     } finally {
       setSaving(false)
     }
@@ -292,11 +298,17 @@ export function AgendaClient() {
 
   const remove = async () => {
     if (!draft?.id) return
+    // Apagar evento não tem desfazer — confirma antes (o botão era direto).
+    if (!window.confirm(`Excluir o evento "${draft.title || 'sem título'}"? Não dá pra desfazer.`)) return
     setSaving(true)
     try {
       await deleteEvent(draft.id)
       setDraft(null)
       await load()
+      toast.success('Evento excluído.')
+    } catch (err) {
+      console.error('[agenda] excluir falhou:', err)
+      toast.error('Não foi possível excluir o evento.')
     } finally {
       setSaving(false)
     }

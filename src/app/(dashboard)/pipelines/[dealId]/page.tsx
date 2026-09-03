@@ -600,11 +600,18 @@ export default function DealDetailPage() {
   const deleteProduct = useCallback(
     async (id: string) => {
       if (!deal) return;
+      // Produto do negócio alimenta a PROPOSTA — apagar sem querer muda o
+      // valor do documento que vai pro cliente. Confirma antes.
+      const item = products.find((p) => p.id === id);
+      if (!window.confirm(`Remover "${item?.name ?? 'este item'}" do negócio? O valor da proposta muda.`)) return;
       const { error } = await removeDealProduct(id);
       if (error) toast.error(error);
-      else await reload();
+      else {
+        toast.success('Item removido.');
+        await reload();
+      }
     },
-    [deal, reload],
+    [deal, products, reload],
   );
 
   const uploadFile = useCallback(
@@ -644,11 +651,16 @@ export default function DealDetailPage() {
 
   const deleteAttachment = useCallback(
     async (id: string) => {
+      const file = attachments.find((a) => a.id === id);
+      if (!window.confirm(`Excluir o arquivo "${file?.name ?? 'selecionado'}"? Não dá pra desfazer.`)) return;
       const { error } = await removeDealAttachment(id);
       if (error) toast.error(error);
-      else setAttachments((prev) => prev.filter((a) => a.id !== id));
+      else {
+        toast.success('Arquivo excluído.');
+        setAttachments((prev) => prev.filter((a) => a.id !== id));
+      }
     },
-    [],
+    [attachments],
   );
 
   const productsTotal = useMemo(

@@ -158,6 +158,9 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
   };
 
   const remove = async (t: AgentToolRow) => {
+    // Apagar ferramenta tira uma capacidade do agente em produção (ele passa a
+    // não conseguir consultar/criar no sistema do cliente). Confirma antes.
+    if (!window.confirm(`Excluir a ferramenta "${t.name}"? O agente perde essa capacidade na hora.`)) return;
     const { error } = await deleteAgentTool(t.id);
     if (error) toast.error(error);
     else {
