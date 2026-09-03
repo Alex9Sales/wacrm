@@ -4,6 +4,8 @@ import { Suspense, useState } from "react";
 import { useSearchParams } from "next/navigation";
 import Link from "next/link";
 import { toast } from "sonner";
+
+import { VerifyEmailNotice } from "@/components/auth/verify-email-notice";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -46,6 +48,7 @@ function LoginPageInner() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [needsVerification, setNeedsVerification] = useState(false);
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -55,6 +58,13 @@ function LoginPageInner() {
     const { error } = await authClient.signIn.email({ email, password });
 
     if (error) {
+      // Conta ainda não confirmou o e-mail: o servidor já reenviou o link
+      // (sendOnSignIn) — só mostramos a tela de "confira seu e-mail".
+      if ((error as { code?: string }).code === "EMAIL_NOT_VERIFIED") {
+        setNeedsVerification(true);
+        setSubmitting(false);
+        return;
+      }
       toast.error(error.message ?? "Não foi possível entrar. Verifique suas credenciais.");
       setSubmitting(false);
       return;
@@ -67,6 +77,16 @@ function LoginPageInner() {
       ? `/join/${encodeURIComponent(inviteToken)}`
       : "/dashboard";
   };
+
+  if (needsVerification) {
+    return (
+      <VerifyEmailNotice
+        email={email}
+        callbackURL={inviteToken ? `/join/${encodeURIComponent(inviteToken)}` : "/dashboard"}
+        title="Confirme seu e-mail para entrar"
+      />
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">

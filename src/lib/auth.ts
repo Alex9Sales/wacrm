@@ -45,13 +45,24 @@ export const auth = betterAuth({
 
   emailAndPassword: {
     enabled: true,
-    // Dev: let users in without the verification round-trip.
-    requireEmailVerification: false,
+    // 02/09 (hardening): cadastro só entra depois de confirmar o e-mail.
+    // Quem já existia foi marcado como verificado no banco (backfill) —
+    // ninguém antigo fica trancado. Membro criado por admin/convite nasce
+    // verificado (o admin/convite já garante o e-mail).
+    requireEmailVerification: true,
     sendResetPassword,
   },
 
   emailVerification: {
     sendVerificationEmail,
+    // O envio é explícito (rota do trial / tela de cadastro) — não no signUp
+    // genérico, senão membro criado pelo admin recebia e-mail à toa.
+    sendOnSignUp: false,
+    // Tentou entrar sem confirmar → reenvia o link na hora (auto-cura).
+    sendOnSignIn: true,
+    // Clicou no link → já entra logado.
+    autoSignInAfterVerification: true,
+    expiresIn: 60 * 60 * 24,
   },
 
   plugins: [

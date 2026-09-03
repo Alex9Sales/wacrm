@@ -602,6 +602,8 @@ export async function createTeamMember(
   try {
     const res = await auth.api.signUpEmail({ body: { name, email, password } })
     newUserId = res.user.id
+    // O admin garante o e-mail do membro: nasce verificado (senão não entra).
+    await db.update(user).set({ emailVerified: true }).where(eq(user.id, newUserId))
   } catch (err) {
     const message =
       err && typeof err === 'object' && 'message' in err

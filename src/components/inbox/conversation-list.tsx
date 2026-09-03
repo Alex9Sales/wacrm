@@ -1049,9 +1049,11 @@ function ConversationItem({
   const contact = conversation.contact;
   const baseName = contact?.name || contact?.phone || "Desconhecido";
   // Código do cliente (quando houver) vai NA FRENTE do nome no card, ex.:
-  // "20583 Construsul". Sem código, mostra só o nome.
-  const code = contact?.customer_codes?.[0]?.trim();
-  const displayName = code ? `${code} ${baseName}` : baseName;
+  // "20583 Construsul". Cliente com MAIS de um código mostra todos, separados
+  // por barra: "21364 / 30089 Cei" (pedido do Felipe Macedo, 02/09). Sem
+  // código, mostra só o nome.
+  const codes = (contact?.customer_codes ?? []).map((c) => c.trim()).filter(Boolean);
+  const displayName = codes.length ? `${codes.join(" / ")} ${baseName}` : baseName;
   const prio = priorityMeta(conversation.priority);
   const isUrgent = conversation.priority === "urgent";
   const contactTags = contact?.tags ?? [];

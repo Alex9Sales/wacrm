@@ -151,6 +151,8 @@ export async function POST(request: Request) {
         body: { name: ownerName, email: ownerEmail, password },
       });
       newUserId = res.user.id;
+      // Conta criada pelo admin da plataforma: e-mail já garantido → verificado.
+      await db.update(user).set({ emailVerified: true }).where(eq(user.id, newUserId));
     } catch (err) {
       // Better Auth throws APIError on duplicate email / weak password.
       const message =

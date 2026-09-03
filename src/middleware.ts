@@ -21,6 +21,7 @@ const AUTH_PAGES = new Set(['/login', '/signup', '/forgot-password'])
 // API prefixes that must remain reachable WITHOUT a session cookie.
 // Everything else under /api is treated as authed.
 const PUBLIC_API_PREFIXES = [
+  '/api/trial/signup', // cadastro self-serve (trial): cria login+org SEM sessão (rate limit + honeypot na rota)
   '/api/auth', // Better Auth's own endpoints (sign-in/up/out, org, …)
   '/api/webhooks', // inbound provider webhooks (verified by signature)
   '/api/invitations', // public invite peek; redeem self-guards the session

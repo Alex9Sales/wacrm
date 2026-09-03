@@ -35,26 +35,27 @@ const SECURITY_HEADERS = [
     value: "camera=(), microphone=(self), geolocation=(), payment=(), usb=()",
   },
   {
-    key: "Content-Security-Policy-Report-Only",
+    // 02/09 (hardening): CSP em ENFORCE (era Report-Only). Allowlist montada
+    // a partir do que o navegador REALMENTE carrega: SDK da Meta (Embedded
+    // Signup), Pixel da Meta + GA4 nas páginas públicas de captação (/f/[slug]),
+    // Google Fonts (página /diagnostico), mídia de CDN (avatar/áudio do
+    // WhatsApp e Instagram), WebSocket da escuta de voz (mesma origem).
+    // Quebrou algo? Olhar o console do navegador ("Refused to ...") e
+    // acrescentar o host aqui — NÃO voltar pra Report-Only.
+    key: "Content-Security-Policy",
     value: [
       "default-src 'self'",
-      // Next.js needs 'unsafe-inline' for its inline hydration script
-      // and 'unsafe-eval' in dev + some production optimisations.
-      // Nonce-based CSP is a later project.
-      "script-src 'self' 'unsafe-inline' 'unsafe-eval'",
-      // Tailwind + inline style attributes on lots of components.
-      "style-src 'self' 'unsafe-inline'",
-      // Supabase public-bucket avatars, contact avatars (arbitrary
-      // https URLs paste-able from the UI), OG images, data URLs for
-      // tiny inline assets.
+      // Next.js precisa de 'unsafe-inline' (script de hidratação/tema) e
+      // 'unsafe-eval' (dev + algumas otimizações). CSP com nonce fica pra depois.
+      "script-src 'self' 'unsafe-inline' 'unsafe-eval' https://connect.facebook.net https://www.googletagmanager.com",
+      "style-src 'self' 'unsafe-inline' https://fonts.googleapis.com",
       "img-src 'self' data: blob: https:",
-      // Outbound media previews (blob: from MediaRecorder + file picker)
-      // and Supabase public-bucket audio/video the inbox renders.
-      "media-src 'self' blob: https://*.supabase.co",
-      "font-src 'self' data:",
-      // Supabase REST + realtime (WSS). All Meta API calls happen
-      // server-side, so graph.facebook.com does not belong here.
-      "connect-src 'self' https://*.supabase.co wss://*.supabase.co",
+      "media-src 'self' data: blob: https:",
+      "font-src 'self' data: https://fonts.gstatic.com",
+      "connect-src 'self' wss: https://graph.facebook.com https://www.facebook.com https://web.facebook.com https://www.googletagmanager.com https://*.google-analytics.com https://analytics.google.com https://stats.g.doubleclick.net",
+      "frame-src 'self' https://www.facebook.com https://web.facebook.com https://staticxx.facebook.com",
+      "worker-src 'self' blob:",
+      "object-src 'none'",
       "frame-ancestors 'none'",
       "base-uri 'self'",
       "form-action 'self'",

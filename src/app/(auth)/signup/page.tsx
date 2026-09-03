@@ -4,6 +4,9 @@ import { Suspense, useState } from "react";
 import Link from "next/link";
 import { useSearchParams } from "next/navigation";
 import { toast } from "sonner";
+
+import { VerifyEmailNotice } from "@/components/auth/verify-email-notice";
+import { confirmInvitedSignup } from "./actions";
 import { authClient } from "@/lib/auth-client";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -45,6 +48,7 @@ function SignupPageInner() {
   const [password, setPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [sent, setSent] = useState(false);
 
   // Sem convite → cadastro fechado. Nada de formulário.
   if (!inviteToken) {
@@ -99,9 +103,31 @@ function SignupPageInner() {
       return;
     }
 
-    // Navegação completa pro convite: re-hidrata a sessão e aceita o convite.
-    window.location.href = `/join/${encodeURIComponent(inviteToken)}`;
+    // O cadastro exige e-mail confirmado (não abre sessão). O convite chegou
+    // nesse e-mail, então ele já prova a posse: marca como verificado e entra.
+    const confirmed = await confirmInvitedSignup(inviteToken, email).catch(() => ({ ok: false }));
+    if (confirmed.ok) {
+      const signIn = await authClient.signIn.email({ email, password });
+      if (!signIn.error) {
+        // Navegação completa pro convite: re-hidrata a sessão e aceita o convite.
+        window.location.href = `/join/${encodeURIComponent(inviteToken)}`;
+        return;
+      }
+    }
+
+    // E-mail diferente do convite (ou convite vencido) → confirma pelo link.
+    await authClient
+      .sendVerificationEmail({ email, callbackURL: `/join/${encodeURIComponent(inviteToken)}` })
+      .catch(() => {});
+    setSent(true);
+    setSubmitting(false);
   };
+
+  if (sent) {
+    return (
+      <VerifyEmailNotice email={email} callbackURL={`/join/${encodeURIComponent(inviteToken)}`} />
+    );
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">

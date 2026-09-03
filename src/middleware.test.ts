@@ -61,7 +61,7 @@ describe("middleware — Better Auth cookie gate", () => {
     },
   );
 
-  it.each(["/api/auth/sign-in/email", "/api/webhooks/whatsapp"])(
+  it.each(["/api/auth/sign-in/email", "/api/webhooks/whatsapp", "/api/trial/signup"])(
     "always passes public API path %s without a cookie",
     async (path) => {
       const res = await middleware(req(path, false));

@@ -9,7 +9,8 @@
 import { useState } from "react";
 import Link from "next/link";
 import { toast } from "sonner";
-import { authClient } from "@/lib/auth-client";
+
+import { VerifyEmailNotice } from "@/components/auth/verify-email-notice";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { PasswordInput } from "@/components/ui/password-input";
@@ -29,6 +30,8 @@ export default function ComecarPage() {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [submitting, setSubmitting] = useState(false);
+  const [sent, setSent] = useState(false);
+  const [website, setWebsite] = useState("");
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -39,45 +42,36 @@ export default function ComecarPage() {
     }
     setSubmitting(true);
     try {
-      // 1. Cria o login (sessão).
-      const signUpRes = await authClient.signUp.email({
-        name: fullName,
-        email,
-        password,
-      });
-      if (signUpRes.error) {
-        toast.error(
-          signUpRes.error.message ?? "Não foi possível criar a conta.",
-        );
-        setSubmitting(false);
-        return;
-      }
-
-      // 2. Provisiona a org de teste (trial 7 dias).
-      const res = await fetch("/api/trial/provision", {
+      // Login + empresa de teste em UMA chamada (servidor). O cadastro só
+      // entra depois de confirmar o e-mail — a tela seguinte explica.
+      const res = await fetch("/api/trial/signup", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ orgName: company.trim() || fullName }),
+        body: JSON.stringify({
+          name: fullName,
+          email,
+          password,
+          orgName: company.trim() || fullName,
+          website, // honeypot (fica vazio pra humanos)
+        }),
       });
       const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.id) {
-        toast.error(data.error ?? "Não foi possível criar sua empresa.");
+      if (!res.ok) {
+        toast.error(data.error ?? "Não foi possível criar a conta.");
         setSubmitting(false);
         return;
       }
-
-      // 3. Ativa a org na sessão e entra.
-      try {
-        await authClient.organization.setActive({ organizationId: data.id });
-      } catch {
-        /* setActive best-effort — a sessão pega no próximo login se falhar */
-      }
-      window.location.href = "/dashboard";
+      setSent(true);
+      setSubmitting(false);
     } catch {
       toast.error("Não foi possível criar a conta.");
       setSubmitting(false);
     }
   };
+
+  if (sent) {
+    return <VerifyEmailNotice email={email} callbackURL="/dashboard" />;
+  }
 
   return (
     <div className="flex min-h-screen items-center justify-center bg-background px-4">
@@ -95,6 +89,17 @@ export default function ComecarPage() {
         </CardHeader>
         <CardContent>
           <form onSubmit={handleSubmit} className="flex flex-col gap-4">
+            {/* honeypot: humano não vê nem preenche */}
+            <input
+              type="text"
+              name="website"
+              value={website}
+              onChange={(e) => setWebsite(e.target.value)}
+              tabIndex={-1}
+              autoComplete="off"
+              aria-hidden="true"
+              style={{ position: "absolute", left: "-9999px", width: 1, height: 1, opacity: 0 }}
+            />
             <div className="flex flex-col gap-2">
               <Label htmlFor="fullName" className="text-muted-foreground">
                 Seu nome
