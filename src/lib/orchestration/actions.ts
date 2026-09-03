@@ -8,11 +8,12 @@
 // de aprovação executa essas com o usuário que aprovou.
 // ============================================================
 
-import { and, desc, eq, inArray, isNull } from 'drizzle-orm'
+import { and, desc, eq, inArray, isNull, sql } from 'drizzle-orm'
 
 import {
   db,
   cadenceEnrollments,
+  dealProducts,
   dealProposals,
   conversations,
   dealEvents,
@@ -293,6 +294,35 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         return { ok: true, result: { notified: n, aiPaused: input.action === 'escalate' } }
       }
 
+      case 'draft_proposal': {
+        // Monta a proposta SALVA do negócio (nada sai pro cliente) — é o passo
+        // que faltava: "enviar proposta" travava porque não existia proposta.
+        if (!deal) return { ok: false, error: 'Ação precisa de um negócio.' }
+        const already = firstOrNull(
+          await db.select({ id: dealProposals.id }).from(dealProposals).where(eq(dealProposals.dealId, deal.id)).limit(1),
+        )
+        if (already) return { ok: true, result: { proposalId: already.id, alreadyExisted: true } }
+        const items = await db
+          .select({ n: sql<number>`count(*)::int` })
+          .from(dealProducts)
+          .where(eq(dealProducts.dealId, deal.id))
+        const itemCount = items[0]?.n ?? 0
+        const validUntil = new Date(Date.now() + 7 * 86_400_000).toISOString().slice(0, 10)
+        const [row] = await db
+          .insert(dealProposals)
+          .values({ dealId: deal.id, accountId: input.accountId, discount: '0', discountType: 'value', validUntil, terms: null })
+          .returning({ id: dealProposals.id })
+        return {
+          ok: true,
+          result: {
+            proposalId: row?.id ?? null,
+            items: itemCount,
+            // Sem produtos lançados a proposta nasce vazia — quem revisar precisa saber.
+            note: itemCount === 0 ? 'Sem produtos no negócio: adicione os itens na aba Produtos antes de enviar.' : null,
+          },
+        }
+      }
+
       case 'apply_discount': {
         // Só GRAVA na proposta salva (nada sai pro cliente). Acima do limite a
         // política já mandou pra aprovação antes de chegar aqui.
@@ -316,7 +346,12 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
       }
 
       case 'start_cadence': {
-        const cadenceId = typeof input.payload.cadenceId === 'string' ? input.payload.cadenceId : null
+        const cadenceId =
+          typeof input.payload.cadenceId === 'string' && input.payload.cadenceId
+            ? input.payload.cadenceId
+            : typeof input.payload.staleCadenceId === 'string'
+              ? input.payload.staleCadenceId
+              : null
         if (!cadenceId) return { ok: false, error: 'Sem cadência escolhida.' }
         const userId = await senderUserId(input.accountId, input.actorUserId, deal, input.conversationId)
         const r = await enrollContactInCadence(

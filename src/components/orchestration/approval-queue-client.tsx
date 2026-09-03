@@ -175,13 +175,19 @@ export function ApprovalQueueClient() {
       </header>
 
       {metrics ? (
-        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-6">
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
           <Metric label="Aguardando" value={metrics.pending} accent={metrics.pending > 0} />
           <Metric label={`Automáticas (${metrics.days}d)`} value={metrics.autoExecuted} />
           <Metric label="Aprovadas" value={metrics.approved} />
           <Metric label="Recusadas" value={metrics.rejected} />
           <Metric label="Bloqueadas" value={metrics.blocked} />
           <Metric label="Taxa de aprovação" value={`${metrics.approvalRate}%`} hint={`${metrics.autoShare}% da rotina foi automática`} />
+          <Metric
+            label={`Receita influenciada (${metrics.days}d)`}
+            value={money(metrics.influencedRevenue) || 'R$ 0'}
+            hint={`${metrics.influencedWon} negócio(s) ganho(s) com ação da IA antes`}
+            accent={metrics.influencedRevenue > 0}
+          />
         </div>
       ) : null}
 

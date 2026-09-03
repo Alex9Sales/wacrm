@@ -17,6 +17,10 @@ export interface SignalLike {
 }
 
 export interface NbaContext {
+  /** A conta configurou uma cadência pra negócio parado (autonomy.staleCadenceId). */
+  cadenceConfigured?: boolean
+  /** O contato já está numa cadência ativa (não inscrever de novo). */
+  inCadence?: boolean
   hasProposal: boolean
   proposalAccepted: boolean
   hasConversation: boolean
@@ -89,6 +93,16 @@ export function recommend(signal: SignalLike, ctx: NbaContext): Recommendation |
       // Parado há mais de 60 dias não é "esfriando", é backlog morto: nada de ação (só limpeza manual).
       if (days > STALE_MAX_DAYS) return null
       if (ctx.hasConversation) {
+        // Com cadência configurada, uma SEQUÊNCIA converte mais que uma
+        // mensagem solta — e só entra se a pessoa não estiver em outra.
+        if (ctx.cadenceConfigured && !ctx.inCadence) {
+          return {
+            action: 'start_cadence',
+            reason: `Negócio${dealRef(ctx)} parado há ${days} dias — colocar ${who(ctx)} na sequência de retomada.`,
+            priority: Math.min(sev, 70),
+            headline: `Iniciar cadência: parado há ${days} dias`,
+          }
+        }
         return {
           action: 'send_followup',
           reason: `Negócio${dealRef(ctx)} parado na mesma etapa há ${days} dias, sem movimento.`,
@@ -105,11 +119,13 @@ export function recommend(signal: SignalLike, ctx: NbaContext): Recommendation |
     }
     case 'high_intent':
       if (!ctx.hasProposal) {
+        // Sem proposta salva, "enviar" trava. O passo real é MONTAR a proposta
+        // (com os produtos já lançados) pro humano revisar — aí o enviar libera.
         return {
-          action: 'send_proposal',
-          reason: `${who(ctx)} está quente${dealRef(ctx)} e ainda não recebeu proposta.`,
+          action: 'draft_proposal',
+          reason: `${who(ctx)} está quente${dealRef(ctx)} e ainda não tem proposta montada.`,
           priority: Math.max(sev, 70),
-          headline: 'Gerar e enviar proposta: cliente quente sem proposta',
+          headline: 'Montar proposta: cliente quente sem proposta',
         }
       }
       if (ctx.proposalAccepted) return null

@@ -139,6 +139,8 @@ export function AiConfig({
   const [policyHumanCooldown, setPolicyHumanCooldown] = useState(24);
   const [policyMaxPerDeal, setPolicyMaxPerDeal] = useState(1);
   const [policyMaxMsgs, setPolicyMaxMsgs] = useState(30);
+  const [policyStaleCadenceId, setPolicyStaleCadenceId] = useState("");
+  const [cadenceOptions, setCadenceOptions] = useState<{ id: string; name: string }[]>([]);
   const [autonomyPausedLoaded, setAutonomyPausedLoaded] = useState(false);
   // 🔒 Trava de acesso: agente só conversa com contatos da etiqueta.
   const [accessTagId, setAccessTagId] = useState("");
@@ -288,6 +290,7 @@ export function AiConfig({
           setPolicyHumanCooldown(typeof a.humanCooldownHours === "number" ? a.humanCooldownHours : 24);
           setPolicyMaxPerDeal(typeof a.maxAutoPerDealPerDay === "number" ? a.maxAutoPerDealPerDay : 1);
           setPolicyMaxMsgs(typeof a.maxAutoMessagesPerDay === "number" ? a.maxAutoMessagesPerDay : 30);
+          setPolicyStaleCadenceId(typeof a.staleCadenceId === "string" ? a.staleCadenceId : "");
         }
         setReactivationEndHour(
           typeof data.autonomy?.reactivationEndHour === "number"
@@ -313,6 +316,27 @@ export function AiConfig({
       setLoading(false);
     }
   }, [cfgUrl]);
+
+  // Cadências ativas da conta (seletor "cadência para negócio parado").
+  useEffect(() => {
+    let alive = true;
+    import("@/app/(dashboard)/automations/cadencias/actions")
+      .then((m) => m.listCadences())
+      .then((rows) => {
+        if (!alive) return;
+        setCadenceOptions(
+          rows
+            .filter((r) => r.active !== false)
+            .map((r) => ({ id: r.id, name: r.name })),
+        );
+      })
+      .catch(() => {
+        /* sem cadências → o seletor fica só com "follow-up avulso" */
+      });
+    return () => {
+      alive = false;
+    };
+  }, []);
 
   useEffect(() => {
     // Guard keyed on account+agent so trocar de agente (mesma conta) refaz o load.
@@ -538,6 +562,7 @@ export function AiConfig({
       humanCooldownHours: policyHumanCooldown,
       maxAutoPerDealPerDay: policyMaxPerDeal,
       maxAutoMessagesPerDay: policyMaxMsgs,
+      ...(policyStaleCadenceId ? { staleCadenceId: policyStaleCadenceId } : {}),
       // Travas só fazem sentido (e só vão pro banco) no modo automático.
       ...(reactivationLevel === "auto"
         ? {
@@ -1602,6 +1627,32 @@ export function AiConfig({
                   <Label className="text-xs">Ações automáticas por negócio/dia</Label>
                   <Input type="number" min={1} max={10} value={policyMaxPerDeal} disabled={disabled}
                     onChange={(e) => setPolicyMaxPerDeal(Math.min(10, Math.max(1, Number(e.target.value) || 1)))} className="mt-1 w-24" />
+                </div>
+                <div className="sm:col-span-2">
+                  <Label className="text-xs">Cadência para negócio parado</Label>
+                  <Select
+                    value={policyStaleCadenceId || "none"}
+                    onValueChange={(v) => setPolicyStaleCadenceId(!v || v === "none" ? "" : String(v))}
+                  >
+                    <SelectTrigger className="mt-1" disabled={disabled}>
+                      <SelectValue placeholder="Só follow-up avulso">
+                        {policyStaleCadenceId
+                          ? (cadenceOptions.find((c) => c.id === policyStaleCadenceId)?.name ?? "Cadência escolhida")
+                          : "Só follow-up avulso"}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Só follow-up avulso</SelectItem>
+                      {cadenceOptions.map((c) => (
+                        <SelectItem key={c.id} value={c.id}>
+                          {c.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                  <p className="mt-1 text-[11px] text-muted-foreground">
+                    Escolhida, a IA sugere colocar o cliente nessa sequência em vez de mandar uma mensagem solta (quem já está numa cadência não entra em outra).
+                  </p>
                 </div>
                 <div>
                   <Label className="text-xs">Mensagens automáticas por dia</Label>

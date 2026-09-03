@@ -63,6 +63,10 @@ export interface AutonomyMetrics {
   approvalRate: number
   /** % das ações executadas (auto + aprovadas) que foram automáticas */
   autoShare: number
+  /** Negócios GANHOS no período que tiveram ação da IA antes do ganho. */
+  influencedWon: number
+  /** Soma do valor desses negócios (receita influenciada). */
+  influencedRevenue: number
 }
 
 export type ActionResult = { ok: true } | { ok: false; error: string }
@@ -227,6 +231,32 @@ export async function getAutonomyMetrics(days = 7): Promise<AutonomyMetrics> {
     })
     .from(agentActionRequests)
     .where(eq(agentActionRequests.accountId, ctx.accountId))
+  // 💰 Receita influenciada: negócio GANHO no período que teve pelo menos uma
+  // ação da IA (automática ou aprovada) ANTES do ganho. É a métrica que mostra
+  // se a autonomia paga a conta — não é atribuição causal, é influência.
+  let influencedWon = 0
+  let influencedRevenue = 0
+  try {
+    const inf = await db.execute(sql`
+      SELECT count(*)::int AS n, COALESCE(SUM(d.value), 0)::float8 AS total
+      FROM deals d
+      WHERE d.account_id = ${ctx.accountId}::uuid
+        AND d.status = 'won'
+        AND d.updated_at >= ${since}
+        AND EXISTS (
+          SELECT 1 FROM agent_action_requests r
+          WHERE r.deal_id = d.id
+            AND r.status IN ('sent', 'done')
+            AND r.resolved_at <= d.updated_at
+        )
+    `)
+    const first = inf.rows[0] as { n?: number; total?: number } | undefined
+    influencedWon = Number(first?.n ?? 0)
+    influencedRevenue = Number(first?.total ?? 0)
+  } catch (err) {
+    console.error('[aprovacoes] receita influenciada falhou:', err instanceof Error ? err.message : err)
+  }
+
   const approved = row?.approved ?? 0
   const rejected = row?.rejected ?? 0
   const auto = row?.auto ?? 0
@@ -240,6 +270,8 @@ export async function getAutonomyMetrics(days = 7): Promise<AutonomyMetrics> {
     failed: row?.failed ?? 0,
     approvalRate: approved + rejected > 0 ? Math.round((approved / (approved + rejected)) * 100) : 0,
     autoShare: auto + approved > 0 ? Math.round((auto / (auto + approved)) * 100) : 0,
+    influencedWon,
+    influencedRevenue,
   }
 }
 

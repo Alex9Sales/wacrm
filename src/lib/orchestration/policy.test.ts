@@ -32,6 +32,13 @@ describe('readPolicy', () => {
     // default do catálogo quando não configurado
     expect(levelFor(p, 'close_deal')).toBe('approve')
     expect(levelFor(p, 'create_task')).toBe('auto')
+    // montar proposta nasce em aprovação (não é 'só humano', mas mexe em dinheiro)
+    expect(levelFor(p, 'draft_proposal')).toBe('approve')
+  })
+
+  it('lê a cadência de negócio parado', () => {
+    expect(readPolicy({ staleCadenceId: 'cad-1' }).staleCadenceId).toBe('cad-1')
+    expect(readPolicy({}).staleCadenceId).toBeNull()
   })
 })
 
@@ -95,10 +102,8 @@ describe('NBA v1', () => {
     expect(r?.action).toBe('send_followup')
     expect(r?.reason).toMatch(/Carlos.*há 3 dias.*visualizou/)
   })
-  it('quente sem proposta → proposta; quente com proposta → follow-up; aceita → nada', () => {
+  it('quente com proposta ACEITA → nada a fazer', () => {
     const s = { signalType: 'high_intent', severity: 70, payload: {}, contactId: 'c', dealId: 'd' }
-    expect(recommend(s, { ...ctx, hasProposal: false })?.action).toBe('send_proposal')
-    expect(recommend(s, ctx)?.action).toBe('send_followup')
     expect(recommend(s, { ...ctx, proposalAccepted: true })).toBeNull()
   })
   it('parado sem conversa → avisa vendedor (ou dono se sem dono)', () => {
@@ -107,6 +112,19 @@ describe('NBA v1', () => {
     expect(recommend(s, { ...ctx, hasConversation: false, dealAssigned: false })?.action).toBe('notify_owner')
     expect(recommend(s, ctx)?.action).toBe('send_followup')
   })
+  it('cliente quente sem proposta → MONTAR proposta (enviar travaria sem proposta salva)', () => {
+    const s = { signalType: 'high_intent', severity: 70, payload: {}, contactId: 'c', dealId: 'd' }
+    expect(recommend(s, { ...ctx, hasProposal: false })?.action).toBe('draft_proposal')
+    expect(recommend(s, ctx)?.action).toBe('send_followup')
+  })
+
+  it('parado com cadência configurada → inicia cadência; sem cadência ou já inscrito → follow-up', () => {
+    const s = { signalType: 'stale_deal', severity: 60, payload: { days_stale: 12 }, contactId: 'c', dealId: 'd' }
+    expect(recommend(s, { ...ctx, cadenceConfigured: true })?.action).toBe('start_cadence')
+    expect(recommend(s, { ...ctx, cadenceConfigured: true, inCadence: true })?.action).toBe('send_followup')
+    expect(recommend(s, ctx)?.action).toBe('send_followup')
+  })
+
   it('parado há mais de 60 dias é backlog morto → nada', () => {
     expect(recommend({ signalType: 'stale_deal', severity: 80, payload: { days_stale: 120 }, contactId: 'c', dealId: 'd' }, ctx)).toBeNull()
   })

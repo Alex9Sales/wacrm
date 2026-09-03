@@ -91,6 +91,7 @@ export function sanitizeAutonomy(input: unknown): Record<string, unknown> {
   if (Number.isInteger(perDeal) && perDeal >= 1 && perDeal <= 10) out.maxAutoPerDealPerDay = perDeal
   const perDayMsgs = Number(o.maxAutoMessagesPerDay)
   if (Number.isInteger(perDayMsgs) && perDayMsgs >= 1 && perDayMsgs <= 500) out.maxAutoMessagesPerDay = perDayMsgs
+  if (typeof o.staleCadenceId === 'string' && o.staleCadenceId.trim()) out.staleCadenceId = o.staleCadenceId.trim()
   return out
 }
 

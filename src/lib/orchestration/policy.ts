@@ -19,6 +19,7 @@ export const ORCH_ACTIONS = [
   'update_follow_up',
   'notify_seller',
   'notify_owner',
+  'draft_proposal',
   'send_proposal',
   'apply_discount',
   'close_deal',
@@ -52,6 +53,7 @@ export const ACTION_CATALOG: Record<OrchAction, ActionMeta> = {
   update_follow_up: { label: 'Reagendar follow-up', hint: 'Ajusta a data do próximo follow-up do negócio.', risk: 'low', defaultLevel: 'auto', kind: 'crm' },
   notify_seller: { label: 'Avisar vendedor', hint: 'Notifica o responsável pelo negócio.', risk: 'low', defaultLevel: 'auto', kind: 'notify' },
   notify_owner: { label: 'Avisar dono/admin', hint: 'Notifica os administradores da conta.', risk: 'low', defaultLevel: 'auto', kind: 'notify' },
+  draft_proposal: { label: 'Montar proposta', hint: 'Cria a proposta do negócio com os produtos já lançados, pronta pra revisar e enviar. Não envia nada ao cliente.', risk: 'medium', defaultLevel: 'approve', kind: 'crm' },
   send_proposal: { label: 'Enviar proposta', hint: 'Manda a proposta do negócio por e-mail.', risk: 'high', defaultLevel: 'approve', kind: 'money', humanOnly: true },
   // Não é 'só humano': aplicar desconto só GRAVA na proposta salva (nada sai
   // pro cliente). Acima do limite configurado vira aprovação — ver decide().
@@ -78,6 +80,8 @@ export interface AutonomyPolicy {
   maxAutoPerDealPerDay: number
   /** Máximo de MENSAGENS automáticas por dia (todas as ações de mensagem somadas). */
   maxAutoMessagesPerDay: number
+  /** Cadência que o NBA usa em negócio parado (vazio = manda follow-up solto). */
+  staleCadenceId: string | null
 }
 
 export const DEFAULT_POLICY: AutonomyPolicy = {
@@ -88,6 +92,7 @@ export const DEFAULT_POLICY: AutonomyPolicy = {
   humanCooldownHours: 24,
   maxAutoPerDealPerDay: 1,
   maxAutoMessagesPerDay: 30,
+  staleCadenceId: null,
 }
 
 function isLevel(v: unknown): v is Level {
@@ -127,6 +132,7 @@ export function readPolicy(autonomy: unknown): AutonomyPolicy {
     maxAutoPerDealPerDay: Number.isFinite(perDeal) && perDeal >= 1 ? Math.min(10, Math.floor(perDeal)) : DEFAULT_POLICY.maxAutoPerDealPerDay,
     maxAutoMessagesPerDay:
       Number.isFinite(perDayMsgs) && perDayMsgs >= 1 ? Math.min(500, Math.floor(perDayMsgs)) : DEFAULT_POLICY.maxAutoMessagesPerDay,
+    staleCadenceId: typeof a.staleCadenceId === 'string' && a.staleCadenceId ? a.staleCadenceId : null,
   }
 }
 

@@ -22,7 +22,7 @@
 
 import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 
-import { db, agentActionRequests, aiConfigs, contacts, conversations, customerSignals, dealProposals, dealSuggestions, deals, messages } from '@/db'
+import { db, agentActionRequests, aiConfigs, cadenceEnrollments, contacts, conversations, customerSignals, dealProposals, dealSuggestions, deals, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfigById } from '@/lib/ai/config'
 import { generateReply } from '@/lib/ai/generate'
@@ -328,6 +328,20 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
     const meta = ACTION_CATALOG[r.actionType as OrchAction]
     if (meta?.kind === 'message') messagesToday += 1
   }
+  // Quem já está numa cadência ativa não entra em outra.
+  const activeCadenceContacts = new Set<string>()
+  if (policy.staleCadenceId) {
+    try {
+      const rows = await db
+        .select({ contactId: cadenceEnrollments.contactId })
+        .from(cadenceEnrollments)
+        .where(and(eq(cadenceEnrollments.accountId, accountId), eq(cadenceEnrollments.status, 'active')))
+      for (const r of rows) activeCadenceContacts.add(r.contactId)
+    } catch {
+      /* melhor recomendar follow-up do que travar o tick */
+    }
+  }
+
   const dedupeCutoff = new Date(Date.now() - DEDUPE_NOTIFY_HOURS * 3_600_000).toISOString()
   const dedupeMsgCutoff = Date.now() - DEDUPE_HOURS * 3_600_000
   const recentRows = await db
@@ -377,6 +391,8 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
     const conv = deal?.conversationId ? convById.get(deal.conversationId) : undefined
     const sig: SignalLike = { id: s.id, signalType: s.signalType, severity: s.severity, payload: s.payload ?? {}, contactId: s.contactId, dealId: s.dealId }
     const rec = recommend(sig, {
+      cadenceConfigured: !!policy.staleCadenceId,
+      inCadence: activeCadenceContacts.has(s.contactId),
       hasProposal: !!proposal,
       proposalAccepted: !!proposal?.acceptedAt,
       hasConversation: !!deal?.conversationId,
@@ -401,7 +417,15 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
       messagesToday,
       usedForDealToday: s.dealId ? (usedByDeal.get(s.dealId) ?? 0) : 0,
     })
-    const basePayload = { ...(s.payload ?? {}), signalType: s.signalType, severity: s.severity, headline: rec.headline, actionLabel: meta.label, risk: meta.risk }
+    const basePayload = {
+      ...(s.payload ?? {}),
+      signalType: s.signalType,
+      severity: s.severity,
+      headline: rec.headline,
+      actionLabel: meta.label,
+      risk: meta.risk,
+      ...(rec.action === 'start_cadence' && policy.staleCadenceId ? { staleCadenceId: policy.staleCadenceId } : {}),
+    }
 
     if (d.decision === 'deferred') continue
 
