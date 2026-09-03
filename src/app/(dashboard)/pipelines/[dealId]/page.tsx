@@ -503,6 +503,7 @@ export default function DealDetailPage() {
 
   const saveProposal = useCallback(async (): Promise<string | null> => {
     if (!dealId) return null;
+    const wasNew = !propUrl;
     setSavingProp(true);
     const res = await saveDealProposal(dealId, {
       discount: parseFloat(propDiscount) || 0,
@@ -526,8 +527,11 @@ export default function DealDetailPage() {
       },
     );
     setPropDirty(false);
+    // ⚠️ 03/09: salvava CERTO mas em silêncio — o botão piscava e voltava, e a
+    // pessoa não sabia se tinha salvado (relato do Alex). Confirma sempre.
+    toast.success(wasNew ? "Proposta criada." : "Proposta salva.");
     return res.publicUrl;
-  }, [dealId, propDiscount, propDiscountType, propValidUntil, propTerms]);
+  }, [dealId, propDiscount, propDiscountType, propValidUntil, propTerms, propUrl]);
 
   const sendProposal = useCallback(async () => {
     if (!dealId || sendingProp) return;
@@ -1907,8 +1911,13 @@ export default function DealDetailPage() {
                       {savingProp ? (
                         <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />
                       ) : null}
-                      Salvar
+                      {savingProp ? "Salvando…" : propDirty ? "Salvar alterações" : "Salvar"}
                     </Button>
+                    {propDirty && !savingProp ? (
+                      <span className="text-xs text-amber-600 dark:text-amber-400">
+                        alterações não salvas
+                      </span>
+                    ) : null}
                     <Button
                       size="sm"
                       variant="outline"
