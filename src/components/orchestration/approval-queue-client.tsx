@@ -248,6 +248,35 @@ export function ApprovalQueueClient() {
                 ) : null}
                 {it.policy ? <p className="mt-2 text-xs text-muted-foreground">Regra: {it.policy}</p> : null}
 
+                <div className="mt-3 rounded-md border border-border bg-muted/40 p-3 text-sm">
+                  <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Ao aprovar, a Fluxia vai</div>
+                  <p className="mt-1 text-foreground">{it.effect}</p>
+                  {it.proposalUrl || (it.action === 'send_proposal' && it.deal) ? (
+                    <div className="mt-2 flex flex-wrap gap-3 text-xs">
+                      {it.proposalUrl ? (
+                        <a href={it.proposalUrl} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary hover:underline">
+                          <ExternalLink className="h-3 w-3" /> ver a proposta que será enviada
+                        </a>
+                      ) : null}
+                      {it.action === 'send_proposal' && it.deal ? (
+                        <Link href={`/pipelines/${it.deal.id}`} className="inline-flex items-center gap-1 text-primary hover:underline">
+                          <ExternalLink className="h-3 w-3" /> abrir o negócio (aba Propostas / Produtos)
+                        </Link>
+                      ) : null}
+                    </div>
+                  ) : null}
+                  {it.warnings.length ? (
+                    <ul className="mt-2 space-y-1">
+                      {it.warnings.map((w) => (
+                        <li key={w} className="flex items-start gap-1.5 text-xs text-amber-700 dark:text-amber-300">
+                          <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                          <span>{w}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  ) : null}
+                </div>
+
                 {it.isMessage ? (
                   <div className="mt-3">
                     <Textarea
@@ -256,7 +285,7 @@ export function ApprovalQueueClient() {
                       onChange={(e) => setTexts((t) => ({ ...t, [it.id]: e.target.value }))}
                       placeholder="Mensagem que será enviada ao cliente"
                     />
-                    <p className="mt-1 text-xs text-muted-foreground">Sugestão da IA — edite à vontade antes de aprovar.</p>
+                    <p className="mt-1 text-xs text-muted-foreground">Esta é a mensagem que vai para o cliente — edite à vontade antes de aprovar.</p>
                   </div>
                 ) : null}
 
@@ -271,7 +300,7 @@ export function ApprovalQueueClient() {
                 ) : null}
 
                 <div className="mt-4 flex flex-wrap items-center gap-2">
-                  <Button size="sm" onClick={() => void approve(it)} disabled={busy === it.id}>
+                  <Button size="sm" onClick={() => void approve(it)} disabled={busy === it.id || it.warnings.length > 0} title={it.warnings.length ? "Resolva os avisos acima antes de aprovar" : undefined}>
                     {busy === it.id ? <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1 h-3.5 w-3.5" />}
                     {it.isMessage ? 'Aprovar e enviar' : 'Aprovar e executar'}
                   </Button>

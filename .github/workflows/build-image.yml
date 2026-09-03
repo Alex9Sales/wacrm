@@ -129,5 +129,7 @@ jobs:
             echo "[deploy] attempt $n failed; retrying in 30s..."
             sleep 30
           done
-          echo "[deploy] all attempts failed"
-          exit 1
+          # 03/09: o VPS tem um poller (deploy-poll.timer, 2 min) que puxa a imagem nova
+          # sozinho — o SSH daqui é só pra acelerar. Falhar aqui NÃO é falha do deploy.
+          echo "[deploy] SSH não alcançou o VPS — o poller do servidor puxa a imagem em até 2 min."
+          exit 0

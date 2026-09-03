@@ -11,7 +11,7 @@
 import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
-import { db, agentActionRequests, contacts, customerSignals, deals, pipelineStages } from '@/db'
+import { db, agentActionRequests, contacts, customerSignals, dealProducts, dealProposals, deals, pipelineStages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { executeOrchestrationAction, noteDealEvent } from '@/lib/orchestration/actions'
@@ -37,6 +37,13 @@ export interface ApprovalItem {
   error: string | null
   attempts: number
   createdAt: string
+  /** O que a Fluxia vai fazer se aprovar (em português, concreto). */
+  effect: string
+  /** Pré-requisitos que faltam (aprovar vai falhar). */
+  warnings: string[]
+  /** Link da proposta salva (pública), quando houver. */
+  proposalUrl: string | null
+  contactEmail: string | null
 }
 
 export interface AutonomyMetrics {
@@ -78,6 +85,7 @@ export async function listApprovalQueue(): Promise<ApprovalItem[]> {
       createdAt: agentActionRequests.createdAt,
       contactName: contacts.name,
       contactPhone: contacts.phone,
+      contactEmail: contacts.email,
     })
     .from(agentActionRequests)
     .leftJoin(contacts, eq(contacts.id, agentActionRequests.contactId))
@@ -96,11 +104,38 @@ export async function listApprovalQueue(): Promise<ApprovalItem[]> {
     for (const d of ds) dealMap.set(d.id, { id: d.id, title: d.title, value: String(d.value ?? '0'), stageName: d.stageName ?? null })
   }
 
+  // Apoio pro "o que acontece ao aprovar": proposta salva + itens (send_proposal), etapas (move_deal).
+  const proposalByDeal = new Map<string, { id: string; acceptedAt: string | null }>()
+  const itemsByDeal = new Map<string, number>()
+  if (dealIds.length) {
+    const props = await db.select({ id: dealProposals.id, dealId: dealProposals.dealId, acceptedAt: dealProposals.acceptedAt }).from(dealProposals).where(inArray(dealProposals.dealId, dealIds))
+    for (const pr of props) proposalByDeal.set(pr.dealId, { id: pr.id, acceptedAt: pr.acceptedAt })
+    const items = await db
+      .select({ dealId: dealProducts.dealId, n: sql<number>`count(*)::int` })
+      .from(dealProducts)
+      .where(inArray(dealProducts.dealId, dealIds))
+      .groupBy(dealProducts.dealId)
+    for (const it of items) itemsByDeal.set(it.dealId, it.n)
+  }
+
   return rows
     .filter((r) => isOrchAction(r.actionType))
     .map((r) => {
       const meta = ACTION_CATALOG[r.actionType as OrchAction]
+      const deal = r.dealId ? (dealMap.get(r.dealId) ?? { id: r.dealId, title: 'Negócio', value: '0', stageName: null }) : null
+      const { effect, warnings, proposalUrl } = describeEffect({
+        action: r.actionType as OrchAction,
+        payload: (r.payload ?? {}) as Record<string, unknown>,
+        dealTitle: deal?.title ?? null,
+        contactEmail: r.contactEmail ?? null,
+        proposal: r.dealId ? (proposalByDeal.get(r.dealId) ?? null) : null,
+        items: r.dealId ? (itemsByDeal.get(r.dealId) ?? 0) : 0,
+      })
       return {
+        effect,
+        warnings,
+        proposalUrl,
+        contactEmail: r.contactEmail ?? null,
         id: r.id,
         action: r.actionType as OrchAction,
         actionLabel: meta.label,
@@ -318,4 +353,68 @@ export async function listRecentAudit(limit = 40): Promise<AuditItem[]> {
       error: r.error,
       at: r.resolvedAt ?? r.createdAt,
     }))
+}
+
+// ---------------------------------------------------------------- "o que acontece ao aprovar"
+
+function fmtWhen(v: unknown): string {
+  const d = typeof v === 'string' ? new Date(v) : null
+  if (!d || Number.isNaN(d.getTime())) return 'amanhã'
+  try {
+    return d.toLocaleString('pt-BR', { dateStyle: 'short', timeStyle: 'short' })
+  } catch {
+    return String(v)
+  }
+}
+
+function describeEffect(args: {
+  action: OrchAction
+  payload: Record<string, unknown>
+  dealTitle: string | null
+  contactEmail: string | null
+  proposal: { id: string; acceptedAt: string | null } | null
+  items: number
+}): { effect: string; warnings: string[]; proposalUrl: string | null } {
+  const p = args.payload
+  const deal = args.dealTitle ? `"${args.dealTitle}"` : 'o negócio'
+  const warnings: string[] = []
+  switch (args.action) {
+    case 'send_followup':
+    case 'reactivation':
+      return { effect: 'Envia a mensagem abaixo pelo canal da conversa (WhatsApp/Instagram/e-mail da conversa). Edite o texto antes, se quiser.', warnings, proposalUrl: null }
+    case 'send_proposal': {
+      if (!args.proposal) warnings.push('Não há proposta salva neste negócio. Abra o negócio → aba Propostas, salve a proposta e depois aprove aqui.')
+      if (args.items === 0) warnings.push('A aba Produtos do negócio está vazia — o e-mail sairia sem itens (o envio falha).')
+      if (!args.contactEmail) warnings.push('O contato não tem e-mail cadastrado — o envio falha. Cadastre o e-mail no contato ou recuse e mande a proposta pelo WhatsApp.')
+      return {
+        effect: `Envia por e-mail${args.contactEmail ? ` para ${args.contactEmail}` : ''} a proposta salva de ${deal}: itens da aba Produtos, totais e o link público da proposta (com aceite). A Fluxia NÃO escreve a proposta — ela manda a que estiver salva no negócio.`,
+        warnings,
+        proposalUrl: args.proposal ? `/proposta/${args.proposal.id}` : null,
+      }
+    }
+    case 'apply_discount':
+      return { effect: `Aplica ${Number(p.discountPct) || 0}% de desconto na proposta salva de ${deal} (só salva — não envia nada ao cliente).`, warnings, proposalUrl: args.proposal ? `/proposta/${args.proposal.id}` : null }
+    case 'close_deal':
+      return { effect: `Marca ${deal} como ${p.status === 'won' ? 'GANHO' : 'PERDIDO'}${typeof p.reason === 'string' && p.reason ? ` (motivo: ${p.reason})` : ''} e dispara as automações de ganho/perda da conta.`, warnings, proposalUrl: null }
+    case 'move_deal': {
+      const stage = typeof p.stageName === 'string' && p.stageName ? `"${p.stageName}"` : p.direction === 'next' ? 'seguinte' : 'indicada'
+      return { effect: `Move ${deal} para a etapa ${stage} e cria as tarefas automáticas dessa etapa.`, warnings, proposalUrl: null }
+    }
+    case 'create_task':
+      return { effect: `Cria a tarefa "${typeof p.title === 'string' && p.title ? p.title : 'Falar com o cliente'}" para o responsável de ${deal}, com prazo ${fmtWhen(p.dueAt)}.`, warnings, proposalUrl: null }
+    case 'update_follow_up':
+      return { effect: `Marca o próximo follow-up de ${deal} para ${fmtWhen(p.at)}.`, warnings, proposalUrl: null }
+    case 'notify_seller':
+      return { effect: 'Manda uma notificação no CRM para o responsável do negócio com o motivo acima. Nada vai para o cliente.', warnings, proposalUrl: null }
+    case 'notify_owner':
+      return { effect: 'Manda uma notificação no CRM para os administradores da conta. Nada vai para o cliente.', warnings, proposalUrl: null }
+    case 'escalate':
+      return { effect: 'Desliga a IA nesta conversa e avisa o time para assumir. Nada vai para o cliente.', warnings, proposalUrl: null }
+    case 'start_cadence':
+      return { effect: `Coloca o contato na cadência ${typeof p.cadenceName === 'string' && p.cadenceName ? `"${p.cadenceName}"` : 'escolhida'} (as mensagens da cadência passam a sair nos horários dela).`, warnings, proposalUrl: null }
+    case 'pause_cadence':
+      return { effect: 'Pausa a cadência ativa do contato (nenhuma mensagem sai).', warnings, proposalUrl: null }
+    default:
+      return { effect: 'Executa a ação indicada.', warnings, proposalUrl: null }
+  }
 }
