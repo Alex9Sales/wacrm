@@ -275,7 +275,12 @@ export function ApprovalQueueClient() {
                           onValueChange={(v) => setChannelSel((s) => ({ ...s, [it.id]: String(v ?? '') }))}
                         >
                           <SelectTrigger className="h-7 w-auto min-w-44 text-xs">
-                            <SelectValue placeholder="Escolha o canal" />
+                            {/* Base UI: sem children o SelectValue mostra o VALUE cru (uuid). */}
+                            <SelectValue placeholder="Escolha o canal">
+                              {it.sendOptions.find(
+                                (o) => o.conversationId === (channelSel[it.id] ?? it.defaultConversationId),
+                              )?.label ?? 'Escolha o canal'}
+                            </SelectValue>
                           </SelectTrigger>
                           <SelectContent>
                             {it.sendOptions.map((o) => (

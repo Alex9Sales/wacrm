@@ -564,7 +564,10 @@ function Composer({
               <Label>Canal</Label>
               <Select value={form.channelId} onValueChange={(v) => patch({ channelId: String(v ?? '') })}>
                 <SelectTrigger>
-                  <SelectValue placeholder="Escolha o Instagram" />
+                  {/* Base UI: sem children o SelectValue mostra o VALUE cru (uuid). */}
+                  <SelectValue placeholder="Escolha o Instagram">
+                    {channels.find((c) => c.id === form.channelId)?.name ?? 'Escolha o Instagram'}
+                  </SelectValue>
                 </SelectTrigger>
                 <SelectContent>
                   {channels.map((c) => (
@@ -814,7 +817,11 @@ function Composer({
                         onValueChange={(v) => patchAuto({ startFlowId: !v || v === 'none' ? null : String(v) })}
                       >
                         <SelectTrigger>
-                          <SelectValue placeholder="Nenhum" />
+                          <SelectValue placeholder="Nenhum">
+                            {form.automation.startFlowId
+                              ? (flows.find((f) => f.id === form.automation.startFlowId)?.name ?? 'Nenhum')
+                              : 'Nenhum'}
+                          </SelectValue>
                         </SelectTrigger>
                         <SelectContent>
                           <SelectItem value="none">Nenhum</SelectItem>
