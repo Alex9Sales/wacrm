@@ -717,6 +717,47 @@ export async function dispatchInboundMessage(
       contentType === 'audio' ||
       contentType === 'document') &&
     !!transcription?.trim();
+
+  // 🔇 Áudio que a IA NÃO consegue ouvir (transcrição desligada ou falhou):
+  // antes o cliente ficava no vácuo e ninguém percebia (caso Rafael 03/09 —
+  // 12 notas de voz sem UMA resposta). Deixa uma nota INTERNA na conversa pro
+  // atendente assumir. Nada é enviado ao cliente. 1 nota por conversa a cada
+  // 12h pra não poluir. Só quando a IA responde nesse canal (senão é normal).
+  if (contentType === 'audio' && !isFromMe && !transcription?.trim() && aiCfg) {
+    try {
+      const recent = firstOrNull(
+        await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, conversation.id),
+              eq(messages.senderType, 'agent'),
+              sql`${messages.contentText} LIKE '🔇 A IA não conseguiu ouvir%'`,
+              gte(
+                messages.createdAt,
+                new Date(Date.now() - 12 * 60 * 60 * 1000).toISOString(),
+              ),
+            ),
+          )
+          .limit(1),
+      );
+      if (!recent) {
+        await db.insert(messages).values({
+          conversationId: conversation.id,
+          accountId,
+          senderType: 'agent',
+          contentType: 'text',
+          contentText:
+            '🔇 A IA não conseguiu ouvir este áudio, então não respondeu. Ligue a transcrição em Configurações → Atendimento → Transcrição de áudio (precisa da chave OpenAI em Agentes IA).',
+          status: 'sent',
+          isInternal: true,
+        });
+      }
+    } catch (err) {
+      console.error('[inbound] nota de áudio sem transcrição falhou:', err);
+    }
+  }
   if (
     !flowConsumed &&
     !outOfHoursSent &&

@@ -125,7 +125,7 @@ export function ServicePanel() {
           title="Transcrição de áudio"
           description="Transcreve automaticamente os áudios recebidos para texto, mostrado abaixo do áudio na conversa. Usa a chave de IA (OpenAI) da sua conta — tem um custo por minuto de áudio."
           label="Transcrever áudios recebidos"
-          hint="Precisa de uma chave OpenAI configurada em Agentes IA. Sem chave, o áudio continua chegando normalmente, só sem transcrição."
+          hint="Precisa de uma chave OpenAI configurada em Agentes IA. ⚠️ Com isto DESLIGADO a IA não responde notas de voz — o áudio chega no chat, mas ela não consegue ouvir e fica calada."
           checked={transcription}
           setChecked={setTranscription}
           save={setAudioTranscriptionEnabled}
