@@ -88,6 +88,15 @@ export const TAG_DIRECTIVE = /\[\[\s*etiqueta\s*:\s*([^\]]+?)\s*\]\]/gi
 /** Agendar: [[AGENDAR:YYYY-MM-DDTHH:MM|título]] (data local + título opcional). */
 export const SCHEDULE_DIRECTIVE =
   /\[\[\s*agendar\s*:\s*(\d{4}-\d{2}-\d{2}[T ]\d{2}:\d{2})\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
+/**
+ * 🧾 Cobrança (Fase 3): o que o devedor acabou de fazer.
+ *   [[COBRANCA:promessa|YYYY-MM-DD]] · [[COBRANCA:comprovante]]
+ *   [[COBRANCA:contesta]] · [[COBRANCA:acordo]]
+ * Um marcador só para o domínio inteiro: menos instrução no prompt = o modelo
+ * acerta mais, e é um lugar só para estender.
+ */
+export const COLLECTION_DIRECTIVE =
+  /\[\[\s*cobranca\s*:\s*(promessa|comprovante|contesta|acordo)\s*(?:\|\s*(\d{4}-\d{2}-\d{2})\s*)?\]\]/i
 /** Transferir pra humano por etiqueta: [[TRANSFERIR:etiqueta|resumo]]. */
 export const TRANSFER_DIRECTIVE =
   /\[\[\s*transferir\s*:\s*([^\]|]+?)\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
@@ -130,6 +139,8 @@ export interface AgentDirectives {
   transfer: { tag: string; summary: string } | null
   /** Criar card no funil: título do negócio, ou null. */
   createCard: { title: string; value: number | null; note: string | null } | null
+  /** 🧾 O que o devedor fez com a cobrança (Fase 3), ou null. */
+  collection: { kind: 'promessa' | 'comprovante' | 'contesta' | 'acordo'; date: string | null } | null
   /** Nota interna pra equipe, ou null. */
   note: string | null
   /** Atributo a gravar no contato: { field, value }, ou null. */
@@ -155,6 +166,10 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const sm = raw.match(SCHEDULE_DIRECTIVE)
   const schedule = sm
     ? { startsLocal: sm[1].trim(), title: (sm[2] || '').trim() }
+    : null
+  const colm = raw.match(COLLECTION_DIRECTIVE)
+  const collection = colm
+    ? { kind: colm[1].toLowerCase() as 'promessa' | 'comprovante' | 'contesta' | 'acordo', date: colm[2] ?? null }
     : null
   const tm = raw.match(TRANSFER_DIRECTIVE)
   const transfer = tm
@@ -211,6 +226,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     .replace(new RegExp(LOSE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(RESOLVE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(SKIP_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(COLLECTION_DIRECTIVE.source, 'gi'), '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
   return {
@@ -223,6 +239,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     schedule,
     transfer,
     createCard,
+    collection,
     note,
     attribute,
     voicePref,
@@ -385,6 +402,10 @@ export function buildSystemPrompt(args: {
   /** Catálogo de produtos/serviços ativos (fonte da verdade de preços),
    *  já formatado (see formatCatalogForPrompt). Null/empty = omit. */
   catalog?: string | null
+  /** Instruções extras de domínio, já formatadas (ex.: a cobrança em aberto
+   *  deste contato). Entram DEPOIS das ferramentas e ANTES do perfil da
+   *  empresa. Undefined/[] = nada. */
+  extraInstructions?: string[]
   /** Fuso IANA da conta (ex.: 'America/Sao_Paulo') — usado para dizer ao modelo
    *  a data/hora atuais, pra ele raciocinar sobre "hoje/amanhã/ontem" e se um
    *  compromisso agendado já passou. Default America/Sao_Paulo. */
@@ -579,6 +600,13 @@ export function buildSystemPrompt(args: {
     }
   }
 
+  // Instruções de domínio que só valem para ESTA conversa (hoje: a cobrança em
+  // aberto do contato). Ficam depois das ferramentas de propósito: são regra
+  // sobre o assunto, não uma ferramenta a mais.
+  for (const extra of args.extraInstructions ?? []) {
+    if (extra && extra.trim()) parts.push(extra.trim())
+  }
+
   // Company profile — always-on business facts (name, what they sell, hours,
   // payment, delivery, tone). Unlike the retrieved knowledge below, this is
   // included on EVERY turn so the agent always knows the basics. Reference,
@@ -647,4 +675,26 @@ export function buildSystemPrompt(args: {
   }
 
   return parts.join('\n\n')
+}
+
+/**
+ * 🧾 Instrução de cobrança (Fase 3). Só entra no prompt quando o contato TEM
+ * parcela em aberto — sem isso toda conversa carregaria regra de cobrança, o
+ * prompt incha e o modelo obedece pior.
+ *
+ * A regra mais importante está escrita em letra grande de propósito: a IA
+ * agradece o comprovante mas NUNCA declara nada pago. Quem confirma pagamento
+ * é o Asaas, nunca uma conversa.
+ */
+export function collectionInstruction(debt: string): string {
+  return (
+    'COBRANÇA EM ABERTO. Este cliente tem valor vencido com a gente:\n' +
+    debt +
+    '\n\nQuando ele falar sobre esse pagamento, além de responder normalmente, emita UM marcador de controle (nunca mostre o marcador ao cliente):\n' +
+    '• Prometeu pagar em uma data ("dia 30", "semana que vem", "quando eu receber, dia 5") → "[[COBRANCA:promessa|AAAA-MM-DD]]" com a data ABSOLUTA calculada a partir da data de hoje informada acima. Confirme a data com ele em palavras, uma vez. Se ele não deu data que dê pra calcular, NÃO use este marcador.\n' +
+    '• Mandou comprovante, print ou disse que acabou de pagar → "[[COBRANCA:comprovante]]". AGRADEÇA e diga que vai conferir. NUNCA diga que está pago, quitado, baixado ou confirmado: quem confirma pagamento é o sistema financeiro, não você.\n' +
+    '• Discorda da cobrança ("já paguei isso", "não reconheço", "cancelei") → "[[COBRANCA:contesta]]". Não discuta e não afirme que ele deve: diga que vai verificar e que alguém retorna.\n' +
+    '• Pede desconto, parcelamento, prazo ou acordo → "[[COBRANCA:acordo]]". NÃO negocie, não ofereça valor, não prometa condição: diga que vai passar para quem decide isso.\n\n' +
+    'NUNCA fale em juros, multa, protesto, negativação, SPC/Serasa, cobrança judicial ou corte de serviço. Nunca ameace. Nunca invente valor, data de vencimento ou desconto — use só os valores acima.'
+  )
 }

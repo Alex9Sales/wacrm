@@ -17,7 +17,8 @@ import { looksLikeInjection } from './untrusted'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
 import { generateWithExternalTools } from './external-tools'
-import { buildSystemPrompt, parseCloseDirectives } from './defaults'
+import { buildSystemPrompt, collectionInstruction, parseCloseDirectives } from './defaults'
+import { applyCollectionReply, openDebtForPrompt } from '@/lib/collections/reply'
 import {
   applyCloseActions,
   loadDealCloseContext,
@@ -560,6 +561,16 @@ export async function dispatchInboundToAiReply(
       }
     }
 
+    // 🧾 Cobrança (Fase 3): só carrega a regra de cobrança quando este contato
+    // TEM parcela em aberto. Em toda conversa isso incharia o prompt e o modelo
+    // obedeceria pior — e falaria de dívida com quem não deve nada.
+    let openDebt: string | null = null
+    try {
+      openDebt = await openDebtForPrompt(accountId, contactId)
+    } catch (err) {
+      console.error('[ai auto-reply] dívida em aberto falhou:', err instanceof Error ? err.message : err)
+    }
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -575,6 +586,7 @@ export async function dispatchInboundToAiReply(
       companyProfile,
       catalog,
       timezone: settings.businessTimezone,
+      extraInstructions: openDebt ? [collectionInstruction(openDebt)] : undefined,
       tools,
       pipelineStages: closeCtx?.stageNames ?? [],
       availableTags: accountTags,
@@ -634,6 +646,23 @@ export async function dispatchInboundToAiReply(
       }
       if (has('private_note') && dirs.note) {
         await postInternalNote({ conversationId, text: dirs.note })
+      }
+      // 🧾 O que o devedor fez com a cobrança. Não depende de ferramenta ligada:
+      // se a conta tem cobrança em aberto, a consequência SEMPRE vale — e a nota
+      // interna registra o que a régua fez, para ninguém descobrir depois.
+      if (dirs.collection && openDebt) {
+        try {
+          const r = await applyCollectionReply({
+            accountId,
+            contactId,
+            conversationId,
+            kind: dirs.collection.kind,
+            date: dirs.collection.date,
+          })
+          if (r.note) await postInternalNote({ conversationId, text: r.note })
+        } catch (err) {
+          console.error('[ai auto-reply] cobrança (resposta) falhou:', err instanceof Error ? err.message : err)
+        }
       }
       if (has('set_attribute') && dirs.attribute) {
         await setContactAttribute({
