@@ -34,6 +34,7 @@ export interface AgentToolRow {
   params: ToolParamDef[]
   bodyTemplate: string | null
   risk: 'read' | 'write' | 'critical'
+  dedupScope?: 'args' | 'conversation' | 'off'
   enabled: boolean
 }
 
@@ -91,6 +92,7 @@ export async function listAgentExternalTools(
     params: Array.isArray(r.params) ? (r.params as ToolParamDef[]) : [],
     bodyTemplate: r.bodyTemplate,
     risk: (r.risk as AgentToolRow['risk']) ?? 'read',
+    dedupScope: (r.dedupScope as AgentToolRow['dedupScope']) ?? 'args',
     enabled: r.enabled,
   }))
 }
@@ -107,6 +109,7 @@ export async function saveAgentTool(input: {
   params: ToolParamDef[]
   bodyTemplate?: string | null
   risk: 'read' | 'write' | 'critical'
+  dedupScope?: 'args' | 'conversation' | 'off'
   enabled: boolean
 }): Promise<{ error: string | null; id?: string }> {
   try {
@@ -134,6 +137,9 @@ export async function saveAgentTool(input: {
     const method = ['GET', 'POST', 'PUT', 'PATCH', 'DELETE'].includes(input.method)
       ? input.method
       : 'GET'
+    const dedupScope = ['args', 'conversation', 'off'].includes(input.dedupScope ?? '')
+      ? (input.dedupScope as 'args' | 'conversation' | 'off')
+      : 'args'
     const risk = ['read', 'write', 'critical'].includes(input.risk)
       ? input.risk
       : 'read'
@@ -167,6 +173,7 @@ export async function saveAgentTool(input: {
           params,
           bodyTemplate: input.bodyTemplate?.trim() || null,
           risk,
+          dedupScope,
           enabled: input.enabled,
           // undefined = mantém o segredo guardado; objeto = substitui.
           ...(input.headers !== undefined
@@ -201,6 +208,7 @@ export async function saveAgentTool(input: {
         params,
         bodyTemplate: input.bodyTemplate?.trim() || null,
         risk,
+        dedupScope,
         enabled: input.enabled,
       })
       .returning()
@@ -255,6 +263,9 @@ export async function testAgentTool(
     params: Array.isArray(r.params) ? (r.params as ToolParamDef[]) : [],
     bodyTemplate: r.bodyTemplate,
     risk: (r.risk as ExternalTool['risk']) ?? 'read',
+    // O teste manual roda fora de conversa, então a trava não se aplica —
+    // mas o tipo exige o campo, e 'off' é o que descreve o teste.
+    dedupScope: 'off',
     createsDeal: r.createsDeal === true,
   }
   // Teste manual ignora o bloqueio de crítica (é o ADMIN validando a config).

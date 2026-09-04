@@ -2791,6 +2791,10 @@ export const agentTools = pgTable("agent_tools", {
 	params: jsonb().default([]).notNull(),
 	bodyTemplate: text("body_template"),
 	risk: text().default('read').notNull(),
+	/** Trava anti-duplicidade (migr 0160): args | conversation | off.
+	 *  `conversation` = cria UMA vez por conversa na janela, aconteça o que
+	 *  acontecer com os argumentos (caso do criar_pedido). */
+	dedupScope: text("dedup_scope").default('args').notNull(),
 	enabled: boolean().default(true).notNull(),
 	// Ao rodar com sucesso, cria também o card no funil do Fluxia (migr 0143).
 	createsDeal: boolean("creates_deal").default(false).notNull(),

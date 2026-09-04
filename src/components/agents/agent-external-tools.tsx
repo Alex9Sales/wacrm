@@ -62,6 +62,7 @@ interface FormState {
   params: ToolParamDef[];
   bodyTemplate: string;
   risk: 'read' | 'write' | 'critical';
+  dedupScope?: 'args' | 'conversation' | 'off';
   enabled: boolean;
 }
 
@@ -76,6 +77,7 @@ const EMPTY_FORM: FormState = {
   params: [],
   bodyTemplate: '',
   risk: 'read',
+  dedupScope: 'args',
   enabled: true,
 };
 
@@ -121,6 +123,7 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
       params: t.params,
       bodyTemplate: t.bodyTemplate ?? '',
       risk: t.risk,
+      dedupScope: t.dedupScope ?? 'args',
       enabled: t.enabled,
     });
   };
@@ -145,6 +148,7 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
       params: form.params,
       bodyTemplate: form.bodyTemplate || null,
       risk: form.risk,
+      dedupScope: form.dedupScope ?? 'args',
       enabled: form.enabled,
     });
     setSaving(false);
@@ -364,6 +368,33 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
                   </p>
                 </div>
               </div>
+
+              {/* 🔁 Anti-duplicidade. Nasceu do pedido triplicado do Wellington
+                  (04/09): o cliente trocou a forma de pagamento e depois mandou
+                  o comprovante, e a IA criou o pedido nas três vezes. */}
+              {form.risk === 'write' && (
+                <div className="space-y-1">
+                  <Label>Pode repetir na mesma conversa?</Label>
+                  <select
+                    value={form.dedupScope ?? 'args'}
+                    onChange={(e) =>
+                      setForm({ ...form, dedupScope: e.target.value as FormState['dedupScope'] })
+                    }
+                    className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
+                  >
+                    <option value="conversation">Não — uma vez por conversa (pedido, venda)</option>
+                    <option value="args">Só se mudar algo (padrão)</option>
+                    <option value="off">Pode repetir à vontade (mover etapa, atualizar cadastro)</option>
+                  </select>
+                  <p className="text-[10px] text-muted-foreground">
+                    {form.dedupScope === 'conversation'
+                      ? 'A IA cria isso UMA vez por conversa. Se o cliente mudar algo depois, ela avisa o time em vez de criar de novo.'
+                      : form.dedupScope === 'off'
+                        ? 'Sem trava. Use só quando repetir for o comportamento certo.'
+                        : 'Bloqueia só a chamada idêntica. ⚠️ Não segura pedido recriado quando o cliente muda a forma de pagamento ou o endereço é redigitado.'}
+                  </p>
+                </div>
+              )}
 
               <div className="space-y-1">
                 <Label>Descrição para a IA (quando usar)</Label>

@@ -38,6 +38,8 @@ export interface ExternalTool {
   params: ToolParamDef[]
   bodyTemplate: string | null
   risk: 'read' | 'write' | 'critical'
+  /** args | conversation | off — ver migr 0160. */
+  dedupScope: 'args' | 'conversation' | 'off'
   /** Ao rodar com sucesso, também cria o card no funil do Fluxia (fallback). */
   createsDeal: boolean
 }
@@ -105,6 +107,7 @@ export async function listEnabledTools(
     params: Array.isArray(r.params) ? (r.params as ToolParamDef[]) : [],
     bodyTemplate: r.bodyTemplate,
     risk: (r.risk as ExternalTool['risk']) ?? 'read',
+    dedupScope: (r.dedupScope as ExternalTool['dedupScope']) ?? 'args',
     createsDeal: r.createsDeal === true,
   }))
 }
@@ -212,7 +215,7 @@ const COSMETIC_ARG_KEY = /^(obs|observ|referenc|reference|note|nota|coment|descr
 
 /** Chave estável dos argumentos (chaves ordenadas, strings normalizadas, campos
  *  cosméticos removidos) pra comparar duas chamadas da mesma ferramenta. */
-function stableArgsKey(args: Record<string, unknown>): string {
+export function stableArgsKey(args: Record<string, unknown>): string {
   const norm = (v: unknown): unknown => {
     if (Array.isArray(v)) return v.map(norm)
     if (v && typeof v === 'object') {
@@ -230,18 +233,22 @@ function stableArgsKey(args: Record<string, unknown>): string {
   return JSON.stringify(norm(args))
 }
 
-/** Esta MESMA ferramenta de escrita já rodou COM SUCESSO nesta conversa, com
- *  argumentos iguais, na janela recente? Evita pedido/card duplicado quando o
- *  modelo re-chama numa mensagem seguinte (ex.: cliente manda o comprovante e a
- *  IA "confirma" de novo). Best-effort: erro na checagem nunca bloqueia. */
-async function alreadyRanIdentical(
+/**
+ * A última rodada BEM-SUCEDIDA desta ferramenta nesta conversa, na janela.
+ * `args` não-nulo = só conta se os argumentos forem equivalentes (escopo
+ * 'args'); `null` = qualquer rodada conta (escopo 'conversation').
+ *
+ * Devolve a rodada em vez de um booleano porque o modelo precisa saber QUANDO
+ * foi e O QUE resultou — sem isso ele não consegue confirmar direito ao cliente.
+ */
+async function previousSuccessfulRun(
   toolId: string,
   conversationId: string,
-  args: Record<string, unknown>,
-): Promise<boolean> {
+  args: Record<string, unknown> | null,
+): Promise<{ createdAt: string; resultSummary: string | null } | null> {
   const cutoff = new Date(Date.now() - WRITE_DEDUP_WINDOW_MS).toISOString()
   const rows = await db
-    .select({ args: agentToolRuns.args })
+    .select({ args: agentToolRuns.args, createdAt: agentToolRuns.createdAt, resultSummary: agentToolRuns.resultSummary })
     .from(agentToolRuns)
     .where(
       and(
@@ -253,10 +260,10 @@ async function alreadyRanIdentical(
     )
     .orderBy(desc(agentToolRuns.createdAt))
     .limit(10)
+
+  if (args === null) return rows[0] ?? null
   const key = stableArgsKey(args)
-  return rows.some(
-    (r) => stableArgsKey((r.args ?? {}) as Record<string, unknown>) === key,
-  )
+  return rows.find((r) => stableArgsKey((r.args ?? {}) as Record<string, unknown>) === key) ?? null
 }
 
 export async function executeTool(
@@ -272,16 +279,32 @@ export async function executeTool(
   const started = Date.now()
   let result: ToolRunResult
 
-  const dupe =
-    tool.risk === 'write' && ctx.conversationId
-      ? await alreadyRanIdentical(tool.id, ctx.conversationId, args).catch(() => false)
-      : false
+  // 🔁 Trava anti-duplicidade. O ESCOPO é configuração da ferramenta:
+  //   conversation → uma vez por conversa, doa o que doer nos argumentos
+  //   args         → só bloqueia chamada idêntica (padrão histórico)
+  //   off          → sem trava (ferramenta feita pra repetir, ex.: mover etapa)
+  const scope = tool.dedupScope ?? 'args'
+  const previous =
+    tool.risk === 'write' && ctx.conversationId && scope !== 'off'
+      ? await previousSuccessfulRun(tool.id, ctx.conversationId, scope === 'args' ? args : null).catch(() => null)
+      : null
 
-  if (dupe) {
+  if (previous) {
+    // ⚠️ 04/09 (Wellington): o cliente trocou de cartão pra Pix e depois mandou
+    // o comprovante — a IA criou o pedido nas TRÊS vezes. Aqui ela é avisada do
+    // que já existe e do que fazer quando algo muda, em vez de recriar.
+    const quando = new Date(previous.createdAt).toLocaleTimeString('pt-BR', {
+      hour: '2-digit',
+      minute: '2-digit',
+      timeZone: 'America/Sao_Paulo',
+    })
     result = {
       status: 'ok',
       summary:
-        'Este pedido/ação já foi registrado nesta conversa há pouco — não repeti pra não duplicar. Considere que JÁ ESTÁ no sistema e apenas confirme ao cliente, sem criar de novo.',
+        `JÁ EXISTE um registro desta ação nesta conversa, feito às ${quando}` +
+        (previous.resultSummary ? ` (${previous.resultSummary.slice(0, 160)})` : '') +
+        '. NÃO crie outro. Se o cliente só mandou comprovante ou confirmou de novo, apenas agradeça e confirme o que já está registrado. ' +
+        'Se algo mudou de verdade (forma de pagamento, endereço, quantidade), NÃO recrie: diga ao cliente que já vai ajustar e emita [[NOTA:o que mudou]] para o time corrigir.',
     }
   } else if (tool.risk === 'critical') {
     result = {
