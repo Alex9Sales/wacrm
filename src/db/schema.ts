@@ -3043,3 +3043,68 @@ export const decisionFeedback = pgTable("decision_feedback", {
 	index("decision_feedback_account_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsLast().op("timestamptz_ops")),
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "decision_feedback_account_id_fkey" }).onDelete("cascade"),
 ]);
+
+// ============================================================
+// 🧾 Agente de Cobrança (migração 0157) — o Asaas DO CLIENTE.
+// Não confundir com lib/billing/asaas.ts, que é a NOSSA assinatura Fluxia
+// (chave única de ambiente). Aqui é N conexões por conta do CRM, chave
+// criptografada em cada uma — é o que faz duas contas Asaas caberem no mesmo
+// agente e no mesmo número de WhatsApp.
+// ============================================================
+export const asaasConnections = pgTable("asaas_connections", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	/** Nome que o cliente reconhece ("Minha conta", "Conta do pai"). */
+	label: text().notNull(),
+	/** Chave da API criptografada. Nunca sai do servidor. */
+	apiKeyEnc: text("api_key_enc").notNull(),
+	/** sandbox | production */
+	environment: text().default('sandbox').notNull(),
+	enabled: boolean().default(true).notNull(),
+	lastSyncAt: timestamp("last_sync_at", { withTimezone: true, mode: 'string' }),
+	lastSyncError: text("last_sync_error"),
+	lastSyncCount: integer("last_sync_count").default(0).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("asaas_connections_account_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.enabled.asc().nullsLast()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "asaas_connections_account_id_fkey" }).onDelete("cascade"),
+]);
+
+export const asaasCharges = pgTable("asaas_charges", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	connectionId: uuid("connection_id").notNull(),
+	asaasId: text("asaas_id").notNull(),
+	asaasCustomerId: text("asaas_customer_id"),
+	customerName: text("customer_name"),
+	cpfCnpj: text("cpf_cnpj"),
+	phone: text(),
+	email: text(),
+	value: numeric({ precision: 12, scale: 2 }).default('0').notNull(),
+	dueDate: date("due_date"),
+	/** Status CRU do Asaas (OVERDUE, PENDING, CONFIRMED, RECEIVED…). */
+	status: text().notNull(),
+	billingType: text("billing_type"),
+	description: text(),
+	invoiceUrl: text("invoice_url"),
+	bankSlipUrl: text("bank_slip_url"),
+	installmentNumber: integer("installment_number"),
+	/** NULL = não casou com contato do CRM → pendência visível, nunca chute. */
+	contactId: uuid("contact_id"),
+	/** phone | email | code | manual */
+	matchedBy: text("matched_by"),
+	/** Veio na última sincronização boa desta conexão. */
+	open: boolean().default(true).notNull(),
+	closedAt: timestamp("closed_at", { withTimezone: true, mode: 'string' }),
+	lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("asaas_charges_account_asaas_uidx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.asaasId.asc().nullsLast().op("text_ops")),
+	index("asaas_charges_contact_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops")),
+	index("asaas_charges_connection_idx").using("btree", table.connectionId.asc().nullsLast().op("uuid_ops"), table.open.asc().nullsLast()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "asaas_charges_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.connectionId], foreignColumns: [asaasConnections.id], name: "asaas_charges_connection_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "asaas_charges_contact_id_fkey" }).onDelete("set null"),
+]);
