@@ -39,6 +39,7 @@ import { publishEvent } from '@/lib/events/publish';
 import { dispatchWebhookEvent } from '@/lib/webhooks/deliver';
 import { runAutomationsForTrigger } from '@/lib/automations/engine';
 import { maybePauseCadenceOnReply } from '@/lib/cadences/cadence';
+import { noteCrossChannelActivity } from '@/lib/inbox/cross-channel';
 import { dispatchInboundToFlows } from '@/lib/flows/engine';
 import {
   enqueueAiReplyDebounced,
@@ -759,6 +760,14 @@ export async function dispatchInboundMessage(
       console.error('[inbound] nota de áudio sem transcrição falhou:', err);
     }
   }
+  // 🔀 Mesmo cliente falando com outro canal seu → nota interna pro time.
+  // Fica FORA do bloco da IA de propósito: o aviso vale mesmo quando um fluxo
+  // atendeu, quando a IA está desligada ou fora do horário. Best-effort: se
+  // falhar, a mensagem segue igual.
+  if (inboundText.trim() || mediaReadable) {
+    void noteCrossChannelActivity({ accountId, contactId, conversationId: conversation.id })
+  }
+
   if (
     !flowConsumed &&
     !outOfHoursSent &&
