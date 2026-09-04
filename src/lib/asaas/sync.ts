@@ -39,10 +39,13 @@ export interface SyncResult {
   pending: number
   /** Quantas sumiram da lista do Asaas desde a última rodada (pagas/apagadas). */
   closed: number
+  /** Cobranças que existem no Asaas mas AINDA NÃO venceram (só para a tela não
+   *  dizer "zero" quando o cliente está olhando cobranças na conta dele). */
+  upcoming: number
   error?: string
 }
 
-const EMPTY: SyncResult = { ok: true, total: 0, matched: 0, pending: 0, closed: 0 }
+const EMPTY: SyncResult = { ok: true, total: 0, matched: 0, pending: 0, closed: 0, upcoming: 0 }
 
 /**
  * Puxa a carteira de UMA conexão e espelha no CRM.
@@ -170,12 +173,25 @@ export async function syncConnection(
     .set({ lastSyncAt: now, lastSyncError: null, lastSyncCount: payments.length, updatedAt: now })
     .where(eq(asaasConnections.id, connectionId))
 
+  // Quantas ainda vão vencer. É uma chamada a mais, e ela existe só para a tela
+  // conseguir dizer "nenhuma vencida, mas você tem N a vencer" em vez de um
+  // zero que parece falha (caso Alex 04/09: 6 parcelas no Asaas, nenhuma vencida).
+  let upcoming = 0
+  if (!statuses.includes('PENDING')) {
+    try {
+      upcoming = (await listCharges(cred, ['PENDING'])).length
+    } catch {
+      /* contexto é bônus: se falhar, a sincronização continua válida */
+    }
+  }
+
   return {
     ok: true,
     total: payments.length,
     matched,
     pending: payments.length - matched,
     closed: closedRows.length,
+    upcoming,
   }
 }
 
@@ -200,6 +216,7 @@ export async function syncAccount(accountId: string, statuses?: readonly string[
     totals.matched += r.matched
     totals.pending += r.pending
     totals.closed += r.closed
+    totals.upcoming += r.upcoming
   }
 
   // Uma conexão quebrada não some em silêncio, mesmo que a outra tenha ido bem.

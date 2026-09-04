@@ -77,6 +77,19 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
   }
 }
 
+/**
+ * Os status que fazem sentido numa régua, com o nome que o cliente entende.
+ * Os demais do Asaas (RECEIVED, CONFIRMED…) já estão pagos — não se cobra.
+ */
+export const CHARGEABLE_STATUSES: { value: string; label: string; hint: string }[] = [
+  { value: 'OVERDUE', label: 'Vencida', hint: 'Passou do vencimento e não foi paga. É o padrão.' },
+  {
+    value: 'PENDING',
+    label: 'A vencer',
+    hint: 'Ainda não venceu. Ligue só se você quer LEMBRAR antes do vencimento — não é cobrança de inadimplente.',
+  },
+]
+
 // ------------------------------------------------------------- elegibilidade
 
 /** Por que um devedor NÃO foi cobrado agora — sempre explicável, nunca mudo. */

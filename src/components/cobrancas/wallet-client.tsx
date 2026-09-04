@@ -25,7 +25,9 @@ import {
   Plus,
   RefreshCw,
   BellOff,
+  Copy,
   Play,
+  ShieldCheck,
   Search,
   Settings2,
   Trash2,
@@ -58,7 +60,7 @@ import {
   type WalletDebtor,
   type WalletSummary,
 } from '@/app/(dashboard)/cobrancas/actions';
-import type { CollectionsSettings } from '@/lib/collections/rules';
+import { CHARGEABLE_STATUSES, type CollectionsSettings } from '@/lib/collections/rules';
 
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -82,6 +84,7 @@ export function WalletClient() {
   const [onlyPending, setOnlyPending] = useState(false);
   const [rule, setRule] = useState<CollectionsSettings | null>(null);
   const [running, setRunning] = useState(false);
+  const [upcoming, setUpcoming] = useState<number | null>(null);
 
   const load = useCallback(async () => {
     try {
@@ -108,10 +111,12 @@ export function WalletClient() {
         toast.error(res.error ?? 'Não foi possível sincronizar.');
       } else {
         const d = res.data!;
+        setUpcoming(d.upcoming);
         toast.success(
-          `${d.total} ${d.total === 1 ? 'cobrança' : 'cobranças'} na carteira` +
+          `${d.total} ${d.total === 1 ? 'cobrança vencida' : 'cobranças vencidas'} na carteira` +
             (d.pending ? ` · ${d.pending} sem contato` : '') +
-            (d.closed ? ` · ${d.closed} saíram desde a última vez` : ''),
+            (d.closed ? ` · ${d.closed} saíram desde a última vez` : '') +
+            (!d.total && d.upcoming ? ` · ${d.upcoming} ainda a vencer` : ''),
         );
       }
       await load();
@@ -226,11 +231,22 @@ export function WalletClient() {
               <DebtorCard key={d.key} debtor={d} onLink={() => setLinkFor(d)} onUnlink={load} onPause={() => setPauseFor(d)} onChanged={load} />
             ))}
             {!debtors.length && (
-              <p className="rounded-md border border-dashed py-10 text-center text-sm text-muted-foreground">
-                {onlyPending
-                  ? 'Nenhuma pendência de contato — todos os devedores casaram.'
-                  : 'Nenhuma cobrança em aberto. Toque em Atualizar para buscar no Asaas.'}
-              </p>
+              <div className="rounded-md border border-dashed px-6 py-10 text-center text-sm text-muted-foreground">
+                {onlyPending ? (
+                  'Nenhuma pendência de contato — todos os devedores casaram.'
+                ) : upcoming ? (
+                  <>
+                    <p className="font-medium text-foreground">Nenhuma cobrança vencida.</p>
+                    <p className="mx-auto mt-1 max-w-lg">
+                      Você tem {upcoming} {upcoming === 1 ? 'cobrança' : 'cobranças'} no Asaas, mas {upcoming === 1 ? 'ela ainda não venceu' : 'nenhuma venceu ainda'}. Esta
+                      tela mostra só o que passou do vencimento. Se você quer avisar <em>antes</em> de vencer, marque
+                      &ldquo;A vencer&rdquo; em Ajustar — mas aí é lembrete, não cobrança de inadimplente.
+                    </p>
+                  </>
+                ) : (
+                  'Nenhuma cobrança vencida. Toque em Atualizar para buscar no Asaas.'
+                )}
+              </div>
             )}
           </div>
         </>
@@ -427,6 +443,35 @@ function ConnectionsPanel({
             <span className="inline-flex items-center gap-1 text-xs text-red-600 dark:text-red-400">
               <AlertTriangle className="h-3.5 w-3.5" /> {c.lastSyncError}
             </span>
+          )}
+
+          {c.webhookUrl && (
+            <button
+              type="button"
+              className={cn(
+                'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]',
+                c.webhookEvents
+                  ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300'
+                  : 'bg-muted text-muted-foreground',
+              )}
+              title={
+                c.webhookEvents
+                  ? `Último aviso do Asaas em ${new Date(c.webhookLastAt!).toLocaleString('pt-BR')}. Clique para copiar a URL de novo.`
+                  : 'Clique para copiar a URL e colar no Asaas (Configurações → Integrações → Webhooks).'
+              }
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(c.webhookUrl!);
+                  toast.success('URL copiada. Cole no Asaas em Configurações → Integrações → Webhooks.');
+                } catch {
+                  toast.error('Não deu para copiar. A URL é: ' + c.webhookUrl);
+                }
+              }}
+            >
+              <ShieldCheck className="h-3 w-3" />
+              {c.webhookEvents ? 'avisos de pagamento ligados' : 'ligar avisos de pagamento'}
+              <Copy className="h-3 w-3" />
+            </button>
           )}
 
           <div className="ml-auto flex gap-1.5">
@@ -785,6 +830,30 @@ function RulePanel({
               />
               Só em dias úteis
             </label>
+          </div>
+
+          <div className="flex flex-col gap-2">
+            <Label>O que a régua considera cobrável</Label>
+            {CHARGEABLE_STATUSES.map((s) => (
+              <label key={s.value} className="flex items-start gap-2 text-sm">
+                <input
+                  type="checkbox"
+                  className="mt-1"
+                  checked={draft.overdueStatuses.includes(s.value)}
+                  onChange={(e) => {
+                    const next = e.target.checked
+                      ? [...draft.overdueStatuses, s.value]
+                      : draft.overdueStatuses.filter((v) => v !== s.value);
+                    // Desmarcar tudo deixaria a régua sem nada para fazer.
+                    setDraft({ ...draft, overdueStatuses: next.length ? next : ['OVERDUE'] });
+                  }}
+                />
+                <span>
+                  {s.label}
+                  <span className="block text-xs text-muted-foreground">{s.hint}</span>
+                </span>
+              </label>
+            ))}
           </div>
 
           <div className="flex flex-col gap-1.5">

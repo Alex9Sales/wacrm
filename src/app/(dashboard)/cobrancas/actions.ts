@@ -24,6 +24,7 @@ import { testCredential, type AsaasEnv } from '@/lib/asaas/collections'
 import { daysOverdue } from '@/lib/asaas/match'
 import { syncAccount, syncConnection, type SyncResult } from '@/lib/asaas/sync'
 import { encrypt } from '@/lib/whatsapp/encryption'
+import { randomBytes } from 'node:crypto'
 
 export interface ActionResult<T = unknown> {
   ok: boolean
@@ -44,6 +45,11 @@ export interface ConnectionView {
   lastSyncError: string | null
   lastSyncCount: number
   openCharges: number
+  /** URL para colar no Asaas (Fase 4). Uma por conexão. */
+  webhookUrl: string | null
+  /** Último evento recebido — prova que a URL foi mesmo colada lá. */
+  webhookLastAt: string | null
+  webhookEvents: number
 }
 
 export async function listConnections(): Promise<ConnectionView[]> {
@@ -58,6 +64,9 @@ export async function listConnections(): Promise<ConnectionView[]> {
       lastSyncAt: asaasConnections.lastSyncAt,
       lastSyncError: asaasConnections.lastSyncError,
       lastSyncCount: asaasConnections.lastSyncCount,
+      webhookToken: asaasConnections.webhookToken,
+      webhookLastAt: asaasConnections.webhookLastAt,
+      webhookEvents: asaasConnections.webhookEvents,
       openCharges: sql<number>`(
         SELECT count(*)::int FROM asaas_charges c
         WHERE c.connection_id = ${asaasConnections.id} AND c.open
@@ -67,11 +76,19 @@ export async function listConnections(): Promise<ConnectionView[]> {
     .where(eq(asaasConnections.accountId, accountId))
     .orderBy(asaasConnections.label)
 
-  return rows.map((r) => ({
+  // APP_URL está vazio em produção; BETTER_AUTH_URL é o que realmente carrega o
+  // domínio. O último recurso repete o padrão usado no resto do projeto.
+  const base = (process.env.APP_URL || process.env.BETTER_AUTH_URL || 'https://crm.salestecnologia.com.br').replace(
+    /\/+$/,
+    '',
+  )
+  return rows.map(({ webhookToken, ...r }) => ({
     ...r,
     environment: r.environment as AsaasEnv,
     // A chave nunca sai daqui; o cliente identifica a conta pelo rótulo.
     keyHint: '••••',
+    // O token só sai dentro da URL que ele vai colar no Asaas — é o uso dele.
+    webhookUrl: webhookToken ? `${base}/api/webhooks/asaas-cobranca/${webhookToken}` : null,
   }))
 }
 
@@ -104,7 +121,14 @@ export async function saveConnection(input: {
 
   const [row] = await db
     .insert(asaasConnections)
-    .values({ accountId, label, apiKeyEnc: encrypt(apiKey), environment: input.environment })
+    .values({
+      accountId,
+      label,
+      apiKeyEnc: encrypt(apiKey),
+      environment: input.environment,
+      // 🧾 Fase 4: cada conexão nasce com o próprio segredo de webhook.
+      webhookToken: randomBytes(24).toString('hex'),
+    })
     .returning({ id: asaasConnections.id })
 
   revalidatePath('/cobrancas')
@@ -141,7 +165,12 @@ export async function removeConnection(id: string): Promise<ActionResult> {
 
 export async function syncNow(connectionId?: string): Promise<ActionResult<SyncResult>> {
   const { accountId } = await requireRole('supervisor')
-  const res = connectionId ? await syncConnection(accountId, connectionId) : await syncAccount(accountId)
+  // Usa os status que a conta escolheu — o botão "Atualizar" ignorava isso e
+  // sempre pedia só OVERDUE (achado 04/09, carteira do Alex vinha vazia).
+  const { overdueStatuses } = normalizeSettings((await getAccountSettings(accountId)).collections)
+  const res = connectionId
+    ? await syncConnection(accountId, connectionId, overdueStatuses)
+    : await syncAccount(accountId, overdueStatuses)
   revalidatePath('/cobrancas')
   return res.ok ? { ok: true, data: res } : { ok: false, error: res.error, data: res }
 }

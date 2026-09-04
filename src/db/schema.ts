@@ -3064,9 +3064,15 @@ export const asaasConnections = pgTable("asaas_connections", {
 	lastSyncAt: timestamp("last_sync_at", { withTimezone: true, mode: 'string' }),
 	lastSyncError: text("last_sync_error"),
 	lastSyncCount: integer("last_sync_count").default(0).notNull(),
+	/** 🧾 Fase 4: segredo na URL do webhook DESTA conexão (uma por conta Asaas). */
+	webhookToken: text("webhook_token"),
+	/** Último evento recebido de verdade — prova que a URL foi colada no Asaas. */
+	webhookLastAt: timestamp("webhook_last_at", { withTimezone: true, mode: 'string' }),
+	webhookEvents: integer("webhook_events").default(0).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
+	uniqueIndex("asaas_connections_webhook_token_uidx").using("btree", table.webhookToken.asc().nullsLast().op("text_ops")),
 	index("asaas_connections_account_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.enabled.asc().nullsLast()),
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "asaas_connections_account_id_fkey" }).onDelete("cascade"),
 ]);
