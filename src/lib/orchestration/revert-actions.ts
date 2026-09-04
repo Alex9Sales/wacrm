@@ -14,6 +14,7 @@ import {
   cadenceEnrollments,
   conversations,
   dealProducts,
+  collectionsTouches,
   dealProposals,
   deals,
   pipelineStages,
@@ -56,6 +57,18 @@ export async function revertOrchestrationAction(input: RevertInput): Promise<Rev
 
       case 'correct': {
         // Mensagem já entregue: não volta. Tira a IA da frente pro humano assumir.
+        // Se era uma cobrança, a régua também PARA neste devedor — senão ela
+        // voltaria a cobrar em 3 dias exatamente quem acabou de reclamar.
+        const contactId = typeof st.contactId === 'string' ? st.contactId : null
+        if (input.action === 'collect_charges' && contactId) {
+          await db
+            .insert(collectionsTouches)
+            .values({ accountId: input.accountId, contactId, paused: true, pausedReason: input.reason ?? 'Cobrança marcada como errada', pausedBy: input.actorUserId })
+            .onConflictDoUpdate({
+              target: [collectionsTouches.accountId, collectionsTouches.contactId],
+              set: { paused: true, pausedReason: input.reason ?? 'Cobrança marcada como errada', pausedBy: input.actorUserId, updatedAt: new Date().toISOString() },
+            })
+        }
         if (input.conversationId) {
           await db
             .update(conversations)
@@ -72,7 +85,9 @@ export async function revertOrchestrationAction(input: RevertInput): Promise<Rev
         }
         return {
           ok: true,
-          done: input.conversationId
+          done: input.action === 'collect_charges' && contactId
+            ? 'A mensagem não volta, mas a régua parou neste devedor e a IA foi pausada na conversa — assuma para resolver com o cliente.'
+            : input.conversationId
             ? 'A mensagem não volta, mas a IA foi pausada nesta conversa — assuma a conversa para corrigir com o cliente.'
             : 'Registrado como resultado ruim.',
         }

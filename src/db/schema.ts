@@ -3108,3 +3108,25 @@ export const asaasCharges = pgTable("asaas_charges", {
 	foreignKey({ columns: [table.connectionId], foreignColumns: [asaasConnections.id], name: "asaas_charges_connection_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "asaas_charges_contact_id_fkey" }).onDelete("set null"),
 ]);
+
+// 🧾 Régua de cobrança (migração 0158) — estado por devedor.
+export const collectionsTouches = pgTable("collections_touches", {
+	accountId: uuid("account_id").notNull(),
+	contactId: uuid("contact_id").notNull(),
+	lastTouchAt: timestamp("last_touch_at", { withTimezone: true, mode: 'string' }),
+	/** Toques SEM resposta. Zera quando o devedor fala. */
+	touchCount: integer("touch_count").default(0).notNull(),
+	/** Cliente prometeu pagar nesta data — a régua dorme até lá (Fase 3 preenche). */
+	snoozeUntil: timestamp("snooze_until", { withTimezone: true, mode: 'string' }),
+	snoozeReason: text("snooze_reason"),
+	paused: boolean().default(false).notNull(),
+	pausedReason: text("paused_reason"),
+	pausedBy: uuid("paused_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	primaryKey({ columns: [table.accountId, table.contactId], name: "collections_touches_pkey" }),
+	index("collections_touches_due_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.lastTouchAt.asc().nullsLast()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "collections_touches_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "collections_touches_contact_id_fkey" }).onDelete("cascade"),
+]);

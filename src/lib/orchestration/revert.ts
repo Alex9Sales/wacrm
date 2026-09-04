@@ -92,6 +92,11 @@ export const REVERT_MATRIX: Record<OrchAction, RevertPlan> = {
     label: 'Corrigir',
     effect: 'A mensagem já foi entregue e não volta. A IA é pausada nesta conversa e você assume para responder ao cliente.',
   },
+  collect_charges: {
+    kind: 'correct',
+    label: 'Corrigir',
+    effect: 'A cobrança já chegou ao cliente e não volta. A IA é pausada nesta conversa, a régua para neste devedor e você assume para resolver.',
+  },
   reactivation: {
     kind: 'correct',
     label: 'Corrigir',

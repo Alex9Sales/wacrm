@@ -7,6 +7,7 @@
 import { eq } from 'drizzle-orm'
 
 import { db, accountSettings } from '@/db'
+import { COLLECTIONS_DEFAULTS, type CollectionsSettings } from '@/lib/collections/rules'
 import { firstOrNull } from '@/db/helpers'
 
 /** One weekday's opening window. `open`/`close` are "HH:MM" (24h) in the
@@ -70,6 +71,8 @@ export interface AccountSettings {
   autonomyPaused: boolean
   /** 🛑 Freio de 3 posições (03/09): 'on' opera | 'suggest' só sugere | 'off'
    *  pausada. Substitui na prática o autonomyPaused (mantido por compat). */
+  /** 🧾 Régua de cobrança (Fase 2) — nasce desligada. Ver lib/collections/rules. */
+  collections: CollectionsSettings
   aiMode: 'on' | 'suggest' | 'off'
   /** Quem mexeu no freio e por quê (auditoria do controle). */
   aiModeBy: string | null
@@ -167,6 +170,7 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   staleDealDays: 7,
   recordSaleOnWon: true,
   autonomyPaused: false,
+  collections: COLLECTIONS_DEFAULTS,
   aiMode: 'on',
   aiModeBy: null,
   aiModeAt: null,

@@ -656,6 +656,8 @@ function describeEffect(args: {
   const deal = args.dealTitle ? `"${args.dealTitle}"` : 'o negócio'
   const warnings: string[] = []
   switch (args.action) {
+    case 'collect_charges':
+      return { effect: 'Envia a cobrança abaixo ao devedor, com as parcelas vencidas e o link de pagamento. Confira o valor antes de aprovar — depois de entregue não dá para desfazer.', warnings, proposalUrl: null }
     case 'send_followup':
     case 'reactivation':
       return { effect: 'Envia a mensagem abaixo pela conversa do contato no canal indicado — edite o texto e, se ele tiver mais de um canal, escolha por onde sai.', warnings, proposalUrl: null }

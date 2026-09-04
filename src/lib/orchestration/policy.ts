@@ -26,6 +26,7 @@ export const ORCH_ACTIONS = [
   'escalate',
   'start_cadence',
   'pause_cadence',
+  'collect_charges',
 ] as const
 export type OrchAction = (typeof ORCH_ACTIONS)[number]
 
@@ -47,6 +48,9 @@ export interface ActionMeta {
 
 export const ACTION_CATALOG: Record<OrchAction, ActionMeta> = {
   reactivation: { label: 'Reativar cliente', hint: 'Chama de volta quem está atrasado na recompra ou sumiu.', risk: 'medium', defaultLevel: 'suggest', kind: 'message' },
+  // Fala com o devedor sobre dinheiro: 'approve' por padrão e nunca 'auto' sem
+  // o portão de evidência — cobrar quem já pagou não tem desfazer.
+  collect_charges: { label: 'Cobrar valor em aberto', hint: 'Manda UMA mensagem ao devedor com todas as parcelas vencidas dele e o link de pagamento.', risk: 'high', defaultLevel: 'approve', kind: 'message' },
   send_followup: { label: 'Enviar follow-up', hint: 'Cutuca o cliente de um negócio parado (proposta sem resposta, follow-up vencido).', risk: 'medium', defaultLevel: 'suggest', kind: 'message' },
   move_deal: { label: 'Mover negócio de etapa', hint: 'Avança ou recua o card no funil.', risk: 'low', defaultLevel: 'approve', kind: 'crm' },
   create_task: { label: 'Criar tarefa', hint: 'Abre uma tarefa pro vendedor com prazo.', risk: 'low', defaultLevel: 'auto', kind: 'crm' },

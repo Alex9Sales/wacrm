@@ -10,6 +10,7 @@ import { bullConnection } from '@/lib/queue/connection';
 import type { OrchestrationNudgeJob } from '@/lib/queue/queues';
 import { listOrchestrationAccounts, recomputeOrchestrationSignals } from '@/lib/orchestration/deal-signals';
 import { runOrchestrationForAccount } from '@/lib/orchestration/engine';
+import { accountsWithCollections, runCollectionsForAccount } from '@/lib/collections/engine';
 
 const QUEUE = 'orchestration';
 const TICK_MS = 10 * 60_000;
@@ -32,6 +33,28 @@ export async function tick(): Promise<void> {
       }
     } catch (err) {
       console.error('[orchestration] motor falhou:', accountId.slice(0, 8), err instanceof Error ? err.message : err);
+    }
+  }
+
+  // 🧾 Régua de cobrança. Roda no mesmo tique porque as travas dela são
+  // próprias: a janela de horário, o intervalo por devedor e o teto diário
+  // barram sozinhos — e a leitura do Asaas só acontece se a última tiver mais
+  // de uma hora, para não estourar o limite de requisições deles.
+  let cobrancaAccounts: string[] = [];
+  try {
+    cobrancaAccounts = await accountsWithCollections();
+  } catch (err) {
+    console.error('[cobranca] não deu pra listar contas:', err instanceof Error ? err.message : err);
+  }
+  for (const accountId of cobrancaAccounts) {
+    try {
+      const c = await runCollectionsForAccount(accountId);
+      if (c.queued) {
+        const pulados = Object.entries(c.skipped).map(([k, v]) => `${k}=${v}`).join(' ');
+        console.log(`[cobranca] ${accountId.slice(0, 8)}: devedores=${c.debtors} na fila=${c.queued}${pulados ? ` pulados(${pulados})` : ''}`);
+      }
+    } catch (err) {
+      console.error('[cobranca] régua falhou:', accountId.slice(0, 8), err instanceof Error ? err.message : err);
     }
   }
 }

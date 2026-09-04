@@ -22,6 +22,8 @@ import {
   notifications,
   pipelineStages,
   tasks,
+  asaasCharges,
+  collectionsTouches,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { cancelEnrollment, enrollContactInCadence } from '@/lib/cadences/cadence'
@@ -165,6 +167,46 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
 
   try {
     switch (input.action) {
+      // 🧾 A cobrança da régua: UMA mensagem por devedor com todas as parcelas
+      // vencidas dele. Antes de mandar, reconsulta o que está em aberto AGORA —
+      // é a última trava contra cobrar quem acabou de pagar, e ela vale mesmo
+      // que o webhook do Asaas (Fase 4) tenha falhado ou atrasado.
+      case 'collect_charges': {
+        const text = (input.text ?? '').trim()
+        if (!text) return { ok: false, error: 'Sem texto pra enviar.' }
+
+        const stillOpen = await db
+          .select({ id: asaasCharges.id })
+          .from(asaasCharges)
+          .where(and(eq(asaasCharges.accountId, input.accountId), eq(asaasCharges.contactId, input.contactId), eq(asaasCharges.open, true)))
+          .limit(1)
+        if (!stillOpen.length) {
+          return { ok: false, error: 'Este cliente não tem mais nada em aberto — a cobrança não foi enviada.' }
+        }
+
+        const conversationId = await resolveConversationId(input.accountId, input.contactId, input.conversationId, deal?.conversationId ?? null)
+        if (!conversationId) return { ok: false, error: 'Contato sem conversa aberta — não dá pra mandar mensagem.' }
+        const userId = await senderUserId(input.accountId, input.actorUserId, deal, conversationId)
+        const sent = await engineSendText({ accountId: input.accountId, userId, conversationId, contactId: input.contactId, text })
+        const nowIso = new Date().toISOString()
+
+        await db
+          .insert(collectionsTouches)
+          .values({ accountId: input.accountId, contactId: input.contactId, lastTouchAt: nowIso, touchCount: 1, updatedAt: nowIso })
+          .onConflictDoUpdate({
+            target: [collectionsTouches.accountId, collectionsTouches.contactId],
+            set: { lastTouchAt: nowIso, touchCount: sql`${collectionsTouches.touchCount} + 1`, updatedAt: nowIso },
+          })
+
+        return {
+          ok: true,
+          result: { messageId: sent.whatsapp_message_id, conversationId },
+          // A mensagem não volta; guardamos o devedor para que "Corrigir"
+          // consiga parar a régua nele além de pausar a IA na conversa.
+          revertState: { contactId: input.contactId, conversationId },
+        }
+      }
+
       case 'send_followup':
       case 'reactivation': {
         const text = (input.text ?? '').trim()

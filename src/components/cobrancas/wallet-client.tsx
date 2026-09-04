@@ -24,7 +24,9 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  Play,
   Search,
+  Settings2,
   Trash2,
   TriangleAlert,
 } from 'lucide-react';
@@ -37,12 +39,15 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { cn } from '@/lib/utils';
 
 import {
+  getCollectionsSettings,
   getWallet,
   linkDebtorToContact,
   listConnections,
   removeConnection,
   saveConnection,
   searchContactsForCharge,
+  runCollectionsNow,
+  saveCollectionsSettings,
   syncNow,
   unlinkDebtor,
   type ConnectionView,
@@ -50,6 +55,7 @@ import {
   type WalletDebtor,
   type WalletSummary,
 } from '@/app/(dashboard)/cobrancas/actions';
+import type { CollectionsSettings } from '@/lib/collections/rules';
 
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -70,12 +76,15 @@ export function WalletClient() {
   const [addOpen, setAddOpen] = useState(false);
   const [linkFor, setLinkFor] = useState<WalletDebtor | null>(null);
   const [onlyPending, setOnlyPending] = useState(false);
+  const [rule, setRule] = useState<CollectionsSettings | null>(null);
+  const [running, setRunning] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [w, c] = await Promise.all([getWallet(), listConnections()]);
+      const [w, c, r] = await Promise.all([getWallet(), listConnections(), getCollectionsSettings()]);
       setWallet(w);
       setConns(c);
+      setRule(r);
     } catch {
       toast.error('Não foi possível carregar a carteira.');
     } finally {
@@ -128,7 +137,7 @@ export function WalletClient() {
         <div>
           <h1 className="text-2xl font-semibold tracking-tight">Carteira vencida</h1>
           <p className="text-sm text-muted-foreground">
-            O que está em aberto no Asaas, espelhado aqui dentro.
+            O que está em aberto no Asaas, e a régua que cobra isso.
           </p>
         </div>
         <div className="flex gap-2">
@@ -142,16 +151,37 @@ export function WalletClient() {
         </div>
       </header>
 
-      {/* Aviso permanente: nesta fase nada é enviado. Não é toast — é contrato. */}
+      {/* Aviso permanente. Não é toast — é contrato com quem opera. */}
       <div className="flex items-start gap-2.5 rounded-md border border-emerald-600/30 bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
         <Eye className="mt-0.5 h-4 w-4 shrink-0" />
         <p>
-          <strong>Nada é enviado nesta tela.</strong> Ela só lê o Asaas para você conferir os valores e a conta de cada
-          cobrança. O envio entra na próxima fase, e mesmo lá começa passando pela sua aprovação.
+          <strong>Nenhuma cobrança sai sem você aprovar.</strong> A régua monta as mensagens e deixa em{' '}
+          <a href="/aprovacoes" className="font-medium underline underline-offset-2">Precisa de você</a>, onde dá para ler,
+          editar e mandar — ou recusar. Antes de cada envio o sistema confere de novo se a parcela continua em aberto.
         </p>
       </div>
 
       <ConnectionsPanel conns={conns} onChanged={load} onSync={(id) => void handleSyncOne(id)} />
+
+      {!!conns.length && rule && (
+        <RulePanel
+          rule={rule}
+          running={running}
+          onSaved={(r) => setRule(r)}
+          onRun={async () => {
+            setRunning(true);
+            try {
+              const res = await runCollectionsNow();
+              if (!res.ok) toast.error(res.error ?? 'A régua não rodou.');
+              else if (!res.data!.queued) toast.info('Nenhum devedor elegível agora — ninguém venceu o intervalo ou o prazo mínimo.');
+              else toast.success(`${res.data!.queued} ${res.data!.queued === 1 ? 'cobrança foi' : 'cobranças foram'} para "Precisa de você".`);
+              await load();
+            } finally {
+              setRunning(false);
+            }
+          }}
+        />
+      )}
 
       {!conns.length ? (
         <EmptyState onAdd={() => setAddOpen(true)} />
@@ -587,5 +617,162 @@ function LinkContactDialog({
         </div>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * A régua: com que frequência cobra, a partir de quando, em que janela e com
+ * que teto. Tudo isto é configuração por conta — nenhuma regra de negócio de
+ * cliente nenhum vira condição no código.
+ */
+function RulePanel({
+  rule,
+  running,
+  onSaved,
+  onRun,
+}: {
+  rule: CollectionsSettings;
+  running: boolean;
+  onSaved: (r: CollectionsSettings) => void;
+  onRun: () => void | Promise<void>;
+}) {
+  const [open, setOpen] = useState(false);
+  const [draft, setDraft] = useState<CollectionsSettings>(rule);
+  const [saving, setSaving] = useState(false);
+  const dirty = JSON.stringify(draft) !== JSON.stringify(rule);
+
+  useEffect(() => setDraft(rule), [rule]);
+
+  async function persist(patch: Partial<CollectionsSettings>) {
+    setSaving(true);
+    try {
+      const res = await saveCollectionsSettings(patch);
+      if (!res.ok) {
+        toast.error(res.error ?? 'Não foi possível salvar.');
+        return false;
+      }
+      onSaved(res.data!);
+      setDraft(res.data!);
+      return true;
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  const num = (k: keyof CollectionsSettings, label: string, hint: string, min: number, max: number) => (
+    <div className="flex flex-col gap-1.5">
+      <Label htmlFor={`rule-${String(k)}`}>{label}</Label>
+      <Input
+        id={`rule-${String(k)}`}
+        type="number"
+        min={min}
+        max={max}
+        value={String(draft[k] ?? '')}
+        onChange={(e) => setDraft({ ...draft, [k]: Number(e.target.value) })}
+        className="w-28"
+      />
+      <p className="text-xs text-muted-foreground">{hint}</p>
+    </div>
+  );
+
+  return (
+    <div className={cn('rounded-md border bg-card', rule.enabled ? 'border-emerald-600/40' : '')}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-3.5 py-3">
+        <Settings2 className="h-4 w-4 text-muted-foreground" />
+        <div className="flex-1">
+          <p className="font-medium">
+            Régua de cobrança{' '}
+            <span className={cn('text-sm font-normal', rule.enabled ? 'text-emerald-700 dark:text-emerald-400' : 'text-muted-foreground')}>
+              · {rule.enabled ? 'ligada' : 'desligada'}
+            </span>
+          </p>
+          <p className="text-xs text-muted-foreground">
+            {rule.enabled
+              ? `A cada ${rule.intervalDays} ${rule.intervalDays === 1 ? 'dia' : 'dias'}, das ${rule.startHour}h às ${rule.endHour}h${rule.weekdaysOnly ? ' em dias úteis' : ''}, no máximo ${rule.dailyCap} por dia. Para depois de ${rule.maxTouches} toques sem resposta.`
+              : 'Ninguém é cobrado enquanto ela estiver desligada.'}
+          </p>
+        </div>
+
+        <Button size="sm" variant="outline" onClick={() => setOpen((v) => !v)}>
+          Ajustar
+        </Button>
+        <Button
+          size="sm"
+          variant={rule.enabled ? 'outline' : 'default'}
+          disabled={saving}
+          onClick={async () => {
+            const ligando = !rule.enabled;
+            if (
+              ligando &&
+              !confirm(
+                `Ligar a régua? Ela vai montar as cobranças a cada ${rule.intervalDays} dias e deixar em "Precisa de você" para você aprovar. Nenhuma mensagem sai sozinha.`,
+              )
+            )
+              return;
+            const ok = await persist({ enabled: ligando });
+            if (ok) toast.success(ligando ? 'Régua ligada. Nada sai sem sua aprovação.' : 'Régua desligada — ninguém será cobrado.');
+          }}
+        >
+          {rule.enabled ? 'Desligar' : 'Ligar régua'}
+        </Button>
+        <Button size="sm" disabled={running || !rule.enabled} onClick={() => void onRun()}>
+          {running ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1.5 h-3.5 w-3.5" />}
+          Rodar agora
+        </Button>
+      </div>
+
+      {open && (
+        <div className="flex flex-col gap-4 border-t px-3.5 py-4">
+          <div className="flex flex-wrap gap-6">
+            {num('intervalDays', 'Cobrar a cada', 'Dias entre um toque e o próximo no mesmo devedor.', 1, 60)}
+            {num('minDaysOverdue', 'A partir de', 'Dias de atraso para entrar na régua.', 0, 365)}
+            {num('dailyCap', 'Máximo por dia', 'Teto de devedores cobrados por dia.', 1, 500)}
+            {num('maxTouches', 'Parar depois de', 'Toques sem resposta antes de devolver para uma pessoa.', 1, 50)}
+          </div>
+
+          <div className="flex flex-wrap items-end gap-6">
+            {num('startHour', 'Começa às', 'Hora de início, no fuso da conta.', 0, 23)}
+            {num('endHour', 'Termina às', 'Hora de término.', 1, 24)}
+            <label className="flex items-center gap-2 pb-6 text-sm">
+              <input
+                type="checkbox"
+                checked={draft.weekdaysOnly}
+                onChange={(e) => setDraft({ ...draft, weekdaysOnly: e.target.checked })}
+              />
+              Só em dias úteis
+            </label>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="rule-tone">Tom das mensagens</Label>
+            <Input
+              id="rule-tone"
+              value={draft.tone}
+              onChange={(e) => setDraft({ ...draft, tone: e.target.value })}
+              placeholder="Ex.: informal, tratamos o cliente por você, sem formalidade"
+            />
+            <p className="text-xs text-muted-foreground">
+              A IA nunca oferece desconto, prazo ou parcelamento, e nunca fala em juros, protesto ou negativação — isso é
+              decisão de gente, não de régua.
+            </p>
+          </div>
+
+          <div className="flex items-center gap-2">
+            <Button
+              size="sm"
+              disabled={!dirty || saving}
+              onClick={async () => {
+                const ok = await persist(draft);
+                if (ok) toast.success('Régua salva.');
+              }}
+            >
+              {saving ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : null}
+              Salvar
+            </Button>
+            {dirty && <span className="text-xs text-amber-600 dark:text-amber-500">alterações não salvas</span>}
+          </div>
+        </div>
+      )}
+    </div>
   );
 }

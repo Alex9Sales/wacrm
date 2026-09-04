@@ -15,8 +15,11 @@
 import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
-import { db, asaasCharges, asaasConnections, contacts } from '@/db'
+import { db, asaasCharges, asaasConnections, collectionsTouches, contacts } from '@/db'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
+import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
+import { runCollectionsForAccount } from '@/lib/collections/engine'
+import { normalizeSettings, type CollectionsSettings } from '@/lib/collections/rules'
 import { testCredential, type AsaasEnv } from '@/lib/asaas/collections'
 import { daysOverdue } from '@/lib/asaas/match'
 import { syncAccount, syncConnection, type SyncResult } from '@/lib/asaas/sync'
@@ -361,4 +364,66 @@ export async function listRecentlyClosed(limit = 20) {
     .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, false), sql`${asaasCharges.closedAt} IS NOT NULL`))
     .orderBy(desc(asaasCharges.closedAt))
     .limit(limit)
+}
+
+// ---------------------------------------------------------- régua (Fase 2)
+
+/**
+ * Configuração da régua. Vive em `account_settings.settings.collections`, e
+ * não em código: é o que faz o segundo cliente não exigir reescrita.
+ */
+export async function getCollectionsSettings(): Promise<CollectionsSettings> {
+  const { accountId } = await getCurrentAccount()
+  const s = await getAccountSettings(accountId)
+  return normalizeSettings(s.collections)
+}
+
+export async function saveCollectionsSettings(input: Partial<CollectionsSettings>): Promise<ActionResult<CollectionsSettings>> {
+  const { accountId } = await requireRole('admin')
+  const current = normalizeSettings((await getAccountSettings(accountId)).collections)
+  const next = normalizeSettings({ ...current, ...input })
+
+  if (next.endHour <= next.startHour) {
+    return { ok: false, error: 'A janela de cobrança precisa terminar depois de começar.' }
+  }
+
+  // Ligar a régua sem ter o que ler só produziria uma fila vazia e a impressão
+  // de que não funciona.
+  if (next.enabled && !current.enabled) {
+    const conn = await db
+      .select({ id: asaasConnections.id })
+      .from(asaasConnections)
+      .where(and(eq(asaasConnections.accountId, accountId), eq(asaasConnections.enabled, true)))
+      .limit(1)
+    if (!conn.length) return { ok: false, error: 'Conecte uma conta do Asaas antes de ligar a régua.' }
+  }
+
+  await updateAccountSettings(accountId, { collections: next })
+  revalidatePath('/cobrancas')
+  return { ok: true, data: next }
+}
+
+/** Roda a régua agora (sem esperar o tique) e conta o que entrou na fila. */
+export async function runCollectionsNow(): Promise<ActionResult<{ queued: number; debtors: number; halted?: string }>> {
+  const { accountId } = await requireRole('supervisor')
+  const r = await runCollectionsForAccount(accountId)
+  revalidatePath('/cobrancas')
+  revalidatePath('/aprovacoes')
+  if (r.haltedBecause) return { ok: false, error: r.haltedBecause, data: { queued: 0, debtors: r.debtors, halted: r.haltedBecause } }
+  return { ok: true, data: { queued: r.queued, debtors: r.debtors } }
+}
+
+/** Pausa/retoma a régua num devedor (acordo em andamento, caso jurídico…). */
+export async function setDebtorPaused(contactId: string, paused: boolean, reason: string | null): Promise<ActionResult> {
+  const { accountId, userId } = await requireRole('agent')
+  const now = new Date().toISOString()
+  await db
+    .insert(collectionsTouches)
+    .values({ accountId, contactId, paused, pausedReason: reason, pausedBy: userId, updatedAt: now })
+    .onConflictDoUpdate({
+      target: [collectionsTouches.accountId, collectionsTouches.contactId],
+      set: { paused, pausedReason: reason, pausedBy: userId, updatedAt: now },
+    })
+  revalidatePath('/cobrancas')
+  return { ok: true }
 }
