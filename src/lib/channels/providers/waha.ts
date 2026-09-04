@@ -2070,14 +2070,30 @@ export async function wahaGroupParticipants(
     { method: 'GET', headers: headersOf(ch) },
     15000,
   );
-  if (!ok || !Array.isArray(body)) return [];
+  // ⚠️ 04/09: o parser antigo aqui olhava só id/jid/participant MINÚSCULOS. O
+  // engine gows devolve "JID"/"PhoneNumber"/"LID" e o JID vem como @lid, então
+  // ele não achava ninguém e o import dizia "privacidade do grupo" num grupo
+  // perfeitamente legível. O parser de lib/whatsapp/group já trata os dois
+  // formatos — era só usá-lo, como o resto do arquivo já faz.
+  const raw = Array.isArray(body) ? body : (body as { participants?: unknown } | null)?.participants;
+  const parsed = ok ? parseGroupParticipants(raw) : [];
+
   const phones = new Set<string>();
-  for (const p of body as Array<Record<string, unknown>>) {
-    const id = String(p?.id ?? p?.jid ?? p?.participant ?? '');
-    // jid de telefone: "5511999999999@c.us" / "@s.whatsapp.net" → só dígitos.
-    const m = id.match(/^(\d{8,15})@(?:c\.us|s\.whatsapp\.net)/i);
-    if (m) phones.add(m[1]);
+  const lids: string[] = [];
+  for (const p of parsed) {
+    if (p.phone) phones.add(p.phone);
+    else if (p.lidUser) lids.push(p.lidUser);
   }
+
+  // Quem só apareceu por @lid: o mapa LID↔telefone do WAHA resolve.
+  const resolve = wahaProvider.resolveLidToPhone?.bind(wahaProvider);
+  if (resolve) {
+    for (const lid of lids) {
+      const phone = await resolve(ch, lid);
+      if (phone) phones.add(phone);
+    }
+  }
+
   return [...phones];
 }
 

@@ -233,7 +233,13 @@ export type NotificationType =
   | 'deal_transferred'
   | 'task_assigned'
   | 'deal_ai_suggestion'
-  | 'scheduled_message_assigned';
+  | 'scheduled_message_assigned'
+  // Fase 2 (orquestração) e cobrança. Faltavam aqui, e por isso a tela de
+  // notificações não sabia tratá-las: o clique não levava a lugar nenhum.
+  | 'agent_action'
+  | 'approval_required'
+  | 'flow_notification'
+  | 'contact_opted_out';
 
 export interface Notification {
   id: string;

@@ -15,6 +15,7 @@ import {
   cadenceEnrollments,
   dealProducts,
   dealProposals,
+  contacts,
   conversations,
   dealEvents,
   deals,
@@ -331,7 +332,18 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         if (input.action === 'escalate' && input.conversationId) {
           await db.update(conversations).set({ aiAutoreplyDisabled: true }).where(eq(conversations.id, input.conversationId))
         }
-        const title = typeof input.payload.title === 'string' && input.payload.title.trim() ? input.payload.title.trim() : input.action === 'escalate' ? 'Fluxia escalou pra você' : 'Fluxia: atenção neste cliente'
+        // ⚠️ 04/09: o título era "Fluxia: atenção neste cliente" — sem dizer QUAL
+        // cliente. Numa lista de 20 notificações isso é indistinguível.
+        const quem = firstOrNull(
+          await db.select({ name: contacts.name, phone: contacts.phone }).from(contacts).where(eq(contacts.id, input.contactId)).limit(1),
+        )
+        const nome = (quem?.name || quem?.phone || '').trim()
+        const title =
+          typeof input.payload.title === 'string' && input.payload.title.trim()
+            ? input.payload.title.trim()
+            : input.action === 'escalate'
+              ? nome ? `Fluxia escalou pra você — ${nome}` : 'Fluxia escalou pra você'
+              : nome ? `Atenção neste cliente — ${nome}` : 'Fluxia: atenção neste cliente'
         const n = await notifyUsers({
           accountId: input.accountId,
           userIds,

@@ -202,3 +202,48 @@ describe('resolveGroupMentions', () => {
     expect(resolveGroupMentions('', ['1'], { '1': 'x' })).toBe('');
   });
 });
+
+describe('parseGroupParticipants — resposta REAL do gows (04/09)', () => {
+  // Capturado da API do WAHA no grupo ELITE MORENA DIGITAL, conta do Alex.
+  // Chaves em MAIÚSCULAS e JID em @lid: era exatamente isso que o parser do
+  // wahaGroupParticipants não lia, e o import respondia "privacidade do grupo".
+  const real = [
+    {
+      JID: '77472720781555@lid',
+      PhoneNumber: '556792639104@s.whatsapp.net',
+      LID: '77472720781555@lid',
+      IsAdmin: false,
+      IsSuperAdmin: false,
+      DisplayName: '',
+      Error: 0,
+      AddRequest: null,
+    },
+    {
+      JID: '33694119161894@lid',
+      PhoneNumber: '556796856146@s.whatsapp.net',
+      LID: '33694119161894@lid',
+      IsAdmin: false,
+      IsSuperAdmin: false,
+      DisplayName: '',
+      Error: 0,
+      AddRequest: null,
+    },
+  ]
+
+  it('extrai o telefone real de cada membro', () => {
+    const out = parseGroupParticipants(real)
+    expect(out.map((p) => p.phone)).toEqual(['556792639104', '556796856146'])
+  })
+
+  it('guarda o LID junto, para quem não tiver telefone visível', () => {
+    const out = parseGroupParticipants(real)
+    expect(out[0].lidUser).toBe('77472720781555')
+  })
+
+  it('membro que só tem @lid não é descartado — vira lid para resolver depois', () => {
+    const out = parseGroupParticipants([{ JID: '999888777@lid', LID: '999888777@lid' }])
+    expect(out).toHaveLength(1)
+    expect(out[0].phone).toBeUndefined()
+    expect(out[0].lidUser).toBe('999888777')
+  })
+})

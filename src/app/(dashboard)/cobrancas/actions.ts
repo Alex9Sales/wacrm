@@ -15,11 +15,13 @@
 import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
-import { db, asaasCharges, asaasConnections, collectionsTouches, contacts } from '@/db'
+import { db, aiConfigs, asaasCharges, asaasConnections, collectionsTouches, contacts, decisionFeedback } from '@/db'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
 import { runCollectionsForAccount } from '@/lib/collections/engine'
 import { normalizeSettings, type CollectionsSettings } from '@/lib/collections/rules'
+import { evaluatePromotion, promotionHeadline, type PromotionVerdict } from '@/lib/collections/promotion'
+import { levelFor, readPolicy } from '@/lib/orchestration/policy'
 import { testCredential, type AsaasEnv } from '@/lib/asaas/collections'
 import { daysOverdue } from '@/lib/asaas/match'
 import { syncAccount, syncConnection, type SyncResult } from '@/lib/asaas/sync'
@@ -483,4 +485,89 @@ export async function setDebtorPaused(contactId: string, paused: boolean, reason
     })
   revalidatePath('/cobrancas')
   return { ok: true }
+}
+
+// ------------------------------------------------- Fase 5: portão de promoção
+
+export interface PromotionView {
+  verdict: PromotionVerdict
+  headline: string
+  /** Nível atual da ação de cobrança: suggest | approve | auto. */
+  level: string
+  /** Já está no automático? */
+  isAuto: boolean
+}
+
+/**
+ * O histórico REAL de decisões humanas sobre cobrança nesta conta.
+ * `decision_feedback` (migr 0156) é a fonte: aprovado / editado / recusado /
+ * revertido / resultado ruim, com data.
+ */
+export async function getCollectionsPromotion(): Promise<PromotionView> {
+  const { accountId } = await getCurrentAccount()
+
+  const rows = await db
+    .select({ decision: decisionFeedback.decision, createdAt: decisionFeedback.createdAt })
+    .from(decisionFeedback)
+    .where(and(eq(decisionFeedback.accountId, accountId), eq(decisionFeedback.actionType, 'collect_charges')))
+    .orderBy(decisionFeedback.createdAt)
+
+  const count = (d: string) => rows.filter((r) => r.decision === d).length
+  const first = rows[0]?.createdAt ? new Date(rows[0].createdAt).getTime() : 0
+  const last = rows.length ? new Date(rows[rows.length - 1].createdAt).getTime() : 0
+
+  const verdict = evaluatePromotion({
+    decisions: rows.length,
+    cleanApprovals: count('approved'),
+    edited: count('edited'),
+    rejected: count('rejected'),
+    badOutcomes: count('reversed') + count('bad_result'),
+    spanDays: first ? Math.floor((last - first) / 86_400_000) : 0,
+  })
+
+  const agent = await db
+    .select({ autonomy: aiConfigs.autonomy })
+    .from(aiConfigs)
+    .where(and(eq(aiConfigs.accountId, accountId), eq(aiConfigs.isDefault, true)))
+    .limit(1)
+  const level = levelFor(readPolicy(agent[0]?.autonomy ?? null), 'collect_charges')
+
+  return { verdict, headline: promotionHeadline(verdict), level, isAuto: level === 'auto' }
+}
+
+/**
+ * Libera (ou recolhe) o automático da cobrança.
+ *
+ * Recusa liberar sem histórico: o portão existe para a decisão ser por
+ * evidência e não por vontade. Voltar para aprovação, sim, é sempre imediato —
+ * recolher autonomia nunca pode ter atrito.
+ */
+export async function setCollectionsAutonomy(auto: boolean): Promise<ActionResult<{ level: string }>> {
+  const { accountId } = await requireRole('admin')
+
+  if (auto) {
+    const { verdict } = await getCollectionsPromotion()
+    if (!verdict.ready) {
+      return { ok: false, error: verdict.blockers[0]?.label ?? 'A régua ainda não tem histórico para operar sozinha.' }
+    }
+  }
+
+  const [agent] = await db
+    .select({ id: aiConfigs.id, autonomy: aiConfigs.autonomy })
+    .from(aiConfigs)
+    .where(and(eq(aiConfigs.accountId, accountId), eq(aiConfigs.isDefault, true)))
+    .limit(1)
+  if (!agent) return { ok: false, error: 'Nenhum agente padrão configurado nesta conta.' }
+
+  const current = (agent.autonomy ?? {}) as Record<string, unknown>
+  const actions = { ...((current.actions as Record<string, string>) ?? {}), collect_charges: auto ? 'auto' : 'approve' }
+
+  await db
+    .update(aiConfigs)
+    .set({ autonomy: { ...current, actions } })
+    .where(eq(aiConfigs.id, agent.id))
+
+  revalidatePath('/cobrancas')
+  revalidatePath('/aprovacoes')
+  return { ok: true, data: { level: auto ? 'auto' : 'approve' } }
 }

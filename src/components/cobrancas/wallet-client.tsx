@@ -25,6 +25,7 @@ import {
   Plus,
   RefreshCw,
   BellOff,
+  Bot,
   Copy,
   Play,
   ShieldCheck,
@@ -43,6 +44,7 @@ import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 import {
+  getCollectionsPromotion,
   getCollectionsSettings,
   getWallet,
   linkDebtorToContact,
@@ -52,11 +54,13 @@ import {
   searchContactsForCharge,
   runCollectionsNow,
   saveCollectionsSettings,
+  setCollectionsAutonomy,
   setDebtorPaused,
   syncNow,
   unlinkDebtor,
   type ConnectionView,
   type ContactOption,
+  type PromotionView,
   type WalletDebtor,
   type WalletSummary,
 } from '@/app/(dashboard)/cobrancas/actions';
@@ -85,13 +89,20 @@ export function WalletClient() {
   const [rule, setRule] = useState<CollectionsSettings | null>(null);
   const [running, setRunning] = useState(false);
   const [upcoming, setUpcoming] = useState<number | null>(null);
+  const [promo, setPromo] = useState<PromotionView | null>(null);
 
   const load = useCallback(async () => {
     try {
-      const [w, c, r] = await Promise.all([getWallet(), listConnections(), getCollectionsSettings()]);
+      const [w, c, r, p] = await Promise.all([
+        getWallet(),
+        listConnections(),
+        getCollectionsSettings(),
+        getCollectionsPromotion(),
+      ]);
       setWallet(w);
       setConns(c);
       setRule(r);
+      setPromo(p);
     } catch {
       toast.error('Não foi possível carregar a carteira.');
     } finally {
@@ -191,6 +202,8 @@ export function WalletClient() {
           }}
         />
       )}
+
+      {!!conns.length && rule?.enabled && promo && <PromotionPanel promo={promo} onChanged={load} />}
 
       {!conns.length ? (
         <EmptyState onAdd={() => setAddOpen(true)} />
@@ -970,5 +983,100 @@ function PauseDebtorDialog({
         </Button>
       </DialogContent>
     </Dialog>
+  );
+}
+
+/**
+ * 🧾 Fase 5 — o portão. Mostra o quanto falta para a régua poder operar
+ * sozinha, com o motivo em português, e só libera o botão quando o histórico
+ * cumpre o critério. Recolher a autonomia, ao contrário, é sempre imediato:
+ * tirar poder da IA nunca pode ter atrito.
+ */
+function PromotionPanel({ promo, onChanged }: { promo: PromotionView; onChanged: () => void }) {
+  const [busy, setBusy] = useState(false);
+  const { verdict } = promo;
+  const s = verdict.stats;
+
+  return (
+    <div className={cn('rounded-md border bg-card px-3.5 py-3', promo.isAuto && 'border-emerald-600/40')}>
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <Bot className="h-4 w-4 text-muted-foreground" />
+        <div className="flex-1">
+          <p className="font-medium">
+            {promo.isAuto ? 'A régua está enviando sozinha' : 'Envio automático'}
+            <span className="ml-1.5 text-sm font-normal text-muted-foreground">
+              · {promo.isAuto ? 'cada envio ainda aparece no histórico' : 'hoje toda cobrança espera sua aprovação'}
+            </span>
+          </p>
+          <p className="text-xs text-muted-foreground">{promo.headline}</p>
+        </div>
+
+        {promo.isAuto ? (
+          <Button
+            size="sm"
+            variant="outline"
+            disabled={busy}
+            onClick={async () => {
+              setBusy(true);
+              try {
+                const res = await setCollectionsAutonomy(false);
+                if (!res.ok) toast.error(res.error ?? 'Não foi possível voltar.');
+                else toast.success('Voltou a esperar sua aprovação.');
+                onChanged();
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Voltar a aprovar
+          </Button>
+        ) : (
+          <Button
+            size="sm"
+            disabled={busy || !verdict.ready}
+            title={verdict.ready ? undefined : verdict.blockers[0]?.label}
+            onClick={async () => {
+              if (!confirm('Liberar a régua para enviar sozinha? Você continua vendo tudo no histórico, e pode voltar a aprovar a qualquer momento.'))
+                return;
+              setBusy(true);
+              try {
+                const res = await setCollectionsAutonomy(true);
+                if (!res.ok) toast.error(res.error ?? 'Não foi possível liberar.');
+                else toast.success('Régua liberada. Ela envia sozinha, dentro do teto e da janela configurados.');
+                onChanged();
+              } finally {
+                setBusy(false);
+              }
+            }}
+          >
+            Liberar envio automático
+          </Button>
+        )}
+      </div>
+
+      {!promo.isAuto && (
+        <div className="mt-2.5 flex flex-col gap-2">
+          <div className="h-1.5 w-full overflow-hidden rounded-full bg-muted">
+            <div
+              className={cn('h-full rounded-full', verdict.ready ? 'bg-emerald-600' : 'bg-primary')}
+              style={{ width: `${Math.round(verdict.progress * 100)}%` }}
+            />
+          </div>
+          <p className="text-xs text-muted-foreground">
+            {s.decisions} {s.decisions === 1 ? 'decisão' : 'decisões'} sua{s.decisions === 1 ? '' : 's'} até agora ·{' '}
+            {s.cleanApprovals} aprovadas sem editar · {s.edited} editadas · {s.rejected} recusadas
+            {s.badOutcomes ? ` · ${s.badOutcomes} marcadas como erradas` : ''} · {s.spanDays}{' '}
+            {s.spanDays === 1 ? 'dia' : 'dias'} de uso
+          </p>
+          {verdict.blockers.length > 1 && (
+            <ul className="flex flex-col gap-0.5 text-xs text-muted-foreground">
+              {verdict.blockers.slice(1).map((b) => (
+                <li key={b.code}>· {b.label}</li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
+    </div>
   );
 }

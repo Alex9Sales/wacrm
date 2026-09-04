@@ -8,7 +8,7 @@ import {
   markNotificationRead,
 } from "./actions";
 import type { Notification } from "@/types";
-import { Bell, CheckCheck, Loader2, UserPlus, Clock, AtSign, ArrowRightLeft, ListChecks, CalendarClock, Sparkles } from "lucide-react";
+import { Bell, BellOff, CheckCheck, ClipboardCheck, Loader2, UserPlus, Clock, AtSign, ArrowRightLeft, ListChecks, CalendarClock, Sparkles } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
@@ -24,6 +24,10 @@ const TYPE_ICON: Record<Notification["type"], typeof Bell> = {
   task_assigned: ListChecks,
   deal_ai_suggestion: Sparkles,
   scheduled_message_assigned: CalendarClock,
+  agent_action: Sparkles,
+  approval_required: ClipboardCheck,
+  flow_notification: Bell,
+  contact_opted_out: BellOff,
 };
 
 export default function NotificationsPage() {
@@ -128,6 +132,21 @@ export default function NotificationsPage() {
           await markNotificationRead(n.id).catch(() => {});
         }
         window.location.href = `/inbox?c=${n.conversation_id}`;
+        return;
+      }
+      // Ação da IA sem negócio nem conversa (ex.: "há aprovações esperando"):
+      // o destino útil é a própria fila. Antes o clique não fazia nada.
+      if (n.type === "agent_action" || n.type === "approval_required") {
+        if (!n.read_at) {
+          setNotifications(
+            (prev) =>
+              prev?.map((x) =>
+                x.id === n.id && !x.read_at ? { ...x, read_at: new Date().toISOString() } : x,
+              ) ?? prev,
+          );
+          await markNotificationRead(n.id).catch(() => {});
+        }
+        window.location.href = "/aprovacoes";
         return;
       }
       if (!n.read_at) markRead(n.id);
