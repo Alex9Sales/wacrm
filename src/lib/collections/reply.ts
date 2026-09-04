@@ -120,13 +120,29 @@ export async function applyCollectionReply(input: CollectionReplyInput): Promise
   }
 }
 
-/** Data prometida + tolerância. Recusa data no passado ou absurdamente longe. */
-export function promiseDeadline(date: string | null, now = new Date()): Date | null {
-  if (!date) return null
-  const d = new Date(`${date.slice(0, 10)}T23:59:59`)
-  if (Number.isNaN(d.getTime())) return null
+/**
+ * Fuso comercial brasileiro em horas (UTC−3). O prazo é calculado em UTC
+ * explícito por causa disto: `new Date('2026-09-30T23:59:59')` é interpretado
+ * no fuso da MÁQUINA, então a hora em que a régua acorda mudaria conforme o
+ * container (o CI, em UTC, pegou isso). Aqui o resultado é o mesmo em qualquer
+ * servidor.
+ */
+const BR_UTC_OFFSET_HOURS = 3
 
-  const until = new Date(d.getTime() + PROMISE_GRACE_DAYS * 86_400_000)
+/**
+ * Quando a régua pode voltar a cobrar: a virada do dia seguinte ao prazo de
+ * tolerância, no horário do Brasil. "Pago dia 30" com 1 dia de tolerância =
+ * dorme o dia 30 e o dia 1º inteiros, e acorda na madrugada do dia 2.
+ *
+ * Recusa data no passado (o modelo errou o ano) ou muito distante.
+ */
+export function promiseDeadline(date: string | null, now = new Date()): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec((date ?? '').slice(0, 10))
+  if (!m) return null
+  const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
+
+  const until = new Date(Date.UTC(y, mo - 1, d + PROMISE_GRACE_DAYS + 1, BR_UTC_OFFSET_HOURS, 0, 0))
+  if (Number.isNaN(until.getTime())) return null
   // Data que já passou: o modelo errou o ano ou o cliente falou de outra coisa.
   if (until.getTime() <= now.getTime()) return null
   // Mais de um ano à frente quase sempre é ano errado; não congelamos a régua
