@@ -17,7 +17,7 @@ import { looksLikeInjection } from './untrusted'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
 import { generateWithExternalTools } from './external-tools'
-import { buildSystemPrompt, collectionInstruction, parseCloseDirectives } from './defaults'
+import { buildSystemPrompt, collectionInstruction, HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
 import { applyCollectionReply, openDebtForPrompt } from '@/lib/collections/reply'
 import {
   applyCloseActions,
@@ -957,7 +957,7 @@ export async function dispatchInboundToAiReply(
           userId: configOwnerUserId,
           conversationId,
           contactId,
-          text: 'Perfeito! Já estou te passando para um responsável — ele continua o atendimento daqui. 🙏',
+          text: HANDOFF_FAREWELL,
         })
         await setCoveredUntil(conversationId, snapshotAt)
       } catch (err) {

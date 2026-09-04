@@ -698,3 +698,11 @@ export function collectionInstruction(debt: string): string {
     'NUNCA fale em juros, multa, protesto, negativação, SPC/Serasa, cobrança judicial ou corte de serviço. Nunca ameace. Nunca invente valor, data de vencimento ou desconto — use só os valores acima.'
   )
 }
+
+/**
+ * Despedida do handoff "pediu humano". Fica aqui porque DUAS coisas dependem
+ * dela: o envio (auto-reply) e a métrica de handoff (analytics). Quando o
+ * texto morava só no envio, a métrica contava 0 com 51 handoffs reais.
+ */
+export const HANDOFF_FAREWELL =
+  'Perfeito! Já estou te passando para um responsável — ele continua o atendimento daqui. 🙏'

@@ -13,6 +13,7 @@
 
 import { eq, sql } from 'drizzle-orm'
 
+import { HANDOFF_FAREWELL } from './defaults'
 import { db, aiConfigs, channels } from '@/db'
 import { costUsd, priceForModel, toBrl, type UsageTokens } from './pricing'
 
@@ -484,11 +485,22 @@ export async function getUsageDashboard(
       WHERE r.account_id = ${accountId} AND r.created_at >= ${rangeStart}::timestamptz
         AND r.status = 'ok' AND t.creates_deal = true
     `),
+    // ⚠️ 04/09: esta métrica contava SÓ o marcador [[TRANSFERIR:etiqueta]], que
+    // grava a nota interna "🔁 Transferido pela IA". Mas existe um SEGUNDO
+    // caminho de handoff — o sentinela "pediu humano", que manda a despedida
+    // ao cliente e desliga a IA sem escrever essa nota. O painel mostrava 0
+    // enquanto a conta tinha 51 handoffs em 30 dias (Família do Gás). Agora
+    // conta os dois: a nota interna E a despedida enviada ao cliente.
     db.execute(sql`
-      SELECT count(*) AS n FROM messages
-      WHERE account_id = ${accountId} AND is_internal = true
-        AND content_text LIKE '%Transferido pela IA%'
-        AND created_at >= ${rangeStart}::timestamptz
+      SELECT count(*) AS n FROM messages m
+      JOIN conversations c ON c.id = m.conversation_id
+      WHERE c.account_id = ${accountId}
+        AND m.created_at >= ${rangeStart}::timestamptz
+        AND (
+          (m.is_internal = true AND m.content_text LIKE '%Transferido pela IA%')
+          OR (m.is_internal = false AND m.sender_type = 'bot'
+              AND m.content_text LIKE ${HANDOFF_FAREWELL.slice(0, 45) + '%'})
+        )
     `),
     db.execute(sql`
       SELECT count(DISTINCT c.id) AS n
