@@ -171,6 +171,12 @@ export interface WalletDebtor {
   total: number
   oldestDaysLate: number | null
   charges: WalletCharge[]
+  /** Estado da régua neste devedor (só existe quando casou com um contato). */
+  paused: boolean
+  pausedReason: string | null
+  touchCount: number
+  lastTouchAt: string | null
+  snoozeUntil: string | null
 }
 
 export interface WalletSummary {
@@ -206,10 +212,19 @@ export async function getWallet(): Promise<WalletSummary> {
       asaasCustomerId: asaasCharges.asaasCustomerId,
       connectionLabel: asaasConnections.label,
       contactName: contacts.name,
+      paused: collectionsTouches.paused,
+      pausedReason: collectionsTouches.pausedReason,
+      touchCount: collectionsTouches.touchCount,
+      lastTouchAt: collectionsTouches.lastTouchAt,
+      snoozeUntil: collectionsTouches.snoozeUntil,
     })
     .from(asaasCharges)
     .innerJoin(asaasConnections, eq(asaasConnections.id, asaasCharges.connectionId))
     .leftJoin(contacts, eq(contacts.id, asaasCharges.contactId))
+    .leftJoin(
+      collectionsTouches,
+      and(eq(collectionsTouches.accountId, asaasCharges.accountId), eq(collectionsTouches.contactId, asaasCharges.contactId)),
+    )
     .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true)))
     .orderBy(asaasCharges.dueDate)
 
@@ -235,6 +250,11 @@ export async function getWallet(): Promise<WalletSummary> {
         total: 0,
         oldestDaysLate: null,
         charges: [],
+        paused: r.paused ?? false,
+        pausedReason: r.pausedReason,
+        touchCount: r.touchCount ?? 0,
+        lastTouchAt: r.lastTouchAt,
+        snoozeUntil: r.snoozeUntil,
       }
       byDebtor.set(key, d)
     }
@@ -416,6 +436,14 @@ export async function runCollectionsNow(): Promise<ActionResult<{ queued: number
 /** Pausa/retoma a régua num devedor (acordo em andamento, caso jurídico…). */
 export async function setDebtorPaused(contactId: string, paused: boolean, reason: string | null): Promise<ActionResult> {
   const { accountId, userId } = await requireRole('agent')
+
+  const [c] = await db
+    .select({ id: contacts.id })
+    .from(contacts)
+    .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+    .limit(1)
+  if (!c) return { ok: false, error: 'Contato não encontrado nesta conta.' }
+
   const now = new Date().toISOString()
   await db
     .insert(collectionsTouches)

@@ -24,6 +24,7 @@ import {
   Loader2,
   Plus,
   RefreshCw,
+  BellOff,
   Play,
   Search,
   Settings2,
@@ -36,6 +37,7 @@ import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
+import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 
 import {
@@ -48,6 +50,7 @@ import {
   searchContactsForCharge,
   runCollectionsNow,
   saveCollectionsSettings,
+  setDebtorPaused,
   syncNow,
   unlinkDebtor,
   type ConnectionView,
@@ -75,6 +78,7 @@ export function WalletClient() {
   const [syncing, setSyncing] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
   const [linkFor, setLinkFor] = useState<WalletDebtor | null>(null);
+  const [pauseFor, setPauseFor] = useState<WalletDebtor | null>(null);
   const [onlyPending, setOnlyPending] = useState(false);
   const [rule, setRule] = useState<CollectionsSettings | null>(null);
   const [running, setRunning] = useState(false);
@@ -219,7 +223,7 @@ export function WalletClient() {
 
           <div className="flex flex-col gap-2.5">
             {debtors.map((d) => (
-              <DebtorCard key={d.key} debtor={d} onLink={() => setLinkFor(d)} onUnlink={load} />
+              <DebtorCard key={d.key} debtor={d} onLink={() => setLinkFor(d)} onUnlink={load} onPause={() => setPauseFor(d)} onChanged={load} />
             ))}
             {!debtors.length && (
               <p className="rounded-md border border-dashed py-10 text-center text-sm text-muted-foreground">
@@ -234,6 +238,7 @@ export function WalletClient() {
 
       <AddConnectionDialog open={addOpen} onOpenChange={setAddOpen} onSaved={load} />
       <LinkContactDialog debtor={linkFor} onClose={() => setLinkFor(null)} onLinked={load} />
+      <PauseDebtorDialog debtor={pauseFor} onClose={() => setPauseFor(null)} onSaved={load} />
     </div>
   );
 
@@ -271,16 +276,26 @@ function DebtorCard({
   debtor,
   onLink,
   onUnlink,
+  onPause,
+  onChanged,
 }: {
   debtor: WalletDebtor;
   onLink: () => void;
   onUnlink: () => void;
+  onPause: () => void;
+  onChanged: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const late = lateLabel(debtor.oldestDaysLate);
 
   return (
-    <div className={cn('rounded-md border bg-card', !debtor.contactId && 'border-amber-500/40')}>
+    <div
+      className={cn(
+        'rounded-md border bg-card',
+        !debtor.contactId && 'border-amber-500/40',
+        debtor.paused && 'border-dashed opacity-75',
+      )}
+    >
       <div className="flex flex-wrap items-center gap-x-3 gap-y-1.5 px-3.5 py-3">
         <button type="button" className="flex-1 text-left" onClick={() => setOpen((v) => !v)}>
           <p className="font-medium">{debtor.name}</p>
@@ -289,15 +304,41 @@ function DebtorCard({
             <span className={late.tone}>{late.text}</span>
             {debtor.phone ? ` · ${debtor.phone}` : ''}
           </p>
+          <p className="text-xs text-muted-foreground">{reguaStatus(debtor)}</p>
         </button>
 
         <p className="font-semibold tabular-nums">{brl(debtor.total)}</p>
 
         {debtor.contactId ? (
-          <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
-            <Check className="h-3 w-3" />
-            {debtor.matchedBy === 'manual' ? 'ligado na mão' : 'contato do CRM'}
-          </span>
+          <div className="flex items-center gap-1.5">
+            {debtor.paused && (
+              <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
+                <BellOff className="h-3 w-3" /> não cobrar
+              </span>
+            )}
+            <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] text-muted-foreground">
+              <Check className="h-3 w-3" />
+              {debtor.matchedBy === 'manual' ? 'ligado na mão' : 'contato do CRM'}
+            </span>
+            {debtor.paused ? (
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  const res = await setDebtorPaused(debtor.contactId!, false, null);
+                  if (!res.ok) toast.error(res.error ?? 'Não foi possível retomar.');
+                  else toast.success(`A régua voltou a valer para ${debtor.name}.`);
+                  onChanged();
+                }}
+              >
+                Voltar a cobrar
+              </Button>
+            ) : (
+              <Button size="sm" variant="ghost" onClick={onPause} title="Nunca cobrar este devedor pela régua">
+                <BellOff className="h-3.5 w-3.5 text-muted-foreground" />
+              </Button>
+            )}
+          </div>
         ) : (
           <Button size="sm" variant="outline" onClick={onLink}>
             <Link2 className="mr-1.5 h-3.5 w-3.5" /> Ligar a um contato
@@ -333,6 +374,9 @@ function DebtorCard({
               );
             })}
           </ul>
+          {debtor.paused && debtor.pausedReason && (
+            <p className="mt-2.5 text-xs text-muted-foreground">Motivo da pausa: {debtor.pausedReason}</p>
+          )}
           {debtor.contactId && (
             <button
               type="button"
@@ -774,5 +818,88 @@ function RulePanel({
         </div>
       )}
     </div>
+  );
+}
+
+/** Em uma linha: onde a régua está neste devedor. */
+function reguaStatus(d: WalletDebtor): string {
+  if (!d.contactId) return 'Sem contato ligado — a régua não cobra este devedor.';
+  if (d.paused) return 'Fora da régua: marcado como "não cobrar".';
+  if (d.snoozeUntil && new Date(d.snoozeUntil).getTime() > Date.now()) {
+    return `Prometeu pagar em ${new Date(d.snoozeUntil).toLocaleDateString('pt-BR')} — a régua dorme até lá.`;
+  }
+  if (!d.touchCount) return 'Ainda não foi cobrado pela régua.';
+  const quando = d.lastTouchAt ? new Date(d.lastTouchAt).toLocaleDateString('pt-BR') : null;
+  return `${d.touchCount} ${d.touchCount === 1 ? 'cobrança enviada' : 'cobranças enviadas'}${quando ? `, a última em ${quando}` : ''}.`;
+}
+
+/**
+ * Tirar um devedor da régua. O motivo é obrigatório porque quem abrir isso
+ * daqui a dois meses precisa saber por que este cliente nunca é cobrado —
+ * "acordo em andamento" e "esqueceram de religar" têm a mesma cara sem ele.
+ */
+function PauseDebtorDialog({
+  debtor,
+  onClose,
+  onSaved,
+}: {
+  debtor: WalletDebtor | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [reason, setReason] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setReason('');
+  }, [debtor]);
+
+  if (!debtor || !debtor.contactId) return null;
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Não cobrar {debtor.name}</DialogTitle>
+          <DialogDescription>
+            A régua para neste devedor e não monta mais nenhuma cobrança para ele. As {debtor.charges.length === 1 ? 'cobranças continuam' : 'cobranças continuam'} aparecendo
+            na carteira, e nada muda no Asaas — só paramos de mandar mensagem.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="pause-reason">Por quê?</Label>
+          <Textarea
+            id="pause-reason"
+            value={reason}
+            onChange={(e) => setReason(e.target.value)}
+            placeholder="Ex.: acordo fechado por fora · cliente antigo, o dono cobra pessoalmente · caso no jurídico"
+            rows={3}
+          />
+        </div>
+
+        <Button
+          disabled={saving || !reason.trim()}
+          onClick={async () => {
+            setSaving(true);
+            try {
+              const res = await setDebtorPaused(debtor.contactId!, true, reason.trim());
+              if (!res.ok) {
+                toast.error(res.error ?? 'Não foi possível pausar.');
+                return;
+              }
+              toast.success(`${debtor.name} saiu da régua.`);
+              onClose();
+              onSaved();
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <BellOff className="mr-1.5 h-4 w-4" />}
+          Tirar da régua
+        </Button>
+      </DialogContent>
+    </Dialog>
   );
 }
