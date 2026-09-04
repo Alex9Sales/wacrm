@@ -11,12 +11,16 @@
 import { and, desc, eq, gte, inArray, isNotNull, isNull, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
-import { db, agentActionRequests, channels, contacts, conversations, customerSignals, dealProducts, dealProposals, deals, pipelineStages } from '@/db'
+import { db, agentActionRequests, channels, contacts, conversations, customerSignals, dealProducts, dealProposals, deals, decisionFeedback, pipelineStages, user } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
+import { hasMinRole } from '@/lib/auth/roles'
+import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
 import { enqueueOrchestrationNudge } from '@/lib/queue/queues'
 import { executeOrchestrationAction, noteDealEvent } from '@/lib/orchestration/actions'
 import { ACTION_CATALOG, type OrchAction, type Risk } from '@/lib/orchestration/policy'
+import { REASON_CODES, REVERT_MATRIX, contextFingerprint, type RevertKind } from '@/lib/orchestration/revert'
+import { revertOrchestrationAction } from '@/lib/orchestration/revert-actions'
 import { loadDealProposalFields } from '@/lib/proposals/proposal'
 import { saveDealProposal, sendDealProposalEmail, setDealStatus } from '@/app/(dashboard)/pipelines/actions'
 
@@ -325,6 +329,7 @@ export async function approveQueueItem(input: { id: string; text?: string | null
   }
 
   let result: Record<string, unknown> = {}
+  let revertState: Record<string, unknown> | null = null
   let error: string | null = null
   if (meta.humanOnly) {
     if (!row.dealId) error = 'Esta ação precisa de um negócio.'
@@ -361,7 +366,10 @@ export async function approveQueueItem(input: { id: string; text?: string | null
       payload,
     })
     if (!r.ok) error = r.error ?? 'Não deu certo.'
-    else result = r.result ?? {}
+    else {
+      result = r.result ?? {}
+      revertState = r.revertState ?? null
+    }
   }
 
   const now = new Date().toISOString()
@@ -383,6 +391,7 @@ export async function approveQueueItem(input: { id: string; text?: string | null
       resolvedAt: now,
       resolvedBy: ctx.userId,
       result,
+      revertState,
       error: null,
     })
     .where(eq(agentActionRequests.id, row.id))
@@ -392,13 +401,27 @@ export async function approveQueueItem(input: { id: string; text?: string | null
   if (row.dealId) {
     await noteDealEvent(ctx.accountId, row.dealId, ctx.userId, `✅ ${meta.label} aprovado e executado. Por quê: ${row.reason ?? '—'}`)
   }
+  // Aprovou como veio ou EDITOU o texto? A diferença importa pra medir a
+  // qualidade da sugestão (editar muito = a IA está escrevendo mal).
+  const editou = meta.kind === 'message' && !!row.suggestedText && text !== row.suggestedText.trim()
+  await recordDecisionFeedback({
+    accountId: ctx.accountId,
+    requestId: row.id,
+    agentId: row.agentId,
+    actionType: action,
+    payload,
+    decision: editou ? 'edited' : 'approved',
+    reasonCode: null,
+    reasonText: null,
+    decidedBy: ctx.userId,
+  })
   // Decisão humana muda o estado: recalcula agora (a fila reflete na hora).
   void enqueueOrchestrationNudge(ctx.accountId, 'approval_decided')
   revalidatePath('/aprovacoes')
   return { ok: true }
 }
 
-export async function rejectQueueItem(id: string, note?: string): Promise<ActionResult> {
+export async function rejectQueueItem(id: string, note?: string, reasonCode?: string | null): Promise<ActionResult> {
   const ctx = await getCurrentAccount()
   if (ctx.role === 'viewer') return { ok: false, error: 'Seu papel só permite visualizar.' }
   const row = await loadPending(ctx.accountId, id)
@@ -411,6 +434,19 @@ export async function rejectQueueItem(id: string, note?: string): Promise<Action
   if (row.dealId) {
     await noteDealEvent(ctx.accountId, row.dealId, ctx.userId, `🚫 Sugestão da Fluxia recusada (${ACTION_CATALOG[row.actionType as OrchAction]?.label ?? row.actionType}).${note ? ` Motivo: ${note}` : ''}`)
   }
+  if (isOrchAction(row.actionType)) {
+    await recordDecisionFeedback({
+      accountId: ctx.accountId,
+      requestId: row.id,
+      agentId: row.agentId,
+      actionType: row.actionType,
+      payload: (row.payload ?? {}) as Record<string, unknown>,
+      decision: 'rejected',
+      reasonCode: reasonCode ?? null,
+      reasonText: note ?? null,
+      decidedBy: ctx.userId,
+    })
+  }
   void enqueueOrchestrationNudge(ctx.accountId, 'approval_rejected')
   revalidatePath('/aprovacoes')
   return { ok: true }
@@ -422,6 +458,13 @@ export interface AuditItem {
   action: OrchAction
   actionLabel: string
   status: string
+  /** Como desfazer/corrigir esta ação (undo | correct | escalate | note_only). */
+  revertKind: RevertKind
+  revertLabel: string
+  revertEffect: string
+  /** Já foi revertida/marcada? */
+  outcome: string | null
+  canRevert: boolean
   decision: string | null
   policy: string | null
   reason: string | null
@@ -442,6 +485,9 @@ export async function listRecentAudit(limit = 40): Promise<AuditItem[]> {
       policy: agentActionRequests.policy,
       reason: agentActionRequests.reason,
       dealId: agentActionRequests.dealId,
+      conversationId: agentActionRequests.conversationId,
+      revertState: agentActionRequests.revertState,
+      outcome: agentActionRequests.outcome,
       resolvedBy: agentActionRequests.resolvedBy,
       resolvedAt: agentActionRequests.resolvedAt,
       createdAt: agentActionRequests.createdAt,
@@ -455,7 +501,19 @@ export async function listRecentAudit(limit = 40): Promise<AuditItem[]> {
     .limit(Math.max(1, Math.min(200, limit)))
   return rows
     .filter((r) => isOrchAction(r.actionType))
-    .map((r) => ({
+    .map((r) => {
+      const plan = REVERT_MATRIX[r.actionType as OrchAction]
+      // "Desfazer" de verdade só aparece quando a ação FOI executada, guardou o
+      // estado anterior e ainda não foi revertida.
+      const executada = r.status === 'sent' || r.status === 'done'
+      const canRevert =
+        executada && !r.outcome && (plan.kind !== 'undo' || !!r.revertState)
+      return {
+      revertKind: plan.kind,
+      revertLabel: plan.label,
+      revertEffect: plan.effect,
+      outcome: r.outcome,
+      canRevert,
       id: r.id,
       action: r.actionType as OrchAction,
       actionLabel: ACTION_CATALOG[r.actionType as OrchAction].label,
@@ -468,7 +526,92 @@ export async function listRecentAudit(limit = 40): Promise<AuditItem[]> {
       byHuman: !!r.resolvedBy,
       error: r.error,
       at: r.resolvedAt ?? r.createdAt,
-    }))
+    }
+    })
+}
+
+/** Desfaz (ou corrige) uma ação já executada + registra o feedback humano. */
+export async function revertQueueItem(input: { id: string; reasonCode?: string | null; reasonText?: string | null }): Promise<ActionResult & { done?: string }> {
+  const ctx = await getCurrentAccount()
+  if (ctx.role === 'viewer') return { ok: false, error: 'Seu papel só permite visualizar.' }
+  const row = firstOrNull(
+    await db
+      .select()
+      .from(agentActionRequests)
+      .where(and(eq(agentActionRequests.id, input.id), eq(agentActionRequests.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  if (!row) return { ok: false, error: 'Ação não encontrada.' }
+  if (!isOrchAction(row.actionType)) return { ok: false, error: 'Tipo de ação desconhecido.' }
+  if (row.status !== 'sent' && row.status !== 'done') return { ok: false, error: 'Esta ação não chegou a ser executada.' }
+  if (row.outcome) return { ok: false, error: 'Esta ação já foi tratada.' }
+
+  const reason = (input.reasonText ?? '').trim() || REASON_CODES.find((r) => r.code === input.reasonCode)?.label || null
+  const r = await revertOrchestrationAction({
+    accountId: ctx.accountId,
+    actorUserId: ctx.userId,
+    action: row.actionType,
+    dealId: row.dealId,
+    conversationId: row.conversationId,
+    revertState: (row.revertState ?? null) as Record<string, unknown> | null,
+    reason,
+  })
+  if (!r.ok) return { ok: false, error: r.error ?? 'Não foi possível desfazer.' }
+
+  const plan = REVERT_MATRIX[row.actionType]
+  const outcome = plan.kind === 'undo' ? 'reverted' : plan.kind === 'correct' ? 'corrected' : 'bad_result'
+  const now = new Date().toISOString()
+  await db
+    .update(agentActionRequests)
+    .set({ outcome, outcomeReason: reason, revertedAt: now, revertedBy: ctx.userId })
+    .where(eq(agentActionRequests.id, row.id))
+
+  await recordDecisionFeedback({
+    accountId: ctx.accountId,
+    requestId: row.id,
+    agentId: row.agentId,
+    actionType: row.actionType,
+    payload: (row.payload ?? {}) as Record<string, unknown>,
+    decision: plan.kind === 'undo' ? 'reversed' : 'bad_result',
+    reasonCode: input.reasonCode ?? null,
+    reasonText: reason,
+    decidedBy: ctx.userId,
+  })
+  revalidatePath('/aprovacoes')
+  return { ok: true, done: r.done }
+}
+
+/** Registra a decisão humana (aprovou/editou/recusou/reverteu) pro Fluxia parar
+ *  de repetir o mesmo tipo de sugestão ruim. Best-effort: nunca derruba a ação. */
+async function recordDecisionFeedback(a: {
+  accountId: string
+  requestId: string
+  agentId: string | null
+  actionType: OrchAction
+  payload: Record<string, unknown>
+  decision: 'approved' | 'edited' | 'rejected' | 'reversed' | 'bad_result'
+  reasonCode: string | null
+  reasonText: string | null
+  decidedBy: string
+}): Promise<void> {
+  try {
+    const signalType = typeof a.payload.signalType === 'string' ? a.payload.signalType : null
+    const severity = typeof a.payload.severity === 'number' ? a.payload.severity : null
+    await db.insert(decisionFeedback).values({
+      accountId: a.accountId,
+      requestId: a.requestId,
+      agentId: a.agentId,
+      actionType: a.actionType,
+      signalType,
+      contextFingerprint: contextFingerprint(a.actionType, signalType, severity),
+      decision: a.decision,
+      reasonCode: a.reasonCode,
+      reasonText: a.reasonText ? a.reasonText.slice(0, 500) : null,
+      decidedBy: a.decidedBy,
+    })
+  } catch (err) {
+    console.error('[aprovacoes] feedback não registrado:', err instanceof Error ? err.message : err)
+  }
 }
 
 // ---------------------------------------------------------------- canal / "o que acontece ao aprovar"
@@ -571,4 +714,46 @@ function describeEffect(args: {
     default:
       return { effect: 'Executa a ação indicada.', warnings, proposalUrl: null }
   }
+}
+
+/** Motivos prontos (o mesmo código agrupa decisões parecidas). */
+export async function listReasonCodes(): Promise<{ code: string; label: string }[]> {
+  return REASON_CODES
+}
+
+export interface AiBrake {
+  mode: 'on' | 'suggest' | 'off'
+  by: string | null
+  at: string | null
+  reason: string | null
+  canChange: boolean
+}
+
+/** 🛑 Estado do freio da conta (topo da tela). */
+export async function getAiBrake(): Promise<AiBrake> {
+  const ctx = await getCurrentAccount()
+  const s = await getAccountSettings(ctx.accountId)
+  const mode = s.aiMode ?? (s.autonomyPaused ? 'off' : 'on')
+  let byName: string | null = null
+  if (s.aiModeBy) {
+    const u = firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, s.aiModeBy)).limit(1))
+    byName = u?.name ?? null
+  }
+  return { mode, by: byName, at: s.aiModeAt ?? null, reason: s.aiModeReason ?? null, canChange: hasMinRole(ctx.role, 'admin') }
+}
+
+/** Muda o freio (admin+). Registra quem mudou e por quê. */
+export async function setAiBrake(mode: 'on' | 'suggest' | 'off', reason?: string): Promise<ActionResult> {
+  const ctx = await getCurrentAccount()
+  if (!hasMinRole(ctx.role, 'admin')) return { ok: false, error: 'Só administradores mudam o estado da IA.' }
+  if (!['on', 'suggest', 'off'].includes(mode)) return { ok: false, error: 'Estado inválido.' }
+  await updateAccountSettings(ctx.accountId, {
+    aiMode: mode,
+    autonomyPaused: mode === 'off', // mantém o campo legado coerente
+    aiModeBy: ctx.userId,
+    aiModeAt: new Date().toISOString(),
+    aiModeReason: (reason ?? '').trim().slice(0, 300) || null,
+  })
+  revalidatePath('/aprovacoes')
+  return { ok: true }
 }

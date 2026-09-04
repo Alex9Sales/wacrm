@@ -46,6 +46,14 @@ describe('decide', () => {
   it('executa sozinho quando tudo está dentro', () => {
     expect(decide(base).decision).toBe('auto_execute')
   })
+  it('freio da conta: pausada bloqueia tudo; "só sugestões" rebaixa a sugestão', () => {
+    expect(decide({ ...base, accountMode: 'off' }).decision).toBe('blocked')
+    expect(decide({ ...base, accountMode: 'suggest' }).decision).toBe('suggest_only')
+    expect(decide({ ...base, accountMode: 'on' }).decision).toBe('auto_execute')
+    // o freio vale até pra ação de risco baixo em automático
+    expect(decide({ ...base, action: 'create_task', accountMode: 'suggest' }).decision).toBe('suggest_only')
+  })
+
   it('kill switch da conta e do agente bloqueiam', () => {
     expect(decide({ ...base, accountPaused: true }).decision).toBe('blocked')
     expect(decide({ ...base, policy: { ...base.policy, paused: true } }).decision).toBe('blocked')

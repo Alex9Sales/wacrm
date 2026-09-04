@@ -52,6 +52,9 @@ export interface ExecInput {
 export interface ExecResult {
   ok: boolean
   result?: Record<string, unknown>
+  /** Estado ANTERIOR à execução — o que o "Desfazer" precisa restaurar.
+   *  Ausente = ação sem reversão possível (ex.: mensagem entregue). */
+  revertState?: Record<string, unknown>
   error?: string
   /** Ação exige sessão humana (fila executa com o aprovador). */
   needsHuman?: boolean
@@ -220,7 +223,11 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         } catch (err) {
           console.error('[orchestration] planStageFollowUp falhou:', err instanceof Error ? err.message : err)
         }
-        return { ok: true, result: { fromStage: from?.name ?? null, toStage: to.name, stageId } }
+        return {
+          ok: true,
+          result: { fromStage: from?.name ?? null, toStage: to.name, stageId },
+          revertState: { stageId: deal.stageId, stageName: from?.name ?? null },
+        }
       }
 
       case 'create_task': {
@@ -255,15 +262,16 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
             dealId: deal?.id ?? null,
           })
         }
-        return { ok: true, result: { taskId: row?.id ?? null, assignedTo: assignee } }
+        return { ok: true, result: { taskId: row?.id ?? null, assignedTo: assignee }, revertState: { taskId: row?.id ?? null } }
       }
 
       case 'update_follow_up': {
         if (!deal) return { ok: false, error: 'Ação precisa de um negócio.' }
         const at = typeof input.payload.at === 'string' ? new Date(input.payload.at) : new Date(Date.now() + FOLLOW_UP_NEXT_HOURS * 3_600_000)
         if (Number.isNaN(at.getTime())) return { ok: false, error: 'Data inválida.' }
+        const antes = firstOrNull(await db.select({ v: deals.nextFollowUpAt }).from(deals).where(eq(deals.id, deal.id)).limit(1))
         await db.update(deals).set({ nextFollowUpAt: at.toISOString(), updatedAt: new Date().toISOString() }).where(eq(deals.id, deal.id))
-        return { ok: true, result: { nextFollowUpAt: at.toISOString() } }
+        return { ok: true, result: { nextFollowUpAt: at.toISOString() }, revertState: { nextFollowUpAt: antes?.v ?? null } }
       }
 
       case 'notify_seller':
@@ -349,6 +357,8 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         return {
           ok: true,
           result: { proposalId: row?.id ?? null, items: itemCount || 1, createdItem, value: itemCount === 0 ? value : null },
+          // desfazer = apagar a proposta (e o item que a IA lançou), só se não aceita
+          revertState: { proposalId: row?.id ?? null, createdItemForDeal: itemCount === 0 ? deal.id : null },
         }
       }
 
@@ -367,11 +377,18 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         )
         if (!prop) return { ok: false, error: 'Não há proposta salva neste negócio.' }
         if (prop.acceptedAt) return { ok: false, error: 'A proposta já foi aceita — não dá pra mexer no desconto.' }
+        const antesDesc = firstOrNull(
+          await db.select({ d: dealProposals.discount, dt: dealProposals.discountType }).from(dealProposals).where(eq(dealProposals.id, prop.id)).limit(1),
+        )
         await db
           .update(dealProposals)
           .set({ discount: String(pct), discountType: 'percent', updatedAt: new Date().toISOString() })
           .where(eq(dealProposals.id, prop.id))
-        return { ok: true, result: { proposalId: prop.id, discountPct: pct } }
+        return {
+          ok: true,
+          result: { proposalId: prop.id, discountPct: pct },
+          revertState: { proposalId: prop.id, discount: antesDesc?.d ?? '0', discountType: antesDesc?.dt ?? 'value' },
+        }
       }
 
       case 'start_cadence': {
@@ -388,7 +405,11 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
           { cadenceId, contactId: input.contactId, conversationId: input.conversationId, dealId: deal?.id ?? null },
         )
         if (!r.ok) return { ok: false, error: r.error ?? 'Não foi possível iniciar a cadência.' }
-        return { ok: true, result: { enrollmentId: r.enrollmentId ?? null, scheduled: r.scheduled ?? 0 } }
+        return {
+          ok: true,
+          result: { enrollmentId: r.enrollmentId ?? null, scheduled: r.scheduled ?? 0 },
+          revertState: { enrollmentId: r.enrollmentId ?? null },
+        }
       }
 
       case 'pause_cadence': {

@@ -409,6 +409,7 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
       action: rec.action,
       policy,
       accountPaused: !!settings.autonomyPaused,
+      accountMode: settings.aiMode ?? 'on',
       withinHours,
       optedOut: !!contact?.optedOut,
       humanActiveRecently: !!(deal?.conversationId && humanRecent.has(deal.conversationId)),
@@ -561,6 +562,8 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
         resolvedAt: now,
         resolvedBy: null,
         result: exec.result ?? {},
+        // guarda o estado anterior — é o que o "Desfazer" da auditoria usa
+        revertState: exec.revertState ?? null,
       })
       recentKeys.add(k)
       usedByAction.set(rec.action, (usedByAction.get(rec.action) ?? 0) + 1)

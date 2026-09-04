@@ -149,8 +149,10 @@ export function capFor(policy: AutonomyPolicy, action: OrchAction): number {
 export interface DecisionContext {
   action: OrchAction
   policy: AutonomyPolicy
-  /** account_settings.autonomyPaused */
+  /** account_settings.autonomyPaused (legado) */
   accountPaused: boolean
+  /** Freio da conta: 'on' opera · 'suggest' só sugere · 'off' pausada. */
+  accountMode?: 'on' | 'suggest' | 'off'
   /** Dentro do horário permitido pra falar com cliente. */
   withinHours: boolean
   optedOut: boolean
@@ -186,7 +188,14 @@ export function decide(ctx: DecisionContext): PolicyDecision {
   const isMessage = meta.kind === 'message'
   const base = `${ctx.action}=${level} · risco ${meta.risk}`
 
-  if (ctx.accountPaused) return { decision: 'blocked', level, reason: `${base} · kill switch da conta ligado` }
+  // 🛑 Freio da conta vem ANTES de tudo: pausada não executa nada; "só
+  // sugestões" rebaixa qualquer ação a sugestão (nada sai, nada muda sozinho).
+  if (ctx.accountMode === 'off' || ctx.accountPaused) {
+    return { decision: 'blocked', level, reason: `${base} · IA pausada nesta conta` }
+  }
+  if (ctx.accountMode === 'suggest') {
+    return { decision: 'suggest_only', level, reason: `${base} · conta em "somente sugestões"` }
+  }
   if (ctx.policy.paused) return { decision: 'blocked', level, reason: `${base} · autonomia do agente pausada` }
   if (isMessage && ctx.optedOut) return { decision: 'blocked', level, reason: `${base} · contato pediu pra não receber mensagens` }
 

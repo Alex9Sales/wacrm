@@ -29,6 +29,10 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { Textarea } from '@/components/ui/textarea';
 import { cn } from '@/lib/utils';
 import {
+  getAiBrake,
+  revertQueueItem,
+  setAiBrake,
+  type AiBrake,
   approveQueueItem,
   getAutonomyMetrics,
   listApprovalQueue,
@@ -98,10 +102,14 @@ export function ApprovalQueueClient() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAudit, setShowAudit] = useState(false);
+  // 🛑 Freio da conta (topo, sempre visível).
+  const [brake, setBrake] = useState<AiBrake | null>(null);
+  const [brakeBusy, setBrakeBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [q, m, a] = await Promise.all([listApprovalQueue(), getAutonomyMetrics(7), listRecentAudit(40)]);
+      const [q, m, a, b] = await Promise.all([listApprovalQueue(), getAutonomyMetrics(7), listRecentAudit(40), getAiBrake()]);
+      setBrake(b);
       setItems(q);
       setMetrics(m);
       setAudit(a);
@@ -153,6 +161,47 @@ export function ApprovalQueueClient() {
     }
   };
 
+  const changeBrake = async (mode: 'on' | 'suggest' | 'off') => {
+    if (!brake?.canChange || brakeBusy || brake.mode === mode) return;
+    const motivo =
+      mode === 'on'
+        ? undefined
+        : (window.prompt(
+            mode === 'off' ? 'Pausar a IA nesta conta. Motivo (opcional):' : 'Deixar a IA só sugerindo. Motivo (opcional):',
+          ) ?? undefined);
+    setBrakeBusy(true);
+    try {
+      const r = await setAiBrake(mode, motivo);
+      if (!r.ok) toast.error(r.error);
+      else toast.success(mode === 'on' ? 'IA operando.' : mode === 'suggest' ? 'IA agora só sugere.' : 'IA pausada nesta conta.');
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Não deu certo.');
+    } finally {
+      setBrakeBusy(false);
+    }
+  };
+
+  const revert = async (a: AuditItem) => {
+    const pergunta =
+      a.revertKind === 'undo'
+        ? `${a.revertEffect}\n\nConfirma?`
+        : `${a.revertEffect}\n\nRegistrar como resultado ruim?`;
+    if (!window.confirm(pergunta)) return;
+    const motivo = window.prompt('O que houve de errado? (ajuda a IA a não repetir)') ?? '';
+    setBusy(a.id);
+    try {
+      const r = await revertQueueItem({ id: a.id, reasonText: motivo || null });
+      if (!r.ok) toast.error(r.error);
+      else toast.success(r.done ?? 'Registrado.');
+      await load();
+    } catch (e) {
+      toast.error(e instanceof Error ? e.message : 'Não deu certo.');
+    } finally {
+      setBusy(null);
+    }
+  };
+
   const reject = async (it: ApprovalItem) => {
     setBusy(it.id);
     try {
@@ -183,6 +232,58 @@ export function ApprovalQueueClient() {
           <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Atualizar
         </Button>
       </header>
+
+      {/* 🛑 FREIO — sempre visível: em produto autônomo a pessoa precisa saber
+          num olhar se a IA está agindo, e conseguir parar na hora. */}
+      {brake ? (
+        <div
+          className={cn(
+            'flex flex-wrap items-center gap-3 rounded-xl border p-3',
+            brake.mode === 'on'
+              ? 'border-emerald-500/40 bg-emerald-500/5'
+              : brake.mode === 'suggest'
+                ? 'border-amber-500/40 bg-amber-500/5'
+                : 'border-red-500/40 bg-red-500/5',
+          )}
+        >
+          <span
+            className={cn(
+              'inline-flex items-center gap-1.5 rounded-full px-3 py-1 text-sm font-semibold',
+              brake.mode === 'on'
+                ? 'bg-emerald-500/15 text-emerald-700 dark:text-emerald-300'
+                : brake.mode === 'suggest'
+                  ? 'bg-amber-500/15 text-amber-700 dark:text-amber-300'
+                  : 'bg-red-500/15 text-red-700 dark:text-red-300',
+            )}
+          >
+            {brake.mode === 'on' ? <Bot className="h-4 w-4" /> : brake.mode === 'suggest' ? <ClipboardCheck className="h-4 w-4" /> : <ShieldAlert className="h-4 w-4" />}
+            {brake.mode === 'on' ? 'IA operando' : brake.mode === 'suggest' ? 'IA só sugerindo' : 'IA pausada'}
+          </span>
+          <span className="text-xs text-muted-foreground">
+            {brake.mode === 'on'
+              ? 'A IA executa o que a política permite e manda o resto pra cá.'
+              : brake.mode === 'suggest'
+                ? 'Nada sai e nada muda sozinho — tudo vira sugestão.'
+                : 'Nenhuma ação é executada. Os sinais continuam sendo registrados.'}
+            {brake.by ? ` · alterado por ${brake.by}${brake.reason ? `: "${brake.reason}"` : ''}` : ''}
+          </span>
+          {brake.canChange ? (
+            <div className="ml-auto flex gap-1.5">
+              {(['on', 'suggest', 'off'] as const).map((m) => (
+                <Button
+                  key={m}
+                  size="sm"
+                  variant={brake.mode === m ? 'default' : 'outline'}
+                  disabled={brakeBusy || brake.mode === m}
+                  onClick={() => void changeBrake(m)}
+                >
+                  {m === 'on' ? 'Operar' : m === 'suggest' ? 'Só sugerir' : 'Pausar'}
+                </Button>
+              ))}
+            </div>
+          ) : null}
+        </div>
+      ) : null}
 
       {metrics ? (
         <div className="grid grid-cols-2 gap-3 sm:grid-cols-4 lg:grid-cols-7">
@@ -431,6 +532,18 @@ export function ApprovalQueueClient() {
                       <span className="ml-auto text-xs text-muted-foreground">{fmt(a.at)}</span>
                     </div>
                     {a.reason ? <p className="text-xs text-muted-foreground">Por quê: {a.reason}</p> : null}
+                    {a.outcome ? (
+                      <p className="text-xs text-amber-700 dark:text-amber-400">
+                        {a.outcome === 'reverted' ? '↩️ desfeita' : a.outcome === 'corrected' ? '⚠️ marcada como errada — IA pausada na conversa' : '⚠️ marcada como resultado ruim'}
+                      </p>
+                    ) : a.canRevert ? (
+                      <div className="flex items-center gap-2">
+                        <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void revert(a)} disabled={busy === a.id}>
+                          {a.revertLabel}
+                        </Button>
+                        <span className="text-[11px] text-muted-foreground">{a.revertEffect}</span>
+                      </div>
+                    ) : null}
                     {a.policy ? <p className="text-xs text-muted-foreground">Regra: {a.policy}</p> : null}
                     {a.error ? <p className="text-xs text-red-600 dark:text-red-300">Erro: {a.error}</p> : null}
                   </li>

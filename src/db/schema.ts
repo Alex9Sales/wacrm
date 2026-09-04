@@ -2953,6 +2953,14 @@ export const agentActionRequests = pgTable("agent_action_requests", {
 	result: jsonb().$type<Record<string, unknown>>(),
 	error: text(),
 	attempts: integer().default(0).notNull(),
+	// 🔙 Reversão/correção (migr 0156): estado ANTERIOR à execução (null = ação
+	// sem desfazer possível, ex.: mensagem entregue) + julgamento do humano.
+	revertState: jsonb("revert_state").$type<Record<string, unknown>>(),
+	// reverted | corrected | bad_result | ok
+	outcome: text(),
+	outcomeReason: text("outcome_reason"),
+	revertedAt: timestamp("reverted_at", { withTimezone: true, mode: 'string' }),
+	revertedBy: uuid("reverted_by"),
 	payload: jsonb("payload").default({}).notNull(),
 	suggestedText: text("suggested_text"),
 	reason: text("reason"),
@@ -3011,4 +3019,27 @@ export const socialPosts = pgTable("social_posts", {
 			foreignColumns: [instagramCommentAutomations.id],
 			name: "social_posts_automation_id_fkey"
 		}).onDelete("set null"),
+]);
+
+// 🧠 Feedback humano estruturado sobre as ações da IA (migr 0156): aprovou,
+// editou, recusou ou reverteu — com motivo e assinatura do contexto. Base para
+// medir a REPETIÇÃO DO MESMO ERRO e ajustar a política.
+export const decisionFeedback = pgTable("decision_feedback", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	requestId: uuid("request_id"),
+	agentId: uuid("agent_id"),
+	actionType: text("action_type").notNull(),
+	signalType: text("signal_type"),
+	contextFingerprint: text("context_fingerprint").notNull(),
+	// approved | edited | rejected | reversed | bad_result
+	decision: text().notNull(),
+	reasonCode: text("reason_code"),
+	reasonText: text("reason_text"),
+	decidedBy: uuid("decided_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("decision_feedback_pattern_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contextFingerprint.asc().nullsLast().op("text_ops"), table.createdAt.desc().nullsLast().op("timestamptz_ops")),
+	index("decision_feedback_account_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsLast().op("timestamptz_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "decision_feedback_account_id_fkey" }).onDelete("cascade"),
 ]);

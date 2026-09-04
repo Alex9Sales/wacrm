@@ -68,6 +68,13 @@ export interface AccountSettings {
    *  (modo Automático) dispara na conta, independente da config dos agentes.
    *  Freio de emergência. Padrão false (não pausado). */
   autonomyPaused: boolean
+  /** 🛑 Freio de 3 posições (03/09): 'on' opera | 'suggest' só sugere | 'off'
+   *  pausada. Substitui na prática o autonomyPaused (mantido por compat). */
+  aiMode: 'on' | 'suggest' | 'off'
+  /** Quem mexeu no freio e por quê (auditoria do controle). */
+  aiModeBy: string | null
+  aiModeAt: string | null
+  aiModeReason: string | null
   /** Cadência que inscreve o contato ao marcar o negócio como GANHO
    *  (pós-venda/onboarding). null = nenhuma. */
   wonCadenceId: string | null
@@ -160,6 +167,10 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   staleDealDays: 7,
   recordSaleOnWon: true,
   autonomyPaused: false,
+  aiMode: 'on',
+  aiModeBy: null,
+  aiModeAt: null,
+  aiModeReason: null,
   wonCadenceId: null,
   lostCadenceId: null,
   wonPipelineId: null,
