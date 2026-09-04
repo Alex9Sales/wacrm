@@ -983,11 +983,48 @@ export async function dispatchInboundToAiReply(
         await applyTags()
         return
       }
+      // ⚠️ 04/09 (caso Wellington, Família do Gás): aqui a IA se DESLIGAVA
+      // sozinha, em silêncio, sempre que um turno saía sem texto — e um turno
+      // sai sem texto com facilidade, por exemplo quando a rodada foi gasta
+      // executando ferramenta (ele criou o pedido às 17:12 e emudeceu no meio
+      // da compra; ninguém soube até o Alex reparar).
+      //
+      // "O modelo não escreveu nada AGORA" não é "a IA nunca mais deve falar
+      // aqui". Então: não desliga no primeiro; registra o tropeço; e só pausa
+      // se virar padrão — aí com nota, porque ninguém pode descobrir de graça
+      // que a IA parou.
       await applyTags()
-      await db
-        .update(conversations)
-        .set({ aiAutoreplyDisabled: true })
-        .where(eq(conversations.id, conversationId))
+
+      const marca = '⚠️ A IA não gerou resposta neste turno'
+      const tropecos = await db
+        .select({ id: messagesTable.id })
+        .from(messagesTable)
+        .where(
+          and(
+            eq(messagesTable.conversationId, conversationId),
+            eq(messagesTable.isInternal, true),
+            sql`${messagesTable.contentText} LIKE ${'%' + marca + '%'}`,
+            sql`${messagesTable.createdAt} >= now() - interval '1 hour'`,
+          ),
+        )
+        .limit(3)
+
+      if (tropecos.length >= 2) {
+        await db
+          .update(conversations)
+          .set({ aiAutoreplyDisabled: true })
+          .where(eq(conversations.id, conversationId))
+        await postInternalNote({
+          conversationId,
+          text: '🛑 IA pausada nesta conversa: três turnos seguidos sem gerar resposta. Assuma a conversa — religue a IA quando quiser que ela volte.',
+        }).catch(() => {})
+      } else {
+        // Não desliga: a próxima mensagem do cliente ganha uma tentativa nova.
+        await postInternalNote({
+          conversationId,
+          text: `${marca}. Ela continua ligada e tenta de novo na próxima mensagem.`,
+        }).catch(() => {})
+      }
       return
     }
 

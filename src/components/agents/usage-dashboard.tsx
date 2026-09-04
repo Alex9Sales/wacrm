@@ -204,11 +204,11 @@ export function UsageDashboard() {
                 />
                 <Kpi
                   icon={<ArrowRightLeft className="h-4 w-4" />}
-                  label="Transferências"
+                  label="Passaram por humano"
                   value={`${pct(data.funnel.transferred, data.funnel.total)}%`}
                   sub={`${int(
                     data.funnel.transferred,
-                  )} escaladas para um humano`}
+                  )} em que alguém do time entrou`}
                 />
               </div>
             </div>
@@ -312,9 +312,13 @@ export function UsageDashboard() {
               />
               <Kpi
                 icon={<ArrowRightLeft className="h-4 w-4" />}
-                label="Transferências p/ humano"
+                label="A IA pediu ajuda"
                 value={int(data.quality.handoffs)}
-                sub={`${data.quality.handoffRatePct.toFixed(0)}% das conversas`}
+                sub={
+                  data.quality.handoffs === 0
+                    ? 'nenhuma vez — ela nunca transferiu sozinha'
+                    : `${data.quality.handoffRatePct.toFixed(0)}% das conversas`
+                }
               />
               <Kpi
                 icon={<ShoppingCart className="h-4 w-4" />}
