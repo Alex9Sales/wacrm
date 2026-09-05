@@ -3136,6 +3136,8 @@ export const collectionsTouches = pgTable("collections_touches", {
 	paused: boolean().default(false).notNull(),
 	pausedReason: text("paused_reason"),
 	pausedBy: uuid("paused_by"),
+	/** Últimas 3 mensagens de cobrança enviadas (mais recente primeiro) — a IA recebe para não repetir. */
+	recentTexts: jsonb("recent_texts").$type<string[]>().default([]).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

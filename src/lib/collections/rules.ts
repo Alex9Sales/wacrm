@@ -224,15 +224,35 @@ export function formatDebtSummary(charges: ChargeLine[]): { total: number; lines
  * Texto de segurança usado quando a IA não está disponível. Seco de
  * propósito: é melhor uma mensagem correta e sem graça do que nenhuma — mas
  * ela nunca sai sozinha, porque a régua começa passando pela aprovação.
+ *
+ * Mesmo sendo o texto de segurança, ele VARIA (05/09): abertura e fechamento
+ * sorteados pela semente — dois devedores no mesmo dia não recebem a mesma
+ * frase. Semente 0 é o texto original. Valores e link nunca mudam.
  */
-export function fallbackMessage(firstName: string | null, summary: ReturnType<typeof formatDebtSummary>, touch: number): string {
+export function fallbackMessage(firstName: string | null, summary: ReturnType<typeof formatDebtSummary>, touch: number, seed = 0): string {
   const oi = firstName ? `Oi, ${firstName}!` : 'Oi!'
-  const abre =
-    touch === 0
-      ? `${oi} Passando para lembrar de um valor em aberto por aqui:`
-      : `${oi} Voltando no valor que ficou em aberto:`
+  const primeiras = [
+    `${oi} Passando para lembrar de um valor em aberto por aqui:`,
+    `${oi} Tudo bem? Vi aqui um valor em aberto e queria te lembrar:`,
+    `${oi} Dando um toque rápido: ficou um valor em aberto por aqui:`,
+    `${oi} Só para lembrar, ficou pendente por aqui:`,
+  ]
+  const seguintes = [
+    `${oi} Voltando no valor que ficou em aberto:`,
+    `${oi} Passando de novo por aqui sobre o valor em aberto:`,
+    `${oi} Tudo bem? Ainda consta em aberto por aqui:`,
+    `${oi} Retomando o assunto do valor pendente:`,
+  ]
+  const fechos = [
+    'Se já pagou ou quiser combinar uma data, é só me dizer por aqui.',
+    'Se já tiver pago, me avisa por aqui; se preferir combinar uma data, também é só falar.',
+    'Já pagou? Me conta por aqui. Se quiser combinar uma data, a gente vê junto.',
+    'Qualquer dúvida, ou se quiser combinar uma data, é só responder esta mensagem.',
+  ]
+  const s = seed >>> 0
+  const abre = (touch === 0 ? primeiras : seguintes)[s % 4]
   const corpo = summary.lines.map((l) => `• ${l}`).join('\n')
   const total = summary.lines.length > 1 ? `\n\nTotal: ${brl(summary.total)}` : ''
   const link = summary.links.length === 1 ? `\n\nPara pagar: ${summary.links[0]}` : ''
-  return `${abre}\n\n${corpo}${total}${link}\n\nSe já pagou ou quiser combinar uma data, é só me dizer por aqui.`
+  return `${abre}\n\n${corpo}${total}${link}\n\n${fechos[(s >>> 2) % 4]}`
 }

@@ -201,11 +201,25 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
 
         await db
           .insert(collectionsTouches)
-          .values({ accountId: input.accountId, contactId: input.contactId, lastTouchAt: nowIso, touchCount: 1, updatedAt: nowIso })
+          .values({ accountId: input.accountId, contactId: input.contactId, lastTouchAt: nowIso, touchCount: 1, updatedAt: nowIso, recentTexts: [text] })
           .onConflictDoUpdate({
             target: [collectionsTouches.accountId, collectionsTouches.contactId],
             set: { lastTouchAt: nowIso, touchCount: sql`${collectionsTouches.touchCount} + 1`, updatedAt: nowIso },
           })
+        // Guarda o que FOI enviado (não o rascunho): é o que a IA recebe no
+        // próximo toque como "não repita isto". Últimas 3, mais recente primeiro.
+        const prevTexts = firstOrNull(
+          await db
+            .select({ recentTexts: collectionsTouches.recentTexts })
+            .from(collectionsTouches)
+            .where(and(eq(collectionsTouches.accountId, input.accountId), eq(collectionsTouches.contactId, input.contactId)))
+            .limit(1),
+        )
+        const kept = [text, ...(Array.isArray(prevTexts?.recentTexts) ? prevTexts.recentTexts : []).filter((t) => typeof t === 'string' && t !== text)].slice(0, 3)
+        await db
+          .update(collectionsTouches)
+          .set({ recentTexts: kept })
+          .where(and(eq(collectionsTouches.accountId, input.accountId), eq(collectionsTouches.contactId, input.contactId)))
 
         return {
           ok: true,

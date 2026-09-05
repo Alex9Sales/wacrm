@@ -23,6 +23,8 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 import { decide, readPolicy, type AutonomyPolicy } from '@/lib/orchestration/policy'
 import { syncAccount } from '@/lib/asaas/sync'
 
+import { maxSimilarity, seedFrom, tooSimilar, variationInstruction, variationPlan } from './variation'
+
 import {
   eligibility,
   fallbackMessage,
@@ -113,6 +115,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       touchCount: collectionsTouches.touchCount,
       snoozeUntil: collectionsTouches.snoozeUntil,
       paused: collectionsTouches.paused,
+      recentTexts: collectionsTouches.recentTexts,
     })
     .from(asaasCharges)
     .innerJoin(asaasConnections, eq(asaasConnections.id, asaasCharges.connectionId))
@@ -143,6 +146,8 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     touchCount: number
     snoozeUntil: string | null
     paused: boolean
+    /** Últimas mensagens de cobrança enviadas a ele — a IA recebe para não repetir. */
+    recentTexts: string[]
   }
 
   const byContact = new Map<string, Debtor>()
@@ -160,6 +165,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
         touchCount: r.touchCount ?? 0,
         snoozeUntil: r.snoozeUntil,
         paused: r.paused ?? false,
+        recentTexts: Array.isArray(r.recentTexts) ? r.recentTexts.filter((t): t is string => typeof t === 'string') : [],
       }
       byContact.set(r.contactId, d)
     }
@@ -209,6 +215,14 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     (a, b) => Math.max(...b.charges.map((c) => c.daysLate ?? -1)) - Math.max(...a.charges.map((c) => c.daysLate ?? -1)),
   )
 
+  // Momento do envio (entra no prompt como cor local: "sexta à tarde") e as
+  // mensagens já redigidas NESTA rodada — quarenta cobranças no mesmo dia não
+  // podem sair como quarenta cópias com o nome trocado.
+  const dias = ['domingo', 'segunda-feira', 'terça-feira', 'quarta-feira', 'quinta-feira', 'sexta-feira', 'sábado']
+  const moment = weekday >= 0 ? `${dias[weekday]} ${hour < 12 ? 'de manhã' : hour < 18 ? 'à tarde' : 'à noite'}` : ''
+  const runTexts: string[] = []
+  const dayKey = today.toISOString().slice(0, 10)
+
   for (const d of ordered) {
     if (budget <= 0) break
     if (alreadyQueued.has(d.contactId)) {
@@ -240,7 +254,11 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       summary,
       touch: d.touchCount,
       tone: s.tone,
+      previousTexts: [...d.recentTexts, ...runTexts.slice(-3)],
+      seed: seedFrom(d.contactId, d.touchCount, dayKey),
+      moment,
     })
+    runTexts.push(text)
 
     const conv = firstOrNull(
       await db
@@ -314,16 +332,22 @@ async function draftCollectionMessage(args: {
   summary: ReturnType<typeof formatDebtSummary>
   touch: number
   tone: string
+  /** Mensagens já enviadas a este devedor + as redigidas nesta rodada. */
+  previousTexts: string[]
+  seed: number
+  moment: string
 }): Promise<string> {
-  const fallback = fallbackMessage(args.firstName, args.summary, args.touch)
+  const fallback = fallbackMessage(args.firstName, args.summary, args.touch, args.seed)
   if (!args.agentId) return fallback
 
   try {
     const config = await loadAiConfigById(args.accountId, args.agentId, { requireActive: false })
     if (!config) return fallback
 
-    const system = [
-      'Você escreve uma cobrança educada no WhatsApp, em português do Brasil. UMA mensagem curta (até 500 caracteres), sem markdown, sem assinatura, no máximo 1 emoji.',
+    const plan = variationPlan(args.seed)
+    const previous = args.previousTexts.filter((t) => t.trim().length > 0).slice(-4)
+    const base = [
+      'Você escreve uma cobrança educada no WhatsApp, em português do Brasil. UMA mensagem (até 500 caracteres), sem markdown, sem assinatura.',
       args.firstName ? `Cliente: ${args.firstName}. Use só o primeiro nome.` : 'Não sabemos o nome do cliente.',
       `Valores em aberto (copie exatamente, NUNCA recalcule nem arredonde):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`,
       args.summary.lines.length > 1
@@ -332,21 +356,39 @@ async function draftCollectionMessage(args: {
       args.summary.links.length === 1 ? `Inclua este link de pagamento no final: ${args.summary.links[0]}` : '',
       args.touch === 0
         ? 'É o PRIMEIRO contato sobre isso: tom de lembrete, leve, sem cobrança dura.'
-        : `Já são ${args.touch + 1} contatos sobre a mesma dívida: continue educado e sem repetir a mensagem anterior, mas seja mais direto.`,
+        : `Já são ${args.touch + 1} contatos sobre a mesma dívida: continue educado, mas seja mais direto.`,
+      args.moment ? `Momento do envio: ${args.moment}.` : '',
+      variationInstruction(plan),
+      previous.length
+        ? `Mensagens JÁ ENVIADAS (a este cliente ou a outros hoje). Não repita abertura, frases nem estrutura de nenhuma delas — o cliente percebe texto de robô:\n${previous
+            .map((t, i) => `${i + 1}) ${t.slice(0, 280)}`)
+            .join('\n')}`
+        : '',
       'NUNCA ameace, nunca fale em protesto, negativação, juros, multa, corte de serviço ou consequência jurídica. Nunca ofereça desconto, parcelamento ou prazo — se o cliente pedir, quem decide é uma pessoa.',
-      'Termine convidando o cliente a responder ali mesmo se já pagou ou se quiser combinar uma data — a resposta dele é o que pausa a cobrança.',
+      'Sempre deixe claro que o cliente pode responder ali mesmo se já pagou ou se quiser combinar uma data — a resposta dele é o que pausa a cobrança.',
       args.tone ? `Tom da empresa: ${args.tone}` : '',
-    ]
-      .filter(Boolean)
-      .join('\n\n')
+    ].filter(Boolean)
 
-    const r = await generateReply({
-      config,
-      systemPrompt: system,
-      messages: [{ role: 'user', content: 'Escreva a mensagem agora.' }] as unknown as Parameters<typeof generateReply>[0]['messages'],
-    })
-    const out = (r?.text ?? '').trim()
-    return out.length >= 20 ? out : fallback
+    const gen = async (extra: string): Promise<string | null> => {
+      const r = await generateReply({
+        config,
+        systemPrompt: [...base, extra].filter(Boolean).join('\n\n'),
+        messages: [{ role: 'user', content: 'Escreva a mensagem agora.' }] as unknown as Parameters<typeof generateReply>[0]['messages'],
+      })
+      const out = (r?.text ?? '').trim()
+      return out.length >= 20 ? out : null
+    }
+
+    const first = await gen('')
+    if (!first) return fallback
+    if (!tooSimilar(first, previous)) return first
+
+    // Repetiu. Uma segunda chance com o motivo explícito; fica a menos parecida.
+    const retry = await gen(
+      'ATENÇÃO: a tentativa anterior ficou parecida demais com uma mensagem já enviada. Troque a abertura, a ordem das informações e as palavras — mantenha só valores, datas e o link.',
+    )
+    if (!retry) return first
+    return maxSimilarity(retry, previous) < maxSimilarity(first, previous) ? retry : first
   } catch {
     return fallback
   }

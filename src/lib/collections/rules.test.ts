@@ -162,4 +162,15 @@ describe('fallbackMessage', () => {
   it('funciona sem nome', () => {
     expect(fallbackMessage(null, summary, 0).startsWith('Oi!')).toBe(true)
   })
+
+  it('varia com a semente sem mexer em valor nem link — dois devedores no mesmo dia não recebem a mesma frase', () => {
+    const textos = [0, 1, 2, 3, 4, 5, 6, 7].map((seed) => fallbackMessage('Ana', summary, 0, seed))
+    expect(new Set(textos).size).toBeGreaterThanOrEqual(4)
+    for (const t of textos) {
+      expect(t.replace(/\u00a0/g, ' ')).toContain('R$ 150,00')
+      expect(t).toContain('https://x/1')
+      expect(t).toContain('combinar uma data')
+      expect(t.startsWith('Oi, Ana!')).toBe(true)
+    }
+  })
 })
