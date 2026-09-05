@@ -150,54 +150,52 @@ export async function resolveConversationByPhone(
   }
 
   // ---- conversation -------------------------------------------
-  // One conversation per (account, contact, channel) — same convention as
-  // the inbound pipeline (inbound.ts).
-  const conv = firstOrNull(
+  try {
+    const conv = await ensureConversationForContact(accountId, contactId!, resolvedChannelId, ownerUserId);
+    return { conversationId: conv.conversationId, contactId: contactId!, contactCreated };
+  } catch (convErr) {
+    console.error('[resolve-conversation] conversation create error:', convErr);
+    throw new SendMessageError('db_error', 'Failed to create conversation', 500);
+  }
+}
+
+/**
+ * Garante a conversa (conta, contato, canal) para um contato que JÁ existe.
+ * É por aqui que a régua de cobrança alcança quem nunca escreveu (05/09):
+ * mesma convenção do inbound — uma conversa por (conta, contato, canal),
+ * setor herdado do canal, autoria = dono da conta.
+ */
+export async function ensureConversationForContact(
+  accountId: string,
+  contactId: string,
+  channelId: string,
+  auditUserId?: string
+): Promise<{ conversationId: string; created: boolean }> {
+  const existing = firstOrNull(
     await db
       .select({ id: conversations.id })
       .from(conversations)
       .where(
         and(
           eq(conversations.accountId, accountId),
-          eq(conversations.contactId, contactId!),
-          eq(conversations.channelId, resolvedChannelId)
+          eq(conversations.contactId, contactId),
+          eq(conversations.channelId, channelId)
         )
       )
       .limit(1)
   );
+  if (existing?.id) return { conversationId: existing.id, created: false };
 
-  if (conv?.id) {
-    return { conversationId: conv.id, contactId: contactId!, contactCreated };
-  }
+  const userId = auditUserId ?? (await resolveAuditUserId(accountId));
+  // Herda o setor padrão do canal na criação (igual ao inbound): conversa
+  // aberta pelo sistema num canal de setor pertence ao setor, não à fila geral.
+  const bornSectorId = await channelDefaultSectorId(channelId);
 
-  // Inherit the channel's default sector at creation (same as the inbound
-  // pipeline) — an agent- or API-started conversation on a sector-owned channel
-  // must belong to that sector, not the open general queue (which everyone
-  // sees). Null when the channel has no default sector.
-  const bornSectorId = await channelDefaultSectorId(resolvedChannelId);
-
-  let newConv: { id: string };
-  try {
-    newConv = firstOrThrow(
-      await db
-        .insert(conversations)
-        .values({
-          accountId,
-          userId: ownerUserId,
-          contactId: contactId!,
-          channelId: resolvedChannelId,
-          sectorId: bornSectorId,
-        })
-        .returning({ id: conversations.id })
-    );
-  } catch (convErr) {
-    console.error('[resolve-conversation] conversation create error:', convErr);
-    throw new SendMessageError(
-      'db_error',
-      'Failed to create conversation',
-      500
-    );
-  }
-
-  return { conversationId: newConv.id, contactId: contactId!, contactCreated };
+  const created = firstOrThrow(
+    await db
+      .insert(conversations)
+      .values({ accountId, userId, contactId, channelId, sectorId: bornSectorId })
+      .returning({ id: conversations.id })
+  );
+  return { conversationId: created.id, created: true };
 }

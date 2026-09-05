@@ -30,6 +30,7 @@ import { firstOrNull } from '@/db/helpers'
 import { cancelEnrollment, enrollContactInCadence } from '@/lib/cadences/cadence'
 import { publishEvent } from '@/lib/events/publish'
 import { engineSendText } from '@/lib/flows/meta-send'
+import { openCollectionConversation } from '@/lib/collections/outreach'
 import { planStageFollowUp } from '@/lib/ai/followup'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 
@@ -185,8 +186,15 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
           return { ok: false, error: 'Este cliente não tem mais nada em aberto — a cobrança não foi enviada.' }
         }
 
-        const conversationId = await resolveConversationId(input.accountId, input.contactId, input.conversationId, deal?.conversationId ?? null)
-        if (!conversationId) return { ok: false, error: 'Contato sem conversa aberta — não dá pra mandar mensagem.' }
+        // Devedor que nunca conversou: a régua abre a conversa no número de
+        // cobrança da conta. Até 05/09 isso falhava e a cobrança só alcançava
+        // quem já tinha escrito — numa carteira de inadimplentes, a minoria.
+        let conversationId = await resolveConversationId(input.accountId, input.contactId, input.conversationId, deal?.conversationId ?? null)
+        if (!conversationId) {
+          const opened = await openCollectionConversation(input.accountId, input.contactId)
+          if (!opened.ok) return { ok: false, error: opened.error }
+          conversationId = opened.conversationId
+        }
         const userId = await senderUserId(input.accountId, input.actorUserId, deal, conversationId)
         const sent = await engineSendText({ accountId: input.accountId, userId, conversationId, contactId: input.contactId, text })
         const nowIso = new Date().toISOString()

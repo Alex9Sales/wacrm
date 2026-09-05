@@ -10,7 +10,7 @@
 // Sem 'server-only' — o worker alcança isso na Fase 2.
 // ============================================================
 
-import { isPlausibleDDD, normalizePhone } from '@/lib/whatsapp/phone-utils'
+import { isPlausibleDDD, normalizePhone, toBrE164IfNational } from '@/lib/whatsapp/phone-utils'
 
 /** Como a cobrança encontrou o contato (guardado para auditoria). */
 export type MatchedBy = 'phone' | 'email' | 'code' | 'manual'
@@ -98,4 +98,21 @@ export function daysOverdue(dueDate: string | null | undefined, today = new Date
   if (Number.isNaN(due.getTime())) return null
   const ref = new Date(today.getFullYear(), today.getMonth(), today.getDate())
   return Math.round((ref.getTime() - due.getTime()) / 86_400_000)
+}
+
+/**
+ * Telefone como o Asaas guarda ("67992361631", "(67) 99236-1631", "5567…") →
+ * dígitos com DDI, prontos para virar contato do CRM. Só aceita número
+ * brasileiro plausível: cadastro com telefone estrangeiro ou quebrado continua
+ * pendência (uma pessoa resolve), não vira contato de lixo.
+ */
+export function asaasPhoneForContact(raw: string | null | undefined): string | null {
+  const text = (raw ?? '').trim()
+  const digits = text.replace(/\D/g, '')
+  // "+370…" tem os mesmos 11 dígitos de um número de Minas sem o sinal: o "+"
+  // é a única pista de que o número já veio internacional — respeitamos.
+  const d = text.startsWith('+') ? digits : toBrE164IfNational(digits)
+  if (!/^55\d{10,11}$/.test(d)) return null
+  if (!isPlausibleDDD(d.slice(2, 4))) return null
+  return d
 }

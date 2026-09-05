@@ -33,6 +33,7 @@ import {
   Settings2,
   Trash2,
   TriangleAlert,
+  UserPlus,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -47,7 +48,11 @@ import {
   getCollectionsPromotion,
   getCollectionsSettings,
   getWallet,
+  createContactForDebtor,
+  createContactsForPendingDebtors,
   linkDebtorToContact,
+  listCollectionChannels,
+  type CollectionChannelOption,
   listConnections,
   removeConnection,
   saveConnection,
@@ -89,6 +94,7 @@ export function WalletClient() {
   const [rule, setRule] = useState<CollectionsSettings | null>(null);
   const [running, setRunning] = useState(false);
   const [upcoming, setUpcoming] = useState<number | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
   const [promo, setPromo] = useState<PromotionView | null>(null);
 
   const load = useCallback(async () => {
@@ -236,6 +242,44 @@ export function WalletClient() {
                   {onlyPending ? 'ver todos' : 'ver só as pendências'}
                 </button>
               </p>
+              <Button
+                size="sm"
+                variant="outline"
+                className="ml-auto shrink-0"
+                disabled={bulkBusy}
+                title="Cria um contato novo para cada pendência com telefone, com nome/telefone/e-mail do Asaas, e liga as cobranças"
+                onClick={async () => {
+                  setBulkBusy(true);
+                  try {
+                    const res = await createContactsForPendingDebtors();
+                    if (!res.ok) {
+                      toast.error(res.error ?? 'Não foi possível criar os contatos.');
+                      return;
+                    }
+                    const d = res.data!;
+                    const parts = [
+                      d.created ? `${d.created} ${d.created === 1 ? 'contato criado' : 'contatos criados'}` : '',
+                      d.linked ? `${d.linked} ${d.linked === 1 ? 'já existia e foi ligado' : 'já existiam e foram ligados'}` : '',
+                    ].filter(Boolean);
+                    if (parts.length) toast.success(parts.join(' · ') + '.');
+                    if (d.skipped.length) {
+                      toast.warning(
+                        `${d.skipped.length} ${d.skipped.length === 1 ? 'ficou pendente' : 'ficaram pendentes'}: ${d.skipped
+                          .slice(0, 3)
+                          .map((x) => `${x.name} (${x.reason})`)
+                          .join('; ')}${d.skipped.length > 3 ? '…' : ''}`,
+                        { duration: 10000 },
+                      );
+                    }
+                    await load();
+                  } finally {
+                    setBulkBusy(false);
+                  }
+                }}
+              >
+                {bulkBusy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <UserPlus className="mr-1.5 h-3.5 w-3.5" />}
+                Criar contatos do Asaas
+              </Button>
             </div>
           )}
 
@@ -717,6 +761,43 @@ function LinkContactDialog({
             </p>
           )}
         </div>
+
+        <div className="rounded-md border border-dashed px-3 py-2.5 text-sm">
+          <p className="font-medium">Ou criar um contato novo com os dados do Asaas</p>
+          <p className="text-xs text-muted-foreground">
+            {debtor.name}
+            {debtor.phone ? ` · ${debtor.phone}` : ' · sem telefone no Asaas'}
+            {debtor.email ? ` · ${debtor.email}` : ''}
+          </p>
+          <Button
+            size="sm"
+            variant="outline"
+            className="mt-2"
+            disabled={busy || !debtor.phone}
+            onClick={async () => {
+              setBusy(true);
+              const res = await createContactForDebtor(debtor.key);
+              setBusy(false);
+              if (!res.ok) {
+                toast.error(res.error ?? 'Não foi possível criar o contato.');
+                return;
+              }
+              const n = res.data!.linked;
+              toast.success(
+                res.data!.created
+                  ? `Contato criado e ligado. ${n === 1 ? '1 cobrança' : `${n} cobranças`} atualizadas.`
+                  : `Já existia um contato com esse telefone — as cobranças foram ligadas a ele.`,
+              );
+              onClose();
+              onLinked();
+            }}
+          >
+            <UserPlus className="mr-1.5 h-3.5 w-3.5" /> Criar contato e ligar
+          </Button>
+          {!debtor.phone && (
+            <p className="mt-1.5 text-xs text-muted-foreground">Sem telefone não dá para criar: cadastre o contato na mão e ligue aqui em cima.</p>
+          )}
+        </div>
       </DialogContent>
     </Dialog>
   );
@@ -741,9 +822,17 @@ function RulePanel({
   const [open, setOpen] = useState(false);
   const [draft, setDraft] = useState<CollectionsSettings>(rule);
   const [saving, setSaving] = useState(false);
+  const [chans, setChans] = useState<CollectionChannelOption[] | null>(null);
   const dirty = JSON.stringify(draft) !== JSON.stringify(rule);
 
   useEffect(() => setDraft(rule), [rule]);
+  useEffect(() => {
+    if (open && chans === null) {
+      void listCollectionChannels()
+        .then(setChans)
+        .catch(() => setChans([]));
+    }
+  }, [open, chans]);
 
   async function persist(patch: Partial<CollectionsSettings>) {
     setSaving(true);
@@ -844,6 +933,29 @@ function RulePanel({
               />
               Só em dias úteis
             </label>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="rule-channel">Número que envia as cobranças</Label>
+            <select
+              id="rule-channel"
+              className="h-9 w-full max-w-sm rounded-md border bg-background px-2 text-sm"
+              value={draft.channelId ?? ''}
+              onChange={(e) => setDraft({ ...draft, channelId: e.target.value || null })}
+            >
+              <option value="">Automático (o único número conectado)</option>
+              {(chans ?? []).map((c) => (
+                <option key={c.id} value={c.id} disabled={!c.connected}>
+                  {c.name}
+                  {c.phone ? ` · ${c.phone}` : ''}
+                  {c.connected ? '' : ' (desconectado)'}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Vale para o devedor que ainda não tem conversa no CRM: a régua abre a conversa por este número. Com mais de um número
+              conectado ela não chuta — escolha aqui.
+            </p>
           </div>
 
           <div className="flex flex-col gap-2">

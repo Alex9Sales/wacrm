@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { brPhoneCandidates, daysOverdue, decideMatch, normalizeDocument, normalizeEmail } from './match'
+import { asaasPhoneForContact, brPhoneCandidates, daysOverdue, decideMatch, normalizeDocument, normalizeEmail } from './match'
 
 describe('brPhoneCandidates', () => {
   it('acha o mesmo celular gravado com e sem o 55', () => {
@@ -116,5 +116,25 @@ describe('daysOverdue', () => {
   it('sem data devolve nulo em vez de fingir zero', () => {
     expect(daysOverdue(null, hoje)).toBeNull()
     expect(daysOverdue('sem-data', hoje)).toBeNull()
+  })
+})
+
+describe('asaasPhoneForContact — telefone do Asaas vira contato', () => {
+  it('celular e fixo nacionais ganham o 55', () => {
+    expect(asaasPhoneForContact('67992361631')).toBe('5567992361631')
+    expect(asaasPhoneForContact('(67) 99236-1631')).toBe('5567992361631')
+    expect(asaasPhoneForContact('6732361631')).toBe('556732361631')
+  })
+
+  it('já com 55 fica como está', () => {
+    expect(asaasPhoneForContact('+55 67 99236-1631')).toBe('5567992361631')
+  })
+
+  it('vazio, curto demais, DDD impossível ou estrangeiro → null (vira pendência, não contato)', () => {
+    expect(asaasPhoneForContact('')).toBeNull()
+    expect(asaasPhoneForContact(null)).toBeNull()
+    expect(asaasPhoneForContact('99236')).toBeNull()
+    expect(asaasPhoneForContact('0192361631')).toBeNull()
+    expect(asaasPhoneForContact('+370 63949836')).toBeNull()
   })
 })

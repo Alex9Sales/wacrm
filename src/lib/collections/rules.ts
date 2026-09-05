@@ -11,6 +11,8 @@
 // consultoria, e é ela que faz o segundo cliente não exigir reescrita.
 // ============================================================
 
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+
 export interface CollectionsSettings {
   /** Nasce DESLIGADA: cobrar alguém nunca é um padrão, é uma decisão. */
   enabled: boolean
@@ -27,6 +29,12 @@ export interface CollectionsSettings {
   weekdaysOnly: boolean
   /** auto = usa o canal que o contato tem; senão força um. */
   channel: 'auto' | 'whatsapp' | 'email'
+  /**
+   * Número (canal de WhatsApp) que ENVIA a cobrança quando o devedor ainda não
+   * tem conversa no CRM. null = automático: o único número conectado da conta;
+   * com mais de um, a régua pede para escolher em vez de chutar.
+   */
+  channelId: string | null
   /** Status do Asaas que contam como vencido nesta conta. */
   overdueStatuses: string[]
   /**
@@ -54,6 +62,7 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   endHour: 18,
   weekdaysOnly: true,
   channel: 'auto',
+  channelId: null,
   overdueStatuses: ['OVERDUE'],
   maxTouches: 8,
   tone: '',
@@ -78,6 +87,7 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     endHour: int(r.endHour, 18, 1, 24),
     weekdaysOnly: r.weekdaysOnly !== false,
     channel: r.channel === 'whatsapp' || r.channel === 'email' ? r.channel : 'auto',
+    channelId: typeof r.channelId === 'string' && UUID_RE.test(r.channelId) ? r.channelId : null,
     overdueStatuses: statuses.length ? statuses : [...COLLECTIONS_DEFAULTS.overdueStatuses],
     maxTouches: int(r.maxTouches, 8, 1, 50),
     tone: typeof r.tone === 'string' ? r.tone.slice(0, 600) : '',

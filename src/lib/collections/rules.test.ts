@@ -19,6 +19,12 @@ function state(p: Partial<TouchState> = {}): TouchState {
 }
 
 describe('normalizeSettings', () => {
+  it('número que envia: só uuid válido, senão automático (null)', () => {
+    expect(normalizeSettings({}).channelId).toBeNull()
+    expect(normalizeSettings({ channelId: 'qualquer coisa' }).channelId).toBeNull()
+    expect(normalizeSettings({ channelId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' }).channelId).toBe('3f2504e0-4f89-41d3-9a0c-0305e82c3301')
+  })
+
   it('nasce desligada — cobrar não é padrão, é decisão', () => {
     expect(normalizeSettings({}).enabled).toBe(false)
     expect(normalizeSettings({ enabled: 'sim' }).enabled).toBe(false)

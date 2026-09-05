@@ -12,10 +12,11 @@
 //     Action chega sanitizado ("digest") no navegador em produção.
 // ============================================================
 
-import { and, desc, eq, ilike, isNull, or, sql } from 'drizzle-orm'
+import { and, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
-import { db, aiConfigs, asaasCharges, asaasConnections, collectionsTouches, contacts, decisionFeedback } from '@/db'
+import { db, aiConfigs, asaasCharges, asaasConnections, channels, collectionsTouches, contacts, decisionFeedback } from '@/db'
+import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
 import { runCollectionsForAccount } from '@/lib/collections/engine'
@@ -23,7 +24,9 @@ import { normalizeSettings, type CollectionsSettings } from '@/lib/collections/r
 import { evaluatePromotion, promotionHeadline, type PromotionVerdict } from '@/lib/collections/promotion'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
 import { testCredential, type AsaasEnv } from '@/lib/asaas/collections'
-import { daysOverdue } from '@/lib/asaas/match'
+import { asaasPhoneForContact, daysOverdue } from '@/lib/asaas/match'
+import { findOrCreateContact } from '@/lib/api/v1/contacts'
+import { WHATSAPP_PROVIDERS } from '@/lib/collections/outreach'
 import { syncAccount, syncConnection, type SyncResult } from '@/lib/asaas/sync'
 import { encrypt } from '@/lib/whatsapp/encryption'
 import { randomBytes } from 'node:crypto'
@@ -570,4 +573,105 @@ export async function setCollectionsAutonomy(auto: boolean): Promise<ActionResul
   revalidatePath('/cobrancas')
   revalidatePath('/aprovacoes')
   return { ok: true, data: { level: auto ? 'auto' : 'approve' } }
+}
+
+// ------------------------------------ contato a partir do Asaas (gap nº1, 05/09)
+// Devedor que não casou com ninguém ficava parado em "sem contato" e só dava
+// para ESCOLHER um contato existente. Numa carteira nova, a maioria não existe
+// no CRM ainda — criar a partir do que o Asaas já sabe é o caminho normal.
+
+export interface CreatedFromAsaas {
+  contactId: string
+  /** true = contato novo; false = já existia um com esse telefone e foi ligado a ele. */
+  created: boolean
+  linked: number
+}
+
+function debtorFilter(debtorKey: string) {
+  return or(eq(asaasCharges.asaasCustomerId, debtorKey), eq(asaasCharges.cpfCnpj, debtorKey), eq(asaasCharges.asaasId, debtorKey))
+}
+
+async function createAndLink(accountId: string, userId: string, debtorKey: string): Promise<ActionResult<CreatedFromAsaas>> {
+  const src = firstOrNull(
+    await db
+      .select({ name: asaasCharges.customerName, phone: asaasCharges.phone, email: asaasCharges.email })
+      .from(asaasCharges)
+      .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true), isNull(asaasCharges.contactId), debtorFilter(debtorKey)))
+      .limit(1),
+  )
+  if (!src) return { ok: false, error: 'Nenhuma cobrança pendente para este devedor.' }
+
+  const phone = asaasPhoneForContact(src.phone)
+  if (!phone) return { ok: false, error: 'Este devedor não tem telefone válido no Asaas. Cadastre o contato na mão e ligue aqui.' }
+
+  let found: { id: string; created: boolean }
+  try {
+    // Mesma trava anti-duplicado do inbound e da API: telefone já existente
+    // (com ou sem 55, com ou sem 9º dígito) reaproveita o contato em vez de
+    // criar um segundo.
+    found = await findOrCreateContact(accountId, userId, {
+      phone,
+      name: src.name?.trim() || null,
+      email: src.email?.trim() || null,
+    })
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'Não foi possível criar o contato.' }
+  }
+
+  const linked = await db
+    .update(asaasCharges)
+    .set({ contactId: found.id, matchedBy: 'manual', updatedAt: new Date().toISOString() })
+    .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true), debtorFilter(debtorKey)))
+    .returning({ id: asaasCharges.id })
+
+  return { ok: true, data: { contactId: found.id, created: found.created, linked: linked.length } }
+}
+
+/** Cria (ou reencontra) o contato com nome/telefone/e-mail do Asaas e liga as cobranças dele. */
+export async function createContactForDebtor(debtorKey: string): Promise<ActionResult<CreatedFromAsaas>> {
+  const { accountId, userId } = await requireRole('agent')
+  const res = await createAndLink(accountId, userId, debtorKey)
+  if (res.ok) revalidatePath('/cobrancas')
+  return res
+}
+
+export interface BulkCreateResult {
+  created: number
+  linked: number
+  skipped: { name: string; reason: string }[]
+}
+
+/** O mesmo, para todas as pendências de uma vez. Quem não tem telefone fica listado, não some. */
+export async function createContactsForPendingDebtors(): Promise<ActionResult<BulkCreateResult>> {
+  const { accountId, userId } = await requireRole('agent')
+  const wallet = await getWallet()
+  const out: BulkCreateResult = { created: 0, linked: 0, skipped: [] }
+  for (const d of wallet.debtors.filter((x) => !x.contactId)) {
+    const res = await createAndLink(accountId, userId, d.key)
+    if (!res.ok) out.skipped.push({ name: d.name, reason: res.error ?? 'falhou' })
+    else if (res.data!.created) out.created += 1
+    else out.linked += 1
+  }
+  revalidatePath('/cobrancas')
+  return { ok: true, data: out }
+}
+
+// ---------------------------------------------- número que envia a cobrança
+
+export interface CollectionChannelOption {
+  id: string
+  name: string
+  phone: string | null
+  connected: boolean
+}
+
+/** Números de WhatsApp da conta, para escolher qual envia as cobranças. */
+export async function listCollectionChannels(): Promise<CollectionChannelOption[]> {
+  const { accountId } = await getCurrentAccount()
+  const rows = await db
+    .select({ id: channels.id, name: channels.name, phone: channels.phoneNumber, status: channels.status })
+    .from(channels)
+    .where(and(eq(channels.accountId, accountId), inArray(channels.provider, [...WHATSAPP_PROVIDERS])))
+    .orderBy(channels.name)
+  return rows.map((r) => ({ id: r.id, name: r.name, phone: r.phone, connected: r.status === 'connected' }))
 }
