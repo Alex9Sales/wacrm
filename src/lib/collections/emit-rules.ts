@@ -110,3 +110,16 @@ export function findDuplicateCharge(recent: RecentCharge[], value: number, now: 
     recent.find((r) => r.open && Math.abs(r.value - value) < 0.005 && new Date(r.createdAt).getTime() >= cutoff) ?? null
   )
 }
+
+/**
+ * Mensagem que acompanha o link quando a cobrança é gerada à mão (Cobranças →
+ * Nova cobrança) e o operador pede para enviar. Curta e sem cobrança dura: é
+ * um link pedido no atendimento, não uma régua.
+ */
+export function manualChargeMessage(firstName: string | null, value: number, dueDate: string, description: string, url: string): string {
+  const brl = value.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+  const due = dueDate.slice(0, 10).split('-').reverse().join('/')
+  const oi = firstName ? `Oi, ${firstName}! ` : 'Oi! '
+  const sobre = description.trim() ? ` (${description.trim()})` : ''
+  return `${oi}Segue o link para pagamento de ${brl}${sobre}, com vencimento em ${due}:\n${url}\n\nQualquer dúvida é só responder por aqui.`
+}

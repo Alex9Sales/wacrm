@@ -15,7 +15,7 @@
 import { and, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
-import { db, aiConfigs, asaasCharges, asaasConnections, channels, collectionsTouches, contacts, decisionFeedback } from '@/db'
+import { db, aiConfigs, asaasCharges, asaasConnections, channels, collectionsTouches, contacts, conversations, decisionFeedback, user } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
@@ -26,7 +26,11 @@ import { levelFor, readPolicy } from '@/lib/orchestration/policy'
 import { testCredential, type AsaasEnv } from '@/lib/asaas/collections'
 import { asaasPhoneForContact, daysOverdue, normalizeEmail } from '@/lib/asaas/match'
 import { findOrCreateContact } from '@/lib/api/v1/contacts'
-import { WHATSAPP_PROVIDERS } from '@/lib/collections/outreach'
+import { resolveCollectionTargets, WHATSAPP_PROVIDERS } from '@/lib/collections/outreach'
+import { createChargeForContact } from '@/lib/collections/emit'
+import { manualChargeMessage, parseDueDate, parseValue, validateEmit } from '@/lib/collections/emit-rules'
+import { postInternalNote } from '@/lib/ai/close-actions'
+import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { syncAccount, syncConnection, type SyncResult } from '@/lib/asaas/sync'
 import { encrypt } from '@/lib/whatsapp/encryption'
 import { randomBytes } from 'node:crypto'
@@ -700,4 +704,115 @@ export async function listCollectionChannels(): Promise<CollectionChannelOption[
     .where(and(eq(channels.accountId, accountId), inArray(channels.provider, [...WHATSAPP_PROVIDERS])))
     .orderBy(channels.name)
   return rows.map((r) => ({ id: r.id, name: r.name, phone: r.phone, connected: r.status === 'connected' }))
+}
+
+// ------------------------------------------------ nova cobrança à mão (item 4)
+// O operador gera a cobrança no Asaas pelo CRM (contato, valor, vencimento,
+// descrição, conta) e, se quiser, o link já vai na conversa. É o "cria uma
+// cobrança de tanto pro fulano" do João/GoLink — sem depender da IA.
+
+export interface ManualChargeInput {
+  contactId: string
+  /** Conta do Asaas; null = a primeira ligada. */
+  connectionId: string | null
+  valueRaw: string
+  /** YYYY-MM-DD */
+  dueDate: string
+  description: string
+  /** Mandar o link na conversa (abre a conversa se não existir). */
+  sendLink: boolean
+}
+
+export interface ManualChargeResult {
+  invoiceUrl: string
+  /** Já existia uma igual aberta, criada há pouco — link reaproveitado. */
+  reused: boolean
+  /** "WhatsApp", "e-mail", "WhatsApp e e-mail" ou null quando não enviou. */
+  sentVia: string | null
+  sendError: string | null
+  connectionLabel: string
+}
+
+export async function createChargeManual(input: ManualChargeInput): Promise<ActionResult<ManualChargeResult>> {
+  const { accountId, userId } = await requireRole('agent')
+
+  const value = parseValue(input.valueRaw)
+  if (!value) return { ok: false, error: 'Valor inválido. Exemplo: 125,00' }
+  const dueDate = parseDueDate(input.dueDate)
+  const description = input.description.trim()
+  // Sem teto: quem decide é gente. Vencimento até 1 ano.
+  const verdict = validateEmit({ value, dueDate, description }, { maxValue: Number.MAX_SAFE_INTEGER, maxDueDays: 365 })
+  if (!verdict.ok) return { ok: false, error: `Não dá para gerar: ${verdict.reason}.` }
+
+  const contact = firstOrNull(
+    await db
+      .select({ id: contacts.id, name: contacts.name })
+      .from(contacts)
+      .where(and(eq(contacts.id, input.contactId), eq(contacts.accountId, accountId)))
+      .limit(1),
+  )
+  if (!contact) return { ok: false, error: 'Contato não encontrado.' }
+
+  // Por onde o link vai — decidido ANTES de criar: se não dá para enviar, o
+  // operador escolhe desmarcar o envio, em vez de ficar com cobrança criada e
+  // link parado.
+  let targets: Awaited<ReturnType<typeof resolveCollectionTargets>> | null = null
+  if (input.sendLink) {
+    targets = await resolveCollectionTargets(accountId, input.contactId, null)
+    if (!targets.ok) {
+      return { ok: false, error: `Não dá para enviar o link: ${targets.error}. Desmarque "mandar o link" para só gerar a cobrança.` }
+    }
+  }
+  let conversationId: string | null = targets?.ok ? (targets.whatsapp?.conversationId ?? targets.email?.conversationId ?? null) : null
+  if (!conversationId) {
+    const latest = firstOrNull(
+      await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(and(eq(conversations.accountId, accountId), eq(conversations.contactId, input.contactId)))
+        .orderBy(desc(conversations.lastMessageAt))
+        .limit(1),
+    )
+    conversationId = latest?.id ?? null
+  }
+
+  const who = firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, userId)).limit(1))
+  const created = await createChargeForContact({
+    accountId,
+    contactId: input.contactId,
+    conversationId,
+    connectionId: input.connectionId,
+    value,
+    dueDate: dueDate!,
+    description,
+    origin: 'manual',
+    actorLabel: `por ${who?.name?.trim() || 'alguém da equipe'}`,
+    noteSuffix: targets?.ok ? `Link enviado por ${targets.label}.` : '',
+  })
+  if (!created.ok) return { ok: false, error: created.reason }
+
+  let sentVia: string | null = null
+  let sendError: string | null = null
+  if (targets?.ok) {
+    const firstName = (contact.name ?? '').trim().split(/\s+/)[0] || null
+    const text = manualChargeMessage(firstName, value, dueDate!, description, created.invoiceUrl)
+    const convIds = [targets.whatsapp?.conversationId, targets.email?.conversationId].filter((c): c is string => !!c)
+    try {
+      for (const cid of convIds) {
+        await sendMessageToConversation(accountId, { conversationId: cid, messageType: 'text', contentText: text, subject: 'Link para pagamento' })
+      }
+      sentVia = targets.label
+    } catch (err) {
+      sendError = err instanceof Error ? err.message : 'falha ao enviar'
+      if (conversationId) {
+        await postInternalNote({
+          conversationId,
+          text: `⚠️ A cobrança foi criada, mas o link NÃO foi enviado (${sendError}). Mande você: ${created.invoiceUrl}`,
+        }).catch(() => {})
+      }
+    }
+  }
+
+  revalidatePath('/cobrancas')
+  return { ok: true, data: { invoiceUrl: created.invoiceUrl, reused: created.reused, sentVia, sendError, connectionLabel: created.connectionLabel } }
 }

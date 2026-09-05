@@ -163,6 +163,11 @@ export async function syncConnection(
         eq(asaasCharges.accountId, accountId),
         eq(asaasCharges.connectionId, connectionId),
         eq(asaasCharges.open, true),
+        // Só o que ESTAVA nos status sincronizados pode "sumir" (pagou/apagou).
+        // Cobrança criada pela IA ou à mão nasce PENDING, não vem na lista de
+        // vencidas — e continuava aberta no Asaas: fechá-la aqui era mentira
+        // (achado de 05/09, ao construir a "Nova cobrança").
+        inArray(asaasCharges.status, [...statuses]),
         seen.length ? notInArray(asaasCharges.asaasId, seen) : sql`true`,
       ),
     )

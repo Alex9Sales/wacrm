@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { EMIT_DEFAULTS, findDuplicateCharge, parseDueDate, parseValue, validateEmit } from './emit-rules'
+import { EMIT_DEFAULTS, findDuplicateCharge, manualChargeMessage, parseDueDate, parseValue, validateEmit } from './emit-rules'
 
 const hoje = new Date(2026, 8, 5) // 05/09/2026
 
@@ -99,5 +99,22 @@ describe('findDuplicateCharge — a lição do pedido triplicado', () => {
 
   it('fora da janela de 6h é compra nova', () => {
     expect(findDuplicateCharge([{ ...recente, createdAt: '2026-09-05T08:00:00-03:00' }], 125, agora)).toBeNull()
+  })
+})
+
+describe('manualChargeMessage — o link gerado à mão', () => {
+  it('tem nome, valor, descrição, vencimento por extenso e o link', () => {
+    const m = manualChargeMessage('Ana', 125, '2026-09-12', 'Ultragaz P-13', 'https://x/pay').replace(/\u00a0/g, ' ')
+    expect(m.startsWith('Oi, Ana!')).toBe(true)
+    expect(m).toContain('R$ 125,00')
+    expect(m).toContain('Ultragaz P-13')
+    expect(m).toContain('12/09/2026')
+    expect(m).toContain('https://x/pay')
+  })
+
+  it('sem nome e sem descrição continua inteira', () => {
+    const m = manualChargeMessage(null, 80.5, '2026-10-01', '', 'https://x/pay')
+    expect(m.startsWith('Oi! ')).toBe(true)
+    expect(m).not.toContain('()')
   })
 })

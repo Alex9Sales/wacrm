@@ -23,6 +23,7 @@ import {
   Link2Off,
   Loader2,
   Plus,
+  Receipt,
   RefreshCw,
   BellOff,
   Bot,
@@ -37,6 +38,8 @@ import {
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
+import { ContactPicker } from '@/components/contacts/contact-picker';
+import { parseDueDate, parseValue } from '@/lib/collections/emit-rules';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -48,6 +51,7 @@ import {
   getCollectionsPromotion,
   getCollectionsSettings,
   getWallet,
+  createChargeManual,
   createContactForDebtor,
   createContactsForPendingDebtors,
   linkDebtorToContact,
@@ -95,6 +99,7 @@ export function WalletClient() {
   const [running, setRunning] = useState(false);
   const [upcoming, setUpcoming] = useState<number | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
+  const [newChargeOpen, setNewChargeOpen] = useState(false);
   const [promo, setPromo] = useState<PromotionView | null>(null);
 
   const load = useCallback(async () => {
@@ -167,6 +172,11 @@ export function WalletClient() {
           </p>
         </div>
         <div className="flex gap-2">
+          {!!conns.length && (
+            <Button variant="outline" onClick={() => setNewChargeOpen(true)} title="Gerar uma cobrança no Asaas para um contato e, se quiser, mandar o link na conversa">
+              <Receipt className="mr-1.5 h-4 w-4" /> Nova cobrança
+            </Button>
+          )}
           <Button variant="outline" onClick={() => setAddOpen(true)}>
             <Plus className="mr-1.5 h-4 w-4" /> Conectar Asaas
           </Button>
@@ -311,6 +321,7 @@ export function WalletClient() {
 
       <AddConnectionDialog open={addOpen} onOpenChange={setAddOpen} onSaved={load} />
       <LinkContactDialog debtor={linkFor} onClose={() => setLinkFor(null)} onLinked={load} />
+      {newChargeOpen && <NewChargeDialog conns={conns.filter((c) => c.enabled)} onClose={() => setNewChargeOpen(false)} onCreated={load} />}
       <PauseDebtorDialog debtor={pauseFor} onClose={() => setPauseFor(null)} onSaved={load} />
     </div>
   );
@@ -557,6 +568,164 @@ function ConnectionsPanel({
         </div>
       ))}
     </div>
+  );
+}
+
+/**
+ * Nova cobrança à mão: contato, valor, vencimento, descrição, conta do Asaas e
+ * (opcional) o link já vai na conversa. É o "cria uma cobrança de tanto pro
+ * fulano" sem depender da IA.
+ */
+function NewChargeDialog({
+  conns,
+  onClose,
+  onCreated,
+}: {
+  conns: ConnectionView[];
+  onClose: () => void;
+  onCreated: () => void;
+}) {
+  const [contactId, setContactId] = useState('');
+  const [connectionId, setConnectionId] = useState<string>(conns[0]?.id ?? '');
+  const [valueRaw, setValueRaw] = useState('');
+  const [dueDate, setDueDate] = useState(() => new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10));
+  const [description, setDescription] = useState('');
+  const [sendLink, setSendLink] = useState(true);
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<{ url: string; sentVia: string | null; sendError: string | null; reused: boolean } | null>(null);
+
+  const valueOk = parseValue(valueRaw) != null;
+  const dueOk = parseDueDate(dueDate) != null;
+  const canSubmit = !!contactId && valueOk && dueOk && description.trim().length >= 3 && !busy;
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>Nova cobrança no Asaas</DialogTitle>
+          <DialogDescription>
+            Gera a cobrança na conta do Asaas ligada aqui. A cobrança entra na carteira e, se o cliente pagar, o webhook fecha sozinho.
+          </DialogDescription>
+        </DialogHeader>
+
+        {done ? (
+          <div className="flex flex-col gap-3 text-sm">
+            <p className="font-medium">{done.reused ? 'Já existia uma cobrança igual aberta, criada há pouco — reaproveitei o link.' : 'Cobrança criada.'}</p>
+            {done.sentVia && <p>Link enviado por {done.sentVia}.</p>}
+            {done.sendError && <p className="text-amber-700 dark:text-amber-400">O link não foi enviado ({done.sendError}). Mande você:</p>}
+            <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-2">
+              <a href={done.url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate text-primary underline underline-offset-2">
+                {done.url}
+              </a>
+              <Button
+                size="sm"
+                variant="outline"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(done.url);
+                    toast.success('Link copiado.');
+                  } catch {
+                    toast.error('Não deu para copiar — selecione o link e copie.');
+                  }
+                }}
+              >
+                <Copy className="mr-1.5 h-3.5 w-3.5" /> Copiar
+              </Button>
+            </div>
+            <div className="flex justify-end">
+              <Button onClick={onClose}>Fechar</Button>
+            </div>
+          </div>
+        ) : (
+          <div className="flex flex-col gap-3">
+            <div className="flex flex-col gap-1.5">
+              <Label>Contato</Label>
+              <ContactPicker value={contactId} onChange={(id) => setContactId(id)} />
+            </div>
+
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nc-value">Valor (R$)</Label>
+                <Input id="nc-value" inputMode="decimal" placeholder="125,00" value={valueRaw} onChange={(e) => setValueRaw(e.target.value)} />
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nc-due">Vencimento</Label>
+                <Input id="nc-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
+              </div>
+            </div>
+
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="nc-desc">Descrição (vai no boleto/Pix)</Label>
+              <Input id="nc-desc" placeholder="Ex.: Botijão P-13 · pedido 1234" value={description} onChange={(e) => setDescription(e.target.value)} />
+            </div>
+
+            {conns.length > 1 && (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nc-conn">Conta do Asaas</Label>
+                <select
+                  id="nc-conn"
+                  className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                  value={connectionId}
+                  onChange={(e) => setConnectionId(e.target.value)}
+                >
+                  {conns.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                      {c.environment === 'sandbox' ? ' (sandbox)' : ''}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            )}
+
+            <label className="flex items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-1" checked={sendLink} onChange={(e) => setSendLink(e.target.checked)} />
+              <span>
+                Mandar o link na conversa agora
+                <span className="block text-xs text-muted-foreground">
+                  Pelo canal configurado em Ajustar (WhatsApp e/ou e-mail). Se o contato não tiver conversa, ela é aberta.
+                </span>
+              </span>
+            </label>
+
+            <div className="flex justify-end gap-2">
+              <Button variant="outline" onClick={onClose} disabled={busy}>
+                Cancelar
+              </Button>
+              <Button
+                disabled={!canSubmit}
+                onClick={async () => {
+                  setBusy(true);
+                  try {
+                    const res = await createChargeManual({
+                      contactId,
+                      connectionId: conns.length > 1 ? connectionId || null : null,
+                      valueRaw,
+                      dueDate,
+                      description,
+                      sendLink,
+                    });
+                    if (!res.ok) {
+                      toast.error(res.error ?? 'Não foi possível gerar a cobrança.');
+                      return;
+                    }
+                    const d = res.data!;
+                    setDone({ url: d.invoiceUrl, sentVia: d.sentVia, sendError: d.sendError, reused: d.reused });
+                    toast.success(d.sentVia ? `Cobrança gerada e link enviado por ${d.sentVia}.` : 'Cobrança gerada.');
+                    onCreated();
+                  } finally {
+                    setBusy(false);
+                  }
+                }}
+              >
+                {busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Receipt className="mr-1.5 h-3.5 w-3.5" />}
+                Gerar cobrança
+              </Button>
+            </div>
+          </div>
+        )}
+      </DialogContent>
+    </Dialog>
   );
 }
 
