@@ -384,9 +384,8 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     }
     // A IA falou HÁ POUCO → mesmo episódio → o teto vale. O mock devolve esta
     // mesma linha pro guard anti-eco (que lê senderType) e pra checagem de
-    // episódio (que lê `at`), por isso ela carrega os dois campos.
-    const agora = new Date().toISOString()
-    h.state.lastMessages = [{ senderType: 'customer', createdAt: agora, at: agora }]
+    // episódio (que lê createdAt).
+    h.state.lastMessages = [{ senderType: 'customer', createdAt: new Date().toISOString() }]
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
@@ -401,7 +400,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
       aiReplyCount: 3,
     }
     const cincoHorasAtras = new Date(Date.now() - 5 * 3_600_000).toISOString()
-    h.state.lastMessages = [{ senderType: 'customer', createdAt: cincoHorasAtras, at: cincoHorasAtras }]
+    h.state.lastMessages = [{ senderType: 'customer', createdAt: cincoHorasAtras }]
     await dispatchInboundToAiReply(ARGS)
     expect(h.state.updatePayload).toEqual(expect.objectContaining({ aiReplyCount: 0 }))
     expect(h.engineSendText).toHaveBeenCalled()

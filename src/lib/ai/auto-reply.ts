@@ -421,7 +421,7 @@ export async function dispatchInboundToAiReply(
       try {
         const ultimaDaIa = firstOrNull(
           await db
-            .select({ at: messagesTable.createdAt })
+            .select({ createdAt: messagesTable.createdAt })
             .from(messagesTable)
             .where(
               and(
@@ -433,7 +433,7 @@ export async function dispatchInboundToAiReply(
             .orderBy(desc(messagesTable.createdAt))
             .limit(1),
         )
-        if (isNewEpisode(ultimaDaIa?.at ?? null)) {
+        if (isNewEpisode(ultimaDaIa?.createdAt ?? null)) {
           await db.update(conversations).set({ aiReplyCount: 0 }).where(eq(conversations.id, conversationId))
           conv.aiReplyCount = 0
         }
