@@ -376,14 +376,35 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('skips when the per-conversation cap is reached', async () => {
+  it('skips when the per-conversation cap is reached (mesmo episódio)', async () => {
     h.state.conv = {
       assignedAgentId: null,
       aiAutoreplyDisabled: false,
       aiReplyCount: 3,
     }
+    // A IA falou HÁ POUCO → mesmo episódio → o teto vale. O mock devolve esta
+    // mesma linha pro guard anti-eco (que lê senderType) e pra checagem de
+    // episódio (que lê `at`), por isso ela carrega os dois campos.
+    const agora = new Date().toISOString()
+    h.state.lastMessages = [{ senderType: 'customer', createdAt: agora, at: agora }]
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  it('teto batido mas IA calada há horas = episódio novo: zera e responde (caso Poliana)', async () => {
+    // 05/09: cliente recorrente, conversa aberta desde 26/08, 22 respostas.
+    // O teto por vida da conversa calava a IA a cada ~3 pedidos, no meio da
+    // venda. Agora um silêncio de horas reabre o episódio.
+    h.state.conv = {
+      assignedAgentId: null,
+      aiAutoreplyDisabled: false,
+      aiReplyCount: 3,
+    }
+    const cincoHorasAtras = new Date(Date.now() - 5 * 3_600_000).toISOString()
+    h.state.lastMessages = [{ senderType: 'customer', createdAt: cincoHorasAtras, at: cincoHorasAtras }]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.updatePayload).toEqual(expect.objectContaining({ aiReplyCount: 0 }))
+    expect(h.engineSendText).toHaveBeenCalled()
   })
 
   it('skips when there is nothing to reply to', async () => {

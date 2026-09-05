@@ -35,6 +35,7 @@ import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
 import { extractMaterialDirectives, findMaterialByName, listMaterialsForAgent } from './materials'
 import { getCoveredUntil, setCoveredUntil } from './reply-marker'
+import { isNewEpisode } from './reply-episode'
 import { enqueueAiReplyDebounced } from '@/lib/queue/queues'
 
 /** Ver guard anti-eco: folga entre o snapshot e o created_at da msg do cliente. */
@@ -410,13 +411,47 @@ export async function dispatchInboundToAiReply(
         return
       }
     }
+    // 🔁 Teto POR EPISÓDIO, não por vida da conversa (caso Poliana, 05/09):
+    // cliente de gás tem UMA conversa de WhatsApp pra sempre, e o teto de 10
+    // estourava a cada ~3 pedidos, calando a IA no meio de uma venda. Se a IA
+    // não fala há EPISODE_GAP_HOURS, o que chegou agora é pedido novo: o
+    // contador zera antes de qualquer checagem. Loop continua contido — um
+    // silêncio de horas quebra qualquer loop.
+    if (conv.aiReplyCount > 0) {
+      try {
+        const ultimaDaIa = firstOrNull(
+          await db
+            .select({ at: messagesTable.createdAt })
+            .from(messagesTable)
+            .where(
+              and(
+                eq(messagesTable.conversationId, conversationId),
+                eq(messagesTable.senderType, 'bot'),
+                eq(messagesTable.isInternal, false),
+              ),
+            )
+            .orderBy(desc(messagesTable.createdAt))
+            .limit(1),
+        )
+        if (isNewEpisode(ultimaDaIa?.at ?? null)) {
+          await db.update(conversations).set({ aiReplyCount: 0 }).where(eq(conversations.id, conversationId))
+          conv.aiReplyCount = 0
+        }
+      } catch (err) {
+        console.error('[ai-reply] zerar contador por episódio falhou:', err)
+      }
+    }
+
     // Cheap early-out; the authoritative cap check is the atomic claim
     // below (this read can race a concurrent inbound).
     if (conv.aiReplyCount >= config.autoReplyMaxPerConversation) {
       // 🛑 Limite de respostas por conversa atingido. Antes (01/09, Rafael/
       // Moacyr) a IA simplesmente calava e ninguém sabia por quê. Agora: log +
-      // UMA nota interna no thread explicando como destravar (o contador zera
-      // ao ligar a IA de novo, atribuir, reabrir ou responder).
+      // nota interna no thread explicando como destravar.
+      //
+      // ⚠️ 05/09: a nota era escrita UMA vez por conversa, PARA SEMPRE — na
+      // segunda batida do teto (Poliana) ficou tudo em silêncio de novo. Agora
+      // a dedup é por janela de 24h: bateu de novo amanhã, avisa de novo.
       console.log(
         `[ai-reply] limite por conversa atingido conv=${conversationId} (${conv.aiReplyCount}/${config.autoReplyMaxPerConversation})`,
       )
@@ -430,6 +465,7 @@ export async function dispatchInboundToAiReply(
                 eq(messagesTable.conversationId, conversationId),
                 eq(messagesTable.isInternal, true),
                 sql`${messagesTable.contentText} LIKE '🛑 IA pausada%'`,
+                sql`${messagesTable.createdAt} >= now() - interval '24 hours'`,
               ),
             )
             .limit(1),
