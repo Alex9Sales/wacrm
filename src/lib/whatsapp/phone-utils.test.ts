@@ -64,6 +64,35 @@ describe("phonesMatch", () => {
   });
 });
 
+describe("phonesMatch — números brasileiros: o DDD faz parte da identidade", () => {
+  it("NÃO iguala DDDs diferentes com o mesmo final (caso Vinícius 43 × 47, 05/09)", () => {
+    // Antes: os 8 últimos dígitos batiam e o inbound do 43 caiu no contato do
+    // 47 — endereço do outro, contato renomeado, resposta entregue a um estranho.
+    expect(phonesMatch("43996345005", "47996345005")).toBe(false);
+    expect(phonesMatch("5543996345005", "5547996345005")).toBe(false);
+    expect(phonesMatch("6792361631", "6892361631")).toBe(false);
+  });
+
+  it("continua tolerando o 55 na frente", () => {
+    expect(phonesMatch("5567992361631", "67992361631")).toBe(true);
+  });
+
+  it("continua tolerando o 9º dígito (celular antigo × novo)", () => {
+    expect(phonesMatch("67992361631", "6792361631")).toBe(true);
+    expect(phonesMatch("5567992361631", "6792361631")).toBe(true);
+  });
+
+  it("55 + 9º dígito juntos, nos dois sentidos", () => {
+    expect(phonesMatch("6792361631", "5567992361631")).toBe(true);
+  });
+
+  it("brasileiro × estrangeiro com o mesmo final não casa como brasileiro (cai na regra antiga só se ambos forem não-BR)", () => {
+    // Um BR e um não-BR: a chave BR não fecha nos dois, então vale a regra
+    // antiga de tronco — comportamento preservado de propósito.
+    expect(phonesMatch("4155551212", "+1 415-555-1212")).toBe(true);
+  });
+});
+
 describe("isValidE164", () => {
   it("accepts numbers 7–15 digits with optional + and non-zero start", () => {
     expect(isValidE164("+37063949836")).toBe(true);

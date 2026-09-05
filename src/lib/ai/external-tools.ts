@@ -417,16 +417,43 @@ export async function generateWithExternalTools(
   // Ferramenta `createsDeal` que rodou COM SUCESSO → vira card no funil (fallback
   // no chamador, se o modelo não emitir [[CRIARCARD]]).
   let orderForCard: OrderForCard | null = null
+  // Uma ESCRITA rodou com sucesso neste turno (pedido criado, cadastro salvo…).
+  let writeSucceeded = false
 
   for (let step = 0; step <= MAX_TOOL_STEPS; step++) {
     const res = await generateReply({ ...args, systemPrompt, messages })
     const call = parseToolCall(res.text)
     if (!call || step === MAX_TOOL_STEPS) {
       // Segurança: nunca deixa um marcador cru vazar pro cliente.
-      if (call) {
-        return { ...res, text: res.text.replace(TOOL_MARKER_RE, '').trim(), orderForCard }
+      let text = (res.text ?? '').replace(TOOL_MARKER_RE, '').trim()
+
+      // ⚠️ Wellington (04/09) e Julio (05/09): criar_pedido rodou OK e a geração
+      // final voltou VAZIA — o cliente disse "à vista" e não ouviu nada. Depois
+      // de uma escrita bem-sucedida, silêncio não é resposta aceitável: pede
+      // uma confirmação curta; se ainda vier vazia, manda uma mínima. O que
+      // NÃO pode acontecer é o cliente confirmar a compra e ficar no vácuo.
+      if (!text && writeSucceeded) {
+        try {
+          const retry = await generateReply({
+            ...args,
+            systemPrompt,
+            messages: [
+              ...messages,
+              {
+                role: 'user',
+                content:
+                  'A ação foi registrada com sucesso. Confirme isso ao cliente em UMA frase curta e natural, sem marcadores e sem mencionar ferramenta.',
+              },
+            ],
+          })
+          text = (retry.text ?? '').replace(TOOL_MARKER_RE, '').trim()
+        } catch (err) {
+          console.error('[external-tools] confirmação pós-escrita falhou:', err instanceof Error ? err.message : err)
+        }
+        if (!text) text = 'Pronto, já registrei aqui! ✅'
       }
-      return { ...res, orderForCard }
+
+      return { ...res, text, orderForCard }
     }
     const tool = tools.find((t) => t.slug === call.slug)
     const outcome: ToolRunResult = tool
@@ -439,6 +466,9 @@ export async function generateWithExternalTools(
 
     if (tool?.createsDeal && outcome.status === 'ok') {
       orderForCard = orderForCardFromArgs(call.args)
+    }
+    if (tool && tool.risk !== 'read' && outcome.status === 'ok') {
+      writeSucceeded = true
     }
 
     // Alimenta o resultado de volta e re-gera.

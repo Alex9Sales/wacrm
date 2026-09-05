@@ -18,14 +18,45 @@ export function normalizePhone(phone: string): string {
 }
 
 /**
- * Compare two phone numbers accounting for trunk prefix differences.
- * e.g. "370063949836" (with trunk 0) matches "37063949836" (without trunk 0)
- * by comparing the last 8 digits.
+ * Chave de identidade de um número BRASILEIRO: DDD + 8 dígitos locais.
+ * Tolera o `55` na frente e o 9º dígito (celular antigo × novo) — que são as
+ * variações legítimas do MESMO assinante. Devolve null quando o número não
+ * parece brasileiro (aí vale a tolerância internacional antiga).
+ */
+function brIdentityKey(digits: string): string | null {
+  let n = digits
+  if ((n.length === 12 || n.length === 13) && n.startsWith('55')) n = n.slice(2)
+  if (n.length !== 10 && n.length !== 11) return null
+  const ddd = n.slice(0, 2)
+  if (!isPlausibleDDD(ddd)) return null
+  const local = n.slice(2)
+  const local8 = local.length === 9 ? (local.startsWith('9') ? local.slice(1) : null) : local
+  if (!local8 || local8.length !== 8) return null
+  return ddd + local8
+}
+
+/**
+ * Dois telefones são a MESMA pessoa?
+ *
+ * ⚠️ 05/09 (caso Vinícius, Família do Gás): esta função comparava só os 8
+ * últimos dígitos. Serve pro 9º dígito e pro `55`, mas de tabela também
+ * igualava DDDs diferentes: o 43 99634-5005 (Vinícius) casou com um contato
+ * antigo do 47 99634-5005 — outra pessoa. A IA puxou o endereço do outro
+ * ("como da última vez"), o contato foi renomeado, e a resposta foi ENTREGUE
+ * NO 47, pra um estranho. No Brasil o DDD faz parte da identidade do número:
+ * mesmo final com DDD diferente é outro assinante.
+ *
+ * Agora: dois números brasileiros comparam por DDD + 8 locais (com 55 e 9º
+ * dígito tolerados). Se algum dos dois não parece brasileiro, mantém a
+ * tolerância antiga de tronco (ex.: "370063949836" × "37063949836", Lituânia).
  */
 export function phonesMatch(phone1: string, phone2: string): boolean {
   const n1 = normalizePhone(phone1)
   const n2 = normalizePhone(phone2)
   if (n1 === n2) return true
+  const k1 = brIdentityKey(n1)
+  const k2 = brIdentityKey(n2)
+  if (k1 && k2) return k1 === k2
   if (n1.length >= 8 && n2.length >= 8) {
     return n1.slice(-8) === n2.slice(-8)
   }
