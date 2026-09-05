@@ -56,6 +56,12 @@ export interface CollectionsSettings {
    * é configuração, não constante.
    */
   emitMaxValue: number
+  /**
+   * O CRM assume os avisos: ao sincronizar, desliga as notificações do Asaas
+   * (e-mail/SMS/WhatsApp deles) de quem entra na carteira. O cliente paga por
+   * envio no Asaas. Opt-in: nasce desligado.
+   */
+  asaasNotificationsOff: boolean
 }
 
 export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
@@ -72,6 +78,7 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   maxTouches: 8,
   tone: '',
   emitMaxValue: 500,
+  asaasNotificationsOff: false,
 }
 
 export function normalizeSettings(raw: unknown): CollectionsSettings {
@@ -100,6 +107,7 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
       const n = typeof r.emitMaxValue === 'number' ? r.emitMaxValue : Number.NaN
       return Number.isFinite(n) ? Math.min(100_000, Math.max(1, Math.round(n * 100) / 100)) : 500
     })(),
+    asaasNotificationsOff: r.asaasNotificationsOff === true,
   }
 }
 
@@ -125,6 +133,7 @@ export type SkipReason =
   | 'opted_out'
   | 'not_due'
   | 'no_channel'
+  | 'duplicate_suspect'
   | 'snoozed'
   | 'paused'
   | 'too_soon'
@@ -136,6 +145,7 @@ export const SKIP_LABEL: Record<SkipReason, string> = {
   opted_out: 'O contato pediu para não receber mensagens',
   not_due: 'Ainda não passou do prazo mínimo de atraso',
   no_channel: 'Sem como alcançar: falta telefone/e-mail no contato ou canal na conta',
+  duplicate_suspect: 'Parcela idêntica em dois cadastros do Asaas — provável duplicata, resolver antes de cobrar',
   snoozed: 'O cliente prometeu pagar em uma data que ainda não chegou',
   paused: 'A cobrança deste devedor está pausada',
   too_soon: 'O último toque foi há pouco tempo',
@@ -195,6 +205,8 @@ export function withinWindow(localHour: number, localWeekday: number, s: Collect
 // ------------------------------------------------------------ texto da dívida
 
 export interface ChargeLine {
+  /** Cadastro do Asaas de onde veio (para o detector de duplicata). */
+  customerId?: string | null
   value: number
   dueDate: string | null
   daysLate: number | null
@@ -301,4 +313,24 @@ export function deliveryPlan(f: DeliveryFacts): DeliveryPlan {
       if (em) return { ok: true, whatsapp: false, email: true, label: 'e-mail' }
       return { ok: false, error: `Sem como alcançar: ${waWhy}; ${emWhy}.` }
   }
+}
+
+// ---------------------------------------------------------- duplicata
+/**
+ * Mesmo valor e mesmo vencimento em DOIS cadastros diferentes do Asaas é,
+ * quase sempre, o mesmo boleto criado duas vezes (Renato ×3, 05/09: 12
+ * parcelas em dobro). A régua NÃO cobra esse devedor até uma pessoa resolver
+ * no Asaas — cobrar em dobro é pior que atrasar um dia.
+ */
+export function duplicateSuspects(charges: { customerId?: string | null; value: number; dueDate: string | null }[]): boolean {
+  const byKey = new Map<string, Set<string>>()
+  for (const c of charges) {
+    if (!c.customerId || !c.dueDate) continue
+    const k = `${c.value.toFixed(2)}|${c.dueDate.slice(0, 10)}`
+    const ids = byKey.get(k) ?? new Set<string>()
+    ids.add(c.customerId)
+    byKey.set(k, ids)
+    if (ids.size > 1) return true
+  }
+  return false
 }

@@ -3,6 +3,7 @@ import { describe, expect, it } from 'vitest'
 import {
   COLLECTIONS_DEFAULTS,
   deliveryPlan,
+  duplicateSuspects,
   eligibility,
   fallbackMessage,
   formatDebtSummary,
@@ -213,5 +214,36 @@ describe('deliveryPlan — por onde a cobrança sai', () => {
   it('normalizeSettings aceita both e devolve auto para lixo', () => {
     expect(normalizeSettings({ channel: 'both' }).channel).toBe('both')
     expect(normalizeSettings({ channel: 'pombo-correio' }).channel).toBe('auto')
+  })
+})
+
+describe('duplicateSuspects — o caso Renato ×3', () => {
+  it('mesmo valor e vencimento em dois cadastros = suspeito', () => {
+    expect(
+      duplicateSuspects([
+        { customerId: 'cus_a', value: 1298.5, dueDate: '2026-10-04' },
+        { customerId: 'cus_b', value: 1298.5, dueDate: '2026-10-04' },
+      ]),
+    ).toBe(true)
+  })
+
+  it('parcelas diferentes do mesmo cadastro, ou iguais no MESMO cadastro, não são suspeitas', () => {
+    expect(
+      duplicateSuspects([
+        { customerId: 'cus_a', value: 1298.5, dueDate: '2026-10-04' },
+        { customerId: 'cus_a', value: 1298.5, dueDate: '2026-11-04' },
+        { customerId: 'cus_a', value: 1298.5, dueDate: '2026-10-04' },
+      ]),
+    ).toBe(false)
+  })
+
+  it('sem cadastro ou sem vencimento não conta', () => {
+    expect(duplicateSuspects([{ customerId: null, value: 10, dueDate: '2026-10-04' }, { customerId: 'x', value: 10, dueDate: null }])).toBe(false)
+  })
+
+  it('a configuração "o CRM assume os avisos" nasce desligada', () => {
+    expect(normalizeSettings({}).asaasNotificationsOff).toBe(false)
+    expect(normalizeSettings({ asaasNotificationsOff: true }).asaasNotificationsOff).toBe(true)
+    expect(normalizeSettings({ asaasNotificationsOff: 'sim' }).asaasNotificationsOff).toBe(false)
   })
 })

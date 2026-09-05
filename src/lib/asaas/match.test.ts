@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { asaasPhoneForContact, brPhoneCandidates, daysOverdue, decideMatch, normalizeDocument, normalizeEmail } from './match'
+import { asaasPhoneForContact, brPhoneCandidates, daysOverdue, decideMatch, groupDuplicateCustomers, normalizeDocument, normalizeEmail } from './match'
 
 describe('brPhoneCandidates', () => {
   it('acha o mesmo celular gravado com e sem o 55', () => {
@@ -136,5 +136,32 @@ describe('asaasPhoneForContact — telefone do Asaas vira contato', () => {
     expect(asaasPhoneForContact('99236')).toBeNull()
     expect(asaasPhoneForContact('0192361631')).toBeNull()
     expect(asaasPhoneForContact('+370 63949836')).toBeNull()
+  })
+})
+
+describe('groupDuplicateCustomers — Renato ×3', () => {
+  it('agrupa por CPF, e cada cadastro entra em um grupo só', () => {
+    const g = groupDuplicateCustomers([
+      { id: 'a', name: 'Renato', cpfCnpj: '123.456.789-00', mobilePhone: '67999996855' },
+      { id: 'b', name: 'Renato ticolat', cpfCnpj: '12345678900', mobilePhone: '5567999996855' },
+      { id: 'c', name: 'Renato T', cpfCnpj: '12345678900', mobilePhone: '6799996855' },
+      { id: 'd', name: 'Outra pessoa', cpfCnpj: '98765432100', mobilePhone: '67911112222' },
+    ])
+    expect(g).toHaveLength(1)
+    expect(g[0].by).toBe('cpf')
+    expect(g[0].customers.map((c) => c.id).sort()).toEqual(['a', 'b', 'c'])
+  })
+
+  it('sem CPF, agrupa por telefone tolerando 55 e 9º dígito; e-mail por último', () => {
+    const g = groupDuplicateCustomers([
+      { id: 'a', name: 'Ana', mobilePhone: '(67) 99236-1631' },
+      { id: 'b', name: 'Ana Paula', mobilePhone: '556792361631' },
+      { id: 'c', name: 'Beto', email: 'Beto@x.com' },
+      { id: 'd', name: 'Roberto', email: 'beto@x.com' },
+      { id: 'e', name: 'Solo', email: 'solo@x.com' },
+    ])
+    expect(g.map((x) => x.by)).toEqual(['phone', 'email'])
+    expect(g[0].customers.map((c) => c.id)).toEqual(['a', 'b'])
+    expect(g[1].customers.map((c) => c.id)).toEqual(['c', 'd'])
   })
 })

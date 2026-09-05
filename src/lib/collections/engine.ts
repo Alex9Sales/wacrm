@@ -27,6 +27,7 @@ import { resolveCollectionTargets } from './outreach'
 import { maxSimilarity, seedFrom, tooSimilar, variationInstruction, variationPlan } from './variation'
 
 import {
+  duplicateSuspects,
   eligibility,
   fallbackMessage,
   formatDebtSummary,
@@ -106,6 +107,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   const rows = await db
     .select({
       contactId: asaasCharges.contactId,
+      asaasCustomerId: asaasCharges.asaasCustomerId,
       contactName: contacts.name,
       optedOut: contacts.optedOut,
       value: asaasCharges.value,
@@ -172,6 +174,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     }
     const late = r.dueDate ? Math.round((today.getTime() - new Date(`${r.dueDate}T00:00:00`).getTime()) / 86_400_000) : null
     d.charges.push({
+      customerId: r.asaasCustomerId,
       value: Number(r.value ?? 0),
       dueDate: r.dueDate,
       daysLate: late,
@@ -243,6 +246,13 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     )
     if (reason !== 'ok') {
       bump(reason)
+      continue
+    }
+
+    // Parcela idêntica em dois cadastros do Asaas = provável duplicata (Renato
+    // ×3). Não cobramos até uma pessoa resolver lá — cobrar em dobro é pior.
+    if (duplicateSuspects(d.charges)) {
+      bump('duplicate_suspect')
       continue
     }
 

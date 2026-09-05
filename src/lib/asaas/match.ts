@@ -116,3 +116,56 @@ export function asaasPhoneForContact(raw: string | null | undefined): string | n
   if (!isPlausibleDDD(d.slice(2, 4))) return null
   return d
 }
+
+// ------------------------------------------ clientes duplicados no Asaas (item 5)
+
+export interface CustomerLite {
+  id: string
+  name?: string | null
+  cpfCnpj?: string | null
+  mobilePhone?: string | null
+  phone?: string | null
+  email?: string | null
+}
+
+export interface DuplicateGroup {
+  by: 'cpf' | 'phone' | 'email'
+  key: string
+  customers: { id: string; name: string | null }[]
+}
+
+/** DDD + 8 dígitos locais: tolera 55 e 9º dígito. Vazio quando não parece BR. */
+function phoneIdentity(raw: string | null | undefined): string {
+  let d = (raw ?? '').replace(/\D/g, '')
+  if ((d.length === 12 || d.length === 13) && d.startsWith('55')) d = d.slice(2)
+  if (d.length === 11 && d[2] === '9') d = d.slice(0, 2) + d.slice(3)
+  return d.length === 10 && isPlausibleDDD(d.slice(0, 2)) ? d : ''
+}
+
+/**
+ * Cadastros que são a MESMA pessoa: primeiro por CPF/CNPJ, depois por telefone
+ * (entre quem não caiu num grupo de documento), depois por e-mail. Cada
+ * cadastro aparece em no máximo um grupo. Não decide nada — mostra.
+ */
+export function groupDuplicateCustomers(list: CustomerLite[]): DuplicateGroup[] {
+  const out: DuplicateGroup[] = []
+  const taken = new Set<string>()
+  const pass = (by: DuplicateGroup['by'], keyOf: (c: CustomerLite) => string) => {
+    const buckets = new Map<string, CustomerLite[]>()
+    for (const c of list) {
+      if (taken.has(c.id)) continue
+      const k = keyOf(c)
+      if (!k) continue
+      buckets.set(k, [...(buckets.get(k) ?? []), c])
+    }
+    for (const [key, cs] of buckets) {
+      if (cs.length < 2) continue
+      for (const c of cs) taken.add(c.id)
+      out.push({ by, key, customers: cs.map((c) => ({ id: c.id, name: c.name ?? null })) })
+    }
+  }
+  pass('cpf', (c) => normalizeDocument(c.cpfCnpj))
+  pass('phone', (c) => phoneIdentity(c.mobilePhone) || phoneIdentity(c.phone))
+  pass('email', (c) => normalizeEmail(c.email))
+  return out
+}

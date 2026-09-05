@@ -18,9 +18,13 @@ import {
   DEFAULT_OVERDUE_STATUSES,
   fetchCustomers,
   listCharges,
+  setCustomerNotifications,
   type AsaasCredential,
   type AsaasEnv,
 } from './collections'
+import { getAccountSettings } from '@/lib/settings/account-settings'
+import { normalizeSettings } from '@/lib/collections/rules'
+
 import {
   brPhoneCandidates,
   decideMatch,
@@ -37,6 +41,8 @@ export interface SyncResult {
   matched: number
   /** Quantas ficaram sem contato (pendência para resolver na tela). */
   pending: number
+  /** Clientes cujas notificações do Asaas foram desligadas nesta rodada (item 5). */
+  notificationsOff: number
   /** Quantas sumiram da lista do Asaas desde a última rodada (pagas/apagadas). */
   closed: number
   /** Cobranças que existem no Asaas mas AINDA NÃO venceram (só para a tela não
@@ -45,7 +51,7 @@ export interface SyncResult {
   error?: string
 }
 
-const EMPTY: SyncResult = { ok: true, total: 0, matched: 0, pending: 0, closed: 0, upcoming: 0 }
+const EMPTY: SyncResult = { ok: true, total: 0, matched: 0, pending: 0, closed: 0, upcoming: 0, notificationsOff: 0 }
 
 /**
  * Puxa a carteira de UMA conexão e espelha no CRM.
@@ -85,6 +91,28 @@ export async function syncConnection(
   }
 
   const customers = await fetchCustomers(cred, payments.map((p) => p.customer)).catch(() => new Map())
+
+  // Item 5 (05/09): o CRM assume os avisos. Opt-in na régua: desliga as
+  // notificações do Asaas de quem entra na carteira — o cliente paga por envio
+  // lá, e a régua é quem fala. Falhou num cliente → a próxima rodada tenta.
+  let notificationsOff = 0
+  try {
+    const s = normalizeSettings((await getAccountSettings(accountId)).collections)
+    if (s.asaasNotificationsOff) {
+      for (const c of customers.values()) {
+        if (c.notificationDisabled !== false) continue
+        try {
+          await setCustomerNotifications(cred, c.id, true)
+          c.notificationDisabled = true
+          notificationsOff++
+        } catch {
+          /* próxima rodada */
+        }
+      }
+    }
+  } catch {
+    /* configuração indisponível: segue sem mexer nos avisos */
+  }
   const now = new Date().toISOString()
   const seen: string[] = []
   let matched = 0
@@ -197,6 +225,7 @@ export async function syncConnection(
     pending: payments.length - matched,
     closed: closedRows.length,
     upcoming,
+    notificationsOff,
   }
 }
 
@@ -222,6 +251,7 @@ export async function syncAccount(accountId: string, statuses?: readonly string[
     totals.pending += r.pending
     totals.closed += r.closed
     totals.upcoming += r.upcoming
+    totals.notificationsOff += r.notificationsOff
   }
 
   // Uma conexão quebrada não some em silêncio, mesmo que a outra tenha ido bem.

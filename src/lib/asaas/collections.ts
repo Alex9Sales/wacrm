@@ -147,6 +147,9 @@ export interface AsaasCustomer {
   email?: string | null
   phone?: string | null
   mobilePhone?: string | null
+  /** true = o Asaas NÃO manda avisos (e-mail/SMS/WhatsApp) para este cliente. */
+  notificationDisabled?: boolean
+  externalReference?: string | null
 }
 
 /**
@@ -188,12 +191,12 @@ export async function testCredential(cred: AsaasCredential): Promise<{ ok: true 
 // (05/09) a IA também CRIA cobrança no Asaas do cliente, no meio do
 // atendimento. Tudo que escreve fica abaixo desta linha, de propósito.
 
-async function asaasPost<T>(cred: AsaasCredential, path: string, body: Record<string, unknown>): Promise<T> {
+async function asaasSend<T>(cred: AsaasCredential, method: 'POST' | 'PUT', path: string, body: Record<string, unknown>): Promise<T> {
   const url = `${baseUrl(cred.environment)}${path}`
   let res: Response
   try {
     res = await fetch(url, {
-      method: 'POST',
+      method,
       headers: { access_token: cred.apiKey, 'Content-Type': 'application/json', accept: 'application/json' },
       body: JSON.stringify(body),
       signal: AbortSignal.timeout(20_000),
@@ -205,6 +208,8 @@ async function asaasPost<T>(cred: AsaasCredential, path: string, body: Record<st
   if (!res.ok) throw new AsaasApiError(humanError(res.status, await res.text().catch(() => '')), res.status)
   return (await res.json()) as T
 }
+
+const asaasPost = <T>(cred: AsaasCredential, path: string, body: Record<string, unknown>) => asaasSend<T>(cred, 'POST', path, body)
 
 export interface AsaasCustomerInput {
   name: string
@@ -267,4 +272,29 @@ export async function createPayment(cred: AsaasCredential, input: CreatePaymentI
     description: input.description.slice(0, 500),
     externalReference: input.externalReference,
   })
+}
+
+// ============================================================ ITEM 5 (05/09)
+
+/**
+ * Liga/desliga TODOS os avisos do Asaas para um cliente (e-mail, SMS, WhatsApp
+ * deles). O cliente da Fluxia paga por envio no Asaas e quer que o CRM avise —
+ * então o Asaas cala e a régua fala.
+ */
+export async function setCustomerNotifications(cred: AsaasCredential, customerId: string, disabled: boolean): Promise<void> {
+  await asaasSend<AsaasCustomer>(cred, 'PUT', `/customers/${encodeURIComponent(customerId)}`, { notificationDisabled: disabled })
+}
+
+/**
+ * Todos os clientes da conta (paginado, teto de páginas para conta gigante
+ * não travar). É a base do detector de duplicados e do desligar em massa.
+ */
+export async function listAllCustomers(cred: AsaasCredential, maxPages = MAX_PAGES): Promise<AsaasCustomer[]> {
+  const out: AsaasCustomer[] = []
+  for (let page = 0; page < maxPages; page++) {
+    const res = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { offset: page * PAGE_SIZE, limit: PAGE_SIZE })
+    out.push(...(res.data ?? []))
+    if (!res.hasMore || !res.data?.length) break
+  }
+  return out
 }

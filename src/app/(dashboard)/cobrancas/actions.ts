@@ -20,11 +20,11 @@ import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
 import { runCollectionsForAccount } from '@/lib/collections/engine'
-import { normalizeSettings, type CollectionsSettings } from '@/lib/collections/rules'
+import { duplicateSuspects, normalizeSettings, type CollectionsSettings } from '@/lib/collections/rules'
 import { evaluatePromotion, promotionHeadline, type PromotionVerdict } from '@/lib/collections/promotion'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
-import { testCredential, type AsaasEnv } from '@/lib/asaas/collections'
-import { asaasPhoneForContact, daysOverdue, normalizeEmail } from '@/lib/asaas/match'
+import { AsaasApiError, listAllCustomers, setCustomerNotifications, testCredential, type AsaasCredential, type AsaasEnv } from '@/lib/asaas/collections'
+import { asaasPhoneForContact, daysOverdue, groupDuplicateCustomers, normalizeEmail, type DuplicateGroup } from '@/lib/asaas/match'
 import { findOrCreateContact } from '@/lib/api/v1/contacts'
 import { resolveCollectionTargets, WHATSAPP_PROVIDERS } from '@/lib/collections/outreach'
 import { createChargeForContact } from '@/lib/collections/emit'
@@ -32,7 +32,7 @@ import { manualChargeMessage, parseDueDate, parseValue, validateEmit } from '@/l
 import { postInternalNote } from '@/lib/ai/close-actions'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { syncAccount, syncConnection, type SyncResult } from '@/lib/asaas/sync'
-import { encrypt } from '@/lib/whatsapp/encryption'
+import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
 import { randomBytes } from 'node:crypto'
 
 export interface ActionResult<T = unknown> {
@@ -58,6 +58,11 @@ export interface ConnectionView {
   webhookUrl: string | null
   /** Último evento recebido — prova que a URL foi mesmo colada lá. */
   webhookLastAt: string | null
+  /** Item 5: clientes duplicados no Asaas (mesmo CPF/telefone/e-mail), da última verificação. */
+  duplicatesReport: DuplicateGroup[]
+  duplicatesCheckedAt: string | null
+  /** Quando os avisos do Asaas foram desligados em massa por aqui. */
+  notificationsOffAt: string | null
   webhookEvents: number
 }
 
@@ -76,6 +81,9 @@ export async function listConnections(): Promise<ConnectionView[]> {
       webhookToken: asaasConnections.webhookToken,
       webhookLastAt: asaasConnections.webhookLastAt,
       webhookEvents: asaasConnections.webhookEvents,
+      duplicatesReport: asaasConnections.duplicatesReport,
+      duplicatesCheckedAt: asaasConnections.duplicatesCheckedAt,
+      notificationsOffAt: asaasConnections.notificationsOffAt,
       openCharges: sql<number>`(
         SELECT count(*)::int FROM asaas_charges c
         WHERE c.connection_id = ${asaasConnections.id} AND c.open
@@ -94,6 +102,7 @@ export async function listConnections(): Promise<ConnectionView[]> {
   return rows.map(({ webhookToken, ...r }) => ({
     ...r,
     environment: r.environment as AsaasEnv,
+    duplicatesReport: (r.duplicatesReport ?? []) as DuplicateGroup[],
     // A chave nunca sai daqui; o cliente identifica a conta pelo rótulo.
     keyHint: '••••',
     // O token só sai dentro da URL que ele vai colar no Asaas — é o uso dele.
@@ -196,6 +205,8 @@ export interface WalletCharge {
   description: string | null
   invoiceUrl: string | null
   connectionLabel: string
+  /** Cadastro do Asaas de onde veio (detector de duplicata). */
+  asaasCustomerId: string | null
 }
 
 export interface WalletDebtor {
@@ -215,6 +226,8 @@ export interface WalletDebtor {
   touchCount: number
   lastTouchAt: string | null
   snoozeUntil: string | null
+  /** Parcela idêntica em dois cadastros do Asaas — a régua não cobra até resolver. */
+  duplicateSuspect: boolean
 }
 
 export interface WalletSummary {
@@ -293,6 +306,7 @@ export async function getWallet(): Promise<WalletSummary> {
         touchCount: r.touchCount ?? 0,
         lastTouchAt: r.lastTouchAt,
         snoozeUntil: r.snoozeUntil,
+        duplicateSuspect: false,
       }
       byDebtor.set(key, d)
     }
@@ -308,7 +322,16 @@ export async function getWallet(): Promise<WalletSummary> {
       description: r.description,
       invoiceUrl: r.invoiceUrl,
       connectionLabel: r.connectionLabel,
+      asaasCustomerId: r.asaasCustomerId,
     })
+  }
+
+  // Parcela idêntica em dois cadastros do Asaas (Renato ×3): a tela avisa e a
+  // régua não cobra até resolver lá.
+  for (const d of byDebtor.values()) {
+    d.duplicateSuspect = duplicateSuspects(
+      d.charges.map((c) => ({ customerId: c.asaasCustomerId, value: Number(c.value), dueDate: c.dueDate })),
+    )
   }
 
   const debtors = [...byDebtor.values()].sort((a, b) => (b.oldestDaysLate ?? -1) - (a.oldestDaysLate ?? -1))
@@ -815,4 +838,96 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
 
   revalidatePath('/cobrancas')
   return { ok: true, data: { invoiceUrl: created.invoiceUrl, reused: created.reused, sentVia, sendError, connectionLabel: created.connectionLabel } }
+}
+
+// ---------------------------------------------- item 5: avisos + duplicados
+
+async function connectionCred(accountId: string, connectionId: string): Promise<{ id: string; label: string; cred: AsaasCredential } | null> {
+  const row = firstOrNull(
+    await db
+      .select({ id: asaasConnections.id, label: asaasConnections.label, environment: asaasConnections.environment, apiKeyEnc: asaasConnections.apiKeyEnc })
+      .from(asaasConnections)
+      .where(and(eq(asaasConnections.accountId, accountId), eq(asaasConnections.id, connectionId)))
+      .limit(1),
+  )
+  if (!row) return null
+  return { id: row.id, label: row.label, cred: { apiKey: decrypt(row.apiKeyEnc), environment: row.environment as AsaasEnv } }
+}
+
+export interface DuplicateCheckResult {
+  groups: DuplicateGroup[]
+  customers: number
+  checkedAt: string
+}
+
+/**
+ * Procura cadastros repetidos no Asaas (mesmo CPF/CNPJ, telefone ou e-mail).
+ * Só mostra — apagar é decisão de gente, no Asaas. Caso Renato ×3 (05/09).
+ */
+export async function checkAsaasDuplicates(connectionId: string): Promise<ActionResult<DuplicateCheckResult>> {
+  const { accountId } = await requireRole('supervisor')
+  const c = await connectionCred(accountId, connectionId)
+  if (!c) return { ok: false, error: 'Conexão não encontrada.' }
+  try {
+    const all = await listAllCustomers(c.cred)
+    const groups = groupDuplicateCustomers(all)
+    const now = new Date().toISOString()
+    await db
+      .update(asaasConnections)
+      .set({ duplicatesReport: groups, duplicatesCheckedAt: now, updatedAt: now })
+      .where(eq(asaasConnections.id, c.id))
+    revalidatePath('/cobrancas')
+    return { ok: true, data: { groups, customers: all.length, checkedAt: now } }
+  } catch (err) {
+    return { ok: false, error: err instanceof AsaasApiError ? err.message : 'Não foi possível ler os clientes do Asaas.' }
+  }
+}
+
+export interface NotificationsBulkResult {
+  changed: number
+  alreadyDone: number
+  failed: number
+  total: number
+  /** Ficaram por fazer (teto por rodada) — clicar de novo continua. */
+  remaining: number
+}
+
+/** Teto por clique: o Asaas limita requisições por minuto; 400 já cobre a maioria das contas. */
+const NOTIFICATIONS_BATCH = 400
+
+/**
+ * Desliga (ou religa) os avisos do Asaas de TODOS os clientes desta conta.
+ * O cliente da Fluxia paga por envio lá; ligando a régua, o CRM é quem avisa.
+ * Reversível: o mesmo botão religa.
+ */
+export async function setAsaasNotifications(connectionId: string, disabled: boolean): Promise<ActionResult<NotificationsBulkResult>> {
+  const { accountId } = await requireRole('admin')
+  const c = await connectionCred(accountId, connectionId)
+  if (!c) return { ok: false, error: 'Conexão não encontrada.' }
+  try {
+    const all = await listAllCustomers(c.cred)
+    const pending = all.filter((cu) => (cu.notificationDisabled === true) !== disabled)
+    const batch = pending.slice(0, NOTIFICATIONS_BATCH)
+    let changed = 0
+    let failed = 0
+    for (const cu of batch) {
+      try {
+        await setCustomerNotifications(c.cred, cu.id, disabled)
+        changed++
+      } catch (err) {
+        failed++
+        if (err instanceof AsaasApiError && err.status === 429) break
+      }
+    }
+    const remaining = pending.length - changed
+    const now = new Date().toISOString()
+    await db
+      .update(asaasConnections)
+      .set({ notificationsOffAt: disabled ? (remaining === 0 ? now : null) : null, updatedAt: now })
+      .where(eq(asaasConnections.id, c.id))
+    revalidatePath('/cobrancas')
+    return { ok: true, data: { changed, alreadyDone: all.length - pending.length, failed, total: all.length, remaining } }
+  } catch (err) {
+    return { ok: false, error: err instanceof AsaasApiError ? err.message : 'Não foi possível falar com o Asaas.' }
+  }
 }

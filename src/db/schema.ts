@@ -3073,6 +3073,11 @@ export const asaasConnections = pgTable("asaas_connections", {
 	/** Último evento recebido de verdade — prova que a URL foi colada no Asaas. */
 	webhookLastAt: timestamp("webhook_last_at", { withTimezone: true, mode: 'string' }),
 	webhookEvents: integer("webhook_events").default(0).notNull(),
+	/** 🧾 Item 5: clientes duplicados no Asaas (mesmo CPF/telefone/e-mail), da última verificação. */
+	duplicatesReport: jsonb("duplicates_report").$type<{ by: string; key: string; customers: { id: string; name: string | null }[] }[]>().default([]).notNull(),
+	duplicatesCheckedAt: timestamp("duplicates_checked_at", { withTimezone: true, mode: 'string' }),
+	/** Quando as notificações do Asaas foram desligadas em massa por aqui. */
+	notificationsOffAt: timestamp("notifications_off_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

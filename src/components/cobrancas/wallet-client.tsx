@@ -35,6 +35,7 @@ import {
   Trash2,
   TriangleAlert,
   UserPlus,
+  Users,
 } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
@@ -51,6 +52,7 @@ import {
   getCollectionsPromotion,
   getCollectionsSettings,
   getWallet,
+  checkAsaasDuplicates,
   createChargeManual,
   createContactForDebtor,
   createContactsForPendingDebtors,
@@ -63,6 +65,7 @@ import {
   searchContactsForCharge,
   runCollectionsNow,
   saveCollectionsSettings,
+  setAsaasNotifications,
   setCollectionsAutonomy,
   setDebtorPaused,
   syncNow,
@@ -393,6 +396,14 @@ function DebtorCard({
 
         <p className="font-semibold tabular-nums">{brl(debtor.total)}</p>
 
+        {debtor.duplicateSuspect && (
+          <span
+            className="inline-flex items-center gap-1 rounded-full bg-red-100 px-2 py-0.5 text-[11px] font-medium text-red-800 dark:bg-red-950 dark:text-red-300"
+            title="Parcela com o mesmo valor e vencimento em dois cadastros do Asaas. A régua não cobra até você resolver lá (apagar o cadastro repetido)."
+          >
+            <Users className="h-3 w-3" /> possível duplicado no Asaas
+          </span>
+        )}
         {debtor.contactId ? (
           <div className="flex items-center gap-1.5">
             {debtor.paused && (
@@ -489,10 +500,48 @@ function ConnectionsPanel({
   onChanged: () => void;
   onSync: (id: string) => void;
 }) {
+  const [busyId, setBusyId] = useState<string | null>(null);
+  const [dupFor, setDupFor] = useState<ConnectionView | null>(null);
   if (!conns.length) return null;
+
+  const byLabel = { cpf: 'mesmo CPF/CNPJ', phone: 'mesmo telefone', email: 'mesmo e-mail' } as const;
 
   return (
     <div className="flex flex-col gap-2">
+      {dupFor && (
+        <Dialog open onOpenChange={(v) => !v && setDupFor(null)}>
+          <DialogContent className="sm:max-w-lg">
+            <DialogHeader>
+              <DialogTitle>Cadastros duplicados no Asaas · {dupFor.label}</DialogTitle>
+              <DialogDescription>
+                {dupFor.duplicatesCheckedAt
+                  ? `Verificado em ${new Date(dupFor.duplicatesCheckedAt).toLocaleString('pt-BR')}. A régua não cobra devedor com parcela idêntica em dois cadastros — resolva no Asaas (apague o cadastro repetido) e verifique de novo.`
+                  : 'Ainda não verificado.'}
+              </DialogDescription>
+            </DialogHeader>
+            {dupFor.duplicatesReport.length ? (
+              <ul className="flex max-h-80 flex-col gap-2 overflow-y-auto text-sm">
+                {dupFor.duplicatesReport.map((g) => (
+                  <li key={`${g.by}-${g.key}`} className="rounded-md border px-3 py-2">
+                    <p className="font-medium">
+                      {g.customers.length} cadastros · {byLabel[g.by as keyof typeof byLabel] ?? g.by}
+                    </p>
+                    <ul className="mt-1 text-xs text-muted-foreground">
+                      {g.customers.map((cu) => (
+                        <li key={cu.id}>
+                          {cu.name || 'Sem nome'} · <span className="font-mono">{cu.id}</span>
+                        </li>
+                      ))}
+                    </ul>
+                  </li>
+                ))}
+              </ul>
+            ) : (
+              <p className="py-4 text-center text-sm text-muted-foreground">Nenhum cadastro repetido encontrado.</p>
+            )}
+          </DialogContent>
+        </Dialog>
+      )}
       {conns.map((c) => (
         <div key={c.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border bg-card px-3.5 py-2.5 text-sm">
           <Building2 className="h-4 w-4 text-muted-foreground" />
@@ -541,6 +590,92 @@ function ConnectionsPanel({
               <Copy className="h-3 w-3" />
             </button>
           )}
+
+          <button
+            type="button"
+            disabled={busyId === c.id}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] disabled:opacity-50',
+              c.duplicatesCheckedAt && c.duplicatesReport.length
+                ? 'bg-red-100 text-red-800 dark:bg-red-950 dark:text-red-300'
+                : 'bg-muted text-muted-foreground',
+            )}
+            title="Procura cadastros repetidos no Asaas (mesmo CPF, telefone ou e-mail). Clique para verificar de novo; clique com a lista aberta para ver quem é."
+            onClick={async () => {
+              if (c.duplicatesCheckedAt && c.duplicatesReport.length && busyId !== c.id) {
+                setDupFor(c);
+                return;
+              }
+              setBusyId(c.id);
+              try {
+                const res = await checkAsaasDuplicates(c.id);
+                if (!res.ok) {
+                  toast.error(res.error ?? 'Não foi possível verificar.');
+                  return;
+                }
+                const d = res.data!;
+                if (d.groups.length) toast.warning(`${d.groups.length} ${d.groups.length === 1 ? 'grupo' : 'grupos'} de cadastros repetidos entre ${d.customers} clientes. Clique no selo para ver.`);
+                else toast.success(`Nenhum cadastro repetido entre ${d.customers} clientes.`);
+                onChanged();
+              } finally {
+                setBusyId(null);
+              }
+            }}
+          >
+            {busyId === c.id ? <Loader2 className="h-3 w-3 animate-spin" /> : <Users className="h-3 w-3" />}
+            {!c.duplicatesCheckedAt
+              ? 'verificar duplicados'
+              : c.duplicatesReport.length
+                ? `${c.duplicatesReport.length} ${c.duplicatesReport.length === 1 ? 'duplicado' : 'duplicados'}`
+                : 'sem duplicados'}
+          </button>
+
+          <button
+            type="button"
+            disabled={busyId === c.id}
+            className={cn(
+              'inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] disabled:opacity-50',
+              c.notificationsOffAt ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-muted text-muted-foreground',
+            )}
+            title={
+              c.notificationsOffAt
+                ? `Avisos do Asaas desligados em ${new Date(c.notificationsOffAt).toLocaleString('pt-BR')} — o CRM é quem avisa. Clique para religar.`
+                : 'Desliga os avisos do próprio Asaas (e-mail/SMS/WhatsApp que ele manda e cobra por envio) de TODOS os clientes desta conta. O CRM passa a ser quem fala. Reversível.'
+            }
+            onClick={async () => {
+              const disable = !c.notificationsOffAt;
+              if (
+                !confirm(
+                  disable
+                    ? `Desligar os avisos do Asaas para TODOS os clientes de "${c.label}"? Eles deixam de receber e-mail/SMS/WhatsApp do Asaas — quem avisa passa a ser o CRM. Dá para religar depois.`
+                    : `Religar os avisos do Asaas para todos os clientes de "${c.label}"? O Asaas volta a mandar (e cobrar por) e-mail/SMS/WhatsApp.`,
+                )
+              )
+                return;
+              setBusyId(c.id);
+              try {
+                const res = await setAsaasNotifications(c.id, disable);
+                if (!res.ok) {
+                  toast.error(res.error ?? 'Não foi possível mexer nos avisos.');
+                  return;
+                }
+                const d = res.data!;
+                toast.success(
+                  `${d.changed} ${d.changed === 1 ? 'cliente alterado' : 'clientes alterados'}` +
+                    (d.alreadyDone ? ` · ${d.alreadyDone} já estavam assim` : '') +
+                    (d.failed ? ` · ${d.failed} falharam` : '') +
+                    (d.remaining ? ` · faltam ${d.remaining}: clique de novo` : ''),
+                  { duration: 8000 },
+                );
+                onChanged();
+              } finally {
+                setBusyId(null);
+              }
+            }}
+          >
+            <BellOff className="h-3 w-3" />
+            {c.notificationsOffAt ? 'avisos do Asaas desligados' : 'desligar avisos do Asaas'}
+          </button>
 
           <div className="ml-auto flex gap-1.5">
             <Button size="sm" variant="ghost" onClick={() => onSync(c.id)}>
@@ -1108,6 +1243,22 @@ function RulePanel({
             </label>
           </div>
 
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={draft.asaasNotificationsOff}
+              onChange={(e) => setDraft({ ...draft, asaasNotificationsOff: e.target.checked })}
+            />
+            <span>
+              O CRM assume os avisos: desligar as notificações do Asaas de quem entra na carteira
+              <span className="block text-xs text-muted-foreground">
+                O Asaas cobra por cada e-mail/SMS/WhatsApp que ele mesmo manda. Ligado, a cada sincronização a régua desliga esses avisos nos
+                clientes da carteira — e passa a ser quem fala. Para desligar de todos os clientes da conta de uma vez, use o selo na linha da conta.
+              </span>
+            </span>
+          </label>
+
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="rule-channel-kind">Por onde cobrar</Label>
             <select
@@ -1211,6 +1362,7 @@ function RulePanel({
 /** Em uma linha: onde a régua está neste devedor. */
 function reguaStatus(d: WalletDebtor): string {
   if (!d.contactId) return 'Sem contato ligado — a régua não cobra este devedor.';
+  if (d.duplicateSuspect) return 'Parcela idêntica em dois cadastros do Asaas — a régua não cobra até resolver lá.';
   if (d.paused) return 'Fora da régua: marcado como "não cobrar".';
   if (d.snoozeUntil && new Date(d.snoozeUntil).getTime() > Date.now()) {
     return `Prometeu pagar em ${new Date(d.snoozeUntil).toLocaleDateString('pt-BR')} — a régua dorme até lá.`;
