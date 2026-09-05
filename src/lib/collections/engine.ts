@@ -23,6 +23,7 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 import { decide, readPolicy, type AutonomyPolicy } from '@/lib/orchestration/policy'
 import { syncAccount } from '@/lib/asaas/sync'
 
+import { resolveCollectionTargets } from './outreach'
 import { maxSimilarity, seedFrom, tooSimilar, variationInstruction, variationPlan } from './variation'
 
 import {
@@ -245,6 +246,14 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       continue
     }
 
+    // Por onde vai (sem abrir conversa ainda — isso é na hora do envio). Quem
+    // não tem como ser alcançado sai da rodada com o motivo contado.
+    const delivery = await resolveCollectionTargets(accountId, d.contactId, null, { dryRun: true })
+    if (!delivery.ok) {
+      bump('no_channel')
+      continue
+    }
+
     const summary = formatDebtSummary(d.charges)
     const firstName = (d.name ?? '').trim().split(/\s+/)[0] || null
     const text = await draftCollectionMessage({
@@ -302,12 +311,14 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
         charges: d.charges.length,
         touch: d.touchCount + 1,
         maxDaysLate: maxLate,
+        delivery: delivery.label,
       },
       suggestedText: text,
       reason:
-        d.charges.length === 1
+        (d.charges.length === 1
           ? `1 parcela vencida há ${maxLate} ${maxLate === 1 ? 'dia' : 'dias'}.`
-          : `${d.charges.length} parcelas vencidas, a mais antiga há ${maxLate} ${maxLate === 1 ? 'dia' : 'dias'}.`,
+          : `${d.charges.length} parcelas vencidas, a mais antiga há ${maxLate} ${maxLate === 1 ? 'dia' : 'dias'}.`) +
+        ` Vai por ${delivery.label}.`,
       decision: decision.decision === 'auto_execute' ? 'auto' : decision.decision === 'request_approval' ? 'approve' : 'suggest',
       policy: decision.reason,
       status: 'pending',

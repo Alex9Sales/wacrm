@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   COLLECTIONS_DEFAULTS,
+  deliveryPlan,
   eligibility,
   fallbackMessage,
   formatDebtSummary,
@@ -172,5 +173,45 @@ describe('fallbackMessage', () => {
       expect(t).toContain('combinar uma data')
       expect(t.startsWith('Oi, Ana!')).toBe(true)
     }
+  })
+})
+
+describe('deliveryPlan — por onde a cobrança sai', () => {
+  const tudo = { hasPhone: true, hasEmail: true, whatsappError: null, emailError: null }
+
+  it('auto: WhatsApp quando tem telefone; e-mail quando não tem', () => {
+    expect(deliveryPlan({ channel: 'auto', ...tudo })).toEqual({ ok: true, whatsapp: true, email: false, label: 'WhatsApp' })
+    expect(deliveryPlan({ channel: 'auto', ...tudo, hasPhone: false })).toEqual({ ok: true, whatsapp: false, email: true, label: 'e-mail' })
+  })
+
+  it('auto sem nada: explica os dois motivos', () => {
+    const r = deliveryPlan({ channel: 'auto', hasPhone: false, hasEmail: false, whatsappError: null, emailError: null })
+    expect(r.ok).toBe(false)
+    if (!r.ok) {
+      expect(r.error).toContain('telefone')
+      expect(r.error).toContain('e-mail')
+    }
+  })
+
+  it('só WhatsApp com mais de um número: devolve o motivo do número, que é o acionável', () => {
+    const r = deliveryPlan({ channel: 'whatsapp', ...tudo, whatsappError: 'escolha em Cobranças → Ajustar qual deles envia' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('Ajustar')
+  })
+
+  it('só e-mail sem canal de e-mail: diz que falta o canal', () => {
+    const r = deliveryPlan({ channel: 'email', ...tudo, emailError: 'nenhum canal de e-mail conectado' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('canal de e-mail')
+  })
+
+  it('os dois: manda pelos dois quando dá, e por um só quando só um dá', () => {
+    expect(deliveryPlan({ channel: 'both', ...tudo })).toEqual({ ok: true, whatsapp: true, email: true, label: 'WhatsApp e e-mail' })
+    expect(deliveryPlan({ channel: 'both', ...tudo, hasPhone: false })).toEqual({ ok: true, whatsapp: false, email: true, label: 'e-mail' })
+  })
+
+  it('normalizeSettings aceita both e devolve auto para lixo', () => {
+    expect(normalizeSettings({ channel: 'both' }).channel).toBe('both')
+    expect(normalizeSettings({ channel: 'pombo-correio' }).channel).toBe('auto')
   })
 })

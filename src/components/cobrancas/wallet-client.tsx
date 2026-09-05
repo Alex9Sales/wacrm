@@ -766,14 +766,15 @@ function LinkContactDialog({
           <p className="font-medium">Ou criar um contato novo com os dados do Asaas</p>
           <p className="text-xs text-muted-foreground">
             {debtor.name}
-            {debtor.phone ? ` · ${debtor.phone}` : ' · sem telefone no Asaas'}
+            {debtor.phone ? ` · ${debtor.phone}` : ''}
             {debtor.email ? ` · ${debtor.email}` : ''}
+            {!debtor.phone && !debtor.email ? ' · sem telefone nem e-mail no Asaas' : ''}
           </p>
           <Button
             size="sm"
             variant="outline"
             className="mt-2"
-            disabled={busy || !debtor.phone}
+            disabled={busy || (!debtor.phone && !debtor.email)}
             onClick={async () => {
               setBusy(true);
               const res = await createContactForDebtor(debtor.key);
@@ -794,8 +795,11 @@ function LinkContactDialog({
           >
             <UserPlus className="mr-1.5 h-3.5 w-3.5" /> Criar contato e ligar
           </Button>
-          {!debtor.phone && (
-            <p className="mt-1.5 text-xs text-muted-foreground">Sem telefone não dá para criar: cadastre o contato na mão e ligue aqui em cima.</p>
+          {!debtor.phone && !debtor.email && (
+            <p className="mt-1.5 text-xs text-muted-foreground">Sem telefone nem e-mail não dá para criar: cadastre o contato na mão e ligue aqui em cima.</p>
+          )}
+          {!debtor.phone && debtor.email && (
+            <p className="mt-1.5 text-xs text-muted-foreground">Só e-mail: este devedor será cobrado por e-mail (precisa de um canal de e-mail conectado).</p>
           )}
         </div>
       </DialogContent>
@@ -933,6 +937,25 @@ function RulePanel({
               />
               Só em dias úteis
             </label>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="rule-channel-kind">Por onde cobrar</Label>
+            <select
+              id="rule-channel-kind"
+              className="h-9 w-full max-w-sm rounded-md border bg-background px-2 text-sm"
+              value={draft.channel}
+              onChange={(e) => setDraft({ ...draft, channel: e.target.value as CollectionsSettings['channel'] })}
+            >
+              <option value="auto">Automático: WhatsApp quando tem telefone, senão e-mail</option>
+              <option value="whatsapp">Só WhatsApp</option>
+              <option value="email">Só e-mail</option>
+              <option value="both">WhatsApp e e-mail, os dois no mesmo toque</option>
+            </select>
+            <p className="text-xs text-muted-foreground">
+              E-mail precisa de um canal de e-mail conectado em Canais e do e-mail no contato (o do Asaas entra ao criar o contato).
+              A fila mostra por onde cada cobrança vai.
+            </p>
           </div>
 
           <div className="flex flex-col gap-1.5">

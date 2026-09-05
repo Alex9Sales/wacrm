@@ -11,6 +11,8 @@
 // consultoria, e é ela que faz o segundo cliente não exigir reescrita.
 // ============================================================
 
+export type DeliveryChannel = 'auto' | 'whatsapp' | 'email' | 'both'
+
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export interface CollectionsSettings {
@@ -27,8 +29,11 @@ export interface CollectionsSettings {
   endHour: number
   /** Não cobra sábado e domingo. */
   weekdaysOnly: boolean
-  /** auto = usa o canal que o contato tem; senão força um. */
-  channel: 'auto' | 'whatsapp' | 'email'
+  /**
+   * Por onde cobrar. auto = WhatsApp quando o contato tem telefone, senão
+   * e-mail; both = os dois no mesmo toque (boleto no e-mail, lembrete no zap).
+   */
+  channel: DeliveryChannel
   /**
    * Número (canal de WhatsApp) que ENVIA a cobrança quando o devedor ainda não
    * tem conversa no CRM. null = automático: o único número conectado da conta;
@@ -86,7 +91,7 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     startHour: int(r.startHour, 9, 0, 23),
     endHour: int(r.endHour, 18, 1, 24),
     weekdaysOnly: r.weekdaysOnly !== false,
-    channel: r.channel === 'whatsapp' || r.channel === 'email' ? r.channel : 'auto',
+    channel: r.channel === 'whatsapp' || r.channel === 'email' || r.channel === 'both' ? r.channel : 'auto',
     channelId: typeof r.channelId === 'string' && UUID_RE.test(r.channelId) ? r.channelId : null,
     overdueStatuses: statuses.length ? statuses : [...COLLECTIONS_DEFAULTS.overdueStatuses],
     maxTouches: int(r.maxTouches, 8, 1, 50),
@@ -119,6 +124,7 @@ export type SkipReason =
   | 'no_contact'
   | 'opted_out'
   | 'not_due'
+  | 'no_channel'
   | 'snoozed'
   | 'paused'
   | 'too_soon'
@@ -129,6 +135,7 @@ export const SKIP_LABEL: Record<SkipReason, string> = {
   no_contact: 'A cobrança não casou com nenhum contato do CRM',
   opted_out: 'O contato pediu para não receber mensagens',
   not_due: 'Ainda não passou do prazo mínimo de atraso',
+  no_channel: 'Sem como alcançar: falta telefone/e-mail no contato ou canal na conta',
   snoozed: 'O cliente prometeu pagar em uma data que ainda não chegou',
   paused: 'A cobrança deste devedor está pausada',
   too_soon: 'O último toque foi há pouco tempo',
@@ -255,4 +262,43 @@ export function fallbackMessage(firstName: string | null, summary: ReturnType<ty
   const total = summary.lines.length > 1 ? `\n\nTotal: ${brl(summary.total)}` : ''
   const link = summary.links.length === 1 ? `\n\nPara pagar: ${summary.links[0]}` : ''
   return `${abre}\n\n${corpo}${total}${link}\n\n${fechos[(s >>> 2) % 4]}`
+}
+
+// ---------------------------------------------------------------- entrega
+// Por onde a cobrança sai. Puro: quem sabe o que o contato tem e o que a conta
+// tem passa os fatos; aqui só se decide — e toda recusa diz o que resolver.
+
+export interface DeliveryFacts {
+  channel: DeliveryChannel
+  hasPhone: boolean
+  hasEmail: boolean
+  /** null = WhatsApp disponível; senão o motivo (ex.: "escolha o número em Ajustar"). */
+  whatsappError: string | null
+  /** null = e-mail disponível; senão o motivo (ex.: "nenhum canal de e-mail conectado"). */
+  emailError: string | null
+}
+
+export type DeliveryPlan = { ok: true; whatsapp: boolean; email: boolean; label: string } | { ok: false; error: string }
+
+const planLabel = (wa: boolean, em: boolean) => (wa && em ? 'WhatsApp e e-mail' : wa ? 'WhatsApp' : 'e-mail')
+
+export function deliveryPlan(f: DeliveryFacts): DeliveryPlan {
+  const wa = f.hasPhone && !f.whatsappError
+  const em = f.hasEmail && !f.emailError
+  const waWhy = !f.hasPhone ? 'o contato não tem telefone válido' : f.whatsappError!
+  const emWhy = !f.hasEmail ? 'o contato não tem e-mail' : f.emailError!
+
+  switch (f.channel) {
+    case 'whatsapp':
+      return wa ? { ok: true, whatsapp: true, email: false, label: 'WhatsApp' } : { ok: false, error: `A régua cobra só por WhatsApp e ${waWhy}.` }
+    case 'email':
+      return em ? { ok: true, whatsapp: false, email: true, label: 'e-mail' } : { ok: false, error: `A régua cobra só por e-mail e ${emWhy}.` }
+    case 'both':
+      if (wa || em) return { ok: true, whatsapp: wa, email: em, label: planLabel(wa, em) }
+      return { ok: false, error: `Sem como alcançar: ${waWhy}; ${emWhy}.` }
+    default:
+      if (wa) return { ok: true, whatsapp: true, email: false, label: 'WhatsApp' }
+      if (em) return { ok: true, whatsapp: false, email: true, label: 'e-mail' }
+      return { ok: false, error: `Sem como alcançar: ${waWhy}; ${emWhy}.` }
+  }
 }

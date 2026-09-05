@@ -24,7 +24,7 @@ import { normalizeSettings, type CollectionsSettings } from '@/lib/collections/r
 import { evaluatePromotion, promotionHeadline, type PromotionVerdict } from '@/lib/collections/promotion'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
 import { testCredential, type AsaasEnv } from '@/lib/asaas/collections'
-import { asaasPhoneForContact, daysOverdue } from '@/lib/asaas/match'
+import { asaasPhoneForContact, daysOverdue, normalizeEmail } from '@/lib/asaas/match'
 import { findOrCreateContact } from '@/lib/api/v1/contacts'
 import { WHATSAPP_PROVIDERS } from '@/lib/collections/outreach'
 import { syncAccount, syncConnection, type SyncResult } from '@/lib/asaas/sync'
@@ -602,18 +602,44 @@ async function createAndLink(accountId: string, userId: string, debtorKey: strin
   if (!src) return { ok: false, error: 'Nenhuma cobrança pendente para este devedor.' }
 
   const phone = asaasPhoneForContact(src.phone)
-  if (!phone) return { ok: false, error: 'Este devedor não tem telefone válido no Asaas. Cadastre o contato na mão e ligue aqui.' }
+  const email = normalizeEmail(src.email)
+  if (!phone && !email) {
+    return { ok: false, error: 'Este devedor não tem telefone válido nem e-mail no Asaas. Cadastre o contato na mão e ligue aqui.' }
+  }
 
   let found: { id: string; created: boolean }
   try {
-    // Mesma trava anti-duplicado do inbound e da API: telefone já existente
-    // (com ou sem 55, com ou sem 9º dígito) reaproveita o contato em vez de
-    // criar um segundo.
-    found = await findOrCreateContact(accountId, userId, {
-      phone,
-      name: src.name?.trim() || null,
-      email: src.email?.trim() || null,
-    })
+    if (phone) {
+      // Mesma trava anti-duplicado do inbound e da API: telefone já existente
+      // (com ou sem 55, com ou sem 9º dígito) reaproveita o contato em vez de
+      // criar um segundo.
+      found = await findOrCreateContact(accountId, userId, {
+        phone,
+        name: src.name?.trim() || null,
+        email: email || null,
+      })
+    } else {
+      // Só e-mail: mesmo formato do inbound de e-mail (phone vazio, índice único
+      // de telefone é parcial). Reaproveita quem já tem esse e-mail na conta.
+      const existing = firstOrNull(
+        await db
+          .select({ id: contacts.id })
+          .from(contacts)
+          .where(and(eq(contacts.accountId, accountId), sql`lower(${contacts.email}) = ${email}`))
+          .limit(1),
+      )
+      if (existing) found = { id: existing.id, created: false }
+      else {
+        const inserted = firstOrNull(
+          await db
+            .insert(contacts)
+            .values({ accountId, userId, phone: '', name: src.name?.trim() || email, email })
+            .returning({ id: contacts.id }),
+        )
+        if (!inserted) return { ok: false, error: 'Não foi possível criar o contato.' }
+        found = { id: inserted.id, created: true }
+      }
+    }
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : 'Não foi possível criar o contato.' }
   }

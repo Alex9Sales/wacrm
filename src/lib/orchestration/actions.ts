@@ -30,7 +30,8 @@ import { firstOrNull } from '@/db/helpers'
 import { cancelEnrollment, enrollContactInCadence } from '@/lib/cadences/cadence'
 import { publishEvent } from '@/lib/events/publish'
 import { engineSendText } from '@/lib/flows/meta-send'
-import { openCollectionConversation } from '@/lib/collections/outreach'
+import { resolveCollectionTargets } from '@/lib/collections/outreach'
+import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { planStageFollowUp } from '@/lib/ai/followup'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 
@@ -186,17 +187,37 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
           return { ok: false, error: 'Este cliente não tem mais nada em aberto — a cobrança não foi enviada.' }
         }
 
-        // Devedor que nunca conversou: a régua abre a conversa no número de
-        // cobrança da conta. Até 05/09 isso falhava e a cobrança só alcançava
-        // quem já tinha escrito — numa carteira de inadimplentes, a minoria.
-        let conversationId = await resolveConversationId(input.accountId, input.contactId, input.conversationId, deal?.conversationId ?? null)
-        if (!conversationId) {
-          const opened = await openCollectionConversation(input.accountId, input.contactId)
-          if (!opened.ok) return { ok: false, error: opened.error }
-          conversationId = opened.conversationId
-        }
+        // Por onde sai (auto / whatsapp / email / both) e em que conversa — abre
+        // a conversa sozinha para quem nunca escreveu (item 1) e manda por
+        // e-mail quando é o caso (item 3). Toda recusa explica o que resolver.
+        const targets = await resolveCollectionTargets(input.accountId, input.contactId, input.conversationId ?? deal?.conversationId ?? null)
+        if (!targets.ok) return { ok: false, error: targets.error }
+        const conversationId = targets.whatsapp?.conversationId ?? targets.email!.conversationId
         const userId = await senderUserId(input.accountId, input.actorUserId, deal, conversationId)
-        const sent = await engineSendText({ accountId: input.accountId, userId, conversationId, contactId: input.contactId, text })
+
+        const sentVia: string[] = []
+        let waMessageId: string | null = null
+        if (targets.whatsapp) {
+          const sent = await engineSendText({ accountId: input.accountId, userId, conversationId: targets.whatsapp.conversationId, contactId: input.contactId, text })
+          waMessageId = sent.whatsapp_message_id
+          sentVia.push('whatsapp')
+        }
+        let emailError: string | null = null
+        if (targets.email) {
+          try {
+            await sendMessageToConversation(input.accountId, {
+              conversationId: targets.email.conversationId,
+              messageType: 'text',
+              contentText: collectionEmailBody(text, input.payload),
+              subject: collectionEmailSubject(input.payload),
+            })
+            sentVia.push('email')
+          } catch (err) {
+            emailError = err instanceof Error ? err.message : 'falha ao enviar o e-mail'
+            // Só e-mail e ele falhou → a ação falhou. WhatsApp já saiu → registra e segue.
+            if (!sentVia.length) return { ok: false, error: `O e-mail não saiu: ${emailError}` }
+          }
+        }
         const nowIso = new Date().toISOString()
 
         await db
@@ -223,7 +244,7 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
 
         return {
           ok: true,
-          result: { messageId: sent.whatsapp_message_id, conversationId },
+          result: { messageId: waMessageId, conversationId, sentVia, label: targets.label, ...(emailError ? { emailError } : {}) },
           // A mensagem não volta; guardamos o devedor para que "Corrigir"
           // consiga parar a régua nele além de pausar a IA na conversa.
           revertState: { contactId: input.contactId, conversationId },
@@ -515,4 +536,19 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
   } catch (err) {
     return { ok: false, error: err instanceof Error ? err.message : String(err) }
   }
+}
+
+// ------------------------------------------------ cobrança por e-mail (item 3)
+
+/** Assunto curto: o toque nº N já diz que é a 2ª/3ª vez. */
+function collectionEmailSubject(payload: Record<string, unknown>): string {
+  const touch = Number(payload.touch ?? 1)
+  return touch > 1 ? `Lembrete de pagamento em aberto (${touch}º aviso)` : 'Lembrete de pagamento em aberto'
+}
+
+/** O texto redigido + os links, quando há mais de um (no texto só cabe um). */
+function collectionEmailBody(text: string, payload: Record<string, unknown>): string {
+  const links = Array.isArray(payload.links) ? payload.links.filter((l): l is string => typeof l === 'string' && l.length > 0) : []
+  if (links.length <= 1) return text
+  return `${text}\n\nLinks para pagamento:\n${links.map((l) => `- ${l}`).join('\n')}`
 }
