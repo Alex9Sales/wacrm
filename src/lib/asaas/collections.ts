@@ -182,3 +182,89 @@ export async function testCredential(cred: AsaasCredential): Promise<{ ok: true 
     return { ok: false, error: err instanceof AsaasApiError ? err.message : 'Não foi possível falar com o Asaas.' }
   }
 }
+
+// ================================================================ ESCRITA
+// Até aqui este módulo era SOMENTE LEITURA. A partir do `criar_cobranca`
+// (05/09) a IA também CRIA cobrança no Asaas do cliente, no meio do
+// atendimento. Tudo que escreve fica abaixo desta linha, de propósito.
+
+async function asaasPost<T>(cred: AsaasCredential, path: string, body: Record<string, unknown>): Promise<T> {
+  const url = `${baseUrl(cred.environment)}${path}`
+  let res: Response
+  try {
+    res = await fetch(url, {
+      method: 'POST',
+      headers: { access_token: cred.apiKey, 'Content-Type': 'application/json', accept: 'application/json' },
+      body: JSON.stringify(body),
+      signal: AbortSignal.timeout(20_000),
+    })
+  } catch (err) {
+    const reason = err instanceof Error && err.name === 'TimeoutError' ? 'demorou demais para responder' : 'não respondeu'
+    throw new AsaasApiError(`O Asaas ${reason}. Nada foi criado.`, 0)
+  }
+  if (!res.ok) throw new AsaasApiError(humanError(res.status, await res.text().catch(() => '')), res.status)
+  return (await res.json()) as T
+}
+
+export interface AsaasCustomerInput {
+  name: string
+  /** Só dígitos, com DDI (5567…). */
+  mobilePhone: string
+  cpfCnpj?: string | null
+  email?: string | null
+  /** Nosso id do contato — é por ele que reencontramos o cliente da próxima vez. */
+  externalReference: string
+}
+
+/**
+ * Reencontra o cliente no Asaas pelo NOSSO id de contato (externalReference,
+ * gravado quando fomos nós que criamos) ou pelo CPF/CNPJ; senão cria.
+ *
+ * Limitação honesta: cliente que já existia no Asaas SEM esses dois dados não
+ * é reencontrado — vira um segundo cadastro lá. O Asaas tolera duplicidade de
+ * cliente; a cobrança sai certa do mesmo jeito.
+ */
+export async function findOrCreateCustomer(cred: AsaasCredential, input: AsaasCustomerInput): Promise<AsaasCustomer> {
+  const byRef = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { externalReference: input.externalReference, limit: 1 })
+  if (byRef.data?.[0]) return byRef.data[0]
+
+  const doc = (input.cpfCnpj ?? '').replace(/\D/g, '')
+  if (doc.length === 11 || doc.length === 14) {
+    const byDoc = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { cpfCnpj: doc, limit: 1 })
+    if (byDoc.data?.[0]) return byDoc.data[0]
+  }
+
+  return asaasPost<AsaasCustomer>(cred, '/customers', {
+    name: input.name,
+    mobilePhone: input.mobilePhone,
+    ...(doc ? { cpfCnpj: doc } : {}),
+    ...(input.email ? { email: input.email } : {}),
+    externalReference: input.externalReference,
+    notificationDisabled: true, // quem fala com o cliente é o CRM, não o Asaas
+  })
+}
+
+export type AsaasBillingType = 'UNDEFINED' | 'PIX' | 'BOLETO' | 'CREDIT_CARD'
+
+export interface CreatePaymentInput {
+  customer: string
+  value: number
+  /** YYYY-MM-DD */
+  dueDate: string
+  description: string
+  billingType: AsaasBillingType
+  /** Nosso rastro (conversa) — aparece no Asaas e volta no webhook. */
+  externalReference: string
+}
+
+/** Cria a cobrança. Devolve o que o Asaas devolveu — inclusive `invoiceUrl`. */
+export async function createPayment(cred: AsaasCredential, input: CreatePaymentInput): Promise<AsaasPayment> {
+  return asaasPost<AsaasPayment>(cred, '/payments', {
+    customer: input.customer,
+    billingType: input.billingType,
+    value: Number(input.value.toFixed(2)),
+    dueDate: input.dueDate,
+    description: input.description.slice(0, 500),
+    externalReference: input.externalReference,
+  })
+}

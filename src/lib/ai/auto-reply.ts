@@ -17,8 +17,10 @@ import { looksLikeInjection } from './untrusted'
 import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-profile'
 import { formatCatalogForPrompt } from './catalog'
 import { generateWithExternalTools } from './external-tools'
-import { buildSystemPrompt, collectionInstruction, HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
+import { buildSystemPrompt, chargeInstruction, collectionInstruction, HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
+import { emitChargeFromDirective } from '@/lib/collections/emit'
 import { applyCollectionReply, openDebtForPrompt } from '@/lib/collections/reply'
+import { normalizeSettings as normalizeCollectionsSettings } from '@/lib/collections/rules'
 import {
   applyCloseActions,
   loadDealCloseContext,
@@ -622,7 +624,16 @@ export async function dispatchInboundToAiReply(
       companyProfile,
       catalog,
       timezone: settings.businessTimezone,
-      extraInstructions: openDebt ? [collectionInstruction(openDebt)] : undefined,
+      extraInstructions: (() => {
+        const extra: string[] = []
+        if (openDebt) extra.push(collectionInstruction(openDebt))
+        // 🧾 criar_cobranca: a regra só entra no prompt do agente que tem a
+        // ferramenta LIGADA — nos outros nem existe a palavra cobrança.
+        if (tools.includes('create_charge')) {
+          extra.push(chargeInstruction(normalizeCollectionsSettings(settings.collections).emitMaxValue))
+        }
+        return extra.length ? extra : undefined
+      })(),
       tools,
       pipelineStages: closeCtx?.stageNames ?? [],
       availableTags: accountTags,
@@ -1003,7 +1014,8 @@ export async function dispatchInboundToAiReply(
       await finishHandoff()
       return
     }
-    if (!text && materialNames.length === 0) {
+    // Uma resposta que é SÓ [[COBRAR:…]] ainda tem o que mandar: o link.
+    if (!text && materialNames.length === 0 && !(dirs.charge && has('create_charge'))) {
       // Sem texto: se foi transferência/encerramento (marcadores sem despedida),
       // executa e sai; senão, desabilita a IA (nada útil pra responder).
       if (has('handoff') && dirs.transfer) {
@@ -1115,15 +1127,31 @@ export async function dispatchInboundToAiReply(
     // tem msgs da IA já prefixadas), o que fazia o nome sair DOBRADO ou numa
     // bolha separada. Remove uma assinatura logo no início (com ou sem ":") e
     // a gente reaplica limpa junto da 1ª mensagem.
+    // 🧾 [[COBRAR:…]] → cria a cobrança no Asaas da conta e ANEXA o link ao
+    // texto. Quem decide se pode é emit-rules (teto, vencimento, duplicata);
+    // se não puder, nota interna + aviso já saíram e o texto vai sem link.
+    let textWithCharge = text
+    if (dirs.charge && has('create_charge')) {
+      const emitted = await emitChargeFromDirective({
+        accountId,
+        contactId,
+        conversationId,
+        agentId: config.id ?? null,
+        valueRaw: dirs.charge.valueRaw,
+        dueRaw: dirs.charge.dueRaw,
+        description: dirs.charge.description,
+      })
+      if (emitted.ok) textWithCharge = `${text.trim()}\n\nLink para pagamento: ${emitted.invoiceUrl}`.trim()
+    }
     const bodyNoSig = signature
-      ? text.replace(
+      ? textWithCharge.replace(
           new RegExp(
             `^\\s*\\*${signature.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:?\\*\\s*\\n?`,
             'i',
           ),
           '',
         )
-      : text
+      : textWithCharge
     // O modelo às vezes copia o carimbo "[DD/MM HH:mm]" do histórico pro começo
     // da resposta (era só metadata pra ele). Remove pra não vazar pro cliente.
     const body = stripLeadingTimestamp(bodyNoSig)

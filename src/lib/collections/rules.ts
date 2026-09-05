@@ -37,6 +37,12 @@ export interface CollectionsSettings {
   maxTouches: number
   /** Instrução de tom, no vocabulário do negócio (vai para a IA). */
   tone: string
+  /**
+   * Teto para a IA EMITIR cobrança sozinha (criar_cobranca). Acima disso ela
+   * não cria — avisa uma pessoa. É dinheiro do cliente do cliente: o limite
+   * é configuração, não constante.
+   */
+  emitMaxValue: number
 }
 
 export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
@@ -51,6 +57,7 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   overdueStatuses: ['OVERDUE'],
   maxTouches: 8,
   tone: '',
+  emitMaxValue: 500,
 }
 
 export function normalizeSettings(raw: unknown): CollectionsSettings {
@@ -74,6 +81,10 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     overdueStatuses: statuses.length ? statuses : [...COLLECTIONS_DEFAULTS.overdueStatuses],
     maxTouches: int(r.maxTouches, 8, 1, 50),
     tone: typeof r.tone === 'string' ? r.tone.slice(0, 600) : '',
+    emitMaxValue: (() => {
+      const n = typeof r.emitMaxValue === 'number' ? r.emitMaxValue : Number.NaN
+      return Number.isFinite(n) ? Math.min(100_000, Math.max(1, Math.round(n * 100) / 100)) : 500
+    })(),
   }
 }
 

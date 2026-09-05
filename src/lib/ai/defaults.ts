@@ -97,6 +97,13 @@ export const SCHEDULE_DIRECTIVE =
  */
 export const COLLECTION_DIRECTIVE =
   /\[\[\s*cobranca\s*:\s*(promessa|comprovante|contesta|acordo)\s*(?:\|\s*(\d{4}-\d{2}-\d{2})\s*)?\]\]/i
+/**
+ * 🧾 Emitir cobrança no Asaas (ferramenta create_charge, 05/09):
+ *   [[COBRAR: valor | vencimento | descrição]]
+ * valor "125,00" · vencimento "2026-09-12", "12/09" ou "+7" (dias) · descrição curta.
+ */
+export const CHARGE_DIRECTIVE =
+  /\[\[\s*cobrar\s*:\s*([^|\]]+?)\s*\|\s*([^|\]]+?)\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
 /** Transferir pra humano por etiqueta: [[TRANSFERIR:etiqueta|resumo]]. */
 export const TRANSFER_DIRECTIVE =
   /\[\[\s*transferir\s*:\s*([^\]|]+?)\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
@@ -139,6 +146,8 @@ export interface AgentDirectives {
   transfer: { tag: string; summary: string } | null
   /** Criar card no funil: título do negócio, ou null. */
   createCard: { title: string; value: number | null; note: string | null } | null
+  /** 🧾 Emitir cobrança no Asaas: valor/vencimento/descrição CRUS (quem valida é emit-rules), ou null. */
+  charge: { valueRaw: string; dueRaw: string; description: string } | null
   /** 🧾 O que o devedor fez com a cobrança (Fase 3), ou null. */
   collection: { kind: 'promessa' | 'comprovante' | 'contesta' | 'acordo'; date: string | null } | null
   /** Nota interna pra equipe, ou null. */
@@ -166,6 +175,10 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
   const sm = raw.match(SCHEDULE_DIRECTIVE)
   const schedule = sm
     ? { startsLocal: sm[1].trim(), title: (sm[2] || '').trim() }
+    : null
+  const chm = raw.match(CHARGE_DIRECTIVE)
+  const charge = chm
+    ? { valueRaw: chm[1].trim(), dueRaw: chm[2].trim(), description: (chm[3] || '').trim() }
     : null
   const colm = raw.match(COLLECTION_DIRECTIVE)
   const collection = colm
@@ -227,6 +240,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     .replace(new RegExp(RESOLVE_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(SKIP_DIRECTIVE.source, 'gi'), '')
     .replace(new RegExp(COLLECTION_DIRECTIVE.source, 'gi'), '')
+    .replace(new RegExp(CHARGE_DIRECTIVE.source, 'gi'), '')
     .replace(/\n{3,}/g, '\n\n')
     .trim()
   return {
@@ -240,6 +254,7 @@ export function parseCloseDirectives(raw: string): AgentDirectives {
     transfer,
     createCard,
     collection,
+    charge,
     note,
     attribute,
     voicePref,
@@ -706,3 +721,18 @@ export function collectionInstruction(debt: string): string {
  */
 export const HANDOFF_FAREWELL =
   'Perfeito! Já estou te passando para um responsável — ele continua o atendimento daqui. 🙏'
+
+/**
+ * 🧾 Instrução da ferramenta "Gerar cobrança no Asaas" (create_charge).
+ * O teto de valor entra no texto para a IA nem tentar acima dele; a trava de
+ * verdade é determinística (emit-rules), esta linha só evita o vai-e-vem.
+ */
+export function chargeInstruction(maxValue: number): string {
+  const teto = maxValue.toFixed(2).replace('.', ',')
+  return (
+    'Gerar cobrança no Asaas: quando o cliente CONFIRMAR o que vai comprar e o valor, e for pagar por link (Pix ou boleto), emita UMA vez "[[COBRAR:<valor> | <vencimento> | <descrição>]]" — valor como "125,00"; vencimento como data "2026-09-12", "12/09" ou dias "+3"; descrição curta do que é (produto/serviço). ' +
+    'O sistema cria a cobrança e o link de pagamento é acrescentado à sua mensagem automaticamente — NÃO invente link e NÃO diga que "já enviou" antes: escreva algo como "segue o link para pagamento". ' +
+    `Só emita com produto e valor confirmados pelo cliente; NUNCA acima de R$ ${teto} (acima disso, diga que vai encaminhar para uma pessoa gerar). Nunca emita duas vezes na mesma compra. ` +
+    'O marcador é metadata de controle: nunca mostre ao cliente.'
+  )
+}

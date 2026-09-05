@@ -21,6 +21,7 @@ export type AgentToolKey =
   | 'voice_pref'
   | 'route_agent'
   | 'send_material'
+  | 'create_charge'
 
 export interface AgentToolDef {
   key: AgentToolKey
@@ -50,6 +51,15 @@ export const AGENT_TOOLS: AgentToolDef[] = [
       'Manda na conversa um dos "Materiais do agente" (catálogo, contrato, circular, vídeo) quando o prompt mandar ou o cliente pedir. Escreve [[ENVIAR:nome]].',
     group: 'Conversa',
     defaultOn: true,
+    implemented: true,
+  },
+  {
+    key: 'create_charge',
+    label: 'Gerar cobrança no Asaas',
+    description:
+      'Depois que o cliente confirmou produto e valor, cria a cobrança no Asaas da conta e manda o link de pagamento na conversa. Escreve [[COBRAR:valor | vencimento | descrição]]. Exige uma conta do Asaas conectada em Cobranças e respeita o valor máximo da régua. Nasce desligada: cobrar nunca é padrão, é decisão.',
+    group: 'Funil',
+    defaultOn: false,
     implemented: true,
   },
   {

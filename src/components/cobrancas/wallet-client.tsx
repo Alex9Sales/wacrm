@@ -830,6 +830,7 @@ function RulePanel({
             {num('minDaysOverdue', 'A partir de', 'Dias de atraso para entrar na régua.', 0, 365)}
             {num('dailyCap', 'Máximo por dia', 'Teto de devedores cobrados por dia.', 1, 500)}
             {num('maxTouches', 'Parar depois de', 'Toques sem resposta antes de devolver para uma pessoa.', 1, 50)}
+            {num('emitMaxValue', 'IA pode cobrar até (R$)', 'Teto da ferramenta "Gerar cobrança no Asaas": acima disso a IA não cria sozinha — avisa uma pessoa.', 1, 100000)}
           </div>
 
           <div className="flex flex-wrap items-end gap-6">

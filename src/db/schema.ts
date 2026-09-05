@@ -3100,6 +3100,10 @@ export const asaasCharges = pgTable("asaas_charges", {
 	invoiceUrl: text("invoice_url"),
 	bankSlipUrl: text("bank_slip_url"),
 	installmentNumber: integer("installment_number"),
+	/** sync = espelhada do Asaas · ai = criada pela IA no atendimento (migr 0161). */
+	origin: text().default('sync').notNull(),
+	/** Conversa em que a IA emitiu (só origin='ai'). */
+	conversationId: uuid("conversation_id"),
 	/** NULL = não casou com contato do CRM → pendência visível, nunca chute. */
 	contactId: uuid("contact_id"),
 	/** phone | email | code | manual */
