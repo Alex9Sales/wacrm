@@ -35,10 +35,22 @@ describe('planMerges — quem fica, quem some', () => {
     expect(p.map((d) => `${d.merge.id}→${d.keep.id}`).sort()).toEqual(['i1→e1', 'i2→e2'])
   })
 
-  it('duas vendas de verdade no mesmo dia: cada ERP absorve só UMA planilha', () => {
+  it('duas vendas do ERP no mesmo dia e uma planilha: a planilha some numa delas, as duas do ERP ficam', () => {
     const p = planMerges([imp('i1', '2026-08-17'), erp('e1', '2026-08-17T13:48:22Z'), erp('e2', '2026-08-17T13:49:24Z')])
     expect(p).toHaveLength(1)
     expect(p[0].merge.id).toBe('i1')
+  })
+
+  it('o ERP manda: uma venda do ERP absorve TODAS as planilhas repetidas do dia', () => {
+    const p = planMerges([erp('e1', '2026-08-24T14:00:00Z'), imp('i1', '2026-08-24'), imp('i2', '2026-08-24'), imp('i3', '2026-08-24')])
+    expect(p.map((d) => d.merge.id).sort()).toEqual(['i1', 'i2', 'i3'])
+    expect(p.every((d) => d.keep.id === 'e1')).toBe(true)
+  })
+
+  it('sem ERP, o Ganho no funil absorve só UMA planilha — a outra pode ser venda de verdade', () => {
+    const p = planMerges([deal('d1', '2026-08-24T18:00:00Z'), imp('i1', '2026-08-24'), imp('i2', '2026-08-24')])
+    expect(p).toHaveLength(1)
+    expect(p[0].keep.id).toBe('d1')
   })
 
   it('negócio ganho some dentro do ERP; sem ERP, a planilha some dentro do negócio', () => {

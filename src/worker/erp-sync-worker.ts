@@ -23,7 +23,7 @@ import { bullConnection } from '@/lib/queue/connection';
 import { listEnabledTools, executeTool } from '@/lib/ai/external-tools';
 import { getAccountSettings } from '@/lib/settings/account-settings';
 import { recomputeMetricsForContacts } from '@/lib/cdl/metrics';
-import { enrichWinner, findSameSale, markMerged } from '@/lib/cdl/merge';
+import { absorbDuplicatesForContact } from '@/lib/cdl/merge';
 import { recomputeSignalsForAccount } from '@/lib/cdl/signals';
 
 const QUEUE = 'erp-sync';
@@ -146,6 +146,7 @@ export async function runErpSyncForAccount(accountId: string, agentId: string): 
         }
       }
       let any = false;
+      let insertedNew = false;
       for (const p of purchases) {
         if (!p.sale_id || !p.sale_date) continue;
         if (p.status && CANCELED.test(p.status)) continue;
@@ -186,26 +187,21 @@ export async function runErpSyncForAccount(accountId: string, agentId: string): 
           .returning({ id: customerTransactions.id, inserted: sql<boolean>`(xmax = 0)` });
         if (ins[0]?.inserted) {
           res.created += 1;
-          // A mesma venda já estava aqui pela planilha ou pelo Ganho no funil?
-          // Então NÃO é compra nova: a repetida some dentro desta (ERP é a fonte
-          // mais precisa) e o que ela sabia (produto, pagamento, negócio) passa
-          // pra cá. Nunca duplicar o histórico — Alex, 06/09.
-          try {
-            const at = new Date(p.sale_date).toISOString();
-            const twin = await findSameSale({ accountId, contactId: c.id, source: 'erp', amount, occurredAt: at });
-            if (twin && ins[0]?.id) {
-              await enrichWinner(
-                { id: ins[0].id, source: 'erp', amount: String(amount), occurredAt: at, dealId: null, paymentMethod: p.payment_method ?? null, metadata: null },
-                twin,
-              );
-              await markMerged(twin.id, ins[0].id);
-              res.merged += 1;
-            }
-          } catch (err) {
-            console.error('[erp-sync] fusão de venda repetida falhou:', err instanceof Error ? err.message : err);
-          }
+          insertedNew = true;
         } else res.updated += 1;
         any = true;
+      }
+      // Venda nova do ERP: a mesma venda já estava aqui pela planilha ou pelo
+      // Ganho no funil? Então NÃO é compra nova — o ERP manda: TODAS as
+      // repetidas do dia somem dentro da linha do ERP, e o que elas sabiam
+      // (produto, pagamento, negócio) passa pra cá. Nunca duplicar — Alex, 06/09.
+      if (insertedNew) {
+        try {
+          const r = await absorbDuplicatesForContact(accountId, c.id);
+          res.merged += r.merged;
+        } catch (err) {
+          console.error('[erp-sync] fusão de venda repetida falhou:', err instanceof Error ? err.message : err);
+        }
       }
       if (any) touched.push(c.id);
     } catch (err) {

@@ -56,8 +56,13 @@ export interface MergeDecision {
 /**
  * Dado um conjunto de vendas de UM contato, quais linhas somem dentro de quais.
  * Cada linha é absorvida no máximo uma vez, pela candidata mais próxima no
- * tempo entre as de fonte mais confiável. Duas vendas de verdade no mesmo dia
- * (dois botijões em dois pedidos) ficam: cada linha "ganha" absorve só UMA.
+ * tempo entre as de fonte mais confiável.
+ *
+ * O ERP MANDA (Alex, 06/09): uma venda do ERP absorve TODAS as repetidas de
+ * planilha/negócio no mesmo dia — 122 planilhas estavam em dobro consigo mesmas
+ * (2–3 linhas iguais no dia) com o ERP mostrando uma venda só. Sem ERP, um
+ * Ganho no funil absorve só UMA planilha: duas linhas de planilha no mesmo dia
+ * podem ser duas vendas de verdade, e aí não há fonte da verdade para decidir.
  */
 export function planMerges(sales: SaleLike[]): MergeDecision[] {
   const ordered = [...sales].sort(
@@ -73,7 +78,7 @@ export function planMerges(sales: SaleLike[]): MergeDecision[] {
     for (const winner of ordered) {
       if (winner.id === loser.id || absorbed.has(winner.id)) continue
       if (sourceRank(winner.source) >= sourceRank(loser.source)) continue
-      if (used.has(`${winner.id}|${loser.source}`)) continue
+      if (winner.source !== 'erp' && used.has(`${winner.id}|${loser.source}`)) continue
       if (!isSameSale(winner, loser)) continue
       const dt = Math.abs(new Date(winner.occurredAt).getTime() - new Date(loser.occurredAt).getTime())
       if (dt < bestDt) {
