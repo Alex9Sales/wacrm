@@ -8,7 +8,7 @@
 // Scope: contacts:read
 // ============================================================
 
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, sql } from 'drizzle-orm'
 
 import { db, contacts, customerMetrics, customerTransactions } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -64,6 +64,8 @@ export async function GET(
         and(
           eq(customerTransactions.accountId, ctx.accountId),
           eq(customerTransactions.contactId, contactId),
+          // 'merged' = a mesma venda vinda de outra fonte — já está na linha que ficou.
+          sql`${customerTransactions.status} <> 'merged'`,
         ),
       )
       .orderBy(desc(customerTransactions.occurredAt))

@@ -5,7 +5,8 @@
 // worker-reachable (importador, e futuros hooks de escrita).
 // ============================================================
 
-import { and, desc, eq, ne, sql } from 'drizzle-orm'
+import { getAccountSettings } from '@/lib/settings/account-settings'
+import { and, desc, eq, ne, notInArray, sql } from 'drizzle-orm'
 
 import { db, customerMetrics, customerTransactions } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -29,6 +30,10 @@ export async function recomputeMetricsForContacts(
         )}])`
       : sql``
 
+  // Data LOCAL da conta: a planilha grava só a data (12:00 UTC) e o ERP a hora
+  // exata — venda das 21h local caía no dia seguinte em UTC e contava 2x (Miriam 06/09).
+  const tz = (await getAccountSettings(accountId)).businessTimezone || 'America/Sao_Paulo'
+
   await db.execute(sql`
     WITH tx AS (
       -- ⚠️ A MESMA venda pode chegar por 3 caminhos (planilha 'import', ERP 'erp' e
@@ -36,13 +41,13 @@ export async function recomputeMetricsForContacts(
       -- média 0,22 dia" e disparou reativação pra quem comprou há 4 dias. Regra:
       -- mesmo contato + mesmo DIA + mesmo valor = mesma venda (fica 1, priorizando
       -- erp > deal > import).
-      SELECT DISTINCT ON (contact_id, (occurred_at)::date, round(amount::numeric, 2))
+      SELECT DISTINCT ON (contact_id, (occurred_at AT TIME ZONE ${tz})::date, round(amount::numeric, 2))
              contact_id, amount, occurred_at, payment_method,
              (metadata->>'product') AS product
       FROM customer_transactions ct
-      WHERE ct.account_id = ${accountId}::uuid AND ct.status <> 'canceled'
+      WHERE ct.account_id = ${accountId}::uuid AND ct.status NOT IN ('canceled', 'merged')
       ${filterByContacts}
-      ORDER BY contact_id, (occurred_at)::date, round(amount::numeric, 2),
+      ORDER BY contact_id, (occurred_at AT TIME ZONE ${tz})::date, round(amount::numeric, 2),
                CASE ct.source WHEN 'erp' THEN 0 WHEN 'deal' THEN 1 WHEN 'import' THEN 2 ELSE 3 END,
                occurred_at
     ),
@@ -193,7 +198,7 @@ export async function buildCustomerFactsBlock(
         and(
           eq(customerTransactions.accountId, accountId),
           eq(customerTransactions.contactId, contactId),
-          ne(customerTransactions.status, 'canceled'),
+          notInArray(customerTransactions.status, ['canceled', 'merged']),
         ),
       )
       .orderBy(desc(customerTransactions.occurredAt))

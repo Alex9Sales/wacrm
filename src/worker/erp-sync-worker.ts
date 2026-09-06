@@ -23,6 +23,7 @@ import { bullConnection } from '@/lib/queue/connection';
 import { listEnabledTools, executeTool } from '@/lib/ai/external-tools';
 import { getAccountSettings } from '@/lib/settings/account-settings';
 import { recomputeMetricsForContacts } from '@/lib/cdl/metrics';
+import { enrichWinner, findSameSale, markMerged } from '@/lib/cdl/merge';
 import { recomputeSignalsForAccount } from '@/lib/cdl/signals';
 
 const QUEUE = 'erp-sync';
@@ -95,8 +96,10 @@ export async function runErpSyncForAccount(accountId: string, agentId: string): 
   contacts: number;
   created: number;
   updated: number;
+  /** Vendas que já existiam por outra fonte e foram fundidas na linha do ERP. */
+  merged: number;
 }> {
-  const res = { contacts: 0, created: 0, updated: 0 };
+  const res = { contacts: 0, created: 0, updated: 0, merged: 0 };
   const tools = await listEnabledTools(accountId, agentId);
   const tool = tools.find((t) => t.slug === TOOL_SLUG);
   if (!tool) return res;
@@ -180,9 +183,28 @@ export async function runErpSyncForAccount(accountId: string, agentId: string): 
               updatedAt: sql`now()`,
             },
           })
-          .returning({ inserted: sql<boolean>`(xmax = 0)` });
-        if (ins[0]?.inserted) res.created += 1;
-        else res.updated += 1;
+          .returning({ id: customerTransactions.id, inserted: sql<boolean>`(xmax = 0)` });
+        if (ins[0]?.inserted) {
+          res.created += 1;
+          // A mesma venda já estava aqui pela planilha ou pelo Ganho no funil?
+          // Então NÃO é compra nova: a repetida some dentro desta (ERP é a fonte
+          // mais precisa) e o que ela sabia (produto, pagamento, negócio) passa
+          // pra cá. Nunca duplicar o histórico — Alex, 06/09.
+          try {
+            const at = new Date(p.sale_date).toISOString();
+            const twin = await findSameSale({ accountId, contactId: c.id, source: 'erp', amount, occurredAt: at });
+            if (twin && ins[0]?.id) {
+              await enrichWinner(
+                { id: ins[0].id, source: 'erp', amount: String(amount), occurredAt: at, dealId: null, paymentMethod: p.payment_method ?? null, metadata: null },
+                twin,
+              );
+              await markMerged(twin.id, ins[0].id);
+              res.merged += 1;
+            }
+          } catch (err) {
+            console.error('[erp-sync] fusão de venda repetida falhou:', err instanceof Error ? err.message : err);
+          }
+        } else res.updated += 1;
         any = true;
       }
       if (any) touched.push(c.id);
@@ -228,7 +250,7 @@ async function tick(): Promise<void> {
     try {
       const r = await runErpSyncForAccount(a.accountId, a.agentId);
       console.log(
-        `[erp-sync] ${a.accountId.slice(0, 8)}: ${r.contacts} contatos · ${r.created} novas · ${r.updated} atualizadas · ${Math.round((Date.now() - started) / 1000)}s`,
+        `[erp-sync] ${a.accountId.slice(0, 8)}: ${r.contacts} contatos · ${r.created} novas · ${r.updated} atualizadas · ${r.merged} fundidas · ${Math.round((Date.now() - started) / 1000)}s`,
       );
     } catch (err) {
       console.error('[erp-sync] rodada falhou:', a.accountId, err);

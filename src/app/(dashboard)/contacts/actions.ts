@@ -1309,7 +1309,7 @@ export async function getContactCommercialProfile(
         and(
           eq(customerTransactions.accountId, ctx.accountId),
           eq(customerTransactions.contactId, contactId),
-          sql`${customerTransactions.status} <> 'canceled'`,
+          sql`${customerTransactions.status} NOT IN ('canceled', 'merged')`,
         ),
       )
       .orderBy(desc(customerTransactions.occurredAt))

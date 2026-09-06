@@ -7,6 +7,7 @@
 // API do agente IA (com aprovação). Tudo account-scoped; escrita = agent+.
 // ============================================================
 
+import { enrichWinner, findSameSale } from '@/lib/cdl/merge'
 import { and, asc, desc, eq, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
@@ -530,6 +531,22 @@ export async function importTransactions(
       if (row.extra) {
         for (const [k, v] of Object.entries(row.extra)) {
           if (v != null && String(v).trim() !== '') metadata[k] = v
+        }
+      }
+
+      // A importação NÃO PODE DUPLICAR — só atualiza (Alex, 06/09). Se a mesma
+      // venda já está aqui pelo ERP ou pelo Ganho no funil, completa a linha
+      // que existe (produto, pagamento) e segue sem criar outra.
+      if (occurredAt) {
+        try {
+          const twin = await findSameSale({ accountId: ctx.accountId, contactId, source: 'import', amount, occurredAt })
+          if (twin) {
+            await enrichWinner(twin, { dealId: null, paymentMethod, metadata })
+            res.transactionsUpdated++
+            continue
+          }
+        } catch (err) {
+          console.error('[import vendas] busca de venda repetida falhou:', err instanceof Error ? err.message : err)
         }
       }
 

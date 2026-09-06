@@ -1563,35 +1563,50 @@ export async function updateDeal(
             )
             const amount = Number(d?.value ?? 0)
             const meta = d?.title ? { product: d.title } : {}
-            await db
-              .insert(customerTransactions)
-              .values({
-                accountId: ctx.accountId,
-                contactId: before.contactId,
-                dealId: id,
-                type: 'purchase',
-                source: 'deal',
-                externalId: id,
-                occurredAt: new Date().toISOString(),
-                amount: String(amount),
-                currency: d?.currency ?? 'BRL',
-                status: 'completed',
-                metadata: meta,
-              })
-              .onConflictDoUpdate({
-                target: [
-                  customerTransactions.accountId,
-                  customerTransactions.source,
-                  customerTransactions.externalId,
-                ],
-                targetWhere: sql`external_id IS NOT NULL`,
-                set: {
+            // A venda já está no histórico pelo ERP ou pela planilha (mesmo
+            // cliente, valor parecido, até 36h)? Então o Ganho NÃO vira linha
+            // nova: liga o negócio à venda que existe. Nunca duplicar — 06/09.
+            const { findSameSale, enrichWinner } = await import('@/lib/cdl/merge')
+            const twin = await findSameSale({
+              accountId: ctx.accountId,
+              contactId: before.contactId,
+              source: 'deal',
+              amount,
+              occurredAt: new Date().toISOString(),
+            }).catch(() => null)
+            if (twin) {
+              await enrichWinner(twin, { dealId: id, paymentMethod: null, metadata: meta })
+            } else {
+              await db
+                .insert(customerTransactions)
+                .values({
+                  accountId: ctx.accountId,
+                  contactId: before.contactId,
+                  dealId: id,
+                  type: 'purchase',
+                  source: 'deal',
+                  externalId: id,
+                  occurredAt: new Date().toISOString(),
                   amount: String(amount),
+                  currency: d?.currency ?? 'BRL',
                   status: 'completed',
                   metadata: meta,
-                  updatedAt: sql`now()`,
-                },
-              })
+                })
+                .onConflictDoUpdate({
+                  target: [
+                    customerTransactions.accountId,
+                    customerTransactions.source,
+                    customerTransactions.externalId,
+                  ],
+                  targetWhere: sql`external_id IS NOT NULL`,
+                  set: {
+                    amount: String(amount),
+                    status: 'completed',
+                    metadata: meta,
+                    updatedAt: sql`now()`,
+                  },
+                })
+            }
           } else {
             // Reaberto ou marcado como perdido a partir de ganho → cancela.
             await db
