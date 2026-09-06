@@ -35,20 +35,29 @@ export async function recomputeMetricsForContacts(
   const tz = (await getAccountSettings(accountId)).businessTimezone || 'America/Sao_Paulo'
 
   await db.execute(sql`
-    WITH tx AS (
-      -- ⚠️ A MESMA venda pode chegar por 3 caminhos (planilha 'import', ERP 'erp' e
-      -- Ganho no funil 'deal'). Caso Fátima 03/09: 1 botijão em 29/08 virou "3 compras,
-      -- média 0,22 dia" e disparou reativação pra quem comprou há 4 dias. Regra:
-      -- mesmo contato + mesmo DIA + mesmo valor = mesma venda (fica 1, priorizando
-      -- erp > deal > import).
-      SELECT DISTINCT ON (contact_id, (occurred_at AT TIME ZONE ${tz})::date, round(amount::numeric, 2))
-             contact_id, amount, occurred_at, payment_method,
-             (metadata->>'product') AS product
+    WITH base AS (
+      -- Dia LOCAL calculado UMA vez aqui: DISTINCT ON e ORDER BY precisam da
+      -- MESMA expressão, e um parâmetro repetido vira $1/$2 (erro 42P10, 06/09).
+      SELECT ct.contact_id, ct.amount, ct.occurred_at, ct.payment_method, ct.source,
+             (ct.metadata->>'product') AS product,
+             (ct.occurred_at AT TIME ZONE ${tz})::date AS local_day,
+             round(ct.amount::numeric, 2) AS amt
       FROM customer_transactions ct
       WHERE ct.account_id = ${accountId}::uuid AND ct.status NOT IN ('canceled', 'merged')
       ${filterByContacts}
-      ORDER BY contact_id, (occurred_at AT TIME ZONE ${tz})::date, round(amount::numeric, 2),
-               CASE ct.source WHEN 'erp' THEN 0 WHEN 'deal' THEN 1 WHEN 'import' THEN 2 ELSE 3 END,
+    ),
+    tx AS (
+      -- ⚠️ A MESMA venda pode chegar por 3 caminhos (planilha 'import', ERP 'erp' e
+      -- Ganho no funil 'deal'). Caso Fátima 03/09: 1 botijão em 29/08 virou "3 compras,
+      -- média 0,22 dia" e disparou reativação pra quem comprou há 4 dias. Regra:
+      -- mesmo contato + mesmo DIA LOCAL + mesmo valor = mesma venda (fica 1, priorizando
+      -- erp > deal > import). Desde 06/09 as repetidas já chegam 'merged' (merge.ts);
+      -- isto é a rede de segurança.
+      SELECT DISTINCT ON (contact_id, local_day, amt)
+             contact_id, amount, occurred_at, payment_method, product
+      FROM base
+      ORDER BY contact_id, local_day, amt,
+               CASE source WHEN 'erp' THEN 0 WHEN 'deal' THEN 1 WHEN 'import' THEN 2 ELSE 3 END,
                occurred_at
     ),
     agg AS (

@@ -4,6 +4,7 @@
 //
 //   npx tsx src/scripts/cdl-dedupe.ts --account all
 //   npx tsx src/scripts/cdl-dedupe.ts --account <uuid> [--dry]
+//   npx tsx src/scripts/cdl-dedupe.ts --account <uuid> --recompute   (só recalcula as métricas)
 //
 // Nada é apagado: a linha repetida vira status='merged' apontando para a que
 // ficou (metadata.merged_into). Regra em lib/cdl/same-sale.ts.
@@ -13,13 +14,15 @@ import { eq, sql } from 'drizzle-orm'
 
 import { db, organization } from '@/db'
 import { cleanupAccountDuplicates } from '@/lib/cdl/merge'
-import { recomputeMetricsForContacts } from '@/lib/cdl/metrics'
+import { recomputeAccountMetrics, recomputeMetricsForContacts } from '@/lib/cdl/metrics'
 
 async function main() {
   const argv = process.argv.slice(2)
   const idx = argv.indexOf('--account')
   const target = idx >= 0 ? argv[idx + 1] : ''
   const dry = argv.includes('--dry')
+  // --recompute: recalcula as métricas de TODOS os contatos da conta (depois de uma limpeza grande).
+  const recomputeAll = argv.includes('--recompute')
   if (!target) {
     console.error('uso: --account all|<uuid> [--dry]')
     process.exit(2)
@@ -46,6 +49,11 @@ async function main() {
       continue
     }
     const started = Date.now()
+    if (recomputeAll) {
+      await recomputeAccountMetrics(a.id)
+      console.log(`${a.name}: métricas recalculadas para a conta inteira · ${Math.round((Date.now() - started) / 1000)}s`)
+      continue
+    }
     const r = await cleanupAccountDuplicates(a.id)
     if (r.contactIds.length) {
       // Em lotes: recomputeMetricsForContacts vira ARRAY[...] com um parâmetro por id.
