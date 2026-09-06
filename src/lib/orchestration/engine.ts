@@ -36,8 +36,12 @@ import { ACTION_CATALOG, decide, readPolicy, type AutonomyPolicy, type OrchActio
 
 const MAX_AUTO_PER_RUN = 5
 const MAX_NOTIFY_PER_RUN = 3
+/** Mensagens AUTOMÁTICAS por tique (10 min): anti-rajada, o mesmo espírito dos Disparos (item 7 da auditoria de cobrança, 06/09). */
+const MAX_AUTO_MESSAGES_PER_RUN = 3
 const MAX_SUGGESTIONS_PER_RUN = 50
-const PACE_MS = 8_000
+/** Entre duas mensagens automáticas no mesmo tique: 60–120s com jitter — nada de 1/segundo numa linha de WhatsApp. */
+const PACE_MIN_MS = 60_000
+const PACE_JITTER_MS = 60_000
 const DEDUPE_HOURS = 48
 /** Aviso ao time repete no máximo 1x por semana por (contato, ação, negócio). */
 const DEDUPE_NOTIFY_HOURS = 24 * 7
@@ -375,6 +379,7 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
   )
 
   let autoRuns = 0
+  let messageRuns = 0
   let notifyRuns = 0
   let consecutiveFails = 0
   const adminsNotified = new Set<string>()
@@ -526,7 +531,14 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
       continue
     }
     if (meta.kind === 'notify' && notifyRuns >= MAX_NOTIFY_PER_RUN) continue
-    if (meta.kind === 'message' && autoRuns > 0) await new Promise((r) => setTimeout(r, PACE_MS))
+    if (meta.kind === 'message') {
+      if (messageRuns >= MAX_AUTO_MESSAGES_PER_RUN) {
+        stats.skipped = 'max-messages-per-run'
+        continue
+      }
+      if (messageRuns > 0) await new Promise((r) => setTimeout(r, PACE_MIN_MS + Math.random() * PACE_JITTER_MS))
+      messageRuns += 1
+    }
     autoRuns += 1
     if (meta.kind === 'notify') notifyRuns += 1
     const exec = await executeOrchestrationAction({

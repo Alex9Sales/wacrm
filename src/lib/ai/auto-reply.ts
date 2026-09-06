@@ -19,6 +19,7 @@ import { formatCatalogForPrompt } from './catalog'
 import { generateWithExternalTools } from './external-tools'
 import { buildSystemPrompt, chargeInstruction, collectionInstruction, HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
 import { emitChargeFromDirective } from '@/lib/collections/emit'
+import { handleOwnerCommand, isOwnerPhone, ownerCommandApplies } from '@/lib/collections/owner-command'
 import { applyCollectionReply, openDebtForPrompt } from '@/lib/collections/reply'
 import { normalizeSettings as normalizeCollectionsSettings } from '@/lib/collections/rules'
 import {
@@ -194,6 +195,39 @@ export async function dispatchInboundToAiReply(
       console.log('[ai auto-reply] geração em voo nesta conversa — rechecagem agendada:', conversationId)
       await enqueueAiReplyDebounced({ ...args, raceChase: true }, REPLY_LOCK_RETRY_MS)
       return
+    }
+
+    // 🧾 Comando do DONO pelo WhatsApp ("cria uma cobrança de 150 pro João"):
+    // quem escreveu é o telefone de Avisos/Sócio IA da conta e o texto parece
+    // pedido (ou há proposta esperando SIM) → trata aqui e a IA de atendimento
+    // não responde por cima. Barato: o LLM só entra depois do regex.
+    try {
+      const ownerSettings = await getAccountSettings(accountId)
+      if (ownerSettings.alertPhone || ownerSettings.ownerDigestPhone) {
+        const who = firstOrNull(
+          await db.select({ phone: contacts.phone, isGroup: contacts.isGroup }).from(contacts).where(eq(contacts.id, contactId)).limit(1),
+        )
+        if (who && !who.isGroup && isOwnerPhone(ownerSettings, who.phone)) {
+          const lastText = firstOrNull(
+            await db
+              .select({ text: messagesTable.contentText })
+              .from(messagesTable)
+              .where(and(eq(messagesTable.conversationId, conversationId), eq(messagesTable.senderType, 'customer'), eq(messagesTable.isInternal, false)))
+              .orderBy(desc(messagesTable.createdAt))
+              .limit(1),
+          )
+          const text = (lastText?.text ?? '').trim()
+          if (text && (await ownerCommandApplies(conversationId, text))) {
+            const handled = await handleOwnerCommand({ accountId, conversationId, contactId, ownerUserId: configOwnerUserId, text })
+            if (handled) {
+              await setCoveredUntil(conversationId, new Date())
+              return
+            }
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[ai auto-reply] comando do dono falhou:', err instanceof Error ? err.message : err)
     }
 
     // 🏁 Anti-eco de corrida: se a ÚLTIMA mensagem não-interna já NÃO é do

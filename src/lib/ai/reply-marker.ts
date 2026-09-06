@@ -127,3 +127,38 @@ export async function releaseReplyLock(conversationId: string, token: string): P
     /* fail-open: o TTL solta */
   }
 }
+
+// ---------------------------------------------------------------- kv curto
+// Estado de poucos minutos por conversa (ex.: "proposta de cobrança esperando
+// o SIM do dono"). Mesmo cliente, mesmo fail-open.
+
+export async function kvGetJson<T>(key: string): Promise<T | null | undefined> {
+  const r = redis()
+  if (!r) return undefined
+  try {
+    const v = await r.get(key)
+    return v ? (JSON.parse(v) as T) : null
+  } catch {
+    return undefined
+  }
+}
+
+export async function kvSetJson(key: string, value: unknown, ttlSeconds: number): Promise<void> {
+  const r = redis()
+  if (!r) return
+  try {
+    await r.set(key, JSON.stringify(value), 'EX', ttlSeconds)
+  } catch {
+    /* fail-open */
+  }
+}
+
+export async function kvDel(key: string): Promise<void> {
+  const r = redis()
+  if (!r) return
+  try {
+    await r.del(key)
+  } catch {
+    /* fail-open */
+  }
+}
