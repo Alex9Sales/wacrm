@@ -674,6 +674,8 @@ export async function dispatchInboundToAiReply(
       accountId,
       agentId: config.id ?? null,
       conversationId,
+      contactId,
+      timezone: settings.businessTimezone,
       // Medidor de custo (Fase B): atribui o uso ao agente/canal/conversa.
       meta: {
         accountId,

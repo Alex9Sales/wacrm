@@ -11,6 +11,7 @@
 // Sem 'server-only' — worker-reachable.
 // ============================================================
 
+import { crmFallbackForTool } from './crm-fallback'
 import { failureKey, retryBlockedSummary, withFailureGuidance } from './tool-failure'
 import { and, desc, eq, gte } from 'drizzle-orm'
 import { assertPublicUrl } from '@/lib/net/safe-url'
@@ -405,6 +406,9 @@ export async function generateWithExternalTools(
     accountId: string
     agentId: string | null
     conversationId: string | null
+    /** Contato da conversa — é dele que sai a FONTE ALTERNATIVA (histórico do CRM) quando o ERP falha. */
+    contactId?: string | null
+    timezone?: string
   },
 ): Promise<GenerateResult & { orderForCard?: OrderForCard | null }> {
   const tools = await listEnabledTools(args.accountId, args.agentId).catch((err) => {
@@ -473,6 +477,21 @@ export async function generateWithExternalTools(
           })
     const firstFailure = tool && outcome.status === 'error' && !failedCalls.has(callKey)
     if (firstFailure) failedCalls.add(callKey)
+    // 1ª falha: o modelo recebe as regras (não transferir, não repetir) E o que
+    // o CRM sabe do cliente — o histórico importado vale como cadastro.
+    let shownSummary = outcome.summary
+    if (firstFailure && tool) {
+      const fallback = await crmFallbackForTool({
+        accountId: args.accountId,
+        contactId: args.contactId ?? null,
+        conversationId: args.conversationId,
+        timezone: args.timezone ?? 'America/Sao_Paulo',
+        slug: tool.slug,
+        risk: tool.risk,
+        failure: outcome.summary,
+      }).catch(() => '')
+      shownSummary = withFailureGuidance(tool.slug, outcome.summary) + (fallback ? `\n\n${fallback}` : '')
+    }
 
     if (tool?.createsDeal && outcome.status === 'ok') {
       orderForCard = orderForCardFromArgs(call.args)
@@ -485,10 +504,7 @@ export async function generateWithExternalTools(
     messages.push({ role: 'assistant', content: call.marker })
     messages.push({
       role: 'user',
-      content: `[RESULTADO DA FERRAMENTA ${call.slug} — ${outcome.status}]\n${neutralizeUntrusted(
-        firstFailure ? withFailureGuidance(call.slug, outcome.summary) : outcome.summary,
-        { maxChars: 6000 },
-      )}\n[FIM DO RESULTADO — responda ao cliente agora usando esse dado; não mencione a ferramenta]`,
+      content: `[RESULTADO DA FERRAMENTA ${call.slug} — ${outcome.status}]\n${neutralizeUntrusted(shownSummary, { maxChars: 6000 })}\n[FIM DO RESULTADO — responda ao cliente agora usando esse dado; não mencione a ferramenta]`,
     })
   }
   // inalcançável (o loop retorna antes), mas o TS quer um retorno.
