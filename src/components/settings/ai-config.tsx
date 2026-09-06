@@ -123,6 +123,11 @@ export function AiConfig({
   // pra abrir conversa com quem é importado (sem conversa ainda).
   const [reactivationCap, setReactivationCap] = useState(20);
   const [reactivationChannel, setReactivationChannel] = useState("");
+  // 🔁 Chamar de volta como os Disparos: N canais com teto cada + espaçamento.
+  const [reactivationChannels, setReactivationChannels] = useState<
+    { channelId: string; dailyCap: number }[]
+  >([]);
+  const [reactivationInterval, setReactivationInterval] = useState(8);
   // 📅 Data de início do auto (YYYY-MM-DD). '' = começa já.
   const [reactivationStart, setReactivationStart] = useState("");
   // ⏰ Janela de envio (horas locais). -1 = sem janela própria (usa o horário
@@ -279,6 +284,28 @@ export function AiConfig({
         );
         {
           const a = (data.autonomy ?? {}) as Record<string, unknown>;
+          setReactivationChannels(
+            Array.isArray(a.reactivationChannels)
+              ? (a.reactivationChannels as { channelId?: unknown; dailyCap?: unknown }[])
+                  .filter((x) => typeof x?.channelId === "string")
+                  .map((x) => ({
+                    channelId: String(x.channelId),
+                    dailyCap: Math.max(1, Math.min(500, Number(x.dailyCap) || 50)),
+                  }))
+              : typeof a.reactivationChannelId === "string" && a.reactivationChannelId
+                ? [
+                    {
+                      channelId: String(a.reactivationChannelId),
+                      dailyCap: Math.max(1, Math.min(500, Number(a.reactivationDailyCap) || 50)),
+                    },
+                  ]
+                : [],
+          );
+          setReactivationInterval(
+            Number.isFinite(Number(a.reactivationIntervalMin)) && Number(a.reactivationIntervalMin) >= 1
+              ? Math.min(120, Math.floor(Number(a.reactivationIntervalMin)))
+              : 8,
+          );
           const acts = (a.actions && typeof a.actions === "object" ? a.actions : {}) as Record<string, unknown>;
           const clean: Record<string, "suggest" | "approve" | "auto"> = {};
           for (const [k, v] of Object.entries(acts)) {
@@ -570,6 +597,8 @@ export function AiConfig({
             ...(reactivationChannel
               ? { reactivationChannelId: reactivationChannel }
               : {}),
+            reactivationChannels,
+            reactivationIntervalMin: reactivationInterval,
             ...(reactivationStart
               ? { reactivationStartsAt: reactivationStart }
               : {}),
@@ -1732,11 +1761,12 @@ export function AiConfig({
                   <p className="text-xs text-amber-700 dark:text-amber-400">
                     ⚠️ <strong>A IA vai enviar sozinha</strong>, sem passar por
                     você. Travas: só no horário configurado, no máximo{" "}
-                    <strong>{reactivationCap}/dia</strong> — e devagar (até 3 a
-                    cada meia hora, com 1–2 min entre cada envio, pra proteger a
-                    linha) — 1× a cada 7 dias por cliente, respeitando quem
-                    pediu pra não receber, e nunca por cima de uma conversa que
-                    um humano está tocando.
+                    o teto de cada linha por dia, 1 mensagem a cada{" "}
+                    <strong>{reactivationInterval} min</strong> por linha (igual aos
+                    Disparos) — 1× a cada 7 dias por cliente, respeitando quem pediu
+                    pra não receber, e nunca por cima de uma conversa que um humano
+                    está tocando. A leva do dia aparece em <strong>Disparos</strong>; se a
+                    linha cair ou der erro, ela pausa sozinha e te avisa.
                   </p>
 
                   <div className="grid gap-3 sm:grid-cols-2">
@@ -1832,47 +1862,83 @@ export function AiConfig({
                         meio-dia.
                       </p>
                     </div>
+                    <div className="sm:col-span-2">
+                      <Label className="text-xs">Linhas que chamam de volta (teto por dia em cada uma)</Label>
+                      <div className="mt-1 space-y-1.5">
+                        {channels
+                          .filter((c) => ["waha", "evolution", "evogo"].includes(c.provider))
+                          .map((c) => {
+                            const sel = reactivationChannels.find((x) => x.channelId === c.id);
+                            return (
+                              <label key={c.id} className="flex items-center gap-2 text-sm">
+                                <input
+                                  type="checkbox"
+                                  checked={!!sel}
+                                  disabled={disabled}
+                                  onChange={(e) =>
+                                    setReactivationChannels((prev) =>
+                                      e.target.checked
+                                        ? [...prev, { channelId: c.id, dailyCap: 50 }]
+                                        : prev.filter((x) => x.channelId !== c.id),
+                                    )
+                                  }
+                                />
+                                <span className="min-w-0 flex-1 truncate">{c.name}</span>
+                                {sel && (
+                                  <>
+                                    <Input
+                                      type="number"
+                                      min={1}
+                                      max={500}
+                                      value={sel.dailyCap}
+                                      disabled={disabled}
+                                      className="w-20"
+                                      onChange={(e) =>
+                                        setReactivationChannels((prev) =>
+                                          prev.map((x) =>
+                                            x.channelId === c.id
+                                              ? { ...x, dailyCap: Math.min(500, Math.max(1, Number(e.target.value) || 1)) }
+                                              : x,
+                                          ),
+                                        )
+                                      }
+                                    />
+                                    <span className="text-xs text-muted-foreground">/dia</span>
+                                  </>
+                                )}
+                              </label>
+                            );
+                          })}
+                        {channels.filter((c) => ["waha", "evolution", "evogo"].includes(c.provider)).length === 0 && (
+                          <p className="text-xs text-muted-foreground">
+                            Nenhuma linha não-oficial conectada. O chamar de volta automático sai por linha WAHA/Evolution
+                            (o canal oficial exige template fora de 24h).
+                          </p>
+                        )}
+                      </div>
+                    </div>
                     <div>
-                      <Label
-                        htmlFor="ai-reactivation-channel"
-                        className="text-xs"
-                      >
-                        Linha de WhatsApp (p/ clientes importados)
+                      <Label htmlFor="ai-reactivation-interval" className="text-xs">
+                        Espaçamento entre mensagens (min)
                       </Label>
-                      <Select
-                        value={reactivationChannel || "none"}
-                        onValueChange={(v) =>
-                          setReactivationChannel(v && v !== "none" ? v : "")
+                      <Input
+                        id="ai-reactivation-interval"
+                        type="number"
+                        min={1}
+                        max={120}
+                        value={reactivationInterval}
+                        disabled={disabled}
+                        className="mt-1 w-28"
+                        onChange={(e) =>
+                          setReactivationInterval(Math.min(120, Math.max(1, Number(e.target.value) || 1)))
                         }
-                      >
-                        <SelectTrigger
-                          id="ai-reactivation-channel"
-                          className="mt-1"
-                          disabled={disabled}
-                        >
-                          <SelectValue placeholder="Escolha a linha" />
-                        </SelectTrigger>
-                        <SelectContent>
-                          <SelectItem value="none">
-                            Só quem já tem conversa
-                          </SelectItem>
-                          {channels
-                            .filter((c) =>
-                              ["waha", "meta", "whatsapp"].includes(c.provider),
-                            )
-                            .map((c) => (
-                              <SelectItem key={c.id} value={c.id}>
-                                {c.name}
-                              </SelectItem>
-                            ))}
-                        </SelectContent>
-                      </Select>
+                      />
+                      <p className="mt-1 text-[11px] text-muted-foreground">Por linha. 8 a 10 min é o ritmo dos Disparos.</p>
                     </div>
                   </div>
                   <p className="text-[11px] text-muted-foreground">
-                    Sem uma linha escolhida, a IA só reativa quem já tem uma
-                    conversa aberta. Escolha uma linha pra ela também abrir o
-                    papo com clientes da sua base importada.
+                    Quem já tem conversa numa dessas linhas recebe por ela; quem nunca falou vai pela linha com mais vaga.
+                    Cada dia vira uma leva em Disparos, uma por linha, com pausa automática e aviso se a linha cair.
                   </p>
 
                   {/* 🛑 Kill switch — freio de emergência de TODA a conta. */}

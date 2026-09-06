@@ -170,6 +170,7 @@ export async function loadRecipientJobContext(
         attempts: broadcastRecipients.attempts,
         params: broadcastRecipients.params,
         messageParams: broadcastRecipients.messageParams,
+        extraVars: broadcastRecipients.vars,
         slotAt: broadcastRecipients.scheduledSlotAt,
         phone: contacts.phone,
         contactName: contacts.name,
@@ -253,12 +254,16 @@ export async function loadRecipientJobContext(
         params,
         messageParams: (row.messageParams as SendTimeParams | null) ?? undefined,
         slotAt: row.slotAt ?? null,
-        vars: contactTokenValues({
-          name: row.contactName,
-          phone: row.phone,
-          email: row.contactEmail,
-          company: row.contactCompany,
-        }),
+        vars: {
+          ...contactTokenValues({
+            name: row.contactName,
+            phone: row.phone,
+            email: row.contactEmail,
+            company: row.contactCompany,
+          }),
+          // Tokens extras deste destinatário (reativação: {{mensagem}}).
+          ...((row.extraVars && typeof row.extraVars === 'object' ? row.extraVars : {}) as Record<string, string>),
+        },
         optedOut: row.optedOut === true,
       },
     },

@@ -52,6 +52,13 @@ export interface EnqueueTextBroadcastInput {
   sendNowIntervalMin?: number
   /** Already-resolved, account-owned contact ids to send to. */
   recipientContactIds: string[]
+  /**
+   * Tokens extras POR destinatário (contactId → { mensagem: '…' }). Mesclados
+   * aos tokens do contato na hora do envio; o corpo pode ser só "{{mensagem}}".
+   * É o que deixa o "Chamar de volta" mandar uma mensagem diferente por pessoa
+   * pelo mesmo mecanismo dos Disparos (espaçamento, pausa, alerta).
+   */
+  recipientVars?: Record<string, Record<string, string>>
   /** Stored on the broadcast row for auditing (what the caller asked for). */
   audienceFilter?: unknown
 }
@@ -212,6 +219,7 @@ export async function enqueueTextBroadcast(
       contactId: r.contactId,
       status: 'pending' as const,
       scheduledSlotAt: slots[i] ? new Date(slots[i]).toISOString() : null,
+      vars: input.recipientVars?.[r.contactId] ?? null,
     }))
     const BATCH = 200
     try {

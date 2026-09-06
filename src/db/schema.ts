@@ -1433,6 +1433,8 @@ export const broadcastRecipients = pgTable("broadcast_recipients", {
 	// only use positional `params`.
 	messageParams: jsonb("message_params"),
 	whatsappMessageId: text("whatsapp_message_id"),
+	/** Tokens extras DESTE destinatário (ex.: {{mensagem}} da reativação), mesclados aos do contato no envio. */
+	vars: jsonb().$type<Record<string, string>>(),
 	// Humanized drip: the computed instant this recipient should be sent.
 	// Null for burst/template broadcasts (sent as fast as the limiter allows).
 	scheduledSlotAt: timestamp("scheduled_slot_at", { withTimezone: true, mode: 'string' }),

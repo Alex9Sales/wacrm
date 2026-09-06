@@ -8,16 +8,10 @@
 // Sem 'server-only' — alcançável do worker.
 // ============================================================
 
+import { planReactivationBatches } from './reactivation-plan'
 import { and, desc, eq, gte, inArray, isNull, ne, sql } from 'drizzle-orm'
 
-import {
-  db,
-  aiConfigs,
-  agentActionRequests,
-  contacts,
-  conversations,
-  customerSignals,
-} from '@/db'
+import { db, aiConfigs, agentActionRequests, contacts, conversations, customerSignals, broadcasts, channels } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { greeting } from '@/lib/cdl/names'
 import { ORCH_ACTIONS } from '@/lib/orchestration/policy'
@@ -61,6 +55,21 @@ export function sanitizeAutonomy(input: unknown): Record<string, unknown> {
   if (Number.isInteger(sh) && sh >= 0 && sh <= 23) out.reactivationStartHour = sh
   const eh = Number(o.reactivationEndHour)
   if (Number.isInteger(eh) && eh >= 1 && eh <= 24) out.reactivationEndHour = eh
+  // 🔁 Chamar de volta pelo mecanismo dos Disparos (06/09): N canais, cada um
+  // com o próprio teto diário, e espaçamento em minutos entre mensagens.
+  if (Array.isArray(o.reactivationChannels)) {
+    const list: { channelId: string; dailyCap: number }[] = []
+    for (const item of o.reactivationChannels as unknown[]) {
+      const it = item && typeof item === 'object' ? (item as Record<string, unknown>) : null
+      const id = typeof it?.channelId === 'string' ? it.channelId.trim() : ''
+      const capN = Number(it?.dailyCap)
+      if (!id || list.some((l) => l.channelId === id)) continue
+      list.push({ channelId: id, dailyCap: Number.isFinite(capN) && capN >= 1 ? Math.min(500, Math.floor(capN)) : 50 })
+    }
+    if (list.length) out.reactivationChannels = list
+  }
+  const iv = Number(o.reactivationIntervalMin)
+  if (Number.isFinite(iv) && iv >= 1) out.reactivationIntervalMin = Math.min(120, Math.floor(iv))
   // ---- Fase 2: política POR AÇÃO (+ tetos e travas) — ver lib/orchestration/policy.ts
   const actions = o.actions && typeof o.actions === 'object' ? (o.actions as Record<string, unknown>) : null
   if (actions) {
@@ -122,6 +131,29 @@ export function reactivationChannelId(autonomy: unknown): string | null {
 
 /** 📅 Data de início do modo auto ("YYYY-MM-DD"). Antes dela, o auto fica
  *  dormente (configurado mas sem enviar). null = começa já. */
+/**
+ * Canais do "Chamar de volta" com teto diário cada. Sem lista → cai no legado
+ * (uma linha + um teto), para contas configuradas antes de 06/09.
+ */
+export function reactivationChannels(autonomy: unknown): { channelId: string; dailyCap: number }[] {
+  const a = autonomy as Record<string, unknown> | null
+  const raw = a?.reactivationChannels
+  if (Array.isArray(raw) && raw.length) {
+    return raw
+      .map((x) => x as { channelId?: unknown; dailyCap?: unknown })
+      .filter((x) => typeof x.channelId === 'string' && x.channelId)
+      .map((x) => ({ channelId: String(x.channelId), dailyCap: Math.max(1, Math.min(500, Number(x.dailyCap) || 50)) }))
+  }
+  const legacy = reactivationChannelId(autonomy)
+  return legacy ? [{ channelId: legacy, dailyCap: reactivationDailyCap(autonomy) }] : []
+}
+
+/** Minutos entre uma mensagem e a próxima no mesmo canal (padrão 8, como o Alex usa nos Disparos). */
+export function reactivationIntervalMin(autonomy: unknown): number {
+  const v = Number((autonomy as Record<string, unknown> | null)?.reactivationIntervalMin)
+  return Number.isFinite(v) && v >= 1 ? Math.min(120, Math.floor(v)) : 8
+}
+
 export function reactivationStartsAt(autonomy: unknown): string | null {
   const v = (autonomy as Record<string, unknown> | null)?.reactivationStartsAt
   return typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null
@@ -381,59 +413,70 @@ export async function runAutoReactivations(accountId: string): Promise<AutoRunRe
   if (autonomyLevel(agent.autonomy, 'reactivation') !== 'auto')
     return { sent: 0, skipped: 'not-auto' }
 
-  // 📅 2b) Data de início: antes dela o auto fica DORMENTE (configurado, mas
-  // não envia). Compara a data local da conta — começa no início daquele dia
-  // (o horário de atendimento ainda decide a hora real do 1º envio).
+  // 📅 2b) Data de início: antes dela o auto fica DORMENTE.
   const startsAt = reactivationStartsAt(agent.autonomy)
-  if (startsAt) {
-    const today = localDate(settings.businessTimezone)
-    if (!today || today < startsAt) return { sent: 0, skipped: 'not-started' }
-  }
+  const today = localDate(settings.businessTimezone)
+  if (startsAt && (!today || today < startsAt)) return { sent: 0, skipped: 'not-started' }
 
-  // ⏰ 3) Horário. Prioridade: janela PRÓPRIA do auto (ex.: 9h–11h) se o dono
-  // configurou; senão o horário de atendimento; senão a janela-segura 8h–20h
-  // (o isWithinBusinessHours retorna true quando o horário está desligado —
-  // no auto isso vazaria envio de madrugada).
+  // ⏰ 3) Horário: janela própria do auto > horário de atendimento > 8h–20h.
   const window = reactivationWindow(agent.autonomy)
   let okHours: boolean
   if (window) {
     const h = localHour(settings.businessTimezone)
     okHours = h != null && h >= window.start && h < window.end
   } else if (settings.businessHoursEnabled) {
-    okHours = (
-      await import('@/lib/settings/business-hours')
-    ).isWithinBusinessHours(settings)
+    okHours = (await import('@/lib/settings/business-hours')).isWithinBusinessHours(settings)
   } else {
     okHours = isSafeDaytime(settings.businessTimezone)
   }
   if (!okHours) return { sent: 0, skipped: 'off-hours' }
 
-  // 🔢 4) Rate-limit: teto de envios AUTO (resolved_by IS NULL) nas últimas 24h.
-  const cap = reactivationDailyCap(agent.autonomy)
-  const sentRow = firstOrNull(
-    await db
-      .select({ n: sql<number>`count(*)::int` })
-      .from(agentActionRequests)
-      .where(
-        and(
-          eq(agentActionRequests.accountId, accountId),
-          eq(agentActionRequests.actionType, 'reactivation'),
-          eq(agentActionRequests.status, 'sent'),
-          isNull(agentActionRequests.resolvedBy),
-          gte(agentActionRequests.resolvedAt, sql`now() - interval '24 hours'`),
-        ),
+  // 📡 4) Canais escolhidos (cada um com teto do dia). O envio é pelo mecanismo
+  //    dos DISPAROS (06/09, pedido do Alex): espaçamento em minutos, pausa +
+  //    alerta se a linha cair, tudo visível em Disparos. Uma leva por canal por
+  //    dia — se a de hoje já existe (enviando, pausada ou pronta), não cria outra.
+  const wanted = reactivationChannels(agent.autonomy)
+  if (!wanted.length) return { sent: 0, skipped: 'no-channel' }
+  const intervalMin = reactivationIntervalMin(agent.autonomy)
+  const dayKey = today ?? new Date().toISOString().slice(0, 10)
+
+  const chanRows = await db
+    .select({ id: channels.id, name: channels.name, provider: channels.provider, status: channels.status })
+    .from(channels)
+    .where(and(eq(channels.accountId, accountId), inArray(channels.provider, ['waha', 'evolution', 'evogo', 'meta'])))
+  const todays = await db
+    .select({ channelId: broadcasts.channelId, status: broadcasts.status, total: broadcasts.totalRecipients })
+    .from(broadcasts)
+    .where(
+      and(
+        eq(broadcasts.accountId, accountId),
+        sql`${broadcasts.audienceFilter}->>'kind' = 'reactivation'`,
+        sql`${broadcasts.audienceFilter}->>'day' = ${dayKey}`,
       ),
-  )
-  // 🐢 Anti-ban: além do teto diário, no máx 3 envios POR TICK (30min) com
-  // 60–120s entre um e outro — nada de rajada 1/segundo numa linha WhatsApp.
-  const PER_TICK = 3
-  let budget = Math.min(cap - (sentRow?.n ?? 0), PER_TICK)
-  if (budget <= 0) return { sent: 0, skipped: 'rate-limit' }
+    )
+  const doneToday = new Set(todays.map((b) => b.channelId).filter((c): c is string => !!c))
 
-  const channelId = reactivationChannelId(agent.autonomy)
-  const userId = agent.createdBy ?? ''
+  const usable: { channelId: string; name: string; remaining: number }[] = []
+  for (const w of wanted) {
+    const ch = chanRows.find((c) => c.id === w.channelId)
+    if (!ch) continue
+    if (ch.status !== 'connected') {
+      console.log(`[autonomy auto] ${accountId.slice(0, 8)}: canal "${ch.name}" desconectado — chamar de volta não sai por ele hoje`)
+      continue
+    }
+    if (ch.provider === 'meta') {
+      // Canal oficial: disparo de texto fora da janela de 24h exige template.
+      console.log(`[autonomy auto] ${accountId.slice(0, 8)}: canal oficial "${ch.name}" não recebe chamar de volta automático (use uma linha WAHA)`)
+      continue
+    }
+    if (doneToday.has(ch.id)) continue
+    usable.push({ channelId: ch.id, name: ch.name, remaining: w.dailyCap })
+  }
+  if (!usable.length) return { sent: 0, skipped: 'done-today' }
 
-  // 5) Candidatos: sinais abertos por severidade (buffer p/ os que forem pulados).
+  // 5) Candidatos: TODOS os sinais abertos de reativação (não só os 12 mais
+  //    graves — era isso que deixava a lista parada em quem estava em cooldown
+  //    ou com humano na conversa, achado de 06/09).
   const sigs = await db
     .select({
       contactId: customerSignals.contactId,
@@ -449,32 +492,32 @@ export async function runAutoReactivations(accountId: string): Promise<AutoRunRe
         inArray(customerSignals.signalType, REACTIVATION_SIGNALS),
       ),
     )
-    .orderBy(desc(customerSignals.severity))
-    .limit(Math.min(300, Math.max(budget * 4, budget)))
+    .orderBy(desc(customerSignals.severity), desc(customerSignals.detectedAt))
+    .limit(1000)
   if (sigs.length === 0) return { sent: 0, skipped: null }
 
-  const ids = [...new Set(sigs.map((s) => s.contactId))]
+  // Um sinal por contato (o mais grave vem primeiro).
+  const bySignalContact = new Map<string, (typeof sigs)[number]>()
+  for (const s of sigs) if (!bySignalContact.has(s.contactId)) bySignalContact.set(s.contactId, s)
+  const ids = [...bySignalContact.keys()]
+
   const [cs, convs, recent] = await Promise.all([
     db
-      .select({ id: contacts.id, name: contacts.name, optedOut: contacts.optedOut })
+      .select({ id: contacts.id, name: contacts.name, phone: contacts.phone, optedOut: contacts.optedOut })
       .from(contacts)
       .where(inArray(contacts.id, ids)),
     db
       .select({
-        id: conversations.id,
         contactId: conversations.contactId,
+        channelId: conversations.channelId,
         iaOff: conversations.aiAutoreplyDisabled,
         assigned: conversations.assignedAgentId,
       })
       .from(conversations)
-      .where(
-        and(
-          eq(conversations.accountId, accountId),
-          inArray(conversations.contactId, ids),
-        ),
-      )
-      .orderBy(desc(conversations.createdAt)),
-    // 🧊 cooldown 7d: quem já foi tratado (enviado/recusado, humano OU auto).
+      .where(and(eq(conversations.accountId, accountId), inArray(conversations.contactId, ids)))
+      .orderBy(desc(conversations.lastMessageAt)),
+    // 🧊 cooldown 7d: quem já foi TRATADO (mensagem enviada ou recusada por
+    // gente). 'blocked'/'expired' não são tratamento — não contam (06/09).
     db
       .select({ contactId: agentActionRequests.contactId })
       .from(agentActionRequests)
@@ -482,106 +525,106 @@ export async function runAutoReactivations(accountId: string): Promise<AutoRunRe
         and(
           eq(agentActionRequests.accountId, accountId),
           eq(agentActionRequests.actionType, 'reactivation'),
-          ne(agentActionRequests.status, 'pending'),
+          inArray(agentActionRequests.status, ['sent', 'rejected']),
           inArray(agentActionRequests.contactId, ids),
           gte(agentActionRequests.resolvedAt, sql`now() - interval '7 days'`),
         ),
       ),
   ])
   const metaOf = new Map(cs.map((c) => [c.id, c]))
-  const convOf = new Map<
-    string,
-    { id: string; iaOff: boolean; assigned: string | null }
-  >()
+  const convOf = new Map<string, { channelId: string | null; iaOff: boolean; assigned: string | null }>()
   for (const c of convs) {
-    if (c.contactId && !convOf.has(c.contactId))
-      convOf.set(c.contactId, { id: c.id, iaOff: c.iaOff, assigned: c.assigned })
+    if (c.contactId && !convOf.has(c.contactId)) convOf.set(c.contactId, { channelId: c.channelId, iaOff: c.iaOff, assigned: c.assigned })
   }
   const cooling = new Set(recent.map((r) => r.contactId))
+  const usableIds = new Set(usable.map((u) => u.channelId))
 
-  const { engineSendText } = await import('@/lib/flows/meta-send')
-  let findOrCreate: typeof import('@/lib/channels/inbound').findOrCreateConversation | null = null
-
-  let sent = 0
-  let fails = 0
-  for (const s of sigs) {
-    if (budget <= 0) break
-    if (fails >= 3) break // ⚡ circuit breaker
-    const c = metaOf.get(s.contactId)
+  const candidates: { contactId: string; preferredChannelId: string | null }[] = []
+  for (const contactId of ids) {
+    const c = metaOf.get(contactId)
     if (!c || c.optedOut) continue // 🔕 opt-out
-    if (cooling.has(s.contactId)) continue // 🧊 cooldown
+    if (!(c.phone ?? '').replace(/\D/g, '')) continue // sem telefone não vai
+    if (cooling.has(contactId)) continue // 🧊 cooldown
+    const existing = convOf.get(contactId)
+    if (existing && (existing.iaOff || existing.assigned)) continue // 👤 humano dono / IA off
+    const preferred = existing?.channelId && usableIds.has(existing.channelId) ? existing.channelId : null
+    if (existing?.channelId && !preferred) continue // conversa num canal que não está na lista: fica lá
+    candidates.push({ contactId, preferredChannelId: preferred })
+  }
+  if (!candidates.length) return { sent: 0, skipped: null }
 
-    let conversationId: string | null = null
-    const existing = convOf.get(s.contactId)
-    if (existing) {
-      if (existing.iaOff || existing.assigned) continue // 👤 humano dono / IA off
-      conversationId = existing.id
-    } else if (channelId) {
-      if (!findOrCreate)
-        findOrCreate = (await import('@/lib/channels/inbound')).findOrCreateConversation
-      try {
-        const r = await findOrCreate(accountId, userId, s.contactId, channelId)
-        if (!r?.conversation) continue
-        conversationId = r.conversation.id
-      } catch {
-        fails++
-        continue
-      }
-    } else {
-      continue // importado sem linha configurada → não dá pra enviar
-    }
-    if (!conversationId) continue
+  const plan = planReactivationBatches(candidates, usable.map((u) => ({ channelId: u.channelId, remaining: u.remaining })))
 
-    const p = (s.payload ?? {}) as Record<string, unknown>
-    const text = draftReactivation(c.name ?? null, s.signalType, p)
-    const reason =
-      s.signalType === 'inactive'
-        ? `[AUTO] Cliente sumido há ${p.days_since ?? '?'} dias`
-        : s.signalType === 'repurchase_overdue'
-          ? `[AUTO] Recompra atrasada — ${p.days_since ?? '?'} dias`
-          : `[AUTO] Na hora da recompra — ${p.days_since ?? '?'} dias`
-    // 🐢 Espaço entre envios (60–120s, com jitter pra parecer humano). Não
-    // espera antes do primeiro.
-    if (sent > 0) {
-      await new Promise((r) => setTimeout(r, 60_000 + Math.random() * 60_000))
+  const { enqueueTextBroadcast } = await import('@/lib/broadcasts/text-broadcast')
+  const userId = agent.createdBy ?? ''
+  const dayLabel = dayKey.split('-').reverse().slice(0, 2).join('/')
+  let sent = 0
+  for (const u of usable) {
+    const list = plan.byChannel.get(u.channelId) ?? []
+    if (!list.length) continue
+    const recipientVars: Record<string, Record<string, string>> = {}
+    const meta: { contactId: string; signalType: string; severity: number | null; payload: Record<string, unknown>; text: string }[] = []
+    for (const contactId of list) {
+      const s = bySignalContact.get(contactId)!
+      const c = metaOf.get(contactId)!
+      const p = (s.payload ?? {}) as Record<string, unknown>
+      const text = draftReactivation(c.name ?? null, s.signalType, p)
+      recipientVars[contactId] = { mensagem: text }
+      meta.push({ contactId, signalType: s.signalType, severity: s.severity ?? null, payload: p, text })
     }
-    try {
-      await engineSendText({ accountId, userId, conversationId, contactId: s.contactId, text })
-      // 📝 log da decisão (resolved_by NULL = foi a IA, não humano)
+    const res = await enqueueTextBroadcast(accountId, userId, {
+      name: `Chamar de volta · ${dayLabel} · ${u.name}`,
+      channelId: u.channelId,
+      bodyText: '{{mensagem}}',
+      includeOptOut: false,
+      sendNow: true,
+      sendNowIntervalMin: intervalMin,
+      recipientContactIds: list,
+      recipientVars,
+      audienceFilter: { kind: 'reactivation', day: dayKey, channelId: u.channelId, intervalMin, cap: u.remaining },
+    })
+    if (!res.broadcastId) {
+      console.error(`[autonomy auto] ${accountId.slice(0, 8)}: chamar de volta pelo canal "${u.name}" não enfileirou: ${res.error ?? 'erro'}`)
+      continue
+    }
+    // 📝 log da decisão (resolved_by NULL = foi a IA) + resolve o sinal (sai da lista).
+    for (const m of meta) {
       await db.insert(agentActionRequests).values({
         accountId,
         agentId: agent.id,
-        contactId: s.contactId,
-        conversationId,
+        contactId: m.contactId,
+        conversationId: null,
         actionType: 'reactivation',
-        payload: { signalType: s.signalType, severity: s.severity, auto: true, ...p },
-        suggestedText: text,
-        reason,
+        payload: { signalType: m.signalType, severity: m.severity, auto: true, broadcastId: res.broadcastId, channelId: u.channelId, ...m.payload },
+        suggestedText: m.text,
+        reason:
+          m.signalType === 'inactive'
+            ? `[AUTO] Cliente sumido há ${m.payload.days_since ?? '?'} dias`
+            : m.signalType === 'repurchase_overdue'
+              ? `[AUTO] Recompra atrasada — ${m.payload.days_since ?? '?'} dias`
+              : `[AUTO] Na hora da recompra — ${m.payload.days_since ?? '?'} dias`,
         status: 'sent',
         resolvedAt: new Date().toISOString(),
         resolvedBy: null,
       })
-      // resolve o sinal (sai da lista)
       await db
         .update(customerSignals)
         .set({ resolvedAt: sql`now()`, updatedAt: sql`now()` })
         .where(
           and(
             eq(customerSignals.accountId, accountId),
-            eq(customerSignals.contactId, s.contactId),
-            eq(customerSignals.signalType, s.signalType),
+            eq(customerSignals.contactId, m.contactId),
+            eq(customerSignals.signalType, m.signalType),
             isNull(customerSignals.resolvedAt),
           ),
         )
-      cooling.add(s.contactId)
-      sent++
-      budget--
-      fails = 0 // sucesso zera o contador do breaker
-    } catch (err) {
-      console.error('[autonomy auto] envio falhou:', s.contactId, err)
-      fails++
     }
+    sent += res.totalRecipients
+    console.log(
+      `[autonomy auto] ${accountId.slice(0, 8)}: "Chamar de volta · ${dayLabel} · ${u.name}" com ${res.totalRecipients} pessoas, 1 a cada ${intervalMin} min (disparo ${res.broadcastId.slice(0, 8)})`,
+    )
   }
+  if (plan.leftOver) console.log(`[autonomy auto] ${accountId.slice(0, 8)}: ${plan.leftOver} ficaram para amanhã (teto do dia)`)
   return { sent, skipped: null }
 }
 
