@@ -11,6 +11,7 @@
 // Sem 'server-only' — worker-reachable.
 // ============================================================
 
+import { failureKey, retryBlockedSummary, withFailureGuidance } from './tool-failure'
 import { and, desc, eq, gte } from 'drizzle-orm'
 import { assertPublicUrl } from '@/lib/net/safe-url'
 
@@ -419,6 +420,10 @@ export async function generateWithExternalTools(
   let orderForCard: OrderForCard | null = null
   // Uma ESCRITA rodou com sucesso neste turno (pedido criado, cadastro salvo…).
   let writeSucceeded = false
+  // Chamadas que JÁ falharam nesta resposta (ferramenta + args): a segunda
+  // tentativa não vai à rede — 06/09 a IA chamou buscar_cliente 4× seguidas
+  // com o ERP fora do ar, 12s cada, e a resposta levou 40s.
+  const failedCalls = new Set<string>()
 
   for (let step = 0; step <= MAX_TOOL_STEPS; step++) {
     const res = await generateReply({ ...args, systemPrompt, messages })
@@ -456,13 +461,18 @@ export async function generateWithExternalTools(
       return { ...res, text, orderForCard }
     }
     const tool = tools.find((t) => t.slug === call.slug)
-    const outcome: ToolRunResult = tool
-      ? await executeTool(tool, call.args, {
-          accountId: args.accountId,
-          agentId: args.agentId,
-          conversationId: args.conversationId,
-        })
-      : { status: 'invalid', summary: `Ferramenta "${call.slug}" não existe. Use apenas as listadas.` }
+    const callKey = failureKey(call.slug, stableArgsKey(call.args))
+    const outcome: ToolRunResult = !tool
+      ? { status: 'invalid', summary: `Ferramenta "${call.slug}" não existe. Use apenas as listadas.` }
+      : failedCalls.has(callKey)
+        ? { status: 'error', summary: retryBlockedSummary(call.slug) }
+        : await executeTool(tool, call.args, {
+            accountId: args.accountId,
+            agentId: args.agentId,
+            conversationId: args.conversationId,
+          })
+    const firstFailure = tool && outcome.status === 'error' && !failedCalls.has(callKey)
+    if (firstFailure) failedCalls.add(callKey)
 
     if (tool?.createsDeal && outcome.status === 'ok') {
       orderForCard = orderForCardFromArgs(call.args)
@@ -475,7 +485,10 @@ export async function generateWithExternalTools(
     messages.push({ role: 'assistant', content: call.marker })
     messages.push({
       role: 'user',
-      content: `[RESULTADO DA FERRAMENTA ${call.slug} — ${outcome.status}]\n${neutralizeUntrusted(outcome.summary, { maxChars: 6000 })}\n[FIM DO RESULTADO — responda ao cliente agora usando esse dado; não mencione a ferramenta]`,
+      content: `[RESULTADO DA FERRAMENTA ${call.slug} — ${outcome.status}]\n${neutralizeUntrusted(
+        firstFailure ? withFailureGuidance(call.slug, outcome.summary) : outcome.summary,
+        { maxChars: 6000 },
+      )}\n[FIM DO RESULTADO — responda ao cliente agora usando esse dado; não mencione a ferramenta]`,
     })
   }
   // inalcançável (o loop retorna antes), mas o TS quer um retorno.

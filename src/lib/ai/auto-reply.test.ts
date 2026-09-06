@@ -63,6 +63,8 @@ vi.mock('@/lib/queue/queues', () => ({
   enqueueAiReplyDebounced: h.enqueueRecheck,
 }))
 vi.mock('./reply-marker', () => ({
+  acquireReplyLock: vi.fn(async () => 'lock-de-teste'),
+  releaseReplyLock: vi.fn(async () => {}),
   getCoveredUntil: async () =>
     h.state.coveredUntil === undefined
       ? undefined

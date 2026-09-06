@@ -36,7 +36,7 @@ import { scheduleEventFromAi } from './schedule-actions'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
 import { extractMaterialDirectives, findMaterialByName, listMaterialsForAgent } from './materials'
-import { getCoveredUntil, setCoveredUntil } from './reply-marker'
+import { acquireReplyLock, getCoveredUntil, releaseReplyLock, setCoveredUntil } from './reply-marker'
 import { isNewEpisode } from './reply-episode'
 import { enqueueAiReplyDebounced } from '@/lib/queue/queues'
 
@@ -170,15 +170,31 @@ async function noteInjectionAttempt(
   }
 }
 
+/** Quanto esperar para rechecar quando outra geração está em voo na conversa. */
+const REPLY_LOCK_RETRY_MS = 10_000
+
 export async function dispatchInboundToAiReply(
   args: DispatchArgs,
 ): Promise<void> {
   const { accountId, conversationId, contactId, configOwnerUserId } = args
 
+  let replyLock: string | null | undefined
   try {
     // Cheap early-out: no active auto-reply agent on this account → nothing to
     // do (avoids the conversation load + routing for non-AI accounts).
     if (!(await hasActiveAutoReplyAgent(accountId))) return
+
+    // 🔒 Uma geração por conversa de cada vez. Outra em voo → NÃO gera em
+    // paralelo: reagenda uma rechecagem, que vai ler o histórico JÁ com a
+    // resposta anterior (e com a IA desligada, se houve handoff). Ver
+    // reply-marker.ts — casos Miriam/Nubia 06/09 (despedida em dobro, resposta
+    // depois da transferência).
+    replyLock = await acquireReplyLock(conversationId)
+    if (replyLock === null) {
+      console.log('[ai auto-reply] geração em voo nesta conversa — rechecagem agendada:', conversationId)
+      await enqueueAiReplyDebounced({ ...args, raceChase: true }, REPLY_LOCK_RETRY_MS)
+      return
+    }
 
     // 🏁 Anti-eco de corrida: se a ÚLTIMA mensagem não-interna já NÃO é do
     // cliente (a resposta em voo cobriu tudo, ou um humano respondeu), não
@@ -1298,5 +1314,7 @@ export async function dispatchInboundToAiReply(
     if (!transferred) await runClose()
   } catch (err) {
     console.error('[ai auto-reply] dispatch failed:', err)
+  } finally {
+    if (replyLock) await releaseReplyLock(conversationId, replyLock)
   }
 }
