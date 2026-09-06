@@ -21,14 +21,31 @@ import {
   PipelineMockup,
 } from '@/components/marketing/product-mockups'
 import { FluxiaLogo } from '@/components/brand/fluxia-logo'
+import { faqJsonLd, jsonLdScript, organizationJsonLd, softwareApplicationJsonLd } from '@/lib/seo/jsonld'
 
 export const metadata: Metadata = {
-  title: 'FluxiaCRM — CRM de atendimento e vendas no WhatsApp',
+  title: { absolute: 'FluxiaCRM | CRM com IA para WhatsApp, Vendas e Follow-up' },
   description:
-    'O FluxiaCRM é uma plataforma de atendimento e vendas no WhatsApp para pequenas e médias empresas: caixa de entrada compartilhada, funil de vendas, agenda integrada ao Google Calendar, relatórios, automações e agentes de IA. Teste grátis por 7 dias, sem cartão.',
+    'CRM com agentes de IA que atendem no WhatsApp e Instagram, conhecem o histórico do cliente, acompanham negociações, fazem follow-up e executam ações dentro das regras da sua empresa. Teste grátis por 7 dias, sem cartão.',
   // A homepage é pública e deve ser rastreável (verificação OAuth do Google +
   // SEO) — sobrepõe o noindex global do layout só para esta rota.
   robots: { index: true, follow: true },
+  alternates: { canonical: '/' },
+  openGraph: {
+    title: 'FluxiaCRM — Seu comercial não deveria depender da memória da equipe',
+    description:
+      'Agentes de IA que atendem, acompanham negociações, conhecem o histórico do cliente e executam a próxima ação dentro das regras da empresa.',
+    url: '/',
+    type: 'website',
+    siteName: 'FluxiaCRM',
+    locale: 'pt_BR',
+  },
+  twitter: {
+    card: 'summary_large_image',
+    title: 'FluxiaCRM — CRM com agentes de IA para quem vende por conversa',
+    description:
+      'Atende, conhece o cliente, percebe o momento, age dentro das regras — e um humano supervisiona.',
+  },
 }
 
 const TRIAL_HREF = '/comecar'
@@ -375,6 +392,12 @@ export default async function RootPage() {
           </div>
         </div>
       </header>
+
+      {/* JSON-LD: quem somos, o que é o produto e as perguntas frequentes —
+          é o que buscadores e IAs leem pra entender a entidade FluxiaCRM. */}
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdScript(organizationJsonLd()) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdScript(softwareApplicationJsonLd()) }} />
+      <script type="application/ld+json" dangerouslySetInnerHTML={{ __html: jsonLdScript(faqJsonLd(PERGUNTAS)) }} />
 
       <main id="conteudo">
         {/* Hero: promessa à esquerda, o produto rodando à direita. O único
@@ -777,6 +800,18 @@ export default async function RootPage() {
               ))}
             </div>
 
+            <div className="mx-auto mt-10 max-w-3xl rounded-2xl border border-border bg-card p-6 text-left">
+              <p className="font-heading text-base font-semibold">Consumo de IA não incluso — e é de propósito</p>
+              <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
+                Você conecta a sua própria chave do provedor de IA (OpenAI, Google Gemini) e paga o uso direto a ele. O
+                FluxiaCRM mostra o custo por conversa, por agente, por canal e por modelo, sem margem escondida sobre
+                tokens. Numa revenda de gás que roda a IA em todos os pedidos, o custo ficou em{' '}
+                <strong className="font-semibold text-foreground">R$ 0,35 por conversa</strong> e{' '}
+                <strong className="font-semibold text-foreground">R$ 0,67 por pedido fechado</strong> nos primeiros dez
+                dias de operação.
+              </p>
+            </div>
+
             <ul className="mt-10 flex flex-wrap items-center justify-center gap-x-7 gap-y-3">
               {INCLUSO_EM_TODOS.map((item) => (
                 <li
@@ -875,7 +910,7 @@ export default async function RootPage() {
       </main>
 
       <footer className="border-t border-border">
-        <div className="mx-auto grid max-w-6xl gap-10 px-6 py-12 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="mx-auto grid max-w-6xl gap-10 px-6 py-12 sm:grid-cols-2 lg:grid-cols-5">
           <div className="sm:col-span-2 lg:col-span-1">
             <FluxiaLogo />
             <p className="mt-4 max-w-xs text-sm leading-relaxed text-muted-foreground">
@@ -893,6 +928,26 @@ export default async function RootPage() {
                     href={item.href}
                     className="inline-block py-1 text-muted-foreground transition-colors hover:text-foreground"
                   >
+                    {item.label}
+                  </a>
+                </li>
+              ))}
+            </ul>
+          </div>
+
+          <div>
+            <p className="font-heading text-sm font-semibold">Conteúdo</p>
+            <ul className="mt-4 flex flex-col gap-2.5 text-sm">
+              {[
+                { href: '/como-funciona', label: 'Como funciona' },
+                { href: '/crm-autonomo', label: 'O que é CRM autônomo' },
+                { href: '/agentes-de-ia', label: 'Agentes de IA para vendas' },
+                { href: '/follow-up-automatico', label: 'Follow-up automático' },
+                { href: '/cases/familia-do-gas', label: 'Case: Família do Gás' },
+                { href: '/sobre', label: 'Sobre a Fluxia' },
+              ].map((item) => (
+                <li key={item.href}>
+                  <a href={item.href} className="inline-block py-1 text-muted-foreground transition-colors hover:text-foreground">
                     {item.label}
                   </a>
                 </li>

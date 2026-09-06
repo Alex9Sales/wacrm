@@ -20,11 +20,20 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
+  // Base das URLs absolutas de OG/canonical (o apex redireciona pra cá).
+  metadataBase: new URL("https://crm.salestecnologia.com.br"),
   title: {
-    default: "CRM Fluxia",
-    template: "%s — CRM Fluxia",
+    default: "FluxiaCRM — CRM com agentes de IA para vendas, atendimento e follow-up",
+    template: "%s | FluxiaCRM",
   },
-  description: "CRM de WhatsApp multi-tenant da Fluxia.",
+  description:
+    "CRM com agentes de IA que atendem no WhatsApp, Instagram, Messenger e e-mail, conhecem o histórico do cliente, fazem follow-up e executam ações dentro das regras da sua empresa — com supervisão humana.",
+  openGraph: {
+    type: "website",
+    siteName: "FluxiaCRM",
+    locale: "pt_BR",
+  },
+  twitter: { card: "summary_large_image" },
   // Verificação de propriedade do Google Search Console (para a verificação
   // OAuth do app). Renderiza <meta name="google-site-verification" ...>.
   verification: {
