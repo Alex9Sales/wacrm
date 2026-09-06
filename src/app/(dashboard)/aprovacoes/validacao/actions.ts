@@ -19,11 +19,27 @@ import { getCurrentAccount } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
 import { ACTION_CATALOG, type Level } from '@/lib/orchestration/policy'
 import { sanitizePromotionOverride } from '@/lib/orchestration/validation'
-import { actionVerdict, isOrchAction, loadAutonomyValidation, loadDefaultAgent, type AutonomyValidation, type ValidationFilters } from '@/lib/orchestration/validation-data'
+import {
+  isOrchAction,
+  loadAutonomyValidation,
+  loadDefaultAgent,
+  loadPromotionGates,
+  promotionBlocker,
+  type AutonomyValidation,
+  type PromotionGate,
+  type ValidationFilters,
+} from '@/lib/orchestration/validation-data'
+import type { OrchAction } from '@/lib/orchestration/policy'
 
-export type { ActionValidationRow, AutonomyValidation, Period, ValidationAuditItem, ValidationCards, ValidationFilters } from '@/lib/orchestration/validation-data'
+export type { ActionValidationRow, AutonomyValidation, Period, PromotionGate, ValidationAuditItem, ValidationCards, ValidationFilters } from '@/lib/orchestration/validation-data'
 
 export type ActionResult = { ok: true } | { ok: false; error: string }
+
+/** Estado do portão por ação — a matriz em Agentes IA usa pra travar "automático" antes de salvar. */
+export async function getPromotionGates(): Promise<Record<OrchAction, PromotionGate>> {
+  const ctx = await getCurrentAccount()
+  return loadPromotionGates(ctx.accountId)
+}
 
 /** O painel inteiro, com os filtros de período e ação (cards e auditoria); a tabela por ação é cumulativa. */
 export async function getAutonomyValidation(input?: Partial<ValidationFilters>): Promise<AutonomyValidation> {
@@ -50,10 +66,9 @@ export async function promoteAction(actionInput: string, level: Level): Promise<
   if (level === 'auto') {
     if (meta.humanOnly) return { ok: false, error: `"${meta.label}" só o humano executa — nunca roda sozinha.` }
     if (meta.risk === 'critical') return { ok: false, error: `"${meta.label}" é crítica — sempre exige aprovação.` }
-    const verdict = await actionVerdict(ctx.accountId, action, agent.autonomy)
-    if (!verdict.ready) {
-      return { ok: false, error: verdict.blockers[0]?.label ?? 'Esta ação ainda não tem histórico para operar sozinha.' }
-    }
+    // O MESMO portão da matriz em Agentes IA e de Cobranças.
+    const blocker = await promotionBlocker(ctx.accountId, action)
+    if (blocker) return { ok: false, error: blocker }
   }
 
   const current = (agent.autonomy && typeof agent.autonomy === 'object' ? agent.autonomy : {}) as Record<string, unknown>

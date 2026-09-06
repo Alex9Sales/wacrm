@@ -2,7 +2,8 @@
 
 import { useCallback, useEffect, useRef, useState } from 'react';
 import { toast } from 'sonner';
-import { ACTION_CATALOG, ORCH_ACTIONS } from '@/lib/orchestration/policy';
+import { ACTION_CATALOG, ORCH_ACTIONS, type OrchAction } from '@/lib/orchestration/policy';
+import { getPromotionGates, type PromotionGate } from '@/app/(dashboard)/aprovacoes/validacao/actions';
 import { Loader2, Sparkles, CheckCircle2, Trash2, Eye, EyeOff, Check, Maximize2 } from 'lucide-react';
 import { useAuth } from '@/hooks/use-auth';
 import { cn } from '@/lib/utils';
@@ -139,6 +140,23 @@ export function AiConfig({
   const [autonomyPaused, setAutonomyPaused] = useState(false);
   // 🧠 Fase 2: política POR AÇÃO (Signal→Policy→Action) + travas do agente.
   const [policyActions, setPolicyActions] = useState<Record<string, "suggest" | "approve" | "auto">>({});
+  // 🔒 Portão de evidência: estado por ação (elegível pra automático?) + o nível
+  // que estava SALVO ao carregar — o que já está em auto não é promoção.
+  const [gates, setGates] = useState<Partial<Record<string, PromotionGate>>>({});
+  const [loadedLevels, setLoadedLevels] = useState<Record<string, string>>({});
+  const loadGates = useCallback(async () => {
+    try {
+      setGates(await getPromotionGates());
+    } catch {
+      /* sem o estado do portão a tela não trava a célula — o servidor barra igual */
+    }
+  }, []);
+  const autoLocked = (act: string): string | null => {
+    const g = gates[act];
+    if (!g || !g.gated || g.eligible) return null;
+    const stored = loadedLevels[act] ?? ACTION_CATALOG[act as OrchAction]?.defaultLevel;
+    return stored === "auto" ? null : (g.blocker ?? "Ainda não há histórico suficiente.");
+  };
   const [policyPaused, setPolicyPaused] = useState(false);
   const [policyDiscountPct, setPolicyDiscountPct] = useState(5);
   const [policyHumanCooldown, setPolicyHumanCooldown] = useState(24);
@@ -312,6 +330,12 @@ export function AiConfig({
             if (v === "suggest" || v === "approve" || v === "auto") clean[k] = v;
           }
           setPolicyActions(clean);
+          // Nível SALVO por ação (pro portão distinguir promoção de "já era auto").
+          // A chave solta `reactivation` manda sobre actions.reactivation.
+          setLoadedLevels({
+            ...clean,
+            reactivation: a.reactivation === "auto" ? "auto" : a.reactivation === "approve" ? "approve" : "suggest",
+          });
           setPolicyPaused(a.paused === true);
           setPolicyDiscountPct(typeof a.discountAutoMaxPct === "number" ? a.discountAutoMaxPct : 5);
           setPolicyHumanCooldown(typeof a.humanCooldownHours === "number" ? a.humanCooldownHours : 24);
@@ -345,6 +369,10 @@ export function AiConfig({
   }, [cfgUrl]);
 
   // Cadências ativas da conta (seletor "cadência para negócio parado").
+  useEffect(() => {
+    void loadGates();
+  }, [loadGates]);
+
   useEffect(() => {
     let alive = true;
     import("@/app/(dashboard)/automations/cadencias/actions")
@@ -713,6 +741,7 @@ export function AiConfig({
       if (res.ok) {
         toast.success('Assistente de IA salvo.');
         await fetchConfig();
+        void loadGates();
         onChanged?.();
       } else {
         toast.error(data.error ?? 'Falha ao salvar.');
@@ -1605,11 +1634,13 @@ export function AiConfig({
                       const current = policyActions[act] ?? meta.defaultLevel;
                       const set = (lvl: "suggest" | "approve" | "auto") =>
                         setPolicyActions((p) => ({ ...p, [act]: lvl }));
-                      const cell = (lvl: "suggest" | "approve" | "auto", blocked?: boolean) => (
+                      const locked = autoLocked(act);
+                      const cell = (lvl: "suggest" | "approve" | "auto", blocked?: boolean, why?: string | null) => (
                         <td key={lvl} className="py-1.5 pr-2">
                           <button
                             type="button"
                             disabled={disabled || blocked}
+                            title={blocked && why ? why : undefined}
                             onClick={() => set(lvl)}
                             aria-pressed={current === lvl}
                             className={`h-6 w-6 rounded-full border transition-colors disabled:opacity-30 ${
@@ -1630,10 +1661,18 @@ export function AiConfig({
                               {meta.hint}
                               {meta.humanOnly ? " · só humano executa" : meta.risk === "critical" ? " · crítico" : ""}
                             </div>
+                            {locked ? (
+                              <div className="mt-0.5 text-[11px] text-amber-700 dark:text-amber-400">
+                                🔒 Automático travado: {locked}{" "}
+                                <a href="/aprovacoes/validacao" className="underline underline-offset-2">
+                                  ver validação
+                                </a>
+                              </div>
+                            ) : null}
                           </td>
                           {cell("suggest")}
                           {cell("approve")}
-                          {cell("auto", !!meta.humanOnly || meta.risk === "critical")}
+                          {cell("auto", !!meta.humanOnly || meta.risk === "critical" || !!locked, locked)}
                         </tr>
                       );
                     })}
@@ -1729,7 +1768,8 @@ export function AiConfig({
                     key={opt.v}
                     type="button"
                     onClick={() => setReactivationLevel(opt.v)}
-                    disabled={disabled}
+                    disabled={disabled || (opt.v === "auto" && !!autoLocked("reactivation"))}
+                    title={opt.v === "auto" ? (autoLocked("reactivation") ?? undefined) : undefined}
                     className={`rounded-lg border p-2.5 text-left transition-colors ${
                       reactivationLevel === opt.v
                         ? opt.v === "auto"
@@ -1747,6 +1787,15 @@ export function AiConfig({
                   </button>
                 ))}
               </div>
+              {autoLocked("reactivation") ? (
+                <p className="mt-2 text-xs text-amber-700 dark:text-amber-400">
+                  🔒 Automático travado: {autoLocked("reactivation")} Deixe em &quot;Rascunha p/ aprovar&quot;, aprove ou recuse as
+                  mensagens em Precisa de você e o portão abre com o histórico.{" "}
+                  <a href="/aprovacoes/validacao" className="underline underline-offset-2">
+                    ver validação
+                  </a>
+                </p>
+              ) : null}
               {reactivationLevel === "approve" && (
                 <p className="mt-2 text-xs text-primary">
                   Os rascunhos da IA aparecem em{" "}

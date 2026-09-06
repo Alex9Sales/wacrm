@@ -6,6 +6,7 @@ import {
   confidenceRate,
   criteriaFor,
   DEFAULT_CRITERIA,
+  gateApplies,
   readPromotionOverride,
   sanitizePromotionOverride,
   statsFromCounts,
@@ -109,6 +110,25 @@ describe('validationStatus', () => {
     const bad = evaluatePromotion({ decisions: 19, cleanApprovals: 18, edited: 1, rejected: 0, badOutcomes: 1, spanDays: 13 }, DEFAULT_CRITERIA.message)
     expect(bad.progress).toBe(0)
     expect(validationStatus({ level: 'approve', humanOnly: false, verdict: bad })).toBe('validating')
+  })
+})
+
+describe('gateApplies', () => {
+  it('vale para o que nasce em sugere/aprova; não vale para o que já nasce automático nem para só-humano', () => {
+    expect(gateApplies('send_followup')).toBe(true)
+    expect(gateApplies('collect_charges')).toBe(true)
+    expect(gateApplies('move_deal')).toBe(true)
+    expect(gateApplies('reactivation')).toBe(true)
+    expect(gateApplies('notify_seller')).toBe(false)
+    expect(gateApplies('create_task')).toBe(false)
+    expect(gateApplies('send_proposal')).toBe(false)
+    expect(gateApplies('close_deal')).toBe(false)
+  })
+  it('ação sem portão fora do automático aparece como "liberada", não "em validação"', () => {
+    const early = evaluatePromotion({ decisions: 0, cleanApprovals: 0, edited: 0, rejected: 0, badOutcomes: 0, spanDays: 0 }, DEFAULT_CRITERIA.notify)
+    expect(validationStatus({ level: 'approve', humanOnly: false, verdict: early, gated: false })).toBe('free')
+    expect(validationStatus({ level: 'auto', humanOnly: false, verdict: early, gated: false })).toBe('auto')
+    expect(validationStatus({ level: 'approve', humanOnly: false, verdict: early, gated: true })).toBe('validating')
   })
 })
 

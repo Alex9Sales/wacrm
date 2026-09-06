@@ -75,6 +75,17 @@ export function criteriaFor(action: OrchAction, override?: PromotionOverride | n
   return merged
 }
 
+/**
+ * O portão vale para as ações que o produto NÃO confia por padrão (nascem em
+ * "sugere" ou "aprova"). Avisos, tarefa, reagendar, pausar cadência e escalar
+ * já nascem automáticas e são de baixo risco: ligam e desligam sem portão.
+ * "Só humano" nunca vira auto — o portão nem se aplica.
+ */
+export function gateApplies(action: OrchAction): boolean {
+  const meta = ACTION_CATALOG[action]
+  return !meta.humanOnly && meta.defaultLevel !== 'auto'
+}
+
 export interface FeedbackCounts {
   approved: number
   edited: number
@@ -128,7 +139,7 @@ export function statsFromFeedback(rows: FeedbackRow[]): PromotionStats {
   return statsFromCounts(c)
 }
 
-export type ValidationStatus = 'suggest_only' | 'validating' | 'almost' | 'eligible' | 'auto' | 'human_only'
+export type ValidationStatus = 'suggest_only' | 'validating' | 'almost' | 'eligible' | 'auto' | 'human_only' | 'free'
 
 /** A partir daqui a tela chama de "quase pronta". */
 export const ALMOST_THRESHOLD = 0.6
@@ -144,6 +155,7 @@ export const VALIDATION_STATUS_META: Record<ValidationStatus, { label: string; h
   eligible: { label: 'Elegível', hint: 'O histórico atende ao critério. Liberar o automático é decisão sua.', tone: 'emerald' },
   auto: { label: 'Automática', hint: 'Já opera sozinha dentro dos tetos. Reversões e correções seguem contando.', tone: 'emerald' },
   human_only: { label: 'Só humano', hint: 'Esta ação nunca roda sozinha — exige uma pessoa executar.', tone: 'red' },
+  free: { label: 'Liberada', hint: 'Baixo risco e automática por padrão: liga e desliga sem portão.', tone: 'muted' },
 }
 
 export const LEVEL_LABEL: Record<Level, string> = {
@@ -152,10 +164,11 @@ export const LEVEL_LABEL: Record<Level, string> = {
   auto: 'Automática',
 }
 
-/** Status que a tabela "por ação" mostra. Determinístico. */
-export function validationStatus(args: { level: Level; humanOnly: boolean; verdict: PromotionVerdict }): ValidationStatus {
+/** Status que a tabela "por ação" mostra. Determinístico. `gated` = gateApplies(ação). */
+export function validationStatus(args: { level: Level; humanOnly: boolean; verdict: PromotionVerdict; gated?: boolean }): ValidationStatus {
   if (args.humanOnly) return 'human_only'
   if (args.level === 'auto') return 'auto'
+  if (args.gated === false) return 'free'
   if (args.verdict.ready) return 'eligible'
   if (args.level === 'suggest') return 'suggest_only'
   return args.verdict.progress >= ALMOST_THRESHOLD ? 'almost' : 'validating'

@@ -15,6 +15,8 @@ import { AiError, type AiProvider } from '@/lib/ai/types'
 import { toAiHoursMode } from '@/lib/ai/hours-gate'
 import { sanitizeTools } from '@/lib/ai/tools'
 import { sanitizeAutonomy } from '@/lib/ai/autonomy'
+import { ORCH_ACTIONS, levelFor, readPolicy } from '@/lib/orchestration/policy'
+import { promotionBlocker } from '@/lib/orchestration/validation-data'
 
 function bad(message: string) {
   return NextResponse.json({ error: message }, { status: 400 })
@@ -306,6 +308,7 @@ export async function POST(request: Request) {
           provider: aiConfigs.provider,
           model: aiConfigs.model,
           apiKey: aiConfigs.apiKey,
+          autonomy: aiConfigs.autonomy,
         })
         .from(aiConfigs)
         .where(
@@ -320,6 +323,20 @@ export async function POST(request: Request) {
         .limit(1),
     )
     if (requestedAgentId && !existing) return bad('Agente não encontrado.')
+
+    // 🔒 Portão de evidência (06/09): subir uma ação para AUTOMÁTICO só com
+    // histórico — o MESMO critério do painel Validação da autonomia. Descer é
+    // livre, e o que já estava em auto continua (não é promoção). A tela
+    // trava a célula antes; aqui é a garantia.
+    if (autonomy !== undefined) {
+      const prev = readPolicy(existing?.autonomy ?? null)
+      const next = readPolicy(autonomy)
+      for (const act of ORCH_ACTIONS) {
+        if (levelFor(next, act) !== 'auto' || levelFor(prev, act) === 'auto') continue
+        const blocker = await promotionBlocker(accountId, act)
+        if (blocker) return bad(blocker)
+      }
+    }
 
     // Caminho LEGADO (chave avulsa): resolve a chave e valida com o provedor.
     // Caminho CREDENCIAL pula tudo isso — a chave da credencial já foi validada

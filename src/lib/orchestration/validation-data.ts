@@ -20,6 +20,7 @@ import { REVERT_MATRIX, type RevertKind } from './revert'
 import {
   confidenceRate,
   criteriaFor,
+  gateApplies,
   readPromotionOverride,
   statsFromCounts,
   validationStatus,
@@ -195,6 +196,45 @@ export async function actionVerdict(accountId: string, action: OrchAction, auton
   return evaluatePromotion(statsFromCounts(counts), criteriaFor(action, readPromotionOverride(autonomy)))
 }
 
+/**
+ * 🔒 O portão em UMA frase: pode subir esta ação para AUTOMÁTICO agora?
+ * null = pode (não tem portão, ou o histórico atende ao critério da conta).
+ * Senão devolve o motivo em português, pronto pra tela. Critério = o da
+ * conta (override no agente padrão), igual ao painel — um portão só, em
+ * todo lugar que promove (painel, matriz em Agentes IA, Cobranças).
+ */
+export async function promotionBlocker(accountId: string, action: OrchAction): Promise<string | null> {
+  if (!gateApplies(action)) return null
+  const agent = await loadDefaultAgent(accountId)
+  const verdict = await actionVerdict(accountId, action, agent?.autonomy ?? null)
+  if (verdict.ready) return null
+  const why = verdict.blockers[0]?.label ?? 'ainda não há histórico suficiente.'
+  return `"${ACTION_CATALOG[action].label}" ainda não pode rodar sozinha: ${why} Valide em Precisa de você → Validação da autonomia.`
+}
+
+export interface PromotionGate {
+  gated: boolean
+  eligible: boolean
+  /** Motivo do bloqueio (só quando gated && !eligible). */
+  blocker: string | null
+}
+
+/** O estado do portão de todas as ações (pra tela travar a célula "automático" antes de salvar). */
+export async function loadPromotionGates(accountId: string): Promise<Record<OrchAction, PromotionGate>> {
+  const [agent, counts] = await Promise.all([loadDefaultAgent(accountId), feedbackCountsByAction(accountId)])
+  const override = readPromotionOverride(agent?.autonomy ?? null)
+  const out = {} as Record<OrchAction, PromotionGate>
+  for (const act of ORCH_ACTIONS) {
+    if (!gateApplies(act)) {
+      out[act] = { gated: false, eligible: true, blocker: null }
+      continue
+    }
+    const verdict = evaluatePromotion(statsFromCounts(counts.get(act) ?? EMPTY_COUNTS()), criteriaFor(act, override))
+    out[act] = { gated: true, eligible: verdict.ready, blocker: verdict.ready ? null : (verdict.blockers[0]?.label ?? 'Ainda não há histórico suficiente.') }
+  }
+  return out
+}
+
 /** O painel inteiro. Cards e auditoria seguem os filtros; a tabela por ação é cumulativa. */
 export async function loadAutonomyValidation(accountId: string, canManage: boolean, input?: Partial<ValidationFilters>): Promise<AutonomyValidation> {
   const { days, action } = normalizeValidationFilters(input)
@@ -284,7 +324,7 @@ export async function loadAutonomyValidation(accountId: string, canManage: boole
       kind: meta.kind,
       humanOnly: !!meta.humanOnly,
       level,
-      status: validationStatus({ level, humanOnly: !!meta.humanOnly, verdict }),
+      status: validationStatus({ level, humanOnly: !!meta.humanOnly, verdict, gated: gateApplies(act) }),
       verdict,
       criteria,
       firstDecisionAt: counts.first,
