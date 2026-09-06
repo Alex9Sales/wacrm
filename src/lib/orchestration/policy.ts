@@ -112,8 +112,10 @@ export function readPolicy(autonomy: unknown): AutonomyPolicy {
     const v = actions[act]
     if (isLevel(v)) levels[act] = v
   }
-  // legado: chave solta `reactivation`
-  if (!levels.reactivation && isLevel(a.reactivation)) levels.reactivation = a.reactivation
+  // Chave solta `reactivation`: é a que a tela "Chamar de volta" grava e a que a
+  // leva do dia lê (a matriz por ação não mostra reativação). Quando existe,
+  // MANDA — senão a tela de validação diria "só sugere" com o automático ligado.
+  if (isLevel(a.reactivation)) levels.reactivation = a.reactivation
   const caps: Partial<Record<OrchAction, number>> = {}
   const rawCaps = (a.caps && typeof a.caps === 'object' ? a.caps : {}) as Record<string, unknown>
   for (const act of ORCH_ACTIONS) {

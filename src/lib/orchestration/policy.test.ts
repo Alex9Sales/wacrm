@@ -22,6 +22,14 @@ describe('readPolicy', () => {
     expect(levelFor(p, 'reactivation')).toBe('auto')
     expect(p.caps.reactivation).toBe(15)
   })
+  it('a chave solta reactivation (tela "Chamar de volta") manda sobre actions.reactivation', () => {
+    // Caso real (06/09): actions.reactivation ficou 'suggest' velho enquanto a
+    // tela gravou 'auto' na chave solta — a leva do dia lê a solta, então a
+    // política tem que dizer o mesmo.
+    const p = readPolicy({ reactivation: 'auto', actions: { reactivation: 'suggest', send_followup: 'approve' } })
+    expect(levelFor(p, 'reactivation')).toBe('auto')
+    expect(levelFor(p, 'send_followup')).toBe('approve')
+  })
   it('lê o formato novo e ignora lixo', () => {
     const p = readPolicy({ actions: { send_followup: 'approve', move_deal: 'auto', xpto: 'auto' }, caps: { send_followup: 9999 }, discountAutoMaxPct: 8, paused: true })
     expect(levelFor(p, 'send_followup')).toBe('approve')

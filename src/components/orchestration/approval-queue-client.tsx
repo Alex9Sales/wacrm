@@ -20,6 +20,7 @@ import {
   MessageSquare,
   RefreshCw,
   ShieldAlert,
+  ShieldCheck,
   User,
   X,
 } from 'lucide-react';
@@ -42,6 +43,7 @@ import {
   type AuditItem,
   type AutonomyMetrics,
 } from '@/app/(dashboard)/aprovacoes/actions';
+import { contextChips } from '@/lib/orchestration/context-chips';
 import type { Risk } from '@/lib/orchestration/policy';
 
 const RISK_META: Record<Risk, { label: string; className: string }> = {
@@ -76,19 +78,6 @@ function money(v: string | number): string {
   } catch {
     return String(n);
   }
-}
-
-function contextChips(p: Record<string, unknown>): string[] {
-  const out: string[] = [];
-  if (typeof p.hours_idle === 'number') out.push(`${Math.floor(p.hours_idle / 24)}d sem resposta`);
-  if (p.viewed === true) out.push('proposta visualizada');
-  if (typeof p.days_stale === 'number') out.push(`parado ${p.days_stale}d`);
-  if (typeof p.days_since === 'number') out.push(`${p.days_since}d sem comprar`);
-  if (typeof p.avg_days === 'number') out.push(`média ${p.avg_days}d`);
-  if (typeof p.qualification === 'number') out.push(`qualificação ${p.qualification}/5`);
-  if (typeof p.temperature === 'string' && p.temperature) out.push(String(p.temperature));
-  if (typeof p.severity === 'number') out.push(`prioridade ${p.severity}`);
-  return out;
 }
 
 export function ApprovalQueueClient() {
@@ -228,9 +217,17 @@ export function ApprovalQueueClient() {
             Tudo que a Fluxia quer fazer e a sua política pede um humano. Aprove, edite ou recuse — cada decisão fica registrada.
           </p>
         </div>
-        <Button variant="outline" size="sm" onClick={() => void load()}>
-          <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Atualizar
-        </Button>
+        <div className="flex flex-wrap items-center gap-2">
+          <Link
+            href="/aprovacoes/validacao"
+            className="inline-flex h-8 items-center gap-1.5 rounded-md border border-border px-3 text-xs font-medium text-foreground transition-colors hover:bg-muted"
+          >
+            <ShieldCheck className="h-3.5 w-3.5 text-primary" /> Validação da autonomia
+          </Link>
+          <Button variant="outline" size="sm" onClick={() => void load()}>
+            <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Atualizar
+          </Button>
+        </div>
       </header>
 
       {/* 🛑 FREIO — sempre visível: em produto autônomo a pessoa precisa saber

@@ -15,6 +15,7 @@ import { db, aiConfigs, agentActionRequests, contacts, conversations, customerSi
 import { firstOrNull } from '@/db/helpers'
 import { greeting } from '@/lib/cdl/names'
 import { ORCH_ACTIONS } from '@/lib/orchestration/policy'
+import { sanitizePromotionOverride } from '@/lib/orchestration/validation'
 
 export type AutonomyLevel = 'suggest' | 'approve' | 'auto'
 
@@ -82,6 +83,11 @@ export function sanitizeAutonomy(input: unknown): Record<string, unknown> {
     // espelha no legado pra telas antigas continuarem certas
     if (clean.reactivation && !out.reactivation) out.reactivation = clean.reactivation
   }
+  // …e o contrário: a tela "Chamar de volta" grava a chave solta; quem lê
+  // `actions` (matriz, validação) precisa ver o mesmo nível. Nunca divergem.
+  if (typeof out.reactivation === 'string') {
+    out.actions = { ...((out.actions as Record<string, string> | undefined) ?? {}), reactivation: out.reactivation }
+  }
   const caps = o.caps && typeof o.caps === 'object' ? (o.caps as Record<string, unknown>) : null
   if (caps) {
     const clean: Record<string, number> = {}
@@ -101,6 +107,10 @@ export function sanitizeAutonomy(input: unknown): Record<string, unknown> {
   const perDayMsgs = Number(o.maxAutoMessagesPerDay)
   if (Number.isInteger(perDayMsgs) && perDayMsgs >= 1 && perDayMsgs <= 500) out.maxAutoMessagesPerDay = perDayMsgs
   if (typeof o.staleCadenceId === 'string' && o.staleCadenceId.trim()) out.staleCadenceId = o.staleCadenceId.trim()
+  // 📊 Critério da conta pra liberar o automático (painel Validação da
+  // autonomia). Sem isto, salvar a matriz em Agentes IA apagaria o critério.
+  const promotion = sanitizePromotionOverride(o.promotion)
+  if (promotion) out.promotion = promotion
   return out
 }
 
@@ -311,6 +321,9 @@ export async function generateReactivationRequests(accountId: string): Promise<n
           payload: { signalType: s.signalType, severity: s.severity, ...p },
           suggestedText: text,
           reason,
+          // auditoria (Validação da autonomia): o que a política decidiu e por quê
+          decision: 'approve',
+          policy: 'reactivation=approve · risco medium · política = aprovar (chamar de volta)',
           status: 'pending',
         })
         .onConflictDoUpdate({
@@ -603,6 +616,9 @@ export async function runAutoReactivations(accountId: string): Promise<AutoRunRe
             : m.signalType === 'repurchase_overdue'
               ? `[AUTO] Recompra atrasada — ${m.payload.days_since ?? '?'} dias`
               : `[AUTO] Na hora da recompra — ${m.payload.days_since ?? '?'} dias`,
+        // auditoria (Validação da autonomia): decisão automática pela leva do dia
+        decision: 'auto',
+        policy: `reactivation=auto · risco medium · leva do dia pela linha "${u.name}" (mecanismo dos Disparos)`,
         status: 'sent',
         resolvedAt: new Date().toISOString(),
         resolvedBy: null,

@@ -22,6 +22,7 @@ import { getAccountSettings, updateAccountSettings } from '@/lib/settings/accoun
 import { runCollectionsForAccount } from '@/lib/collections/engine'
 import { duplicateSuspects, normalizeSettings, type CollectionsSettings } from '@/lib/collections/rules'
 import { evaluatePromotion, promotionHeadline, type PromotionVerdict } from '@/lib/collections/promotion'
+import { criteriaFor, readPromotionOverride, statsFromFeedback } from '@/lib/orchestration/validation'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
 import { AsaasApiError, listAllCustomers, setCustomerNotifications, testCredential, type AsaasCredential, type AsaasEnv } from '@/lib/asaas/collections'
 import { asaasPhoneForContact, daysOverdue, groupDuplicateCustomers, normalizeEmail, type DuplicateGroup } from '@/lib/asaas/match'
@@ -542,25 +543,16 @@ export async function getCollectionsPromotion(): Promise<PromotionView> {
     .where(and(eq(decisionFeedback.accountId, accountId), eq(decisionFeedback.actionType, 'collect_charges')))
     .orderBy(decisionFeedback.createdAt)
 
-  const count = (d: string) => rows.filter((r) => r.decision === d).length
-  const first = rows[0]?.createdAt ? new Date(rows[0].createdAt).getTime() : 0
-  const last = rows.length ? new Date(rows[rows.length - 1].createdAt).getTime() : 0
-
-  const verdict = evaluatePromotion({
-    decisions: rows.length,
-    cleanApprovals: count('approved'),
-    edited: count('edited'),
-    rejected: count('rejected'),
-    badOutcomes: count('reversed') + count('bad_result'),
-    spanDays: first ? Math.floor((last - first) / 86_400_000) : 0,
-  })
-
   const agent = await db
     .select({ autonomy: aiConfigs.autonomy })
     .from(aiConfigs)
     .where(and(eq(aiConfigs.accountId, accountId), eq(aiConfigs.isDefault, true)))
     .limit(1)
-  const level = levelFor(readPolicy(agent[0]?.autonomy ?? null), 'collect_charges')
+  const autonomy = agent[0]?.autonomy ?? null
+  // Mesmo critério do painel Validação da autonomia (override da conta;
+  // cobrança nunca tolera reversão). Reversão conta como erro, não como decisão.
+  const verdict = evaluatePromotion(statsFromFeedback(rows), criteriaFor('collect_charges', readPromotionOverride(autonomy)))
+  const level = levelFor(readPolicy(autonomy), 'collect_charges')
 
   return { verdict, headline: promotionHeadline(verdict), level, isAuto: level === 'auto' }
 }
