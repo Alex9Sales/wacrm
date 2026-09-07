@@ -11,6 +11,8 @@ import { and, desc, eq, ne, notInArray, sql } from 'drizzle-orm'
 import { db, customerMetrics, customerTransactions } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 
+import { humanizeProduct } from './product-label'
+
 /**
  * Recomputa as métricas dos contatos informados (ou de TODOS os contatos da
  * conta com transações, se `contactIds` vier vazio/null). Ignora transações
@@ -237,7 +239,7 @@ export async function buildCustomerFactsBlock(
   )
   if (last?.occurredAt) {
     const parts = [fmtDateInTz(last.occurredAt, timezone)]
-    if (last.product) parts.push(String(last.product))
+    if (last.product) parts.push(humanizeProduct(String(last.product)))
     if (last.amount != null && Number(last.amount) > 0) parts.push(money(last.amount))
     if (last.payment) parts.push(String(last.payment))
     lines.push(`${isService ? 'Último atendimento' : 'Última compra'}: ${parts.join(' — ')}.`)
@@ -252,7 +254,7 @@ export async function buildCustomerFactsBlock(
   }
   if (Number(m.averageTicket) > 0) lines.push(`Ticket médio: ${money(m.averageTicket)}.`)
   if (m.preferredProduct)
-    lines.push(`${isService ? 'Mais frequente' : 'Produto mais comprado'}: ${m.preferredProduct}.`)
+    lines.push(`${isService ? 'Mais frequente' : 'Produto mais comprado'}: ${humanizeProduct(String(m.preferredProduct))}.`)
   if (m.preferredPaymentMethod)
     lines.push(`Pagamento mais frequente: ${m.preferredPaymentMethod}.`)
   return lines.join('\n')

@@ -14,6 +14,7 @@ import { and, desc, eq, gte, inArray, isNull, ne, sql } from 'drizzle-orm'
 import { db, aiConfigs, agentActionRequests, contacts, conversations, customerSignals, broadcasts, channels } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { greeting } from '@/lib/cdl/names'
+import { humanizeProduct, parseProductLabel, productNames } from '@/lib/cdl/product-label'
 import { ORCH_ACTIONS } from '@/lib/orchestration/policy'
 import { sanitizePromotionOverride } from '@/lib/orchestration/validation'
 
@@ -191,18 +192,34 @@ async function defaultAgent(accountId: string) {
 }
 
 /** Rascunho de reativação (mesma linguagem da lista "Chamar de volta"). */
-function draftReactivation(
+/**
+ * Texto do "chamar de volta". O produto vem do histórico como a fonte grava
+ * ("1.00x P-13 UltraGaz  Ultragaz") — passa pelo rótulo natural antes de
+ * chegar ao cliente. Exportado pra reescrever levas já enfileiradas.
+ */
+export function draftReactivation(
   name: string | null,
   signalType: string,
   payload: Record<string, unknown>,
 ): string {
   const oi = greeting(name)
-  const prod = payload.product ? String(payload.product) : 'seu pedido'
+  const raw = typeof payload.product === 'string' ? payload.product : null
+  const items = parseProductLabel(raw)
+  const names = productNames(raw)
   if (signalType === 'inactive')
-    return `${oi} Sumiu, hein 😄 Faz um tempo que não passa aqui. Tá precisando de ${prod}? Consigo te atender rapidinho.`
-  if (signalType === 'repurchase_overdue')
-    return `${oi} 😊 Vi que já faz ${payload.days_since ?? 'uns'} dias do seu último ${prod}. Quer que eu já separe pra você?`
-  return `${oi} Passando pra ver se tá na hora de repor o ${prod}. Quer que eu já deixe separado? 😊`
+    return `${oi} Sumiu, hein 😄 Faz um tempo que não passa aqui. Tá precisando de ${names}? Consigo te atender rapidinho.`
+  if (signalType === 'repurchase_overdue') {
+    const dias = payload.days_since ?? 'uns'
+    // 1 item, 1 unidade: "do seu último P-13 Copagaz". Mais que isso: "da sua última compra (2 P-13 Ultragaz)".
+    const ultimo =
+      items.length === 1 && items[0].qty <= 1
+        ? `do seu último ${names}`
+        : items.length
+          ? `da sua última compra (${humanizeProduct(raw)})`
+          : 'do seu último pedido'
+    return `${oi} 😊 Vi que já faz ${dias} dias ${ultimo}. Quer que eu já separe pra você?`
+  }
+  return `${oi} Passando pra ver se tá na hora de repor o ${names}. Quer que eu já deixe separado? 😊`
 }
 
 const REACTIVATION_SIGNALS = ['repurchase_overdue', 'inactive', 'repurchase_due']

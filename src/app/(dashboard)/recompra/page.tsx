@@ -32,12 +32,14 @@ import {
 } from "./actions";
 import { toast } from "sonner";
 import { greeting } from "@/lib/cdl/names";
+import { humanizeProduct, productNames } from "@/lib/cdl/product-label";
 
 /** Rascunho de reativação sugerido (o humano edita/aprova antes de enviar). */
 function draftFor(row: RepurchaseRow): string {
   const p = row.payload as Record<string, unknown>;
   const oi = greeting(row.name);
-  const prod = p.product ? String(p.product) : "seu pedido";
+  // "1.00x P-13 UltraGaz  Ultragaz" (como o ERP grava) → "P-13 Ultragaz".
+  const prod = productNames(typeof p.product === "string" ? p.product : null);
   if (row.signalType === "inactive")
     return `${oi} Sumiu, hein 😄 Faz um tempo que não passa aqui. Tá precisando de ${prod}? Consigo te atender rapidinho.`;
   if (row.signalType === "repurchase_overdue")
@@ -112,7 +114,7 @@ function detail(row: RepurchaseRow): string {
   const parts: string[] = [];
   if (p.days_since != null) parts.push(`${p.days_since} dias sem comprar`);
   if (p.avg_days != null) parts.push(`compra a cada ${p.avg_days}d`);
-  if (p.product) parts.push(`última: ${p.product}`);
+  if (p.product) parts.push(`última: ${humanizeProduct(String(p.product))}`);
   if (p.last_amount != null && Number(p.last_amount) > 0)
     parts.push(brl(p.last_amount));
   return parts.join(" · ");
