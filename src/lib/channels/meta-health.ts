@@ -85,13 +85,54 @@ export function classifyMetaHealth(input: {
   }
   if (status && (status < 200 || status >= 300)) return { verdict: 'transient', reason: `Graph HTTP ${status}` };
   const st = String(body.status ?? '').toUpperCase();
-  const hs = body.health_status as { can_send_message?: string } | undefined;
+  const hs = body.health_status as { can_send_message?: string; entities?: HealthEntity[] } | undefined;
   const canSend = String(hs?.can_send_message ?? '').toUpperCase();
   if (DEAD_STATUSES.has(st)) return { verdict: 'dead', reason: `status ${st} na Meta` };
-  if (canSend === 'BLOCKED') return { verdict: 'dead', reason: 'envio BLOQUEADO pela Meta (health_status)' };
+  if (canSend === 'BLOCKED') {
+    // 07/09 (Fluxia, coexistência): o can_send_message do topo é o PIOR das
+    // entidades. A WABA bloqueada por PAGAMENTO (141006) só barra conversa
+    // iniciada pela empresa (template/disparo) — receber e responder em 24h
+    // seguem. Derrubar o canal por isso parou a IA à toa. Regra: só NÚMERO,
+    // NEGÓCIO ou APP bloqueados (ou WABA bloqueada por outro motivo) matam.
+    const blocked = (hs?.entities ?? []).filter((e) => String(e.can_send_message ?? '').toUpperCase() === 'BLOCKED');
+    if (blocked.length) {
+      const fatal = blocked.filter((e) => !isPaymentOnlyBlock(e));
+      if (fatal.length === 0) {
+        return { verdict: 'warn', reason: `erro no método de pagamento da conta WhatsApp (141006): disparos e templates bloqueados; receber e responder em 24h seguem. Solução: adicionar forma de pagamento no Gerenciador do WhatsApp (WABA ${blocked[0]?.id ?? '?'}).` };
+      }
+      const why = fatal
+        .map((e) => `${e.entity_type ?? 'entidade'}: ${e.errors?.[0]?.error_description ?? 'bloqueada'}`)
+        .join(' · ');
+      return { verdict: 'dead', reason: `envio BLOQUEADO pela Meta — ${why}` };
+    }
+    return { verdict: 'dead', reason: 'envio BLOQUEADO pela Meta (health_status)' };
+  }
   if (WARN_STATUSES.has(st)) return { verdict: 'warn', reason: `status ${st} na Meta` };
-  if (canSend === 'LIMITED') return { verdict: 'warn', reason: 'envio LIMITADO pela Meta (health_status)' };
+  if (canSend === 'LIMITED') {
+    const info = (hs?.entities ?? []).flatMap((e) => e.additional_info ?? []).find((s) => /display name/i.test(s));
+    return {
+      verdict: 'warn',
+      reason: info
+        ? 'envio LIMITADO pela Meta: o nome de exibição do número ainda não foi aprovado (limite de mensagens menor até aprovar).'
+        : 'envio LIMITADO pela Meta (health_status)',
+    };
+  }
   return { verdict: 'ok', reason: st ? `status ${st}` : 'ok' };
+}
+
+interface HealthEntity {
+  entity_type?: string;
+  id?: string;
+  can_send_message?: string;
+  errors?: { error_code?: number; error_description?: string; possible_solution?: string }[];
+  additional_info?: string[];
+}
+
+/** WABA bloqueada SÓ por pagamento (141006): barra template/disparo, não a conversa. */
+function isPaymentOnlyBlock(e: HealthEntity): boolean {
+  if (String(e.entity_type ?? '').toUpperCase() !== 'WABA') return false;
+  const errs = e.errors ?? [];
+  return errs.length > 0 && errs.every((x) => Number(x.error_code) === 141006);
 }
 
 async function fetchPhoneHealth(
@@ -257,6 +298,21 @@ export async function runMetaHealthCheck(): Promise<MetaHealthTickResult> {
         health.strikes = 0;
         health.warning = reason;
         result.warned += 1;
+        // Vivo com restrição ≠ morto: se fomos nós que derrubamos, religa. Sem
+        // isto, um canal derrubado por engano ficava desconectado até a Meta
+        // devolver 'ok' — que pode levar dias (nome de exibição em análise).
+        if (health.marked_down || (row.status !== 'connected' && health.marked_down !== false)) {
+          await updateChannelStatus(row.id, 'connected');
+          health.marked_down = false;
+          health.last_error = null;
+          result.restored += 1;
+          console.log(`[meta-health] "${row.name}" voltou com aviso (${reason}) → connected`);
+          await notifyAdmins(
+            row.accountId,
+            `✅ Canal "${row.name}" voltou (com aviso)`,
+            `O WhatsApp oficial "${row.name}" está conectado na Meta e a IA e os envios voltaram. Aviso da Meta: ${reason}`,
+          );
+        }
         const last = health.warned_at ? Date.parse(health.warned_at) : 0;
         if (now - last > ALERT_COOLDOWN_WARN_MS) {
           health.warned_at = new Date(now).toISOString();
