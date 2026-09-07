@@ -24,6 +24,10 @@ export interface PageSection {
   steps?: { title: string; body: string }[]
   /** Exemplo concreto do produto, destacado. */
   example?: { title: string; body: string }
+  /** Números reais em cartões (o "medidor" do produto na página). */
+  stats?: { label: string; value: string; hint?: string }[]
+  /** Fonte/período dos números, em letra pequena. */
+  note?: string
 }
 
 export interface PageSpec {
@@ -144,6 +148,18 @@ export function MarketingPage({ spec }: { spec: PageSpec }) {
                   <p className="mt-1.5 leading-relaxed text-foreground/90">{s.example.body}</p>
                 </div>
               ) : null}
+              {s.stats?.length ? (
+                <dl className="mt-5 grid grid-cols-2 gap-3 sm:grid-cols-3">
+                  {s.stats.map((st) => (
+                    <div key={st.label} className="rounded-xl border border-border bg-card p-4">
+                      <dt className="text-xs text-muted-foreground">{st.label}</dt>
+                      <dd className="mt-1 font-heading text-2xl font-bold tabular-nums tracking-[-0.02em]">{st.value}</dd>
+                      {st.hint ? <dd className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{st.hint}</dd> : null}
+                    </div>
+                  ))}
+                </dl>
+              ) : null}
+              {s.note ? <p className="mt-3 text-xs text-muted-foreground">{s.note}</p> : null}
             </section>
           ))}
 

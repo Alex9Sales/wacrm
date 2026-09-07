@@ -6,7 +6,7 @@ const spec: PageSpec = {
   "datePublished": "2026-09-06",
   "title": "Como a Família do Gás usa agentes de IA para atender e criar pedidos automaticamente",
   "metaTitle": "Case Família do Gás: IA atendendo no WhatsApp e criando pedidos no ERP",
-  "metaDescription": "Revenda de gás em Campo Grande que colocou um agente de IA atendendo no WhatsApp: consulta o ERP, cria pedidos, corrige endereço, calcula distância e chama de volta quem atrasou a recompra. Números reais dos primeiros dez dias.",
+  "metaDescription": "Revenda de gás em Campo Grande que colocou um agente de IA atendendo no WhatsApp: consulta o ERP, cria pedidos, corrige endereço, calcula distância e chama de volta quem atrasou a recompra. Números reais dos primeiros 30 dias.",
   "intro": "A Família do Gás é uma revenda de gás em Campo Grande (MS) com vários números de WhatsApp e um ERP próprio. Em agosto de 2026 ela colocou um agente de IA, a \"Maria\", atendendo os pedidos de ponta a ponta. Nos primeiros dez dias foram 330 conversas e 168 pedidos criados pela IA, a um custo de R$ 0,67 por pedido, saindo de 1 pedido no primeiro dia para 30 por dia.",
   "breadcrumb": [
     {
@@ -42,15 +42,15 @@ const spec: PageSpec = {
     },
     {
       "id": "numeros",
-      "h2": "Os números dos primeiros dez dias",
+      "h2": "Os números",
       "bullets": [
-        "330 conversas atendidas pela IA, 168 pedidos criados.",
-        "R$ 0,67 de IA por pedido e R$ 0,35 por conversa, medidos no painel de custo, pagos com a chave da própria empresa.",
-        "Rampa de 1 pedido no primeiro dia para 30 pedidos por dia.",
-        "A IA pediu ajuda de um humano 51 vezes no mês, como deve."
+        "Primeiros dez dias: 330 conversas atendidas pela IA e 168 pedidos criados, saindo de 1 pedido no primeiro dia para 30 por dia.",
+        "30 dias (até 07/09): 445 conversas atendidas pela IA, 261 pedidos criados no ERP e 65 pedidos de ajuda a um humano (15%).",
+        "Custo de IA em 30 dias: R$ 122,41 no total, R$ 0,28 por conversa e R$ 0,47 por pedido, medidos no painel de custo e pagos com a chave da própria empresa.",
+        "36% das conversas foram resolvidas só pela IA, sem ninguém do time entrar; nas outras, a equipe entrou onde a regra manda."
       ],
       "paragraphs": [
-        "Os números vêm do painel da conta em 04/09/2026 e cobrem os primeiros dez dias de operação com a IA ligada em todos os pedidos."
+        "Os números vêm do painel Agentes IA da própria conta: os dez primeiros dias medidos em 04/09/2026 e os 30 dias medidos em 07/09/2026, com a IA ligada em todos os pedidos."
       ]
     },
     {

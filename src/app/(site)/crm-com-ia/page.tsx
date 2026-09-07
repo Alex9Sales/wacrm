@@ -31,14 +31,23 @@ const spec: PageSpec = {
     },
     {
       "id": "custo",
-      "h2": "Quanto custa a IA",
+      "h2": "Quanto custa a IA: o medidor de uma conta real",
       "paragraphs": [
         "O consumo do modelo é pago direto ao provedor, com a chave do próprio cliente (OpenAI ou Google Gemini). O Fluxia mostra o custo por conversa, agente, canal e modelo, sem margem sobre tokens."
       ],
       "example": {
-        "title": "Revenda de gás, primeiros dez dias",
-        "body": "R$ 0,35 por conversa e R$ 0,67 por pedido fechado, com a IA respondendo em todos os pedidos e consultando o ERP a cada atendimento."
-      }
+        "title": "Revenda de gás, 30 dias de operação (até 07/09/2026)",
+        "body": "R$ 122,41 de IA no mês para 445 conversas atendidas e 261 pedidos criados no ERP: R$ 0,28 por conversa e R$ 0,47 por pedido, com a IA consultando o ERP em média 5,8 vezes por conversa."
+      },
+      "stats": [
+        {"label": "Conversas atendidas pela IA", "value": "445", "hint": "de 631 no período: 77% de envolvimento"},
+        {"label": "Pedidos criados pela IA", "value": "261", "hint": "no ERP, sem ninguém digitando"},
+        {"label": "Custo total de IA em 30 dias", "value": "R$ 122,41", "hint": "4.329 requisições · 57 milhões de tokens, 65% em cache"},
+        {"label": "Custo por conversa", "value": "R$ 0,28", "hint": "pago direto ao provedor, na chave da empresa"},
+        {"label": "Custo por pedido criado", "value": "R$ 0,47", "hint": "R$ 122,41 ÷ 261 pedidos"},
+        {"label": "Pediu ajuda a um humano", "value": "65 vezes", "hint": "15% das conversas, como deve"}
+      ],
+      "note": "Números do painel Agentes IA da própria conta, 30 dias até 07/09/2026, câmbio de R$ 5,40 por dólar. Modelos: gpt-5.5 no atendimento e gpt-5.6-luna nas ferramentas."
     },
     {
       "id": "controle",

@@ -39,7 +39,9 @@ export function softwareApplicationJsonLd() {
       lowPrice: String(PLAN_PRICES_BRL.start),
       highPrice: String(PLAN_PRICES_BRL.enterprise),
       offerCount: 4,
-      description: 'Teste grátis de 7 dias, sem cartão. Consumo de IA pago direto ao provedor, com a chave do próprio cliente.',
+      // Preço de lançamento: vale pra quem assinar até esta data (depois entram os valores novos).
+      priceValidUntil: '2026-11-30',
+      description: 'Preço de lançamento válido para quem assinar até 30/11/2026. Teste grátis de 7 dias, sem cartão. Consumo de IA pago direto ao provedor, com a chave do próprio cliente.',
     },
   }
 }

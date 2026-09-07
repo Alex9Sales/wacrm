@@ -188,11 +188,18 @@ const COMPARATIVO: {
   { linha: 'Agendamento público que cai na agenda', chatbot: 'parcial', crm: 'parcial' },
 ]
 
+// Preço de LANÇAMENTO (07/09): os valores atuais valem pra quem assinar até
+// 30/11/2026 e ficam travados enquanto a pessoa for assinante. A partir de
+// dezembro entram os valores/nomes novos (decisão do Alex). Nunca "de/por"
+// riscado com preço que não foi cobrado — o futuro é anunciado, não riscado.
+const LAUNCH_PRICE_UNTIL = '30/11/2026'
+
 const PLANS = [
   {
     name: 'Start',
     price: '139,90',
-    tagline: 'Pra quem está começando, e cresce com você',
+    tagline: 'A IA atende: responde, qualifica e organiza o funil',
+    future: 'R$ 297/mês',
     highlighted: false,
     lead: null as string | null,
     features: [
@@ -206,7 +213,8 @@ const PLANS = [
   {
     name: 'Essencial',
     price: '497',
-    tagline: 'O atendimento e o funil organizados',
+    tagline: 'A IA conhece o cliente: histórico, memória comercial e equipe junta',
+    future: 'plano Growth, R$ 697/mês',
     highlighted: false,
     lead: null as string | null,
     features: [
@@ -221,7 +229,8 @@ const PLANS = [
   {
     name: 'Pro',
     price: '799',
-    tagline: 'Vendas no automático, com Inteligência Artificial',
+    tagline: 'A IA percebe e age: sua operação comercial começa a trabalhar sozinha, sob as suas regras',
+    future: 'plano Scale, R$ 1.297/mês',
     highlighted: true,
     lead: 'Tudo do Essencial, e mais:',
     features: [
@@ -236,7 +245,8 @@ const PLANS = [
   {
     name: 'Enterprise',
     price: '1.999',
-    tagline: 'Voz, ligação e escala com prioridade',
+    tagline: 'A IA opera processos completos, integrada à empresa: voz, ERP e várias operações',
+    future: 'a partir de R$ 2.990/mês, conforme o tamanho da operação',
     highlighted: false,
     lead: 'Tudo do Pro, e mais:',
     features: [
@@ -250,9 +260,10 @@ const PLANS = [
 
 const INCLUSO_EM_TODOS = [
   '7 dias grátis, sem cartão',
-  'Sem taxa de implantação',
+  'Sem taxa de implantação no Start e no Essencial',
   'Sem fidelidade',
   'Suporte no WhatsApp',
+  'Preço de lançamento travado pra quem assinar até ' + LAUNCH_PRICE_UNTIL,
 ]
 
 const PERGUNTAS = [
@@ -737,6 +748,11 @@ export default async function RootPage() {
               </strong>
               , sem cartão. Escolha o plano quando decidir continuar.
             </p>
+            <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-muted-foreground">
+              <span className="rounded-full bg-primary/10 px-2.5 py-0.5 font-semibold text-primary">Preço de lançamento</span>{' '}
+              Quem assinar até {LAUNCH_PRICE_UNTIL} mantém o valor de hoje enquanto for assinante. A partir de dezembro
+              entram os valores novos, escritos em cada plano.
+            </p>
 
             <div className="mt-12 grid grid-cols-1 items-stretch gap-5 md:grid-cols-2 xl:grid-cols-4">
               {PLANS.map((p) => (
@@ -768,6 +784,9 @@ export default async function RootPage() {
                     </span>
                     <span className="text-sm text-muted-foreground">/mês</span>
                   </div>
+                  <p className="mt-2 text-xs leading-snug text-muted-foreground">
+                    Preço de lançamento até {LAUNCH_PRICE_UNTIL}. A partir de dezembro: {p.future}.
+                  </p>
 
                   <a
                     href={TRIAL_HREF}
@@ -805,10 +824,15 @@ export default async function RootPage() {
               <p className="mt-2 text-sm leading-relaxed text-muted-foreground">
                 Você conecta a sua própria chave do provedor de IA (OpenAI, Google Gemini) e paga o uso direto a ele. O
                 FluxiaCRM mostra o custo por conversa, por agente, por canal e por modelo, sem margem escondida sobre
-                tokens. Numa revenda de gás que roda a IA em todos os pedidos, o custo ficou em{' '}
-                <strong className="font-semibold text-foreground">R$ 0,35 por conversa</strong> e{' '}
-                <strong className="font-semibold text-foreground">R$ 0,67 por pedido fechado</strong> nos primeiros dez
-                dias de operação.
+                tokens. Numa revenda de gás que roda a IA em todos os pedidos, 30 dias de operação custaram{' '}
+                <strong className="font-semibold text-foreground">R$ 122,41 de IA</strong> para 445 conversas atendidas e
+                261 pedidos criados no ERP:{' '}
+                <strong className="font-semibold text-foreground">R$ 0,28 por conversa</strong> e{' '}
+                <strong className="font-semibold text-foreground">R$ 0,47 por pedido</strong>. Os números estão no{' '}
+                <a href="/crm-com-ia#medidor" className="underline decoration-primary decoration-2 underline-offset-4">
+                  medidor de custo
+                </a>
+                .
               </p>
             </div>
 
@@ -828,7 +852,8 @@ export default async function RootPage() {
             </ul>
 
             <p className="mt-6 text-center text-sm text-muted-foreground">
-              Implantação (setup) sob consulta. Precisa de algo específico?{' '}
+              Nos planos Pro e Enterprise, a implantação assistida é opcional e sob consulta, conforme a complexidade
+              (agentes, ERP, políticas comerciais, vários canais). Precisa de algo específico?{' '}
               <a
                 href={WHATSAPP_HREF}
                 target="_blank"
