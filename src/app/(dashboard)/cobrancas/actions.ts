@@ -29,6 +29,7 @@ import { asaasPhoneForContact, daysOverdue, groupDuplicateCustomers, normalizeEm
 import { findOrCreateContact } from '@/lib/api/v1/contacts'
 import { resolveCollectionTargets, WHATSAPP_PROVIDERS } from '@/lib/collections/outreach'
 import { createChargeForContact } from '@/lib/collections/emit'
+import { changeChargeDueDateCore } from '@/lib/collections/due-date'
 import { manualChargeMessage, parseDueDate, parseValue, validateEmit } from '@/lib/collections/emit-rules'
 import { postInternalNote } from '@/lib/ai/close-actions'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
@@ -231,11 +232,23 @@ export interface WalletDebtor {
   duplicateSuspect: boolean
 }
 
+/** Lacuna 4 (07/09): o que entrou depois que a régua falou — o gancho em reais. */
+export interface RecoveredSummary {
+  days: number
+  /** Cobranças pagas no período (todas as que passaram pela carteira). */
+  paidCount: number
+  paidTotal: number
+  /** Pagas DEPOIS de uma mensagem da régua (ou criadas pelo CRM): influência, não causalidade. */
+  afterTouchCount: number
+  afterTouchTotal: number
+}
+
 export interface WalletSummary {
   debtors: WalletDebtor[]
   totalValue: number
   totalCharges: number
   pendingMatch: number
+  recovered: RecoveredSummary
 }
 
 /**
@@ -342,7 +355,64 @@ export async function getWallet(): Promise<WalletSummary> {
     totalValue,
     totalCharges: rows.length,
     pendingMatch: debtors.filter((d) => !d.contactId).length,
+    recovered: await recoveredSummary(accountId, 30),
   }
+}
+
+/**
+ * Quanto entrou nos últimos N dias e quanto disso veio DEPOIS de uma mensagem
+ * da régua (ou de cobrança criada pelo CRM). É influência, não causalidade —
+ * mas é o número que o cliente consegue medir em reais.
+ */
+async function recoveredSummary(accountId: string, days: number): Promise<RecoveredSummary> {
+  const since = new Date(Date.now() - days * 86_400_000).toISOString()
+  const paid = await db
+    .select({
+      value: asaasCharges.value,
+      closedAt: asaasCharges.closedAt,
+      origin: asaasCharges.origin,
+      lastTouchAt: collectionsTouches.lastTouchAt,
+    })
+    .from(asaasCharges)
+    .leftJoin(
+      collectionsTouches,
+      and(eq(collectionsTouches.accountId, asaasCharges.accountId), eq(collectionsTouches.contactId, asaasCharges.contactId)),
+    )
+    .where(
+      and(
+        eq(asaasCharges.accountId, accountId),
+        eq(asaasCharges.open, false),
+        inArray(asaasCharges.status, ['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH']),
+        sql`${asaasCharges.closedAt} >= ${since}`,
+      ),
+    )
+  const out: RecoveredSummary = { days, paidCount: 0, paidTotal: 0, afterTouchCount: 0, afterTouchTotal: 0 }
+  for (const p of paid) {
+    const v = Number(p.value ?? 0)
+    out.paidCount += 1
+    out.paidTotal += v
+    const touchedBefore = !!p.lastTouchAt && !!p.closedAt && new Date(p.lastTouchAt).getTime() <= new Date(p.closedAt).getTime()
+    if (touchedBefore || p.origin === 'ai' || p.origin === 'manual') {
+      out.afterTouchCount += 1
+      out.afterTouchTotal += v
+    }
+  }
+  return out
+}
+
+/**
+ * Lacuna 3 (07/09): mover o vencimento de uma cobrança no Asaas pela tela.
+ * Aceita "10/09", "dia 10", "+7" ou 2026-09-10. A régua dorme até a nova data.
+ */
+export async function changeChargeDueDate(chargeId: string, dueDateRaw: string): Promise<ActionResult<{ dueDate: string; invoiceUrl: string | null }>> {
+  const { accountId, userId } = await requireRole('agent')
+  const dueDate = parseDueDate(dueDateRaw)
+  if (!dueDate) return { ok: false, error: 'Data inválida. Exemplo: 10/09, "dia 10" ou +7.' }
+  const who = firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, userId)).limit(1))
+  const r = await changeChargeDueDateCore({ accountId, chargeId, dueDate, actor: who?.name ? `por ${who.name}` : 'pela equipe' })
+  if (!r.ok) return { ok: false, error: r.error }
+  revalidatePath('/cobrancas')
+  return { ok: true, data: { dueDate: r.dueDate, invoiceUrl: r.invoiceUrl } }
 }
 
 // ------------------------------------------------------ casamento na mão

@@ -274,6 +274,37 @@ export async function createPayment(cred: AsaasCredential, input: CreatePaymentI
   })
 }
 
+/** Uma cobrança pelo id — a reconsulta AO VIVO antes de lembrar/agradecer. */
+export async function getPayment(cred: AsaasCredential, paymentId: string): Promise<AsaasPayment> {
+  return asaasGet<AsaasPayment>(cred, `/payments/${encodeURIComponent(paymentId)}`)
+}
+
+/**
+ * Move o vencimento (lacuna 3, 07/09). Para boleto o Asaas gera um novo com a
+ * data nova e devolve o invoiceUrl atualizado; juros/multa passam a contar da
+ * nova data — por isso quem manda é gente ou uma configuração explícita.
+ */
+export async function updatePaymentDueDate(cred: AsaasCredential, paymentId: string, dueDate: string): Promise<AsaasPayment> {
+  return asaasSend<AsaasPayment>(cred, 'PUT', `/payments/${encodeURIComponent(paymentId)}`, { dueDate })
+}
+
+/** Cobranças PENDING que vencem entre as datas (lembrete antes do vencimento). */
+export async function listPendingDueBetween(cred: AsaasCredential, fromDate: string, untilDate: string): Promise<AsaasPayment[]> {
+  const out: AsaasPayment[] = []
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const res = await asaasGet<AsaasList<AsaasPayment>>(cred, '/payments', {
+      status: 'PENDING',
+      'dueDate[ge]': fromDate,
+      'dueDate[le]': untilDate,
+      offset: page * PAGE_SIZE,
+      limit: PAGE_SIZE,
+    })
+    out.push(...(res.data ?? []))
+    if (!res.hasMore || !res.data?.length) break
+  }
+  return out
+}
+
 // ============================================================ ITEM 5 (05/09)
 
 /**

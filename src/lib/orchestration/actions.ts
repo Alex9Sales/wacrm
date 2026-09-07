@@ -31,6 +31,7 @@ import { cancelEnrollment, enrollContactInCadence } from '@/lib/cadences/cadence
 import { publishEvent } from '@/lib/events/publish'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { resolveCollectionTargets } from '@/lib/collections/outreach'
+import { reminderStillPending } from '@/lib/collections/reminders'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { planStageFollowUp } from '@/lib/ai/followup'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
@@ -178,13 +179,21 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         const text = (input.text ?? '').trim()
         if (!text) return { ok: false, error: 'Sem texto pra enviar.' }
 
-        const stillOpen = await db
-          .select({ id: asaasCharges.id })
-          .from(asaasCharges)
-          .where(and(eq(asaasCharges.accountId, input.accountId), eq(asaasCharges.contactId, input.contactId), eq(asaasCharges.open, true)))
-          .limit(1)
-        if (!stillOpen.length) {
-          return { ok: false, error: 'Este cliente não tem mais nada em aberto — a cobrança não foi enviada.' }
+        // 🔔 Lembrete antes do vencimento (payload.kind='reminder'): a parcela
+        // não está na carteira de vencidas — reconfere AO VIVO no Asaas.
+        const isReminder = input.payload.kind === 'reminder'
+        if (isReminder) {
+          const check = await reminderStillPending(input.accountId, input.payload)
+          if (!check.ok) return { ok: false, error: check.error }
+        } else {
+          const stillOpen = await db
+            .select({ id: asaasCharges.id })
+            .from(asaasCharges)
+            .where(and(eq(asaasCharges.accountId, input.accountId), eq(asaasCharges.contactId, input.contactId), eq(asaasCharges.open, true)))
+            .limit(1)
+          if (!stillOpen.length) {
+            return { ok: false, error: 'Este cliente não tem mais nada em aberto — a cobrança não foi enviada.' }
+          }
         }
 
         // Por onde sai (auto / whatsapp / email / both) e em que conversa — abre
@@ -218,6 +227,9 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
             if (!sentVia.length) return { ok: false, error: `O e-mail não saiu: ${emailError}` }
           }
         }
+        // Lembrete não conta como toque de cobrança: não mexe no ritmo da régua
+        // nem no contador que devolve o devedor para uma pessoa.
+        if (!isReminder) {
         const nowIso = new Date().toISOString()
 
         await db
@@ -241,6 +253,7 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
           .update(collectionsTouches)
           .set({ recentTexts: kept })
           .where(and(eq(collectionsTouches.accountId, input.accountId), eq(collectionsTouches.contactId, input.contactId)))
+        }
 
         return {
           ok: true,

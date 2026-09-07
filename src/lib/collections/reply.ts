@@ -17,6 +17,10 @@ import { and, eq } from 'drizzle-orm'
 import { db, asaasCharges, collectionsTouches, contacts, member } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { notifyUsers } from '@/lib/orchestration/actions'
+import { getAccountSettings } from '@/lib/settings/account-settings'
+
+import { changeChargeDueDateCore } from './due-date'
+import { normalizeSettings } from './rules'
 
 export type CollectionReplyKind = 'promessa' | 'comprovante' | 'contesta' | 'acordo'
 
@@ -48,13 +52,12 @@ const RECEIPT_HOLD_DAYS = 3
 export async function applyCollectionReply(input: CollectionReplyInput): Promise<CollectionReplyResult> {
   // Só faz sentido se este contato REALMENTE tem cobrança em aberto. Sem isso,
   // um marcador alucinado numa conversa qualquer mexeria no estado da régua.
-  const open = firstOrNull(
-    await db
-      .select({ id: asaasCharges.id })
-      .from(asaasCharges)
-      .where(and(eq(asaasCharges.accountId, input.accountId), eq(asaasCharges.contactId, input.contactId), eq(asaasCharges.open, true)))
-      .limit(1),
-  )
+  const openCharges = await db
+    .select({ id: asaasCharges.id })
+    .from(asaasCharges)
+    .where(and(eq(asaasCharges.accountId, input.accountId), eq(asaasCharges.contactId, input.contactId), eq(asaasCharges.open, true)))
+    .limit(2)
+  const open = openCharges[0]
   if (!open) return { applied: false, note: '' }
 
   const now = new Date()
@@ -74,9 +77,28 @@ export async function applyCollectionReply(input: CollectionReplyInput): Promise
         touchCount: 0,
         updatedAt: nowIso,
       })
+      // Lacuna 3 (07/09): com a configuração ligada e UMA parcela em aberto, a
+      // promessa também move o vencimento no Asaas — senão o boleto fica com a
+      // data velha e os juros do Asaas continuam contando enquanto a régua dorme.
+      let extra = ''
+      try {
+        const s = normalizeSettings((await getAccountSettings(input.accountId)).collections)
+        if (s.promiseUpdatesDueDate) {
+          if (openCharges.length === 1) {
+            const moved = await changeChargeDueDateCore({ accountId: input.accountId, chargeId: open.id, dueDate: input.date!.slice(0, 10), actor: 'pela IA (promessa do cliente)' })
+            extra = moved.ok
+              ? ` Vencimento no Asaas movido para ${br(moved.dueDate)}${moved.invoiceUrl ? ' (novo link gerado)' : ''}.`
+              : ` Não deu para mover o vencimento no Asaas: ${moved.error}`
+          } else {
+            extra = ' Há mais de uma parcela em aberto — vencimento no Asaas não alterado (ninguém chuta qual).'
+          }
+        }
+      } catch (err) {
+        console.error('[cobranca] promessa → vencimento falhou:', err instanceof Error ? err.message : err)
+      }
       return {
         applied: true,
-        note: `🧾 Cliente prometeu pagar em ${br(input.date!)}. A régua dorme até lá (com 1 dia de tolerância) e volta sozinha se não entrar.`,
+        note: `🧾 Cliente prometeu pagar em ${br(input.date!)}. A régua dorme até lá (com 1 dia de tolerância) e volta sozinha se não entrar.${extra}`,
       }
     }
 

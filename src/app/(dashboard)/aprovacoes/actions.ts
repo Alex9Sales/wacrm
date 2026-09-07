@@ -657,6 +657,14 @@ function describeEffect(args: {
   const warnings: string[] = []
   switch (args.action) {
     case 'collect_charges':
+      if (p.kind === 'reminder') {
+        const dueIn = typeof p.dueIn === 'number' ? p.dueIn : null
+        return {
+          effect: `Envia o LEMBRETE abaixo: a parcela ainda não venceu${dueIn == null ? '' : dueIn <= 0 ? ' (vence hoje)' : dueIn === 1 ? ' (vence amanhã)' : ` (vence em ${dueIn} dias)`}. Antes de enviar, o CRM reconfere no Asaas se ela continua em aberto; paga, não sai.`,
+          warnings,
+          proposalUrl: null,
+        }
+      }
       return { effect: 'Envia a cobrança abaixo ao devedor, com as parcelas vencidas e o link de pagamento. Confira o valor antes de aprovar — depois de entregue não dá para desfazer.', warnings, proposalUrl: null }
     case 'send_followup':
     case 'reactivation':

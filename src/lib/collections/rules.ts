@@ -62,6 +62,25 @@ export interface CollectionsSettings {
    * envio no Asaas. Opt-in: nasce desligado.
    */
   asaasNotificationsOff: boolean
+  /**
+   * Agradecer quando o pagamento entra (webhook do Asaas). Só para quem a
+   * régua/CRM cobrou ou cuja cobrança nasceu aqui — nunca para quem nunca
+   * ouviu falar da gente por aqui. (07/09, pedido do cliente no áudio.)
+   */
+  thankOnPayment: boolean
+  /**
+   * Lembrete ANTES de vencer: N dias antes do vencimento manda um aviso leve.
+   * Não é cobrança de inadimplente — é o "vence quinta, tá aí o link".
+   * 0 = desligado (padrão).
+   */
+  reminderDaysBefore: number
+  /**
+   * Quando o cliente promete uma data ("pago dia 10"), além de a régua dormir,
+   * mover o vencimento no Asaas para essa data (o Asaas gera novo boleto/link).
+   * Só com UMA parcela em aberto — com várias, ninguém chuta qual. Nasce
+   * desligado: mexer no vencimento perdoa juros/multa do Asaas, é decisão.
+   */
+  promiseUpdatesDueDate: boolean
 }
 
 export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
@@ -79,6 +98,9 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   tone: '',
   emitMaxValue: 500,
   asaasNotificationsOff: false,
+  thankOnPayment: true,
+  reminderDaysBefore: 0,
+  promiseUpdatesDueDate: false,
 }
 
 export function normalizeSettings(raw: unknown): CollectionsSettings {
@@ -108,6 +130,9 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
       return Number.isFinite(n) ? Math.min(100_000, Math.max(1, Math.round(n * 100) / 100)) : 500
     })(),
     asaasNotificationsOff: r.asaasNotificationsOff === true,
+    thankOnPayment: r.thankOnPayment !== false,
+    reminderDaysBefore: int(r.reminderDaysBefore, 0, 0, 15),
+    promiseUpdatesDueDate: r.promiseUpdatesDueDate === true,
   }
 }
 
@@ -237,6 +262,56 @@ export function formatDebtSummary(charges: ChargeLine[]): { total: number; lines
 
   const links = [...new Set(ordered.map((c) => c.invoiceUrl).filter((u): u is string => !!u))]
   return { total: ordered.reduce((sum, c) => sum + c.value, 0), lines, links }
+}
+
+// ------------------------------------------------- lembrete antes de vencer
+
+export interface UpcomingLine {
+  value: number
+  dueDate: string | null
+  /** Dias até vencer (0 = hoje). */
+  daysUntil: number | null
+  connectionLabel: string
+  invoiceUrl: string | null
+}
+
+/**
+ * Resumo do que AINDA VAI vencer — o texto do lembrete. Mesma regra do resumo
+ * da dívida: fatos prontos, a IA só escreve ao redor.
+ */
+export function formatUpcomingSummary(charges: UpcomingLine[]): { total: number; lines: string[]; links: string[]; minDays: number | null } {
+  const multiAccount = new Set(charges.map((c) => c.connectionLabel)).size > 1
+  const ordered = [...charges].sort((a, b) => (a.daysUntil ?? 999) - (b.daysUntil ?? 999))
+  const lines = ordered.map((c) => {
+    const quando =
+      c.daysUntil == null ? '' : c.daysUntil <= 0 ? ' (hoje)' : c.daysUntil === 1 ? ' (amanhã)' : ` (em ${c.daysUntil} dias)`
+    const conta = multiAccount ? ` — ${c.connectionLabel}` : ''
+    return `${brl(c.value)} · vence em ${br(c.dueDate)}${quando}${conta}`
+  })
+  const links = [...new Set(ordered.map((c) => c.invoiceUrl).filter((u): u is string => !!u))]
+  const days = ordered.map((c) => c.daysUntil).filter((d): d is number => d != null)
+  return { total: ordered.reduce((s, c) => s + c.value, 0), lines, links, minDays: days.length ? Math.min(...days) : null }
+}
+
+/** Texto de segurança do LEMBRETE (sem IA): leve, sem a palavra "atraso". Varia pela semente. */
+export function fallbackReminderMessage(firstName: string | null, summary: ReturnType<typeof formatUpcomingSummary>, seed = 0): string {
+  const oi = firstName ? `Oi, ${firstName}!` : 'Oi!'
+  const aberturas = [
+    `${oi} Passando só pra lembrar: tem um valor que vence em breve por aqui:`,
+    `${oi} Tudo bem? Um lembrete rápido do que está para vencer:`,
+    `${oi} Só pra você não perder a data, fica o lembrete:`,
+    `${oi} Aviso amigo: está chegando o vencimento de:`,
+  ]
+  const fechos = [
+    'Se já estiver programado, pode ignorar esta mensagem 😉',
+    'Qualquer dúvida, é só responder por aqui.',
+    'Se precisar de outra data, me avisa por aqui que a gente vê.',
+    'Se já pagou, desconsidere — e obrigado!',
+  ]
+  const s = seed >>> 0
+  const corpo = summary.lines.map((l) => `• ${l}`).join('\n')
+  const link = summary.links.length === 1 ? `\n\nPara pagar: ${summary.links[0]}` : ''
+  return `${aberturas[s % 4]}\n\n${corpo}${link}\n\n${fechos[(s >>> 2) % 4]}`
 }
 
 /**

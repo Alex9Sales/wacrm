@@ -75,6 +75,7 @@ import {
   type PromotionView,
   type WalletDebtor,
   type WalletSummary,
+  changeChargeDueDate,
 } from '@/app/(dashboard)/cobrancas/actions';
 import { CHARGEABLE_STATUSES, type CollectionsSettings } from '@/lib/collections/rules';
 
@@ -228,10 +229,21 @@ export function WalletClient() {
         <EmptyState onAdd={() => setAddOpen(true)} />
       ) : (
         <>
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-4">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             <Stat label="Devedores" value={String(wallet?.debtors.length ?? 0)} />
             <Stat label="Cobranças" value={String(wallet?.totalCharges ?? 0)} />
             <Stat label="Total em aberto" value={brl(wallet?.totalValue ?? 0)} wide />
+            <Stat
+              label={`Recuperado (${wallet?.recovered.days ?? 30} dias)`}
+              value={brl(wallet?.recovered.afterTouchTotal ?? 0)}
+              hint={
+                wallet && wallet.recovered.paidCount > 0
+                  ? `${wallet.recovered.afterTouchCount} de ${wallet.recovered.paidCount} pagas depois de uma mensagem da régua · ${brl(wallet.recovered.paidTotal)} pagas no total`
+                  : 'pagas depois de uma mensagem da régua'
+              }
+              tone={wallet?.recovered.afterTouchTotal ? 'good' : undefined}
+              wide
+            />
             <Stat
               label="Sem contato"
               value={String(wallet?.pendingMatch ?? 0)}
@@ -342,19 +354,21 @@ export function WalletClient() {
   }
 }
 
-function Stat({ label, value, tone, wide }: { label: string; value: string; tone?: 'warn'; wide?: boolean }) {
+function Stat({ label, value, tone, wide, hint }: { label: string; value: string; tone?: 'warn' | 'good'; wide?: boolean; hint?: string }) {
   return (
-    <div className="rounded-md border bg-card px-3.5 py-3">
+    <div className={cn('rounded-md border bg-card px-3.5 py-3', tone === 'good' && 'border-emerald-600/40')}>
       <p className="text-[11px] font-medium uppercase tracking-wider text-muted-foreground">{label}</p>
       <p
         className={cn(
           'mt-0.5 font-semibold tabular-nums',
           wide ? 'text-lg' : 'text-xl',
           tone === 'warn' && 'text-amber-600 dark:text-amber-500',
+          tone === 'good' && 'text-emerald-700 dark:text-emerald-400',
         )}
       >
         {value}
       </p>
+      {hint ? <p className="mt-0.5 text-[11px] leading-snug text-muted-foreground">{hint}</p> : null}
     </div>
   );
 }
@@ -465,6 +479,25 @@ function DebtorCard({
                       link de pagamento <ExternalLink className="h-3 w-3" />
                     </a>
                   )}
+                  <button
+                    type="button"
+                    className="text-xs text-muted-foreground underline underline-offset-2 hover:text-foreground"
+                    onClick={async () => {
+                      const raw = window.prompt(
+                        `Novo vencimento para ${brl(Number(c.value))} (hoje vence ${c.dueDate ? c.dueDate.split('-').reverse().join('/') : '—'}).\nExemplo: 10/09, "dia 10" ou +7.\n\nO Asaas gera novo boleto/link e a régua dorme até a nova data.`,
+                      );
+                      if (!raw) return;
+                      const r = await changeChargeDueDate(c.id, raw);
+                      if (!r.ok) {
+                        toast.error(r.error ?? 'Não deu para alterar.');
+                        return;
+                      }
+                      toast.success(`Vencimento alterado para ${r.data!.dueDate.split('-').reverse().join('/')}${r.data!.invoiceUrl ? ' · novo link gerado' : ''}.`);
+                      onChanged();
+                    }}
+                  >
+                    alterar vencimento
+                  </button>
                 </li>
               );
             })}
@@ -1228,7 +1261,40 @@ function RulePanel({
             {num('dailyCap', 'Máximo por dia', 'Teto de devedores cobrados por dia.', 1, 500)}
             {num('maxTouches', 'Parar depois de', 'Toques sem resposta antes de devolver para uma pessoa.', 1, 50)}
             {num('emitMaxValue', 'IA pode cobrar até (R$)', 'Teto da ferramenta "Gerar cobrança no Asaas": acima disso a IA não cria sozinha — avisa uma pessoa.', 1, 100000)}
+            {num('reminderDaysBefore', 'Lembrar antes de vencer (dias)', '0 = desligado. Com 3, quem tem parcela vencendo nos próximos 3 dias recebe um aviso leve — não é cobrança. Passa pela mesma fila e teto.', 0, 15)}
           </div>
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={draft.thankOnPayment}
+              onChange={(e) => setDraft({ ...draft, thankOnPayment: e.target.checked })}
+            />
+            <span>
+              Agradecer quando o pagamento entrar
+              <span className="block text-xs text-muted-foreground">
+                Quando o Asaas avisa que a cobrança foi paga, o CRM manda um &quot;recebemos, obrigado&quot; — só para quem a régua cobrou ou cuja
+                cobrança nasceu aqui. Nunca para quem o CRM nunca falou.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={draft.promiseUpdatesDueDate}
+              onChange={(e) => setDraft({ ...draft, promiseUpdatesDueDate: e.target.checked })}
+            />
+            <span>
+              Quando o cliente prometer uma data, mover o vencimento no Asaas
+              <span className="block text-xs text-muted-foreground">
+                &quot;Pago dia 10&quot; passa a mover o boleto para o dia 10 (novo link), além de a régua dormir até lá. Só com uma parcela em
+                aberto. Atenção: juros e multa do Asaas passam a contar da data nova.
+              </span>
+            </span>
+          </label>
 
           <div className="flex flex-wrap items-end gap-6">
             {num('startHour', 'Começa às', 'Hora de início, no fuso da conta.', 0, 23)}

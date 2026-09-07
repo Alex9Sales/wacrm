@@ -271,7 +271,7 @@ async function markError(connectionId: string, error: string): Promise<void> {
  * Procura o contato do CRM por telefone, e-mail e código do cliente — nessa
  * ordem de confiança. Empate em qualquer nível devolve "sem contato".
  */
-async function findContact(
+export async function findContact(
   accountId: string,
   phone: string | null,
   email: string | null,

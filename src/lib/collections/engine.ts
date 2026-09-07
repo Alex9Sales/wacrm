@@ -24,6 +24,7 @@ import { decide, readPolicy, type AutonomyPolicy } from '@/lib/orchestration/pol
 import { syncAccount } from '@/lib/asaas/sync'
 
 import { resolveCollectionTargets } from './outreach'
+import { queueUpcomingReminders } from './reminders'
 import { maxSimilarity, seedFrom, tooSimilar, variationInstruction, variationPlan } from './variation'
 
 import {
@@ -47,6 +48,10 @@ export interface CollectionsRunStats {
   skipped: Partial<Record<SkipReason, number>>
   /** Por que a rodada inteira não fez nada, quando for o caso. */
   haltedBecause?: string
+  /** Lembretes antes do vencimento propostos nesta rodada (quando ligado). */
+  reminders?: number
+  /** Parcelas a vencer encontradas no Asaas na janela do lembrete. */
+  remindersFound?: number
 }
 
 /** Não bate no Asaas a cada tique: uma sincronização por hora basta. */
@@ -336,6 +341,29 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
 
     stats.queued += 1
     budget -= 1
+  }
+
+  // 🔔 Lembrete antes de vencer (lacuna 2, 07/09): mesma fila, mesma política,
+  // mesmo teto do dia — o que sobrou do orçamento depois das vencidas.
+  if (s.reminderDaysBefore > 0 && budget > 0) {
+    try {
+      const r = await queueUpcomingReminders({
+        accountId,
+        settings: s,
+        accountSettings,
+        policy,
+        agentId: agent?.id ?? null,
+        budget,
+        alreadyQueued,
+        usedToday: usedToday + stats.queued,
+        moment,
+        dayKey,
+      })
+      stats.reminders = r.queued
+      stats.remindersFound = r.found
+    } catch (err) {
+      console.error('[cobranca] lembretes falharam:', err instanceof Error ? err.message : err)
+    }
   }
 
   return stats

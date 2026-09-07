@@ -1,5 +1,6 @@
 import { NextResponse } from 'next/server'
 
+import { sendPaymentThanks } from '@/lib/collections/thanks'
 import { applyAsaasEvent, connectionByWebhookToken, type AsaasWebhookBody } from '@/lib/collections/webhook'
 
 // ============================================================
@@ -37,6 +38,16 @@ export async function POST(req: Request, ctx: { params: Promise<{ token: string 
       console.log(
         `[cobranca webhook] ${conn.label}: ${body.event} → ${out.cancelledRequests} cobrança(s) pendente(s) cancelada(s) antes de sair`,
       )
+    }
+    // 🙏 Pagou o que a gente cobrou → agradece (lacuna 1, 07/09). Best-effort:
+    // falhar aqui nunca vira 500, senão o Asaas reenvia e agradeceríamos 2x.
+    if (out.action === 'settled' && out.transitioned && out.chargeId && out.contactId) {
+      try {
+        const t = await sendPaymentThanks({ accountId: conn.accountId, chargeId: out.chargeId, contactId: out.contactId })
+        console.log(`[cobranca webhook] ${conn.label}: agradecimento ${t.sent ? `enviado (${t.why})` : `não enviado — ${t.why}`}`)
+      } catch (err) {
+        console.error('[cobranca webhook] agradecimento falhou:', err instanceof Error ? err.message : err)
+      }
     }
     return NextResponse.json({ ok: true, action: out.action })
   } catch (err) {

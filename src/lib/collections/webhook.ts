@@ -45,6 +45,11 @@ export interface WebhookOutcome {
   action: 'settled' | 'reopened' | 'gone' | 'ignored' | 'unknown_charge'
   /** Toques pendentes que foram cancelados por causa disso. */
   cancelledRequests: number
+  /** Cobrança espelhada (quando existe) — para quem chama agradecer/registrar. */
+  chargeId?: string
+  contactId?: string | null
+  /** true = a cobrança ESTAVA aberta e fechou agora (evento repetido não conta). */
+  transitioned?: boolean
 }
 
 /**
@@ -97,7 +102,8 @@ export async function applyAsaasEvent(connectionId: string, accountId: string, b
     .set({ open: false, closedAt: now, status: body.payment?.status ?? (gone ? 'DELETED' : 'RECEIVED'), updatedAt: now })
     .where(eq(asaasCharges.id, charge.id))
 
-  if (!charge.contactId) return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: 0 }
+  const ref = { chargeId: charge.id, contactId: charge.contactId, transitioned: charge.open === true }
+  if (!charge.contactId) return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: 0, ...ref }
 
   // 🛑 O ponto da fase: cancelar o que ainda não saiu. Só cancelamos quando o
   // devedor não tem MAIS NADA em aberto — quem paga uma de três parcelas
@@ -109,7 +115,7 @@ export async function applyAsaasEvent(connectionId: string, accountId: string, b
       .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, charge.contactId), eq(asaasCharges.open, true)))
       .limit(1),
   )
-  if (aindaDeve) return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: 0 }
+  if (aindaDeve) return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: 0, ...ref }
 
   const cancelled = await db
     .update(agentActionRequests)
@@ -135,7 +141,7 @@ export async function applyAsaasEvent(connectionId: string, accountId: string, b
     .set({ touchCount: 0, snoozeUntil: null, snoozeReason: null, updatedAt: now })
     .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, charge.contactId)))
 
-  return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: cancelled.length }
+  return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: cancelled.length, ...ref }
 }
 
 /** Acha a conexão pelo token da URL. Token inválido = 404, sem detalhe. */
