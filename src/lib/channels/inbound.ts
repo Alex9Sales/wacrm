@@ -412,7 +412,7 @@ export async function dispatchInboundMessage(
     // trava real é o índice único parcial (conversation_id, message_id) no banco
     // + este ON CONFLICT (sem alvo = no-op até o índice existir; seguro deployar
     // antes). Afonso 29/08: "Pagamento confirmado" 2x no CRM, 1x no WhatsApp.
-    await db
+    const inserted = await db
       .insert(messages)
       .values({
         conversationId: conversation.id,
@@ -428,7 +428,19 @@ export async function dispatchInboundMessage(
         createdAt: new Date().toISOString(),
         interactiveReplyId: ev.interactiveReplyId ?? null,
       })
-      .onConflictDoNothing();
+      .onConflictDoNothing()
+      .returning({ id: messages.id });
+    // 07/09 (Alex, coexistência): a Meta entregou o MESMO wamid duas vezes no
+    // mesmo segundo — "Bom dia" como text e de novo como type=unsupported. O
+    // índice único barrou a 2ª linha, mas o código seguia e sobrescrevia a
+    // prévia da conversa com "[Unsupported message type…]" + somava não lida.
+    // Repetida = não aconteceu nada: nem prévia, nem não lida, nem IA, nem fluxo.
+    if (!inserted.length) {
+      console.warn(
+        `[inbound] mensagem repetida ignorada (wamid ${ev.externalMessageId ?? '?'}, canal ${channel.id.slice(0, 8)}, tipo ${contentType})`,
+      );
+      return null;
+    }
   } catch (msgError) {
     console.error('[inbound] Error inserting message:', msgError);
     return null;

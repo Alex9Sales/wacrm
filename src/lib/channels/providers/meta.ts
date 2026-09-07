@@ -92,6 +92,9 @@ interface MetaWebhookMessage {
   from: string;
   timestamp?: string;
   type: string;
+  // type:'unsupported' vem com o motivo (131051 "Unsupported message type":
+  // enquete, edição de mensagem, mídia de visualização única, etc.).
+  errors?: { code?: number; title?: string; message?: string; error_data?: { details?: string } }[];
   text?: { body: string };
   image?: { id: string; mime_type?: string; caption?: string };
   video?: { id: string; mime_type?: string; caption?: string };
@@ -566,12 +569,25 @@ function normalizeInboundMessage(
       };
     }
 
-    default:
+    default: {
+      // A API oficial não entrega alguns tipos (enquete, edição de mensagem,
+      // mídia de visualização única…): chega type:'unsupported' + errors[].
+      // Fica registrado em português, com o detalhe da Meta, e vai pro log
+      // pra diagnóstico — sem inventar o conteúdo.
+      const err = msg.errors?.[0];
+      const detail = err?.error_data?.details || err?.message || err?.title || '';
+      console.warn(
+        `[meta] mensagem não suportada (${msg.type}) de ${msg.from} wamid ${msg.id}${err?.code ? ` · ${err.code}` : ''}${detail ? ` · ${detail}` : ''}`,
+      );
       return {
         ...base,
         contentType: 'text' as InboundContentType,
-        contentText: `[Unsupported message type: ${msg.type}]`,
+        contentText:
+          msg.type === 'unsupported'
+            ? `[Mensagem não suportada pela API oficial do WhatsApp${detail ? ` — ${detail}` : ' (enquete, edição ou mídia de visualização única)'}]`
+            : `[Tipo de mensagem não suportado: ${msg.type}]`,
       };
+    }
   }
 }
 
