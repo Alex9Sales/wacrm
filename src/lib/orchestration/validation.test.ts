@@ -6,7 +6,11 @@ import {
   confidenceRate,
   criteriaFor,
   DEFAULT_CRITERIA,
+  DEFAULT_CRITERIA_BY_ACTION,
   gateApplies,
+  nextPromotedAt,
+  readPromotedAt,
+  sanitizePromotedAt,
   readPromotionOverride,
   sanitizePromotionOverride,
   statsFromCounts,
@@ -15,10 +19,17 @@ import {
 } from './validation'
 
 describe('criteriaFor', () => {
-  it('usa o padrão do TIPO da ação quando a conta não mexeu', () => {
-    expect(criteriaFor('send_followup')).toEqual(DEFAULT_CRITERIA.message)
-    expect(criteriaFor('move_deal')).toEqual(DEFAULT_CRITERIA.crm)
+  it('usa o padrão POR AÇÃO quando existe, senão o do tipo', () => {
+    expect(criteriaFor('send_followup')).toEqual(DEFAULT_CRITERIA_BY_ACTION.send_followup)
+    expect(criteriaFor('move_deal')).toEqual(DEFAULT_CRITERIA_BY_ACTION.move_deal)
     expect(criteriaFor('notify_seller')).toEqual(DEFAULT_CRITERIA.notify)
+    expect(criteriaFor('pause_cadence')).toEqual(DEFAULT_CRITERIA.crm)
+  })
+  it('ação rara tem portão possível: proposta 8 decisões em 30 dias; reativação em leva: 30 em 7', () => {
+    expect(criteriaFor('draft_proposal').minDecisions).toBe(8)
+    expect(criteriaFor('draft_proposal').minDays).toBe(30)
+    expect(criteriaFor('reactivation').minDecisions).toBe(30)
+    expect(criteriaFor('reactivation').minDays).toBe(7)
   })
   it('cobrança tem o critério próprio (mais duro)', () => {
     expect(criteriaFor('collect_charges')).toEqual(COLLECTION_PROMOTION)
@@ -27,7 +38,7 @@ describe('criteriaFor', () => {
     const c = criteriaFor('send_followup', { minDecisions: 5, minDays: 3 })
     expect(c.minDecisions).toBe(5)
     expect(c.minDays).toBe(3)
-    expect(c.minCleanApprovalRate).toBe(DEFAULT_CRITERIA.message.minCleanApprovalRate)
+    expect(c.minCleanApprovalRate).toBe(DEFAULT_CRITERIA_BY_ACTION.send_followup!.minCleanApprovalRate)
   })
   it('dinheiro e cobrança NUNCA toleram reversão, mesmo com override', () => {
     expect(criteriaFor('collect_charges', { maxBadOutcomes: 3 }).maxBadOutcomes).toBe(0)
@@ -110,6 +121,28 @@ describe('validationStatus', () => {
     const bad = evaluatePromotion({ decisions: 19, cleanApprovals: 18, edited: 1, rejected: 0, badOutcomes: 1, spanDays: 13 }, DEFAULT_CRITERIA.message)
     expect(bad.progress).toBe(0)
     expect(validationStatus({ level: 'approve', humanOnly: false, verdict: bad })).toBe('validating')
+  })
+})
+
+describe('promotedAt', () => {
+  it('sanitiza datas válidas por ação e ignora lixo', () => {
+    expect(sanitizePromotedAt({ send_followup: '2026-09-07T10:00:00.000Z', move_deal: 'ontem', xpto: '2026-09-07T10:00:00.000Z' })).toEqual({
+      send_followup: '2026-09-07T10:00:00.000Z',
+    })
+    expect(sanitizePromotedAt(null)).toBeNull()
+    expect(readPromotedAt({ promotedAt: { move_deal: '2026-09-01T00:00:00.000Z' } })).toEqual({ move_deal: '2026-09-01T00:00:00.000Z' })
+    expect(readPromotedAt({})).toEqual({})
+  })
+  it('quem virou auto agora ganha a data; quem já era mantém; quem saiu perde', () => {
+    const prev = { move_deal: '2026-09-01T00:00:00.000Z', send_followup: '2026-09-02T00:00:00.000Z' }
+    const now = '2026-09-07T12:00:00.000Z'
+    const out = nextPromotedAt({
+      prev,
+      wasAuto: (a) => a === 'move_deal' || a === 'send_followup' || a === 'notify_seller',
+      isAuto: (a) => a === 'move_deal' || a === 'reactivation' || a === 'notify_seller',
+      now,
+    })
+    expect(out).toEqual({ move_deal: '2026-09-01T00:00:00.000Z', reactivation: now, notify_seller: now })
   })
 })
 

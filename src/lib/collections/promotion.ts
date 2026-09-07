@@ -76,9 +76,16 @@ const pct = (n: number) => `${Math.round(n * 100)}%`
  * Determinística e sem efeito colateral: dado o histórico, a ação pode subir de
  * "aprovação" para "automático"?
  */
-export function evaluatePromotion(stats: PromotionStats, c: PromotionCriteria = COLLECTION_PROMOTION): PromotionVerdict {
+export function evaluatePromotion(
+  stats: PromotionStats,
+  c: PromotionCriteria = COLLECTION_PROMOTION,
+  opts: { noun?: string } = {},
+): PromotionVerdict {
   const blockers: PromotionVerdict['blockers'] = []
   const ratios: number[] = []
+  // "1 cobrança foi revertida" na régua; "1 ação foi revertida" no painel geral.
+  const noun = opts.noun ?? 'ação'
+  const nounPlural = noun.endsWith('ão') ? `${noun.slice(0, -2)}ões` : `${noun}s`
 
   if (stats.decisions < c.minDecisions) {
     blockers.push({
@@ -122,8 +129,8 @@ export function evaluatePromotion(stats: PromotionStats, c: PromotionCriteria = 
       code: 'bad_outcomes',
       label:
         stats.badOutcomes === 1
-          ? '1 cobrança foi revertida ou marcada como errada. Para soltar o automático esse número precisa ser zero.'
-          : `${stats.badOutcomes} cobranças foram revertidas ou marcadas como erradas. Para soltar o automático esse número precisa ser zero.`,
+          ? `1 ${noun} foi revertida ou marcada como errada. Para soltar o automático esse número precisa ser ${c.maxBadOutcomes === 0 ? 'zero' : `no máximo ${c.maxBadOutcomes}`}.`
+          : `${stats.badOutcomes} ${nounPlural} foram revertidas ou marcadas como erradas. Para soltar o automático esse número precisa ser ${c.maxBadOutcomes === 0 ? 'zero' : `no máximo ${c.maxBadOutcomes}`}.`,
     })
     // Um resultado ruim não é "quase lá": zera o progresso mostrado.
     ratios.push(0)

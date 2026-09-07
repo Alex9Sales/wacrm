@@ -16,7 +16,7 @@ import { firstOrNull } from '@/db/helpers'
 import { greeting } from '@/lib/cdl/names'
 import { humanizeProduct, parseProductLabel, productNames } from '@/lib/cdl/product-label'
 import { ORCH_ACTIONS } from '@/lib/orchestration/policy'
-import { sanitizePromotionOverride } from '@/lib/orchestration/validation'
+import { sanitizePromotedAt, sanitizePromotionOverride } from '@/lib/orchestration/validation'
 
 export type AutonomyLevel = 'suggest' | 'approve' | 'auto'
 
@@ -112,6 +112,9 @@ export function sanitizeAutonomy(input: unknown): Record<string, unknown> {
   // autonomia). Sem isto, salvar a matriz em Agentes IA apagaria o critério.
   const promotion = sanitizePromotionOverride(o.promotion)
   if (promotion) out.promotion = promotion
+  // Data em que cada ação virou automática (o servidor recalcula ao promover).
+  const promotedAt = sanitizePromotedAt(o.promotedAt)
+  if (promotedAt) out.promotedAt = promotedAt
   return out
 }
 

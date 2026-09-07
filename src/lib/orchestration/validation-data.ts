@@ -16,11 +16,12 @@ import { evaluatePromotion, type PromotionCriteria, type PromotionVerdict } from
 
 import { contextChips } from './context-chips'
 import { ACTION_CATALOG, ORCH_ACTIONS, levelFor, readPolicy, type ActionMeta, type Level, type OrchAction, type Risk } from './policy'
-import { REVERT_MATRIX, type RevertKind } from './revert'
+import { REASON_CODES, REVERT_MATRIX, type RevertKind } from './revert'
 import {
   confidenceRate,
   criteriaFor,
   gateApplies,
+  readPromotedAt,
   readPromotionOverride,
   statsFromCounts,
   validationStatus,
@@ -47,8 +48,12 @@ export interface ValidationCards {
   /** Correções: texto editado ANTES de enviar + ação corrigida DEPOIS (IA pausada na conversa). */
   edited: number
   corrected: number
-  /** Desfeitas ou marcadas como resultado ruim. */
+  /** Desfeitas ou marcadas como resultado ruim (soma das duas abaixo). */
   reversed: number
+  /** Desfeitas de verdade (estado anterior restaurado). */
+  reverted: number
+  /** Marcadas como resultado ruim (sem desfazer possível). */
+  badResult: number
   /** Foram para a fila humana (a política pediu aprovação). */
   escalated: number
   pendingNow: number
@@ -82,6 +87,41 @@ export interface ActionValidationRow {
   executedPeriod: number
   /** Revertidas, corrigidas ou marcadas como erradas (todo o histórico). */
   badOutcomesAll: number
+  /** Desde quando está automática (marco gravado ao promover); null se não está ou é anterior ao marco. */
+  autoSince: string | null
+  executedSincePromotion: number
+  badSincePromotion: number
+}
+
+/** Mesmo tipo de ação corrigido/recusado várias vezes pelo mesmo motivo — o que precisa ficar muito visível. */
+export interface RepeatedError {
+  action: OrchAction
+  actionLabel: string
+  reasonCode: string | null
+  reasonLabel: string
+  signalType: string | null
+  /** alta | media | baixa | null */
+  severityBand: string | null
+  count: number
+  /** Tipos de julgamento envolvidos (edited/rejected/reversed/bad_result). */
+  kinds: string[]
+  lastAt: string
+}
+
+/** Uma semana da tendência (mais antiga primeiro). */
+export interface TrendWeek {
+  from: string
+  to: string
+  decisions: number
+  clean: number
+  /** 0–100 ou null sem decisão. */
+  cleanRate: number | null
+  executions: number
+  autoExecutions: number
+  /** Editadas antes de enviar + corrigidas depois. */
+  corrections: number
+  /** Desfeitas + resultado ruim (pela data do julgamento). */
+  reversals: number
 }
 
 export interface ValidationFeedback {
@@ -135,6 +175,8 @@ export interface AutonomyValidation {
   cards: ValidationCards
   actions: ActionValidationRow[]
   override: PromotionOverride | null
+  repeats: RepeatedError[]
+  trend: TrendWeek[]
   audit: ValidationAuditItem[]
 }
 
@@ -250,7 +292,8 @@ export async function loadAutonomyValidation(accountId: string, canManage: boole
         executions: sql<number>`count(*) filter (where ${agentActionRequests.status} in ('sent','done'))::int`,
         autoExecutions: sql<number>`count(*) filter (where ${agentActionRequests.status} in ('sent','done') and ${agentActionRequests.resolvedBy} is null)::int`,
         corrected: sql<number>`count(*) filter (where ${agentActionRequests.outcome} = 'corrected')::int`,
-        reversed: sql<number>`count(*) filter (where ${agentActionRequests.outcome} in ('reverted','bad_result'))::int`,
+        reverted: sql<number>`count(*) filter (where ${agentActionRequests.outcome} = 'reverted')::int`,
+        badResult: sql<number>`count(*) filter (where ${agentActionRequests.outcome} = 'bad_result')::int`,
         escalated: sql<number>`count(*) filter (where ${agentActionRequests.decision} = 'approve')::int`,
         pendingNow: sql<number>`count(*) filter (where ${agentActionRequests.status} = 'pending')::int`,
         blocked: sql<number>`count(*) filter (where ${agentActionRequests.status} = 'blocked')::int`,
@@ -295,7 +338,9 @@ export async function loadAutonomyValidation(accountId: string, canManage: boole
     autoShare: executions > 0 ? Math.round((autoExecutions / executions) * 100) : null,
     edited,
     corrected: r?.corrected ?? 0,
-    reversed: r?.reversed ?? 0,
+    reversed: (r?.reverted ?? 0) + (r?.badResult ?? 0),
+    reverted: r?.reverted ?? 0,
+    badResult: r?.badResult ?? 0,
     escalated: r?.escalated ?? 0,
     pendingNow: r?.pendingNow ?? 0,
     blocked: r?.blocked ?? 0,
@@ -308,6 +353,21 @@ export async function loadAutonomyValidation(accountId: string, canManage: boole
 
   const policy = readPolicy(agent?.autonomy ?? null)
   const override = readPromotionOverride(agent?.autonomy ?? null)
+  const promotedAt = readPromotedAt(agent?.autonomy ?? null)
+  // Desde a promoção: execuções e correções/reversões de cada ação automática.
+  const sinceMap = new Map<string, { executed: number; bad: number }>()
+  await Promise.all(
+    (Object.entries(promotedAt) as [OrchAction, string][]).map(async ([act, iso]) => {
+      const [row] = await db
+        .select({
+          executed: sql<number>`count(*) filter (where ${agentActionRequests.status} in ('sent','done'))::int`,
+          bad: sql<number>`count(*) filter (where ${agentActionRequests.outcome} in ('reverted','corrected','bad_result'))::int`,
+        })
+        .from(agentActionRequests)
+        .where(and(eq(agentActionRequests.accountId, accountId), eq(agentActionRequests.actionType, act), sql`${decidedAt} >= ${iso}`))
+      sinceMap.set(act, { executed: row?.executed ?? 0, bad: row?.bad ?? 0 })
+    }),
+  )
   const reqMap = new Map(reqByAction.map((x) => [x.actionType, x]))
   const actions: ActionValidationRow[] = ORCH_ACTIONS.map((act) => {
     const meta = ACTION_CATALOG[act]
@@ -316,7 +376,11 @@ export async function loadAutonomyValidation(accountId: string, canManage: boole
     const verdict = evaluatePromotion(statsFromCounts(counts), criteria)
     const level = levelFor(policy, act)
     const rq = reqMap.get(act)
+    const since = level === 'auto' ? (promotedAt[act] ?? null) : null
     return {
+      autoSince: since,
+      executedSincePromotion: since ? (sinceMap.get(act)?.executed ?? 0) : 0,
+      badSincePromotion: since ? (sinceMap.get(act)?.bad ?? 0) : 0,
       action: act,
       label: meta.label,
       hint: meta.hint,
@@ -337,9 +401,117 @@ export async function loadAutonomyValidation(accountId: string, canManage: boole
     }
   })
 
-  const audit = await listValidationAudit(accountId, since, action)
+  const [audit, repeats, trend] = await Promise.all([
+    listValidationAudit(accountId, since, action),
+    listRepeatedErrors(accountId, since, action),
+    loadTrend(accountId, days, action),
+  ])
 
-  return { days, since, action, canManage, hasDefaultAgent: !!agent, cards, actions, override, audit }
+  return { days, since, action, canManage, hasDefaultAgent: !!agent, cards, actions, override, repeats, trend, audit }
+}
+
+const BAD_KINDS = ['edited', 'rejected', 'reversed', 'bad_result']
+
+/**
+ * Repetição do MESMO erro: mesma ação, mesmo motivo, mesma assinatura de
+ * contexto (ação|sinal|faixa de prioridade), 2+ vezes no período.
+ */
+export async function listRepeatedErrors(accountId: string, since: string, action: OrchAction | 'all', limit = 8): Promise<RepeatedError[]> {
+  const rows = await db
+    .select({
+      actionType: decisionFeedback.actionType,
+      reasonCode: decisionFeedback.reasonCode,
+      fingerprint: decisionFeedback.contextFingerprint,
+      n: sql<number>`count(*)::int`,
+      lastAt: sql<string>`max(${decisionFeedback.createdAt})`,
+      kinds: sql<string>`string_agg(distinct ${decisionFeedback.decision}, ',')`,
+    })
+    .from(decisionFeedback)
+    .where(
+      and(
+        eq(decisionFeedback.accountId, accountId),
+        sql`${decisionFeedback.createdAt} >= ${since}`,
+        inArray(decisionFeedback.decision, BAD_KINDS),
+        action !== 'all' ? eq(decisionFeedback.actionType, action) : undefined,
+      ),
+    )
+    .groupBy(decisionFeedback.actionType, decisionFeedback.reasonCode, decisionFeedback.contextFingerprint)
+    .having(sql`count(*) >= 2`)
+    .orderBy(desc(sql`count(*)`), desc(sql`max(${decisionFeedback.createdAt})`))
+    .limit(limit)
+  return rows
+    .filter((r) => isOrchAction(r.actionType))
+    .map((r) => {
+      const act = r.actionType as OrchAction
+      const [, signal, band] = (r.fingerprint ?? '').split('|')
+      const reason = r.reasonCode ? REASON_CODES.find((c) => c.code === r.reasonCode) : null
+      const kinds = (r.kinds ?? '').split(',').filter(Boolean)
+      return {
+        action: act,
+        actionLabel: ACTION_CATALOG[act].label,
+        reasonCode: r.reasonCode,
+        reasonLabel: reason?.label ?? (r.reasonCode ? r.reasonCode : kinds.length === 1 && kinds[0] === 'edited' ? 'Texto reescrito antes de enviar' : 'Sem motivo informado'),
+        signalType: signal && signal !== 'sem-sinal' ? signal : null,
+        severityBand: band && band !== 'na' ? band : null,
+        count: r.n,
+        kinds,
+        lastAt: r.lastAt,
+      }
+    })
+}
+
+/** Semana a semana (mais antiga primeiro): a prova não é só que a IA está boa, é que está melhorando. */
+export async function loadTrend(accountId: string, days: number, action: OrchAction | 'all'): Promise<TrendWeek[]> {
+  const weeks = Math.max(1, Math.ceil(days / 7))
+  const now = Date.now()
+  const sinceWeeks = new Date(now - weeks * 7 * 86_400_000).toISOString()
+  const decidedAt = sql`coalesce(${agentActionRequests.resolvedAt}, ${agentActionRequests.createdAt})`
+  const fbWeek = sql<number>`floor(extract(epoch from (now() - ${decisionFeedback.createdAt})) / 604800)::int`
+  const reqWeek = sql<number>`floor(extract(epoch from (now() - ${decidedAt})) / 604800)::int`
+  const [fb, req] = await Promise.all([
+    db
+      .select({
+        w: fbWeek,
+        decisions: sql<number>`count(*) filter (where ${decisionFeedback.decision} in ('approved','edited','rejected'))::int`,
+        clean: sql<number>`count(*) filter (where ${decisionFeedback.decision} = 'approved')::int`,
+        edited: sql<number>`count(*) filter (where ${decisionFeedback.decision} = 'edited')::int`,
+        reversals: sql<number>`count(*) filter (where ${decisionFeedback.decision} in ('reversed','bad_result'))::int`,
+      })
+      .from(decisionFeedback)
+      .where(and(eq(decisionFeedback.accountId, accountId), sql`${decisionFeedback.createdAt} >= ${sinceWeeks}`, action !== 'all' ? eq(decisionFeedback.actionType, action) : undefined))
+      .groupBy(fbWeek),
+    db
+      .select({
+        w: reqWeek,
+        executions: sql<number>`count(*) filter (where ${agentActionRequests.status} in ('sent','done'))::int`,
+        autoExecutions: sql<number>`count(*) filter (where ${agentActionRequests.status} in ('sent','done') and ${agentActionRequests.resolvedBy} is null)::int`,
+        corrected: sql<number>`count(*) filter (where ${agentActionRequests.outcome} = 'corrected')::int`,
+      })
+      .from(agentActionRequests)
+      .where(and(eq(agentActionRequests.accountId, accountId), sql`${decidedAt} >= ${sinceWeeks}`, action !== 'all' ? eq(agentActionRequests.actionType, action) : undefined))
+      .groupBy(reqWeek),
+  ])
+  const fbMap = new Map(fb.map((r) => [r.w, r]))
+  const reqMap = new Map(req.map((r) => [r.w, r]))
+  const out: TrendWeek[] = []
+  for (let w = weeks - 1; w >= 0; w--) {
+    const f = fbMap.get(w)
+    const r = reqMap.get(w)
+    const decisions = f?.decisions ?? 0
+    const clean = f?.clean ?? 0
+    out.push({
+      from: new Date(now - (w + 1) * 7 * 86_400_000).toISOString(),
+      to: new Date(now - w * 7 * 86_400_000).toISOString(),
+      decisions,
+      clean,
+      cleanRate: decisions > 0 ? Math.round((clean / decisions) * 100) : null,
+      executions: r?.executions ?? 0,
+      autoExecutions: r?.autoExecutions ?? 0,
+      corrections: (f?.edited ?? 0) + (r?.corrected ?? 0),
+      reversals: f?.reversals ?? 0,
+    })
+  }
+  return out
 }
 
 /** Auditoria com a cadeia completa: sinal → política → decisão → ação → motivo → resultado. */

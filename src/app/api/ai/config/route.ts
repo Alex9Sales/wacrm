@@ -16,6 +16,7 @@ import { toAiHoursMode } from '@/lib/ai/hours-gate'
 import { sanitizeTools } from '@/lib/ai/tools'
 import { sanitizeAutonomy } from '@/lib/ai/autonomy'
 import { ORCH_ACTIONS, levelFor, readPolicy } from '@/lib/orchestration/policy'
+import { nextPromotedAt, readPromotedAt } from '@/lib/orchestration/validation'
 import { promotionBlocker } from '@/lib/orchestration/validation-data'
 
 function bad(message: string) {
@@ -336,6 +337,14 @@ export async function POST(request: Request) {
         const blocker = await promotionBlocker(accountId, act)
         if (blocker) return bad(blocker)
       }
+      // 📅 Marco "automática desde": o form não manda, o servidor recalcula.
+      const promotedAt = nextPromotedAt({
+        prev: readPromotedAt(existing?.autonomy ?? null),
+        wasAuto: (a) => levelFor(prev, a) === 'auto',
+        isAuto: (a) => levelFor(next, a) === 'auto',
+      })
+      if (Object.keys(promotedAt).length) autonomy.promotedAt = promotedAt
+      else delete autonomy.promotedAt
     }
 
     // Caminho LEGADO (chave avulsa): resolve a chave e valida com o provedor.

@@ -25,7 +25,7 @@ import {
   type ValidationAuditItem,
 } from '@/app/(dashboard)/aprovacoes/validacao/actions';
 import { ACTION_CATALOG, ORCH_ACTIONS, type Level, type OrchAction, type Risk } from '@/lib/orchestration/policy';
-import { DEFAULT_CRITERIA, LEVEL_LABEL, VALIDATION_STATUS_META, type ValidationStatus } from '@/lib/orchestration/validation';
+import { DEFAULT_CRITERIA_BY_ACTION, LEVEL_LABEL, VALIDATION_STATUS_META, type ValidationStatus } from '@/lib/orchestration/validation';
 
 const PERIODS: { value: Period; label: string }[] = [
   { value: 7, label: 'Últimos 7 dias' },
@@ -276,7 +276,7 @@ export function AutonomyValidationClient() {
               hint={`${cards.edited} texto editado antes de enviar · ${cards.corrected} corrigida depois (IA pausada na conversa)`}
               warn={cards.edited + cards.corrected > 0}
             />
-            <Card label="Reversões" value={cards.reversed} hint="desfeitas ou marcadas como resultado ruim" warn={cards.reversed > 0} />
+            <Card label="Reversões" value={cards.reversed} hint={`${cards.reverted} desfeitas · ${cards.badResult} marcadas como resultado ruim`} warn={cards.reversed > 0} />
             <Card
               label="Escaladas para você"
               value={cards.escalated}
@@ -319,10 +319,13 @@ export function AutonomyValidationClient() {
             <div className="border-b border-border bg-muted/30 px-4 py-4">
               <p className="text-sm font-medium text-foreground">Critério da conta para liberar o automático</p>
               <p className="mt-1 text-xs text-muted-foreground">
-                Vazio = padrão por tipo de ação (mensagem: {DEFAULT_CRITERIA.message.minDecisions} decisões em {DEFAULT_CRITERIA.message.minDays} dias, ≥
-                {pct(DEFAULT_CRITERIA.message.minCleanApprovalRate)} sem edição · CRM: {DEFAULT_CRITERIA.crm.minDecisions} em {DEFAULT_CRITERIA.crm.minDays} dias · cobrança:
-                20 em 14 dias, ≥90%). O critério tem que caber no seu volume real: grande demais é o mesmo que não ter. Cobrança e dinheiro nunca toleram reversão,
-                mesmo que você configure.
+                Vazio = padrão por ação, calibrado pelo volume de cada uma: follow-up {DEFAULT_CRITERIA_BY_ACTION.send_followup?.minDecisions} decisões em{' '}
+                {DEFAULT_CRITERIA_BY_ACTION.send_followup?.minDays} dias · reativar {DEFAULT_CRITERIA_BY_ACTION.reactivation?.minDecisions} em{' '}
+                {DEFAULT_CRITERIA_BY_ACTION.reactivation?.minDays} (sai em leva) · mover negócio {DEFAULT_CRITERIA_BY_ACTION.move_deal?.minDecisions} em{' '}
+                {DEFAULT_CRITERIA_BY_ACTION.move_deal?.minDays} · proposta {DEFAULT_CRITERIA_BY_ACTION.draft_proposal?.minDecisions} em{' '}
+                {DEFAULT_CRITERIA_BY_ACTION.draft_proposal?.minDays} (é rara) · desconto {DEFAULT_CRITERIA_BY_ACTION.apply_discount?.minDecisions} em{' '}
+                {DEFAULT_CRITERIA_BY_ACTION.apply_discount?.minDays} · cobrança 20 em 14, ≥90% sem edição. O que você preencher aqui vale para todas as ações.
+                O critério tem que caber no seu volume real: grande demais é o mesmo que não ter. Cobrança e dinheiro nunca toleram reversão, mesmo que você configure.
               </p>
               <div className="mt-3 grid gap-3 sm:grid-cols-5">
                 <Field label="Decisões mínimas" value={crit.minDecisions} onChange={(v) => setCrit((c) => ({ ...c, minDecisions: v }))} placeholder="20" />
@@ -402,6 +405,7 @@ export function AutonomyValidationClient() {
                           <span className={cn('inline-block rounded-full px-2 py-0.5 text-xs font-medium', TONE_CLASS[st.tone])} title={st.hint}>
                             {st.label}
                           </span>
+                          {row.autoSince ? <div className="mt-0.5 text-[10px] text-muted-foreground">desde {fmtDay(row.autoSince)}</div> : null}
                         </td>
                         <td className="px-4 py-2.5 text-right" onClick={(e) => e.stopPropagation()}>
                           {data.canManage && !row.humanOnly ? (
@@ -459,6 +463,17 @@ export function AutonomyValidationClient() {
                                   {row.pending} esperando você
                                   {row.badOutcomesAll ? ` · ${row.badOutcomesAll} corrigidas/revertidas` : ''}
                                 </p>
+                                {row.autoSince ? (
+                                  <p>
+                                    <span className="font-medium text-foreground">Automática desde {fmtDay(row.autoSince)}:</span> {row.executedSincePromotion} execuções ·{' '}
+                                    {row.badSincePromotion} correções/reversões desde então
+                                    {row.badSincePromotion === 0 && row.executedSincePromotion > 0 ? ' — sem incidente' : ''}
+                                  </p>
+                                ) : row.status === 'auto' ? (
+                                  <p>
+                                    <span className="font-medium text-foreground">Automática</span> antes de o painel existir — o marco começa na próxima mudança de nível.
+                                  </p>
+                                ) : null}
                               </div>
                             </div>
                           </td>
@@ -467,6 +482,94 @@ export function AutonomyValidationClient() {
                     </RowGroup>
                   );
                 })}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      ) : null}
+
+      {/* ---- Erros que se repetem: mesma ação, mesmo motivo, mesmo contexto */}
+      {data ? (
+        <section className="rounded-xl border border-border bg-card">
+          <div className="border-b border-border px-4 py-3">
+            <h2 className="text-sm font-semibold text-foreground">Erros que se repetem</h2>
+            <p className="text-xs text-muted-foreground">
+              Mesma ação corrigida, recusada ou revertida pelo mesmo motivo, no mesmo tipo de situação, duas ou mais vezes no período. É aqui que a política precisa mudar.
+            </p>
+          </div>
+          {data.repeats.length === 0 ? (
+            <p className="px-4 py-4 text-sm text-muted-foreground">Nenhum motivo se repetiu no período.</p>
+          ) : (
+            <ul className="divide-y divide-border">
+              {data.repeats.map((r, i) => (
+                <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-sm">
+                  <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-amber-500/15 px-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                    {r.count}×
+                  </span>
+                  <span className="font-medium text-foreground">{r.actionLabel}</span>
+                  <span className="text-muted-foreground">·</span>
+                  <span className="text-foreground/90">{r.reasonLabel}</span>
+                  {r.signalType ? (
+                    <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                      {SIGNAL_LABEL[r.signalType] ?? r.signalType}
+                      {r.severityBand ? ` · prioridade ${r.severityBand}` : ''}
+                    </span>
+                  ) : null}
+                  <span className="text-xs text-muted-foreground">{r.kinds.map((k) => FEEDBACK_LABEL[k] ?? k).join(' / ')}</span>
+                  <span className="ml-auto text-xs text-muted-foreground">última em {fmtDay(r.lastAt)}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </section>
+      ) : null}
+
+      {/* ---- Tendência semanal: a prova é que está melhorando, não só que está boa */}
+      {data ? (
+        <section className="rounded-xl border border-border bg-card">
+          <div className="border-b border-border px-4 py-3">
+            <h2 className="text-sm font-semibold text-foreground">Tendência semanal</h2>
+            <p className="text-xs text-muted-foreground">Semana a semana, a mais antiga primeiro. Sem edição = aprovadas como vieram ÷ decisões humanas da semana.</p>
+          </div>
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b border-border text-left text-xs text-muted-foreground">
+                  <th className="px-4 py-2 font-medium">Semana</th>
+                  <th className="px-2 py-2 text-right font-medium">Decisões</th>
+                  <th className="px-2 py-2 font-medium">Sem edição</th>
+                  <th className="px-2 py-2 text-right font-medium">Execuções</th>
+                  <th className="px-2 py-2 text-right font-medium">Automáticas</th>
+                  <th className="px-2 py-2 text-right font-medium">Correções</th>
+                  <th className="px-4 py-2 text-right font-medium">Reversões</th>
+                </tr>
+              </thead>
+              <tbody>
+                {data.trend.map((w, i) => (
+                  <tr key={w.from} className={cn('border-b border-border/60', i === data.trend.length - 1 && 'bg-muted/20')}>
+                    <td className="px-4 py-2 text-xs text-muted-foreground">
+                      {fmtDay(w.from)} – {fmtDay(w.to)}
+                      {i === data.trend.length - 1 ? ' (atual)' : ''}
+                    </td>
+                    <td className="px-2 py-2 text-right tabular-nums">{w.decisions}</td>
+                    <td className="px-2 py-2">
+                      {w.cleanRate == null ? (
+                        <span className="text-xs text-muted-foreground">—</span>
+                      ) : (
+                        <div className="flex items-center gap-2">
+                          <div className="h-2 w-20 overflow-hidden rounded-full bg-muted">
+                            <div className={cn('h-full rounded-full', w.cleanRate >= 85 ? 'bg-emerald-500' : w.cleanRate >= 60 ? 'bg-primary' : 'bg-amber-500')} style={{ width: `${w.cleanRate}%` }} />
+                          </div>
+                          <span className="text-xs tabular-nums">{w.cleanRate}%</span>
+                        </div>
+                      )}
+                    </td>
+                    <td className="px-2 py-2 text-right tabular-nums">{w.executions}</td>
+                    <td className="px-2 py-2 text-right tabular-nums">{w.autoExecutions}</td>
+                    <td className={cn('px-2 py-2 text-right tabular-nums', w.corrections > 0 && 'text-amber-700 dark:text-amber-300')}>{w.corrections}</td>
+                    <td className={cn('px-4 py-2 text-right tabular-nums', w.reversals > 0 && 'font-semibold text-red-600 dark:text-red-300')}>{w.reversals}</td>
+                  </tr>
+                ))}
               </tbody>
             </table>
           </div>

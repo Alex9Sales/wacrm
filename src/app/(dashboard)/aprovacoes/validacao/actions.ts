@@ -17,8 +17,8 @@ import { revalidatePath } from 'next/cache'
 import { db, aiConfigs } from '@/db'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
-import { ACTION_CATALOG, type Level } from '@/lib/orchestration/policy'
-import { sanitizePromotionOverride } from '@/lib/orchestration/validation'
+import { ACTION_CATALOG, levelFor, readPolicy, type Level } from '@/lib/orchestration/policy'
+import { nextPromotedAt, readPromotedAt, sanitizePromotionOverride } from '@/lib/orchestration/validation'
 import {
   isOrchAction,
   loadAutonomyValidation,
@@ -31,7 +31,17 @@ import {
 } from '@/lib/orchestration/validation-data'
 import type { OrchAction } from '@/lib/orchestration/policy'
 
-export type { ActionValidationRow, AutonomyValidation, Period, PromotionGate, ValidationAuditItem, ValidationCards, ValidationFilters } from '@/lib/orchestration/validation-data'
+export type {
+  ActionValidationRow,
+  AutonomyValidation,
+  Period,
+  PromotionGate,
+  RepeatedError,
+  TrendWeek,
+  ValidationAuditItem,
+  ValidationCards,
+  ValidationFilters,
+} from '@/lib/orchestration/validation-data'
 
 export type ActionResult = { ok: true } | { ok: false; error: string }
 
@@ -76,6 +86,16 @@ export async function promoteAction(actionInput: string, level: Level): Promise<
   const next: Record<string, unknown> = { ...current, actions }
   // Espelha no legado pra telas antigas de "Chamar de volta" continuarem certas.
   if (action === 'reactivation') next.reactivation = level
+  // 📅 Marco "automática desde": quem virou auto agora ganha a data; quem saiu perde.
+  const prevPolicy = readPolicy(current)
+  const nextPolicy = readPolicy(next)
+  const promotedAt = nextPromotedAt({
+    prev: readPromotedAt(current),
+    wasAuto: (a) => levelFor(prevPolicy, a) === 'auto',
+    isAuto: (a) => levelFor(nextPolicy, a) === 'auto',
+  })
+  if (Object.keys(promotedAt).length) next.promotedAt = promotedAt
+  else delete next.promotedAt
   await db.update(aiConfigs).set({ autonomy: next }).where(eq(aiConfigs.id, agent.id))
 
   revalidatePath('/aprovacoes/validacao')

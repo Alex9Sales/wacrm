@@ -551,7 +551,7 @@ export async function getCollectionsPromotion(): Promise<PromotionView> {
   const autonomy = agent[0]?.autonomy ?? null
   // Mesmo critério do painel Validação da autonomia (override da conta;
   // cobrança nunca tolera reversão). Reversão conta como erro, não como decisão.
-  const verdict = evaluatePromotion(statsFromFeedback(rows), criteriaFor('collect_charges', readPromotionOverride(autonomy)))
+  const verdict = evaluatePromotion(statsFromFeedback(rows), criteriaFor('collect_charges', readPromotionOverride(autonomy)), { noun: 'cobrança' })
   const level = levelFor(readPolicy(autonomy), 'collect_charges')
 
   return { verdict, headline: promotionHeadline(verdict), level, isAuto: level === 'auto' }

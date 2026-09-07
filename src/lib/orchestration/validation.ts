@@ -14,7 +14,7 @@
 
 import { COLLECTION_PROMOTION, type PromotionCriteria, type PromotionStats, type PromotionVerdict } from '@/lib/collections/promotion'
 
-import { ACTION_CATALOG, type ActionMeta, type Level, type OrchAction } from './policy'
+import { ACTION_CATALOG, ORCH_ACTIONS, type ActionMeta, type Level, type OrchAction } from './policy'
 
 /** Critério padrão por tipo de ação. Mensagem fala com o cliente: mais duro que mexer no CRM. */
 export const DEFAULT_CRITERIA: Record<ActionMeta['kind'], PromotionCriteria> = {
@@ -22,6 +22,21 @@ export const DEFAULT_CRITERIA: Record<ActionMeta['kind'], PromotionCriteria> = {
   money: { minDecisions: 20, minDays: 14, minCleanApprovalRate: 0.9, maxRejectionRate: 0.05, maxBadOutcomes: 0 },
   crm: { minDecisions: 10, minDays: 7, minCleanApprovalRate: 0.9, maxRejectionRate: 0.1, maxBadOutcomes: 0 },
   notify: { minDecisions: 10, minDays: 7, minCleanApprovalRate: 0.8, maxRejectionRate: 0.2, maxBadOutcomes: 0 },
+}
+
+/**
+ * Ajuste POR AÇÃO por cima do tipo (retorno do ChatGPT, 07/09): ação rara não
+ * pode ter portão impossível. Proposta e desconto acontecem poucas vezes por
+ * mês → menos decisões numa janela maior; reativação sai em leva diária → mais
+ * decisões numa janela curta.
+ */
+export const DEFAULT_CRITERIA_BY_ACTION: Partial<Record<OrchAction, PromotionCriteria>> = {
+  send_followup: { minDecisions: 20, minDays: 14, minCleanApprovalRate: 0.85, maxRejectionRate: 0.1, maxBadOutcomes: 0 },
+  reactivation: { minDecisions: 30, minDays: 7, minCleanApprovalRate: 0.85, maxRejectionRate: 0.1, maxBadOutcomes: 0 },
+  move_deal: { minDecisions: 12, minDays: 14, minCleanApprovalRate: 0.9, maxRejectionRate: 0.1, maxBadOutcomes: 0 },
+  start_cadence: { minDecisions: 12, minDays: 14, minCleanApprovalRate: 0.85, maxRejectionRate: 0.1, maxBadOutcomes: 0 },
+  draft_proposal: { minDecisions: 8, minDays: 30, minCleanApprovalRate: 0.9, maxRejectionRate: 0.1, maxBadOutcomes: 0 },
+  apply_discount: { minDecisions: 10, minDays: 30, minCleanApprovalRate: 0.9, maxRejectionRate: 0.05, maxBadOutcomes: 0 },
 }
 
 /** Override da conta (ai_configs.autonomy.promotion): só as chaves que a pessoa mexeu. */
@@ -63,7 +78,7 @@ export function readPromotionOverride(autonomy: unknown): PromotionOverride | nu
  */
 export function criteriaFor(action: OrchAction, override?: PromotionOverride | null): PromotionCriteria {
   const meta = ACTION_CATALOG[action]
-  const base = action === 'collect_charges' ? COLLECTION_PROMOTION : DEFAULT_CRITERIA[meta.kind]
+  const base = action === 'collect_charges' ? COLLECTION_PROMOTION : (DEFAULT_CRITERIA_BY_ACTION[action] ?? DEFAULT_CRITERIA[meta.kind])
   const merged: PromotionCriteria = { ...base }
   if (override) {
     for (const k of CRITERIA_KEYS) {
@@ -73,6 +88,46 @@ export function criteriaFor(action: OrchAction, override?: PromotionOverride | n
   }
   if (action === 'collect_charges' || meta.kind === 'money') merged.maxBadOutcomes = 0
   return merged
+}
+
+/**
+ * Data em que cada ação virou automática (ai_configs.autonomy.promotedAt).
+ * É o marco que o painel usa pra dizer "automática desde DD/MM · N execuções
+ * · M correções desde então" — o critério do ChatGPT pra abrir a Fase 3.
+ */
+export type PromotedAt = Partial<Record<OrchAction, string>>
+
+export function sanitizePromotedAt(input: unknown): PromotedAt | null {
+  const o = input && typeof input === 'object' ? (input as Record<string, unknown>) : null
+  if (!o) return null
+  const out: PromotedAt = {}
+  for (const act of ORCH_ACTIONS) {
+    const v = o[act]
+    if (typeof v !== 'string') continue
+    const t = new Date(v).getTime()
+    if (Number.isFinite(t)) out[act] = new Date(t).toISOString()
+  }
+  return Object.keys(out).length ? out : null
+}
+
+export function readPromotedAt(autonomy: unknown): PromotedAt {
+  const a = autonomy && typeof autonomy === 'object' ? (autonomy as Record<string, unknown>) : null
+  return sanitizePromotedAt(a?.promotedAt) ?? {}
+}
+
+/**
+ * O que gravar em promotedAt depois de salvar níveis: quem virou auto AGORA
+ * ganha a data; quem já era auto mantém a que tinha (ou ganha agora, se não
+ * havia registro); quem saiu do auto perde o marco.
+ */
+export function nextPromotedAt(args: { prev: PromotedAt; wasAuto: (a: OrchAction) => boolean; isAuto: (a: OrchAction) => boolean; now?: string }): PromotedAt {
+  const now = args.now ?? new Date().toISOString()
+  const out: PromotedAt = {}
+  for (const act of ORCH_ACTIONS) {
+    if (!args.isAuto(act)) continue
+    out[act] = args.wasAuto(act) ? (args.prev[act] ?? now) : now
+  }
+  return out
 }
 
 /**
