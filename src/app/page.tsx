@@ -51,6 +51,15 @@ export const metadata: Metadata = {
 const TRIAL_HREF = '/comecar'
 const WHATSAPP_HREF =
   'https://wa.me/556791806048?text=Quero%20saber%20mais%20sobre%20o%20FluxiaCRM'
+// CTA por plano (07/09, sugestão do ChatGPT que o Alex aprovou): autonomia é o
+// recurso que mais exige configuração certa — quem entra no Pro/Enterprise
+// começa por uma demonstração/piloto guiado, não sozinho no teste grátis.
+const DEMO_HREF =
+  'https://wa.me/556791806048?text=' +
+  encodeURIComponent('Quero agendar uma demonstração do plano Pro do FluxiaCRM e começar um piloto.')
+const SPECIALIST_HREF =
+  'https://wa.me/556791806048?text=' +
+  encodeURIComponent('Quero falar com um especialista sobre o plano Enterprise do FluxiaCRM.')
 
 /** Navegação por âncora do cabeçalho fixo. */
 const NAV = [
@@ -200,6 +209,7 @@ const PLANS = [
     price: '139,90',
     tagline: 'A IA atende: responde, qualifica e organiza o funil',
     future: 'R$ 297/mês',
+    cta: { label: 'Testar 7 dias grátis', href: TRIAL_HREF, external: false, hint: 'Sem cartão. Você conecta o número e começa hoje.' },
     highlighted: false,
     lead: null as string | null,
     features: [
@@ -215,6 +225,7 @@ const PLANS = [
     price: '497',
     tagline: 'A IA conhece o cliente: histórico, memória comercial e equipe junta',
     future: 'plano Growth, R$ 697/mês',
+    cta: { label: 'Testar 7 dias grátis', href: TRIAL_HREF, external: false, hint: 'Sem cartão. Importe o histórico e veja a IA conhecer seus clientes.' },
     highlighted: false,
     lead: null as string | null,
     features: [
@@ -231,6 +242,7 @@ const PLANS = [
     price: '799',
     tagline: 'A IA percebe e age: sua operação comercial começa a trabalhar sozinha, sob as suas regras',
     future: 'plano Scale, R$ 1.297/mês',
+    cta: { label: 'Agendar demonstração', href: DEMO_HREF, external: true, hint: 'Piloto guiado: configuramos os agentes e a política de autonomia com você.' },
     highlighted: true,
     lead: 'Tudo do Essencial, e mais:',
     features: [
@@ -247,6 +259,7 @@ const PLANS = [
     price: '1.999',
     tagline: 'A IA opera processos completos, integrada à empresa: voz, ERP e várias operações',
     future: 'a partir de R$ 2.990/mês, conforme o tamanho da operação',
+    cta: { label: 'Falar com especialista', href: SPECIALIST_HREF, external: true, hint: 'Escopo, integrações e preço definidos com a sua operação.' },
     highlighted: false,
     lead: 'Tudo do Pro, e mais:',
     features: [
@@ -259,7 +272,7 @@ const PLANS = [
 ]
 
 const INCLUSO_EM_TODOS = [
-  '7 dias grátis, sem cartão',
+  '7 dias grátis, sem cartão, no Start e no Essencial · demonstração guiada no Pro e no Enterprise',
   'Sem taxa de implantação no Start e no Essencial',
   'Sem fidelidade',
   'Suporte no WhatsApp',
@@ -746,7 +759,8 @@ export default async function RootPage() {
               <strong className="font-semibold text-foreground">
                 7 dias grátis
               </strong>
-              , sem cartão. Escolha o plano quando decidir continuar.
+              , sem cartão, no Start e no Essencial. No Pro e no Enterprise, a autonomia entra por um piloto guiado
+              com a gente.
             </p>
             <p className="mx-auto mt-3 max-w-2xl text-center text-sm text-muted-foreground">
               <span className="rounded-full bg-primary/10 px-2.5 py-0.5 font-semibold text-primary">Preço de lançamento</span>{' '}
@@ -789,15 +803,18 @@ export default async function RootPage() {
                   </p>
 
                   <a
-                    href={TRIAL_HREF}
+                    href={p.cta.href}
+                    target={p.cta.external ? '_blank' : undefined}
+                    rel={p.cta.external ? 'noopener noreferrer' : undefined}
                     className={`mt-6 rounded-lg px-4 py-3 text-center text-sm font-semibold transition ${
                       p.highlighted
                         ? 'bg-primary text-primary-foreground hover:bg-primary-hover'
                         : 'text-foreground ring-1 ring-border hover:bg-muted'
                     }`}
                   >
-                    Testar 7 dias grátis
+                    {p.cta.label}
                   </a>
+                  <p className="mt-2 text-center text-[11px] leading-snug text-muted-foreground">{p.cta.hint}</p>
 
                   <p className="mt-6 text-xs font-medium text-muted-foreground">
                     {p.lead ?? 'O que está incluído:'}
