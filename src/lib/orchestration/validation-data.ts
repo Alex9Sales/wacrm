@@ -89,8 +89,37 @@ export interface ActionValidationRow {
   badOutcomesAll: number
   /** Desde quando está automática (marco gravado ao promover); null se não está ou é anterior ao marco. */
   autoSince: string | null
-  executedSincePromotion: number
-  badSincePromotion: number
+  /** Como a ação se comportou DEPOIS de ganhar autonomia (a pergunta certa). */
+  sincePromotion: SincePromotion | null
+}
+
+export interface SincePromotion {
+  since: string
+  days: number
+  executed: number
+  /** Executadas sem passar pela fila (resolved_by null). */
+  auto: number
+  /** Execuções sem nenhuma intervenção depois: nem correção, nem desfeita, nem resultado ruim. */
+  clean: number
+  corrected: number
+  reverted: number
+  badResult: number
+  /** 0–100: clean ÷ executed (null sem execução). */
+  confidence: number | null
+}
+
+/** Um caso concreto por trás de um erro repetido (clicar abre). */
+export interface RepeatedCase {
+  requestId: string | null
+  contactId: string | null
+  contactName: string | null
+  conversationId: string | null
+  dealId: string | null
+  decision: string
+  reasonText: string | null
+  at: string
+  /** Começo do texto que a IA propôs/enviou, quando é ação de mensagem. */
+  text: string | null
 }
 
 /** Mesmo tipo de ação corrigido/recusado várias vezes pelo mesmo motivo — o que precisa ficar muito visível. */
@@ -106,6 +135,8 @@ export interface RepeatedError {
   /** Tipos de julgamento envolvidos (edited/rejected/reversed/bad_result). */
   kinds: string[]
   lastAt: string
+  /** Os casos mais recentes do grupo (até 10). */
+  cases: RepeatedCase[]
 }
 
 /** Uma semana da tendência (mais antiga primeiro). */
@@ -354,18 +385,37 @@ export async function loadAutonomyValidation(accountId: string, canManage: boole
   const policy = readPolicy(agent?.autonomy ?? null)
   const override = readPromotionOverride(agent?.autonomy ?? null)
   const promotedAt = readPromotedAt(agent?.autonomy ?? null)
-  // Desde a promoção: execuções e correções/reversões de cada ação automática.
-  const sinceMap = new Map<string, { executed: number; bad: number }>()
+  // Desde a promoção: como cada ação automática se comportou DEPOIS de ganhar
+  // autonomia — execuções, sem intervenção, correções, desfeitas, resultado ruim.
+  const sinceMap = new Map<string, SincePromotion>()
   await Promise.all(
     (Object.entries(promotedAt) as [OrchAction, string][]).map(async ([act, iso]) => {
       const [row] = await db
         .select({
           executed: sql<number>`count(*) filter (where ${agentActionRequests.status} in ('sent','done'))::int`,
-          bad: sql<number>`count(*) filter (where ${agentActionRequests.outcome} in ('reverted','corrected','bad_result'))::int`,
+          auto: sql<number>`count(*) filter (where ${agentActionRequests.status} in ('sent','done') and ${agentActionRequests.resolvedBy} is null)::int`,
+          corrected: sql<number>`count(*) filter (where ${agentActionRequests.outcome} = 'corrected')::int`,
+          reverted: sql<number>`count(*) filter (where ${agentActionRequests.outcome} = 'reverted')::int`,
+          badResult: sql<number>`count(*) filter (where ${agentActionRequests.outcome} = 'bad_result')::int`,
         })
         .from(agentActionRequests)
         .where(and(eq(agentActionRequests.accountId, accountId), eq(agentActionRequests.actionType, act), sql`${decidedAt} >= ${iso}`))
-      sinceMap.set(act, { executed: row?.executed ?? 0, bad: row?.bad ?? 0 })
+      const executed = row?.executed ?? 0
+      const corrected = row?.corrected ?? 0
+      const reverted = row?.reverted ?? 0
+      const badResult = row?.badResult ?? 0
+      const clean = Math.max(0, executed - corrected - reverted - badResult)
+      sinceMap.set(act, {
+        since: iso,
+        days: Math.max(0, Math.floor((Date.now() - new Date(iso).getTime()) / 86_400_000)),
+        executed,
+        auto: row?.auto ?? 0,
+        clean,
+        corrected,
+        reverted,
+        badResult,
+        confidence: executed > 0 ? Math.round((clean / executed) * 100) : null,
+      })
     }),
   )
   const reqMap = new Map(reqByAction.map((x) => [x.actionType, x]))
@@ -379,8 +429,7 @@ export async function loadAutonomyValidation(accountId: string, canManage: boole
     const since = level === 'auto' ? (promotedAt[act] ?? null) : null
     return {
       autoSince: since,
-      executedSincePromotion: since ? (sinceMap.get(act)?.executed ?? 0) : 0,
-      badSincePromotion: since ? (sinceMap.get(act)?.bad ?? 0) : 0,
+      sincePromotion: since ? (sinceMap.get(act) ?? null) : null,
       action: act,
       label: meta.label,
       hint: meta.hint,
@@ -414,7 +463,9 @@ const BAD_KINDS = ['edited', 'rejected', 'reversed', 'bad_result']
 
 /**
  * Repetição do MESMO erro: mesma ação, mesmo motivo, mesma assinatura de
- * contexto (ação|sinal|faixa de prioridade), 2+ vezes no período.
+ * contexto (ação|sinal|faixa de prioridade), 2+ vezes no período — com os
+ * casos por trás (clicar abre). Agrupa em memória: o período é limitado e os
+ * julgamentos ruins são poucos (teto de 500 linhas).
  */
 export async function listRepeatedErrors(accountId: string, since: string, action: OrchAction | 'all', limit = 8): Promise<RepeatedError[]> {
   const rows = await db
@@ -422,11 +473,19 @@ export async function listRepeatedErrors(accountId: string, since: string, actio
       actionType: decisionFeedback.actionType,
       reasonCode: decisionFeedback.reasonCode,
       fingerprint: decisionFeedback.contextFingerprint,
-      n: sql<number>`count(*)::int`,
-      lastAt: sql<string>`max(${decisionFeedback.createdAt})`,
-      kinds: sql<string>`string_agg(distinct ${decisionFeedback.decision}, ',')`,
+      decision: decisionFeedback.decision,
+      reasonText: decisionFeedback.reasonText,
+      at: decisionFeedback.createdAt,
+      requestId: decisionFeedback.requestId,
+      contactId: agentActionRequests.contactId,
+      conversationId: agentActionRequests.conversationId,
+      dealId: agentActionRequests.dealId,
+      suggestedText: agentActionRequests.suggestedText,
+      contactName: contacts.name,
     })
     .from(decisionFeedback)
+    .leftJoin(agentActionRequests, eq(agentActionRequests.id, decisionFeedback.requestId))
+    .leftJoin(contacts, eq(contacts.id, agentActionRequests.contactId))
     .where(
       and(
         eq(decisionFeedback.accountId, accountId),
@@ -435,27 +494,54 @@ export async function listRepeatedErrors(accountId: string, since: string, actio
         action !== 'all' ? eq(decisionFeedback.actionType, action) : undefined,
       ),
     )
-    .groupBy(decisionFeedback.actionType, decisionFeedback.reasonCode, decisionFeedback.contextFingerprint)
-    .having(sql`count(*) >= 2`)
-    .orderBy(desc(sql`count(*)`), desc(sql`max(${decisionFeedback.createdAt})`))
-    .limit(limit)
-  return rows
-    .filter((r) => isOrchAction(r.actionType))
-    .map((r) => {
-      const act = r.actionType as OrchAction
-      const [, signal, band] = (r.fingerprint ?? '').split('|')
-      const reason = r.reasonCode ? REASON_CODES.find((c) => c.code === r.reasonCode) : null
-      const kinds = (r.kinds ?? '').split(',').filter(Boolean)
+    .orderBy(desc(decisionFeedback.createdAt))
+    .limit(500)
+
+  const groups = new Map<string, { actionType: string; reasonCode: string | null; fingerprint: string; kinds: Set<string>; lastAt: string; cases: RepeatedCase[]; count: number }>()
+  for (const r of rows) {
+    if (!isOrchAction(r.actionType)) continue
+    const key = `${r.actionType}|${r.reasonCode ?? ''}|${r.fingerprint}`
+    const g = groups.get(key) ?? { actionType: r.actionType, reasonCode: r.reasonCode, fingerprint: r.fingerprint, kinds: new Set<string>(), lastAt: r.at, cases: [], count: 0 }
+    g.count += 1
+    g.kinds.add(r.decision)
+    if (r.at > g.lastAt) g.lastAt = r.at
+    if (g.cases.length < 10) {
+      const isMessage = ACTION_CATALOG[r.actionType as OrchAction].kind === 'message'
+      g.cases.push({
+        requestId: r.requestId,
+        contactId: r.contactId ?? null,
+        contactName: r.contactName ?? null,
+        conversationId: r.conversationId ?? null,
+        dealId: r.dealId ?? null,
+        decision: r.decision,
+        reasonText: r.reasonText,
+        at: r.at,
+        text: isMessage && r.suggestedText ? r.suggestedText.slice(0, 140) : null,
+      })
+    }
+    groups.set(key, g)
+  }
+
+  return Array.from(groups.values())
+    .filter((g) => g.count >= 2)
+    .sort((a, b) => b.count - a.count || (b.lastAt > a.lastAt ? 1 : -1))
+    .slice(0, limit)
+    .map((g) => {
+      const act = g.actionType as OrchAction
+      const [, signal, band] = (g.fingerprint ?? '').split('|')
+      const reason = g.reasonCode ? REASON_CODES.find((c) => c.code === g.reasonCode) : null
+      const kinds = Array.from(g.kinds)
       return {
         action: act,
         actionLabel: ACTION_CATALOG[act].label,
-        reasonCode: r.reasonCode,
-        reasonLabel: reason?.label ?? (r.reasonCode ? r.reasonCode : kinds.length === 1 && kinds[0] === 'edited' ? 'Texto reescrito antes de enviar' : 'Sem motivo informado'),
+        reasonCode: g.reasonCode,
+        reasonLabel: reason?.label ?? (g.reasonCode ? g.reasonCode : kinds.length === 1 && kinds[0] === 'edited' ? 'Texto reescrito antes de enviar' : 'Sem motivo informado'),
         signalType: signal && signal !== 'sem-sinal' ? signal : null,
         severityBand: band && band !== 'na' ? band : null,
-        count: r.n,
+        count: g.count,
         kinds,
-        lastAt: r.lastAt,
+        lastAt: g.lastAt,
+        cases: g.cases,
       }
     })
 }

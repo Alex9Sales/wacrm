@@ -79,12 +79,26 @@ describe('statsFromFeedback', () => {
     expect(s.edited).toBe(1)
     expect(s.rejected).toBe(1)
     expect(s.badOutcomes).toBe(2)
+    expect(s.criticalBadOutcomes).toBe(1)
     // do dia 01 ao dia 08 (a reversão conta pro intervalo de uso)
     expect(s.spanDays).toBe(7)
   })
+  it('resultado ruim é eliminatório mesmo com tolerância a desfeitas configurada', () => {
+    const base = { decisions: 40, cleanApprovals: 39, edited: 1, rejected: 0, spanDays: 20 }
+    const tolerante = { ...criteriaFor('move_deal'), maxBadOutcomes: 3 }
+    // 2 desfeitas dentro da tolerância → passa
+    expect(evaluatePromotion({ ...base, badOutcomes: 2, criticalBadOutcomes: 0 }, tolerante).ready).toBe(true)
+    // 1 resultado ruim → bloqueia, com o código próprio e progresso zero
+    const v = evaluatePromotion({ ...base, badOutcomes: 1, criticalBadOutcomes: 1 }, tolerante)
+    expect(v.ready).toBe(false)
+    expect(v.blockers.map((b) => b.code)).toEqual(['critical_bad_result'])
+    expect(v.progress).toBe(0)
+    // 4 desfeitas acima da tolerância → bloqueia por desfeitas
+    expect(evaluatePromotion({ ...base, badOutcomes: 4, criticalBadOutcomes: 0 }, tolerante).blockers.map((b) => b.code)).toEqual(['bad_outcomes'])
+  })
   it('sem histórico tudo zera e o portão bloqueia por falta de decisões', () => {
     const s = statsFromFeedback([])
-    expect(s).toEqual({ decisions: 0, cleanApprovals: 0, edited: 0, rejected: 0, badOutcomes: 0, spanDays: 0 })
+    expect(s).toEqual({ decisions: 0, cleanApprovals: 0, edited: 0, rejected: 0, badOutcomes: 0, criticalBadOutcomes: 0, spanDays: 0 })
     const v = evaluatePromotion(s, criteriaFor('send_followup'))
     expect(v.ready).toBe(false)
     expect(v.blockers[0]?.code).toBe('not_enough_decisions')

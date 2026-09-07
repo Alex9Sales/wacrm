@@ -123,6 +123,7 @@ export function AutonomyValidationClient() {
   const [busy, setBusy] = useState<string | null>(null);
   const [openRow, setOpenRow] = useState<OrchAction | null>(null);
   const [openAudit, setOpenAudit] = useState<string | null>(null);
+  const [openRepeat, setOpenRepeat] = useState<string | null>(null);
   const [showCriteria, setShowCriteria] = useState(false);
   const [crit, setCrit] = useState({ minDecisions: '', minDays: '', minCleanPct: '', maxRejPct: '', maxBad: '' });
 
@@ -463,11 +464,15 @@ export function AutonomyValidationClient() {
                                   {row.pending} esperando você
                                   {row.badOutcomesAll ? ` · ${row.badOutcomesAll} corrigidas/revertidas` : ''}
                                 </p>
-                                {row.autoSince ? (
-                                  <p>
-                                    <span className="font-medium text-foreground">Automática desde {fmtDay(row.autoSince)}:</span> {row.executedSincePromotion} execuções ·{' '}
-                                    {row.badSincePromotion} correções/reversões desde então
-                                    {row.badSincePromotion === 0 && row.executedSincePromotion > 0 ? ' — sem incidente' : ''}
+                                {row.sincePromotion ? (
+                                  <p className="rounded-md border border-emerald-500/30 bg-emerald-500/5 px-2 py-1.5 text-foreground">
+                                    <span className="font-medium">Automática há {row.sincePromotion.days} dia{row.sincePromotion.days === 1 ? '' : 's'}</span> (desde{' '}
+                                    {fmtDay(row.sincePromotion.since)}) · {row.sincePromotion.executed} execuções · {row.sincePromotion.clean} sem intervenção ·{' '}
+                                    {row.sincePromotion.corrected} correções · {row.sincePromotion.reverted} desfeitas ·{' '}
+                                    <span className={cn(row.sincePromotion.badResult > 0 && 'font-semibold text-red-600 dark:text-red-300')}>
+                                      {row.sincePromotion.badResult} resultados ruins
+                                    </span>
+                                    {row.sincePromotion.confidence != null ? ` · confiança pós-promoção: ${row.sincePromotion.confidence}%` : ''}
                                   </p>
                                 ) : row.status === 'auto' ? (
                                   <p>
@@ -501,24 +506,63 @@ export function AutonomyValidationClient() {
             <p className="px-4 py-4 text-sm text-muted-foreground">Nenhum motivo se repetiu no período.</p>
           ) : (
             <ul className="divide-y divide-border">
-              {data.repeats.map((r, i) => (
-                <li key={i} className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-sm">
-                  <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-amber-500/15 px-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
-                    {r.count}×
-                  </span>
-                  <span className="font-medium text-foreground">{r.actionLabel}</span>
-                  <span className="text-muted-foreground">·</span>
-                  <span className="text-foreground/90">{r.reasonLabel}</span>
-                  {r.signalType ? (
-                    <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
-                      {SIGNAL_LABEL[r.signalType] ?? r.signalType}
-                      {r.severityBand ? ` · prioridade ${r.severityBand}` : ''}
-                    </span>
-                  ) : null}
-                  <span className="text-xs text-muted-foreground">{r.kinds.map((k) => FEEDBACK_LABEL[k] ?? k).join(' / ')}</span>
-                  <span className="ml-auto text-xs text-muted-foreground">última em {fmtDay(r.lastAt)}</span>
-                </li>
-              ))}
+              {data.repeats.map((r, i) => {
+                const key = `${r.action}|${r.reasonCode ?? ''}|${r.signalType ?? ''}|${r.severityBand ?? ''}`;
+                const open = openRepeat === key;
+                return (
+                  <li key={i}>
+                    <button type="button" onClick={() => setOpenRepeat(open ? null : key)} className="flex w-full flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3 text-left text-sm hover:bg-muted/40">
+                      {open ? <ChevronDown className="h-3.5 w-3.5 text-muted-foreground" /> : <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />}
+                      <span className="inline-flex h-6 min-w-6 items-center justify-center rounded-full bg-amber-500/15 px-2 text-xs font-semibold text-amber-700 dark:text-amber-300">
+                        {r.count}×
+                      </span>
+                      <span className="font-medium text-foreground">{r.actionLabel}</span>
+                      <span className="text-muted-foreground">·</span>
+                      <span className="text-foreground/90">{r.reasonLabel}</span>
+                      {r.signalType ? (
+                        <span className="rounded-md bg-muted px-2 py-0.5 text-xs text-muted-foreground">
+                          {SIGNAL_LABEL[r.signalType] ?? r.signalType}
+                          {r.severityBand ? ` · prioridade ${r.severityBand}` : ''}
+                        </span>
+                      ) : null}
+                      <span className="text-xs text-muted-foreground">{r.kinds.map((k) => FEEDBACK_LABEL[k] ?? k).join(' / ')}</span>
+                      <span className="ml-auto text-xs text-muted-foreground">última em {fmtDay(r.lastAt)}</span>
+                    </button>
+                    {open ? (
+                      <ul className="divide-y divide-border/60 border-t border-border/60 bg-muted/20">
+                        {r.cases.map((c, j) => (
+                          <li key={j} className="flex flex-col gap-1 px-4 py-2 pl-10 text-xs">
+                            <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                              <span className="inline-flex items-center gap-1 font-medium text-foreground">
+                                <User className="h-3 w-3 text-muted-foreground" /> {c.contactName ?? 'Contato'}
+                              </span>
+                              <span className="text-muted-foreground">{FEEDBACK_LABEL[c.decision] ?? c.decision}</span>
+                              <span className="text-muted-foreground">{fmt(c.at)}</span>
+                              {c.conversationId ? (
+                                <Link href={`/inbox?c=${encodeURIComponent(c.conversationId)}`} className="inline-flex items-center gap-1 text-primary hover:underline">
+                                  <MessageSquare className="h-3 w-3" /> conversa
+                                </Link>
+                              ) : null}
+                              {c.dealId ? (
+                                <Link href={`/pipelines/${c.dealId}`} className="inline-flex items-center gap-1 text-primary hover:underline">
+                                  <ExternalLink className="h-3 w-3" /> negócio
+                                </Link>
+                              ) : null}
+                            </div>
+                            {c.reasonText ? <p className="text-foreground/90">&quot;{c.reasonText}&quot;</p> : null}
+                            {c.text ? <p className="truncate text-muted-foreground">{c.text}</p> : null}
+                          </li>
+                        ))}
+                        {r.count > r.cases.length ? (
+                          <li className="px-4 py-2 pl-10 text-xs text-muted-foreground">
+                            + {r.count - r.cases.length} caso{r.count - r.cases.length === 1 ? '' : 's'} mais antigo{r.count - r.cases.length === 1 ? '' : 's'} — veja na auditoria abaixo.
+                          </li>
+                        ) : null}
+                      </ul>
+                    ) : null}
+                  </li>
+                );
+              })}
             </ul>
           )}
         </section>

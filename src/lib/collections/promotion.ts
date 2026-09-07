@@ -48,8 +48,14 @@ export interface PromotionStats {
   /** Aprovadas depois de editar o texto (= a IA escreveu mal). */
   edited: number
   rejected: number
-  /** Revertidas ou marcadas como resultado ruim. */
+  /** Revertidas ou marcadas como resultado ruim (soma; inclui as críticas abaixo). */
   badOutcomes: number
+  /**
+   * Só as de RESULTADO RUIM: a ação aconteceu e não dava para desfazer (mensagem
+   * errada entregue, cobrança de quem já pagou). Eliminatório sempre — desfazer
+   * um card é recuperável, mandar a mensagem errada não. Ausente = 0.
+   */
+  criticalBadOutcomes?: number
   /** Dias entre a primeira e a última decisão. */
   spanDays: number
 }
@@ -60,6 +66,7 @@ export type BlockerCode =
   | 'low_clean_approval'
   | 'too_many_rejections'
   | 'bad_outcomes'
+  | 'critical_bad_result'
 
 export interface PromotionVerdict {
   ready: boolean
@@ -124,13 +131,29 @@ export function evaluatePromotion(
     }
   }
 
-  if (stats.badOutcomes > c.maxBadOutcomes) {
+  // Resultado ruim (irrecuperável) é eliminatório SEMPRE, independente da
+  // tolerância configurada — mesmo com 98% de confiança. Desfeita (recuperável)
+  // conta contra maxBadOutcomes.
+  const critical = stats.criticalBadOutcomes ?? 0
+  const reversals = Math.max(0, stats.badOutcomes - critical)
+  if (critical > 0) {
+    blockers.push({
+      code: 'critical_bad_result',
+      label:
+        critical === 1
+          ? `1 ${noun} teve resultado ruim (não dava para desfazer). Resultado ruim é eliminatório: precisa ser zero, mesmo com as outras taxas boas.`
+          : `${critical} ${nounPlural} tiveram resultado ruim (não dava para desfazer). Resultado ruim é eliminatório: precisa ser zero, mesmo com as outras taxas boas.`,
+    })
+    ratios.push(0)
+  }
+  if (reversals > c.maxBadOutcomes) {
+    const limite = c.maxBadOutcomes === 0 ? 'zero' : `no máximo ${c.maxBadOutcomes}`
     blockers.push({
       code: 'bad_outcomes',
       label:
-        stats.badOutcomes === 1
-          ? `1 ${noun} foi revertida ou marcada como errada. Para soltar o automático esse número precisa ser ${c.maxBadOutcomes === 0 ? 'zero' : `no máximo ${c.maxBadOutcomes}`}.`
-          : `${stats.badOutcomes} ${nounPlural} foram revertidas ou marcadas como erradas. Para soltar o automático esse número precisa ser ${c.maxBadOutcomes === 0 ? 'zero' : `no máximo ${c.maxBadOutcomes}`}.`,
+        reversals === 1
+          ? `1 ${noun} precisou ser desfeita. Para soltar o automático esse número precisa ser ${limite}.`
+          : `${reversals} ${nounPlural} precisaram ser desfeitas. Para soltar o automático esse número precisa ser ${limite}.`,
     })
     // Um resultado ruim não é "quase lá": zera o progresso mostrado.
     ratios.push(0)

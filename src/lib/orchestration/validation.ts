@@ -170,6 +170,7 @@ export function statsFromCounts(c: FeedbackCounts): PromotionStats {
     edited: c.edited,
     rejected: c.rejected,
     badOutcomes: c.reversed + c.badResult,
+    criticalBadOutcomes: c.badResult,
     spanDays: span,
   }
 }
