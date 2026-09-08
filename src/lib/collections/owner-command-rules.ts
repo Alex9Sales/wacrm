@@ -81,6 +81,8 @@ export interface RawParsedCommand {
   value?: string | number | null
   dueDate?: string | null
   description?: string | null
+  /** "em 3x", "3 vezes", "parcelado em 4" → número de parcelas. */
+  installments?: string | number | null
 }
 
 export interface ParsedCommand {
@@ -90,7 +92,11 @@ export interface ParsedCommand {
   description: string
   /** O dono não disse vencimento → entrou o padrão de 3 dias (a proposta avisa). */
   dueDefaulted: boolean
+  /** Parcelas (2–60) ou null = à vista. */
+  installments: number | null
 }
+
+export const MAX_CHARGE_INSTALLMENTS = 60
 
 /** Normaliza o que o modelo extraiu: valor e data pelas regras da emissão; vencimento padrão +3 dias. */
 export function normalizeParsedCommand(raw: RawParsedCommand, today: Date = new Date()): ParsedCommand {
@@ -99,7 +105,18 @@ export function normalizeParsedCommand(raw: RawParsedCommand, today: Date = new 
   const dueDefaulted = !raw.dueDate
   const due = raw.dueDate ? parseDueDate(String(raw.dueDate), today) : parseDueDate('+3', today)
   const description = (raw.description ?? '').toString().trim() || 'Cobrança'
-  return { customerQuery: query, value, dueDate: due, description, dueDefaulted }
+  let installments: number | null = null
+  if (raw.installments != null && raw.installments !== '') {
+    const n = Math.trunc(Number(String(raw.installments).replace(/\D/g, '')))
+    if (Number.isFinite(n) && n >= 2 && n <= MAX_CHARGE_INSTALLMENTS) installments = n
+  }
+  return { customerQuery: query, value, dueDate: due, description, dueDefaulted, installments }
+}
+
+/** "em 3x (R$ 50,00 cada)" — só quando parcelado. */
+export function installmentsLabel(value: number, installments: number | null | undefined): string {
+  if (!installments || installments < 2) return ''
+  return ` em ${installments}x (${brl(value / installments)} cada)`
 }
 
 /** Aviso que acompanha a proposta quando o vencimento foi o padrão. */
@@ -108,8 +125,8 @@ export const DUE_DEFAULTED_NOTE = '(Você não disse o vencimento: coloquei 3 di
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const br = (ymd: string) => ymd.slice(0, 10).split('-').reverse().join('/')
 
-export function formatProposal(p: { name: string | null; phone: string; value: number; dueDate: string; description: string }): string {
-  return `Confirma? Cobrar ${brl(p.value)} de ${p.name?.trim() || p.phone} (${p.phone}), vencendo ${br(p.dueDate)}, "${p.description}". Responda SIM para gerar e mandar o link, ou NÃO para cancelar.`
+export function formatProposal(p: { name: string | null; phone: string; value: number; dueDate: string; description: string; installments?: number | null }): string {
+  return `Confirma? Cobrar ${brl(p.value)}${installmentsLabel(p.value, p.installments)} de ${p.name?.trim() || p.phone} (${p.phone}), vencendo ${br(p.dueDate)}, "${p.description}". Responda SIM para gerar e mandar o link, ou NÃO para cancelar.`
 }
 
 export function formatCandidates(cands: { name: string | null; phone: string }[]): string {

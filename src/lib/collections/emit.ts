@@ -17,9 +17,9 @@
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
-import { and, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm'
 
-import { db, asaasCharges, asaasConnections, contacts, member, messages } from '@/db'
+import { db, asaasCharges, asaasConnections, contactCustomValues, contacts, customFields, member, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { createPayment, findOrCreateCustomer, type AsaasCredential, type AsaasEnv } from '@/lib/asaas/collections'
 import { postInternalNote } from '@/lib/ai/close-actions'
@@ -28,7 +28,7 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { toBrE164IfNational } from '@/lib/whatsapp/phone-utils'
 
-import { findDocumentInText } from './document'
+import { findDocumentInText, normalizeValidDocument } from './document'
 import { EMIT_DEFAULTS, findDuplicateCharge, parseDueDate, parseValue, validateEmit } from './emit-rules'
 import { normalizeSettings } from './rules'
 
@@ -57,6 +57,53 @@ export interface CreateChargeInput {
    *  último documento visto na carteira para o contato. O Asaas de produção
    *  exige documento pra gerar qualquer cobrança (08/09). */
   cpfCnpj?: string | null
+  /** Parcelas (2–60): o Asaas cria N cobranças; a 1ª volta aqui. */
+  installments?: number | null
+}
+
+/** CPF/CNPJ num campo personalizado do contato (nome do campo com cpf/cnpj/documento). */
+export async function documentFromCustomFields(accountId: string, contactId: string): Promise<string | null> {
+  try {
+    const rows = await db
+      .select({ value: contactCustomValues.value })
+      .from(contactCustomValues)
+      .innerJoin(customFields, eq(customFields.id, contactCustomValues.customFieldId))
+      .where(
+        and(
+          eq(contactCustomValues.contactId, contactId),
+          eq(customFields.accountId, accountId),
+          sql`${customFields.fieldName} ~* '(cpf|cnpj|documento)'`,
+        ),
+      )
+      .limit(3)
+    for (const r of rows) {
+      const doc = normalizeValidDocument(r.value)
+      if (doc) return doc
+    }
+  } catch {
+    /* sem campo → segue */
+  }
+  return null
+}
+
+/** Guarda o documento no campo personalizado do contato (se a conta tiver um) — "fica cadastrado". */
+export async function rememberDocumentOnContact(accountId: string, contactId: string, doc: string): Promise<void> {
+  try {
+    const field = firstOrNull(
+      await db
+        .select({ id: customFields.id })
+        .from(customFields)
+        .where(and(eq(customFields.accountId, accountId), eq(customFields.entity, 'contact'), sql`${customFields.fieldName} ~* '(cpf|cnpj|documento)'`))
+        .limit(1),
+    )
+    if (!field) return
+    await db
+      .insert(contactCustomValues)
+      .values({ contactId, customFieldId: field.id, value: doc })
+      .onConflictDoUpdate({ target: [contactCustomValues.contactId, contactCustomValues.customFieldId], set: { value: doc } })
+  } catch {
+    /* rastro, não requisito */
+  }
 }
 
 export type CreateChargeOutcome =
@@ -146,7 +193,11 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
 
     const phoneDigits = (contact.phone ?? '').replace(/\D/g, '')
     const docNow = (input.cpfCnpj ?? '').replace(/\D/g, '')
-    const cpfCnpj = docNow.length === 11 || docNow.length === 14 ? docNow : await knownDocumentFor(input.accountId, input.contactId)
+    const cpfCnpj =
+      docNow.length === 11 || docNow.length === 14
+        ? docNow
+        : (await knownDocumentFor(input.accountId, input.contactId)) ?? (await documentFromCustomFields(input.accountId, input.contactId))
+    if (docNow.length === 11 || docNow.length === 14) void rememberDocumentOnContact(input.accountId, input.contactId, docNow)
     const customer = await findOrCreateCustomer(cred, {
       name: (contact.name || contact.email || contact.phone || 'Cliente').trim(),
       mobilePhone: phoneDigits ? toBrE164IfNational(phoneDigits) : '',
@@ -158,15 +209,18 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
     // Com documento, UNDEFINED deixa o cliente escolher Pix/boleto na página do
     // Asaas; sem documento tenta Pix (sandbox aceita; produção recusa e a
     // recusa volta como needsDocument pra quem chamou pedir o CPF/CNPJ).
-    const billingType = customer.cpfCnpj ? 'UNDEFINED' : 'PIX'
+    // Parcelado é sempre UNDEFINED (boleto/cartão; Pix não parcela).
+    const installments = input.installments && input.installments >= 2 ? Math.min(60, Math.trunc(input.installments)) : null
+    const billingType = customer.cpfCnpj || installments ? 'UNDEFINED' : 'PIX'
 
     const payment = await createPayment(cred, {
       customer: customer.id,
       value: input.value,
       dueDate: input.dueDate,
-      description: input.description,
+      description: installments ? `${input.description} (${installments}x)` : input.description,
       billingType,
       externalReference: input.conversationId ?? input.contactId,
+      installments,
     })
     if (!payment.invoiceUrl) return { ok: false, reason: 'o Asaas criou a cobrança mas não devolveu o link (id ' + payment.id + ')' }
 
@@ -183,11 +237,12 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
           cpfCnpj: customer.cpfCnpj ?? cpfCnpj ?? null,
           phone: contact.phone,
           email: contact.email,
-          value: String(input.value),
+          value: String(installments ? Number(payment.value ?? input.value / installments) : input.value),
           dueDate: input.dueDate,
           status: payment.status,
           billingType: payment.billingType ?? billingType,
-          description: input.description,
+          description: installments ? `${input.description} (1/${installments})` : input.description,
+          installmentNumber: installments ? 1 : null,
           invoiceUrl: payment.invoiceUrl,
           bankSlipUrl: payment.bankSlipUrl ?? null,
           contactId: input.contactId,

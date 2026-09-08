@@ -269,21 +269,27 @@ export type AsaasBillingType = 'UNDEFINED' | 'PIX' | 'BOLETO' | 'CREDIT_CARD'
 
 export interface CreatePaymentInput {
   customer: string
+  /** Valor TOTAL. Com `installments` ≥ 2 vira `totalValue` dividido em N parcelas. */
   value: number
-  /** YYYY-MM-DD */
+  /** YYYY-MM-DD (da 1ª parcela, quando parcelado) */
   dueDate: string
   description: string
   billingType: AsaasBillingType
   /** Nosso rastro (conversa) — aparece no Asaas e volta no webhook. */
   externalReference: string
+  /** Parcelas (2–60) — 08/09, pedido do Rafael/Alex ("em 3x"). */
+  installments?: number | null
 }
 
-/** Cria a cobrança. Devolve o que o Asaas devolveu — inclusive `invoiceUrl`. */
+/** Cria a cobrança (à vista ou parcelada). Devolve o que o Asaas devolveu — inclusive `invoiceUrl`
+ *  (no parcelado, é a 1ª parcela; as demais entram na carteira pela sincronização). */
 export async function createPayment(cred: AsaasCredential, input: CreatePaymentInput): Promise<AsaasPayment> {
+  const total = Number(input.value.toFixed(2))
+  const n = input.installments && input.installments >= 2 ? Math.min(60, Math.trunc(input.installments)) : null
   return asaasPost<AsaasPayment>(cred, '/payments', {
     customer: input.customer,
     billingType: input.billingType,
-    value: Number(input.value.toFixed(2)),
+    ...(n ? { installmentCount: n, totalValue: total } : { value: total }),
     dueDate: input.dueDate,
     description: input.description.slice(0, 500),
     externalReference: input.externalReference,

@@ -21,6 +21,7 @@ import { buildSystemPrompt, chargeInstruction, collectionInstruction, HANDOFF_FA
 import { documentFromConversation, emitChargeFromDirective, knownDocumentFor } from '@/lib/collections/emit'
 import { handleOwnerCommand, isOwnerPhone, ownerCommandApplies } from '@/lib/collections/owner-command'
 import { joinCustomerBurst } from '@/lib/collections/owner-command-rules'
+import { handleOwnerAssistant } from '@/lib/assistant/handler'
 import { isSelfMessage } from './self-message'
 import { applyCollectionReply, openDebtForPrompt } from '@/lib/collections/reply'
 import { normalizeSettings as normalizeCollectionsSettings } from '@/lib/collections/rules'
@@ -236,9 +237,15 @@ export async function dispatchInboundToAiReply(
     // quem escreveu é o telefone de Avisos/Sócio IA da conta e o texto parece
     // pedido (ou há proposta esperando SIM) → trata aqui e a IA de atendimento
     // não responde por cima. Barato: o LLM só entra depois do regex.
+    const ownerSettings = await getAccountSettings(accountId).catch(() => null)
+    const isOwner =
+      !!ownerSettings &&
+      !!(ownerSettings.alertPhone || ownerSettings.ownerDigestPhone) &&
+      !!who &&
+      !who.isGroup &&
+      isOwnerPhone(ownerSettings, who.phone)
     try {
-      const ownerSettings = await getAccountSettings(accountId)
-      if ((ownerSettings.alertPhone || ownerSettings.ownerDigestPhone) && who && !who.isGroup && isOwnerPhone(ownerSettings, who.phone)) {
+      if (isOwner) {
         const text = await loadCustomerBurst()
         if (text && (await ownerCommandApplies(conversationId, text))) {
           const handled = await handleOwnerCommand({ accountId, conversationId, contactId, ownerUserId: configOwnerUserId, text })
@@ -250,6 +257,33 @@ export async function dispatchInboundToAiReply(
       }
     } catch (err) {
       console.error('[ai auto-reply] comando do dono falhou:', err instanceof Error ? err.message : err)
+    }
+
+    // 🤝 Assistente do dono (Fase 3a, 08/09): pedido do dono que não é cobrança
+    // — funil parado, resumo, cliente, agenda, cobranças, equipe; tarefa,
+    // atribuir e agendar com SIM. Não é pedido pro CRM → segue pra IA de
+    // vendas (o dono testa o agente pelo próprio celular).
+    if (isOwner && ownerSettings) {
+      try {
+        const text = await loadCustomerBurst()
+        if (text) {
+          const handled = await handleOwnerAssistant({
+            accountId,
+            conversationId,
+            contactId,
+            ownerUserId: configOwnerUserId,
+            text,
+            tz: ownerSettings.businessTimezone || 'America/Sao_Paulo',
+            staleDays: ownerSettings.staleDealDays || 7,
+          })
+          if (handled) {
+            await setCoveredUntil(conversationId, new Date())
+            return
+          }
+        }
+      } catch (err) {
+        console.error('[ai auto-reply] assistente do dono falhou:', err instanceof Error ? err.message : err)
+      }
     }
 
     // 🪞 Eco interno (08/09, conta Fluxia): a "mensagem do cliente" foi o

@@ -15,7 +15,7 @@
 
 import { and, desc, eq } from 'drizzle-orm'
 
-import { db, aiConfigs, contacts, conversations } from '@/db'
+import { db, aiConfigs, contacts, conversations, deals } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfigById } from '@/lib/ai/config'
 import { generateReply } from '@/lib/ai/generate'
@@ -52,6 +52,8 @@ interface Proposal {
   value: number
   dueDate: string
   description: string
+  /** Parcelas (2–60) ou null = à vista. Vem do pedido ou das condições do negócio no funil. */
+  installments?: number | null
 }
 
 interface Pending {
@@ -69,6 +71,28 @@ interface Draft {
   dueDate: string
   description: string
   dueDefaulted?: boolean
+  installments?: number | null
+}
+
+/**
+ * Parcelas do pedido ou, se o dono não disse, as condições de pagamento do
+ * negócio aberto do contato no funil (Rafael 08/09: "pego no negócio que
+ * está criado"). Devolve também o texto de aviso quando veio do negócio.
+ */
+async function installmentsFor(accountId: string, contactId: string, fromRequest: number | null): Promise<{ installments: number | null; note: string }> {
+  if (fromRequest) return { installments: fromRequest, note: '' }
+  const deal = firstOrNull(
+    await db
+      .select({ installments: deals.installments, paymentType: deals.paymentType, paymentMethod: deals.paymentMethod })
+      .from(deals)
+      .where(and(eq(deals.accountId, accountId), eq(deals.contactId, contactId), eq(deals.status, 'open')))
+      .orderBy(desc(deals.createdAt))
+      .limit(1),
+  )
+  if (deal?.installments && deal.installments >= 2) {
+    return { installments: deal.installments, note: `\n(Parcelas vieram do negócio no funil: ${deal.installments}x. Diga "à vista" antes do SIM se não for isso.)` }
+  }
+  return { installments: null, note: '' }
 }
 
 /**
@@ -76,22 +100,26 @@ interface Draft {
  * botijão"): o modelo extrai só o que veio; campo ausente fica como estava.
  * Nada extraído → null (quem chamou decide o que dizer).
  */
-async function tweakFields<T extends { value: number; dueDate: string; description: string; dueDefaulted?: boolean }>(
+async function tweakFields<T extends { value: number; dueDate: string; description: string; dueDefaulted?: boolean; installments?: number | null }>(
   accountId: string,
   base: T,
   text: string,
 ): Promise<T | null> {
+  // "à vista" / "sem parcelar" tira as parcelas sem passar pelo modelo.
+  if (/\b(à vista|a vista|sem parcel)/i.test(text)) return { ...base, installments: null }
   const raw = await extractWithModel(accountId, text)
   if (!raw) return null
   const due = raw.dueDate ? parseDueDate(String(raw.dueDate)) : null
   const value = raw.value == null ? null : parseValue(String(raw.value))
   const description = (raw.description ?? '').toString().trim()
-  if (!due && !value && !description) return null
+  const installments = normalizeParsedCommand({ installments: raw.installments ?? null }).installments
+  if (!due && !value && !description && !installments) return null
   return {
     ...base,
     ...(due ? { dueDate: due, dueDefaulted: false } : {}),
     ...(value ? { value } : {}),
     ...(description ? { description } : {}),
+    ...(installments ? { installments } : {}),
   }
 }
 
@@ -157,8 +185,8 @@ async function extractWithModel(accountId: string, text: string): Promise<RawPar
     config,
     systemPrompt: [
       'Você extrai os dados de um pedido de cobrança escrito pelo dono de uma loja. Responda SOMENTE um JSON, sem texto em volta, com as chaves:',
-      '{"customer": nome do cliente ou null, "phone": telefone do cliente ou null, "value": valor em reais como está no texto ou null, "dueDate": vencimento como está no texto ("10/09", "dia 10", "+7", "2026-09-10") ou null, "description": do que é a cobrança ou null}',
-      'Não invente: campo que não está no texto vira null. "dia 10" → "10". "semana que vem" → "+7". "amanhã" → "+1".',
+      '{"customer": nome do cliente ou null, "phone": telefone do cliente ou null, "value": valor em reais como está no texto ou null, "dueDate": vencimento como está no texto ("10/09", "dia 10", "+7", "2026-09-10") ou null, "description": do que é a cobrança ou null, "installments": número de parcelas ("em 3x", "3 vezes", "parcelado em 4") ou null}',
+      'Não invente: campo que não está no texto vira null. "dia 10" → "10". "semana que vem" → "+7". "amanhã" → "+1". Sem menção a parcelas → installments null.',
     ].join('\n'),
     messages: [{ role: 'user', content: text }] as unknown as Parameters<typeof generateReply>[0]['messages'],
   })
@@ -203,6 +231,7 @@ async function execute(accountId: string, ownerUserId: string, p: Proposal, cpfC
     actorLabel: 'pelo dono, via WhatsApp',
     noteSuffix: 'Link enviado ao cliente.',
     cpfCnpj: cpfCnpj ?? null,
+    installments: p.installments ?? null,
   })
   if (!created.ok) {
     if (created.needsDocument) {
@@ -311,9 +340,10 @@ export async function handleOwnerCommand(args: {
         const c = pending.candidates[idx]
         const extra = restLines.join('\n').trim()
         const draft = extra ? (await tweakFields(args.accountId, pending.draft, extra)) ?? pending.draft : pending.draft
-        const proposal: Proposal & { dueDefaulted?: boolean } = { contactId: c.id, name: c.name, phone: c.phone, ...draft }
+        const terms = await installmentsFor(args.accountId, c.id, draft.installments ?? null)
+        const proposal: Proposal & { dueDefaulted?: boolean } = { contactId: c.id, name: c.name, phone: c.phone, ...draft, installments: terms.installments }
         await kvSetJson(k, { stage: 'confirm', proposal } satisfies Pending, TTL_SECONDS)
-        await say(proposalText(proposal))
+        await say(proposalText(proposal) + terms.note)
         return true
       }
       if (looksLikeCancel(text)) {
@@ -365,7 +395,7 @@ export async function handleOwnerCommand(args: {
       return true
     }
     let found = await findContactsByQuery(args.accountId, parsed.customerQuery, 5)
-    const draft: Draft = { value: parsed.value, dueDate: parsed.dueDate, description: parsed.description, dueDefaulted: parsed.dueDefaulted }
+    const draft: Draft = { value: parsed.value, dueDate: parsed.dueDate, description: parsed.description, dueDefaulted: parsed.dueDefaulted, installments: parsed.installments }
     if (!found.length) {
       // Dono mandou o telefone (junto ou depois do "me manda o telefone")?
       // Então cadastra — com o nome que ele deu — e segue pra proposta.
@@ -385,9 +415,10 @@ export async function handleOwnerCommand(args: {
       await say(formatCandidates(found))
       return true
     }
-    const proposal: Proposal & { dueDefaulted?: boolean } = { contactId: found[0].id, name: found[0].name, phone: found[0].phone, ...draft }
+    const terms = await installmentsFor(args.accountId, found[0].id, draft.installments ?? null)
+    const proposal: Proposal & { dueDefaulted?: boolean } = { contactId: found[0].id, name: found[0].name, phone: found[0].phone, ...draft, installments: terms.installments }
     await kvSetJson(k, { stage: 'confirm', proposal } satisfies Pending, TTL_SECONDS)
-    await say(proposalText(proposal))
+    await say(proposalText(proposal) + terms.note)
     return true
   } catch (err) {
     console.error('[owner-command] falhou:', err instanceof Error ? err.message : err)
