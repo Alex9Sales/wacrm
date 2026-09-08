@@ -727,10 +727,17 @@ export const HANDOFF_FAREWELL =
  * O teto de valor entra no texto para a IA nem tentar acima dele; a trava de
  * verdade é determinística (emit-rules), esta linha só evita o vai-e-vem.
  */
-export function chargeInstruction(maxValue: number): string {
+export function chargeInstruction(maxValue: number, opts: { hasDocument?: boolean } = {}): string {
   const teto = maxValue.toFixed(2).replace('.', ',')
+  // 08/09: o Asaas de produção exige CPF ou CNPJ do cliente pra gerar QUALQUER
+  // cobrança. Sem documento conhecido, a IA pede ANTES de emitir — senão a
+  // resposta sairia prometendo um link que não vem.
+  const documento = opts.hasDocument
+    ? 'O CPF/CNPJ do cliente já é conhecido pelo sistema: não peça de novo. '
+    : 'O Asaas exige CPF ou CNPJ do cliente para gerar a cobrança e o sistema ainda não tem o dele: ANTES de emitir, peça o CPF ou CNPJ (só números) numa mensagem curta e só emita o marcador DEPOIS que ele mandar o documento nesta conversa. '
   return (
     'Gerar cobrança no Asaas: quando o cliente CONFIRMAR o que vai comprar e o valor, e for pagar por link (Pix ou boleto), emita UMA vez "[[COBRAR:<valor> | <vencimento> | <descrição>]]" — valor como "125,00"; vencimento como data "2026-09-12", "12/09" ou dias "+3"; descrição curta do que é (produto/serviço). ' +
+    documento +
     'O sistema cria a cobrança e o link de pagamento é acrescentado à sua mensagem automaticamente — NÃO invente link e NÃO diga que "já enviou" antes: escreva algo como "segue o link para pagamento". ' +
     `Só emita com produto e valor confirmados pelo cliente; NUNCA acima de R$ ${teto} (acima disso, diga que vai encaminhar para uma pessoa gerar). Nunca emita duas vezes na mesma compra. ` +
     'O marcador é metadata de controle: nunca mostre ao cliente.'

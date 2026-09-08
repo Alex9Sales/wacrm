@@ -18,7 +18,7 @@ import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-prof
 import { formatCatalogForPrompt } from './catalog'
 import { generateWithExternalTools } from './external-tools'
 import { buildSystemPrompt, chargeInstruction, collectionInstruction, HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
-import { emitChargeFromDirective } from '@/lib/collections/emit'
+import { documentFromConversation, emitChargeFromDirective, knownDocumentFor } from '@/lib/collections/emit'
 import { handleOwnerCommand, isOwnerPhone, ownerCommandApplies } from '@/lib/collections/owner-command'
 import { joinCustomerBurst } from '@/lib/collections/owner-command-rules'
 import { isSelfMessage } from './self-message'
@@ -623,6 +623,13 @@ export async function dispatchInboundToAiReply(
 
     // Ferramentas ligadas neste agente (Fase A).
     const tools = config.tools ?? []
+    // 🧾 O Asaas de produção exige CPF/CNPJ: a instrução de cobrança muda
+    // conforme o documento já é conhecido (carteira) ou já apareceu nas
+    // mensagens do cliente nesta conversa. Só custa consulta quando a
+    // ferramenta de cobrança está ligada no agente.
+    const chargeHasDocument = tools.includes('create_charge')
+      ? !!((await knownDocumentFor(accountId, contactId)) || (await documentFromConversation(conversationId)))
+      : false
     const has = (k: string) => tools.includes(k)
 
     // move_card: injeta as etapas do funil ligado pra a IA escolher uma.
@@ -725,7 +732,7 @@ export async function dispatchInboundToAiReply(
         // 🧾 criar_cobranca: a regra só entra no prompt do agente que tem a
         // ferramenta LIGADA — nos outros nem existe a palavra cobrança.
         if (tools.includes('create_charge')) {
-          extra.push(chargeInstruction(normalizeCollectionsSettings(settings.collections).emitMaxValue))
+          extra.push(chargeInstruction(normalizeCollectionsSettings(settings.collections).emitMaxValue, { hasDocument: chargeHasDocument }))
         }
         return extra.length ? extra : undefined
       })(),
@@ -1238,7 +1245,14 @@ export async function dispatchInboundToAiReply(
         dueRaw: dirs.charge.dueRaw,
         description: dirs.charge.description,
       })
-      if (emitted.ok) textWithCharge = `${text.trim()}\n\nLink para pagamento: ${emitted.invoiceUrl}`.trim()
+      if (emitted.ok) {
+        textWithCharge = `${text.trim()}\n\nLink para pagamento: ${emitted.invoiceUrl}`.trim()
+      } else if (emitted.needsDocument) {
+        // O Asaas (produção) exigiu CPF/CNPJ: em vez de sair prometendo um link
+        // que não vem, a resposta pede o documento — com ele no histórico a
+        // próxima emissão passa (emit.ts lê as últimas mensagens do cliente).
+        textWithCharge = `${text.trim()}\n\nPara eu gerar o link de pagamento, preciso do seu CPF ou CNPJ (só os números). Pode me mandar?`.trim()
+      }
     }
     const bodyNoSig = signature
       ? textWithCharge.replace(

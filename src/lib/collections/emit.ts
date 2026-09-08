@@ -64,7 +64,7 @@ export type CreateChargeOutcome =
   | { ok: false; reason: string; needsDocument?: boolean }
 
 /** Último CPF/CNPJ que a carteira viu para este contato (cobrança nossa ou sincronizada). */
-async function knownDocumentFor(accountId: string, contactId: string): Promise<string | null> {
+export async function knownDocumentFor(accountId: string, contactId: string): Promise<string | null> {
   const row = firstOrNull(
     await db
       .select({ doc: asaasCharges.cpfCnpj })
@@ -227,17 +227,20 @@ export interface EmitInput {
 
 export type EmitOutcome =
   | { ok: true; invoiceUrl: string; value: number; dueDate: string; reused: boolean }
-  | { ok: false; reason: string }
+  | { ok: false; reason: string; needsDocument?: boolean }
 
-/** A IA escreveu [[COBRAR:…]]: as travas decidem; falhou → nota + aviso, a resposta sai sem link. */
+/** A IA escreveu [[COBRAR:…]]: as travas decidem; falhou → nota + aviso, a resposta sai sem link
+ *  (com `needsDocument` quem responde pede o CPF/CNPJ ao cliente em vez de prometer link). */
 export async function emitChargeFromDirective(input: EmitInput): Promise<EmitOutcome> {
-  const fail = async (reason: string): Promise<EmitOutcome> => {
+  const fail = async (reason: string, needsDocument = false): Promise<EmitOutcome> => {
     await postInternalNote({
       conversationId: input.conversationId,
-      text: `🧾 A IA tentou gerar uma cobrança e NÃO gerou: ${reason}. O cliente pode estar esperando o link — assuma daqui.`,
+      text: needsDocument
+        ? `🧾 A IA tentou gerar uma cobrança e o Asaas exigiu CPF/CNPJ do cliente (${reason}). A IA pediu o documento na conversa; quando ele mandar, a próxima tentativa passa.`
+        : `🧾 A IA tentou gerar uma cobrança e NÃO gerou: ${reason}. O cliente pode estar esperando o link — assuma daqui.`,
     }).catch(() => {})
-    await alertTeam(input, `Cobrança não gerada — ${reason}`)
-    return { ok: false, reason }
+    if (!needsDocument) await alertTeam(input, `Cobrança não gerada — ${reason}`)
+    return { ok: false, reason, needsDocument }
   }
 
   try {
@@ -267,13 +270,7 @@ export async function emitChargeFromDirective(input: EmitInput): Promise<EmitOut
       noteSuffix: 'Link enviado na conversa.',
       cpfCnpj,
     })
-    if (!created.ok) {
-      return fail(
-        created.needsDocument
-          ? `${created.reason} Peça o CPF ou CNPJ ao cliente na conversa — com o documento no histórico a próxima tentativa passa`
-          : created.reason,
-      )
-    }
+    if (!created.ok) return fail(created.reason, created.needsDocument === true)
     return { ok: true, invoiceUrl: created.invoiceUrl, value: value!, dueDate: dueDate!, reused: created.reused }
   } catch (err) {
     const reason = err instanceof Error ? err.message : 'falha inesperada'
@@ -283,7 +280,7 @@ export async function emitChargeFromDirective(input: EmitInput): Promise<EmitOut
 }
 
 /** CPF/CNPJ válido nas últimas mensagens do CLIENTE nesta conversa (só dígitos) ou null. */
-async function documentFromConversation(conversationId: string): Promise<string | null> {
+export async function documentFromConversation(conversationId: string): Promise<string | null> {
   try {
     const rows = await db
       .select({ text: messages.contentText })
