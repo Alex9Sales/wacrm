@@ -11,6 +11,7 @@
 import { listChannels } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import { getAccountSettings } from '@/lib/settings/account-settings'
+import { markSelfMessage } from '@/lib/ai/self-message'
 import {
   DEFAULT_ALERT_TEMPLATES,
   renderAlertTemplate,
@@ -79,6 +80,9 @@ export async function sendOwnerAlert(
       console.warn(`[owner-alerts] conta ${accountId} sem canal WhatsApp p/ avisar`)
       return false
     }
+    // Destino pode ser um canal com IA (ver lib/ai/self-message.ts): marca o
+    // texto pra IA não responder ao próprio aviso do sistema.
+    await markSelfMessage(text)
     await getProvider(wa.provider).sendText(wa, phone, text)
     return true
   } catch (err) {

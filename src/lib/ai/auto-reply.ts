@@ -20,6 +20,7 @@ import { generateWithExternalTools } from './external-tools'
 import { buildSystemPrompt, chargeInstruction, collectionInstruction, HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
 import { emitChargeFromDirective } from '@/lib/collections/emit'
 import { handleOwnerCommand, isOwnerPhone, ownerCommandApplies } from '@/lib/collections/owner-command'
+import { isSelfMessage } from './self-message'
 import { applyCollectionReply, openDebtForPrompt } from '@/lib/collections/reply'
 import { normalizeSettings as normalizeCollectionsSettings } from '@/lib/collections/rules'
 import {
@@ -197,37 +198,69 @@ export async function dispatchInboundToAiReply(
       return
     }
 
+    // Quem escreveu e a última mensagem do cliente — usados pelo comando do
+    // dono e pela checagem de eco interno logo abaixo. Falha → null/'' e cada
+    // bloco trata como "não se aplica".
+    const who = await db
+      .select({ phone: contacts.phone, isGroup: contacts.isGroup })
+      .from(contacts)
+      .where(eq(contacts.id, contactId))
+      .limit(1)
+      .then(firstOrNull)
+      .catch(() => null)
+    const loadLastCustomerText = async (): Promise<string> => {
+      const row = firstOrNull(
+        await db
+          .select({ text: messagesTable.contentText })
+          .from(messagesTable)
+          .where(and(eq(messagesTable.conversationId, conversationId), eq(messagesTable.senderType, 'customer'), eq(messagesTable.isInternal, false)))
+          .orderBy(desc(messagesTable.createdAt))
+          .limit(1),
+      )
+      return (row?.text ?? '').trim()
+    }
+
     // 🧾 Comando do DONO pelo WhatsApp ("cria uma cobrança de 150 pro João"):
     // quem escreveu é o telefone de Avisos/Sócio IA da conta e o texto parece
     // pedido (ou há proposta esperando SIM) → trata aqui e a IA de atendimento
     // não responde por cima. Barato: o LLM só entra depois do regex.
     try {
       const ownerSettings = await getAccountSettings(accountId)
-      if (ownerSettings.alertPhone || ownerSettings.ownerDigestPhone) {
-        const who = firstOrNull(
-          await db.select({ phone: contacts.phone, isGroup: contacts.isGroup }).from(contacts).where(eq(contacts.id, contactId)).limit(1),
-        )
-        if (who && !who.isGroup && isOwnerPhone(ownerSettings, who.phone)) {
-          const lastText = firstOrNull(
-            await db
-              .select({ text: messagesTable.contentText })
-              .from(messagesTable)
-              .where(and(eq(messagesTable.conversationId, conversationId), eq(messagesTable.senderType, 'customer'), eq(messagesTable.isInternal, false)))
-              .orderBy(desc(messagesTable.createdAt))
-              .limit(1),
-          )
-          const text = (lastText?.text ?? '').trim()
-          if (text && (await ownerCommandApplies(conversationId, text))) {
-            const handled = await handleOwnerCommand({ accountId, conversationId, contactId, ownerUserId: configOwnerUserId, text })
-            if (handled) {
-              await setCoveredUntil(conversationId, new Date())
-              return
-            }
+      if ((ownerSettings.alertPhone || ownerSettings.ownerDigestPhone) && who && !who.isGroup && isOwnerPhone(ownerSettings, who.phone)) {
+        const text = await loadLastCustomerText()
+        if (text && (await ownerCommandApplies(conversationId, text))) {
+          const handled = await handleOwnerCommand({ accountId, conversationId, contactId, ownerUserId: configOwnerUserId, text })
+          if (handled) {
+            await setCoveredUntil(conversationId, new Date())
+            return
           }
         }
       }
     } catch (err) {
       console.error('[ai auto-reply] comando do dono falhou:', err instanceof Error ? err.message : err)
+    }
+
+    // 🪞 Eco interno (08/09, conta Fluxia): a "mensagem do cliente" foi o
+    // PRÓPRIO CRM que gerou — Sócio IA/aviso saindo de um canal pra OUTRO
+    // canal desta conta com IA ligada, ou resposta de uma IA chegando noutra
+    // IA (duas contas conversando sozinhas). Não é cliente: a IA fica quieta.
+    // O comando do dono (acima) continua valendo. Ver lib/ai/self-message.ts.
+    if (who && !who.isGroup) {
+      try {
+        const text = await loadLastCustomerText()
+        if (text) {
+          const self = await isSelfMessage({ contactPhone: who.phone, text })
+          if (self.echo) {
+            console.warn(
+              `[ai auto-reply] eco interno (${self.source}${self.channelName ? ` · canal "${self.channelName}"` : ''}): texto gerado pelo próprio CRM — IA não responde. conversa ${conversationId}`,
+            )
+            await setCoveredUntil(conversationId, new Date())
+            return
+          }
+        }
+      } catch (err) {
+        console.error('[ai auto-reply] checagem de eco interno falhou:', err instanceof Error ? err.message : err)
+      }
     }
 
     // 🏁 Anti-eco de corrida: se a ÚLTIMA mensagem não-interna já NÃO é do

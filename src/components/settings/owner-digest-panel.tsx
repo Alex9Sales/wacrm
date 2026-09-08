@@ -5,6 +5,7 @@ import { toast } from "sonner";
 import { Loader2, Sparkles, Send } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
+import { phonesMatch } from "@/lib/whatsapp/phone-utils";
 import { getOwnerDigest, setOwnerDigest, sendOwnerDigestTest } from "./actions";
 import { Button } from "@/components/ui/button";
 import { Label } from "@/components/ui/label";
@@ -28,8 +29,16 @@ export function OwnerDigestPanel() {
   const [hour, setHour] = useState(8);
   const [phone, setPhone] = useState("");
   const [channelId, setChannelId] = useState<string>("");
-  const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
+  const [channels, setChannels] = useState<
+    { id: string; name: string; phone: string | null }[]
+  >([]);
   const [preview, setPreview] = useState("");
+  // O número digitado é o de um canal DESTA conta? Aí o resumo entra nesse
+  // canal como mensagem recebida (08/09: o agente respondeu ao resumo como se
+  // fosse lead — hoje a IA reconhece e fica quieta, mas o dono deve saber).
+  const sameAsChannel = phone.trim()
+    ? channels.find((c) => c.phone && phonesMatch(c.phone, phone))
+    : undefined;
 
   useEffect(() => {
     getOwnerDigest()
@@ -135,6 +144,14 @@ export function OwnerDigestPanel() {
                   placeholder="Ex.: 67 99999-9999"
                   className={selectCls}
                 />
+                {sameAsChannel && (
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    Esse é o número do canal «{sameAsChannel.name}» desta conta.
+                    O resumo vai entrar nesse canal como mensagem recebida (a IA
+                    reconhece e não responde a ele, mas a conversa aparece como
+                    não lida). Prefira um número que não seja canal.
+                  </p>
+                )}
               </div>
             </div>
 

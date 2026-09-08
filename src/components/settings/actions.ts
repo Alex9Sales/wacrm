@@ -1157,19 +1157,28 @@ export async function setLostReasonsSettings(input: {
 
 const WA_PROVIDERS = ['waha', 'meta', 'evolution', 'evogo']
 
+/** Número do canal só com dígitos (Meta grava "+55 67 9…", WAHA só dígitos). */
+function channelDigits(phoneNumber: string | null): string | null {
+  const d = (phoneNumber ?? '').replace(/\D/g, '')
+  return d.length >= 8 ? d : null
+}
+
 export async function getOwnerDigest(): Promise<{
   enabled: boolean
   hour: number
   phone: string
   channelId: string | null
-  channels: { id: string; name: string }[]
+  /** `phone` = número do canal (só dígitos) — a tela avisa se o dono digitar
+   *  o número de um canal da própria conta (08/09: o resumo entrava no canal
+   *  oficial como mensagem de cliente). */
+  channels: { id: string; name: string; phone: string | null }[]
   preview: string
 }> {
   const ctx = await getCurrentAccount()
   const [s, chans, preview] = await Promise.all([
     getAccountSettings(ctx.accountId),
     db
-      .select({ id: channels.id, name: channels.name, provider: channels.provider })
+      .select({ id: channels.id, name: channels.name, provider: channels.provider, phoneNumber: channels.phoneNumber })
       .from(channels)
       .where(eq(channels.accountId, ctx.accountId)),
     previewDigest(ctx.accountId).catch(() => ''),
@@ -1181,7 +1190,7 @@ export async function getOwnerDigest(): Promise<{
     channelId: s.ownerDigestChannelId,
     channels: chans
       .filter((c) => WA_PROVIDERS.includes(c.provider))
-      .map((c) => ({ id: c.id, name: c.name })),
+      .map((c) => ({ id: c.id, name: c.name, phone: channelDigits(c.phoneNumber) })),
     preview,
   }
 }
@@ -1391,13 +1400,13 @@ export async function getOwnerAlerts(): Promise<{
   bookingTemplate: string
   orderTemplate: string
   demoTemplate: string
-  channels: { id: string; name: string }[]
+  channels: { id: string; name: string; phone: string | null }[]
 }> {
   const ctx = await getCurrentAccount()
   const [s, chans] = await Promise.all([
     getAccountSettings(ctx.accountId),
     db
-      .select({ id: channels.id, name: channels.name, provider: channels.provider })
+      .select({ id: channels.id, name: channels.name, provider: channels.provider, phoneNumber: channels.phoneNumber })
       .from(channels)
       .where(eq(channels.accountId, ctx.accountId)),
   ])
@@ -1416,7 +1425,7 @@ export async function getOwnerAlerts(): Promise<{
     demoTemplate: s.alertDemoTemplate,
     channels: chans
       .filter((c) => WA_PROVIDERS.includes(c.provider))
-      .map((c) => ({ id: c.id, name: c.name })),
+      .map((c) => ({ id: c.id, name: c.name, phone: channelDigits(c.phoneNumber) })),
   }
 }
 

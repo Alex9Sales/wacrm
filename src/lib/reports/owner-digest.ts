@@ -29,6 +29,7 @@ import {
 import { listChannels } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import { formatCurrency, DEFAULT_CURRENCY } from '@/lib/currency'
+import { markSelfMessage } from '@/lib/ai/self-message'
 
 const WHATSAPP_PROVIDERS = ['waha', 'meta', 'evolution', 'evogo']
 // Conversa cujo ÚLTIMO evento é do cliente e mais antigo que isto conta como
@@ -364,6 +365,9 @@ async function sendDigest(
     console.warn(`[owner-digest] conta ${accountId} sem canal WhatsApp p/ enviar`)
     return false
   }
+  // Se o destino for um canal com IA (08/09: resumo mandado do celular do
+  // Alex pro número oficial), a IA reconhece o texto e não responde a ele.
+  await markSelfMessage(text)
   await getProvider(wa.provider).sendText(wa, phone, text)
   return true
 }

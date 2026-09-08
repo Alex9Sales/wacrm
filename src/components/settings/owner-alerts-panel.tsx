@@ -11,6 +11,7 @@ import { toast } from 'sonner';
 import { Loader2, Megaphone } from 'lucide-react';
 
 import { getOwnerAlerts, setOwnerAlerts } from './actions';
+import { phonesMatch } from '@/lib/whatsapp/phone-utils';
 import { DEFAULT_ALERT_TEMPLATES } from '@/lib/alerts/templates';
 import { Button } from '@/components/ui/button';
 import { Textarea } from '@/components/ui/textarea';
@@ -34,8 +35,11 @@ export function OwnerAlertsPanel() {
   const [onBooking, setOnBooking] = useState(false);
   const [onOrder, setOnOrder] = useState(false);
   const [onDemo, setOnDemo] = useState(false);
-  const [channels, setChannels] = useState<{ id: string; name: string }[]>([]);
+  const [channels, setChannels] = useState<{ id: string; name: string; phone: string | null }[]>([]);
   const [showTemplates, setShowTemplates] = useState(false);
+  // Número de um canal DESTA conta? O aviso entra lá como mensagem recebida
+  // (a IA reconhece e não responde a ele — ver lib/ai/self-message.ts).
+  const sameAsChannel = phone.trim() ? channels.find((c) => c.phone && phonesMatch(c.phone, phone)) : undefined;
   const [wonTemplate, setWonTemplate] = useState('');
   const [handoffTemplate, setHandoffTemplate] = useState('');
   const [bookingTemplate, setBookingTemplate] = useState('');
@@ -121,6 +125,13 @@ export function OwnerAlertsPanel() {
                   onChange={(e) => setPhone(e.target.value)}
                   placeholder="ex.: 67 99999-9999"
                 />
+                {sameAsChannel && (
+                  <p className="text-xs text-amber-700 dark:text-amber-400">
+                    Esse é o número do canal «{sameAsChannel.name}» desta conta. Os avisos vão entrar
+                    nesse canal como mensagem recebida (a IA não responde a eles). Prefira um número
+                    que não seja canal.
+                  </p>
+                )}
               </div>
               <div className="space-y-1.5">
                 <Label htmlFor="alert-channel">Canal que envia</Label>
