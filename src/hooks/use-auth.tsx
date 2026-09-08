@@ -85,6 +85,11 @@ interface AuthContextValue {
    * and may take the "not opted in" branch incorrectly.
    */
   profileLoading: boolean;
+  /** /api/me não respondeu (rede, tempo esgotado, 5xx) mesmo depois das
+   *  novas tentativas. NÃO é "sem sessão": o shell mostra "tentar de novo"
+   *  em vez de mandar pro login (08/09: aba presa em "Carregando…" durante a
+   *  troca de container do deploy). */
+  loadError: boolean;
   signOut: () => Promise<void>;
   /** Re-fetch the current user's profile row — call after a save from
    *  the settings form so header/sidebar reflect the change without a
@@ -150,6 +155,41 @@ interface AuthContextValue {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
+// 08/09: durante a troca de container do deploy o proxy segura /api/me por
+// um minuto ou mais — sem tempo limite a aba ficava em "Carregando…" o tempo
+// todo. Agora cada tentativa tem 10 s e a gente tenta de novo com espera
+// crescente; o container novo fica pronto em 10–20 s, então a 2ª/3ª pega.
+const ME_TIMEOUT_MS = 10_000;
+const ME_BACKOFF_MS = [1_000, 2_000, 4_000, 6_000];
+
+/** GET /api/me com tempo limite e novas tentativas nas falhas transitórias
+ *  (rede, tempo esgotado, 5xx). Devolve a resposta "de verdade" (2xx/3xx/4xx)
+ *  ou null quando esgotou as tentativas. */
+async function fetchMeWithRetry(): Promise<Response | null> {
+  for (let attempt = 0; ; attempt++) {
+    try {
+      const ctrl = new AbortController();
+      const timer = window.setTimeout(() => ctrl.abort(), ME_TIMEOUT_MS);
+      let res: Response;
+      try {
+        res = await fetch("/api/me", { cache: "no-store", signal: ctrl.signal });
+      } finally {
+        window.clearTimeout(timer);
+      }
+      if (res.status > 0 && res.status < 500) return res;
+      console.warn(`[AuthProvider] /api/me ${res.status} — tentativa ${attempt + 1}`);
+    } catch (err) {
+      console.warn(
+        `[AuthProvider] /api/me falhou (rede/tempo) — tentativa ${attempt + 1}:`,
+        err instanceof Error ? err.message : err,
+      );
+    }
+    const wait = ME_BACKOFF_MS[attempt];
+    if (wait == null) return null;
+    await new Promise((r) => window.setTimeout(r, wait));
+  }
+}
+
 /**
  * AuthProvider — wrap this around the dashboard layout.
  * Makes ONE getSession() call for the whole tree instead of one per
@@ -161,6 +201,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [account, setAccount] = useState<AccountSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [profileLoading, setProfileLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
 
   // Hydrate the whole auth context from GET /api/me in one round trip.
   // The endpoint resolves the session server-side (Phase 1 dev stub →
@@ -169,7 +210,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const fetchProfile = useCallback(async () => {
     setProfileLoading(true);
     try {
-      const res = await fetch("/api/me", { cache: "no-store" });
+      const res = await fetchMeWithRetry();
+      if (!res) {
+        // Rede/servidor fora mesmo depois das tentativas: mantém o que já
+        // tinha (sessão anterior) e sinaliza — o shell decide o que mostrar.
+        setLoadError(true);
+        return;
+      }
       if (res.status === 401) {
         setUser(null);
         setProfile(null);
@@ -185,8 +232,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
       if (!res.ok) {
         console.error("[AuthProvider] /api/me failed:", res.status);
+        setLoadError(true);
         return;
       }
+      setLoadError(false);
 
       const body = (await res.json()) as {
         profile: {
@@ -250,6 +299,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       );
     } catch (err) {
       console.error("[AuthProvider] fetchProfile threw:", err);
+      setLoadError(true);
     } finally {
       setProfileLoading(false);
     }
@@ -330,6 +380,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         profile,
         loading,
         profileLoading,
+        loadError,
         signOut,
         refreshProfile,
         account,
@@ -365,6 +416,7 @@ export function useAuth(): AuthContextValue {
       profile: null,
       loading: false,
       profileLoading: false,
+      loadError: false,
       signOut: async () => {
         window.location.href = "/login";
       },

@@ -82,7 +82,17 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
     if (checking.current) return;
     checking.current = true;
     try {
-      const res = await fetch("/api/version", { cache: "no-store" });
+      // 08/09: durante a troca de container o proxy segura a requisição por
+      // um minuto ou mais — e `checking` travado pulava TODAS as sondagens
+      // seguintes. Tempo limite de 8 s: falhou, a próxima (20 s) tenta.
+      const ctrl = new AbortController();
+      const timer = window.setTimeout(() => ctrl.abort(), 8_000);
+      let res: Response;
+      try {
+        res = await fetch("/api/version", { cache: "no-store", signal: ctrl.signal });
+      } finally {
+        window.clearTimeout(timer);
+      }
       if (!res.ok) return;
       const data = (await res.json()) as { buildId?: string };
       if (typeof data.buildId !== "string") return;

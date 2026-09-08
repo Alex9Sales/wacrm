@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
-import { Ban, LogOut, Clock3, Gift } from "lucide-react";
+import { Ban, LogOut, Clock3, Gift, RotateCw } from "lucide-react";
 import { AuthProvider, useAuth } from "@/hooks/use-auth";
 import { Sidebar } from "@/components/layout/sidebar";
 import { Header } from "@/components/layout/header";
@@ -22,6 +22,8 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
     user,
     loading,
     profileLoading,
+    loadError,
+    refreshProfile,
     suspended,
     trialActive,
     trialEndsAt,
@@ -46,11 +48,22 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
   const [sidebarOpen, setSidebarOpen] = useState(false);
   const closeSidebar = useCallback(() => setSidebarOpen(false), []);
 
+  // Sem sessão de verdade (401 / perfil vazio) → login. Falha de REDE
+  // (loadError) não é "sem sessão": fica na tela de tentar de novo abaixo.
   useEffect(() => {
-    if (!loading && !user) {
+    if (!loading && !user && !loadError) {
       router.push("/login");
     }
-  }, [user, loading, router]);
+  }, [user, loading, loadError, router]);
+
+  // Enquanto a tela de erro estiver na frente, tenta sozinha a cada 15 s —
+  // o caso típico é a troca de container do deploy, que dura segundos.
+  const showRetry = !loading && !user && loadError;
+  useEffect(() => {
+    if (!showRetry) return;
+    const id = window.setInterval(() => void refreshProfile(), 15_000);
+    return () => window.clearInterval(id);
+  }, [showRetry, refreshProfile]);
 
   if (loading) {
     return (
@@ -59,6 +72,34 @@ function DashboardShellInner({ children }: { children: React.ReactNode }) {
           <div className="h-8 w-8 animate-spin rounded-full border-2 border-primary border-t-transparent" />
           <p className="text-sm text-muted-foreground">Carregando…</p>
         </div>
+      </div>
+    );
+  }
+
+  if (showRetry) {
+    return (
+      <div className="flex h-screen flex-col items-center justify-center gap-5 bg-background px-6 text-center">
+        <div className="flex size-14 items-center justify-center rounded-full bg-primary/10 text-primary">
+          <RotateCw className="size-7" />
+        </div>
+        <div className="max-w-md space-y-2">
+          <h1 className="font-heading text-xl font-semibold text-foreground">
+            Não foi possível carregar o CRM
+          </h1>
+          <p className="text-sm text-muted-foreground">
+            O servidor não respondeu a tempo. Pode ser a sua conexão ou uma
+            atualização do sistema terminando. Tentamos de novo sozinhos a cada
+            15 segundos.
+          </p>
+        </div>
+        <button
+          type="button"
+          onClick={() => void refreshProfile()}
+          className="inline-flex h-10 items-center gap-2 rounded-full bg-primary px-5 text-sm font-semibold text-primary-foreground transition-colors hover:bg-primary/90"
+        >
+          <RotateCw className="size-4" />
+          Tentar de novo
+        </button>
       </div>
     );
   }
