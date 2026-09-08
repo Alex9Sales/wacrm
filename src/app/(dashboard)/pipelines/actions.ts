@@ -9,6 +9,7 @@
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
 import { db, channels, companies, contacts, conversations, customFields, dealAttachments, dealContacts, dealCustomValues, dealEmails, dealEvents, dealProducts, dealProposals, dealQuestions, deals, member, messages, notifications, pipelines, pipelineStages, stageTaskTemplates, user } from '@/db'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
+import { normalizePaymentTerms, paymentTermsSummary } from '@/lib/pipelines/payment-terms'
 import { enqueueTextBroadcast } from '@/lib/broadcasts/text-broadcast'
 import { buildProposalData, loadDealProposalFields } from '@/lib/proposals/proposal'
 import {
@@ -191,6 +192,11 @@ export async function listDeals(pipelineId: string): Promise<Deal[]> {
       // Origem/fonte do lead (selo no card + filtro por origem).
       source: deals.source,
       origin: deals.origin,
+      // 💳 Condições de pagamento (selo no card).
+      payment_type: deals.paymentType,
+      recurrence: deals.recurrence,
+      installments: deals.installments,
+      payment_method: deals.paymentMethod,
       stage_changed_at: deals.stageChangedAt,
       next_follow_up_at: deals.nextFollowUpAt,
       follow_up_count: conversations.followUpStep,
@@ -1237,9 +1243,31 @@ export interface DealInput {
   origin?: string | null
   /** Nota de qualificação 1..5 (estrela do card, estilo RD). */
   qualification?: number | null
+  /** 💳 Condições de pagamento (Rafael 08/09) — normalizadas por
+   *  lib/pipelines/payment-terms.ts antes de gravar. */
+  payment_type?: string | null
+  recurrence?: string | null
+  installments?: number | null
+  payment_method?: string | null
   /** Conversa vinculada — quando o negócio nasce PELA conversa, guardamos o id
    *  aqui pra o card do funil mostrar a bolinha de chat (abre a conversa). */
   conversation_id?: string | null
+}
+
+/** Colunas de pagamento do negócio a partir do input (já normalizadas). */
+function paymentTermsColumns(input: {
+  payment_type?: string | null
+  recurrence?: string | null
+  installments?: number | null
+  payment_method?: string | null
+}) {
+  const t = normalizePaymentTerms({
+    paymentType: input.payment_type,
+    recurrence: input.recurrence,
+    installments: input.installments,
+    paymentMethod: input.payment_method,
+  })
+  return { paymentType: t.paymentType, recurrence: t.recurrence, installments: t.installments, paymentMethod: t.paymentMethod }
 }
 
 /**
@@ -1287,6 +1315,7 @@ export async function createDeal(
           source: input.source ?? null,
           origin: input.origin ?? null,
           qualification: input.qualification ?? null,
+          ...paymentTermsColumns(input),
           status: 'open',
         })
         .returning({ id: deals.id }),
@@ -1330,6 +1359,10 @@ export async function duplicateDeal(
           notes: deals.notes,
           expectedCloseDate: deals.expectedCloseDate,
           temperature: deals.temperature,
+          paymentType: deals.paymentType,
+          recurrence: deals.recurrence,
+          installments: deals.installments,
+          paymentMethod: deals.paymentMethod,
           source: deals.source,
           origin: deals.origin,
           qualification: deals.qualification,
@@ -1358,6 +1391,10 @@ export async function duplicateDeal(
           notes: src.notes,
           expectedCloseDate: src.expectedCloseDate,
           temperature: src.temperature,
+          paymentType: src.paymentType,
+          recurrence: src.recurrence,
+          installments: src.installments,
+          paymentMethod: src.paymentMethod,
           source: src.source,
           origin: src.origin,
           qualification: src.qualification,
@@ -1437,6 +1474,16 @@ export async function updateDeal(
     if (patch.source !== undefined) set.source = patch.source
     if (patch.origin !== undefined) set.origin = patch.origin
     if (patch.qualification !== undefined) set.qualification = patch.qualification
+    // 💳 Pagamento: se qualquer um dos 4 veio, normaliza o conjunto (recorrência
+    // só em recorrente, parcelas só em à vista) e grava os 4.
+    if (
+      patch.payment_type !== undefined ||
+      patch.recurrence !== undefined ||
+      patch.installments !== undefined ||
+      patch.payment_method !== undefined
+    ) {
+      Object.assign(set, paymentTermsColumns(patch))
+    }
     if (patch.status !== undefined) set.status = patch.status
     // Motivo de perda: guarda ao marcar 'lost'; limpa ao reabrir/ganhar.
     if (patch.status === 'lost' && patch.lost_reason !== undefined) {
@@ -1823,6 +1870,10 @@ export async function getDeal(id: string): Promise<Deal | null> {
         temperature: deals.temperature,
         source: deals.source,
         origin: deals.origin,
+        payment_type: deals.paymentType,
+        recurrence: deals.recurrence,
+        installments: deals.installments,
+        payment_method: deals.paymentMethod,
         status: deals.status,
         created_at: deals.createdAt,
         updated_at: deals.updatedAt,
@@ -2991,6 +3042,7 @@ function buildDealAskPrompt(
     deal.temperature ? `Temperatura: ${deal.temperature}` : null,
     deal.qualification ? `Qualificação: ${deal.qualification}/5` : null,
     deal.source ? `Fonte: ${deal.source}` : null,
+    paymentTermsSummary(deal) ? `Pagamento combinado: ${paymentTermsSummary(deal)}` : null,
     deal.expected_close_date
       ? `Fechamento previsto: ${deal.expected_close_date}`
       : null,

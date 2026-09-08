@@ -1144,6 +1144,12 @@ export const deals = pgTable("deals", {
 	temperature: text(),
 	source: text(),
 	origin: text(),
+	// 💳 Condições de pagamento (Rafael 08/09, migração 0165) — valores em
+	// lib/pipelines/payment-terms.ts; todos opcionais.
+	paymentType: text("payment_type"),
+	recurrence: text(),
+	installments: integer(),
+	paymentMethod: text("payment_method"),
 	// Paridade RD — migração 0060.
 	lostReason: text("lost_reason"),
 	qualification: smallint("qualification"),

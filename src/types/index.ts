@@ -454,6 +454,12 @@ export interface Deal {
   source?: string | null;
   /** Origem / campanha. */
   origin?: string | null;
+  /** 💳 Condições de pagamento (Rafael 08/09): à vista/recorrente, recorrência,
+   *  parcelas, forma — valores em lib/pipelines/payment-terms.ts. */
+  payment_type?: string | null;
+  recurrence?: string | null;
+  installments?: number | null;
+  payment_method?: string | null;
   /** Motivo registrado ao marcar PERDA (estilo RD). */
   lost_reason?: string | null;
   /** Nota de qualificação 1..5 (estrela do card, estilo RD). */

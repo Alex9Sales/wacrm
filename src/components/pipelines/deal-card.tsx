@@ -13,6 +13,7 @@ import {
   Building2, Clock3, Snowflake, Sparkles,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
+import { paymentTermsChips } from "@/lib/pipelines/payment-terms";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
 import { deleteDeal, transferDeal, duplicateDeal, setDealPaused, setDealNextFollowUp, openDealConversation, openDealWhatsApp } from "@/app/(dashboard)/pipelines/actions";
 import { dealChannelLabel, isInstagramProvider } from "@/lib/pipelines/channel-label";
@@ -542,6 +543,24 @@ export function DealCard({
           </span>
         )}
       </div>
+
+      {/* 💳 Como vai pagar (Rafael 08/09): "Recorrente · mensal" / "3x" + forma. */}
+      {(() => {
+        const chips = paymentTermsChips(deal);
+        if (!chips.length) return null;
+        return (
+          <div className="mt-1 flex flex-wrap gap-1">
+            {chips.map((c) => (
+              <span
+                key={c}
+                className="inline-flex items-center rounded bg-primary/10 px-1.5 py-0.5 text-[10px] font-medium text-primary"
+              >
+                {c}
+              </span>
+            ))}
+          </div>
+        );
+      })()}
 
       {(canOpenChat || assigneeLabel || deal.origin) && (
         <div className="mt-2 flex items-center justify-between gap-2">

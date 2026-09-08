@@ -56,6 +56,13 @@ import {
   isInstagramProvider,
 } from "@/lib/pipelines/channel-label";
 import { DEAL_ORIGINS, isDealOrigin } from "@/lib/pipelines/deal-origin";
+import {
+  MAX_INSTALLMENTS,
+  PAYMENT_METHODS,
+  PAYMENT_METHOD_LABEL,
+  RECURRENCES,
+  RECURRENCE_LABEL,
+} from "@/lib/pipelines/payment-terms";
 import { toast } from "sonner";
 
 interface DealFormProps {
@@ -100,6 +107,11 @@ export function DealForm({
   const [source, setSource] = useState("");
   const [origin, setOrigin] = useState("");
   const [qualification, setQualification] = useState(0);
+  // 💳 Condições de pagamento (Rafael 08/09) — todas opcionais.
+  const [paymentType, setPaymentType] = useState("");
+  const [recurrence, setRecurrence] = useState("");
+  const [installments, setInstallments] = useState("");
+  const [paymentMethod, setPaymentMethod] = useState("");
 
   const [selectedContact, setSelectedContact] = useState<PickerContact | null>(null);
   const [profiles, setProfiles] = useState<Profile[]>([]);
@@ -184,6 +196,10 @@ export function DealForm({
       setSource(deal.source ?? "");
       setOrigin(deal.origin ?? "");
       setQualification(deal.qualification ?? 0);
+      setPaymentType(deal.payment_type ?? "");
+      setRecurrence(deal.recurrence ?? "");
+      setInstallments(deal.installments ? String(deal.installments) : "");
+      setPaymentMethod(deal.payment_method ?? "");
       setLostReason(deal.lost_reason ?? "");
       setLostReasonOpen(false);
     } else {
@@ -198,6 +214,11 @@ export function DealForm({
       setTemperature("");
       setSource("");
       setOrigin("");
+      setQualification(0);
+      setPaymentType("");
+      setRecurrence("");
+      setInstallments("");
+      setPaymentMethod("");
       // Opened from a conversation → start with the contact locked-in.
     }
   }, [open, deal, defaultStageId, defaultContactId, stages, defaultCurrency]);
@@ -279,6 +300,11 @@ export function DealForm({
       source: source.trim() || null,
       origin: origin.trim() || null,
       qualification: qualification || null,
+      payment_type: paymentType || null,
+      recurrence: paymentType === "recurring" ? recurrence || null : null,
+      installments:
+        paymentType !== "recurring" && installments ? Number(installments) : null,
+      payment_method: paymentMethod || null,
     };
 
     if (deal) {
@@ -547,6 +573,79 @@ export function DealForm({
                   {CURRENCIES.map((c) => (
                     <option key={c.code} value={c.code}>
                       {c.code}
+                    </option>
+                  ))}
+                </select>
+              </div>
+            </div>
+
+            {/* 💳 Pagamento (Rafael 08/09): como o cliente vai pagar — à vista ou
+                recorrente, em quantas vezes e por qual meio. Tudo opcional; o
+                valor acima continua opcional também. */}
+            <div className="space-y-2 rounded-lg border border-border bg-muted/40 p-3">
+              <p className="text-xs font-medium uppercase tracking-wider text-muted-foreground">
+                Pagamento (opcional)
+              </p>
+              <div className="grid grid-cols-2 gap-3">
+                <div className="grid gap-1.5">
+                  <Label className="text-muted-foreground">Tipo</Label>
+                  <select
+                    value={paymentType}
+                    onChange={(e) => {
+                      const v = e.target.value;
+                      setPaymentType(v);
+                      if (v !== "recurring") setRecurrence("");
+                      if (v === "recurring") setInstallments("");
+                    }}
+                    className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary"
+                  >
+                    <option value="">— não definido —</option>
+                    <option value="single">À vista</option>
+                    <option value="recurring">Recorrente</option>
+                  </select>
+                </div>
+                {paymentType === "recurring" ? (
+                  <div className="grid gap-1.5">
+                    <Label className="text-muted-foreground">Recorrência</Label>
+                    <select
+                      value={recurrence}
+                      onChange={(e) => setRecurrence(e.target.value)}
+                      className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary"
+                    >
+                      <option value="">— escolher —</option>
+                      {RECURRENCES.map((r) => (
+                        <option key={r} value={r}>
+                          {RECURRENCE_LABEL[r]}
+                        </option>
+                      ))}
+                    </select>
+                  </div>
+                ) : (
+                  <div className="grid gap-1.5">
+                    <Label className="text-muted-foreground">Parcelas</Label>
+                    <Input
+                      type="number"
+                      min={1}
+                      max={MAX_INSTALLMENTS}
+                      value={installments}
+                      onChange={(e) => setInstallments(e.target.value)}
+                      placeholder="1 = sem parcelar"
+                      className="border-border bg-muted text-foreground"
+                    />
+                  </div>
+                )}
+              </div>
+              <div className="grid gap-1.5">
+                <Label className="text-muted-foreground">Forma de pagamento</Label>
+                <select
+                  value={paymentMethod}
+                  onChange={(e) => setPaymentMethod(e.target.value)}
+                  className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary"
+                >
+                  <option value="">— não definida —</option>
+                  {PAYMENT_METHODS.map((m) => (
+                    <option key={m} value={m}>
+                      {PAYMENT_METHOD_LABEL[m]}
                     </option>
                   ))}
                 </select>

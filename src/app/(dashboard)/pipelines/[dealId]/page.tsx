@@ -52,6 +52,7 @@ import { TaskForm } from "@/components/tarefas/task-form";
 import { CompanyPicker } from "@/components/pipelines/company-picker";
 import { DealContactsPanel } from "@/components/pipelines/deal-contacts-panel";
 import { TransferDealButton } from "@/components/pipelines/transfer-deal-button";
+import { paymentTermsSummary } from "@/lib/pipelines/payment-terms";
 import { CadenceButton } from "@/components/inbox/cadence-button";
 import {
   getDeal,
@@ -1214,6 +1215,7 @@ export default function DealDetailPage() {
                   : null
               }
             />
+            <Field label="Pagamento" value={paymentTermsSummary(deal)} />
             <Field label="Fonte" value={deal.source} />
             <Field label="Origem" value={deal.origin} />
             <Field label="Previsão de fechamento" value={fmtDate(deal.expected_close_date)} />
