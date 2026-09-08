@@ -482,15 +482,27 @@ export function MessageThread({
     if (!conversation) return;
     const next = !aiPaused;
     setAiPaused(next); // otimista
-    const { error } = await setConversationAiPaused(conversation.id, next);
-    if (error) {
-      toast.error(error);
-      setAiPaused(!next);
-    } else {
+    try {
+      const { error } = await setConversationAiPaused(conversation.id, next);
+      if (error) {
+        toast.error(error);
+        setAiPaused(!next);
+        return;
+      }
       toast.success(
         next
           ? "IA pausada — você assumiu a conversa"
           : "IA reativada — ela continua com o contexto",
+      );
+    } catch {
+      // 08/09 (GoLink): a chamada LANÇOU (aba com build antigo após deploy,
+      // rede) e o botão ficava em "off" na tela com a IA ligada no servidor.
+      // Erro lançado também reverte e avisa.
+      setAiPaused(!next);
+      toast.error(
+        next
+          ? "Não consegui pausar a IA. Recarregue a página e tente de novo."
+          : "Não consegui religar a IA. Recarregue a página e tente de novo.",
       );
     }
   }, [conversation, aiPaused]);

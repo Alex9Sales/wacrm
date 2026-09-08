@@ -49,6 +49,7 @@ import {
 } from '@/lib/sectors/access'
 import { formatConversationPreview } from '@/lib/inbox/preview'
 import { loadChannel } from '@/lib/channels/channels'
+import { postInternalNote } from '@/lib/ai/close-actions'
 import { dispatchTagAddedToFlows } from '@/lib/flows/engine'
 import { getProvider } from '@/lib/channels/registry'
 import { groupJidDigits } from '@/lib/whatsapp/group'
@@ -274,6 +275,21 @@ export async function setConversationAiPaused(
           eq(conversations.accountId, ctx.accountId),
         ),
       )
+    // 🧾 Rastro na conversa: quem ligou/desligou e quando (08/09, GoLink: "a IA
+    // estava desligada e respondeu" — sem registro não dava pra saber se o
+    // clique chegou ao servidor). Best-effort: nunca quebra o toggle.
+    try {
+      const who = firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, ctx.userId)).limit(1))
+      const nome = who?.name?.trim() || 'a equipe'
+      await postInternalNote({
+        conversationId,
+        text: paused
+          ? `⏸️ IA pausada nesta conversa por ${nome}. Ela não responde até alguém religar.`
+          : `▶️ IA religada nesta conversa por ${nome}.`,
+      })
+    } catch {
+      /* nota é rastro, não requisito */
+    }
     // 🆕 Ao LIGAR a IA, retoma na hora se houver mensagem do cliente parada.
     if (!paused) await aiCatchUpOnEnable(ctx.accountId, conversationId)
     return { error: null }
