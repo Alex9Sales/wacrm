@@ -88,16 +88,22 @@ export interface ParsedCommand {
   value: number | null
   dueDate: string | null
   description: string
+  /** O dono não disse vencimento → entrou o padrão de 3 dias (a proposta avisa). */
+  dueDefaulted: boolean
 }
 
 /** Normaliza o que o modelo extraiu: valor e data pelas regras da emissão; vencimento padrão +3 dias. */
 export function normalizeParsedCommand(raw: RawParsedCommand, today: Date = new Date()): ParsedCommand {
   const query = (raw.phone && String(raw.phone).replace(/\D/g, '').length >= 8 ? String(raw.phone) : raw.customer ? String(raw.customer) : '').trim() || null
   const value = raw.value == null ? null : parseValue(String(raw.value))
+  const dueDefaulted = !raw.dueDate
   const due = raw.dueDate ? parseDueDate(String(raw.dueDate), today) : parseDueDate('+3', today)
   const description = (raw.description ?? '').toString().trim() || 'Cobrança'
-  return { customerQuery: query, value, dueDate: due, description }
+  return { customerQuery: query, value, dueDate: due, description, dueDefaulted }
 }
+
+/** Aviso que acompanha a proposta quando o vencimento foi o padrão. */
+export const DUE_DEFAULTED_NOTE = '(Você não disse o vencimento: coloquei 3 dias. Quer outra data? Diga antes do SIM, ex.: "vence amanhã".)'
 
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const br = (ymd: string) => ymd.slice(0, 10).split('-').reverse().join('/')

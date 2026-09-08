@@ -230,10 +230,18 @@ export interface AsaasCustomerInput {
  * cliente; a cobrança sai certa do mesmo jeito.
  */
 export async function findOrCreateCustomer(cred: AsaasCredential, input: AsaasCustomerInput): Promise<AsaasCustomer> {
-  const byRef = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { externalReference: input.externalReference, limit: 1 })
-  if (byRef.data?.[0]) return byRef.data[0]
-
   const doc = (input.cpfCnpj ?? '').replace(/\D/g, '')
+  const byRef = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { externalReference: input.externalReference, limit: 1 })
+  if (byRef.data?.[0]) {
+    const found = byRef.data[0]
+    // 08/09: o Asaas de produção exige CPF/CNPJ pra gerar cobrança. Cliente que
+    // criamos sem documento ganha o documento agora (o dono/cliente mandou).
+    if (!found.cpfCnpj && (doc.length === 11 || doc.length === 14)) {
+      return updateCustomerDocument(cred, found.id, doc)
+    }
+    return found
+  }
+
   if (doc.length === 11 || doc.length === 14) {
     const byDoc = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { cpfCnpj: doc, limit: 1 })
     if (byDoc.data?.[0]) return byDoc.data[0]
@@ -246,6 +254,14 @@ export async function findOrCreateCustomer(cred: AsaasCredential, input: AsaasCu
     ...(input.email ? { email: input.email } : {}),
     externalReference: input.externalReference,
     notificationDisabled: true, // quem fala com o cliente é o CRM, não o Asaas
+  })
+}
+
+/** Grava o CPF/CNPJ num cliente que existia sem documento (e mantém os avisos do Asaas desligados). */
+export async function updateCustomerDocument(cred: AsaasCredential, customerId: string, cpfCnpj: string): Promise<AsaasCustomer> {
+  return asaasSend<AsaasCustomer>(cred, 'PUT', `/customers/${encodeURIComponent(customerId)}`, {
+    cpfCnpj: cpfCnpj.replace(/\D/g, ''),
+    notificationDisabled: true,
   })
 }
 

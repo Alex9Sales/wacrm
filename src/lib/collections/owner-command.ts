@@ -25,9 +25,11 @@ import { engineSendText } from '@/lib/flows/meta-send'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { phonesMatch } from '@/lib/whatsapp/phone-utils'
 
+import { findDocumentInText } from './document'
 import { createChargeForContact } from './emit'
-import { manualChargeMessage } from './emit-rules'
+import { manualChargeMessage, parseDueDate, parseValue } from './emit-rules'
 import {
+  DUE_DEFAULTED_NOTE,
   formatCandidates,
   formatDone,
   formatProposal,
@@ -53,13 +55,47 @@ interface Proposal {
 }
 
 interface Pending {
-  /** collect = pedido em pedaços: guarda o texto acumulado até ter cliente+valor+vencimento. */
-  stage: 'choose' | 'confirm' | 'collect'
+  /** collect = pedido em pedaços: guarda o texto acumulado até ter cliente+valor+vencimento.
+   *  document = o Asaas exigiu CPF/CNPJ (produção): esperando o documento pra gerar. */
+  stage: 'choose' | 'confirm' | 'collect' | 'document'
   candidates?: FoundContact[]
-  draft?: { value: number; dueDate: string; description: string }
+  draft?: Draft
   proposal?: Proposal
   partialText?: string
 }
+
+interface Draft {
+  value: number
+  dueDate: string
+  description: string
+  dueDefaulted?: boolean
+}
+
+/**
+ * Ajuste em cima de um rascunho/proposta ("vence amanhã", "valor 150", "é o
+ * botijão"): o modelo extrai só o que veio; campo ausente fica como estava.
+ * Nada extraído → null (quem chamou decide o que dizer).
+ */
+async function tweakFields<T extends { value: number; dueDate: string; description: string; dueDefaulted?: boolean }>(
+  accountId: string,
+  base: T,
+  text: string,
+): Promise<T | null> {
+  const raw = await extractWithModel(accountId, text)
+  if (!raw) return null
+  const due = raw.dueDate ? parseDueDate(String(raw.dueDate)) : null
+  const value = raw.value == null ? null : parseValue(String(raw.value))
+  const description = (raw.description ?? '').toString().trim()
+  if (!due && !value && !description) return null
+  return {
+    ...base,
+    ...(due ? { dueDate: due, dueDefaulted: false } : {}),
+    ...(value ? { value } : {}),
+    ...(description ? { description } : {}),
+  }
+}
+
+const proposalText = (p: Proposal & { dueDefaulted?: boolean }) => formatProposal(p) + (p.dueDefaulted ? `\n${DUE_DEFAULTED_NOTE}` : '')
 
 /**
  * "Me manda o telefone dele que eu cadastro e cobro" — cumpre a promessa:
@@ -152,8 +188,9 @@ async function latestConversationOf(accountId: string, contactId: string): Promi
   return c?.id ?? null
 }
 
-/** Cria a cobrança e manda o link ao cliente. Devolve o texto para o dono. */
-async function execute(accountId: string, ownerUserId: string, p: Proposal): Promise<string> {
+/** Cria a cobrança e manda o link ao cliente. Devolve o texto para o dono
+ *  (e `needsDocument` quando o Asaas exigiu CPF/CNPJ — o chamador pede). */
+async function execute(accountId: string, ownerUserId: string, p: Proposal, cpfCnpj?: string | null): Promise<{ text: string; needsDocument: boolean }> {
   const created = await createChargeForContact({
     accountId,
     contactId: p.contactId,
@@ -165,8 +202,17 @@ async function execute(accountId: string, ownerUserId: string, p: Proposal): Pro
     origin: 'manual',
     actorLabel: 'pelo dono, via WhatsApp',
     noteSuffix: 'Link enviado ao cliente.',
+    cpfCnpj: cpfCnpj ?? null,
   })
-  if (!created.ok) return `Não consegui gerar: ${created.reason}. Nada foi cobrado.`
+  if (!created.ok) {
+    if (created.needsDocument) {
+      return {
+        text: `O Asaas exige CPF ou CNPJ pra gerar a cobrança de ${p.name?.trim() || p.phone}. Me manda o documento (só números) que eu cadastro no Asaas — com os avisos deles desligados — e gero. Ou responda NÃO pra cancelar.`,
+        needsDocument: true,
+      }
+    }
+    return { text: `Não consegui gerar: ${created.reason}. Nada foi cobrado.`, needsDocument: false }
+  }
 
   let sentVia: string | null = null
   try {
@@ -184,7 +230,7 @@ async function execute(accountId: string, ownerUserId: string, p: Proposal): Pro
     console.error('[owner-command] envio do link falhou:', err instanceof Error ? err.message : err)
   }
   void ownerUserId
-  return formatDone(p, created.invoiceUrl, sentVia)
+  return { text: formatDone(p, created.invoiceUrl, sentVia), needsDocument: false }
 }
 
 /**
@@ -206,11 +252,36 @@ export async function handleOwnerCommand(args: {
     const pending = (await kvGetJson<Pending>(k)) ?? null
     const text = args.text.trim()
 
+    // ---- o Asaas exigiu CPF/CNPJ (produção, 08/09): esperando o documento
+    if (pending?.stage === 'document' && pending.proposal) {
+      if (looksLikeCancel(text)) {
+        await kvDel(k)
+        await say('Cancelado. Nada foi cobrado.')
+        return true
+      }
+      const doc = findDocumentInText(text)
+      if (doc) {
+        const r = await execute(args.accountId, args.ownerUserId, pending.proposal, doc)
+        if (!r.needsDocument) await kvDel(k)
+        await say(r.text)
+        return true
+      }
+      if (!looksLikeChargeCommand(text)) {
+        await say(`Preciso do CPF ou CNPJ de ${pending.proposal.name?.trim() || pending.proposal.phone} (11 ou 14 números) pra gerar no Asaas — ou responda NÃO pra cancelar.`)
+        return true
+      }
+    }
+
     // ---- resposta a uma proposta pendente
     if (pending?.stage === 'confirm' && pending.proposal) {
       if (looksLikeConfirmation(text)) {
-        await kvDel(k)
-        await say(await execute(args.accountId, args.ownerUserId, pending.proposal))
+        const r = await execute(args.accountId, args.ownerUserId, pending.proposal)
+        if (r.needsDocument) {
+          await kvSetJson(k, { stage: 'document', proposal: pending.proposal } satisfies Pending, TTL_SECONDS)
+        } else {
+          await kvDel(k)
+        }
+        await say(r.text)
         return true
       }
       if (looksLikeCancel(text)) {
@@ -218,19 +289,31 @@ export async function handleOwnerCommand(args: {
         await say('Cancelado. Nada foi cobrado.')
         return true
       }
-      // Nem sim nem não: se for um pedido novo, recomeça; senão relembra.
+      // Nem sim nem não: ajuste ("vence amanhã", "valor 150") atualiza a
+      // proposta; pedido novo recomeça; o resto só relembra.
       if (!looksLikeChargeCommand(text)) {
-        await say('Ficou pendente: ' + formatProposal(pending.proposal))
+        const tweaked = await tweakFields(args.accountId, pending.proposal, text)
+        if (tweaked) {
+          await kvSetJson(k, { stage: 'confirm', proposal: tweaked } satisfies Pending, TTL_SECONDS)
+          await say(proposalText(tweaked))
+          return true
+        }
+        await say('Ficou pendente: ' + proposalText(pending.proposal))
         return true
       }
     }
     if (pending?.stage === 'choose' && pending.candidates && pending.draft) {
-      const idx = pickCandidateIndex(text, pending.candidates.length)
+      // "2" pode vir com ajuste junto ("2" / "Para vencimento amanhã", 08/09):
+      // o índice é a primeira linha; o resto ajusta o rascunho.
+      const [firstLine = '', ...restLines] = text.split('\n')
+      const idx = pickCandidateIndex(firstLine.trim(), pending.candidates.length)
       if (idx != null) {
         const c = pending.candidates[idx]
-        const proposal: Proposal = { contactId: c.id, name: c.name, phone: c.phone, ...pending.draft }
+        const extra = restLines.join('\n').trim()
+        const draft = extra ? (await tweakFields(args.accountId, pending.draft, extra)) ?? pending.draft : pending.draft
+        const proposal: Proposal & { dueDefaulted?: boolean } = { contactId: c.id, name: c.name, phone: c.phone, ...draft }
         await kvSetJson(k, { stage: 'confirm', proposal } satisfies Pending, TTL_SECONDS)
-        await say(formatProposal(proposal))
+        await say(proposalText(proposal))
         return true
       }
       if (looksLikeCancel(text)) {
@@ -282,7 +365,7 @@ export async function handleOwnerCommand(args: {
       return true
     }
     let found = await findContactsByQuery(args.accountId, parsed.customerQuery, 5)
-    const draft = { value: parsed.value, dueDate: parsed.dueDate, description: parsed.description }
+    const draft: Draft = { value: parsed.value, dueDate: parsed.dueDate, description: parsed.description, dueDefaulted: parsed.dueDefaulted }
     if (!found.length) {
       // Dono mandou o telefone (junto ou depois do "me manda o telefone")?
       // Então cadastra — com o nome que ele deu — e segue pra proposta.
@@ -302,9 +385,9 @@ export async function handleOwnerCommand(args: {
       await say(formatCandidates(found))
       return true
     }
-    const proposal: Proposal = { contactId: found[0].id, name: found[0].name, phone: found[0].phone, ...draft }
+    const proposal: Proposal & { dueDefaulted?: boolean } = { contactId: found[0].id, name: found[0].name, phone: found[0].phone, ...draft }
     await kvSetJson(k, { stage: 'confirm', proposal } satisfies Pending, TTL_SECONDS)
-    await say(formatProposal(proposal))
+    await say(proposalText(proposal))
     return true
   } catch (err) {
     console.error('[owner-command] falhou:', err instanceof Error ? err.message : err)

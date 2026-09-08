@@ -32,8 +32,10 @@ describe('comando do dono — reconhecer', () => {
 describe('comando do dono — normalizar o que o modelo extraiu', () => {
   it('valor e data pelas mesmas regras da emissão; vencimento padrão +3 dias; telefone vence o nome', () => {
     const p = normalizeParsedCommand({ customer: 'João Silva', value: 'R$ 150,00', dueDate: '10/09' }, hoje)
-    expect(p).toEqual({ customerQuery: 'João Silva', value: 150, dueDate: '2026-09-10', description: 'Cobrança' })
-    expect(normalizeParsedCommand({ customer: 'Maria', value: 80 }, hoje).dueDate).toBe('2026-09-09')
+    expect(p).toEqual({ customerQuery: 'João Silva', value: 150, dueDate: '2026-09-10', description: 'Cobrança', dueDefaulted: false })
+    const semVenc = normalizeParsedCommand({ customer: 'Maria', value: 80 }, hoje)
+    expect(semVenc.dueDate).toBe('2026-09-09')
+    expect(semVenc.dueDefaulted).toBe(true) // a proposta avisa que os 3 dias foram padrão
     expect(normalizeParsedCommand({ customer: 'Maria', phone: '67 99999-1234', value: 80 }, hoje).customerQuery).toBe('67 99999-1234')
     expect(normalizeParsedCommand({ customer: 'Maria', value: 'abc' }, hoje).value).toBeNull()
   })

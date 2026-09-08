@@ -17,9 +17,9 @@
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
-import { and, desc, eq, gte, inArray } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNotNull } from 'drizzle-orm'
 
-import { db, asaasCharges, asaasConnections, contacts, member } from '@/db'
+import { db, asaasCharges, asaasConnections, contacts, member, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { createPayment, findOrCreateCustomer, type AsaasCredential, type AsaasEnv } from '@/lib/asaas/collections'
 import { postInternalNote } from '@/lib/ai/close-actions'
@@ -28,6 +28,7 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { toBrE164IfNational } from '@/lib/whatsapp/phone-utils'
 
+import { findDocumentInText } from './document'
 import { EMIT_DEFAULTS, findDuplicateCharge, parseDueDate, parseValue, validateEmit } from './emit-rules'
 import { normalizeSettings } from './rules'
 
@@ -52,11 +53,31 @@ export interface CreateChargeInput {
   actorLabel: string
   /** Complemento da nota (ex.: "Link enviado na conversa."). */
   noteSuffix?: string
+  /** CPF/CNPJ (só dígitos) que o dono/cliente mandou agora. Sem isso, usa o
+   *  último documento visto na carteira para o contato. O Asaas de produção
+   *  exige documento pra gerar qualquer cobrança (08/09). */
+  cpfCnpj?: string | null
 }
 
 export type CreateChargeOutcome =
   | { ok: true; chargeId: string; invoiceUrl: string; reused: boolean; connectionLabel: string }
-  | { ok: false; reason: string }
+  | { ok: false; reason: string; needsDocument?: boolean }
+
+/** Último CPF/CNPJ que a carteira viu para este contato (cobrança nossa ou sincronizada). */
+async function knownDocumentFor(accountId: string, contactId: string): Promise<string | null> {
+  const row = firstOrNull(
+    await db
+      .select({ doc: asaasCharges.cpfCnpj })
+      .from(asaasCharges)
+      .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, contactId), isNotNull(asaasCharges.cpfCnpj)))
+      .orderBy(desc(asaasCharges.createdAt))
+      .limit(1),
+  )
+  const d = (row?.doc ?? '').replace(/\D/g, '')
+  return d.length === 11 || d.length === 14 ? d : null
+}
+
+const NEEDS_DOCUMENT_RE = /CPF ou CNPJ|cpfCnpj/i
 
 export async function createChargeForContact(input: CreateChargeInput): Promise<CreateChargeOutcome> {
   try {
@@ -124,15 +145,19 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
     }
 
     const phoneDigits = (contact.phone ?? '').replace(/\D/g, '')
+    const docNow = (input.cpfCnpj ?? '').replace(/\D/g, '')
+    const cpfCnpj = docNow.length === 11 || docNow.length === 14 ? docNow : await knownDocumentFor(input.accountId, input.contactId)
     const customer = await findOrCreateCustomer(cred, {
       name: (contact.name || contact.email || contact.phone || 'Cliente').trim(),
       mobilePhone: phoneDigits ? toBrE164IfNational(phoneDigits) : '',
       email: contact.email,
+      cpfCnpj,
       externalReference: input.contactId,
     })
 
-    // Sem CPF/CNPJ no contato o boleto não sai; Pix não exige. Com CPF no
-    // cadastro, UNDEFINED deixa o cliente escolher na página do Asaas.
+    // Com documento, UNDEFINED deixa o cliente escolher Pix/boleto na página do
+    // Asaas; sem documento tenta Pix (sandbox aceita; produção recusa e a
+    // recusa volta como needsDocument pra quem chamou pedir o CPF/CNPJ).
     const billingType = customer.cpfCnpj ? 'UNDEFINED' : 'PIX'
 
     const payment = await createPayment(cred, {
@@ -155,6 +180,7 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
           asaasId: payment.id,
           asaasCustomerId: payment.customer,
           customerName: contact.name,
+          cpfCnpj: customer.cpfCnpj ?? cpfCnpj ?? null,
           phone: contact.phone,
           email: contact.email,
           value: String(input.value),
@@ -183,7 +209,7 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
   } catch (err) {
     const reason = err instanceof Error ? err.message : 'falha inesperada'
     console.error('[cobranca] criar falhou:', reason)
-    return { ok: false, reason }
+    return { ok: false, reason, needsDocument: NEEDS_DOCUMENT_RE.test(reason) }
   }
 }
 
@@ -224,6 +250,10 @@ export async function emitChargeFromDirective(input: EmitInput): Promise<EmitOut
     const verdict = validateEmit({ value, dueDate, description }, guard)
     if (!verdict.ok) return fail(verdict.reason)
 
+    // 08/09: se o cliente mandou o CPF/CNPJ na conversa (o Asaas de produção
+    // exige), ele vai junto — senão a cobrança volta recusada e a IA fica
+    // pedindo o documento que já está no histórico.
+    const cpfCnpj = await documentFromConversation(input.conversationId)
     const created = await createChargeForContact({
       accountId: input.accountId,
       contactId: input.contactId,
@@ -235,14 +265,40 @@ export async function emitChargeFromDirective(input: EmitInput): Promise<EmitOut
       origin: 'ai',
       actorLabel: 'pela IA',
       noteSuffix: 'Link enviado na conversa.',
+      cpfCnpj,
     })
-    if (!created.ok) return fail(created.reason)
+    if (!created.ok) {
+      return fail(
+        created.needsDocument
+          ? `${created.reason} Peça o CPF ou CNPJ ao cliente na conversa — com o documento no histórico a próxima tentativa passa`
+          : created.reason,
+      )
+    }
     return { ok: true, invoiceUrl: created.invoiceUrl, value: value!, dueDate: dueDate!, reused: created.reused }
   } catch (err) {
     const reason = err instanceof Error ? err.message : 'falha inesperada'
     console.error('[criar_cobranca] falhou:', reason)
     return fail(reason)
   }
+}
+
+/** CPF/CNPJ válido nas últimas mensagens do CLIENTE nesta conversa (só dígitos) ou null. */
+async function documentFromConversation(conversationId: string): Promise<string | null> {
+  try {
+    const rows = await db
+      .select({ text: messages.contentText })
+      .from(messages)
+      .where(and(eq(messages.conversationId, conversationId), eq(messages.senderType, 'customer'), eq(messages.isInternal, false)))
+      .orderBy(desc(messages.createdAt))
+      .limit(8)
+    for (const r of rows) {
+      const doc = findDocumentInText(r.text)
+      if (doc) return doc
+    }
+  } catch {
+    /* sem documento → segue sem */
+  }
+  return null
 }
 
 async function alertTeam(input: EmitInput, title: string): Promise<void> {
