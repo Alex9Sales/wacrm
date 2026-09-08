@@ -9,6 +9,7 @@ import { and, eq } from 'drizzle-orm'
 
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
+import { pickProviderTarget } from '@/lib/channels/target'
 import type { ChannelCtx } from '@/lib/channels/provider'
 import {
   sanitizePhoneForMeta,
@@ -74,18 +75,6 @@ async function loadContactAndChannel(
     throw new Error('contact has no phone/external id')
   }
 
-  // Instagram (e canais sem telefone): o alvo do provider é o external_id (IGSID),
-  // sem passar pela trava de E.164. WhatsApp segue por telefone.
-  let sanitized: string
-  if (contact.externalId) {
-    sanitized = contact.externalId
-  } else {
-    sanitized = sanitizePhoneForMeta(contact.phone)
-    if (!isValidE164(sanitized)) {
-      throw new Error(`contact phone invalid: ${contact.phone}`)
-    }
-  }
-
   const conv = firstOrNull(
     await db
       .select({ channelId: conversations.channelId })
@@ -104,6 +93,21 @@ async function loadContactAndChannel(
   if (!channel || channel.accountId !== accountId) {
     throw new Error('WhatsApp not configured for this account')
   }
+
+  // O CANAL decide o alvo (lib/channels/target.ts): WhatsApp → telefone,
+  // Instagram → external_id (IGSID). 08/09: contato com telefone E external_id
+  // de e-mail ia pro Meta com o e-mail como destinatário (#131009).
+  const picked = pickProviderTarget({
+    provider: channel.provider,
+    phoneDigits: sanitizePhoneForMeta(contact.phone),
+    externalId: contact.externalId,
+    email: null,
+  })
+  if (!picked) throw new Error(`contact has no usable target for channel ${channel.provider}`)
+  if (picked.kind === 'phone' && !isValidE164(picked.target)) {
+    throw new Error(`contact phone invalid: ${contact.phone}`)
+  }
+  const sanitized = picked.target
 
   return { contact: { id: contact.id, phone: contact.phone }, sanitized, channel }
 }

@@ -46,6 +46,7 @@ import {
 import { firstOrNull, firstOrThrow } from '@/db/helpers';
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels';
 import { getProvider } from '@/lib/channels/registry';
+import { pickProviderTarget } from '@/lib/channels/target';
 import type { OutboundMedia, ChannelCtx } from '@/lib/channels/provider';
 import type { MediaKind } from '@/lib/whatsapp/meta-api';
 import {
@@ -339,16 +340,33 @@ export async function sendMessageToConversation(
   // (e.g. 556792539584-1481125514@g.us) — sending to the reconstructed
   // hyphen-less id makes WAHA hang and abort. The intact jid lives in
   // monitored_groups.group_jid; look it up by matching digits.
-  let providerTarget = sanitizedPhone;
-  if (isEmailChannel && contact.email) {
-    // E-mail: o destinatário é SEMPRE o e-mail do contato — mesmo que o lead
-    // tenha entrado por outro canal (external_id pode ser um id de WhatsApp/IG).
-    // Isso permite uma conversa de e-mail no MESMO contato (cadência multicanal).
-    providerTarget = contact.email;
-  } else if (contact.externalId) {
-    // Instagram: o alvo do provider é o IGSID (não telefone).
-    providerTarget = contact.externalId;
-  } else if (contact.isGroup) {
+  // O CANAL decide o alvo (lib/channels/target.ts): e-mail → e-mail do contato
+  // (cadência multicanal no MESMO contato); WhatsApp → telefone, mesmo que o
+  // contato tenha external_id (08/09: e-mail no external_id de contato de
+  // WhatsApp ia pro Meta como destinatário → #131009); Instagram → IGSID.
+  const picked = pickProviderTarget({
+    provider: channel.provider,
+    phoneDigits: sanitizedPhone,
+    externalId: contact.externalId,
+    email: contact.email,
+    isGroup: contact.isGroup,
+  });
+  if (!picked) {
+    throw new SendMessageError(
+      'bad_request',
+      isEmailChannel ? 'Contact has no e-mail address' : 'Contact phone number not found',
+      400
+    );
+  }
+  if (picked.kind === 'phone' && !isValidE164(picked.target)) {
+    throw new SendMessageError(
+      'bad_request',
+      'Invalid phone number format',
+      400
+    );
+  }
+  let providerTarget = picked.target;
+  if (contact.isGroup) {
     const wantedDigits = contact.phone.replace(/\D/g, '');
     const monitored = await db
       .select({ jid: monitoredGroups.groupJid })
