@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatCandidates, formatProposal, looksLikeCancel, looksLikeChargeCommand, looksLikeConfirmation, normalizeParsedCommand, pickCandidateIndex } from './owner-command-rules'
+import { formatCandidates, formatProposal, joinCustomerBurst, looksLikeCancel, looksLikeChargeCommand, looksLikeConfirmation, normalizeParsedCommand, pickCandidateIndex } from './owner-command-rules'
 
 const hoje = new Date(2026, 8, 6)
 
@@ -46,5 +46,38 @@ describe('comando do dono — normalizar o que o modelo extraiu', () => {
     const c = formatCandidates([{ name: 'João A', phone: '1' }, { name: null, phone: '2' }])
     expect(c).toContain('1) João A')
     expect(c).toContain('2) Sem nome')
+  })
+})
+
+describe('comando do dono — rajada de balões (08/09)', () => {
+  const at = (s: number) => new Date(Date.UTC(2026, 8, 8, 16, 5, s)).toISOString()
+  it('junta os balões do dono em ordem e o conjunto vira pedido de cobrança', () => {
+    const rows = [
+      { senderType: 'customer', text: 'Pix', createdAt: at(50) },
+      { senderType: 'customer', text: 'Vencimento amanhã', createdAt: at(40) },
+      { senderType: 'customer', text: 'Valor de 5 reais', createdAt: at(30) },
+      { senderType: 'customer', text: 'Para Danyela Souza', createdAt: at(20) },
+      { senderType: 'customer', text: 'Cria uma cobrança', createdAt: at(10) },
+      { senderType: 'bot', text: 'Bom dia, Alex!', createdAt: at(0) },
+    ]
+    const burst = joinCustomerBurst(rows)
+    expect(burst).toBe('Cria uma cobrança\nPara Danyela Souza\nValor de 5 reais\nVencimento amanhã\nPix')
+    expect(looksLikeChargeCommand('Pix')).toBe(false)
+    expect(looksLikeChargeCommand(burst)).toBe(true)
+  })
+  it('para na última resposta do CRM: o que veio antes dela não entra', () => {
+    const rows = [
+      { senderType: 'customer', text: 'sim', createdAt: at(30) },
+      { senderType: 'bot', text: 'Confirma? Responda SIM', createdAt: at(20) },
+      { senderType: 'customer', text: 'cria uma cobrança de 5 pra Ana', createdAt: at(10) },
+    ]
+    expect(joinCustomerBurst(rows)).toBe('sim')
+  })
+  it('última mensagem não é do dono → vazio; janela e limite respeitados', () => {
+    expect(joinCustomerBurst([{ senderType: 'bot', text: 'x', createdAt: at(0) }])).toBe('')
+    const old = { senderType: 'customer', text: 'de ontem', createdAt: new Date(Date.UTC(2026, 8, 7, 16, 0, 0)).toISOString() }
+    expect(joinCustomerBurst([{ senderType: 'customer', text: 'agora', createdAt: at(0) }, old])).toBe('agora')
+    const many = Array.from({ length: 12 }, (_, i) => ({ senderType: 'customer', text: `m${i}`, createdAt: at(59 - i) }))
+    expect(joinCustomerBurst(many, { max: 3 })).toBe('m2\nm1\nm0')
   })
 })

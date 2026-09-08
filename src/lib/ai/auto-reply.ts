@@ -20,6 +20,7 @@ import { generateWithExternalTools } from './external-tools'
 import { buildSystemPrompt, chargeInstruction, collectionInstruction, HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
 import { emitChargeFromDirective } from '@/lib/collections/emit'
 import { handleOwnerCommand, isOwnerPhone, ownerCommandApplies } from '@/lib/collections/owner-command'
+import { joinCustomerBurst } from '@/lib/collections/owner-command-rules'
 import { isSelfMessage } from './self-message'
 import { applyCollectionReply, openDebtForPrompt } from '@/lib/collections/reply'
 import { normalizeSettings as normalizeCollectionsSettings } from '@/lib/collections/rules'
@@ -219,6 +220,17 @@ export async function dispatchInboundToAiReply(
       )
       return (row?.text ?? '').trim()
     }
+    // A rajada do dono: os últimos balões dele até a última resposta do CRM,
+    // juntos (08/09: pedido em cinco balões — só o último era "Pix").
+    const loadCustomerBurst = async (): Promise<string> => {
+      const rows = await db
+        .select({ senderType: messagesTable.senderType, text: messagesTable.contentText, createdAt: messagesTable.createdAt })
+        .from(messagesTable)
+        .where(and(eq(messagesTable.conversationId, conversationId), eq(messagesTable.isInternal, false)))
+        .orderBy(desc(messagesTable.createdAt))
+        .limit(12)
+      return joinCustomerBurst(rows)
+    }
 
     // 🧾 Comando do DONO pelo WhatsApp ("cria uma cobrança de 150 pro João"):
     // quem escreveu é o telefone de Avisos/Sócio IA da conta e o texto parece
@@ -227,7 +239,7 @@ export async function dispatchInboundToAiReply(
     try {
       const ownerSettings = await getAccountSettings(accountId)
       if ((ownerSettings.alertPhone || ownerSettings.ownerDigestPhone) && who && !who.isGroup && isOwnerPhone(ownerSettings, who.phone)) {
-        const text = await loadLastCustomerText()
+        const text = await loadCustomerBurst()
         if (text && (await ownerCommandApplies(conversationId, text))) {
           const handled = await handleOwnerCommand({ accountId, conversationId, contactId, ownerUserId: configOwnerUserId, text })
           if (handled) {

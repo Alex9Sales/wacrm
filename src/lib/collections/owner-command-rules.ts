@@ -11,6 +11,35 @@
 import { parseDueDate, parseValue } from './emit-rules'
 
 /** Parece um pedido de cobrança? (verbo + palavra de cobrança; valor vem depois). */
+/**
+ * Junta a "rajada" do dono: as últimas mensagens dele (só do cliente da
+ * conversa) até a última resposta do CRM, dentro da janela, em ordem
+ * cronológica. Caso 08/09 (Alex): "Cria uma cobrança" / "Para Danyela Souza" /
+ * "Valor de 5 reais" / "Vencimento amanhã" / "Pix" em CINCO balões — olhando só
+ * o último ("Pix") não parece pedido nenhum e o agente de vendas assumia.
+ * `rowsNewestFirst` = mensagens não-internas, da mais nova pra mais velha.
+ */
+export function joinCustomerBurst(
+  rowsNewestFirst: Array<{ senderType: string; text: string | null; createdAt: string | Date | null }>,
+  opts: { windowMs?: number; max?: number } = {},
+): string {
+  const windowMs = opts.windowMs ?? 10 * 60 * 1000
+  const max = opts.max ?? 8
+  const newest = rowsNewestFirst[0]
+  if (!newest || newest.senderType !== 'customer') return ''
+  const newestAt = newest.createdAt ? new Date(newest.createdAt).getTime() : Date.now()
+  const at = (v: string | Date | null) => (v ? new Date(v).getTime() : newestAt)
+  const parts: string[] = []
+  for (const r of rowsNewestFirst) {
+    if (r.senderType !== 'customer') break
+    if (newestAt - at(r.createdAt) > windowMs) break
+    const t = (r.text ?? '').trim()
+    if (t) parts.push(t)
+    if (parts.length >= max) break
+  }
+  return parts.reverse().join('\n')
+}
+
 export function looksLikeChargeCommand(text: string): boolean {
   const t = text.toLowerCase()
   const money = /cobran[cç]a|cobrar|boleto|pix|link de pagamento|fatura/.test(t)

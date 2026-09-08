@@ -15,7 +15,7 @@
 
 import { and, desc, eq } from 'drizzle-orm'
 
-import { db, aiConfigs, conversations } from '@/db'
+import { db, aiConfigs, contacts, conversations } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfigById } from '@/lib/ai/config'
 import { generateReply } from '@/lib/ai/generate'
@@ -53,10 +53,38 @@ interface Proposal {
 }
 
 interface Pending {
-  stage: 'choose' | 'confirm'
+  /** collect = pedido em pedaços: guarda o texto acumulado até ter cliente+valor+vencimento. */
+  stage: 'choose' | 'confirm' | 'collect'
   candidates?: FoundContact[]
   draft?: { value: number; dueDate: string; description: string }
   proposal?: Proposal
+  partialText?: string
+}
+
+/**
+ * "Me manda o telefone dele que eu cadastro e cobro" — cumpre a promessa:
+ * cria o contato com o nome e o telefone que o dono mandou. BR nacional (10–11
+ * dígitos) ganha o 55. Conflito (já existe noutro formato) → null e o fluxo
+ * pede de novo. Nunca lança.
+ */
+async function createContactFromOwner(accountId: string, userId: string, name: string | null, phoneDigits: string): Promise<FoundContact | null> {
+  const d = phoneDigits.replace(/\D/g, '')
+  const phone = /^55\d{10,11}$/.test(d) ? d : d.length === 10 || d.length === 11 ? `55${d}` : d
+  if (phone.length < 10) return null
+  try {
+    const row = firstOrNull(
+      await db
+        .insert(contacts)
+        .values({ accountId, userId, phone, name: (name ?? '').trim() || null })
+        .onConflictDoNothing()
+        .returning({ id: contacts.id, name: contacts.name, phone: contacts.phone, email: contacts.email }),
+    )
+    if (row) console.log(`[owner-command] contato cadastrado pelo dono: ${row.id}`)
+    return row ?? null
+  } catch (err) {
+    console.error('[owner-command] cadastrar contato falhou:', err instanceof Error ? err.message : err)
+    return null
+  }
 }
 
 /** O telefone de quem escreveu é o do dono (Avisos ou Sócio IA)? */
@@ -216,30 +244,56 @@ export async function handleOwnerCommand(args: {
       }
     }
 
-    // ---- pedido novo
-    if (!looksLikeChargeCommand(text)) return false
-    const raw = await extractWithModel(args.accountId, text)
+    // ---- pedido novo, ou continuação de um pedido em pedaços (08/09: o dono
+    // manda "cria uma cobrança" / "pra Danyela" / "5 reais" / "amanhã" em
+    // balões separados, e responde ao "qual o valor?" com outro balão).
+    let request = text
+    if (pending?.stage === 'collect' && pending.partialText) {
+      if (looksLikeCancel(text)) {
+        await kvDel(k)
+        await say('Cancelado. Nada foi cobrado.')
+        return true
+      }
+      // Pedido novo do zero substitui; senão é continuação → junta.
+      request = looksLikeChargeCommand(text) ? text : `${pending.partialText}\n${text}`
+    }
+    if (!looksLikeChargeCommand(request)) return false
+    const remember = () => kvSetJson(k, { stage: 'collect', partialText: request } satisfies Pending, TTL_SECONDS)
+    const raw = await extractWithModel(args.accountId, request)
     if (!raw) {
+      await remember()
       await say('Não entendi o pedido. Exemplo: "cria uma cobrança de 150 pro João Silva vencendo dia 10".')
       return true
     }
     const parsed = normalizeParsedCommand(raw)
     if (!parsed.customerQuery) {
+      await remember()
       await say('Pra quem é a cobrança? Me manda o nome ou o telefone do cliente.')
       return true
     }
     if (!parsed.value) {
+      await remember()
       await say(`Qual o valor da cobrança para ${parsed.customerQuery}? Exemplo: "150,00".`)
       return true
     }
     if (!parsed.dueDate) {
+      await remember()
       await say('Não entendi o vencimento. Exemplo: "vencendo dia 10" ou "em 7 dias".')
       return true
     }
-    const found = await findContactsByQuery(args.accountId, parsed.customerQuery, 5)
+    let found = await findContactsByQuery(args.accountId, parsed.customerQuery, 5)
     const draft = { value: parsed.value, dueDate: parsed.dueDate, description: parsed.description }
     if (!found.length) {
-      await kvDel(k)
+      // Dono mandou o telefone (junto ou depois do "me manda o telefone")?
+      // Então cadastra — com o nome que ele deu — e segue pra proposta.
+      const phoneDigits = String(raw.phone ?? '').replace(/\D/g, '')
+      if (phoneDigits.length >= 10) {
+        const created = await createContactFromOwner(args.accountId, args.ownerUserId, raw.customer ?? null, phoneDigits)
+        if (created) found = [created]
+      }
+    }
+    if (!found.length) {
+      await remember()
       await say(`Não achei "${parsed.customerQuery}" nos contatos. Me manda o telefone dele (com DDD) que eu cadastro e cobro.`)
       return true
     }
