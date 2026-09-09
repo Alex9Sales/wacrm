@@ -23,7 +23,7 @@ export function normalizePhone(phone: string): string {
  * variações legítimas do MESMO assinante. Devolve null quando o número não
  * parece brasileiro (aí vale a tolerância internacional antiga).
  */
-function brIdentityKey(digits: string): string | null {
+export function brIdentityKey(digits: string): string | null {
   let n = digits
   if ((n.length === 12 || n.length === 13) && n.startsWith('55')) n = n.slice(2)
   if (n.length !== 10 && n.length !== 11) return null

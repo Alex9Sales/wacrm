@@ -95,6 +95,9 @@ export interface Contact {
    *  and unique per account. Read-only. */
   phone_normalized?: string;
   name?: string;
+  /** 📒 De onde veio o nome (migr 0166): editado no CRM, agenda do celular,
+   *  perfil do WhatsApp ou desconhecido. Regra em lib/contacts/name-rule.ts. */
+  name_source?: 'crm' | 'phonebook' | 'whatsapp' | string | null;
   email?: string;
   company?: string;
   /** 🎂 Aniversário YYYY-MM-DD (migr 0151). */

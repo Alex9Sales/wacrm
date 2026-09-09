@@ -243,6 +243,13 @@ export const contacts = pgTable("contacts", {
 	optedOut: boolean("opted_out").default(false).notNull(),
 	optedOutAt: timestamp("opted_out_at", { withTimezone: true, mode: 'string' }),
 	optedOutReason: text("opted_out_reason"),
+	// 📒 De onde veio o NOME atual (migr 0166, regra 09/09 "nome digitado no
+	// CRM sempre vence"): 'crm' = alguém digitou no CRM (formulário, ficha,
+	// CSV) — nada automático troca; 'phonebook' = agenda do celular;
+	// 'whatsapp' = nome de perfil que o próprio cliente escolheu (pushName);
+	// null = legado/formulário público/API. Prioridade em
+	// lib/contacts/name-rule.ts: crm > phonebook > whatsapp > telefone.
+	nameSource: text("name_source"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
@@ -257,6 +264,37 @@ export const contacts = pgTable("contacts", {
 			name: "contacts_account_id_fkey"
 		}).onDelete("cascade"),
 	index("idx_contacts_company").using("btree", table.companyId.asc().nullsLast().op("uuid_ops")),
+]);
+
+// 📒 Agenda do celular espelhada por canal (migr 0166). Só entradas COM nome
+// salvo no aparelho. WAHA: GET /api/contacts/all; API oficial em coexistência:
+// webhook smb_app_state_sync. `phone` = dígitos como o WhatsApp identifica o
+// número (muitas vezes sem o 9º dígito) — casar com contacts pela chave de
+// identidade (DDD + 8), nunca por igualdade crua. Aplicação da regra de nome
+// em lib/contacts/phonebook.ts.
+export const phonebookEntries = pgTable("phonebook_entries", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	channelId: uuid("channel_id").notNull(),
+	phone: text().notNull(),
+	name: text().notNull(),
+	pushName: text("push_name"),
+	seenAt: timestamp("seen_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("idx_phonebook_entries_channel_phone").using("btree", table.channelId.asc().nullsLast().op("uuid_ops"), table.phone.asc().nullsLast().op("text_ops")),
+	index("idx_phonebook_entries_account_suffix").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), sql`right(${table.phone}, 8)`),
+	foreignKey({
+			columns: [table.accountId],
+			foreignColumns: [organization.id],
+			name: "phonebook_entries_account_id_fkey"
+		}).onDelete("cascade"),
+	foreignKey({
+			columns: [table.channelId],
+			foreignColumns: [channels.id],
+			name: "phonebook_entries_channel_id_fkey"
+		}).onDelete("cascade"),
 ]);
 
 // Empresas como ENTIDADE (IA v2 roadmap — Fase "Empresas"). Antes "empresa" era
@@ -678,6 +716,9 @@ export const channels = pgTable("channels", {
 	dedicatedUserId: uuid("dedicated_user_id"),
 	// Per-channel token used to validate non-Meta webhook deliveries.
 	webhookSecret: text("webhook_secret").notNull(),
+	// 📒 Última sincronização da agenda do celular (migr 0166). null = nunca
+	// importou → o worker phonebook-sync ignora o canal (opt-in pelo botão).
+	phonebookSyncedAt: timestamp("phonebook_synced_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [

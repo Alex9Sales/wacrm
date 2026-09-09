@@ -168,6 +168,16 @@ export interface ChannelCtx {
   webhookSecret: string;
 }
 
+/** 📒 Um contato salvo na agenda do celular pareado (ver listPhonebook). */
+export interface PhonebookContact {
+  /** Dígitos do id do WhatsApp (ex.: 556791875477 — às vezes sem o 9º dígito). */
+  phone: string;
+  /** Nome como está salvo na agenda do aparelho. */
+  name: string;
+  /** Nome de perfil que a própria pessoa escolheu (pushName), se conhecido. */
+  pushName?: string | null;
+}
+
 /** Outbound send options shared across send* methods. */
 export interface SendOptions {
   /** External id of a message to quote (swipe-reply). */
@@ -389,6 +399,15 @@ export interface WhatsAppProvider {
    * when the id can't be resolved (unknown lid / error).
    */
   resolveLidToPhone?(ch: ChannelCtx, lid: string): Promise<string | null>;
+
+  /**
+   * 📒 Agenda do celular: os contatos SALVOS no aparelho pareado (só quem tem
+   * nome na agenda — quem só mandou mensagem, com pushName, fica de fora).
+   * `phone` = dígitos do id do WhatsApp (pode vir sem o 9º dígito). Optional:
+   * só engines com acesso ao contact store implementam (gows/WAHA). A API
+   * oficial recebe a agenda pelo webhook smb_app_state_sync, não por aqui.
+   */
+  listPhonebook?(ch: ChannelCtx): Promise<PhonebookContact[]>;
 
   /**
    * Meta: HMAC over the raw body via the global app secret. Others: match

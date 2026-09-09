@@ -164,6 +164,8 @@ export async function findOrCreateContact(
           userId: auditUserId,
           phone: sanitized,
           name: input.name ?? sanitized,
+          // Nome vindo da integração = o negócio sabe quem é → nada automático troca.
+          nameSource: input.name ? 'crm' : null,
           email: input.email ?? null,
           company: input.company ?? null,
           customerCodes: normalizeCodes(input.customer_codes),

@@ -62,6 +62,7 @@ export async function PATCH(
     // type is a 400 rather than a silently-ignored no-op.
     const updates: Partial<{
       name: string | null;
+      nameSource: string | null;
       email: string | null;
       company: string | null;
       customerCodes: string[];
@@ -76,6 +77,9 @@ export async function PATCH(
         return fail('bad_request', `'${field}' must be a string or null`, 400);
       }
     }
+    // 📒 Nome trocado pela integração = o negócio sabe quem é → origem 'crm'
+    // (nada automático — perfil do WhatsApp, agenda — troca depois).
+    if ('name' in updates) updates.nameSource = updates.name ? 'crm' : null;
     // customer_codes: replace the full set (array of strings).
     if ('customer_codes' in body) {
       if (body.customer_codes !== null && !Array.isArray(body.customer_codes)) {

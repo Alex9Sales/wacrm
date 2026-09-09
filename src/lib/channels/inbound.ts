@@ -69,6 +69,8 @@ import {
 } from '@/lib/whatsapp/group';
 import { normalizeInboundPhoneBR } from '@/lib/whatsapp/phone-utils';
 import { matchesOptOut, optOutContact } from '@/lib/contacts/opt-out';
+import { asNameSource, decideContactName } from '@/lib/contacts/name-rule';
+import { lookupPhonebookName } from '@/lib/contacts/phonebook';
 import { handleCaptureWaRef } from '@/lib/capture/wa-ref';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
@@ -1604,27 +1606,35 @@ async function findOrCreateContact(
   name: string,
   opts?: { isGroup?: boolean },
 ): Promise<ContactOutcome | null> {
-  // Shape an existing row into the outcome. We only *fill* the name from the
-  // WhatsApp pushName while the contact still has no real name yet (empty, or
-  // still the bare phone from creation). Once a real name exists — whether the
-  // first pushName or a name the operator typed in the CRM — WhatsApp must NOT
-  // overwrite it, otherwise every new message reverts a CRM-edited name back to
-  // the WhatsApp one. (WhatsApp name changes after that point are ignored on
-  // purpose: the CRM is the source of truth for a saved contact's name.)
+  // Shape an existing row into the outcome. The WhatsApp pushName only *fills*
+  // the name while the contact still has no real name yet (empty, or still the
+  // bare phone from creation) — regra em lib/contacts/name-rule.ts: nome
+  // digitado no CRM > agenda do celular > formulário > perfil do WhatsApp.
+  // Once a real name exists WhatsApp must NOT overwrite it, otherwise every
+  // new message reverts a CRM-edited name back to the WhatsApp one. Ao
+  // preencher, o nome SALVO na agenda do celular (se a conta importou a
+  // agenda) vence o nome de perfil que o cliente escolheu.
   const asExisting = async (
     existing: ExistingContact,
   ): Promise<ContactOutcome> => {
-    const isBarePhone = (s: string) => /^\+?\d[\d\s()\-]{4,}$/.test(s.trim());
-    const hasRealName =
-      !!existing.name &&
-      existing.name !== phone &&
-      !isBarePhone(existing.name);
-    if (name && name !== existing.name && !hasRealName) {
+    let currentName = existing.name ?? null;
+    const decision = decideContactName({
+      current: { name: existing.name, phone, source: asNameSource(existing.nameSource) },
+      incoming: { name, source: 'whatsapp' },
+    });
+    if (decision.apply) {
+      const saved = opts?.isGroup ? null : await lookupPhonebookName(accountId, phone);
+      const next = saved ?? name;
       try {
         await db
           .update(contacts)
-          .set({ name, updatedAt: new Date().toISOString() })
+          .set({
+            name: next,
+            nameSource: saved ? 'phonebook' : 'whatsapp',
+            updatedAt: new Date().toISOString(),
+          })
           .where(eq(contacts.id, existing.id));
+        currentName = next;
       } catch (err) {
         console.error('[inbound] Error updating contact name:', err);
       }
@@ -1633,7 +1643,7 @@ async function findOrCreateContact(
       contact: {
         id: existing.id,
         userId: String(existing.userId),
-        name: existing.name ?? null,
+        name: currentName,
         avatarUrl: (existing.avatarUrl ?? null) as string | null,
       },
       wasCreated: false,
@@ -1664,6 +1674,10 @@ async function findOrCreateContact(
     return null;
   }
 
+  // 📒 Número salvo na agenda do celular (conta que importou a agenda) nasce
+  // com o nome da agenda, não com o nome de perfil. Lido FORA da transação.
+  const savedName = opts?.isGroup ? null : await lookupPhonebookName(accountId, phone);
+
   try {
     return await db.transaction(async (tx) => {
       await tx.execute(
@@ -1680,7 +1694,8 @@ async function findOrCreateContact(
             accountId,
             userId: ownerUserId,
             phone,
-            name: name || phone,
+            name: savedName ?? (name || phone),
+            nameSource: savedName ? 'phonebook' : name ? 'whatsapp' : null,
             isGroup: opts?.isGroup ?? false,
           })
           .returning(),
@@ -1801,12 +1816,13 @@ async function findOrCreateContactByExternalId(
     name: string | null;
     avatarUrl: string | null;
   }): Promise<ContactOutcome> => {
-    // Preenche o nome só enquanto o contato ainda não tem um nome real.
+    // Preenche o nome só enquanto o contato ainda não tem um nome real
+    // (origem 'whatsapp' = nome de perfil do canal; nunca troca nome existente).
     if (name && name !== existing.name && (!existing.name || existing.name === externalId)) {
       try {
         await db
           .update(contacts)
-          .set({ name, updatedAt: new Date().toISOString() })
+          .set({ name, nameSource: 'whatsapp', updatedAt: new Date().toISOString() })
           .where(eq(contacts.id, existing.id));
       } catch {
         /* best-effort */
@@ -1869,6 +1885,7 @@ async function findOrCreateContactByExternalId(
             phone: '',
             externalId,
             name: name || externalId,
+            nameSource: name ? 'whatsapp' : null,
           })
           .returning(),
       );

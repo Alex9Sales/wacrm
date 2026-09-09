@@ -111,6 +111,14 @@ import('./meta-health-worker')
     console.error('[worker] meta-health failed to start:', err);
   });
 
+// 📒 Agenda do celular — tick de 6 h: reconfere a agenda dos números que já
+// importaram e aplica a regra de nome (CRM > agenda > perfil do WhatsApp).
+import('./phonebook-sync-worker')
+  .then((m) => m.startPhonebookSyncWorker())
+  .catch((err) => {
+    console.error('[worker] phonebook-sync failed to start:', err);
+  });
+
 // 🔄 Sync ERP → CRM — 1x/dia (05h locais) por conta com `historico_compras`:
 // compras feitas fora do CRM entram no CDL (caso Poleana, 01/09).
 import('./erp-sync-worker')

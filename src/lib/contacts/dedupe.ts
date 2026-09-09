@@ -31,6 +31,8 @@ export interface ExistingContact {
   id: string;
   phone: string;
   name?: string | null;
+  /** Origem do nome (migr 0166): crm | phonebook | whatsapp | null. */
+  nameSource?: string | null;
   [key: string]: unknown;
 }
 

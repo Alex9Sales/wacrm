@@ -20,7 +20,7 @@
 // ============================================================
 
 import { NextResponse, after } from 'next/server'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 
 import { db, callLogs, channels, contacts, conversations, messageReactions, messages } from '@/db'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
@@ -30,6 +30,7 @@ import { decryptCredentials, loadMetaChannelByPhoneNumberId } from '@/lib/channe
 import { metaProvider } from '@/lib/channels/providers/meta'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
+import { ingestMetaStateSync, type MetaStateSyncItem } from '@/lib/contacts/phonebook'
 import { applyStatusUpdate } from '@/lib/channels/status'
 import { publishEvent } from '@/lib/events/publish'
 import type { ChannelCtx } from '@/lib/channels/provider'
@@ -102,6 +103,9 @@ interface MetaRawValue {
   statuses?: MetaRawStatus[]
   calls?: MetaRawCall[]
   message_echoes?: MetaEchoMessage[]
+  // COEXISTÊNCIA: agenda do celular (campo `smb_app_state_sync`) — a Meta
+  // manda os contatos salvos no aparelho (action add/remove).
+  state_sync?: MetaStateSyncItem[]
 }
 
 interface MetaRawChange {
@@ -244,6 +248,14 @@ async function processWebhook(body: MetaRawBody) {
       // CRM — que é justamente o ponto da coexistência (celular + CRM juntos).
       if (change.field === 'smb_message_echoes') {
         await handleMessageEchoes(value)
+        continue
+      }
+
+      // ---- COEXISTÊNCIA: agenda do celular (smb_app_state_sync) ----
+      // Precisa do campo assinado no app da Meta. Vira phonebook_entries +
+      // regra de nome (CRM > agenda > perfil) — lib/contacts/phonebook.ts.
+      if (change.field === 'smb_app_state_sync') {
+        await handleStateSync(value, entry.id)
         continue
       }
 
@@ -568,6 +580,48 @@ async function handleMetaReaction(channel: ChannelCtx, msg: MetaRawMessage) {
 // se já existe, foi o CRM que enviou; se não, veio do celular e a gente insere
 // como mensagem de saída ('agent') na conversa do cliente.
 // ------------------------------------------------------------
+/**
+ * Agenda do celular em coexistência. O canal vem pelo phone_number_id do
+ * `metadata`; se a Meta mandar só o WABA (entry.id), cai pro canal Meta da
+ * conta com esse `waba_id` no provider_meta.
+ */
+async function handleStateSync(value: MetaRawValue, wabaId?: string) {
+  const phoneNumberId = value.metadata?.phone_number_id
+  let channel: { id: string; accountId: string } | null = phoneNumberId
+    ? await loadMetaChannelByPhoneNumberId(phoneNumberId)
+    : null
+  if (!channel && wabaId) {
+    channel = firstOrNull(
+      await db
+        .select({ id: channels.id, accountId: channels.accountId })
+        .from(channels)
+        .where(
+          and(
+            eq(channels.provider, 'meta'),
+            sql`${channels.providerMeta}->>'waba_id' = ${wabaId}`,
+          ),
+        )
+        .limit(1),
+    )
+  }
+  if (!channel) {
+    console.error('[webhooks/meta] state_sync sem canal', { phoneNumberId, wabaId })
+    return
+  }
+  const items = Array.isArray(value.state_sync) ? value.state_sync : []
+  if (items.length === 0) return
+  try {
+    const r = await ingestMetaStateSync(channel, items)
+    const a = r.applied
+    console.log(
+      `[webhooks/meta] agenda (state_sync) canal ${channel.id}: +${r.added} −${r.removed}` +
+        (a ? ` · preencheu ${a.filled} · trocou perfil ${a.upgraded} · acompanhou ${a.mirrored}` : ''),
+    )
+  } catch (err) {
+    console.error('[webhooks/meta] state_sync failed:', err)
+  }
+}
+
 async function handleMessageEchoes(value: MetaRawValue) {
   const phoneNumberId = value.metadata?.phone_number_id
   const channel = phoneNumberId

@@ -23,6 +23,8 @@ import { and, eq } from 'drizzle-orm';
 import { db, contacts, conversations } from '@/db';
 import { firstOrNull, firstOrThrow } from '@/db/helpers';
 import { findExistingContact, isUniqueViolation } from '@/lib/contacts/dedupe';
+import { asNameSource, decideContactName } from '@/lib/contacts/name-rule';
+import { lookupPhonebookName } from '@/lib/contacts/phonebook';
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels';
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils';
 import { SendMessageError } from '@/lib/whatsapp/send-message';
@@ -101,13 +103,23 @@ export async function resolveConversationByPhone(
   const existing = await findExistingContact(accountId, sanitized);
   if (existing) {
     contactId = existing.id;
-    if (name && name !== existing.name) {
+    // 📒 Regra do nome (lib/contacts/name-rule.ts): o nome vindo de formulário
+    // / API / lead de anúncio troca perfil do WhatsApp e legado (como sempre),
+    // mas NÃO um nome digitado no CRM nem o da agenda do celular.
+    const decision = decideContactName({
+      current: { name: existing.name, phone: existing.phone, source: asNameSource(existing.nameSource) },
+      incoming: { name: name ?? null, source: null },
+    });
+    if (decision.apply && name) {
       await db
         .update(contacts)
-        .set({ name, updatedAt: new Date().toISOString() })
+        .set({ name: name.trim(), nameSource: null, updatedAt: new Date().toISOString() })
         .where(eq(contacts.id, existing.id));
     }
   } else {
+    // Número salvo na agenda do celular (conta que importou) nasce com o nome
+    // da agenda — é como o negócio conhece a pessoa.
+    const savedName = await lookupPhonebookName(accountId, sanitized);
     let created: { id: string } | null = null;
     try {
       created = firstOrThrow(
@@ -117,7 +129,8 @@ export async function resolveConversationByPhone(
             accountId,
             userId: ownerUserId,
             phone: sanitized,
-            name: name || sanitized,
+            name: savedName ?? (name || sanitized),
+            nameSource: savedName ? 'phonebook' : null,
           })
           .returning({ id: contacts.id })
       );

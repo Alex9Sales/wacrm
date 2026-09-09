@@ -53,6 +53,16 @@ import type {
   Deal,
 } from '@/types'
 
+/**
+ * 📒 Origem 'crm' só quando o nome realmente MUDOU nesta gravação — um
+ * "salvar" que só mexeu no e-mail não pode travar um nome de perfil do
+ * WhatsApp como se alguém o tivesse digitado (regra em lib/contacts/name-rule).
+ */
+const crmNameSource = (name: string | null) =>
+  name
+    ? sql<string | null>`CASE WHEN ${contacts.name} IS DISTINCT FROM ${name} THEN 'crm' ELSE ${contacts.nameSource} END`
+    : null
+
 const contactColumns = {
   id: contacts.id,
   user_id: contacts.userId,
@@ -60,6 +70,7 @@ const contactColumns = {
   phone: contacts.phone,
   phone_normalized: contacts.phoneNormalized,
   name: contacts.name,
+  name_source: contacts.nameSource,
   email: contacts.email,
   company: contacts.company,
       birthday: contacts.birthday,
@@ -398,6 +409,7 @@ export async function saveContact(
         .update(contacts)
         .set({
           name,
+          nameSource: crmNameSource(name),
           phone,
           email,
           company,
@@ -417,6 +429,7 @@ export async function saveContact(
           userId: ctx.userId,
           accountId: ctx.accountId,
           name,
+          nameSource: name ? 'crm' : null,
           phone,
           email,
           company,
@@ -603,6 +616,8 @@ export async function importContacts(
       accountId: ctx.accountId,
       phone: row.phone,
       name: row.name || null,
+      // Nome vindo da planilha = digitado pelo negócio → nada automático troca.
+      nameSource: row.name ? ('crm' as const) : null,
       email: row.email || null,
       company: row.company || null,
       ...(row.birthday !== undefined ? { birthday: normalizeBirthday(row.birthday) } : {}),
@@ -656,7 +671,10 @@ export async function importContacts(
   //     the row are (re)assigned via the same tagAssignments path.
   for (const { id, row } of toOverwrite) {
     const set: Record<string, unknown> = {}
-    if (row.name) set.name = row.name
+    if (row.name) {
+      set.name = row.name
+      set.nameSource = 'crm'
+    }
     if (row.email) set.email = row.email
     if (row.company) set.company = row.company
     if (row.codes && row.codes.length > 0) set.customerCodes = row.codes
@@ -875,10 +893,12 @@ export async function updateContactDetails(input: {
     if (!phone) return { error: 'Phone number is required' }
     const company = input.company.trim() || null
     const companyId = await resolveCompanyId(ctx.accountId, ctx.userId, company)
+    const name = input.name.trim() || null
     const updated = await db
       .update(contacts)
       .set({
-        name: input.name.trim() || null,
+        name,
+        nameSource: crmNameSource(name),
         phone,
         email: input.email.trim() || null,
         company,

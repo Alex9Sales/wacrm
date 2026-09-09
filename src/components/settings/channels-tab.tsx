@@ -27,6 +27,7 @@ import {
   Users,
   MessageCircle,
   Globe,
+  BookUser,
 } from 'lucide-react';
 
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider';
@@ -51,6 +52,7 @@ import { ChannelQrModal } from './channel-qr-modal';
 import { ChannelLocationDialog } from './channel-location-dialog';
 import { ChannelPixDialog } from './channel-pix-dialog';
 import { ChannelGroupsDialog } from './channel-groups-dialog';
+import { ChannelPhonebookDialog } from './channel-phonebook-dialog';
 import { ChannelCommentAutomationDialog } from './channel-comment-automation-dialog';
 import { ChannelProviderIcon } from './channel-provider-icon';
 
@@ -158,6 +160,8 @@ export function ChannelsTab() {
   const [pixing, setPixing] = useState<ChannelSummary | null>(null);
   // The channel whose monitored groups are being picked.
   const [grouping, setGrouping] = useState<ChannelSummary | null>(null);
+  // 📒 O canal cuja agenda do celular está sendo importada.
+  const [phonebooking, setPhonebooking] = useState<ChannelSummary | null>(null);
   // O canal Instagram cuja automação de comentários está sendo editada.
   const [commenting, setCommenting] = useState<ChannelSummary | null>(null);
   // The channel pending delete-confirmation.
@@ -350,6 +354,7 @@ export function ChannelsTab() {
               onLocation={() => setLocating(ch)}
               onPix={() => setPixing(ch)}
               onGroups={() => setGrouping(ch)}
+              onPhonebook={() => setPhonebooking(ch)}
               onComments={() => setCommenting(ch)}
               onDelete={() => setDeleting(ch)}
               onConfigureDomain={() => setDomainSetup({ channelId: ch.id, initial: null })}
@@ -429,6 +434,14 @@ export function ChannelsTab() {
         <ChannelGroupsDialog
           channel={grouping}
           onClose={() => setGrouping(null)}
+        />
+      )}
+
+      {/* 📒 Importar agenda do celular (WAHA puxa; Meta recebe pelo webhook). */}
+      {phonebooking && (
+        <ChannelPhonebookDialog
+          channel={phonebooking}
+          onClose={() => setPhonebooking(null)}
         />
       )}
 
@@ -571,6 +584,7 @@ function ChannelRow({
   onLocation,
   onPix,
   onGroups,
+  onPhonebook,
   onComments,
   onDelete,
   onConfigureDomain,
@@ -581,11 +595,14 @@ function ChannelRow({
   onLocation: () => void;
   onPix: () => void;
   onGroups: () => void;
+  onPhonebook: () => void;
   onComments: () => void;
   onDelete: () => void;
   onConfigureDomain: () => void;
 }) {
   const isMeta = channel.provider === 'meta';
+  // 📒 Agenda do celular: WAHA lê do aparelho; Meta (coexistência) recebe pelo webhook.
+  const hasPhonebook = channel.provider === 'waha' || isMeta;
   const metaHealth = (channel.provider_meta as { health?: { last_error?: string | null; last_at?: string | null; warning?: string | null } }).health ?? null;
   const isInstagram = channel.provider === 'instagram';
   const canPair = CAPABILITIES[channel.provider]?.qrPairing ?? false;
@@ -715,6 +732,19 @@ function ChannelRow({
             >
               <Users className="size-3.5" />
               Grupos
+            </Button>
+          )}
+
+          {hasPhonebook && (
+            <Button
+              variant="ghost"
+              size="sm"
+              title="Importar a agenda do celular (contatos com o nome como você salvou)"
+              onClick={onPhonebook}
+              className="text-muted-foreground hover:text-foreground"
+            >
+              <BookUser className="size-3.5" />
+              Agenda
             </Button>
           )}
 

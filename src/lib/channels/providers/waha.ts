@@ -50,6 +50,7 @@ import type {
   NormalizedStatus,
   OutboundMedia,
   ParsedWebhook,
+  PhonebookContact,
   SendOptions,
   WebhookVerifyCtx,
   WhatsAppProvider,
@@ -1370,6 +1371,54 @@ export const wahaProvider: WhatsAppProvider = {
    *  LID↔PN map: GET /api/{session}/lids/{lid} → { lid, pn:"55…@c.us" }. Used for
    *  a 1:1 inbound that arrived addressed ONLY by @lid (no phone in the payload).
    *  Cached per session (TTL); null when the lid is unknown. */
+  /**
+   * 📒 Agenda do celular pareado. VERIFICADO no gows da Fluxia (09/09/2026):
+   *   GET {base}/api/contacts/all?session=<s>&limit=<n>&offset=<o>
+   *   → [{ id: "556791875477@c.us" | "…@lid", name, pushname }]
+   * `name` = nome SALVO na agenda (vazio pra quem só mandou mensagem);
+   * `pushname` = nome de perfil da pessoa. Só entradas @c.us carregam nome
+   * (as @lid vêm sem). O store inteiro é grande (35 mil na conta do Alex,
+   * 11,8 mil com nome) → pagina de 1000 em 1000 e devolve só quem tem nome.
+   * Guarda contra engine que ignore o offset (mesma 1ª entrada repetida).
+   */
+  async listPhonebook(ch: ChannelCtx): Promise<PhonebookContact[]> {
+    const base = baseUrlOf(ch);
+    const session = encodeURIComponent(sessionOf(ch));
+    const LIMIT = 1000;
+    const out: PhonebookContact[] = [];
+    let offset = 0;
+    let lastFirstId: string | null = null;
+    for (let page = 0; page < 500; page++) {
+      const { ok, status, body } = await httpJson(
+        `${base}/api/contacts/all?session=${session}&limit=${LIMIT}&offset=${offset}`,
+        { method: 'GET', headers: headersOf(ch) },
+        60_000,
+      );
+      if (!ok) throw new Error(`WAHA contacts/all HTTP ${status}`);
+      const rows = Array.isArray(body)
+        ? (body as unknown as { id?: unknown; name?: unknown; pushname?: unknown }[])
+        : [];
+      if (rows.length === 0) break;
+      const firstId = typeof rows[0]?.id === 'string' ? rows[0].id : '';
+      if (firstId && firstId === lastFirstId) break;
+      lastFirstId = firstId;
+      for (const r of rows) {
+        const id = typeof r.id === 'string' ? r.id : '';
+        if (!/@c\.us$/i.test(id)) continue;
+        const name = typeof r.name === 'string' ? r.name.trim() : '';
+        if (!name) continue;
+        const digits = id.split('@')[0].split(':')[0].replace(/\D/g, '');
+        if (!digits) continue;
+        const pushName =
+          typeof r.pushname === 'string' && r.pushname.trim() ? r.pushname.trim() : null;
+        out.push({ phone: digits, name, pushName });
+      }
+      if (rows.length < LIMIT) break;
+      offset += rows.length;
+    }
+    return out;
+  },
+
   async resolveLidToPhone(
     ch: ChannelCtx,
     lid: string,

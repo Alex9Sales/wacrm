@@ -10,6 +10,7 @@ import {
 import { formatCurrency } from '@/lib/currency';
 import { toast } from 'sonner';
 import type { Contact, Tag, ContactNote, CustomField, Deal, MessageTemplate } from '@/types';
+import { nameSourceLabel } from '@/lib/contacts/name-rule';
 import {
   listTags,
   getContact,
@@ -455,7 +456,8 @@ export function ContactDetailView({
                     {contact.name || 'Desconhecido'}
                   </SheetTitle>
                   <SheetDescription className="text-muted-foreground text-xs mt-0.5">
-                    Detalhes do contato
+                    {/* 📒 De onde veio o nome — responde "por que está com esse nome?" */}
+                    {nameSourceLabel(contact.name_source) ?? 'Detalhes do contato'}
                   </SheetDescription>
                   <div className="flex flex-wrap items-center gap-3 mt-1.5 text-xs text-muted-foreground">
                     <button
