@@ -22,9 +22,17 @@ import type {
   NormalizedStatus,
   OutboundMedia,
   ParsedWebhook,
+  SendOptions,
   WebhookVerifyCtx,
   WhatsAppProvider,
 } from '../provider'
+
+/** 🙋 Fora da janela de 24 h: tag HUMAN_AGENT (7 dias). Decisão vem do send-message. */
+function messagingTypeOf(opts?: SendOptions): Record<string, string> {
+  return opts?.humanAgent
+    ? { messaging_type: 'MESSAGE_TAG', tag: 'HUMAN_AGENT' }
+    : { messaging_type: 'RESPONSE' }
+}
 import { verifyMetaWebhookSignature } from '@/lib/whatsapp/webhook-signature'
 
 const DEFAULT_GRAPH_BASE = 'https://graph.facebook.com/v21.0'
@@ -153,17 +161,17 @@ export const messengerProvider: WhatsAppProvider = {
   id: 'messenger',
   capabilities: CAPABILITIES.messenger,
 
-  async sendText(ch, to, text) {
+  async sendText(ch, to, text, opts) {
     const url = `${graphBaseOf(ch)}/${pageIdOf(ch)}/messages`
     const data = await graphPost(url, accessTokenOf(ch), {
       recipient: { id: to },
-      messaging_type: 'RESPONSE',
+      ...messagingTypeOf(opts),
       message: { text },
     })
     return { externalMessageId: data.message_id ?? '' }
   },
 
-  async sendMedia(ch, to, media: OutboundMedia) {
+  async sendMedia(ch, to, media: OutboundMedia, opts) {
     const url = `${graphBaseOf(ch)}/${pageIdOf(ch)}/messages`
     const token = accessTokenOf(ch)
     if (!media.url) {
@@ -172,7 +180,7 @@ export const messengerProvider: WhatsAppProvider = {
     const type = media.kind === 'document' ? 'file' : media.kind
     const data = await graphPost(url, token, {
       recipient: { id: to },
-      messaging_type: 'RESPONSE',
+      ...messagingTypeOf(opts),
       message: {
         attachment: { type, payload: { url: media.url, is_reusable: false } },
       },
@@ -181,7 +189,7 @@ export const messengerProvider: WhatsAppProvider = {
       try {
         await graphPost(url, token, {
           recipient: { id: to },
-          messaging_type: 'RESPONSE',
+          ...messagingTypeOf(opts),
           message: { text: media.caption.trim() },
         })
       } catch {

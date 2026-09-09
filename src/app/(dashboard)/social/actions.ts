@@ -15,6 +15,19 @@ import { revalidatePath } from 'next/cache'
 import { db, channels, socialPosts } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
+import { loadChannelByAccount } from '@/lib/channels/channels'
+import {
+  createMediaComment,
+  deleteComment,
+  fetchInstagramAccountProfile,
+  fetchInstagramMedia,
+  listMediaComments,
+  replyToComment,
+  setCommentHidden,
+  type InstagramAccountProfile,
+  type InstagramComment,
+  type InstagramMedia,
+} from '@/lib/channels/providers/instagram'
 import {
   validatePost,
   type SocialAutomationDraft,
@@ -277,4 +290,134 @@ export async function deleteSocialPost(id: string): Promise<ActionResult> {
   await db.delete(socialPosts).where(and(eq(socialPosts.id, id), eq(socialPosts.accountId, ctx.accountId)))
   revalidatePath('/social')
   return { ok: true }
+}
+
+// ============================================================
+// 📸 Conta conectada + moderação de comentários (09/09/2026 — revisão da Meta:
+// instagram_business_basic precisa mostrar a conta com o @ visível, perfil
+// buscado AO VIVO e a lista de mídias; instagram_business_manage_comments
+// precisa do ciclo comentar → responder → ocultar → apagar, com chamadas reais
+// na API antes de reenviar — o "api_precheck"). Leitura: qualquer membro.
+// Moderação: supervisor+ (mesmo nível de quem publica).
+// ============================================================
+
+export interface InstagramAccountPanel {
+  profile: InstagramAccountProfile
+  media: InstagramMedia[]
+  fetchedAt: string
+}
+
+async function loadIgCtx(accountId: string, channelId: string) {
+  const ch = await loadChannelByAccount(accountId, channelId)
+  if (!ch || ch.provider !== 'instagram') return null
+  return ch
+}
+
+function errMsg(err: unknown, fallback: string): string {
+  return err instanceof Error && err.message ? err.message : fallback
+}
+
+/** Perfil (nome, bio, seguidores…) + últimas mídias da conta, ao vivo na API. */
+export async function getInstagramAccountPanel(
+  channelId: string,
+): Promise<ActionResult<{ panel: InstagramAccountPanel }>> {
+  try {
+    const ctx = await getCurrentAccount()
+    const ch = await loadIgCtx(ctx.accountId, channelId)
+    if (!ch) return { ok: false, error: 'Canal do Instagram não encontrado.' }
+    const [profile, media] = await Promise.all([
+      fetchInstagramAccountProfile(ch),
+      fetchInstagramMedia(ch, 24),
+    ])
+    return { ok: true, panel: { profile, media, fetchedAt: new Date().toISOString() } }
+  } catch (err) {
+    return { ok: false, error: errMsg(err, 'Não foi possível ler a conta do Instagram.') }
+  }
+}
+
+/** Comentários (com respostas) de um post da conta. */
+export async function listInstagramMediaComments(
+  channelId: string,
+  mediaId: string,
+): Promise<ActionResult<{ comments: InstagramComment[] }>> {
+  try {
+    const ctx = await getCurrentAccount()
+    const ch = await loadIgCtx(ctx.accountId, channelId)
+    if (!ch) return { ok: false, error: 'Canal do Instagram não encontrado.' }
+    const comments = await listMediaComments(ch, mediaId)
+    return { ok: true, comments }
+  } catch (err) {
+    return { ok: false, error: errMsg(err, 'Não foi possível ler os comentários.') }
+  }
+}
+
+/** Comenta num post da própria conta. */
+export async function createInstagramComment(
+  channelId: string,
+  mediaId: string,
+  message: string,
+): Promise<ActionResult<{ id: string }>> {
+  try {
+    const ctx = await requireRole('supervisor')
+    const text = message.trim().slice(0, 2200)
+    if (!text) return { ok: false, error: 'Escreva o comentário.' }
+    const ch = await loadIgCtx(ctx.accountId, channelId)
+    if (!ch) return { ok: false, error: 'Canal do Instagram não encontrado.' }
+    const r = await createMediaComment(ch, mediaId, text)
+    return { ok: true, id: r.id }
+  } catch (err) {
+    return { ok: false, error: errMsg(err, 'Não foi possível comentar.') }
+  }
+}
+
+/** Responde publicamente um comentário (fica aninhado nele). */
+export async function replyInstagramComment(
+  channelId: string,
+  commentId: string,
+  message: string,
+): Promise<ActionResult> {
+  try {
+    const ctx = await requireRole('supervisor')
+    const text = message.trim().slice(0, 2200)
+    if (!text) return { ok: false, error: 'Escreva a resposta.' }
+    const ch = await loadIgCtx(ctx.accountId, channelId)
+    if (!ch) return { ok: false, error: 'Canal do Instagram não encontrado.' }
+    await replyToComment(ch, commentId, text)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: errMsg(err, 'Não foi possível responder.') }
+  }
+}
+
+/** Oculta (ou volta a mostrar) um comentário no post. */
+export async function hideInstagramComment(
+  channelId: string,
+  commentId: string,
+  hidden: boolean,
+): Promise<ActionResult> {
+  try {
+    const ctx = await requireRole('supervisor')
+    const ch = await loadIgCtx(ctx.accountId, channelId)
+    if (!ch) return { ok: false, error: 'Canal do Instagram não encontrado.' }
+    await setCommentHidden(ch, commentId, hidden)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: errMsg(err, hidden ? 'Não foi possível ocultar.' : 'Não foi possível mostrar.') }
+  }
+}
+
+/** Apaga um comentário do post (o nosso ou o de qualquer pessoa). */
+export async function deleteInstagramComment(
+  channelId: string,
+  commentId: string,
+): Promise<ActionResult> {
+  try {
+    const ctx = await requireRole('supervisor')
+    const ch = await loadIgCtx(ctx.accountId, channelId)
+    if (!ch) return { ok: false, error: 'Canal do Instagram não encontrado.' }
+    await deleteComment(ch, commentId)
+    return { ok: true }
+  } catch (err) {
+    return { ok: false, error: errMsg(err, 'Não foi possível apagar.') }
+  }
 }

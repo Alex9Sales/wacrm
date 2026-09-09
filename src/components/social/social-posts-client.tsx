@@ -70,6 +70,7 @@ import {
   type SocialPostRow,
 } from '@/app/(dashboard)/social/actions';
 import type { FlowLite, IgChannelLite } from '@/components/settings/instagram-comments-actions';
+import { InstagramAccountPanel } from './instagram-account-panel';
 
 // ---------------------------------------------------------------- meta
 
@@ -256,6 +257,9 @@ export function SocialPostsClient() {
           </button>
         </div>
       ) : null}
+
+      {/* 📸 Conta conectada: perfil ao vivo, mídias e moderação de comentários. */}
+      {channels.length > 0 ? <InstagramAccountPanel channels={channels} /> : null}
 
       {options && channels.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-card p-8 text-center">

@@ -27,7 +27,7 @@
 // other providers resolve their own chatId (WAHA) or don't need it.
 // ============================================================
 
-import { and, eq } from 'drizzle-orm';
+import { and, desc, eq } from 'drizzle-orm';
 
 import {
   db,
@@ -512,6 +512,33 @@ export async function sendMessageToConversation(
     }
   }
 
+  // 🙋 Instagram/Messenger: passadas 24 h da última mensagem do CLIENTE, a Meta
+  // só aceita a resposta com a tag HUMAN_AGENT (recurso "Human Agent": atendente
+  // humano responde em até 7 dias). Sem a tag o envio morre em "outside of
+  // allowed window". WhatsApp/e-mail ignoram a flag.
+  let humanAgent = false;
+  if (channel.provider === 'instagram' || channel.provider === 'messenger') {
+    try {
+      const last = firstOrNull(
+        await db
+          .select({ at: messages.createdAt })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, conversationId),
+              eq(messages.senderType, 'customer'),
+            ),
+          )
+          .orderBy(desc(messages.createdAt))
+          .limit(1),
+      );
+      const lastMs = last?.at ? new Date(last.at).getTime() : 0;
+      humanAgent = !lastMs || Date.now() - lastMs > 24 * 60 * 60_000;
+    } catch {
+      humanAgent = false;
+    }
+  }
+
   // Dispatch one send attempt through the resolved provider. Returns the
   // provider-side message id. Media/text/template all route through the
   // WhatsAppProvider interface — the adapter owns the transport specifics.
@@ -546,7 +573,9 @@ export async function sendMessageToConversation(
         filename: filename || undefined,
         mimetype: mimetype || undefined,
       };
-      const result = await provider.sendMedia(channel, phone, media);
+      const result = await provider.sendMedia(channel, phone, media, {
+        humanAgent: humanAgent || undefined,
+      });
       return result.externalMessageId;
     }
     const result = await provider.sendText(channel, phone, waText!, {
@@ -554,6 +583,7 @@ export async function sendMessageToConversation(
       contextFromMe,
       mentions: mentionJids.length ? mentionJids : undefined,
       subject: subject || undefined,
+      humanAgent: humanAgent || undefined,
     });
     return result.externalMessageId;
   };

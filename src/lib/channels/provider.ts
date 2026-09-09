@@ -194,6 +194,13 @@ export interface SendOptions {
   mentions?: string[];
   /** Assunto do e-mail (canais de e-mail). Ignorado por WhatsApp/IG/Messenger. */
   subject?: string;
+  /**
+   * 🙋 Instagram/Messenger fora da janela de 24 h: manda com a tag HUMAN_AGENT
+   * (recurso "Human Agent" da Meta — atendente humano pode responder em até
+   * 7 dias). Quem decide é o motor de envio pelo último inbound da conversa;
+   * WhatsApp/e-mail ignoram.
+   */
+  humanAgent?: boolean;
   /** Anexos do e-mail (canais de e-mail): o provider baixa cada URL e anexa
    *  TODOS num único e-mail. Ignorado por WhatsApp/IG/Messenger. */
   attachments?: { url: string; filename?: string }[];
@@ -309,6 +316,7 @@ export interface WhatsAppProvider {
     ch: ChannelCtx,
     toE164: string,
     media: OutboundMedia,
+    opts?: SendOptions,
   ): Promise<{ externalMessageId: string }>;
 
   sendTemplate?(

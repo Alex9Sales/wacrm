@@ -22,6 +22,7 @@ import type {
   NormalizedStatus,
   OutboundMedia,
   ParsedWebhook,
+  SendOptions,
   WebhookVerifyCtx,
   WhatsAppProvider,
 } from '../provider'
@@ -241,11 +242,22 @@ export async function fetchFollowsBusiness(
   }
 }
 
+/**
+ * 🙋 Fora da janela de 24 h o Instagram só aceita a tag HUMAN_AGENT (recurso
+ * "Human Agent": atendente humano responde em até 7 dias). Quem decide é o
+ * motor de envio (send-message) pelo último inbound; aqui só traduz.
+ */
+function messagingTypeOf(opts?: SendOptions): Record<string, string> {
+  return opts?.humanAgent
+    ? { messaging_type: 'MESSAGE_TAG', tag: 'HUMAN_AGENT' }
+    : { messaging_type: 'RESPONSE' }
+}
+
 async function graphPost(
   url: string,
   token: string,
   body: unknown,
-): Promise<{ message_id?: string }> {
+): Promise<{ message_id?: string; id?: string; success?: boolean }> {
   const res = await fetch(url, {
     method: 'POST',
     headers: {
@@ -256,6 +268,8 @@ async function graphPost(
   })
   const data = (await res.json().catch(() => ({}))) as {
     message_id?: string
+    id?: string
+    success?: boolean
     error?: { message?: string; code?: number }
   }
   if (!res.ok || data.error) {
@@ -325,6 +339,162 @@ export async function fetchInstagramMedia(
   } catch (err) {
     console.error('[instagram media] error', err)
     return []
+  }
+}
+
+// ------------------------------------------------------------
+// 📸 Perfil da conta + moderação de comentários (revisão da Meta, 09/09/2026:
+// o screencast de instagram_business_basic precisa mostrar a conta com o @
+// visível, nome/bio/seguidores buscados AO VIVO e a lista de mídias; o de
+// instagram_business_manage_comments precisa do ciclo completo — comentar,
+// responder, ocultar e apagar — e o "api_precheck" exige chamadas reais).
+// ------------------------------------------------------------
+
+export interface InstagramAccountProfile {
+  id: string
+  username: string | null
+  name: string | null
+  biography: string | null
+  followersCount: number | null
+  followsCount: number | null
+  mediaCount: number | null
+  profilePictureUrl: string | null
+  website: string | null
+}
+
+/**
+ * Perfil da PRÓPRIA conta conectada, ao vivo (instagram_business_basic).
+ * GET {graphBase}/{ig_id}?fields=username,name,biography,followers_count,…
+ */
+export async function fetchInstagramAccountProfile(
+  ch: ChannelCtx,
+): Promise<InstagramAccountProfile> {
+  const fields =
+    'id,username,name,biography,followers_count,follows_count,media_count,profile_picture_url,website'
+  const url = `${graphBaseOf(ch)}/${igIdOf(ch)}?fields=${fields}`
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessTokenOf(ch)}` },
+  })
+  const json = (await res.json().catch(() => ({}))) as Record<string, unknown> & {
+    error?: { message?: string }
+  }
+  if (!res.ok || json.error) {
+    throw new Error(
+      `instagram perfil falhou: ${res.status} ${json.error?.message ?? ''}`.trim(),
+    )
+  }
+  const num = (v: unknown) => (typeof v === 'number' ? v : null)
+  const str = (v: unknown) => (typeof v === 'string' && v ? v : null)
+  return {
+    id: String(json.id ?? igIdOf(ch)),
+    username: str(json.username),
+    name: str(json.name),
+    biography: str(json.biography),
+    followersCount: num(json.followers_count),
+    followsCount: num(json.follows_count),
+    mediaCount: num(json.media_count),
+    profilePictureUrl: str(json.profile_picture_url),
+    website: str(json.website),
+  }
+}
+
+export interface InstagramComment {
+  id: string
+  text: string
+  username: string | null
+  timestamp: string | null
+  hidden: boolean
+  likeCount: number | null
+  replies: InstagramComment[]
+}
+
+function toComment(raw: Record<string, unknown>): InstagramComment {
+  const from = raw.from as { username?: unknown } | undefined
+  const repliesRaw = (raw.replies as { data?: Record<string, unknown>[] } | undefined)?.data
+  return {
+    id: String(raw.id ?? ''),
+    text: typeof raw.text === 'string' ? raw.text : '',
+    username:
+      typeof raw.username === 'string'
+        ? raw.username
+        : typeof from?.username === 'string'
+          ? from.username
+          : null,
+    timestamp: typeof raw.timestamp === 'string' ? raw.timestamp : null,
+    hidden: raw.hidden === true,
+    likeCount: typeof raw.like_count === 'number' ? raw.like_count : null,
+    replies: Array.isArray(repliesRaw) ? repliesRaw.map(toComment) : [],
+  }
+}
+
+/**
+ * Comentários de um post (com as respostas). GET {graphBase}/{mediaId}/comments.
+ * Usa instagram_business_manage_comments.
+ */
+export async function listMediaComments(
+  ch: ChannelCtx,
+  mediaId: string,
+  limit = 50,
+): Promise<InstagramComment[]> {
+  const fields =
+    'id,text,username,timestamp,hidden,like_count,replies{id,text,username,timestamp,hidden,like_count}'
+  const url =
+    `${graphBaseOf(ch)}/${encodeURIComponent(mediaId)}/comments` +
+    `?fields=${encodeURIComponent(fields)}&limit=${limit}`
+  const res = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessTokenOf(ch)}` },
+  })
+  const json = (await res.json().catch(() => ({}))) as {
+    data?: Record<string, unknown>[]
+    error?: { message?: string }
+  }
+  if (!res.ok || json.error) {
+    throw new Error(
+      `instagram comentários falhou: ${res.status} ${json.error?.message ?? ''}`.trim(),
+    )
+  }
+  return (json.data ?? []).map(toComment)
+}
+
+/** Comenta num post da própria conta. POST {graphBase}/{mediaId}/comments. */
+export async function createMediaComment(
+  ch: ChannelCtx,
+  mediaId: string,
+  message: string,
+): Promise<{ id: string }> {
+  const data = await graphPost(
+    `${graphBaseOf(ch)}/${encodeURIComponent(mediaId)}/comments`,
+    accessTokenOf(ch),
+    { message },
+  )
+  return { id: data.id ?? '' }
+}
+
+/** Oculta/mostra um comentário. POST {graphBase}/{commentId} { hide }. */
+export async function setCommentHidden(
+  ch: ChannelCtx,
+  commentId: string,
+  hidden: boolean,
+): Promise<void> {
+  await graphPost(`${graphBaseOf(ch)}/${encodeURIComponent(commentId)}`, accessTokenOf(ch), {
+    hide: hidden,
+  })
+}
+
+/** Apaga um comentário (de qualquer pessoa) num post da própria conta. DELETE {graphBase}/{commentId}. */
+export async function deleteComment(ch: ChannelCtx, commentId: string): Promise<void> {
+  const res = await fetch(`${graphBaseOf(ch)}/${encodeURIComponent(commentId)}`, {
+    method: 'DELETE',
+    headers: { Authorization: `Bearer ${accessTokenOf(ch)}` },
+  })
+  const data = (await res.json().catch(() => ({}))) as {
+    success?: boolean
+    error?: { message?: string }
+  }
+  if (!res.ok || data.error) {
+    throw new Error(
+      `instagram apagar comentário falhou: ${res.status} ${data.error?.message ?? ''}`.trim(),
+    )
   }
 }
 
@@ -404,17 +574,17 @@ export const instagramProvider: WhatsAppProvider = {
   id: 'instagram',
   capabilities: CAPABILITIES.instagram,
 
-  async sendText(ch, to, text) {
+  async sendText(ch, to, text, opts) {
     const url = `${graphBaseOf(ch)}/${igIdOf(ch)}/messages`
     const data = await graphPost(url, accessTokenOf(ch), {
       recipient: { id: to },
-      messaging_type: 'RESPONSE',
+      ...messagingTypeOf(opts),
       message: { text },
     })
     return { externalMessageId: data.message_id ?? '' }
   },
 
-  async sendMedia(ch, to, media: OutboundMedia) {
+  async sendMedia(ch, to, media: OutboundMedia, opts) {
     // IG envia mídia por URL pública (attachment). Legenda vira uma msg de texto
     // separada quando houver.
     const url = `${graphBaseOf(ch)}/${igIdOf(ch)}/messages`
@@ -426,7 +596,7 @@ export const instagramProvider: WhatsAppProvider = {
       media.kind === 'document' ? 'file' : media.kind // image | video | audio | file
     const data = await graphPost(url, token, {
       recipient: { id: to },
-      messaging_type: 'RESPONSE',
+      ...messagingTypeOf(opts),
       message: {
         attachment: { type, payload: { url: media.url, is_reusable: false } },
       },
@@ -435,7 +605,7 @@ export const instagramProvider: WhatsAppProvider = {
       try {
         await graphPost(url, token, {
           recipient: { id: to },
-          messaging_type: 'RESPONSE',
+          ...messagingTypeOf(opts),
           message: { text: media.caption.trim() },
         })
       } catch {
