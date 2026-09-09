@@ -88,3 +88,11 @@ describe('assistente do dono — textos', () => {
     expect(e).toContain('Ninguém esperando')
   })
 })
+
+describe('assistente do dono — 09/09: "o que tenho amanhã?" caía na IA de vendas', () => {
+  it('agenda por "tenho/amanhã/hoje/semana" passa no filtro barato', () => {
+    for (const t of ['O que tenho amanhã ?', 'o que tenho hoje', 'e a semana que vem?', 'próximos compromissos', 'que horário tenho livre?']) {
+      expect(looksLikeAssistantRequest(t), t).toBe(true)
+    }
+  })
+})

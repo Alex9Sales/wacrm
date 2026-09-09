@@ -22,6 +22,7 @@ import { generateReply } from '@/lib/ai/generate'
 import { kvDel, kvGetJson, kvSetJson } from '@/lib/ai/reply-marker'
 import { findContactsByQuery, type FoundContact } from '@/lib/contacts/search'
 import { engineSendText } from '@/lib/flows/meta-send'
+import { markSelfMessage } from '@/lib/ai/self-message'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { phonesMatch } from '@/lib/whatsapp/phone-utils'
 
@@ -35,6 +36,7 @@ import {
   formatProposal,
   looksLikeCancel,
   looksLikeChargeCommand,
+  looksLikeCrmOwnText,
   looksLikeConfirmation,
   normalizeParsedCommand,
   pickCandidateIndex,
@@ -164,6 +166,8 @@ export function isOwnerPhone(settings: { alertPhone?: string; ownerDigestPhone?:
 
 /** Vale a pena olhar? (tem proposta pendente, ou o texto parece pedido). Barato — sem LLM. */
 export async function ownerCommandApplies(conversationId: string, text: string): Promise<boolean> {
+  // Texto do próprio CRM voltando por outro canal (09/09) não é pedido.
+  if (looksLikeCrmOwnText(text)) return false
   if (looksLikeChargeCommand(text)) return true
   const pending = await kvGetJson<Pending>(key(conversationId))
   return !!pending
@@ -201,6 +205,9 @@ async function extractWithModel(accountId: string, text: string): Promise<RawPar
 }
 
 async function replyOwner(args: { accountId: string; userId: string; conversationId: string; contactId: string; text: string }): Promise<void> {
+  // Marca ANTES de mandar: se o texto voltar por outro canal com IA (o
+  // celular do dono também é canal), a guarda de eco reconhece e cala.
+  await markSelfMessage(args.text)
   await engineSendText(args)
 }
 

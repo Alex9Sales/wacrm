@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatCandidates, formatProposal, joinCustomerBurst, looksLikeCancel, looksLikeChargeCommand, looksLikeConfirmation, normalizeParsedCommand, pickCandidateIndex } from './owner-command-rules'
+import { formatCandidates, formatProposal, joinCustomerBurst, looksLikeCancel, looksLikeChargeCommand, looksLikeConfirmation, looksLikeCrmOwnText, normalizeParsedCommand, pickCandidateIndex } from './owner-command-rules'
 
 const hoje = new Date(2026, 8, 6)
 
@@ -83,5 +83,33 @@ describe('comando do dono — rajada de balões (08/09)', () => {
     expect(joinCustomerBurst([{ senderType: 'customer', text: 'agora', createdAt: at(0) }, old])).toBe('agora')
     const many = Array.from({ length: 12 }, (_, i) => ({ senderType: 'customer', text: `m${i}`, createdAt: at(59 - i) }))
     expect(joinCustomerBurst(many, { max: 3 })).toBe('m2\nm1\nm0')
+  })
+})
+
+describe('loop de 09/09 — texto do próprio CRM nunca é pedido nem confirmação', () => {
+  const own = [
+    'Confirma? Cobrar R$ 10,00 de Alex Sanabria (556791875477), vencendo 12/09/2026, "Cobrança"',
+    'Qual o valor da cobrança para Alex Sanabria? Exemplo: "150,00".',
+    'Preciso do CPF ou CNPJ de Alex Sanabria (11 ou 14 números) pra gerar no Asaas — ou responda NÃO pra cancelar.',
+    'O Asaas exige CPF ou CNPJ pra gerar a cobrança de Alex Sanabria. Me manda o documento.',
+    'Pronto ✅ Cobrança de R$ 10,00 para Alex, vence 12/09/2026.',
+    'Cancelado. Nada foi cobrado.',
+    'Ficou pendente: Confirma? Cobrar R$ 10,00 de Alex…',
+    'Equipe hoje:\n• Alex Sales — 8 conversas atendidas · 78 abertas',
+    '🌟 Bom dia! Seu resumo da Fluxia — 09/09',
+    'Encontrei o Luan: negócio "Agente Gestão de Dados DRE"…',
+  ]
+  it('reconhece os textos que o CRM manda pro dono', () => {
+    for (const t of own) expect(looksLikeCrmOwnText(t), t).toBe(true)
+  })
+  it('"Confirma? Cobrar…" NÃO conta como SIM (era o que criava a cobrança); "sim" curto continua valendo', () => {
+    expect(looksLikeConfirmation('Confirma? Cobrar R$ 10,00 de Alex Sanabria (556791875477), vencendo 12/09/2026')).toBe(false)
+    expect(looksLikeConfirmation('confirma')).toBe(true)
+    expect(looksLikeConfirmation('sim, pode mandar')).toBe(true)
+    expect(looksLikeConfirmation('sim ' + 'x'.repeat(70))).toBe(false)
+  })
+  it('pedido de gente continua sendo pedido', () => {
+    expect(looksLikeCrmOwnText('cria uma cobrança de 150 pro João vencendo dia 10')).toBe(false)
+    expect(looksLikeCrmOwnText('quem está devendo?')).toBe(false)
   })
 })

@@ -74,6 +74,39 @@ export async function markSelfMessage(text: string): Promise<void> {
   }
 }
 
+/** Canais WhatsApp (qualquer conta) cujo número é este telefone. */
+async function channelsWithPhone(digits: string): Promise<{ id: string; name: string; phoneNumber: string | null }[]> {
+  const tail = digits.slice(-8)
+  const candidates = await db
+    .select({ id: channels.id, name: channels.name, phoneNumber: channels.phoneNumber })
+    .from(channels)
+    .where(
+      and(
+        inArray(channels.provider, WA_PROVIDERS),
+        sql`regexp_replace(coalesce(${channels.phoneNumber}, ''), '\\D', '', 'g') LIKE ${'%' + tail}`,
+      ),
+    )
+  return candidates.filter((c) => c.phoneNumber && phonesMatch(c.phoneNumber, digits))
+}
+
+/**
+ * Este telefone é o número de um canal WhatsApp do CRM (qualquer conta)?
+ * Caso 09/09 (loop Fluxia): o Sócio IA estava cadastrado com o número do
+ * PRÓPRIO canal oficial → cada resposta do assistente voltava pelo celular
+ * do Alex (que também é canal) como "mensagem do dono" e os dois lados
+ * conversaram sozinhos a cada 12 s — chegaram a mandar uma cobrança pro
+ * Asaas. Um canal nunca é "o dono falando". Fail-open: erro → false.
+ */
+export async function isChannelPhone(phone: string | null | undefined): Promise<boolean> {
+  const digits = normalizePhone(phone ?? '')
+  if (digits.length < 8) return false
+  try {
+    return (await channelsWithPhone(digits)).length > 0
+  } catch {
+    return false
+  }
+}
+
 export type SelfMessageVerdict =
   | { echo: false }
   | { echo: true; source: 'marker' | 'channel'; channelName?: string }
@@ -104,17 +137,7 @@ export async function isSelfMessage(args: {
   const digits = normalizePhone(args.contactPhone ?? '')
   if (digits.length < 8) return { echo: false }
   try {
-    const tail = digits.slice(-8)
-    const candidates = await db
-      .select({ id: channels.id, name: channels.name, phoneNumber: channels.phoneNumber })
-      .from(channels)
-      .where(
-        and(
-          inArray(channels.provider, WA_PROVIDERS),
-          sql`regexp_replace(coalesce(${channels.phoneNumber}, ''), '\\D', '', 'g') LIKE ${'%' + tail}`,
-        ),
-      )
-    const own = candidates.filter((c) => c.phoneNumber && phonesMatch(c.phoneNumber, digits))
+    const own = await channelsWithPhone(digits)
     if (own.length === 0) return { echo: false }
 
     const since = new Date(Date.now() - DB_WINDOW_MS).toISOString()

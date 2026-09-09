@@ -21,9 +21,9 @@ import { generateWithExternalTools } from './external-tools'
 import { buildSystemPrompt, chargeInstruction, collectionInstruction, HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
 import { documentFromConversation, emitChargeFromDirective, knownDocumentFor } from '@/lib/collections/emit'
 import { handleOwnerCommand, isOwnerPhone, ownerCommandApplies } from '@/lib/collections/owner-command'
-import { joinCustomerBurst } from '@/lib/collections/owner-command-rules'
+import { joinCustomerBurst, looksLikeCrmOwnText } from '@/lib/collections/owner-command-rules'
 import { handleOwnerAssistant } from '@/lib/assistant/handler'
-import { isSelfMessage } from './self-message'
+import { isChannelPhone, isSelfMessage } from './self-message'
 import { applyCollectionReply, openDebtForPrompt } from '@/lib/collections/reply'
 import { normalizeSettings as normalizeCollectionsSettings } from '@/lib/collections/rules'
 import {
@@ -234,21 +234,56 @@ export async function dispatchInboundToAiReply(
       return joinCustomerBurst(rows)
     }
 
+    // 🪞 Eco interno (08/09, conta Fluxia): a "mensagem do cliente" foi o
+    // PRÓPRIO CRM que gerou — Sócio IA/aviso saindo de um canal pra OUTRO
+    // canal desta conta com IA ligada, ou resposta de uma IA chegando noutra
+    // IA (duas contas conversando sozinhas). Não é cliente: a IA fica quieta.
+    // Roda ANTES dos blocos do dono (09/09: o loop assistente↔cobrança passou
+    // por cima porque a checagem vinha depois). Ver lib/ai/self-message.ts.
+    if (who && !who.isGroup) {
+      try {
+        const text = await loadLastCustomerText()
+        if (text) {
+          const self = await isSelfMessage({ contactPhone: who.phone, text })
+          if (self.echo) {
+            console.warn(
+              `[ai auto-reply] eco interno (${self.source}${self.channelName ? ` · canal "${self.channelName}"` : ''}): texto gerado pelo próprio CRM — IA não responde. conversa ${conversationId}`,
+            )
+            await setCoveredUntil(conversationId, new Date())
+            return
+          }
+        }
+      } catch (err) {
+        console.error('[ai auto-reply] checagem de eco interno falhou:', err instanceof Error ? err.message : err)
+      }
+    }
+
     // 🧾 Comando do DONO pelo WhatsApp ("cria uma cobrança de 150 pro João"):
     // quem escreveu é o telefone de Avisos/Sócio IA da conta e o texto parece
     // pedido (ou há proposta esperando SIM) → trata aqui e a IA de atendimento
     // não responde por cima. Barato: o LLM só entra depois do regex.
+    // 09/09: o número de um CANAL nunca é "o dono" (Sócio IA cadastrado com o
+    // número do canal oficial fez os dois canais da Fluxia conversarem
+    // sozinhos), e texto que o próprio CRM escreve ("Confirma? Cobrar…",
+    // "Qual o valor…") nunca vira pedido nem confirmação.
     const ownerSettings = await getAccountSettings(accountId).catch(() => null)
+    const senderIsChannel = !!who && !who.isGroup && (await isChannelPhone(who.phone))
+    if (senderIsChannel && ownerSettings && isOwnerPhone(ownerSettings, who?.phone)) {
+      console.warn(
+        `[ai auto-reply] telefone do dono (Avisos/Sócio IA) é o número de um canal do CRM — ignorado como dono. conversa ${conversationId}`,
+      )
+    }
     const isOwner =
       !!ownerSettings &&
       !!(ownerSettings.alertPhone || ownerSettings.ownerDigestPhone) &&
       !!who &&
       !who.isGroup &&
+      !senderIsChannel &&
       isOwnerPhone(ownerSettings, who.phone)
     try {
       if (isOwner) {
         const text = await loadCustomerBurst()
-        if (text && (await ownerCommandApplies(conversationId, text))) {
+        if (text && !looksLikeCrmOwnText(text) && (await ownerCommandApplies(conversationId, text))) {
           const handled = await handleOwnerCommand({ accountId, conversationId, contactId, ownerUserId: configOwnerUserId, text })
           if (handled) {
             await setCoveredUntil(conversationId, new Date())
@@ -267,7 +302,7 @@ export async function dispatchInboundToAiReply(
     if (isOwner && ownerSettings) {
       try {
         const text = await loadCustomerBurst()
-        if (text) {
+        if (text && !looksLikeCrmOwnText(text)) {
           const handled = await handleOwnerAssistant({
             accountId,
             conversationId,
@@ -284,29 +319,6 @@ export async function dispatchInboundToAiReply(
         }
       } catch (err) {
         console.error('[ai auto-reply] assistente do dono falhou:', err instanceof Error ? err.message : err)
-      }
-    }
-
-    // 🪞 Eco interno (08/09, conta Fluxia): a "mensagem do cliente" foi o
-    // PRÓPRIO CRM que gerou — Sócio IA/aviso saindo de um canal pra OUTRO
-    // canal desta conta com IA ligada, ou resposta de uma IA chegando noutra
-    // IA (duas contas conversando sozinhas). Não é cliente: a IA fica quieta.
-    // O comando do dono (acima) continua valendo. Ver lib/ai/self-message.ts.
-    if (who && !who.isGroup) {
-      try {
-        const text = await loadLastCustomerText()
-        if (text) {
-          const self = await isSelfMessage({ contactPhone: who.phone, text })
-          if (self.echo) {
-            console.warn(
-              `[ai auto-reply] eco interno (${self.source}${self.channelName ? ` · canal "${self.channelName}"` : ''}): texto gerado pelo próprio CRM — IA não responde. conversa ${conversationId}`,
-            )
-            await setCoveredUntil(conversationId, new Date())
-            return
-          }
-        }
-      } catch (err) {
-        console.error('[ai auto-reply] checagem de eco interno falhou:', err instanceof Error ? err.message : err)
       }
     }
 

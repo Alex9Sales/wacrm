@@ -52,8 +52,25 @@ const WORD_END = '(?![\\p{L}\\p{N}])'
 const CONFIRM_RE = new RegExp(`^(sim|s|ok|okay|confirma|confirmo|confirmado|pode|pode sim|isso|isso mesmo|manda|vai|bora|certo|correto)${WORD_END}`, 'iu')
 const CANCEL_RE = new RegExp(`^(n[aã]o|nao|cancela|cancelar|deixa|esquece|para|errado)${WORD_END}`, 'iu')
 
+/** Uma confirmação de gente é curta ("sim", "pode mandar", "ok, vence amanhã"). */
+const MAX_CONFIRMATION_LEN = 60
+
+/**
+ * Texto que o PRÓPRIO CRM escreve pro dono (proposta, pergunta, aviso do
+ * assistente). Nunca é pedido nem confirmação — 09/09: "Confirma? Cobrar
+ * R$ 10,00 de …" voltou pelo outro canal, casou com ^confirma e mandou a
+ * cobrança pro Asaas (barrou só por falta de CPF).
+ */
+const CRM_OWN_RE =
+  /^(confirma\? cobrar|qual o valor da cobran[çc]a|preciso do cpf ou cnpj|o asaas exige cpf|pronto ✅|cancelado\. nada foi cobrado|ficou pendente:|encontrei |equipe hoje:|(bom dia|boa tarde|boa noite)! seu resumo|🌟|sou o assistente da sua conta|nenhum neg[óo]cio parado|n[ãa]o achei ninguém|achei mais de um|agenda (de hoje|de amanh[ãa]|da semana)|em aberto: \d+ cobran|feito ✅|marcado ✅|tarefa criada|passei )/iu
+
+export function looksLikeCrmOwnText(text: string): boolean {
+  return CRM_OWN_RE.test(text.trim())
+}
+
 export function looksLikeConfirmation(text: string): boolean {
   const t = text.trim()
+  if (t.length > MAX_CONFIRMATION_LEN || looksLikeCrmOwnText(t)) return false
   return CONFIRM_RE.test(t) || /^(👍|✅)/u.test(t)
 }
 

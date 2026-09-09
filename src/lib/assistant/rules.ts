@@ -45,7 +45,7 @@ export interface AssistantIntent {
 }
 
 const REQUEST_RE =
-  /\b(funil|neg[óo]cios?|parad[oa]s?|esfriando|sem resposta|resumo|panorama|como (estamos|est[áa])|agenda|compromissos?|marca|marcar|agendar|agende|reuni[ãa]o|visita|consulta|tarefa|lembra|lembrete|atribui|atribuir|transfere|transferir|passa|passar|repassa|manda (pro|pra|para)|quem|quantos|quantas|cliente|cadastro|contato|hist[óo]rico|cobran[çc]as?|devendo|inadimpl\w*|pagou|pagaram|entrou|recebemos|equipe|atendimentos?|atendeu|esperando|fila|ajuda|o que voc[êe] (faz|sabe)|me mostra|me lista|lista)\b/i
+  /\b(funil|neg[óo]cios?|parad[oa]s?|esfriando|sem resposta|resumo|panorama|como (estamos|est[áa])|agenda|compromissos?|marca|marcar|agendar|agende|reuni[ãa]o|visita|consulta|tarefa|lembra|lembrete|atribui|atribuir|transfere|transferir|passa|passar|repassa|manda (pro|pra|para)|quem|quantos|quantas|cliente|cadastro|contato|hist[óo]rico|cobran[çc]as?|devendo|inadimpl\w*|pagou|pagaram|entrou|recebemos|equipe|atendimentos?|atendeu|esperando|fila|ajuda|o que voc[êe] (faz|sabe)|me mostra|me lista|lista|tenho|amanh[ãa]|hoje|semana|hor[áa]rios?|pr[óo]xim[ao]s?)\b/i
 
 /** Barato: só chama o modelo quando o texto parece pedido pro CRM. */
 export function looksLikeAssistantRequest(text: string): boolean {

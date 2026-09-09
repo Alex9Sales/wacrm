@@ -10,6 +10,8 @@
 // ============================================================
 
 import { engineSendText } from '@/lib/flows/meta-send'
+import { markSelfMessage } from '@/lib/ai/self-message'
+import { looksLikeCrmOwnText } from '@/lib/collections/owner-command-rules'
 import { looksLikeCancel, looksLikeConfirmation } from '@/lib/collections/owner-command-rules'
 import { previewDigest } from '@/lib/reports/owner-digest'
 
@@ -65,8 +67,14 @@ function classifierPrompt(memberNames: string[], todayYmd: string): string {
 }
 
 export async function handleOwnerAssistant(args: AssistantArgs): Promise<boolean> {
-  const say = (text: string) =>
-    engineSendText({ accountId: args.accountId, userId: args.ownerUserId, conversationId: args.conversationId, contactId: args.contactId, text })
+  // Marca antes de mandar: se a resposta voltar por outro canal com IA (o
+  // celular do dono também é canal — loop de 09/09), a guarda de eco cala.
+  const say = async (text: string) => {
+    await markSelfMessage(text)
+    return engineSendText({ accountId: args.accountId, userId: args.ownerUserId, conversationId: args.conversationId, contactId: args.contactId, text })
+  }
+  // Texto que o próprio CRM escreveu voltando como "pedido" → não é pedido.
+  if (looksLikeCrmOwnText(args.text)) return false
   const text = args.text.trim()
   if (!text) return false
 

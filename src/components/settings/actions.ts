@@ -36,6 +36,7 @@ import { isUniqueViolation } from '@/lib/contacts/dedupe'
 import { auth } from '@/lib/auth'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
+import { phonesMatch } from '@/lib/whatsapp/phone-utils'
 import { loadLeadDistribution } from '@/lib/leads/distribution'
 import {
   getAccountSettings,
@@ -1206,6 +1207,22 @@ function normalizeOwnerPhone(raw: string): string {
   return digits
 }
 
+/**
+ * 09/09 (loop na Fluxia): o Sócio IA estava cadastrado com o número do
+ * PRÓPRIO canal oficial → a resposta do assistente voltava como "mensagem do
+ * dono" pelo outro canal e os dois conversaram sozinhos. Número de canal da
+ * conta não pode ser o telefone do dono. Devolve o nome do canal quando bate.
+ */
+async function ownerPhoneIsChannel(accountId: string, phone: string): Promise<string | null> {
+  if (!phone) return null
+  const rows = await db
+    .select({ name: channels.name, phoneNumber: channels.phoneNumber })
+    .from(channels)
+    .where(eq(channels.accountId, accountId))
+  const hit = rows.find((c) => c.phoneNumber && phonesMatch(c.phoneNumber, phone))
+  return hit?.name ?? null
+}
+
 export async function setOwnerDigest(input: {
   enabled: boolean
   hour: number
@@ -1216,6 +1233,12 @@ export async function setOwnerDigest(input: {
   const phone = normalizeOwnerPhone(input.phone)
   if (input.enabled && !phone) {
     return { error: 'Informe o número do WhatsApp que vai receber o resumo.' }
+  }
+  const asChannel = await ownerPhoneIsChannel(ctx.accountId, phone)
+  if (asChannel) {
+    return {
+      error: `Esse número é o canal "${asChannel}" do CRM. Coloque o celular pessoal de quem vai receber o resumo — um número de canal faria a IA responder a si mesma.`,
+    }
   }
   const hour = Math.min(23, Math.max(0, Math.trunc(Number(input.hour))))
   await updateAccountSettings(ctx.accountId, {
@@ -1453,6 +1476,12 @@ export async function setOwnerAlerts(input: {
     !!input.onDemo
   if (anyOn && !phone) {
     return { error: 'Informe o número do WhatsApp que vai receber os avisos.' }
+  }
+  const asChannel = await ownerPhoneIsChannel(ctx.accountId, phone)
+  if (asChannel) {
+    return {
+      error: `Esse número é o canal "${asChannel}" do CRM. Coloque o celular pessoal de quem vai receber os avisos — um número de canal faria a IA responder a si mesma.`,
+    }
   }
   await updateAccountSettings(ctx.accountId, {
     alertPhone: phone,
