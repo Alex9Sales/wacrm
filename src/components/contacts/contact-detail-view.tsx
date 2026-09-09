@@ -298,22 +298,29 @@ export function ContactDetailView({
     }
 
     setSavingDetails(true);
-    const { error } = await updateContactDetails({
-      contactId,
-      name: editName,
-      phone: editPhone,
-      email: editEmail,
-      company: editCompany,
-    });
-
-    if (error) {
-      toast.error(error || 'Falha ao atualizar contato');
-    } else {
-      toast.success('Contato atualizado');
-      fetchContact();
-      onUpdated();
+    try {
+      const { error } = await updateContactDetails({
+        contactId,
+        name: editName,
+        phone: editPhone,
+        email: editEmail,
+        company: editCompany,
+      });
+      if (error) {
+        toast.error(error || 'Falha ao atualizar contato');
+      } else {
+        toast.success('Contato atualizado');
+        fetchContact();
+        onUpdated();
+      }
+    } catch {
+      // 09/09 (Alex: "mudei o nome e voltou pro do WhatsApp"): a chamada LANÇOU
+      // (aba com build antigo após deploy, rede) e nada avisava — o nome novo
+      // ficava só na tela e sumia no recarregar. Agora avisa e pede F5.
+      toast.error('Não consegui salvar o contato. Recarregue a página (F5) e tente de novo.');
+    } finally {
+      setSavingDetails(false);
     }
-    setSavingDetails(false);
   }
 
   async function toggleTag(tagId: string) {
