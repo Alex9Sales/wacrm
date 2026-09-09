@@ -193,18 +193,25 @@ export async function teamSnapshot(accountId: string, startOfTodayIso: string): 
     .from(conversations)
     .where(and(eq(conversations.accountId, accountId), eq(conversations.status, 'open')))
     .groupBy(conversations.assignedAgentId)
+  // `messages.sender_id` vem VAZIO nas mensagens de atendente (0 de 12.804 em 7
+  // dias, 08/09) — quem atendeu é o responsável da conversa. Métrica honesta:
+  // conversas com resposta humana hoje, por responsável.
   const sentRes = await db.execute(sql`
-    SELECT m.sender_id AS uid, count(*)::int AS n
+    SELECT c.assigned_agent_id AS uid, count(DISTINCT c.id)::int AS n
     FROM messages m
     JOIN conversations c ON c.id = m.conversation_id
     WHERE c.account_id = ${accountId}
       AND m.sender_type = 'agent'
       AND m.is_internal = false
       AND m.created_at >= ${startOfTodayIso}::timestamptz
-    GROUP BY m.sender_id
+    GROUP BY c.assigned_agent_id
   `)
   const sent = new Map<string, number>()
-  for (const r of sentRes.rows as unknown as { uid: string | null; n: number }[]) if (r.uid) sent.set(r.uid, Number(r.n))
+  let unassignedAnswered = 0
+  for (const r of sentRes.rows as unknown as { uid: string | null; n: number }[]) {
+    if (r.uid) sent.set(r.uid, Number(r.n))
+    else unassignedAnswered += Number(r.n)
+  }
   const openMap = new Map<string, number>()
   for (const r of openByAssignee) if (r.uid) openMap.set(r.uid, Number(r.n))
 
@@ -226,6 +233,7 @@ export async function teamSnapshot(accountId: string, startOfTodayIso: string): 
   `)
   return {
     members: members.map((m) => ({ name: m.name, openConversations: openMap.get(m.id) ?? 0, sentToday: sent.get(m.id) ?? 0 })),
+    unassignedAnswered,
     waiting: (waitingRes.rows as unknown as { name: string; minutes: number; assignee: string | null }[]).map((w) => ({
       name: w.name,
       minutes: Number(w.minutes),

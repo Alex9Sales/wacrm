@@ -289,7 +289,10 @@ export function formatCollections(s: CollectionsSnapshot): string {
 }
 
 export interface TeamSnapshot {
+  /** sentToday = conversas com resposta humana hoje atribuídas à pessoa. */
   members: { name: string; openConversations: number; sentToday: number }[]
+  /** Conversas respondidas hoje SEM responsável (ninguém assumiu). */
+  unassignedAnswered?: number
   waiting: { name: string; minutes: number; assignee: string | null }[]
 }
 
@@ -298,10 +301,11 @@ export function formatTeam(t: TeamSnapshot): string {
   if (t.members.length) {
     lines.push('Equipe hoje:')
     for (const m of t.members) {
-      const msgs = m.sentToday === 1 ? '1 mensagem enviada' : `${m.sentToday} mensagens enviadas`
-      const convs = m.openConversations === 1 ? '1 conversa aberta' : `${m.openConversations} conversas abertas`
-      lines.push(`• ${m.name} — ${msgs} · ${convs}`)
+      const done = m.sentToday === 1 ? '1 conversa atendida' : `${m.sentToday} conversas atendidas`
+      const convs = m.openConversations === 1 ? '1 aberta' : `${m.openConversations} abertas`
+      lines.push(`• ${m.name} — ${done} · ${convs}`)
     }
+    if (t.unassignedAnswered) lines.push(`• Sem responsável — ${t.unassignedAnswered} conversa${t.unassignedAnswered === 1 ? '' : 's'} atendida${t.unassignedAnswered === 1 ? '' : 's'} (ninguém assumiu)`)
   }
   if (t.waiting.length) {
     lines.push(`Esperando resposta há mais de 1h (${t.waiting.length}):`)
