@@ -37,6 +37,7 @@ const agentSelect = {
   tools: aiConfigs.tools,
   pipelineId: aiConfigs.pipelineId,
   access: aiConfigs.access,
+  autonomy: aiConfigs.autonomy,
 }
 
 type AgentRow = {
@@ -67,6 +68,8 @@ type AgentRow = {
   tools: unknown
   pipelineId: string | null
   access: unknown
+  /** Política de autonomia do agente (matriz por ação) — cru; ler com readPolicy(). */
+  autonomy: unknown
 }
 
 /** Turn a raw agent row into a usable, decrypted AiConfig (or null when it
@@ -145,6 +148,7 @@ function finalizeAgent(
     tools: sanitizeTools(row.tools),
     pipelineId: row.pipelineId,
     access: (row.access ?? {}) as AiConfig['access'],
+    autonomy: row.autonomy ?? null,
   }
 }
 

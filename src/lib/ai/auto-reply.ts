@@ -1,5 +1,6 @@
 import { and, desc, eq, inArray, sql } from 'drizzle-orm'
-import { db, automations, conversations, contacts, messages as messagesTable, aiConfigs } from '@/db'
+import { db, automations, conversations, contacts, messages as messagesTable, aiConfigs, agentActionRequests } from '@/db'
+import { levelFor, readPolicy } from '@/lib/orchestration/policy'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfigForChannel, loadAiConfigById } from './config'
 import { hasActiveAutoReplyAgent } from './agents'
@@ -427,6 +428,11 @@ export async function dispatchInboundToAiReply(
     }
     if (!config || !config.autoReplyEnabled) return
 
+    // 📅 Nível da ação "marcar compromisso" na matriz de autonomia do agente:
+    // 'auto' marca na hora; qualquer outro nível = a IA combina, avisa que vai
+    // confirmar, e o compromisso espera aprovação em Precisa de você (09/09).
+    const scheduleApproval = levelFor(readPolicy(config.autonomy ?? null), 'schedule_event') !== 'auto'
+
     // 🔒 Trava de acesso (caso "agente de suporte só pra clientes"): quando o
     // agente tem uma etiqueta de acesso, só conversa com contatos que a têm.
     // Quem não tem recebe a mensagem padrão UMA vez por conversa e a IA se
@@ -760,6 +766,7 @@ export async function dispatchInboundToAiReply(
       companyProfile,
       catalog,
       timezone: settings.businessTimezone,
+      scheduleApproval,
       extraInstructions: (() => {
         const extra: string[] = []
         if (openDebt) extra.push(collectionInstruction(openDebt))
@@ -921,6 +928,55 @@ export async function dispatchInboundToAiReply(
     }
     // Agendar (ferramenta 'schedule').
     const runSchedule = async () => {
+      if (has('schedule') && dirs.schedule && scheduleApproval) {
+        // 📅 Com aprovação: nada é marcado agora. Vira pedido em Precisa de você;
+        // aprovar marca e confirma pro cliente; recusar pausa a IA aqui.
+        const s = dirs.schedule
+        const when = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}/.test(s.startsLocal)
+          ? `${s.startsLocal.slice(8, 10)}/${s.startsLocal.slice(5, 7)} às ${s.startsLocal.slice(11, 16)}`
+          : s.startsLocal
+        const title = (s.title || 'Reunião').trim().slice(0, 200)
+        try {
+          const inserted = await db
+            .insert(agentActionRequests)
+            .values({
+              accountId,
+              agentId: config.id ?? null,
+              contactId,
+              dealId: null,
+              conversationId,
+              actionType: 'schedule_event',
+              payload: { startsLocal: s.startsLocal, title, timezone: settings.businessTimezone || 'America/Sao_Paulo', durationMin: 60 },
+              reason: `Cliente combinou ${title} para ${when} na conversa.`,
+              decision: 'approve',
+              policy: 'schedule_event: nível da matriz exige aprovação',
+              status: 'pending',
+            })
+            .onConflictDoNothing()
+            .returning({ id: agentActionRequests.id })
+          await postInternalNote({
+            conversationId,
+            text: inserted.length
+              ? `📅 IA combinou "${title}" para ${when} — aguardando sua aprovação em Precisa de você. O cliente foi avisado de que você vai confirmar.`
+              : `📅 IA combinou "${title}" para ${when} — já havia um pedido pendente deste contato em Precisa de você.`,
+          }).catch(() => {})
+          if (inserted.length && configOwnerUserId) {
+            const { notifyUsers } = await import('@/lib/orchestration/actions')
+            await notifyUsers({
+              accountId,
+              userIds: [configOwnerUserId],
+              type: 'approval_required',
+              title: `Aprovar: marcar "${title}"`,
+              body: `${when} — combinado com o cliente na conversa. Aprovar marca na Agenda e confirma pra ele.`,
+              contactId,
+              conversationId,
+            }).catch(() => 0)
+          }
+        } catch (err) {
+          console.error('[ai auto-reply] pedido de agendamento falhou:', err instanceof Error ? err.message : err)
+        }
+        return
+      }
       if (has('schedule') && dirs.schedule) {
         const ev = await scheduleEventFromAi({
           accountId,

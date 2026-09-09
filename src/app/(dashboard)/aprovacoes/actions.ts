@@ -434,6 +434,23 @@ export async function rejectQueueItem(id: string, note?: string, reasonCode?: st
   if (row.dealId) {
     await noteDealEvent(ctx.accountId, row.dealId, ctx.userId, `🚫 Sugestão da Fluxia recusada (${ACTION_CATALOG[row.actionType as OrchAction]?.label ?? row.actionType}).${note ? ` Motivo: ${note}` : ''}`)
   }
+  // 📅 Horário recusado: o cliente ficou esperando a confirmação — pausa a IA
+  // nessa conversa e deixa nota pra quem recusou combinar outro horário.
+  if (row.actionType === 'schedule_event' && row.conversationId) {
+    await db
+      .update(conversations)
+      .set({ aiAutoreplyDisabled: true })
+      .where(and(eq(conversations.id, row.conversationId), eq(conversations.accountId, ctx.accountId)))
+    try {
+      const { postInternalNote } = await import('@/lib/ai/close-actions')
+      await postInternalNote({
+        conversationId: row.conversationId,
+        text: `🚫 Horário proposto pela IA recusado${note ? ` (${note})` : ''}. Nada foi marcado. A IA está pausada aqui — combine outro horário com o cliente, que ficou esperando a confirmação.`,
+      })
+    } catch {
+      /* rastro */
+    }
+  }
   if (isOrchAction(row.actionType)) {
     await recordDecisionFeedback({
       accountId: ctx.accountId,
@@ -666,6 +683,15 @@ function describeEffect(args: {
         }
       }
       return { effect: 'Envia a cobrança abaixo ao devedor, com as parcelas vencidas e o link de pagamento. Confira o valor antes de aprovar — depois de entregue não dá para desfazer.', warnings, proposalUrl: null }
+    case 'schedule_event': {
+      const startsLocal = typeof p.startsLocal === 'string' ? p.startsLocal : ''
+      const when = startsLocal ? `${startsLocal.slice(8, 10)}/${startsLocal.slice(5, 7)} às ${startsLocal.slice(11, 16)}` : 'data a definir'
+      return {
+        effect: `Marca "${typeof p.title === 'string' && p.title ? p.title : 'Reunião'}" na Agenda para ${when} e manda a confirmação do horário pro cliente na conversa (a IA disse a ele que ia confirmar). Recusar: nada é marcado, a IA é pausada nessa conversa e você combina outro horário.`,
+        warnings,
+        proposalUrl: null,
+      }
+    }
     case 'send_followup':
     case 'reactivation':
       return { effect: 'Envia a mensagem abaixo pela conversa do contato no canal indicado — edite o texto e, se ele tiver mais de um canal, escolha por onde sai.', warnings, proposalUrl: null }

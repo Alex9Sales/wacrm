@@ -21,6 +21,7 @@ import {
   tasks,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { calendarEvents as calEvents } from '@/db'
 import { cancelEnrollment } from '@/lib/cadences/cadence'
 
 import { noteDealEvent } from './actions'
@@ -125,6 +126,27 @@ export async function revertOrchestrationAction(input: RevertInput): Promise<Rev
 
 async function undoAction(input: RevertInput, st: Record<string, unknown>): Promise<RevertResult> {
   switch (input.action) {
+    case 'schedule_event': {
+      const eventId = typeof st.eventId === 'string' ? st.eventId : null
+      if (!eventId) return { ok: false, done: '', error: 'Não guardamos o compromisso desta ação.' }
+      await db
+        .update(calEvents)
+        .set({ status: 'cancelled', updatedAt: new Date().toISOString() })
+        .where(and(eq(calEvents.id, eventId), eq(calEvents.accountId, input.accountId)))
+      try {
+        const { pushEventToGoogle } = await import('@/lib/google/sync')
+        await pushEventToGoogle(input.accountId, eventId, 'delete')
+      } catch (err) {
+        console.error('[revert] google delete falhou:', err instanceof Error ? err.message : err)
+      }
+      if (input.conversationId) {
+        await db
+          .update(conversations)
+          .set({ aiAutoreplyDisabled: true })
+          .where(and(eq(conversations.id, input.conversationId), eq(conversations.accountId, input.accountId)))
+      }
+      return { ok: true, done: 'Compromisso cancelado na Agenda e a IA pausada nesta conversa — combine outro horário com o cliente.' }
+    }
     case 'move_deal': {
       const stageId = typeof st.stageId === 'string' ? st.stageId : null
       if (!stageId || !input.dealId) return { ok: false, done: '', error: 'Não guardamos a etapa anterior desta ação.' }

@@ -27,6 +27,7 @@ export const ORCH_ACTIONS = [
   'start_cadence',
   'pause_cadence',
   'collect_charges',
+  'schedule_event',
 ] as const
 export type OrchAction = (typeof ORCH_ACTIONS)[number]
 
@@ -64,6 +65,11 @@ export const ACTION_CATALOG: Record<OrchAction, ActionMeta> = {
   apply_discount: { label: 'Aplicar desconto', hint: 'Ajusta o desconto da proposta salva (até o limite, sem aprovação). Não envia nada ao cliente.', risk: 'high', defaultLevel: 'approve', kind: 'money' },
   close_deal: { label: 'Fechar negócio', hint: 'Marca como ganho ou perdido.', risk: 'critical', defaultLevel: 'approve', kind: 'crm', humanOnly: true },
   escalate: { label: 'Escalar pra humano', hint: 'Tira a IA da frente e chama o time.', risk: 'low', defaultLevel: 'auto', kind: 'notify' },
+  // 📅 09/09 (GoLink: "a IA marcou reunião sem autorização"): marcar compromisso
+  // entra na matriz. 'auto' = marca na hora (comportamento de sempre, por isso
+  // é o padrão); qualquer outro nível = a IA combina, diz que VAI confirmar, e
+  // o compromisso espera aprovação em Precisa de você.
+  schedule_event: { label: 'Marcar reunião/compromisso', hint: 'Quando o cliente combina dia e hora na conversa, cria o compromisso na Agenda e confirma pra ele. Abaixo de "automática", a IA só propõe e você aprova.', risk: 'medium', defaultLevel: 'auto', kind: 'crm' },
   start_cadence: { label: 'Iniciar cadência', hint: 'Coloca o contato numa sequência de mensagens.', risk: 'medium', defaultLevel: 'approve', kind: 'message' },
   pause_cadence: { label: 'Pausar cadência', hint: 'Interrompe a sequência em andamento.', risk: 'low', defaultLevel: 'auto', kind: 'crm' },
 }

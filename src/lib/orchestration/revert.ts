@@ -110,6 +110,11 @@ export const REVERT_MATRIX: Record<OrchAction, RevertPlan> = {
   notify_seller: { kind: 'note_only', label: 'Marcar como errado', effect: 'O aviso já foi lido pelo time; só registramos que não era pertinente.' },
   notify_owner: { kind: 'note_only', label: 'Marcar como errado', effect: 'O aviso já foi lido pelo time; só registramos que não era pertinente.' },
   escalate: { kind: 'note_only', label: 'Marcar como errado', effect: 'Só registramos que escalar não era necessário. A IA continua pausada na conversa até você religar.' },
+  schedule_event: {
+    kind: 'undo',
+    label: 'Desmarcar',
+    effect: 'Cancela o compromisso na Agenda (e no Google, se sincronizado) e pausa a IA nesta conversa para você combinar outro horário com o cliente.',
+  },
 }
 
 /** Assinatura do contexto para agrupar decisões parecidas (sem dado do cliente). */

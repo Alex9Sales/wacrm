@@ -264,6 +264,57 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         }
       }
 
+      case 'schedule_event': {
+        // 📅 Aprovado em Precisa de você: marca na Agenda e confirma o horário
+        // pro cliente na conversa (a IA tinha dito que ia confirmar).
+        const p = input.payload as { startsLocal?: string; title?: string; timezone?: string; durationMin?: number }
+        if (!p.startsLocal) return { ok: false, error: 'Sem data/hora no pedido.' }
+        if (!input.conversationId) return { ok: false, error: 'Sem conversa pra confirmar ao cliente.' }
+        const tz = p.timezone || 'America/Sao_Paulo'
+        const { scheduleEventFromAi } = await import('@/lib/ai/schedule-actions')
+        const ev = await scheduleEventFromAi({
+          accountId: input.accountId,
+          userId: input.actorUserId,
+          conversationId: input.conversationId,
+          contactId: input.contactId,
+          startsLocal: p.startsLocal,
+          title: p.title || 'Reunião',
+          timezone: tz,
+          durationMin: p.durationMin,
+        })
+        if (!ev) return { ok: false, error: 'Não consegui marcar (data/hora inválida ou agenda indisponível).' }
+        const when = new Date(ev.startsAt)
+          .toLocaleString('pt-BR', { timeZone: tz, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+          .replace('.,', '')
+        let confirmed = false
+        try {
+          const userId = await senderUserId(input.accountId, input.actorUserId, deal, input.conversationId)
+          await engineSendText({
+            accountId: input.accountId,
+            userId,
+            conversationId: input.conversationId,
+            contactId: input.contactId,
+            text: `Confirmado! ✅ ${ev.title}: ${when}. Até lá!`,
+          })
+          confirmed = true
+        } catch (err) {
+          console.error('[orchestration] confirmação do agendamento falhou:', err instanceof Error ? err.message : err)
+        }
+        try {
+          const { postInternalNote } = await import('@/lib/ai/close-actions')
+          await postInternalNote({
+            conversationId: input.conversationId,
+            text: `📅 Aprovado: "${ev.title}" marcado para ${when}${confirmed ? ' e confirmado pro cliente.' : '. A confirmação ao cliente FALHOU — mande você.'}`,
+          })
+        } catch {
+          /* nota é rastro */
+        }
+        return {
+          ok: true,
+          result: { eventId: ev.eventId, startsAt: ev.startsAt, title: ev.title, confirmed },
+          revertState: { eventId: ev.eventId, conversationId: input.conversationId },
+        }
+      }
       case 'send_followup':
       case 'reactivation': {
         const text = (input.text ?? '').trim()

@@ -69,6 +69,9 @@ export interface AiConfig {
   /** Ferramentas ligadas neste agente (chaves de tools.ts). Fonte da verdade
    *  do que a IA pode fazer no CRM. */
   tools?: string[]
+  /** Política de autonomia do agente (matriz por ação), crua — ler com
+   *  readPolicy() de lib/orchestration/policy. */
+  autonomy?: unknown
 }
 
 /** A single conversation turn in the shape both providers accept. */
