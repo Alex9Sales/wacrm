@@ -931,7 +931,32 @@ export async function dispatchInboundToAiReply(
           title: dirs.schedule.title || 'Reunião',
           timezone: settings.businessTimezone,
         })
-        if (ev) console.log('[ai auto-reply] agendou:', JSON.stringify(ev))
+        if (ev) {
+          console.log('[ai auto-reply] agendou:', JSON.stringify(ev))
+          // 📅 09/09 (GoLink, "a IA marcou reunião sem autorização"): o
+          // agendamento era invisível na conversa e aparecia na agenda como se
+          // o dono tivesse criado. Agora: nota interna + aviso ao dono.
+          const tz = settings.businessTimezone || 'America/Sao_Paulo'
+          const when = new Date(ev.startsAt)
+            .toLocaleString('pt-BR', { timeZone: tz, weekday: 'short', day: '2-digit', month: '2-digit', hour: '2-digit', minute: '2-digit' })
+            .replace('.,', '')
+          await postInternalNote({
+            conversationId,
+            text: `📅 IA agendou "${ev.title}" para ${when}. Se não era pra marcar, cancele na Agenda — e, pra ela não marcar sozinha, desligue a ferramenta "Agendar" no agente (Agentes IA).`,
+          }).catch(() => {})
+          if (configOwnerUserId) {
+            const { notifyUsers } = await import('@/lib/orchestration/actions')
+            await notifyUsers({
+              accountId,
+              userIds: [configOwnerUserId],
+              type: 'agent_action',
+              title: `IA agendou: ${ev.title}`,
+              body: `${when} — marcado pela IA na conversa. Confira na Agenda.`,
+              contactId,
+              conversationId,
+            }).catch(() => 0)
+          }
+        }
       }
     }
     // Cria o card no funil + dispara o aviso do responsável. createDealFromAi
