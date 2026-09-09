@@ -55,7 +55,10 @@ export function ChannelPhonebookDialog({
 }) {
   const [preview, setPreview] = useState<PhonebookPreview | null>(null);
   const [mode, setMode] = useState<NameMode>('fill');
-  const [createMissing, setCreateMissing] = useState(true);
+  // Desmarcado por padrão: a agenda do Alex tem 11,8 mil nomes e só 1,2 mil
+  // estão no CRM — criar 10 mil contatos (pessoais, antigos) tem que ser
+  // escolha explícita, não vem de brinde com "corrigir nomes".
+  const [createMissing, setCreateMissing] = useState(false);
   const [applying, setApplying] = useState(false);
   const [result, setResult] = useState<PhonebookApplySummary | null>(null);
 
