@@ -225,14 +225,26 @@ export function WalletClient() {
       </header>
 
       {/* Aviso permanente. Não é toast — é contrato com quem opera. */}
-      <div className="flex items-start gap-2.5 rounded-md border border-emerald-600/30 bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
-        <Eye className="mt-0.5 h-4 w-4 shrink-0" />
-        <p>
-          <strong>Nenhuma cobrança sai sem você aprovar.</strong> A régua monta as mensagens e deixa em{' '}
-          <a href="/aprovacoes" className="font-medium underline underline-offset-2">Precisa de você</a>, onde dá para ler,
-          editar e mandar — ou recusar. Antes de cada envio o sistema confere de novo se a parcela continua em aberto.
-        </p>
-      </div>
+      {rule?.enabled && rule.autoSend ? (
+        <div className="flex items-start gap-2.5 rounded-md border border-amber-500/40 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+          <Bot className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            <strong>Envio automático ligado.</strong> As cobranças saem sozinhas, uma a cada {rule.sendEveryMinutes} min, das {rule.startHour}h às{' '}
+            {rule.endHour}h{rule.weekdaysOnly ? ' em dias úteis' : ''}, sem passar por Precisa de você. Antes de cada envio o sistema confere de
+            novo se a parcela continua em aberto. Para voltar a aprovar uma a uma, desmarque &quot;Enviar sozinha&quot; em Ajustar.
+          </p>
+        </div>
+      ) : (
+        <div className="flex items-start gap-2.5 rounded-md border border-emerald-600/30 bg-emerald-50 px-3.5 py-2.5 text-sm text-emerald-900 dark:bg-emerald-950/40 dark:text-emerald-200">
+          <Eye className="mt-0.5 h-4 w-4 shrink-0" />
+          <p>
+            <strong>Nenhuma cobrança sai sem você aprovar.</strong> A régua monta as mensagens e deixa em{' '}
+            <a href="/aprovacoes" className="font-medium underline underline-offset-2">Precisa de você</a>, onde dá para ler,
+            editar e mandar — ou recusar (também dá para aprovar todas de uma vez: saem uma a cada {rule?.sendEveryMinutes ?? 5} min). Antes de
+            cada envio o sistema confere de novo se a parcela continua em aberto.
+          </p>
+        </div>
+      )}
 
       <ConnectionsPanel
         conns={conns}
@@ -1334,7 +1346,10 @@ function RulePanel({
           </p>
           <p className="text-xs text-muted-foreground">
             {rule.enabled
-              ? `A cada ${rule.intervalDays} ${rule.intervalDays === 1 ? 'dia' : 'dias'}, das ${rule.startHour}h às ${rule.endHour}h${rule.weekdaysOnly ? ' em dias úteis' : ''}, no máximo ${rule.dailyCap} por dia. Para depois de ${rule.maxTouches} toques sem resposta.`
+              ? `A cada ${rule.intervalDays} ${rule.intervalDays === 1 ? 'dia' : 'dias'}, das ${rule.startHour}h às ${rule.endHour}h${rule.weekdaysOnly ? ' em dias úteis' : ''}, no máximo ${rule.dailyCap} por dia. Para depois de ${rule.maxTouches} toques sem resposta.` +
+                (rule.autoSend
+                  ? ` Envia sozinha, uma a cada ${rule.sendEveryMinutes} min.`
+                  : ' Cada cobrança espera sua aprovação em "Precisa de você".')
               : 'Ninguém é cobrado enquanto ela estiver desligada.'}
           </p>
         </div>
@@ -1351,12 +1366,21 @@ function RulePanel({
             if (
               ligando &&
               !confirm(
-                `Ligar a régua? Ela vai montar as cobranças a cada ${rule.intervalDays} dias e deixar em "Precisa de você" para você aprovar. Nenhuma mensagem sai sozinha.`,
+                rule.autoSend
+                  ? `Ligar a régua? Ela vai montar as cobranças a cada ${rule.intervalDays} dias e ENVIAR SOZINHA, uma a cada ${rule.sendEveryMinutes} min, das ${rule.startHour}h às ${rule.endHour}h. Antes de cada envio o sistema confere se a parcela continua em aberto.`
+                  : `Ligar a régua? Ela vai montar as cobranças a cada ${rule.intervalDays} dias e deixar em "Precisa de você" para você aprovar. Nenhuma mensagem sai sozinha.`,
               )
             )
               return;
             const ok = await persist({ enabled: ligando });
-            if (ok) toast.success(ligando ? 'Régua ligada. Nada sai sem sua aprovação.' : 'Régua desligada — ninguém será cobrado.');
+            if (ok)
+              toast.success(
+                ligando
+                  ? rule.autoSend
+                    ? `Régua ligada. As cobranças saem sozinhas, uma a cada ${rule.sendEveryMinutes} min.`
+                    : 'Régua ligada. Nada sai sem sua aprovação.'
+                  : 'Régua desligada — ninguém será cobrado.',
+              );
           }}
         >
           {rule.enabled ? 'Desligar' : 'Ligar régua'}
@@ -1376,7 +1400,35 @@ function RulePanel({
             {num('maxTouches', 'Parar depois de', 'Toques sem resposta antes de devolver para uma pessoa.', 1, 50)}
             {num('emitMaxValue', 'IA pode cobrar até (R$)', 'Teto da ferramenta "Gerar cobrança no Asaas": acima disso a IA não cria sozinha — avisa uma pessoa.', 1, 100000)}
             {num('reminderDaysBefore', 'Lembrar antes de vencer (dias)', '0 = desligado. Com 3, quem tem parcela vencendo nos próximos 3 dias recebe um aviso leve — não é cobrança. Passa pela mesma fila e teto.', 0, 15)}
+            {num('sendEveryMinutes', 'Uma mensagem a cada (min)', 'Cadência do envio automático e do "Aprovar todas": espaçar as mensagens é o que evita o bloqueio do número.', 1, 120)}
           </div>
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={draft.autoSend}
+              onChange={(e) => {
+                const on = e.target.checked;
+                if (
+                  on &&
+                  !confirm(
+                    `Enviar sozinha? As cobranças vão sair SEM passar por "Precisa de você" — uma a cada ${draft.sendEveryMinutes} min, das ${draft.startHour}h às ${draft.endHour}h. Antes de cada envio o sistema confere no Asaas se a parcela continua em aberto. Dá para desligar quando quiser.`,
+                  )
+                )
+                  return;
+                setDraft({ ...draft, autoSend: on });
+              }}
+            />
+            <span>
+              Enviar sozinha, sem passar por &quot;Precisa de você&quot;
+              <span className="block text-xs text-muted-foreground">
+                Decisão sua: a régua manda direto pelo canal configurado, uma a cada {draft.sendEveryMinutes} min, no horário acima. Os freios
+                continuam valendo — IA pausada na conta, cliente que pediu para não receber, conversa com a IA desligada. Desmarcado, cada
+                cobrança espera sua aprovação (e o automático por evidência libera depois de 20 decisões em 14 dias).
+              </span>
+            </span>
+          </label>
 
           <label className="flex items-start gap-2 text-sm">
             <input

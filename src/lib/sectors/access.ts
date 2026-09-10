@@ -180,9 +180,14 @@ export async function conversationVisibility(
   // (ver memória drizzle-subquery-unqualified).
   const mineDedicated = sql`"conversations"."channel_id" IN (SELECT id FROM channels WHERE account_id = ${accountId} AND dedicated_user_id = ${userId})`;
   const notOthersDedicated = sql`("conversations"."channel_id" IS NULL OR "conversations"."channel_id" NOT IN (SELECT id FROM channels WHERE account_id = ${accountId} AND dedicated_user_id IS NOT NULL AND dedicated_user_id <> ${userId}))`;
-  const base = and(
-    notOthersDedicated,
-    or(mine, participant, sectorScope, mineDedicated),
+  // 09/09 (Leonardo/GoLink): ATRIBUÍDA A MIM ou @MENÇÃO vence o canal dedicado
+  // de outra pessoa. Antes o "canal dedicado ao João" escondia da lista até a
+  // conversa que o próprio João atribuiu ao Leonardo — ele abria pela
+  // notificação e, ao sair, ela sumia. Mesma ordem do canReadConversation.
+  const base = or(
+    mine,
+    participant,
+    and(notOthersDedicated, or(sectorScope, mineDedicated)),
   ) as SQL;
   // "Ninguém vê as do admin": exclude admin/owner-assigned entirely.
   const adminIds = await getAdminUserIds(accountId);
@@ -223,14 +228,15 @@ export async function canReadConversation(
   if (assignedAgentId && (await isAdminUser(accountId, assignedAgentId))) {
     return false;
   }
+  // @mention participant — reads this one thread regardless of owner/sector,
+  // canal dedicado incluso (quem menciona quer que a pessoa leia).
+  if (conversationId && (await isParticipant(conversationId, userId))) {
+    return true;
+  }
   // 📌 Canal dedicado: abaixo de supervisor, só o dono do canal abre.
   if (conversationId) {
     const dedicated = await dedicatedOwnerOfConversation(conversationId);
     if (dedicated) return dedicated === userId;
-  }
-  // @mention participant — reads this one thread regardless of owner/sector.
-  if (conversationId && (await isParticipant(conversationId, userId))) {
-    return true;
   }
   if (isPrivate) return false;
   // Sector team (Felipe's spec): inside a sector the caller belongs to, agents
@@ -269,13 +275,13 @@ export async function canListConversation(
   }
   if (hasMinRole(role, 'supervisor')) return true;
   if (assignedAgentId && assignedAgentId === userId) return true;
-  // 📌 Canal dedicado: só o dono lista.
+  if (conversationId && (await isParticipant(conversationId, userId))) {
+    return true;
+  }
+  // 📌 Canal dedicado: só o dono lista (atribuída/menção já passaram acima).
   if (conversationId) {
     const dedicated = await dedicatedOwnerOfConversation(conversationId);
     if (dedicated) return dedicated === userId;
-  }
-  if (conversationId && (await isParticipant(conversationId, userId))) {
-    return true;
   }
   // Sector member: sees every conversation in their sectors (any assignee) —
   // INCLUDING private ones, which show as a locked row (read is still blocked
@@ -322,11 +328,11 @@ export function agentCanReadRow(args: {
   } = args;
   if (assignedAgentId && assignedAgentId === userId) return true;
   if (assignedAgentId && adminIds.has(assignedAgentId)) return false;
-  // 📌 Canal dedicado: só o dono lê as conversas dele.
+  if (participantIds.has(conversationId)) return true;
+  // 📌 Canal dedicado: só o dono lê as conversas dele (atribuída/menção acima).
   if (channelId && dedicatedByChannel?.has(channelId)) {
     return dedicatedByChannel.get(channelId) === userId;
   }
-  if (participantIds.has(conversationId)) return true;
   if (isPrivate) return false;
   // Sector-mate reads teammates' threads (assigned or not); a no-sector thread
   // is readable only while unassigned (open queue), then becomes the owner's.

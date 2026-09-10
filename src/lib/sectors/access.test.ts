@@ -43,4 +43,18 @@ describe('agentCanReadRow — canal dedicado', () => {
   it('sem mapa (chamadas antigas) nada muda', () => {
     expect(agentCanReadRow({ ...base, channelId: 'ch-vitor' })).toBe(true)
   })
+
+  // 09/09 — Leonardo (setor Financeiro) na GoLink: todos os canais são
+  // dedicados; o João atribuía a conversa a ele e ela sumia da lista.
+  it('mencionado (@) numa conversa de canal dedicado a outro → leio', () => {
+    expect(
+      agentCanReadRow({ ...base, channelId: 'ch-vitor', dedicatedByChannel: dedicated, participantIds: new Set(['c1']) }),
+    ).toBe(true)
+  })
+
+  it('setor em comum NÃO basta em canal dedicado a outro (número pessoal continua pessoal)', () => {
+    expect(
+      agentCanReadRow({ ...base, sectorId: 'fin', sectorIds: new Set(['fin']), channelId: 'ch-vitor', dedicatedByChannel: dedicated }),
+    ).toBe(false)
+  })
 })

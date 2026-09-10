@@ -299,7 +299,19 @@ async function loadPending(accountId: string, id: string) {
 }
 
 /** Aprova (e executa) um item. `text` = mensagem editada, se for ação de mensagem. */
-export async function approveQueueItem(input: { id: string; text?: string | null; payload?: Record<string, unknown>; conversationId?: string | null; proposalValue?: number | null }): Promise<ActionResult> {
+export async function approveQueueItem(input: {
+  id: string
+  text?: string | null
+  payload?: Record<string, unknown>
+  conversationId?: string | null
+  proposalValue?: number | null
+  /**
+   * Cobrança aprovada em LOTE (09/09): em vez de sair agora, entra na fila do
+   * sender e sai uma a cada N minutos (Cobranças → Ajustar), no horário da
+   * régua — aprovar 33 de uma vez não pode virar 33 mensagens num minuto.
+   */
+  paced?: boolean
+}): Promise<ActionResult> {
   const ctx = await getCurrentAccount()
   if (ctx.role === 'viewer') return { ok: false, error: 'Seu papel só permite visualizar.' }
   const row = await loadPending(ctx.accountId, input.id)
@@ -326,6 +338,25 @@ export async function approveQueueItem(input: { id: string; text?: string | null
     )
     if (!conv) return { ok: false, error: 'A conversa escolhida não é deste contato.' }
     sendConversationId = conv.id
+  }
+
+  // 🧾 Lote cadenciado: humano aprovou (texto fechado, quem aprovou gravado),
+  // o envio fica com o sender (lib/collections/sender.ts). Some da fila de
+  // aprovação (não é mais 'pending') e aparece na auditoria quando sair.
+  if (input.paced && action === 'collect_charges' && meta.kind === 'message') {
+    await db
+      .update(agentActionRequests)
+      .set({
+        status: 'queued',
+        suggestedText: text,
+        conversationId: sendConversationId,
+        payload: { ...payload, queuedBy: ctx.userId, queuedAt: new Date().toISOString() },
+        resolvedBy: ctx.userId,
+        error: null,
+      })
+      .where(eq(agentActionRequests.id, row.id))
+    revalidatePath('/aprovacoes')
+    return { ok: true }
   }
 
   let result: Record<string, unknown> = {}

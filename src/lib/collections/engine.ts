@@ -63,7 +63,7 @@ export function readCollectionsSettings(raw: unknown): CollectionsSettings {
   return normalizeSettings(bag.collections)
 }
 
-function localParts(tz: string): { hour: number; weekday: number } {
+export function localParts(tz: string): { hour: number; weekday: number } {
   try {
     const fmt = new Intl.DateTimeFormat('en-US', { timeZone: tz, hour: '2-digit', hour12: false, weekday: 'short' })
     const parts = fmt.formatToParts(new Date())
@@ -218,7 +218,12 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       .orderBy(desc(aiConfigs.isActive))
       .limit(1),
   )
-  const policy: AutonomyPolicy = readPolicy(agent?.autonomy ?? null)
+  // 🔓 "Enviar sozinha" (Ajustar): decisão explícita do dono — a cobrança vira
+  //    automática mesmo sem o portão de promoção. Os freios da conta (pausa,
+  //    "só sugestões", opt-out, IA desligada na conversa) seguem valendo dentro
+  //    do decide(). Quem manda de fato é o sender (lib/collections/sender.ts),
+  //    uma mensagem a cada N minutos.
+  const policy: AutonomyPolicy = withAutoSend(readPolicy(agent?.autonomy ?? null), s)
 
   // Do mais atrasado para o menos: se o teto cortar, corta o que espera menos.
   const ordered = [...byContact.values()].sort(
@@ -442,6 +447,12 @@ async function draftCollectionMessage(args: {
   } catch {
     return fallback
   }
+}
+
+/** Política efetiva da régua: com "Enviar sozinha" ligado, collect_charges é automático. */
+export function withAutoSend(policy: AutonomyPolicy, s: Pick<CollectionsSettings, 'autoSend'>): AutonomyPolicy {
+  if (!s.autoSend) return policy
+  return { ...policy, levels: { ...policy.levels, collect_charges: 'auto' } }
 }
 
 /** Contas com régua ligada e ao menos uma conexão Asaas (para o tique do worker). */

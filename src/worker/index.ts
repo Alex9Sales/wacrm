@@ -157,3 +157,10 @@ import('./orchestration-worker')
   .catch((err) => {
     console.error('[worker] orchestration failed to start:', err);
   });
+
+// 🧾 Sender da régua de cobrança (1 min): envia uma cobrança a cada N minutos.
+import('./collections-sender-worker')
+  .then((m) => m.startCollectionsSenderWorker())
+  .catch((err) => {
+    console.error('[worker] collections-sender failed to start:', err);
+  });

@@ -43,6 +43,7 @@ import {
   type AuditItem,
   type AutonomyMetrics,
 } from '@/app/(dashboard)/aprovacoes/actions';
+import { getCollectionsSettings } from '@/app/(dashboard)/cobrancas/actions';
 import { contextChips } from '@/lib/orchestration/context-chips';
 import type { Risk } from '@/lib/orchestration/policy';
 
@@ -158,9 +159,19 @@ export function ApprovalQueueClient() {
   const approveAllCollections = async () => {
     const list = collectItems;
     if (!list.length || bulkBusy) return;
+    // Cadência e horário vêm de Cobranças → Ajustar: o lote NÃO sai de uma vez.
+    let every = 5;
+    let janela = '';
+    try {
+      const s = await getCollectionsSettings();
+      every = s.sendEveryMinutes;
+      janela = ` das ${s.startHour}h às ${s.endHour}h${s.weekdaysOnly ? ' em dias úteis' : ''}`;
+    } catch {
+      /* sem as configurações, fica o texto genérico */
+    }
     if (
       !window.confirm(
-        `Aprovar e ENVIAR ${list.length} ${list.length === 1 ? 'cobrança' : 'cobranças'} agora, com o texto que está na tela?\n\nAntes de cada envio o sistema confere no Asaas se a parcela continua em aberto.`,
+        `Aprovar ${list.length} ${list.length === 1 ? 'cobrança' : 'cobranças'} com o texto que está na tela?\n\nElas saem sozinhas, uma a cada ${every} min${janela} (ajuste em Cobranças → Ajustar). Antes de cada envio o sistema confere no Asaas se a parcela continua em aberto.`,
       )
     )
       return;
@@ -175,6 +186,7 @@ export function ApprovalQueueClient() {
             text: texts[it.id] ?? it.suggestedText,
             conversationId: channelSel[it.id] ?? it.defaultConversationId,
             proposalValue: null,
+            paced: true,
           });
           if (r.ok) ok += 1;
           else falhas.push(`${it.contact.name || it.contact.phone || 'contato'}: ${r.error}`);
@@ -182,8 +194,8 @@ export function ApprovalQueueClient() {
           falhas.push(`${it.contact.name || it.contact.phone || 'contato'}: ${e instanceof Error ? e.message : 'não deu certo'}`);
         }
       }
-      if (ok) toast.success(`${ok} ${ok === 1 ? 'cobrança enviada' : 'cobranças enviadas'}.`);
-      if (falhas.length) toast.error(`${falhas.length} não ${falhas.length === 1 ? 'saiu' : 'saíram'}:\n${falhas.slice(0, 5).join('\n')}`, { duration: 12000 });
+      if (ok) toast.success(`${ok} ${ok === 1 ? 'cobrança na fila de envio' : 'cobranças na fila de envio'} — uma a cada ${every} min.`, { duration: 8000 });
+      if (falhas.length) toast.error(`${falhas.length} não ${falhas.length === 1 ? 'entrou' : 'entraram'}:\n${falhas.slice(0, 5).join('\n')}`, { duration: 12000 });
       await load();
     } finally {
       setBulkBusy(false);

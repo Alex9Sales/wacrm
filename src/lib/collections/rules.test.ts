@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import {
   COLLECTIONS_DEFAULTS,
+  autoSendDue,
   deliveryPlan,
   duplicateSuspects,
   eligibility,
@@ -101,6 +102,26 @@ describe('eligibility — a régua só cobra quem pode ser cobrado', () => {
   it('opt-out vence até a pausa e o atraso — ninguém contorna um "não me mande mais"', () => {
     const d = eligibility({ ...base, optedOut: true, maxDaysLate: 300, state: state({ paused: true }) }, s, agora)
     expect(d).toBe('opted_out')
+  })
+})
+
+describe('autoSend / cadência (09/09, GoLink "uma a cada N minutos")', () => {
+  it('nasce desligado, com 5 minutos entre mensagens; prende o intervalo em 1–120', () => {
+    const d = normalizeSettings({})
+    expect(d.autoSend).toBe(false)
+    expect(d.sendEveryMinutes).toBe(5)
+    expect(normalizeSettings({ sendEveryMinutes: 0 }).sendEveryMinutes).toBe(1)
+    expect(normalizeSettings({ sendEveryMinutes: 999 }).sendEveryMinutes).toBe(120)
+    expect(normalizeSettings({ autoSend: 'sim' }).autoSend).toBe(false)
+    expect(normalizeSettings({ autoSend: true }).autoSend).toBe(true)
+  })
+
+  it('autoSendDue: sem envio anterior pode; depois só quando passa o intervalo', () => {
+    const now = Date.parse('2026-09-10T12:00:00Z')
+    expect(autoSendDue(null, now, 5)).toBe(true)
+    expect(autoSendDue(now - 4 * 60_000, now, 5)).toBe(false)
+    expect(autoSendDue(now - 5 * 60_000, now, 5)).toBe(true)
+    expect(autoSendDue(now - 30_000, now, 0)).toBe(false) // 0 vira 1 minuto
   })
 })
 

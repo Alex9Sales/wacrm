@@ -81,6 +81,20 @@ export interface CollectionsSettings {
    * desligado: mexer no vencimento perdoa juros/multa do Asaas, é decisão.
    */
   promiseUpdatesDueDate: boolean
+  /**
+   * Enviar SOZINHA, sem passar por "Precisa de você" (09/09, João/GoLink:
+   * "quero automático já"). É decisão explícita do dono e ignora o portão de
+   * promoção (20 decisões/14 dias) — os freios da conta continuam valendo
+   * (IA pausada, "só sugestões", opt-out, IA desligada na conversa). Nasce
+   * desligado.
+   */
+  autoSend: boolean
+  /**
+   * Cadência do envio automático (e do "Aprovar todas"): uma mensagem a cada
+   * N minutos, dentro do horário da régua. Espaçar é o anti-ban — quarenta
+   * cobranças num minuto é como o WhatsApp reconhece um robô.
+   */
+  sendEveryMinutes: number
 }
 
 export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
@@ -101,6 +115,8 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   thankOnPayment: true,
   reminderDaysBefore: 0,
   promiseUpdatesDueDate: false,
+  autoSend: false,
+  sendEveryMinutes: 5,
 }
 
 export function normalizeSettings(raw: unknown): CollectionsSettings {
@@ -133,7 +149,18 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     thankOnPayment: r.thankOnPayment !== false,
     reminderDaysBefore: int(r.reminderDaysBefore, 0, 0, 15),
     promiseUpdatesDueDate: r.promiseUpdatesDueDate === true,
+    autoSend: r.autoSend === true,
+    sendEveryMinutes: int(r.sendEveryMinutes, 5, 1, 120),
   }
+}
+
+/**
+ * Cadência do envio automático: já passou N minutos desde a última mensagem
+ * da régua nesta conta? Sem envio anterior, pode. Puro, pra testar.
+ */
+export function autoSendDue(lastSentAtMs: number | null, nowMs: number, everyMinutes: number): boolean {
+  if (lastSentAtMs == null) return true
+  return nowMs - lastSentAtMs >= Math.max(1, everyMinutes) * 60_000
 }
 
 /**

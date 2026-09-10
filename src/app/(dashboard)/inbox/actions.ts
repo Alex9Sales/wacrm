@@ -7,7 +7,7 @@
 // is no RLS anymore.
 // ============================================================
 
-import { and, asc, desc, eq, ilike, inArray, lt, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, ilike, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 import {
   db,
   contactNotes,
@@ -36,7 +36,7 @@ import {
   requireRole,
   type AccountContext,
 } from '@/lib/auth/account'
-import { hasMinRole } from '@/lib/auth/roles'
+import { hasMinRole, type AccountRole } from '@/lib/auth/roles'
 import {
   conversationVisibility,
   canReadConversation,
@@ -1865,6 +1865,7 @@ export async function startNewConversation(input: {
       input.name?.trim() || null,
       input.channelId ?? null,
     )
+    await claimNewConversation(ctx.accountId, ctx.userId, ctx.role, res.conversationId)
     return {
       conversationId: res.conversationId,
       contactCreated: res.contactCreated,
@@ -1874,6 +1875,39 @@ export async function startNewConversation(input: {
     throw new Error(
       err instanceof Error ? err.message : 'Não foi possível iniciar a conversa.',
     )
+  }
+}
+
+/**
+ * Quem ABRE a conversa fica com ela (09/09, Leonardo/GoLink): um atendente
+ * criava a conversa pelo "Nova conversa"/"Abrir conversa", o toast dizia
+ * "Conversa aberta" e a lista continuava vazia — a conversa nascia sem dono
+ * num canal dedicado ao João, invisível pra ele. Só atribui quando ainda não
+ * tem dono, e só pra quem está abaixo de admin: conversa do dono/admin fica
+ * invisível pro time, então o João abrindo uma conversa não pode "tomá-la".
+ */
+async function claimNewConversation(
+  accountId: string,
+  userId: string,
+  role: AccountRole,
+  conversationId: string,
+): Promise<void> {
+  if (hasMinRole(role, 'admin')) return
+  try {
+    const now = new Date().toISOString()
+    await db
+      .update(conversations)
+      .set({ assignedAgentId: userId, assignedAt: now, updatedAt: now })
+      .where(
+        and(
+          eq(conversations.id, conversationId),
+          eq(conversations.accountId, accountId),
+          isNull(conversations.assignedAgentId),
+        ),
+      )
+  } catch (err) {
+    // A conversa já existe e vai abrir pelo deep-link; a atribuição é conforto.
+    console.error('[startNewConversation] não deu pra atribuir a quem abriu:', err instanceof Error ? err.message : err)
   }
 }
 
@@ -1899,7 +1933,9 @@ export async function startNewEmailConversation(input: {
   }
   const { resolveEmailConversation } = await import('@/lib/channels/inbound')
   try {
-    return await resolveEmailConversation(channel, addr, input.name?.trim() || null)
+    const res = await resolveEmailConversation(channel, addr, input.name?.trim() || null)
+    await claimNewConversation(ctx.accountId, ctx.userId, ctx.role, res.conversationId)
+    return res
   } catch (err) {
     throw new Error(
       err instanceof Error ? err.message : 'Não foi possível iniciar a conversa.',
