@@ -47,6 +47,7 @@ import {
 } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { hasMinRole, type AccountRole } from '@/lib/auth/roles';
+import { getAccountSettings } from '@/lib/settings/account-settings';
 
 /** Sector ids a user belongs to. */
 export async function getUserSectorIds(userId: string): Promise<string[]> {
@@ -138,6 +139,19 @@ async function dedicatedOwnerOfConversation(conversationId: string): Promise<str
   return row?.userId ?? null;
 }
 
+/**
+ * "Equipe vê tudo" (Configurações → Setores): a conta abriu mão da privacidade
+ * por setor/dono — todo membro lista e abre qualquer conversa. Só a marcada
+ * como PRIVADA continua com o dono. Fail-closed: erro ao ler = modelo normal.
+ */
+export async function teamSeesAll(accountId: string): Promise<boolean> {
+  try {
+    return (await getAccountSettings(accountId)).teamSeesAllConversations === true;
+  } catch {
+    return false;
+  }
+}
+
 export async function conversationVisibility(
   role: AccountRole,
   userId: string,
@@ -145,6 +159,9 @@ export async function conversationVisibility(
 ): Promise<SQL | undefined> {
   // Admin/owner see everything.
   if (hasMinRole(role, 'admin')) return undefined;
+  // "Equipe vê tudo": sem restrição pra ninguém (a privada aparece como linha
+  // travada, igual ao setor — read_blocked esconde o conteúdo).
+  if (await teamSeesAll(accountId)) return undefined;
 
   // Supervisor: everything EXCEPT conversations assigned to an admin/owner.
   if (hasMinRole(role, 'supervisor')) {
@@ -217,6 +234,9 @@ export async function canReadConversation(
   if (hasMinRole(role, 'admin')) return true;
   // The assignee always reads their own thread.
   if (assignedAgentId && assignedAgentId === userId) return true;
+  // "Equipe vê tudo": qualquer membro abre qualquer conversa — menos a privada
+  // (essa continua só do dono, admin e supervisor).
+  if (await teamSeesAll(accountId)) return !isPrivate || hasMinRole(role, 'supervisor');
   // Supervisor: everything except an admin/owner-assigned thread.
   if (hasMinRole(role, 'supervisor')) {
     if (assignedAgentId && (await isAdminUser(accountId, assignedAgentId))) {
@@ -269,6 +289,8 @@ export async function canListConversation(
   isPrivate = false,
 ): Promise<boolean> {
   if (hasMinRole(role, 'admin')) return true;
+  // "Equipe vê tudo": lista pra qualquer membro (a privada entra travada).
+  if (await teamSeesAll(accountId)) return true;
   // Admin/owner conversations are never listed to a non-admin.
   if (assignedAgentId && (await isAdminUser(accountId, assignedAgentId))) {
     return false;

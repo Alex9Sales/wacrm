@@ -58,6 +58,14 @@ export interface AccountSettings {
    *  for teams that answer on the phone itself. Admin/supervisor-controlled
    *  in Configurações → Notificações. */
   crmCallingEnabled: boolean
+  /** "Equipe vê tudo": TODO membro (atendente inclusive) lista e abre qualquer
+   *  conversa — de qualquer setor, atribuída a quem for, inclusive a admin/dono.
+   *  Só a conversa marcada como PRIVADA continua restrita ao dono dela. Desligado
+   *  (padrão) vale o modelo de setores: atendente vê o próprio setor, o que é
+   *  dele e a fila geral, e ninguém vê as conversas de admin/dono. Existe pra
+   *  operação pequena onde todo mundo atende todo mundo — a clínica da Joyce
+   *  (10/09) "perdia" mensagens que estavam com a dona. */
+  teamSeesAllConversations: boolean
   /** Negócio ABERTO parado nesta MESMA etapa por mais dias que isto vira
    *  "esfriando" (alerta no card + filtro no funil). 0 = desligado. Padrão 7. */
   staleDealDays: number
@@ -167,6 +175,7 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   csatCommentPrompt:
     'Obrigado pela nota! Se quiser, deixe um comentário sobre o atendimento — é rapidinho. 🙏',
   crmCallingEnabled: true,
+  teamSeesAllConversations: false,
   staleDealDays: 7,
   recordSaleOnWon: true,
   autonomyPaused: false,

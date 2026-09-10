@@ -191,8 +191,42 @@ export async function syncNow(connectionId?: string): Promise<ActionResult<SyncR
   const res = connectionId
     ? await syncConnection(accountId, connectionId, overdueStatuses)
     : await syncAccount(accountId, overdueStatuses)
+  // 10/09 (João/GoLink): "removi os duplicados no Asaas e cliquei em Atualizar,
+  // mas continua acusando". O selo vinha de um relatório antigo — só o botão
+  // "verificar de novo" refazia. Atualizar agora reconta também (best-effort:
+  // falha aqui não derruba a sincronização).
+  await refreshDuplicateReports(accountId, connectionId).catch(() => {})
   revalidatePath('/cobrancas')
   return res.ok ? { ok: true, data: res } : { ok: false, error: res.error, data: res }
+}
+
+/** Reconta os cadastros duplicados de cada conta do Asaas (ou só de uma). */
+async function refreshDuplicateReports(accountId: string, connectionId?: string): Promise<void> {
+  const conns = await db
+    .select({ id: asaasConnections.id })
+    .from(asaasConnections)
+    .where(
+      and(
+        eq(asaasConnections.accountId, accountId),
+        eq(asaasConnections.enabled, true),
+        ...(connectionId ? [eq(asaasConnections.id, connectionId)] : []),
+      ),
+    )
+  for (const c of conns) {
+    const cred = await connectionCred(accountId, c.id)
+    if (!cred) continue
+    try {
+      const all = await listAllCustomers(cred.cred)
+      const groups = groupDuplicateCustomers(all)
+      const now = new Date().toISOString()
+      await db
+        .update(asaasConnections)
+        .set({ duplicatesReport: groups, duplicatesCheckedAt: now, updatedAt: now })
+        .where(eq(asaasConnections.id, c.id))
+    } catch (err) {
+      console.warn(`[cobranca] recontar duplicados (${cred.label}) falhou: ${err instanceof Error ? err.message : err}`)
+    }
+  }
 }
 
 // --------------------------------------------------------------- a carteira

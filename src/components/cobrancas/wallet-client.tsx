@@ -238,7 +238,19 @@ export function WalletClient() {
       </header>
 
       {/* Aviso permanente. Não é toast — é contrato com quem opera. */}
-      {rule?.enabled && rule.autoSend ? (
+      {rule && !rule.enabled ? (
+        <div className="flex items-start gap-2.5 rounded-md border border-border bg-muted/40 px-3.5 py-2.5 text-sm text-foreground">
+          <Eye className="mt-0.5 h-4 w-4 shrink-0 text-muted-foreground" />
+          <p>
+            <strong>Régua desligada.</strong> Nada é montado nem enviado — o que estiver em{' '}
+            <a href="/aprovacoes" className="font-medium underline underline-offset-2">Precisa de você</a> fica parado, e rascunho de
+            outro dia é descartado (a régua refaz com os números do dia).{' '}
+            {rule.autoSend
+              ? `Ao ligar, as cobranças saem sozinhas, uma a cada ${rule.sendEveryMinutes} min, das ${rule.startHour}h às ${rule.endHour}h${rule.weekdaysOnly ? ' em dias úteis' : ''} — não precisa aprovar nada.`
+              : 'Ao ligar, a régua monta as mensagens e deixa em Precisa de você para você aprovar.'}
+          </p>
+        </div>
+      ) : rule?.enabled && rule.autoSend ? (
         <div className="flex items-start gap-2.5 rounded-md border border-amber-500/40 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
           <Bot className="mt-0.5 h-4 w-4 shrink-0" />
           <p>

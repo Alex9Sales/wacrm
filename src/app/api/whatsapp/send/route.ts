@@ -14,6 +14,7 @@ import {
 } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
 import { getUserSectorIds, isAdminUser } from '@/lib/sectors/access'
+import { looksLikeBareCode } from '@/lib/whatsapp/bare-code'
 import {
   checkRateLimit,
   rateLimitResponse,
@@ -288,7 +289,10 @@ export async function POST(request: Request) {
       // worst case the message just goes out without the signature.
       try {
         const settings = await getAccountSettings(accountId)
-        if (settings.agentSignatureEnabled) {
+        // Código Pix / linha de boleto / link sozinho sai SEM assinatura: o
+        // cliente copia a bolha inteira no celular e o banco recusa (10/09,
+        // Leonardo/GoLink). Mensagem de gente continua assinada.
+        if (settings.agentSignatureEnabled && !looksLikeBareCode(content_text)) {
           const sender = firstOrNull(
             await db
               .select({ name: user.name })

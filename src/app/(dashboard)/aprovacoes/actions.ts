@@ -38,6 +38,8 @@ export interface ApprovalItem {
   suggestedText: string | null
   reason: string | null
   policy: string | null
+  /** 'auto' = sai sozinha quando chegar a vez (fila do automático), sem ninguém aprovar. */
+  decision: string | null
   payload: Record<string, unknown>
   error: string | null
   attempts: number
@@ -96,6 +98,7 @@ export async function listApprovalQueue(): Promise<ApprovalItem[]> {
       suggestedText: agentActionRequests.suggestedText,
       reason: agentActionRequests.reason,
       policy: agentActionRequests.policy,
+      decision: agentActionRequests.decision,
       payload: agentActionRequests.payload,
       error: agentActionRequests.error,
       attempts: agentActionRequests.attempts,
@@ -221,6 +224,7 @@ export async function listApprovalQueue(): Promise<ApprovalItem[]> {
         suggestedText: r.suggestedText,
         reason: r.reason,
         policy: r.policy,
+        decision: r.decision ?? null,
         payload: (r.payload ?? {}) as Record<string, unknown>,
         error: r.error,
         attempts: r.attempts,

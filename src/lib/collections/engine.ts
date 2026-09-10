@@ -25,6 +25,7 @@ import { syncAccount } from '@/lib/asaas/sync'
 
 import { resolveCollectionTargets } from './outreach'
 import { queueUpcomingReminders } from './reminders'
+import { expireStaleCollectionDrafts } from './stale'
 import { maxSimilarity, seedFrom, tooSimilar, variationInstruction, variationPlan } from './variation'
 
 import {
@@ -197,6 +198,9 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
 
   // 3) Teto do dia + quem já está na fila (não empilhamos dois pedidos para a
   //    mesma pessoa: a fila viraria ruído e o cliente cobraria em dobro).
+  //    Antes, o que sobrou de OUTRO dia expira (stale.ts): "vence hoje" de
+  //    ontem não sai hoje — esta rodada monta de novo com os números de hoje.
+  await expireStaleCollectionDrafts(accountId, tz)
   const dayAgo = new Date(Date.now() - 24 * 3_600_000).toISOString()
   const recent = await db
     .select({ contactId: agentActionRequests.contactId, status: agentActionRequests.status })

@@ -1452,6 +1452,19 @@ export async function getOwnerAlerts(): Promise<{
   }
 }
 
+/** "Equipe vê tudo" (Setores): estado atual da conta. */
+export async function getTeamVisibility(): Promise<{ teamSeesAll: boolean }> {
+  const ctx = await getCurrentAccount()
+  const s = await getAccountSettings(ctx.accountId)
+  return { teamSeesAll: s.teamSeesAllConversations === true }
+}
+
+/** Liga/desliga "Equipe vê tudo" (admin). Ver AccountSettings.teamSeesAllConversations. */
+export async function setTeamVisibility(teamSeesAll: boolean): Promise<void> {
+  const ctx = await requireRole('admin')
+  await updateAccountSettings(ctx.accountId, { teamSeesAllConversations: teamSeesAll === true })
+}
+
 export async function setOwnerAlerts(input: {
   phone: string
   channelId: string | null

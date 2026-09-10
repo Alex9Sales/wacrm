@@ -36,6 +36,8 @@ import {
   listChannelsForRouting,
   setChannelDefaultSector,
   setChannelDedicatedUser,
+  getTeamVisibility,
+  setTeamVisibility,
   type SectorWithMembers,
   type ChannelRouting,
 } from "./actions";
@@ -52,6 +54,9 @@ export function SectorsPanel() {
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<SectorWithMembers | null>(null);
   const [creating, setCreating] = useState(false);
+  // "Equipe vê tudo" — null enquanto carrega.
+  const [teamSeesAll, setTeamSeesAll] = useState<boolean | null>(null);
+  const [savingVisibility, setSavingVisibility] = useState(false);
 
   const reload = () =>
     Promise.all([listSectorsWithMembers(), listChannelsForRouting()])
@@ -66,15 +71,46 @@ export function SectorsPanel() {
       listSectorsWithMembers(),
       listTeamMembers(),
       listChannelsForRouting(),
+      getTeamVisibility().catch(() => null),
     ])
-      .then(([s, m, c]) => {
+      .then(([s, m, c, v]) => {
         setSectors(s);
         setMembers(m);
         setChannelsList(c);
+        if (v) setTeamSeesAll(v.teamSeesAll);
       })
       .catch(() => {})
       .finally(() => setLoading(false));
   }, []);
+
+  const toggleTeamVisibility = async (on: boolean) => {
+    if (savingVisibility) return;
+    if (
+      on &&
+      !confirm(
+        "Ligar \"Equipe vê tudo\"? Todo membro (atendente inclusive) passa a ver e abrir QUALQUER conversa — de qualquer setor, atribuída a quem for, inclusive as do admin/dono. Só a conversa marcada como privada continua restrita. Dá para desligar quando quiser.",
+      )
+    )
+      return;
+    setSavingVisibility(true);
+    try {
+      await setTeamVisibility(on);
+      setTeamSeesAll(on);
+      toast.success(
+        on
+          ? "Equipe vê tudo: agora todo mundo enxerga todas as conversas."
+          : "Voltou o modelo por setor: cada um vê o seu setor, o que é dele e a fila geral.",
+      );
+    } catch (err) {
+      if (isStaleActionError(err)) {
+        reloadForStaleAction();
+        return;
+      }
+      toast.error("Não foi possível salvar.");
+    } finally {
+      setSavingVisibility(false);
+    }
+  };
 
   const nameOf = (id: string) =>
     members.find((m) => m.id === id)?.name ?? "?";
@@ -93,6 +129,36 @@ export function SectorsPanel() {
           ) : undefined
         }
       />
+
+      {/* 👀 "Equipe vê tudo": operação pequena onde todo mundo atende todo mundo
+          (clínica da Joyce, 10/09: mensagem "sumia" porque a conversa estava
+          com a dona e atendente não vê conversa de admin). */}
+      {!loading && teamSeesAll !== null && (
+        <label
+          className={cn(
+            "mt-4 flex cursor-pointer items-start gap-3 rounded-xl border px-4 py-3",
+            teamSeesAll ? "border-primary/40 bg-primary/5" : "border-border bg-card",
+            !canEditSettings && "cursor-default opacity-80",
+          )}
+        >
+          <Checkbox
+            checked={teamSeesAll}
+            disabled={!canEditSettings || savingVisibility}
+            onCheckedChange={(v) => void toggleTeamVisibility(v === true)}
+            className="mt-0.5"
+          />
+          <span className="min-w-0">
+            <span className="block text-sm font-medium text-foreground">
+              Equipe vê tudo
+            </span>
+            <span className="mt-0.5 block text-xs text-muted-foreground">
+              {teamSeesAll
+                ? "Ligado: todo membro vê e abre qualquer conversa — de qualquer setor, atribuída a quem for, inclusive as do admin/dono. Só a conversa marcada como privada fica com o dono dela."
+                : "Desligado: cada atendente vê o próprio setor, o que está com ele e a fila geral; ninguém vê as conversas do admin/dono. Ligue quando todo mundo atende todo mundo (recepção, clínica, loja pequena)."}
+            </span>
+          </span>
+        </label>
+      )}
 
       <div className="mt-4 space-y-3">
         {loading ? (

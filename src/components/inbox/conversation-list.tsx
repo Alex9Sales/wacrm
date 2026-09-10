@@ -224,11 +224,12 @@ export function ConversationList({
   // antiga já carregada) e anexa no estado do pai (dedup por id).
   const loadMore = useCallback(async () => {
     if (loadingMore) return;
-    // Cursor = menor last_message_at carregado (a lista é DESC; nulls ficam no
-    // topo e já vieram na 1ª página).
+    // Cursor = menor "última atividade" carregada (a lista é DESC por
+    // COALESCE(last_message_at, created_at) — conversa sem mensagem entra pela
+    // data de criação, igual ao servidor).
     let cursor: string | null = null;
     for (const c of conversations) {
-      const t = c.last_message_at;
+      const t = c.last_message_at || c.created_at;
       if (t && (cursor === null || t < cursor)) cursor = t;
     }
     if (!cursor) {

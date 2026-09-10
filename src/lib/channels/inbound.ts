@@ -465,9 +465,12 @@ export async function dispatchInboundMessage(
       .set({
         lastMessageText: contentText,
         lastMessageAt: new Date().toISOString(),
-        unreadCount: isFromMe
-          ? conversation.unreadCount || 0
-          : (conversation.unreadCount || 0) + 1,
+        // Eco do CELULAR (alguém da equipe respondeu pelo próprio WhatsApp):
+        // quem responde leu. Zera o não-lido em vez de deixar acumular — a
+        // clínica da Joyce (10/09) tinha 229 conversas "não lidas" que a
+        // recepção já tinha atendido pelo telefone. Mensagem mandada PELO CRM
+        // não passa aqui (o eco dela é descartado como repetida).
+        unreadCount: isFromMe ? 0 : (conversation.unreadCount || 0) + 1,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(conversations.id, conversation.id));
@@ -1100,9 +1103,12 @@ async function ingestGroupMessage(
       .set({
         lastMessageText: contentText,
         lastMessageAt: new Date().toISOString(),
-        unreadCount: isFromMe
-          ? conversation.unreadCount || 0
-          : (conversation.unreadCount || 0) + 1,
+        // Eco do CELULAR (alguém da equipe respondeu pelo próprio WhatsApp):
+        // quem responde leu. Zera o não-lido em vez de deixar acumular — a
+        // clínica da Joyce (10/09) tinha 229 conversas "não lidas" que a
+        // recepção já tinha atendido pelo telefone. Mensagem mandada PELO CRM
+        // não passa aqui (o eco dela é descartado como repetida).
+        unreadCount: isFromMe ? 0 : (conversation.unreadCount || 0) + 1,
         updatedAt: new Date().toISOString(),
       })
       .where(eq(conversations.id, conversation.id));

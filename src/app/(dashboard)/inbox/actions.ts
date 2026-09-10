@@ -45,6 +45,7 @@ import {
   getParticipantConversationIds,
   getUserSectorIds,
   getDedicatedChannelMap,
+  teamSeesAll,
 } from '@/lib/sectors/access'
 import { formatConversationPreview } from '@/lib/inbox/preview'
 import { loadChannel } from '@/lib/channels/channels'
@@ -599,8 +600,14 @@ export async function listConversations(opts?: {
     )
     if (cond) filters.push(cond)
   }
+  // Ordem da lista = última atividade. Conversa ainda sem mensagem (aberta pela
+  // ficha do contato, agenda…) tem last_message_at NULL — e `DESC` puro no
+  // Postgres põe NULL PRIMEIRO: a clínica da Joyce (10/09) abria a caixa com 51
+  // conversas vazias no topo e os pacientes de hoje lá embaixo. Vale a data de
+  // criação no lugar, no ORDER e no cursor da paginação.
+  const recency = sql`COALESCE(${conversations.lastMessageAt}, ${conversations.createdAt})`
   if (opts?.beforeLastMessageAt) {
-    filters.push(lt(conversations.lastMessageAt, opts.beforeLastMessageAt))
+    filters.push(sql`${recency} < ${opts.beforeLastMessageAt}`)
   }
 
   // Busca → 50 por padrão; página → o limit pedido; sem nada → tudo (compat).
@@ -618,7 +625,7 @@ export async function listConversations(opts?: {
     .leftJoin(channels, eq(conversations.channelId, channels.id))
     .leftJoin(sectors, eq(conversations.sectorId, sectors.id))
     .where(and(...filters))
-    .orderBy(desc(conversations.lastMessageAt))
+    .orderBy(sql`${recency} DESC`, desc(conversations.id))
   const rows = await (effectiveLimit ? base.limit(effectiveLimit) : base)
 
   const contactIds = Array.from(
@@ -646,23 +653,28 @@ export async function listConversations(opts?: {
   const isAgentTier = !hasMinRole(ctx.role, 'supervisor')
   // As três listas de visibilidade são independentes — busca em paralelo (antes
   // era 1 round-trip atrás do outro) e só pra o tier de agente.
-  const [adminIdsArr, sectorIdsArr, participantIdsArr, dedicatedByChannel] = isAgentTier
+  const [adminIdsArr, sectorIdsArr, participantIdsArr, dedicatedByChannel, openTeam] = isAgentTier
     ? await Promise.all([
         getAdminUserIds(ctx.accountId),
         getUserSectorIds(ctx.userId),
         getParticipantConversationIds(ctx.userId),
         getDedicatedChannelMap(ctx.accountId),
+        teamSeesAll(ctx.accountId),
       ])
-    : [[] as string[], [] as string[], [] as string[], new Map<string, string>()]
+    : [[] as string[], [] as string[], [] as string[], new Map<string, string>(), false]
   const adminIds = new Set(adminIdsArr)
   const sectorIds = new Set(sectorIdsArr)
   const participantIds = new Set(participantIdsArr)
 
   return rows.map((row) => {
     const { contact, channel, sector, ...conv } = row
+    // "Equipe vê tudo" (Config → Setores): atendente lê qualquer linha — só a
+    // privada de outra pessoa continua travada. Mesma regra do canReadConversation.
     const readable =
       !isAgentTier ||
-      agentCanReadRow({
+      (openTeam
+        ? !conv.is_private || conv.assigned_agent_id === ctx.userId
+        : agentCanReadRow({
         userId: ctx.userId,
         conversationId: conv.id,
         sectorId: conv.sector_id,
@@ -673,7 +685,7 @@ export async function listConversations(opts?: {
         participantIds,
         channelId: conv.channel_id,
         dedicatedByChannel,
-      })
+      }))
     return {
       ...conv,
       // Blocked rows mask the preview. A PRIVATE thread shows a distinct lock

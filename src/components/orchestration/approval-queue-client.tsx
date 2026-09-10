@@ -401,6 +401,17 @@ export function ApprovalQueueClient() {
                           <ShieldAlert className="h-3 w-3" /> só humano executa
                         </span>
                       ) : null}
+                      {/* Automática: já está decidida — sai sozinha quando chegar a
+                          vez (cadência / régua ligada). Sem isso o dono achava que
+                          tinha que aprovar as 47 da régua (João, 10/09). */}
+                      {it.decision === 'auto' ? (
+                        <span
+                          className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300"
+                          title="Não precisa aprovar: sai sozinha quando chegar a vez. Aprovar só adianta; recusar cancela."
+                        >
+                          <Bot className="h-3 w-3" /> sai sozinha
+                        </span>
+                      ) : null}
                     </div>
                     <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
                       <span className="inline-flex items-center gap-1 font-medium text-foreground">

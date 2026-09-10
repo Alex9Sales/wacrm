@@ -25,6 +25,7 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 
 import { localParts } from './engine'
 import { autoSendDue, normalizeSettings, withinWindow } from './rules'
+import { expireStaleCollectionDrafts } from './stale'
 
 /** Tentativas antes de marcar o pedido como falho (rede/canal fora do ar). */
 const MAX_ATTEMPTS = 3
@@ -50,11 +51,14 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
 
   const accountSettings = await getAccountSettings(accountId)
   const s = normalizeSettings(accountSettings.collections)
+  const tz = accountSettings.businessTimezone || 'America/Sao_Paulo'
+  // Rascunho de outro dia nunca sai (stale.ts) — mesmo com a régua desligada a
+  // fila não fica mostrando "vence hoje" de ontem; a próxima rodada refaz.
+  await expireStaleCollectionDrafts(accountId, tz, now)
   if (!s.enabled) return { ...stats, haltedBecause: 'régua desligada' }
   if (accountSettings.aiMode === 'off' || accountSettings.aiMode === 'suggest' || accountSettings.autonomyPaused) {
     return { ...stats, haltedBecause: 'IA pausada ou só sugerindo nesta conta' }
   }
-  const tz = accountSettings.businessTimezone || 'America/Sao_Paulo'
   const { hour, weekday } = localParts(tz)
   if (!withinWindow(hour, weekday, s)) return { ...stats, haltedBecause: 'fora da janela da régua' }
 

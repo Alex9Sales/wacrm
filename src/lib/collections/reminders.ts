@@ -130,6 +130,8 @@ export async function queueUpcomingReminders(args: {
   const contactById = new Map(contactRows.map((r) => [r.id, r]))
 
   // Um lembrete por parcela: o que já foi lembrado nos últimos 45 dias não repete.
+  // Expirado (envelheceu na fila, stale.ts) ou falho NÃO conta como lembrado —
+  // senão a parcela ficaria sem aviso nenhum.
   const since = new Date(Date.now() - 45 * 86_400_000).toISOString()
   const previous = await db
     .select({ payload: agentActionRequests.payload })
@@ -140,6 +142,7 @@ export async function queueUpcomingReminders(args: {
         eq(agentActionRequests.actionType, 'collect_charges'),
         gte(agentActionRequests.createdAt, since),
         sql`${agentActionRequests.payload}->>'kind' = 'reminder'`,
+        sql`${agentActionRequests.status} NOT IN ('expired', 'failed')`,
       ),
     )
   const reminded = new Set<string>()
