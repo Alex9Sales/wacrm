@@ -308,8 +308,8 @@ export function WalletClient() {
             </div>
           )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <Stat label="Devedores" value={String(totals.debtors)} />
-            <Stat label="Cobranças" value={String(totals.charges)} />
+            <Stat label="Clientes em atraso" value={String(totals.debtors)} hint="um por pessoa, com todas as parcelas dele" />
+            <Stat label="Parcelas vencidas" value={String(totals.charges)} hint="a vencer não entra aqui — só o lembrete" />
             <Stat label={connFilterLabel ? `Em aberto · ${connFilterLabel}` : 'Total em aberto'} value={brl(totals.value)} wide />
             <Stat
               label={`Recuperado (${wallet?.recovered.days ?? 30} dias)`}
