@@ -6,7 +6,11 @@ import {
   duplicateSuspects,
   eligibility,
   fallbackMessage,
+  fallbackReminderMessage,
+  formatDebtBody,
   formatDebtSummary,
+  formatUpcomingSummary,
+  linksInstruction,
   normalizeSettings,
   withinWindow,
   type CollectionsSettings,
@@ -143,6 +147,57 @@ describe('formatDebtSummary — os números vêm prontos, a IA não soma', () =>
       { ...charges[1], invoiceUrl: 'https://x/1' },
     ])
     expect(r.links).toEqual(['https://x/1'])
+  })
+
+  // 09/09 (João/GoLink): "com 3 boletos vencidos o sistema manda os 3 links?"
+  // Antes, com mais de um link a mensagem saía SEM link nenhum.
+  it('com várias parcelas, cada linha carrega o próprio link', () => {
+    const r = formatDebtSummary(charges)
+    expect(r.items.map((i) => i.url)).toEqual(['https://x/1', 'https://x/2'])
+    const corpo = formatDebtBody(r)
+    expect(corpo).toContain('https://x/1')
+    expect(corpo).toContain('https://x/2')
+    // o link fica logo abaixo da parcela dele, na ordem do atraso
+    expect(corpo.indexOf('40 dias')).toBeLessThan(corpo.indexOf('https://x/1'))
+    expect(corpo.indexOf('https://x/1')).toBeLessThan(corpo.indexOf('9 dias'))
+  })
+
+  it('com um link só, o corpo não repete o link (ele vai no fim da mensagem)', () => {
+    const r = formatDebtSummary([charges[0]])
+    expect(formatDebtBody(r)).not.toContain('https://x/1')
+    expect(linksInstruction(r)).toContain('no final: https://x/1')
+  })
+
+  it('instrução pra IA lista todos os links quando há mais de um', () => {
+    const inst = linksInstruction(formatDebtSummary(charges))
+    expect(inst).toContain('2 parcelas')
+    expect(inst).toContain('https://x/1')
+    expect(inst).toContain('https://x/2')
+    expect(linksInstruction(formatDebtSummary([{ ...charges[0], invoiceUrl: null }]))).toBe('')
+  })
+})
+
+describe('fallbackMessage com 3 parcelas vencidas — todos os links saem', () => {
+  const tres = formatDebtSummary([
+    { value: 100, dueDate: '2026-07-01', daysLate: 70, connectionLabel: 'Asaas', invoiceUrl: 'https://x/a' },
+    { value: 100, dueDate: '2026-08-01', daysLate: 40, connectionLabel: 'Asaas', invoiceUrl: 'https://x/b' },
+    { value: 100, dueDate: '2026-09-01', daysLate: 9, connectionLabel: 'Asaas', invoiceUrl: 'https://x/c' },
+  ])
+  it('a mensagem de segurança traz os 3 links, um por parcela', () => {
+    const t = fallbackMessage('Ana', tres, 0)
+    for (const u of ['https://x/a', 'https://x/b', 'https://x/c']) expect(t).toContain(u)
+  })
+  it('lembrete antes de vencer também', () => {
+    const up = formatUpcomingSummary([
+      { value: 50, dueDate: '2026-09-12', daysUntil: 2, connectionLabel: 'Asaas', invoiceUrl: 'https://y/1' },
+      { value: 60, dueDate: '2026-09-13', daysUntil: 3, connectionLabel: 'Asaas', invoiceUrl: 'https://y/2' },
+    ])
+    const t = fallbackReminderMessage('Ana', up, 1)
+    expect(t).toContain('https://y/1')
+    expect(t).toContain('https://y/2')
+    expect(t).not.toContain('Para pagar:')
+    const um = formatUpcomingSummary([{ value: 50, dueDate: '2026-09-12', daysUntil: 2, connectionLabel: 'Asaas', invoiceUrl: 'https://y/1' }])
+    expect(fallbackReminderMessage('Ana', um, 1)).toContain('Para pagar: https://y/1')
   })
 })
 

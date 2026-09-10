@@ -25,7 +25,7 @@ import type { AccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
 import { resolveCollectionTargets } from './outreach'
-import { fallbackReminderMessage, formatUpcomingSummary, type CollectionsSettings, type UpcomingLine } from './rules'
+import { fallbackReminderMessage, formatUpcomingSummary, linksInstruction, type CollectionsSettings, type UpcomingLine } from './rules'
 import { seedFrom, tooSimilar } from './variation'
 
 export interface ReminderRunResult {
@@ -264,7 +264,7 @@ async function draftReminder(args: {
       'Você escreve um LEMBRETE amigável no WhatsApp, em português do Brasil, sobre uma cobrança que AINDA NÃO VENCEU. UMA mensagem (até 400 caracteres), sem markdown, sem assinatura.',
       args.firstName ? `Cliente: ${args.firstName}. Use só o primeiro nome.` : 'Não sabemos o nome do cliente.',
       `O que vai vencer (copie exatamente, NUNCA recalcule):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`,
-      args.summary.links.length === 1 ? `Inclua este link de pagamento no final: ${args.summary.links[0]}` : '',
+      linksInstruction(args.summary),
       'Não é cobrança de inadimplente: nunca use "atraso", "pendente", "em aberto" nem tom de pressão. Diga que é só um lembrete e que, se já estiver programado, pode ignorar.',
       'NUNCA fale em juros, multa, protesto, negativação ou consequência. Nunca ofereça desconto ou prazo.',
       args.moment ? `Momento do envio: ${args.moment}.` : '',

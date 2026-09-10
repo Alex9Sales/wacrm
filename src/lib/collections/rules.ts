@@ -250,18 +250,45 @@ const br = (iso: string | null) => (iso ? iso.slice(0, 10).split('-').reverse().
  * `multiAccount` marca de qual conta é cada parcela, e só aparece quando há
  * mais de uma conta envolvida — no caso normal ninguém precisa ver isso.
  */
-export function formatDebtSummary(charges: ChargeLine[]): { total: number; lines: string[]; links: string[] } {
+export interface SummaryItem {
+  line: string
+  /** Link de pagamento DESTA parcela (null quando o Asaas não devolveu). */
+  url: string | null
+}
+
+export function formatDebtSummary(charges: ChargeLine[]): { total: number; lines: string[]; links: string[]; items: SummaryItem[] } {
   const multiAccount = new Set(charges.map((c) => c.connectionLabel)).size > 1
   const ordered = [...charges].sort((a, b) => (b.daysLate ?? -1) - (a.daysLate ?? -1))
 
-  const lines = ordered.map((c) => {
+  const items = ordered.map((c) => {
     const atraso = c.daysLate == null ? '' : c.daysLate > 0 ? ` (${c.daysLate} ${c.daysLate === 1 ? 'dia' : 'dias'} de atraso)` : ''
     const conta = multiAccount ? ` — ${c.connectionLabel}` : ''
-    return `${brl(c.value)} · venceu em ${br(c.dueDate)}${atraso}${conta}`
+    return { line: `${brl(c.value)} · venceu em ${br(c.dueDate)}${atraso}${conta}`, url: c.invoiceUrl ?? null }
   })
 
   const links = [...new Set(ordered.map((c) => c.invoiceUrl).filter((u): u is string => !!u))]
-  return { total: ordered.reduce((sum, c) => sum + c.value, 0), lines, links }
+  return { total: ordered.reduce((sum, c) => sum + c.value, 0), lines: items.map((i) => i.line), links, items }
+}
+
+/**
+ * Corpo da mensagem: uma linha por parcela. Com UMA parcela o link vai no fim
+ * ("Para pagar: …"); com várias, cada parcela leva o próprio link logo
+ * abaixo — 09/09 (João/GoLink, "quando o cliente tem 3 boletos vencidos"):
+ * antes a mensagem com 2+ parcelas saía SEM link nenhum.
+ */
+export function formatDebtBody(summary: { items: SummaryItem[]; links: string[] }): string {
+  const multi = summary.links.length > 1
+  return summary.items.map((i) => (multi && i.url ? `• ${i.line}\n  ${i.url}` : `• ${i.line}`)).join('\n')
+}
+
+/** Instrução pra IA sobre os links: um só no fim, ou um por parcela. */
+export function linksInstruction(summary: { items: SummaryItem[]; links: string[] }): string {
+  if (summary.links.length === 1) return `Inclua este link de pagamento no final: ${summary.links[0]}`
+  if (summary.links.length > 1) {
+    const list = summary.items.filter((i) => i.url).map((i) => `${i.line} → ${i.url}`).join('; ')
+    return `São ${summary.links.length} parcelas, cada uma com o próprio link de pagamento. Liste cada parcela com o link dela logo abaixo, sem trocar nem omitir nenhum: ${list}`
+  }
+  return ''
 }
 
 // ------------------------------------------------- lembrete antes de vencer
@@ -279,18 +306,18 @@ export interface UpcomingLine {
  * Resumo do que AINDA VAI vencer — o texto do lembrete. Mesma regra do resumo
  * da dívida: fatos prontos, a IA só escreve ao redor.
  */
-export function formatUpcomingSummary(charges: UpcomingLine[]): { total: number; lines: string[]; links: string[]; minDays: number | null } {
+export function formatUpcomingSummary(charges: UpcomingLine[]): { total: number; lines: string[]; links: string[]; items: SummaryItem[]; minDays: number | null } {
   const multiAccount = new Set(charges.map((c) => c.connectionLabel)).size > 1
   const ordered = [...charges].sort((a, b) => (a.daysUntil ?? 999) - (b.daysUntil ?? 999))
-  const lines = ordered.map((c) => {
+  const items: SummaryItem[] = ordered.map((c) => {
     const quando =
       c.daysUntil == null ? '' : c.daysUntil <= 0 ? ' (hoje)' : c.daysUntil === 1 ? ' (amanhã)' : ` (em ${c.daysUntil} dias)`
     const conta = multiAccount ? ` — ${c.connectionLabel}` : ''
-    return `${brl(c.value)} · vence em ${br(c.dueDate)}${quando}${conta}`
+    return { line: `${brl(c.value)} · vence em ${br(c.dueDate)}${quando}${conta}`, url: c.invoiceUrl ?? null }
   })
   const links = [...new Set(ordered.map((c) => c.invoiceUrl).filter((u): u is string => !!u))]
   const days = ordered.map((c) => c.daysUntil).filter((d): d is number => d != null)
-  return { total: ordered.reduce((s, c) => s + c.value, 0), lines, links, minDays: days.length ? Math.min(...days) : null }
+  return { total: ordered.reduce((s, c) => s + c.value, 0), lines: items.map((i) => i.line), links, items, minDays: days.length ? Math.min(...days) : null }
 }
 
 /** Texto de segurança do LEMBRETE (sem IA): leve, sem a palavra "atraso". Varia pela semente. */
@@ -309,7 +336,9 @@ export function fallbackReminderMessage(firstName: string | null, summary: Retur
     'Se já pagou, desconsidere — e obrigado!',
   ]
   const s = seed >>> 0
-  const corpo = summary.lines.map((l) => `• ${l}`).join('\n')
+  // 2+ parcelas: cada uma sai com o próprio link embaixo (antes, com mais de
+  // um link a mensagem ia SEM link nenhum — João/GoLink, 09/09).
+  const corpo = formatDebtBody(summary)
   const link = summary.links.length === 1 ? `\n\nPara pagar: ${summary.links[0]}` : ''
   return `${aberturas[s % 4]}\n\n${corpo}${link}\n\n${fechos[(s >>> 2) % 4]}`
 }
@@ -345,7 +374,7 @@ export function fallbackMessage(firstName: string | null, summary: ReturnType<ty
   ]
   const s = seed >>> 0
   const abre = (touch === 0 ? primeiras : seguintes)[s % 4]
-  const corpo = summary.lines.map((l) => `• ${l}`).join('\n')
+  const corpo = formatDebtBody(summary)
   const total = summary.lines.length > 1 ? `\n\nTotal: ${brl(summary.total)}` : ''
   const link = summary.links.length === 1 ? `\n\nPara pagar: ${summary.links[0]}` : ''
   return `${abre}\n\n${corpo}${total}${link}\n\n${fechos[(s >>> 2) % 4]}`

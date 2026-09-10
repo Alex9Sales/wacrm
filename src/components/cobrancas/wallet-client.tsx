@@ -153,10 +153,43 @@ export function WalletClient() {
     }
   }
 
+  // Filtro por conta do Asaas (09/09, João/GoLink ligou duas contas e a
+  // carteira somava tudo junto): clicar no nome da conta mostra só ela;
+  // nenhuma selecionada = todas. Só visual — a régua continua cobrando as
+  // parcelas de todas as contas na mesma mensagem.
+  const [connFilter, setConnFilter] = useState<string | null>(null);
+  const connFilterLabel = connFilter ? conns.find((c) => c.id === connFilter)?.label ?? null : null;
+
   const debtors = useMemo(() => {
-    const all = wallet?.debtors ?? [];
+    let all = wallet?.debtors ?? [];
+    if (connFilter) {
+      all = all
+        .map((d) => {
+          const charges = d.charges.filter((c) => c.connectionId === connFilter);
+          if (!charges.length) return null;
+          const next: WalletDebtor = {
+            ...d,
+            charges,
+            total: charges.reduce((s, c) => s + (Number(c.value) || 0), 0),
+            oldestDaysLate: Math.max(...charges.map((c) => c.daysLate ?? 0)),
+          };
+          return next;
+        })
+        .filter((d): d is WalletDebtor => d !== null);
+    }
     return onlyPending ? all.filter((d) => !d.contactId) : all;
-  }, [wallet, onlyPending]);
+  }, [wallet, onlyPending, connFilter]);
+
+  // Números do topo acompanham o filtro (sem filtro = os da carteira inteira).
+  const totals = useMemo(() => {
+    if (!connFilter) {
+      return { debtors: wallet?.debtors.length ?? 0, charges: wallet?.totalCharges ?? 0, value: wallet?.totalValue ?? 0 };
+    }
+    const base = (wallet?.debtors ?? []).flatMap((d) =>
+      d.charges.filter((c) => c.connectionId === connFilter).map((c) => ({ key: d.key, value: Number(c.value) || 0 })),
+    );
+    return { debtors: new Set(base.map((b) => b.key)).size, charges: base.length, value: base.reduce((s, b) => s + b.value, 0) };
+  }, [wallet, connFilter]);
 
   if (loading) {
     return (
@@ -201,7 +234,13 @@ export function WalletClient() {
         </p>
       </div>
 
-      <ConnectionsPanel conns={conns} onChanged={load} onSync={(id) => void handleSyncOne(id)} />
+      <ConnectionsPanel
+        conns={conns}
+        onChanged={load}
+        onSync={(id) => void handleSyncOne(id)}
+        filter={connFilter}
+        onFilter={(id) => setConnFilter((cur) => (cur === id ? null : id))}
+      />
 
       {!!conns.length && rule && (
         <RulePanel
@@ -229,10 +268,24 @@ export function WalletClient() {
         <EmptyState onAdd={() => setAddOpen(true)} />
       ) : (
         <>
+          {connFilterLabel && (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <span className="text-muted-foreground">Mostrando só a conta</span>
+              <button
+                type="button"
+                onClick={() => setConnFilter(null)}
+                className="inline-flex items-center gap-1.5 rounded-full border border-primary/40 bg-primary/10 px-2.5 py-0.5 font-medium text-primary hover:bg-primary/15"
+                title="Voltar a ver todas as contas"
+              >
+                <Building2 className="h-3.5 w-3.5" /> {connFilterLabel} <span aria-hidden>×</span>
+              </button>
+              <span className="text-xs text-muted-foreground">(clique no nome de outra conta para trocar; nenhuma selecionada = todas)</span>
+            </div>
+          )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
-            <Stat label="Devedores" value={String(wallet?.debtors.length ?? 0)} />
-            <Stat label="Cobranças" value={String(wallet?.totalCharges ?? 0)} />
-            <Stat label="Total em aberto" value={brl(wallet?.totalValue ?? 0)} wide />
+            <Stat label="Devedores" value={String(totals.debtors)} />
+            <Stat label="Cobranças" value={String(totals.charges)} />
+            <Stat label={connFilterLabel ? `Em aberto · ${connFilterLabel}` : 'Total em aberto'} value={brl(totals.value)} wide />
             <Stat
               label={`Recuperado (${wallet?.recovered.days ?? 30} dias)`}
               value={brl(wallet?.recovered.afterTouchTotal ?? 0)}
@@ -528,10 +581,15 @@ function ConnectionsPanel({
   conns,
   onChanged,
   onSync,
+  filter,
+  onFilter,
 }: {
   conns: ConnectionView[];
   onChanged: () => void;
   onSync: (id: string) => void;
+  /** Conta selecionada na carteira (null = todas). */
+  filter: string | null;
+  onFilter: (id: string) => void;
 }) {
   const [busyId, setBusyId] = useState<string | null>(null);
   const [dupFor, setDupFor] = useState<ConnectionView | null>(null);
@@ -576,9 +634,26 @@ function ConnectionsPanel({
         </Dialog>
       )}
       {conns.map((c) => (
-        <div key={c.id} className="flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border bg-card px-3.5 py-2.5 text-sm">
-          <Building2 className="h-4 w-4 text-muted-foreground" />
-          <span className="font-medium">{c.label}</span>
+        <div
+          key={c.id}
+          className={cn(
+            'flex flex-wrap items-center gap-x-3 gap-y-1.5 rounded-md border bg-card px-3.5 py-2.5 text-sm',
+            filter === c.id && 'border-primary/60 ring-1 ring-primary/30',
+          )}
+        >
+          <Building2 className={cn('h-4 w-4', filter === c.id ? 'text-primary' : 'text-muted-foreground')} />
+          {conns.length > 1 ? (
+            <button
+              type="button"
+              onClick={() => onFilter(c.id)}
+              className={cn('font-medium underline-offset-2 hover:underline', filter === c.id && 'text-primary')}
+              title={filter === c.id ? 'Clique para voltar a ver todas as contas' : 'Clique para ver só as cobranças desta conta'}
+            >
+              {c.label}
+            </button>
+          ) : (
+            <span className="font-medium">{c.label}</span>
+          )}
           {c.environment === 'sandbox' && (
             <span className="rounded bg-amber-100 px-1.5 py-0.5 text-[11px] font-medium text-amber-800 dark:bg-amber-950 dark:text-amber-300">
               sandbox
@@ -759,12 +834,17 @@ function NewChargeDialog({
   const [dueDate, setDueDate] = useState(() => new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10));
   const [description, setDescription] = useState('');
   const [sendLink, setSendLink] = useState(true);
+  // 09/09 (João/GoLink): "dá pra escolher só Pix?" e "cadê o CPF?".
+  const [billingType, setBillingType] = useState<'UNDEFINED' | 'PIX' | 'BOLETO' | 'CREDIT_CARD'>('UNDEFINED');
+  const [cpfCnpj, setCpfCnpj] = useState('');
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<{ url: string; sentVia: string | null; sendError: string | null; reused: boolean } | null>(null);
 
   const valueOk = parseValue(valueRaw) != null;
   const dueOk = parseDueDate(dueDate) != null;
-  const canSubmit = !!contactId && valueOk && dueOk && description.trim().length >= 3 && !busy;
+  const cpfDigits = cpfCnpj.replace(/\D/g, '');
+  const cpfOk = cpfDigits.length === 0 || cpfDigits.length === 11 || cpfDigits.length === 14;
+  const canSubmit = !!contactId && valueOk && dueOk && cpfOk && description.trim().length >= 3 && !busy;
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -827,6 +907,38 @@ function NewChargeDialog({
               <Input id="nc-desc" placeholder="Ex.: Botijão P-13 · pedido 1234" value={description} onChange={(e) => setDescription(e.target.value)} />
             </div>
 
+            <div className="grid grid-cols-2 gap-3">
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nc-billing">Forma de pagamento</Label>
+                <select
+                  id="nc-billing"
+                  className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                  value={billingType}
+                  onChange={(e) => setBillingType(e.target.value as typeof billingType)}
+                >
+                  <option value="UNDEFINED">Cliente escolhe (Pix, boleto ou cartão)</option>
+                  <option value="PIX">Só Pix</option>
+                  <option value="BOLETO">Só boleto</option>
+                  <option value="CREDIT_CARD">Só cartão</option>
+                </select>
+              </div>
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nc-cpf">CPF/CNPJ do cliente</Label>
+                <Input
+                  id="nc-cpf"
+                  inputMode="numeric"
+                  placeholder="só se o cadastro não tiver"
+                  value={cpfCnpj}
+                  onChange={(e) => setCpfCnpj(e.target.value)}
+                  aria-invalid={!cpfOk}
+                  className={cn(!cpfOk && 'border-red-500')}
+                />
+              </div>
+            </div>
+            <p className="-mt-1 text-xs text-muted-foreground">
+              O Asaas de produção exige CPF/CNPJ pra emitir. Se o contato já tem no cadastro (ou já é cliente do Asaas), pode deixar em branco.
+            </p>
+
             {conns.length > 1 && (
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="nc-conn">Conta do Asaas</Label>
@@ -872,6 +984,8 @@ function NewChargeDialog({
                       dueDate,
                       description,
                       sendLink,
+                      billingType,
+                      cpfCnpj: cpfDigits || undefined,
                     });
                     if (!res.ok) {
                       toast.error(res.error ?? 'Não foi possível gerar a cobrança.');

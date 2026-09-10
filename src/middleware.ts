@@ -31,6 +31,9 @@ const PUBLIC_API_PREFIXES = [
   //                a new deploy and self-recover from a stale bundle (returns
   //                only an opaque build id; no data).
   '/api/files', // public media proxy (browser + Meta fetch media by URL)
+  '/api/client-errors', // relatório da tela "Algo deu errado" — precisa chegar
+  //            MESMO com sessão caída (é quando mais quebra). Só grava log;
+  //            limite por IP e corpo pequeno na própria rota.
   '/api/v1', // public API — auths per-request via API key (requireApiKey),
   //            not the session cookie, so the middleware must let it through
   //            and let each route enforce its own key + scope.

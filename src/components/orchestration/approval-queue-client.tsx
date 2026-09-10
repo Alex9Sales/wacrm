@@ -150,6 +150,46 @@ export function ApprovalQueueClient() {
     }
   };
 
+  // 09/09 (João/GoLink): "então é ir em Precisa de você e mandar uma por uma?"
+  // Enquanto a régua não ganha o automático (gate de 20 decisões), dá pra
+  // aprovar TODAS as cobranças de uma vez — com o texto que estiver na tela.
+  const collectItems = (items ?? []).filter((it) => it.action === 'collect_charges');
+  const [bulkBusy, setBulkBusy] = useState(false);
+  const approveAllCollections = async () => {
+    const list = collectItems;
+    if (!list.length || bulkBusy) return;
+    if (
+      !window.confirm(
+        `Aprovar e ENVIAR ${list.length} ${list.length === 1 ? 'cobrança' : 'cobranças'} agora, com o texto que está na tela?\n\nAntes de cada envio o sistema confere no Asaas se a parcela continua em aberto.`,
+      )
+    )
+      return;
+    setBulkBusy(true);
+    let ok = 0;
+    const falhas: string[] = [];
+    try {
+      for (const it of list) {
+        try {
+          const r = await approveQueueItem({
+            id: it.id,
+            text: texts[it.id] ?? it.suggestedText,
+            conversationId: channelSel[it.id] ?? it.defaultConversationId,
+            proposalValue: null,
+          });
+          if (r.ok) ok += 1;
+          else falhas.push(`${it.contact.name || it.contact.phone || 'contato'}: ${r.error}`);
+        } catch (e) {
+          falhas.push(`${it.contact.name || it.contact.phone || 'contato'}: ${e instanceof Error ? e.message : 'não deu certo'}`);
+        }
+      }
+      if (ok) toast.success(`${ok} ${ok === 1 ? 'cobrança enviada' : 'cobranças enviadas'}.`);
+      if (falhas.length) toast.error(`${falhas.length} não ${falhas.length === 1 ? 'saiu' : 'saíram'}:\n${falhas.slice(0, 5).join('\n')}`, { duration: 12000 });
+      await load();
+    } finally {
+      setBulkBusy(false);
+    }
+  };
+
   const changeBrake = async (mode: 'on' | 'suggest' | 'off') => {
     if (!brake?.canChange || brakeBusy || brake.mode === mode) return;
     const motivo =
@@ -227,6 +267,17 @@ export function ApprovalQueueClient() {
           <Button variant="outline" size="sm" onClick={() => void load()}>
             <RefreshCw className="mr-1.5 h-3.5 w-3.5" /> Atualizar
           </Button>
+          {collectItems.length >= 2 ? (
+            <Button
+              size="sm"
+              onClick={() => void approveAllCollections()}
+              disabled={bulkBusy || busy !== null}
+              title="Envia todas as cobranças da fila, uma atrás da outra, com o texto que está em cada card"
+            >
+              {bulkBusy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Check className="mr-1.5 h-3.5 w-3.5" />}
+              Aprovar todas as cobranças ({collectItems.length})
+            </Button>
+          ) : null}
         </div>
       </header>
 

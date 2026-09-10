@@ -32,6 +32,7 @@ import {
   eligibility,
   fallbackMessage,
   formatDebtSummary,
+  linksInstruction,
   normalizeSettings,
   withinWindow,
   type ChargeLine,
@@ -402,7 +403,7 @@ async function draftCollectionMessage(args: {
       args.summary.lines.length > 1
         ? `Total: ${args.summary.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}.`
         : '',
-      args.summary.links.length === 1 ? `Inclua este link de pagamento no final: ${args.summary.links[0]}` : '',
+      linksInstruction(args.summary),
       args.touch === 0
         ? 'É o PRIMEIRO contato sobre isso: tom de lembrete, leve, sem cobrança dura.'
         : `Já são ${args.touch + 1} contatos sobre a mesma dívida: continue educado, mas seja mais direto.`,

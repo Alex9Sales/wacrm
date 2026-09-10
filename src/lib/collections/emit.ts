@@ -21,7 +21,7 @@ import { and, desc, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm'
 
 import { db, asaasCharges, asaasConnections, contactCustomValues, contacts, customFields, member, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
-import { createPayment, findOrCreateCustomer, type AsaasCredential, type AsaasEnv } from '@/lib/asaas/collections'
+import { createPayment, findOrCreateCustomer, type AsaasBillingType, type AsaasCredential, type AsaasEnv } from '@/lib/asaas/collections'
 import { postInternalNote } from '@/lib/ai/close-actions'
 import { notifyUsers } from '@/lib/orchestration/actions'
 import { getAccountSettings } from '@/lib/settings/account-settings'
@@ -53,6 +53,12 @@ export interface CreateChargeInput {
   actorLabel: string
   /** Complemento da nota (ex.: "Link enviado na conversa."). */
   noteSuffix?: string
+  /**
+   * Forma de pagamento (09/09, João/GoLink: "dá pra escolher só Pix?").
+   * UNDEFINED = o cliente escolhe na página do Asaas (Pix, boleto ou cartão).
+   * Ignorado quando parcelado (Pix não parcela → UNDEFINED).
+   */
+  billingType?: AsaasBillingType
   /** CPF/CNPJ (só dígitos) que o dono/cliente mandou agora. Sem isso, usa o
    *  último documento visto na carteira para o contato. O Asaas de produção
    *  exige documento pra gerar qualquer cobrança (08/09). */
@@ -211,7 +217,9 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
     // recusa volta como needsDocument pra quem chamou pedir o CPF/CNPJ).
     // Parcelado é sempre UNDEFINED (boleto/cartão; Pix não parcela).
     const installments = input.installments && input.installments >= 2 ? Math.min(60, Math.trunc(input.installments)) : null
-    const billingType = customer.cpfCnpj || installments ? 'UNDEFINED' : 'PIX'
+    const billingType: AsaasBillingType = installments
+      ? 'UNDEFINED'
+      : (input.billingType ?? (customer.cpfCnpj ? 'UNDEFINED' : 'PIX'))
 
     const payment = await createPayment(cred, {
       customer: customer.id,

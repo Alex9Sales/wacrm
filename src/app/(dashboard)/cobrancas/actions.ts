@@ -207,6 +207,8 @@ export interface WalletCharge {
   description: string | null
   invoiceUrl: string | null
   connectionLabel: string
+  /** Conta do Asaas de onde veio — a carteira filtra por ela (09/09, GoLink com 2 contas). */
+  connectionId: string
   /** Cadastro do Asaas de onde veio (detector de duplicata). */
   asaasCustomerId: string | null
 }
@@ -276,6 +278,7 @@ export async function getWallet(): Promise<WalletSummary> {
       matchedBy: asaasCharges.matchedBy,
       asaasCustomerId: asaasCharges.asaasCustomerId,
       connectionLabel: asaasConnections.label,
+      connectionId: asaasCharges.connectionId,
       contactName: contacts.name,
       paused: collectionsTouches.paused,
       pausedReason: collectionsTouches.pausedReason,
@@ -336,6 +339,7 @@ export async function getWallet(): Promise<WalletSummary> {
       description: r.description,
       invoiceUrl: r.invoiceUrl,
       connectionLabel: r.connectionLabel,
+      connectionId: r.connectionId,
       asaasCustomerId: r.asaasCustomerId,
     })
   }
@@ -806,6 +810,10 @@ export interface ManualChargeInput {
   description: string
   /** Mandar o link na conversa (abre a conversa se não existir). */
   sendLink: boolean
+  /** Forma de pagamento: UNDEFINED = cliente escolhe (padrão), PIX, BOLETO, CREDIT_CARD. */
+  billingType?: 'UNDEFINED' | 'PIX' | 'BOLETO' | 'CREDIT_CARD'
+  /** CPF/CNPJ do cliente, se o cadastro não tiver (Asaas de produção exige). */
+  cpfCnpj?: string
 }
 
 export interface ManualChargeResult {
@@ -873,6 +881,8 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
     origin: 'manual',
     actorLabel: `por ${who?.name?.trim() || 'alguém da equipe'}`,
     noteSuffix: targets?.ok ? `Link enviado por ${targets.label}.` : '',
+    billingType: input.billingType && input.billingType !== 'UNDEFINED' ? input.billingType : undefined,
+    cpfCnpj: (input.cpfCnpj ?? '').replace(/\D/g, '') || undefined,
   })
   if (!created.ok) return { ok: false, error: created.reason }
 
