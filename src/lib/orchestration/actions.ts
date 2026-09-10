@@ -25,6 +25,7 @@ import {
   tasks,
   asaasCharges,
   collectionsTouches,
+  user,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { cancelEnrollment, enrollContactInCadence } from '@/lib/cadences/cadence'
@@ -32,6 +33,8 @@ import { publishEvent } from '@/lib/events/publish'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { resolveCollectionTargets } from '@/lib/collections/outreach'
 import { reminderStillPending } from '@/lib/collections/reminders'
+import { normalizeSettings } from '@/lib/collections/rules'
+import { getAccountSettings } from '@/lib/settings/account-settings'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { planStageFollowUp } from '@/lib/ai/followup'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
@@ -111,6 +114,27 @@ async function adminUserIds(accountId: string): Promise<string[]> {
 }
 
 /** Quem assina o envio quando a IA age sozinha: dono do negócio → dono da conversa → primeiro admin. */
+/**
+ * 10/09 (João/GoLink): "a cobrança tem como ir com a etiqueta Leonardo
+ * Financeiro?" — com a assinatura de atendente ligada na conta e "Quem cuida
+ * das respostas" definido em Ajustar, a cobrança automática sai assinada por
+ * essa pessoa, igual a uma mensagem digitada por ela. Só WhatsApp (e-mail já
+ * tem remetente). Fail-open: qualquer erro manda sem assinatura.
+ */
+async function signedByAssignee(accountId: string, text: string): Promise<string> {
+  try {
+    const settings = await getAccountSettings(accountId)
+    if (!settings.agentSignatureEnabled) return text
+    const assigneeId = normalizeSettings(settings.collections).assigneeUserId
+    if (!assigneeId) return text
+    const row = firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, assigneeId)).limit(1))
+    const name = row?.name?.trim()
+    return name ? `*${name}:*\n${text}` : text
+  } catch {
+    return text
+  }
+}
+
 async function senderUserId(accountId: string, actorUserId: string | null, deal: { assignedTo: string | null } | null, conversationId: string | null) {
   if (actorUserId) return actorUserId
   if (deal?.assignedTo) return deal.assignedTo
@@ -257,7 +281,13 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         const sentVia: string[] = []
         let waMessageId: string | null = null
         if (targets.whatsapp) {
-          const sent = await engineSendText({ accountId: input.accountId, userId, conversationId: targets.whatsapp.conversationId, contactId: input.contactId, text })
+          const sent = await engineSendText({
+            accountId: input.accountId,
+            userId,
+            conversationId: targets.whatsapp.conversationId,
+            contactId: input.contactId,
+            text: await signedByAssignee(input.accountId, text),
+          })
           waMessageId = sent.whatsapp_message_id
           sentVia.push('whatsapp')
         }

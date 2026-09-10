@@ -182,7 +182,10 @@ export async function queueUpcomingReminders(args: {
       continue
     }
 
-    const summary = formatUpcomingSummary(fresh.map((x) => x.line))
+    const summary = formatUpcomingSummary(
+      fresh.map((x) => x.line),
+      { showValues: s.showValues },
+    )
     // Nome como está no Asaas prevalece (10/09); o contato só cobre o vazio.
     const fullName = (cand.name ?? '').trim() || contact.name || null
     const firstName = greetingName(fullName)
@@ -283,6 +286,7 @@ async function draftReminder(args: {
         ? `Cliente (nome como está no Asaas): ${args.fullName}. Se for pessoa, chame só pelo primeiro nome; se for empresa, use o nome da empresa como está (curto). Nunca invente apelido.`
         : 'Não sabemos o nome do cliente — não invente um.',
       `O que vai vencer (copie exatamente, NUNCA recalcule):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`,
+      args.summary.showValues ? '' : 'A empresa NÃO quer valores na mensagem: não cite valor em reais — só a data de vencimento e o link. O valor o cliente vê no link.',
       linksInstruction(args.summary),
       'Não é cobrança de inadimplente: nunca use "atraso", "pendente", "em aberto" nem tom de pressão. Diga que é só um lembrete e que, se já estiver programado, pode ignorar.',
       'NUNCA fale em juros, multa, protesto, negativação ou consequência. Nunca ofereça desconto ou prazo.',

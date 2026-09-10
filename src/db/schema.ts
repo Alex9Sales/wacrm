@@ -3146,6 +3146,10 @@ export const asaasCharges = pgTable("asaas_charges", {
 	phone: text(),
 	email: text(),
 	value: numeric({ precision: 12, scale: 2 }).default('0').notNull(),
+	/** Juros + multa já calculados pelo Asaas para pagamento após o vencimento
+	 *  (`interestValue`, migr 0167). NULL = o Asaas não informou. A mensagem da
+	 *  régua mostra "R$ 100,00 (R$ 106,79 com juros e multa)" — João/GoLink 10/09. */
+	interestValue: numeric("interest_value", { precision: 12, scale: 2 }),
 	dueDate: date("due_date"),
 	/** Status CRU do Asaas (OVERDUE, PENDING, CONFIRMED, RECEIVED…). */
 	status: text().notNull(),

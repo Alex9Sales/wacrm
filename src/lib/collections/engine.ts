@@ -33,6 +33,7 @@ import {
   eligibility,
   fallbackMessage,
   formatDebtSummary,
+  formatDebtTotal,
   greetingName,
   linksInstruction,
   normalizeSettings,
@@ -120,6 +121,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       customerName: asaasCharges.customerName,
       optedOut: contacts.optedOut,
       value: asaasCharges.value,
+      interestValue: asaasCharges.interestValue,
       dueDate: asaasCharges.dueDate,
       invoiceUrl: asaasCharges.invoiceUrl,
       connectionLabel: asaasConnections.label,
@@ -187,7 +189,9 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     const late = r.dueDate ? Math.round((today.getTime() - new Date(`${r.dueDate}T00:00:00`).getTime()) / 86_400_000) : null
     d.charges.push({
       customerId: r.asaasCustomerId,
+      customerName: r.customerName,
       value: Number(r.value ?? 0),
+      interestValue: r.interestValue != null ? Number(r.interestValue) : null,
       dueDate: r.dueDate,
       daysLate: late,
       connectionLabel: r.connectionLabel,
@@ -284,7 +288,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       continue
     }
 
-    const summary = formatDebtSummary(d.charges)
+    const summary = formatDebtSummary(d.charges, { showValues: s.showValues })
     // Nome como está no ASAAS prevalece (João/Alex 10/09) — o apelido salvo
     // no celular ("Rack 95") ou o "primeiro nome" de uma empresa ("Drogaria")
     // saía errado na saudação.
@@ -430,10 +434,13 @@ async function draftCollectionMessage(args: {
       args.fullName
         ? `Cliente (nome como está no Asaas): ${args.fullName}. Se for pessoa, chame só pelo primeiro nome; se for empresa, use o nome da empresa como está (curto, sem Ltda/ME). Nunca invente apelido nem use só a primeira palavra de um nome de empresa.`
         : 'Não sabemos o nome do cliente — não invente um.',
-      `Valores em aberto (copie exatamente, NUNCA recalcule nem arredonde):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`,
-      args.summary.lines.length > 1
-        ? `Total: ${args.summary.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}.`
-        : '',
+      args.summary.showValues
+        ? `Valores em aberto (copie exatamente, NUNCA recalcule nem arredonde):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`
+        : `Parcelas em aberto (copie exatamente):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`,
+      args.summary.showValues && args.summary.lines.length > 1 ? `Total: ${formatDebtTotal(args.summary)}.` : '',
+      args.summary.showValues
+        ? ''
+        : 'A empresa NÃO quer valores na mensagem: não cite nenhum valor em reais, nem total, nem juros — só o vencimento, os dias de atraso e o link de cada parcela. O valor o cliente vê no link.',
       linksInstruction(args.summary),
       args.touch === 0
         ? 'É o PRIMEIRO contato sobre isso: tom de lembrete, leve, sem cobrança dura.'
@@ -446,7 +453,7 @@ async function draftCollectionMessage(args: {
             .join('\n')}`
         : '',
       `Situação: ${args.summary.lines.length} ${args.summary.lines.length === 1 ? 'parcela vencida' : 'parcelas vencidas'}${args.maxDaysLate != null ? `, a mais antiga há ${args.maxDaysLate} dias` : ''}.`,
-      'NUNCA ameace nem fale em protesto, negativação, juros, multa ou consequência jurídica. Nunca ofereça desconto, parcelamento ou prazo — se o cliente pedir, quem decide é uma pessoa. Sobre continuidade do serviço/anúncio, fale APENAS se as instruções da empresa abaixo pedirem — como informação, nunca como ameaça.',
+      'NUNCA ameace nem fale em protesto, negativação ou consequência jurídica. O "com juros e multa" que aparece nas linhas é FATO calculado pelo Asaas: copie como está, sem ameaçar nem explicar. Nunca ofereça desconto, parcelamento ou prazo — se o cliente pedir, quem decide é uma pessoa. Sobre continuidade do serviço/anúncio, fale APENAS se as instruções da empresa abaixo pedirem — como informação, nunca como ameaça.',
       args.offerDate
         ? 'Sempre deixe claro que o cliente pode responder ali mesmo se já pagou ou se quiser combinar uma data — a resposta dele é o que pausa a cobrança.'
         : 'Diga que, se já pagou, é só responder por aqui. NÃO ofereça combinar data, prazo ou "quando puder" — a empresa não quer abrir essa porta.',

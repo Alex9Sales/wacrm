@@ -1006,9 +1006,12 @@ export interface ManualChargeInput {
   billingType?: 'UNDEFINED' | 'PIX' | 'BOLETO' | 'CREDIT_CARD'
   /** CPF/CNPJ do cliente, se o cadastro não tiver (Asaas de produção exige). */
   cpfCnpj?: string
+  /** Assinatura mensal sem fim (o Asaas gera uma cobrança por mês a partir do vencimento). */
+  recurring?: 'MONTHLY'
 }
 
 export interface ManualChargeResult {
+  /** Vazio só em assinatura cuja 1ª cobrança o Asaas ainda não gerou. */
   invoiceUrl: string
   /** Já existia uma igual aberta, criada há pouco — link reaproveitado. */
   reused: boolean
@@ -1016,6 +1019,8 @@ export interface ManualChargeResult {
   sentVia: string | null
   sendError: string | null
   connectionLabel: string
+  /** Id da assinatura no Asaas, quando foi recorrência. */
+  subscriptionId?: string | null
 }
 
 export async function createChargeManual(input: ManualChargeInput): Promise<ActionResult<ManualChargeResult>> {
@@ -1075,14 +1080,22 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
     noteSuffix: targets?.ok ? `Link enviado por ${targets.label}.` : '',
     billingType: input.billingType && input.billingType !== 'UNDEFINED' ? input.billingType : undefined,
     cpfCnpj: (input.cpfCnpj ?? '').replace(/\D/g, '') || undefined,
+    recurring: input.recurring === 'MONTHLY' ? 'MONTHLY' : null,
   })
   if (!created.ok) return { ok: false, error: created.reason }
 
   let sentVia: string | null = null
   let sendError: string | null = null
-  if (targets?.ok) {
+  // Assinatura cuja 1ª cobrança ainda não existe: sem link pra mandar agora.
+  if (targets?.ok && created.invoiceUrl) {
     const firstName = (contact.name ?? '').trim().split(/\s+/)[0] || null
-    const text = manualChargeMessage(firstName, value, dueDate!, description, created.invoiceUrl)
+    const text = manualChargeMessage(
+      firstName,
+      value,
+      dueDate!,
+      input.recurring === 'MONTHLY' ? `${description} · assinatura mensal` : description,
+      created.invoiceUrl,
+    )
     const convIds = [targets.whatsapp?.conversationId, targets.email?.conversationId].filter((c): c is string => !!c)
     try {
       for (const cid of convIds) {
@@ -1101,7 +1114,17 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
   }
 
   revalidatePath('/cobrancas')
-  return { ok: true, data: { invoiceUrl: created.invoiceUrl, reused: created.reused, sentVia, sendError, connectionLabel: created.connectionLabel } }
+  return {
+    ok: true,
+    data: {
+      invoiceUrl: created.invoiceUrl,
+      reused: created.reused,
+      sentVia,
+      sendError,
+      connectionLabel: created.connectionLabel,
+      subscriptionId: created.subscriptionId ?? null,
+    },
+  }
 }
 
 // ---------------------------------------------- item 5: avisos + duplicados

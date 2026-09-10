@@ -96,6 +96,8 @@ export interface AsaasPayment {
   customer: string
   value: number
   netValue?: number
+  /** Juros + multa calculados pelo Asaas para pagamento após o vencimento (0/ausente antes de vencer). */
+  interestValue?: number | null
   dueDate: string
   status: string
   billingType?: string
@@ -103,6 +105,8 @@ export interface AsaasPayment {
   invoiceUrl?: string | null
   bankSlipUrl?: string | null
   installmentNumber?: number | null
+  /** Assinatura de origem, quando a cobrança nasceu de uma recorrência. */
+  subscription?: string | null
 }
 
 interface AsaasList<T> {
@@ -294,6 +298,55 @@ export async function createPayment(cred: AsaasCredential, input: CreatePaymentI
     description: input.description.slice(0, 500),
     externalReference: input.externalReference,
   })
+}
+
+// ---------------------------------------------------------------- assinatura
+
+export type AsaasCycle = 'WEEKLY' | 'BIWEEKLY' | 'MONTHLY' | 'BIMONTHLY' | 'QUARTERLY' | 'SEMIANNUALLY' | 'YEARLY'
+
+export interface CreateSubscriptionInput {
+  customer: string
+  value: number
+  /** YYYY-MM-DD do PRIMEIRO vencimento; as seguintes seguem o ciclo. */
+  nextDueDate: string
+  description: string
+  billingType: AsaasBillingType
+  externalReference: string
+  /** Padrão MONTHLY (João/GoLink 10/09: "trabalho com assinatura, todo mês, sem término"). */
+  cycle?: AsaasCycle
+}
+
+export interface AsaasSubscription {
+  id: string
+  customer: string
+  value: number
+  nextDueDate: string
+  cycle: string
+  status: string
+  description?: string | null
+}
+
+/**
+ * Assinatura sem data de fim: o Asaas gera uma cobrança por ciclo, sozinho.
+ * "A criação da assinatura não confirma nenhum pagamento" — as cobranças
+ * entram na carteira pela sincronização/webhook conforme nascem.
+ */
+export async function createSubscription(cred: AsaasCredential, input: CreateSubscriptionInput): Promise<AsaasSubscription> {
+  return asaasSend<AsaasSubscription>(cred, 'POST', '/subscriptions', {
+    customer: input.customer,
+    billingType: input.billingType,
+    value: Number(input.value.toFixed(2)),
+    nextDueDate: input.nextDueDate,
+    cycle: input.cycle ?? 'MONTHLY',
+    description: input.description.slice(0, 500),
+    externalReference: input.externalReference,
+  })
+}
+
+/** Cobranças já geradas por uma assinatura (a 1ª costuma nascer na hora). */
+export async function listSubscriptionPayments(cred: AsaasCredential, subscriptionId: string): Promise<AsaasPayment[]> {
+  const res = await asaasGet<AsaasList<AsaasPayment>>(cred, `/subscriptions/${encodeURIComponent(subscriptionId)}/payments`, { limit: 20 })
+  return res.data ?? []
 }
 
 /** Uma cobrança pelo id — a reconsulta AO VIVO antes de lembrar/agradecer. */

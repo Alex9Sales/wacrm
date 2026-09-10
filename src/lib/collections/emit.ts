@@ -21,7 +21,16 @@ import { and, desc, eq, gte, inArray, isNotNull, sql } from 'drizzle-orm'
 
 import { db, asaasCharges, asaasConnections, contactCustomValues, contacts, customFields, member, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
-import { createPayment, findOrCreateCustomer, type AsaasBillingType, type AsaasCredential, type AsaasEnv } from '@/lib/asaas/collections'
+import {
+  createPayment,
+  createSubscription,
+  findOrCreateCustomer,
+  listSubscriptionPayments,
+  type AsaasBillingType,
+  type AsaasCredential,
+  type AsaasEnv,
+  type AsaasPayment,
+} from '@/lib/asaas/collections'
 import { postInternalNote } from '@/lib/ai/close-actions'
 import { notifyUsers } from '@/lib/orchestration/actions'
 import { getAccountSettings } from '@/lib/settings/account-settings'
@@ -65,6 +74,13 @@ export interface CreateChargeInput {
   cpfCnpj?: string | null
   /** Parcelas (2–60): o Asaas cria N cobranças; a 1ª volta aqui. */
   installments?: number | null
+  /**
+   * Assinatura sem fim (10/09, João/GoLink: "trabalho com assinatura, todo mês
+   * chega a cobrança"): o Asaas gera uma cobrança por mês a partir de `dueDate`.
+   * Ignora `installments`. A 1ª cobrança entra na carteira aqui; as seguintes
+   * chegam pela sincronização/lembrete conforme o Asaas as cria.
+   */
+  recurring?: 'MONTHLY' | null
 }
 
 /** CPF/CNPJ num campo personalizado do contato (nome do campo com cpf/cnpj/documento). */
@@ -113,7 +129,16 @@ export async function rememberDocumentOnContact(accountId: string, contactId: st
 }
 
 export type CreateChargeOutcome =
-  | { ok: true; chargeId: string; invoiceUrl: string; reused: boolean; connectionLabel: string }
+  | {
+      ok: true
+      chargeId: string
+      /** Vazio SÓ em assinatura cuja 1ª cobrança o Asaas ainda não gerou. */
+      invoiceUrl: string
+      reused: boolean
+      connectionLabel: string
+      /** Preenchido quando nasceu uma assinatura (recorrência). */
+      subscriptionId?: string | null
+    }
   | { ok: false; reason: string; needsDocument?: boolean }
 
 /** Último CPF/CNPJ que a carteira viu para este contato (cobrança nossa ou sincronizada). */
@@ -153,7 +178,11 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
     }
 
     // Duplicata: mesmo contato, mesmo valor, aberta, últimas 6h → reaproveita.
-    const recent = await db
+    // (Assinatura não passa por aqui: a 1ª mensalidade pode ter o valor de uma
+    // cobrança avulsa recente e nem por isso é repetida.)
+    const recent = input.recurring
+      ? []
+      : await db
       .select({ id: asaasCharges.id, value: asaasCharges.value, createdAt: asaasCharges.createdAt, open: asaasCharges.open, invoiceUrl: asaasCharges.invoiceUrl })
       .from(asaasCharges)
       .where(
@@ -211,6 +240,74 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
       cpfCnpj,
       externalReference: input.contactId,
     })
+
+    // 🔁 Assinatura mensal: o Asaas gera as cobranças, uma por mês, sem fim.
+    if (input.recurring) {
+      const subBilling: AsaasBillingType = input.billingType ?? (customer.cpfCnpj ? 'UNDEFINED' : 'PIX')
+      const subDescription = `${input.description} (assinatura mensal)`
+      const sub = await createSubscription(cred, {
+        customer: customer.id,
+        value: input.value,
+        nextDueDate: input.dueDate,
+        description: subDescription,
+        billingType: subBilling,
+        externalReference: input.conversationId ?? input.contactId,
+        cycle: 'MONTHLY',
+      })
+      // A 1ª cobrança costuma nascer na hora; dá três chances curtas antes de
+      // deixar pra sincronização/lembrete.
+      let first: AsaasPayment | null = null
+      for (let attempt = 0; attempt < 3 && !first; attempt++) {
+        const list = await listSubscriptionPayments(cred, sub.id).catch(() => [] as AsaasPayment[])
+        first = list.find((p) => String(p.status).toUpperCase() === 'PENDING') ?? list[0] ?? null
+        if (!first) await new Promise((r) => setTimeout(r, 1500))
+      }
+      let chargeId = ''
+      if (first?.invoiceUrl) {
+        const row = firstOrNull(
+          await db
+            .insert(asaasCharges)
+            .values({
+              accountId: input.accountId,
+              connectionId: conn.id,
+              conversationId: input.conversationId,
+              asaasId: first.id,
+              asaasCustomerId: first.customer ?? customer.id,
+              customerName: contact.name,
+              cpfCnpj: customer.cpfCnpj ?? cpfCnpj ?? null,
+              phone: contact.phone,
+              email: contact.email,
+              value: String(Number(first.value ?? input.value)),
+              dueDate: first.dueDate ? first.dueDate.slice(0, 10) : input.dueDate,
+              status: first.status,
+              billingType: first.billingType ?? subBilling,
+              description: subDescription,
+              installmentNumber: null,
+              invoiceUrl: first.invoiceUrl,
+              bankSlipUrl: first.bankSlipUrl ?? null,
+              contactId: input.contactId,
+              matchedBy: 'manual',
+              origin: input.origin,
+              open: true,
+            })
+            .onConflictDoNothing()
+            .returning({ id: asaasCharges.id }),
+        )
+        chargeId = row?.id ?? ''
+      }
+      if (input.conversationId) {
+        await postInternalNote({
+          conversationId: input.conversationId,
+          text:
+            `🔁 Assinatura mensal criada no Asaas ${input.actorLabel}: ${brl(input.value)} todo mês a partir de ${br(input.dueDate)} · "${input.description}" · conta ${conn.label}. ` +
+            (first?.invoiceUrl
+              ? `A 1ª cobrança já está na carteira.${input.noteSuffix ? ` ${input.noteSuffix}` : ''}`
+              : 'O Asaas ainda vai gerar a 1ª cobrança; ela entra na carteira sozinha e o lembrete/régua manda o link.') +
+            ' As próximas mensalidades chegam pela sincronização. Se o cliente pagar, o webhook fecha sozinho.',
+        }).catch(() => {})
+      }
+      return { ok: true, chargeId, invoiceUrl: first?.invoiceUrl ?? '', reused: false, connectionLabel: conn.label, subscriptionId: sub.id }
+    }
 
     // Com documento, UNDEFINED deixa o cliente escolher Pix/boleto na página do
     // Asaas; sem documento tenta Pix (sandbox aceita; produção recusa e a

@@ -114,6 +114,12 @@ export interface CollectionsSettings {
    * pagou, é só responder — a resposta continua pausando a régua.
    */
   offerDateNegotiation: boolean
+  /**
+   * Mostrar os VALORES (R$ de cada parcela, total, juros) na mensagem. Desligado
+   * = só vencimento, dias de atraso e link (João/GoLink 10/09: "valor assusta o
+   * cliente; ele paga só a mais atrasada"). Padrão ligado.
+   */
+  showValues: boolean
 }
 
 export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
@@ -139,6 +145,7 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   assigneeUserId: null,
   sectorId: null,
   offerDateNegotiation: true,
+  showValues: true,
 }
 
 export function normalizeSettings(raw: unknown): CollectionsSettings {
@@ -176,6 +183,7 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     assigneeUserId: typeof r.assigneeUserId === 'string' && UUID_RE.test(r.assigneeUserId) ? r.assigneeUserId : null,
     sectorId: typeof r.sectorId === 'string' && UUID_RE.test(r.sectorId) ? r.sectorId : null,
     offerDateNegotiation: r.offerDateNegotiation !== false,
+    showValues: r.showValues !== false,
   }
 }
 
@@ -302,7 +310,12 @@ export function withinWindow(localHour: number, localWeekday: number, s: Collect
 export interface ChargeLine {
   /** Cadastro do Asaas de onde veio (para o detector de duplicata). */
   customerId?: string | null
+  /** Nome do cadastro no Asaas — entra na linha quando o devedor tem mais de
+   *  um cadastro (mesma pessoa, duas empresas; João/GoLink 10/09). */
+  customerName?: string | null
   value: number
+  /** Juros + multa já calculados pelo Asaas (vencida). null/0 = não mostra. */
+  interestValue?: number | null
   dueDate: string | null
   daysLate: number | null
   connectionLabel: string
@@ -326,18 +339,53 @@ export interface SummaryItem {
   url: string | null
 }
 
-export function formatDebtSummary(charges: ChargeLine[]): { total: number; lines: string[]; links: string[]; items: SummaryItem[] } {
+export interface SummaryOptions {
+  /** false = linha sem R$ (só vencimento, atraso e link) e sem "Total". Padrão true. */
+  showValues?: boolean
+}
+
+export function formatDebtSummary(
+  charges: ChargeLine[],
+  opts: SummaryOptions = {},
+): {
+  total: number
+  /** Total já com juros e multa do Asaas (= total quando nada foi informado). */
+  totalWithInterest: number
+  /** Ecoa a opção: quem monta o texto (fallback/IA) sabe se pode citar reais. */
+  showValues: boolean
+  lines: string[]
+  links: string[]
+  items: SummaryItem[]
+} {
+  const showValues = opts.showValues !== false
   const multiAccount = new Set(charges.map((c) => c.connectionLabel)).size > 1
+  // Mesma pessoa com dois cadastros (duas empresas): cada linha diz de qual é.
+  const multiCustomer = new Set(charges.map((c) => (c.customerName ?? '').trim()).filter(Boolean)).size > 1
   const ordered = [...charges].sort((a, b) => (b.daysLate ?? -1) - (a.daysLate ?? -1))
+  const interestOf = (c: ChargeLine) => (typeof c.interestValue === 'number' && c.interestValue > 0 ? c.interestValue : 0)
 
   const items = ordered.map((c) => {
     const atraso = c.daysLate == null ? '' : c.daysLate > 0 ? ` (${c.daysLate} ${c.daysLate === 1 ? 'dia' : 'dias'} de atraso)` : ''
     const conta = multiAccount ? ` — ${c.connectionLabel}` : ''
-    return { line: `${brl(c.value)} · venceu em ${br(c.dueDate)}${atraso}${conta}`, url: c.invoiceUrl ?? null }
+    const quem = multiCustomer && (c.customerName ?? '').trim() ? ` · ${(c.customerName ?? '').trim()}` : ''
+    // 10/09 (João): "tem que exibir o valor total com os juros" — o Asaas já calcula.
+    const juros = interestOf(c) > 0 ? ` (${brl(c.value + interestOf(c))} com juros e multa)` : ''
+    // 10/09 (João, mais tarde): "remove tudo que é valor, só vencimento, dias e link".
+    const valor = showValues ? `${brl(c.value)}${juros} · ` : ''
+    const vencimento = showValues ? `venceu em ${br(c.dueDate)}` : `Venceu em ${br(c.dueDate)}`
+    return { line: `${valor}${vencimento}${atraso}${quem}${conta}`, url: c.invoiceUrl ?? null }
   })
 
   const links = [...new Set(ordered.map((c) => c.invoiceUrl).filter((u): u is string => !!u))]
-  return { total: ordered.reduce((sum, c) => sum + c.value, 0), lines: items.map((i) => i.line), links, items }
+  const total = ordered.reduce((sum, c) => sum + c.value, 0)
+  const totalWithInterest = ordered.reduce((sum, c) => sum + c.value + interestOf(c), 0)
+  return { total, totalWithInterest, showValues, lines: items.map((i) => i.line), links, items }
+}
+
+/** "Total: R$ 400,00 (R$ 425,10 com juros e multa)" — só quando há juros a mostrar. */
+export function formatDebtTotal(summary: { total: number; totalWithInterest: number }): string {
+  const withInterest = summary.totalWithInterest > summary.total + 0.005 ? ` (${brl(summary.totalWithInterest)} com juros e multa)` : ''
+  return `${brl(summary.total)}${withInterest}`
 }
 
 /**
@@ -376,18 +424,24 @@ export interface UpcomingLine {
  * Resumo do que AINDA VAI vencer — o texto do lembrete. Mesma regra do resumo
  * da dívida: fatos prontos, a IA só escreve ao redor.
  */
-export function formatUpcomingSummary(charges: UpcomingLine[]): { total: number; lines: string[]; links: string[]; items: SummaryItem[]; minDays: number | null } {
+export function formatUpcomingSummary(
+  charges: UpcomingLine[],
+  opts: SummaryOptions = {},
+): { total: number; showValues: boolean; lines: string[]; links: string[]; items: SummaryItem[]; minDays: number | null } {
+  const showValues = opts.showValues !== false
   const multiAccount = new Set(charges.map((c) => c.connectionLabel)).size > 1
   const ordered = [...charges].sort((a, b) => (a.daysUntil ?? 999) - (b.daysUntil ?? 999))
   const items: SummaryItem[] = ordered.map((c) => {
     const quando =
       c.daysUntil == null ? '' : c.daysUntil <= 0 ? ' (hoje)' : c.daysUntil === 1 ? ' (amanhã)' : ` (em ${c.daysUntil} dias)`
     const conta = multiAccount ? ` — ${c.connectionLabel}` : ''
-    return { line: `${brl(c.value)} · vence em ${br(c.dueDate)}${quando}${conta}`, url: c.invoiceUrl ?? null }
+    const valor = showValues ? `${brl(c.value)} · ` : ''
+    const vencimento = showValues ? `vence em ${br(c.dueDate)}` : `Vence em ${br(c.dueDate)}`
+    return { line: `${valor}${vencimento}${quando}${conta}`, url: c.invoiceUrl ?? null }
   })
   const links = [...new Set(ordered.map((c) => c.invoiceUrl).filter((u): u is string => !!u))]
   const days = ordered.map((c) => c.daysUntil).filter((d): d is number => d != null)
-  return { total: ordered.reduce((s, c) => s + c.value, 0), lines: items.map((i) => i.line), links, items, minDays: days.length ? Math.min(...days) : null }
+  return { total: ordered.reduce((s, c) => s + c.value, 0), showValues, lines: items.map((i) => i.line), links, items, minDays: days.length ? Math.min(...days) : null }
 }
 
 /** Texto de segurança do LEMBRETE (sem IA): leve, sem a palavra "atraso". Varia pela semente. */
@@ -466,7 +520,7 @@ export function fallbackMessage(
   const s = seed >>> 0
   const abre = (touch === 0 ? primeiras : seguintes)[s % 4]
   const corpo = formatDebtBody(summary)
-  const total = summary.lines.length > 1 ? `\n\nTotal: ${brl(summary.total)}` : ''
+  const total = summary.lines.length > 1 && summary.showValues !== false ? `\n\nTotal: ${formatDebtTotal(summary)}` : ''
   const link = summary.links.length === 1 ? `\n\nPara pagar: ${summary.links[0]}` : ''
   return `${abre}\n\n${corpo}${total}${link}\n\n${fechos[(s >>> 2) % 4]}`
 }

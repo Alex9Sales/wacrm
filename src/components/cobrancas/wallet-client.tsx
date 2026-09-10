@@ -932,8 +932,10 @@ function NewChargeDialog({
   // 09/09 (João/GoLink): "dá pra escolher só Pix?" e "cadê o CPF?".
   const [billingType, setBillingType] = useState<'UNDEFINED' | 'PIX' | 'BOLETO' | 'CREDIT_CARD'>('UNDEFINED');
   const [cpfCnpj, setCpfCnpj] = useState('');
+  // 10/09 (João/GoLink): "trabalho com assinatura — todo mês chega a cobrança, sem término".
+  const [kind, setKind] = useState<'single' | 'subscription'>('single');
   const [busy, setBusy] = useState(false);
-  const [done, setDone] = useState<{ url: string; sentVia: string | null; sendError: string | null; reused: boolean } | null>(null);
+  const [done, setDone] = useState<{ url: string; sentVia: string | null; sendError: string | null; reused: boolean; subscription: boolean } | null>(null);
 
   const valueOk = parseValue(valueRaw) != null;
   const dueOk = parseDueDate(dueDate) != null;
@@ -953,9 +955,21 @@ function NewChargeDialog({
 
         {done ? (
           <div className="flex flex-col gap-3 text-sm">
-            <p className="font-medium">{done.reused ? 'Já existia uma cobrança igual aberta, criada há pouco — reaproveitei o link.' : 'Cobrança criada.'}</p>
+            <p className="font-medium">
+              {done.reused
+                ? 'Já existia uma cobrança igual aberta, criada há pouco — reaproveitei o link.'
+                : done.subscription
+                  ? 'Assinatura mensal criada no Asaas. Todo mês ele gera a cobrança sozinho, sem data de fim.'
+                  : 'Cobrança criada.'}
+            </p>
+            {done.subscription && !done.url && (
+              <p className="text-muted-foreground">
+                O Asaas ainda vai gerar a 1ª cobrança. Ela entra na carteira sozinha e o lembrete manda o link ao cliente.
+              </p>
+            )}
             {done.sentVia && <p>Link enviado por {done.sentVia}.</p>}
             {done.sendError && <p className="text-amber-700 dark:text-amber-400">O link não foi enviado ({done.sendError}). Mande você:</p>}
+            {done.url && (
             <div className="flex items-center gap-2 rounded-md border bg-muted/40 px-2.5 py-2">
               <a href={done.url} target="_blank" rel="noopener noreferrer" className="min-w-0 flex-1 truncate text-primary underline underline-offset-2">
                 {done.url}
@@ -975,6 +989,7 @@ function NewChargeDialog({
                 <Copy className="mr-1.5 h-3.5 w-3.5" /> Copiar
               </Button>
             </div>
+            )}
             <div className="flex justify-end">
               <Button onClick={onClose}>Fechar</Button>
             </div>
@@ -986,13 +1001,32 @@ function NewChargeDialog({
               <ContactPicker value={contactId} onChange={(id) => setContactId(id)} />
             </div>
 
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="nc-kind">Tipo</Label>
+              <select
+                id="nc-kind"
+                className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                value={kind}
+                onChange={(e) => setKind(e.target.value as typeof kind)}
+              >
+                <option value="single">Cobrança única</option>
+                <option value="subscription">Assinatura mensal (repete todo mês, sem data de fim)</option>
+              </select>
+              {kind === 'subscription' && (
+                <p className="text-xs text-muted-foreground">
+                  Igual à assinatura do Asaas: ele gera uma cobrança por mês, a partir do 1º vencimento. Cada mensalidade entra na carteira,
+                  recebe o lembrete antes de vencer e a cobrança se atrasar. Para encerrar, cancele a assinatura no Asaas.
+                </p>
+              )}
+            </div>
+
             <div className="grid grid-cols-2 gap-3">
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="nc-value">Valor (R$)</Label>
+                <Label htmlFor="nc-value">{kind === 'subscription' ? 'Valor mensal (R$)' : 'Valor (R$)'}</Label>
                 <Input id="nc-value" inputMode="decimal" placeholder="125,00" value={valueRaw} onChange={(e) => setValueRaw(e.target.value)} />
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="nc-due">Vencimento</Label>
+                <Label htmlFor="nc-due">{kind === 'subscription' ? '1º vencimento' : 'Vencimento'}</Label>
                 <Input id="nc-due" type="date" value={dueDate} onChange={(e) => setDueDate(e.target.value)} />
               </div>
             </div>
@@ -1081,14 +1115,23 @@ function NewChargeDialog({
                       sendLink,
                       billingType,
                       cpfCnpj: cpfDigits || undefined,
+                      recurring: kind === 'subscription' ? 'MONTHLY' : undefined,
                     });
                     if (!res.ok) {
                       toast.error(res.error ?? 'Não foi possível gerar a cobrança.');
                       return;
                     }
                     const d = res.data!;
-                    setDone({ url: d.invoiceUrl, sentVia: d.sentVia, sendError: d.sendError, reused: d.reused });
-                    toast.success(d.sentVia ? `Cobrança gerada e link enviado por ${d.sentVia}.` : 'Cobrança gerada.');
+                    setDone({ url: d.invoiceUrl, sentVia: d.sentVia, sendError: d.sendError, reused: d.reused, subscription: !!d.subscriptionId });
+                    toast.success(
+                      d.subscriptionId
+                        ? d.sentVia
+                          ? `Assinatura criada e link da 1ª cobrança enviado por ${d.sentVia}.`
+                          : 'Assinatura mensal criada.'
+                        : d.sentVia
+                          ? `Cobrança gerada e link enviado por ${d.sentVia}.`
+                          : 'Cobrança gerada.',
+                    );
                     onCreated();
                   } finally {
                     setBusy(false);
@@ -1096,7 +1139,7 @@ function NewChargeDialog({
                 }}
               >
                 {busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Receipt className="mr-1.5 h-3.5 w-3.5" />}
-                Gerar cobrança
+                {kind === 'subscription' ? 'Criar assinatura' : 'Gerar cobrança'}
               </Button>
             </div>
           </div>
@@ -1693,6 +1736,22 @@ function RulePanel({
               <span className="block text-xs text-muted-foreground">
                 Desmarcado, a mensagem só diz que, se já pagou, é só responder por aqui — sem abrir a porta pra adiar. A resposta do cliente
                 continua pausando a régua nele.
+              </span>
+            </span>
+          </label>
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={draft.showValues}
+              onChange={(e) => setDraft({ ...draft, showValues: e.target.checked })}
+            />
+            <span>
+              Mostrar os valores na mensagem
+              <span className="block text-xs text-muted-foreground">
+                Marcado: cada parcela sai com o valor (e o valor com juros e multa, quando o Asaas informa) e o total. Desmarcado: só o
+                vencimento, os dias de atraso e o link de cada parcela — o valor o cliente vê no link. Vale também para o lembrete.
               </span>
             </span>
           </label>

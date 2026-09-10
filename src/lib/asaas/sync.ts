@@ -138,6 +138,8 @@ export async function syncConnection(
         phone,
         email,
         value: String(p.value ?? 0),
+        // Juros + multa que o Asaas já calculou (só faz sentido vencida).
+        interestValue: typeof p.interestValue === 'number' && Number.isFinite(p.interestValue) ? String(p.interestValue) : null,
         dueDate: p.dueDate ? p.dueDate.slice(0, 10) : null,
         status: p.status,
         billingType: p.billingType ?? null,
@@ -161,6 +163,7 @@ export async function syncConnection(
           phone: sql`excluded.phone`,
           email: sql`excluded.email`,
           value: sql`excluded.value`,
+          interestValue: sql`excluded.interest_value`,
           dueDate: sql`excluded.due_date`,
           status: sql`excluded.status`,
           billingType: sql`excluded.billing_type`,
