@@ -32,6 +32,7 @@ import {
   eligibility,
   fallbackMessage,
   formatDebtSummary,
+  greetingName,
   linksInstruction,
   normalizeSettings,
   withinWindow,
@@ -115,6 +116,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       contactId: asaasCharges.contactId,
       asaasCustomerId: asaasCharges.asaasCustomerId,
       contactName: contacts.name,
+      customerName: asaasCharges.customerName,
       optedOut: contacts.optedOut,
       value: asaasCharges.value,
       dueDate: asaasCharges.dueDate,
@@ -149,6 +151,8 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   interface Debtor {
     contactId: string
     name: string | null
+    /** Nome do cliente como está no Asaas (prevalece na saudação). */
+    asaasName: string | null
     optedOut: boolean
     charges: ChargeLine[]
     lastTouchAt: string | null
@@ -168,6 +172,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       d = {
         contactId: r.contactId,
         name: r.contactName,
+        asaasName: (r.customerName ?? '').trim() || null,
         optedOut: r.optedOut,
         charges: [],
         lastTouchAt: r.lastTouchAt,
@@ -276,14 +281,21 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     }
 
     const summary = formatDebtSummary(d.charges)
-    const firstName = (d.name ?? '').trim().split(/\s+/)[0] || null
+    // Nome como está no ASAAS prevalece (João/Alex 10/09) — o apelido salvo
+    // no celular ("Rack 95") ou o "primeiro nome" de uma empresa ("Drogaria")
+    // saía errado na saudação.
+    const customerName = d.asaasName ?? d.name
+    const firstName = greetingName(customerName)
     const text = await draftCollectionMessage({
       accountId,
       agentId: agent?.id ?? null,
       firstName,
+      fullName: customerName,
       summary,
       touch: d.touchCount,
       tone: s.tone,
+      offerDate: s.offerDateNegotiation,
+      maxDaysLate: Number.isFinite(maxLate) ? maxLate : null,
       previousTexts: [...d.recentTexts, ...runTexts.slice(-3)],
       seed: seedFrom(d.contactId, d.touchCount, dayKey),
       moment,
@@ -384,6 +396,8 @@ async function draftCollectionMessage(args: {
   accountId: string
   agentId: string | null
   firstName: string | null
+  /** Nome completo como está no Asaas — a IA decide pessoa × empresa. */
+  fullName: string | null
   summary: ReturnType<typeof formatDebtSummary>
   touch: number
   tone: string
@@ -391,8 +405,11 @@ async function draftCollectionMessage(args: {
   previousTexts: string[]
   seed: number
   moment: string
+  /** Oferecer "combinar uma data" no fecho (Ajustar). */
+  offerDate: boolean
+  maxDaysLate: number | null
 }): Promise<string> {
-  const fallback = fallbackMessage(args.firstName, args.summary, args.touch, args.seed)
+  const fallback = fallbackMessage(args.firstName, args.summary, args.touch, args.seed, { offerDate: args.offerDate })
   if (!args.agentId) return fallback
 
   try {
@@ -403,7 +420,9 @@ async function draftCollectionMessage(args: {
     const previous = args.previousTexts.filter((t) => t.trim().length > 0).slice(-4)
     const base = [
       'Você escreve uma cobrança educada no WhatsApp, em português do Brasil. UMA mensagem (até 500 caracteres), sem markdown, sem assinatura.',
-      args.firstName ? `Cliente: ${args.firstName}. Use só o primeiro nome.` : 'Não sabemos o nome do cliente.',
+      args.fullName
+        ? `Cliente (nome como está no Asaas): ${args.fullName}. Se for pessoa, chame só pelo primeiro nome; se for empresa, use o nome da empresa como está (curto, sem Ltda/ME). Nunca invente apelido nem use só a primeira palavra de um nome de empresa.`
+        : 'Não sabemos o nome do cliente — não invente um.',
       `Valores em aberto (copie exatamente, NUNCA recalcule nem arredonde):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`,
       args.summary.lines.length > 1
         ? `Total: ${args.summary.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}.`
@@ -419,9 +438,12 @@ async function draftCollectionMessage(args: {
             .map((t, i) => `${i + 1}) ${t.slice(0, 280)}`)
             .join('\n')}`
         : '',
-      'NUNCA ameace, nunca fale em protesto, negativação, juros, multa, corte de serviço ou consequência jurídica. Nunca ofereça desconto, parcelamento ou prazo — se o cliente pedir, quem decide é uma pessoa.',
-      'Sempre deixe claro que o cliente pode responder ali mesmo se já pagou ou se quiser combinar uma data — a resposta dele é o que pausa a cobrança.',
-      args.tone ? `Tom da empresa: ${args.tone}` : '',
+      `Situação: ${args.summary.lines.length} ${args.summary.lines.length === 1 ? 'parcela vencida' : 'parcelas vencidas'}${args.maxDaysLate != null ? `, a mais antiga há ${args.maxDaysLate} dias` : ''}.`,
+      'NUNCA ameace nem fale em protesto, negativação, juros, multa ou consequência jurídica. Nunca ofereça desconto, parcelamento ou prazo — se o cliente pedir, quem decide é uma pessoa. Sobre continuidade do serviço/anúncio, fale APENAS se as instruções da empresa abaixo pedirem — como informação, nunca como ameaça.',
+      args.offerDate
+        ? 'Sempre deixe claro que o cliente pode responder ali mesmo se já pagou ou se quiser combinar uma data — a resposta dele é o que pausa a cobrança.'
+        : 'Diga que, se já pagou, é só responder por aqui. NÃO ofereça combinar data, prazo ou "quando puder" — a empresa não quer abrir essa porta.',
+      args.tone ? `Instruções da empresa (siga à risca, inclusive regras por número de parcelas ou dias de atraso): ${args.tone}` : '',
     ].filter(Boolean)
 
     const gen = async (extra: string): Promise<string | null> => {

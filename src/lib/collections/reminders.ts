@@ -25,7 +25,7 @@ import type { AccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
 import { resolveCollectionTargets } from './outreach'
-import { fallbackReminderMessage, formatUpcomingSummary, linksInstruction, type CollectionsSettings, type UpcomingLine } from './rules'
+import { fallbackReminderMessage, formatUpcomingSummary, greetingName, linksInstruction, type CollectionsSettings, type UpcomingLine } from './rules'
 import { seedFrom, tooSimilar } from './variation'
 
 export interface ReminderRunResult {
@@ -180,9 +180,21 @@ export async function queueUpcomingReminders(args: {
     }
 
     const summary = formatUpcomingSummary(fresh.map((x) => x.line))
-    const firstName = (contact.name ?? cand.name ?? '').trim().split(/\s+/)[0] || null
+    // Nome como está no Asaas prevalece (10/09); o contato só cobre o vazio.
+    const fullName = (cand.name ?? '').trim() || contact.name || null
+    const firstName = greetingName(fullName)
     const seed = seedFrom(cand.contactId, 0, args.dayKey)
-    const text = await draftReminder({ accountId: args.accountId, agentId: args.agentId, firstName, summary, tone: s.tone, seed, moment: args.moment })
+    const text = await draftReminder({
+      accountId: args.accountId,
+      agentId: args.agentId,
+      firstName,
+      fullName,
+      summary,
+      tone: s.tone,
+      seed,
+      moment: args.moment,
+      offerDate: s.offerDateNegotiation,
+    })
 
     const conv = firstOrNull(
       await db
@@ -250,25 +262,30 @@ async function draftReminder(args: {
   accountId: string
   agentId: string | null
   firstName: string | null
+  fullName: string | null
   summary: ReturnType<typeof formatUpcomingSummary>
   tone: string
   seed: number
   moment: string
+  offerDate: boolean
 }): Promise<string> {
-  const fallback = fallbackReminderMessage(args.firstName, args.summary, args.seed)
+  const fallback = fallbackReminderMessage(args.firstName, args.summary, args.seed, { offerDate: args.offerDate })
   if (!args.agentId) return fallback
   try {
     const config = await loadAiConfigById(args.accountId, args.agentId, { requireActive: false })
     if (!config) return fallback
     const system = [
       'Você escreve um LEMBRETE amigável no WhatsApp, em português do Brasil, sobre uma cobrança que AINDA NÃO VENCEU. UMA mensagem (até 400 caracteres), sem markdown, sem assinatura.',
-      args.firstName ? `Cliente: ${args.firstName}. Use só o primeiro nome.` : 'Não sabemos o nome do cliente.',
+      args.fullName
+        ? `Cliente (nome como está no Asaas): ${args.fullName}. Se for pessoa, chame só pelo primeiro nome; se for empresa, use o nome da empresa como está (curto). Nunca invente apelido.`
+        : 'Não sabemos o nome do cliente — não invente um.',
       `O que vai vencer (copie exatamente, NUNCA recalcule):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`,
       linksInstruction(args.summary),
       'Não é cobrança de inadimplente: nunca use "atraso", "pendente", "em aberto" nem tom de pressão. Diga que é só um lembrete e que, se já estiver programado, pode ignorar.',
       'NUNCA fale em juros, multa, protesto, negativação ou consequência. Nunca ofereça desconto ou prazo.',
       args.moment ? `Momento do envio: ${args.moment}.` : '',
-      args.tone ? `Tom da empresa: ${args.tone}` : '',
+      args.offerDate ? '' : 'NÃO ofereça outra data nem prazo — se já pagou, é só responder por aqui.',
+      args.tone ? `Instruções da empresa (siga à risca): ${args.tone}` : '',
     ]
       .filter(Boolean)
       .join('\n\n')

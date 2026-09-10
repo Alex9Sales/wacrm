@@ -174,21 +174,39 @@ async function assignCollectionConversations(accountId: string, conversationIds:
     const { getAccountSettings } = await import('@/lib/settings/account-settings')
     const { normalizeSettings } = await import('@/lib/collections/rules')
     const s = normalizeSettings((await getAccountSettings(accountId)).collections)
-    if (!s.assigneeUserId) return
+    if (!s.assigneeUserId && !s.sectorId) return
     const ids = conversationIds.filter((id): id is string => !!id)
     if (!ids.length) return
-    const { member: memberTable } = await import('@/db')
-    const stillMember = await db
-      .select({ id: memberTable.id })
-      .from(memberTable)
-      .where(and(eq(memberTable.organizationId, accountId), eq(memberTable.userId, s.assigneeUserId)))
-      .limit(1)
-    if (!stillMember.length) return
     const now = new Date().toISOString()
+    const patch: { assignedAgentId?: string; assignedAt?: string; sectorId?: string; updatedAt: string } = { updatedAt: now }
+    if (s.assigneeUserId) {
+      const { member: memberTable } = await import('@/db')
+      const stillMember = await db
+        .select({ id: memberTable.id })
+        .from(memberTable)
+        .where(and(eq(memberTable.organizationId, accountId), eq(memberTable.userId, s.assigneeUserId)))
+        .limit(1)
+      if (stillMember.length) {
+        patch.assignedAgentId = s.assigneeUserId
+        patch.assignedAt = now
+      }
+    }
+    // 🗂️ Setor das conversas de cobrança (João/GoLink 10/09: "cai na caixinha
+    // Asaas, pra não misturar"). Só se o setor ainda existe nesta conta.
+    if (s.sectorId) {
+      const { sectors: sectorsTable } = await import('@/db')
+      const sector = await db
+        .select({ id: sectorsTable.id })
+        .from(sectorsTable)
+        .where(and(eq(sectorsTable.accountId, accountId), eq(sectorsTable.id, s.sectorId)))
+        .limit(1)
+      if (sector.length) patch.sectorId = s.sectorId
+    }
+    if (!patch.assignedAgentId && !patch.sectorId) return
     await db
       .update(conversations)
-      .set({ assignedAgentId: s.assigneeUserId, assignedAt: now, updatedAt: now })
-      .where(and(eq(conversations.accountId, accountId), inArray(conversations.id, ids), sql`${conversations.assignedAgentId} IS DISTINCT FROM ${s.assigneeUserId}`))
+      .set(patch)
+      .where(and(eq(conversations.accountId, accountId), inArray(conversations.id, ids)))
   } catch (err) {
     console.error('[cobranca] não deu pra atribuir a conversa a quem cuida das respostas:', err instanceof Error ? err.message : err)
   }

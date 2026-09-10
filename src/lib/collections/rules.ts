@@ -102,6 +102,18 @@ export interface CollectionsSettings {
    * na atribuição.
    */
   assigneeUserId: string | null
+  /**
+   * Setor em que a conversa de cobrança entra ao sair a mensagem (10/09,
+   * João/GoLink: "cria um setor Asaas e tudo que o robô mandar cai lá").
+   * null = não mexe no setor.
+   */
+  sectorId: string | null
+  /**
+   * Oferecer "combinar uma data" no fecho da mensagem. João (10/09): "isso dá
+   * liberdade pro cliente enrolar". Desligado, a mensagem só diz que, se já
+   * pagou, é só responder — a resposta continua pausando a régua.
+   */
+  offerDateNegotiation: boolean
 }
 
 export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
@@ -125,6 +137,8 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   autoSend: false,
   sendEveryMinutes: 5,
   assigneeUserId: null,
+  sectorId: null,
+  offerDateNegotiation: true,
 }
 
 export function normalizeSettings(raw: unknown): CollectionsSettings {
@@ -160,7 +174,27 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     autoSend: r.autoSend === true,
     sendEveryMinutes: int(r.sendEveryMinutes, 5, 1, 120),
     assigneeUserId: typeof r.assigneeUserId === 'string' && UUID_RE.test(r.assigneeUserId) ? r.assigneeUserId : null,
+    sectorId: typeof r.sectorId === 'string' && UUID_RE.test(r.sectorId) ? r.sectorId : null,
+    offerDateNegotiation: r.offerDateNegotiation !== false,
   }
+}
+
+const NAME_STOPWORDS = new Set(['e', 'de', 'da', 'do', 'das', 'dos', '&', 'em', 'para'])
+
+/**
+ * Como chamar o cliente na mensagem, a partir do nome COMO ESTÁ NO ASAAS
+ * (decisão João/Alex 10/09: prevalece o Asaas, não o apelido do WhatsApp).
+ * Sem IA não dá pra saber se é pessoa ou empresa, então: até 3 palavras vai
+ * inteiro ("Drogaria Imaculada", "Rack 95"); mais longo, as duas primeiras
+ * ("Ultra Visão"), ou só a primeira se a segunda for conector ("João da…" → "João").
+ * A IA recebe o nome completo com a instrução pessoa/empresa (engine.ts).
+ */
+export function greetingName(name: string | null | undefined): string | null {
+  const words = (name ?? '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean)
+  if (!words.length) return null
+  if (words.length <= 3) return words.join(' ')
+  if (NAME_STOPWORDS.has(words[1].toLowerCase())) return words[0]
+  return `${words[0]} ${words[1]}`
 }
 
 /**
@@ -357,7 +391,12 @@ export function formatUpcomingSummary(charges: UpcomingLine[]): { total: number;
 }
 
 /** Texto de segurança do LEMBRETE (sem IA): leve, sem a palavra "atraso". Varia pela semente. */
-export function fallbackReminderMessage(firstName: string | null, summary: ReturnType<typeof formatUpcomingSummary>, seed = 0): string {
+export function fallbackReminderMessage(
+  firstName: string | null,
+  summary: ReturnType<typeof formatUpcomingSummary>,
+  seed = 0,
+  opts: { offerDate?: boolean } = {},
+): string {
   const oi = firstName ? `Oi, ${firstName}!` : 'Oi!'
   const aberturas = [
     `${oi} Passando só pra lembrar: tem um valor que vence em breve por aqui:`,
@@ -368,7 +407,7 @@ export function fallbackReminderMessage(firstName: string | null, summary: Retur
   const fechos = [
     'Se já estiver programado, pode ignorar esta mensagem 😉',
     'Qualquer dúvida, é só responder por aqui.',
-    'Se precisar de outra data, me avisa por aqui que a gente vê.',
+    opts.offerDate === false ? 'Se já pagou, desconsidere.' : 'Se precisar de outra data, me avisa por aqui que a gente vê.',
     'Se já pagou, desconsidere — e obrigado!',
   ]
   const s = seed >>> 0
@@ -388,7 +427,13 @@ export function fallbackReminderMessage(firstName: string | null, summary: Retur
  * sorteados pela semente — dois devedores no mesmo dia não recebem a mesma
  * frase. Semente 0 é o texto original. Valores e link nunca mudam.
  */
-export function fallbackMessage(firstName: string | null, summary: ReturnType<typeof formatDebtSummary>, touch: number, seed = 0): string {
+export function fallbackMessage(
+  firstName: string | null,
+  summary: ReturnType<typeof formatDebtSummary>,
+  touch: number,
+  seed = 0,
+  opts: { offerDate?: boolean } = {},
+): string {
   const oi = firstName ? `Oi, ${firstName}!` : 'Oi!'
   const primeiras = [
     `${oi} Passando para lembrar de um valor em aberto por aqui:`,
@@ -402,12 +447,22 @@ export function fallbackMessage(firstName: string | null, summary: ReturnType<ty
     `${oi} Tudo bem? Ainda consta em aberto por aqui:`,
     `${oi} Retomando o assunto do valor pendente:`,
   ]
-  const fechos = [
-    'Se já pagou ou quiser combinar uma data, é só me dizer por aqui.',
-    'Se já tiver pago, me avisa por aqui; se preferir combinar uma data, também é só falar.',
-    'Já pagou? Me conta por aqui. Se quiser combinar uma data, a gente vê junto.',
-    'Qualquer dúvida, ou se quiser combinar uma data, é só responder esta mensagem.',
-  ]
+  // Sem "combinar uma data" quando a empresa não quer abrir essa porta
+  // (João/GoLink 10/09). A resposta do cliente continua pausando a régua.
+  const fechos =
+    opts.offerDate === false
+      ? [
+          'Se já pagou, é só me avisar por aqui.',
+          'Se já tiver pago, me responde por aqui que eu confiro.',
+          'Já pagou? Me conta por aqui.',
+          'Qualquer dúvida, é só responder esta mensagem.',
+        ]
+      : [
+          'Se já pagou ou quiser combinar uma data, é só me dizer por aqui.',
+          'Se já tiver pago, me avisa por aqui; se preferir combinar uma data, também é só falar.',
+          'Já pagou? Me conta por aqui. Se quiser combinar uma data, a gente vê junto.',
+          'Qualquer dúvida, ou se quiser combinar uma data, é só responder esta mensagem.',
+        ]
   const s = seed >>> 0
   const abre = (touch === 0 ? primeiras : seguintes)[s % 4]
   const corpo = formatDebtBody(summary)

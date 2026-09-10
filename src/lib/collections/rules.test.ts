@@ -11,6 +11,7 @@ import {
   formatDebtBody,
   formatDebtSummary,
   formatUpcomingSummary,
+  greetingName,
   linksInstruction,
   normalizeSettings,
   withinWindow,
@@ -122,6 +123,49 @@ describe('autoSend / cadência (09/09, GoLink "uma a cada N minutos")', () => {
     expect(autoSendDue(now - 4 * 60_000, now, 5)).toBe(false)
     expect(autoSendDue(now - 5 * 60_000, now, 5)).toBe(true)
     expect(autoSendDue(now - 30_000, now, 0)).toBe(false) // 0 vira 1 minuto
+  })
+})
+
+describe('greetingName — nome como está no Asaas (10/09, GoLink)', () => {
+  it('até 3 palavras vai inteiro: empresa curta e apelido não viram "primeiro nome"', () => {
+    expect(greetingName('Drogaria Imaculada')).toBe('Drogaria Imaculada')
+    expect(greetingName('Rack 95')).toBe('Rack 95')
+    expect(greetingName('Alipé Podologia')).toBe('Alipé Podologia')
+  })
+  it('mais longo: duas primeiras, ou só a primeira quando a segunda é conector', () => {
+    expect(greetingName('Ultra Visão e Regrava Vale Taubaté')).toBe('Ultra Visão')
+    expect(greetingName('João da Silva Pereira')).toBe('João')
+    expect(greetingName('CRIIS Mármores e Granitos')).toBe('CRIIS Mármores')
+  })
+  it('vazio vira null', () => {
+    expect(greetingName('')).toBeNull()
+    expect(greetingName(null)).toBeNull()
+    expect(greetingName('   ')).toBeNull()
+  })
+})
+
+describe('fallbackMessage sem "combinar uma data" (offerDate=false)', () => {
+  const summary = formatDebtSummary([{ value: 150, dueDate: '2026-08-01', daysLate: 40, connectionLabel: 'Minha conta', invoiceUrl: 'https://x/1' }])
+  it('nenhuma variação oferece data; a porta "já pagou? responde" continua aberta', () => {
+    for (const seed of [0, 1, 2, 3, 4, 5, 6, 7]) {
+      const t = fallbackMessage('Ana', summary, 0, seed, { offerDate: false })
+      expect(t.toLowerCase()).not.toContain('combinar')
+      expect(t.toLowerCase()).not.toContain('data')
+      expect(t).toContain('https://x/1')
+      expect(/pagou|respond/i.test(t)).toBe(true)
+    }
+  })
+  it('padrão continua oferecendo data (compat)', () => {
+    expect(fallbackMessage('Ana', summary, 0, 0)).toContain('combinar uma data')
+    expect(normalizeSettings({}).offerDateNegotiation).toBe(true)
+    expect(normalizeSettings({ offerDateNegotiation: false }).offerDateNegotiation).toBe(false)
+    expect(normalizeSettings({ sectorId: 'x' }).sectorId).toBeNull()
+  })
+  it('lembrete também', () => {
+    const up = formatUpcomingSummary([{ value: 50, dueDate: '2026-09-12', daysUntil: 2, connectionLabel: 'A', invoiceUrl: 'https://y/1' }])
+    for (const seed of [0, 1, 2, 3, 4, 5, 6, 7]) {
+      expect(fallbackReminderMessage('Ana', up, seed, { offerDate: false }).toLowerCase()).not.toContain('outra data')
+    }
   })
 })
 

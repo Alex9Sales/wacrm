@@ -59,8 +59,10 @@ import {
   linkDebtorToContact,
   listCollectionAssignees,
   listCollectionChannels,
+  listCollectionSectors,
   type CollectionAssigneeOption,
   type CollectionChannelOption,
+  type CollectionSectorOption,
   listConnections,
   removeConnection,
   saveConnection,
@@ -1293,6 +1295,7 @@ function RulePanel({
   const [saving, setSaving] = useState(false);
   const [chans, setChans] = useState<CollectionChannelOption[] | null>(null);
   const [people, setPeople] = useState<CollectionAssigneeOption[] | null>(null);
+  const [sectorsList, setSectorsList] = useState<CollectionSectorOption[] | null>(null);
   const dirty = JSON.stringify(draft) !== JSON.stringify(rule);
 
   useEffect(() => setDraft(rule), [rule]);
@@ -1307,7 +1310,12 @@ function RulePanel({
         .then(setPeople)
         .catch(() => setPeople([]));
     }
-  }, [open, chans, people]);
+    if (open && sectorsList === null) {
+      void listCollectionSectors()
+        .then(setSectorsList)
+        .catch(() => setSectorsList([]));
+    }
+  }, [open, chans, people, sectorsList]);
 
   async function persist(patch: Partial<CollectionsSettings>) {
     setSaving(true);
@@ -1562,6 +1570,43 @@ function RulePanel({
               &quot;pago dia 10&quot;) cai com quem resolve — mesmo que a conversa estivesse com outro atendente.
             </p>
           </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="rule-sector">Setor das conversas de cobrança</Label>
+            <select
+              id="rule-sector"
+              className="h-9 w-full max-w-sm rounded-md border bg-background px-2 text-sm"
+              value={draft.sectorId ?? ''}
+              onChange={(e) => setDraft({ ...draft, sectorId: e.target.value || null })}
+            >
+              <option value="">Não mexer no setor</option>
+              {(sectorsList ?? []).map((s) => (
+                <option key={s.id} value={s.id}>
+                  {s.name}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Toda conversa em que o robô mandar cobrança entra neste setor (ex.: &quot;Asaas&quot; ou &quot;Cobrança&quot;) — assim não mistura com
+              vendas e atendimento. Crie o setor em Configurações → Setores e coloque nele quem cuida das respostas.
+            </p>
+          </div>
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={draft.offerDateNegotiation}
+              onChange={(e) => setDraft({ ...draft, offerDateNegotiation: e.target.checked })}
+            />
+            <span>
+              Oferecer &quot;combinar uma data&quot; no fim da mensagem
+              <span className="block text-xs text-muted-foreground">
+                Desmarcado, a mensagem só diz que, se já pagou, é só responder por aqui — sem abrir a porta pra adiar. A resposta do cliente
+                continua pausando a régua nele.
+              </span>
+            </span>
+          </label>
 
           <div className="flex flex-col gap-2">
             <Label>O que a régua considera cobrável</Label>

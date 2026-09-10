@@ -803,6 +803,19 @@ export async function listCollectionAssignees(): Promise<CollectionAssigneeOptio
   return rows.filter((r) => r.role !== 'viewer').map((r) => ({ id: r.id, name: r.name ?? '', role: r.role }))
 }
 
+export interface CollectionSectorOption {
+  id: string
+  name: string
+}
+
+/** Setores da conta pra "Setor das conversas de cobrança" (Ajustar). */
+export async function listCollectionSectors(): Promise<CollectionSectorOption[]> {
+  const { accountId } = await getCurrentAccount()
+  const { sectors } = await import('@/db')
+  const rows = await db.select({ id: sectors.id, name: sectors.name }).from(sectors).where(eq(sectors.accountId, accountId)).orderBy(sectors.name)
+  return rows.map((r) => ({ id: r.id, name: r.name }))
+}
+
 export async function listCollectionChannels(): Promise<CollectionChannelOption[]> {
   const { accountId } = await getCurrentAccount()
   const rows = await db
