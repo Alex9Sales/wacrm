@@ -182,6 +182,14 @@ export function EmbeddedSignupButton({
     }
     try {
       const FB = await loadFbSdk();
+      // Bloqueador de privacidade (Brave "escudos", uBlock, extensão) pode
+      // substituir o SDK por um "dublê" sem login() — antes virava exceção
+      // solta em vez de aviso (09/09, conta Zelo).
+      if (typeof FB?.login !== 'function') {
+        throw new Error(
+          'O componente do Facebook foi bloqueado no seu navegador. Desative bloqueadores de anúncio/privacidade (ou os "escudos" do Brave) para este site e clique de novo.',
+        );
+      }
       FB.login(
         (response) => {
           const code = response?.authResponse?.code;
