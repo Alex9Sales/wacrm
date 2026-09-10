@@ -95,6 +95,13 @@ export interface CollectionsSettings {
    * cobranças num minuto é como o WhatsApp reconhece um robô.
    */
   sendEveryMinutes: number
+  /**
+   * Quem cuida das RESPOSTAS de cobrança (10/09, João/GoLink: "atribui pro
+   * Leonardo do Financeiro"). Ao enviar uma cobrança, a conversa passa a ser
+   * dessa pessoa — ela vê na lista dela e recebe as respostas. null = não mexe
+   * na atribuição.
+   */
+  assigneeUserId: string | null
 }
 
 export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
@@ -117,6 +124,7 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   promiseUpdatesDueDate: false,
   autoSend: false,
   sendEveryMinutes: 5,
+  assigneeUserId: null,
 }
 
 export function normalizeSettings(raw: unknown): CollectionsSettings {
@@ -151,6 +159,7 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     promiseUpdatesDueDate: r.promiseUpdatesDueDate === true,
     autoSend: r.autoSend === true,
     sendEveryMinutes: int(r.sendEveryMinutes, 5, 1, 120),
+    assigneeUserId: typeof r.assigneeUserId === 'string' && UUID_RE.test(r.assigneeUserId) ? r.assigneeUserId : null,
   }
 }
 

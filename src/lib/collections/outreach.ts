@@ -88,8 +88,10 @@ const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
 /**
  * Decide por onde esta cobrança sai e garante as conversas (a menos que
  * `dryRun`, usado pela régua só para rotular a fila: "vai por e-mail").
- * Conversa existente do contato no canal certo é reaproveitada; sem ela, abre
- * no número/canal escolhido. Nunca abre conversa em dryRun.
+ * Com número escolhido em Ajustar, a conversa é a DESSE número (reaproveita a
+ * existente nele ou abre uma); sem número escolhido, reaproveita a conversa
+ * de WhatsApp existente do contato, senão abre no único conectado. Nunca abre
+ * conversa em dryRun.
  */
 export async function resolveCollectionTargets(
   accountId: string,
@@ -119,7 +121,16 @@ export async function resolveCollectionTargets(
     .where(and(eq(conversations.accountId, accountId), eq(conversations.contactId, contactId)))
     .orderBy(desc(conversations.lastMessageAt))
 
-  const waConv = (hintConversationId ? convs.find((c) => c.id === hintConversationId && isWa(c.provider)) : undefined) ?? convs.find((c) => isWa(c.provider))
+  // 10/09 (GoLink): com "Número que envia as cobranças" ESCOLHIDO, a cobrança
+  // sai SEMPRE por ele — mesmo que o devedor já converse com o Wilian ou o
+  // Vitor. Antes o número escolhido só valia pra quem não tinha conversa, e a
+  // régua reaproveitava a conversa mais recente em qualquer número (3 das 6
+  // primeiras cobranças saíram pelo número do vendedor). Sem número escolhido
+  // (automático), continua: reaproveita a conversa de WhatsApp existente.
+  const fixedChannel = settings.channelId
+  const isWaOnFixed = (c: { channelId: string; provider: string }) => isWa(c.provider) && (!fixedChannel || c.channelId === fixedChannel)
+  const waConv =
+    (hintConversationId ? convs.find((c) => c.id === hintConversationId && isWaOnFixed(c)) : undefined) ?? convs.find((c) => isWaOnFixed(c))
   const emConv = convs.find((c) => isEmail(c.provider))
 
   const waPick: ChannelPick = waConv ? { ok: true, id: waConv.channelId, name: '' } : await pickCollectionChannel(accountId, settings.channelId)

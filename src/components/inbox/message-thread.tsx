@@ -1385,7 +1385,12 @@ export function MessageThread({
     : "Atribuir";
   // O atendente atribuído (não-supervisor) pode TRANSFERIR o atendimento —
   // supervisor+ tem o assign completo; o assignee ganha um "Transferir".
-  const isAssignee = !!assignedAgentId && assignedAgentId === user?.id;
+  // 10/09 (Leonardo/GoLink): conversa SEM dono que o atendente consegue ver
+  // (fila do setor, conversa que ele mesmo abriu) também ganha o "Transferir"
+  // — antes o menu nem aparecia e ele não tinha como passar pra ninguém.
+  const isAssignee =
+    (!!assignedAgentId && assignedAgentId === user?.id) ||
+    (!assignedAgentId && !conversation.read_blocked);
   // Reply lock (mirrors the server-side check in /api/whatsapp/send).
   // Sector model (Felipe's spec): a thread that belongs to a SECTOR never locks
   // the composer — teammates in the sector reply to each other's threads

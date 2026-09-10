@@ -57,7 +57,9 @@ import {
   createContactForDebtor,
   createContactsForPendingDebtors,
   linkDebtorToContact,
+  listCollectionAssignees,
   listCollectionChannels,
+  type CollectionAssigneeOption,
   type CollectionChannelOption,
   listConnections,
   removeConnection,
@@ -1290,6 +1292,7 @@ function RulePanel({
   const [draft, setDraft] = useState<CollectionsSettings>(rule);
   const [saving, setSaving] = useState(false);
   const [chans, setChans] = useState<CollectionChannelOption[] | null>(null);
+  const [people, setPeople] = useState<CollectionAssigneeOption[] | null>(null);
   const dirty = JSON.stringify(draft) !== JSON.stringify(rule);
 
   useEffect(() => setDraft(rule), [rule]);
@@ -1299,7 +1302,12 @@ function RulePanel({
         .then(setChans)
         .catch(() => setChans([]));
     }
-  }, [open, chans]);
+    if (open && people === null) {
+      void listCollectionAssignees()
+        .then(setPeople)
+        .catch(() => setPeople([]));
+    }
+  }, [open, chans, people]);
 
   async function persist(patch: Partial<CollectionsSettings>) {
     setSaving(true);
@@ -1530,6 +1538,28 @@ function RulePanel({
             <p className="text-xs text-muted-foreground">
               Vale para o devedor que ainda não tem conversa no CRM: a régua abre a conversa por este número. Com mais de um número
               conectado ela não chuta — escolha aqui.
+            </p>
+          </div>
+
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="rule-assignee">Quem cuida das respostas</Label>
+            <select
+              id="rule-assignee"
+              className="h-9 w-full max-w-sm rounded-md border bg-background px-2 text-sm"
+              value={draft.assigneeUserId ?? ''}
+              onChange={(e) => setDraft({ ...draft, assigneeUserId: e.target.value || null })}
+            >
+              <option value="">Ninguém em especial (não mexe na atribuição)</option>
+              {(people ?? []).map((p) => (
+                <option key={p.id} value={p.id}>
+                  {p.name}
+                  {p.role === 'owner' ? ' · dono' : p.role === 'admin' ? ' · admin' : p.role === 'supervisor' ? ' · supervisor' : ''}
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Ao sair uma cobrança, a conversa passa a ser dessa pessoa: aparece na lista dela e a resposta do cliente (&quot;já paguei&quot;,
+              &quot;pago dia 10&quot;) cai com quem resolve — mesmo que a conversa estivesse com outro atendente.
             </p>
           </div>
 

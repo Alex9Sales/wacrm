@@ -162,6 +162,38 @@ export async function noteDealEvent(accountId: string, dealId: string, actorUser
   }
 }
 
+/**
+ * Atribui as conversas de cobrança a quem cuida das respostas
+ * (`collections.assigneeUserId`). Sempre que a cobrança sai: o dono decidiu
+ * que cobrança é dessa pessoa, então até conversa já atribuída a outro passa
+ * pra ela (a resposta "já paguei" tem que cair com quem resolve). Sem a
+ * configuração, não mexe em nada. Nunca derruba o envio: falha aqui é log.
+ */
+async function assignCollectionConversations(accountId: string, conversationIds: Array<string | null>): Promise<void> {
+  try {
+    const { getAccountSettings } = await import('@/lib/settings/account-settings')
+    const { normalizeSettings } = await import('@/lib/collections/rules')
+    const s = normalizeSettings((await getAccountSettings(accountId)).collections)
+    if (!s.assigneeUserId) return
+    const ids = conversationIds.filter((id): id is string => !!id)
+    if (!ids.length) return
+    const { member: memberTable } = await import('@/db')
+    const stillMember = await db
+      .select({ id: memberTable.id })
+      .from(memberTable)
+      .where(and(eq(memberTable.organizationId, accountId), eq(memberTable.userId, s.assigneeUserId)))
+      .limit(1)
+    if (!stillMember.length) return
+    const now = new Date().toISOString()
+    await db
+      .update(conversations)
+      .set({ assignedAgentId: s.assigneeUserId, assignedAt: now, updatedAt: now })
+      .where(and(eq(conversations.accountId, accountId), inArray(conversations.id, ids), sql`${conversations.assignedAgentId} IS DISTINCT FROM ${s.assigneeUserId}`))
+  } catch (err) {
+    console.error('[cobranca] não deu pra atribuir a conversa a quem cuida das respostas:', err instanceof Error ? err.message : err)
+  }
+}
+
 export async function executeOrchestrationAction(input: ExecInput): Promise<ExecResult> {
   const meta = ACTION_CATALOG[input.action]
   if (meta.humanOnly) return { ok: false, needsHuman: true, error: 'Esta ação só o humano executa (aprove na fila "Precisa de você").' }
@@ -227,6 +259,11 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
             if (!sentVia.length) return { ok: false, error: `O e-mail não saiu: ${emailError}` }
           }
         }
+        // 👤 Quem cuida das respostas (Ajustar → "Quem cuida das respostas"):
+        // a conversa onde a cobrança saiu passa a ser dessa pessoa — ela vê na
+        // lista dela e recebe a resposta do cliente (10/09, Leonardo/GoLink).
+        await assignCollectionConversations(input.accountId, [targets.whatsapp?.conversationId ?? null, targets.email?.conversationId ?? null])
+
         // Lembrete não conta como toque de cobrança: não mexe no ritmo da régua
         // nem no contador que devolve o devedor para uma pessoa.
         if (!isReminder) {

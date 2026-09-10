@@ -15,7 +15,7 @@
 import { and, desc, eq, ilike, inArray, isNull, or, sql } from 'drizzle-orm'
 import { revalidatePath } from 'next/cache'
 
-import { db, aiConfigs, asaasCharges, asaasConnections, channels, collectionsTouches, contacts, conversations, decisionFeedback, user } from '@/db'
+import { db, aiConfigs, asaasCharges, asaasConnections, channels, collectionsTouches, contacts, conversations, decisionFeedback, member, user } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
@@ -785,6 +785,24 @@ export interface CollectionChannelOption {
 }
 
 /** Números de WhatsApp da conta, para escolher qual envia as cobranças. */
+export interface CollectionAssigneeOption {
+  id: string
+  name: string
+  role: string
+}
+
+/** Membros da conta pra "Quem cuida das respostas" (Ajustar). Viewer não atende. */
+export async function listCollectionAssignees(): Promise<CollectionAssigneeOption[]> {
+  const { accountId } = await getCurrentAccount()
+  const rows = await db
+    .select({ id: user.id, name: user.name, role: member.role })
+    .from(member)
+    .innerJoin(user, eq(member.userId, user.id))
+    .where(eq(member.organizationId, accountId))
+    .orderBy(user.name)
+  return rows.filter((r) => r.role !== 'viewer').map((r) => ({ id: r.id, name: r.name ?? '', role: r.role }))
+}
+
 export async function listCollectionChannels(): Promise<CollectionChannelOption[]> {
   const { accountId } = await getCurrentAccount()
   const rows = await db

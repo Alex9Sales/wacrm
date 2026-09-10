@@ -27,7 +27,6 @@ import {
   user,
   channels,
   sectors,
-  sectorMembers,
   quickReplies,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -1347,30 +1346,14 @@ export async function transferConversationToAgent(
   )
   if (!targetMember) throw new Error('Atendente inválido.')
 
-  // If the conversation belongs to a sector, transfers stay inside it —
-  // EXCETO admin/owner, que têm acesso a TODOS os setores (não ficam presos a
-  // um). Assim o dono/admin pode ser atribuído a qualquer conversa, mesmo sem
-  // estar listado como membro daquele setor.
-  const targetIsAdmin = hasMinRole(
-    targetMember.role as import('@/lib/auth/roles').AccountRole,
-    'admin',
-  )
-  if (conv.sectorId && !targetIsAdmin) {
-    const inSector = firstOrNull(
-      await db
-        .select({ id: sectorMembers.id })
-        .from(sectorMembers)
-        .where(
-          and(
-            eq(sectorMembers.sectorId, conv.sectorId),
-            eq(sectorMembers.userId, targetUserId),
-          ),
-        )
-        .limit(1),
-    )
-    if (!inSector) {
-      throw new Error('Esse atendente não está no setor desta conversa.')
-    }
+  // 10/09 (Leonardo/GoLink): transferir pode ir pra QUALQUER atendente da
+  // conta, do setor ou não, admin incluso. Antes a transferência ficava presa
+  // ao setor da conversa — o Leonardo era o único do Financeiro e não
+  // conseguia passar pra ninguém. Quem recebe vê a conversa por estar
+  // atribuída a ele (a lista prioriza "atribuída a mim" sobre setor/canal).
+  // Viewer não atende, então não recebe.
+  if (targetMember.role === 'viewer') {
+    throw new Error('Esse usuário só visualiza — não pode receber atendimento.')
   }
 
   await db
