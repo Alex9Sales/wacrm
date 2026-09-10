@@ -16,6 +16,7 @@ import { toast } from 'sonner';
 import {
   AlertTriangle,
   Building2,
+  CalendarClock,
   Check,
   ExternalLink,
   Eye,
@@ -80,6 +81,8 @@ import {
   type WalletDebtor,
   type WalletSummary,
   changeChargeDueDate,
+  clearPaymentPromise,
+  registerPaymentPromise,
 } from '@/app/(dashboard)/cobrancas/actions';
 import { CHARGEABLE_STATUSES, type CollectionsSettings } from '@/lib/collections/rules';
 
@@ -103,6 +106,9 @@ export function WalletClient() {
   const [linkFor, setLinkFor] = useState<WalletDebtor | null>(null);
   const [pauseFor, setPauseFor] = useState<WalletDebtor | null>(null);
   const [onlyPending, setOnlyPending] = useState(false);
+  // Filtro "Promessas": quem prometeu pagar (a régua dorme até a data).
+  const [onlyPromises, setOnlyPromises] = useState(false);
+  const [promiseFor, setPromiseFor] = useState<WalletDebtor | null>(null);
   const [rule, setRule] = useState<CollectionsSettings | null>(null);
   const [running, setRunning] = useState(false);
   const [upcoming, setUpcoming] = useState<number | null>(null);
@@ -181,8 +187,11 @@ export function WalletClient() {
         })
         .filter((d): d is WalletDebtor => d !== null);
     }
+    if (onlyPromises) all = all.filter((d) => hasPromise(d));
     return onlyPending ? all.filter((d) => !d.contactId) : all;
-  }, [wallet, onlyPending, connFilter]);
+  }, [wallet, onlyPending, onlyPromises, connFilter]);
+
+  const promisesCount = useMemo(() => (wallet?.debtors ?? []).filter((d) => hasPromise(d)).length, [wallet]);
 
   // Números do topo acompanham o filtro (sem filtro = os da carteira inteira).
   const totals = useMemo(() => {
@@ -377,9 +386,33 @@ export function WalletClient() {
             </div>
           )}
 
+          {promisesCount > 0 && (
+            <div className="flex flex-wrap items-center gap-2 text-sm">
+              <button
+                type="button"
+                onClick={() => setOnlyPromises((v) => !v)}
+                className={cn(
+                  'inline-flex items-center gap-1.5 rounded-full border px-2.5 py-0.5 font-medium',
+                  onlyPromises ? 'border-primary/40 bg-primary/10 text-primary' : 'border-border bg-card text-muted-foreground hover:text-foreground',
+                )}
+                title="Quem prometeu pagar — a régua dorme até a data combinada"
+              >
+                <CalendarClock className="h-3.5 w-3.5" /> Promessas de pagamento ({promisesCount}){onlyPromises ? ' ×' : ''}
+              </button>
+              {onlyPromises && <span className="text-xs text-muted-foreground">Mostrando só quem prometeu. Em cada um dá para mudar a data ou cobrar agora.</span>}
+            </div>
+          )}
           <div className="flex flex-col gap-2.5">
             {debtors.map((d) => (
-              <DebtorCard key={d.key} debtor={d} onLink={() => setLinkFor(d)} onUnlink={load} onPause={() => setPauseFor(d)} onChanged={load} />
+              <DebtorCard
+                key={d.key}
+                debtor={d}
+                onLink={() => setLinkFor(d)}
+                onUnlink={load}
+                onPause={() => setPauseFor(d)}
+                onPromise={() => setPromiseFor(d)}
+                onChanged={load}
+              />
             ))}
             {!debtors.length && (
               <div className="rounded-md border border-dashed px-6 py-10 text-center text-sm text-muted-foreground">
@@ -407,6 +440,7 @@ export function WalletClient() {
       <LinkContactDialog debtor={linkFor} onClose={() => setLinkFor(null)} onLinked={load} />
       {newChargeOpen && <NewChargeDialog conns={conns.filter((c) => c.enabled)} onClose={() => setNewChargeOpen(false)} onCreated={load} />}
       <PauseDebtorDialog debtor={pauseFor} onClose={() => setPauseFor(null)} onSaved={load} />
+      <PromiseDialog debtor={promiseFor} onClose={() => setPromiseFor(null)} onSaved={load} />
     </div>
   );
 
@@ -447,16 +481,19 @@ function DebtorCard({
   onLink,
   onUnlink,
   onPause,
+  onPromise,
   onChanged,
 }: {
   debtor: WalletDebtor;
   onLink: () => void;
   onUnlink: () => void;
   onPause: () => void;
+  onPromise: () => void;
   onChanged: () => void;
 }) {
   const [open, setOpen] = useState(false);
   const late = lateLabel(debtor.oldestDaysLate);
+  const promised = hasPromise(debtor);
 
   return (
     <div
@@ -498,6 +535,14 @@ function DebtorCard({
               <Check className="h-3 w-3" />
               {debtor.matchedBy === 'manual' ? 'ligado na mão' : 'contato do CRM'}
             </span>
+            {promised && (
+              <span
+                className="inline-flex items-center gap-1 rounded-full bg-sky-100 px-2 py-0.5 text-[11px] font-medium text-sky-800 dark:bg-sky-950 dark:text-sky-300"
+                title={debtor.snoozeReason ?? undefined}
+              >
+                <CalendarClock className="h-3 w-3" /> prometeu {new Date(debtor.snoozeUntil!).toLocaleDateString('pt-BR')}
+              </span>
+            )}
             {debtor.paused ? (
               <Button
                 size="sm"
@@ -512,9 +557,30 @@ function DebtorCard({
                 Voltar a cobrar
               </Button>
             ) : (
-              <Button size="sm" variant="ghost" onClick={onPause} title="Nunca cobrar este devedor pela régua">
-                <BellOff className="h-3.5 w-3.5 text-muted-foreground" />
-              </Button>
+              <>
+                {promised ? (
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    title="Tira a promessa: a régua volta a cobrar este devedor no próximo ciclo"
+                    onClick={async () => {
+                      if (!confirm(`Cobrar ${debtor.name} de novo? A promessa registrada é apagada e a régua volta a valer.`)) return;
+                      const res = await clearPaymentPromise(debtor.contactId!);
+                      if (!res.ok) toast.error(res.error ?? 'Não deu certo.');
+                      else toast.success(`${debtor.name} volta pra régua.`);
+                      onChanged();
+                    }}
+                  >
+                    Cobrar agora
+                  </Button>
+                ) : null}
+                <Button size="sm" variant="ghost" onClick={onPromise} title={promised ? 'Mudar a data prometida' : 'Cliente prometeu pagar em uma data — a régua dorme até lá'}>
+                  <CalendarClock className="h-3.5 w-3.5 text-muted-foreground" />
+                </Button>
+                <Button size="sm" variant="ghost" onClick={onPause} title="Nunca cobrar este devedor pela régua">
+                  <BellOff className="h-3.5 w-3.5 text-muted-foreground" />
+                </Button>
+              </>
             )}
           </div>
         ) : (
@@ -1671,8 +1737,8 @@ function reguaStatus(d: WalletDebtor): string {
   if (!d.contactId) return 'Sem contato ligado — a régua não cobra este devedor.';
   if (d.duplicateSuspect) return 'Parcela idêntica em dois cadastros do Asaas — a régua não cobra até resolver lá.';
   if (d.paused) return 'Fora da régua: marcado como "não cobrar".';
-  if (d.snoozeUntil && new Date(d.snoozeUntil).getTime() > Date.now()) {
-    return `Prometeu pagar em ${new Date(d.snoozeUntil).toLocaleDateString('pt-BR')} — a régua dorme até lá.`;
+  if (hasPromise(d)) {
+    return `Promessa: a régua dorme até ${new Date(d.snoozeUntil!).toLocaleDateString('pt-BR')}${d.snoozeReason ? ` · ${d.snoozeReason}` : ''}.`;
   }
   if (!d.touchCount) return 'Ainda não foi cobrado pela régua.';
   const quando = d.lastTouchAt ? new Date(d.lastTouchAt).toLocaleDateString('pt-BR') : null;
@@ -1684,6 +1750,85 @@ function reguaStatus(d: WalletDebtor): string {
  * daqui a dois meses precisa saber por que este cliente nunca é cobrado —
  * "acordo em andamento" e "esqueceram de religar" têm a mesma cara sem ele.
  */
+/** Régua dorme até a data em que o cliente prometeu pagar (10/09, pedido do Alex/João). */
+function hasPromise(d: { snoozeUntil: string | null }): boolean {
+  return !!d.snoozeUntil && new Date(d.snoozeUntil).getTime() > Date.now();
+}
+
+/**
+ * "Registrar promessa": o cliente disse "pago dia 15" por telefone, num áudio
+ * que a IA não leu, ou pro Leonardo. Mesmo efeito do marcador da IA — a régua
+ * dorme até a data (+1 dia), o boleto move junto se "mover vencimento" estiver
+ * ligado em Ajustar, e fica nota na conversa.
+ */
+function PromiseDialog({
+  debtor,
+  onClose,
+  onSaved,
+}: {
+  debtor: WalletDebtor | null;
+  onClose: () => void;
+  onSaved: () => void;
+}) {
+  const [date, setDate] = useState('');
+  const [note, setNote] = useState('');
+  const [saving, setSaving] = useState(false);
+
+  useEffect(() => {
+    setDate(new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10));
+    setNote('');
+  }, [debtor]);
+
+  if (!debtor || !debtor.contactId) return null;
+
+  return (
+    <Dialog open onOpenChange={(v) => !v && onClose()}>
+      <DialogContent className="sm:max-w-md">
+        <DialogHeader>
+          <DialogTitle>{hasPromise(debtor) ? 'Mudar a data prometida' : 'Promessa de pagamento'} — {debtor.name}</DialogTitle>
+          <DialogDescription>
+            A régua para de cobrar este cliente até o dia seguinte à data. Se ele não pagar, volta a cobrar sozinha. A promessa fica registrada
+            na conversa.
+          </DialogDescription>
+        </DialogHeader>
+
+        <div className="grid grid-cols-2 gap-3">
+          <div className="flex flex-col gap-1.5">
+            <Label htmlFor="promise-date">Prometeu pagar em</Label>
+            <Input id="promise-date" type="date" value={date} onChange={(e) => setDate(e.target.value)} />
+          </div>
+        </div>
+        <div className="flex flex-col gap-1.5">
+          <Label htmlFor="promise-note">Observação (opcional)</Label>
+          <Textarea id="promise-note" value={note} onChange={(e) => setNote(e.target.value)} placeholder="Ex.: falou por telefone que recebe do governo na segunda" rows={2} />
+        </div>
+
+        <Button
+          disabled={saving || !date}
+          onClick={async () => {
+            setSaving(true);
+            try {
+              const res = await registerPaymentPromise({ contactId: debtor.contactId!, dateRaw: date, note: note.trim() || null });
+              if (!res.ok) {
+                toast.error(res.error ?? 'Não foi possível registrar.');
+                return;
+              }
+              toast.success(`Promessa registrada: a régua dorme em ${debtor.name} até depois de ${date.split('-').reverse().join('/')}.`);
+              onClose();
+              onSaved();
+            } finally {
+              setSaving(false);
+            }
+          }}
+        >
+          {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : <CalendarClock className="mr-1.5 h-4 w-4" />}
+          Registrar promessa
+        </Button>
+      </DialogContent>
+    </Dialog>
+  );
+}
+
 function PauseDebtorDialog({
   debtor,
   onClose,

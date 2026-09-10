@@ -43,6 +43,12 @@ import { Repeat } from "lucide-react";
 import { CustomerCodesEditor } from "./customer-codes-editor";
 import { CommercialHistory } from "./commercial-history";
 import { importGroupMembers } from "@/app/(dashboard)/inbox/group-actions";
+import {
+  clearPaymentPromise,
+  getContactCollectionStatus,
+  registerPaymentPromise,
+  type ContactCollectionStatus,
+} from "@/app/(dashboard)/cobrancas/actions";
 import { CustomFieldInput } from "@/components/contacts/custom-field-input";
 import { CallButton } from "@/components/calls/call-button";
 import type {
@@ -75,6 +81,7 @@ import {
   ListChecks,
   ListTodo,
   CalendarClock,
+  Receipt,
   UserPlus,
   Flag,
   Trash2,
@@ -220,6 +227,10 @@ export function ContactSidebar({
   const [copied, setCopied] = useState(false);
   const [deals, setDeals] = useState<Deal[]>([]);
   const [notes, setNotes] = useState<ContactNote[]>([]);
+  // 🧾 Cobrança em aberto deste contato (só aparece quando existe).
+  const [collection, setCollection] = useState<ContactCollectionStatus | null>(null);
+  const [promiseDate, setPromiseDate] = useState("");
+  const [promiseBusy, setPromiseBusy] = useState(false);
   // Tarefas — this contact's tasks (compact) + the reused create dialog.
   const [tasks, setTasks] = useState<TaskLite[]>([]);
   const [taskFormOpen, setTaskFormOpen] = useState(false);
@@ -321,6 +332,14 @@ export function ContactSidebar({
       setDeals(dealsData);
       setNotes(notesData);
       setTags(tagsData);
+      // Cobrança: best-effort e fora do Promise.all — falha aqui não pode
+      // derrubar o painel inteiro.
+      void getContactCollectionStatus(contactId)
+        .then((c) => {
+          setCollection(c);
+          setPromiseDate(new Date(Date.now() + 5 * 86_400_000).toISOString().slice(0, 10));
+        })
+        .catch(() => setCollection(null));
       setTasks(tasksData);
       setEditTags(editTagsData);
       setCustomFields(fieldsData);
@@ -870,6 +889,92 @@ export function ContactSidebar({
           </div>
 
           <div className="mt-3">
+            {/* ---- Cobrança (só quando o contato tem parcela em aberto) ---- */}
+            {collection && contactId && (
+              <Section icon={Receipt} title="Cobrança" defaultOpen>
+                <div className="flex flex-col gap-2 px-1 text-sm">
+                  <p>
+                    <span className="font-medium">
+                      {collection.openCount === 1 ? "1 parcela em aberto" : `${collection.openCount} parcelas em aberto`}
+                    </span>{" "}
+                    · {collection.total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                    {collection.oldestDaysLate != null && collection.oldestDaysLate > 0 ? ` · ${collection.oldestDaysLate} dias de atraso` : ""}
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    {collection.paused
+                      ? `Fora da régua: "não cobrar"${collection.pausedReason ? ` (${collection.pausedReason})` : ""}.`
+                      : collection.snoozeUntil && new Date(collection.snoozeUntil).getTime() > Date.now()
+                        ? `Promessa: a régua dorme até ${new Date(collection.snoozeUntil).toLocaleDateString("pt-BR")}${collection.snoozeReason ? ` · ${collection.snoozeReason}` : ""}.`
+                        : collection.touchCount
+                          ? `${collection.touchCount} ${collection.touchCount === 1 ? "cobrança enviada" : "cobranças enviadas"} pela régua${collection.lastTouchAt ? `, a última em ${new Date(collection.lastTouchAt).toLocaleDateString("pt-BR")}` : ""}.`
+                          : "Ainda não foi cobrado pela régua."}
+                  </p>
+                  {!collection.paused && (
+                    <div className="flex flex-wrap items-end gap-2">
+                      <div className="flex flex-col gap-1">
+                        <label htmlFor="sb-promise-date" className="text-[11px] text-muted-foreground">
+                          Prometeu pagar em
+                        </label>
+                        <input
+                          id="sb-promise-date"
+                          type="date"
+                          value={promiseDate}
+                          onChange={(e) => setPromiseDate(e.target.value)}
+                          className="h-8 rounded-md border border-border bg-background px-2 text-xs"
+                        />
+                      </div>
+                      <button
+                        type="button"
+                        disabled={promiseBusy || !promiseDate}
+                        onClick={async () => {
+                          setPromiseBusy(true);
+                          try {
+                            const r = await registerPaymentPromise({ contactId, dateRaw: promiseDate, conversationId: conversation?.id ?? null });
+                            if (!r.ok) toast.error(r.error ?? "Não foi possível registrar.");
+                            else {
+                              toast.success("Promessa registrada — a régua dorme até lá.");
+                              setCollection(await getContactCollectionStatus(contactId).catch(() => collection));
+                            }
+                          } finally {
+                            setPromiseBusy(false);
+                          }
+                        }}
+                        className="inline-flex h-8 items-center gap-1 rounded-md bg-primary px-2.5 text-xs font-medium text-primary-foreground hover:bg-primary/90 disabled:opacity-50"
+                      >
+                        <CalendarClock className="h-3.5 w-3.5" /> Registrar promessa
+                      </button>
+                      {collection.snoozeUntil && new Date(collection.snoozeUntil).getTime() > Date.now() && (
+                        <button
+                          type="button"
+                          disabled={promiseBusy}
+                          onClick={async () => {
+                            if (!confirm("Cobrar de novo? A promessa é apagada e a régua volta a valer.")) return;
+                            setPromiseBusy(true);
+                            try {
+                              const r = await clearPaymentPromise(contactId);
+                              if (!r.ok) toast.error(r.error ?? "Não deu certo.");
+                              else {
+                                toast.success("Volta pra régua.");
+                                setCollection(await getContactCollectionStatus(contactId).catch(() => collection));
+                              }
+                            } finally {
+                              setPromiseBusy(false);
+                            }
+                          }}
+                          className="inline-flex h-8 items-center rounded-md border border-border px-2.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+                        >
+                          Cobrar agora
+                        </button>
+                      )}
+                    </div>
+                  )}
+                  <p className="text-[11px] text-muted-foreground">
+                    Se o cliente responder por aqui (&quot;pago segunda&quot;, comprovante, contestação), a IA lê e ajusta a régua sozinha, sem responder por você.
+                  </p>
+                </div>
+              </Section>
+            )}
+
             {/* ---- Negócio ---- */}
             <Section
               icon={DollarSign}

@@ -438,7 +438,19 @@ export async function dispatchInboundToAiReply(
         requireAutoReply: true,
       })
     }
-    if (!config || !config.autoReplyEnabled) return
+    // 🧾 Onde a IA NÃO responde, a régua ainda precisa ouvir o devedor
+    // (10/09, Rack/GoLink: "pago segunda" num canal sem IA passou em branco).
+    // Classifica em silêncio e aplica na régua — nunca responde ao cliente.
+    const silentCollectionCheck = async (cfg: typeof config) => {
+      if (conv.isGroup) return
+      const { detectCollectionReplySilently } = await import('@/lib/collections/silent-reply')
+      const tz = (await getAccountSettings(accountId).catch(() => null))?.businessTimezone || 'America/Sao_Paulo'
+      await detectCollectionReplySilently({ accountId, conversationId, contactId, channelId: conv.channelId, config: cfg, timezone: tz })
+    }
+    if (!config || !config.autoReplyEnabled) {
+      await silentCollectionCheck(null)
+      return
+    }
 
     // 📅 Nível da ação "marcar compromisso" na matriz de autonomia do agente:
     // 'auto' marca na hora; qualquer outro nível = a IA combina, avisa que vai
@@ -506,15 +518,22 @@ export async function dispatchInboundToAiReply(
     // Settings da conta: usado pro gate de horário E pro fuso injetado no prompt.
     const settings = await getAccountSettings(accountId)
     if (config.autoReplyHoursMode !== 'always') {
-      if (!aiHoursAllows(config.autoReplyHoursMode, settings)) return
+      if (!aiHoursAllows(config.autoReplyHoursMode, settings)) {
+        await silentCollectionCheck(config)
+        return
+      }
     }
     // NEVER auto-reply in a GROUP thread. The bot answering inside a WhatsApp
     // group is almost always wrong (it would reply to every member's message,
     // spamming the group) and risky for the number's reputation — so it's a
     // hard lock, not a per-account toggle. 1:1 threads are unaffected.
     if (conv.isGroup) return
-    if (conv.assignedAgentId) return // a human owns this thread
-    if (conv.aiAutoreplyDisabled) return // handed off / turned off here
+    if (conv.assignedAgentId || conv.aiAutoreplyDisabled) {
+      // a human owns this thread / handed off or turned off here — a IA não
+      // responde, mas o devedor pode ter prometido pagar: régua ouve em silêncio.
+      await silentCollectionCheck(config)
+      return
+    }
     // 👤 Humano DIGITANDO: o atendente começou a responder no inbox (marca
     // renovada a cada digitada). A IA recua na hora, antes mesmo dele enviar —
     // não atropela quem está compondo. Volta sozinha quando ele para de digitar.

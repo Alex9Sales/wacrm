@@ -227,6 +227,7 @@ export interface WalletDebtor {
   /** Estado da régua neste devedor (só existe quando casou com um contato). */
   paused: boolean
   pausedReason: string | null
+  snoozeReason: string | null
   touchCount: number
   lastTouchAt: string | null
   snoozeUntil: string | null
@@ -285,6 +286,7 @@ export async function getWallet(): Promise<WalletSummary> {
       touchCount: collectionsTouches.touchCount,
       lastTouchAt: collectionsTouches.lastTouchAt,
       snoozeUntil: collectionsTouches.snoozeUntil,
+      snoozeReason: collectionsTouches.snoozeReason,
     })
     .from(asaasCharges)
     .innerJoin(asaasConnections, eq(asaasConnections.id, asaasCharges.connectionId))
@@ -323,6 +325,7 @@ export async function getWallet(): Promise<WalletSummary> {
         touchCount: r.touchCount ?? 0,
         lastTouchAt: r.lastTouchAt,
         snoozeUntil: r.snoozeUntil,
+        snoozeReason: r.snoozeReason,
         duplicateSuspect: false,
       }
       byDebtor.set(key, d)
@@ -570,6 +573,130 @@ export async function runCollectionsNow(): Promise<ActionResult<{ queued: number
 }
 
 /** Pausa/retoma a régua num devedor (acordo em andamento, caso jurídico…). */
+// ------------------------------------------------- promessa de pagamento (10/09)
+// O cliente disse "pago dia 15" — para o Leonardo (ou quem atende), por
+// telefone ou num áudio que a IA não leu. Mesmo efeito do marcador da IA:
+// a régua dorme até a data (+1 dia de folga) e, se "mover vencimento" estiver
+// ligado em Ajustar, o boleto no Asaas vai junto. Nota interna na conversa.
+
+export async function registerPaymentPromise(input: {
+  contactId: string
+  /** "15/09", "dia 15", "+5" ou 2026-09-15 */
+  dateRaw: string
+  note?: string | null
+  conversationId?: string | null
+}): Promise<ActionResult<{ until: string }>> {
+  const { accountId, userId } = await requireRole('agent')
+  const c = firstOrNull(
+    await db.select({ id: contacts.id, name: contacts.name }).from(contacts).where(and(eq(contacts.id, input.contactId), eq(contacts.accountId, accountId))).limit(1),
+  )
+  if (!c) return { ok: false, error: 'Contato não encontrado nesta conta.' }
+  const date = parseDueDate(input.dateRaw)
+  if (!date) return { ok: false, error: 'Data inválida. Exemplo: 15/09, "dia 15" ou +5.' }
+
+  const { applyCollectionReply } = await import('@/lib/collections/reply')
+  const r = await applyCollectionReply({ accountId, contactId: c.id, conversationId: input.conversationId ?? null, kind: 'promessa', date })
+  if (!r.applied) return { ok: false, error: 'Este contato não tem cobrança em aberto na carteira.' }
+
+  const who = firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, userId)).limit(1))
+  const extra = (input.note ?? '').trim()
+  const reason = `Prometeu pagar em ${date.split('-').reverse().join('/')} — registrado por ${who?.name ?? 'alguém da equipe'}${extra ? `: ${extra}` : ''}`
+  const touch = firstOrNull(
+    await db
+      .select({ until: collectionsTouches.snoozeUntil })
+      .from(collectionsTouches)
+      .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, c.id)))
+      .limit(1),
+  )
+  await db
+    .update(collectionsTouches)
+    .set({ snoozeReason: reason, updatedAt: new Date().toISOString() })
+    .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, c.id)))
+
+  // Nota na conversa (a informada ou a mais recente do contato).
+  const convId =
+    input.conversationId ??
+    firstOrNull(
+      await db
+        .select({ id: conversations.id })
+        .from(conversations)
+        .where(and(eq(conversations.accountId, accountId), eq(conversations.contactId, c.id)))
+        .orderBy(desc(conversations.lastMessageAt))
+        .limit(1),
+    )?.id ??
+    null
+  if (convId) await postInternalNote({ conversationId: convId, text: `${r.note} (${reason})` })
+
+  revalidatePath('/cobrancas')
+  return { ok: true, data: { until: touch?.until ?? date } }
+}
+
+/** "Cobrar agora": tira a promessa e a régua volta a valer no próximo ciclo. */
+export async function clearPaymentPromise(contactId: string): Promise<ActionResult> {
+  const { accountId } = await requireRole('agent')
+  const now = new Date().toISOString()
+  await db
+    .update(collectionsTouches)
+    .set({ snoozeUntil: null, snoozeReason: null, updatedAt: now })
+    .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, contactId)))
+  revalidatePath('/cobrancas')
+  return { ok: true }
+}
+
+export interface ContactCollectionStatus {
+  openCount: number
+  total: number
+  oldestDaysLate: number | null
+  snoozeUntil: string | null
+  snoozeReason: string | null
+  paused: boolean
+  pausedReason: string | null
+  lastTouchAt: string | null
+  touchCount: number
+}
+
+/** Situação de cobrança de UM contato — a lateral da conversa mostra e age. */
+export async function getContactCollectionStatus(contactId: string): Promise<ContactCollectionStatus | null> {
+  const { accountId } = await getCurrentAccount()
+  const rows = await db
+    .select({ value: asaasCharges.value, dueDate: asaasCharges.dueDate })
+    .from(asaasCharges)
+    .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, contactId), eq(asaasCharges.open, true)))
+  if (!rows.length) return null
+  const today = new Date()
+  let oldest: number | null = null
+  for (const r of rows) {
+    if (!r.dueDate) continue
+    const d = Math.floor((today.getTime() - new Date(`${r.dueDate}T12:00:00Z`).getTime()) / 86_400_000)
+    if (oldest == null || d > oldest) oldest = d
+  }
+  const t = firstOrNull(
+    await db
+      .select({
+        snoozeUntil: collectionsTouches.snoozeUntil,
+        snoozeReason: collectionsTouches.snoozeReason,
+        paused: collectionsTouches.paused,
+        pausedReason: collectionsTouches.pausedReason,
+        lastTouchAt: collectionsTouches.lastTouchAt,
+        touchCount: collectionsTouches.touchCount,
+      })
+      .from(collectionsTouches)
+      .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, contactId)))
+      .limit(1),
+  )
+  return {
+    openCount: rows.length,
+    total: rows.reduce((s, r) => s + (Number(r.value) || 0), 0),
+    oldestDaysLate: oldest,
+    snoozeUntil: t?.snoozeUntil ?? null,
+    snoozeReason: t?.snoozeReason ?? null,
+    paused: t?.paused ?? false,
+    pausedReason: t?.pausedReason ?? null,
+    lastTouchAt: t?.lastTouchAt ?? null,
+    touchCount: t?.touchCount ?? 0,
+  }
+}
+
 export async function setDebtorPaused(contactId: string, paused: boolean, reason: string | null): Promise<ActionResult> {
   const { accountId, userId } = await requireRole('agent')
 
