@@ -1861,6 +1861,7 @@ export async function startNewConversation(input: {
       input.channelId ?? null,
     )
     await claimNewConversation(ctx.accountId, ctx.userId, ctx.role, res.conversationId)
+    await assertCallerSeesConversation(ctx, res.conversationId)
     return {
       conversationId: res.conversationId,
       contactCreated: res.contactCreated,
@@ -1871,6 +1872,49 @@ export async function startNewConversation(input: {
       err instanceof Error ? err.message : 'Não foi possível iniciar a conversa.',
     )
   }
+}
+
+/**
+ * "Abrir conversa"/"Nova conversa" reaproveita a conversa que JÁ existe com o
+ * contato. Se ela está com alguém que o chamador não pode ver (dono/admin, ou
+ * outro atendente fora do setor dele), o deep-link abria a caixa VAZIA, sem
+ * dizer nada — a clínica da Joyce (10/09) achou que a mensagem "não chegava".
+ * Aqui vira um erro que explica e diz o que fazer.
+ */
+async function assertCallerSeesConversation(
+  ctx: { accountId: string; userId: string; role: AccountRole },
+  conversationId: string,
+): Promise<void> {
+  if (hasMinRole(ctx.role, 'admin')) return
+  const row = firstOrNull(
+    await db
+      .select({
+        sectorId: conversations.sectorId,
+        assignedAgentId: conversations.assignedAgentId,
+        isPrivate: conversations.isPrivate,
+      })
+      .from(conversations)
+      .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, ctx.accountId)))
+      .limit(1),
+  )
+  if (!row) return
+  const visible = await canListConversation(
+    ctx.role,
+    ctx.userId,
+    ctx.accountId,
+    row.sectorId,
+    row.assignedAgentId,
+    conversationId,
+    row.isPrivate ?? false,
+  )
+  if (visible) return
+  const who = row.assignedAgentId
+    ? firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, row.assignedAgentId)).limit(1))?.name?.trim()
+    : null
+  throw new Error(
+    `Já existe uma conversa com este contato, mas ela está com ${who || 'outra pessoa'} e você não tem acesso a ela. ` +
+      'Peça a um administrador para transferir a conversa para você, ou para ligar "Equipe vê tudo" em Configurações → Setores.',
+  )
 }
 
 /**

@@ -136,7 +136,10 @@ const navItems: NavItem[] = [
   { href: "/agenda", label: "Agenda", icon: CalendarDays },
   { href: "/pipelines", label: "Funis", icon: GitBranch },
   { href: "/propostas", label: "Propostas", icon: FileText },
-  { href: "/cobrancas", label: "Cobranças", icon: Receipt },
+  // Carteira e régua são de supervisor pra cima (as actions exigem esse papel);
+  // pro atendente o item só abria uma tela quebrada (João, 10/09: "eles não
+  // podem ver essa página?").
+  { href: "/cobrancas", label: "Cobranças", icon: Receipt, supervisorOnly: true },
   { href: "/captacao", label: "Captação", icon: ClipboardList },
   { href: "/prospeccao", label: "Prospecção", icon: Radar },
   { href: "/relatorios", label: "Relatórios", icon: BarChart3 },

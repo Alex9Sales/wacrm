@@ -38,6 +38,7 @@ import {
   UserPlus,
   Users,
 } from 'lucide-react';
+import { isStaleActionError, reloadForStaleAction } from '@/lib/stale-action';
 
 import { Button } from '@/components/ui/button';
 import { ContactPicker } from '@/components/contacts/contact-picker';
@@ -1406,6 +1407,16 @@ function RulePanel({
       onSaved(res.data!);
       setDraft(res.data!);
       return true;
+    } catch (err) {
+      // Erro LANÇADO (aba aberta desde antes de um deploy, rede): antes ficava
+      // mudo — o botão "Salvar" não fazia nada e o aviso "alterações não salvas"
+      // continuava (João, 10/09: "40 → 50 não deixa salvar").
+      if (isStaleActionError(err)) {
+        reloadForStaleAction();
+        return false;
+      }
+      toast.error(err instanceof Error && err.message ? err.message : 'Não foi possível salvar. Recarregue a página (F5) e tente de novo.');
+      return false;
     } finally {
       setSaving(false);
     }

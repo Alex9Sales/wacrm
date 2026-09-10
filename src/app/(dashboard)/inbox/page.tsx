@@ -205,7 +205,17 @@ export default function InboxPage() {
     let cancelled = false;
     void (async () => {
       const fetched = await getConversationWithContact(target).catch(() => null);
-      if (cancelled || !fetched) return;
+      if (cancelled) return;
+      if (!fetched) {
+        // Antes o link `?c=` pra uma conversa invisível (com o dono/admin,
+        // fora do setor, apagada) abria a caixa vazia sem dizer nada.
+        if (searchParams.get("c") === target) {
+          toast.error(
+            "Esta conversa não está disponível para você: está com outra pessoa (sem acesso) ou foi apagada. Peça a um administrador para transferir.",
+          );
+        }
+        return;
+      }
       // The user may have moved on while the fetch was in flight.
       if (searchParams.get("c") !== target) return;
       setConversations((prev) =>
