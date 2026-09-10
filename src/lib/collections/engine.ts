@@ -319,7 +319,10 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       withinHours: true, // a janela da régua já foi conferida no início da rodada
       optedOut: d.optedOut,
       humanActiveRecently: false,
-      aiDisabledInConversation: conv?.aiOff === true,
+      // Com "Enviar sozinha" ligado, IA desligada na conversa NÃO segura a
+      // cobrança (10/09, João: "no dia do vencimento pode ser automático") —
+      // a régua não é a IA conversando; quem responde é a pessoa mesmo.
+      aiDisabledInConversation: s.autoSend ? false : conv?.aiOff === true,
       usedToday,
       messagesToday: usedToday,
       usedForDealToday: 0,

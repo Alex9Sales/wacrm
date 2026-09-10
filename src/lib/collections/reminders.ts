@@ -211,7 +211,7 @@ export async function queueUpcomingReminders(args: {
       withinHours: true,
       optedOut: false,
       humanActiveRecently: false,
-      aiDisabledInConversation: conv?.aiOff === true,
+      aiDisabledInConversation: s.autoSend ? false : conv?.aiOff === true,
       usedToday,
       messagesToday: usedToday,
       usedForDealToday: 0,

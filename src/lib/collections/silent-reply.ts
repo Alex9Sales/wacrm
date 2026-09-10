@@ -47,13 +47,18 @@ export function parseClassification(raw: string): SilentClassification | null {
   }
 }
 
-/** Texto que o cliente mandou: transcrição do áudio quando houver, senão o texto. */
+/**
+ * Texto que o cliente mandou: transcrição do áudio quando houver, senão o
+ * texto (numa imagem, o texto é a descrição que a IA gerou — "transferência
+ * concluída, R$ 400" — e isso É comprovante).
+ */
 export function customerTextOf(row: { contentText: string | null; transcription: string | null; contentType: string | null }): string {
   const t = (row.transcription ?? '').trim()
   if (t) return t
   const c = (row.contentText ?? '').trim()
   // Placeholder de mídia sem transcrição ("[audio]", "[image]") não classifica.
   if (!c || /^\[[a-z]+\]$/i.test(c)) return ''
+  if (row.contentType === 'image' || row.contentType === 'document') return `[imagem: ${c}]`
   return c
 }
 
@@ -107,16 +112,33 @@ export async function detectCollectionReplySilently(args: {
       .limit(1)
     if (!open.length) return
 
-    const last = firstOrNull(
-      await db
-        .select({ id: messages.id, contentText: messages.contentText, transcription: messages.transcription, contentType: messages.contentType })
-        .from(messages)
-        .where(and(eq(messages.conversationId, args.conversationId), eq(messages.senderType, 'customer'), eq(messages.isInternal, false)))
-        .orderBy(desc(messages.createdAt))
-        .limit(1),
-    )
+    // A RAJADA do cliente: os últimos balões dele desde a última mensagem do
+    // CRM (Psi Jéssica 10/09: comprovante numa imagem + "esqueci" num áudio —
+    // olhando só o último balão, o comprovante passava). Até 6, em ordem.
+    const recent = await db
+      .select({ id: messages.id, senderType: messages.senderType, contentText: messages.contentText, transcription: messages.transcription, contentType: messages.contentType, createdAt: messages.createdAt })
+      .from(messages)
+      .where(and(eq(messages.conversationId, args.conversationId), eq(messages.isInternal, false)))
+      .orderBy(desc(messages.createdAt))
+      .limit(8)
+    const burst: typeof recent = []
+    for (const m of recent) {
+      if (m.senderType !== 'customer') break
+      burst.push(m)
+      if (burst.length >= 6) break
+    }
+    const last = burst[0]
     if (!last) return
-    const text = customerTextOf(last)
+    // Só mensagem RECENTE: uma chamada fora do fluxo de entrada (sonda,
+    // rechecagem atrasada) não pode classificar um "pago segunda" de meses atrás.
+    const lastAt = last.createdAt ? new Date(last.createdAt).getTime() : 0
+    if (!lastAt || Date.now() - lastAt > 24 * 3_600_000) return
+    const text = burst
+      .slice()
+      .reverse()
+      .map((m) => customerTextOf(m))
+      .filter(Boolean)
+      .join('\n')
     if (!text) return
 
     // Uma classificação por mensagem: a rechecagem do auto-reply não repete.
@@ -133,7 +155,7 @@ export async function detectCollectionReplySilently(args: {
       todayLine(args.timezone),
       'Responda SOMENTE um JSON, sem texto em volta: {"kind":"promessa"|"comprovante"|"contesta"|"acordo"|"nenhum","date":"YYYY-MM-DD"|null}',
       '- promessa: diz que vai pagar (com ou sem data). Se citar dia ("segunda", "amanhã", "dia 15", "até sexta"), converta para a PRÓXIMA data correspondente a partir de hoje; sem data → null.',
-      '- comprovante: diz que JÁ pagou ou mandou comprovante.',
+      '- comprovante: diz que JÁ pagou, mandou comprovante, ou a descrição de uma imagem mostra transferência/Pix/pagamento concluído.',
       '- contesta: diz que não deve, que a cobrança está errada ou que não reconhece.',
       '- acordo: pede desconto, parcelamento, prazo, negociar ou "entrar em acordo".',
       '- nenhum: qualquer outra coisa (pergunta, conversa, "ok", agradecimento).',
