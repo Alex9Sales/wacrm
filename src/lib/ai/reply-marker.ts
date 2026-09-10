@@ -128,6 +128,26 @@ export async function releaseReplyLock(conversationId: string, token: string): P
   }
 }
 
+/**
+ * "Só uma vez por período", ATÔMICO: SET NX com TTL. Serve pra resposta
+ * automática que não pode sair duas vezes quando 4 mensagens do cliente chegam
+ * no mesmo segundo e a checagem no banco ainda não vê a primeira resposta
+ * (10/09, CEMA/Felipe: 4 "fora do horário" em 500 ms).
+ *   true      → ganhou (é a primeira nesta janela)
+ *   false     → outra já ganhou (não mande)
+ *   undefined → Redis indisponível (fail-open: quem chama decide)
+ */
+export async function claimOnce(key: string, ttlSeconds: number): Promise<boolean | undefined> {
+  const r = redis()
+  if (!r) return undefined
+  try {
+    const ok = await r.set(key, String(Date.now()), 'EX', Math.max(1, Math.floor(ttlSeconds)), 'NX')
+    return ok === 'OK'
+  } catch {
+    return undefined
+  }
+}
+
 // ---------------------------------------------------------------- kv curto
 // Estado de poucos minutos por conversa (ex.: "proposta de cobrança esperando
 // o SIM do dono"). Mesmo cliente, mesmo fail-open.

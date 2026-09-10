@@ -1358,7 +1358,23 @@ async function maybeSendOutOfHoursReply(
       );
     if ((recent?.n ?? 0) > 0) return false;
 
-    await engineSendText({ accountId, userId, conversationId, contactId, text: message });
+    // 🔒 Trava ATÔMICA por conversa (10/09, CEMA/Felipe): o cliente mandou 4
+    // fotos em 150 ms, as 4 passaram pela contagem acima antes de a primeira
+    // resposta existir no banco, e o cliente recebeu 4 "fora do horário". O
+    // Redis decide quem manda; a contagem no banco continua cobrindo o resto
+    // (resposta de atendente, Redis fora do ar).
+    const { claimOnce, kvDel } = await import('@/lib/ai/reply-marker');
+    const slot = `oohs:${conversationId}`;
+    const won = await claimOnce(slot, 6 * 3600);
+    if (won === false) return false;
+
+    try {
+      await engineSendText({ accountId, userId, conversationId, contactId, text: message });
+    } catch (err) {
+      // Não saiu: libera a vaga pra próxima mensagem do cliente tentar de novo.
+      if (won) await kvDel(slot).catch(() => {});
+      throw err;
+    }
     return true;
   } catch (err) {
     console.error('[inbound] out-of-hours reply failed:', err);
