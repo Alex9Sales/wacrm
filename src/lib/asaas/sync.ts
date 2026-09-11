@@ -17,6 +17,7 @@ import {
   AsaasApiError,
   DEFAULT_OVERDUE_STATUSES,
   fetchCustomers,
+  listAllCustomers,
   listCharges,
   setCustomerNotifications,
   type AsaasCredential,
@@ -32,6 +33,14 @@ import {
   normalizeEmail,
   type MatchCandidate,
 } from './match'
+
+/**
+ * De quanto em quanto tempo a varredura de avisos olha TODOS os clientes do
+ * Asaas, e não só os da carteira vencida. Cliente novo nasce lá com aviso
+ * ligado; um dia é rápido o bastante para o dono não pagar por isso, e raro o
+ * bastante para não pesar na rodada da régua (a listagem é paginada).
+ */
+const FULL_SWEEP_MS = 20 * 3_600_000
 
 export interface SyncResult {
   ok: boolean
@@ -95,18 +104,46 @@ export async function syncConnection(
   // Item 5 (05/09): o CRM assume os avisos. Opt-in na régua: desliga as
   // notificações do Asaas de quem entra na carteira — o cliente paga por envio
   // lá, e a régua é quem fala. Falhou num cliente → a próxima rodada tenta.
+  //
+  // 11/09 (João/GoLink): "desativei tudo e o Asaas continua cobrando taxa". A
+  // varredura só via quem JÁ estava vencido, e cliente novo nasce no Asaas com
+  // aviso LIGADO — dois clientes criados em 24h já estavam mandando de novo.
+  // Agora, uma vez por dia, a varredura pega TODOS os clientes da conta.
   let notificationsOff = 0
+  let notificationsRefused = 0
   try {
     const s = normalizeSettings((await getAccountSettings(accountId)).collections)
     if (s.asaasNotificationsOff) {
-      for (const c of customers.values()) {
-        if (c.notificationDisabled !== false) continue
+      const lastSweep = conn.notificationsOffAt ? new Date(conn.notificationsOffAt).getTime() : 0
+      const sweepAll = Date.now() - lastSweep > FULL_SWEEP_MS
+      let pool = [...customers.values()]
+      if (sweepAll) {
+        // Falha na listagem não pode derrubar a sincronização: cai na carteira.
+        const everyone = await listAllCustomers(cred).catch(() => null)
+        if (everyone) pool = everyone
+      }
+      for (const c of pool) {
+        if (c.notificationDisabled === true) continue
         try {
           await setCustomerNotifications(cred, c.id, true)
           c.notificationDisabled = true
+          const inWallet = customers.get(c.id)
+          if (inWallet) inWallet.notificationDisabled = true
           notificationsOff++
         } catch {
-          /* próxima rodada */
+          // Assinatura ativa ("possui cobranças agendadas") recusa sempre — a
+          // conta resolve no painel do Asaas. Contamos para não ficar invisível.
+          notificationsRefused++
+        }
+      }
+      if (sweepAll) {
+        await db
+          .update(asaasConnections)
+          .set({ notificationsOffAt: new Date().toISOString() })
+          .where(eq(asaasConnections.id, connectionId))
+          .catch(() => {})
+        if (notificationsRefused) {
+          console.warn(`[cobranca] ${conn.label}: ${notificationsRefused} cliente(s) o Asaas não deixou desligar os avisos (provável assinatura ativa).`)
         }
       }
     }
