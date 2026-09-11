@@ -12,6 +12,7 @@ import {
   formatDebtSummary,
   formatUpcomingSummary,
   greetingName,
+  phoneSearchDigits,
   linksInstruction,
   normalizeSettings,
   withinWindow,
@@ -127,10 +128,18 @@ describe('autoSend / cadência (09/09, GoLink "uma a cada N minutos")', () => {
 })
 
 describe('greetingName — nome como está no Asaas (10/09, GoLink)', () => {
-  it('empresa curta e apelido não viram "primeiro nome"', () => {
+  it('até 3 palavras vai inteiro: empresa curta e apelido não viram "primeiro nome"', () => {
     expect(greetingName('Drogaria Imaculada')).toBe('Drogaria Imaculada')
     expect(greetingName('Rack 95')).toBe('Rack 95')
     expect(greetingName('Alipé Podologia')).toBe('Alipé Podologia')
+  })
+  // 11/09 — os nomes reais da carteira da GoLink que cortar em duas estragaria.
+  it('nome de 3 palavras não pode perder a terceira', () => {
+    expect(greetingName('Canal da Pizza')).toBe('Canal da Pizza')
+    expect(greetingName('UTI dos Fogões')).toBe('UTI dos Fogões')
+    expect(greetingName('Marcenaria São José')).toBe('Marcenaria São José')
+    expect(greetingName('Drogaria Faria Lima')).toBe('Drogaria Faria Lima')
+    expect(greetingName('Depósito São Caetano')).toBe('Depósito São Caetano')
   })
   it('mais longo: duas primeiras, ou só a primeira quando a segunda é conector', () => {
     expect(greetingName('Ultra Visão e Regrava Vale Taubaté')).toBe('Ultra Visão')
@@ -148,8 +157,25 @@ describe('greetingName — nome como está no Asaas (10/09, GoLink)', () => {
     expect(greetingName('A Pellogia Corretora E Administracao De Seguros Lt')).toBe('A Pellogia Corretora')
     expect(greetingName('O Boticário')).toBe('O Boticário')
   })
-  it('nome de empresa com dono junto para nas duas primeiras', () => {
-    expect(greetingName('Dom Burguer Susan')).toBe('Dom Burguer')
+  it('separador solto não vira parte do nome', () => {
+    expect(greetingName('Ecosistema - Gestão de Seguros')).toBe('Ecosistema')
+  })
+})
+
+describe('phoneSearchDigits — por que "Center Pisos Raspadora" não era achado (11/09)', () => {
+  it('busca por NOME não procura telefone (senão o ILIKE vira %% e casa com a conta toda)', () => {
+    expect(phoneSearchDigits('Center Pisos Raspadora')).toBeNull()
+    expect(phoneSearchDigits('')).toBeNull()
+    expect(phoneSearchDigits(null)).toBeNull()
+    expect(phoneSearchDigits('L&M Vidros')).toBeNull()
+  })
+  it('dígito solto do nome também não abre a busca por telefone', () => {
+    expect(phoneSearchDigits('Rack 95')).toBeNull()
+    expect(phoneSearchDigits('M&P 12')).toBeNull()
+  })
+  it('telefone de verdade procura pelos dígitos', () => {
+    expect(phoneSearchDigits('(12) 99701-0439')).toBe('12997010439')
+    expect(phoneSearchDigits('997010439')).toBe('997010439')
   })
   it('sufixo de razão social não é jeito de chamar ninguém', () => {
     expect(greetingName('Pellogia Ltda')).toBe('Pellogia')

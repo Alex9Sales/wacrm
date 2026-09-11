@@ -187,7 +187,21 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
   }
 }
 
-const NAME_STOPWORDS = new Set(['e', 'de', 'da', 'do', 'das', 'dos', '&', 'em', 'para'])
+const NAME_STOPWORDS = new Set(['e', 'de', 'da', 'do', 'das', 'dos', '&', 'em', 'para', '-', '–', '—', '|', '/'])
+
+/**
+ * Os dígitos de uma busca de contato — ou `null` quando não dá para procurar
+ * por telefone.
+ *
+ * 🐛 11/09 (João/GoLink): a carteira montava `phone ILIKE '%' || digitos || '%'`
+ * sem essa guarda. Buscando "Center Pisos Raspadora" os dígitos davam string
+ * VAZIA, o ILIKE virava `'%%'` e casava com os 286 contatos da conta — a lista
+ * devolvia 20 contatos quaisquer e o certo nunca aparecia ("n acha").
+ */
+export function phoneSearchDigits(query: string | null | undefined): string | null {
+  const d = (query ?? '').replace(/\D/g, '')
+  return d.length >= 4 ? d : null
+}
 
 /** Artigo sozinho não é nome de ninguém: "A Pellogia…" tem que levar mais uma palavra. */
 const NAME_ARTICLES = new Set(['a', 'o', 'as', 'os'])
@@ -199,10 +213,17 @@ const NAME_LEGAL_SUFFIX = new Set(['ltda', 'ltda.', 'lt', 'me', 'mei', 'epp', 'e
  * Como chamar o cliente na mensagem, a partir do nome COMO ESTÁ NO ASAAS
  * (decisão João/Alex 10/09: prevalece o Asaas, não o apelido do WhatsApp).
  * Sem IA não dá pra saber se é pessoa ou empresa, então a regra é de tamanho:
- * as DUAS primeiras palavras ("Ultra Visão", "Drogaria Imaculada", "Dom Burguer"),
- * só a primeira quando a segunda é conector ("João da…" → "João"), e TRÊS quando
- * a primeira é artigo — senão "A Pellogia Corretora E Administracao De Seguros Lt"
- * virava "A Pellogia" (11/09, pedido do João). Sufixo de razão social cai fora.
+ * até 3 palavras vai INTEIRO ("Drogaria Faria Lima", "UTI dos Fogões",
+ * "Marcenaria São José" — cortar em duas estraga todos esses); mais longo, as
+ * duas primeiras ("Ultra Visão"), ou só a primeira quando a segunda é conector
+ * ("João da…" → "João").
+ *
+ * ⚠️ 11/09: passei a regra pelos 51 clientes reais da GoLink antes de subir.
+ * Forçar "duas primeiras" para atender "Dom Burguer Susan" quebrava 8 nomes
+ * ("Canal da Pizza" → "Canal", "UTI dos Fogões" → "UTI"). Ficou o limite de 3.
+ * Os dois consertos que a lista real pediu: ARTIGO na frente não conta como
+ * palavra ("A Pellogia Corretora E…" virava "A Pellogia") e SUFIXO de razão
+ * social ("Ltda", "ME") não é jeito de chamar ninguém.
  * A IA recebe o nome completo com a instrução pessoa/empresa (engine.ts).
  */
 export function greetingName(name: string | null | undefined): string | null {
@@ -211,14 +232,14 @@ export function greetingName(name: string | null | undefined): string | null {
     .trim()
     .split(' ')
     .filter(Boolean)
-    .filter((w, i) => i === 0 || !NAME_LEGAL_SUFFIX.has(w.toLowerCase().replace(/,$/, '')))
+    .filter((w, i) => i === 0 || !NAME_LEGAL_SUFFIX.has(w.toLowerCase().replace(/[.,]$/, '')))
   if (!words.length) return null
-  // Artigo na frente não conta como palavra do nome.
-  const take = NAME_ARTICLES.has(words[0].toLowerCase()) ? 3 : 2
-  if (words.length <= take) return words.join(' ')
-  const next = words[take - 1]?.toLowerCase()
-  if (next && NAME_STOPWORDS.has(next)) return words.slice(0, take - 1).join(' ')
-  return words.slice(0, take).join(' ')
+
+  const comArtigo = NAME_ARTICLES.has(words[0].toLowerCase())
+  if (words.length <= (comArtigo ? 4 : 3)) return words.join(' ')
+  const keep = comArtigo ? 3 : 2
+  if (NAME_STOPWORDS.has(words[keep - 1].toLowerCase())) return words.slice(0, keep - 1).join(' ')
+  return words.slice(0, keep).join(' ')
 }
 
 /**

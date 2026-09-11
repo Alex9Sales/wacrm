@@ -20,7 +20,7 @@ import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
 import { runCollectionsForAccount } from '@/lib/collections/engine'
-import { duplicateSuspects, normalizeSettings, type CollectionsSettings } from '@/lib/collections/rules'
+import { duplicateSuspects, greetingName, normalizeSettings, phoneSearchDigits, type CollectionsSettings } from '@/lib/collections/rules'
 import { evaluatePromotion, promotionHeadline, type PromotionVerdict } from '@/lib/collections/promotion'
 import { criteriaFor, readPromotionOverride, statsFromFeedback } from '@/lib/orchestration/validation'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
@@ -528,20 +528,22 @@ export async function searchContactsForCharge(query: string): Promise<ContactOpt
   const q = query.trim()
   if (q.length < 2) return []
 
+  // 🐛 11/09 (João): buscar "Center Pisos Raspadora" não achava o contato que
+  // EXISTIA. A busca por telefone usava `q.replace(/\D/g,'')`, que numa busca
+  // sem dígitos vira string vazia — `phone ILIKE '%%'` casa com TODO MUNDO.
+  // Com o OR, a lista virava "os 20 primeiros contatos da conta", e o certo
+  // quase nunca estava neles. Só procura por telefone quando há dígitos.
+  const digitos = phoneSearchDigits(q)
+  const termos = [ilike(contacts.name, `%${q}%`), ilike(contacts.email, `%${q}%`)]
+  if (digitos) termos.push(ilike(contacts.phone, `%${digitos}%`))
+
   const rows = await db
     .select({ id: contacts.id, name: contacts.name, phone: contacts.phone, email: contacts.email })
     .from(contacts)
-    .where(
-      and(
-        eq(contacts.accountId, accountId),
-        eq(contacts.isGroup, false),
-        or(
-          ilike(contacts.name, `%${q}%`),
-          ilike(contacts.phone, `%${q.replace(/\D/g, '')}%`),
-          ilike(contacts.email, `%${q}%`),
-        ),
-      ),
-    )
+    .where(and(eq(contacts.accountId, accountId), eq(contacts.isGroup, false), or(...termos)))
+    // Quem começa com o que foi digitado vem primeiro — sem isso o contato
+    // certo podia ficar fora das 20 linhas.
+    .orderBy(sql`CASE WHEN ${contacts.name} ILIKE ${q + '%'} THEN 0 ELSE 1 END`, contacts.name)
     .limit(20)
 
   return rows.map((r) => ({ id: r.id, name: r.name ?? r.phone, phone: r.phone, email: r.email }))
@@ -1244,7 +1246,19 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
   let sendError: string | null = null
   // Assinatura cuja 1ª cobrança ainda não existe: sem link pra mandar agora.
   if (targets?.ok && created.invoiceUrl) {
-    const firstName = (contact.name ?? '').trim().split(/\s+/)[0] || null
+    // 11/09 (João): a primeira palavra crua virava "Oi, Dom!" para
+    // "Dom Burguer Susan". Mesma regra da régua (greetingName), e o nome do
+    // ASAAS na frente do apelido do CRM — que às vezes é só o número.
+    const asaasName = firstOrNull(
+      await db
+        .select({ name: asaasCharges.customerName })
+        .from(asaasCharges)
+        .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, input.contactId)))
+        .orderBy(desc(asaasCharges.updatedAt))
+        .limit(1),
+    )?.name
+    const nomeBase = asaasName?.trim() || (looksLikeBarePhone(contact.name) ? null : contact.name)
+    const firstName = greetingName(nomeBase)
     const text = manualChargeMessage(
       firstName,
       value,
