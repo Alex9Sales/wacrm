@@ -253,11 +253,15 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         const text = (input.text ?? '').trim()
         if (!text) return { ok: false, error: 'Sem texto pra enviar.' }
 
-        // 🔔 Lembrete antes do vencimento (payload.kind='reminder'): a parcela
-        // não está na carteira de vencidas — reconfere AO VIVO no Asaas.
-        const isReminder = input.payload.kind === 'reminder'
-        if (isReminder) {
-          const check = await reminderStillPending(input.accountId, input.payload)
+        // 🔔 Lembrete antes do vencimento (kind='reminder') e 🔗 aviso de
+        // cobrança nova (kind='new_charge'): os dois falam de uma parcela
+        // específica, então reconferem AO VIVO no Asaas, uma a uma. O aviso de
+        // cobrança nova também vale VENCIDA — a do João nasceu vencida no mesmo
+        // dia e o cliente nunca tinha recebido o link (11/09).
+        const kind = input.payload.kind
+        if (kind === 'reminder' || kind === 'new_charge') {
+          const aceitas = kind === 'new_charge' ? (['PENDING', 'OVERDUE'] as const) : (['PENDING'] as const)
+          const check = await reminderStillPending(input.accountId, input.payload, aceitas)
           if (!check.ok) return { ok: false, error: check.error }
         } else {
           const stillOpen = await db
@@ -312,9 +316,10 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         // lista dela e recebe a resposta do cliente (10/09, Leonardo/GoLink).
         await assignCollectionConversations(input.accountId, [targets.whatsapp?.conversationId ?? null, targets.email?.conversationId ?? null])
 
-        // Lembrete não conta como toque de cobrança: não mexe no ritmo da régua
-        // nem no contador que devolve o devedor para uma pessoa.
-        if (!isReminder) {
+        // Lembrete e aviso de cobrança nova NÃO contam como toque de cobrança:
+        // não mexem no ritmo da régua nem no contador que devolve o devedor
+        // para uma pessoa. Nenhum dos dois é cobrança — são entrega de link.
+        if (kind !== 'reminder' && kind !== 'new_charge') {
         const nowIso = new Date().toISOString()
 
         await db

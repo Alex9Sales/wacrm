@@ -24,6 +24,7 @@ import { decide, readPolicy, type AutonomyPolicy } from '@/lib/orchestration/pol
 import { syncAccount } from '@/lib/asaas/sync'
 
 import { resolveCollectionTargets } from './outreach'
+import { queueNewChargeNotices } from './new-charge'
 import { queueUpcomingReminders } from './reminders'
 import { expireStaleCollectionDrafts, localDayKey } from './stale'
 import { maxSimilarity, seedFrom, tooSimilar, variationInstruction, variationPlan } from './variation'
@@ -57,6 +58,8 @@ export interface CollectionsRunStats {
   reminders?: number
   /** Parcelas a vencer encontradas no Asaas na janela do lembrete. */
   remindersFound?: number
+  /** Avisos de cobrança NOVA (criada no painel do Asaas) propostos nesta rodada. */
+  newCharges?: number
 }
 
 /** Não bate no Asaas a cada tique: uma sincronização por hora basta. */
@@ -389,6 +392,28 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
 
     stats.queued += 1
     budget -= 1
+  }
+
+  // 🔗 Cobrança nova que o CRM não criou (11/09, João/GoLink): quando a conta
+  // desligou os avisos do Asaas, quem manda o link é o CRM. Vem ANTES do
+  // lembrete porque é mais urgente — o cliente ainda não sabe que existe.
+  if (budget > 0) {
+    try {
+      const n = await queueNewChargeNotices({
+        accountId,
+        settings: s,
+        accountSettings,
+        policy,
+        agentId: agent?.id ?? null,
+        budget,
+        alreadyQueued,
+        usedToday: usedToday + stats.queued,
+      })
+      stats.newCharges = n.queued
+      budget -= n.queued
+    } catch (err) {
+      console.error('[cobranca] aviso de cobrança nova falhou:', err instanceof Error ? err.message : err)
+    }
   }
 
   // 🔔 Lembrete antes de vencer (lacuna 2, 07/09): mesma fila, mesma política,

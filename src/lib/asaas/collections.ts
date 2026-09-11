@@ -99,6 +99,8 @@ export interface AsaasPayment {
   /** Juros + multa calculados pelo Asaas para pagamento após o vencimento (0/ausente antes de vencer). */
   interestValue?: number | null
   dueDate: string
+  /** Quando a cobrança foi criada NO ASAAS (YYYY-MM-DD). */
+  dateCreated?: string | null
   status: string
   billingType?: string
   description?: string | null

@@ -123,3 +123,37 @@ export function manualChargeMessage(firstName: string | null, value: number, due
   const sobre = description.trim() ? ` (${description.trim()})` : ''
   return `${oi}Segue o link para pagamento de ${brl}${sobre}, com vencimento em ${due}:\n${url}\n\nQualquer dúvida é só responder por aqui.`
 }
+
+export interface NewChargeLine {
+  value: number
+  /** YYYY-MM-DD */
+  dueDate: string
+  description: string
+  url: string
+}
+
+/**
+ * Aviso de COBRANÇA NOVA: o CRM viu no Asaas uma cobrança que ele mesmo não
+ * criou e manda o link.
+ *
+ * Por que existe (11/09, João/GoLink): ele criou uma cobrança direto no painel
+ * do Asaas e o cliente não recebeu nada. Os avisos do Asaas estavam desligados
+ * — a pedido dele, pra não pagar a taxa por notificação — e a régua só fala
+ * quando a dívida passa do atraso mínimo. Entre as duas coisas, silêncio.
+ *
+ * É aviso, não cobrança: não fala em atraso, não pressiona, só entrega o link.
+ */
+export function newChargesMessage(firstName: string | null, charges: NewChargeLine[]): string {
+  const oi = firstName ? `Oi, ${firstName}! ` : 'Oi! '
+  if (charges.length === 1) {
+    const c = charges[0]
+    return manualChargeMessage(firstName, c.value, c.dueDate, c.description, c.url)
+  }
+  const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+  const dia = (d: string) => d.slice(0, 10).split('-').reverse().join('/')
+  const linhas = charges.map((c) => {
+    const sobre = c.description.trim() ? ` (${c.description.trim()})` : ''
+    return `• ${brl(c.value)}${sobre}, vence ${dia(c.dueDate)}:\n${c.url}`
+  })
+  return `${oi}Seguem os links para pagamento:\n\n${linhas.join('\n\n')}\n\nQualquer dúvida é só responder por aqui.`
+}

@@ -3150,6 +3150,11 @@ export const asaasCharges = pgTable("asaas_charges", {
 	 *  (`interestValue`, migr 0167). NULL = o Asaas não informou. A mensagem da
 	 *  régua mostra "R$ 100,00 (R$ 106,79 com juros e multa)" — João/GoLink 10/09. */
 	interestValue: numeric("interest_value", { precision: 12, scale: 2 }),
+	/** Data em que a cobrança nasceu NO ASAAS (migr 0168). Diferente de
+	 *  `createdAt`, que é quando a NOSSA linha nasceu e vira "hoje" numa
+	 *  ressincronização. É por esta que o aviso de cobrança nova decide se
+	 *  algo é novo mesmo — sem ela o aviso viraria disparo em massa. */
+	asaasCreatedAt: date("asaas_created_at"),
 	dueDate: date("due_date"),
 	/** Status CRU do Asaas (OVERDUE, PENDING, CONFIRMED, RECEIVED…). */
 	status: text().notNull(),

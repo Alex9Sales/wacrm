@@ -325,10 +325,19 @@ async function draftReminder(args: {
  * ainda está PENDING. Paga/cancelada sai da lista; sem nenhuma, o envio é
  * recusado com o motivo (a fila mostra).
  */
-export async function reminderStillPending(accountId: string, payload: Record<string, unknown>): Promise<{ ok: true; pending: string[] } | { ok: false; error: string }> {
+export async function reminderStillPending(
+  accountId: string,
+  payload: Record<string, unknown>,
+  /**
+   * Situações que ainda valem o envio. Lembrete só vale a vencer (PENDING);
+   * o aviso de COBRANÇA NOVA também vale vencida (11/09: a do João nasceu
+   * vencida no mesmo dia e o cliente nunca recebeu o link).
+   */
+  aceitas: readonly string[] = ['PENDING'],
+): Promise<{ ok: true; pending: string[] } | { ok: false; error: string }> {
   const connectionId = typeof payload.connectionId === 'string' ? payload.connectionId : null
   const asaasIds = Array.isArray(payload.asaasIds) ? payload.asaasIds.filter((x): x is string => typeof x === 'string') : []
-  if (!connectionId || !asaasIds.length) return { ok: false, error: 'Lembrete sem referência das parcelas — não dá para reconferir no Asaas.' }
+  if (!connectionId || !asaasIds.length) return { ok: false, error: 'Sem referência das parcelas — não dá para reconferir no Asaas.' }
   const conn = firstOrNull(
     await db
       .select({ apiKeyEnc: asaasConnections.apiKeyEnc, environment: asaasConnections.environment })
@@ -347,12 +356,12 @@ export async function reminderStillPending(accountId: string, payload: Record<st
   for (const id of asaasIds) {
     try {
       const p = await getPayment(cred, id)
-      if (String(p.status).toUpperCase() === 'PENDING') pending.push(id)
+      if (aceitas.includes(String(p.status).toUpperCase())) pending.push(id)
     } catch (err) {
       return { ok: false, error: `Não deu para reconferir no Asaas agora: ${err instanceof Error ? err.message : 'falha'}` }
     }
   }
-  if (!pending.length) return { ok: false, error: 'A parcela já foi paga ou cancelada no Asaas — lembrete não enviado.' }
+  if (!pending.length) return { ok: false, error: 'A parcela já foi paga ou cancelada no Asaas — nada foi enviado.' }
   return { ok: true, pending }
 }
 
