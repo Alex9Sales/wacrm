@@ -151,6 +151,15 @@ export interface FollowUpConfig {
   stageTriggers: StageTrigger[]
   /** Lembretes ancorados no horário da reunião (24h/1h antes, +2h depois…). */
   meetingReminders: MeetingReminder[]
+  /**
+   * "Não cutuque quem já fechou": conversa que JÁ tem negócio criado sai do
+   * reengajamento por silêncio. Opt-in por conta, e por um bom motivo: em
+   * venda rápida (Família do Gás, 11/09) o negócio É o pedido fechado, e
+   * cutucar depois vira cobrança chata; em venda longa o negócio nasce no
+   * começo e o follow-up é justamente pra empurrar — ligar lá mataria o
+   * reengajamento. Padrão: desligado.
+   */
+  skipWhenDealExists: boolean
 }
 
 const VALID_UNITS = new Set<FollowUpDelayUnit>(['minutes', 'hours', 'days'])
@@ -414,6 +423,7 @@ export function readFollowUpConfig(raw: unknown): FollowUpConfig {
     giveUpStage,
     stageTriggers,
     meetingReminders,
+    skipWhenDealExists: bag.skipWhenDealExists === true,
   }
 }
 
@@ -668,6 +678,10 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         -- falhou na validação de telefone — com JID aceito teria mandado
         -- "oi, ainda precisa?" dentro do grupo).
         AND coalesce(ct.is_group, false) = false
+        -- "Não cutuque quem já fechou" (opt-in, 11/09 Família do Gás): pedido
+        -- virou negócio nesta conversa → o reengajamento não tem o que
+        -- reengajar. Sem o flag, nada muda (venda longa precisa do empurrão).
+        ${cfg.skipWhenDealExists ? sql`AND NOT EXISTS (SELECT 1 FROM deals d WHERE d.conversation_id = c.id)` : sql``}
         -- Só quem JÁ escreveu alguma vez (senão não é reengajamento):
         AND EXISTS (
           SELECT 1 FROM messages mi

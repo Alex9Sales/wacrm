@@ -180,6 +180,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
   const [giveUpStage, setGiveUpStage] = useState('');
   const [stageTriggers, setStageTriggers] = useState<StageTrig[]>([]);
   const [meetingRems, setMeetingRems] = useState<MeetingRem[]>([]);
+  const [skipWhenDealExists, setSkipWhenDealExists] = useState(false);
   const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -225,6 +226,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
             : [{ ...NEW_STEP, delayUnit: 'hours' }],
         );
         setGiveUpEnabled(!!data.followUp.giveUpEnabled);
+        setSkipWhenDealExists(data.followUp.skipWhenDealExists === true);
         setGiveUpStage(
           typeof data.followUp.giveUpStage === 'string' ? data.followUp.giveUpStage : '',
         );
@@ -379,6 +381,7 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
               .filter(Boolean),
           })),
           giveUpEnabled,
+          skipWhenDealExists,
           giveUpStage: giveUpStage.trim(),
           stageTriggers: stageTriggers
             .filter((t) => t.stage.trim())
@@ -640,6 +643,26 @@ export function FollowUpSection({ agentId }: { agentId: string }) {
               <Plus className="mr-1.5 h-4 w-4" /> Adicionar toque
             </Button>
           )}
+
+          {/* Quem já fechou sai do toque (venda rápida). Opt-in: em venda longa
+              o negócio nasce cedo e o toque é justamente o que empurra. */}
+          <div className="rounded-lg border border-dashed border-border p-3">
+            <label className="flex items-center gap-2.5 text-sm font-medium text-foreground">
+              <Switch
+                checked={skipWhenDealExists}
+                onCheckedChange={setSkipWhenDealExists}
+                disabled={!canEdit}
+              />
+              Não dar toque em quem já fechou
+            </label>
+            <p className="mt-1 text-[11px] text-muted-foreground">
+              Se a conversa <strong>já virou um negócio</strong>, a IA não manda o
+              toque de silêncio. Use em <strong>venda rápida</strong>, onde o negócio
+              nasce quando o pedido fecha — aí cutucar depois vira cobrança.{' '}
+              <strong>Deixe desligado em venda longa</strong>, onde o negócio nasce no
+              começo e o toque é o que empurra a negociação.
+            </p>
+          </div>
 
           {/* Desistência: sem resposta até o último toque → perde EM PÉ. */}
           <div className="rounded-lg border border-dashed border-border p-3">
