@@ -570,8 +570,14 @@ function DebtorCard({
               className="h-6 px-2 text-[11px]"
               onClick={async () => {
                 const res = await adoptAsaasPhone(debtor.contactId!);
-                if (!res.ok) toast.error(res.error ?? 'Não foi possível trocar o telefone.');
-                else toast.success(`Agora a cobrança de ${debtor.name} sai para ${fmtPhone(res.data!.phone)}.`);
+                if (!res.ok) {
+                  // Número já é de outro contato: abre direto a troca de
+                  // contato, em vez de deixar o aviso sem saída.
+                  toast.error(res.error ?? 'Não foi possível trocar o telefone.');
+                  if ((res.error ?? '').includes('Ligar a um contato')) onLink();
+                  return;
+                }
+                toast.success(`Agora a cobrança de ${debtor.name} sai para ${fmtPhone(res.data!.phone)}.`);
                 onChanged();
               }}
             >
@@ -634,6 +640,14 @@ function DebtorCard({
                 </Button>
                 <Button size="sm" variant="ghost" onClick={onPause} title="Nunca cobrar este devedor pela régua">
                   <BellOff className="h-3.5 w-3.5 text-muted-foreground" />
+                </Button>
+                {/* 11/09: trocar o contato ligado também precisa existir. O
+                    devedor cujo número do Asaas já pertence a OUTRO contato
+                    (Center Pisos × Center Raspadora) não tinha saída na tela:
+                    "Usar o do Asaas" recusava e mandava religar, e o botão de
+                    religar só aparecia para devedor SEM contato. */}
+                <Button size="sm" variant="ghost" onClick={onLink} title="Trocar o contato do CRM que recebe esta cobrança">
+                  <Link2 className="h-3.5 w-3.5 text-muted-foreground" />
                 </Button>
               </>
             )}
@@ -1355,10 +1369,11 @@ function LinkContactDialog({
     <Dialog open onOpenChange={(v) => !v && onClose()}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Ligar a um contato do CRM</DialogTitle>
+          <DialogTitle>{debtor.contactId ? 'Trocar o contato desta cobrança' : 'Ligar a um contato do CRM'}</DialogTitle>
           <DialogDescription>
             {debtor.name} · {brl(debtor.total)} em {debtor.charges.length === 1 ? '1 cobrança' : `${debtor.charges.length} cobranças`}
             {debtor.phone ? ` · ${debtor.phone}` : ''}
+            {debtor.contactId ? '. A cobrança passa a sair na conversa do contato que você escolher.' : ''}
           </DialogDescription>
         </DialogHeader>
 
