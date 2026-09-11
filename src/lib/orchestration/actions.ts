@@ -696,6 +696,11 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
 
 /** Assunto curto: o toque nº N já diz que é a 2ª/3ª vez. */
 function collectionEmailSubject(payload: Record<string, unknown>): string {
+  // 11/09: o assunto tem que combinar com o que está escrito no corpo. Aviso de
+  // cobrança NOVA com assunto "pagamento em aberto" acusa atraso de quem acabou
+  // de receber a cobrança, e lembrete antes de vencer também não é atraso.
+  if (payload.kind === 'new_charge') return 'Link para pagamento'
+  if (payload.kind === 'reminder') return 'Sua cobrança vence em breve'
   const touch = Number(payload.touch ?? 1)
   return touch > 1 ? `Lembrete de pagamento em aberto (${touch}º aviso)` : 'Lembrete de pagamento em aberto'
 }
