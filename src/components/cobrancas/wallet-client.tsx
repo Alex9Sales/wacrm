@@ -71,6 +71,7 @@ import {
   listConnections,
   removeConnection,
   adoptAsaasPhone,
+  lookupCep,
   restoreContactPhone,
   saveConnection,
   searchContactsForCharge,
@@ -1034,6 +1035,32 @@ function NewChargeDialog({
   const [addressNumber, setAddressNumber] = useState('');
   const [complement, setComplement] = useState('');
   const [province, setProvince] = useState('');
+  const [cepBusy, setCepBusy] = useState(false);
+  const [cepCidade, setCepCidade] = useState('');
+
+  // CEP completo preenche rua e bairro sozinho (BrasilAPI, a mesma da busca de
+  // CNPJ em Dados da empresa). Nunca sobrescreve o que já foi digitado à mão.
+  const buscarCep = useCallback(
+    async (valor: string) => {
+      const digits = valor.replace(/\D/g, '');
+      if (digits.length !== 8) return;
+      setCepBusy(true);
+      try {
+        const r = await lookupCep(digits);
+        if (r.error) {
+          setCepCidade('');
+          toast.error(r.error);
+          return;
+        }
+        setAddress((v) => v.trim() || r.address || '');
+        setProvince((v) => v.trim() || r.province || '');
+        setCepCidade([r.city, r.state].filter(Boolean).join('/'));
+      } finally {
+        setCepBusy(false);
+      }
+    },
+    [],
+  );
   // 10/09 (João/GoLink): "trabalho com assinatura — todo mês chega a cobrança, sem término".
   const [kind, setKind] = useState<'single' | 'subscription'>('single');
   const [busy, setBusy] = useState(false);
@@ -1231,7 +1258,20 @@ function NewChargeDialog({
                   <div className="grid grid-cols-3 gap-3">
                     <div className="flex flex-col gap-1.5">
                       <Label htmlFor="nc-cep">CEP</Label>
-                      <Input id="nc-cep" inputMode="numeric" placeholder="12345-678" value={postalCode} onChange={(e) => setPostalCode(e.target.value)} />
+                      <div className="relative">
+                        <Input
+                          id="nc-cep"
+                          inputMode="numeric"
+                          placeholder="12345-678"
+                          value={postalCode}
+                          onChange={(e) => {
+                            setPostalCode(e.target.value);
+                            if (e.target.value.replace(/\D/g, '').length === 8) void buscarCep(e.target.value);
+                          }}
+                          onBlur={(e) => void buscarCep(e.target.value)}
+                        />
+                        {cepBusy && <Loader2 className="absolute right-2 top-2.5 h-4 w-4 animate-spin text-muted-foreground" />}
+                      </div>
                     </div>
                     <div className="col-span-2 flex flex-col gap-1.5">
                       <Label htmlFor="nc-rua">Rua</Label>
@@ -1252,7 +1292,9 @@ function NewChargeDialog({
                       <Input id="nc-bairro" placeholder="Centro" value={province} onChange={(e) => setProvince(e.target.value)} />
                     </div>
                   </div>
-                  <p className="text-xs text-muted-foreground">Cidade e estado o Asaas preenche pelo CEP.</p>
+                  <p className="text-xs text-muted-foreground">
+                    {cepCidade ? `${cepCidade} — cidade e estado o Asaas preenche pelo CEP.` : 'Cidade e estado o Asaas preenche pelo CEP.'}
+                  </p>
                 </div>
               )}
             </div>

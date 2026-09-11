@@ -1417,3 +1417,51 @@ export async function setAsaasNotifications(connectionId: string, disabled: bool
     return { ok: false, error: err instanceof AsaasApiError ? err.message : 'Não foi possível falar com o Asaas.' }
   }
 }
+
+export interface CepLookup {
+  /** Logradouro, sem número. */
+  address: string | null
+  /** Bairro. */
+  province: string | null
+  city: string | null
+  state: string | null
+  error?: string
+}
+
+/**
+ * Preenche o endereço a partir do CEP (BrasilAPI, pública e grátis — a mesma
+ * usada na busca de CNPJ em Dados da empresa).
+ *
+ * 11/09 (Alex, a partir do João): "tem como colocar o CEP e já carregar o
+ * endereço?". O CRM já fazia isso para CNPJ; para CEP é a mesma porta.
+ * Cidade e estado voltam só para conferência — quem grava esses dois é o
+ * Asaas, pelo próprio CEP.
+ */
+export async function lookupCep(cep: string): Promise<CepLookup> {
+  await getCurrentAccount()
+  const digits = (cep ?? '').replace(/\D/g, '')
+  const vazio: CepLookup = { address: null, province: null, city: null, state: null }
+  if (digits.length !== 8) return { ...vazio, error: 'CEP precisa ter 8 dígitos.' }
+  try {
+    const res = await fetch(`https://brasilapi.com.br/api/cep/v2/${digits}`, {
+      // Mesma pegadinha do CNPJ: sem user-agent de browser o Cloudflare devolve 403.
+      headers: { accept: 'application/json', 'user-agent': 'Mozilla/5.0 (compatible; FluxiaCRM/1.0)' },
+      cache: 'no-store',
+      signal: AbortSignal.timeout(8_000),
+    })
+    if (!res.ok) {
+      return { ...vazio, error: res.status === 404 ? 'CEP não encontrado.' : 'Não foi possível consultar o CEP agora.' }
+    }
+    const d = (await res.json()) as Record<string, unknown>
+    const s = (k: string) => (typeof d[k] === 'string' ? (d[k] as string).trim() : '')
+    return {
+      address: s('street') || null,
+      province: s('neighborhood') || null,
+      city: s('city') || null,
+      state: s('state') || null,
+    }
+  } catch {
+    // Falha de rede nunca trava o preenchimento à mão.
+    return { ...vazio, error: 'Não foi possível consultar o CEP agora. Dá para preencher à mão.' }
+  }
+}
