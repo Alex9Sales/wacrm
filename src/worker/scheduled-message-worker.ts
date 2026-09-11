@@ -21,9 +21,9 @@
 // ============================================================
 
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
-import { eq, and } from 'drizzle-orm';
+import { eq, and, isNull } from 'drizzle-orm';
 
-import { db, scheduledMessages, contacts } from '@/db';
+import { db, scheduledMessages, contacts, conversations } from '@/db';
 import { renderForContact } from '@/lib/whatsapp/message-vars';
 import { bullConnection } from '@/lib/queue/connection';
 import {
@@ -159,6 +159,28 @@ async function processScheduledMessageJob(
         updatedAt: now,
       })
       .where(eq(scheduledMessages.id, scheduledMessageId));
+
+    // 👤 "Responsável" do agendamento (Agendar mensagem → Responsável): a
+    // conversa passa a ser dessa pessoa, senão ela nunca vê a resposta do
+    // cliente — em canal DEDICADO a outro, conversa sem dono é invisível para
+    // ela (11/09, Leonardo/GoLink: "algumas não chegam pra ele"). Só atribui
+    // quando ninguém pegou ainda: responder nunca rouba de um colega.
+    if (row.assignedTo) {
+      try {
+        await db
+          .update(conversations)
+          .set({ assignedAgentId: row.assignedTo, assignedAt: now })
+          .where(
+            and(
+              eq(conversations.id, row.conversationId),
+              eq(conversations.accountId, row.accountId),
+              isNull(conversations.assignedAgentId),
+            ),
+          );
+      } catch (err) {
+        log(`${scheduledMessageId} não deu pra atribuir ao responsável: ${String(err)}`);
+      }
+    }
 
     // Best-effort realtime nudge so the inbox renders the new message.
     await publishEvent(row.accountId, {
