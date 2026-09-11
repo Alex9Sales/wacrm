@@ -27,6 +27,7 @@ import {
   findOrCreateCustomer,
   listSubscriptionPayments,
   type AsaasBillingType,
+  type AsaasCustomerAddress,
   type AsaasCredential,
   type AsaasEnv,
   type AsaasPayment,
@@ -72,6 +73,15 @@ export interface CreateChargeInput {
    *  último documento visto na carteira para o contato. O Asaas de produção
    *  exige documento pra gerar qualquer cobrança (08/09). */
   cpfCnpj?: string | null
+  /**
+   * E-mail e endereço do cliente, para o cadastro do Asaas (11/09, João/GoLink:
+   * "precisa ter email e endereço completo, pois precisa pra depois o Asaas
+   * emitir nota fiscal"). Tudo opcional: quem não emite nota não preenche.
+   * O CRM não guarda endereço na ficha — vai para o Asaas, que passa a ser a
+   * fonte disso e reaproveita nas cobranças seguintes do mesmo cliente.
+   */
+  email?: string | null
+  billingAddress?: AsaasCustomerAddress | null
   /** Parcelas (2–60): o Asaas cria N cobranças; a 1ª volta aqui. */
   installments?: number | null
   /**
@@ -236,8 +246,11 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
     const customer = await findOrCreateCustomer(cred, {
       name: (contact.name || contact.email || contact.phone || 'Cliente').trim(),
       mobilePhone: phoneDigits ? toBrE164IfNational(phoneDigits) : '',
-      email: contact.email,
+      // O e-mail digitado agora vence o da ficha: quem preencheu sabia que é
+      // esse que precisa sair na nota fiscal (11/09).
+      email: input.email?.trim() || contact.email,
       cpfCnpj,
+      address: input.billingAddress ?? null,
       externalReference: input.contactId,
     })
 

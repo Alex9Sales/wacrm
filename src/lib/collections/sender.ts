@@ -24,8 +24,8 @@ import { executeOrchestrationAction } from '@/lib/orchestration/actions'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 
 import { localParts } from './engine'
-import { autoSendDue, normalizeSettings, withinWindow } from './rules'
-import { expireStaleCollectionDrafts } from './stale'
+import { autoSendDue, dayBlockedReason, normalizeSettings, withinWindow } from './rules'
+import { expireStaleCollectionDrafts, localDayKey } from './stale'
 
 /** Tentativas antes de marcar o pedido como falho (rede/canal fora do ar). */
 const MAX_ATTEMPTS = 3
@@ -60,7 +60,10 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
     return { ...stats, haltedBecause: 'IA pausada ou só sugerindo nesta conta' }
   }
   const { hour, weekday } = localParts(tz)
-  if (!withinWindow(hour, weekday, s)) return { ...stats, haltedBecause: 'fora da janela da régua' }
+  const hojeKey = localDayKey(tz, now)
+  const diaBloqueado = dayBlockedReason(weekday, s, hojeKey)
+  if (diaBloqueado) return { ...stats, haltedBecause: diaBloqueado.toLowerCase() }
+  if (!withinWindow(hour, weekday, s, hojeKey)) return { ...stats, haltedBecause: 'fora do horário da régua' }
 
   // A fila: aprovadas em lote ('queued') e as automáticas ainda não enviadas.
   // Mais antiga primeiro — a régua já ordenou do mais atrasado pro menos.

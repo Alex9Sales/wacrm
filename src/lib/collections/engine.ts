@@ -29,6 +29,7 @@ import { expireStaleCollectionDrafts, localDayKey } from './stale'
 import { maxSimilarity, seedFrom, tooSimilar, variationInstruction, variationPlan } from './variation'
 
 import {
+  dayBlockedReason,
   duplicateSuspects,
   eligibility,
   fallbackMessage,
@@ -91,8 +92,13 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
 
   const tz = accountSettings.businessTimezone || 'America/Sao_Paulo'
   const { hour, weekday } = localParts(tz)
-  if (!withinWindow(hour, weekday, s)) {
-    return { ...stats, haltedBecause: `Fora da janela de cobrança (${s.startHour}h–${s.endHour}h${s.weekdaysOnly ? ', dias úteis' : ''}).` }
+  const hojeKey = localDayKey(tz)
+  // O dia bloqueado (dia da semana / feriado) diz POR QUE — sem isso a tela
+  // mostrava "fora da janela" e o cliente não sabia se era hora ou dia.
+  const diaBloqueado = dayBlockedReason(weekday, s, hojeKey)
+  if (diaBloqueado) return { ...stats, haltedBecause: `${diaBloqueado}. A régua não cobra hoje.` }
+  if (!withinWindow(hour, weekday, s, hojeKey)) {
+    return { ...stats, haltedBecause: `Fora do horário de cobrança (${s.startHour}h–${s.endHour}h).` }
   }
 
   // 1) Reconsultar o Asaas. Sem isso a régua cobraria de uma lista velha, que é

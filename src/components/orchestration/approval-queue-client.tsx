@@ -44,6 +44,7 @@ import {
   type AutonomyMetrics,
 } from '@/app/(dashboard)/aprovacoes/actions';
 import { getCollectionsSettings } from '@/app/(dashboard)/cobrancas/actions';
+import { describeWeekdays } from '@/lib/collections/rules';
 import { contextChips } from '@/lib/orchestration/context-chips';
 import type { Risk } from '@/lib/orchestration/policy';
 
@@ -165,7 +166,7 @@ export function ApprovalQueueClient() {
     try {
       const s = await getCollectionsSettings();
       every = s.sendEveryMinutes;
-      janela = ` das ${s.startHour}h às ${s.endHour}h${s.weekdaysOnly ? ' em dias úteis' : ''}`;
+      janela = ` das ${s.startHour}h às ${s.endHour}h, ${describeWeekdays(s.sendWeekdays)}`;
     } catch {
       /* sem as configurações, fica o texto genérico */
     }

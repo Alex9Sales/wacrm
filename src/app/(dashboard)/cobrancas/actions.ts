@@ -1166,6 +1166,17 @@ export interface ManualChargeInput {
   cpfCnpj?: string
   /** Assinatura mensal sem fim (o Asaas gera uma cobrança por mês a partir do vencimento). */
   recurring?: 'MONTHLY'
+  /**
+   * E-mail e endereço para o cadastro do Asaas — o que ele exige para emitir
+   * NOTA FISCAL (11/09, João/GoLink). Tudo opcional. Fica guardado no Asaas,
+   * então só precisa ser preenchido uma vez por cliente.
+   */
+  email?: string
+  postalCode?: string
+  address?: string
+  addressNumber?: string
+  complement?: string
+  province?: string
 }
 
 export interface ManualChargeResult {
@@ -1194,12 +1205,22 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
 
   const contact = firstOrNull(
     await db
-      .select({ id: contacts.id, name: contacts.name })
+      .select({ id: contacts.id, name: contacts.name, email: contacts.email })
       .from(contacts)
       .where(and(eq(contacts.id, input.contactId), eq(contacts.accountId, accountId)))
       .limit(1),
   )
   if (!contact) return { ok: false, error: 'Contato não encontrado.' }
+
+  // E-mail digitado aqui também fica na ficha, se ela ainda não tinha um —
+  // senão o operador redigita a cada cobrança. Nunca sobrescreve o que existe.
+  const emailDigitado = (input.email ?? '').trim()
+  if (emailDigitado && !contact.email?.trim()) {
+    await db
+      .update(contacts)
+      .set({ email: emailDigitado, updatedAt: new Date().toISOString() })
+      .where(and(eq(contacts.id, input.contactId), eq(contacts.accountId, accountId)))
+  }
 
   // Por onde o link vai — decidido ANTES de criar: se não dá para enviar, o
   // operador escolhe desmarcar o envio, em vez de ficar com cobrança criada e
@@ -1239,6 +1260,14 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
     billingType: input.billingType && input.billingType !== 'UNDEFINED' ? input.billingType : undefined,
     cpfCnpj: (input.cpfCnpj ?? '').replace(/\D/g, '') || undefined,
     recurring: input.recurring === 'MONTHLY' ? 'MONTHLY' : null,
+    email: input.email?.trim() || null,
+    billingAddress: {
+      postalCode: input.postalCode ?? null,
+      address: input.address ?? null,
+      addressNumber: input.addressNumber ?? null,
+      complement: input.complement ?? null,
+      province: input.province ?? null,
+    },
   })
   if (!created.ok) return { ok: false, error: created.reason }
 

@@ -215,6 +215,22 @@ async function asaasSend<T>(cred: AsaasCredential, method: 'POST' | 'PUT', path:
 
 const asaasPost = <T>(cred: AsaasCredential, path: string, body: Record<string, unknown>) => asaasSend<T>(cred, 'POST', path, body)
 
+/**
+ * Endereço do cliente no Asaas. Existe por causa da NOTA FISCAL (11/09,
+ * João/GoLink): sem endereço completo o Asaas não emite. Cidade e estado o
+ * próprio Asaas resolve pelo CEP, então não pedimos.
+ */
+export interface AsaasCustomerAddress {
+  /** CEP, só dígitos. */
+  postalCode?: string | null
+  /** Logradouro, sem o número. */
+  address?: string | null
+  addressNumber?: string | null
+  complement?: string | null
+  /** Bairro. */
+  province?: string | null
+}
+
 export interface AsaasCustomerInput {
   name: string
   /** Só dígitos, com DDI (5567…). */
@@ -223,6 +239,23 @@ export interface AsaasCustomerInput {
   email?: string | null
   /** Nosso id do contato — é por ele que reencontramos o cliente da próxima vez. */
   externalReference: string
+  address?: AsaasCustomerAddress | null
+}
+
+/** Só os campos de endereço realmente preenchidos — o Asaas rejeita string vazia. */
+function addressFields(a: AsaasCustomerAddress | null | undefined): Record<string, string> {
+  if (!a) return {}
+  const out: Record<string, string> = {}
+  const put = (k: string, v: string | null | undefined) => {
+    const t = (v ?? '').trim()
+    if (t) out[k] = k === 'postalCode' ? t.replace(/\D/g, '') : t
+  }
+  put('postalCode', a.postalCode)
+  put('address', a.address)
+  put('addressNumber', a.addressNumber)
+  put('complement', a.complement)
+  put('province', a.province)
+  return out
 }
 
 /**
@@ -235,27 +268,33 @@ export interface AsaasCustomerInput {
  */
 export async function findOrCreateCustomer(cred: AsaasCredential, input: AsaasCustomerInput): Promise<AsaasCustomer> {
   const doc = (input.cpfCnpj ?? '').replace(/\D/g, '')
+  const endereco = addressFields(input.address)
+  const email = (input.email ?? '').trim()
   const byRef = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { externalReference: input.externalReference, limit: 1 })
-  if (byRef.data?.[0]) {
-    const found = byRef.data[0]
-    // 08/09: o Asaas de produção exige CPF/CNPJ pra gerar cobrança. Cliente que
-    // criamos sem documento ganha o documento agora (o dono/cliente mandou).
-    if (!found.cpfCnpj && (doc.length === 11 || doc.length === 14)) {
-      return updateCustomerDocument(cred, found.id, doc)
-    }
-    return found
-  }
+  const existente = byRef.data?.[0] ?? (doc.length === 11 || doc.length === 14
+    ? (await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { cpfCnpj: doc, limit: 1 })).data?.[0]
+    : undefined)
 
-  if (doc.length === 11 || doc.length === 14) {
-    const byDoc = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { cpfCnpj: doc, limit: 1 })
-    if (byDoc.data?.[0]) return byDoc.data[0]
+  if (existente) {
+    // 08/09: o Asaas de produção exige CPF/CNPJ pra gerar cobrança.
+    // 11/09: e e-mail + endereço pra emitir nota fiscal. Cliente que já existe
+    // recebe agora o que veio preenchido — sem apagar o que já estava lá.
+    const patch: Record<string, string> = { ...endereco }
+    if (!existente.cpfCnpj && (doc.length === 11 || doc.length === 14)) patch.cpfCnpj = doc
+    if (email && !existente.email) patch.email = email
+    if (Object.keys(patch).length === 0) return existente
+    return asaasSend<AsaasCustomer>(cred, 'PUT', `/customers/${encodeURIComponent(existente.id)}`, {
+      ...patch,
+      notificationDisabled: true,
+    })
   }
 
   return asaasPost<AsaasCustomer>(cred, '/customers', {
     name: input.name,
     mobilePhone: input.mobilePhone,
     ...(doc ? { cpfCnpj: doc } : {}),
-    ...(input.email ? { email: input.email } : {}),
+    ...(email ? { email } : {}),
+    ...endereco,
     externalReference: input.externalReference,
     notificationDisabled: true, // quem fala com o cliente é o CRM, não o Asaas
   })

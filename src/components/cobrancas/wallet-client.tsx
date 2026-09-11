@@ -18,6 +18,7 @@ import {
   Building2,
   CalendarClock,
   Check,
+  ChevronDown,
   ExternalLink,
   Eye,
   Link2,
@@ -89,7 +90,7 @@ import {
   clearPaymentPromise,
   registerPaymentPromise,
 } from '@/app/(dashboard)/cobrancas/actions';
-import { CHARGEABLE_STATUSES, type CollectionsSettings } from '@/lib/collections/rules';
+import { CHARGEABLE_STATUSES, WEEKDAY_SHORT, describeWeekdays, type CollectionsSettings } from '@/lib/collections/rules';
 
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -260,7 +261,7 @@ export function WalletClient() {
             <a href="/aprovacoes" className="font-medium underline underline-offset-2">Precisa de você</a> fica parado, e rascunho de
             outro dia é descartado (a régua refaz com os números do dia).{' '}
             {rule.autoSend
-              ? `Ao ligar, as cobranças saem sozinhas, uma a cada ${rule.sendEveryMinutes} min, das ${rule.startHour}h às ${rule.endHour}h${rule.weekdaysOnly ? ' em dias úteis' : ''} — não precisa aprovar nada.`
+              ? `Ao ligar, as cobranças saem sozinhas, uma a cada ${rule.sendEveryMinutes} min, das ${rule.startHour}h às ${rule.endHour}h, ${describeWeekdays(rule.sendWeekdays)}${rule.skipHolidays ? ' (feriado nacional não)' : ''} — não precisa aprovar nada.`
               : 'Ao ligar, a régua monta as mensagens e deixa em Precisa de você para você aprovar.'}
           </p>
         </div>
@@ -269,7 +270,7 @@ export function WalletClient() {
           <Bot className="mt-0.5 h-4 w-4 shrink-0" />
           <p>
             <strong>Envio automático ligado.</strong> As cobranças saem sozinhas, uma a cada {rule.sendEveryMinutes} min, das {rule.startHour}h às{' '}
-            {rule.endHour}h{rule.weekdaysOnly ? ' em dias úteis' : ''}, sem passar por Precisa de você. Antes de cada envio o sistema confere de
+            {rule.endHour}h, {describeWeekdays(rule.sendWeekdays)}{rule.skipHolidays ? ' (feriado nacional não)' : ''}, sem passar por Precisa de você. Antes de cada envio o sistema confere de
             novo se a parcela continua em aberto. Para voltar a aprovar uma a uma, desmarque &quot;Enviar sozinha&quot; em Ajustar.
           </p>
         </div>
@@ -1023,6 +1024,16 @@ function NewChargeDialog({
   // 09/09 (João/GoLink): "dá pra escolher só Pix?" e "cadê o CPF?".
   const [billingType, setBillingType] = useState<'UNDEFINED' | 'PIX' | 'BOLETO' | 'CREDIT_CARD'>('UNDEFINED');
   const [cpfCnpj, setCpfCnpj] = useState('');
+  // 📄 11/09 (João/GoLink): "precisa ter email e endereço completo, pois precisa
+  // pra depois o Asaas emitir nota fiscal". Fica guardado no Asaas — preenche
+  // uma vez por cliente. Cidade e estado o Asaas resolve pelo CEP.
+  const [nfOpen, setNfOpen] = useState(false);
+  const [email, setEmail] = useState('');
+  const [postalCode, setPostalCode] = useState('');
+  const [address, setAddress] = useState('');
+  const [addressNumber, setAddressNumber] = useState('');
+  const [complement, setComplement] = useState('');
+  const [province, setProvince] = useState('');
   // 10/09 (João/GoLink): "trabalho com assinatura — todo mês chega a cobrança, sem término".
   const [kind, setKind] = useState<'single' | 'subscription'>('single');
   const [busy, setBusy] = useState(false);
@@ -1188,6 +1199,64 @@ function NewChargeDialog({
               </div>
             )}
 
+            {/* 📄 Dados de nota fiscal: dobrado, porque a maioria das cobranças
+                não precisa. Vai tudo pro cadastro do Asaas e fica lá. */}
+            <div className="rounded-lg border border-dashed">
+              <button
+                type="button"
+                onClick={() => setNfOpen((v) => !v)}
+                className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-medium"
+              >
+                <span>
+                  E-mail e endereço (para nota fiscal)
+                  <span className="block text-xs font-normal text-muted-foreground">
+                    Opcional. O Asaas só emite nota com endereço completo. Preenche uma vez e fica no cadastro dele.
+                  </span>
+                </span>
+                <ChevronDown className={cn('h-4 w-4 shrink-0 transition-transform', nfOpen && 'rotate-180')} />
+              </button>
+
+              {nfOpen && (
+                <div className="flex flex-col gap-3 border-t px-3 py-3">
+                  <div className="flex flex-col gap-1.5">
+                    <Label htmlFor="nc-email">E-mail do cliente</Label>
+                    <Input
+                      id="nc-email"
+                      type="email"
+                      placeholder="cliente@empresa.com.br"
+                      value={email}
+                      onChange={(e) => setEmail(e.target.value)}
+                    />
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="nc-cep">CEP</Label>
+                      <Input id="nc-cep" inputMode="numeric" placeholder="12345-678" value={postalCode} onChange={(e) => setPostalCode(e.target.value)} />
+                    </div>
+                    <div className="col-span-2 flex flex-col gap-1.5">
+                      <Label htmlFor="nc-rua">Rua</Label>
+                      <Input id="nc-rua" placeholder="Av. Brasil" value={address} onChange={(e) => setAddress(e.target.value)} />
+                    </div>
+                  </div>
+                  <div className="grid grid-cols-3 gap-3">
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="nc-num">Número</Label>
+                      <Input id="nc-num" placeholder="47" value={addressNumber} onChange={(e) => setAddressNumber(e.target.value)} />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="nc-compl">Complemento</Label>
+                      <Input id="nc-compl" placeholder="sala 2" value={complement} onChange={(e) => setComplement(e.target.value)} />
+                    </div>
+                    <div className="flex flex-col gap-1.5">
+                      <Label htmlFor="nc-bairro">Bairro</Label>
+                      <Input id="nc-bairro" placeholder="Centro" value={province} onChange={(e) => setProvince(e.target.value)} />
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">Cidade e estado o Asaas preenche pelo CEP.</p>
+                </div>
+              )}
+            </div>
+
             <label className="flex items-start gap-2 text-sm">
               <input type="checkbox" className="mt-1" checked={sendLink} onChange={(e) => setSendLink(e.target.checked)} />
               <span>
@@ -1217,6 +1286,12 @@ function NewChargeDialog({
                       billingType,
                       cpfCnpj: cpfDigits || undefined,
                       recurring: kind === 'subscription' ? 'MONTHLY' : undefined,
+                      email: email.trim() || undefined,
+                      postalCode: postalCode.trim() || undefined,
+                      address: address.trim() || undefined,
+                      addressNumber: addressNumber.trim() || undefined,
+                      complement: complement.trim() || undefined,
+                      province: province.trim() || undefined,
                     });
                     if (!res.ok) {
                       toast.error(res.error ?? 'Não foi possível gerar a cobrança.');
@@ -1596,7 +1671,7 @@ function RulePanel({
           </p>
           <p className="text-xs text-muted-foreground">
             {rule.enabled
-              ? `A cada ${rule.intervalDays} ${rule.intervalDays === 1 ? 'dia' : 'dias'}, das ${rule.startHour}h às ${rule.endHour}h${rule.weekdaysOnly ? ' em dias úteis' : ''}, no máximo ${rule.dailyCap} por dia. Para depois de ${rule.maxTouches} toques sem resposta.` +
+              ? `A cada ${rule.intervalDays} ${rule.intervalDays === 1 ? 'dia' : 'dias'}, das ${rule.startHour}h às ${rule.endHour}h, ${describeWeekdays(rule.sendWeekdays)}${rule.skipHolidays ? ' (feriado nacional não)' : ''}, no máximo ${rule.dailyCap} por dia. Para depois de ${rule.maxTouches} toques sem resposta.` +
                 (rule.autoSend
                   ? ` Envia sozinha, uma a cada ${rule.sendEveryMinutes} min.`
                   : ' Cada cobrança espera sua aprovação em "Precisa de você".')
@@ -1715,15 +1790,60 @@ function RulePanel({
           <div className="flex flex-wrap items-end gap-6">
             {num('startHour', 'Começa às', 'Hora de início, no fuso da conta.', 0, 23)}
             {num('endHour', 'Termina às', 'Hora de término.', 1, 24)}
-            <label className="flex items-center gap-2 pb-6 text-sm">
-              <input
-                type="checkbox"
-                checked={draft.weekdaysOnly}
-                onChange={(e) => setDraft({ ...draft, weekdaysOnly: e.target.checked })}
-              />
-              Só em dias úteis
-            </label>
           </div>
+
+          {/* 📆 11/09 (Alex, a partir do João): "cada um tem sua forma de
+              trabalhar — quem cobra no sábado deixa de segunda a sábado, quem
+              não cobra deixa de segunda a sexta". O antigo "só dias úteis" não
+              dava esse meio-termo. */}
+          <div className="flex flex-col gap-2">
+            <Label>Dias em que a régua cobra</Label>
+            <div className="flex flex-wrap gap-1.5">
+              {WEEKDAY_SHORT.map((nome, dia) => {
+                const ligado = draft.sendWeekdays.includes(dia);
+                return (
+                  <button
+                    key={dia}
+                    type="button"
+                    aria-pressed={ligado}
+                    onClick={() => {
+                      const dias = ligado ? draft.sendWeekdays.filter((d) => d !== dia) : [...draft.sendWeekdays, dia].sort();
+                      // Sem nenhum dia a régua nunca cobraria e a tela não
+                      // explicaria o silêncio — para desligar existe o botão da régua.
+                      if (!dias.length) {
+                        toast.error('Deixe pelo menos um dia. Para parar de cobrar, desligue a régua.');
+                        return;
+                      }
+                      setDraft({ ...draft, sendWeekdays: dias, weekdaysOnly: dias.every((d) => d >= 1 && d <= 5) });
+                    }}
+                    className={cn(
+                      'h-8 min-w-[3rem] rounded-md border px-2 text-xs font-medium transition',
+                      ligado ? 'border-primary bg-primary text-primary-foreground' : 'bg-background text-muted-foreground hover:bg-muted',
+                    )}
+                  >
+                    {nome}
+                  </button>
+                );
+              })}
+            </div>
+            <p className="text-xs text-muted-foreground">Cobra {describeWeekdays(draft.sendWeekdays)}.</p>
+          </div>
+
+          <label className="flex items-start gap-2 text-sm">
+            <input
+              type="checkbox"
+              className="mt-1"
+              checked={draft.skipHolidays}
+              onChange={(e) => setDraft({ ...draft, skipHolidays: e.target.checked })}
+            />
+            <span>
+              Não cobrar em feriado nacional
+              <span className="block text-xs text-muted-foreground">
+                Natal, Ano-Novo, Carnaval, Sexta-feira Santa, Tiradentes, Trabalho, Corpus Christi, Independência, Aparecida, Finados,
+                Proclamação da República e Consciência Negra. Feriado da sua cidade não entra — para esse, desmarque o dia na régua.
+              </span>
+            </span>
+          </label>
 
           <label className="flex items-start gap-2 text-sm">
             <input

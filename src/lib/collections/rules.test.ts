@@ -11,7 +11,10 @@ import {
   formatDebtBody,
   formatDebtSummary,
   formatUpcomingSummary,
+  dayBlockedReason,
+  describeWeekdays,
   greetingName,
+  normalizeWeekdays,
   phoneSearchDigits,
   linksInstruction,
   normalizeSettings,
@@ -218,7 +221,53 @@ describe('withinWindow', () => {
   it('não cobra no fim de semana quando é só dia útil', () => {
     expect(withinWindow(12, 0, s)).toBe(false)
     expect(withinWindow(12, 6, s)).toBe(false)
-    expect(withinWindow(12, 6, { ...s, weekdaysOnly: false })).toBe(true)
+    expect(withinWindow(12, 6, { ...s, sendWeekdays: [0, 1, 2, 3, 4, 5, 6] })).toBe(true)
+  })
+
+  // 11/09 (Alex): "quem cobra no sábado deixa de segunda a sábado, quem não
+  // cobra deixa de segunda a sexta" — e domingo/feriado nunca.
+  it('cada conta escolhe os dias: segunda a sábado sem domingo', () => {
+    const ate_sabado = { ...s, sendWeekdays: [1, 2, 3, 4, 5, 6] }
+    expect(withinWindow(12, 6, ate_sabado)).toBe(true)
+    expect(withinWindow(12, 0, ate_sabado)).toBe(false)
+  })
+
+  it('feriado nacional não dispara, e a data é obrigatória pra saber disso', () => {
+    const sexta_santa = '2026-04-03' // Páscoa 2026 = 05/04
+    expect(withinWindow(12, 5, s, sexta_santa)).toBe(false)
+    expect(withinWindow(12, 5, s, '2026-04-10')).toBe(true)
+    expect(withinWindow(12, 5, { ...s, skipHolidays: false }, sexta_santa)).toBe(true)
+    // Sem a data, a régua não inventa feriado — só o dia da semana manda.
+    expect(withinWindow(12, 5, s)).toBe(true)
+  })
+
+  it('diz POR QUE o dia está bloqueado, em português', () => {
+    expect(dayBlockedReason(0, s)).toBe('Domingo não está nos dias de cobrança')
+    expect(dayBlockedReason(5, s, '2026-12-25')).toBe('Feriado nacional (Natal)')
+    expect(dayBlockedReason(3, s, '2026-09-16')).toBeNull()
+  })
+})
+
+describe('normalizeWeekdays — lista vazia nunca vira "cobra todo dia"', () => {
+  it('conta antiga herda o que já valia para ela', () => {
+    expect(normalizeWeekdays(undefined, true)).toEqual([1, 2, 3, 4, 5])
+    expect(normalizeWeekdays([], true)).toEqual([1, 2, 3, 4, 5])
+    expect(normalizeWeekdays(undefined, false)).toEqual([0, 1, 2, 3, 4, 5, 6])
+  })
+  it('joga fora o que não é dia da semana, sem repetir e em ordem', () => {
+    expect(normalizeWeekdays([6, 1, 1, 99, -2, 'seg'])).toEqual([1, 6])
+  })
+})
+
+describe('describeWeekdays — como a tela conta isso pro dono', () => {
+  it('sequência vira intervalo', () => {
+    expect(describeWeekdays([1, 2, 3, 4, 5])).toBe('segunda a sexta')
+    expect(describeWeekdays([1, 2, 3, 4, 5, 6])).toBe('segunda a sábado')
+    expect(describeWeekdays([0, 1, 2, 3, 4, 5, 6])).toBe('todos os dias')
+  })
+  it('dias soltos viram lista', () => {
+    expect(describeWeekdays([1, 3, 5])).toBe('seg, qua e sex')
+    expect(describeWeekdays([2])).toBe('ter')
   })
 })
 

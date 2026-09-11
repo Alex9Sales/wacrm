@@ -11,6 +11,8 @@
 // consultoria, e é ela que faz o segundo cliente não exigir reescrita.
 // ============================================================
 
+import { holidayName } from './holidays'
+
 export type DeliveryChannel = 'auto' | 'whatsapp' | 'email' | 'both'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
@@ -27,8 +29,21 @@ export interface CollectionsSettings {
   /** Janela de envio, no fuso da conta. */
   startHour: number
   endHour: number
-  /** Não cobra sábado e domingo. */
+  /**
+   * @deprecated Use `sendWeekdays`. Continua sendo lido para as contas antigas
+   * e para quem ainda não abriu a tela, mas quem manda é `sendWeekdays`.
+   */
   weekdaysOnly: boolean
+  /**
+   * Em quais dias da semana a régua pode cobrar (0=domingo … 6=sábado).
+   *
+   * 11/09 (Alex): "cada um tem sua forma de trabalhar — quem cobra no sábado
+   * deixa de segunda a sábado, quem não cobra deixa de segunda a sexta".
+   * Nunca fica vazio: lista vazia voltaria a cobrar todo dia sem ninguém pedir.
+   */
+  sendWeekdays: number[]
+  /** Não cobra em feriado NACIONAL (ver `holidays.ts`; municipal não dá para saber). */
+  skipHolidays: boolean
   /**
    * Por onde cobrar. auto = WhatsApp quando o contato tem telefone, senão
    * e-mail; both = os dois no mesmo toque (boleto no e-mail, lembrete no zap).
@@ -130,6 +145,8 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   startHour: 9,
   endHour: 18,
   weekdaysOnly: true,
+  sendWeekdays: [1, 2, 3, 4, 5],
+  skipHolidays: true,
   channel: 'auto',
   channelId: null,
   overdueStatuses: ['OVERDUE'],
@@ -146,6 +163,19 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   sectorId: null,
   offerDateNegotiation: true,
   showValues: true,
+}
+
+/**
+ * Dias da semana válidos, sem repetição e em ordem. Lista vazia ou lixo cai no
+ * que a conta já usava (`weekdaysOnly`) — nunca em "cobra todo dia", que
+ * ninguém pediu e é o erro caro aqui.
+ */
+export function normalizeWeekdays(raw: unknown, uteisPorPadrao = true): number[] {
+  const dias = Array.isArray(raw)
+    ? [...new Set(raw.map((d) => (typeof d === 'number' ? Math.round(d) : Number.NaN)).filter((d) => d >= 0 && d <= 6))].sort()
+    : []
+  if (dias.length) return dias
+  return uteisPorPadrao ? [1, 2, 3, 4, 5] : [0, 1, 2, 3, 4, 5, 6]
 }
 
 export function normalizeSettings(raw: unknown): CollectionsSettings {
@@ -165,6 +195,10 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     startHour: int(r.startHour, 9, 0, 23),
     endHour: int(r.endHour, 18, 1, 24),
     weekdaysOnly: r.weekdaysOnly !== false,
+    // Conta que ainda não escolheu os dias herda o que já valia para ela:
+    // "só dias úteis" = segunda a sexta; desmarcado = a semana toda.
+    sendWeekdays: normalizeWeekdays(r.sendWeekdays, r.weekdaysOnly !== false),
+    skipHolidays: r.skipHolidays !== false,
     channel: r.channel === 'whatsapp' || r.channel === 'email' || r.channel === 'both' ? r.channel : 'auto',
     channelId: typeof r.channelId === 'string' && UUID_RE.test(r.channelId) ? r.channelId : null,
     overdueStatuses: statuses.length ? statuses : [...COLLECTIONS_DEFAULTS.overdueStatuses],
@@ -337,9 +371,43 @@ export function eligibility(input: EligibleInput, s: CollectionsSettings, now = 
  * A janela é avaliada com a hora JÁ convertida para o fuso da conta —
  * quem converte é quem chama, para esta função continuar pura.
  */
-export function withinWindow(localHour: number, localWeekday: number, s: CollectionsSettings): boolean {
-  if (s.weekdaysOnly && (localWeekday === 0 || localWeekday === 6)) return false
+export function withinWindow(
+  localHour: number,
+  localWeekday: number,
+  s: CollectionsSettings,
+  /** Data local `YYYY-MM-DD` — só necessária para checar feriado. */
+  localDayKey?: string,
+): boolean {
+  if (!s.sendWeekdays.includes(localWeekday)) return false
+  if (s.skipHolidays && localDayKey && holidayName(localDayKey)) return false
   return localHour >= s.startHour && localHour < s.endHour
+}
+
+/**
+ * Por que a régua não vai cobrar hoje — em português, para a tela e para o log.
+ * `null` quando o dia está liberado (a hora é checada à parte).
+ */
+export function dayBlockedReason(localWeekday: number, s: CollectionsSettings, localDayKey?: string): string | null {
+  if (!s.sendWeekdays.includes(localWeekday)) return `${WEEKDAY_NAMES[localWeekday] ?? 'Hoje'} não está nos dias de cobrança`
+  if (s.skipHolidays && localDayKey) {
+    const feriado = holidayName(localDayKey)
+    if (feriado) return `Feriado nacional (${feriado})`
+  }
+  return null
+}
+
+export const WEEKDAY_NAMES = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
+export const WEEKDAY_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
+
+/** "segunda a sexta", "segunda a sábado", "seg, qua e sex" — para a tela. */
+export function describeWeekdays(dias: number[]): string {
+  const d = [...new Set(dias)].sort()
+  if (!d.length) return 'nenhum dia'
+  if (d.length === 7) return 'todos os dias'
+  const seguido = d.every((v, i) => i === 0 || v === d[i - 1] + 1)
+  if (seguido && d.length > 2) return `${WEEKDAY_NAMES[d[0]].toLowerCase()} a ${WEEKDAY_NAMES[d[d.length - 1]].toLowerCase()}`
+  const nomes = d.map((x) => WEEKDAY_SHORT[x].toLowerCase())
+  return nomes.length === 1 ? nomes[0] : `${nomes.slice(0, -1).join(', ')} e ${nomes[nomes.length - 1]}`
 }
 
 // ------------------------------------------------------------ texto da dívida
