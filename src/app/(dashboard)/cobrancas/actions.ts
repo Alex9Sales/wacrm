@@ -267,6 +267,14 @@ export interface WalletDebtor {
   snoozeUntil: string | null
   /** Parcela idêntica em dois cadastros do Asaas — a régua não cobra até resolver. */
   duplicateSuspect: boolean
+  /**
+   * O cadastro do Asaas tem um celular DIFERENTE do que está na ficha do
+   * contato — e é a ficha que manda no envio (11/09, João/GoLink: trocou o
+   * telefone no Asaas e a cobrança continuou indo para o número antigo).
+   * `null` quando batem, quando o Asaas não tem celular válido ou quando o
+   * número do Asaas é fixo (aí não serve para WhatsApp e o aviso seria ruído).
+   */
+  phoneDiffers: { asaas: string; crm: string | null } | null
 }
 
 /** Lacuna 4 (07/09): o que entrou depois que a régua falou — o gancho em reais. */
@@ -286,6 +294,31 @@ export interface WalletSummary {
   totalCharges: number
   pendingMatch: number
   recovered: RecoveredSummary
+}
+
+/**
+ * Celular do Asaas × telefone da ficha. Só aponta o que resolve alguma coisa:
+ * precisa haver contato ligado, o número do Asaas precisa ser um CELULAR
+ * válido (fixo não tem WhatsApp, avisar seria ruído) e ele tem que ser
+ * realmente outro número — os últimos 8 dígitos decidem, para "com 9" e "sem
+ * 9" não virarem falso alarme.
+ */
+function phoneDiff(
+  asaasRaw: string | null,
+  crmRaw: string | null,
+  contactId: string | null,
+): { asaas: string; crm: string | null } | null {
+  if (!contactId) return null
+  const asaas = asaasPhoneForContact(asaasRaw)
+  // `asaasPhoneForContact` aceita fixo (10 dígitos locais). Aqui não serve:
+  // adotar um fixo deixaria a cobrança sem chegar — caso Felipe Chaveiro,
+  // 11/09, em que o dono trocou o celular por um fixo no Asaas. Só celular:
+  // 55 + DDD + 9 + oito dígitos.
+  if (!asaas || !/^55\d{2}9\d{8}$/.test(asaas)) return null
+  const crmDigits = (crmRaw ?? '').replace(/\D/g, '')
+  const tail = (d: string) => d.slice(-8)
+  if (crmDigits && tail(crmDigits) === tail(asaas)) return null
+  return { asaas, crm: crmDigits ? (crmRaw ?? '').trim() : null }
 }
 
 /**
@@ -315,6 +348,7 @@ export async function getWallet(): Promise<WalletSummary> {
       connectionLabel: asaasConnections.label,
       connectionId: asaasCharges.connectionId,
       contactName: contacts.name,
+      contactPhone: contacts.phone,
       paused: collectionsTouches.paused,
       pausedReason: collectionsTouches.pausedReason,
       touchCount: collectionsTouches.touchCount,
@@ -361,6 +395,7 @@ export async function getWallet(): Promise<WalletSummary> {
         snoozeUntil: r.snoozeUntil,
         snoozeReason: r.snoozeReason,
         duplicateSuspect: false,
+        phoneDiffers: phoneDiff(r.phone, r.contactPhone, r.contactId),
       }
       byDebtor.set(key, d)
     }
@@ -524,6 +559,54 @@ export async function linkDebtorToContact(debtorKey: string, contactId: string):
 }
 
 /** Desfaz um casamento feito na mão (volta a ser pendência). */
+/**
+ * Adota na ficha do contato o celular que está no cadastro do Asaas. É o
+ * botão do aviso "telefone diferente do Asaas": o envio usa a ficha, então sem
+ * isso trocar o número lá não muda para onde a cobrança vai. Nunca sobrescreve
+ * às cegas — recusa quando outro contato da conta já usa esse número, que é o
+ * caminho de criar dois cadastros da mesma pessoa.
+ */
+export async function adoptAsaasPhone(contactId: string): Promise<ActionResult<{ phone: string }>> {
+  const { accountId } = await requireRole('agent')
+
+  const charge = firstOrNull(
+    await db
+      .select({ phone: asaasCharges.phone })
+      .from(asaasCharges)
+      .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, contactId), eq(asaasCharges.open, true)))
+      .orderBy(desc(asaasCharges.updatedAt))
+      .limit(1),
+  )
+  const phone = asaasPhoneForContact(charge?.phone ?? null)
+  if (!phone || !/^55\d{2}9\d{8}$/.test(phone)) {
+    return { ok: false, error: 'O cadastro do Asaas não tem um CELULAR para este cliente. Número fixo não recebe WhatsApp — corrija no Asaas.' }
+  }
+
+  const clash = firstOrNull(
+    await db
+      .select({ id: contacts.id, name: contacts.name })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.accountId, accountId),
+          sql`${contacts.id} <> ${contactId}`,
+          sql`right(regexp_replace(${contacts.phone}, '\\D', '', 'g'), 8) = ${phone.slice(-8)}`,
+        ),
+      )
+      .limit(1),
+  )
+  if (clash) {
+    return {
+      ok: false,
+      error: `Esse número já é do contato "${clash.name ?? 'sem nome'}". Use "Ligar a um contato" e escolha ele, para não ficar com o cliente em dois cadastros.`,
+    }
+  }
+
+  await db.update(contacts).set({ phone, updatedAt: new Date().toISOString() }).where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+  revalidatePath('/cobrancas')
+  return { ok: true, data: { phone } }
+}
+
 export async function unlinkDebtor(debtorKey: string): Promise<ActionResult> {
   const { accountId } = await requireRole('agent')
   await db

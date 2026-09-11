@@ -23,6 +23,7 @@ import {
   Link2,
   Link2Off,
   Loader2,
+  Phone,
   Plus,
   Receipt,
   RefreshCw,
@@ -67,6 +68,7 @@ import {
   type CollectionSectorOption,
   listConnections,
   removeConnection,
+  adoptAsaasPhone,
   saveConnection,
   searchContactsForCharge,
   runCollectionsNow,
@@ -88,6 +90,15 @@ import {
 import { CHARGEABLE_STATUSES, type CollectionsSettings } from '@/lib/collections/rules';
 
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
+
+/** "5512997075373" → "(12) 99707-5373". O que não for número BR sai como veio. */
+function fmtPhone(raw: string): string {
+  const d = raw.replace(/\D/g, '');
+  const local = d.startsWith('55') && d.length >= 12 ? d.slice(2) : d;
+  if (local.length === 11) return `(${local.slice(0, 2)}) ${local.slice(2, 7)}-${local.slice(7)}`;
+  if (local.length === 10) return `(${local.slice(0, 2)}) ${local.slice(2, 6)}-${local.slice(6)}`;
+  return raw;
+}
 
 function lateLabel(days: number | null): { text: string; tone: string } {
   if (days == null) return { text: 'sem vencimento', tone: 'text-muted-foreground' };
@@ -536,6 +547,37 @@ function DebtorCard({
           >
             <Users className="h-3 w-3" /> possível duplicado no Asaas
           </span>
+        )}
+
+        {/* 📞 11/09 (João/GoLink): trocar o celular no Asaas não mudava para
+            onde a cobrança ia — o envio usa a ficha do contato. Em vez de
+            sobrescrever sozinho (o que foi corrigido à mão aqui tem que valer),
+            a carteira avisa e deixa a troca a um clique. */}
+        {debtor.phoneDiffers && (
+          <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
+            <Phone className="h-3.5 w-3.5 shrink-0" />
+            <span>
+              No Asaas o celular é <strong className="font-semibold">{fmtPhone(debtor.phoneDiffers.asaas)}</strong>
+              {debtor.phoneDiffers.crm ? (
+                <> e a cobrança está saindo para <strong className="font-semibold">{fmtPhone(debtor.phoneDiffers.crm)}</strong>.</>
+              ) : (
+                <> e este contato não tem telefone.</>
+              )}
+            </span>
+            <Button
+              size="sm"
+              variant="outline"
+              className="h-6 px-2 text-[11px]"
+              onClick={async () => {
+                const res = await adoptAsaasPhone(debtor.contactId!);
+                if (!res.ok) toast.error(res.error ?? 'Não foi possível trocar o telefone.');
+                else toast.success(`Agora a cobrança de ${debtor.name} sai para ${fmtPhone(res.data!.phone)}.`);
+                onChanged();
+              }}
+            >
+              Usar o do Asaas
+            </Button>
+          </div>
         )}
         {debtor.contactId ? (
           <div className="flex items-center gap-1.5">
