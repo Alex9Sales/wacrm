@@ -11,7 +11,7 @@
 // Sem 'server-only' — a rota do webhook e o worker alcançam isso.
 // ============================================================
 
-import { and, eq, sql } from 'drizzle-orm'
+import { and, asc, eq, sql } from 'drizzle-orm'
 
 import { db, agentActionRequests, asaasCharges, collectionsTouches, contacts, member } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -19,8 +19,10 @@ import { engineSendText } from '@/lib/flows/meta-send'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 
+import { localParts } from './engine'
 import { resolveCollectionTargets } from './outreach'
-import { normalizeSettings } from './rules'
+import { dayBlockedReason, greetingName, normalizeSettings, withinWindow } from './rules'
+import { localDayKey } from './stale'
 import { seedFromId, thankYouMessage } from './thanks-text'
 
 /** Tipo próprio: não é ação do catálogo, então não entra na fila nem nas métricas de cobrança. */
@@ -88,11 +90,38 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
   )
   if (already) return { sent: false, why: 'já agradecido' }
 
+  const firstName = greetingName(contact.name)
+  const text = thankYouMessage(firstName, Number(charge.value ?? 0), seedFromId(charge.id))
+
+  // ⏰ 11/09 (Alex): "prende o agradecimento na janela também". O webhook do
+  // Asaas chega na hora do pagamento — inclusive 22h de domingo. Mas NÃO se
+  // engole o agradecimento: ele fica esperando e sai quando a janela abrir
+  // (sendDuePaymentThanks, chamado pelo worker a cada minuto).
+  const settingsAll = await getAccountSettings(args.accountId)
+  const tz = settingsAll.businessTimezone || 'America/Sao_Paulo'
+  const { hour, weekday } = localParts(tz)
+  const hojeKey = localDayKey(tz)
+  const foraDaJanela = dayBlockedReason(weekday, settings, hojeKey) ?? (withinWindow(hour, weekday, settings, hojeKey) ? null : 'Fora do horário')
+  if (foraDaJanela) {
+    const agora = new Date().toISOString()
+    await db.insert(agentActionRequests).values({
+      accountId: args.accountId,
+      contactId: args.contactId,
+      conversationId: charge.conversationId ?? null,
+      actionType: THANKS_ACTION,
+      payload: { chargeId: charge.id, asaasId: charge.asaasId, value: Number(charge.value ?? 0), heldAt: agora },
+      suggestedText: text,
+      reason: `Pagamento recebido — agradecimento em espera (${foraDaJanela.toLowerCase()})`,
+      decision: 'auto',
+      policy: 'collections.thankOnPayment · espera a janela de atendimento',
+      status: 'pending',
+    })
+    return { sent: false, why: `${foraDaJanela.toLowerCase()} — vai sair quando a janela abrir` }
+  }
+
   const targets = await resolveCollectionTargets(args.accountId, args.contactId, charge.conversationId ?? null)
   if (!targets.ok) return { sent: false, why: targets.error }
 
-  const firstName = (contact.name ?? '').trim().split(/\s+/)[0] || null
-  const text = thankYouMessage(firstName, Number(charge.value ?? 0), seedFromId(charge.id))
   const sentVia: string[] = []
   let conversationId: string | null = null
 
@@ -147,4 +176,127 @@ async function senderUserId(accountId: string): Promise<string | null> {
   const rows = await db.select({ userId: member.userId, role: member.role }).from(member).where(eq(member.organizationId, accountId))
   const pick = rows.find((r) => r.role === 'owner') ?? rows.find((r) => r.role === 'admin') ?? rows[0]
   return pick?.userId ?? null
+}
+
+/**
+ * Agradecimento que ficou ESPERANDO a janela abrir. Uma por chamada — o worker
+ * passa a cada minuto, então um fim de semana inteiro drena sem virar rajada
+ * na segunda de manhã (é a mesma prudência do sender da régua).
+ *
+ * Agradecimento velho não sai: passou de `MAX_ESPERA_DIAS`, "obrigado pelo
+ * pagamento" já soa estranho — melhor calar do que chegar atrasado.
+ */
+const MAX_ESPERA_DIAS = 3
+
+export async function sendDuePaymentThanks(accountId: string, now = new Date()): Promise<ThanksOutcome> {
+  const settingsAll = await getAccountSettings(accountId)
+  const settings = normalizeSettings(settingsAll.collections)
+  if (!settings.thankOnPayment) return { sent: false, why: 'agradecimento desligado na conta' }
+
+  const tz = settingsAll.businessTimezone || 'America/Sao_Paulo'
+  const { hour, weekday } = localParts(tz)
+  const hojeKey = localDayKey(tz, now)
+  if (dayBlockedReason(weekday, settings, hojeKey)) return { sent: false, why: 'dia fora da régua' }
+  if (!withinWindow(hour, weekday, settings, hojeKey)) return { sent: false, why: 'fora do horário' }
+
+  const velho = new Date(now.getTime() - MAX_ESPERA_DIAS * 86_400_000).toISOString()
+  const pendente = firstOrNull(
+    await db
+      .select({ id: agentActionRequests.id, contactId: agentActionRequests.contactId, payload: agentActionRequests.payload, createdAt: agentActionRequests.createdAt })
+      .from(agentActionRequests)
+      .where(
+        and(
+          eq(agentActionRequests.accountId, accountId),
+          eq(agentActionRequests.actionType, THANKS_ACTION),
+          eq(agentActionRequests.status, 'pending'),
+        ),
+      )
+      .orderBy(asc(agentActionRequests.createdAt))
+      .limit(1),
+  )
+  if (!pendente) return { sent: false, why: 'nada em espera' }
+
+  if (pendente.createdAt && pendente.createdAt < velho) {
+    await db
+      .update(agentActionRequests)
+      .set({ status: 'expired', resolvedAt: now.toISOString(), error: `Esperou mais de ${MAX_ESPERA_DIAS} dias pela janela — agradecer agora ficaria estranho.` })
+      .where(eq(agentActionRequests.id, pendente.id))
+    return { sent: false, why: 'agradecimento envelheceu na espera' }
+  }
+
+  const chargeId = (pendente.payload as { chargeId?: unknown } | null)?.chargeId
+  if (!pendente.contactId || typeof chargeId !== 'string') {
+    await db.update(agentActionRequests).set({ status: 'failed', resolvedAt: now.toISOString(), error: 'Agradecimento em espera sem contato ou cobrança.' }).where(eq(agentActionRequests.id, pendente.id))
+    return { sent: false, why: 'agradecimento em espera sem referência' }
+  }
+
+  // O pagamento pode ter sido estornado enquanto esperava — quem manda é o
+  // estado de agora, não o do momento em que o webhook chegou.
+  const charge = firstOrNull(
+    await db
+      .select({ open: asaasCharges.open, value: asaasCharges.value, conversationId: asaasCharges.conversationId })
+      .from(asaasCharges)
+      .where(and(eq(asaasCharges.id, chargeId), eq(asaasCharges.accountId, accountId)))
+      .limit(1),
+  )
+  if (!charge || charge.open) {
+    await db.update(agentActionRequests).set({ status: 'expired', resolvedAt: now.toISOString(), error: 'A cobrança voltou a ficar em aberto — agradecimento cancelado.' }).where(eq(agentActionRequests.id, pendente.id))
+    return { sent: false, why: 'cobrança não está mais paga' }
+  }
+
+  const targets = await resolveCollectionTargets(accountId, pendente.contactId, charge.conversationId ?? null)
+  if (!targets.ok) {
+    await db.update(agentActionRequests).set({ status: 'failed', resolvedAt: now.toISOString(), error: targets.error }).where(eq(agentActionRequests.id, pendente.id))
+    return { sent: false, why: targets.error }
+  }
+
+  const text = (pendente.payload as { texto?: unknown } | null)?.texto
+  const corpo = typeof text === 'string' && text.trim() ? text : ((await db.select({ t: agentActionRequests.suggestedText }).from(agentActionRequests).where(eq(agentActionRequests.id, pendente.id)).limit(1))[0]?.t ?? '')
+  if (!corpo.trim()) {
+    await db.update(agentActionRequests).set({ status: 'failed', resolvedAt: now.toISOString(), error: 'Agradecimento em espera sem texto.' }).where(eq(agentActionRequests.id, pendente.id))
+    return { sent: false, why: 'agradecimento em espera sem texto' }
+  }
+
+  const sentVia: string[] = []
+  let conversationId: string | null = null
+  if (targets.whatsapp) {
+    const userId = await senderUserId(accountId)
+    if (userId) {
+      try {
+        await engineSendText({ accountId, userId, conversationId: targets.whatsapp.conversationId, contactId: pendente.contactId, text: corpo })
+        sentVia.push('whatsapp')
+        conversationId = targets.whatsapp.conversationId
+      } catch (err) {
+        console.error('[cobranca] agradecimento em espera falhou no WhatsApp:', err instanceof Error ? err.message : err)
+      }
+    }
+  }
+  if (targets.email && !sentVia.length) {
+    try {
+      await sendMessageToConversation(accountId, {
+        conversationId: targets.email.conversationId,
+        messageType: 'text',
+        contentText: corpo,
+        subject: 'Pagamento recebido — obrigado',
+      })
+      sentVia.push('email')
+      conversationId = targets.email.conversationId
+    } catch (err) {
+      console.error('[cobranca] agradecimento em espera falhou no e-mail:', err instanceof Error ? err.message : err)
+    }
+  }
+  if (!sentVia.length) return { sent: false, why: 'nenhum canal conseguiu enviar' }
+
+  const iso = now.toISOString()
+  await db
+    .update(agentActionRequests)
+    .set({
+      status: 'sent',
+      conversationId,
+      executedAt: iso,
+      resolvedAt: iso,
+      payload: { ...((pendente.payload ?? {}) as Record<string, unknown>), sentVia, heldUntil: iso },
+    })
+    .where(eq(agentActionRequests.id, pendente.id))
+  return { sent: true, why: sentVia.join('+') }
 }

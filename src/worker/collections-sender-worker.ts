@@ -11,6 +11,7 @@ import { Queue, Worker } from 'bullmq';
 import { bullConnection } from '@/lib/queue/connection';
 import { accountsWithCollections } from '@/lib/collections/engine';
 import { sendDueAutoCollections } from '@/lib/collections/sender';
+import { sendDuePaymentThanks } from '@/lib/collections/thanks';
 
 const QUEUE = 'collections-sender';
 const EVERY_MS = Number(process.env.COLLECTIONS_SENDER_EVERY_MS) || 60_000;
@@ -29,6 +30,11 @@ export async function tick(): Promise<void> {
       if (r.sent || r.failed) {
         console.log(`[cobranca-sender] ${accountId.slice(0, 8)}: enviadas=${r.sent} falhas=${r.failed}${r.haltedBecause ? ` (${r.haltedBecause})` : ''}`);
       }
+      // 🙏 11/09 (Alex): o agradecimento de pagamento também respeita a janela.
+      // O que chegou fora dela ficou esperando — uma por tique, pra um fim de
+      // semana inteiro não virar rajada na segunda de manhã.
+      const t = await sendDuePaymentThanks(accountId);
+      if (t.sent) console.log(`[cobranca-sender] ${accountId.slice(0, 8)}: agradecimento em espera enviado (${t.why})`);
     } catch (err) {
       console.error('[cobranca-sender] falhou:', accountId.slice(0, 8), err instanceof Error ? err.message : err);
     }
