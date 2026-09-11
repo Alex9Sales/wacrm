@@ -189,20 +189,36 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
 
 const NAME_STOPWORDS = new Set(['e', 'de', 'da', 'do', 'das', 'dos', '&', 'em', 'para'])
 
+/** Artigo sozinho não é nome de ninguém: "A Pellogia…" tem que levar mais uma palavra. */
+const NAME_ARTICLES = new Set(['a', 'o', 'as', 'os'])
+
+/** Sufixo de razão social: ninguém quer ser chamado de "Ltda". */
+const NAME_LEGAL_SUFFIX = new Set(['ltda', 'ltda.', 'lt', 'me', 'mei', 'epp', 'eireli', 'sa', 's.a', 's.a.', 'sas'])
+
 /**
  * Como chamar o cliente na mensagem, a partir do nome COMO ESTÁ NO ASAAS
  * (decisão João/Alex 10/09: prevalece o Asaas, não o apelido do WhatsApp).
- * Sem IA não dá pra saber se é pessoa ou empresa, então: até 3 palavras vai
- * inteiro ("Drogaria Imaculada", "Rack 95"); mais longo, as duas primeiras
- * ("Ultra Visão"), ou só a primeira se a segunda for conector ("João da…" → "João").
+ * Sem IA não dá pra saber se é pessoa ou empresa, então a regra é de tamanho:
+ * as DUAS primeiras palavras ("Ultra Visão", "Drogaria Imaculada", "Dom Burguer"),
+ * só a primeira quando a segunda é conector ("João da…" → "João"), e TRÊS quando
+ * a primeira é artigo — senão "A Pellogia Corretora E Administracao De Seguros Lt"
+ * virava "A Pellogia" (11/09, pedido do João). Sufixo de razão social cai fora.
  * A IA recebe o nome completo com a instrução pessoa/empresa (engine.ts).
  */
 export function greetingName(name: string | null | undefined): string | null {
-  const words = (name ?? '').replace(/\s+/g, ' ').trim().split(' ').filter(Boolean)
+  const words = (name ?? '')
+    .replace(/\s+/g, ' ')
+    .trim()
+    .split(' ')
+    .filter(Boolean)
+    .filter((w, i) => i === 0 || !NAME_LEGAL_SUFFIX.has(w.toLowerCase().replace(/,$/, '')))
   if (!words.length) return null
-  if (words.length <= 3) return words.join(' ')
-  if (NAME_STOPWORDS.has(words[1].toLowerCase())) return words[0]
-  return `${words[0]} ${words[1]}`
+  // Artigo na frente não conta como palavra do nome.
+  const take = NAME_ARTICLES.has(words[0].toLowerCase()) ? 3 : 2
+  if (words.length <= take) return words.join(' ')
+  const next = words[take - 1]?.toLowerCase()
+  if (next && NAME_STOPWORDS.has(next)) return words.slice(0, take - 1).join(' ')
+  return words.slice(0, take).join(' ')
 }
 
 /**

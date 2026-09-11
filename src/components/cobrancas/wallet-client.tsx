@@ -36,6 +36,7 @@ import {
   Settings2,
   Trash2,
   TriangleAlert,
+  User,
   UserPlus,
   Users,
 } from 'lucide-react';
@@ -69,6 +70,7 @@ import {
   listConnections,
   removeConnection,
   adoptAsaasPhone,
+  restoreContactPhone,
   saveConnection,
   searchContactsForCharge,
   runCollectionsNow,
@@ -538,6 +540,23 @@ function DebtorCard({
           <p className="text-xs text-muted-foreground">{reguaStatus(debtor)}</p>
         </button>
 
+        {/* 📇 11/09 (João): quem recebe a cobrança é a ficha do CRM, mas a tela
+            não dizia QUAL — ele ligou no contato errado e perguntou "como
+            volto?". Agora o nome aparece e o link abre a ficha para editar. */}
+        {debtor.contactId && (
+          <a
+            href={`/contacts?c=${debtor.contactId}`}
+            className="inline-flex max-w-[14rem] items-center gap-1 truncate text-[11px] text-muted-foreground underline-offset-2 hover:text-foreground hover:underline"
+            title="Abrir a ficha do contato que recebe esta cobrança"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <User className="h-3 w-3 shrink-0" />
+            <span className="truncate">
+              vai para {debtor.contactName ?? 'contato sem nome'}
+            </span>
+          </a>
+        )}
+
         <p className="font-semibold tabular-nums">{brl(debtor.total)}</p>
 
         {debtor.duplicateSuspect && (
@@ -577,7 +596,23 @@ function DebtorCard({
                   if ((res.error ?? '').includes('Ligar a um contato')) onLink();
                   return;
                 }
-                toast.success(`Agora a cobrança de ${debtor.name} sai para ${fmtPhone(res.data!.phone)}.`);
+                const anterior = res.data!.previousPhone;
+                toast.success(`Agora a cobrança de ${debtor.name} sai para ${fmtPhone(res.data!.phone)}.`, {
+                  // Clicar no devedor errado aqui muda para onde a cobrança vai.
+                  // Sem volta, o cliente fica sem saída (11/09, João).
+                  duration: 12_000,
+                  action: anterior
+                    ? {
+                        label: 'Desfazer',
+                        onClick: async () => {
+                          const back = await restoreContactPhone(debtor.contactId!, anterior);
+                          if (!back.ok) toast.error(back.error ?? 'Não foi possível desfazer.');
+                          else toast.success(`Voltou para ${fmtPhone(anterior)}.`);
+                          onChanged();
+                        },
+                      }
+                    : undefined,
+                });
                 onChanged();
               }}
             >

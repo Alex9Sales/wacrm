@@ -276,6 +276,25 @@ export interface WalletDebtor {
    * número do Asaas é fixo (aí não serve para WhatsApp e o aviso seria ruído).
    */
   phoneDiffers: { asaas: string; crm: string | null } | null
+  /**
+   * Nome do contato do CRM que está recebendo esta cobrança — para a tela poder
+   * dizer PARA QUEM vai e abrir a ficha (11/09: o João ligou no contato errado e
+   * não tinha como ver nem como voltar: "cliquei errado, como volto?").
+   * `null` quando o contato não tem nome próprio (aí o cabeçalho usa o do Asaas).
+   */
+  contactName: string | null
+}
+
+/**
+ * O contato do WhatsApp que nunca teve nome salvo vem com o próprio número no
+ * lugar do nome. Mostrar isso como nome do devedor esconde de quem é a cobrança
+ * (11/09: "Center Pisos Raspadora" aparecia como 5512991103109).
+ */
+function looksLikeBarePhone(name: string | null | undefined): boolean {
+  const t = (name ?? '').trim()
+  if (!t) return false
+  const digits = t.replace(/\D/g, '')
+  return digits.length >= 8 && digits.length === t.replace(/[\s()+-]/g, '').length
 }
 
 /** Lacuna 4 (07/09): o que entrou depois que a régua falou — o gancho em reais. */
@@ -380,7 +399,9 @@ export async function getWallet(): Promise<WalletSummary> {
     if (!d) {
       d = {
         key,
-        name: r.contactName || r.customerName || 'Sem nome',
+        // Nome do Asaas vence o contato quando o contato só tem o número.
+        name: (looksLikeBarePhone(r.contactName) ? r.customerName : r.contactName) || r.customerName || 'Sem nome',
+        contactName: looksLikeBarePhone(r.contactName) ? null : (r.contactName ?? null),
         phone: r.phone,
         email: r.email,
         cpfCnpj: r.cpfCnpj,
@@ -567,7 +588,7 @@ export async function linkDebtorToContact(debtorKey: string, contactId: string):
  * às cegas — recusa quando outro contato da conta já usa esse número, que é o
  * caminho de criar dois cadastros da mesma pessoa.
  */
-export async function adoptAsaasPhone(contactId: string): Promise<ActionResult<{ phone: string }>> {
+export async function adoptAsaasPhone(contactId: string): Promise<ActionResult<{ phone: string; previousPhone: string | null }>> {
   const { accountId } = await requireRole('agent')
 
   const charge = firstOrNull(
@@ -613,9 +634,50 @@ export async function adoptAsaasPhone(contactId: string): Promise<ActionResult<{
     }
   }
 
+  // Guarda o número anterior para o "Desfazer" do aviso — clicar errado aqui
+  // troca para onde a cobrança vai, e sem volta o cliente fica sem saída
+  // (11/09, João: "cliquei errado aqui em center piso raspadora, como volto?").
+  const antes = firstOrNull(
+    await db
+      .select({ phone: contacts.phone })
+      .from(contacts)
+      .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+      .limit(1),
+  )
+
   await db.update(contacts).set({ phone, updatedAt: new Date().toISOString() }).where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
   revalidatePath('/cobrancas')
-  return { ok: true, data: { phone } }
+  return { ok: true, data: { phone, previousPhone: antes?.phone?.trim() || null } }
+}
+
+/**
+ * Desfaz o "Usar o do Asaas": devolve à ficha o telefone que estava lá antes.
+ * Só aceita o número que a própria ação acabou de devolver, e só quando ele
+ * ainda não é de outro contato.
+ */
+export async function restoreContactPhone(contactId: string, phone: string): Promise<ActionResult> {
+  const { accountId } = await requireRole('agent')
+  const limpo = (phone ?? '').trim()
+  if (!limpo) return { ok: false, error: 'Não há um telefone anterior para voltar.' }
+
+  const clash = firstOrNull(
+    await db
+      .select({ id: contacts.id, name: contacts.name })
+      .from(contacts)
+      .where(
+        and(
+          eq(contacts.accountId, accountId),
+          sql`${contacts.id} <> ${contactId}`,
+          sql`right(regexp_replace(${contacts.phone}, '\\D', '', 'g'), 8) = ${limpo.replace(/\D/g, '').slice(-8)}`,
+        ),
+      )
+      .limit(1),
+  )
+  if (clash) return { ok: false, error: `Não dá para voltar: esse número agora é do contato "${clash.name ?? 'sem nome'}".` }
+
+  await db.update(contacts).set({ phone: limpo, updatedAt: new Date().toISOString() }).where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+  revalidatePath('/cobrancas')
+  return { ok: true }
 }
 
 export async function unlinkDebtor(debtorKey: string): Promise<ActionResult> {

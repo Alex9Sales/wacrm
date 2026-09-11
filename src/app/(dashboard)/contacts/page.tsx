@@ -276,6 +276,16 @@ export default function ContactsPage() {
     setDetailOpen(true);
   }
 
+  // 🔗 11/09 (João/GoLink): a carteira de cobranças diz PARA QUEM a cobrança
+  // vai e precisa abrir essa ficha. Sem isto o link cairia na lista inteira e
+  // ele teria que caçar o contato na mão — que foi o problema do dia.
+  useEffect(() => {
+    const id = new URLSearchParams(window.location.search).get('c');
+    if (id) openDetail(id);
+    // Só na entrada: depois disso quem manda é o clique na lista.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
   function confirmDelete(contact: Contact) {
     setDeleteTarget(contact);
     setDeleteConfirmOpen(true);

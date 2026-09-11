@@ -127,7 +127,7 @@ describe('autoSend / cadência (09/09, GoLink "uma a cada N minutos")', () => {
 })
 
 describe('greetingName — nome como está no Asaas (10/09, GoLink)', () => {
-  it('até 3 palavras vai inteiro: empresa curta e apelido não viram "primeiro nome"', () => {
+  it('empresa curta e apelido não viram "primeiro nome"', () => {
     expect(greetingName('Drogaria Imaculada')).toBe('Drogaria Imaculada')
     expect(greetingName('Rack 95')).toBe('Rack 95')
     expect(greetingName('Alipé Podologia')).toBe('Alipé Podologia')
@@ -141,6 +141,19 @@ describe('greetingName — nome como está no Asaas (10/09, GoLink)', () => {
     expect(greetingName('')).toBeNull()
     expect(greetingName(null)).toBeNull()
     expect(greetingName('   ')).toBeNull()
+  })
+
+  // 11/09 — os dois nomes que o João mandou depois de ver o "Oi, Dom!".
+  it('artigo na frente leva mais uma palavra (senão vira "Oi, A!")', () => {
+    expect(greetingName('A Pellogia Corretora E Administracao De Seguros Lt')).toBe('A Pellogia Corretora')
+    expect(greetingName('O Boticário')).toBe('O Boticário')
+  })
+  it('nome de empresa com dono junto para nas duas primeiras', () => {
+    expect(greetingName('Dom Burguer Susan')).toBe('Dom Burguer')
+  })
+  it('sufixo de razão social não é jeito de chamar ninguém', () => {
+    expect(greetingName('Pellogia Ltda')).toBe('Pellogia')
+    expect(greetingName('Vale Ouro ME')).toBe('Vale Ouro')
   })
 })
 
