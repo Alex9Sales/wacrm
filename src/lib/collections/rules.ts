@@ -396,6 +396,23 @@ export function dayBlockedReason(localWeekday: number, s: CollectionsSettings, l
   return null
 }
 
+/**
+ * O dia serve para AGRADECER um pagamento? Regra própria, mais solta que a da
+ * cobrança (11/09, Alex: "pode deixar o agradecimento sair no sábado também").
+ *
+ * Agradecer não é cobrar: não incomoda, e chegar dois dias depois do pagamento
+ * é pior que chegar num sábado. Então ele não se prende aos dias escolhidos
+ * para a régua — só não vai em DOMINGO nem em feriado, e respeita o horário.
+ */
+export function thanksDayBlockedReason(localWeekday: number, s: CollectionsSettings, localDayKey?: string): string | null {
+  if (localWeekday === 0) return 'Domingo'
+  if (s.skipHolidays && localDayKey) {
+    const feriado = holidayName(localDayKey)
+    if (feriado) return `Feriado nacional (${feriado})`
+  }
+  return null
+}
+
 export const WEEKDAY_NAMES = ['Domingo', 'Segunda', 'Terça', 'Quarta', 'Quinta', 'Sexta', 'Sábado']
 export const WEEKDAY_SHORT = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 

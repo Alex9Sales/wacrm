@@ -16,6 +16,7 @@ import {
   greetingName,
   normalizeWeekdays,
   phoneSearchDigits,
+  thanksDayBlockedReason,
   linksInstruction,
   normalizeSettings,
   withinWindow,
@@ -245,6 +246,19 @@ describe('withinWindow', () => {
     expect(dayBlockedReason(0, s)).toBe('Domingo não está nos dias de cobrança')
     expect(dayBlockedReason(5, s, '2026-12-25')).toBe('Feriado nacional (Natal)')
     expect(dayBlockedReason(3, s, '2026-09-16')).toBeNull()
+  })
+})
+
+describe('thanksDayBlockedReason — agradecer não é cobrar (11/09)', () => {
+  it('sai no SÁBADO mesmo com a régua em segunda a sexta', () => {
+    expect(s.sendWeekdays).toEqual([1, 2, 3, 4, 5])
+    expect(dayBlockedReason(6, s)).toBe('Sábado não está nos dias de cobrança')
+    expect(thanksDayBlockedReason(6, s)).toBeNull()
+  })
+  it('nunca no domingo nem em feriado', () => {
+    expect(thanksDayBlockedReason(0, s)).toBe('Domingo')
+    expect(thanksDayBlockedReason(5, s, '2026-12-25')).toBe('Feriado nacional (Natal)')
+    expect(thanksDayBlockedReason(5, { ...s, skipHolidays: false }, '2026-12-25')).toBeNull()
   })
 })
 

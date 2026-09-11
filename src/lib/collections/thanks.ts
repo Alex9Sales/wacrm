@@ -21,7 +21,7 @@ import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 
 import { localParts } from './engine'
 import { resolveCollectionTargets } from './outreach'
-import { dayBlockedReason, greetingName, normalizeSettings, withinWindow } from './rules'
+import { greetingName, normalizeSettings, thanksDayBlockedReason } from './rules'
 import { localDayKey } from './stale'
 import { seedFromId, thankYouMessage } from './thanks-text'
 
@@ -101,7 +101,11 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
   const tz = settingsAll.businessTimezone || 'America/Sao_Paulo'
   const { hour, weekday } = localParts(tz)
   const hojeKey = localDayKey(tz)
-  const foraDaJanela = dayBlockedReason(weekday, settings, hojeKey) ?? (withinWindow(hour, weekday, settings, hojeKey) ? null : 'Fora do horário')
+  // Agradecer tem regra própria: vai no sábado, não vai no domingo nem em
+  // feriado, e respeita o horário da conta (11/09, Alex).
+  const diaRuim = thanksDayBlockedReason(weekday, settings, hojeKey)
+  const foraDoHorario = hour < settings.startHour || hour >= settings.endHour
+  const foraDaJanela = diaRuim ?? (foraDoHorario ? 'Fora do horário' : null)
   if (foraDaJanela) {
     const agora = new Date().toISOString()
     await db.insert(agentActionRequests).values({
@@ -196,8 +200,9 @@ export async function sendDuePaymentThanks(accountId: string, now = new Date()):
   const tz = settingsAll.businessTimezone || 'America/Sao_Paulo'
   const { hour, weekday } = localParts(tz)
   const hojeKey = localDayKey(tz, now)
-  if (dayBlockedReason(weekday, settings, hojeKey)) return { sent: false, why: 'dia fora da régua' }
-  if (!withinWindow(hour, weekday, settings, hojeKey)) return { sent: false, why: 'fora do horário' }
+  const diaRuim = thanksDayBlockedReason(weekday, settings, hojeKey)
+  if (diaRuim) return { sent: false, why: diaRuim.toLowerCase() }
+  if (hour < settings.startHour || hour >= settings.endHour) return { sent: false, why: 'fora do horário' }
 
   const velho = new Date(now.getTime() - MAX_ESPERA_DIAS * 86_400_000).toISOString()
   const pendente = firstOrNull(
