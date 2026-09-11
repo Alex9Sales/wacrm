@@ -1047,9 +1047,19 @@ function NewChargeDialog({
                 >
                   <option value="UNDEFINED">Cliente escolhe (Pix, boleto ou cartão)</option>
                   <option value="PIX">Só Pix</option>
-                  <option value="BOLETO">Só boleto</option>
+                  {/* 11/09 (João/GoLink): "deixa boleto e Pix, tira o cartão".
+                      No Asaas o boleto já sai com o QR Code do Pix no mesmo
+                      link quando a conta tem chave Pix — é a opção "Boleto
+                      Bancário / Pix" do painel deles. Não existe combinar dois
+                      billingType, então este é o caminho. */}
+                  <option value="BOLETO">Boleto e Pix (sem cartão)</option>
                   <option value="CREDIT_CARD">Só cartão</option>
                 </select>
+                {billingType === 'BOLETO' && (
+                  <p className="text-xs text-muted-foreground">
+                    O boleto sai com o QR Code do Pix no mesmo link. Se a conta do Asaas não tiver chave Pix cadastrada, vai só o boleto.
+                  </p>
+                )}
               </div>
               <div className="flex flex-col gap-1.5">
                 <Label htmlFor="nc-cpf">CPF/CNPJ do cliente</Label>

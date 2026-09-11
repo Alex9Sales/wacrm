@@ -25,7 +25,7 @@ import { syncAccount } from '@/lib/asaas/sync'
 
 import { resolveCollectionTargets } from './outreach'
 import { queueUpcomingReminders } from './reminders'
-import { expireStaleCollectionDrafts } from './stale'
+import { expireStaleCollectionDrafts, localDayKey } from './stale'
 import { maxSimilarity, seedFrom, tooSimilar, variationInstruction, variationPlan } from './variation'
 
 import {
@@ -168,6 +168,19 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
 
   const byContact = new Map<string, Debtor>()
   const today = new Date()
+  // Dias de atraso = diferença de DATAS no fuso da conta, não de instantes.
+  // Antes era `agora - meia-noite do vencimento` arredondado: às 10h53 de 11/09
+  // uma parcela vencida em 10/09 dava 1,58 → "2 dias de atraso" (João, 11/09:
+  // "venceu ontem e está falando dois dias"). O servidor roda em UTC, o que
+  // piorava a conta à noite.
+  const todayKey = localDayKey(tz, today)
+  const daysLateFrom = (ymd: string | null): number | null => {
+    if (!ymd) return null
+    const venc = Date.parse(`${ymd.slice(0, 10)}T00:00:00Z`)
+    const hoje = Date.parse(`${todayKey}T00:00:00Z`)
+    if (Number.isNaN(venc) || Number.isNaN(hoje)) return null
+    return Math.round((hoje - venc) / 86_400_000)
+  }
   for (const r of rows) {
     if (!r.contactId) continue
     let d = byContact.get(r.contactId)
@@ -186,7 +199,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       }
       byContact.set(r.contactId, d)
     }
-    const late = r.dueDate ? Math.round((today.getTime() - new Date(`${r.dueDate}T00:00:00`).getTime()) / 86_400_000) : null
+    const late = daysLateFrom(r.dueDate)
     d.charges.push({
       customerId: r.asaasCustomerId,
       customerName: r.customerName,

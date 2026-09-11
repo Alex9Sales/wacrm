@@ -644,7 +644,14 @@ export async function sendMessageToConversation(
   // The 9th-digit auto-correct is a 1:1 (Meta) thing. NEVER for a group nem para
   // Instagram (workingPhone é o IGSID/jid, não um telefone — gravá-lo em
   // contacts.phone corromperia a chave).
-  if (!contact.isGroup && !contact.externalId && workingPhone !== sanitizedPhone) {
+  //
+  // ⚠️ 11/09 (GoLink): só o Meta varia o alvo. Nos outros provedores
+  // `workingPhone` é o `providerTarget` cru — e num canal de E-MAIL isso é o
+  // ENDEREÇO. A cobrança por e-mail vinha gravando "fulano@gmail.com" em
+  // contacts.phone ("Auto-corrected contact phone: 5512997075373 →
+  // chaveirofinancas@gmail.com"), destruindo o telefone do cliente. Trava por
+  // provedor: fora do Meta ninguém reescreve o telefone.
+  if (provider.id === 'meta' && !contact.isGroup && !contact.externalId && workingPhone !== sanitizedPhone) {
     console.log(
       `[send-message] Auto-corrected contact phone: ${sanitizedPhone} → ${workingPhone}`
     );

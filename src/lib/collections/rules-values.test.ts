@@ -65,3 +65,22 @@ describe('formatDebtSummary — juros, dois cadastros e "sem valores" (João 10/
     expect(normalizeSettings({ showValues: false }).showValues).toBe(false)
   })
 })
+
+describe('dias de atraso pela DATA, não pelo instante (João 11/09)', () => {
+  // A régua calcula com o mesmo par de chaves YYYY-MM-DD que o engine usa.
+  const diasDeAtraso = (venceu: string, hojeKey: string) =>
+    Math.round((Date.parse(`${hojeKey}T00:00:00Z`) - Date.parse(`${venceu}T00:00:00Z`)) / 86_400_000)
+
+  it('venceu ontem = 1 dia, não 2', () => {
+    expect(diasDeAtraso('2026-09-10', '2026-09-11')).toBe(1)
+  })
+
+  it('vence hoje = 0', () => {
+    expect(diasDeAtraso('2026-09-11', '2026-09-11')).toBe(0)
+  })
+
+  it('não muda com a hora do dia (o servidor roda em UTC)', () => {
+    expect(diasDeAtraso('2026-09-10', '2026-09-11')).toBe(1)
+    expect(diasDeAtraso('2026-08-15', '2026-09-11')).toBe(27)
+  })
+})

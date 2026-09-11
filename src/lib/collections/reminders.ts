@@ -26,6 +26,7 @@ import { decrypt } from '@/lib/whatsapp/encryption'
 
 import { resolveCollectionTargets } from './outreach'
 import { fallbackReminderMessage, formatUpcomingSummary, greetingName, linksInstruction, type CollectionsSettings, type UpcomingLine } from './rules'
+import { localDayKey } from './stale'
 import { seedFrom, tooSimilar } from './variation'
 
 export interface ReminderRunResult {
@@ -65,6 +66,14 @@ export async function queueUpcomingReminders(args: {
   if (!conns.length) return out
 
   const today = new Date()
+  const tz = args.accountSettings.businessTimezone || 'America/Sao_Paulo'
+  const todayKey = localDayKey(tz, today)
+  const daysUntilFrom = (ymd: string): number | null => {
+    const venc = Date.parse(`${ymd.slice(0, 10)}T00:00:00Z`)
+    const hoje = Date.parse(`${todayKey}T00:00:00Z`)
+    if (Number.isNaN(venc) || Number.isNaN(hoje)) return null
+    return Math.round((venc - hoje) / 86_400_000)
+  }
   const from = isoDay(today)
   const until = isoDay(new Date(today.getTime() + s.reminderDaysBefore * 86_400_000))
 
@@ -102,8 +111,10 @@ export async function queueUpcomingReminders(args: {
         bump('no_contact')
         continue
       }
-      const due = p.dueDate ? new Date(`${p.dueDate.slice(0, 10)}T00:00:00Z`) : null
-      const daysUntil = due ? Math.round((Date.UTC(today.getFullYear(), today.getMonth(), today.getDate()) - due.getTime()) / -86_400_000) : null
+      // Dias até vencer pela DATA no fuso da conta (mesma conta da régua):
+      // o servidor roda em UTC e `Date.UTC(...componentes locais)` errava por
+      // um dia à noite.
+      const daysUntil = p.dueDate ? daysUntilFrom(p.dueDate) : null
       let cand = byContact.get(decision.contactId)
       if (!cand) {
         cand = { contactId: decision.contactId, name: cust?.name ?? null, optedOut: false, connectionId: c.id, lines: [], asaasIds: [] }
