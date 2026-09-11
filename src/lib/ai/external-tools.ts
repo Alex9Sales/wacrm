@@ -295,17 +295,24 @@ export async function executeTool(
     // ⚠️ 04/09 (Wellington): o cliente trocou de cartão pra Pix e depois mandou
     // o comprovante — a IA criou o pedido nas TRÊS vezes. Aqui ela é avisada do
     // que já existe e do que fazer quando algo muda, em vez de recriar.
-    const quando = new Date(previous.createdAt).toLocaleTimeString('pt-BR', {
-      hour: '2-digit',
-      minute: '2-digit',
-      timeZone: 'America/Sao_Paulo',
-    })
+    // Idade RELATIVA em vez de hora no relógio: o fuso aqui era fixo em
+    // São Paulo e mentia uma hora pra conta de Campo Grande (11/09, Dayane —
+    // "feito às 14:36" quando era 13:36 lá). Minuto relativo nunca erra.
+    const minutos = Math.max(0, Math.round((Date.now() - new Date(previous.createdAt).getTime()) / 60_000))
+    const quando =
+      minutos < 1 ? 'agora há pouco' : minutos < 60 ? `há ${minutos} min` : `há ${Math.round(minutos / 60)} h`
     result = {
       status: 'ok',
       summary:
-        `JÁ EXISTE um registro desta ação nesta conversa, feito às ${quando}` +
+        `JÁ EXISTE um registro desta ação nesta conversa, feito ${quando}` +
         (previous.resultSummary ? ` (${previous.resultSummary.slice(0, 160)})` : '') +
-        '. NÃO crie outro. Se o cliente só mandou comprovante ou confirmou de novo, apenas agradeça e confirme o que já está registrado. ' +
+        '. NÃO crie outro e NÃO repita a confirmação: o cliente já foi avisado nesta conversa. ' +
+        // ⚠️ 11/09 (Dayane): aqui estava escrito "agradeça e confirme o que já
+        // está registrado" — e a IA mandou a confirmação INTEIRA de novo
+        // (produto, valor e endereço), 15 s depois da primeira. Mandar duas
+        // vezes faz o cliente achar que saíram dois pedidos.
+        'Responda só o que o cliente perguntou AGORA. Se ele não perguntou nada novo (só disse "isso"/"ok" ou mandou o comprovante), ' +
+        'mande no máximo um "ok, já está anotado" curto — sem repetir produto, valor nem endereço. ' +
         'Se algo mudou de verdade (forma de pagamento, endereço, quantidade), NÃO recrie: diga ao cliente que já vai ajustar e emita [[NOTA:o que mudou]] para o time corrigir.',
     }
   } else if (tool.risk === 'critical') {
