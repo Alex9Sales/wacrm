@@ -557,7 +557,7 @@ function DebtorCard({
           <div className="flex flex-wrap items-center gap-2 rounded-md border border-amber-500/40 bg-amber-50 px-2.5 py-1.5 text-[11px] text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
             <Phone className="h-3.5 w-3.5 shrink-0" />
             <span>
-              No Asaas o celular é <strong className="font-semibold">{fmtPhone(debtor.phoneDiffers.asaas)}</strong>
+              No Asaas o telefone é <strong className="font-semibold">{fmtPhone(debtor.phoneDiffers.asaas)}</strong>
               {debtor.phoneDiffers.crm ? (
                 <> e a cobrança está saindo para <strong className="font-semibold">{fmtPhone(debtor.phoneDiffers.crm)}</strong>.</>
               ) : (

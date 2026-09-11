@@ -11,7 +11,7 @@ const tail = (d: string) => d.replace(/\D/g, '').slice(-8)
 const avisa = (asaasRaw: string | null, crmRaw: string | null, contactId: string | null): boolean => {
   if (!contactId) return false
   const asaas = asaasPhoneForContact(asaasRaw)
-  if (!asaas || !/^55\d{2}9\d{8}$/.test(asaas)) return false
+  if (!asaas) return false
   const crm = (crmRaw ?? '').replace(/\D/g, '')
   return !(crm && tail(crm) === tail(asaas))
 }
@@ -31,8 +31,11 @@ describe('aviso de telefone diferente do Asaas', () => {
     expect(avisa('12997075373', '551297075373', 'c1')).toBe(false)
   })
 
-  it('fixo no Asaas não vira aviso (não tem WhatsApp)', () => {
-    expect(avisa('1236488533', '5512997075373', 'c1')).toBe(false)
+  // 11/09: fixo TAMBÉM conta. O WhatsApp Business aceita número fixo e o do
+  // cliente da GoLink respondeu numberExists=true no check-exists. Quem decide
+  // se o número serve é o WhatsApp na hora de adotar, não o formato.
+  it('fixo com WhatsApp gera aviso como qualquer outro', () => {
+    expect(avisa('1236488533', '5512997075373', 'c1')).toBe(true)
   })
 
   it('devedor sem contato ligado não gera aviso', () => {

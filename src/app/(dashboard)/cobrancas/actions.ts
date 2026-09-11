@@ -32,6 +32,7 @@ import { createChargeForContact } from '@/lib/collections/emit'
 import { changeChargeDueDateCore } from '@/lib/collections/due-date'
 import { manualChargeMessage, parseDueDate, parseValue, validateEmit } from '@/lib/collections/emit-rules'
 import { postInternalNote } from '@/lib/ai/close-actions'
+import { numberHasWhatsApp } from '@/lib/whatsapp/number-exists'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { syncAccount, syncConnection, type SyncResult } from '@/lib/asaas/sync'
 import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
@@ -309,12 +310,12 @@ function phoneDiff(
   contactId: string | null,
 ): { asaas: string; crm: string | null } | null {
   if (!contactId) return null
+  // Fixo TAMBÉM entra: o WhatsApp Business aceita número fixo, e o do cliente
+  // da GoLink (12 3648-8533) respondeu `numberExists: true` no check-exists
+  // (11/09). Quem decide se o número serve é o WhatsApp, na hora de adotar —
+  // não o formato.
   const asaas = asaasPhoneForContact(asaasRaw)
-  // `asaasPhoneForContact` aceita fixo (10 dígitos locais). Aqui não serve:
-  // adotar um fixo deixaria a cobrança sem chegar — caso Felipe Chaveiro,
-  // 11/09, em que o dono trocou o celular por um fixo no Asaas. Só celular:
-  // 55 + DDD + 9 + oito dígitos.
-  if (!asaas || !/^55\d{2}9\d{8}$/.test(asaas)) return null
+  if (!asaas) return null
   const crmDigits = (crmRaw ?? '').replace(/\D/g, '')
   const tail = (d: string) => d.slice(-8)
   if (crmDigits && tail(crmDigits) === tail(asaas)) return null
@@ -578,8 +579,18 @@ export async function adoptAsaasPhone(contactId: string): Promise<ActionResult<{
       .limit(1),
   )
   const phone = asaasPhoneForContact(charge?.phone ?? null)
-  if (!phone || !/^55\d{2}9\d{8}$/.test(phone)) {
-    return { ok: false, error: 'O cadastro do Asaas não tem um CELULAR para este cliente. Número fixo não recebe WhatsApp — corrija no Asaas.' }
+  if (!phone) return { ok: false, error: 'O cadastro do Asaas não tem um telefone válido para este cliente.' }
+
+  // Pergunta ao WhatsApp se o número recebe mensagem, em vez de adivinhar pelo
+  // formato: fixo pode ter WhatsApp Business e celular pode não ter. Só o
+  // "não existe" barra — quando não dá para checar, seguimos (fail-open).
+  const settings = normalizeSettings((await getAccountSettings(accountId)).collections)
+  const check = await numberHasWhatsApp(accountId, phone, settings.channelId)
+  if (check.exists === false) {
+    return {
+      ok: false,
+      error: 'Esse número do Asaas não está no WhatsApp, então a cobrança não chegaria. Confirme o número com o cliente e corrija no Asaas.',
+    }
   }
 
   const clash = firstOrNull(
