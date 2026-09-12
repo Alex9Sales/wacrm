@@ -227,7 +227,11 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   //    Antes, o que sobrou de OUTRO dia expira (stale.ts): "vence hoje" de
   //    ontem não sai hoje — esta rodada monta de novo com os números de hoje.
   await expireStaleCollectionDrafts(accountId, tz)
-  const dayAgo = new Date(Date.now() - 24 * 3_600_000).toISOString()
+  // 🐛 12/09 (pergunta do João sobre volume): o teto do dia contava as últimas
+  // 24 HORAS corridas. Quem batia o teto num dia começava o dia seguinte com
+  // orçamento ZERO — as 50 de ontem entre 9h e 17h ainda estavam na janela às
+  // 9h de hoje, e a régua respondia "teto já atingido" e não mandava nada.
+  // O teto é POR DIA do calendário, no fuso da conta.
   const recent = await db
     .select({ contactId: agentActionRequests.contactId, status: agentActionRequests.status })
     .from(agentActionRequests)
@@ -235,7 +239,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       and(
         eq(agentActionRequests.accountId, accountId),
         eq(agentActionRequests.actionType, 'collect_charges'),
-        gte(agentActionRequests.createdAt, dayAgo),
+        sql`to_char(${agentActionRequests.createdAt} AT TIME ZONE ${tz}, 'YYYY-MM-DD') = ${hojeKey}`,
       ),
     )
   const alreadyQueued = new Set(recent.filter((r) => r.status === 'pending').map((r) => r.contactId))

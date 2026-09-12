@@ -58,6 +58,18 @@ export interface ScheduleMessageInput {
    * porque o canal de uma agendada é sempre o canal da sua conversa.
    */
   channelId?: string | null
+  /**
+   * 📎 Anexo na mensagem agendada (12/09, pedido do João/GoLink: "preciso criar
+   * um agendamento pra enviar um contrato pro cliente").
+   *
+   * A tabela e o worker JÁ mandavam mídia — faltava só deixar entrar por aqui.
+   * `mediaUrl` vem do upload da tela (o mesmo bucket do compositor), e o tipo
+   * decide como o WhatsApp mostra: imagem/vídeo inline, documento como arquivo.
+   * Texto sem anexo continua sendo o caso normal.
+   */
+  messageType?: 'text' | 'image' | 'video' | 'document' | 'audio'
+  mediaUrl?: string | null
+  filename?: string | null
 }
 
 const liteSelect = {
@@ -195,7 +207,14 @@ export async function scheduleMessage(
     const conversationId = input.conversationId?.trim()
     const contentText = input.contentText?.trim()
     if (!conversationId) return { ok: false, error: 'Conversa inválida.' }
-    if (!contentText) return { ok: false, error: 'Escreva a mensagem.' }
+
+    // Com anexo, o texto é opcional: mandar só a imagem ou só o contrato é
+    // legítimo. Sem anexo, texto vazio não tem o que enviar.
+    const tipo = input.messageType && input.messageType !== 'text' ? input.messageType : 'text'
+    const mediaUrl = (input.mediaUrl ?? '').trim() || null
+    if (tipo !== 'text' && !mediaUrl) return { ok: false, error: 'O anexo não terminou de subir. Tente de novo.' }
+    if (tipo === 'text' && !contentText) return { ok: false, error: 'Escreva a mensagem.' }
+    if (mediaUrl && !/^https?:\/\//i.test(mediaUrl)) return { ok: false, error: 'Anexo inválido.' }
 
     const when = new Date(input.scheduledAt)
     if (Number.isNaN(when.getTime())) {
@@ -311,10 +330,12 @@ export async function scheduleMessage(
           accountId: ctx.accountId,
           conversationId: conv.id,
           contactId: conv.contactId,
-          messageType: 'text',
-          contentText: input.includeOptOut
-            ? appendOptOutLine(contentText)
-            : contentText,
+          messageType: tipo,
+          mediaUrl,
+          filename: (input.filename ?? '').trim() || null,
+          // O "responda SAIR" só entra quando há texto: pendurar opt-out numa
+          // legenda vazia deixaria a mensagem só com a frase de descadastro.
+          contentText: contentText && input.includeOptOut ? appendOptOutLine(contentText) : (contentText || null),
           scheduledAt: when.toISOString(),
           status: 'pending',
           createdBy: ctx.userId,

@@ -11,7 +11,7 @@
 
 import { useEffect, useState } from 'react'
 import { toast } from 'sonner'
-import { Loader2 } from 'lucide-react'
+import { Loader2, Paperclip, X } from 'lucide-react'
 import {
   Dialog,
   DialogContent,
@@ -35,6 +35,7 @@ import {
   type SendableChannel,
 } from '@/app/(dashboard)/inbox/actions'
 import { listTeamMembers } from '@/app/(dashboard)/internal-chat/actions'
+import { uploadAccountMedia, deleteAccountMedia, mediaMaxBytesFor } from '@/lib/storage/upload-media'
 import { useAuth } from '@/hooks/use-auth'
 import { hasMinRole } from '@/lib/auth/roles'
 
@@ -150,11 +151,56 @@ export function ScheduleMessageForm({
       .catch(() => setMembers([]))
   }, [open, canAssign])
 
+  // Mesmo bucket do compositor da conversa — o anexo agendado é mídia de chat.
+  const BUCKET_ANEXO = 'chat-media'
+
+  // 📎 12/09 (João): "preciso criar um agendamento pra enviar um contrato pro
+  // cliente". A tabela e o worker já mandavam mídia; faltava a tela.
+  const [anexo, setAnexo] = useState<{ url: string; path: string; nome: string; tipo: 'image' | 'video' | 'document' } | null>(null)
+  const [subindo, setSubindo] = useState(false)
+
+  function tipoDoArquivo(f: File): 'image' | 'video' | 'document' {
+    if (f.type.startsWith('image/')) return 'image'
+    if (f.type.startsWith('video/')) return 'video'
+    return 'document'
+  }
+
+  async function anexar(file: File | undefined) {
+    if (!file) return
+    const tipo = tipoDoArquivo(file)
+    // Sem o provedor à mão aqui, vale o teto do WhatsApp (o menor).
+    const max = mediaMaxBytesFor(undefined, tipo)
+    if (file.size > max) {
+      toast.error(`O arquivo tem ${(file.size / 1024 / 1024).toFixed(1)} MB e o limite para ${tipo} é ${Math.round(max / 1024 / 1024)} MB.`)
+      return
+    }
+    setSubindo(true)
+    try {
+      const { publicUrl, path } = await uploadAccountMedia(BUCKET_ANEXO, file)
+      // Trocar o anexo apaga o anterior, pra não deixar arquivo órfão no bucket.
+      if (anexo?.path) void deleteAccountMedia(BUCKET_ANEXO, anexo.path).catch(() => {})
+      setAnexo({ url: publicUrl, path, nome: file.name, tipo })
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha no upload.')
+    } finally {
+      setSubindo(false)
+    }
+  }
+
+  function removerAnexo() {
+    if (anexo?.path) void deleteAccountMedia(BUCKET_ANEXO, anexo.path).catch(() => {})
+    setAnexo(null)
+  }
+
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const body = text.trim()
-    if (!body) {
-      toast.error('Escreva a mensagem.')
+    if (!body && !anexo) {
+      toast.error('Escreva a mensagem ou anexe um arquivo.')
+      return
+    }
+    if (subindo) {
+      toast.error('Espere o anexo terminar de subir.')
       return
     }
     if (!when) {
@@ -193,6 +239,9 @@ export function ScheduleMessageForm({
             assignedTo: assignee || null,
             includeOptOut: optOut,
             channelId: channelId || null,
+            messageType: anexo?.tipo ?? 'text',
+            mediaUrl: anexo?.url ?? null,
+            filename: anexo?.nome ?? null,
           })
       if (!res.ok) {
         toast.error(res.error)
@@ -227,7 +276,7 @@ export function ScheduleMessageForm({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <Label htmlFor="sched-text">
-                Mensagem <span className="text-destructive">*</span>
+                Mensagem {anexo ? <span className="font-normal text-muted-foreground">(opcional, vira a legenda)</span> : <span className="text-destructive">*</span>}
               </Label>
               <div className="flex items-center gap-1 text-xs text-muted-foreground">
                 <span>Modelos</span>
@@ -248,6 +297,42 @@ export function ScheduleMessageForm({
               autoFocus
               className="w-full resize-none rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
             />
+            {/* 📎 Anexo: imagem, vídeo ou documento (contrato, boleto, PDF). */}
+            {!editing && (
+              <div className="pt-1">
+                {anexo ? (
+                  <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs">
+                    <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                    <span className="min-w-0 flex-1 truncate text-foreground">{anexo.nome}</span>
+                    <span className="shrink-0 text-muted-foreground">
+                      {anexo.tipo === 'image' ? 'imagem' : anexo.tipo === 'video' ? 'vídeo' : 'documento'}
+                    </span>
+                    <button
+                      type="button"
+                      onClick={removerAnexo}
+                      className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+                      title="Remover o anexo"
+                    >
+                      <X className="h-3.5 w-3.5" />
+                    </button>
+                  </div>
+                ) : (
+                  <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                    {subindo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+                    <span>{subindo ? 'Subindo o anexo…' : 'Anexar imagem, vídeo ou documento'}</span>
+                    <input
+                      type="file"
+                      className="hidden"
+                      disabled={subindo}
+                      onChange={(e) => {
+                        void anexar(e.target.files?.[0])
+                        e.currentTarget.value = ''
+                      }}
+                    />
+                  </label>
+                )}
+              </div>
+            )}
             {!editing && (
               <label className="flex cursor-pointer items-start gap-2 pt-1 text-xs text-muted-foreground">
                 <input

@@ -88,11 +88,13 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
 
   // Teto do dia e cadência olham TODO envio de cobrança da conta (automático
   // ou aprovado à mão): o anti-ban é por linha de WhatsApp, não por origem.
-  const dayAgo = new Date(now.getTime() - 24 * 3_600_000).toISOString()
+  // O teto é POR DIA do calendário no fuso da conta, não nas últimas 24 h
+  // corridas (12/09): com janela corrida, bater o teto hoje zerava a manhã de
+  // amanhã. A CADÊNCIA continua olhando o último envio, sem recorte de dia.
   const recent = firstOrNull(
     await db
       .select({
-        n: sql<number>`count(*)::int`,
+        n: sql<number>`count(*) FILTER (WHERE to_char(${agentActionRequests.executedAt} AT TIME ZONE ${tz}, 'YYYY-MM-DD') = ${hojeKey})::int`,
         last: sql<string | null>`max(${agentActionRequests.executedAt})`,
       })
       .from(agentActionRequests)
@@ -101,7 +103,7 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
           eq(agentActionRequests.accountId, accountId),
           eq(agentActionRequests.actionType, 'collect_charges'),
           eq(agentActionRequests.status, 'sent'),
-          gte(agentActionRequests.executedAt, dayAgo),
+          gte(agentActionRequests.executedAt, new Date(now.getTime() - 48 * 3_600_000).toISOString()),
         ),
       ),
   )
