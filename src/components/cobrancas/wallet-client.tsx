@@ -92,6 +92,8 @@ import {
   registerPaymentPromise,
 } from '@/app/(dashboard)/cobrancas/actions';
 import { CHARGEABLE_STATUSES, WEEKDAY_SHORT, describeWeekdays, type CollectionsSettings } from '@/lib/collections/rules';
+import { listApprovedTemplates } from '@/app/(dashboard)/inbox/actions';
+import type { MessageTemplate } from '@/types';
 
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -1637,7 +1639,16 @@ function RulePanel({
   const [chans, setChans] = useState<CollectionChannelOption[] | null>(null);
   const [people, setPeople] = useState<CollectionAssigneeOption[] | null>(null);
   const [sectorsList, setSectorsList] = useState<CollectionSectorOption[] | null>(null);
+  // Templates aprovados da conta (só existem em canal oficial da Meta).
+  const [templates, setTemplates] = useState<MessageTemplate[]>([]);
   const dirty = JSON.stringify(draft) !== JSON.stringify(rule);
+
+  useEffect(() => {
+    if (!open) return;
+    listApprovedTemplates()
+      .then(setTemplates)
+      .catch(() => setTemplates([]));
+  }, [open]);
 
   useEffect(() => setDraft(rule), [rule]);
   useEffect(() => {
@@ -1869,6 +1880,44 @@ function RulePanel({
               })}
             </div>
             <p className="text-xs text-muted-foreground">Cobra {describeWeekdays(draft.sendWeekdays)}.</p>
+          </div>
+
+          {/* 📋 12/09 (Alex): template pra quem cobra pela API OFICIAL. Fora da
+              janela de 24 h a Meta não entrega texto livre, e cobrança quase
+              nunca está na janela — o devedor não escreveu primeiro. */}
+          <div className="flex flex-col gap-1.5 rounded-lg border border-dashed border-border p-3">
+            <Label htmlFor="tpl-cobranca">Template aprovado (só API oficial do WhatsApp)</Label>
+            <select
+              id="tpl-cobranca"
+              className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+              value={draft.templateName ?? ''}
+              onChange={(e) => {
+                const escolhido = templates.find((x) => x.name === e.target.value);
+                setDraft({
+                  ...draft,
+                  templateName: escolhido?.name ?? null,
+                  templateLanguage: escolhido?.language ?? null,
+                });
+              }}
+            >
+              <option value="">Nenhum — só texto livre</option>
+              {templates.map((tpl) => (
+                <option key={tpl.id} value={tpl.name}>
+                  {tpl.name} ({tpl.language})
+                </option>
+              ))}
+            </select>
+            <p className="text-xs text-muted-foreground">
+              Só vale em número de <strong>API oficial</strong>. Lá, passadas 24 h desde a última mensagem do cliente, o WhatsApp não
+              entrega texto livre — e cobrança quase sempre cai nesse caso, porque o devedor não escreveu primeiro. Com o template
+              escolhido a régua manda o template; sem ele, ela recusa e explica, em vez de gravar uma mensagem que a Meta descarta.
+              Em número não oficial isto é ignorado.
+            </p>
+            {!templates.length && (
+              <p className="text-xs text-amber-700 dark:text-amber-400">
+                Nenhum template aprovado nesta conta. Eles vêm do WhatsApp Manager depois da aprovação da Meta.
+              </p>
+            )}
           </div>
 
           <label className="flex items-start gap-2 text-sm">

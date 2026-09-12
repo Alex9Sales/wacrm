@@ -45,6 +45,20 @@ export interface CollectionsSettings {
   /** Não cobra em feriado NACIONAL (ver `holidays.ts`; municipal não dá para saber). */
   skipHolidays: boolean
   /**
+   * Template aprovado, para quem cobra pela API OFICIAL do WhatsApp (Meta).
+   *
+   * 12/09 (Alex): "colocar em Ajustar a opção de selecionar template caso o
+   * cliente queira usar API Oficial". No canal oficial, fora da janela de 24 h
+   * desde a última mensagem do cliente, texto livre NÃO é entregue — e cobrança
+   * é quase sempre fora da janela, porque o devedor não escreveu primeiro.
+   * Sem template, nessa situação, a régua não manda (e diz o motivo).
+   * Em canal não oficial isto é ignorado: lá texto livre sai a qualquer hora.
+   */
+  templateName: string | null
+  templateLanguage: string | null
+  /** Variáveis do corpo, na ordem. Aceita `{nome}`. */
+  templateParams: string[]
+  /**
    * Por onde cobrar. auto = WhatsApp quando o contato tem telefone, senão
    * e-mail; both = os dois no mesmo toque (boleto no e-mail, lembrete no zap).
    */
@@ -147,6 +161,9 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   weekdaysOnly: true,
   sendWeekdays: [1, 2, 3, 4, 5],
   skipHolidays: true,
+  templateName: null,
+  templateLanguage: null,
+  templateParams: [],
   channel: 'auto',
   channelId: null,
   overdueStatuses: ['OVERDUE'],
@@ -199,6 +216,11 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     // "só dias úteis" = segunda a sexta; desmarcado = a semana toda.
     sendWeekdays: normalizeWeekdays(r.sendWeekdays, r.weekdaysOnly !== false),
     skipHolidays: r.skipHolidays !== false,
+    templateName: typeof r.templateName === 'string' && r.templateName.trim() ? r.templateName.trim().slice(0, 200) : null,
+    templateLanguage: typeof r.templateLanguage === 'string' && r.templateLanguage.trim() ? r.templateLanguage.trim().slice(0, 20) : null,
+    templateParams: Array.isArray(r.templateParams)
+      ? r.templateParams.filter((x): x is string => typeof x === 'string').slice(0, 10)
+      : [],
     channel: r.channel === 'whatsapp' || r.channel === 'email' || r.channel === 'both' ? r.channel : 'auto',
     channelId: typeof r.channelId === 'string' && UUID_RE.test(r.channelId) ? r.channelId : null,
     overdueStatuses: statuses.length ? statuses : [...COLLECTIONS_DEFAULTS.overdueStatuses],

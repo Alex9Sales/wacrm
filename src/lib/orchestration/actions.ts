@@ -285,15 +285,40 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         const sentVia: string[] = []
         let waMessageId: string | null = null
         if (targets.whatsapp) {
-          const sent = await engineSendText({
-            accountId: input.accountId,
-            userId,
-            conversationId: targets.whatsapp.conversationId,
-            contactId: input.contactId,
-            text: await signedByAssignee(input.accountId, text),
-          })
-          waMessageId = sent.whatsapp_message_id
-          sentVia.push('whatsapp')
+          // 📋 12/09: na API OFICIAL (Meta), fora da janela de 24 h desde a
+          // última mensagem do cliente, texto livre NÃO é entregue — e cobrança
+          // é quase sempre fora da janela, porque o devedor não escreveu
+          // primeiro. Com template configurado em Ajustar, manda o template;
+          // sem template, recusa dizendo o que resolver, em vez de gravar uma
+          // mensagem que a Meta descarta em silêncio.
+          const gate = await officialTemplateGate(input.accountId, targets.whatsapp.conversationId)
+          if (gate.needsTemplate) {
+            if (!gate.templateName) {
+              return {
+                ok: false,
+                error:
+                  'Este número é a API oficial do WhatsApp e o cliente não escreveu nas últimas 24 h, então só um template aprovado é entregue. Escolha o template em Cobranças → Ajustar.',
+              }
+            }
+            await sendMessageToConversation(input.accountId, {
+              conversationId: targets.whatsapp.conversationId,
+              messageType: 'template',
+              templateName: gate.templateName,
+              templateLanguage: gate.templateLanguage,
+              templateParams: gate.params,
+            })
+            sentVia.push('whatsapp')
+          } else {
+            const sent = await engineSendText({
+              accountId: input.accountId,
+              userId,
+              conversationId: targets.whatsapp.conversationId,
+              contactId: input.contactId,
+              text: await signedByAssignee(input.accountId, text),
+            })
+            waMessageId = sent.whatsapp_message_id
+            sentVia.push('whatsapp')
+          }
         }
         let emailError: string | null = null
         if (targets.email) {
@@ -695,6 +720,51 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
 // ------------------------------------------------ cobrança por e-mail (item 3)
 
 /** Assunto curto: o toque nº N já diz que é a 2ª/3ª vez. */
+/**
+ * Na API OFICIAL (Meta), texto livre só é entregue dentro de 24 h desde a
+ * última mensagem do cliente. Cobrança quase nunca está nessa janela — o
+ * devedor não escreveu primeiro. Devolve se precisa de template e qual.
+ *
+ * Canal não oficial (WAHA e afins) não tem janela: `needsTemplate` false.
+ * Fail-open: qualquer erro aqui vira "manda texto", que é o comportamento
+ * de antes — nunca trava a cobrança por causa desta checagem.
+ */
+async function officialTemplateGate(
+  accountId: string,
+  conversationId: string,
+): Promise<{ needsTemplate: boolean; templateName: string | null; templateLanguage: string | null; params: string[] }> {
+  const vazio = { needsTemplate: false, templateName: null, templateLanguage: null, params: [] as string[] }
+  try {
+    const { CAPABILITIES } = await import('@/lib/channels/provider')
+    const row = firstOrNull(
+      await db
+        .select({ provider: sql<string | null>`ch.provider`, lastInbound: sql<string | null>`c.last_inbound_at`, contactName: contacts.name })
+        .from(sql`conversations c`)
+        .leftJoin(sql`channels ch`, sql`ch.id = c.channel_id`)
+        .leftJoin(contacts, sql`${contacts.id} = c.contact_id`)
+        .where(sql`c.id = ${conversationId} AND c.account_id = ${accountId}`)
+        .limit(1),
+    )
+    if (!row?.provider) return vazio
+    const oficial = (CAPABILITIES as Record<string, { templates?: boolean } | undefined>)[row.provider]?.templates === true
+    if (!oficial) return vazio
+    const aberta = !!row.lastInbound && Date.now() - new Date(row.lastInbound).getTime() < 24 * 3_600_000
+    if (aberta) return vazio
+
+    const s = normalizeSettings((await getAccountSettings(accountId)).collections)
+    const nome = (row.contactName ?? '').trim().split(/\s+/)[0] || 'cliente'
+    return {
+      needsTemplate: true,
+      templateName: s.templateName,
+      templateLanguage: s.templateLanguage,
+      params: s.templateParams.map((p) => p.replace(/\{nome\}/gi, nome)),
+    }
+  } catch (err) {
+    console.error('[cobranca] checagem de template oficial falhou:', err instanceof Error ? err.message : err)
+    return vazio
+  }
+}
+
 function collectionEmailSubject(payload: Record<string, unknown>): string {
   // 11/09: o assunto tem que combinar com o que está escrito no corpo. Aviso de
   // cobrança NOVA com assunto "pagamento em aberto" acusa atraso de quem acabou
