@@ -70,7 +70,20 @@ export interface ScheduleMessageInput {
   messageType?: 'text' | 'image' | 'video' | 'document' | 'audio'
   mediaUrl?: string | null
   filename?: string | null
+  /**
+   * Até 5 anexos num agendamento só (12/09, pedido do João: "poder selecionar
+   * até 5 imagens ou arquivo pdf"). Quando vem preenchido, manda em `media` e
+   * o worker envia em sequência; `mediaUrl`/`filename`/`messageType` ficam com
+   * o PRIMEIRO, para a lista e o caminho antigo continuarem funcionando.
+   */
+  attachments?: { url: string; filename?: string | null; type: 'image' | 'video' | 'document' }[]
 }
+
+
+// ⚠️ Arquivo 'use server': só dá pra EXPORTAR função async. Esta constante
+// fica local de propósito — exportar um número aqui quebra o módulo inteiro,
+// e o Next reporta como "export X doesn't exist" em outro import qualquer.
+const MAX_ANEXOS = 5
 
 const liteSelect = {
   id: scheduledMessages.id,
@@ -210,11 +223,21 @@ export async function scheduleMessage(
 
     // Com anexo, o texto é opcional: mandar só a imagem ou só o contrato é
     // legítimo. Sem anexo, texto vazio não tem o que enviar.
-    const tipo = input.messageType && input.messageType !== 'text' ? input.messageType : 'text'
-    const mediaUrl = (input.mediaUrl ?? '').trim() || null
-    if (tipo !== 'text' && !mediaUrl) return { ok: false, error: 'O anexo não terminou de subir. Tente de novo.' }
+    const anexos = (input.attachments ?? [])
+      .filter((a) => typeof a?.url === 'string' && /^https?:\/\//i.test(a.url))
+      .slice(0, MAX_ANEXOS)
+    // Um anexo só, vindo do campo antigo, entra na mesma lista.
+    if (!anexos.length && input.mediaUrl && /^https?:\/\//i.test(input.mediaUrl)) {
+      const t1 = input.messageType && input.messageType !== 'text' ? input.messageType : 'document'
+      anexos.push({ url: input.mediaUrl, filename: input.filename ?? null, type: t1 as 'image' | 'video' | 'document' })
+    }
+    if ((input.attachments?.length ?? 0) > MAX_ANEXOS) {
+      return { ok: false, error: `No máximo ${MAX_ANEXOS} anexos por agendamento.` }
+    }
+    const primeiro = anexos[0] ?? null
+    const tipo = primeiro ? primeiro.type : 'text'
+    const mediaUrl = primeiro?.url ?? null
     if (tipo === 'text' && !contentText) return { ok: false, error: 'Escreva a mensagem.' }
-    if (mediaUrl && !/^https?:\/\//i.test(mediaUrl)) return { ok: false, error: 'Anexo inválido.' }
 
     const when = new Date(input.scheduledAt)
     if (Number.isNaN(when.getTime())) {
@@ -332,7 +355,8 @@ export async function scheduleMessage(
           contactId: conv.contactId,
           messageType: tipo,
           mediaUrl,
-          filename: (input.filename ?? '').trim() || null,
+          filename: (primeiro?.filename ?? '').trim() || null,
+          media: anexos.length ? anexos.map((a) => ({ url: a.url, filename: a.filename ?? null, type: a.type })) : null,
           // O "responda SAIR" só entra quando há texto: pendurar opt-out numa
           // legenda vazia deixaria a mensagem só com a frase de descadastro.
           contentText: contentText && input.includeOptOut ? appendOptOutLine(contentText) : (contentText || null),

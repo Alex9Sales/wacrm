@@ -1,0 +1,12 @@
+-- 12/09 (Alex, pedido do João): "em agendamentos não tem a opção de enviar
+-- anexos e arquivos, já coloca pra poder selecionar até 5 imagens ou arquivo
+-- pdf".
+--
+-- A tabela guardava UM anexo (media_url + filename). Cinco arquivos viravam
+-- cinco agendamentos na lista, cinco atribuições de responsável e cinco
+-- chances de erro parcial. Com a lista aqui, um agendamento continua sendo
+-- UMA linha, e o worker manda os arquivos em sequência.
+--
+-- media_url/filename seguem preenchidos com o PRIMEIRO arquivo: a lista de
+-- agendadas e o fallback do worker continuam funcionando sem saber da coluna.
+ALTER TABLE "scheduled_messages" ADD COLUMN IF NOT EXISTS "media" jsonb;

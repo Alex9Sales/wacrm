@@ -2295,6 +2295,10 @@ export const scheduledMessages = pgTable("scheduled_messages", {
 	contentText: text("content_text"),
 	mediaUrl: text("media_url"),
 	filename: text(),
+	/** Vários anexos num agendamento só (migr 0169): [{url, filename, type}],
+	 *  até 5. `mediaUrl`/`filename` seguem com o PRIMEIRO, então a lista de
+	 *  agendadas e o fallback do worker funcionam sem conhecer esta coluna. */
+	media: jsonb("media").$type<{ url: string; filename: string | null; type: string }[]>(),
 	scheduledAt: timestamp("scheduled_at", { withTimezone: true, mode: 'string' }).notNull(),
 	status: text().default('pending').notNull(),
 	// Set after a successful send.

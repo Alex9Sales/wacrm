@@ -8,7 +8,8 @@
 
 import { useEffect, useRef, useState } from 'react'
 import { toast } from 'sonner'
-import { CalendarClock, Plus, X, Search, User, GitBranch, Loader2 } from 'lucide-react'
+import { CalendarClock, Plus, X, Search, User, GitBranch, Loader2, Paperclip } from 'lucide-react'
+import { uploadAccountMedia, deleteAccountMedia, mediaMaxBytesFor } from '@/lib/storage/upload-media'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
@@ -56,6 +57,56 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
   const [text, setText] = useState('')
   const [when, setWhen] = useState(defaultWhen)
   const [submitting, setSubmitting] = useState(false)
+
+  // 📎 12/09 (João): "em agendamentos não tem a opção de enviar anexos, já
+  // coloca pra poder selecionar até 5 imagens ou arquivo pdf". Um agendamento
+  // continua sendo UMA entrada na lista; o worker manda os arquivos em fila.
+  const MAX_ANEXOS_TELA = 5
+  const BUCKET_ANEXO = 'chat-media'
+  type AnexoStaged = { url: string; path: string; nome: string; tipo: 'image' | 'video' | 'document' }
+  const [anexos, setAnexos] = useState<AnexoStaged[]>([])
+  const [subindo, setSubindo] = useState(false)
+
+  function tipoDoArquivo(f: File): 'image' | 'video' | 'document' {
+    if (f.type.startsWith('image/')) return 'image'
+    if (f.type.startsWith('video/')) return 'video'
+    return 'document'
+  }
+
+  async function anexar(files: FileList | null) {
+    if (!files?.length) return
+    const cabem = MAX_ANEXOS_TELA - anexos.length
+    if (cabem <= 0) {
+      toast.error(`Máximo de ${MAX_ANEXOS_TELA} anexos por agendamento.`)
+      return
+    }
+    const escolhidos = Array.from(files).slice(0, cabem)
+    if (files.length > cabem) toast.error(`Só cabem ${cabem} a mais. Os outros foram ignorados.`)
+    setSubindo(true)
+    try {
+      for (const file of escolhidos) {
+        const tipo = tipoDoArquivo(file)
+        const max = mediaMaxBytesFor(undefined, tipo)
+        if (file.size > max) {
+          toast.error(`${file.name} tem ${(file.size / 1024 / 1024).toFixed(1)} MB e o limite é ${Math.round(max / 1024 / 1024)} MB.`)
+          continue
+        }
+        try {
+          const { publicUrl, path } = await uploadAccountMedia(BUCKET_ANEXO, file)
+          setAnexos((l) => [...l, { url: publicUrl, path, nome: file.name, tipo }])
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : `Falha no upload de ${file.name}.`)
+        }
+      }
+    } finally {
+      setSubindo(false)
+    }
+  }
+
+  function removerAnexo(path: string) {
+    void deleteAccountMedia(BUCKET_ANEXO, path).catch(() => {})
+    setAnexos((l) => l.filter((a) => a.path !== path))
+  }
   // Anti-ban: quando o dia escolhido já tem 30+ agendadas, guarda a contagem
   // pra pedir uma 2ª confirmação ("agendar mesmo assim"). null = sem aviso.
   const [dayWarn, setDayWarn] = useState<number | null>(null)
@@ -169,6 +220,7 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
         contentText: text.trim(),
         scheduledAt: new Date(when).toISOString(),
         includeOptOut: optOut,
+        attachments: anexos.map((a) => ({ url: a.url, filename: a.nome, type: a.tipo })),
       })
       if (!r.ok) {
         toast.error(r.error)
@@ -352,6 +404,49 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
                   rows={4}
                   placeholder="Escreva a mensagem que será enviada…"
                 />
+                {/* 📎 Até 5 anexos: imagem, vídeo ou documento (PDF, contrato). */}
+                <div className="mt-2">
+                  {anexos.length > 0 && (
+                    <ul className="mb-1.5 flex flex-col gap-1">
+                      {anexos.map((a) => (
+                        <li key={a.path} className="flex items-center gap-2 rounded-md border border-border bg-muted/40 px-2 py-1.5 text-xs">
+                          <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                          <span className="min-w-0 flex-1 truncate text-foreground">{a.nome}</span>
+                          <button
+                            type="button"
+                            onClick={() => removerAnexo(a.path)}
+                            className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+                            title="Remover"
+                          >
+                            <X className="h-3.5 w-3.5" />
+                          </button>
+                        </li>
+                      ))}
+                    </ul>
+                  )}
+                  {anexos.length < MAX_ANEXOS_TELA && (
+                    <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
+                      {subindo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
+                      <span>
+                        {subindo
+                          ? 'Subindo…'
+                          : anexos.length
+                            ? `Anexar mais (${MAX_ANEXOS_TELA - anexos.length} restantes)`
+                            : 'Anexar imagem, vídeo ou PDF (até 5)'}
+                      </span>
+                      <input
+                        type="file"
+                        multiple
+                        className="hidden"
+                        disabled={subindo}
+                        onChange={(e) => {
+                          void anexar(e.target.files)
+                          e.currentTarget.value = ''
+                        }}
+                      />
+                    </label>
+                  )}
+                </div>
                 <label className="mt-1.5 flex cursor-pointer items-start gap-2 text-xs text-muted-foreground">
                   <input
                     type="checkbox"

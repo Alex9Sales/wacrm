@@ -136,6 +136,12 @@ async function processScheduledMessageJob(
   }
 
   try {
+    // 📎 Vários anexos num agendamento só (migr 0169): o primeiro leva o texto
+    // como legenda, os outros vão em sequência. Um agendamento = uma entrada na
+    // lista, mesmo com 5 arquivos. Lista vazia = caminho antigo, intacto.
+    const anexos = Array.isArray(row.media) ? row.media.filter((a) => a && typeof a.url === 'string') : [];
+    const extras = anexos.slice(1);
+
     const result = await sendMessageToConversation(row.accountId, {
       conversationId: row.conversationId,
       messageType: row.messageType,
@@ -145,6 +151,22 @@ async function processScheduledMessageJob(
       // Assunto (degrau de e-mail da cadência); WhatsApp/IG ignoram.
       subject,
     });
+
+    // Os demais anexos, um a um. Falha num deles NÃO derruba o agendamento
+    // inteiro (o primeiro já saiu): registra no log e segue — melhor 4 de 5
+    // entregues do que marcar tudo como falho e reenviar o que já chegou.
+    for (const extra of extras) {
+      try {
+        await sendMessageToConversation(row.accountId, {
+          conversationId: row.conversationId,
+          messageType: (extra.type as 'image' | 'video' | 'document') ?? 'document',
+          mediaUrl: extra.url,
+          filename: extra.filename,
+        });
+      } catch (err) {
+        log(`${scheduledMessageId} anexo extra falhou (${extra.filename ?? extra.url}): ${String(err)}`);
+      }
+    }
 
     // Guard on status='pending' so a race with a cancel doesn't resurrect it
     // — though once sent, 'sent' is the accurate terminal state.

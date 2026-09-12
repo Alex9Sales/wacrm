@@ -156,7 +156,9 @@ export function ScheduleMessageForm({
 
   // 📎 12/09 (João): "preciso criar um agendamento pra enviar um contrato pro
   // cliente". A tabela e o worker já mandavam mídia; faltava a tela.
-  const [anexo, setAnexo] = useState<{ url: string; path: string; nome: string; tipo: 'image' | 'video' | 'document' } | null>(null)
+  const MAX_ANEXOS_TELA = 5
+  type AnexoStaged = { url: string; path: string; nome: string; tipo: 'image' | 'video' | 'document' }
+  const [anexos, setAnexos] = useState<AnexoStaged[]>([])
   const [subindo, setSubindo] = useState(false)
 
   function tipoDoArquivo(f: File): 'image' | 'video' | 'document' {
@@ -165,37 +167,46 @@ export function ScheduleMessageForm({
     return 'document'
   }
 
-  async function anexar(file: File | undefined) {
-    if (!file) return
-    const tipo = tipoDoArquivo(file)
-    // Sem o provedor à mão aqui, vale o teto do WhatsApp (o menor).
-    const max = mediaMaxBytesFor(undefined, tipo)
-    if (file.size > max) {
-      toast.error(`O arquivo tem ${(file.size / 1024 / 1024).toFixed(1)} MB e o limite para ${tipo} é ${Math.round(max / 1024 / 1024)} MB.`)
+  async function anexar(files: FileList | null) {
+    if (!files?.length) return
+    const cabem = MAX_ANEXOS_TELA - anexos.length
+    if (cabem <= 0) {
+      toast.error(`Máximo de ${MAX_ANEXOS_TELA} anexos por agendamento.`)
       return
     }
+    const escolhidos = Array.from(files).slice(0, cabem)
+    if (files.length > cabem) toast.error(`Só cabem ${cabem} a mais. Os outros foram ignorados.`)
     setSubindo(true)
     try {
-      const { publicUrl, path } = await uploadAccountMedia(BUCKET_ANEXO, file)
-      // Trocar o anexo apaga o anterior, pra não deixar arquivo órfão no bucket.
-      if (anexo?.path) void deleteAccountMedia(BUCKET_ANEXO, anexo.path).catch(() => {})
-      setAnexo({ url: publicUrl, path, nome: file.name, tipo })
-    } catch (err) {
-      toast.error(err instanceof Error ? err.message : 'Falha no upload.')
+      for (const file of escolhidos) {
+        const tipo = tipoDoArquivo(file)
+        // Sem o provedor à mão aqui, vale o teto do WhatsApp (o menor).
+        const max = mediaMaxBytesFor(undefined, tipo)
+        if (file.size > max) {
+          toast.error(`${file.name} tem ${(file.size / 1024 / 1024).toFixed(1)} MB e o limite é ${Math.round(max / 1024 / 1024)} MB.`)
+          continue
+        }
+        try {
+          const { publicUrl, path } = await uploadAccountMedia(BUCKET_ANEXO, file)
+          setAnexos((l) => [...l, { url: publicUrl, path, nome: file.name, tipo }])
+        } catch (err) {
+          toast.error(err instanceof Error ? err.message : `Falha no upload de ${file.name}.`)
+        }
+      }
     } finally {
       setSubindo(false)
     }
   }
 
-  function removerAnexo() {
-    if (anexo?.path) void deleteAccountMedia(BUCKET_ANEXO, anexo.path).catch(() => {})
-    setAnexo(null)
+  function removerAnexo(path: string) {
+    void deleteAccountMedia(BUCKET_ANEXO, path).catch(() => {})
+    setAnexos((l) => l.filter((a) => a.path !== path))
   }
 
   async function handleSubmit(e: React.FormEvent) {
     e.preventDefault()
     const body = text.trim()
-    if (!body && !anexo) {
+    if (!body && !anexos.length) {
       toast.error('Escreva a mensagem ou anexe um arquivo.')
       return
     }
@@ -239,9 +250,7 @@ export function ScheduleMessageForm({
             assignedTo: assignee || null,
             includeOptOut: optOut,
             channelId: channelId || null,
-            messageType: anexo?.tipo ?? 'text',
-            mediaUrl: anexo?.url ?? null,
-            filename: anexo?.nome ?? null,
+            attachments: anexos.map((a) => ({ url: a.url, filename: a.nome, type: a.tipo })),
           })
       if (!res.ok) {
         toast.error(res.error)
@@ -276,7 +285,7 @@ export function ScheduleMessageForm({
           <div className="space-y-1.5">
             <div className="flex items-center justify-between">
               <Label htmlFor="sched-text">
-                Mensagem {anexo ? <span className="font-normal text-muted-foreground">(opcional, vira a legenda)</span> : <span className="text-destructive">*</span>}
+                Mensagem {anexos.length ? <span className="font-normal text-muted-foreground">(opcional, vira a legenda)</span> : <span className="text-destructive">*</span>}
               </Label>
               <div className="flex items-center gap-1 text-xs text-muted-foreground">
                 <span>Modelos</span>
@@ -300,32 +309,44 @@ export function ScheduleMessageForm({
             {/* 📎 Anexo: imagem, vídeo ou documento (contrato, boleto, PDF). */}
             {!editing && (
               <div className="pt-1">
-                {anexo ? (
-                  <div className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs">
-                    <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
-                    <span className="min-w-0 flex-1 truncate text-foreground">{anexo.nome}</span>
-                    <span className="shrink-0 text-muted-foreground">
-                      {anexo.tipo === 'image' ? 'imagem' : anexo.tipo === 'video' ? 'vídeo' : 'documento'}
-                    </span>
-                    <button
-                      type="button"
-                      onClick={removerAnexo}
-                      className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
-                      title="Remover o anexo"
-                    >
-                      <X className="h-3.5 w-3.5" />
-                    </button>
-                  </div>
-                ) : (
+                {anexos.length > 0 && (
+                  <ul className="mb-1.5 flex flex-col gap-1">
+                    {anexos.map((a) => (
+                      <li key={a.path} className="flex items-center gap-2 rounded-lg border border-border bg-muted/40 px-2.5 py-2 text-xs">
+                        <Paperclip className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+                        <span className="min-w-0 flex-1 truncate text-foreground">{a.nome}</span>
+                        <span className="shrink-0 text-muted-foreground">
+                          {a.tipo === 'image' ? 'imagem' : a.tipo === 'video' ? 'vídeo' : 'documento'}
+                        </span>
+                        <button
+                          type="button"
+                          onClick={() => removerAnexo(a.path)}
+                          className="shrink-0 rounded p-0.5 text-muted-foreground hover:bg-background hover:text-foreground"
+                          title="Remover o anexo"
+                        >
+                          <X className="h-3.5 w-3.5" />
+                        </button>
+                      </li>
+                    ))}
+                  </ul>
+                )}
+                {anexos.length < MAX_ANEXOS_TELA && (
                   <label className="inline-flex cursor-pointer items-center gap-1.5 text-xs text-muted-foreground hover:text-foreground">
                     {subindo ? <Loader2 className="h-3.5 w-3.5 animate-spin" /> : <Paperclip className="h-3.5 w-3.5" />}
-                    <span>{subindo ? 'Subindo o anexo…' : 'Anexar imagem, vídeo ou documento'}</span>
+                    <span>
+                      {subindo
+                        ? 'Subindo…'
+                        : anexos.length
+                          ? `Anexar mais (${MAX_ANEXOS_TELA - anexos.length} restantes)`
+                          : 'Anexar imagem, vídeo ou PDF (até 5)'}
+                    </span>
                     <input
                       type="file"
+                      multiple
                       className="hidden"
                       disabled={subindo}
                       onChange={(e) => {
-                        void anexar(e.target.files?.[0])
+                        void anexar(e.target.files)
                         e.currentTarget.value = ''
                       }}
                     />
