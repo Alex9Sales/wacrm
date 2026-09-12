@@ -264,9 +264,16 @@ export function ChannelPhonebookDialog({
             {result ? 'Fechar' : 'Cancelar'}
           </Button>
           {preview?.ok && !result && preview.entries > 0 && (
-            <Button onClick={apply} disabled={applying || nothingToDo}>
+            // 12/09 (João): ele viu o botão cinza e concluiu "deve ser algum
+            // bug". O motivo estava escrito acima, na lista, e ele não viu.
+            // Botão desabilitado diz no PRÓPRIO rótulo por que está assim.
+            <Button
+              onClick={apply}
+              disabled={applying || nothingToDo}
+              title={nothingToDo ? 'Todos os nomes já estão iguais à agenda do celular — não há o que importar.' : undefined}
+            >
               {applying ? <Loader2 className="size-4 animate-spin" /> : <BookUser className="size-4" />}
-              Importar agenda
+              {nothingToDo ? 'Nada para importar' : 'Importar agenda'}
             </Button>
           )}
         </DialogFooter>
