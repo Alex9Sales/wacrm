@@ -16,15 +16,15 @@
 // reconfere no Asaas se ainda há parcela aberta (executeOrchestrationAction) —
 // quem pagou entre a fila e o envio não recebe cobrança.
 // ============================================================
-import { and, asc, eq, gte, or, sql } from 'drizzle-orm'
+import { and, asc, eq, gte, inArray, notInArray, or, sql } from 'drizzle-orm'
 
-import { db, agentActionRequests } from '@/db'
+import { db, agentActionRequests, channels, conversations, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
-import { executeOrchestrationAction } from '@/lib/orchestration/actions'
+import { executeOrchestrationAction, recordCollectionTouch } from '@/lib/orchestration/actions'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 
 import { localParts } from './engine'
-import { autoSendDue, dayBlockedReason, normalizeSettings, withinWindow } from './rules'
+import { autoSendDue, dayBlockedReason, deliveredEchoSnippet, normalizeSettings, retryCutoffIso, withinWindow } from './rules'
 import { expireStaleCollectionDrafts, localDayKey } from './stale'
 
 /** Tentativas antes de marcar o pedido como falho (rede/canal fora do ar). */
@@ -67,6 +67,8 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
 
   // A fila: aprovadas em lote ('queued') e as automáticas ainda não enviadas.
   // Mais antiga primeiro — a régua já ordenou do mais atrasado pro menos.
+  // Quem falhou há menos de 3 min fica de fora da vez (o eco pode estar
+  // chegando, ver abaixo) sem travar os outros devedores.
   const row = firstOrNull(
     await db
       .select()
@@ -79,12 +81,47 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
             eq(agentActionRequests.status, 'queued'),
             and(eq(agentActionRequests.status, 'pending'), eq(agentActionRequests.decision, 'auto')),
           ),
+          sql`(${agentActionRequests.payload}->>'lastAttemptAt' IS NULL OR (${agentActionRequests.payload}->>'lastAttemptAt')::timestamptz <= ${retryCutoffIso(now.getTime())}::timestamptz)`,
         ),
       )
       .orderBy(asc(agentActionRequests.createdAt))
       .limit(1),
   )
   if (!row) return stats
+
+  // 🔁 A tentativa anterior falhou. "Falhou" não quer dizer "não chegou": em
+  // 14/09 o WAHA devolveu erro, ENTREGOU, e o reenvio do minuto seguinte deu ao
+  // devedor a mesma cobrança duas vezes. Então: o pedido só volta depois de 3
+  // min (filtro acima) e, se a mensagem já está na conversa, adota o envio em
+  // vez de repetir.
+  if ((row.attempts ?? 0) > 0) {
+    const prev = (row.payload ?? {}) as Record<string, unknown>
+    const copy = await findDeliveredWhatsAppCopy(accountId, row)
+    if (copy) {
+      const nowIso = now.toISOString()
+      await db
+        .update(agentActionRequests)
+        .set({
+          status: 'sent',
+          // A hora em que ela chegou de verdade: é o que o teto e a cadência contam.
+          executedAt: copy.createdAt ?? nowIso,
+          resolvedAt: nowIso,
+          resolvedBy: row.resolvedBy ?? null,
+          result: { messageId: null, conversationId: copy.conversationId, sentVia: ['whatsapp'], label: 'WhatsApp', adoptedFromEcho: copy.id },
+          payload: { ...prev, auto: row.status === 'pending', sentBy: 'sender' },
+          error: null,
+        })
+        .where(eq(agentActionRequests.id, row.id))
+      try {
+        await recordCollectionTouch(accountId, row.contactId, (row.suggestedText ?? '').trim(), prev.kind)
+      } catch (err) {
+        console.error('[cobranca-sender] toque do envio adotado não foi registrado:', err instanceof Error ? err.message : err)
+      }
+      console.log(`[cobranca-sender] ${accountId.slice(0, 8)}: pedido ${row.id.slice(0, 8)} já tinha chegado (mensagem ${copy.id.slice(0, 8)}) — não reenviado`)
+      stats.sent = 1
+      return stats
+    }
+  }
 
   // Teto do dia e cadência olham TODO envio de cobrança da conta (automático
   // ou aprovado à mão): o anti-ban é por linha de WhatsApp, não por origem.
@@ -159,9 +196,45 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
     .set({
       attempts,
       error,
+      // Marca a hora da tentativa: o pedido sai da vez por 3 min (retryCutoffIso).
+      payload: { ...payload, lastAttemptAt: nowIso },
       ...(final ? { status: gone ? 'expired' : 'failed', resolvedAt: nowIso } : {}),
     })
     .where(eq(agentActionRequests.id, row.id))
   stats.failed = 1
   return stats
+}
+
+/**
+ * A cobrança deste pedido já está numa conversa de WhatsApp do devedor? Vale o
+ * eco do celular ('agent') e a mensagem gravada pelo próprio CRM ('bot'),
+ * criadas depois do pedido e contendo o começo do rascunho. E-mail fica de
+ * fora: a cópia por e-mail não prova que o WhatsApp saiu.
+ */
+async function findDeliveredWhatsAppCopy(
+  accountId: string,
+  row: { contactId: string; createdAt: string; suggestedText: string | null },
+): Promise<{ id: string; conversationId: string; createdAt: string | null } | null> {
+  const snippet = deliveredEchoSnippet(row.suggestedText)
+  if (!snippet) return null
+  return firstOrNull(
+    await db
+      .select({ id: messages.id, conversationId: messages.conversationId, createdAt: messages.createdAt })
+      .from(messages)
+      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+      .innerJoin(channels, eq(channels.id, conversations.channelId))
+      .where(
+        and(
+          eq(conversations.accountId, accountId),
+          eq(conversations.contactId, row.contactId),
+          notInArray(channels.provider, ['email', 'gmail']),
+          inArray(messages.senderType, ['agent', 'bot']),
+          eq(messages.isInternal, false),
+          gte(messages.createdAt, row.createdAt),
+          sql`position(${snippet} in regexp_replace(${messages.contentText}, ${'\\s+'}, ' ', 'g')) > 0`,
+        ),
+      )
+      .orderBy(asc(messages.createdAt))
+      .limit(1),
+  )
 }

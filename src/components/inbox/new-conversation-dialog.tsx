@@ -175,7 +175,7 @@ export function NewConversationDialog({
     }
     setSubmitting(true);
     try {
-      const { conversationId, contactCreated } = isEmail
+      const res = isEmail
         ? await startNewEmailConversation({
             email: email.trim().toLowerCase(),
             name: name.trim() || null,
@@ -186,10 +186,14 @@ export function NewConversationDialog({
             name: name.trim() || null,
             channelId: channelId || null,
           });
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
       toast.success(
-        contactCreated ? "Conversa iniciada." : "Conversa aberta.",
+        res.contactCreated ? "Conversa iniciada." : "Conversa aberta.",
       );
-      onStarted(conversationId);
+      onStarted(res.conversationId);
       onOpenChange(false);
     } catch (err) {
       if (isStaleActionError(err)) {

@@ -16,6 +16,7 @@ import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount } from '@/lib/auth/account'
 import { hasMinRole } from '@/lib/auth/roles'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
+import { fixedCollectionRoute, normalizeSettings } from '@/lib/collections/rules'
 import { enqueueOrchestrationNudge } from '@/lib/queue/queues'
 import { executeOrchestrationAction, noteDealEvent } from '@/lib/orchestration/actions'
 import { ACTION_CATALOG, type OrchAction, type Risk } from '@/lib/orchestration/policy'
@@ -59,11 +60,20 @@ export interface ApprovalItem {
   sendOptions: { conversationId: string; label: string }[]
   /** A conversa que será usada se não trocar (a do negócio, senão a mais recente). */
   defaultConversationId: string | null
+  /**
+   * Cobrança com número fixo em Ajustar: por onde sai DE VERDADE ("WhatsApp ·
+   * Cobranças e e-mail"). Quando vem, a tela mostra isto no lugar do seletor,
+   * que nesse caso não muda nada (outreach.ts ignora a conversa escolhida).
+   */
+  sendRoute: string | null
 }
 
 export interface AutonomyMetrics {
   days: number
+  /** Esperando uma PESSOA decidir. Não inclui a fila do automático. */
   pending: number
+  /** Pendentes com decisão 'auto': saem sozinhas quando chegar a vez. */
+  autoQueued: number
   autoExecuted: number
   approved: number
   rejected: number
@@ -162,6 +172,31 @@ export async function listApprovalQueue(): Promise<ApprovalItem[]> {
     }
   }
 
+  // 🧾 Cobrança com "Número que envia as cobranças" escolhido sai SEMPRE por ele.
+  // 14/09 (João/GoLink): o card dizia "WhatsApp · João" e 43 de 45 saíram pelo
+  // número Cobranças — o seletor não valia nada e ainda confundia.
+  let fixedRoute: ((payload: Record<string, unknown>) => string) | null = null
+  if (rows.some((r) => r.actionType === 'collect_charges')) {
+    try {
+      const s = normalizeSettings((await getAccountSettings(ctx.accountId)).collections)
+      if (s.channelId) {
+        const ch = firstOrNull(
+          await db
+            .select({ name: channels.name })
+            .from(channels)
+            .where(and(eq(channels.id, s.channelId), eq(channels.accountId, ctx.accountId)))
+            .limit(1),
+        )
+        if (ch?.name) {
+          const nome = ch.name
+          fixedRoute = (payload) => fixedCollectionRoute(payload.delivery, nome)
+        }
+      }
+    } catch (err) {
+      console.error('[aprovacoes] número fixo da régua não carregou:', err instanceof Error ? err.message : err)
+    }
+  }
+
   // Apoio pro "o que acontece ao aprovar": proposta salva + itens (send_proposal), etapas (move_deal).
   const proposalByDeal = new Map<string, { id: string; acceptedAt: string | null }>()
   const itemsByDeal = new Map<string, number>()
@@ -197,7 +232,9 @@ export async function listApprovalQueue(): Promise<ApprovalItem[]> {
       const defaultConversationId = isMessage
         ? (sendOptions.find((o) => o.conversationId === preferred)?.conversationId ?? sendOptions[0]?.conversationId ?? null)
         : null
-      if (isMessage && sendOptions.length === 0) {
+      const sendRoute = r.actionType === 'collect_charges' && fixedRoute ? fixedRoute((r.payload ?? {}) as Record<string, unknown>) : null
+      // Cobrança abre a conversa sozinha no número fixo — "sem conversa" não trava.
+      if (isMessage && sendOptions.length === 0 && !sendRoute) {
         warnings.push('O contato não tem conversa aberta em nenhum canal — não dá pra enviar. Abra uma conversa com ele primeiro.')
       }
       const itemsOfDeal = r.dealId ? (itemsByDeal.get(r.dealId) ?? 0) : 0
@@ -211,6 +248,7 @@ export async function listApprovalQueue(): Promise<ApprovalItem[]> {
         contactEmail: r.contactEmail ?? null,
         sendOptions,
         defaultConversationId,
+        sendRoute,
         id: r.id,
         action: r.actionType as OrchAction,
         actionLabel: meta.label,
@@ -239,7 +277,10 @@ export async function getAutonomyMetrics(days = 7): Promise<AutonomyMetrics> {
   const since = new Date(Date.now() - Math.max(1, Math.min(90, days)) * 86_400_000).toISOString()
   const [row] = await db
     .select({
-      pending: sql<number>`count(*) filter (where ${agentActionRequests.status} = 'pending')::int`,
+      // 14/09 (João/GoLink): "Aguardando 15" contava as 14 cobranças da fila do
+      // automático, que não esperam ninguém. Aguardando = só o que pede pessoa.
+      pending: sql<number>`count(*) filter (where ${agentActionRequests.status} = 'pending' and ${agentActionRequests.decision} is distinct from 'auto')::int`,
+      autoQueued: sql<number>`count(*) filter (where ${agentActionRequests.status} = 'pending' and ${agentActionRequests.decision} = 'auto')::int`,
       auto: sql<number>`count(*) filter (where ${agentActionRequests.status} in ('sent','done') and ${agentActionRequests.resolvedBy} is null and ${agentActionRequests.createdAt} >= ${since})::int`,
       approved: sql<number>`count(*) filter (where ${agentActionRequests.status} in ('sent','done') and ${agentActionRequests.resolvedBy} is not null and ${agentActionRequests.createdAt} >= ${since})::int`,
       rejected: sql<number>`count(*) filter (where ${agentActionRequests.status} = 'rejected' and ${agentActionRequests.createdAt} >= ${since})::int`,
@@ -280,6 +321,7 @@ export async function getAutonomyMetrics(days = 7): Promise<AutonomyMetrics> {
   return {
     days,
     pending: row?.pending ?? 0,
+    autoQueued: row?.autoQueued ?? 0,
     autoExecuted: auto,
     approved,
     rejected,

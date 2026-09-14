@@ -308,11 +308,16 @@ export function MessageThread({
     async (p: GroupParticipant) => {
       setParticipantBusy(true);
       try {
-        const { conversationId } = await startNewConversation({
+        const res = await startNewConversation({
           phone: p.phone,
           channelId: conversation?.channel?.id ?? null,
         });
-        window.location.href = `/inbox?c=${conversationId}`;
+        if (!res.ok) {
+          toast.error(res.error);
+          setParticipantBusy(false);
+          return;
+        }
+        window.location.href = `/inbox?c=${res.conversationId}`;
       } catch {
         toast.error("Não foi possível abrir a conversa.");
         setParticipantBusy(false);

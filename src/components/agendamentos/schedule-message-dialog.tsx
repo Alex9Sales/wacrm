@@ -15,6 +15,7 @@ import { Input } from '@/components/ui/input'
 import { Textarea } from '@/components/ui/textarea'
 import { Label } from '@/components/ui/label'
 import { QuickReplyPicker } from '@/components/inbox/quick-reply-picker'
+import { WhenPresets } from './when-presets'
 import {
   Select,
   SelectContent,
@@ -210,13 +211,17 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
     }
     setSubmitting(true)
     try {
-      const { conversationId } = await startNewConversation({
+      const conv = await startNewConversation({
         phone: target.phone,
         name: target.name,
         channelId: channelId || null,
       })
+      if (!conv.ok) {
+        toast.error(conv.error)
+        return
+      }
       const r = await scheduleMessage({
-        conversationId,
+        conversationId: conv.conversationId,
         contentText: text.trim(),
         scheduledAt: new Date(when).toISOString(),
         includeOptOut: optOut,
@@ -473,6 +478,7 @@ export function ScheduleMessageDialog({ onScheduled }: { onScheduled: () => void
                   onChange={(e) => setWhen(e.target.value)}
                   className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm"
                 />
+                <WhenPresets onPick={setWhen} />
               </div>
             </div>
 

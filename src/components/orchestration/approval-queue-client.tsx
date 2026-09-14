@@ -93,13 +93,23 @@ export function ApprovalQueueClient() {
   const [busy, setBusy] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [showAudit, setShowAudit] = useState(false);
+  const [showAutoQueue, setShowAutoQueue] = useState(false);
+  // Ritmo da régua, pra dizer na fila do automático quando cada uma sai.
+  const [pace, setPace] = useState<{ every: number; janela: string } | null>(null);
   // 🛑 Freio da conta (topo, sempre visível).
   const [brake, setBrake] = useState<AiBrake | null>(null);
   const [brakeBusy, setBrakeBusy] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [q, m, a, b] = await Promise.all([listApprovalQueue(), getAutonomyMetrics(7), listRecentAudit(40), getAiBrake()]);
+      const [q, m, a, b, cs] = await Promise.all([
+        listApprovalQueue(),
+        getAutonomyMetrics(7),
+        listRecentAudit(40),
+        getAiBrake(),
+        getCollectionsSettings().catch(() => null),
+      ]);
+      if (cs) setPace({ every: cs.sendEveryMinutes, janela: `das ${cs.startHour}h às ${cs.endHour}h, ${describeWeekdays(cs.sendWeekdays)}` });
       setBrake(b);
       setItems(q);
       setMetrics(m);
@@ -152,10 +162,18 @@ export function ApprovalQueueClient() {
     }
   };
 
+  // 14/09 (João/GoLink): as 14 cobranças da fila do automático apareciam como
+  // cartões de aprovação, com "Aprovar e enviar" em cada uma, e ele achou que
+  // precisava clicar. Elas NÃO esperam ninguém — vão para uma seção própria,
+  // recolhida, fora do "Aguardando".
+  const humanItems = (items ?? []).filter((it) => it.decision !== 'auto');
+  const autoItems = (items ?? []).filter((it) => it.decision === 'auto');
+
   // 09/09 (João/GoLink): "então é ir em Precisa de você e mandar uma por uma?"
   // Enquanto a régua não ganha o automático (gate de 20 decisões), dá pra
   // aprovar TODAS as cobranças de uma vez — com o texto que estiver na tela.
-  const collectItems = (items ?? []).filter((it) => it.action === 'collect_charges');
+  // Só as que esperam aprovação: as automáticas já vão sair.
+  const collectItems = humanItems.filter((it) => it.action === 'collect_charges');
   const [bulkBusy, setBulkBusy] = useState(false);
   const approveAllCollections = async () => {
     const list = collectItems;
@@ -257,6 +275,17 @@ export function ApprovalQueueClient() {
       setBusy(null);
     }
   };
+
+  // Fila do automático: não tem "aprovar" (a mensagem já vai sair e um clique
+  // aqui podia cruzar com o envio do sender) — só dá para impedir.
+  const cancelAuto = async (it: ApprovalItem) => {
+    const quem = it.contact.name || it.contact.phone || 'Este contato';
+    const pergunta = it.isMessage ? `${quem} não vai receber esta mensagem. Confirmar?` : `Cancelar "${it.actionLabel}" para ${quem}?`;
+    if (!window.confirm(pergunta)) return;
+    await reject(it);
+  };
+
+  const autoAreCollections = autoItems.length > 0 && autoItems.every((it) => it.action === 'collect_charges');
 
   return (
     <div className="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 sm:p-6">
@@ -373,7 +402,7 @@ export function ApprovalQueueClient() {
         </div>
       ) : null}
 
-      {items && items.length === 0 ? (
+      {items && humanItems.length === 0 ? (
         <div className="rounded-xl border border-dashed border-border bg-card p-8 text-center">
           <Check className="mx-auto mb-2 h-8 w-8 text-emerald-500" />
           <p className="font-medium text-foreground">Nada esperando por você</p>
@@ -383,9 +412,9 @@ export function ApprovalQueueClient() {
         </div>
       ) : null}
 
-      {items && items.length > 0 ? (
+      {humanItems.length > 0 ? (
         <div className="flex flex-col gap-4">
-          {items.map((it) => {
+          {humanItems.map((it) => {
             const risk = RISK_META[it.risk];
             const chips = contextChips(it.payload);
             return (
@@ -400,17 +429,6 @@ export function ApprovalQueueClient() {
                       {it.humanOnly ? (
                         <span className="inline-flex items-center gap-1 text-xs text-muted-foreground">
                           <ShieldAlert className="h-3 w-3" /> só humano executa
-                        </span>
-                      ) : null}
-                      {/* Automática: já está decidida — sai sozinha quando chegar a
-                          vez (cadência / régua ligada). Sem isso o dono achava que
-                          tinha que aprovar as 47 da régua (João, 10/09). */}
-                      {it.decision === 'auto' ? (
-                        <span
-                          className="inline-flex items-center gap-1 rounded-full bg-emerald-500/10 px-2 py-0.5 text-xs font-medium text-emerald-700 dark:text-emerald-300"
-                          title="Não precisa aprovar: sai sozinha quando chegar a vez. Aprovar só adianta; recusar cancela."
-                        >
-                          <Bot className="h-3 w-3" /> sai sozinha
                         </span>
                       ) : null}
                     </div>
@@ -451,7 +469,17 @@ export function ApprovalQueueClient() {
                 <div className="mt-3 rounded-md border border-border bg-muted/40 p-3 text-sm">
                   <div className="text-xs font-medium uppercase tracking-wide text-muted-foreground">Ao aprovar, a Fluxia vai</div>
                   <p className="mt-1 text-foreground">{it.effect}</p>
-                  {it.isMessage && it.sendOptions.length > 0 ? (
+                  {it.isMessage && it.sendRoute ? (
+                    <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
+                      <span className="text-muted-foreground">Enviar por:</span>
+                      <span
+                        className="rounded-md bg-background px-2 py-1 font-medium text-foreground ring-1 ring-border"
+                        title="Número escolhido em Cobranças → Ajustar. A cobrança sai sempre por ele."
+                      >
+                        {it.sendRoute}
+                      </span>
+                    </div>
+                  ) : it.isMessage && it.sendOptions.length > 0 ? (
                     <div className="mt-2 flex flex-wrap items-center gap-2 text-xs">
                       <span className="text-muted-foreground">Enviar por:</span>
                       {it.sendOptions.length === 1 ? (
@@ -566,6 +594,69 @@ export function ApprovalQueueClient() {
             );
           })}
         </div>
+      ) : null}
+
+      {autoItems.length > 0 ? (
+        <section className="rounded-xl border border-emerald-500/30 bg-emerald-500/5">
+          <button
+            type="button"
+            onClick={() => setShowAutoQueue((v) => !v)}
+            className="flex w-full flex-wrap items-center justify-between gap-2 px-4 py-3 text-left"
+          >
+            <span className="flex items-start gap-2">
+              <Bot className="mt-0.5 h-4 w-4 shrink-0 text-emerald-700 dark:text-emerald-300" />
+              <span>
+                <span className="block text-sm font-medium text-foreground">
+                  Na fila do automático · {autoItems.length}{' '}
+                  {autoAreCollections
+                    ? autoItems.length === 1 ? 'cobrança' : 'cobranças'
+                    : autoItems.length === 1 ? 'mensagem' : 'mensagens'}
+                </span>
+                <span className="block text-xs text-muted-foreground">
+                  Não precisa aprovar: {autoItems.length === 1 ? 'sai sozinha' : 'saem sozinhas'} quando chegar a vez
+                  {autoAreCollections && pace ? `, uma a cada ${pace.every} min ${pace.janela}` : ''}.
+                  {autoAreCollections ? ' Antes de cada cobrança o sistema confere no Asaas se a parcela continua em aberto.' : ''}
+                </span>
+              </span>
+            </span>
+            <span className="text-xs text-muted-foreground">{showAutoQueue ? 'esconder' : 'ver a fila'}</span>
+          </button>
+          {showAutoQueue ? (
+            <ul className="divide-y divide-border border-t border-emerald-500/20">
+              {autoItems.map((it) => (
+                <li key={it.id} className="flex flex-col gap-1.5 px-4 py-3 text-sm">
+                  <div className="flex flex-wrap items-center gap-x-3 gap-y-1">
+                    <span className="inline-flex items-center gap-1 font-medium text-foreground">
+                      <User className="h-3.5 w-3.5 text-muted-foreground" />
+                      {it.contact.name || it.contact.phone || 'Contato'}
+                    </span>
+                    {it.sendRoute ? <span className="text-xs text-muted-foreground">sai por {it.sendRoute}</span> : null}
+                    <span className="ml-auto text-xs text-muted-foreground">{fmt(it.createdAt)}</span>
+                  </div>
+                  {it.reason ? <p className="text-xs text-muted-foreground">{it.reason}</p> : null}
+                  {it.suggestedText ? (
+                    <p className="line-clamp-2 whitespace-pre-line rounded-md bg-background/60 px-2.5 py-1.5 text-xs text-foreground">
+                      {it.suggestedText}
+                    </p>
+                  ) : null}
+                  {it.error ? (
+                    <p className="flex items-start gap-1.5 text-xs text-red-600 dark:text-red-300">
+                      <AlertTriangle className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+                      Última tentativa falhou: {it.error}
+                      {it.attempts > 0 ? ` (${it.attempts}x)` : ''}
+                    </p>
+                  ) : null}
+                  <div>
+                    <Button size="sm" variant="outline" className="h-7 text-xs" onClick={() => void cancelAuto(it)} disabled={busy === it.id}>
+                      {busy === it.id ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <X className="mr-1 h-3 w-3" />}
+                      {it.isMessage ? 'Não enviar' : 'Cancelar'}
+                    </Button>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          ) : null}
+        </section>
       ) : null}
 
       <section className="rounded-xl border border-border bg-card">

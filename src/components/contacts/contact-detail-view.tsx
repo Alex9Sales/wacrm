@@ -274,15 +274,19 @@ export function ContactDetailView({
     if (!contact || openingChat) return;
     setOpeningChat(true);
     try {
-      const { conversationId } = await startNewConversation({
+      const res = await startNewConversation({
         phone: contact.phone,
         name: contact.name ?? null,
         channelId: selectedChannelId || null,
       });
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
       // Navegação COMPLETA (não router.push): remonta a inbox e reativa o
       // deep-link `?c=`, e é robusta contra bundle velho (aba desatualizada
       // depois de deploy) — o client-side push podia falhar ao carregar chunk.
-      window.location.href = `/inbox?c=${conversationId}`;
+      window.location.href = `/inbox?c=${res.conversationId}`;
     } catch (err) {
       toast.error(
         err instanceof Error ? err.message : 'Não foi possível abrir a conversa.',

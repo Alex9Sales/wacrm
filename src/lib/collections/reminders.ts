@@ -25,7 +25,7 @@ import type { AccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
 import { resolveCollectionTargets } from './outreach'
-import { fallbackReminderMessage, formatUpcomingSummary, greetingName, linksInstruction, type CollectionsSettings, type UpcomingLine } from './rules'
+import { byNearestDue, fallbackReminderMessage, formatUpcomingSummary, greetingName, linksInstruction, type CollectionsSettings, type UpcomingLine } from './rules'
 import { localDayKey } from './stale'
 import { seedFrom, tooSimilar } from './variation'
 
@@ -164,7 +164,8 @@ export async function queueUpcomingReminders(args: {
 
   let budget = args.budget
   let usedToday = args.usedToday
-  for (const cand of byContact.values()) {
+  // Vence antes, sai antes: se o teto cortar, corta quem ainda tem dias de janela.
+  for (const cand of byNearestDue([...byContact.values()])) {
     if (budget <= 0) {
       bump('budget')
       break

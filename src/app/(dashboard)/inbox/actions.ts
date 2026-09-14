@@ -1844,11 +1844,20 @@ export async function listSendableChannels(): Promise<SendableChannel[]> {
  * the inbox can deep-link to it (`?c=<id>`). `channelId` is optional; omitted,
  * the account's default channel is used. Gated to agent+ (viewers can't send).
  */
+export type StartConversationResult =
+  | { ok: true; conversationId: string; contactCreated: boolean }
+  | { ok: false; error: string }
+
+/**
+ * 14/09 (Vitor/GoLink): DEVOLVE o erro em vez de lançar. Erro lançado numa
+ * Server Action chega sanitizado em produção — a explicação abaixo, escrita
+ * em 10/09, aparecia na tela como "Minified React error #441".
+ */
 export async function startNewConversation(input: {
   phone: string
   name?: string | null
   channelId?: string | null
-}): Promise<{ conversationId: string; contactCreated: boolean }> {
+}): Promise<StartConversationResult> {
   const ctx = await requireRole('agent')
   const { resolveConversationByPhone } = await import(
     '@/lib/whatsapp/resolve-conversation'
@@ -1861,17 +1870,28 @@ export async function startNewConversation(input: {
       input.channelId ?? null,
     )
     await claimNewConversation(ctx.accountId, ctx.userId, ctx.role, res.conversationId)
-    await assertCallerSeesConversation(ctx, res.conversationId)
+    const blocked = await callerBlockedReason(ctx, res.conversationId)
+    if (blocked) return { ok: false, error: blocked }
     return {
+      ok: true,
       conversationId: res.conversationId,
       contactCreated: res.contactCreated,
     }
   } catch (err) {
-    // SendMessageError carries a user-safe message (bad phone / no channel).
-    throw new Error(
-      err instanceof Error ? err.message : 'Não foi possível iniciar a conversa.',
-    )
+    console.error('[startNewConversation]', err instanceof Error ? err.message : err)
+    return { ok: false, error: startConversationError(err) }
   }
+}
+
+/**
+ * O resolvedor fala a língua da API pública (inglês, código de máquina). Na
+ * tela vai português; erro de banco/provedor fica só no log.
+ */
+function startConversationError(err: unknown): string {
+  const code = (err as { code?: unknown } | null)?.code
+  if (code === 'bad_request') return 'Número de telefone inválido.'
+  if (code === 'whatsapp_not_configured') return 'Esse número de WhatsApp não está conectado. Confira em Canais.'
+  return 'Não foi possível iniciar a conversa.'
 }
 
 /**
@@ -1879,25 +1899,28 @@ export async function startNewConversation(input: {
  * contato. Se ela está com alguém que o chamador não pode ver (dono/admin, ou
  * outro atendente fora do setor dele), o deep-link abria a caixa VAZIA, sem
  * dizer nada — a clínica da Joyce (10/09) achou que a mensagem "não chegava".
- * Aqui vira um erro que explica e diz o que fazer.
+ * Aqui vira um motivo que explica e diz o que fazer (null = pode abrir). O
+ * canal entra na frase porque é por ele que o admin acha a conversa.
  */
-async function assertCallerSeesConversation(
+async function callerBlockedReason(
   ctx: { accountId: string; userId: string; role: AccountRole },
   conversationId: string,
-): Promise<void> {
-  if (hasMinRole(ctx.role, 'admin')) return
+): Promise<string | null> {
+  if (hasMinRole(ctx.role, 'admin')) return null
   const row = firstOrNull(
     await db
       .select({
         sectorId: conversations.sectorId,
         assignedAgentId: conversations.assignedAgentId,
         isPrivate: conversations.isPrivate,
+        channelName: channels.name,
       })
       .from(conversations)
+      .leftJoin(channels, eq(channels.id, conversations.channelId))
       .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, ctx.accountId)))
       .limit(1),
   )
-  if (!row) return
+  if (!row) return null
   const visible = await canListConversation(
     ctx.role,
     ctx.userId,
@@ -1907,13 +1930,14 @@ async function assertCallerSeesConversation(
     conversationId,
     row.isPrivate ?? false,
   )
-  if (visible) return
+  if (visible) return null
   const who = row.assignedAgentId
     ? firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, row.assignedAgentId)).limit(1))?.name?.trim()
     : null
-  throw new Error(
-    `Já existe uma conversa com este contato, mas ela está com ${who || 'outra pessoa'} e você não tem acesso a ela. ` +
-      'Peça a um administrador para transferir a conversa para você, ou para ligar "Equipe vê tudo" em Configurações → Setores.',
+  const onde = row.channelName ? ` no canal ${row.channelName}` : ''
+  return (
+    `Já existe uma conversa com este contato${onde}, mas ela está com ${who || 'outra pessoa'} e você não tem acesso a ela. ` +
+    'Peça a um administrador para atribuir a conversa a você, ou para ligar "Equipe vê tudo" em Configurações → Setores.'
   )
 }
 
@@ -1960,25 +1984,26 @@ export async function startNewEmailConversation(input: {
   email: string
   name?: string | null
   channelId: string
-}): Promise<{ conversationId: string; contactCreated: boolean }> {
+}): Promise<StartConversationResult> {
   const ctx = await requireRole('agent')
   const addr = (input.email || '').trim().toLowerCase()
   if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(addr)) {
-    throw new Error('Digite um e-mail válido.')
+    return { ok: false, error: 'Digite um e-mail válido.' }
   }
   const channel = await loadChannel(input.channelId)
   if (!channel || channel.accountId !== ctx.accountId || channel.provider !== 'email') {
-    throw new Error('Canal de e-mail inválido.')
+    return { ok: false, error: 'Canal de e-mail inválido.' }
   }
   const { resolveEmailConversation } = await import('@/lib/channels/inbound')
   try {
     const res = await resolveEmailConversation(channel, addr, input.name?.trim() || null)
     await claimNewConversation(ctx.accountId, ctx.userId, ctx.role, res.conversationId)
-    return res
+    const blocked = await callerBlockedReason(ctx, res.conversationId)
+    if (blocked) return { ok: false, error: blocked }
+    return { ok: true, conversationId: res.conversationId, contactCreated: res.contactCreated }
   } catch (err) {
-    throw new Error(
-      err instanceof Error ? err.message : 'Não foi possível iniciar a conversa.',
-    )
+    console.error('[startNewEmailConversation]', err instanceof Error ? err.message : err)
+    return { ok: false, error: 'Não foi possível iniciar a conversa.' }
   }
 }
 

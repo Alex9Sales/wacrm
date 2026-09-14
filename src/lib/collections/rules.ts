@@ -308,6 +308,69 @@ export function autoSendDue(lastSentAtMs: number | null, nowMs: number, everyMin
 }
 
 /**
+ * Por onde a cobrança sai DE VERDADE quando a conta fixou o número (Ajustar →
+ * "Número que envia as cobranças"): o executor ignora a conversa escolhida no
+ * card e usa sempre esse número (outreach.ts). 14/09 (João/GoLink): o card
+ * dizia "WhatsApp · João" enquanto 43 de 45 saíram pelo número Cobranças.
+ * `delivery` é o plano gravado pela régua ("WhatsApp", "e-mail", "WhatsApp e e-mail").
+ */
+export function fixedCollectionRoute(delivery: unknown, channelName: string): string {
+  const plano = typeof delivery === 'string' && delivery.trim() ? delivery.trim() : 'WhatsApp'
+  if (!/whatsapp/i.test(plano)) return plano.charAt(0).toUpperCase() + plano.slice(1)
+  return plano.replace(/whatsapp/i, `WhatsApp · ${channelName}`)
+}
+
+/**
+ * 🔔 Ordem dos lembretes antes do vencimento: o que vence antes sai antes.
+ *
+ * 14/09 (João/GoLink): "se passar dos 50, o aviso de quem vence em 5 dias se
+ * perde?". Não se perde — a janela vai até o vencimento e o aviso tenta de novo
+ * no dia seguinte. Mas a lista vinha na ordem do Asaas, e com o teto curto um
+ * "vence amanhã" podia perder a vaga para um "vence em 5 dias", que ainda teria
+ * dias de janela. Sem data conhecida vai para o fim.
+ */
+export function byNearestDue<T extends { lines: { daysUntil: number | null }[] }>(candidates: T[]): T[] {
+  const nearest = (c: T) => {
+    const dias = c.lines.map((l) => l.daysUntil).filter((d): d is number => typeof d === 'number')
+    return dias.length ? Math.min(...dias) : Number.MAX_SAFE_INTEGER
+  }
+  return [...candidates].sort((a, b) => nearest(a) - nearest(b))
+}
+
+/**
+ * 🔁 Depois de uma tentativa que falhou, quanto falta para poder tentar de novo.
+ *
+ * 14/09 (A.M Carretos/GoLink): o WAHA devolveu erro mas ENTREGOU; o sender
+ * tentou de novo no minuto seguinte e o devedor recebeu a mesma cobrança duas
+ * vezes. A espera dá tempo do eco da mensagem chegar — e o sender procura esse
+ * eco antes de reenviar.
+ */
+export const RETRY_AFTER_FAILURE_MS = 3 * 60_000
+
+/**
+ * Pedido cuja última tentativa foi DEPOIS deste instante ainda espera. Vira
+ * filtro da fila (e não um "espera" do sender): um pedido travado não pode
+ * segurar os outros devedores da conta.
+ */
+export function retryCutoffIso(nowMs: number): string {
+  return new Date(nowMs - RETRY_AFTER_FAILURE_MS).toISOString()
+}
+
+/**
+ * Trecho do rascunho que reconhece a mensagem já entregue. Espaços são
+ * normalizados (o banco compara com o mesmo tratamento) e a assinatura
+ * ("*João:*") entra ANTES do texto, então procurar o começo do rascunho dentro
+ * da mensagem enviada funciona com ou sem ela. Texto curto demais não serve
+ * de prova — "Bom dia!" casaria com qualquer coisa.
+ */
+export function deliveredEchoSnippet(text: string | null | undefined): string | null {
+  const t = (text ?? '').replace(/\s+/g, ' ').trim()
+  // Corta por caractere (Array.from), não por unidade UTF-16: emoji partido ao
+  // meio vira "�" no banco e o trecho nunca casaria.
+  return t.length >= 30 ? Array.from(t).slice(0, 80).join('') : null
+}
+
+/**
  * Os status que fazem sentido numa régua, com o nome que o cliente entende.
  * Os demais do Asaas (RECEIVED, CONFIRMED…) já estão pagos — não se cobra.
  */

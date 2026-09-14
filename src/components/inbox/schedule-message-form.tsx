@@ -36,6 +36,7 @@ import {
 } from '@/app/(dashboard)/inbox/actions'
 import { listTeamMembers } from '@/app/(dashboard)/internal-chat/actions'
 import { uploadAccountMedia, deleteAccountMedia, mediaMaxBytesFor } from '@/lib/storage/upload-media'
+import { WhenPresets, toLocalInput } from '@/components/agendamentos/when-presets'
 import { useAuth } from '@/hooks/use-auth'
 import { hasMinRole } from '@/lib/auth/roles'
 
@@ -46,32 +47,6 @@ interface ScheduleMessageFormProps {
   onSaved: () => void
   /** Quando setado, o form edita este agendamento (pendente) em vez de criar. */
   editing?: ScheduledMessageLite | null
-}
-
-const pad = (n: number) => String(n).padStart(2, '0')
-
-/** A Date → the value a <input type="datetime-local"> expects (local, mins). */
-function toLocalInput(d: Date): string {
-  return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}T${pad(d.getHours())}:${pad(d.getMinutes())}`
-}
-
-/** Presets relative to now, returned as datetime-local strings. */
-function presets(): { label: string; value: string }[] {
-  const now = new Date()
-  const inHour = new Date(now.getTime() + 60 * 60 * 1000)
-  const in3h = new Date(now.getTime() + 3 * 60 * 60 * 1000)
-  const tomorrow9 = new Date(now)
-  tomorrow9.setDate(tomorrow9.getDate() + 1)
-  tomorrow9.setHours(9, 0, 0, 0)
-  const nextWeek9 = new Date(now)
-  nextWeek9.setDate(nextWeek9.getDate() + 7)
-  nextWeek9.setHours(9, 0, 0, 0)
-  return [
-    { label: 'Em 1 hora', value: toLocalInput(inHour) },
-    { label: 'Em 3 horas', value: toLocalInput(in3h) },
-    { label: 'Amanhã 9h', value: toLocalInput(tomorrow9) },
-    { label: 'Próx. semana', value: toLocalInput(nextWeek9) },
-  ]
 }
 
 export function ScheduleMessageForm({
@@ -424,18 +399,7 @@ export function ScheduleMessageForm({
               onChange={(e) => setWhen(e.target.value)}
               required
             />
-            <div className="flex flex-wrap gap-1.5 pt-1">
-              {presets().map((p) => (
-                <button
-                  key={p.label}
-                  type="button"
-                  onClick={() => setWhen(p.value)}
-                  className="rounded-full border border-border px-2.5 py-1 text-xs text-muted-foreground transition-colors hover:border-primary/40 hover:text-foreground"
-                >
-                  {p.label}
-                </button>
-              ))}
-            </div>
+            <WhenPresets onPick={setWhen} />
           </div>
 
           {/* Responsável — só admin/supervisor, só ao criar. Vazio = dono do lead. */}

@@ -268,13 +268,16 @@ export function WalletClient() {
               : 'Ao ligar, a régua monta as mensagens e deixa em Precisa de você para você aprovar.'}
           </p>
         </div>
-      ) : rule?.enabled && rule.autoSend ? (
+      ) : rule?.enabled && (rule.autoSend || promo?.isAuto) ? (
         <div className="flex items-start gap-2.5 rounded-md border border-amber-500/40 bg-amber-50 px-3.5 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
           <Bot className="mt-0.5 h-4 w-4 shrink-0" />
           <p>
             <strong>Envio automático ligado.</strong> As cobranças saem sozinhas, uma a cada {rule.sendEveryMinutes} min, das {rule.startHour}h às{' '}
-            {rule.endHour}h, {describeWeekdays(rule.sendWeekdays)}{rule.skipHolidays ? ' (feriado nacional não)' : ''}, sem passar por Precisa de você. Antes de cada envio o sistema confere de
-            novo se a parcela continua em aberto. Para voltar a aprovar uma a uma, desmarque &quot;Enviar sozinha&quot; em Ajustar.
+            {rule.endHour}h, {describeWeekdays(rule.sendWeekdays)}{rule.skipHolidays ? ' (feriado nacional não)' : ''}, sem ninguém aprovar — em Precisa de você elas só
+            aparecem na &quot;fila do automático&quot;. Antes de cada envio o sistema confere de novo se a parcela continua em aberto.{' '}
+            {rule.autoSend
+              ? <>Para voltar a aprovar uma a uma, desmarque &quot;Enviar sozinha&quot; em Ajustar.</>
+              : <>Para voltar a aprovar uma a uma, use &quot;Voltar a aprovar&quot; logo abaixo.</>}
           </p>
         </div>
       ) : (
@@ -317,7 +320,11 @@ export function WalletClient() {
         />
       )}
 
-      {!!conns.length && rule?.enabled && promo && <PromotionPanel promo={promo} onChanged={load} />}
+      {/* 14/09 (João/GoLink): com "Enviar sozinha" ligado este painel dizia
+          "hoje toda cobrança espera sua aprovação", com o botão cinza, logo
+          abaixo do aviso "Envio automático ligado". Ele lê OUTRO interruptor
+          (a promoção por evidência) — quem manda de verdade é o autoSend. */}
+      {!!conns.length && rule?.enabled && !rule.autoSend && promo && <PromotionPanel promo={promo} onChanged={load} />}
 
       {!conns.length ? (
         <EmptyState onAdd={() => setAddOpen(true)} />

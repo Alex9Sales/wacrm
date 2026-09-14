@@ -341,34 +341,7 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         // lista dela e recebe a resposta do cliente (10/09, Leonardo/GoLink).
         await assignCollectionConversations(input.accountId, [targets.whatsapp?.conversationId ?? null, targets.email?.conversationId ?? null])
 
-        // Lembrete e aviso de cobrança nova NÃO contam como toque de cobrança:
-        // não mexem no ritmo da régua nem no contador que devolve o devedor
-        // para uma pessoa. Nenhum dos dois é cobrança — são entrega de link.
-        if (kind !== 'reminder' && kind !== 'new_charge') {
-        const nowIso = new Date().toISOString()
-
-        await db
-          .insert(collectionsTouches)
-          .values({ accountId: input.accountId, contactId: input.contactId, lastTouchAt: nowIso, touchCount: 1, updatedAt: nowIso, recentTexts: [text] })
-          .onConflictDoUpdate({
-            target: [collectionsTouches.accountId, collectionsTouches.contactId],
-            set: { lastTouchAt: nowIso, touchCount: sql`${collectionsTouches.touchCount} + 1`, updatedAt: nowIso },
-          })
-        // Guarda o que FOI enviado (não o rascunho): é o que a IA recebe no
-        // próximo toque como "não repita isto". Últimas 3, mais recente primeiro.
-        const prevTexts = firstOrNull(
-          await db
-            .select({ recentTexts: collectionsTouches.recentTexts })
-            .from(collectionsTouches)
-            .where(and(eq(collectionsTouches.accountId, input.accountId), eq(collectionsTouches.contactId, input.contactId)))
-            .limit(1),
-        )
-        const kept = [text, ...(Array.isArray(prevTexts?.recentTexts) ? prevTexts.recentTexts : []).filter((t) => typeof t === 'string' && t !== text)].slice(0, 3)
-        await db
-          .update(collectionsTouches)
-          .set({ recentTexts: kept })
-          .where(and(eq(collectionsTouches.accountId, input.accountId), eq(collectionsTouches.contactId, input.contactId)))
-        }
+        await recordCollectionTouch(input.accountId, input.contactId, text, kind)
 
         return {
           ok: true,
@@ -717,6 +690,43 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
   }
 }
 
+/**
+ * Registra o TOQUE de cobrança: é o que dá o ritmo da régua (intervalo entre
+ * cobranças) e o que a IA recebe como "não repita isto". Exportado para o
+ * sender, que também registra quando reconhece que um envio "falho" tinha
+ * chegado (14/09) — sem o toque, o devedor seria cobrado de novo no dia seguinte.
+ *
+ * Lembrete e aviso de cobrança nova NÃO contam como toque de cobrança: não
+ * mexem no ritmo da régua nem no contador que devolve o devedor para uma
+ * pessoa. Nenhum dos dois é cobrança — são entrega de link.
+ */
+export async function recordCollectionTouch(accountId: string, contactId: string, text: string, kind: unknown): Promise<void> {
+  if (kind === 'reminder' || kind === 'new_charge') return
+  const nowIso = new Date().toISOString()
+
+  await db
+    .insert(collectionsTouches)
+    .values({ accountId, contactId, lastTouchAt: nowIso, touchCount: 1, updatedAt: nowIso, recentTexts: [text] })
+    .onConflictDoUpdate({
+      target: [collectionsTouches.accountId, collectionsTouches.contactId],
+      set: { lastTouchAt: nowIso, touchCount: sql`${collectionsTouches.touchCount} + 1`, updatedAt: nowIso },
+    })
+  // Guarda o que FOI enviado (não o rascunho): é o que a IA recebe no
+  // próximo toque como "não repita isto". Últimas 3, mais recente primeiro.
+  const prevTexts = firstOrNull(
+    await db
+      .select({ recentTexts: collectionsTouches.recentTexts })
+      .from(collectionsTouches)
+      .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, contactId)))
+      .limit(1),
+  )
+  const kept = [text, ...(Array.isArray(prevTexts?.recentTexts) ? prevTexts.recentTexts : []).filter((t) => typeof t === 'string' && t !== text)].slice(0, 3)
+  await db
+    .update(collectionsTouches)
+    .set({ recentTexts: kept })
+    .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, contactId)))
+}
+
 // ------------------------------------------------ cobrança por e-mail (item 3)
 
 /** Assunto curto: o toque nº N já diz que é a 2ª/3ª vez. */
@@ -736,9 +746,17 @@ async function officialTemplateGate(
   const vazio = { needsTemplate: false, templateName: null, templateLanguage: null, params: [] as string[] }
   try {
     const { CAPABILITIES } = await import('@/lib/channels/provider')
+    // 14/09: `conversations` NÃO tem last_inbound_at — é o apelido da subconsulta
+    // do follow-up (followup.ts). Ler a coluna inexistente derrubava a query em
+    // TODO envio desde 12/09, e o fail-open mandava texto livre no canal oficial.
     const row = firstOrNull(
       await db
-        .select({ provider: sql<string | null>`ch.provider`, lastInbound: sql<string | null>`c.last_inbound_at`, contactName: contacts.name })
+        .select({
+          provider: sql<string | null>`ch.provider`,
+          lastInbound: sql<string | null>`(SELECT max(m.created_at) FROM messages m
+            WHERE m.conversation_id = c.id AND m.sender_type = 'customer' AND m.is_internal = false)`,
+          contactName: contacts.name,
+        })
         .from(sql`conversations c`)
         .leftJoin(sql`channels ch`, sql`ch.id = c.channel_id`)
         .leftJoin(contacts, sql`${contacts.id} = c.contact_id`)
