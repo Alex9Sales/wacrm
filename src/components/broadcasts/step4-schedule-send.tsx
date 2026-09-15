@@ -26,6 +26,7 @@ import {
   CalendarClock,
   Smartphone,
 } from 'lucide-react';
+import { channelOwnerLabel, otherPersonOwner } from '@/lib/broadcasts/channel-choice';
 
 interface AudienceConfig {
   type: string;
@@ -42,6 +43,8 @@ interface Step4Props {
   channels: BroadcastChannel[];
   channelId: string;
   onChannelChange: (channelId: string) => void;
+  /** Quem está criando — pra marcar "seu número" e avisar número de outra pessoa. */
+  userId?: string | null;
   /** ISO string or '' for "send now". Bound to a datetime-local input. */
   scheduledAt: string;
   onScheduledAtChange: (iso: string) => void;
@@ -87,6 +90,7 @@ export function Step4ScheduleSend({
   audience,
   channels,
   channelId,
+  userId = null,
   onChannelChange,
   scheduledAt,
   onScheduledAtChange,
@@ -193,13 +197,26 @@ export function Step4ScheduleSend({
             onChange={(e) => onChannelChange(e.target.value)}
             className="w-full rounded-lg border border-border bg-muted px-3 py-2 text-sm text-foreground outline-none focus-visible:border-ring focus-visible:ring-2 focus-visible:ring-ring/50"
           >
-            {channels.map((ch) => (
-              <option key={ch.id} value={ch.id}>
-                {ch.name}
-                {ch.phone_number ? ` (${ch.phone_number})` : ''}
-              </option>
-            ))}
+            {channels.map((ch) => {
+              const owner = channelOwnerLabel(ch, userId);
+              return (
+                <option key={ch.id} value={ch.id}>
+                  {ch.name}
+                  {owner ? ` · ${owner}` : ''}
+                  {ch.phone_number ? ` (${ch.phone_number})` : ''}
+                </option>
+              );
+            })}
           </select>
+          {(() => {
+            const other = otherPersonOwner(channels.find((c) => c.id === channelId), userId);
+            return other ? (
+              <p className="mt-1.5 rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[11px] leading-snug text-amber-800 dark:text-amber-300">
+                Este é o <strong>número de {other}</strong>: as mensagens saem pelo
+                WhatsApp de {other} e as respostas chegam pra essa pessoa.
+              </p>
+            ) : null;
+          })()}
         </div>
       )}
 

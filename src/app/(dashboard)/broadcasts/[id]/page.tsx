@@ -174,6 +174,37 @@ function downloadBlob(filename: string, content: string) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * 15/09 (GoLink): retomar soltava de uma vez o que venceu na pausa. Agora os
+ * pendentes seguem o mesmo ritmo a partir de agora — o aviso diz qual e até
+ * quando, pra ninguém pausar de novo achando que travou.
+ */
+function resumeMessage(
+  schedule: { pending: number; intervalMs: number; drip: boolean; firstAt: string | null; lastAt: string | null } | undefined,
+  withTitle = true,
+): string {
+  const title = withTitle ? 'Disparo retomado. ' : '';
+  if (!schedule || schedule.pending === 0) return withTitle ? 'Disparo retomado.' : '';
+  const hhmm = (iso: string | null) =>
+    iso ? new Date(iso).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' }) : '';
+  const lastDay = schedule.lastAt ? new Date(schedule.lastAt) : null;
+  const sameDay = lastDay ? lastDay.toDateString() === new Date().toDateString() : true;
+  const until = schedule.lastAt
+    ? sameDay
+      ? ` (termina por volta das ${hhmm(schedule.lastAt)})`
+      : ` (termina em ${lastDay!.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} por volta das ${hhmm(schedule.lastAt)})`
+    : '';
+  if (schedule.drip) {
+    return `${title}Os ${schedule.pending} pendentes seguem espalhados no horário comercial, a partir de ${hhmm(schedule.firstAt)}${until}.`;
+  }
+  if (schedule.intervalMs <= 0) {
+    return `${title}Os ${schedule.pending} pendentes saem agora, sem intervalo (foi o escolhido ao criar).`;
+  }
+  const min = schedule.intervalMs / 60_000;
+  const every = min >= 1 ? `${Math.round(min * 10) / 10} min` : `${Math.round(schedule.intervalMs / 1000)} s`;
+  return `${title}Os ${schedule.pending} pendentes saem 1 a cada ${every}, a partir de ${hhmm(schedule.firstAt)}${until}.`;
+}
+
 export default function BroadcastDetailPage() {
   const params = useParams();
   const router = useRouter();
@@ -272,11 +303,11 @@ export default function BroadcastDetailPage() {
       } else {
         const msg =
           action === 'pause'
-            ? 'Broadcast pausado.'
+            ? 'Disparo pausado. Ao retomar, os envios continuam no mesmo ritmo a partir daquele momento.'
             : action === 'resume'
-              ? 'Broadcast retomado.'
+              ? resumeMessage(result.schedule)
               : 'Broadcast cancelado.';
-        toast.success(msg);
+        toast.success(msg, { duration: action === 'resume' ? 8000 : 4000 });
       }
       await fetchData().catch(() => {});
     } catch (err) {
@@ -294,7 +325,8 @@ export default function BroadcastDetailPage() {
         toast.error(result.message ?? 'Não foi possível reenviar os falhados.');
       } else {
         toast.success(
-          `Reenviando ${result.requeued ?? 0} destinatário(s) falhado(s).`,
+          `Reenviando ${result.requeued ?? 0} destinatário(s) falhado(s). ${resumeMessage(result.schedule, false)}`,
+          { duration: 8000 },
         );
       }
       await fetchData().catch(() => {});

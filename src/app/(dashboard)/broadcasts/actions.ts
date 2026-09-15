@@ -20,7 +20,7 @@ import {
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
-import { channels } from '@/db'
+import { channels, user } from '@/db'
 import {
   pauseBroadcast,
   resumeBroadcast,
@@ -39,6 +39,7 @@ import {
   type PacingConfig,
 } from '@/lib/whatsapp/drip-schedule'
 import { enqueueTextBroadcast } from '@/lib/broadcasts/text-broadcast'
+import { otherPersonNumberError } from '@/lib/broadcasts/channel-owner-guard'
 import type {
   Broadcast,
   BroadcastRecipient,
@@ -285,6 +286,9 @@ export interface BroadcastChannel {
   status: string
   /** Canal de e-mail (email/gmail) — disparo vira newsletter com assunto. */
   is_email?: boolean
+  /** Dono do número (canal dedicado). null = número da empresa. 15/09 GoLink. */
+  dedicated_user_id?: string | null
+  dedicated_user_name?: string | null
 }
 
 /**
@@ -301,8 +305,11 @@ export async function listMetaChannels(): Promise<BroadcastChannel[]> {
       name: channels.name,
       phone_number: channels.phoneNumber,
       status: channels.status,
+      dedicated_user_id: channels.dedicatedUserId,
+      dedicated_user_name: user.name,
     })
     .from(channels)
+    .leftJoin(user, eq(user.id, channels.dedicatedUserId))
     .where(
       and(eq(channels.accountId, ctx.accountId), eq(channels.provider, 'meta')),
     )
@@ -873,8 +880,11 @@ export async function listTextBroadcastChannels(): Promise<BroadcastChannel[]> {
       phone_number: channels.phoneNumber,
       status: channels.status,
       provider: channels.provider,
+      dedicated_user_id: channels.dedicatedUserId,
+      dedicated_user_name: user.name,
     })
     .from(channels)
+    .leftJoin(user, eq(user.id, channels.dedicatedUserId))
     .where(eq(channels.accountId, ctx.accountId))
     .orderBy(channels.name)
   // Não-oficiais (drip com jitter) + canais de E-MAIL (newsletter/segmento).
@@ -912,6 +922,8 @@ export interface CreateTextBroadcastInput {
   includeOptOut?: boolean
   /** Assunto — obrigatório quando o canal é de e-mail. */
   subject?: string | null
+  /** Quem cria confirmou enviar pelo número dedicado a OUTRA pessoa. */
+  confirmOtherPersonNumber?: boolean
   audience: ResolveAudienceInput
 }
 
@@ -925,6 +937,9 @@ export async function createTextBroadcast(
 ): Promise<{ broadcastId: string | null; totalRecipients: number; error: string | null }> {
   try {
     const ctx = await requireRole('agent')
+    // 15/09 (GoLink): número dedicado a outra pessoa só com confirmação.
+    const ownerError = await otherPersonNumberError(ctx.accountId, ctx.userId, input.channelId, input.confirmOtherPersonNumber)
+    if (ownerError) return { broadcastId: null, totalRecipients: 0, error: ownerError }
     // Resolve the audience (session-scoped) → account-owned contact ids, then
     // hand off to the shared core (validation / slots / persist / enqueue).
     const contactsList = await resolveAudienceContacts(input.audience)

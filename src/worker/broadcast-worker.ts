@@ -69,6 +69,8 @@ import { startScheduledMessageWorker } from './scheduled-message-worker';
 
 const DRY_RUN = process.env.BROADCAST_DRY_RUN === 'true';
 const PAUSE_RECHECK_MS = 15_000;
+/** Job que acorda até 2 s antes do horário gravado segue (relógio/atraso do Redis). */
+const SLOT_EARLY_TOLERANCE_MS = 2_000;
 
 function log(...args: unknown[]): void {
   console.log('[worker]', ...args);
@@ -163,6 +165,14 @@ async function processRecipientJob(job: Job<RecipientJob>): Promise<void> {
   }
 
   const { channel, sendContext, recipient } = loaded.ctx;
+  // Job idempotente (revisão 15/09): ao retomar, um job já concluído pode ser
+  // reagendado com o mesmo id se o envio terminou no meio do reslot — sem
+  // isso o cliente receberia de novo.
+  if (recipient.status !== 'pending') {
+    log(`recipient ${recipient.id} skipped: already ${recipient.status}`);
+    await finalizeBroadcastIfDone(loaded.ctx.broadcast.id);
+    return;
+  }
   const attempts = recipient.attempts + 1;
 
   // Anti-ban: contato pediu pra não receber ("não perturbe") → não envia. Marca
@@ -176,6 +186,17 @@ async function processRecipientJob(job: Job<RecipientJob>): Promise<void> {
     log(`recipient ${recipient.id} skipped: opt-out`);
     await finalizeBroadcastIfDone(loaded.ctx.broadcast.id);
     return;
+  }
+
+  // Horário gravado manda (15/09, GoLink): ao retomar, os pendentes ganham
+  // horários novos a partir de agora e os jobs são reagendados — mas um job
+  // que estava travado na hora não dá pra reagendar e acordaria no ritmo
+  // antigo, soltando envios juntos. Se o horário dele ainda não chegou, espera.
+  const slotMs = recipient.slotAt ? Date.parse(recipient.slotAt) : NaN;
+  if (Number.isFinite(slotMs) && slotMs - Date.now() > SLOT_EARLY_TOLERANCE_MS) {
+    await job.moveToDelayed(slotMs, job.token);
+    log(`recipient ${recipient.id} deferred to its slot ${recipient.slotAt}`);
+    throw new DelayedError(); // moveToDelayed exige DelayedError (ver acima)
   }
 
   // Business-hours guard for humanized drips: if this job fires OUTSIDE the

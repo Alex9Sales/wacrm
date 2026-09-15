@@ -46,6 +46,7 @@ import { runDealSuggestions } from '@/lib/ai/deal-suggest'
 import { planStageFollowUp } from '@/lib/ai/followup'
 import { dealSuggestions } from '@/db'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
+import { otherPersonNumberError } from '@/lib/broadcasts/channel-owner-guard'
 
 const contactColumns = {
   id: contacts.id,
@@ -2890,7 +2891,15 @@ export async function saveDealCustomValues(
 // ------------------------------------------------------------
 export interface StageBroadcastInfo {
   leadCount: number
-  channels: { id: string; name: string; provider: string }[]
+  channels: {
+    id: string
+    name: string
+    provider: string
+    status: string
+    /** Dono do número (15/09 GoLink: padrão = número de quem dispara). */
+    dedicated_user_id: string | null
+    dedicated_user_name: string | null
+  }[]
 }
 
 /** Contagem de leads (negócios abertos com contato, legíveis) + canais de texto. */
@@ -2914,8 +2923,16 @@ export async function stageBroadcastInfo(stageId: string): Promise<StageBroadcas
     )
     // Canais de texto (disparo é WAHA/Evolution/EvoGo — não-oficial).
     const chans = await db
-      .select({ id: channels.id, name: channels.name, provider: channels.provider })
+      .select({
+        id: channels.id,
+        name: channels.name,
+        provider: channels.provider,
+        status: channels.status,
+        dedicated_user_id: channels.dedicatedUserId,
+        dedicated_user_name: user.name,
+      })
       .from(channels)
+      .leftJoin(user, eq(user.id, channels.dedicatedUserId))
       .where(
         and(
           eq(channels.accountId, ctx.accountId),
@@ -2935,12 +2952,16 @@ export async function broadcastToStage(input: {
   stageId: string
   channelId: string
   text: string
+  /** Quem dispara confirmou usar o número dedicado a OUTRA pessoa. */
+  confirmOtherPersonNumber?: boolean
 }): Promise<{ ok: boolean; total?: number; error?: string }> {
   try {
     const ctx = await getCurrentAccount()
     const text = (input.text ?? '').trim()
     if (!text) return { ok: false, error: 'Escreva a mensagem.' }
     if (!input.channelId) return { ok: false, error: 'Escolha o canal.' }
+    const ownerError = await otherPersonNumberError(ctx.accountId, ctx.userId, input.channelId, input.confirmOtherPersonNumber)
+    if (ownerError) return { ok: false, error: ownerError }
     const rows = await db
       .select({
         dealId: deals.id,

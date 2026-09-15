@@ -16,17 +16,27 @@
 // fanned out. This module is Next-independent.
 // ============================================================
 
-import { and, eq } from 'drizzle-orm';
+import { and, asc, eq, sql } from 'drizzle-orm';
 
 import { db, broadcastRecipients, broadcasts, notifications } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { publishEvent } from '@/lib/events/publish';
+import {
+  countSentToday,
+  inferSpacingMs,
+  normalizePacing,
+  pacingIntervalMinutes,
+  reslotPendingSlots,
+  type PacingConfig,
+} from '@/lib/whatsapp/drip-schedule';
 import type { ChannelHaltReason } from './errors';
 import {
   enqueueBroadcastDispatch,
   removeBroadcastDispatchJob,
   removeRecipientJobs,
+  rescheduleRecipient,
 } from './queues';
+import { finalizeBroadcastIfDone } from './broadcast-jobs';
 
 export type BroadcastControlAction = 'pause' | 'resume' | 'cancel';
 
@@ -35,8 +45,112 @@ export interface ControlResult {
   /** New status on success, or the current status on a rejected transition. */
   status: string;
   /** Error code when !ok. */
-  code?: 'not_found' | 'invalid_state';
+  code?: 'not_found' | 'invalid_state' | 'reslot_failed';
   message?: string;
+  /** Resume/retry: how the pending recipients were re-spaced from now. */
+  schedule?: ReslotSummary;
+}
+
+/** O ritmo que os pendentes seguem depois de retomar (pra tela dizer). */
+export interface ReslotSummary {
+  pending: number;
+  /** Intervalo entre envios (ms). 0 = rajada escolhida por quem criou. */
+  intervalMs: number;
+  /** Horário comercial (gotejamento) em vez de intervalo fixo. */
+  drip: boolean;
+  firstAt: string | null;
+  lastAt: string | null;
+}
+
+/**
+ * 15/09 (GoLink, Vitor): pausar pra "dar um tempo" e retomar soltava DE UMA
+ * VEZ tudo o que venceu durante a pausa — 14 imagens em 73 s num disparo de
+ * 1 a cada 2 min (risco de ban e cara de spam). Antes de voltar a enviar,
+ * os pendentes ganham horários novos a partir de agora, no mesmo ritmo
+ * (reslotPendingSlots), e os jobs na fila são reagendados. O worker ainda
+ * confere o horário gravado antes de mandar (job que estava travado e não
+ * deu pra reagendar espera o seu horário).
+ *
+ * `rescheduleJobs: false` quando quem chama vai refazer o dispatch (retry),
+ * que enfileira todo mundo já com os horários novos.
+ */
+export async function reslotPendingRecipients(
+  broadcastId: string,
+  opts: { rescheduleJobs?: boolean } = {},
+): Promise<ReslotSummary> {
+  const b = firstOrNull(
+    await db
+      .select({ pacing: broadcasts.pacing, channelId: broadcasts.channelId })
+      .from(broadcasts)
+      .where(eq(broadcasts.id, broadcastId))
+      .limit(1),
+  );
+  const empty: ReslotSummary = { pending: 0, intervalMs: 0, drip: false, firstAt: null, lastAt: null };
+  if (!b) return empty;
+
+  const rows = await db
+    .select({
+      id: broadcastRecipients.id,
+      status: broadcastRecipients.status,
+      slotAt: broadcastRecipients.scheduledSlotAt,
+      sentAt: broadcastRecipients.sentAt,
+    })
+    .from(broadcastRecipients)
+    .where(eq(broadcastRecipients.broadcastId, broadcastId))
+    .orderBy(
+      sql`${broadcastRecipients.scheduledSlotAt} ASC NULLS LAST`,
+      asc(broadcastRecipients.createdAt),
+      asc(broadcastRecipients.id),
+    );
+  const pending = rows.filter((r) => r.status === 'pending');
+  const toMs = (v: string | null) => (v ? Date.parse(v) : null);
+  const pacing: PacingConfig | null = b.pacing ? normalizePacing(b.pacing as Partial<PacingConfig>) : null;
+  const intervalMs = pacing ? pacingIntervalMinutes(pacing) * 60_000 : inferSpacingMs(rows.map((r) => toMs(r.slotAt)));
+  const sentTimes = rows.map((r) => toMs(r.sentAt)).filter((t): t is number => t !== null && Number.isFinite(t));
+  const nowMs = Date.now();
+
+  const slots = reslotPendingSlots({
+    pendingCount: pending.length,
+    pacing,
+    spacingMs: intervalMs,
+    lastSentAtMs: sentTimes.length ? Math.max(...sentTimes) : null,
+    nowMs,
+    usedToday: pacing ? countSentToday(sentTimes, nowMs, pacing.offsetMin) : 0,
+  });
+  if (!slots || pending.length === 0) {
+    return { ...empty, pending: pending.length, intervalMs, drip: !!pacing };
+  }
+  if (slots.length < pending.length) {
+    throw new Error(`reslot incompleto: ${slots.length} horários para ${pending.length} pendentes`);
+  }
+
+  // Um UPDATE por lote (VALUES), só em quem continua pendente.
+  const BATCH = 500;
+  for (let i = 0; i < pending.length; i += BATCH) {
+    const values = pending
+      .slice(i, i + BATCH)
+      .map((r, j) => sql`(${r.id}::uuid, ${new Date(slots[i + j]).toISOString()}::timestamptz)`);
+    await db.execute(sql`
+      UPDATE "broadcast_recipients" AS r
+      SET "scheduled_slot_at" = v.slot
+      FROM (VALUES ${sql.join(values, sql`, `)}) AS v(id, slot)
+      WHERE r."id" = v.id AND r."status" = 'pending'
+    `);
+  }
+
+  if (opts.rescheduleJobs !== false && b.channelId) {
+    for (let i = 0; i < pending.length; i++) {
+      await rescheduleRecipient(b.channelId, broadcastId, pending[i].id, Math.max(0, slots[i] - nowMs));
+    }
+  }
+
+  return {
+    pending: pending.length,
+    intervalMs,
+    drip: !!pacing,
+    firstAt: new Date(slots[0]).toISOString(),
+    lastAt: new Date(slots[slots.length - 1]).toISOString(),
+  };
 }
 
 async function currentStatus(
@@ -53,6 +167,34 @@ async function currentStatus(
       .limit(1),
   );
   return row?.status ?? null;
+}
+
+const STATUS_PT: Record<string, string> = {
+  cancelled: 'cancelado',
+  paused: 'pausado',
+  sent: 'enviado',
+  failed: 'com falha',
+  sending: 'enviando',
+  scheduled: 'agendado',
+  draft: 'rascunho',
+};
+const statusPt = (s: string | null) => (s ? STATUS_PT[s] ?? s : 'desconhecido');
+
+/** UPDATE só se o status ainda for `from`. true = esta chamada fez a transição. */
+async function transitionStatus(
+  broadcastId: string,
+  accountId: string,
+  from: string,
+  to: string,
+): Promise<boolean> {
+  const rows = await db
+    .update(broadcasts)
+    .set({ status: to, updatedAt: new Date().toISOString() })
+    .where(
+      and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, accountId), eq(broadcasts.status, from)),
+    )
+    .returning({ id: broadcasts.id });
+  return rows.length > 0;
 }
 
 async function setStatus(broadcastId: string, status: string): Promise<void> {
@@ -102,11 +244,42 @@ export async function resumeBroadcast(
       message: `Cannot resume a broadcast in status '${status}'`,
     };
   }
-  await setStatus(broadcastId, 'sending');
+  // Ritmo recomeça a partir de agora ANTES de liberar o envio. Se não der
+  // pra reorganizar, não retoma: retomar sem isso despeja a fila.
+  let schedule: ReslotSummary;
+  try {
+    schedule = await reslotPendingRecipients(broadcastId);
+  } catch (err) {
+    console.error('[broadcast-controls] reslot on resume failed:', broadcastId, err);
+    return {
+      ok: false,
+      status,
+      code: 'reslot_failed',
+      message: 'Não consegui reorganizar os horários dos próximos envios. Tente retomar de novo em instantes.',
+    };
+  }
+  // Transição condicional: um Cancelar/Pausar que chegou durante o reslot
+  // vence (revisão 15/09) — senão o disparo cancelado voltava a enviar.
+  const won = await transitionStatus(broadcastId, accountId, 'paused', 'sending');
+  if (!won) {
+    const now = await currentStatus(broadcastId, accountId);
+    // Outra ação (outro Retomar, "Enviar agora") já voltou a enviar: não é erro.
+    if (now !== 'sending') {
+      return {
+        ok: false,
+        status: now ?? 'unknown',
+        code: 'invalid_state',
+        message: `O disparo ficou ${statusPt(now)} enquanto retomava.`,
+      };
+    }
+  }
   // Re-enqueue dispatch (jobId dedups if one is still around) so any
   // still-pending recipients are (re)fanned out.
   await enqueueBroadcastDispatch(broadcastId, {});
-  return { ok: true, status: 'sending' };
+  // O dispatch re-enfileirado costuma ser deduplicado: se não sobrou
+  // pendente (o último saiu durante a pausa), fecha o disparo aqui.
+  await finalizeBroadcastIfDone(broadcastId);
+  return { ok: true, status: 'sending', schedule };
 }
 
 /** Cancel a broadcast → 'cancelled' (terminal). Pending recipients won't
@@ -189,6 +362,16 @@ export async function retryFailedBroadcast(
       message: 'Nenhum destinatário pendente/falhado para reenviar',
     };
   }
+  // Mesmo ritmo a partir de agora (senão os reenviados + vencidos saem de
+  // uma vez — pior ainda depois de um bloqueio 463). O dispatch abaixo
+  // enfileira todos já com os horários novos.
+  let schedule: ReslotSummary | undefined;
+  try {
+    schedule = await reslotPendingRecipients(broadcastId, { rescheduleJobs: false });
+  } catch (err) {
+    // Sem os horários novos segue como antes (não deixa ninguém sem job).
+    console.error('[broadcast-controls] reslot on retry failed:', broadcastId, err);
+  }
   // Clear the BullMQ jobId dedup: a completed dispatch job and prior
   // failed recipient jobs block the re-enqueue otherwise.
   await removeBroadcastDispatchJob(broadcastId);
@@ -198,9 +381,27 @@ export async function retryFailedBroadcast(
       pending.map((p) => p.id),
     );
   }
-  await setStatus(broadcastId, 'sending');
+  let won = await transitionStatus(broadcastId, accountId, status, 'sending');
+  if (!won) {
+    const now = await currentStatus(broadcastId, accountId);
+    if (now === 'sent' || now === 'failed') {
+      // O worker fechou o disparo no meio (último pendente saiu): reabre, senão
+      // os reenviados ficariam 'pending' sem job e sem botão pra recuperar.
+      won = await transitionStatus(broadcastId, accountId, now, 'sending');
+    } else if (now === 'sending') {
+      won = true; // outro Reenviar/Retomar venceu: re-enfileirar é idempotente
+    }
+    if (!won) {
+      return {
+        ok: false,
+        status: now ?? 'unknown',
+        code: 'invalid_state',
+        message: `O disparo ficou ${statusPt(now)} enquanto reenviava.`,
+      };
+    }
+  }
   await enqueueBroadcastDispatch(broadcastId, {});
-  return { ok: true, status: 'sending', requeued: pending.length };
+  return { ok: true, status: 'sending', requeued: pending.length, schedule };
 }
 
 /** What the operator sees when a broadcast is auto-paused. */

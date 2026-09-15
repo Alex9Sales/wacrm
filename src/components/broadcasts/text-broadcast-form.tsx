@@ -12,7 +12,7 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { Loader2, Upload, Users, CalendarClock, Send, Paperclip, X, Check } from 'lucide-react'
+import { Loader2, Upload, Users, CalendarClock, Send, Paperclip, X, Check, Smartphone } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -38,6 +38,12 @@ import { renderForContact, SUPPORTED_TOKENS } from '@/lib/whatsapp/message-vars'
 import { parseCsv, type CsvContact } from '@/lib/broadcasts/csv'
 import type { Tag } from '@/types'
 import { cn } from '@/lib/utils'
+import { useAuth } from '@/hooks/use-auth'
+import {
+  channelOwnerLabel,
+  defaultBroadcastChannelId,
+  otherPersonOwner,
+} from '@/lib/broadcasts/channel-choice'
 
 type MediaKind = 'image' | 'video' | 'document' | 'audio'
 
@@ -68,8 +74,14 @@ const DAY_LABELS = 'seg–sáb'
 
 export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
   const router = useRouter()
+  const { user } = useAuth()
+  const userId = user?.id ?? null
 
   const [channels, setChannels] = useState<BroadcastChannel[]>([])
+  // 15/09 (GoLink): quem mexeu no canal manda; senão o padrão é o número de
+  // quem está criando (channel-choice.ts), não o 1º em ordem alfabética.
+  const [channelTouched, setChannelTouched] = useState(false)
+  const [confirmOtherNumber, setConfirmOtherNumber] = useState(false)
   const [tags, setTags] = useState<Tag[]>([])
   const [loading, setLoading] = useState(true)
 
@@ -126,7 +138,6 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
         const usable = emailOnly ? chs.filter((c) => c.is_email) : chs
         setChannels(usable)
         setTags(tgs)
-        if (usable.length > 0) setChannelId(usable[0].id)
       } finally {
         if (!cancelled) setLoading(false)
       }
@@ -135,6 +146,14 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
       cancelled = true
     }
   }, [])
+
+  // Canal padrão = o número de quem cria (o usuário carrega junto ou depois
+  // da lista). Não passa por cima de uma escolha feita à mão.
+  useEffect(() => {
+    if (channelTouched || channels.length === 0) return
+    const id = defaultBroadcastChannelId(channels, userId, { email: !!emailOnly })
+    if (id && id !== channelId) setChannelId(id)
+  }, [channels, userId, channelTouched, channelId, emailOnly])
 
   // Live recipient estimate for the chosen audience.
   useEffect(() => {
@@ -291,11 +310,14 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
   const estDays = estimate && estimate > 0 ? Math.ceil(estimate / cap) : 0
   // Canal de e-mail selecionado → newsletter (assunto obrigatório, sem mídia).
   const isEmailChannel = !!channels.find((c) => c.id === channelId)?.is_email
+  // Número dedicado a OUTRA pessoa: aviso + confirmação (o servidor também exige).
+  const otherOwner = otherPersonOwner(channels.find((c) => c.id === channelId), userId)
 
   const canSubmit =
     !submitting &&
     !uploadingMedia &&
     !!channelId &&
+    (!otherOwner || confirmOtherNumber) &&
     (!isEmailChannel || subject.trim().length > 0) &&
     (message.trim().length > 0 || mediaItems.length > 0) &&
     ((audienceType === 'all') ||
@@ -314,6 +336,7 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
         media: mediaItems.length > 0 ? mediaItems : undefined,
         includeOptOut,
         subject: subject.trim() || null,
+        confirmOtherPersonNumber: !!otherOwner && confirmOtherNumber,
         dailyCap: cap,
         sendNow,
         sendNowIntervalMin: Math.max(0, Math.floor(sendNowIntervalMin) || 0),
@@ -340,7 +363,7 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
     } finally {
       setSubmitting(false)
     }
-  }, [canSubmit, name, channelId, subject, message, mediaItems, includeOptOut, cap, sendNow, sendNowIntervalMin, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
+  }, [canSubmit, name, channelId, subject, otherOwner, confirmOtherNumber, message, mediaItems, includeOptOut, cap, sendNow, sendNowIntervalMin, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
 
   if (loading) {
     return (
@@ -376,28 +399,67 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
       <div className="grid gap-4 sm:grid-cols-2">
         <div className="space-y-1.5">
           <Label>Canal</Label>
-          <Select value={channelId} onValueChange={(v) => v && setChannelId(v)}>
+          <Select
+            value={channelId}
+            onValueChange={(v) => {
+              if (!v) return
+              setChannelTouched(true)
+              setConfirmOtherNumber(false)
+              setChannelId(v)
+            }}
+          >
             <SelectTrigger className="w-full bg-muted border-border">
               {/* Render the label ourselves (name only) instead of Radix's
                   auto-capture, which can fall back to the raw channel id. */}
               {channelId ? (
                 <span className="truncate">
-                  {channels.find((c) => c.id === channelId)?.name ?? 'Canal'}
+                  {(() => {
+                    const c = channels.find((ch) => ch.id === channelId)
+                    if (!c) return 'Canal'
+                    const owner = channelOwnerLabel(c, userId)
+                    return owner ? `${c.name} · ${owner}` : c.name
+                  })()}
                 </span>
               ) : (
                 <span className="text-muted-foreground">Escolha o canal</span>
               )}
             </SelectTrigger>
             <SelectContent>
-              {channels.map((c) => (
-                <SelectItem key={c.id} value={c.id}>
-                  {c.is_email ? '✉️ ' : ''}
-                  {c.name}
-                  {c.phone_number ? ` · ${c.phone_number}` : ''}
-                </SelectItem>
-              ))}
+              {channels.map((c) => {
+                const owner = channelOwnerLabel(c, userId)
+                return (
+                  <SelectItem key={c.id} value={c.id}>
+                    {c.is_email ? '✉️ ' : ''}
+                    {c.name}
+                    {owner ? ` · ${owner}` : ''}
+                    {c.phone_number ? ` · ${c.phone_number}` : ''}
+                    {c.status && c.status !== 'connected' ? ' (desconectado)' : ''}
+                  </SelectItem>
+                )
+              })}
             </SelectContent>
           </Select>
+          {otherOwner ? (
+            <div className="rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[11px] leading-snug text-amber-800 dark:text-amber-300">
+              <p className="flex items-start gap-1.5">
+                <Smartphone className="mt-px h-3.5 w-3.5 shrink-0" />
+                <span>
+                  Este é o <strong>número de {otherOwner}</strong>. As mensagens saem
+                  pelo WhatsApp de {otherOwner} e as respostas chegam pra essa pessoa —
+                  talvez você não consiga ver as conversas.
+                </span>
+              </p>
+              <label className="mt-1.5 flex cursor-pointer items-center gap-1.5 font-medium">
+                <input
+                  type="checkbox"
+                  checked={confirmOtherNumber}
+                  onChange={(e) => setConfirmOtherNumber(e.target.checked)}
+                  className="h-3.5 w-3.5 accent-amber-600"
+                />
+                Quero enviar pelo número de {otherOwner} mesmo assim
+              </label>
+            </div>
+          ) : null}
           {isEmailChannel ? (
             <p className="text-[11px] text-muted-foreground">
               Canal de e-mail: o disparo vai pro <strong>e-mail</strong> dos

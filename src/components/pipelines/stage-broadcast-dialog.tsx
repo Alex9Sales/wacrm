@@ -9,6 +9,12 @@ import { toast } from 'sonner'
 import { Loader2, Megaphone } from 'lucide-react'
 
 import { SUPPORTED_TOKENS } from '@/lib/whatsapp/message-vars'
+import { useAuth } from '@/hooks/use-auth'
+import {
+  channelOwnerLabel,
+  defaultBroadcastChannelId,
+  otherPersonOwner,
+} from '@/lib/broadcasts/channel-choice'
 
 import {
   Dialog,
@@ -36,8 +42,14 @@ export function StageBroadcastDialog({
   open: boolean
   onOpenChange: (v: boolean) => void
 }) {
+  const { user } = useAuth()
+  const userId = user?.id ?? null
   const [info, setInfo] = useState<StageBroadcastInfo | null>(null)
   const [channelId, setChannelId] = useState('')
+  // 15/09 (GoLink): padrão = número de quem dispara (não o 1º da lista);
+  // número de outra pessoa só com confirmação.
+  const [channelTouched, setChannelTouched] = useState(false)
+  const [confirmOtherNumber, setConfirmOtherNumber] = useState(false)
   const [text, setText] = useState('')
   const [sending, setSending] = useState(false)
   const textRef = useRef<HTMLTextAreaElement>(null)
@@ -64,13 +76,20 @@ export function StageBroadcastDialog({
     if (!open) return
     setInfo(null)
     setText('')
+    setChannelTouched(false)
+    setConfirmOtherNumber(false)
     stageBroadcastInfo(stageId)
-      .then((i) => {
-        setInfo(i)
-        setChannelId(i.channels[0]?.id ?? '')
-      })
+      .then((i) => setInfo(i))
       .catch(() => setInfo({ leadCount: 0, channels: [] }))
   }, [open, stageId])
+
+  useEffect(() => {
+    if (!info || channelTouched || info.channels.length === 0) return
+    const id = defaultBroadcastChannelId(info.channels, userId)
+    if (id && id !== channelId) setChannelId(id)
+  }, [info, userId, channelTouched, channelId])
+
+  const otherOwner = otherPersonOwner(info?.channels.find((c) => c.id === channelId), userId)
 
   async function send() {
     const body = text.trim()
@@ -82,8 +101,17 @@ export function StageBroadcastDialog({
       toast.error('Escolha o canal.')
       return
     }
+    if (otherOwner && !confirmOtherNumber) {
+      toast.error(`Confirme que quer enviar pelo número de ${otherOwner}.`)
+      return
+    }
     setSending(true)
-    const res = await broadcastToStage({ stageId, channelId, text: body })
+    const res = await broadcastToStage({
+      stageId,
+      channelId,
+      text: body,
+      confirmOtherPersonNumber: !!otherOwner && confirmOtherNumber,
+    })
     setSending(false)
     if (!res.ok) {
       toast.error(res.error ?? 'Falha ao disparar.')
@@ -132,17 +160,44 @@ export function StageBroadcastDialog({
                 </label>
                 <select
                   value={channelId}
-                  onChange={(e) => setChannelId(e.target.value)}
+                  onChange={(e) => {
+                    setChannelTouched(true)
+                    setConfirmOtherNumber(false)
+                    setChannelId(e.target.value)
+                  }}
                   className="h-9 rounded-lg border border-border bg-background px-2 text-sm text-foreground"
                 >
-                  {info.channels.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.name}
-                    </option>
-                  ))}
+                  {info.channels.map((c) => {
+                    const owner = channelOwnerLabel(c, userId)
+                    return (
+                      <option key={c.id} value={c.id}>
+                        {c.name}
+                        {owner ? ` · ${owner}` : ''}
+                        {c.status !== 'connected' ? ' (desconectado)' : ''}
+                      </option>
+                    )
+                  })}
                 </select>
               </div>
             )}
+            {otherOwner ? (
+              <div className="rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-[11px] leading-snug text-amber-800 dark:text-amber-300">
+                <p>
+                  {info.channels.length === 1 ? 'O único canal de disparo é o ' : 'Este é o '}
+                  <strong>número de {otherOwner}</strong>. As mensagens saem pelo WhatsApp de{' '}
+                  {otherOwner} e as respostas chegam pra essa pessoa.
+                </p>
+                <label className="mt-1.5 flex cursor-pointer items-center gap-1.5 font-medium">
+                  <input
+                    type="checkbox"
+                    checked={confirmOtherNumber}
+                    onChange={(e) => setConfirmOtherNumber(e.target.checked)}
+                    className="h-3.5 w-3.5 accent-amber-600"
+                  />
+                  Quero enviar pelo número de {otherOwner} mesmo assim
+                </label>
+              </div>
+            ) : null}
             <div className="space-y-1.5">
               <div className="flex flex-wrap items-center gap-1.5">
                 <span className="text-[11px] text-muted-foreground">Variáveis:</span>
@@ -185,7 +240,8 @@ export function StageBroadcastDialog({
               !info ||
               info.channels.length === 0 ||
               info.leadCount === 0 ||
-              !text.trim()
+              !text.trim() ||
+              (!!otherOwner && !confirmOtherNumber)
             }
           >
             {sending && <Loader2 className="mr-1.5 h-4 w-4 animate-spin" />}

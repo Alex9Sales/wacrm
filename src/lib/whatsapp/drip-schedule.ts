@@ -118,8 +118,8 @@ export function computeDripSlots(
   let remaining = count;
   let first = true;
   // Guard against a pathological infinite loop: enough days to place all
-  // recipients at 1/day, plus a week of skipped days, plus slack.
-  let safety = count + 14;
+  // recipients at 1/day even with a single allowed weekday, plus slack.
+  let safety = count * 7 + 14;
 
   while (remaining > 0 && safety-- > 0) {
     const weekday = new Date(dayStartLocal).getUTCDay();
@@ -151,4 +151,112 @@ export function computeDripSlots(
   }
 
   return slots;
+}
+
+/**
+ * Intervalo de um "Enviar agora" espaçado, deduzido dos horários já gravados
+ * nos destinatários (nowSpacedSlots: i × intervalo). 0 = rajada (todos no
+ * mesmo horário ou sem horário). Mediana das diferenças positivas: robusta a
+ * um destinatário reagendado fora do compasso.
+ */
+export function inferSpacingMs(slots: readonly (number | null | undefined)[]): number {
+  const sorted = [...new Set(slots.filter((s): s is number => typeof s === 'number' && Number.isFinite(s)))].sort(
+    (a, b) => a - b,
+  );
+  const diffs: number[] = [];
+  for (let i = 1; i < sorted.length; i++) {
+    const d = sorted[i] - sorted[i - 1];
+    if (d > 0) diffs.push(d);
+  }
+  if (!diffs.length) return 0;
+  diffs.sort((a, b) => a - b);
+  const mid = Math.floor(diffs.length / 2);
+  return Math.round(diffs.length % 2 ? diffs[mid] : (diffs[mid - 1] + diffs[mid]) / 2);
+}
+
+/**
+ * Gotejamento RETOMADO (pausa, "Reenviar falhados"): continua o dia de hoje
+ * em vez de tratá-lo como vazio (revisão 15/09). computeDripSlots espalha até
+ * `dailyCap` envios pelo que SOBRA da janela — retomar às 17h espremia 50
+ * envios até as 18h, somados aos que já tinham saído. Aqui:
+ *   - hoje só cabe `dailyCap - usedToday`;
+ *   - o passo é sempre o do gotejamento (janela ÷ máx/dia), nunca menor;
+ *   - o 1º espera 1 min e um passo inteiro desde o último envio;
+ *   - o que não couber vai pros próximos dias permitidos.
+ */
+export function resumeDripSlots(
+  count: number,
+  cfg: PacingConfig,
+  opts: { nowMs: number; usedToday: number; lastSentAtMs: number | null },
+): number[] {
+  const slots: number[] = [];
+  if (count <= 0) return slots;
+  const { dailyCap, startMin, endMin, days, offsetMin } = cfg;
+  // Passo exato (janela ÷ máx/dia): arredondar pra minuto inteiro fazia caber
+  // menos que o máximo por dia quando a divisão não é exata (48 → 47).
+  const stepMs = ((endMin - startMin) * MIN_MS) / dailyCap;
+  const localNow = opts.nowMs + offsetMin * MIN_MS;
+  const notBeforeLocal = Math.max(
+    localNow + MIN_MS,
+    opts.lastSentAtMs !== null ? opts.lastSentAtMs + offsetMin * MIN_MS + Math.round(stepMs) : -Infinity,
+  );
+  let dayStartLocal = Math.floor(localNow / DAY_MS) * DAY_MS;
+  let remaining = count;
+  let today = true;
+  let safety = count * 7 + 14;
+
+  while (remaining > 0 && safety-- > 0) {
+    const weekday = new Date(dayStartLocal).getUTCDay();
+    if (days.includes(weekday)) {
+      const windowStartLocal = dayStartLocal + startMin * MIN_MS;
+      const windowEndLocal = dayStartLocal + endMin * MIN_MS;
+      const earliest = today ? Math.max(windowStartLocal, notBeforeLocal) : windowStartLocal;
+      const capacity = today ? Math.max(0, dailyCap - Math.max(0, opts.usedToday)) : dailyCap;
+      for (let k = 0; k < capacity && remaining > 0; k++) {
+        const slotLocal = earliest + Math.round(k * stepMs);
+        if (slotLocal >= windowEndLocal) break;
+        slots.push(slotLocal - offsetMin * MIN_MS);
+        remaining--;
+      }
+    }
+    today = false;
+    dayStartLocal += DAY_MS;
+  }
+  return slots;
+}
+
+/** Quantos já saíram HOJE (dia local do gotejamento). */
+export function countSentToday(sentAtMs: readonly number[], nowMs: number, offsetMin: number): number {
+  const day = (ms: number) => Math.floor((ms + offsetMin * MIN_MS) / DAY_MS);
+  const today = day(nowMs);
+  return sentAtMs.filter((t) => Number.isFinite(t) && day(t) === today).length;
+}
+
+/**
+ * Horários novos dos PENDENTES ao retomar um disparo pausado.
+ *
+ * 15/09 (GoLink, Vitor): pausar pra "dar um tempo" e retomar soltava de uma
+ * vez tudo o que tinha vencido durante a pausa — 14 imagens em 73 s num
+ * disparo de 1 a cada 2 min. Aqui o ritmo recomeça a partir de AGORA:
+ *   - gotejamento em horário comercial (pacing): resumeDripSlots (limite do
+ *     dia descontando o que já saiu, passo do gotejamento);
+ *   - "Enviar agora" espaçado: mesmo intervalo, e o 1º nunca sai antes de um
+ *     intervalo depois do último envio;
+ *   - rajada (intervalo 0): null — foi a escolha de quem criou, não mexe.
+ */
+export function reslotPendingSlots(input: {
+  pendingCount: number;
+  pacing: PacingConfig | null;
+  spacingMs: number;
+  lastSentAtMs: number | null;
+  nowMs: number;
+  /** Gotejamento: quantos deste disparo já saíram hoje. */
+  usedToday?: number;
+}): number[] | null {
+  const { pendingCount, pacing, spacingMs, lastSentAtMs, nowMs } = input;
+  if (pendingCount <= 0) return [];
+  if (pacing) return resumeDripSlots(pendingCount, pacing, { nowMs, usedToday: input.usedToday ?? 0, lastSentAtMs });
+  if (spacingMs <= 0) return null;
+  const start = lastSentAtMs !== null ? Math.max(nowMs, lastSentAtMs + spacingMs) : nowMs;
+  return nowSpacedSlots(pendingCount, spacingMs, start);
 }

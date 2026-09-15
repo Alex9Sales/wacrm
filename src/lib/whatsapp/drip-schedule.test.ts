@@ -6,6 +6,9 @@ import {
   localMinuteOfDay,
   pacingIntervalMinutes,
   nowSpacedSlots,
+  inferSpacingMs,
+  reslotPendingSlots,
+  countSentToday,
   DEFAULT_PACING,
   type PacingConfig,
 } from './drip-schedule';
@@ -133,5 +136,80 @@ describe('normalizePacing', () => {
   it('keeps a valid custom config', () => {
     const cfg = normalizePacing({ dailyCap: 30, startMin: 540, endMin: 1140, days: [1, 2, 3, 4, 5], offsetMin: -180 });
     expect(cfg).toEqual({ dailyCap: 30, startMin: 540, endMin: 1140, days: [1, 2, 3, 4, 5], offsetMin: -180 });
+  });
+});
+
+// 15/09 (GoLink): retomar um disparo pausado soltava a fila vencida de uma vez.
+describe('inferSpacingMs + reslotPendingSlots', () => {
+  const MIN = 60_000;
+  const T0 = Date.UTC(2026, 8, 15, 12, 50, 0);
+
+  it('deduz o intervalo do "Enviar agora" pelos horários gravados', () => {
+    const slots = Array.from({ length: 45 }, (_, i) => T0 + i * 2 * MIN);
+    expect(inferSpacingMs(slots)).toBe(2 * MIN);
+    expect(inferSpacingMs([T0, T0, T0, null])).toBe(0);
+    expect(inferSpacingMs([null, undefined])).toBe(0);
+    // um reagendado fora do compasso não muda a mediana
+    expect(inferSpacingMs([...slots, T0 + 7 * MIN + 13_000])).toBe(2 * MIN);
+  });
+
+  it('retomar depois de uma pausa longa NÃO despeja: 1 a cada 2 min a partir de agora', () => {
+    const now = T0 + 33 * MIN; // pausado das 09:52 às 10:23 SP
+    const lastSent = T0 + 2 * MIN;
+    const next = reslotPendingSlots({ pendingCount: 43, pacing: null, spacingMs: 2 * MIN, lastSentAtMs: lastSent, nowMs: now })!;
+    expect(next).toHaveLength(43);
+    expect(next[0]).toBe(now);
+    for (let i = 1; i < next.length; i++) expect(next[i] - next[i - 1]).toBe(2 * MIN);
+  });
+
+  it('pausa curta: o 1º espera completar o intervalo desde o último envio', () => {
+    const lastSent = T0;
+    const now = T0 + 30_000;
+    const next = reslotPendingSlots({ pendingCount: 3, pacing: null, spacingMs: 2 * MIN, lastSentAtMs: lastSent, nowMs: now })!;
+    expect(next[0]).toBe(T0 + 2 * MIN);
+  });
+
+  it('rajada escolhida (intervalo 0) fica como está', () => {
+    expect(reslotPendingSlots({ pendingCount: 5, pacing: null, spacingMs: 0, lastSentAtMs: null, nowMs: T0 })).toBeNull();
+  });
+
+  // Revisão 15/09: retomar o gotejamento às 17h espremia 50 envios até as 18h.
+  it('gotejamento retomado no fim do dia respeita o limite do dia e o passo', () => {
+    const step = pacingIntervalMinutes(CFG) * MIN; // 12 min
+    const now = MON_9H_LOCAL_UTC + 8 * 60 * MIN + 5 * MIN; // segunda 17:05 (Campo Grande)
+    const next = reslotPendingSlots({ pendingCount: 155, pacing: CFG, spacingMs: step, lastSentAtMs: now - 3 * MIN, nowMs: now, usedToday: 45 })!;
+    expect(next).toHaveLength(155);
+    const monday = next.filter((t) => localWeekday(t, CFG.offsetMin) === 1 && t - now < 86_400_000);
+    expect(monday.length).toBeLessThanOrEqual(5);
+    for (let i = 1; i < next.length; i++) expect(next[i] - next[i - 1]).toBeGreaterThanOrEqual(step);
+    expect(allInWindow(next, CFG)).toBe(true);
+    expect(Math.max(...perDayCounts(next, CFG.offsetMin))).toBeLessThanOrEqual(CFG.dailyCap);
+  });
+
+  it('gotejamento retomado 10 s depois de um envio espera o passo inteiro', () => {
+    const step = pacingIntervalMinutes(CFG) * MIN;
+    const lastSent = MON_9H_LOCAL_UTC;
+    const next = reslotPendingSlots({ pendingCount: 3, pacing: CFG, spacingMs: step, lastSentAtMs: lastSent, nowMs: lastSent + 10_000, usedToday: 1 })!;
+    expect(next[0] - lastSent).toBeGreaterThanOrEqual(step);
+  });
+
+  it('gotejamento retomado mantém o máximo por dia mesmo sem divisão exata (48/dia)', () => {
+    const cfg48 = { ...CFG, dailyCap: 48 };
+    const sunday = MON_9H_LOCAL_UTC - 86_400_000; // domingo: começa na segunda
+    const next = reslotPendingSlots({ pendingCount: 96, pacing: cfg48, spacingMs: 0, lastSentAtMs: null, nowMs: sunday, usedToday: 0 })!;
+    expect(next).toHaveLength(96);
+    expect(perDayCounts(next, CFG.offsetMin)).toEqual([48, 48]);
+  });
+
+  it('máximo 1 por dia com 100 pendentes: agenda todos (sem cortar)', () => {
+    const cfg1 = { ...CFG, dailyCap: 1 };
+    const next = reslotPendingSlots({ pendingCount: 100, pacing: cfg1, spacingMs: 0, lastSentAtMs: null, nowMs: MON_9H_LOCAL_UTC, usedToday: 0 })!;
+    expect(next).toHaveLength(100);
+    expect(computeDripSlots(100, cfg1, MON_9H_LOCAL_UTC)).toHaveLength(100);
+  });
+
+  it('countSentToday conta pelo dia local', () => {
+    const now = MON_9H_LOCAL_UTC;
+    expect(countSentToday([now - MIN, now - 60 * MIN, now - 86_400_000], now, CFG.offsetMin)).toBe(2);
   });
 });

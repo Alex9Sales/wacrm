@@ -15,6 +15,8 @@ import { Step3Personalize } from '@/components/broadcasts/step3-personalize';
 import { Step4ScheduleSend } from '@/components/broadcasts/step4-schedule-send';
 import { useBroadcastSending } from '@/hooks/use-broadcast-sending';
 import { Check } from 'lucide-react';
+import { useAuth } from '@/hooks/use-auth';
+import { defaultBroadcastChannelId } from '@/lib/broadcasts/channel-choice';
 
 const steps = [
   { label: 'Template', key: 'template' },
@@ -52,13 +54,22 @@ export default function NewBroadcastPage() {
   const [channelId, setChannelId] = useState('');
   const [scheduledAt, setScheduledAt] = useState('');
 
+  const { user } = useAuth();
+  const userId = user?.id ?? null;
+  const [channelTouched, setChannelTouched] = useState(false);
+
+  // 15/09 (GoLink): o padrão era o 1º canal em ordem alfabética, que pode ser o
+  // número de outra pessoa. Agora: o número de quem cria → o 1º sem dono.
+  useEffect(() => {
+    if (channelTouched || channels.length === 0) return;
+    const id = defaultBroadcastChannelId(channels, userId);
+    if (id && id !== channelId) setChannelId(id);
+  }, [channels, userId, channelTouched, channelId]);
+
   useEffect(() => {
     listMetaChannels()
       .then((list) => {
         setChannels(list);
-        // Default to the first (or the single) channel so channel_id is
-        // always sent even when the picker is hidden.
-        if (list.length > 0) setChannelId(list[0].id);
       })
       .catch(() => {
         // Non-fatal: without an explicit channel the backend falls back to
@@ -224,7 +235,11 @@ export default function NewBroadcastPage() {
               audience={audience}
               channels={channels}
               channelId={channelId}
-              onChannelChange={setChannelId}
+              onChannelChange={(id) => {
+                setChannelTouched(true);
+                setChannelId(id);
+              }}
+              userId={userId}
               scheduledAt={scheduledAt}
               onScheduledAtChange={setScheduledAt}
               onSend={handleSend}
