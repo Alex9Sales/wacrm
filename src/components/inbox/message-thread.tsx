@@ -35,6 +35,7 @@ import { useAuth } from "@/hooks/use-auth";
 import { otherPersonNumber as numberOfOtherPerson } from "@/lib/channels/other-person-number";
 import { useCrmCallingEnabled } from "@/hooks/use-crm-calling";
 import { hasMinRole } from "@/lib/auth/roles";
+import { aiState, aiWaitingHint } from "@/lib/ai/conversation-ai-state";
 import { usePresence } from "@/hooks/use-presence";
 import { PresenceDot } from "@/components/presence/presence-dot";
 import { presenceLabel } from "@/lib/presence";
@@ -489,16 +490,90 @@ export function MessageThread({
   useEffect(() => {
     setAiPaused(!!conversation?.ai_autoreply_disabled);
   }, [conversation?.id, conversation?.ai_autoreply_disabled]);
+  // ⏳ Estado honesto (15/09, GoLink — Dra. Andressa): IA ligada com responsável
+  // humano NÃO responde. Recalcula aqui com o toggle otimista e a atribuição
+  // trocada na hora (o ai_state do servidor só muda ao recarregar a conversa).
+  const aiUiState = aiState({
+    aiActiveChannel: conversation?.ai_active_channel,
+    aiAutoreplyDisabled: aiPaused,
+    assignedAgentId: conversation?.assigned_agent_id,
+  });
+  const aiAssigneeName =
+    profiles.find((p) => p.user_id === conversation?.assigned_agent_id)
+      ?.full_name ??
+    conversation?.ai_assignee_name ??
+    null;
+  // "Tirar responsável" pedido pelo aviso de IA em espera — confirma antes,
+  // porque sem a atribuição essa pessoa pode deixar de abrir a conversa.
+  const [aiUnassignAsk, setAiUnassignAsk] = useState<{
+    conversationId: string;
+    name: string | null;
+    losesAccess: boolean;
+  } | null>(null);
+  const [aiUnassignBusy, setAiUnassignBusy] = useState(false);
+  // O toast dura 12s: se trocou de conversa nesse meio, a ação não pode abrir a
+  // confirmação "desta conversa" em cima de outra.
+  const aiConvIdRef = useRef(conversation?.id);
+  useEffect(() => {
+    aiConvIdRef.current = conversation?.id;
+    setAiUnassignAsk(null);
+  }, [conversation?.id]);
+
+  const handleAiUnassignConfirm = useCallback(async () => {
+    if (!aiUnassignAsk) return;
+    setAiUnassignBusy(true);
+    try {
+      await updateConversationAssignment(aiUnassignAsk.conversationId, null);
+      onAssignChange(aiUnassignAsk.conversationId, null);
+      toast.success("Responsável tirado. A IA volta a responder nesta conversa.");
+      setAiUnassignAsk(null);
+    } catch (err) {
+      console.error("Failed to unassign for AI:", err);
+      toast.error("Não consegui tirar o responsável. Recarregue a página e tente de novo.");
+    } finally {
+      setAiUnassignBusy(false);
+    }
+  }, [aiUnassignAsk, onAssignChange]);
 
   const handleToggleAi = useCallback(async () => {
     if (!conversation) return;
     const next = !aiPaused;
     setAiPaused(next); // otimista
     try {
-      const { error } = await setConversationAiPaused(conversation.id, next);
+      const { error, warning, assignee } = await setConversationAiPaused(
+        conversation.id,
+        next,
+      );
       if (error) {
         toast.error(error);
         setAiPaused(!next);
+        return;
+      }
+      if (!next && warning) {
+        // Ligou, mas tem responsável: a IA fica em espera. Supervisor+ pode
+        // tirar o responsável dali mesmo (o servidor exige supervisor).
+        const convId = conversation.id;
+        toast.warning(warning, {
+          duration: 12000,
+          ...(canAssign && assignee
+            ? {
+                action: {
+                  label: "Tirar responsável",
+                  onClick: () => {
+                    if (aiConvIdRef.current !== convId) {
+                      toast.info("Abra a conversa de novo pra tirar o responsável.");
+                      return;
+                    }
+                    setAiUnassignAsk({
+                      conversationId: convId,
+                      name: assignee.name,
+                      losesAccess: assignee.losesAccessOnUnassign,
+                    });
+                  },
+                },
+              }
+            : {}),
+        });
         return;
       }
       toast.success(
@@ -517,7 +592,7 @@ export function MessageThread({
           : "Não consegui religar a IA. Recarregue a página e tente de novo.",
       );
     }
-  }, [conversation, aiPaused]);
+  }, [conversation, aiPaused, canAssign]);
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
   // The message being forwarded (opens the ForwardDialog).
   const [forwarding, setForwarding] = useState<Message | null>(null);
@@ -1758,8 +1833,11 @@ export function MessageThread({
           {/* Pausar / ativar a IA nesta conversa. Pausada = o atendente
               assumiu; ao reativar, a IA volta a responder já com o contexto.
               SÓ aparece nas conversas cujo canal a IA atende (senão o botão
-              não faz sentido — a IA não responde ali). */}
+              não faz sentido — a IA não responde ali).
+              ⏳ 15/09 (GoLink): ligada COM responsável = "IA em espera" — o
+              auto-reply não responde conversa atribuída, e "IA on" enganava. */}
           {conversation.ai_active_channel && (
+          <>
           <button
             type="button"
             onClick={() => void handleToggleAi()}
@@ -1767,13 +1845,17 @@ export function MessageThread({
             title={
               aiPaused
                 ? "IA pausada — clique para reativar (ela continua com o contexto)"
-                : "IA ativa — clique para pausar e assumir a conversa"
+                : aiUiState === "waiting_assignee"
+                  ? `${aiWaitingHint(aiAssigneeName)} Clique para pausar a IA.`
+                  : "IA ativa — clique para pausar e assumir a conversa"
             }
             className={cn(
               "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium transition-colors",
               aiPaused
                 ? "text-muted-foreground hover:bg-muted hover:text-foreground"
-                : "bg-primary/10 text-primary hover:bg-primary/20",
+                : aiUiState === "waiting_assignee"
+                  ? "bg-amber-500/10 text-amber-700 hover:bg-amber-500/20 dark:text-amber-400"
+                  : "bg-primary/10 text-primary hover:bg-primary/20",
             )}
           >
             {aiPaused ? (
@@ -1782,9 +1864,63 @@ export function MessageThread({
               <Bot className="h-3.5 w-3.5" />
             )}
             <span className="hidden sm:inline">
-              {aiPaused ? "IA off" : "IA on"}
+              {aiPaused
+                ? "IA off"
+                : aiUiState === "waiting_assignee"
+                  ? "IA em espera"
+                  : "IA on"}
             </span>
           </button>
+          {/* Confirmação do "Tirar responsável" (ação do aviso ao ligar a IA). */}
+          <Dialog
+            open={!!aiUnassignAsk}
+            onOpenChange={(open) => {
+              if (!open && !aiUnassignBusy) setAiUnassignAsk(null);
+            }}
+          >
+            <DialogContent className="border-border bg-popover sm:max-w-md">
+              <DialogHeader>
+                <DialogTitle className="text-popover-foreground">
+                  Tirar responsável
+                </DialogTitle>
+                <DialogDescription className="text-muted-foreground">
+                  Tirar {aiUnassignAsk?.name ?? "o responsável"} desta conversa?
+                  Sem responsável, a IA volta a responder.
+                </DialogDescription>
+              </DialogHeader>
+              {aiUnassignAsk?.losesAccess && (
+                <p className="rounded-md border border-amber-500/30 bg-amber-500/10 px-3 py-2 text-xs text-amber-800 dark:text-amber-300">
+                  Atenção: sem a atribuição, {aiUnassignAsk.name ?? "essa pessoa"}{" "}
+                  deixa de ver esta conversa (canal dedicado a outra pessoa,
+                  conversa privada ou setor diferente).
+                </p>
+              )}
+              <DialogFooter className="border-border bg-popover">
+                <Button
+                  variant="outline"
+                  onClick={() => setAiUnassignAsk(null)}
+                  disabled={aiUnassignBusy}
+                  className="border-border text-muted-foreground hover:bg-muted"
+                >
+                  Cancelar
+                </Button>
+                <Button
+                  onClick={() => void handleAiUnassignConfirm()}
+                  disabled={aiUnassignBusy}
+                >
+                  {aiUnassignBusy ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Tirando...
+                    </>
+                  ) : (
+                    "Tirar responsável"
+                  )}
+                </Button>
+              </DialogFooter>
+            </DialogContent>
+          </Dialog>
+          </>
           )}
 
           {/* Status dropdown */}

@@ -8,7 +8,7 @@
 // ============================================================
 
 import { NextResponse } from 'next/server'
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 
 import {
   db,
@@ -115,7 +115,13 @@ export async function POST(
     // @mention replies (posts this note), their temporary access ends and the
     // conversation drops off their list. The owner (assigned agent) is never
     // removed — they keep the thread regardless.
-    if (conv.assignedAgentId !== ctx.userId) {
+    // 15/09 (GoLink): quem criou um DISPARO que abriu esta conversa entra como
+    // participante pra acompanhar as respostas (lib/broadcasts/conversation-link)
+    // — esse acesso NÃO é de menção e não some quando a pessoa escreve uma nota.
+    const viaBroadcast =
+      conv.assignedAgentId !== ctx.userId &&
+      (await createdBroadcastForConversation(ctx.accountId, conversationId, ctx.userId).catch(() => false))
+    if (conv.assignedAgentId !== ctx.userId && !viaBroadcast) {
       try {
         await db
           .delete(conversationParticipants)
@@ -142,3 +148,24 @@ export async function POST(
     return toErrorResponse(err)
   }
 }
+
+/** A pessoa criou um disparo que mandou pra este contato por este número? */
+async function createdBroadcastForConversation(
+  accountId: string,
+  conversationId: string,
+  userId: string,
+): Promise<boolean> {
+  const res = await db.execute(sql`
+    SELECT 1
+    FROM "conversations" c
+    JOIN "broadcast_recipients" r ON r."contact_id" = c."contact_id" AND r."sent_at" IS NOT NULL
+    JOIN "broadcasts" b ON b."id" = r."broadcast_id"
+      AND b."account_id" = c."account_id"
+      AND b."user_id" = ${userId}::uuid
+      AND b."channel_id" = c."channel_id"
+    WHERE c."id" = ${conversationId}::uuid AND c."account_id" = ${accountId}::uuid
+    LIMIT 1
+  `)
+  return res.rows.length > 0
+}
+

@@ -14,12 +14,25 @@
 // react to them. `resume` also re-enqueues the dispatch so a broadcast
 // that had no recipient jobs yet (e.g. paused while still scheduled) gets
 // fanned out. This module is Next-independent.
+//
+// 15/09 (GoLink): pausar grava QUEM e QUANDO (paused_by/paused_at/
+// pause_reason, migr 0173) na mesma transição condicional; retomar/reenviar
+// limpam. "Excluir" de disparo que já enviou vira ARQUIVAR
+// (deleteOrArchiveBroadcast) — o "dia do cliente" foi excluído e levou junto
+// o histórico de quem já tinha recebido.
 // ============================================================
 
-import { and, asc, eq, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, ne, notInArray, sql } from 'drizzle-orm';
 
-import { db, broadcastRecipients, broadcasts, notifications } from '@/db';
+import { db, broadcastRecipients, broadcasts, member, notifications } from '@/db';
 import { firstOrNull } from '@/db/helpers';
+import type { AccountRole } from '@/lib/auth/roles';
+import {
+  broadcastDeletionMode,
+  canManageBroadcast,
+  type BroadcastPauseReason,
+} from '@/lib/broadcasts/detail-text';
+import { loadDefaultChannel } from '@/lib/channels/channels';
 import { publishEvent } from '@/lib/events/publish';
 import {
   countSentToday,
@@ -180,16 +193,25 @@ const STATUS_PT: Record<string, string> = {
 };
 const statusPt = (s: string | null) => (s ? STATUS_PT[s] ?? s : 'desconhecido');
 
+/** Voltou a enviar: a pausa deixa de valer (a tela para de dizer "Pausado por…"). */
+const CLEAR_PAUSE = { pausedBy: null, pausedAt: null, pauseReason: null };
+
+/** Encerrados: nada mais sai (cancelar não se aplica). */
+const FINAL_STATUSES = ['sent', 'failed', 'cancelled'] as const;
+/** Ainda podem enviar alguém. */
+const ACTIVE_STATUSES = ['sending', 'scheduled', 'paused'] as const;
+
 /** UPDATE só se o status ainda for `from`. true = esta chamada fez a transição. */
 async function transitionStatus(
   broadcastId: string,
   accountId: string,
   from: string,
   to: string,
+  extra: Partial<typeof broadcasts.$inferInsert> = {},
 ): Promise<boolean> {
   const rows = await db
     .update(broadcasts)
-    .set({ status: to, updatedAt: new Date().toISOString() })
+    .set({ ...extra, status: to, updatedAt: new Date().toISOString() })
     .where(
       and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, accountId), eq(broadcasts.status, from)),
     )
@@ -197,31 +219,46 @@ async function transitionStatus(
   return rows.length > 0;
 }
 
-async function setStatus(broadcastId: string, status: string): Promise<void> {
-  await db
-    .update(broadcasts)
-    .set({ status, updatedAt: new Date().toISOString() })
-    .where(eq(broadcasts.id, broadcastId));
-}
-
-/** Pause a broadcast — only from 'sending' or 'scheduled'. */
+/**
+ * Pause a broadcast — only from 'sending' or 'scheduled'. Quem pausou e
+ * quando vão na MESMA transição condicional (um Cancelar/fechamento do
+ * worker que chegou antes vence e nada é gravado). `actorUserId` null =
+ * sem pessoa conhecida (chave de API de quem saiu da conta).
+ */
 export async function pauseBroadcast(
   broadcastId: string,
   accountId: string,
+  actorUserId: string | null = null,
 ): Promise<ControlResult> {
+  const nowIso = new Date().toISOString();
+  const won = await db
+    .update(broadcasts)
+    .set({
+      status: 'paused',
+      pausedBy: actorUserId,
+      pausedAt: nowIso,
+      pauseReason: 'manual' satisfies BroadcastPauseReason,
+      updatedAt: nowIso,
+    })
+    .where(
+      and(
+        eq(broadcasts.id, broadcastId),
+        eq(broadcasts.accountId, accountId),
+        inArray(broadcasts.status, ['sending', 'scheduled']),
+      ),
+    )
+    .returning({ id: broadcasts.id });
+  if (won.length > 0) return { ok: true, status: 'paused' };
+
   const status = await currentStatus(broadcastId, accountId);
   if (status === null)
     return { ok: false, status: 'unknown', code: 'not_found' };
-  if (status !== 'sending' && status !== 'scheduled') {
-    return {
-      ok: false,
-      status,
-      code: 'invalid_state',
-      message: `Cannot pause a broadcast in status '${status}'`,
-    };
-  }
-  await setStatus(broadcastId, 'paused');
-  return { ok: true, status: 'paused' };
+  return {
+    ok: false,
+    status,
+    code: 'invalid_state',
+    message: `Não dá pra pausar: o disparo está ${statusPt(status)}.`,
+  };
 }
 
 /**
@@ -260,7 +297,7 @@ export async function resumeBroadcast(
   }
   // Transição condicional: um Cancelar/Pausar que chegou durante o reslot
   // vence (revisão 15/09) — senão o disparo cancelado voltava a enviar.
-  const won = await transitionStatus(broadcastId, accountId, 'paused', 'sending');
+  const won = await transitionStatus(broadcastId, accountId, 'paused', 'sending', CLEAR_PAUSE);
   if (!won) {
     const now = await currentStatus(broadcastId, accountId);
     // Outra ação (outro Retomar, "Enviar agora") já voltou a enviar: não é erro.
@@ -289,19 +326,30 @@ export async function cancelBroadcast(
   broadcastId: string,
   accountId: string,
 ): Promise<ControlResult> {
+  // Transição condicional (15/09): o worker fechando o disparo ('sent') no
+  // mesmo instante vence — antes o UPDATE incondicional sobrescrevia.
+  const won = await db
+    .update(broadcasts)
+    .set({ status: 'cancelled', updatedAt: new Date().toISOString() })
+    .where(
+      and(
+        eq(broadcasts.id, broadcastId),
+        eq(broadcasts.accountId, accountId),
+        notInArray(broadcasts.status, [...FINAL_STATUSES]),
+      ),
+    )
+    .returning({ id: broadcasts.id });
+  if (won.length > 0) return { ok: true, status: 'cancelled' };
+
   const status = await currentStatus(broadcastId, accountId);
   if (status === null)
     return { ok: false, status: 'unknown', code: 'not_found' };
-  if (status === 'sent' || status === 'failed' || status === 'cancelled') {
-    return {
-      ok: false,
-      status,
-      code: 'invalid_state',
-      message: `Cannot cancel a broadcast in status '${status}'`,
-    };
-  }
-  await setStatus(broadcastId, 'cancelled');
-  return { ok: true, status: 'cancelled' };
+  return {
+    ok: false,
+    status,
+    code: 'invalid_state',
+    message: `Não dá pra cancelar: o disparo já está ${statusPt(status)}.`,
+  };
 }
 
 /**
@@ -317,7 +365,7 @@ export async function retryFailedBroadcast(
 ): Promise<ControlResult & { requeued?: number }> {
   const row = firstOrNull(
     await db
-      .select({ status: broadcasts.status, channelId: broadcasts.channelId })
+      .select({ status: broadcasts.status, channelId: broadcasts.channelId, archivedAt: broadcasts.archivedAt })
       .from(broadcasts)
       .where(
         and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, accountId)),
@@ -326,6 +374,11 @@ export async function retryFailedBroadcast(
   );
   if (!row) return { ok: false, status: 'unknown', code: 'not_found' };
   const status = row.status;
+  // Arquivado fica só como histórico (15/09): reenviar reabriria um disparo
+  // que alguém tirou da lista de propósito.
+  if (row.archivedAt) {
+    return { ok: false, status, code: 'invalid_state', message: 'Este disparo está arquivado — crie um novo pra enviar de novo.' };
+  }
   if (status === 'scheduled') {
     return {
       ok: false,
@@ -381,13 +434,13 @@ export async function retryFailedBroadcast(
       pending.map((p) => p.id),
     );
   }
-  let won = await transitionStatus(broadcastId, accountId, status, 'sending');
+  let won = await transitionStatus(broadcastId, accountId, status, 'sending', CLEAR_PAUSE);
   if (!won) {
     const now = await currentStatus(broadcastId, accountId);
     if (now === 'sent' || now === 'failed') {
       // O worker fechou o disparo no meio (último pendente saiu): reabre, senão
       // os reenviados ficariam 'pending' sem job e sem botão pra recuperar.
-      won = await transitionStatus(broadcastId, accountId, now, 'sending');
+      won = await transitionStatus(broadcastId, accountId, now, 'sending', CLEAR_PAUSE);
     } else if (now === 'sending') {
       won = true; // outro Reenviar/Retomar venceu: re-enfileirar é idempotente
     }
@@ -402,6 +455,11 @@ export async function retryFailedBroadcast(
   }
   await enqueueBroadcastDispatch(broadcastId, {});
   return { ok: true, status: 'sending', requeued: pending.length, schedule };
+}
+
+/** broadcasts.pause_reason gravado numa pausa automática. */
+function haltPauseReason(reason: ChannelHaltReason): BroadcastPauseReason {
+  return reason === 'reputation' ? 'reputation' : 'session';
 }
 
 /** What the operator sees when a broadcast is auto-paused. */
@@ -448,10 +506,18 @@ export async function haltBroadcast(
   reason: ChannelHaltReason,
   detail: string,
 ): Promise<boolean> {
+  const nowIso = new Date().toISOString();
   const won = firstOrNull(
     await db
       .update(broadcasts)
-      .set({ status: 'paused', updatedAt: new Date().toISOString() })
+      .set({
+        status: 'paused',
+        // Pausa automática: sem pessoa, com o motivo (a tela diz qual).
+        pausedBy: null,
+        pausedAt: nowIso,
+        pauseReason: haltPauseReason(reason),
+        updatedAt: nowIso,
+      })
       .where(
         and(eq(broadcasts.id, broadcastId), eq(broadcasts.status, 'sending')),
       )
@@ -486,13 +552,170 @@ export async function controlBroadcast(
   action: BroadcastControlAction,
   broadcastId: string,
   accountId: string,
+  actorUserId: string | null = null,
 ): Promise<ControlResult> {
   switch (action) {
     case 'pause':
-      return pauseBroadcast(broadcastId, accountId);
+      return pauseBroadcast(broadcastId, accountId, actorUserId);
     case 'resume':
       return resumeBroadcast(broadcastId, accountId);
     case 'cancel':
       return cancelBroadcast(broadcastId, accountId);
   }
+}
+
+// ------------------------------------------------------------
+// Excluir × arquivar (15/09, GoLink): o "dia do cliente" foi excluído depois
+// de já ter saído pra dezenas de pessoas — sumiu o histórico de quem recebeu
+// e ninguém sabia quem clicou. Agora:
+//   - só quem criou ou supervisor+ (canManageBroadcast);
+//   - ativo (enviando/agendado/pausado) é CANCELADO antes, na transição
+//     condicional, e os jobs que ainda não rodaram saem da fila;
+//   - já saiu pra alguém (enviado OU tentado) → ARQUIVA (some da lista, os
+//     destinatários e as contagens ficam); nunca saiu → apaga de verdade.
+// ------------------------------------------------------------
+
+export interface BroadcastActor {
+  userId: string | null;
+  /** null = sem papel conhecido (ex.: chave de API de quem saiu da conta). */
+  role: AccountRole | null;
+}
+
+export type DeleteBroadcastResult =
+  | {
+      ok: true;
+      archived: boolean;
+      /** Já estava arquivado antes desta chamada (nada mudou). */
+      alreadyArchived?: boolean;
+      /** Status antes de mexer (pra auditoria). */
+      previousStatus: string;
+      /** Esta chamada cancelou um disparo que ainda estava ativo. */
+      cancelled: boolean;
+      sentCount: number;
+      channelId: string | null;
+    }
+  | { ok: false; code: 'not_found' | 'forbidden'; error: string };
+
+/** Papel atual de uma pessoa na conta (null = não é mais membro). */
+export async function memberRole(accountId: string, userId: string | null): Promise<AccountRole | null> {
+  if (!userId) return null;
+  const row = firstOrNull(
+    await db
+      .select({ role: member.role })
+      .from(member)
+      .where(and(eq(member.organizationId, accountId), eq(member.userId, userId)))
+      .limit(1),
+  );
+  return (row?.role as AccountRole | undefined) ?? null;
+}
+
+export async function deleteOrArchiveBroadcast(
+  broadcastId: string,
+  accountId: string,
+  actor: BroadcastActor,
+): Promise<DeleteBroadcastResult> {
+  const b = firstOrNull(
+    await db
+      .select({
+        userId: broadcasts.userId,
+        status: broadcasts.status,
+        channelId: broadcasts.channelId,
+        archivedAt: broadcasts.archivedAt,
+        sentCount: broadcasts.sentCount,
+      })
+      .from(broadcasts)
+      .where(and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, accountId)))
+      .limit(1),
+  );
+  if (!b) return { ok: false, code: 'not_found', error: 'Disparo não encontrado.' };
+  if (!canManageBroadcast({ actorUserId: actor.userId, actorRole: actor.role, creatorUserId: b.userId })) {
+    return {
+      ok: false,
+      code: 'forbidden',
+      error: 'Só quem criou o disparo ou um supervisor pode excluir ou arquivar.',
+    };
+  }
+  if (b.archivedAt) {
+    return {
+      ok: true,
+      archived: true,
+      alreadyArchived: true,
+      previousStatus: b.status,
+      cancelled: false,
+      sentCount: b.sentCount ?? 0,
+      channelId: b.channelId,
+    };
+  }
+
+  // 1) Para de enviar ANTES de decidir (condicional: um fechamento do worker
+  //    que chegou antes vence).
+  let cancelled = false;
+  if ((ACTIVE_STATUSES as readonly string[]).includes(b.status)) {
+    const rows = await db
+      .update(broadcasts)
+      .set({ status: 'cancelled', updatedAt: new Date().toISOString() })
+      .where(
+        and(
+          eq(broadcasts.id, broadcastId),
+          eq(broadcasts.accountId, accountId),
+          inArray(broadcasts.status, [...ACTIVE_STATUSES]),
+        ),
+      )
+      .returning({ id: broadcasts.id });
+    cancelled = rows.length > 0;
+  }
+
+  // 2) Jobs que ainda não rodaram saem da fila (best-effort: um job que
+  //    escapar vê 'cancelled' — ou a linha apagada — e não envia).
+  try {
+    const pending = await db
+      .select({ id: broadcastRecipients.id })
+      .from(broadcastRecipients)
+      .where(and(eq(broadcastRecipients.broadcastId, broadcastId), eq(broadcastRecipients.status, 'pending')));
+    await removeBroadcastDispatchJob(broadcastId);
+    const channelId = b.channelId ?? (await loadDefaultChannel(accountId))?.id ?? null;
+    if (channelId && pending.length > 0) {
+      await removeRecipientJobs(channelId, pending.map((p) => p.id));
+    }
+  } catch (err) {
+    console.error('[broadcast-controls] remover jobs ao excluir/arquivar falhou:', broadcastId, err);
+  }
+
+  // 3) Nunca saiu pra ninguém → apaga. O próprio DELETE confere de novo
+  //    (um envio que terminou entre a leitura e aqui faz cair no arquivar).
+  //    ⚠️ Subquery raw: coluna externa como literal "broadcasts"."id".
+  const nonPending = firstOrNull(
+    await db
+      .select({ n: sql<number>`count(*)::int` })
+      .from(broadcastRecipients)
+      .where(and(eq(broadcastRecipients.broadcastId, broadcastId), ne(broadcastRecipients.status, 'pending'))),
+  );
+  const fresh = firstOrNull(
+    await db.select({ sentCount: broadcasts.sentCount }).from(broadcasts).where(eq(broadcasts.id, broadcastId)).limit(1),
+  );
+  const sentCount = fresh?.sentCount ?? b.sentCount ?? 0;
+  if (broadcastDeletionMode({ sentCount, nonPendingCount: nonPending?.n ?? 0 }) === 'delete') {
+    const deleted = await db
+      .delete(broadcasts)
+      .where(
+        and(
+          eq(broadcasts.id, broadcastId),
+          eq(broadcasts.accountId, accountId),
+          sql`COALESCE("broadcasts"."sent_count", 0) = 0`,
+          sql`NOT EXISTS (SELECT 1 FROM broadcast_recipients r WHERE r.broadcast_id = "broadcasts"."id" AND r.status <> 'pending')`,
+        ),
+      )
+      .returning({ id: broadcasts.id });
+    if (deleted.length > 0) {
+      return { ok: true, archived: false, previousStatus: b.status, cancelled, sentCount: 0, channelId: b.channelId };
+    }
+  }
+
+  // 4) Arquiva: some da lista, o histórico fica.
+  const nowIso = new Date().toISOString();
+  await db
+    .update(broadcasts)
+    .set({ archivedAt: nowIso, archivedBy: actor.userId, updatedAt: nowIso })
+    .where(and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, accountId), isNull(broadcasts.archivedAt)));
+  return { ok: true, archived: true, previousStatus: b.status, cancelled, sentCount, channelId: b.channelId };
 }

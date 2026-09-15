@@ -7,12 +7,17 @@
 // the sends across business hours (08–18h, Mon–Sat, Campo Grande), at most
 // `dailyCap` per day. Server-side + queued, so it survives a browser close
 // and runs over days.
+//
+// 15/09 (GoLink): planilha só com telefones criou 17 contatos sem nome — agora
+// avisa quantos NOVOS vão ficar sem nome (e aceita lista colada); e o disparo
+// refeito mandava a mesma mensagem 2× — quem já recebeu hoje fica de fora, a
+// não ser que a pessoa marque "Enviar também pra quem já recebeu".
 // ============================================================
 
 import { useCallback, useEffect, useRef, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { toast } from 'sonner'
-import { Loader2, Upload, Users, CalendarClock, Send, Paperclip, X, Check, Smartphone } from 'lucide-react'
+import { Loader2, Upload, Users, CalendarClock, Send, Paperclip, X, Check, Smartphone, TriangleAlert } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
@@ -28,6 +33,7 @@ import {
   estimateAudienceCount,
   createTextBroadcast,
   type BroadcastChannel,
+  type CreateTextBroadcastInput,
 } from '@/app/(dashboard)/broadcasts/actions'
 import { listTags, listContacts } from '@/app/(dashboard)/contacts/actions'
 import {
@@ -35,7 +41,15 @@ import {
   MEDIA_MAX_BYTES_BY_KIND,
 } from '@/lib/storage/upload-media'
 import { renderForContact, SUPPORTED_TOKENS } from '@/lib/whatsapp/message-vars'
-import { parseCsv, type CsvContact } from '@/lib/broadcasts/csv'
+import {
+  namelessContactsWarning,
+  parseCsv,
+  summarizeCsvNames,
+  type CsvContact,
+} from '@/lib/broadcasts/csv'
+import { checkCsvNamelessContacts } from '@/lib/broadcasts/csv-name-check'
+import type { DuplicateSkip } from '@/lib/broadcasts/duplicate-sends'
+import { duplicateSkipNotice, SEND_AGAIN_HINT } from '@/lib/broadcasts/duplicate-notice'
 import type { Tag } from '@/types'
 import { cn } from '@/lib/utils'
 import { useAuth } from '@/hooks/use-auth'
@@ -71,6 +85,9 @@ interface PickContact {
 }
 
 const DAY_LABELS = 'seg–sáb'
+
+/** Rótulo da audiência quando a planilha veio colada (não de arquivo). */
+const PASTED_LIST = 'Lista colada'
 
 export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
   const router = useRouter()
@@ -113,6 +130,15 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
   const [csvContacts, setCsvContacts] = useState<CsvContact[]>([])
   const [csvName, setCsvName] = useState('')
   const fileRef = useRef<HTMLInputElement>(null)
+  // Lista colada (alternativa ao arquivo): uma linha por contato.
+  const [pasteText, setPasteText] = useState('')
+  // 15/09 (GoLink): planilha só com telefones → contatos novos sem nome. Aviso
+  // âmbar com quantos NOVOS vão nascer sem nome ('approx' = não deu pra
+  // conferir no servidor, conta as linhas sem nome).
+  const [namelessCount, setNamelessCount] = useState<{ n: number; approx: boolean } | null>(null)
+  const namelessReq = useRef(0)
+  // Desmarcado = quem já recebeu esta mensagem hoje fica de fora (padrão).
+  const [sendAgain, setSendAgain] = useState(false)
 
   // Pick-specific-contacts audience.
   const [contactSearch, setContactSearch] = useState('')
@@ -220,17 +246,57 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
     }
   }, [audienceType, contactSearch])
 
+  /** Conta quem vai ficar sem nome: pergunta ao servidor quais telefones sem
+   *  nome já são contato; se não der, avisa pelas linhas sem nome ("Até N"). */
+  const checkNameless = useCallback(async (rows: CsvContact[]) => {
+    const req = ++namelessReq.current
+    const summary = summarizeCsvNames(rows)
+    if (summary.withoutName === 0) {
+      setNamelessCount(null)
+      return
+    }
+    let next: { n: number; approx: boolean }
+    try {
+      const res = await checkCsvNamelessContacts(summary.phonesWithoutName)
+      next = res.ok
+        ? { n: res.newWithoutName, approx: false }
+        : { n: summary.withoutName, approx: true }
+    } catch {
+      next = { n: summary.withoutName, approx: true }
+    }
+    if (req === namelessReq.current) setNamelessCount(next)
+  }, [])
+
+  const applyCsv = useCallback(
+    (parsed: CsvContact[], label: string) => {
+      setCsvContacts(parsed)
+      setCsvName(label)
+      setNamelessCount(null)
+      if (parsed.length > 0) void checkNameless(parsed)
+      else namelessReq.current++
+    },
+    [checkNameless],
+  )
+
   const handleFile = useCallback(async (file: File) => {
     const text = await file.text()
     const parsed = parseCsv(text)
-    setCsvContacts(parsed)
-    setCsvName(file.name)
+    setPasteText('')
+    applyCsv(parsed, file.name)
     if (parsed.length === 0) {
       toast.error('Nenhum telefone válido encontrado no arquivo.')
     } else {
       toast.success(`${parsed.length} contatos lidos de ${file.name}.`)
     }
-  }, [])
+  }, [applyCsv])
+
+  // Lista colada: lê enquanto a pessoa cola/edita (com uma pausa curta).
+  useEffect(() => {
+    if (audienceType !== 'csv') return
+    if (!pasteText.trim()) return
+    const t = setTimeout(() => applyCsv(parseCsv(pasteText), PASTED_LIST), 400)
+    return () => clearTimeout(t)
+  }, [pasteText, audienceType, applyCsv])
 
   const toggleTag = useCallback((id: string) => {
     setSelectedTagIds((prev) =>
@@ -329,7 +395,9 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
     if (!canSubmit) return
     setSubmitting(true)
     try {
-      const res = await createTextBroadcast({
+      // skipRecentDuplicates/skippedDuplicates: contrato de 15/09 (envios 2×).
+      const input: CreateTextBroadcastInput & { skipRecentDuplicates?: boolean } = {
+        skipRecentDuplicates: !sendAgain,
         name: name.trim() || null,
         channelId,
         bodyText: message.trim(),
@@ -349,9 +417,17 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
               ? pickedContacts.map((c) => c.id)
               : undefined,
         },
-      })
+      }
+      const res: Awaited<ReturnType<typeof createTextBroadcast>> & {
+        skippedDuplicates?: DuplicateSkip[]
+      } = await createTextBroadcast(input)
+      const skipped = res.skippedDuplicates ?? []
       if (res.error || !res.broadcastId) {
-        toast.error(res.error || 'Falha ao criar o disparo.')
+        // Todo mundo já tinha recebido: diz o motivo e como mandar mesmo assim.
+        toast.error(
+          res.error || 'Falha ao criar o disparo.',
+          skipped.length > 0 ? { description: SEND_AGAIN_HINT } : undefined,
+        )
         return
       }
       toast.success(
@@ -359,11 +435,16 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
           ? `Disparo iniciado agora — ${res.totalRecipients} contatos.`
           : `Disparo criado — ${res.totalRecipients} contatos, ${cap}/dia (${DAY_LABELS}).`,
       )
+      const notice = duplicateSkipNotice(skipped)
+      if (notice) toast.info(notice, { duration: 10_000 })
       router.push('/broadcasts')
+    } catch (err) {
+      console.error('[text-broadcast-form] create', err)
+      toast.error('Falha ao criar o disparo. Tente de novo.')
     } finally {
       setSubmitting(false)
     }
-  }, [canSubmit, name, channelId, subject, otherOwner, confirmOtherNumber, message, mediaItems, includeOptOut, cap, sendNow, sendNowIntervalMin, audienceType, selectedTagIds, csvContacts, pickedContacts, router])
+  }, [canSubmit, name, channelId, subject, otherOwner, confirmOtherNumber, message, mediaItems, includeOptOut, cap, sendNow, sendNowIntervalMin, audienceType, selectedTagIds, csvContacts, pickedContacts, router, sendAgain])
 
   if (loading) {
     return (
@@ -821,13 +902,56 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
               )}
             >
               <Upload className="h-4 w-4" />
-              {csvName
+              {csvName && csvName !== PASTED_LIST
                 ? `${csvName} — ${csvContacts.length} contatos (arraste outro pra trocar)`
                 : 'Enviar planilha (.csv) — clique ou arraste aqui. Uma linha por contato: telefone,nome'}
             </button>
+            <textarea
+              value={pasteText}
+              onChange={(e) => {
+                const v = e.target.value
+                setPasteText(v)
+                if (!v.trim() && csvName === PASTED_LIST) applyCsv([], '')
+              }}
+              rows={3}
+              placeholder={'Ou cole a lista aqui — uma linha por contato:\n67999998888, Maria Silva'}
+              aria-label="Colar lista de contatos"
+              className="mt-2 w-full resize-y rounded-lg border border-border bg-muted px-3 py-2 text-xs text-foreground placeholder-muted-foreground outline-none focus:border-primary/50"
+            />
+            {csvName === PASTED_LIST && (
+              <p className="mt-1 text-xs text-muted-foreground">
+                {csvContacts.length} contatos na lista colada.
+              </p>
+            )}
+            {namelessCount && namelessCount.n > 0 ? (
+              <div
+                role="alert"
+                className="mt-2 flex items-start gap-2 rounded-md border border-amber-500/30 bg-amber-500/[0.07] px-3 py-2 text-xs leading-snug text-amber-800 dark:text-amber-300"
+              >
+                <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" />
+                <span>{namelessContactsWarning(namelessCount.n, { approx: namelessCount.approx })}</span>
+              </div>
+            ) : null}
           </div>
         )}
       </div>
+
+      {/* 15/09 (GoLink): disparo refeito mandava a mesma mensagem 2×. */}
+      <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
+        <input
+          type="checkbox"
+          checked={sendAgain}
+          onChange={(e) => setSendAgain(e.target.checked)}
+          className="mt-0.5 h-4 w-4 accent-primary"
+        />
+        <span className="text-sm">
+          <span className="text-foreground">Enviar também pra quem já recebeu esta mensagem hoje</span>
+          <span className="block text-xs text-muted-foreground">
+            Desmarcado, quem recebeu a mesma mensagem nas últimas 24 h (por disparo ou à mão)
+            fica de fora.
+          </span>
+        </span>
+      </label>
 
       {/* Send now vs humanized drip */}
       <label className="flex cursor-pointer items-start gap-2 rounded-lg border border-border bg-muted/40 px-3 py-2.5">
@@ -917,6 +1041,12 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
             )}
           </div>
         )}
+        {audienceType === 'csv' && namelessCount && namelessCount.n > 0 ? (
+          <p className="mt-2 flex items-start gap-2 text-xs text-amber-800 dark:text-amber-300">
+            <TriangleAlert className="mt-px h-3.5 w-3.5 shrink-0" />
+            <span>{namelessContactsWarning(namelessCount.n, { approx: namelessCount.approx })}</span>
+          </p>
+        ) : null}
       </div>
 
       <div className="flex items-center justify-end gap-2 border-t border-border pt-4">

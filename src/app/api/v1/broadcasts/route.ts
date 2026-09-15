@@ -27,7 +27,7 @@
 //               "scheduled_at": string | null } }
 // ============================================================
 
-import { and, desc, eq, lt, or } from 'drizzle-orm';
+import { and, desc, eq, isNotNull, isNull, lt, or } from 'drizzle-orm';
 
 import { db, broadcasts } from '@/db';
 import { requireApiKey } from '@/lib/auth/api-context';
@@ -46,6 +46,9 @@ export async function GET(request: Request) {
     const ctx = await requireApiKey(request, 'broadcasts:send');
     const { limit, cursor } = parseListParams(request);
     const conditions = [eq(broadcasts.accountId, ctx.accountId)];
+    // Arquivados (15/09, migr 0173) ficam de fora, como na tela; ?archived=true lista só eles.
+    const archived = new URL(request.url).searchParams.get('archived') === 'true';
+    conditions.push(archived ? isNotNull(broadcasts.archivedAt) : isNull(broadcasts.archivedAt));
     if (cursor) {
       conditions.push(
         or(
@@ -71,6 +74,7 @@ export async function GET(request: Request) {
         failed_count: broadcasts.failedCount,
         created_at: broadcasts.createdAt,
         updated_at: broadcasts.updatedAt,
+        archived_at: broadcasts.archivedAt,
       })
       .from(broadcasts)
       .where(and(...conditions))

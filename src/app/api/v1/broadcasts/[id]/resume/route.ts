@@ -9,6 +9,7 @@
 
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
+import { logBroadcastEvent } from '@/lib/broadcasts/audit';
 import { resumeBroadcast } from '@/lib/queue/broadcast-controls';
 
 export async function POST(
@@ -24,6 +25,14 @@ export async function POST(
         return fail('not_found', 'Broadcast not found', 404);
       return fail('invalid_state', result.message ?? 'Invalid state', 409);
     }
+    logBroadcastEvent({
+      action: 'resume',
+      broadcastId: id,
+      accountId: ctx.accountId,
+      userId: ctx.createdBy,
+      role: 'api_key',
+      extra: { keyId: ctx.keyId },
+    });
     return ok({ id, status: result.status });
   } catch (err) {
     return toApiErrorResponse(err);

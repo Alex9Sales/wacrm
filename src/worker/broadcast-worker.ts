@@ -24,7 +24,8 @@
 //       - broadcast cancelled → skip (ack, no send),
 //       - broadcast paused    → moveToDelayed(+15s) so it self-resumes,
 //       - broadcast sending   → jitter (non-official providers) then send;
-//           success → mark 'sent' + wamid; permanent error → mark 'failed'
+//           success → mark 'sent' + wamid (+ quem disparou vira participante
+//           da conversa, 15/09); permanent error → mark 'failed'
 //           (UnrecoverableError, no retry); transient → throw to retry.
 //
 // Idempotency: jobId=recipientRowId means an infra retry of dispatch
@@ -65,6 +66,7 @@ import {
 } from '@/lib/whatsapp/drip-schedule';
 import { getProvider } from '@/lib/channels/registry';
 import { sendBroadcastRecipient } from '@/lib/whatsapp/broadcast-core';
+import { linkBroadcastConversation } from '@/lib/broadcasts/conversation-link';
 import { startScheduledMessageWorker } from './scheduled-message-worker';
 
 const DRY_RUN = process.env.BROADCAST_DRY_RUN === 'true';
@@ -250,6 +252,17 @@ async function processRecipientJob(job: Job<RecipientJob>): Promise<void> {
   if (result.ok) {
     await markRecipientSent(recipient.id, result.externalMessageId, attempts);
     log(`sent recipient ${recipient.id} → ${result.externalMessageId}`);
+    // 15/09 (GoLink): quem criou o disparo passa a ver a conversa gerada, mesmo
+    // num número dedicado a outra pessoa (vira participante; responsável, setor
+    // e número ficam como estão). Nunca lança — o envio já saiu.
+    if (recipient.contactId) {
+      await linkBroadcastConversation({
+        accountId: loaded.ctx.broadcast.accountId,
+        channelId: channel.id,
+        contactId: recipient.contactId,
+        creatorUserId: loaded.ctx.broadcast.userId,
+      });
+    }
     await finalizeBroadcastIfDone(loaded.ctx.broadcast.id);
     return;
   }

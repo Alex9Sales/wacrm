@@ -18,8 +18,9 @@
 import { NextResponse } from 'next/server'
 import { and, eq, sql, type SQL } from 'drizzle-orm'
 
-import { db, channels, conversations } from '@/db'
+import { db, aiConfigs, channels, conversations } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { removeDeletedChannel } from '@/lib/ai/agent-channels'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { loadChannelByAccount, encryptCredentials } from '@/lib/channels/channels'
 import type { ChannelCtx, ProviderId } from '@/lib/channels/provider'
@@ -311,8 +312,63 @@ export async function DELETE(request: Request, { params }: RouteParams) {
       .delete(channels)
       .where(and(eq(channels.accountId, ctx.accountId), eq(channels.id, id)))
 
+    // 🤖 Tira o canal apagado da lista dos agentes — com cuidado. Best-effort:
+    // o canal já foi apagado, isto nunca derruba a resposta.
+    try {
+      await detachDeletedChannelFromAgents(ctx.accountId, id)
+    } catch (err) {
+      console.error(
+        '[channels DELETE] limpar canal dos agentes falhou:',
+        err instanceof Error ? err.message : err,
+      )
+    }
+
     return NextResponse.json({ success: true })
   } catch (err) {
     return toErrorResponse(err)
   }
+}
+
+/**
+ * 15/09 (produção): agentes ficavam com id de canal apagado na lista (CEMA,
+ * Zelia, GoLink). Tira o id SÓ de quem continua com pelo menos 1 canal que
+ * existe. Quem ficaria sem canal válido NÃO é mexido: lista vazia num agente
+ * default = "responde em TODOS os canais" (agents.ts pickAgentIdForChannel) —
+ * a tela do agente avisa "não responde em nenhum canal" e a pessoa escolhe.
+ * FOR UPDATE: um "Salvar" do agente ao mesmo tempo não perde a edição.
+ */
+async function detachDeletedChannelFromAgents(accountId: string, deletedId: string): Promise<void> {
+  await db.transaction(async (tx) => {
+    const agents = await tx
+      .select({ id: aiConfigs.id, name: aiConfigs.name, channelIds: aiConfigs.autoReplyChannelIds })
+      .from(aiConfigs)
+      .where(eq(aiConfigs.accountId, accountId))
+      .for('update')
+    const withDeleted = agents.filter((a) => (a.channelIds ?? []).includes(deletedId))
+    if (withDeleted.length === 0) return
+
+    const existing = new Set(
+      (
+        await tx.select({ id: channels.id }).from(channels).where(eq(channels.accountId, accountId))
+      ).map((c) => c.id),
+    )
+    for (const a of withDeleted) {
+      const next = removeDeletedChannel(a.channelIds, deletedId, existing)
+      if (!next) {
+        console.warn(
+          '[channels DELETE] agente ficaria sem canal válido — lista mantida:',
+          JSON.stringify({ accountId, agentId: a.id, agentName: a.name, deletedChannelId: deletedId }),
+        )
+        continue
+      }
+      await tx
+        .update(aiConfigs)
+        .set({ autoReplyChannelIds: next, updatedAt: new Date().toISOString() })
+        .where(and(eq(aiConfigs.id, a.id), eq(aiConfigs.accountId, accountId)))
+      console.log(
+        '[channels DELETE] canal apagado tirado do agente:',
+        JSON.stringify({ accountId, agentId: a.id, deletedChannelId: deletedId, remaining: next.length }),
+      )
+    }
+  })
 }

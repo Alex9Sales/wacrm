@@ -11,6 +11,12 @@
 // recipient rows, and enqueues the dispatch. `upsertContactsByPhone` is the
 // helper the API uses to turn a CSV-style {phone,name}[] into owned contact
 // ids before calling in.
+//
+// 15/09 (GoLink): antes de gravar, tira quem já recebeu ESTA mesma mensagem
+// nas últimas 24 h (disparo refeito 3×, gente que já tinha recebido à mão) e
+// devolve a lista em skippedDuplicates. Opt-out por chamada:
+// skipRecentDuplicates=false. Mensagem por pessoa (recipientVars — "Chamar de
+// volta") não é comparada: o corpo "{{mensagem}}" é igual e o conteúdo não.
 // ============================================================
 
 import { and, eq, inArray } from 'drizzle-orm'
@@ -22,7 +28,11 @@ import { getProvider } from '@/lib/channels/registry'
 import { enqueueBroadcastDispatch } from '@/lib/queue/queues'
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils'
 import { resolveOrCreateContactIdsByPhone } from '@/lib/contacts/dedupe'
-import type { DuplicateSkip } from '@/lib/broadcasts/duplicate-sends'
+import {
+  findRecentDuplicateContacts,
+  mediaFingerprintName,
+  type DuplicateSkip,
+} from '@/lib/broadcasts/duplicate-sends'
 import {
   computeDripSlots,
   normalizePacing,
@@ -139,7 +149,7 @@ export async function enqueueTextBroadcast(
     const ids = Array.from(
       new Set(input.recipientContactIds.filter((v): v is string => !!v)),
     )
-    const recipients: { contactId: string }[] = []
+    let recipients: { contactId: string }[] = []
     if (ids.length > 0) {
       const rows = (await db
         .select({ id: contacts.id, phone: contacts.phone, email: contacts.email })
@@ -171,6 +181,52 @@ export async function enqueueTextBroadcast(
         error: isEmail
           ? 'Nenhum contato com e-mail válido nesta audiência.'
           : 'Nenhum contato com telefone válido nesta audiência.',
+      }
+    }
+
+    // Quem já recebeu esta mesma mensagem nas últimas 24 h fica de fora. Se a
+    // checagem falhar, segue sem pular (melhor mandar do que travar o disparo).
+    let skippedDuplicates: DuplicateSkip[] = []
+    const perRecipientBody =
+      !!input.recipientVars && Object.keys(input.recipientVars).length > 0
+    if (input.skipRecentDuplicates !== false && !perRecipientBody) {
+      const effectiveMedia: { url: string; filename?: string | null }[] =
+        mediaList.length > 0
+          ? mediaList
+          : mediaUrl
+            ? [{ url: mediaUrl, filename: input.mediaFilename ?? null }]
+            : []
+      try {
+        skippedDuplicates = await findRecentDuplicateContacts(
+          accountId,
+          recipients.map((r) => r.contactId),
+          {
+            bodyText: body || null,
+            mediaFilenames: effectiveMedia
+              .map(mediaFingerprintName)
+              .filter((n): n is string => !!n),
+            subject: subject || null,
+          },
+        )
+      } catch (dupErr) {
+        console.error('[text-broadcast] checagem de envios repetidos falhou — segue sem pular:', dupErr)
+        skippedDuplicates = []
+      }
+      if (skippedDuplicates.length > 0) {
+        const skip = new Set(skippedDuplicates.map((d) => d.contactId))
+        const kept = recipients.filter((r) => !skip.has(r.contactId))
+        if (kept.length === 0) {
+          return {
+            broadcastId: null,
+            totalRecipients: 0,
+            error:
+              recipients.length === 1
+                ? 'Este contato já recebeu esta mensagem nas últimas 24 h.'
+                : `Todos os ${recipients.length} contatos já receberam esta mensagem nas últimas 24 h.`,
+            skippedDuplicates,
+          }
+        }
+        recipients = kept
       }
     }
 
@@ -243,7 +299,12 @@ export async function enqueueTextBroadcast(
     }
 
     await enqueueBroadcastDispatch(broadcast.id)
-    return { broadcastId: broadcast.id, totalRecipients: recipients.length, error: null }
+    return {
+      broadcastId: broadcast.id,
+      totalRecipients: recipients.length,
+      error: null,
+      skippedDuplicates,
+    }
   } catch (err) {
     console.error('[text-broadcast] enqueue failed:', err)
     return {

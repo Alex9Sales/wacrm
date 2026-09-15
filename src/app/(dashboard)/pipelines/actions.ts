@@ -47,6 +47,20 @@ import { planStageFollowUp } from '@/lib/ai/followup'
 import { dealSuggestions } from '@/db'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { otherPersonNumberError } from '@/lib/broadcasts/channel-owner-guard'
+import { enqueueTemplateBroadcast } from '@/lib/broadcasts/template-broadcast'
+import { logBroadcastEvent } from '@/lib/broadcasts/audit'
+import type { TemplateSendMapping } from '@/lib/broadcasts/template-vars'
+import type { DuplicateSkip } from '@/lib/broadcasts/duplicate-sends'
+import {
+  STAGE_BROADCAST_PROVIDERS,
+  STAGE_MAX_ATTACHMENTS,
+  hasSendableEmail,
+  stageBroadcastNote,
+  stageChannelKind,
+  validateStageBroadcastBasics,
+  type StageBroadcastKind,
+} from '@/lib/broadcasts/stage-broadcast'
+import { isValidE164, sanitizePhoneForMeta } from '@/lib/whatsapp/phone-utils'
 
 const contactColumns = {
   id: contacts.id,
@@ -2885,43 +2899,102 @@ export async function saveDealCustomValues(
 }
 
 // ------------------------------------------------------------
-// Disparo por ETAPA do funil (item 6). Manda uma mensagem de texto pra todos
-// os leads (contatos) dos negócios ABERTOS de uma etapa, reusando o motor de
-// Disparos (rate-limit + opt-out) e registrando no histórico de cada negócio.
+// Disparo por ETAPA do funil (item 6). Manda pra todos os leads (contatos)
+// dos negócios ABERTOS de uma etapa, reusando o motor de Disparos (fila do
+// worker, ritmo seguro, opt-out) e registrando no histórico de cada negócio.
+// 15/09 (GoLink): mesmos tipos dos Disparos — o tipo vem do canal: WhatsApp
+// (texto + anexos), E-mail (assunto + anexos) e API oficial (template).
+// Regras puras em lib/broadcasts/stage-broadcast.ts e template-vars.ts.
 // ------------------------------------------------------------
-export interface StageBroadcastInfo {
-  leadCount: number
-  channels: {
-    id: string
-    name: string
-    provider: string
-    status: string
-    /** Dono do número (15/09 GoLink: padrão = número de quem dispara). */
-    dedicated_user_id: string | null
-    dedicated_user_name: string | null
-  }[]
+export interface StageBroadcastChannel {
+  id: string
+  name: string
+  provider: string
+  status: string
+  /** Dono do número (15/09 GoLink: padrão = número de quem dispara). */
+  dedicated_user_id: string | null
+  dedicated_user_name: string | null
+  /** WhatsApp ('text'), E-mail ('email') ou API oficial ('template'). */
+  kind: StageBroadcastKind
+  is_email: boolean
 }
 
-/** Contagem de leads (negócios abertos com contato, legíveis) + canais de texto. */
+export interface StageBroadcastInfo {
+  leadCount: number
+  /** Leads com e-mail válido — só eles recebem o disparo de e-mail. */
+  leadCountWithEmail: number
+  /** 1º lead da etapa, pra prévia das variáveis. */
+  sampleLead: { name: string | null; phone: string | null; email: string | null; company: string | null } | null
+  channels: StageBroadcastChannel[]
+}
+
+export type BroadcastToStageInput = {
+  stageId: string
+  channelId: string
+  kind: StageBroadcastKind
+  /** WhatsApp/E-mail: corpo (aceita {{primeiro_nome}} etc.). */
+  text?: string
+  /** E-mail: assunto (obrigatório). */
+  subject?: string
+  /** WhatsApp/E-mail: até 10 anexos já enviados (uploadAccountMedia). */
+  media?: { url: string; type: string; filename?: string | null }[]
+  /** API oficial: template aprovado. */
+  templateName?: string
+  templateLanguage?: string
+  /** {{1}}, {{2}}… do corpo → campo do contato ou texto fixo. */
+  variables?: TemplateSendMapping['variables']
+  /** {{1}} do cabeçalho de texto. */
+  headerVariable?: TemplateSendMapping['headerVariable']
+  /** Final do link dos botões com {{1}} (índice do botão → valor). */
+  buttonValues?: TemplateSendMapping['buttonValues']
+  /** Arquivo do cabeçalho de imagem/vídeo/documento. */
+  headerMediaUrl?: string
+  /** Quem dispara confirmou usar o número dedicado a OUTRA pessoa. */
+  confirmOtherPersonNumber?: boolean
+  /** Pula quem já recebeu esta mensagem hoje (padrão true). */
+  skipRecentDuplicates?: boolean
+}
+
+export type BroadcastToStageResult = {
+  ok: boolean
+  total?: number
+  error?: string
+  /** Quem ficou de fora por já ter recebido a mesma mensagem hoje. */
+  skippedDuplicates?: DuplicateSkip[]
+}
+
+/** Negócios abertos e legíveis da etapa, com o contato (conta da sessão). */
+async function stageLeadRows(ctx: AccountContext, stageId: string) {
+  const rows = await db
+    .select({
+      dealId: deals.id,
+      contactId: deals.contactId,
+      assignedTo: deals.assignedTo,
+      name: contacts.name,
+      phone: contacts.phone,
+      email: contacts.email,
+      company: contacts.company,
+      optedOut: contacts.optedOut,
+    })
+    .from(deals)
+    .leftJoin(contacts, and(eq(contacts.id, deals.contactId), eq(contacts.accountId, ctx.accountId)))
+    .where(and(eq(deals.accountId, ctx.accountId), eq(deals.stageId, stageId), eq(deals.status, 'open')))
+    .orderBy(asc(deals.createdAt))
+  return rows.filter((r) => r.contactId && dealReadable(ctx.role, ctx.userId, r.assignedTo))
+}
+
+/** Contagem de leads (negócios abertos com contato, legíveis) + canais que disparam. */
 export async function stageBroadcastInfo(stageId: string): Promise<StageBroadcastInfo> {
   try {
     const ctx = await getCurrentAccount()
-    const rows = await db
-      .select({ contactId: deals.contactId, assignedTo: deals.assignedTo })
-      .from(deals)
-      .where(
-        and(
-          eq(deals.accountId, ctx.accountId),
-          eq(deals.stageId, stageId),
-          eq(deals.status, 'open'),
-        ),
-      )
-    const ids = new Set(
-      rows
-        .filter((r) => r.contactId && dealReadable(ctx.role, ctx.userId, r.assignedTo))
-        .map((r) => r.contactId as string),
-    )
-    // Canais de texto (disparo é WAHA/Evolution/EvoGo — não-oficial).
+    const rows = await stageLeadRows(ctx, stageId)
+    const ids = new Set<string>()
+    const withEmail = new Set<string>()
+    for (const r of rows) {
+      ids.add(r.contactId as string)
+      if (hasSendableEmail(r.email)) withEmail.add(r.contactId as string)
+    }
+    const first = rows[0]
     const chans = await db
       .select({
         id: channels.id,
@@ -2936,73 +3009,136 @@ export async function stageBroadcastInfo(stageId: string): Promise<StageBroadcas
       .where(
         and(
           eq(channels.accountId, ctx.accountId),
-          inArray(channels.provider, ['waha', 'evolution', 'evogo']),
+          inArray(channels.provider, [...STAGE_BROADCAST_PROVIDERS]),
         ),
       )
       .orderBy(asc(channels.name))
-    return { leadCount: ids.size, channels: chans }
+    return {
+      leadCount: ids.size,
+      leadCountWithEmail: withEmail.size,
+      sampleLead: first
+        ? { name: first.name, phone: first.phone, email: first.email, company: first.company }
+        : null,
+      channels: chans.flatMap((c) => {
+        const kind = stageChannelKind(c.provider)
+        return kind ? [{ ...c, kind, is_email: kind === 'email' }] : []
+      }),
+    }
   } catch (err) {
     console.error('[stageBroadcastInfo]', err)
-    return { leadCount: 0, channels: [] }
+    return { leadCount: 0, leadCountWithEmail: 0, sampleLead: null, channels: [] }
   }
 }
 
-/** Dispara uma mensagem de texto pra todos os leads (abertos) de uma etapa. */
-export async function broadcastToStage(input: {
-  stageId: string
-  channelId: string
-  text: string
-  /** Quem dispara confirmou usar o número dedicado a OUTRA pessoa. */
-  confirmOtherPersonNumber?: boolean
-}): Promise<{ ok: boolean; total?: number; error?: string }> {
+/** Dispara pra todos os leads (abertos) de uma etapa — WhatsApp, e-mail ou template. */
+export async function broadcastToStage(input: BroadcastToStageInput): Promise<BroadcastToStageResult> {
   try {
     const ctx = await getCurrentAccount()
-    const text = (input.text ?? '').trim()
-    if (!text) return { ok: false, error: 'Escreva a mensagem.' }
-    if (!input.channelId) return { ok: false, error: 'Escolha o canal.' }
+    const channelRow = input.channelId
+      ? firstOrNull(
+          await db
+            .select({ provider: channels.provider })
+            .from(channels)
+            .where(and(eq(channels.id, input.channelId), eq(channels.accountId, ctx.accountId)))
+            .limit(1),
+        )
+      : null
+    if (input.channelId && !channelRow) return { ok: false, error: 'Canal inválido.' }
+    const kind = stageChannelKind(channelRow?.provider)
+    const basicsError = validateStageBroadcastBasics(input, kind)
+    if (basicsError || !kind) return { ok: false, error: basicsError ?? 'Escolha o canal.' }
     const ownerError = await otherPersonNumberError(ctx.accountId, ctx.userId, input.channelId, input.confirmOtherPersonNumber)
     if (ownerError) return { ok: false, error: ownerError }
-    const rows = await db
-      .select({
-        dealId: deals.id,
-        contactId: deals.contactId,
-        assignedTo: deals.assignedTo,
-      })
-      .from(deals)
-      .where(
-        and(
-          eq(deals.accountId, ctx.accountId),
-          eq(deals.stageId, input.stageId),
-          eq(deals.status, 'open'),
-        ),
-      )
-    const readable = rows.filter(
-      (r) => r.contactId && dealReadable(ctx.role, ctx.userId, r.assignedTo),
-    )
+
+    const readable = await stageLeadRows(ctx, input.stageId)
     const contactIds = [...new Set(readable.map((r) => r.contactId as string))]
     if (contactIds.length === 0) {
       return { ok: false, error: 'Nenhum lead com contato nesta etapa.' }
     }
+    if (kind === 'email' && !readable.some((r) => hasSendableEmail(r.email))) {
+      return { ok: false, error: 'Nenhum lead desta etapa tem e-mail. Cadastre o e-mail no contato ou use o WhatsApp.' }
+    }
     const stageNm = await stageName(input.stageId)
-    const res = await enqueueTextBroadcast(ctx.accountId, ctx.userId, {
-      name: `Disparo — etapa ${stageNm ?? ''}`.trim(),
-      channelId: input.channelId,
-      bodyText: text,
-      recipientContactIds: contactIds,
-      includeOptOut: true,
-      audienceFilter: { kind: 'stage', stageId: input.stageId },
-    })
+    const name = `Disparo — etapa ${stageNm ?? ''}`.trim()
+    const audienceFilter = { kind: 'stage', stageId: input.stageId }
+    const text = (input.text ?? '').trim()
+    const media = kind === 'template' ? [] : (input.media ?? []).slice(0, STAGE_MAX_ATTACHMENTS)
+
+    const res =
+      kind === 'template'
+        ? await enqueueTemplateBroadcast(ctx.accountId, ctx.userId, {
+            name,
+            channelId: input.channelId,
+            templateName: input.templateName ?? '',
+            templateLanguage: input.templateLanguage ?? '',
+            mapping: {
+              variables: input.variables ?? {},
+              headerVariable: input.headerVariable ?? null,
+              buttonValues: input.buttonValues ?? {},
+              headerMediaUrl: input.headerMediaUrl ?? null,
+            },
+            recipientContactIds: contactIds,
+            audienceFilter,
+            skipRecentDuplicates: input.skipRecentDuplicates !== false,
+          })
+        : await enqueueTextBroadcast(ctx.accountId, ctx.userId, {
+            name,
+            channelId: input.channelId,
+            bodyText: text,
+            subject: kind === 'email' ? (input.subject ?? '').trim() : null,
+            media: media.length > 0 ? media : undefined,
+            recipientContactIds: contactIds,
+            includeOptOut: true,
+            audienceFilter,
+            skipRecentDuplicates: input.skipRecentDuplicates !== false,
+          })
+    const skippedDuplicates = res.skippedDuplicates ?? []
     if (res.error || !res.broadcastId) {
-      return { ok: false, error: res.error ?? 'Falha ao disparar.' }
+      return {
+        ok: false,
+        error: res.error ?? 'Falha ao disparar.',
+        ...(skippedDuplicates.length > 0 ? { skippedDuplicates } : {}),
+      }
     }
-    // Registra no histórico de cada negócio (best-effort).
-    const preview = text.length > 80 ? `${text.slice(0, 80)}…` : text
+    logBroadcastEvent({
+      action: 'create',
+      broadcastId: res.broadcastId,
+      accountId: ctx.accountId,
+      userId: ctx.userId,
+      role: ctx.role,
+      channelId: input.channelId,
+      extra: {
+        source: 'stage',
+        stageId: input.stageId,
+        kind,
+        recipients: res.totalRecipients,
+        skipped: skippedDuplicates.length,
+        ...(kind === 'template' ? { templateName: input.templateName } : {}),
+      },
+    })
+
+    // Histórico só nos negócios cujo contato entrou no disparo: tem o destino
+    // do tipo (telefone ou e-mail), não pediu pra sair (o worker pula) e não
+    // ficou de fora por já ter recebido.
+    const skipped = new Set(skippedDuplicates.map((s) => s.contactId))
+    const note = stageBroadcastNote(kind, {
+      text,
+      subject: input.subject,
+      mediaCount: media.length,
+      templateName: input.templateName,
+    })
     for (const r of readable) {
-      await recordDealEvent(ctx.accountId, ctx.userId, r.dealId, 'note', {
-        text: `📣 Disparo enviado (etapa): ${preview}`,
-      })
+      if (skipped.has(r.contactId as string) || r.optedOut === true) continue
+      const reachable =
+        kind === 'email' ? hasSendableEmail(r.email) : isValidE164(sanitizePhoneForMeta(r.phone ?? ''))
+      if (!reachable) continue
+      await recordDealEvent(ctx.accountId, ctx.userId, r.dealId, 'note', { text: note })
     }
-    return { ok: true, total: res.totalRecipients }
+    return {
+      ok: true,
+      total: res.totalRecipients,
+      ...(skippedDuplicates.length > 0 ? { skippedDuplicates } : {}),
+    }
   } catch (err) {
     console.error('[broadcastToStage]', err)
     return { ok: false, error: 'Falha ao disparar para a etapa.' }

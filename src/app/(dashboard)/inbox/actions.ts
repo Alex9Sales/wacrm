@@ -35,7 +35,7 @@ import {
   requireRole,
   type AccountContext,
 } from '@/lib/auth/account'
-import { hasMinRole, type AccountRole } from '@/lib/auth/roles'
+import { hasMinRole, isAccountRole, type AccountRole } from '@/lib/auth/roles'
 import {
   conversationVisibility,
   canReadConversation,
@@ -50,6 +50,7 @@ import {
 import { formatConversationPreview } from '@/lib/inbox/preview'
 import { loadChannel } from '@/lib/channels/channels'
 import { postInternalNote } from '@/lib/ai/close-actions'
+import { aiEnableWithAssigneeWarning, aiState } from '@/lib/ai/conversation-ai-state'
 import {
   CONTINUATION_MAX_LINES,
   continuationDraft,
@@ -278,6 +279,24 @@ export async function getConversationWithContact(
   const { contact, channel, sector, ...conv } = row
   // Botão "IA on/off": só aparece nas conversas cujo canal a IA atende.
   const aiActiveChannel = await aiRepliesOnChannel(ctx.accountId, channel?.id)
+  // 15/09 (GoLink, Dra. Andressa): "IA on" com responsável humano não responde
+  // (gate do auto-reply). O estado diz isso, com o nome de quem está com ela.
+  const aiStateNow = aiState({
+    aiActiveChannel,
+    aiAutoreplyDisabled: conv.ai_autoreply_disabled,
+    assignedAgentId: conv.assigned_agent_id,
+  })
+  let aiAssigneeName: string | null = null
+  if (aiActiveChannel && conv.assigned_agent_id && !readBlocked) {
+    try {
+      const a = firstOrNull(
+        await db.select({ name: user.name }).from(user).where(eq(user.id, conv.assigned_agent_id)).limit(1),
+      )
+      aiAssigneeName = a?.name?.trim() || null
+    } catch (err) {
+      console.error('[getConversationWithContact] nome do responsável:', err instanceof Error ? err.message : err)
+    }
+  }
   return {
     ...conv,
     // When blocked, mask the preview with the SAME sentinel the list uses
@@ -294,6 +313,8 @@ export async function getConversationWithContact(
     transfer_note: readBlocked ? null : conv.transfer_note,
     read_blocked: readBlocked,
     ai_active_channel: aiActiveChannel,
+    ai_state: aiStateNow,
+    ai_assignee_name: aiAssigneeName,
     status: conv.status as ConversationStatus,
     priority: (conv.priority ?? 'none') as ConversationPriority,
     unread_count: conv.unread_count ?? 0,
@@ -317,9 +338,43 @@ export async function getConversationWithContact(
 export async function setConversationAiPaused(
   conversationId: string,
   paused: boolean,
-): Promise<{ error: string | null }> {
+): Promise<{
+  error: string | null
+  /** Ligou a IA, mas a conversa tem responsável: ela segue calada até tirar
+   *  (15/09, GoLink — Dra. Andressa). A UI mostra como toast de aviso. */
+  warning?: string | null
+  /** Quem está com a conversa, quando há `warning` — pro "Tirar responsável".
+   *  `losesAccessOnUnassign`: sem a atribuição essa pessoa deixa de abrir a
+   *  conversa (canal dedicado a outra pessoa, privada, setor que não é o dela). */
+  assignee?: { id: string; name: string | null; losesAccessOnUnassign: boolean } | null
+}> {
   try {
     const ctx = await getCurrentAccount()
+    const current = firstOrNull(
+      await db
+        .select({
+          assignedAgentId: conversations.assignedAgentId,
+          sectorId: conversations.sectorId,
+          isPrivate: conversations.isPrivate,
+        })
+        .from(conversations)
+        .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!current) return { error: 'Conversa não encontrada.' }
+    if (
+      !(await canReadConversation(
+        ctx.role,
+        ctx.userId,
+        ctx.accountId,
+        current.sectorId,
+        current.assignedAgentId,
+        conversationId,
+        current.isPrivate,
+      ))
+    ) {
+      return { error: 'Sem permissão para esta conversa.' }
+    }
     await db
       .update(conversations)
       .set({
@@ -336,6 +391,42 @@ export async function setConversationAiPaused(
           eq(conversations.accountId, ctx.accountId),
         ),
       )
+    // ⏳ Ligou com responsável humano: liga mesmo assim (quando tirarem o
+    // responsável ela já volta), mas avisa — o auto-reply cala a IA em conversa
+    // atribuída e o "IA on" enganava (15/09, GoLink: Dra. Andressa sem resposta).
+    let warning: string | null = null
+    let assignee: { id: string; name: string | null; losesAccessOnUnassign: boolean } | null = null
+    if (!paused && current.assignedAgentId) {
+      let assigneeName: string | null = null
+      let losesAccessOnUnassign = false
+      try {
+        const a = firstOrNull(
+          await db
+            .select({ name: user.name, role: member.role })
+            .from(user)
+            .leftJoin(member, and(eq(member.userId, user.id), eq(member.organizationId, ctx.accountId)))
+            .where(eq(user.id, current.assignedAgentId))
+            .limit(1),
+        )
+        assigneeName = a?.name?.trim() || null
+        // Mesma regra de leitura da inbox, simulando a conversa SEM responsável.
+        if (a?.role && isAccountRole(a.role)) {
+          losesAccessOnUnassign = !(await canReadConversation(
+            a.role,
+            current.assignedAgentId,
+            ctx.accountId,
+            current.sectorId,
+            null,
+            conversationId,
+            current.isPrivate,
+          ))
+        }
+      } catch (err) {
+        console.error('[setConversationAiPaused] responsável:', err instanceof Error ? err.message : err)
+      }
+      warning = aiEnableWithAssigneeWarning(assigneeName)
+      assignee = { id: current.assignedAgentId, name: assigneeName, losesAccessOnUnassign }
+    }
     // 🧾 Rastro na conversa: quem ligou/desligou e quando (08/09, GoLink: "a IA
     // estava desligada e respondeu" — sem registro não dava pra saber se o
     // clique chegou ao servidor). Best-effort: nunca quebra o toggle.
@@ -346,14 +437,17 @@ export async function setConversationAiPaused(
         conversationId,
         text: paused
           ? `⏸️ IA pausada nesta conversa por ${nome}. Ela não responde até alguém religar.`
-          : `▶️ IA religada nesta conversa por ${nome}.`,
+          : warning
+            ? `▶️ IA religada nesta conversa por ${nome}. ${warning}`
+            : `▶️ IA religada nesta conversa por ${nome}.`,
       })
-    } catch {
-      /* nota é rastro, não requisito */
+    } catch (err) {
+      // nota é rastro, não requisito — mas não some sem deixar log
+      console.error('[setConversationAiPaused] nota interna:', err instanceof Error ? err.message : err)
     }
     // 🆕 Ao LIGAR a IA, retoma na hora se houver mensagem do cliente parada.
     if (!paused) await aiCatchUpOnEnable(ctx.accountId, conversationId)
-    return { error: null }
+    return { error: null, warning, assignee }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao alterar a IA' }
   }

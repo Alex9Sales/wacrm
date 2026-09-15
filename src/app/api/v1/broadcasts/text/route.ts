@@ -16,11 +16,19 @@
 //     "daily_cap": 50,                             // humanized drip cap/day
 //     "send_now": false, "send_now_interval_min": 1,   // optional
 //     "recipients": [{ "phone": "+5567…", "name": "Maria" }],  // OR
-//     "contact_ids": ["<uuid>", …]
+//     "contact_ids": ["<uuid>", …],
+//     "skip_recent_duplicates": false              // optional (default false)
 //   }
-// Returns { data: { broadcast_id, total_recipients } }.
+// Returns { data: { broadcast_id, total_recipients, skipped_duplicates } }.
+//
+// skip_recent_duplicates (15/09, GoLink: envios repetidos): true = tira quem
+// já recebeu a mesma mensagem nas últimas 24 h; `skipped_duplicates` lista
+// quem ficou de fora ([{ contact_id, name, last_sent_at }]). Padrão false pra
+// integração existente não mudar de comportamento. Se TODOS já tinham
+// recebido → 409 all_recipients_duplicate com a mesma lista em error.
 // ============================================================
 
+import { NextResponse } from 'next/server';
 import { asc, eq } from 'drizzle-orm';
 
 import { db, channels } from '@/db';
@@ -33,6 +41,16 @@ import {
   enqueueTextBroadcast,
   upsertContactsByPhone,
 } from '@/lib/broadcasts/text-broadcast';
+import type { DuplicateSkip } from '@/lib/broadcasts/duplicate-sends';
+import { logBroadcastEvent } from '@/lib/broadcasts/audit';
+
+function toWireSkips(list: DuplicateSkip[] | undefined) {
+  return (list ?? []).map((d) => ({
+    contact_id: d.contactId,
+    name: d.name,
+    last_sent_at: d.lastSentAt,
+  }));
+}
 
 /** The account's first non-official (needsJitter) channel — the default
  *  sender when the caller omits channel_id. */
@@ -133,13 +151,40 @@ export async function POST(request: Request) {
           : undefined,
       recipientContactIds,
       audienceFilter: { source: 'api/v1', via: Array.isArray(body.recipients) ? 'recipients' : 'contact_ids' },
+      // Opt-in: integrações existentes seguem mandando pra todos.
+      skipRecentDuplicates: body.skip_recent_duplicates === true,
     });
 
+    if (!result.broadcastId && (result.skippedDuplicates?.length ?? 0) > 0) {
+      return NextResponse.json(
+        {
+          error: {
+            code: 'all_recipients_duplicate',
+            message: result.error ?? 'All recipients already received this message in the last 24 h',
+            skipped_duplicates: toWireSkips(result.skippedDuplicates),
+          },
+        },
+        { status: 409 },
+      );
+    }
     if (result.error || !result.broadcastId) {
       return fail('bad_request', result.error ?? 'Failed to create broadcast', 400);
     }
+    logBroadcastEvent({
+      action: 'create',
+      broadcastId: result.broadcastId,
+      accountId: ctx.accountId,
+      userId,
+      role: 'api',
+      channelId,
+      extra: { source: 'api/v1', total: result.totalRecipients, skipped: result.skippedDuplicates?.length ?? 0 },
+    });
     return ok(
-      { broadcast_id: result.broadcastId, total_recipients: result.totalRecipients },
+      {
+        broadcast_id: result.broadcastId,
+        total_recipients: result.totalRecipients,
+        skipped_duplicates: toWireSkips(result.skippedDuplicates),
+      },
       201,
     );
   } catch (err) {

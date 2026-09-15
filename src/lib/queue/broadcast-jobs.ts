@@ -25,6 +25,8 @@ import { contactTokenValues } from '@/lib/whatsapp/message-vars';
 export interface BroadcastRow {
   id: string;
   accountId: string;
+  /** Quem criou o disparo — vira participante das conversas geradas (15/09). */
+  userId: string;
   channelId: string | null;
   status: string;
   messageKind: string;
@@ -49,6 +51,7 @@ export async function loadBroadcastRow(
       .select({
         id: broadcasts.id,
         accountId: broadcasts.accountId,
+        userId: broadcasts.userId,
         channelId: broadcasts.channelId,
         status: broadcasts.status,
         messageKind: broadcasts.messageKind,
@@ -135,6 +138,8 @@ export interface RecipientJobContext {
   sendContext: BroadcastSendContext;
   recipient: {
     id: string;
+    /** Contato do destinatário — pra vincular a conversa a quem disparou. */
+    contactId: string | null;
     status: string;
     attempts: number;
     phone: string;
@@ -166,6 +171,7 @@ export async function loadRecipientJobContext(
       .select({
         id: broadcastRecipients.id,
         broadcastId: broadcastRecipients.broadcastId,
+        contactId: broadcastRecipients.contactId,
         status: broadcastRecipients.status,
         attempts: broadcastRecipients.attempts,
         params: broadcastRecipients.params,
@@ -248,6 +254,7 @@ export async function loadRecipientJobContext(
       sendContext,
       recipient: {
         id: row.id,
+        contactId: row.contactId ?? null,
         status: row.status,
         attempts: row.attempts,
         phone: destination,

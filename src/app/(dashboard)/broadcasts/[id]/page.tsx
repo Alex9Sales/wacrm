@@ -11,6 +11,7 @@ import {
   cancelBroadcastAction,
   sendBroadcastNowAction,
   retryFailedBroadcastAction,
+  removeBroadcastRecipientAction,
 } from '../actions';
 import { Broadcast, BroadcastRecipient, RecipientStatus } from '@/types';
 import { Button } from '@/components/ui/button';
@@ -56,12 +57,22 @@ import {
   Zap,
   RefreshCw,
   MessageSquare,
+  Lock,
+  Archive,
+  UserMinus,
 } from 'lucide-react';
 import { toast } from 'sonner';
 import {
   getBroadcastStatus,
   getRecipientStatus,
 } from '@/lib/broadcast-status';
+import {
+  archivedLine,
+  broadcastProgressLine,
+  channelWithOwner,
+  lockedChatHint,
+  pauseLine,
+} from '@/lib/broadcasts/detail-text';
 
 /**
  * Poll cadence while the broadcast is still moving. The queue worker
@@ -221,6 +232,9 @@ export default function BroadcastDetailPage() {
   const [deleting, setDeleting] = useState(false);
   const [confirmCancel, setConfirmCancel] = useState(false);
   const [controlBusy, setControlBusy] = useState(false);
+  // "Tirar da fila" (15/09, GoLink): destinatário pendente a confirmar.
+  const [removeTarget, setRemoveTarget] = useState<BroadcastRecipient | null>(null);
+  const [removing, setRemoving] = useState(false);
 
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
@@ -389,20 +403,49 @@ export default function BroadcastDetailPage() {
     downloadBlob(`broadcast-${safeName}-${broadcastId.slice(0, 8)}.csv`, csv);
   }
 
+  // 15/09 (GoLink): disparo que já enviou é ARQUIVADO (o servidor decide e
+  // cancela antes se ainda estiver ativo); nunca enviou → apagado.
   async function handleDelete() {
     setDeleting(true);
-    // broadcast_recipients cascades on broadcasts.id (migration 001), so a
-    // single delete is sufficient — the aggregate trigger in migration 003
-    // is defined on broadcast_recipients but fires only on its own row
-    // changes, not on a cascaded drop of the parent row.
-    const { error: delErr } = await deleteBroadcast(broadcastId);
-    setDeleting(false);
-    if (delErr) {
-      toast.error(`Falha ao excluir: ${delErr}`);
-      return;
+    try {
+      const result = await deleteBroadcast(broadcastId);
+      if (!result.ok) {
+        toast.error(result.error ?? 'Não foi possível excluir o disparo.');
+        return;
+      }
+      setConfirmDelete(false);
+      toast.success(
+        result.archived
+          ? 'Disparo arquivado. Saiu da lista; o histórico de quem recebeu fica em "Arquivados".'
+          : 'Disparo excluído.',
+        { duration: 6000 },
+      );
+      router.push('/broadcasts');
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao excluir o disparo.');
+    } finally {
+      setDeleting(false);
     }
-    toast.success('Disparo excluído');
-    router.push('/broadcasts');
+  }
+
+  async function handleRemoveRecipient(recipient: BroadcastRecipient) {
+    setRemoving(true);
+    try {
+      const result = await removeBroadcastRecipientAction(broadcastId, recipient.id);
+      if (!result.ok) {
+        toast.error(result.error);
+        return;
+      }
+      setRemoveTarget(null);
+      toast.success(
+        `${recipient.contact?.name || recipient.contact?.phone || 'Contato'} saiu da fila e não vai receber este disparo.`,
+      );
+      await fetchData().catch(() => {});
+    } catch (err) {
+      toast.error(err instanceof Error ? err.message : 'Falha ao tirar da fila.');
+    } finally {
+      setRemoving(false);
+    }
   }
 
   if (loading) {
@@ -425,25 +468,49 @@ export default function BroadcastDetailPage() {
   }
 
   const status = getBroadcastStatus(broadcast.status);
+  const now = new Date();
+  // Arquivado (15/09): só histórico — nenhuma ação na tela.
+  const archived = !!broadcast.archived_at;
 
   // Control availability, mirroring the queue state machine:
   //   sending          → Pause, Cancel
   //   paused           → Resume, Cancel
   //   scheduled        → Cancel
-  const canPause = broadcast.status === 'sending';
-  const canResume = broadcast.status === 'paused';
+  const canPause = !archived && broadcast.status === 'sending';
+  const canResume = !archived && broadcast.status === 'paused';
   const canCancel =
-    broadcast.status === 'sending' ||
-    broadcast.status === 'scheduled' ||
-    broadcast.status === 'paused';
-  const deleteBlocked = isLive; // scheduled / sending / paused
-  // "Enviar agora" only for a humanized drip still waiting on its slots
-  // (pacing present). Bursts (pacing null) already send immediately.
-  const canSendNow =
-    (broadcast as unknown as { pacing?: unknown }).pacing != null &&
+    !archived &&
     (broadcast.status === 'sending' ||
       broadcast.status === 'scheduled' ||
       broadcast.status === 'paused');
+  // Excluir fica disponível mesmo com envios: o servidor arquiva (histórico
+  // fica) em vez de apagar. Só quem criou ou supervisor+.
+  const hasSends = broadcast.sent_count > 0 || (broadcast.processed_count ?? 0) > 0;
+  const canDelete = broadcast.can_delete !== false;
+  // "Enviar agora" only for a humanized drip still waiting on its slots
+  // (pacing present). Bursts (pacing null) already send immediately.
+  const canSendNow =
+    !archived &&
+    broadcast.pacing != null &&
+    (broadcast.status === 'sending' ||
+      broadcast.status === 'scheduled' ||
+      broadcast.status === 'paused');
+  // "Tirar da fila": só de disparo que ainda tem fila andando.
+  const canRemoveRecipients =
+    !archived &&
+    (broadcast.status === 'paused' ||
+      broadcast.status === 'scheduled' ||
+      broadcast.status === 'sending');
+  const channelLabel = channelWithOwner(broadcast.channel_name, broadcast.channel_owner_name);
+  const progressLine = broadcastProgressLine({
+    status: broadcast.status,
+    pendingCount: broadcast.pending_count ?? 0,
+    nextSlotAt: broadcast.next_slot_at ?? null,
+    lastSlotAt: broadcast.last_slot_at ?? null,
+    intervalMs: broadcast.interval_ms ?? 0,
+    drip: broadcast.pacing != null,
+    now,
+  });
 
   const processed =
     broadcast.sent_count + broadcast.failed_count;
@@ -487,11 +554,18 @@ export default function BroadcastDetailPage() {
                 {status.label}
               </span>
             </div>
-            <div className="mt-1 flex items-center gap-3 text-sm text-muted-foreground">
-              <span>Template: {broadcast.template_name}</span>
-              <span>-</span>
+            <div className="mt-1 flex flex-wrap items-center gap-x-3 gap-y-1 text-sm text-muted-foreground">
+              {broadcast.template_name && (
+                <span>Template: {broadcast.template_name}</span>
+              )}
+              {/* 15/09 (GoLink): por qual número saiu e quem criou — o 1º
+                  disparo do Vitor saiu pelo número do Leonardo sem ninguém ver. */}
+              {channelLabel && <span>Canal: {channelLabel}</span>}
+              {broadcast.created_by_name && (
+                <span>Criado por {broadcast.created_by_name}</span>
+              )}
               <span>
-                Criado em {new Date(broadcast.created_at).toLocaleDateString()}
+                Criado em {new Date(broadcast.created_at).toLocaleDateString('pt-BR')}
               </span>
             </div>
           </div>
@@ -520,7 +594,7 @@ export default function BroadcastDetailPage() {
               retried the moment it reconnects, without pausing first. Only
               'scheduled' has nothing to retry (retryFailedBroadcast rejects
               it). */}
-          {broadcast.failed_count > 0 && broadcast.status !== 'scheduled' && (
+          {!archived && broadcast.failed_count > 0 && broadcast.status !== 'scheduled' && (
             <Button
               variant="outline"
               size="sm"
@@ -572,65 +646,64 @@ export default function BroadcastDetailPage() {
             </Button>
           )}
 
-          {/* Delete — inline-confirm pattern matches the pipeline-settings
-              "Delete Pipeline" flow. In-flight broadcasts (scheduled /
-              sending / paused) can't be deleted because orphaning queued
-              Meta sends would leave the funnel inconsistent. */}
-          {confirmDelete ? (
-            <div className="flex items-center gap-2 rounded-md border border-red-500/30 bg-red-500/10 px-3 py-1.5 text-sm">
-              <span className="text-red-300">Excluir este broadcast?</span>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setConfirmDelete(false)}
-                disabled={deleting}
-                className="h-7 border-border bg-transparent text-muted-foreground hover:bg-muted"
-              >
-                Cancelar
-              </Button>
-              <Button
-                size="sm"
-                onClick={handleDelete}
-                disabled={deleting}
-                className="h-7 bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
-              >
-                {deleting ? 'Excluindo…' : 'Confirmar'}
-              </Button>
-            </div>
-          ) : (
+          {/* Excluir / Arquivar (15/09, GoLink): com envios vira "Arquivar"
+              — some da lista e o histórico fica; ativo é cancelado antes.
+              Confirmação explica o que acontece. Arquivado: nenhuma ação. */}
+          {!archived && (
             <Button
               variant="outline"
               size="sm"
-              disabled={deleteBlocked}
+              disabled={!canDelete || controlBusy}
               onClick={() => setConfirmDelete(true)}
               title={
-                deleteBlocked
-                  ? 'Não é possível excluir enquanto o broadcast está agendado, enviando ou pausado'
-                  : 'Excluir este broadcast'
+                !canDelete
+                  ? 'Só quem criou o disparo ou um supervisor pode excluir ou arquivar.'
+                  : hasSends
+                    ? 'Arquivar: sai da lista e o histórico de quem recebeu fica guardado'
+                    : 'Excluir este disparo'
               }
               className="border-red-500/30 bg-transparent text-red-400 hover:bg-red-500/10 disabled:opacity-40"
             >
-              <Trash2 className="h-3.5 w-3.5" />
-              Excluir
+              {hasSends ? <Archive className="h-3.5 w-3.5" /> : <Trash2 className="h-3.5 w-3.5" />}
+              {hasSends ? 'Arquivar' : 'Excluir'}
             </Button>
           )}
         </div>
       </div>
+
+      {archived && broadcast.archived_at && (
+        <div className="flex items-center gap-2 rounded-xl border border-border bg-muted/40 px-4 py-3 text-sm text-muted-foreground">
+          <Archive className="h-4 w-4 shrink-0" />
+          <span>
+            {archivedLine({
+              archivedByName: broadcast.archived_by_name,
+              archivedAt: broadcast.archived_at,
+              now,
+            })}
+            . Fica só como histórico: nada mais sai por este disparo.
+          </span>
+        </div>
+      )}
 
       {/* Live progress / scheduled banner. Shows a progress bar while
           sending or paused, and the scheduled time when scheduled. */}
       {(isLive || broadcast.status === 'sent') && (
         <div className="rounded-xl border border-border bg-card p-4">
           {broadcast.status === 'scheduled' ? (
-            <div className="flex items-center gap-2 text-sm text-blue-400">
-              <CalendarClock className="h-4 w-4" />
-              <span className="font-medium">Agendado</span>
-              {scheduledLabel && (
-                <span className="text-muted-foreground">
-                  para {scheduledLabel}
-                </span>
+            <>
+              <div className="flex items-center gap-2 text-sm text-blue-400">
+                <CalendarClock className="h-4 w-4" />
+                <span className="font-medium">Agendado</span>
+                {scheduledLabel && (
+                  <span className="text-muted-foreground">
+                    para {scheduledLabel}
+                  </span>
+                )}
+              </div>
+              {progressLine && (
+                <p className="mt-2 text-xs text-muted-foreground">{progressLine}</p>
               )}
-            </div>
+            </>
           ) : (
             <>
               <div className="mb-2 flex items-center justify-between">
@@ -665,6 +738,21 @@ export default function BroadcastDetailPage() {
                   style={{ width: `${progressPct}%` }}
                 />
               </div>
+              {/* 15/09 (GoLink): quando sai o próximo e quem pausou — antes a
+                  tela dizia só "Pausado" e o Vitor pausava/retomava no escuro. */}
+              {broadcast.status === 'paused' && (
+                <p className="mt-2 text-xs font-medium text-amber-600 dark:text-amber-400">
+                  {pauseLine({
+                    pausedByName: broadcast.paused_by_name,
+                    pausedAt: broadcast.paused_at,
+                    pauseReason: broadcast.pause_reason,
+                    now,
+                  })}
+                </p>
+              )}
+              {progressLine && (broadcast.status === 'sending' || broadcast.status === 'paused') && (
+                <p className="mt-1.5 text-xs text-muted-foreground">{progressLine}</p>
+              )}
             </>
           )}
         </div>
@@ -840,7 +928,24 @@ export default function BroadcastDetailPage() {
                         {recipient.error_message ?? '-'}
                       </TableCell>
                       <TableCell className="text-right">
-                        {recipient.conversation_id ? (
+                        {/* 15/09 (GoLink): só a conversa no número do disparo.
+                            Pendente não tem conversa ainda (e pode sair da
+                            fila); sem acesso mostra cadeado dizendo onde está. */}
+                        {recipient.status === 'pending' ? (
+                          canRemoveRecipients ? (
+                            <Button
+                              variant="ghost"
+                              size="xs"
+                              onClick={() => setRemoveTarget(recipient)}
+                              disabled={removing}
+                              title="Tirar esta pessoa da fila: não vai receber este disparo"
+                              className="text-muted-foreground hover:text-red-500"
+                            >
+                              <UserMinus />
+                              Tirar da fila
+                            </Button>
+                          ) : null
+                        ) : recipient.conversation_id && recipient.conversation_readable ? (
                           <button
                             type="button"
                             onClick={() =>
@@ -853,8 +958,36 @@ export default function BroadcastDetailPage() {
                           >
                             <MessageSquare className="h-4 w-4" />
                           </button>
+                        ) : recipient.conversation_id ? (
+                          <button
+                            type="button"
+                            onClick={() =>
+                              toast.info(
+                                lockedChatHint({
+                                  recipientStatus: recipient.status,
+                                  channelName: recipient.conversation_channel_name,
+                                  holderName: recipient.conversation_holder_name,
+                                }),
+                                { duration: 8000 },
+                              )
+                            }
+                            title={lockedChatHint({
+                              recipientStatus: recipient.status,
+                              channelName: recipient.conversation_channel_name,
+                              holderName: recipient.conversation_holder_name,
+                            })}
+                            aria-label="Conversa sem acesso"
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted"
+                          >
+                            <Lock className="h-4 w-4" />
+                          </button>
                         ) : (
-                          <span className="text-muted-foreground">-</span>
+                          <span
+                            className="text-muted-foreground"
+                            title="Nenhuma conversa com este contato no número do disparo"
+                          >
+                            -
+                          </span>
                         )}
                       </TableCell>
                     </TableRow>
@@ -865,6 +998,88 @@ export default function BroadcastDetailPage() {
           </div>
         )}
       </div>
+
+      {/* Excluir / Arquivar — o texto diz o que acontece com o histórico. */}
+      <Dialog open={confirmDelete} onOpenChange={(open) => !deleting && setConfirmDelete(open)}>
+        <DialogContent className="border-border bg-popover sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground">
+              {hasSends ? 'Arquivar disparo' : 'Excluir disparo'}
+            </DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {hasSends
+                ? `${
+                    broadcast.sent_count > 0
+                      ? `Este disparo já saiu para ${broadcast.sent_count.toLocaleString('pt-BR')} pessoa(s).`
+                      : 'Este disparo já tentou enviar (com falha).'
+                  } Ele sai da lista, mas o histórico de quem recebeu fica guardado em "Arquivados".`
+                : 'Este disparo ainda não enviou nada. Ele será apagado de vez.'}
+              {isLive &&
+                ` Como ainda está ${status.label.toLowerCase()}, quem não recebeu não vai mais receber.`}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setConfirmDelete(false)}
+              disabled={deleting}
+              className="border-border text-muted-foreground"
+            >
+              Voltar
+            </Button>
+            <Button
+              onClick={() => void handleDelete()}
+              disabled={deleting}
+              className="bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              {hasSends ? <Archive className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
+              {deleting
+                ? hasSends
+                  ? 'Arquivando…'
+                  : 'Excluindo…'
+                : hasSends
+                  ? 'Arquivar'
+                  : 'Excluir'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      {/* Tirar da fila — só destinatário pendente. */}
+      <Dialog
+        open={!!removeTarget}
+        onOpenChange={(open) => {
+          if (!open && !removing) setRemoveTarget(null);
+        }}
+      >
+        <DialogContent className="border-border bg-popover sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle className="text-popover-foreground">Tirar da fila</DialogTitle>
+            <DialogDescription className="text-muted-foreground">
+              {removeTarget?.contact?.name || removeTarget?.contact?.phone || 'Este contato'} não
+              vai receber este disparo. Os outros continuam na fila normalmente.
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRemoveTarget(null)}
+              disabled={removing}
+              className="border-border text-muted-foreground"
+            >
+              Voltar
+            </Button>
+            <Button
+              onClick={() => removeTarget && void handleRemoveRecipient(removeTarget)}
+              disabled={removing}
+              className="bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
+            >
+              <UserMinus className="h-4 w-4" />
+              {removing ? 'Tirando…' : 'Tirar da fila'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {/* Cancel confirmation — cancelling is terminal: pending recipients
           won't be sent. */}

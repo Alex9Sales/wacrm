@@ -7,6 +7,8 @@ import {
   getWhatsappConnected,
   markConversationRead,
 } from "./actions";
+import { conversationAccessInfo } from "./access-info-actions";
+import { conversationUnavailableMessage } from "@/lib/inbox/access-notice";
 import type {
   Conversation,
   Message,
@@ -209,10 +211,15 @@ export default function InboxPage() {
       if (!fetched) {
         // Antes o link `?c=` pra uma conversa invisível (com o dono/admin,
         // fora do setor, apagada) abria a caixa vazia sem dizer nada.
+        // 15/09 (GoLink): e depois dizia "sem acesso OU apagada" junto — o
+        // servidor agora diz qual das duas (e em que número ela está).
+        const info = await conversationAccessInfo(target).catch((err) => {
+          console.error("conversationAccessInfo failed:", err);
+          return null;
+        });
+        if (cancelled) return;
         if (searchParams.get("c") === target) {
-          toast.error(
-            "Esta conversa não está disponível para você: está com outra pessoa (sem acesso) ou foi apagada. Peça a um administrador para transferir.",
-          );
+          toast.error(conversationUnavailableMessage(info), { duration: 8000 });
         }
         return;
       }

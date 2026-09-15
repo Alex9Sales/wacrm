@@ -13,7 +13,7 @@ import {
   TableHeader,
   TableRow,
 } from '@/components/ui/table';
-import { Radio, Plus, Loader2, Send } from 'lucide-react';
+import { Radio, Plus, Loader2, Send, Archive } from 'lucide-react';
 import { useCan } from '@/hooks/use-can';
 import { GatedButton } from '@/components/ui/gated-button';
 import { getBroadcastStatus } from '@/lib/broadcast-status';
@@ -62,19 +62,40 @@ export default function BroadcastsPage() {
   const [broadcasts, setBroadcasts] = useState<Broadcast[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  // 15/09 (GoLink): "Excluir" de disparo que já enviou vira arquivar — some
+  // desta lista e fica no filtro "Arquivados" com o histórico.
+  const [showArchived, setShowArchived] = useState(false);
+  const showArchivedRef = useRef(false);
+  const [switching, setSwitching] = useState(false);
 
   // Used to kick off polling only while something is actively sending.
   const pollTimer = useRef<ReturnType<typeof setInterval> | null>(null);
 
   async function fetchBroadcasts() {
+    const archived = showArchivedRef.current;
     try {
-      const data = await listBroadcasts();
+      const data = await listBroadcasts({ archived });
+      // Trocou de filtro enquanto carregava: descarta a resposta velha.
+      if (showArchivedRef.current !== archived) return;
       setBroadcasts(data);
+      setError(null);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Falha ao carregar os disparos');
     } finally {
-      setLoading(false);
+      if (showArchivedRef.current === archived) {
+        setLoading(false);
+        setSwitching(false);
+      }
     }
+  }
+
+  function toggleArchived(next: boolean) {
+    if (showArchivedRef.current === next) return;
+    showArchivedRef.current = next;
+    setShowArchived(next);
+    setBroadcasts([]);
+    setSwitching(true);
+    void fetchBroadcasts();
   }
 
   useEffect(() => {
@@ -218,7 +239,49 @@ export default function BroadcastsPage() {
         </div>
       </div>
 
-      {broadcasts.length === 0 ? (
+      <div
+        role="tablist"
+        aria-label="Filtro de disparos"
+        className="inline-flex rounded-lg border border-border bg-card p-0.5 text-sm"
+      >
+        <button
+          type="button"
+          role="tab"
+          aria-selected={!showArchived}
+          onClick={() => toggleArchived(false)}
+          className={`rounded-md px-3 py-1 transition-colors ${
+            !showArchived ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          Disparos
+        </button>
+        <button
+          type="button"
+          role="tab"
+          aria-selected={showArchived}
+          onClick={() => toggleArchived(true)}
+          className={`inline-flex items-center gap-1.5 rounded-md px-3 py-1 transition-colors ${
+            showArchived ? 'bg-muted font-medium text-foreground' : 'text-muted-foreground hover:text-foreground'
+          }`}
+        >
+          <Archive className="h-3.5 w-3.5" />
+          Arquivados
+        </button>
+      </div>
+
+      {switching ? (
+        <div className="flex h-48 items-center justify-center rounded-xl border border-border bg-card">
+          <Loader2 className="h-5 w-5 animate-spin text-primary" />
+        </div>
+      ) : broadcasts.length === 0 && showArchived ? (
+        <div className="flex h-48 flex-col items-center justify-center rounded-xl border border-border bg-card">
+          <Archive className="mb-3 h-8 w-8 text-muted-foreground" />
+          <p className="text-sm font-medium text-foreground">Nenhum disparo arquivado</p>
+          <p className="mt-1 max-w-sm text-center text-xs text-muted-foreground">
+            Quando alguém exclui um disparo que já tinha enviado mensagens, ele vem pra cá com o histórico de quem recebeu.
+          </p>
+        </div>
+      ) : broadcasts.length === 0 ? (
         <div className="flex h-64 flex-col items-center justify-center rounded-xl border border-border bg-card">
           <Radio className="mb-3 h-10 w-10 text-muted-foreground" />
           <p className="text-sm font-medium text-foreground">Nenhum disparo ainda</p>

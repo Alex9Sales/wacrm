@@ -99,3 +99,50 @@ export function parseCsv(text: string): CsvContact[] {
   }
   return out
 }
+
+// ------------------------------------------------------------
+// Planilha sem nome (15/09, GoLink): o Vitor colou só os telefones e 17
+// contatos novos nasceram sem nome — a busca por nome não achava ninguém.
+// Aqui só contamos; quem já é contato o servidor confere
+// (csv-name-check.ts), porque a importação NÃO troca o nome de contato
+// existente (resolveOrCreateContactIdsByPhone só cria os que faltam).
+// ------------------------------------------------------------
+
+export interface CsvNameSummary {
+  /** Telefones únicos da planilha (o mesmo número repetido conta 1). */
+  total: number
+  /** Desses, quantos vieram sem nome. */
+  withoutName: number
+  /** Os telefones sem nome — pra conferir no servidor quais já são contato. */
+  phonesWithoutName: string[]
+}
+
+/**
+ * Conta os telefones sem nome. Mesmo número = mesmos 8 últimos dígitos (a
+ * regra da importação, que tolera o 9º dígito e o 55); a 1ª linha manda.
+ */
+export function summarizeCsvNames(rows: readonly CsvContact[]): CsvNameSummary {
+  const seen = new Set<string>()
+  const phonesWithoutName: string[] = []
+  for (const r of rows) {
+    const key = (r.phone ?? '').replace(/\D/g, '').slice(-8)
+    if (!key || seen.has(key)) continue
+    seen.add(key)
+    if (!r.name?.trim()) phonesWithoutName.push(r.phone)
+  }
+  return { total: seen.size, withoutName: phonesWithoutName.length, phonesWithoutName }
+}
+
+/**
+ * Aviso âmbar do formulário. `approx` = não deu pra conferir quem já é
+ * contato, então o número é "até N" (as linhas sem nome).
+ */
+export function namelessContactsWarning(n: number, opts: { approx?: boolean } = {}): string | null {
+  if (n <= 0) return null
+  const prefix = opts.approx ? 'Até ' : ''
+  const body =
+    n === 1
+      ? `${prefix}1 contato vai ficar sem nome — a busca por nome não vai achá-lo.`
+      : `${prefix}${n} contatos vão ficar sem nome — a busca por nome não vai achá-los.`
+  return `${body} Cole a planilha com telefone e nome.`
+}

@@ -218,6 +218,12 @@ export interface Conversation {
   /** A IA atende automaticamente o canal desta conversa? O botão "IA on/off" só
    *  aparece quando true (nas outras conversas a IA não responde). */
   ai_active_channel?: boolean;
+  /** Estado honesto da IA (15/09, GoLink): ligada com responsável humano =
+   *  'waiting_assignee' — a IA não responde e o botão mostra "IA em espera".
+   *  Ver lib/ai/conversation-ai-state.ts. Só vem de getConversationWithContact. */
+  ai_state?: 'responding' | 'waiting_assignee' | 'paused' | 'channel_off';
+  /** Nome do responsável, pra dica "Com responsável (<nome>)…". */
+  ai_assignee_name?: string | null;
   /** Handoff note shown to the receiving agent after a sector transfer. */
   transfer_note?: string | null;
   transfer_note_at?: string | null;
@@ -541,14 +547,44 @@ export interface Broadcast {
   replied_count: number;
   failed_count: number;
   created_at: string;
+  /** Gotejamento (horário comercial); null = rajada / "enviar agora". */
+  pacing?: Record<string, unknown> | null;
+  // ---- Tela do disparo (15/09, GoLink) — só getBroadcast preenche. ----
+  /** Dono do número do disparo (canal dedicado). */
+  channel_owner_name?: string | null;
+  created_by_name?: string | null;
+  /** Quem pausou (null em pausa automática ou pela API de quem saiu). */
+  paused_by_name?: string | null;
+  paused_at?: string | null;
+  /** 'manual' | 'reputation' | 'session' (migração 0173). */
+  pause_reason?: string | null;
+  /** Arquivado: some da lista, histórico fica. listBroadcasts também traz. */
+  archived_at?: string | null;
+  archived_by_name?: string | null;
+  /** Destinatários ainda na fila. */
+  pending_count?: number;
+  /** Destinatários que já saíram da fila (enviado ou falhou). */
+  processed_count?: number;
+  /** Menor / maior horário gravado entre os pendentes (ISO). */
+  next_slot_at?: string | null;
+  last_slot_at?: string | null;
+  /** Intervalo entre envios (ms); 0 = sem ritmo conhecido. */
+  interval_ms?: number;
+  /** Quem olha pode excluir/arquivar (quem criou ou supervisor+). */
+  can_delete?: boolean;
 }
 
 export interface BroadcastRecipient {
   id: string;
   broadcast_id: string;
-  /** The contact's conversation (broadcast channel preferred) — powers the
-   *  "abrir chat" shortcut in the recipients table. */
+  /** A conversa do contato NO NÚMERO DO DISPARO (15/09: nunca a de outro
+   *  número); null pra pendente. Powers the "abrir chat" shortcut. */
   conversation_id?: string | null;
+  /** Quem olha consegue abrir essa conversa (regras de lib/sectors/access). */
+  conversation_readable?: boolean;
+  /** Número da conversa e com quem está — dica do cadeado quando não abre. */
+  conversation_channel_name?: string | null;
+  conversation_holder_name?: string | null;
   /**
    * Nullable after migration 004 — becomes NULL when the referenced
    * contact is deleted (ON DELETE SET NULL). History preserved; the

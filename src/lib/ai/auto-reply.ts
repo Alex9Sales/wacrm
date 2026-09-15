@@ -531,6 +531,16 @@ export async function dispatchInboundToAiReply(
     if (conv.assignedAgentId || conv.aiAutoreplyDisabled) {
       // a human owns this thread / handed off or turned off here — a IA não
       // responde, mas o devedor pode ter prometido pagar: régua ouve em silêncio.
+      // 🔎 15/09 (GoLink, Dra. Andressa): "IA on" e sem resposta, e o log não
+      // dizia por quê. Uma linha com o motivo — sem conteúdo de mensagem.
+      console.log(
+        '[ai auto-reply] calada:',
+        JSON.stringify({
+          reason: conv.aiAutoreplyDisabled ? 'disabled' : 'assigned',
+          conversationId,
+          assignedAgentId: conv.assignedAgentId ?? null,
+        }),
+      )
       await silentCollectionCheck(config)
       return
     }

@@ -7,25 +7,34 @@
 // there is no RLS anymore.
 // ============================================================
 
-import { and, count, desc, eq, ilike, inArray, ne, sql } from 'drizzle-orm'
+import { and, count, desc, eq, ilike, inArray, isNotNull, isNull, ne, sql } from 'drizzle-orm'
+import { alias } from 'drizzle-orm/pg-core'
 import {
   db,
   broadcasts,
   broadcastRecipients,
   contacts,
   contactTags,
+  conversations,
   customFields,
   contactCustomValues,
   messageTemplates,
 } from '@/db'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
-import { getCurrentAccount, requireRole } from '@/lib/auth/account'
+import {
+  ForbiddenError,
+  getCurrentAccount,
+  requireRole,
+  type AccountContext,
+} from '@/lib/auth/account'
+import { hasMinRole } from '@/lib/auth/roles'
 import { channels, user } from '@/db'
 import {
   pauseBroadcast,
   resumeBroadcast,
   cancelBroadcast,
   retryFailedBroadcast,
+  deleteOrArchiveBroadcast,
   type ControlResult,
 } from '@/lib/queue/broadcast-controls'
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels'
@@ -34,12 +43,27 @@ import { getProvider } from '@/lib/channels/registry'
 import type { ProviderId } from '@/lib/channels/provider'
 import { rescheduleRecipient } from '@/lib/queue/queues'
 import {
+  inferSpacingMs,
   normalizePacing,
   pacingIntervalMinutes,
   type PacingConfig,
 } from '@/lib/whatsapp/drip-schedule'
-import { enqueueTextBroadcast } from '@/lib/broadcasts/text-broadcast'
+import {
+  enqueueTextBroadcast,
+  type EnqueueTextBroadcastResult,
+} from '@/lib/broadcasts/text-broadcast'
 import { otherPersonNumberError } from '@/lib/broadcasts/channel-owner-guard'
+import { logBroadcastEvent, type BroadcastAuditAction } from '@/lib/broadcasts/audit'
+import { removePendingRecipient } from '@/lib/broadcasts/recipient-remove'
+import { canManageBroadcast } from '@/lib/broadcasts/detail-text'
+import {
+  agentCanReadRow,
+  getAdminUserIds,
+  getDedicatedChannelMap,
+  getParticipantConversationIds,
+  getUserSectorIds,
+  teamSeesAll,
+} from '@/lib/sectors/access'
 import type {
   Broadcast,
   BroadcastRecipient,
@@ -88,30 +112,132 @@ const contactColumns = {
   updated_at: contacts.updatedAt,
 }
 
-/** Newest-first list of the account's broadcasts. */
-export async function listBroadcasts(): Promise<Broadcast[]> {
+/**
+ * Newest-first list of the account's broadcasts. Arquivados (15/09) ficam
+ * de fora por padrão; `archived: true` lista só eles (filtro "Arquivados").
+ */
+export async function listBroadcasts(
+  opts: { archived?: boolean } = {},
+): Promise<Broadcast[]> {
   const ctx = await getCurrentAccount()
   const rows = await db
-    .select(broadcastColumns)
+    .select({ ...broadcastColumns, archived_at: broadcasts.archivedAt })
     .from(broadcasts)
     .leftJoin(channels, eq(channels.id, broadcasts.channelId))
-    .where(eq(broadcasts.accountId, ctx.accountId))
+    .where(
+      and(
+        eq(broadcasts.accountId, ctx.accountId),
+        opts.archived ? isNotNull(broadcasts.archivedAt) : isNull(broadcasts.archivedAt),
+      ),
+    )
     .orderBy(desc(broadcasts.createdAt))
   return rows as unknown as Broadcast[]
 }
 
-/** One broadcast (account-scoped) or null. */
+/** Timestamp do pg ("2026-09-15 13:30:00+00" ou Date) → ISO; inválido → null. */
+function isoOrNull(v: unknown): string | null {
+  if (v == null) return null
+  const ms = v instanceof Date ? v.getTime() : Date.parse(String(v))
+  return Number.isFinite(ms) ? new Date(ms).toISOString() : null
+}
+
+// Pessoas citadas na tela do disparo (15/09 GoLink): dono do número, quem
+// criou, quem pausou, quem arquivou.
+const channelOwnerUser = alias(user, 'bc_channel_owner')
+const creatorUser = alias(user, 'bc_creator')
+const pausedByUser = alias(user, 'bc_paused_by')
+const archivedByUser = alias(user, 'bc_archived_by')
+
+/**
+ * One broadcast (account-scoped) or null — com o que a tela precisa pra dizer
+ * quando sai o próximo, quem pausou e por qual número (15/09, GoLink: a tela
+ * dizia só "Pausado" e ninguém sabia de quem era o número).
+ */
 export async function getBroadcast(broadcastId: string): Promise<Broadcast | null> {
   const ctx = await getCurrentAccount()
   const row = firstOrNull(
     await db
-      .select(broadcastColumns)
+      .select({
+        ...broadcastColumns,
+        channel_owner_name: channelOwnerUser.name,
+        created_by_name: creatorUser.name,
+        paused_by_name: pausedByUser.name,
+        paused_at: broadcasts.pausedAt,
+        pause_reason: broadcasts.pauseReason,
+        archived_at: broadcasts.archivedAt,
+        archived_by_name: archivedByUser.name,
+      })
       .from(broadcasts)
       .leftJoin(channels, eq(channels.id, broadcasts.channelId))
+      .leftJoin(channelOwnerUser, eq(channelOwnerUser.id, channels.dedicatedUserId))
+      .leftJoin(creatorUser, eq(creatorUser.id, broadcasts.userId))
+      .leftJoin(pausedByUser, eq(pausedByUser.id, broadcasts.pausedBy))
+      .leftJoin(archivedByUser, eq(archivedByUser.id, broadcasts.archivedBy))
       .where(and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, ctx.accountId)))
       .limit(1),
   )
-  return row as unknown as Broadcast | null
+  if (!row) return null
+
+  // Fila: quantos faltam e a janela de horários gravados dos pendentes.
+  const agg = firstOrNull(
+    await db
+      .select({
+        pending: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.status} = 'pending')::int`,
+        processed: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.status} <> 'pending')::int`,
+        nextSlot: sql<string | null>`min(${broadcastRecipients.scheduledSlotAt}) FILTER (WHERE ${broadcastRecipients.status} = 'pending')`,
+        lastSlot: sql<string | null>`max(${broadcastRecipients.scheduledSlotAt}) FILTER (WHERE ${broadcastRecipients.status} = 'pending')`,
+      })
+      .from(broadcastRecipients)
+      .where(eq(broadcastRecipients.broadcastId, broadcastId)),
+  )
+  const pendingCount = agg?.pending ?? 0
+
+  // Ritmo: gotejamento = janela ÷ máx/dia; senão deduzido dos horários
+  // gravados (mesma regra do retomar). Só os próximos 200 bastam pra mediana.
+  let intervalMs = 0
+  if (row.pacing) {
+    intervalMs = pacingIntervalMinutes(normalizePacing(row.pacing as Partial<PacingConfig>)) * 60_000
+  } else if (pendingCount > 0 && agg?.nextSlot) {
+    let slots = await db
+      .select({ at: broadcastRecipients.scheduledSlotAt })
+      .from(broadcastRecipients)
+      .where(
+        and(
+          eq(broadcastRecipients.broadcastId, broadcastId),
+          eq(broadcastRecipients.status, 'pending'),
+          isNotNull(broadcastRecipients.scheduledSlotAt),
+        ),
+      )
+      .orderBy(broadcastRecipients.scheduledSlotAt)
+      .limit(200)
+    if (slots.length < 2) {
+      slots = await db
+        .select({ at: broadcastRecipients.scheduledSlotAt })
+        .from(broadcastRecipients)
+        .where(
+          and(eq(broadcastRecipients.broadcastId, broadcastId), isNotNull(broadcastRecipients.scheduledSlotAt)),
+        )
+        .orderBy(desc(broadcastRecipients.scheduledSlotAt))
+        .limit(200)
+    }
+    intervalMs = inferSpacingMs(slots.map((s) => (s.at ? Date.parse(s.at) : null)))
+  }
+
+  return {
+    ...row,
+    paused_at: isoOrNull(row.paused_at),
+    archived_at: isoOrNull(row.archived_at),
+    pending_count: pendingCount,
+    processed_count: agg?.processed ?? 0,
+    next_slot_at: isoOrNull(agg?.nextSlot),
+    last_slot_at: isoOrNull(agg?.lastSlot),
+    interval_ms: intervalMs,
+    can_delete: canManageBroadcast({
+      actorUserId: ctx.userId,
+      actorRole: ctx.role,
+      creatorUserId: row.user_id,
+    }),
+  } as unknown as Broadcast
 }
 
 /**
@@ -133,25 +259,6 @@ export async function listBroadcastRecipients(
   )
   if (!parent) return []
 
-  // The contact's conversation for the "abrir chat" shortcut — prefer the
-  // broadcast's channel, fall back to the contact's most recent thread.
-  const conversationIdSql = parent.channelId
-    ? sql<string | null>`(
-        select cv.id from conversations cv
-        where cv.contact_id = ${broadcastRecipients.contactId}
-          and cv.account_id = ${ctx.accountId}
-        order by (cv.channel_id = ${parent.channelId}) desc,
-          cv.last_message_at desc nulls last
-        limit 1
-      )`
-    : sql<string | null>`(
-        select cv.id from conversations cv
-        where cv.contact_id = ${broadcastRecipients.contactId}
-          and cv.account_id = ${ctx.accountId}
-        order by cv.last_message_at desc nulls last
-        limit 1
-      )`
-
   const rows = await db
     .select({
       id: broadcastRecipients.id,
@@ -165,7 +272,6 @@ export async function listBroadcastRecipients(
       replied_at: broadcastRecipients.repliedAt,
       error_message: broadcastRecipients.errorMessage,
       created_at: broadcastRecipients.createdAt,
-      conversation_id: conversationIdSql,
       contact: contactColumns,
     })
     .from(broadcastRecipients)
@@ -173,24 +279,238 @@ export async function listBroadcastRecipients(
     .where(eq(broadcastRecipients.broadcastId, broadcastId))
     .orderBy(desc(broadcastRecipients.createdAt))
 
-  return rows.map((r) => ({
-    ...r,
-    contact: r.contact?.id ? (r.contact as unknown as Contact) : undefined,
-  })) as unknown as BroadcastRecipient[]
+  // 15/09 (GoLink, Vitor): o "Chat" caía na conversa do contato em QUALQUER
+  // número (a mais recente) e, quando era a do número do Leonardo, a caixa
+  // dizia só "não disponível". Agora: só a conversa no número do disparo
+  // (disparo antigo sem canal gravado = o padrão da conta, igual ao worker),
+  // pendente não tem link, e cada linha diz se quem olha consegue abrir.
+  const channelId =
+    parent.channelId ?? (await loadDefaultChannel(ctx.accountId))?.id ?? null
+  const contactIds = [
+    ...new Set(
+      rows
+        .filter((r) => r.status !== 'pending')
+        .map((r) => r.contact_id)
+        .filter((id): id is string => !!id),
+    ),
+  ]
+  const convByContact = new Map<string, RecipientConversation>()
+  if (channelId && contactIds.length > 0) {
+    const assigneeUser = alias(user, 'rc_assignee')
+    const ownerUser = alias(user, 'rc_channel_owner')
+    const convRows = await db
+      .select({
+        id: conversations.id,
+        contactId: conversations.contactId,
+        channelId: conversations.channelId,
+        sectorId: conversations.sectorId,
+        assignedAgentId: conversations.assignedAgentId,
+        isPrivate: conversations.isPrivate,
+        channelName: channels.name,
+        channelOwnerId: channels.dedicatedUserId,
+        channelOwnerName: ownerUser.name,
+        assigneeName: assigneeUser.name,
+      })
+      .from(conversations)
+      .leftJoin(channels, eq(channels.id, conversations.channelId))
+      .leftJoin(ownerUser, eq(ownerUser.id, channels.dedicatedUserId))
+      .leftJoin(assigneeUser, eq(assigneeUser.id, conversations.assignedAgentId))
+      .where(
+        and(
+          eq(conversations.accountId, ctx.accountId),
+          eq(conversations.channelId, channelId),
+          inArray(conversations.contactId, contactIds),
+        ),
+      )
+      // ⚠️ DESC põe NULL primeiro: conversa sem mensagem vale pela criação.
+      .orderBy(sql`COALESCE(${conversations.lastMessageAt}, ${conversations.createdAt}) DESC`)
+    for (const c of convRows) {
+      if (c.contactId && !convByContact.has(c.contactId)) convByContact.set(c.contactId, c)
+    }
+  }
+  const canRead = await recipientConversationReader(ctx, [...convByContact.values()])
+
+  return rows.map((r) => {
+    const conv = r.status !== 'pending' && r.contact_id ? convByContact.get(r.contact_id) : undefined
+    const readable = conv ? canRead(conv) : false
+    return {
+      ...r,
+      conversation_id: conv?.id ?? null,
+      conversation_readable: readable,
+      conversation_channel_name: conv?.channelName ?? null,
+      // Com quem está (só pra dica do cadeado): dono do número dedicado,
+      // senão quem atende — nunca o nome de admin ("ninguém vê as do admin").
+      conversation_holder_name:
+        conv && !readable ? conv.holderName : null,
+      contact: r.contact?.id ? (r.contact as unknown as Contact) : undefined,
+    }
+  }) as unknown as BroadcastRecipient[]
 }
 
-/** Delete a broadcast (recipients cascade). Returns an error message or null. */
+interface RecipientConversation {
+  id: string
+  contactId: string | null
+  channelId: string | null
+  sectorId: string | null
+  assignedAgentId: string | null
+  isPrivate: boolean
+  channelName: string | null
+  channelOwnerId: string | null
+  channelOwnerName: string | null
+  assigneeName: string | null
+  holderName?: string | null
+}
+
+/**
+ * Leitura (abrir a conversa) com os conjuntos carregados UMA vez — espelha
+ * canReadConversation (lib/sectors/access.ts), como a lista da caixa faz.
+ * Também preenche `holderName` de cada conversa pra dica do cadeado.
+ */
+async function recipientConversationReader(
+  ctx: AccountContext,
+  convs: RecipientConversation[],
+): Promise<(c: RecipientConversation) => boolean> {
+  const needsAdmins = convs.some((c) => c.assignedAgentId)
+  const isAdmin = hasMinRole(ctx.role, 'admin')
+  const isSupervisor = hasMinRole(ctx.role, 'supervisor')
+  const isAgentTier = !isSupervisor
+  const [adminIdsArr, sectorIdsArr, participantIdsArr, dedicatedByChannel, openTeam] =
+    convs.length === 0 || isAdmin
+      ? [[] as string[], [] as string[], [] as string[], new Map<string, string>(), false]
+      : await Promise.all([
+          needsAdmins ? getAdminUserIds(ctx.accountId) : Promise.resolve([] as string[]),
+          isAgentTier ? getUserSectorIds(ctx.userId) : Promise.resolve([] as string[]),
+          isAgentTier ? getParticipantConversationIds(ctx.userId) : Promise.resolve([] as string[]),
+          isAgentTier ? getDedicatedChannelMap(ctx.accountId) : Promise.resolve(new Map<string, string>()),
+          teamSeesAll(ctx.accountId),
+        ])
+  const adminIds = new Set(adminIdsArr)
+  const sectorIds = new Set(sectorIdsArr)
+  const participantIds = new Set(participantIdsArr)
+
+  for (const c of convs) {
+    const assigneeIsAdmin = !!c.assignedAgentId && adminIds.has(c.assignedAgentId)
+    c.holderName =
+      (c.channelOwnerId ? c.channelOwnerName : null) ??
+      (c.assignedAgentId && !assigneeIsAdmin ? c.assigneeName : null)
+  }
+
+  return (c) => {
+    if (isAdmin) return true
+    if (c.assignedAgentId && c.assignedAgentId === ctx.userId) return true
+    if (openTeam) return !c.isPrivate || isSupervisor
+    if (isSupervisor) return !(c.assignedAgentId && adminIds.has(c.assignedAgentId))
+    return agentCanReadRow({
+      userId: ctx.userId,
+      conversationId: c.id,
+      sectorId: c.sectorId,
+      assignedAgentId: c.assignedAgentId,
+      isPrivate: c.isPrivate,
+      sectorIds,
+      adminIds,
+      participantIds,
+      channelId: c.channelId,
+      dedicatedByChannel,
+    })
+  }
+}
+
+/** Quem fez a ação, pro rastro (lib/broadcasts/audit.ts). */
+function audit(
+  ctx: AccountContext,
+  action: BroadcastAuditAction,
+  broadcastId: string,
+  more: { channelId?: string | null; sentCount?: number | null; extra?: Record<string, unknown> } = {},
+): void {
+  logBroadcastEvent({
+    action,
+    broadcastId,
+    accountId: ctx.accountId,
+    userId: ctx.userId,
+    role: ctx.role,
+    ...more,
+  })
+}
+
+/** Canal e quantos já saíram — contexto da linha de auditoria. */
+async function auditSnapshot(
+  broadcastId: string,
+  accountId: string,
+): Promise<{ channelId: string | null; sentCount: number | null }> {
+  try {
+    const row = firstOrNull(
+      await db
+        .select({ channelId: broadcasts.channelId, sentCount: broadcasts.sentCount })
+        .from(broadcasts)
+        .where(and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, accountId)))
+        .limit(1),
+    )
+    return { channelId: row?.channelId ?? null, sentCount: row?.sentCount ?? null }
+  } catch {
+    return { channelId: null, sentCount: null }
+  }
+}
+
+/**
+ * "Excluir" (15/09, GoLink): quem criou ou supervisor+. Disparo que já saiu
+ * pra alguém é ARQUIVADO (some da lista, o histórico de quem recebeu fica);
+ * ativo é cancelado antes. Nunca saiu → apaga. Regra em
+ * deleteOrArchiveBroadcast (lib/queue/broadcast-controls.ts), a mesma da API.
+ */
 export async function deleteBroadcast(
   broadcastId: string,
-): Promise<{ error: string | null }> {
+): Promise<{ ok: boolean; archived?: boolean; error?: string }> {
   try {
     const ctx = await getCurrentAccount()
-    await db
-      .delete(broadcasts)
-      .where(and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, ctx.accountId)))
-    return { error: null }
+    const result = await deleteOrArchiveBroadcast(broadcastId, ctx.accountId, {
+      userId: ctx.userId,
+      role: ctx.role,
+    })
+    if (!result.ok) return { ok: false, error: result.error }
+    if (!result.alreadyArchived) {
+      audit(ctx, result.archived ? 'archive' : 'delete', broadcastId, {
+        channelId: result.channelId,
+        sentCount: result.sentCount,
+        extra: { previousStatus: result.previousStatus, cancelled: result.cancelled },
+      })
+    }
+    return { ok: true, archived: result.archived }
   } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Failed to delete broadcast' }
+    console.error('[broadcast] deleteBroadcast failed:', err)
+    return { ok: false, error: 'Não foi possível excluir o disparo. Tente de novo.' }
+  }
+}
+
+/**
+ * "Tirar da fila" (15/09, GoLink): tira UMA pessoa que ainda não recebeu,
+ * sem cancelar e refazer o disparo inteiro (o que gerou envios repetidos).
+ */
+export async function removeBroadcastRecipientAction(
+  broadcastId: string,
+  recipientId: string,
+): Promise<{ ok: true } | { ok: false; error: string }> {
+  try {
+    const ctx = await requireRole('agent')
+    const archived = firstOrNull(
+      await db
+        .select({ archivedAt: broadcasts.archivedAt })
+        .from(broadcasts)
+        .where(and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!archived) return { ok: false, error: 'Disparo não encontrado.' }
+    if (archived.archivedAt) return { ok: false, error: 'Este disparo está arquivado.' }
+    const result = await removePendingRecipient(ctx.accountId, broadcastId, recipientId)
+    if (!result.ok) return result
+    const snap = await auditSnapshot(broadcastId, ctx.accountId)
+    audit(ctx, 'remove_recipient', broadcastId, { ...snap, extra: { recipientId } })
+    return { ok: true }
+  } catch (err) {
+    if (err instanceof ForbiddenError) {
+      return { ok: false, error: 'Seu acesso é só de leitura: peça a quem criou o disparo pra tirar da fila.' }
+    }
+    console.error('[broadcast] removeBroadcastRecipientAction failed:', err)
+    return { ok: false, error: 'Não foi possível tirar essa pessoa da fila. Tente de novo.' }
   }
 }
 
@@ -924,6 +1244,11 @@ export interface CreateTextBroadcastInput {
   subject?: string | null
   /** Quem cria confirmou enviar pelo número dedicado a OUTRA pessoa. */
   confirmOtherPersonNumber?: boolean
+  /**
+   * Pula quem já recebeu esta mesma mensagem nas últimas 24 h (padrão true).
+   * false = "enviar mesmo pra quem já recebeu" (15/09, GoLink).
+   */
+  skipRecentDuplicates?: boolean
   audience: ResolveAudienceInput
 }
 
@@ -934,7 +1259,7 @@ export interface CreateTextBroadcastInput {
  */
 export async function createTextBroadcast(
   input: CreateTextBroadcastInput,
-): Promise<{ broadcastId: string | null; totalRecipients: number; error: string | null }> {
+): Promise<EnqueueTextBroadcastResult> {
   try {
     const ctx = await requireRole('agent')
     // 15/09 (GoLink): número dedicado a outra pessoa só com confirmação.
@@ -946,7 +1271,7 @@ export async function createTextBroadcast(
     const recipientContactIds = contactsList
       .map((c) => c.id)
       .filter((id): id is string => !!id)
-    return enqueueTextBroadcast(ctx.accountId, ctx.userId, {
+    const result = await enqueueTextBroadcast(ctx.accountId, ctx.userId, {
       name: input.name,
       channelId: input.channelId,
       bodyText: input.bodyText,
@@ -959,9 +1284,22 @@ export async function createTextBroadcast(
       dailyCap: input.dailyCap,
       sendNow: input.sendNow,
       sendNowIntervalMin: input.sendNowIntervalMin,
+      skipRecentDuplicates: input.skipRecentDuplicates,
       recipientContactIds,
       audienceFilter: input.audience,
     })
+    if (result.broadcastId) {
+      audit(ctx, 'create', result.broadcastId, {
+        channelId: input.channelId,
+        extra: {
+          total: result.totalRecipients,
+          skippedDuplicates: result.skippedDuplicates?.length ?? 0,
+          sendNow: !!input.sendNow,
+          otherPersonNumber: !!input.confirmOtherPersonNumber,
+        },
+      })
+    }
+    return result
   } catch (err) {
     console.error('[broadcast] createTextBroadcast failed:', err)
     return {
@@ -1011,7 +1349,15 @@ export async function sendBroadcastNowAction(
 
     await db
       .update(broadcasts)
-      .set({ pacing: null, status: 'sending', updatedAt: new Date().toISOString() })
+      // Voltou a enviar: a pausa (se havia) deixa de valer.
+      .set({
+        pacing: null,
+        status: 'sending',
+        pausedBy: null,
+        pausedAt: null,
+        pauseReason: null,
+        updatedAt: new Date().toISOString(),
+      })
       .where(eq(broadcasts.id, b.id))
 
     const channel = b.channelId
@@ -1041,6 +1387,10 @@ export async function sendBroadcastNowAction(
         .where(eq(broadcastRecipients.id, pending[i].id))
       await rescheduleRecipient(channel.id, b.id, pending[i].id, delayMs)
     }
+    audit(ctx, 'send_now', b.id, {
+      channelId: channel.id,
+      extra: { pending: pending.length, intervalMs, previousStatus: b.status },
+    })
     return { ok: true }
   } catch (err) {
     console.error('[broadcast] sendBroadcastNowAction failed:', err)
@@ -1059,25 +1409,39 @@ export async function sendBroadcastNowAction(
 // can surface an invalid-transition message and refetch.
 // ------------------------------------------------------------
 
+// 15/09 (GoLink): cada ação deixa rastro (quem/qual disparo/quantos já
+// tinham saído) — e pausar grava quem pausou pra tela mostrar.
+
 export async function pauseBroadcastAction(
   broadcastId: string,
 ): Promise<ControlResult> {
   const ctx = await getCurrentAccount()
-  return pauseBroadcast(broadcastId, ctx.accountId)
+  const result = await pauseBroadcast(broadcastId, ctx.accountId, ctx.userId)
+  if (result.ok) audit(ctx, 'pause', broadcastId, await auditSnapshot(broadcastId, ctx.accountId))
+  return result
 }
 
 export async function resumeBroadcastAction(
   broadcastId: string,
 ): Promise<ControlResult> {
   const ctx = await getCurrentAccount()
-  return resumeBroadcast(broadcastId, ctx.accountId)
+  const result = await resumeBroadcast(broadcastId, ctx.accountId)
+  if (result.ok) {
+    audit(ctx, 'resume', broadcastId, {
+      ...(await auditSnapshot(broadcastId, ctx.accountId)),
+      extra: { pending: result.schedule?.pending ?? null },
+    })
+  }
+  return result
 }
 
 export async function cancelBroadcastAction(
   broadcastId: string,
 ): Promise<ControlResult> {
   const ctx = await getCurrentAccount()
-  return cancelBroadcast(broadcastId, ctx.accountId)
+  const result = await cancelBroadcast(broadcastId, ctx.accountId)
+  if (result.ok) audit(ctx, 'cancel', broadcastId, await auditSnapshot(broadcastId, ctx.accountId))
+  return result
 }
 
 /** "Reenviar falhados" — requeue only the failed recipients of a broadcast. */
@@ -1085,7 +1449,14 @@ export async function retryFailedBroadcastAction(
   broadcastId: string,
 ): Promise<ControlResult & { requeued?: number }> {
   const ctx = await getCurrentAccount()
-  return retryFailedBroadcast(broadcastId, ctx.accountId)
+  const result = await retryFailedBroadcast(broadcastId, ctx.accountId)
+  if (result.ok) {
+    audit(ctx, 'retry', broadcastId, {
+      ...(await auditSnapshot(broadcastId, ctx.accountId)),
+      extra: { requeued: result.requeued ?? 0 },
+    })
+  }
+  return result
 }
 
 /** Flip a broadcast's final status once the send loop completes. */

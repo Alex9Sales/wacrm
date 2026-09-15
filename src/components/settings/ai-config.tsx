@@ -38,6 +38,7 @@ import {
 } from '@/components/ui/select';
 import { SettingsPanelHead } from './settings-panel-head';
 import { AI_PROVIDER_DEFAULT_MODEL } from '@/lib/ai/defaults';
+import { agentChannelsHealth } from '@/lib/ai/agent-channels';
 import { AGENT_TOOLS } from '@/lib/ai/tools';
 import { listPipelines } from '@/app/(dashboard)/pipelines/actions';
 import {
@@ -190,6 +191,9 @@ export function AiConfig({
     { id: string; name: string; provider: string }[]
   >([]);
   const [channelIds, setChannelIds] = useState<string[]>([]);
+  // A lista de canais da conta carregou de verdade? Sem isso não dá pra dizer
+  // que um id "foi apagado" (falha de carga nunca vira aviso falso).
+  const [channelsLoaded, setChannelsLoaded] = useState(false);
   // Funil DESTE agente (0139): card criado pela IA nasce nele. '' = 1º da conta.
   const [pipes, setPipes] = useState<{ id: string; name: string }[]>([]);
   const [pipelineId, setPipelineId] = useState('');
@@ -419,8 +423,9 @@ export function AiConfig({
         const data = (await res.json().catch(() => ({}))) as {
           channels?: { id: string; name: string; provider: string }[];
         };
-        if (!cancelled && Array.isArray(data.channels)) {
+        if (!cancelled && res.ok && Array.isArray(data.channels)) {
           setChannels(data.channels);
+          setChannelsLoaded(true);
         }
       } catch {
         /* best-effort — sem canais o picker só some */
@@ -1263,8 +1268,10 @@ export function AiConfig({
               </div>
             )}
 
-            {/* Canais onde a IA responde (multi). Vazio = todos os canais. */}
-            {autoReplyEnabled && channels.length > 0 && (
+            {/* Canais onde a IA responde (multi). Vazio = todos os canais.
+                🗑️ 15/09: id de canal apagado fica na lista (CEMA/Zelia/GoLink).
+                A tela avisa e NUNCA esvazia sozinha — vazio vira "todos". */}
+            {autoReplyEnabled && (channels.length > 0 || (channelsLoaded && channelIds.length > 0)) && (
               <div className="rounded-md border border-border p-3">
                 <p className="text-sm font-medium text-foreground">
                   Canais onde a IA responde
@@ -1315,6 +1322,44 @@ export function AiConfig({
                     Respondendo em <strong>todos</strong> os canais.
                   </p>
                 )}
+                {channelsLoaded &&
+                  (() => {
+                    const health = agentChannelsHealth(
+                      channelIds,
+                      channels.map((c) => c.id),
+                    );
+                    if (health.deleted === 0) return null;
+                    const existing = new Set(channels.map((c) => c.id));
+                    return (
+                      <div className="mt-2 rounded-md border border-amber-500/30 bg-amber-500/10 px-2.5 py-2 text-[11px] text-amber-800 dark:text-amber-300">
+                        <p>
+                          {health.deleted === 1
+                            ? '1 canal desta lista foi apagado.'
+                            : `${health.deleted} canais desta lista foram apagados.`}
+                        </p>
+                        {health.respondsNowhere ? (
+                          <p className="mt-1 font-medium">
+                            Este agente não responde em nenhum canal — escolha os canais.
+                          </p>
+                        ) : (
+                          // Sobra canal válido: dá pra limpar sem virar "todos".
+                          <button
+                            type="button"
+                            disabled={disabled}
+                            onClick={() =>
+                              setChannelIds((prev) => {
+                                const next = prev.filter((cid) => existing.has(cid));
+                                return next.length > 0 ? next : prev; // nunca vazia sozinha
+                              })
+                            }
+                            className="mt-1 underline underline-offset-2 hover:opacity-80 disabled:opacity-50"
+                          >
+                            Tirar os apagados da lista
+                          </button>
+                        )}
+                      </div>
+                    );
+                  })()}
               </div>
             )}
 
