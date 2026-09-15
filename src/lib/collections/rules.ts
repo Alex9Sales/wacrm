@@ -307,6 +307,21 @@ export function autoSendDue(lastSentAtMs: number | null, nowMs: number, everyMin
   return nowMs - lastSentAtMs >= Math.max(1, everyMinutes) * 60_000
 }
 
+const COLLECTION_EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/
+
+/**
+ * 📧 Um endereço de e-mail utilizável, ou null. Aceita a lista que o Asaas
+ * guarda em alguns cadastros ("a@x.com, b@y.com") e fica com o primeiro válido.
+ */
+export function collectionEmail(value: unknown): string | null {
+  if (typeof value !== 'string') return null
+  for (const parte of value.split(/[,;\s]+/)) {
+    const e = parte.trim().toLowerCase()
+    if (COLLECTION_EMAIL_RE.test(e)) return e
+  }
+  return null
+}
+
 /**
  * Por onde a cobrança sai DE VERDADE quando a conta fixou o número (Ajustar →
  * "Número que envia as cobranças"): o executor ignora a conversa escolhida no

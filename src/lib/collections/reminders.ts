@@ -25,7 +25,7 @@ import type { AccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
 import { resolveCollectionTargets } from './outreach'
-import { byNearestDue, fallbackReminderMessage, formatUpcomingSummary, greetingName, linksInstruction, type CollectionsSettings, type UpcomingLine } from './rules'
+import { byNearestDue, collectionEmail, fallbackReminderMessage, formatUpcomingSummary, greetingName, linksInstruction, type CollectionsSettings, type UpcomingLine } from './rules'
 import { localDayKey } from './stale'
 import { seedFrom, tooSimilar } from './variation'
 
@@ -80,6 +80,8 @@ export async function queueUpcomingReminders(args: {
   interface Candidate {
     contactId: string
     name: string | null
+    /** E-mail do cliente no Asaas (a parcela a vencer não está na carteira). */
+    email: string | null
     optedOut: boolean
     connectionId: string
     lines: UpcomingLine[]
@@ -117,7 +119,15 @@ export async function queueUpcomingReminders(args: {
       const daysUntil = p.dueDate ? daysUntilFrom(p.dueDate) : null
       let cand = byContact.get(decision.contactId)
       if (!cand) {
-        cand = { contactId: decision.contactId, name: cust?.name ?? null, optedOut: false, connectionId: c.id, lines: [], asaasIds: [] }
+        cand = {
+          contactId: decision.contactId,
+          name: cust?.name ?? null,
+          email: collectionEmail(cust?.email),
+          optedOut: false,
+          connectionId: c.id,
+          lines: [],
+          asaasIds: [],
+        }
         byContact.set(decision.contactId, cand)
       }
       cand.lines.push({ value: Number(p.value ?? 0), dueDate: p.dueDate ? p.dueDate.slice(0, 10) : null, daysUntil, connectionLabel: c.label, invoiceUrl: p.invoiceUrl ?? null })
@@ -188,7 +198,7 @@ export async function queueUpcomingReminders(args: {
       bump('already')
       continue
     }
-    const delivery = await resolveCollectionTargets(args.accountId, cand.contactId, null, { dryRun: true })
+    const delivery = await resolveCollectionTargets(args.accountId, cand.contactId, null, { dryRun: true, fallbackEmail: cand.email })
     if (!delivery.ok) {
       bump('no_channel')
       continue
@@ -258,6 +268,8 @@ export async function queueUpcomingReminders(args: {
         dueIn,
         touch: 0,
         delivery: delivery.label,
+        // O executor usa se o contato continuar sem e-mail na hora do envio.
+        ...(cand.email ? { asaasEmail: cand.email } : {}),
       },
       suggestedText: text,
       reason:

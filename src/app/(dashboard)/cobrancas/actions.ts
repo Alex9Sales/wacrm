@@ -1227,7 +1227,8 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
   // link parado.
   let targets: Awaited<ReturnType<typeof resolveCollectionTargets>> | null = null
   if (input.sendLink) {
-    targets = await resolveCollectionTargets(accountId, input.contactId, null)
+    // O e-mail digitado no formulário vale como destino se o contato não tiver.
+    targets = await resolveCollectionTargets(accountId, input.contactId, null, { fallbackEmail: input.email })
     if (!targets.ok) {
       return { ok: false, error: `Não dá para enviar o link: ${targets.error}. Desmarque "mandar o link" para só gerar a cobrança.` }
     }
@@ -1298,7 +1299,14 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
     const convIds = [targets.whatsapp?.conversationId, targets.email?.conversationId].filter((c): c is string => !!c)
     try {
       for (const cid of convIds) {
-        await sendMessageToConversation(accountId, { conversationId: cid, messageType: 'text', contentText: text, subject: 'Link para pagamento' })
+        await sendMessageToConversation(accountId, {
+          conversationId: cid,
+          messageType: 'text',
+          contentText: text,
+          subject: 'Link para pagamento',
+          // Na conversa de e-mail, o endereço resolvido (contato, formulário ou Asaas).
+          emailTo: cid === targets.email?.conversationId ? targets.email.address : null,
+        })
       }
       sentVia = targets.label
     } catch (err) {

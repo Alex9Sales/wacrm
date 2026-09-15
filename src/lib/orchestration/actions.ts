@@ -277,7 +277,11 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         // Por onde sai (auto / whatsapp / email / both) e em que conversa — abre
         // a conversa sozinha para quem nunca escreveu (item 1) e manda por
         // e-mail quando é o caso (item 3). Toda recusa explica o que resolver.
-        const targets = await resolveCollectionTargets(input.accountId, input.contactId, input.conversationId ?? deal?.conversationId ?? null)
+        // asaasEmail: o lembrete traz o e-mail do cliente direto da API do Asaas
+        // (a parcela a vencer não está na carteira) — vale quando o contato não tem.
+        const targets = await resolveCollectionTargets(input.accountId, input.contactId, input.conversationId ?? deal?.conversationId ?? null, {
+          fallbackEmail: input.payload.asaasEmail,
+        })
         if (!targets.ok) return { ok: false, error: targets.error }
         const conversationId = targets.whatsapp?.conversationId ?? targets.email!.conversationId
         const userId = await senderUserId(input.accountId, input.actorUserId, deal, conversationId)
@@ -328,6 +332,7 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
               messageType: 'text',
               contentText: collectionEmailBody(text, input.payload),
               subject: collectionEmailSubject(input.payload),
+              emailTo: targets.email.address,
             })
             sentVia.push('email')
           } catch (err) {

@@ -148,6 +148,7 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
         messageType: 'text',
         contentText: text,
         subject: 'Pagamento recebido — obrigado',
+        emailTo: targets.email.address,
       })
       sentVia.push('email')
       conversationId = targets.email.conversationId
@@ -283,6 +284,7 @@ export async function sendDuePaymentThanks(accountId: string, now = new Date()):
         messageType: 'text',
         contentText: corpo,
         subject: 'Pagamento recebido — obrigado',
+        emailTo: targets.email.address,
       })
       sentVia.push('email')
       conversationId = targets.email.conversationId

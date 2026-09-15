@@ -261,7 +261,14 @@ async function execute(accountId: string, ownerUserId: string, p: Proposal, cpfC
       const text = manualChargeMessage(firstName, p.value, p.dueDate, p.description, created.invoiceUrl)
       const convIds = [targets.whatsapp?.conversationId, targets.email?.conversationId].filter((c): c is string => !!c)
       for (const cid of convIds) {
-        await sendMessageToConversation(accountId, { conversationId: cid, messageType: 'text', contentText: text, subject: 'Link para pagamento' })
+        await sendMessageToConversation(accountId, {
+          conversationId: cid,
+          messageType: 'text',
+          contentText: text,
+          subject: 'Link para pagamento',
+          // Na conversa de e-mail, o endereço resolvido (pode ser o do Asaas).
+          emailTo: cid === targets.email?.conversationId ? targets.email.address : null,
+        })
       }
       sentVia = targets.label
     }

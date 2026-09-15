@@ -12,14 +12,14 @@
 // Sem 'server-only' — o executor roda no worker.
 // ============================================================
 
-import { and, desc, eq, inArray } from 'drizzle-orm'
+import { and, desc, eq, inArray, sql } from 'drizzle-orm'
 
-import { db, channels, contacts, conversations } from '@/db'
+import { db, asaasCharges, channels, contacts, conversations } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { ensureConversationForContact } from '@/lib/whatsapp/resolve-conversation'
 
-import { deliveryPlan, normalizeSettings } from './rules'
+import { collectionEmail, deliveryPlan, normalizeSettings } from './rules'
 
 /** Provedores que são WhatsApp. */
 export const WHATSAPP_PROVIDERS = ['meta', 'waha', 'evolution', 'evogo'] as const
@@ -83,7 +83,30 @@ export interface CollectionTargets {
 
 export type TargetsOutcome = ({ ok: true } & CollectionTargets) | { ok: false; error: string }
 
-const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+/**
+ * E-mail do cliente no Asaas, para quem não tem e-mail no contato: o que veio
+ * junto (lembrete, criar cobrança) ou o das parcelas desse contato na carteira
+ * — aberta primeiro, a mais recente.
+ */
+async function asaasEmailFor(accountId: string, contactId: string, hint: unknown): Promise<string | null> {
+  const direto = collectionEmail(hint)
+  if (direto) return direto
+  const row = firstOrNull(
+    await db
+      .select({ email: asaasCharges.email })
+      .from(asaasCharges)
+      .where(
+        and(
+          eq(asaasCharges.accountId, accountId),
+          eq(asaasCharges.contactId, contactId),
+          sql`nullif(trim(${asaasCharges.email}), '') IS NOT NULL`,
+        ),
+      )
+      .orderBy(desc(asaasCharges.open), desc(asaasCharges.updatedAt))
+      .limit(1),
+  )
+  return collectionEmail(row?.email)
+}
 
 /**
  * Decide por onde esta cobrança sai e garante as conversas (a menos que
@@ -97,7 +120,11 @@ export async function resolveCollectionTargets(
   accountId: string,
   contactId: string,
   hintConversationId: string | null,
-  opts: { dryRun?: boolean } = {},
+  opts: {
+    dryRun?: boolean
+    /** E-mail do cliente no Asaas já em mãos (lembrete: vem da API na hora, não da carteira). */
+    fallbackEmail?: unknown
+  } = {},
 ): Promise<TargetsOutcome> {
   const contact = firstOrNull(
     await db
@@ -110,8 +137,15 @@ export async function resolveCollectionTargets(
 
   const settings = normalizeSettings((await getAccountSettings(accountId)).collections)
   const hasPhone = (contact.phone ?? '').replace(/\D/g, '').length >= 10
-  const address = (contact.email ?? '').trim().toLowerCase()
-  const hasEmail = EMAIL_RE.test(address)
+  // 📧 14/09 (João/GoLink): só o e-mail do CONTATO valia, e 18 de 30 devedores
+  // com e-mail no Asaas ficavam sem e-mail nenhum — com os avisos do Asaas
+  // desligados, ninguém mais mandava. Sem e-mail no contato, vale o do cliente
+  // no Asaas. Não gravamos no contato: parcela ligada ao contato errado (o
+  // teste "Sérgio Lemes" caiu no número do próprio João) espalharia o e-mail
+  // de um cliente em outro.
+  const contactEmail = collectionEmail(contact.email)
+  const address = contactEmail ?? (await asaasEmailFor(accountId, contactId, opts.fallbackEmail)) ?? ''
+  const hasEmail = !!address
 
   // Conversas que o contato já tem, com o provedor do canal de cada uma.
   const convs = await db

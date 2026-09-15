@@ -124,6 +124,12 @@ export interface SendMessageParams {
   replyToMessageId?: string | null;
   /** Assunto do e-mail (canais de e-mail). Ignorado pelos outros canais. */
   subject?: string | null;
+  /**
+   * Destinatário explícito, só em canal de e-mail. Sem isto vale o e-mail do
+   * contato. A cobrança usa o e-mail do cliente no Asaas quando o contato não
+   * tem, SEM gravá-lo no contato (14/09).
+   */
+  emailTo?: string | null;
 }
 
 export interface SendMessageResult {
@@ -225,6 +231,7 @@ export async function sendMessageToConversation(
     templateMessageParams,
     replyToMessageId,
     subject,
+    emailTo,
   } = params;
 
   if (!conversationId) {
@@ -311,12 +318,15 @@ export async function sendMessageToConversation(
   }
   const isEmailChannel =
     channel.provider === 'email' || channel.provider === 'gmail';
+  // Destinatário explícito só vale em canal de e-mail; senão, o do contato.
+  const emailAddress =
+    isEmailChannel && emailTo?.trim() ? emailTo.trim().toLowerCase() : contact.email;
 
   const sanitizedPhone = sanitizePhoneForMeta(contact.phone);
   // Canal de e-mail com contato que tem e-mail dispensa telefone. Os demais
   // canais (WhatsApp/IG/Messenger) mantêm as travas: exige telefone OU external_id
   // (IGSID), e telefone em E.164 (grupo/external_id passam por serem casos à parte).
-  if (!(isEmailChannel && contact.email)) {
+  if (!(isEmailChannel && emailAddress)) {
     if (!contact.phone && !contact.externalId) {
       throw new SendMessageError(
         'bad_request',
@@ -348,7 +358,7 @@ export async function sendMessageToConversation(
     provider: channel.provider,
     phoneDigits: sanitizedPhone,
     externalId: contact.externalId,
-    email: contact.email,
+    email: emailAddress,
     isGroup: contact.isGroup,
   });
   if (!picked) {
