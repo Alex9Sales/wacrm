@@ -16,7 +16,9 @@ function visionModel(): string {
 const SYSTEM_PROMPT =
   'Você descreve, em português do Brasil, imagens que clientes enviam pelo WhatsApp de uma empresa. ' +
   'Seja objetivo (2–3 frases) sobre o que aparece. Se houver TEXTO, documento, número, etiqueta, placa, ' +
-  'comprovante, endereço ou valor, TRANSCREVA exatamente o que dá pra ler. Nunca invente o que não estiver visível.'
+  'comprovante, endereço ou valor, TRANSCREVA exatamente o que dá pra ler. Nunca invente o que não estiver visível. ' +
+  // 15/09: a descrição aparece crua no card — "**Valor:**" mostrava os asteriscos.
+  'Responda em texto simples, sem markdown (nada de **, # ou `).'
 
 /**
  * Descreve uma imagem a partir da sua URL pública. Lança em erro (rede/HTTP/

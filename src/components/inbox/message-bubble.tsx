@@ -37,6 +37,7 @@ import { GroupText, groupColor } from "@/lib/inbox/group-color";
 import { detectCopyCode } from "@/lib/inbox/copy-code";
 import { MentionText } from "@/components/inbox/mention-composer";
 import type { MentionMember } from "@/lib/inbox/mentions";
+import { plainAiText } from "@/lib/ai/plain-text";
 import {
   parseCallLog,
   formatCallDuration,
@@ -1044,7 +1045,7 @@ function MessageContent({
               {/* 15/09: código de barras (47 dígitos, uma "palavra" só) vazava
                   da caixa. overflow-wrap:anywhere quebra token longo. */}
               <p className="whitespace-pre-wrap break-words text-sm leading-snug text-foreground/90 [overflow-wrap:anywhere]">
-                {message.transcription}
+                {plainAiText(message.transcription)}
               </p>
             </div>
           )}
@@ -1090,7 +1091,7 @@ function MessageContent({
                 Transcrição
               </p>
               <p className="whitespace-pre-wrap break-words text-sm leading-snug text-foreground/90 [overflow-wrap:anywhere]">
-                {message.transcription}
+                {plainAiText(message.transcription)}
               </p>
             </div>
           )}
