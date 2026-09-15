@@ -17,6 +17,11 @@
 // devolve a lista em skippedDuplicates. Opt-out por chamada:
 // skipRecentDuplicates=false. Mensagem por pessoa (recipientVars — "Chamar de
 // volta") não é comparada: o corpo "{{mensagem}}" é igual e o conteúdo não.
+//
+// Revisão 15/09: a escolha fica gravada em broadcasts.allow_repeats
+// (= skipRecentDuplicates === false). Sem ela o worker confere de novo na
+// hora do envio — um disparo pausado que volta não manda de novo pra quem
+// já recebeu a mesma mensagem por outro disparo nesse meio-tempo.
 // ============================================================
 
 import { and, eq, inArray } from 'drizzle-orm'
@@ -33,6 +38,7 @@ import {
   mediaFingerprintName,
   type DuplicateSkip,
 } from '@/lib/broadcasts/duplicate-sends'
+import { allDuplicatesError } from '@/lib/broadcasts/duplicate-notice'
 import {
   computeDripSlots,
   normalizePacing,
@@ -74,7 +80,8 @@ export interface EnqueueTextBroadcastInput {
   audienceFilter?: unknown
   /**
    * Pula quem já recebeu esta mesma mensagem nas últimas 24 h (padrão true).
-   * false = "enviar mesmo pra quem já recebeu" (15/09, GoLink: envios repetidos).
+   * false = "enviar mesmo pra quem já recebeu" (15/09, GoLink: envios repetidos)
+   * — gravado como broadcasts.allow_repeats, e aí o worker também não confere.
    */
   skipRecentDuplicates?: boolean
 }
@@ -219,10 +226,8 @@ export async function enqueueTextBroadcast(
           return {
             broadcastId: null,
             totalRecipients: 0,
-            error:
-              recipients.length === 1
-                ? 'Este contato já recebeu esta mensagem nas últimas 24 h.'
-                : `Todos os ${recipients.length} contatos já receberam esta mensagem nas últimas 24 h.`,
+            // Diz se foi "já recebeu" ou "já está na fila de outro disparo".
+            error: allDuplicatesError(skippedDuplicates),
             skippedDuplicates,
           }
         }
@@ -258,6 +263,9 @@ export async function enqueueTextBroadcast(
           bodyText: body || null,
           subject: subject || null,
           includeOptOut: input.includeOptOut !== false,
+          // "Enviar também pra quem já recebeu": o worker não confere repetido
+          // na hora do envio (revisão 15/09). Padrão = confere.
+          allowRepeats: input.skipRecentDuplicates === false,
           media: mediaList.length > 0 ? mediaList : null,
           mediaUrl: mediaUrl || null,
           mediaType,

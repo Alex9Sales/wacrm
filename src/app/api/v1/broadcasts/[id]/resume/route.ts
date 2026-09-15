@@ -25,12 +25,14 @@ export async function POST(
         return fail('not_found', 'Broadcast not found', 404);
       return fail('invalid_state', result.message ?? 'Invalid state', 409);
     }
-    logBroadcastEvent({
+    // Rastro em broadcast_events (revisão 15/09); nunca lança.
+    await logBroadcastEvent({
       action: 'resume',
       broadcastId: id,
       accountId: ctx.accountId,
       userId: ctx.createdBy,
       role: 'api_key',
+      previousStatus: result.previousStatus,
       extra: { keyId: ctx.keyId },
     });
     return ok({ id, status: result.status });

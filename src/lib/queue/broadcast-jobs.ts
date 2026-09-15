@@ -40,6 +40,12 @@ export interface BroadcastRow {
   templateName: string | null;
   templateLanguage: string;
   includeOptOut: boolean;
+  /**
+   * "Enviar também pra quem já recebeu" (migr 0174, revisão 15/09). false =
+   * o worker confere na hora do envio se o contato já recebeu a mesma
+   * mensagem por outro disparo nas últimas 24 h.
+   */
+  allowRepeats: boolean;
 }
 
 /** Load the broadcast row (or null if it vanished). */
@@ -65,6 +71,7 @@ export async function loadBroadcastRow(
         templateName: broadcasts.templateName,
         templateLanguage: broadcasts.templateLanguage,
         includeOptOut: broadcasts.includeOptOut,
+        allowRepeats: broadcasts.allowRepeats,
       })
       .from(broadcasts)
       .where(eq(broadcasts.id, broadcastId))
@@ -151,6 +158,12 @@ export interface RecipientJobContext {
     vars: Record<string, string>;
     /** Contato pediu pra não receber ("não perturbe") → o worker pula. */
     optedOut: boolean;
+    /**
+     * Tem mensagem PRÓPRIA (broadcast_recipients.vars, ex.: {{mensagem}} do
+     * "Chamar de volta"): o corpo do disparo não diz o que ele recebe, então
+     * fica fora da checagem de repetidos na hora do envio.
+     */
+    hasOwnVars: boolean;
   };
 }
 
@@ -272,6 +285,11 @@ export async function loadRecipientJobContext(
           ...((row.extraVars && typeof row.extraVars === 'object' ? row.extraVars : {}) as Record<string, string>),
         },
         optedOut: row.optedOut === true,
+        hasOwnVars:
+          !!row.extraVars &&
+          typeof row.extraVars === 'object' &&
+          !Array.isArray(row.extraVars) &&
+          Object.keys(row.extraVars).length > 0,
       },
     },
   };

@@ -8,7 +8,7 @@
 // ============================================================
 
 import { NextResponse } from 'next/server'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq } from 'drizzle-orm'
 
 import {
   db,
@@ -23,6 +23,7 @@ import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 import { publishEvent } from '@/lib/events/publish'
 import { parseMentions } from '@/lib/inbox/mentions'
+import { hasBroadcastAccessToConversation } from '@/lib/broadcasts/conversation-link'
 
 export async function POST(
   request: Request,
@@ -149,23 +150,17 @@ export async function POST(
   }
 }
 
-/** A pessoa criou um disparo que mandou pra este contato por este número? */
-async function createdBroadcastForConversation(
+/**
+ * A pessoa tem acesso POR DISPARO a esta conversa? Revisão 15/09: não basta ter
+ * disparado pra este contato por este número — a conversa precisa ter NASCIDO
+ * do disparo (não privada, sem mensagem anterior a ele). Senão uma @menção numa
+ * conversa antiga viraria acesso permanente só porque a pessoa já disparou pro
+ * contato. A regra mora em lib/broadcasts/conversation-link (mesma do vínculo).
+ */
+function createdBroadcastForConversation(
   accountId: string,
   conversationId: string,
   userId: string,
 ): Promise<boolean> {
-  const res = await db.execute(sql`
-    SELECT 1
-    FROM "conversations" c
-    JOIN "broadcast_recipients" r ON r."contact_id" = c."contact_id" AND r."sent_at" IS NOT NULL
-    JOIN "broadcasts" b ON b."id" = r."broadcast_id"
-      AND b."account_id" = c."account_id"
-      AND b."user_id" = ${userId}::uuid
-      AND b."channel_id" = c."channel_id"
-    WHERE c."id" = ${conversationId}::uuid AND c."account_id" = ${accountId}::uuid
-    LIMIT 1
-  `)
-  return res.rows.length > 0
+  return hasBroadcastAccessToConversation(accountId, conversationId, userId)
 }
-

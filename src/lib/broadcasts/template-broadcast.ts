@@ -9,10 +9,17 @@
 // (findOrCreateContact); aqui a audiência já são contatos da conta, então
 // o contato vai direto — sem risco de criar outro no 9º dígito.
 //
+// Revisão 15/09 (envios repetidos): "mesma mensagem" num template é nome +
+// idioma + os VALORES que a pessoa vê (corpo, {{1}} do cabeçalho de texto,
+// final dos links) — o mesmo template com outro nome/valor é outra mensagem.
+// A checagem roda depois de montar os valores de cada um, conta quem ainda
+// está na fila de um disparo ativo, e a escolha "enviar mesmo assim" fica
+// gravada em broadcasts.allow_repeats (o worker confere de novo sem ela).
+//
 // Worker-safe (sem 'server-only').
 // ============================================================
 
-import { and, eq, gte, inArray } from 'drizzle-orm'
+import { and, eq, inArray } from 'drizzle-orm'
 
 import { db, broadcasts, broadcastRecipients, contacts } from '@/db'
 import { firstOrThrow } from '@/db/helpers'
@@ -21,7 +28,15 @@ import { getProvider } from '@/lib/channels/registry'
 import { enqueueBroadcastDispatch } from '@/lib/queue/queues'
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils'
 import { BroadcastError, loadBroadcastTemplateRow } from '@/lib/whatsapp/broadcast-core'
-import type { DuplicateSkip } from '@/lib/broadcasts/duplicate-sends'
+import {
+  DUPLICATE_WINDOW_MS,
+  latestSkipCollector,
+  recipientWithoutOwnVarsSql,
+  sentOrQueuedSinceSql,
+  templateSendKey,
+  type DuplicateSkip,
+} from '@/lib/broadcasts/duplicate-sends'
+import { allDuplicatesError } from '@/lib/broadcasts/duplicate-notice'
 import {
   buildTemplateRecipientSend,
   missingValuesError,
@@ -39,7 +54,10 @@ export interface EnqueueTemplateBroadcastInput {
   /** Contatos da conta, já resolvidos pela audiência (ex.: leads da etapa). */
   recipientContactIds: string[]
   audienceFilter?: unknown
-  /** Pula quem já recebeu esta mensagem nas últimas 24 h (padrão true). */
+  /**
+   * Pula quem já recebeu esta mensagem nas últimas 24 h (padrão true). false
+   * também grava broadcasts.allow_repeats (o worker não confere na hora).
+   */
   skipRecentDuplicates?: boolean
 }
 
@@ -98,43 +116,43 @@ export async function enqueueTemplateBroadcast(
             .where(and(inArray(contacts.id, ids), eq(contacts.accountId, accountId)))
         : []
     const byId = new Map(rows.map((r) => [r.id, r]))
-    let recipients = ids
+    const recipients = ids
       .map((id) => byId.get(id))
       .filter((c): c is (typeof rows)[number] => !!c && isValidE164(sanitizePhoneForMeta(c.phone ?? '')))
     if (recipients.length === 0) return fail('Nenhum contato com telefone válido nesta audiência.')
 
-    // Quem já recebeu este mesmo template hoje fica de fora (15/09: envios 2×).
+    // Parâmetros de cada um ANTES da checagem de repetidos (revisão 15/09):
+    // o mesmo template com valores diferentes é outra mensagem.
+    let planned = recipients.map((c) => ({
+      contactId: c.id,
+      ...buildTemplateRecipientSend(needs, mapping, c),
+    }))
+
+    // Quem já recebeu este mesmo template com os mesmos valores hoje (ou está
+    // na fila de um disparo ativo com ele) fica de fora (15/09: envios 2×).
     // Se a checagem falhar, segue sem pular (mesma escolha do disparo de texto).
     let skippedDuplicates: DuplicateSkip[] = []
     if (input.skipRecentDuplicates !== false) {
       try {
-        skippedDuplicates = await findRecentTemplateRecipients(
-          accountId,
-          recipients.map((r) => r.id),
-          templateName,
-          templateLanguage,
-        )
+        skippedDuplicates = await findRecentTemplateRecipients(accountId, planned, templateName, templateLanguage)
       } catch (dupErr) {
         console.error('[template-broadcast] checagem de envios repetidos falhou — segue sem pular:', dupErr)
         skippedDuplicates = []
       }
       if (skippedDuplicates.length > 0) {
         const skip = new Set(skippedDuplicates.map((s) => s.contactId))
-        recipients = recipients.filter((r) => !skip.has(r.id))
-        if (recipients.length === 0) {
-          return fail('Todos já receberam esta mensagem hoje — nada foi enviado.', skippedDuplicates)
-        }
+        planned = planned.filter((p) => !skip.has(p.contactId))
+        if (planned.length === 0) return fail(allDuplicatesError(skippedDuplicates), skippedDuplicates)
       }
     }
 
-    // Parâmetros de cada um; campo vazio sem "Se faltar" barra o disparo inteiro
-    // (a Meta recusaria o envio desse lead com erro genérico).
+    // Campo vazio sem "Se faltar" barra o disparo inteiro (a Meta recusaria o
+    // envio desse lead com erro genérico). Só conta quem vai receber: quem
+    // ficou de fora por repetido não pode barrar os outros.
     const missingCounts = new Map<'header' | number, number>()
-    const planned = recipients.map((c) => {
-      const send = buildTemplateRecipientSend(needs, mapping, c)
-      for (const where of send.missing) missingCounts.set(where, (missingCounts.get(where) ?? 0) + 1)
-      return { contactId: c.id, ...send }
-    })
+    for (const p of planned) {
+      for (const where of p.missing) missingCounts.set(where, (missingCounts.get(where) ?? 0) + 1)
+    }
     const missingError = missingValuesError(mapping, missingCounts)
     if (missingError) return fail(missingError, skippedDuplicates)
 
@@ -154,6 +172,8 @@ export async function enqueueTemplateBroadcast(
             input.audienceFilter != null ? (input.audienceFilter as Record<string, unknown>) : null,
           // Template não leva a linha "responda SAIR" (a opção fica nos botões).
           includeOptOut: false,
+          // "Enviar também pra quem já recebeu": o worker não confere repetido.
+          allowRepeats: input.skipRecentDuplicates === false,
           status: 'sending',
           totalRecipients: planned.length,
         })
@@ -196,30 +216,36 @@ export async function enqueueTemplateBroadcast(
   }
 }
 
-/** Janela do "já recebeu hoje" (a mesma do disparo de texto). */
-const TEMPLATE_DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000
-const SENT_STATUSES = ['sent', 'delivered', 'read', 'replied']
-
 /**
- * Contatos que receberam o MESMO template (nome + idioma) por disparo da conta
- * nas últimas 24 h. O texto do template muda por lead ({{1}}…), então aqui a
- * mensagem é o template — a checagem de texto (duplicate-sends.ts) deixa
+ * Contatos (dentre `planned`) que receberam o MESMO template (nome + idioma +
+ * valores, ver templateSendKey) por disparo da conta nas últimas 24 h, ou que
+ * estão pendentes num disparo ativo (sending/scheduled) criado nelas com ele.
+ * O texto do template muda por lead ({{1}}…), então aqui a mensagem é o
+ * template com os valores — a checagem de texto (duplicate-sends.ts) deixa
  * template de fora.
  */
-async function findRecentTemplateRecipients(
+export async function findRecentTemplateRecipients(
   accountId: string,
-  contactIds: readonly string[],
+  planned: readonly { contactId: string; params: string[]; messageParams?: unknown }[],
   templateName: string,
   templateLanguage: string,
+  opts: { sinceMs?: number } = {},
 ): Promise<DuplicateSkip[]> {
-  const ids = Array.from(new Set(contactIds.filter(Boolean)))
-  if (ids.length === 0) return []
-  const since = new Date(Date.now() - TEMPLATE_DUPLICATE_WINDOW_MS).toISOString()
+  const keyOf = new Map<string, string>()
+  for (const p of planned) if (p.contactId && !keyOf.has(p.contactId)) keyOf.set(p.contactId, templateSendKey(p))
+  const ids = [...keyOf.keys()]
+  if (!accountId || ids.length === 0) return []
+  const windowMs = opts.sinceMs && opts.sinceMs > 0 ? opts.sinceMs : DUPLICATE_WINDOW_MS
+  const since = new Date(Date.now() - windowMs).toISOString()
   const rows = await db
     .select({
       contactId: broadcastRecipients.contactId,
       name: contacts.name,
+      status: broadcastRecipients.status,
       sentAt: broadcastRecipients.sentAt,
+      queuedAt: broadcastRecipients.createdAt,
+      params: broadcastRecipients.params,
+      messageParams: broadcastRecipients.messageParams,
     })
     .from(broadcastRecipients)
     .innerJoin(broadcasts, eq(broadcasts.id, broadcastRecipients.broadcastId))
@@ -231,20 +257,15 @@ async function findRecentTemplateRecipients(
         eq(broadcasts.templateName, templateName),
         eq(broadcasts.templateLanguage, templateLanguage),
         inArray(broadcastRecipients.contactId, ids),
-        inArray(broadcastRecipients.status, SENT_STATUSES),
-        gte(broadcastRecipients.sentAt, since),
+        sentOrQueuedSinceSql(since),
+        recipientWithoutOwnVarsSql(),
       ),
     )
-  const latest = new Map<string, { name: string | null; at: string }>()
+  const skips = latestSkipCollector()
   for (const r of rows) {
-    if (!r.contactId || !r.sentAt) continue
-    const ms = Date.parse(r.sentAt)
-    const at = Number.isFinite(ms) ? new Date(ms).toISOString() : r.sentAt
-    const prev = latest.get(r.contactId)
-    if (!prev || Date.parse(at) > Date.parse(prev.at)) latest.set(r.contactId, { name: r.name, at })
+    if (!r.contactId || keyOf.get(r.contactId) !== templateSendKey(r)) continue
+    if (r.status === 'pending') skips.note(r.contactId, r.name, r.queuedAt, 'queued')
+    else skips.note(r.contactId, r.name, r.sentAt, 'same_template')
   }
-  return ids.flatMap((id) => {
-    const hit = latest.get(id)
-    return hit ? [{ contactId: id, name: hit.name, lastSentAt: hit.at }] : []
-  })
+  return skips.list(ids)
 }

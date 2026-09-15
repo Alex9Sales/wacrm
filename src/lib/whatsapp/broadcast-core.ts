@@ -315,6 +315,10 @@ export async function createBroadcast(
           userId: auditUserId,
           name: name || `API broadcast (${templateName})`,
           channelId: channel.id,
+          // Integrações e o assistente de template seguem como antes: o
+          // worker não pula repetidos (15/09 — o filtro é dos disparos de texto
+          // da tela e do funil).
+          allowRepeats: true,
           templateName,
           templateLanguage,
           status: isScheduled ? 'scheduled' : 'sending',

@@ -17,7 +17,6 @@ import {
   deals,
   member,
   groupParticipantNames,
-  aiConfigs,
   monitoredGroups,
   messageReactions,
   messageTemplates,
@@ -51,6 +50,10 @@ import { formatConversationPreview } from '@/lib/inbox/preview'
 import { loadChannel } from '@/lib/channels/channels'
 import { postInternalNote } from '@/lib/ai/close-actions'
 import { aiEnableWithAssigneeWarning, aiState } from '@/lib/ai/conversation-ai-state'
+// Botão "IA on/off", "IA em espera" e retomada: mesma regra do auto-reply
+// (revisão 15/09 — lib/ai/ai-replies-here.ts e lib/ai/ai-catch-up.ts).
+import { aiRepliesOnConversation } from '@/lib/ai/ai-replies-here'
+import { aiCatchUpOnEnable } from '@/lib/ai/ai-catch-up'
 import {
   CONTINUATION_MAX_LINES,
   continuationDraft,
@@ -86,38 +89,6 @@ import type {
  * `normalizeConversation` pipeline produced. Returns null when the
  * conversation doesn't exist or belongs to another account.
  */
-/**
- * A IA responde automaticamente NESTE canal? (mesma regra do auto-reply:
- * assistente ativo + resposta automática ligada + canal na lista, ou lista
- * vazia = todos). Usado pra mostrar o botão "IA on/off" SÓ nas conversas que a
- * IA de fato atende — nas outras o botão nem aparece.
- */
-async function aiRepliesOnChannel(
-  accountId: string,
-  channelId: string | null | undefined,
-): Promise<boolean> {
-  // Multi-agente: a conta pode ter VÁRIOS agentes. O botão de IA deve aparecer
-  // se QUALQUER agente ativo com auto-resposta atende este canal (canais vazio =
-  // todos). Antes pegava 1 agente arbitrário (.limit(1)) → escondia o botão
-  // quando o "escolhido" estava com auto-resposta desligada.
-  const rows = await db
-    .select({ channelIds: aiConfigs.autoReplyChannelIds })
-    .from(aiConfigs)
-    .where(
-      and(
-        eq(aiConfigs.accountId, accountId),
-        eq(aiConfigs.isActive, true),
-        eq(aiConfigs.autoReplyEnabled, true),
-      ),
-    )
-  for (const r of rows) {
-    const ids = r.channelIds ?? []
-    if (ids.length === 0) return true // esse agente atende todos os canais
-    if (channelId && ids.includes(channelId)) return true
-  }
-  return false
-}
-
 export async function getConversationWithContact(
   conversationId: string,
 ): Promise<Conversation | null> {
@@ -144,6 +115,8 @@ export async function getConversationWithContact(
         unread_count: conversations.unreadCount,
         ai_autoreply_disabled: conversations.aiAutoreplyDisabled,
         ai_reply_count: conversations.aiReplyCount,
+        // Só pra decidir se a IA responde aqui (agente dono); não vai pro cliente.
+        ai_agent_id: conversations.aiAgentId,
         created_at: conversations.createdAt,
         updated_at: conversations.updatedAt,
         // Reuse contactColumns so the detail fetch stays in lockstep with the
@@ -276,9 +249,13 @@ export async function getConversationWithContact(
     }
   }
 
-  const { contact, channel, sector, ...conv } = row
-  // Botão "IA on/off": só aparece nas conversas cujo canal a IA atende.
-  const aiActiveChannel = await aiRepliesOnChannel(ctx.accountId, channel?.id)
+  const { contact, channel, sector, ai_agent_id: aiAgentId, ...conv } = row
+  // Botão "IA on/off": só aparece nas conversas que a IA de fato atende —
+  // agente dono da conversa ou roteamento do canal, igual ao auto-reply.
+  const aiActiveChannel = await aiRepliesOnConversation(ctx.accountId, {
+    channelId: channel?.id,
+    aiAgentId,
+  })
   // 15/09 (GoLink, Dra. Andressa): "IA on" com responsável humano não responde
   // (gate do auto-reply). O estado diz isso, com o nome de quem está com ela.
   const aiStateNow = aiState({
@@ -356,6 +333,8 @@ export async function setConversationAiPaused(
           assignedAgentId: conversations.assignedAgentId,
           sectorId: conversations.sectorId,
           isPrivate: conversations.isPrivate,
+          channelId: conversations.channelId,
+          aiAgentId: conversations.aiAgentId,
         })
         .from(conversations)
         .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, ctx.accountId)))
@@ -396,7 +375,21 @@ export async function setConversationAiPaused(
     // atribuída e o "IA on" enganava (15/09, GoLink: Dra. Andressa sem resposta).
     let warning: string | null = null
     let assignee: { id: string; name: string | null; losesAccessOnUnassign: boolean } | null = null
+    // Revisão 15/09: só avisa "em espera"/oferece "Tirar responsável" se a IA
+    // de fato atende esta conversa (mesma regra do auto-reply) — senão tirar o
+    // responsável não faria a IA voltar. Na dúvida (erro), não promete.
+    let aiRepliesHere = false
     if (!paused && current.assignedAgentId) {
+      try {
+        aiRepliesHere = await aiRepliesOnConversation(ctx.accountId, {
+          channelId: current.channelId,
+          aiAgentId: current.aiAgentId,
+        })
+      } catch (err) {
+        console.error('[setConversationAiPaused] IA atende a conversa?', err instanceof Error ? err.message : err)
+      }
+    }
+    if (!paused && current.assignedAgentId && aiRepliesHere) {
       let assigneeName: string | null = null
       let losesAccessOnUnassign = false
       try {
@@ -450,56 +443,6 @@ export async function setConversationAiPaused(
     return { error: null, warning, assignee }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao alterar a IA' }
-  }
-}
-
-/** Ao LIGAR a IA numa conversa cuja ÚLTIMA mensagem é do CLIENTE (sem resposta),
- *  enfileira a resposta pelo MESMO caminho do inbound (debounced). Se a última
- *  for do bot (já respondeu) ou do atendente (humano assumiu), não faz nada — e
- *  o dispatch ainda revalida todos os gates (atribuição, teto, barge-in, etc.).
- *  Best-effort: nunca lança (não pode quebrar o toggle). */
-async function aiCatchUpOnEnable(
-  accountId: string,
-  conversationId: string,
-): Promise<void> {
-  try {
-    const last = firstOrNull(
-      await db
-        .select({ senderType: messages.senderType, isInternal: messages.isInternal })
-        .from(messages)
-        .where(eq(messages.conversationId, conversationId))
-        .orderBy(desc(messages.createdAt))
-        .limit(1),
-    )
-    if (!last || last.senderType !== 'customer' || last.isInternal) return
-
-    const conv = firstOrNull(
-      await db
-        .select({ contactId: conversations.contactId })
-        .from(conversations)
-        .where(eq(conversations.id, conversationId))
-        .limit(1),
-    )
-    if (!conv?.contactId) return
-    const contact = firstOrNull(
-      await db
-        .select({ userId: contacts.userId })
-        .from(contacts)
-        .where(eq(contacts.id, conv.contactId))
-        .limit(1),
-    )
-    const { enqueueAiReplyDebounced } = await import('@/lib/queue/queues')
-    await enqueueAiReplyDebounced(
-      {
-        accountId,
-        conversationId,
-        contactId: conv.contactId,
-        configOwnerUserId: contact?.userId ?? '',
-      },
-      0,
-    )
-  } catch (err) {
-    console.error('[ai catch-up on enable] falhou:', err)
   }
 }
 

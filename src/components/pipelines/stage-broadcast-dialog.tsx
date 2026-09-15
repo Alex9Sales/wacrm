@@ -228,7 +228,12 @@ export function StageBroadcastDialog({
         toast.error(res.error ?? 'Falha ao disparar.', skipped.length > 0 ? { description: SEND_AGAIN_HINT } : undefined)
         return
       }
-      toast.success(`Disparo enviado para ${res.total ?? 0} lead(s) da etapa.`)
+      // Revisão 15/09: "Disparo enviado" fazia refazer achando que já tinha
+      // saído tudo (ou que não saiu). Ele entra na fila e sai aos poucos.
+      const total = res.total ?? 0
+      toast.success(
+        `Disparo criado: ${total} ${total === 1 ? 'contato' : 'contatos'} na fila, sai aos poucos no ritmo seguro.`,
+      )
       const notice = duplicateSkipNotice(skipped)
       if (notice) toast.info(notice, { duration: 10_000 })
       onOpenChange(false)
@@ -260,6 +265,8 @@ export function StageBroadcastDialog({
           </div>
         ) : loadError ? (
           <p className="py-4 text-center text-sm text-red-600 dark:text-red-400">{loadError}</p>
+        ) : info.error ? (
+          <p className="py-4 text-center text-sm text-muted-foreground">{info.error}</p>
         ) : info.channels.length === 0 ? (
           <p className="py-4 text-center text-sm text-muted-foreground">
             Nenhum canal de disparo (WhatsApp, e-mail ou API oficial). Conecte um em{' '}

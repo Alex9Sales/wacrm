@@ -186,13 +186,3 @@ export function canManageBroadcast(i: {
   return !!i.actorUserId && !!i.creatorUserId && i.actorUserId === i.creatorUserId
 }
 
-/**
- * Já saiu pra alguém (enviado ou tentado) → ARQUIVA e guarda o histórico.
- * Nunca saiu → pode apagar de verdade.
- */
-export function broadcastDeletionMode(i: {
-  sentCount: number | null | undefined
-  nonPendingCount: number | null | undefined
-}): 'archive' | 'delete' {
-  return (i.sentCount ?? 0) > 0 || (i.nonPendingCount ?? 0) > 0 ? 'archive' : 'delete'
-}

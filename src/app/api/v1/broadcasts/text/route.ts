@@ -22,10 +22,16 @@
 // Returns { data: { broadcast_id, total_recipients, skipped_duplicates } }.
 //
 // skip_recent_duplicates (15/09, GoLink: envios repetidos): true = tira quem
-// já recebeu a mesma mensagem nas últimas 24 h; `skipped_duplicates` lista
-// quem ficou de fora ([{ contact_id, name, last_sent_at }]). Padrão false pra
-// integração existente não mudar de comportamento. Se TODOS já tinham
-// recebido → 409 all_recipients_duplicate com a mesma lista em error.
+// já recebeu a mesma mensagem nas últimas 24 h (ou está na fila de um disparo
+// ativo com ela); `skipped_duplicates` lista quem ficou de fora
+// ([{ contact_id, name, last_sent_at, reason }], reason = same_text |
+// same_files | queued). Padrão false pra integração existente não mudar de
+// comportamento. Se TODOS já tinham recebido → 409 all_recipients_duplicate
+// com a mesma lista em error.
+//
+// Revisão 15/09: sem skip_recent_duplicates=true o disparo é gravado com
+// allow_repeats=true — senão o worker passaria a conferir repetido na hora
+// do envio e a integração mudaria de comportamento sem pedir.
 // ============================================================
 
 import { NextResponse } from 'next/server';
@@ -49,6 +55,7 @@ function toWireSkips(list: DuplicateSkip[] | undefined) {
     contact_id: d.contactId,
     name: d.name,
     last_sent_at: d.lastSentAt,
+    reason: d.reason ?? null,
   }));
 }
 
@@ -151,7 +158,9 @@ export async function POST(request: Request) {
           : undefined,
       recipientContactIds,
       audienceFilter: { source: 'api/v1', via: Array.isArray(body.recipients) ? 'recipients' : 'contact_ids' },
-      // Opt-in: integrações existentes seguem mandando pra todos.
+      // Opt-in: integrações existentes seguem mandando pra todos. false aqui
+      // também grava allow_repeats=true (enqueueTextBroadcast), então o worker
+      // não pula ninguém na hora do envio.
       skipRecentDuplicates: body.skip_recent_duplicates === true,
     });
 
@@ -170,7 +179,7 @@ export async function POST(request: Request) {
     if (result.error || !result.broadcastId) {
       return fail('bad_request', result.error ?? 'Failed to create broadcast', 400);
     }
-    logBroadcastEvent({
+    await logBroadcastEvent({
       action: 'create',
       broadcastId: result.broadcastId,
       accountId: ctx.accountId,

@@ -23,6 +23,9 @@
 //       - reloads the recipient + broadcast (fresh state after restart),
 //       - broadcast cancelled → skip (ack, no send),
 //       - broadcast paused    → moveToDelayed(+15s) so it self-resumes,
+//       - já recebeu a mesma mensagem por OUTRO disparo nas últimas 24 h e o
+//         disparo não tem allow_repeats → 'failed' com o motivo (revisão
+//         15/09: disparo pausado que volta depois de outro igual),
 //       - broadcast sending   → jitter (non-official providers) then send;
 //           success → mark 'sent' + wamid (+ quem disparou vira participante
 //           da conversa, 15/09); permanent error → mark 'failed'
@@ -56,6 +59,7 @@ import {
   recordRecipientAttempt,
   markRecipientFailed,
   finalizeBroadcastIfDone,
+  type RecipientJobContext,
 } from '@/lib/queue/broadcast-jobs';
 import {
   normalizePacing,
@@ -67,6 +71,10 @@ import {
 import { getProvider } from '@/lib/channels/registry';
 import { sendBroadcastRecipient } from '@/lib/whatsapp/broadcast-core';
 import { linkBroadcastConversation } from '@/lib/broadcasts/conversation-link';
+import {
+  ALREADY_RECEIVED_ELSEWHERE_ERROR,
+  contactAlreadyReceivedElsewhere,
+} from '@/lib/broadcasts/duplicate-sends';
 import { startScheduledMessageWorker } from './scheduled-message-worker';
 
 const DRY_RUN = process.env.BROADCAST_DRY_RUN === 'true';
@@ -133,6 +141,43 @@ async function ensureRecipientWorker(channelId: string): Promise<void> {
     `spun up recipient worker for channel ${channelId} ` +
       `(limit ${limiter.max}/${Math.round(limiter.duration / 1000)}s)`,
   );
+}
+
+/**
+ * Revisão 15/09 (GoLink): disparo A pausado com pendentes + disparo B com a
+ * mesma mensagem → quando A volta, os pendentes recebiam de novo (na criação
+ * de B, A pausado não contava como "na fila"). Confere na hora, com UMA
+ * consulta, se o contato já recebeu a mesma mensagem por outro disparo nas
+ * últimas 24 h. Fica fora: disparo com "enviar também pra quem já recebeu"
+ * (allow_repeats) e destinatário com mensagem própria (vars). Consulta falhou
+ * → segue enviando (melhor mandar do que travar o disparo).
+ */
+async function alreadyReceivedElsewhere(ctx: RecipientJobContext): Promise<boolean> {
+  const { broadcast, recipient } = ctx;
+  if (broadcast.allowRepeats || !recipient.contactId || recipient.hasOwnVars) return false;
+  try {
+    return await contactAlreadyReceivedElsewhere({
+      accountId: broadcast.accountId,
+      broadcastId: broadcast.id,
+      contactId: recipient.contactId,
+      messageKind: broadcast.messageKind,
+      bodyText: broadcast.bodyText,
+      subject: broadcast.subject,
+      media: broadcast.media,
+      mediaUrl: broadcast.mediaUrl,
+      mediaFilename: broadcast.mediaFilename,
+      templateName: broadcast.templateName,
+      templateLanguage: broadcast.templateLanguage,
+      params: recipient.params,
+      messageParams: recipient.messageParams ?? null,
+    });
+  } catch (err) {
+    log(
+      `recipient ${recipient.id} checagem de repetido falhou — segue enviando:`,
+      err instanceof Error ? err.message : err,
+    );
+    return false;
+  }
 }
 
 // ---- recipient job -----------------------------------------------------
@@ -221,6 +266,16 @@ async function processRecipientJob(job: Job<RecipientJob>): Promise<void> {
         throw new DelayedError(); // ver nota acima: moveToDelayed exige DelayedError
       }
     }
+  }
+
+  // Repetido na hora do envio (ver alreadyReceivedElsewhere): depois dos
+  // adiamentos (o job pode dormir horas até o horário/expediente) e antes do
+  // jitter, pra conferir o mais perto possível do envio.
+  if (await alreadyReceivedElsewhere(loaded.ctx)) {
+    await markRecipientFailed(recipient.id, attempts, ALREADY_RECEIVED_ELSEWHERE_ERROR);
+    log(`recipient ${recipient.id} skipped: já recebeu por outro disparo nas últimas 24 h`);
+    await finalizeBroadcastIfDone(loaded.ctx.broadcast.id);
+    return;
   }
 
   // Jitter for non-official providers to reduce ban risk.

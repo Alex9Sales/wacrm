@@ -73,6 +73,7 @@ import { matchesOptOut, optOutContact } from '@/lib/contacts/opt-out';
 import { asNameSource, decideContactName } from '@/lib/contacts/name-rule';
 import { lookupPhonebookName } from '@/lib/contacts/phonebook';
 import { handleCaptureWaRef } from '@/lib/capture/wa-ref';
+import { linkBroadcastCreatorsOnFirstReply } from '@/lib/broadcasts/conversation-link';
 import { getProvider } from './registry';
 import type { ChannelCtx, NormalizedInbound } from './provider';
 
@@ -506,6 +507,16 @@ export async function dispatchInboundMessage(
           conversationId: conversation.id,
         });
       }
+      // Revisão 15/09: canal sem eco (meta/evogo) não cria conversa no envio do
+      // disparo — ela nasce AQUI, na resposta, depois do rodízio. Quem disparou
+      // pra esse contato por este número (7 dias) vira participante; conversa
+      // recém-criada não tem histórico a vazar. Nunca lança.
+      await linkBroadcastCreatorsOnFirstReply({
+        accountId,
+        conversationId: conversation.id,
+        contactId,
+        channelId: conversation.channelId ?? channel.id,
+      });
     } else if (conversation.sectorId == null) {
       // Existing conversation still in the GENERAL QUEUE: a keyword in a later
       // message can move it to a sector — but ONLY while it's unattended (no

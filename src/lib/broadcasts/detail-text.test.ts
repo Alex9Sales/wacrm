@@ -2,7 +2,6 @@ import { describe, expect, it } from 'vitest'
 
 import {
   archivedLine,
-  broadcastDeletionMode,
   broadcastProgressLine,
   canManageBroadcast,
   channelWithOwner,
@@ -128,7 +127,7 @@ describe('lockedChatHint', () => {
   })
 })
 
-describe('canManageBroadcast / broadcastDeletionMode', () => {
+describe('canManageBroadcast', () => {
   it('quem criou ou supervisor para cima', () => {
     expect(canManageBroadcast({ actorUserId: 'vitor', actorRole: 'agent', creatorUserId: 'vitor' })).toBe(true)
     expect(canManageBroadcast({ actorUserId: 'joao', actorRole: 'agent', creatorUserId: 'vitor' })).toBe(false)
@@ -136,10 +135,4 @@ describe('canManageBroadcast / broadcastDeletionMode', () => {
     expect(canManageBroadcast({ actorUserId: null, actorRole: null, creatorUserId: 'vitor' })).toBe(false)
   })
 
-  it('já saiu pra alguém → arquiva; nunca saiu → apaga', () => {
-    expect(broadcastDeletionMode({ sentCount: 3, nonPendingCount: 3 })).toBe('archive')
-    // Falhou conta como tentativa: fica o histórico.
-    expect(broadcastDeletionMode({ sentCount: 0, nonPendingCount: 1 })).toBe('archive')
-    expect(broadcastDeletionMode({ sentCount: 0, nonPendingCount: 0 })).toBe('delete')
-  })
 })

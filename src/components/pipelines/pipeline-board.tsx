@@ -22,6 +22,7 @@ import { Button } from "@/components/ui/button";
 import { Plus, Megaphone } from "lucide-react";
 import { StageBroadcastDialog } from "./stage-broadcast-dialog";
 import { useAuth } from "@/hooks/use-auth";
+import { useCan } from "@/hooks/use-can";
 import { useCrmCallingEnabled } from "@/hooks/use-crm-calling";
 import { formatCurrency } from "@/lib/currency";
 
@@ -258,6 +259,9 @@ function StageColumn({
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const [bcastOpen, setBcastOpen] = useState(false);
+  // Disparar pela etapa é agent+ (revisão 15/09: viewer disparava template
+  // pago e e-mail). O servidor recusa também; aqui o megafone nem aparece.
+  const canBroadcast = useCan("send-messages");
 
   // Estatísticas por coluna (estilo RD) — calculadas dos deals + taskCounts.
   const stats = useMemo(() => {
@@ -299,15 +303,17 @@ function StageColumn({
           {stage.name}
         </h3>
         <div className="flex shrink-0 items-center gap-1">
-          <button
-            type="button"
-            onClick={() => setBcastOpen(true)}
-            title="Disparar mensagem para os leads desta etapa"
-            className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
-            aria-label="Disparar para a etapa"
-          >
-            <Megaphone className="h-3.5 w-3.5" />
-          </button>
+          {canBroadcast && (
+            <button
+              type="button"
+              onClick={() => setBcastOpen(true)}
+              title="Disparar mensagem para os leads desta etapa"
+              className="rounded-md p-1 text-muted-foreground transition-colors hover:bg-muted hover:text-primary"
+              aria-label="Disparar para a etapa"
+            >
+              <Megaphone className="h-3.5 w-3.5" />
+            </button>
+          )}
           <span className="rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
             {deals.length}
           </span>
@@ -370,12 +376,14 @@ function StageColumn({
         Novo negócio
       </Button>
 
-      <StageBroadcastDialog
-        stageId={stage.id}
-        stageName={stage.name}
-        open={bcastOpen}
-        onOpenChange={setBcastOpen}
-      />
+      {canBroadcast && (
+        <StageBroadcastDialog
+          stageId={stage.id}
+          stageName={stage.name}
+          open={bcastOpen}
+          onOpenChange={setBcastOpen}
+        />
+      )}
     </div>
   );
 }

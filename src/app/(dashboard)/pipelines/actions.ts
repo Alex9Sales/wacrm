@@ -21,7 +21,7 @@ import {
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { findOrCreateConversation } from '@/lib/channels/inbound'
 import { firstOrNull, firstOrThrow } from '@/db/helpers'
-import { getCurrentAccount, type AccountContext } from '@/lib/auth/account'
+import { ForbiddenError, getCurrentAccount, requireRole, type AccountContext } from '@/lib/auth/account'
 import { enqueueOrchestrationNudge } from '@/lib/queue/queues'
 import { hasMinRole } from '@/lib/auth/roles'
 import { getAdminUserIds, canReadConversation } from '@/lib/sectors/access'
@@ -2920,6 +2920,8 @@ export interface StageBroadcastChannel {
 }
 
 export interface StageBroadcastInfo {
+  /** Motivo quando não dá pra disparar (ex.: acesso só de leitura). */
+  error?: string
   leadCount: number
   /** Leads com e-mail válido — só eles recebem o disparo de e-mail. */
   leadCountWithEmail: number
@@ -2983,10 +2985,19 @@ async function stageLeadRows(ctx: AccountContext, stageId: string) {
   return rows.filter((r) => r.contactId && dealReadable(ctx.role, ctx.userId, r.assignedTo))
 }
 
+/**
+ * Revisão 15/09: disparar pela etapa manda template PAGO, e-mail com anexos e
+ * dá acesso às conversas geradas — só agent+, como os Disparos
+ * (createTextBroadcast). Antes bastava estar na conta (viewer disparava).
+ */
+const STAGE_BROADCAST_READ_ONLY = 'Seu acesso é só de leitura — peça a um agente para disparar.'
+
 /** Contagem de leads (negócios abertos com contato, legíveis) + canais que disparam. */
 export async function stageBroadcastInfo(stageId: string): Promise<StageBroadcastInfo> {
+  const empty: StageBroadcastInfo = { leadCount: 0, leadCountWithEmail: 0, sampleLead: null, channels: [] }
   try {
-    const ctx = await getCurrentAccount()
+    // Viewer não vê canais nem leads da etapa pra disparar (o megafone some).
+    const ctx = await requireRole('agent')
     const rows = await stageLeadRows(ctx, stageId)
     const ids = new Set<string>()
     const withEmail = new Set<string>()
@@ -3025,15 +3036,16 @@ export async function stageBroadcastInfo(stageId: string): Promise<StageBroadcas
       }),
     }
   } catch (err) {
+    if (err instanceof ForbiddenError) return { ...empty, error: STAGE_BROADCAST_READ_ONLY }
     console.error('[stageBroadcastInfo]', err)
-    return { leadCount: 0, leadCountWithEmail: 0, sampleLead: null, channels: [] }
+    return empty
   }
 }
 
 /** Dispara pra todos os leads (abertos) de uma etapa — WhatsApp, e-mail ou template. */
 export async function broadcastToStage(input: BroadcastToStageInput): Promise<BroadcastToStageResult> {
   try {
-    const ctx = await getCurrentAccount()
+    const ctx = await requireRole('agent')
     const channelRow = input.channelId
       ? firstOrNull(
           await db
@@ -3100,7 +3112,8 @@ export async function broadcastToStage(input: BroadcastToStageInput): Promise<Br
         ...(skippedDuplicates.length > 0 ? { skippedDuplicates } : {}),
       }
     }
-    logBroadcastEvent({
+    // Rastro em broadcast_events (revisão 15/09); nunca lança.
+    await logBroadcastEvent({
       action: 'create',
       broadcastId: res.broadcastId,
       accountId: ctx.accountId,
@@ -3140,6 +3153,8 @@ export async function broadcastToStage(input: BroadcastToStageInput): Promise<Br
       ...(skippedDuplicates.length > 0 ? { skippedDuplicates } : {}),
     }
   } catch (err) {
+    // Viewer: motivo claro, não o "Falha ao disparar" genérico.
+    if (err instanceof ForbiddenError) return { ok: false, error: STAGE_BROADCAST_READ_ONLY }
     console.error('[broadcastToStage]', err)
     return { ok: false, error: 'Falha ao disparar para a etapa.' }
   }

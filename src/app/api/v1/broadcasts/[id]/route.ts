@@ -21,7 +21,6 @@ import { db, broadcasts } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import { requireApiKey } from '@/lib/auth/api-context';
 import { ok, fail, toApiErrorResponse } from '@/lib/api/v1/respond';
-import { logBroadcastEvent } from '@/lib/broadcasts/audit';
 import { deleteOrArchiveBroadcast, memberRole } from '@/lib/queue/broadcast-controls';
 
 export async function GET(
@@ -83,26 +82,17 @@ export async function DELETE(
     const { id } = await params;
 
     // A chave age como quem a criou, com o papel que essa pessoa tem HOJE.
+    // O rastro (delete/archive em broadcast_events) é gravado lá dentro — a
+    // exclusão real grava o evento ANTES de apagar (revisão 15/09).
     const role = await memberRole(ctx.accountId, ctx.createdBy);
     const result = await deleteOrArchiveBroadcast(id, ctx.accountId, {
       userId: role ? ctx.createdBy : null,
       role,
+      audit: { userId: ctx.createdBy, role: 'api_key', extra: { keyId: ctx.keyId } },
     });
     if (!result.ok) {
       if (result.code === 'not_found') return fail('not_found', 'Broadcast not found', 404);
       return fail('forbidden', result.error, 403);
-    }
-    if (!result.alreadyArchived) {
-      logBroadcastEvent({
-        action: result.archived ? 'archive' : 'delete',
-        broadcastId: id,
-        accountId: ctx.accountId,
-        userId: ctx.createdBy,
-        role: 'api_key',
-        channelId: result.channelId,
-        sentCount: result.sentCount,
-        extra: { keyId: ctx.keyId, previousStatus: result.previousStatus, cancelled: result.cancelled },
-      });
     }
     return ok({ id, archived: result.archived });
   } catch (err) {

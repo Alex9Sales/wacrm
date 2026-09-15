@@ -415,14 +415,23 @@ async function recipientConversationReader(
   }
 }
 
-/** Quem fez a ação, pro rastro (lib/broadcasts/audit.ts). */
-function audit(
+/**
+ * Quem fez a ação, pro rastro (lib/broadcasts/audit.ts → broadcast_events).
+ * Nunca lança (o rastro é best-effort); aguardado pra gravar antes de a
+ * resposta sair (revisão 15/09: só no console sumia a cada deploy).
+ */
+async function audit(
   ctx: AccountContext,
   action: BroadcastAuditAction,
   broadcastId: string,
-  more: { channelId?: string | null; sentCount?: number | null; extra?: Record<string, unknown> } = {},
-): void {
-  logBroadcastEvent({
+  more: {
+    channelId?: string | null
+    sentCount?: number | null
+    previousStatus?: string | null
+    extra?: Record<string, unknown>
+  } = {},
+): Promise<void> {
+  await logBroadcastEvent({
     action,
     broadcastId,
     accountId: ctx.accountId,
@@ -462,18 +471,13 @@ export async function deleteBroadcast(
 ): Promise<{ ok: boolean; archived?: boolean; error?: string }> {
   try {
     const ctx = await getCurrentAccount()
+    // O rastro (delete/archive) é gravado lá dentro: a exclusão real grava o
+    // evento ANTES de apagar, na mesma transação.
     const result = await deleteOrArchiveBroadcast(broadcastId, ctx.accountId, {
       userId: ctx.userId,
       role: ctx.role,
     })
     if (!result.ok) return { ok: false, error: result.error }
-    if (!result.alreadyArchived) {
-      audit(ctx, result.archived ? 'archive' : 'delete', broadcastId, {
-        channelId: result.channelId,
-        sentCount: result.sentCount,
-        extra: { previousStatus: result.previousStatus, cancelled: result.cancelled },
-      })
-    }
     return { ok: true, archived: result.archived }
   } catch (err) {
     console.error('[broadcast] deleteBroadcast failed:', err)
@@ -503,7 +507,7 @@ export async function removeBroadcastRecipientAction(
     const result = await removePendingRecipient(ctx.accountId, broadcastId, recipientId)
     if (!result.ok) return result
     const snap = await auditSnapshot(broadcastId, ctx.accountId)
-    audit(ctx, 'remove_recipient', broadcastId, { ...snap, extra: { recipientId } })
+    await audit(ctx, 'remove_recipient', broadcastId, { ...snap, extra: { recipientId } })
     return { ok: true }
   } catch (err) {
     if (err instanceof ForbiddenError) {
@@ -532,6 +536,8 @@ export async function saveDraftBroadcast(
       userId: ctx.userId,
       accountId: ctx.accountId,
       name: input.name,
+          // Assistente de template: sem filtro de repetidos no worker (como antes).
+          allowRepeats: true,
       templateName: input.template_name,
       templateLanguage: input.template_language,
       templateVariables: input.template_variables,
@@ -1029,6 +1035,8 @@ export async function createBroadcastWithRecipients(
           userId: ctx.userId,
           accountId: ctx.accountId,
           name: input.name,
+          // Assistente de template: sem filtro de repetidos no worker (como antes).
+          allowRepeats: true,
           templateName: input.template_name,
           templateLanguage: input.template_language,
           templateVariables: input.template_variables,
@@ -1289,7 +1297,7 @@ export async function createTextBroadcast(
       audienceFilter: input.audience,
     })
     if (result.broadcastId) {
-      audit(ctx, 'create', result.broadcastId, {
+      await audit(ctx, 'create', result.broadcastId, {
         channelId: input.channelId,
         extra: {
           total: result.totalRecipients,
@@ -1387,9 +1395,10 @@ export async function sendBroadcastNowAction(
         .where(eq(broadcastRecipients.id, pending[i].id))
       await rescheduleRecipient(channel.id, b.id, pending[i].id, delayMs)
     }
-    audit(ctx, 'send_now', b.id, {
+    await audit(ctx, 'send_now', b.id, {
       channelId: channel.id,
-      extra: { pending: pending.length, intervalMs, previousStatus: b.status },
+      previousStatus: b.status,
+      extra: { pending: pending.length, intervalMs },
     })
     return { ok: true }
   } catch (err) {
@@ -1415,20 +1424,34 @@ export async function sendBroadcastNowAction(
 export async function pauseBroadcastAction(
   broadcastId: string,
 ): Promise<ControlResult> {
+  // Só leitura não mexe em disparo (revisão 15/09).
   const ctx = await getCurrentAccount()
+  if (!hasMinRole(ctx.role, 'agent')) {
+    return { ok: false, status: 'unknown', code: 'invalid_state', message: 'Seu acesso é só de leitura — peça a um agente.' }
+  }
   const result = await pauseBroadcast(broadcastId, ctx.accountId, ctx.userId)
-  if (result.ok) audit(ctx, 'pause', broadcastId, await auditSnapshot(broadcastId, ctx.accountId))
+  if (result.ok) {
+    await audit(ctx, 'pause', broadcastId, {
+      ...(await auditSnapshot(broadcastId, ctx.accountId)),
+      previousStatus: result.previousStatus,
+    })
+  }
   return result
 }
 
 export async function resumeBroadcastAction(
   broadcastId: string,
 ): Promise<ControlResult> {
+  // Só leitura não mexe em disparo (revisão 15/09).
   const ctx = await getCurrentAccount()
+  if (!hasMinRole(ctx.role, 'agent')) {
+    return { ok: false, status: 'unknown', code: 'invalid_state', message: 'Seu acesso é só de leitura — peça a um agente.' }
+  }
   const result = await resumeBroadcast(broadcastId, ctx.accountId)
   if (result.ok) {
-    audit(ctx, 'resume', broadcastId, {
+    await audit(ctx, 'resume', broadcastId, {
       ...(await auditSnapshot(broadcastId, ctx.accountId)),
+      previousStatus: result.previousStatus,
       extra: { pending: result.schedule?.pending ?? null },
     })
   }
@@ -1438,9 +1461,18 @@ export async function resumeBroadcastAction(
 export async function cancelBroadcastAction(
   broadcastId: string,
 ): Promise<ControlResult> {
+  // Só leitura não mexe em disparo (revisão 15/09).
   const ctx = await getCurrentAccount()
+  if (!hasMinRole(ctx.role, 'agent')) {
+    return { ok: false, status: 'unknown', code: 'invalid_state', message: 'Seu acesso é só de leitura — peça a um agente.' }
+  }
   const result = await cancelBroadcast(broadcastId, ctx.accountId)
-  if (result.ok) audit(ctx, 'cancel', broadcastId, await auditSnapshot(broadcastId, ctx.accountId))
+  if (result.ok) {
+    await audit(ctx, 'cancel', broadcastId, {
+      ...(await auditSnapshot(broadcastId, ctx.accountId)),
+      previousStatus: result.previousStatus,
+    })
+  }
   return result
 }
 
@@ -1448,11 +1480,16 @@ export async function cancelBroadcastAction(
 export async function retryFailedBroadcastAction(
   broadcastId: string,
 ): Promise<ControlResult & { requeued?: number }> {
+  // Só leitura não mexe em disparo (revisão 15/09).
   const ctx = await getCurrentAccount()
+  if (!hasMinRole(ctx.role, 'agent')) {
+    return { ok: false, status: 'unknown', code: 'invalid_state', message: 'Seu acesso é só de leitura — peça a um agente.' }
+  }
   const result = await retryFailedBroadcast(broadcastId, ctx.accountId)
   if (result.ok) {
-    audit(ctx, 'retry', broadcastId, {
+    await audit(ctx, 'retry', broadcastId, {
       ...(await auditSnapshot(broadcastId, ctx.accountId)),
+      previousStatus: result.previousStatus,
       extra: { requeued: result.requeued ?? 0 },
     })
   }

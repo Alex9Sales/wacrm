@@ -22,13 +22,14 @@
 // o histórico de quem já tinha recebido.
 // ============================================================
 
-import { and, asc, eq, inArray, isNull, ne, notInArray, sql } from 'drizzle-orm';
+import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm';
 
 import { db, broadcastRecipients, broadcasts, member, notifications } from '@/db';
 import { firstOrNull } from '@/db/helpers';
 import type { AccountRole } from '@/lib/auth/roles';
+import { logBroadcastEvent } from '@/lib/broadcasts/audit';
+import { broadcastDeleteOrArchive, DELETABLE_PREVIOUS_STATUSES } from '@/lib/broadcasts/deletion-rule';
 import {
-  broadcastDeletionMode,
   canManageBroadcast,
   type BroadcastPauseReason,
 } from '@/lib/broadcasts/detail-text';
@@ -45,11 +46,13 @@ import {
 import type { ChannelHaltReason } from './errors';
 import {
   enqueueBroadcastDispatch,
+  outboundQueue,
   removeBroadcastDispatchJob,
   removeRecipientJobs,
   rescheduleRecipient,
 } from './queues';
 import { finalizeBroadcastIfDone } from './broadcast-jobs';
+import { ALREADY_RECEIVED_ELSEWHERE_ERROR } from '@/lib/broadcasts/duplicate-sends';
 
 export type BroadcastControlAction = 'pause' | 'resume' | 'cancel';
 
@@ -62,6 +65,11 @@ export interface ControlResult {
   message?: string;
   /** Resume/retry: how the pending recipients were re-spaced from now. */
   schedule?: ReslotSummary;
+  /**
+   * Sucesso: status que a transição de fato encontrou (auditoria em
+   * broadcast_events, revisão 15/09). Ausente quando não deu pra saber.
+   */
+  previousStatus?: string;
 }
 
 /** O ritmo que os pendentes seguem depois de retomar (pra tela dizer). */
@@ -196,10 +204,15 @@ const statusPt = (s: string | null) => (s ? STATUS_PT[s] ?? s : 'desconhecido');
 /** Voltou a enviar: a pausa deixa de valer (a tela para de dizer "Pausado por…"). */
 const CLEAR_PAUSE = { pausedBy: null, pausedAt: null, pauseReason: null };
 
-/** Encerrados: nada mais sai (cancelar não se aplica). */
-const FINAL_STATUSES = ['sent', 'failed', 'cancelled'] as const;
 /** Ainda podem enviar alguém. */
 const ACTIVE_STATUSES = ['sending', 'scheduled', 'paused'] as const;
+/**
+ * Cancelar vale pra tudo que não terminou: os ativos + rascunho. Lista
+ * explícita (não "fora de sent/failed/cancelled") porque a transição
+ * condicional precisa do status de onde saiu (broadcasts_status_check só
+ * permite estes 7 status).
+ */
+const CANCELLABLE_STATUSES: readonly string[] = ['draft', ...ACTIVE_STATUSES];
 
 /** UPDATE só se o status ainda for `from`. true = esta chamada fez a transição. */
 async function transitionStatus(
@@ -219,6 +232,48 @@ async function transitionStatus(
   return rows.length > 0;
 }
 
+type AllowedTransition =
+  | { won: true; /** Status encontrado; null = venceu sem saber de qual. */ from: string | null }
+  | { won: false; /** Status atual (null = disparo não existe). */ status: string | null };
+
+/**
+ * Transição condicional que diz DE QUAL status saiu (revisão 15/09: a
+ * auditoria em broadcast_events guarda o status anterior). Faz o UPDATE com
+ * `status = <lido>`; se outro processo mudou no meio, relê e tenta de novo
+ * enquanto o status ainda for um de `allowed`. Mantém a garantia de antes:
+ * quem chegou primeiro (Cancelar, fechamento do worker) vence.
+ */
+async function transitionFromAllowed(
+  broadcastId: string,
+  accountId: string,
+  allowed: readonly string[],
+  to: string,
+  extra: Partial<typeof broadcasts.$inferInsert> = {},
+  known?: string | null,
+): Promise<AllowedTransition> {
+  let status = known !== undefined ? known : await currentStatus(broadcastId, accountId);
+  for (let i = 0; i < 3; i++) {
+    if (status === null || !allowed.includes(status)) return { won: false, status };
+    if (await transitionStatus(broadcastId, accountId, status, to, extra)) return { won: true, from: status };
+    status = await currentStatus(broadcastId, accountId);
+  }
+  if (status === null || !allowed.includes(status)) return { won: false, status };
+  // Status mudando sem parar entre estados permitidos (raríssimo): transição
+  // pelo conjunto, como era antes — vence sem saber de qual status saiu.
+  const rows = await db
+    .update(broadcasts)
+    .set({ ...extra, status: to, updatedAt: new Date().toISOString() })
+    .where(
+      and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, accountId), inArray(broadcasts.status, [...allowed])),
+    )
+    .returning({ id: broadcasts.id });
+  if (rows.length > 0) return { won: true, from: null };
+  return { won: false, status: await currentStatus(broadcastId, accountId) };
+}
+
+/** `previousStatus` do ControlResult (omitido quando não se sabe). */
+const withPrevious = (from: string | null) => (from ? { previousStatus: from } : {});
+
 /**
  * Pause a broadcast — only from 'sending' or 'scheduled'. Quem pausou e
  * quando vão na MESMA transição condicional (um Cancelar/fechamento do
@@ -230,27 +285,14 @@ export async function pauseBroadcast(
   accountId: string,
   actorUserId: string | null = null,
 ): Promise<ControlResult> {
-  const nowIso = new Date().toISOString();
-  const won = await db
-    .update(broadcasts)
-    .set({
-      status: 'paused',
-      pausedBy: actorUserId,
-      pausedAt: nowIso,
-      pauseReason: 'manual' satisfies BroadcastPauseReason,
-      updatedAt: nowIso,
-    })
-    .where(
-      and(
-        eq(broadcasts.id, broadcastId),
-        eq(broadcasts.accountId, accountId),
-        inArray(broadcasts.status, ['sending', 'scheduled']),
-      ),
-    )
-    .returning({ id: broadcasts.id });
-  if (won.length > 0) return { ok: true, status: 'paused' };
+  const t = await transitionFromAllowed(broadcastId, accountId, ['sending', 'scheduled'], 'paused', {
+    pausedBy: actorUserId,
+    pausedAt: new Date().toISOString(),
+    pauseReason: 'manual' satisfies BroadcastPauseReason,
+  });
+  if (t.won) return { ok: true, status: 'paused', ...withPrevious(t.from) };
 
-  const status = await currentStatus(broadcastId, accountId);
+  const status = t.status;
   if (status === null)
     return { ok: false, status: 'unknown', code: 'not_found' };
   return {
@@ -316,7 +358,8 @@ export async function resumeBroadcast(
   // O dispatch re-enfileirado costuma ser deduplicado: se não sobrou
   // pendente (o último saiu durante a pausa), fecha o disparo aqui.
   await finalizeBroadcastIfDone(broadcastId);
-  return { ok: true, status: 'sending', schedule };
+  // Sem vencer, outro Retomar/"Enviar agora" fez a transição: não se sabe de onde.
+  return { ok: true, status: 'sending', schedule, ...withPrevious(won ? 'paused' : null) };
 }
 
 /** Cancel a broadcast → 'cancelled' (terminal). Pending recipients won't
@@ -328,20 +371,10 @@ export async function cancelBroadcast(
 ): Promise<ControlResult> {
   // Transição condicional (15/09): o worker fechando o disparo ('sent') no
   // mesmo instante vence — antes o UPDATE incondicional sobrescrevia.
-  const won = await db
-    .update(broadcasts)
-    .set({ status: 'cancelled', updatedAt: new Date().toISOString() })
-    .where(
-      and(
-        eq(broadcasts.id, broadcastId),
-        eq(broadcasts.accountId, accountId),
-        notInArray(broadcasts.status, [...FINAL_STATUSES]),
-      ),
-    )
-    .returning({ id: broadcasts.id });
-  if (won.length > 0) return { ok: true, status: 'cancelled' };
+  const t = await transitionFromAllowed(broadcastId, accountId, CANCELLABLE_STATUSES, 'cancelled');
+  if (t.won) return { ok: true, status: 'cancelled', ...withPrevious(t.from) };
 
-  const status = await currentStatus(broadcastId, accountId);
+  const status = t.status;
   if (status === null)
     return { ok: false, status: 'unknown', code: 'not_found' };
   return {
@@ -396,6 +429,9 @@ export async function retryFailedBroadcast(
       and(
         eq(broadcastRecipients.broadcastId, broadcastId),
         eq(broadcastRecipients.status, 'failed'),
+        // Quem ficou de fora por já ter recebido por outro disparo não volta
+        // pra fila (o worker pularia de novo; só gera ruído).
+        sql`coalesce(${broadcastRecipients.errorMessage}, '') <> ${ALREADY_RECEIVED_ELSEWHERE_ERROR}`,
       ),
     );
   const pending = await db
@@ -435,14 +471,17 @@ export async function retryFailedBroadcast(
     );
   }
   let won = await transitionStatus(broadcastId, accountId, status, 'sending', CLEAR_PAUSE);
+  let previousStatus: string | null = won ? status : null;
   if (!won) {
     const now = await currentStatus(broadcastId, accountId);
     if (now === 'sent' || now === 'failed') {
       // O worker fechou o disparo no meio (último pendente saiu): reabre, senão
       // os reenviados ficariam 'pending' sem job e sem botão pra recuperar.
       won = await transitionStatus(broadcastId, accountId, now, 'sending', CLEAR_PAUSE);
+      if (won) previousStatus = now;
     } else if (now === 'sending') {
       won = true; // outro Reenviar/Retomar venceu: re-enfileirar é idempotente
+      previousStatus = 'sending';
     }
     if (!won) {
       return {
@@ -454,7 +493,7 @@ export async function retryFailedBroadcast(
     }
   }
   await enqueueBroadcastDispatch(broadcastId, {});
-  return { ok: true, status: 'sending', requeued: pending.length, schedule };
+  return { ok: true, status: 'sending', requeued: pending.length, schedule, ...withPrevious(previousStatus) };
 }
 
 /** broadcasts.pause_reason gravado numa pausa automática. */
@@ -571,23 +610,36 @@ export async function controlBroadcast(
 //   - só quem criou ou supervisor+ (canManageBroadcast);
 //   - ativo (enviando/agendado/pausado) é CANCELADO antes, na transição
 //     condicional, e os jobs que ainda não rodaram saem da fila;
-//   - já saiu pra alguém (enviado OU tentado) → ARQUIVA (some da lista, os
-//     destinatários e as contagens ficam); nunca saiu → apaga de verdade.
+//   - apaga de verdade SÓ o que nunca tentou enviar (rascunho/agendado, ou
+//     cancelado sem tentativa e sem job ativo — lib/broadcasts/deletion-rule);
+//     o resto é ARQUIVADO (some da lista, destinatários e contagens ficam).
+// Revisão 15/09: um disparo 'sending' com o 1º envio SAINDO (job ativo, ainda
+// 'pending' com attempts = 0) caía no "nunca saiu" e era apagado — o cliente
+// recebia e o histórico sumia. Job ATIVO não sai da fila (removeRecipientJobs
+// não consegue tirar) e só grava attempts/status depois da resposta do
+// provedor; por isso a regra olha o status anterior e a fila, não só as
+// contagens. O rastro (broadcast_events) é gravado aqui: a exclusão real grava
+// o evento ANTES do DELETE, na mesma transação.
 // ------------------------------------------------------------
 
 export interface BroadcastActor {
   userId: string | null;
   /** null = sem papel conhecido (ex.: chave de API de quem saiu da conta). */
   role: AccountRole | null;
+  /**
+   * Como a ação aparece no rastro. Padrão: userId/role acima. A API usa
+   * role 'api_key', a pessoa que criou a chave e o id da chave em `extra`.
+   */
+  audit?: { userId?: string | null; role?: string | null; extra?: Record<string, unknown> };
 }
 
 export type DeleteBroadcastResult =
   | {
       ok: true;
       archived: boolean;
-      /** Já estava arquivado antes desta chamada (nada mudou). */
+      /** Já estava arquivado antes desta chamada (nada mudou, nada gravado). */
       alreadyArchived?: boolean;
-      /** Status antes de mexer (pra auditoria). */
+      /** Status antes de mexer (o que o cancelamento encontrou). */
       previousStatus: string;
       /** Esta chamada cancelou um disparo que ainda estava ativo. */
       cancelled: boolean;
@@ -608,6 +660,15 @@ export async function memberRole(accountId: string, userId: string | null): Prom
   );
   return (row?.role as AccountRole | undefined) ?? null;
 }
+
+/** Algum job deste disparo sendo executado agora na fila do canal. */
+async function hasActiveRecipientJob(channelId: string, broadcastId: string): Promise<boolean> {
+  const active = await outboundQueue(channelId).getActive();
+  return active.some((j) => j?.data?.broadcastId === broadcastId);
+}
+
+/** DELETE não aconteceu (a condição mudou no meio): desfaz o evento e arquiva. */
+class DeleteSkipped extends Error {}
 
 export async function deleteOrArchiveBroadcast(
   broadcastId: string,
@@ -648,74 +709,138 @@ export async function deleteOrArchiveBroadcast(
   }
 
   // 1) Para de enviar ANTES de decidir (condicional: um fechamento do worker
-  //    que chegou antes vence).
+  //    que chegou antes vence). `previousStatus` = o status que o cancelamento
+  //    encontrou — um agendado que virou 'sending' no meio conta como enviando.
+  let previousStatus = b.status;
   let cancelled = false;
+  /** Não deu pra saber de onde saiu / se há envio saindo: na dúvida, arquiva. */
+  let uncertain = false;
   if ((ACTIVE_STATUSES as readonly string[]).includes(b.status)) {
-    const rows = await db
-      .update(broadcasts)
-      .set({ status: 'cancelled', updatedAt: new Date().toISOString() })
-      .where(
-        and(
-          eq(broadcasts.id, broadcastId),
-          eq(broadcasts.accountId, accountId),
-          inArray(broadcasts.status, [...ACTIVE_STATUSES]),
-        ),
-      )
-      .returning({ id: broadcasts.id });
-    cancelled = rows.length > 0;
+    const t = await transitionFromAllowed(broadcastId, accountId, ACTIVE_STATUSES, 'cancelled', {}, b.status);
+    if (t.won) {
+      cancelled = true;
+      if (t.from) previousStatus = t.from;
+      else uncertain = true;
+    } else {
+      if (t.status === null) return { ok: false, code: 'not_found', error: 'Disparo não encontrado.' };
+      previousStatus = t.status;
+    }
   }
 
   // 2) Jobs que ainda não rodaram saem da fila (best-effort: um job que
-  //    escapar vê 'cancelled' — ou a linha apagada — e não envia).
+  //    escapar vê 'cancelled' — ou a linha apagada — e não envia). Job ATIVO
+  //    não sai: ele já leu 'sending' e vai mandar — por isso a checagem abaixo.
+  // Fila do canal que o worker usa: o do disparo ou o padrão da conta
+  // (disparo antigo sem canal gravado — mesmo fallback do worker).
+  let channelId = b.channelId;
+  if (!channelId) {
+    try {
+      channelId = (await loadDefaultChannel(accountId))?.id ?? null;
+    } catch (err) {
+      uncertain = true;
+      console.error('[broadcast-controls] canal padrão ao excluir falhou:', broadcastId, err);
+    }
+  }
   try {
     const pending = await db
       .select({ id: broadcastRecipients.id })
       .from(broadcastRecipients)
       .where(and(eq(broadcastRecipients.broadcastId, broadcastId), eq(broadcastRecipients.status, 'pending')));
     await removeBroadcastDispatchJob(broadcastId);
-    const channelId = b.channelId ?? (await loadDefaultChannel(accountId))?.id ?? null;
     if (channelId && pending.length > 0) {
       await removeRecipientJobs(channelId, pending.map((p) => p.id));
     }
   } catch (err) {
     console.error('[broadcast-controls] remover jobs ao excluir/arquivar falhou:', broadcastId, err);
   }
+  // Depois do cancelamento: job que começar agora vê 'cancelled' e pula; o
+  // que já estava rodando aparece aqui como ativo.
+  let activeJob = false;
+  if (channelId) {
+    try {
+      activeJob = await hasActiveRecipientJob(channelId, broadcastId);
+    } catch (err) {
+      uncertain = true;
+      console.error('[broadcast-controls] checar job ativo ao excluir falhou:', broadcastId, err);
+    }
+  }
 
-  // 3) Nunca saiu pra ninguém → apaga. O próprio DELETE confere de novo
-  //    (um envio que terminou entre a leitura e aqui faz cair no arquivar).
-  //    ⚠️ Subquery raw: coluna externa como literal "broadcasts"."id".
-  const nonPending = firstOrNull(
+  // 3) Decide com o estado de agora.
+  const agg = firstOrNull(
     await db
-      .select({ n: sql<number>`count(*)::int` })
+      .select({
+        nonPending: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.status} <> 'pending')::int`,
+        attempted: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.attempts} > 0)::int`,
+      })
       .from(broadcastRecipients)
-      .where(and(eq(broadcastRecipients.broadcastId, broadcastId), ne(broadcastRecipients.status, 'pending'))),
+      .where(eq(broadcastRecipients.broadcastId, broadcastId)),
   );
   const fresh = firstOrNull(
     await db.select({ sentCount: broadcasts.sentCount }).from(broadcasts).where(eq(broadcasts.id, broadcastId)).limit(1),
   );
   const sentCount = fresh?.sentCount ?? b.sentCount ?? 0;
-  if (broadcastDeletionMode({ sentCount, nonPendingCount: nonPending?.n ?? 0 }) === 'delete') {
-    const deleted = await db
-      .delete(broadcasts)
-      .where(
-        and(
-          eq(broadcasts.id, broadcastId),
-          eq(broadcasts.accountId, accountId),
-          sql`COALESCE("broadcasts"."sent_count", 0) = 0`,
-          sql`NOT EXISTS (SELECT 1 FROM broadcast_recipients r WHERE r.broadcast_id = "broadcasts"."id" AND r.status <> 'pending')`,
-        ),
-      )
-      .returning({ id: broadcasts.id });
-    if (deleted.length > 0) {
-      return { ok: true, archived: false, previousStatus: b.status, cancelled, sentCount: 0, channelId: b.channelId };
+  const auditAs: NonNullable<BroadcastActor['audit']> = actor.audit ?? {};
+  const audit = {
+    broadcastId,
+    accountId,
+    userId: auditAs.userId !== undefined ? auditAs.userId : actor.userId,
+    role: auditAs.role !== undefined ? auditAs.role : actor.role,
+    previousStatus,
+    channelId: b.channelId,
+  };
+  const extra = { ...(auditAs.extra ?? {}), cancelled };
+
+  const mode = broadcastDeleteOrArchive({
+    previousStatus,
+    sentCount,
+    nonPendingCount: agg?.nonPending ?? 0,
+    attemptedCount: agg?.attempted ?? 0,
+    activeJob: activeJob || uncertain,
+  });
+  if (mode === 'delete') {
+    try {
+      // Evento ANTES do DELETE, na mesma transação: sem FK pra broadcasts, ele
+      // fica mesmo com a linha apagada; se o DELETE não acontecer, some junto.
+      // O próprio DELETE confere de novo (um envio que andou entre a leitura e
+      // aqui faz cair no arquivar). ⚠️ Subquery raw: "broadcasts"."id" literal.
+      await db.transaction(async (tx) => {
+        await logBroadcastEvent({ ...audit, action: 'delete', sentCount: 0, extra }, { tx });
+        const deleted = await tx
+          .delete(broadcasts)
+          .where(
+            and(
+              eq(broadcasts.id, broadcastId),
+              eq(broadcasts.accountId, accountId),
+              inArray(broadcasts.status, [...DELETABLE_PREVIOUS_STATUSES]),
+              sql`COALESCE("broadcasts"."sent_count", 0) = 0`,
+              sql`NOT EXISTS (SELECT 1 FROM broadcast_recipients r WHERE r.broadcast_id = "broadcasts"."id" AND (r.status <> 'pending' OR r.attempts > 0))`,
+            ),
+          )
+          .returning({ id: broadcasts.id });
+        if (deleted.length === 0) throw new DeleteSkipped();
+      });
+      return { ok: true, archived: false, previousStatus, cancelled, sentCount: 0, channelId: b.channelId };
+    } catch (err) {
+      if (!(err instanceof DeleteSkipped)) throw err;
     }
   }
 
   // 4) Arquiva: some da lista, o histórico fica.
   const nowIso = new Date().toISOString();
-  await db
+  const archived = await db
     .update(broadcasts)
     .set({ archivedAt: nowIso, archivedBy: actor.userId, updatedAt: nowIso })
-    .where(and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, accountId), isNull(broadcasts.archivedAt)));
-  return { ok: true, archived: true, previousStatus: b.status, cancelled, sentCount, channelId: b.channelId };
+    .where(and(eq(broadcasts.id, broadcastId), eq(broadcasts.accountId, accountId), isNull(broadcasts.archivedAt)))
+    .returning({ id: broadcasts.id });
+  if (archived.length === 0) {
+    // Outra exclusão chegou antes (arquivou ou apagou): nada a registrar.
+    return { ok: true, archived: true, alreadyArchived: true, previousStatus, cancelled, sentCount, channelId: b.channelId };
+  }
+  await logBroadcastEvent({
+    ...audit,
+    action: 'archive',
+    sentCount,
+    extra: { ...extra, ...(activeJob ? { activeJob: true } : {}) },
+  });
+  return { ok: true, archived: true, previousStatus, cancelled, sentCount, channelId: b.channelId };
 }

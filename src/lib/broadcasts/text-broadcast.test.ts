@@ -119,10 +119,55 @@ describe('enqueueTextBroadcast — envios repetidos', () => {
     expect(h.dispatched).toHaveLength(0)
   })
 
-  it('"enviar mesmo assim" (skipRecentDuplicates=false) não consulta', async () => {
+  it('"enviar mesmo assim" (skipRecentDuplicates=false) não consulta e grava allowRepeats', async () => {
     const res = await enqueueTextBroadcast('acc', 'u-vitor', { ...base, skipRecentDuplicates: false })
     expect(res.totalRecipients).toBe(3)
     expect(findRecentDuplicateContacts).not.toHaveBeenCalled()
+    // Revisão 15/09: a escolha fica no disparo pro worker não conferir de novo.
+    expect(h.broadcastValues[0].allowRepeats).toBe(true)
+  })
+
+  it('padrão (confere repetidos) grava allowRepeats=false — o worker confere na hora', async () => {
+    await enqueueTextBroadcast('acc', 'u-vitor', base)
+    expect(h.broadcastValues[0].allowRepeats).toBe(false)
+    await enqueueTextBroadcast('acc', 'u-vitor', { ...base, skipRecentDuplicates: true })
+    expect(h.broadcastValues[1].allowRepeats).toBe(false)
+  })
+
+  it('todos na fila de outro disparo ativo → erro fala da fila', async () => {
+    h.dupResult = ['c1', 'c2', 'c3'].map((contactId) => ({
+      contactId,
+      name: null,
+      lastSentAt: '2026-09-15T12:50:04.000Z',
+      reason: 'queued' as const,
+    }))
+    const res = await enqueueTextBroadcast('acc', 'u-vitor', base)
+    expect(res.broadcastId).toBeNull()
+    expect(res.error).toBe('Todos os 3 contatos já estão na fila de outro disparo com esta mensagem.')
+    expect(h.broadcastValues).toHaveLength(0)
+  })
+
+  it('e-mail: manda o assunto pra checagem (assunto diferente não é repetido)', async () => {
+    const { loadChannel } = await import('@/lib/channels/channels')
+    vi.mocked(loadChannel).mockResolvedValueOnce({
+      id: 'ch-mail',
+      accountId: 'acc',
+      provider: 'email',
+      settings: {},
+    } as unknown as Awaited<ReturnType<typeof loadChannel>>)
+    h.contacts = [{ id: 'c1', phone: null, email: 'a@b.com' }]
+    await enqueueTextBroadcast('acc', 'u-vitor', {
+      ...base,
+      channelId: 'ch-mail',
+      bodyText: 'Segue em anexo.',
+      subject: '  Boleto de setembro ',
+      recipientContactIds: ['c1'],
+    })
+    expect(findRecentDuplicateContacts).toHaveBeenCalledWith('acc', ['c1'], {
+      bodyText: 'Segue em anexo.',
+      mediaFilenames: [],
+      subject: 'Boleto de setembro',
+    })
   })
 
   it('mensagem por pessoa ("Chamar de volta", recipientVars) não é comparada', async () => {
