@@ -11,7 +11,7 @@
 // como a Fase 2 vai cobrar: uma mensagem por pessoa, com as parcelas juntas.
 // ============================================================
 
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { toast } from 'sonner';
 import {
   AlertTriangle,
@@ -1038,6 +1038,7 @@ function NewChargeDialog({
   // pra depois o Asaas emitir nota fiscal". Fica guardado no Asaas — preenche
   // uma vez por cliente. Cidade e estado o Asaas resolve pelo CEP.
   const [nfOpen, setNfOpen] = useState(false);
+  const nfRef = useRef<HTMLDivElement>(null);
   const [email, setEmail] = useState('');
   const [postalCode, setPostalCode] = useState('');
   const [address, setAddress] = useState('');
@@ -1083,8 +1084,11 @@ function NewChargeDialog({
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-md">
-        <DialogHeader>
+      {/* 15/09 (João/GoLink): com "E-mail e endereço" aberto o diálogo passava da
+          altura da tela e o botão de gerar sumia (só aparecia em tela cheia).
+          Agora os campos rolam e os botões ficam sempre à vista embaixo. */}
+      <DialogContent className="flex max-h-[calc(100svh-2rem)] flex-col sm:max-w-md">
+        <DialogHeader className="shrink-0 pr-6">
           <DialogTitle>Nova cobrança no Asaas</DialogTitle>
           <DialogDescription>
             Gera a cobrança na conta do Asaas ligada aqui. A cobrança entra na carteira e, se o cliente pagar, o webhook fecha sozinho.
@@ -1092,7 +1096,7 @@ function NewChargeDialog({
         </DialogHeader>
 
         {done ? (
-          <div className="flex flex-col gap-3 text-sm">
+          <div className="-mx-1 flex min-h-0 flex-col gap-3 overflow-y-auto px-1 text-sm">
             <p className="font-medium">
               {done.reused
                 ? 'Já existia uma cobrança igual aberta, criada há pouco — reaproveitei o link.'
@@ -1133,7 +1137,8 @@ function NewChargeDialog({
             </div>
           </div>
         ) : (
-          <div className="flex flex-col gap-3">
+          <>
+          <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-1 pb-1">
             <div className="flex flex-col gap-1.5">
               <Label>Contato</Label>
               <ContactPicker value={contactId} onChange={(id) => setContactId(id)} />
@@ -1237,10 +1242,15 @@ function NewChargeDialog({
 
             {/* 📄 Dados de nota fiscal: dobrado, porque a maioria das cobranças
                 não precisa. Vai tudo pro cadastro do Asaas e fica lá. */}
-            <div className="rounded-lg border border-dashed">
+            <div ref={nfRef} className="rounded-lg border border-dashed">
               <button
                 type="button"
-                onClick={() => setNfOpen((v) => !v)}
+                onClick={() => {
+                  const opening = !nfOpen;
+                  setNfOpen(opening);
+                  // Abriu: rola até os campos (em tela baixa eles ficariam abaixo da dobra).
+                  if (opening) requestAnimationFrame(() => nfRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+                }}
                 className="flex w-full items-center justify-between px-3 py-2 text-left text-sm font-medium"
               >
                 <span>
@@ -1317,8 +1327,9 @@ function NewChargeDialog({
                 </span>
               </span>
             </label>
+          </div>
 
-            <div className="flex justify-end gap-2">
+            <div className="flex shrink-0 justify-end gap-2 border-t pt-3">
               <Button variant="outline" onClick={onClose} disabled={busy}>
                 Cancelar
               </Button>
@@ -1369,7 +1380,7 @@ function NewChargeDialog({
                 {kind === 'subscription' ? 'Criar assinatura' : 'Gerar cobrança'}
               </Button>
             </div>
-          </div>
+          </>
         )}
       </DialogContent>
     </Dialog>
