@@ -22,6 +22,7 @@ import { getProvider } from '@/lib/channels/registry'
 import { enqueueBroadcastDispatch } from '@/lib/queue/queues'
 import { sanitizePhoneForMeta, isValidE164 } from '@/lib/whatsapp/phone-utils'
 import { resolveOrCreateContactIdsByPhone } from '@/lib/contacts/dedupe'
+import type { DuplicateSkip } from '@/lib/broadcasts/duplicate-sends'
 import {
   computeDripSlots,
   normalizePacing,
@@ -61,12 +62,19 @@ export interface EnqueueTextBroadcastInput {
   recipientVars?: Record<string, Record<string, string>>
   /** Stored on the broadcast row for auditing (what the caller asked for). */
   audienceFilter?: unknown
+  /**
+   * Pula quem já recebeu esta mesma mensagem nas últimas 24 h (padrão true).
+   * false = "enviar mesmo pra quem já recebeu" (15/09, GoLink: envios repetidos).
+   */
+  skipRecentDuplicates?: boolean
 }
 
 export interface EnqueueTextBroadcastResult {
   broadcastId: string | null
   totalRecipients: number
   error: string | null
+  /** Quem ficou de fora por já ter recebido a mesma mensagem hoje. */
+  skippedDuplicates?: DuplicateSkip[]
 }
 
 /**

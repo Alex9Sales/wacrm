@@ -1429,6 +1429,13 @@ export const broadcasts = pgTable("broadcasts", {
 	// mensagem 'text' (WAHA = "responda SAIR"; oficial usa botões no template).
 	// Ligado por padrão pra disparos de texto.
 	includeOptOut: boolean("include_opt_out").default(true).notNull(),
+	// Rastro da pausa e arquivamento (migração 0173, 15/09 GoLink).
+	pausedBy: uuid("paused_by"),
+	pausedAt: timestamp("paused_at", { withTimezone: true, mode: 'string' }),
+	/** 'manual' | 'reputation' | 'session' — por que está pausado. */
+	pauseReason: text("pause_reason"),
+	archivedAt: timestamp("archived_at", { withTimezone: true, mode: 'string' }),
+	archivedBy: uuid("archived_by"),
 	// Optional media attachment for a 'text' broadcast (image/video/document/
 	// audio). mediaUrl is the public (proxy) URL the provider fetches.
 	mediaUrl: text("media_url"),
