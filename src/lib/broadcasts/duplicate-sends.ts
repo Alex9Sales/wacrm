@@ -28,8 +28,14 @@ import { appendOptOutLine } from '@/lib/contacts/opt-out'
 export interface DuplicateSkip {
   contactId: string
   name: string | null
-  /** Quando recebeu a mesma mensagem (ISO). */
+  /** Quando recebeu a mesma mensagem (ISO). Na fila: quando entrou. */
   lastSentAt: string
+  /**
+   * Por que ficou de fora (revisão 15/09): mesmo texto/legenda, mesmos
+   * arquivos, mesmo template com os mesmos valores, ou já está NA FILA de um
+   * disparo ativo com a mesma mensagem.
+   */
+  reason?: 'same_text' | 'same_files' | 'same_template' | 'queued'
 }
 
 export interface BroadcastContentFingerprint {

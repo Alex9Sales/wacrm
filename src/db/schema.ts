@@ -1436,6 +1436,8 @@ export const broadcasts = pgTable("broadcasts", {
 	pauseReason: text("pause_reason"),
 	archivedAt: timestamp("archived_at", { withTimezone: true, mode: 'string' }),
 	archivedBy: uuid("archived_by"),
+	/** "Enviar também pra quem já recebeu hoje" (migr 0174). O worker pula repetidos quando false. */
+	allowRepeats: boolean("allow_repeats").default(false).notNull(),
 	// Optional media attachment for a 'text' broadcast (image/video/document/
 	// audio). mediaUrl is the public (proxy) URL the provider fetches.
 	mediaUrl: text("media_url"),
@@ -3199,6 +3201,25 @@ export const asaasCharges = pgTable("asaas_charges", {
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "asaas_charges_account_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.connectionId], foreignColumns: [asaasConnections.id], name: "asaas_charges_connection_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "asaas_charges_contact_id_fkey" }).onDelete("set null"),
+]);
+
+// 📣 Rastro das ações em disparos (migração 0174). Sem FK para broadcasts:
+// o evento de exclusão sobrevive à linha apagada.
+export const broadcastEvents = pgTable("broadcast_events", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	broadcastId: uuid("broadcast_id").notNull(),
+	userId: uuid("user_id"),
+	role: text(),
+	action: text().notNull(),
+	previousStatus: text("previous_status"),
+	channelId: uuid("channel_id"),
+	sentCount: integer("sent_count"),
+	extra: jsonb(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	index("idx_broadcast_events_broadcast").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.broadcastId.asc().nullsLast().op("uuid_ops"), table.createdAt.asc().nullsLast()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "broadcast_events_account_id_fkey" }).onDelete("cascade"),
 ]);
 
 // 📭 E-mail devolvido (migração 0171) — supressão POR ENDEREÇO. Só devolução

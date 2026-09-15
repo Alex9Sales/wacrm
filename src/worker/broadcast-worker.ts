@@ -261,6 +261,7 @@ async function processRecipientJob(job: Job<RecipientJob>): Promise<void> {
         channelId: channel.id,
         contactId: recipient.contactId,
         creatorUserId: loaded.ctx.broadcast.userId,
+        broadcastId: loaded.ctx.broadcast.id,
       });
     }
     await finalizeBroadcastIfDone(loaded.ctx.broadcast.id);

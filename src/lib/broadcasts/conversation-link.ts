@@ -27,6 +27,8 @@ export async function linkBroadcastConversation(input: {
   channelId: string
   contactId: string
   creatorUserId: string
+  /** Disparo que gerou o envio: só vincula conversa nascida dele (revisão 15/09). */
+  broadcastId?: string
 }): Promise<void> {
   const { accountId, channelId, contactId, creatorUserId } = input
   if (!accountId || !channelId || !contactId || !creatorUserId) return
