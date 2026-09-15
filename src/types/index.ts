@@ -180,6 +180,14 @@ export type ChannelProvider = 'meta' | 'waha' | 'evolution' | 'evogo' | 'instagr
 /** The channel a conversation belongs to, threaded to the inbox client
  *  so the composer can gate provider-specific affordances and the list /
  *  thread can badge which channel a thread is on (Phase 4, Wave 4B). */
+/** ↪️ Vínculo entre conversas do mesmo contato em números diferentes (migr 0170). */
+export interface ConversationLink {
+  /** null = quem está vendo não pode abrir a outra conversa (fica só o nome do número). */
+  conversation_id: string | null;
+  /** Nome do número (canal) da outra conversa. */
+  channel_name: string;
+}
+
 export interface ConversationChannel {
   id: string;
   provider: ChannelProvider;
@@ -215,6 +223,10 @@ export interface Conversation {
   transfer_note_at?: string | null;
   transfer_note_by?: string | null;
   transfer_note_by_name?: string | null;
+  /** ↪️ De qual conversa (outro número) este atendimento veio. */
+  continued_from?: ConversationLink | null;
+  /** ↪️ Pra qual conversa (outro número) este atendimento foi continuado. */
+  continued_to?: ConversationLink | null;
   last_message_text?: string;
   last_message_at?: string;
   unread_count: number;

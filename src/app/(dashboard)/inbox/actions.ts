@@ -50,6 +50,15 @@ import {
 import { formatConversationPreview } from '@/lib/inbox/preview'
 import { loadChannel } from '@/lib/channels/channels'
 import { postInternalNote } from '@/lib/ai/close-actions'
+import {
+  CONTINUATION_MAX_LINES,
+  continuationDraft,
+  isWhatsAppProvider,
+  myWhatsAppNumbers,
+  noteForNewConversation,
+  noteForOldConversation,
+  transcriptLines,
+} from '@/lib/inbox/continue-on-number'
 import { dispatchTagAddedToFlows } from '@/lib/flows/engine'
 import { getProvider } from '@/lib/channels/registry'
 import { groupJidDigits } from '@/lib/whatsapp/group'
@@ -61,6 +70,7 @@ import type {
   ConversationPriority,
   ConversationStatus,
   ContactNote,
+  ConversationLink,
   Deal,
   Message,
   MessageReaction,
@@ -127,6 +137,7 @@ export async function getConversationWithContact(
         transfer_note: conversations.transferNote,
         transfer_note_at: conversations.transferNoteAt,
         transfer_note_by: conversations.transferNoteBy,
+        continued_from_conversation_id: conversations.continuedFromConversationId,
         last_message_text: conversations.lastMessageText,
         last_message_at: conversations.lastMessageAt,
         unread_count: conversations.unreadCount,
@@ -216,6 +227,54 @@ export async function getConversationWithContact(
     transferNoteByName = u?.name ?? null
   }
 
+  // ↪️ "Continuar pelo meu número" (migr 0170): de onde este atendimento veio e
+  // pra onde ele foi — vira o botão "Ver conversa anterior"/"Abrir" no topo.
+  let continuedFrom: ConversationLink | null = null
+  let continuedTo: ConversationLink | null = null
+  if (!readBlocked) {
+    try {
+      const linkCols = {
+        id: conversations.id,
+        channelName: channels.name,
+        sectorId: conversations.sectorId,
+        assignedAgentId: conversations.assignedAgentId,
+        isPrivate: conversations.isPrivate,
+      }
+      // Revisão 15/09: o link só vai pra quem pode ABRIR a outra conversa — pro
+      // Vitor, "Abrir" levava à conversa do João e caía em tela bloqueada.
+      // Sem permissão, fica só o nome do número.
+      const vinculo = async (c: { id: string; channelName: string | null; sectorId: string | null; assignedAgentId: string | null; isPrivate: boolean | null }): Promise<ConversationLink> => ({
+        conversation_id: (await canReadConversation(ctx.role, ctx.userId, ctx.accountId, c.sectorId, c.assignedAgentId, c.id, c.isPrivate ?? false))
+          ? c.id
+          : null,
+        channel_name: c.channelName ?? '',
+      })
+      if (row.continued_from_conversation_id) {
+        const origem = firstOrNull(
+          await db
+            .select(linkCols)
+            .from(conversations)
+            .leftJoin(channels, eq(channels.id, conversations.channelId))
+            .where(and(eq(conversations.id, row.continued_from_conversation_id), eq(conversations.accountId, ctx.accountId)))
+            .limit(1),
+        )
+        if (origem) continuedFrom = await vinculo(origem)
+      }
+      const seguiu = firstOrNull(
+        await db
+          .select(linkCols)
+          .from(conversations)
+          .leftJoin(channels, eq(channels.id, conversations.channelId))
+          .where(and(eq(conversations.accountId, ctx.accountId), eq(conversations.continuedFromConversationId, conversationId)))
+          .orderBy(desc(conversations.updatedAt))
+          .limit(1),
+      )
+      if (seguiu) continuedTo = await vinculo(seguiu)
+    } catch (err) {
+      console.error('[getConversationWithContact] vínculo de continuação:', err instanceof Error ? err.message : err)
+    }
+  }
+
   const { contact, channel, sector, ...conv } = row
   // Botão "IA on/off": só aparece nas conversas cujo canal a IA atende.
   const aiActiveChannel = await aiRepliesOnChannel(ctx.accountId, channel?.id)
@@ -239,6 +298,8 @@ export async function getConversationWithContact(
     priority: (conv.priority ?? 'none') as ConversationPriority,
     unread_count: conv.unread_count ?? 0,
     transfer_note_by_name: readBlocked ? null : transferNoteByName,
+    continued_from: continuedFrom,
+    continued_to: continuedTo,
     contact: contact?.id
       ? ({ ...contact, tags: readBlocked ? [] : contactTagsList } as unknown as Contact)
       : undefined,
@@ -429,6 +490,8 @@ const contactColumns = {
   customer_codes: contacts.customerCodes,
   avatar_url: contacts.avatarUrl,
   is_group: contacts.isGroup,
+  // ↪️ "Continuar pelo meu número" não é oferecido pra quem pediu descadastro.
+  opted_out: contacts.optedOut,
   created_at: contacts.createdAt,
   updated_at: contacts.updatedAt,
 }
@@ -2015,6 +2078,294 @@ export async function startNewEmailConversation(input: {
   } catch (err) {
     console.error('[startNewEmailConversation]', err instanceof Error ? err.message : err)
     return { ok: false, error: 'Não foi possível iniciar a conversa.' }
+  }
+}
+
+// ---- ↪️ Continuar pelo meu número -------------------------------------------
+// 15/09 (Alex, caso Will Santos/GoLink). Transferir NÃO troca de número (os
+// números são da empresa); este botão é a ESCOLHA de quem atende. Regras e
+// textos em lib/inbox/continue-on-number.ts.
+
+export interface MyWhatsAppNumber {
+  id: string
+  name: string
+  phone: string | null
+  provider: string
+}
+
+/**
+ * Números de WhatsApp conectados DEDICADOS a quem está logado — o "meu número"
+ * do botão. Vazio = a pessoa não tem número próprio (o botão nem aparece).
+ */
+export async function listMyWhatsAppNumbers(): Promise<MyWhatsAppNumber[]> {
+  const ctx = await getCurrentAccount()
+  const rows = await db
+    .select({
+      id: channels.id,
+      name: channels.name,
+      phone: channels.phoneNumber,
+      provider: channels.provider,
+      status: channels.status,
+      dedicatedUserId: channels.dedicatedUserId,
+    })
+    .from(channels)
+    .where(and(eq(channels.accountId, ctx.accountId), eq(channels.dedicatedUserId, ctx.userId)))
+    .orderBy(asc(channels.name))
+  return myWhatsAppNumbers(rows, ctx.userId).map((c) => ({ id: c.id, name: c.name, phone: c.phone, provider: c.provider }))
+}
+
+export type ContinueOnMyNumberResult =
+  | { ok: true; conversationId: string; channelName: string; needsTemplate: boolean; draft: string | null }
+  | { ok: false; error: string; choices?: MyWhatsAppNumber[] }
+
+/**
+ * Abre (ou reaproveita) a conversa com o MESMO contato num número da pessoa
+ * logada e leva o contexto junto: vínculo entre as duas conversas, nota com as
+ * últimas falas na nova, aviso na antiga e a 1ª mensagem pronta (WhatsApp não
+ * oficial). Quem continua fica responsável pela nova — assim a IA daquele
+ * número não responde sozinha. Devolve o erro (nunca lança).
+ */
+export async function continueOnMyNumber(input: {
+  conversationId: string
+  channelId?: string | null
+}): Promise<ContinueOnMyNumberResult> {
+  try {
+    const ctx = await requireRole('agent')
+    const src = firstOrNull(
+      await db
+        .select({
+          id: conversations.id,
+          contactId: conversations.contactId,
+          channelId: conversations.channelId,
+          sectorId: conversations.sectorId,
+          assignedAgentId: conversations.assignedAgentId,
+          isPrivate: conversations.isPrivate,
+          continuedFrom: conversations.continuedFromConversationId,
+          provider: channels.provider,
+          channelName: channels.name,
+          channelPhone: channels.phoneNumber,
+          contactPhone: contacts.phone,
+          optedOut: contacts.optedOut,
+          isGroup: contacts.isGroup,
+        })
+        .from(conversations)
+        .leftJoin(channels, eq(channels.id, conversations.channelId))
+        .leftJoin(contacts, eq(contacts.id, conversations.contactId))
+        .where(and(eq(conversations.id, input.conversationId), eq(conversations.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!src) return { ok: false, error: 'Conversa não encontrada.' }
+    const podeLer = await canReadConversation(
+      ctx.role,
+      ctx.userId,
+      ctx.accountId,
+      src.sectorId,
+      src.assignedAgentId,
+      src.id,
+      src.isPrivate ?? false,
+    )
+    if (!podeLer) return { ok: false, error: 'Você não tem acesso a esta conversa.' }
+    if (!isWhatsAppProvider(src.provider)) {
+      return { ok: false, error: 'Só dá pra continuar por outro número numa conversa de WhatsApp.' }
+    }
+    if (src.isGroup) return { ok: false, error: 'Grupo não pode ser continuado por outro número.' }
+    if (src.optedOut) {
+      return { ok: false, error: 'Este cliente pediu pra não receber mensagens (descadastro). Nada foi aberto.' }
+    }
+    if (!src.contactPhone) return { ok: false, error: 'O contato não tem telefone.' }
+
+    const meus = (await listMyWhatsAppNumbers()).filter((m) => m.id !== src.channelId)
+    if (!meus.length) {
+      return {
+        ok: false,
+        error: 'Você não tem outro número de WhatsApp seu conectado. O dono de cada número é definido em Configurações.',
+      }
+    }
+    let alvo: MyWhatsAppNumber | undefined
+    if (input.channelId) {
+      alvo = meus.find((m) => m.id === input.channelId)
+      if (!alvo) return { ok: false, error: 'Esse número não é seu ou não está conectado.' }
+    } else if (meus.length === 1) {
+      alvo = meus[0]
+    } else {
+      return { ok: false, error: 'Escolha por qual dos seus números continuar.', choices: meus }
+    }
+
+    // API oficial: número novo = fora da janela de 24 h → só modelo aprovado.
+    // Não oficial: confere se o cliente tem WhatsApp, pelo próprio número de destino.
+    const { CAPABILITIES } = await import('@/lib/channels/provider')
+    const oficial = (CAPABILITIES as Record<string, { templates?: boolean } | undefined>)[alvo.provider]?.templates === true
+    if (!oficial) {
+      const { numberHasWhatsApp } = await import('@/lib/whatsapp/number-exists')
+      const check = await numberHasWhatsApp(ctx.accountId, src.contactPhone, alvo.id)
+      if (check.exists === false) {
+        return { ok: false, error: `O WhatsApp diz que ${src.contactPhone} não tem conta. Nada foi aberto.` }
+      }
+    }
+
+    // Mesmo contato, número escolhido. Clique duplo ou mensagem chegando junto
+    // batem no índice único — aí a conversa já existe e é só achar.
+    const { ensureConversationForContact } = await import('@/lib/whatsapp/resolve-conversation')
+    let destinoId: string
+    try {
+      destinoId = (await ensureConversationForContact(ctx.accountId, src.contactId, alvo.id)).conversationId
+    } catch (err) {
+      const ja = firstOrNull(
+        await db
+          .select({ id: conversations.id })
+          .from(conversations)
+          .where(
+            and(
+              eq(conversations.accountId, ctx.accountId),
+              eq(conversations.contactId, src.contactId),
+              eq(conversations.channelId, alvo.id),
+            ),
+          )
+          .limit(1),
+      )
+      if (!ja) throw err
+      destinoId = ja.id
+    }
+
+    const agora = new Date().toISOString()
+    const destino = firstOrNull(
+      await db
+        .select({
+          assignedAgentId: conversations.assignedAgentId,
+          status: conversations.status,
+          sectorId: conversations.sectorId,
+          isPrivate: conversations.isPrivate,
+          continuedFrom: conversations.continuedFromConversationId,
+        })
+        .from(conversations)
+        .where(and(eq(conversations.id, destinoId), eq(conversations.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!destino) return { ok: false, error: 'Não foi possível continuar pelo seu número.' }
+
+    // 🔎 Revisão 15/09: a conversa com este cliente no número da pessoa pode JÁ
+    // existir com um admin (ou privada de outra pessoa). Gravar vínculo e notas
+    // e mandar pra lá dava tela bloqueada. Confere ANTES de escrever qualquer
+    // coisa. Sem responsável não precisa: quem continua é atribuído abaixo.
+    if (destino.assignedAgentId && destino.assignedAgentId !== ctx.userId) {
+      const podeLerDestino = await canReadConversation(
+        ctx.role,
+        ctx.userId,
+        ctx.accountId,
+        destino.sectorId,
+        destino.assignedAgentId,
+        destinoId,
+        destino.isPrivate ?? false,
+      )
+      if (!podeLerDestino) {
+        const dono = firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, destino.assignedAgentId)).limit(1))
+        return {
+          ok: false,
+          error: `A conversa com este cliente no seu número está com ${dono?.name?.trim() || 'outra pessoa'}. Peça pra transferir pra você. Nada foi alterado.`,
+        }
+      }
+    }
+
+    // --- Leituras primeiro: nada é gravado se alguma delas falhar. ---
+    const { getAccountSettings } = await import('@/lib/settings/account-settings')
+    const tz = (await getAccountSettings(ctx.accountId)).businessTimezone || 'America/Sao_Paulo'
+    // Origem privada: a conversa nova é lida por mais gente — as falas não vêm.
+    const ultimas = src.isPrivate
+      ? []
+      : await db
+          .select({
+            senderType: messages.senderType,
+            contentType: messages.contentType,
+            contentText: messages.contentText,
+            transcription: messages.transcription,
+            createdAt: messages.createdAt,
+          })
+          .from(messages)
+          .where(and(eq(messages.conversationId, src.id), eq(messages.isInternal, false), isNull(messages.deletedAt)))
+          .orderBy(desc(messages.createdAt))
+          .limit(CONTINUATION_MAX_LINES * 3)
+    const linhas = transcriptLines([...ultimas].reverse(), tz)
+    const eu = firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, ctx.userId)).limit(1))
+    const meuNome = eu?.name?.trim() || 'Alguém da equipe'
+
+    // --- Escritas das duas conversas juntas (transação). ---
+    // Vínculo: aponta pra conversa de onde a pessoa ACABOU de vir — a mais
+    // recente vence, que é o que a nota nova diz. Voltando pro número de
+    // origem, o sentido inverte: a de lá perde o vínculo antigo (nada de ciclo
+    // A↔B) e o botão continua existindo nas duas pontas.
+    // Conversa antiga sem responsável: a IA e o follow-up daquele número
+    // seguiriam falando com o cliente em paralelo (os dois só agem com
+    // ai_autoreply_disabled=false e sem responsável). Desliga só a IA — quem
+    // enxerga a conversa não muda.
+    const voltandoPraOrigem = src.continuedFrom === destinoId
+    const pausarIaAntiga = !src.assignedAgentId
+    await db.transaction(async (tx) => {
+      await tx
+        .update(conversations)
+        .set({
+          continuedFromConversationId: src.id,
+          // Quem continua fica com a conversa: aparece na lista da pessoa e a IA
+          // do número não responde sozinha (auto-reply cala com responsável).
+          ...(destino.assignedAgentId ? {} : { assignedAgentId: ctx.userId, assignedAt: agora }),
+          ...(destino.status === 'open' ? {} : { status: 'open' }),
+          updatedAt: agora,
+        })
+        .where(and(eq(conversations.id, destinoId), eq(conversations.accountId, ctx.accountId)))
+      if (voltandoPraOrigem || pausarIaAntiga) {
+        await tx
+          .update(conversations)
+          .set({
+            ...(voltandoPraOrigem ? { continuedFromConversationId: null } : {}),
+            ...(pausarIaAntiga ? { aiAutoreplyDisabled: true } : {}),
+            updatedAt: agora,
+          })
+          .where(and(eq(conversations.id, src.id), eq(conversations.accountId, ctx.accountId)))
+      }
+    })
+
+    // Contexto pra quem atende: as últimas falas de lá + aviso nas duas pontas.
+    const notaNova = await postInternalNote({
+      conversationId: destinoId,
+      text: noteForNewConversation({
+        fromChannelName: src.channelName || 'outro número',
+        fromPhone: src.channelPhone,
+        byName: meuNome,
+        at: agora,
+        tz,
+        lines: linhas,
+        privateSource: !!src.isPrivate,
+      }),
+    })
+    const notaAntiga = await postInternalNote({
+      conversationId: src.id,
+      text: noteForOldConversation({
+        toChannelName: alvo.name,
+        toPhone: alvo.phone,
+        byName: meuNome,
+        at: agora,
+        tz,
+        aiPaused: pausarIaAntiga,
+      }),
+    })
+    if (!notaNova || !notaAntiga) {
+      console.error(`[continueOnMyNumber] nota não gravada (nova=${notaNova}, antiga=${notaAntiga}) — ${src.id} → ${destinoId}`)
+    }
+
+    const { publishEvent } = await import('@/lib/events/publish')
+    for (const cid of [destinoId, src.id]) {
+      await publishEvent(ctx.accountId, { type: 'message.received', conversationId: cid, fromMe: true })
+    }
+
+    return {
+      ok: true,
+      conversationId: destinoId,
+      channelName: alvo.name,
+      needsTemplate: oficial,
+      draft: oficial ? null : continuationDraft(meuNome),
+    }
+  } catch (err) {
+    console.error('[continueOnMyNumber]', err instanceof Error ? err.message : err)
+    return { ok: false, error: 'Não foi possível continuar pelo seu número.' }
   }
 }
 

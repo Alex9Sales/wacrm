@@ -847,10 +847,14 @@ export const conversations = pgTable("conversations", {
 	// supervisors and explicit participants see it — hidden from the general
 	// queue and from agents it isn't assigned to.
 	isPrivate: boolean("is_private").default(false).notNull(),
+	// ↪️ "Continuar pelo meu número" (migr 0170): de qual conversa (outro número,
+	// mesmo contato) este atendimento veio. FK com ON DELETE SET NULL no SQL.
+	continuedFromConversationId: uuid("continued_from_conversation_id"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow(),
 }, (table) => [
 	index("idx_conversations_account").using("btree", table.accountId.asc().nullsLast().op("uuid_ops")),
+	index("idx_conversations_continued_from").using("btree", table.continuedFromConversationId.asc().nullsLast().op("uuid_ops")).where(sql`(continued_from_conversation_id IS NOT NULL)`),
 	// Perf (migr 0097): inbox lista por account_id ordenando por last_message_at DESC.
 	index("idx_conversations_account_last_msg").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.lastMessageAt.desc().nullsLast()),
 	index("idx_conversations_contact_id").using("btree", table.contactId.asc().nullsLast().op("uuid_ops")),

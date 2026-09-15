@@ -19,7 +19,12 @@ import {
   setConversationPrivacy,
   setConversationAiPaused,
   startNewConversation,
+  continueOnMyNumber,
+  listMyWhatsAppNumbers,
+  type MyWhatsAppNumber,
 } from "@/app/(dashboard)/inbox/actions";
+import { isStaleActionError, reloadForStaleAction } from "@/lib/stale-action";
+import { CAPABILITIES, type ProviderId } from "@/lib/channels/provider";
 import { promptCsatOnClose } from "./csat-prompt";
 import {
   ParticipantActionSheet,
@@ -66,6 +71,7 @@ import {
   LockOpen,
   Bot,
   BotOff,
+  CornerUpRight,
 } from "lucide-react";
 import { startOutboundCall } from "@/components/calls/incoming-call-modal";
 import { format, isToday, isYesterday, differenceInHours } from "date-fns";
@@ -1196,6 +1202,92 @@ export function MessageThread({
     setNoteDismissed(false);
   }, [conversation?.id]);
 
+  // ↪️ "Continuar pelo meu número" (15/09, Alex/João): ESCOLHA de quem atende,
+  // nunca automático. Aparece junto do aviso "respondendo pelo número de outra
+  // pessoa", e só pra quem tem outro número próprio conectado.
+  const [myNumbers, setMyNumbers] = useState<MyWhatsAppNumber[]>([]);
+  useEffect(() => {
+    if (!user?.id) return;
+    let cancelled = false;
+    listMyWhatsAppNumbers()
+      .then((n) => {
+        if (!cancelled) setMyNumbers(n);
+      })
+      .catch(() => {
+        if (!cancelled) setMyNumbers([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+  const continueTargets = useMemo(
+    () => myNumbers.filter((n) => n.id !== conversation?.channel?.id),
+    [myNumbers, conversation?.channel?.id],
+  );
+  // Grupo e cliente descadastrado: o servidor sempre recusaria — nem oferece.
+  const canContinueOnMyNumber =
+    !!numberOfOtherPerson(conversation?.channel, user?.id) &&
+    continueTargets.length > 0 &&
+    !contact?.is_group &&
+    !contact?.opted_out;
+  const [continueOpen, setContinueOpen] = useState(false);
+  const [continueChoice, setContinueChoice] = useState("");
+  const [continuing, setContinuing] = useState(false);
+  useEffect(() => {
+    setContinueOpen(false);
+    setContinueChoice("");
+  }, [conversation?.id]);
+  const continueTarget =
+    continueTargets.find((n) => n.id === continueChoice) ??
+    (continueTargets.length === 1 ? continueTargets[0] : undefined);
+
+  const handleContinueOnMyNumber = useCallback(async () => {
+    if (!conversation) return;
+    if (!continueTarget) {
+      toast.error("Escolha por qual dos seus números continuar.");
+      return;
+    }
+    setContinuing(true);
+    // Revisão 15/09: no sucesso o botão NÃO destrava — a página ainda não
+    // trocou e um 2º clique postava as notas em dobro.
+    let navegando = false;
+    try {
+      const res = await continueOnMyNumber({
+        conversationId: conversation.id,
+        channelId: continueTarget.id,
+      });
+      if (!res.ok) {
+        toast.error(res.error);
+        return;
+      }
+      // 1ª mensagem pronta no compositor da conversa nova — sem pisar num
+      // rascunho que a pessoa já tenha começado lá.
+      if (res.draft) {
+        try {
+          const key = `fluxia:draft:${res.conversationId}`;
+          if (!sessionStorage.getItem(key)) sessionStorage.setItem(key, res.draft);
+        } catch {
+          /* storage indisponível — abre sem rascunho */
+        }
+      }
+      // Navegação COMPLETA, igual ao "Abrir conversa" do contato: router.push
+      // não carregava conversa recém-criada.
+      navegando = true;
+      window.location.href = `/inbox?c=${res.conversationId}`;
+    } catch (err) {
+      if (isStaleActionError(err)) {
+        // Só trava o botão se o reload aconteceu mesmo — em cooldown (outro
+        // reload há menos de 15 s) ele não recarrega e o diálogo tem que soltar.
+        navegando = reloadForStaleAction();
+        toast.info(navegando ? "Atualizando o sistema…" : "O sistema está sendo atualizado. Tente de novo em alguns segundos.");
+        return;
+      }
+      toast.error("Não foi possível continuar pelo seu número.");
+    } finally {
+      if (!navegando) setContinuing(false);
+    }
+  }, [conversation, continueTarget]);
+
   const handleAssignChange = useCallback(
     async (agentId: string | null) => {
       if (!conversation) return;
@@ -1894,6 +1986,104 @@ export function MessageThread({
         </div>
       )}
 
+      {/* ↪️ Vínculo entre as conversas do mesmo cliente em números diferentes. */}
+      {(conversation.continued_from || conversation.continued_to) && (
+        <div className="mx-4 mt-3 flex flex-col gap-1.5">
+          {conversation.continued_from && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
+              <CornerUpRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 text-foreground">
+                Continuação do atendimento que começou no número{" "}
+                <strong>{conversation.continued_from.channel_name || "anterior"}</strong>.
+              </span>
+              {conversation.continued_from.conversation_id && (
+                <a
+                  href={`/inbox?c=${encodeURIComponent(conversation.continued_from.conversation_id)}`}
+                  className="shrink-0 font-medium text-primary hover:underline"
+                >
+                  Ver conversa anterior
+                </a>
+              )}
+            </div>
+          )}
+          {conversation.continued_to && (
+            <div className="flex flex-wrap items-center gap-x-2 gap-y-1 rounded-lg border border-border bg-muted/40 px-3 py-2 text-xs">
+              <CornerUpRight className="h-3.5 w-3.5 shrink-0 text-muted-foreground" />
+              <span className="min-w-0 flex-1 text-foreground">
+                Este atendimento continuou no número{" "}
+                <strong>{conversation.continued_to.channel_name || "de outra pessoa"}</strong>.
+              </span>
+              {conversation.continued_to.conversation_id && (
+                <a
+                  href={`/inbox?c=${encodeURIComponent(conversation.continued_to.conversation_id)}`}
+                  className="shrink-0 font-medium text-primary hover:underline"
+                >
+                  Abrir
+                </a>
+              )}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ↪️ Continuar pelo meu número — confirmação (escolha, nunca automático). */}
+      <Dialog
+        open={continueOpen}
+        onOpenChange={(o) => {
+          if (!continuing) setContinueOpen(o);
+        }}
+      >
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Continuar pelo seu número?</DialogTitle>
+            <DialogDescription>
+              {contact?.name || "O cliente"} passa a falar com você pelo seu número. Esta conversa continua existindo e
+              nada é enviado sozinho.
+            </DialogDescription>
+          </DialogHeader>
+          {continueTargets.length > 1 && (
+            <div className="space-y-1.5">
+              <label htmlFor="continue-number" className="text-xs font-medium text-foreground">
+                Seu número
+              </label>
+              <select
+                id="continue-number"
+                value={continueChoice}
+                onChange={(e) => setContinueChoice(e.target.value)}
+                className="h-9 w-full rounded-md border border-border bg-background px-2 text-sm text-foreground"
+              >
+                <option value="">Escolha…</option>
+                {continueTargets.map((n) => (
+                  <option key={n.id} value={n.id}>
+                    {n.name}
+                    {n.phone ? ` · ${n.phone}` : ""}
+                  </option>
+                ))}
+              </select>
+            </div>
+          )}
+          <ul className="space-y-1 text-sm text-muted-foreground">
+            <li>• Vai junto: uma nota com as últimas mensagens daqui e um botão pra voltar a esta conversa.</li>
+            <li>• Aqui fica um aviso de que o atendimento seguiu no seu número.</li>
+            <li>
+              •{" "}
+              {continueTarget && CAPABILITIES[continueTarget.provider as ProviderId]?.templates
+                ? "Seu número é da API oficial: a 1ª mensagem precisa ser um modelo aprovado."
+                : "A 1ª mensagem vem pronta no campo, pra você revisar e enviar."}
+            </li>
+          </ul>
+          <DialogFooter>
+            <Button variant="ghost" onClick={() => setContinueOpen(false)} disabled={continuing}>
+              Cancelar
+            </Button>
+            <Button onClick={handleContinueOnMyNumber} disabled={continuing || !continueTarget}>
+              {continuing && <Loader2 className="mr-2 h-4 w-4 animate-spin" />}
+              Continuar pelo meu número
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
       {/* Transfer dialog — target sector + optional handoff note. */}
       <Dialog
         open={!!transferSector}
@@ -2080,6 +2270,7 @@ export function MessageThread({
         onDroppedFileConsumed={() => setDroppedFile(null)}
         lockedByOtherAgent={lockedByOtherAgentName}
         otherPersonNumber={numberOfOtherPerson(conversation.channel, user?.id)}
+        onContinueOnMyNumber={canContinueOnMyNumber ? () => setContinueOpen(true) : null}
       />
 
       <TemplatePicker

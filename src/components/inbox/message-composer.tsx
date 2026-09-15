@@ -25,6 +25,7 @@ import {
   MapPin,
   Lock,
   Smartphone,
+  CornerUpRight,
 } from "lucide-react";
 import type { OtherPersonNumber } from "@/lib/channels/other-person-number";
 import { Button } from "@/components/ui/button";
@@ -159,6 +160,9 @@ interface MessageComposerProps {
   /** Número da conversa é dedicado a OUTRA pessoa: o que sair daqui vai pelo
    *  WhatsApp dela, não pelo celular de quem responde. */
   otherPersonNumber?: OtherPersonNumber | null;
+  /** ↪️ Abre o "Continuar pelo meu número" (só vem quando a pessoa tem outro
+   *  número próprio conectado). Escolha de quem atende, nunca automático. */
+  onContinueOnMyNumber?: (() => void) | null;
 }
 
 function formatDuration(seconds: number): string {
@@ -192,6 +196,7 @@ export function MessageComposer({
   onDroppedFileConsumed,
   lockedByOtherAgent,
   otherPersonNumber,
+  onContinueOnMyNumber,
 }: MessageComposerProps) {
   // Capability gating (Phase 4). No channel → default to Meta's full
   // capability set so legacy single-Meta accounts are unaffected.
@@ -940,11 +945,23 @@ export function MessageComposer({
       {otherPersonNumber && !noteMode && !readOnly && !locked && (
         <div className="mb-2 flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2">
           <Smartphone className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
-          <p className="text-xs text-amber-700 dark:text-amber-300">
-            Você está respondendo pelo número <strong>{otherPersonNumber.name}</strong>
-            {otherPersonNumber.phone ? ` (${otherPersonNumber.phone})` : ""}, que não é o seu. O cliente recebe
-            desse WhatsApp — a mensagem não aparece no seu celular.
-          </p>
+          <div className="min-w-0 flex-1">
+            <p className="text-xs text-amber-700 dark:text-amber-300">
+              Você está respondendo pelo número <strong>{otherPersonNumber.name}</strong>
+              {otherPersonNumber.phone ? ` (${otherPersonNumber.phone})` : ""}, que não é o seu. O cliente recebe
+              desse WhatsApp — a mensagem não aparece no seu celular.
+            </p>
+            {onContinueOnMyNumber && (
+              <button
+                type="button"
+                onClick={onContinueOnMyNumber}
+                className="mt-1.5 inline-flex items-center gap-1 rounded-md border border-amber-600/30 bg-background/60 px-2 py-1 text-xs font-medium text-amber-800 transition-colors hover:bg-background dark:text-amber-200"
+              >
+                <CornerUpRight className="h-3.5 w-3.5" />
+                Continuar pelo meu número
+              </button>
+            )}
+          </div>
         </div>
       )}
 
