@@ -13,9 +13,15 @@
 // The "Reconectar" action reuses the same QR-pairing modal as Settings →
 // Canais (POST /connect → QR → poll /state). Only admins (edit-settings)
 // can re-pair, so agents just see the heads-up.
+//
+// 15/09 (GoLink): Gmail com a senha de app recusada também aparece — o canal
+// fica 'connected' no banco, então o sinal é o `problem` da saúde. O link
+// leva pra Canais (onde se troca a senha) só pra owner/admin, que são quem
+// consegue abrir as rotas de canal.
 // ============================================================
 
 import { useCallback, useEffect, useState } from 'react';
+import Link from 'next/link';
 import { AlertTriangle } from 'lucide-react';
 
 import { useServerEvents } from '@/hooks/use-server-events';
@@ -42,16 +48,20 @@ function reasonFor(status: string): string {
   }
 }
 
+type StatusChannel = ChannelSummary & { problem?: string | null };
+
 export function ChannelStatusBanner() {
   const canReconnect = useCan('edit-settings');
+  const canManageChannels = useCan('manage-channels');
   const [down, setDown] = useState<ChannelSummary[]>([]);
+  const [broken, setBroken] = useState<StatusChannel[]>([]);
   const [reconnecting, setReconnecting] = useState<ChannelSummary | null>(null);
 
   const load = useCallback(async () => {
     try {
       const res = await fetch('/api/channels/status', { cache: 'no-store' });
       if (!res.ok) return;
-      const data = (await res.json()) as { channels: ChannelSummary[] };
+      const data = (await res.json()) as { channels: StatusChannel[] };
       // Só canais de PAREAMENTO POR QR (WAHA/Evolution/EvoGo) têm "sessão que
       // cai" e reconexão por QR. Providers de token (meta/instagram/messenger)
       // não pareiam por QR — nunca mostram este banner (senão o "Reconectar"
@@ -61,6 +71,7 @@ export function ChannelStatusBanner() {
           (c) => isDown(c.status) && CAPABILITIES[c.provider]?.qrPairing,
         ),
       );
+      setBroken(data.channels.filter((c) => c.provider === 'gmail' && !!c.problem));
     } catch {
       // Best-effort — a failed poll just leaves the last known state.
     }
@@ -79,7 +90,7 @@ export function ChannelStatusBanner() {
   );
   useServerEvents(onEvent);
 
-  if (down.length === 0) return null;
+  if (down.length === 0 && broken.length === 0) return null;
 
   return (
     <>
@@ -103,6 +114,29 @@ export function ChannelStatusBanner() {
                 >
                   Reconectar
                 </button>
+              ) : (
+                <span className="shrink-0 text-red-600/70 dark:text-red-300/60">
+                  avise um admin
+                </span>
+              )}
+            </div>
+          ))}
+          {broken.map((ch) => (
+            <div
+              key={ch.id}
+              className="flex items-center gap-1.5 text-xs text-red-700 dark:text-red-300/90"
+            >
+              <AlertTriangle className="h-3.5 w-3.5 shrink-0 text-red-500/80" />
+              <span className="min-w-0 truncate">
+                Gmail <b className="font-semibold">{ch.name}</b> parado — {ch.problem}
+              </span>
+              {canManageChannels ? (
+                <Link
+                  href="/settings?tab=channels"
+                  className="shrink-0 font-medium underline decoration-red-400/50 underline-offset-2 transition-colors hover:text-red-800 hover:decoration-red-500 dark:hover:text-red-200"
+                >
+                  Abrir Canais
+                </Link>
               ) : (
                 <span className="shrink-0 text-red-600/70 dark:text-red-300/60">
                   avise um admin

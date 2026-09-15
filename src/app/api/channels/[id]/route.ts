@@ -16,7 +16,7 @@
 // ============================================================
 
 import { NextResponse } from 'next/server'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, sql, type SQL } from 'drizzle-orm'
 
 import { db, channels, conversations } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -29,25 +29,39 @@ interface RouteParams {
 }
 
 /**
- * Merge a provider-specific `config` patch into the channel's existing
- * credentials + providerMeta. Only provided fields are updated; omitted
- * fields keep their current value. Returns the new credentials object
- * (plaintext, to be re-encrypted) and the new providerMeta.
+ * Turn a provider-specific `config` patch into a DELTA: the credential keys to
+ * change and the provider_meta keys to set/remove. Omitted fields keep their
+ * current value.
+ *
+ * 15/09 (Gmail GoLink): this used to return the whole provider_meta snapshot
+ * read at the start of the request, and the PATCH wrote it back. The worker
+ * writes the same column meanwhile (Gmail read position, channel health), so
+ * saving a Pix key could roll the Gmail read position back or erase the
+ * health warning. The PATCH now merges only what changed (jsonb `||` / `-`).
  */
 function applyConfigPatch(
   ch: ChannelCtx,
   config: Record<string, unknown>,
-): { credentials: Record<string, unknown>; providerMeta: Record<string, unknown> } {
+): {
+  credentials: Record<string, unknown> | null
+  metaSet: Record<string, unknown>
+  metaUnset: string[]
+} {
   const credentials = { ...ch.credentials }
-  const providerMeta = { ...ch.providerMeta }
+  let credentialsChanged = false
+  const metaSet: Record<string, unknown> = {}
+  const metaUnset: string[] = []
   const str = (v: unknown): string | undefined =>
     typeof v === 'string' && v.trim().length > 0 ? v : undefined
 
   const setCred = (key: string, v: string | undefined) => {
-    if (v !== undefined) credentials[key] = v
+    if (v !== undefined && credentials[key] !== v) {
+      credentials[key] = v
+      credentialsChanged = true
+    }
   }
   const setMeta = (key: string, v: string | undefined) => {
-    if (v !== undefined) providerMeta[key] = v
+    if (v !== undefined) metaSet[key] = v
   }
 
   switch (ch.provider as ProviderId) {
@@ -81,7 +95,7 @@ function applyConfigPatch(
       | null
       | undefined
     if (p === null) {
-      delete providerMeta.pix
+      metaUnset.push('pix')
     } else if (p && typeof p.key === 'string' && p.key.trim()) {
       const keyType =
         typeof p.keyType === 'string' && p.keyType.trim()
@@ -89,7 +103,7 @@ function applyConfigPatch(
           : undefined
       const name =
         typeof p.name === 'string' && p.name.trim() ? p.name.trim() : undefined
-      providerMeta.pix = {
+      metaSet.pix = {
         key: p.key.trim(),
         ...(keyType ? { keyType } : {}),
         ...(name ? { name } : {}),
@@ -105,7 +119,7 @@ function applyConfigPatch(
       | null
       | undefined
     if (l === null) {
-      delete providerMeta.location
+      metaUnset.push('location')
     } else if (
       l &&
       typeof l.latitude === 'number' &&
@@ -113,7 +127,7 @@ function applyConfigPatch(
     ) {
       const label =
         typeof l.label === 'string' && l.label.trim() ? l.label.trim() : undefined
-      providerMeta.location = {
+      metaSet.location = {
         latitude: l.latitude,
         longitude: l.longitude,
         ...(label ? { label } : {}),
@@ -121,7 +135,14 @@ function applyConfigPatch(
     }
   }
 
-  return { credentials, providerMeta }
+  return { credentials: credentialsChanged ? credentials : null, metaSet, metaUnset }
+}
+
+/** provider_meta = (atual - chaves removidas) || chaves novas — nunca o snapshot. */
+function mergeProviderMetaSql(metaSet: Record<string, unknown>, metaUnset: string[]): SQL {
+  let expr: SQL = sql`coalesce(${channels.providerMeta}, '{}'::jsonb)`
+  for (const key of metaUnset) expr = sql`(${expr} - ${key}::text)`
+  return sql`${expr} || ${JSON.stringify(metaSet)}::jsonb`
 }
 
 function isDuplicateNameError(err: unknown): boolean {
@@ -166,7 +187,7 @@ export async function PATCH(request: Request, { params }: RouteParams) {
     const patch: {
       name?: string
       credentials?: string
-      providerMeta?: Record<string, unknown>
+      providerMeta?: SQL
       updatedAt: string
     } = { updatedAt: new Date().toISOString() }
 
@@ -187,12 +208,25 @@ export async function PATCH(request: Request, { params }: RouteParams) {
           { status: 400 },
         )
       }
-      const { credentials, providerMeta } = applyConfigPatch(channel, config)
-      patch.credentials = encryptCredentials(credentials)
-      patch.providerMeta = providerMeta
+      // Gmail: a senha de app tem rota própria (valida no Google e mantém o
+      // ponto de leitura) e o endereço não muda (o ponto de leitura é da caixa).
+      if (channel.provider === 'gmail' && ('app_password' in config || 'address' in config)) {
+        return NextResponse.json(
+          {
+            error:
+              'Para trocar a senha de app use o botão "Trocar senha de app" do canal. O endereço de um canal Gmail não pode ser trocado: crie um canal novo para outro Gmail.',
+          },
+          { status: 400 },
+        )
+      }
+      const { credentials, metaSet, metaUnset } = applyConfigPatch(channel, config)
+      if (credentials) patch.credentials = encryptCredentials(credentials)
+      if (Object.keys(metaSet).length > 0 || metaUnset.length > 0) {
+        patch.providerMeta = mergeProviderMetaSql(metaSet, metaUnset)
+      }
     }
 
-    if (patch.name === undefined && patch.credentials === undefined) {
+    if (patch.name === undefined && config === undefined) {
       return NextResponse.json(
         { error: 'Nothing to update: provide name and/or config' },
         { status: 400 },

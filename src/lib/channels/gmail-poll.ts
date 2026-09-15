@@ -15,15 +15,17 @@
 
 import { ImapFlow } from 'imapflow'
 import PostalMime from 'postal-mime'
-import { and, eq } from 'drizzle-orm'
-import { Redis, type RedisOptions } from 'ioredis'
+import { and, eq, sql } from 'drizzle-orm'
 
-import { bullConnection } from '@/lib/queue/connection'
 import { db, channels } from '@/db'
 import { loadChannel } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
 import { gmailAddressOf, appPasswordOf } from '@/lib/channels/providers/gmail'
+import { inGmailAuthBackoff, markGmailAuthFailed } from '@/lib/channels/gmail-auth-backoff'
+import { recordGmailFailure, recordGmailImapLoginOk } from '@/lib/channels/gmail-health'
+import { parseDeliveryReport } from '@/lib/channels/email-bounce'
+import { applyEmailBounce } from '@/lib/channels/email-bounce-apply'
 
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
@@ -41,15 +43,25 @@ function attachmentToBase64(content: unknown): string | null {
   return buf.toString('base64')
 }
 
-async function saveState(
-  channelId: string,
-  meta: Record<string, unknown>,
-  uidValidity: string,
-  lastUid: number,
-): Promise<void> {
+/**
+ * Grava o ponto de leitura por MERGE no provider_meta (nunca o objeto lido no
+ * começo do tick): a web grava Pix/Localização/saúde/senha no mesmo campo, e
+ * um lote demorado apagaria o que ela gravou no meio. Na mesma época de UIDs o
+ * ponto nunca volta pra trás.
+ */
+async function saveState(channelId: string, uidValidity: string, lastUid: number): Promise<void> {
   await db
     .update(channels)
-    .set({ providerMeta: { ...meta, gmailUidValidity: uidValidity, gmailLastUid: lastUid } })
+    .set({
+      providerMeta: sql`coalesce(${channels.providerMeta}, '{}'::jsonb) || jsonb_build_object(
+        'gmailUidValidity', ${uidValidity}::text,
+        'gmailLastUid', CASE
+          WHEN ${channels.providerMeta}->>'gmailUidValidity' = ${uidValidity}::text
+            THEN greatest(coalesce((${channels.providerMeta}->>'gmailLastUid')::int, 0), ${lastUid}::int)
+          ELSE ${lastUid}::int
+        END
+      )`,
+    })
     .where(eq(channels.id, channelId))
 }
 
@@ -63,7 +75,8 @@ async function pollOneChannel(channelId: string): Promise<number> {
     address = gmailAddressOf(ch)
     appPassword = appPasswordOf(ch)
   } catch {
-    return 0 // canal sem credenciais válidas — ignora
+    // Conta como falha (saúde do canal), não como leitura ok.
+    throw new Error('canal Gmail sem endereço ou senha de app salvos')
   }
 
   const client = new ImapFlow({
@@ -104,7 +117,7 @@ async function pollOneChannel(channelId: string): Promise<number> {
 
       // 1ª sync ou UIDVALIDITY mudou → marca o agora, não importa histórico.
       if (storedValidity !== uidValidity || storedLastUid === null) {
-        await saveState(channelId, meta, uidValidity, Math.max(0, uidNext - 1))
+        await saveState(channelId, uidValidity, Math.max(0, uidNext - 1))
         return 0
       }
 
@@ -123,6 +136,23 @@ async function pollOneChannel(channelId: string): Promise<number> {
           const from = (parsed.from?.address || '').trim().toLowerCase()
           // Pula o que a própria conta enviou (aparece em alguns fetches).
           if (!from || from === address) continue
+
+          // 📭 15/09 (Vale Ouro): aviso de devolução NÃO é cliente escrevendo —
+          // virava contato "Mail Delivery Subsystem". Vira nota na conversa do
+          // envio + supressão (email-bounce-apply.ts) e nunca cai no inbox,
+          // nem se aplicar der erro.
+          // Formato de aviso vindo de quem NÃO é servidor de e-mail segue como
+          // e-mail comum (não some do CRM).
+          const report = parseDeliveryReport(parsed)
+          if (report?.trusted) {
+            try {
+              await applyEmailBounce(ch, report)
+            } catch (err) {
+              console.error('[gmail-poll] devolução falhou uid=%s canal=%s:', uid, channelId, err)
+            }
+            processed++
+            continue
+          }
 
           const attachments = (parsed.attachments || [])
             .map((a) => {
@@ -158,7 +188,7 @@ async function pollOneChannel(channelId: string): Promise<number> {
       }
 
       if (maxUid > storedLastUid) {
-        await saveState(channelId, meta, uidValidity, maxUid)
+        await saveState(channelId, uidValidity, maxUid)
       }
     } finally {
       lock.release()
@@ -172,48 +202,6 @@ async function pollOneChannel(channelId: string): Promise<number> {
     }
   }
   return processed
-}
-
-// Senha recusada: tentar a cada minuto são ~60 logins inválidos por hora, e o
-// Google pode bloquear a conta. Espera 30 min entre tentativas (Redis; sem
-// Redis, tenta como antes).
-const AUTH_FAIL_BACKOFF_MS = 30 * 60_000
-
-let redisClient: Redis | null | undefined
-
-function redis(): Redis | null {
-  if (redisClient !== undefined) return redisClient
-  try {
-    redisClient = new Redis({
-      ...(bullConnection() as RedisOptions),
-      maxRetriesPerRequest: 1,
-      enableOfflineQueue: false,
-    })
-    redisClient.on('error', () => {
-      /* fail-open */
-    })
-  } catch {
-    redisClient = null
-  }
-  return redisClient
-}
-
-const authFailKey = (channelId: string) => `gmail:authfail:${channelId}`
-
-async function inAuthBackoff(channelId: string): Promise<boolean> {
-  try {
-    return (await redis()?.exists(authFailKey(channelId))) === 1
-  } catch {
-    return false
-  }
-}
-
-async function markAuthFailed(channelId: string): Promise<void> {
-  try {
-    await redis()?.set(authFailKey(channelId), new Date().toISOString(), 'PX', AUTH_FAIL_BACKOFF_MS)
-  } catch {
-    /* fail-open */
-  }
 }
 
 type ImapError = {
@@ -241,6 +229,21 @@ function describeImapError(err: unknown): string {
     .join(' ')
 }
 
+/** A senha de app foi trocada (gmail-credentials.ts) depois deste instante? */
+async function passwordChangedSince(channelId: string, sinceMs: number): Promise<boolean> {
+  try {
+    const [row] = await db
+      .select({ at: sql<string | null>`${channels.providerMeta}->>'gmailPasswordChangedAt'` })
+      .from(channels)
+      .where(eq(channels.id, channelId))
+      .limit(1)
+    const at = row?.at ? Date.parse(row.at) : NaN
+    return Number.isFinite(at) && at >= sinceMs
+  } catch {
+    return false
+  }
+}
+
 /** Varre TODOS os canais gmail conectados. Um canal com erro (senha revogada,
  *  IMAP fora) não derruba os outros. */
 export async function runGmailPollSweep(): Promise<{
@@ -254,12 +257,23 @@ export async function runGmailPollSweep(): Promise<{
 
   let messages = 0
   for (const r of rows) {
-    if (await inAuthBackoff(r.id)) continue
+    // Senha recusada: espera 30 min entre tentativas (gmail-auth-backoff.ts).
+    if (await inGmailAuthBackoff(r.id)) continue
+    const tickStartedAt = Date.now()
     try {
       messages += await pollOneChannel(r.id)
+      await recordGmailImapLoginOk(r.id, tickStartedAt)
     } catch (err) {
+      // Admin trocou a senha enquanto este tick tentava com a antiga: a recusa
+      // é da senha velha. Registrar aqui reabriria o aviso e a espera de 30 min
+      // logo depois da troca.
+      if ((err as ImapError)?.authenticationFailed && (await passwordChangedSince(r.id, tickStartedAt))) {
+        console.info('[gmail-poll] canal %s: recusa da senha antiga — a senha acabou de ser trocada', r.id)
+        continue
+      }
+      await recordGmailFailure(r.id, 'imap', err)
       if ((err as ImapError)?.authenticationFailed) {
-        await markAuthFailed(r.id)
+        await markGmailAuthFailed(r.id)
         console.error(
           '[gmail-poll] canal %s: Gmail recusou a senha de app (%s). Próxima tentativa em 30 min.',
           r.id,

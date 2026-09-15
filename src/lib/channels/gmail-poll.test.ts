@@ -15,6 +15,8 @@ const imap = vi.hoisted(() => ({
     usable: boolean
   }>,
   connectError: null as unknown,
+  mailbox: false as false | { uidValidity: number; uidNext: number },
+  messages: [] as Array<{ uid: number; source: Buffer }>,
 }))
 
 vi.mock('imapflow', () => ({
@@ -29,25 +31,36 @@ vi.mock('imapflow', () => ({
     })
     logout = vi.fn(async () => {})
     on = vi.fn(() => this)
-    mailbox = false
+    get mailbox() {
+      return imap.mailbox
+    }
     getMailboxLock = vi.fn(async () => ({ release: () => {} }))
+    async *fetch() {
+      for (const m of imap.messages) yield m
+    }
     constructor() {
       imap.instances.push(this)
     }
   },
 }))
 vi.mock('ioredis', () => ({ Redis: FakeRedis }))
+const health = vi.hoisted(() => ({ fail: vi.fn(async () => {}), ok: vi.fn(async () => {}) }))
+vi.mock('./gmail-health', () => ({ recordGmailFailure: health.fail, recordGmailImapLoginOk: health.ok }))
 vi.mock('@/lib/queue/connection', () => ({ bullConnection: () => ({}) }))
 vi.mock('@/db', () => {
   const rows = [{ id: 'canal-golink' }]
-  const chain = { from: () => chain, where: async () => rows }
-  return { db: { select: () => chain, update: vi.fn() }, channels: {} }
+  const chain = { from: () => chain, where: () => Object.assign(Promise.resolve(rows), { limit: async () => [] }) }
+  const upd = { set: () => upd, where: async () => [] }
+  return { db: { select: () => chain, update: () => upd }, channels: {} }
 })
+const bounce = vi.hoisted(() => ({ apply: vi.fn(async () => 'matched') }))
+vi.mock('./email-bounce-apply', () => ({ applyEmailBounce: bounce.apply }))
+const inbound = vi.hoisted(() => ({ dispatch: vi.fn(async () => {}) }))
 vi.mock('@/lib/channels/channels', () => ({
   loadChannel: async (id: string) => ({ id, providerMeta: { gmailLastUid: 129, gmailUidValidity: '1' } }),
 }))
-vi.mock('@/lib/channels/registry', () => ({ getProvider: () => ({ parseWebhook: () => ({ messages: [] }) }) }))
-vi.mock('@/lib/channels/inbound', () => ({ dispatchInboundMessage: vi.fn() }))
+vi.mock('@/lib/channels/registry', () => ({ getProvider: () => ({ parseWebhook: () => ({ messages: [{ id: 'm1' }] }) }) }))
+vi.mock('@/lib/channels/inbound', () => ({ dispatchInboundMessage: inbound.dispatch }))
 vi.mock('@/lib/channels/providers/gmail', () => ({
   gmailAddressOf: () => 'golinkoficial@gmail.com',
   appPasswordOf: () => 'abcdabcdabcdabcd',
@@ -68,6 +81,13 @@ describe('runGmailPollSweep com senha de app recusada', () => {
     imap.instances.length = 0
     imap.connectError = null
     redisStore.clear()
+    health.fail.mockClear()
+    health.ok.mockClear()
+    imap.mailbox = false
+    imap.messages = []
+    bounce.apply.mockReset()
+    bounce.apply.mockResolvedValue('matched')
+    inbound.dispatch.mockClear()
     vi.spyOn(console, 'error').mockImplementation(() => {})
     vi.spyOn(console, 'warn').mockImplementation(() => {})
   })
@@ -119,5 +139,71 @@ describe('runGmailPollSweep com senha de app recusada', () => {
     const [client] = imap.instances
     expect(client.logout).toHaveBeenCalled()
     expect(client.close).not.toHaveBeenCalled()
+  })
+
+  it('registra a saúde da leitura: falha com o erro, sucesso zera', async () => {
+    imap.connectError = authError
+    await runGmailPollSweep()
+    expect(health.fail).toHaveBeenCalledWith('canal-golink', 'imap', authError)
+    expect(health.ok).not.toHaveBeenCalled()
+
+    vi.useFakeTimers()
+    vi.advanceTimersByTime(30 * 60_000 + 1)
+    imap.connectError = null
+    await runGmailPollSweep()
+    expect(health.ok).toHaveBeenCalledWith('canal-golink', expect.any(Number))
+  })
+})
+
+describe('runGmailPollSweep com aviso de devolução', () => {
+  const dsn = Buffer.from(
+    [
+      'From: Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
+      'To: golinkoficial@gmail.com',
+      'Subject: Delivery Status Notification (Failure)',
+      'Content-Type: multipart/report; boundary="b1"; report-type=delivery-status',
+      '',
+      '--b1',
+      'Content-Type: message/delivery-status',
+      '',
+      'X-Original-Message-ID: <4a3e832e-1107-f5f2-480c-221184622209@gmail.com>',
+      '',
+      'Final-Recipient: rfc822; financeiro@empresa-exemplo.com.br',
+      'Action: failed',
+      'Status: 5.1.10',
+      '',
+      '--b1--',
+      '',
+    ].join('\r\n'),
+  )
+  const cliente = Buffer.from(['From: Cliente <cliente@empresa-exemplo.com.br>', 'To: golinkoficial@gmail.com', 'Subject: Oi', 'Content-Type: text/plain', '', 'Já paguei.'].join('\r\n'))
+
+  beforeEach(() => {
+    imap.instances.length = 0
+    imap.connectError = null
+    imap.mailbox = { uidValidity: 1, uidNext: 132 }
+    redisStore.clear()
+    bounce.apply.mockReset()
+    bounce.apply.mockResolvedValue('matched')
+    inbound.dispatch.mockClear()
+    vi.spyOn(console, 'error').mockImplementation(() => {})
+  })
+  afterEach(() => vi.restoreAllMocks())
+
+  it('devolução vai pra applyEmailBounce e NUNCA vira contato; e-mail de cliente segue normal', async () => {
+    imap.messages = [
+      { uid: 130, source: dsn },
+      { uid: 131, source: cliente },
+    ]
+    await runGmailPollSweep()
+    expect(bounce.apply).toHaveBeenCalledTimes(1)
+    expect(inbound.dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('mesmo se aplicar a devolução der erro, ela não cai no inbox', async () => {
+    bounce.apply.mockRejectedValue(new Error('banco fora'))
+    imap.messages = [{ uid: 130, source: dsn }]
+    await runGmailPollSweep()
+    expect(inbound.dispatch).not.toHaveBeenCalled()
   })
 })

@@ -26,6 +26,7 @@ import {
 } from '@/db';
 import { firstOrNull, firstOrThrow } from '@/db/helpers';
 import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels';
+import { gmailHealthOf } from '@/lib/channels/gmail-health-state';
 import { getProvider } from '@/lib/channels/registry';
 import type { ChannelCtx } from '@/lib/channels/provider';
 import {
@@ -507,8 +508,18 @@ export async function sendBroadcastRecipient(
 
       if (!body) return { ok: false, error: 'empty text body' };
       const result = await provider.sendText(channel, recipient.phone, body, {});
+      if (channel.provider === 'gmail' && gmailHealthOf(channel.providerMeta)?.smtp) {
+        const { recordGmailOk } = await import('@/lib/channels/gmail-health');
+        await recordGmailOk(channel.id, 'smtp');
+      }
       return { ok: true, externalMessageId: result.externalMessageId };
     } catch (error) {
+      // Gmail com a senha recusada: avisa os admins (gmail-health) em vez de
+      // só falhar destinatário por destinatário.
+      if (channel.provider === 'gmail') {
+        const { recordGmailSendFailure } = await import('@/lib/channels/gmail-health');
+        await recordGmailSendFailure(channel.id, error, channel.providerMeta);
+      }
       return {
         ok: false,
         error: error instanceof Error ? error.message : 'Unknown error',

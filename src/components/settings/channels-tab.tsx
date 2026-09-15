@@ -28,9 +28,11 @@ import {
   MessageCircle,
   Globe,
   BookUser,
+  KeyRound,
 } from 'lucide-react';
 
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider';
+import { gmailHealthOf, gmailProblem } from '@/lib/channels/gmail-health-state';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
 import { Card, CardContent } from '@/components/ui/card';
@@ -51,6 +53,7 @@ import { EmailApiSetupDialog, type EmailApiInbound } from './email-api-setup-dia
 import { ChannelQrModal } from './channel-qr-modal';
 import { ChannelLocationDialog } from './channel-location-dialog';
 import { ChannelPixDialog } from './channel-pix-dialog';
+import { ChannelGmailPasswordDialog } from './channel-gmail-password-dialog';
 import { ChannelGroupsDialog } from './channel-groups-dialog';
 import { ChannelPhonebookDialog } from './channel-phonebook-dialog';
 import { ChannelCommentAutomationDialog } from './channel-comment-automation-dialog';
@@ -122,8 +125,18 @@ const STATUS_META: Record<
   },
 };
 
-export function ChannelStatusBadge({ status }: { status: ChannelStatus }) {
-  const meta = STATUS_META[status] ?? STATUS_META.disconnected;
+export function ChannelStatusBadge({
+  status,
+  problemLabel,
+}: {
+  status: ChannelStatus;
+  /** Canal "conectado" no banco mas quebrado de fato (ex.: Gmail com senha
+   *  recusada) — mostra vermelho com este rótulo em vez do verde. */
+  problemLabel?: string | null;
+}) {
+  const meta = problemLabel
+    ? { ...STATUS_META.error, label: problemLabel }
+    : (STATUS_META[status] ?? STATUS_META.disconnected);
   return (
     <Badge variant="outline" className={cn('gap-1.5', meta.badge)}>
       <span className={cn('h-1.5 w-1.5 rounded-full', meta.dot)} />
@@ -158,6 +171,8 @@ export function ChannelsTab() {
   const [locating, setLocating] = useState<ChannelSummary | null>(null);
   // The channel whose Pix key is being set.
   const [pixing, setPixing] = useState<ChannelSummary | null>(null);
+  // O canal Gmail cuja senha de app está sendo trocada.
+  const [gmailPassword, setGmailPassword] = useState<ChannelSummary | null>(null);
   // The channel whose monitored groups are being picked.
   const [grouping, setGrouping] = useState<ChannelSummary | null>(null);
   // 📒 O canal cuja agenda do celular está sendo importada.
@@ -353,6 +368,7 @@ export function ChannelsTab() {
               onPair={() => setPairing(ch)}
               onLocation={() => setLocating(ch)}
               onPix={() => setPixing(ch)}
+              onGmailPassword={() => setGmailPassword(ch)}
               onGroups={() => setGrouping(ch)}
               onPhonebook={() => setPhonebooking(ch)}
               onComments={() => setCommenting(ch)}
@@ -424,6 +440,18 @@ export function ChannelsTab() {
           onClose={() => setPixing(null)}
           onSaved={() => {
             setPixing(null);
+            void load();
+          }}
+        />
+      )}
+
+      {/* Trocar a senha de app do Gmail (mantém conversas e ponto de leitura). */}
+      {gmailPassword && (
+        <ChannelGmailPasswordDialog
+          channel={gmailPassword}
+          onClose={() => setGmailPassword(null)}
+          onSaved={() => {
+            setGmailPassword(null);
             void load();
           }}
         />
@@ -583,6 +611,7 @@ function ChannelRow({
   onPair,
   onLocation,
   onPix,
+  onGmailPassword,
   onGroups,
   onPhonebook,
   onComments,
@@ -594,6 +623,7 @@ function ChannelRow({
   onPair: () => void;
   onLocation: () => void;
   onPix: () => void;
+  onGmailPassword: () => void;
   onGroups: () => void;
   onPhonebook: () => void;
   onComments: () => void;
@@ -614,6 +644,15 @@ function ChannelRow({
   const hasLocation = !!(channel.provider_meta as { location?: unknown })
     .location;
   const hasPix = !!(channel.provider_meta as { pix?: unknown }).pix;
+  // 📧 Gmail: o status do banco segue 'connected' mesmo com a senha recusada
+  // (o poll precisa continuar tentando) — a saúde real vem do provider_meta.
+  const isGmail = channel.provider === 'gmail';
+  const gmailAddress = isGmail
+    ? (channel.provider_meta as { address?: string | null }).address ?? null
+    : null;
+  const gmailIssue = isGmail
+    ? gmailProblem(gmailHealthOf(channel.provider_meta))
+    : null;
 
   return (
     <Card size="sm">
@@ -630,8 +669,18 @@ function ChannelRow({
               </Badge>
             </div>
             <p className="mt-0.5 truncate text-xs text-muted-foreground">
-              {channel.phone_number || 'Número não vinculado'}
+              {isGmail
+                ? gmailAddress || 'Gmail sem endereço'
+                : channel.phone_number || 'Número não vinculado'}
             </p>
+            {/* 📧 Gmail com senha recusada / falhando (15/09, GoLink: ficou
+                verde a noite toda com a senha revogada). */}
+            {gmailIssue && (
+              <p className="mt-0.5 text-[11px] text-red-500" title={gmailIssue.message}>
+                {gmailIssue.message}
+                {gmailIssue.since ? ` · desde ${fmtHealthTime(gmailIssue.since)}` : ''}
+              </p>
+            )}
             {/* 🩺 Saúde real na Meta (monitor a cada 30 min). */}
             {isMeta && metaHealth?.last_error && channel.status !== 'connected' && (
               <p className="mt-0.5 text-[11px] text-red-500" title={metaHealth.last_error}>
@@ -649,7 +698,16 @@ function ChannelRow({
         </div>
 
         <div className="flex items-center gap-2">
-          <ChannelStatusBadge status={channel.status} />
+          <ChannelStatusBadge
+            status={channel.status}
+            problemLabel={
+              gmailIssue
+                ? gmailIssue.kind === 'auth_failed'
+                  ? 'Senha recusada'
+                  : 'Com falha'
+                : null
+            }
+          />
 
           {isMeta ? (
             <Button
@@ -675,6 +733,19 @@ function ChannelRow({
               {pairLabel}
             </Button>
           ) : null}
+
+          {isGmail && (
+            <Button
+              variant={gmailIssue ? 'default' : 'outline'}
+              size="sm"
+              onClick={onGmailPassword}
+              className={gmailIssue ? undefined : 'border-border'}
+              title="Trocar a senha de app do Google sem apagar o canal"
+            >
+              <KeyRound className="size-3.5" />
+              Trocar senha de app
+            </Button>
+          )}
 
           {isBrandedEmail && (
             <Button

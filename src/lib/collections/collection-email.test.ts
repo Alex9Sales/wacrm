@@ -21,4 +21,10 @@ describe('collectionEmail', () => {
     expect(collectionEmail(null)).toBeNull()
     expect(collectionEmail(42)).toBeNull()
   })
+
+  it('pula endereços que voltaram (email_bounces) e fica com o próximo válido', () => {
+    const voltou = new Set(['a@x.com'])
+    expect(collectionEmail('a@x.com, b@y.com', voltou)).toBe('b@y.com')
+    expect(collectionEmail('A@X.com', voltou)).toBeNull()
+  })
 })

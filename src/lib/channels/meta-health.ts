@@ -19,8 +19,9 @@ import { and, eq, inArray } from 'drizzle-orm';
 
 import { db, channels, member, notifications } from '@/db';
 import { publishEvent } from '@/lib/events/publish';
-import { getProvider } from '@/lib/channels/registry';
-import { decryptCredentials, loadChannel, updateChannelStatus } from '@/lib/channels/channels';
+import { decryptCredentials, updateChannelStatus } from '@/lib/channels/channels';
+// Aviso no WhatsApp da Fluxia — mesmo código, agora compartilhado com o Gmail.
+import { alertPlatform } from '@/lib/alerts/channel-alert';
 
 const GRAPH_BASE = 'https://graph.facebook.com/v21.0';
 const FIELDS = 'status,platform_type,is_on_biz_app,quality_rating,health_status';
@@ -196,21 +197,6 @@ async function notifyAdmins(accountId: string, title: string, body: string): Pro
   await publishEvent(accountId, { type: 'notification' });
 }
 
-/** Aviso no WhatsApp da Fluxia (mesmo destino dos chamados de suporte). Best-effort. */
-async function alertPlatform(text: string): Promise<void> {
-  try {
-    const channelId =
-      process.env.PLATFORM_SUPPORT_CHANNEL_ID?.trim() || process.env.PLATFORM_BILLING_CHANNEL_ID?.trim();
-    if (!channelId) return;
-    const to = process.env.PLATFORM_SUPPORT_ALERT_TO?.replace(/\D/g, '').trim() || '556791806048';
-    const ch = await loadChannel(channelId);
-    if (!ch) return;
-    await getProvider(ch.provider).sendText(ch, to, text);
-  } catch (err) {
-    console.error('[meta-health] aviso à plataforma falhou:', err);
-  }
-}
-
 export interface MetaHealthTickResult {
   checked: number;
   down: number;
@@ -347,6 +333,7 @@ export async function runMetaHealthCheck(): Promise<MetaHealthTickResult> {
           );
           await alertPlatform(
             `🔴 *Canal Meta morto*\nConta: ${row.accountId.slice(0, 8)}…\nCanal: ${row.name}\nMotivo: ${reason}\nO CRM marcou como desconectado e avisou os admins da conta.`,
+            'meta-health',
           );
         }
       } else if (health.strikes < STRIKES_TO_DOWN) {

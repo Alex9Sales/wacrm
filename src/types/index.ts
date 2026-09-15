@@ -258,7 +258,9 @@ export type NotificationType =
   | 'agent_action'
   | 'approval_required'
   | 'flow_notification'
-  | 'contact_opted_out';
+  | 'contact_opted_out'
+  // Canal com problema (ex.: Gmail com a senha de app recusada) — migr 0172.
+  | 'channel_alert';
 
 export interface Notification {
   id: string;

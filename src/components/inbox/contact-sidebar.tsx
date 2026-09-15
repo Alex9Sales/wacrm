@@ -98,6 +98,7 @@ import { ContactForm } from "@/components/contacts/contact-form";
 import { DealForm } from "@/components/pipelines/deal-form";
 import { ContactAvatar } from "./contact-avatar";
 import { ContactPhotoDialog } from "./contact-photo-dialog";
+import { EmailBounceBadge } from "./email-bounce-badge";
 import { cn } from "@/lib/utils";
 import { useAuth } from "@/hooks/use-auth";
 import { hasMinRole } from "@/lib/auth/roles";
@@ -785,6 +786,13 @@ export function ContactSidebar({
                 )}
               </span>
             </div>
+            {!contact.is_group && (
+              <EmailBounceBadge
+                key={`${contact.id}:${contact.email ?? ""}`}
+                contactId={contact.id}
+                canRelease={hasMinRole(accountRole ?? "viewer", "supervisor")}
+              />
+            )}
 
             <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground">
               <Building2 className="h-4 w-4 shrink-0 text-muted-foreground" />

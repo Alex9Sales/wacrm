@@ -8,7 +8,7 @@ import {
   markNotificationRead,
 } from "./actions";
 import type { Notification } from "@/types";
-import { Bell, BellOff, CheckCheck, ClipboardCheck, Loader2, UserPlus, Clock, AtSign, ArrowRightLeft, ListChecks, CalendarClock, Sparkles } from "lucide-react";
+import { Bell, BellOff, CheckCheck, ClipboardCheck, Loader2, UserPlus, Clock, AtSign, ArrowRightLeft, ListChecks, CalendarClock, Sparkles, MailWarning } from "lucide-react";
 import { formatDistanceToNow } from "date-fns";
 import { ptBR } from "date-fns/locale";
 import { Button } from "@/components/ui/button";
@@ -28,6 +28,7 @@ const TYPE_ICON: Record<Notification["type"], typeof Bell> = {
   approval_required: ClipboardCheck,
   flow_notification: Bell,
   contact_opted_out: BellOff,
+  channel_alert: MailWarning,
 };
 
 export default function NotificationsPage() {
@@ -87,6 +88,14 @@ export default function NotificationsPage() {
       if (n.type === "task_assigned") {
         if (!n.read_at) markRead(n.id);
         router.push("/tarefas");
+        return;
+      }
+      // Canal com problema (ex.: Gmail com a senha de app recusada) → aba
+      // Canais, onde fica o botão de trocar a senha. Antes do ramo channel_id
+      // (esse campo é do chat interno).
+      if (n.type === "channel_alert") {
+        if (!n.read_at) markRead(n.id);
+        router.push("/settings?tab=channels");
         return;
       }
       // Mensagem agendada atribuída → abre a central de Agendamentos (mesmo

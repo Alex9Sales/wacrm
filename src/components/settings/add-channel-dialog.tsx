@@ -32,6 +32,7 @@ import { Label } from '@/components/ui/label';
 import { PROVIDER_LABELS, type ChannelSummary } from './channels-tab';
 import { EmbeddedSignupButton } from './embedded-signup-button';
 import { ChannelProviderIcon } from './channel-provider-icon';
+import { GmailAppPasswordHelp } from './gmail-app-password-help';
 import type { DomainState } from './email-domain-dialog';
 import type { EmailApiInbound } from './email-api-setup-dialog';
 
@@ -661,23 +662,7 @@ export function AddChannelDialog({
                 provedor. A Fluxia é só o inbox.
               </div>
             )}
-            {provider === 'gmail' && (
-              <div className="rounded-md border border-border bg-muted/40 px-3 py-2 text-xs text-muted-foreground">
-                Como pegar a senha de app: ative a{' '}
-                <strong>verificação em 2 etapas</strong> no Google, depois vá em{' '}
-                <a
-                  href="https://myaccount.google.com/apppasswords"
-                  target="_blank"
-                  rel="noopener noreferrer"
-                  className="text-primary hover:underline"
-                >
-                  Senhas de app
-                </a>{' '}
-                e gere uma — cole os 16 caracteres acima.
-                <br />⚠️ Use um <strong>Gmail dedicado</strong> do negócio: a
-                gente lê a caixa de entrada dele.
-              </div>
-            )}
+            {provider === 'gmail' && <GmailAppPasswordHelp />}
           </div>
         )}
 

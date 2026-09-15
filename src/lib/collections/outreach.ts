@@ -18,6 +18,9 @@ import { db, asaasCharges, channels, contacts, conversations } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { ensureConversationForContact } from '@/lib/whatsapp/resolve-conversation'
+import { gmailSendBlockedReason } from '@/lib/channels/gmail-health-state'
+
+import { suppressedEmails } from './email-suppression'
 
 import { collectionEmail, deliveryPlan, normalizeSettings } from './rules'
 
@@ -56,15 +59,28 @@ export async function pickCollectionChannel(accountId: string, channelId: string
   return { ok: false, error: 'há mais de um número conectado: escolha em Cobranças → Ajustar qual deles envia as cobranças' }
 }
 
-/** Canal de e-mail da conta (o primeiro conectado). */
+/** Motivo pra não mandar e-mail por este canal agora (Gmail com senha recusada). */
+function emailChannelBlocked(c: { provider: string; providerMeta: unknown }): string | null {
+  return c.provider === 'gmail' ? gmailSendBlockedReason(c.providerMeta) : null
+}
+
+/**
+ * Canal de e-mail da conta (o primeiro conectado). 15/09 (GoLink): Gmail com a
+ * senha de app recusada fica de fora — cada tentativa era mais um login
+ * recusado no Google (a régua manda a cada 5 min) e a falha só aparecia como
+ * erro do e-mail depois do WhatsApp.
+ */
 export async function pickEmailChannel(accountId: string): Promise<ChannelPick> {
   const rows = await db
-    .select({ id: channels.id, name: channels.name, status: channels.status })
+    .select({ id: channels.id, name: channels.name, status: channels.status, provider: channels.provider, providerMeta: channels.providerMeta })
     .from(channels)
     .where(and(eq(channels.accountId, accountId), inArray(channels.provider, [...EMAIL_PROVIDERS])))
     .orderBy(channels.createdAt)
-  const connected = rows.find((r) => r.status === 'connected')
-  if (connected) return { ok: true, id: connected.id, name: connected.name }
+  const connected = rows.filter((r) => r.status === 'connected')
+  const usable = connected.find((r) => !emailChannelBlocked(r))
+  if (usable) return { ok: true, id: usable.id, name: usable.name }
+  const blocked = connected.map(emailChannelBlocked).find(Boolean)
+  if (blocked) return { ok: false, error: blocked }
   return { ok: false, error: rows.length ? 'o canal de e-mail da conta está desconectado' : 'nenhum canal de e-mail conectado — conecte um em Canais para cobrar por e-mail' }
 }
 
@@ -84,28 +100,24 @@ export interface CollectionTargets {
 export type TargetsOutcome = ({ ok: true } & CollectionTargets) | { ok: false; error: string }
 
 /**
- * E-mail do cliente no Asaas, para quem não tem e-mail no contato: o que veio
- * junto (lembrete, criar cobrança) ou o das parcelas desse contato na carteira
- * — aberta primeiro, a mais recente.
+ * E-mails do cliente nas parcelas do Asaas (para quem não tem e-mail no
+ * contato) — aberta primeiro, a mais recente. Até 5: se o primeiro voltou
+ * (email_bounces), vale o próximo.
  */
-async function asaasEmailFor(accountId: string, contactId: string, hint: unknown): Promise<string | null> {
-  const direto = collectionEmail(hint)
-  if (direto) return direto
-  const row = firstOrNull(
-    await db
-      .select({ email: asaasCharges.email })
-      .from(asaasCharges)
-      .where(
-        and(
-          eq(asaasCharges.accountId, accountId),
-          eq(asaasCharges.contactId, contactId),
-          sql`nullif(trim(${asaasCharges.email}), '') IS NOT NULL`,
-        ),
-      )
-      .orderBy(desc(asaasCharges.open), desc(asaasCharges.updatedAt))
-      .limit(1),
-  )
-  return collectionEmail(row?.email)
+async function asaasChargeEmails(accountId: string, contactId: string): Promise<string[]> {
+  const rows = await db
+    .select({ email: asaasCharges.email })
+    .from(asaasCharges)
+    .where(
+      and(
+        eq(asaasCharges.accountId, accountId),
+        eq(asaasCharges.contactId, contactId),
+        sql`nullif(trim(${asaasCharges.email}), '') IS NOT NULL`,
+      ),
+    )
+    .orderBy(desc(asaasCharges.open), desc(asaasCharges.updatedAt))
+    .limit(5)
+  return rows.map((r) => r.email).filter((e): e is string => typeof e === 'string')
 }
 
 /**
@@ -143,13 +155,29 @@ export async function resolveCollectionTargets(
   // no Asaas. Não gravamos no contato: parcela ligada ao contato errado (o
   // teste "Sérgio Lemes" caiu no número do próprio João) espalharia o e-mail
   // de um cliente em outro.
-  const contactEmail = collectionEmail(contact.email)
-  const address = contactEmail ?? (await asaasEmailFor(accountId, contactId, opts.fallbackEmail)) ?? ''
+  //
+  // 📭 15/09 (Vale Ouro): endereço que voltou como não entregue
+  // (email_bounces) fica de fora em todos eles — a régua ia mandar de novo pro
+  // domínio que não recebe e-mail. Se a consulta falhar, manda como antes.
+  const hint = typeof opts.fallbackEmail === 'string' ? opts.fallbackEmail : null
+  const chargeEmails = await asaasChargeEmails(accountId, contactId)
+  const candidates = [contact.email, hint, ...chargeEmails]
+  const bounced = await suppressedEmails(accountId, candidates).catch((err) => {
+    console.error('[collections] consulta de e-mails devolvidos falhou conta=%s contato=%s:', accountId, contactId, err)
+    return new Set<string>()
+  })
+  const firstUsable = (skip?: ReadonlySet<string>) =>
+    collectionEmail(contact.email, skip) ??
+    collectionEmail(hint, skip) ??
+    chargeEmails.map((e) => collectionEmail(e, skip)).find(Boolean) ??
+    null
+  const address = firstUsable(bounced) ?? ''
   const hasEmail = !!address
+  const emailBlocked = !hasEmail && bounced.size > 0 ? firstUsable() : null
 
   // Conversas que o contato já tem, com o provedor do canal de cada uma.
   const convs = await db
-    .select({ id: conversations.id, channelId: channels.id, provider: channels.provider, status: channels.status })
+    .select({ id: conversations.id, channelId: channels.id, provider: channels.provider, status: channels.status, providerMeta: channels.providerMeta })
     .from(conversations)
     .innerJoin(channels, eq(channels.id, conversations.channelId))
     .where(and(eq(conversations.accountId, accountId), eq(conversations.contactId, contactId)))
@@ -165,7 +193,9 @@ export async function resolveCollectionTargets(
   const isWaOnFixed = (c: { channelId: string; provider: string }) => isWa(c.provider) && (!fixedChannel || c.channelId === fixedChannel)
   const waConv =
     (hintConversationId ? convs.find((c) => c.id === hintConversationId && isWaOnFixed(c)) : undefined) ?? convs.find((c) => isWaOnFixed(c))
-  const emConv = convs.find((c) => isEmail(c.provider))
+  // Conversa de e-mail num Gmail com a senha recusada não serve: vale o canal
+  // de e-mail que funciona (ou o motivo, na fila).
+  const emConv = convs.find((c) => isEmail(c.provider) && !emailChannelBlocked(c))
 
   const waPick: ChannelPick = waConv ? { ok: true, id: waConv.channelId, name: '' } : await pickCollectionChannel(accountId, settings.channelId)
   const emPick: ChannelPick = emConv ? { ok: true, id: emConv.channelId, name: '' } : await pickEmailChannel(accountId)
@@ -176,6 +206,7 @@ export async function resolveCollectionTargets(
     hasEmail,
     whatsappError: waPick.ok ? null : waPick.error,
     emailError: emPick.ok ? null : emPick.error,
+    emailBlocked,
   })
   if (!plan.ok) return plan
 

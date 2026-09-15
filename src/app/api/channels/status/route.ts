@@ -28,6 +28,15 @@ import {
 } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import type { ProviderId } from '@/lib/channels/provider'
+import { gmailHealthOf, gmailProblem } from '@/lib/channels/gmail-health-state'
+
+/** Frase curta pro banner (lido por todos — sem "troque aqui"). */
+function gmailBannerProblem(providerMeta: unknown): string | null {
+  const p = gmailProblem(gmailHealthOf(providerMeta))
+  if (!p) return null
+  if (p.kind === 'auth_failed') return 'o Google recusou a senha de app'
+  return p.source === 'imap' ? 'não estamos conseguindo ler a caixa' : 'os envios estão falhando'
+}
 
 export async function GET() {
   try {
@@ -39,6 +48,7 @@ export async function GET() {
         name: channels.name,
         status: channels.status,
         phoneNumber: channels.phoneNumber,
+        providerMeta: channels.providerMeta,
       })
       .from(channels)
       .where(eq(channels.accountId, ctx.accountId))
@@ -72,6 +82,10 @@ export async function GET() {
         name: ch.name,
         status: ch.status,
         phone_number: ch.phoneNumber,
+        // 📧 Gmail fica 'connected' mesmo com a senha recusada (o poll segue
+        // tentando): o problema real vem da saúde. Só a frase — nunca o
+        // provider_meta.
+        problem: ch.provider === 'gmail' ? gmailBannerProblem(ch.providerMeta) : null,
       })),
     })
   } catch (err) {

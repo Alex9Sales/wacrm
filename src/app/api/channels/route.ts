@@ -19,6 +19,7 @@ import { db, channels } from '@/db'
 import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { createChannel, type CreateChannelInput } from '@/lib/channels/channels'
 import { EMAIL_HOSTED_DOMAIN } from '@/lib/channels/providers/email-domains'
+import { gmailHealthOf } from '@/lib/channels/gmail-health-state'
 import type { ProviderId } from '@/lib/channels/provider'
 
 // Managed (Fluxia-hosted) infra for the non-official providers. When these
@@ -111,8 +112,10 @@ function safeProviderMeta(
     }
   }
   if (provider === 'gmail') {
-    // Só o endereço Gmail. appPassword fica em `credentials` (nunca exposto).
-    return { address: meta.address ?? null, location, pix }
+    // Endereço + saúde (senha recusada / leitura falhando — 15/09, GoLink: o
+    // canal ficou verde a noite toda com a senha revogada). appPassword fica
+    // em `credentials` e o ponto de leitura (gmailLastUid/UidValidity) não sai.
+    return { address: meta.address ?? null, health: gmailHealthOf(meta), location, pix }
   }
   // waha / evolution / evogo: baseUrl + the session or instance name.
   return {

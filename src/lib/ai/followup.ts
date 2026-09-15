@@ -19,6 +19,7 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 import { isWithinBusinessHours } from '@/lib/settings/business-hours'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { zonedWallToUtc } from './schedule-actions'
+import { gmailSendBlockedReason } from '@/lib/channels/gmail-health-state'
 
 // ---- Trava de madrugada ----------------------------------------------------
 // Não manda follow-up de madrugada (antes das 7h no fuso da conta). Se o horário
@@ -290,7 +291,12 @@ type WorkerChannelCtx = Awaited<ReturnType<typeof listChannels>>[number]
  *  credencial (não há campo de status no ChannelCtx); se faltar credencial, a
  *  entrega falha e cai no WhatsApp. */
 function pickEmailChannel(channels: WorkerChannelCtx[]): WorkerChannelCtx | null {
-  return channels.find((ch) => ch.provider === 'email' || ch.provider === 'gmail') ?? null
+  // Gmail com a senha de app recusada fica de fora (15/09, GoLink): o toque cai no WhatsApp.
+  return (
+    channels.find(
+      (ch) => ch.provider === 'email' || (ch.provider === 'gmail' && !gmailSendBlockedReason(ch.providerMeta)),
+    ) ?? null
+  )
 }
 
 /** Alvo de e-mail deste toque: só resolve endereço (contacts.email) + canal — NÃO

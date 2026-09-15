@@ -82,6 +82,15 @@ export function canManageMembers(role: AccountRole): boolean {
 }
 
 /**
+ * Owner / admin: connect, repair and change credentials of channels. Mirrors
+ * the API gate (requireRole('admin') in /api/channels/*) — a supervisor can
+ * edit settings but gets 403 on the channel routes.
+ */
+export function canManageChannels(role: AccountRole): boolean {
+  return hasMinRole(role, "admin");
+}
+
+/**
  * Owner / admin / supervisor: edit account-wide settings (WhatsApp/channel
  * config, integrations, message templates, pipelines, tags, custom fields,
  * account name). Excludes per-user settings like avatar or own password.

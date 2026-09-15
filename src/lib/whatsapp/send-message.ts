@@ -48,6 +48,7 @@ import { loadChannel, loadDefaultChannel } from '@/lib/channels/channels';
 import { getProvider } from '@/lib/channels/registry';
 import { pickProviderTarget } from '@/lib/channels/target';
 import type { OutboundMedia, ChannelCtx } from '@/lib/channels/provider';
+import { gmailHealthOf } from '@/lib/channels/gmail-health-state';
 import type { MediaKind } from '@/lib/whatsapp/meta-api';
 import {
   sanitizePhoneForMeta,
@@ -91,6 +92,11 @@ export class SendMessageError extends Error {
  */
 export function friendlySendError(raw: string): string | null {
   const m = raw.toLowerCase();
+  // 15/09 (GoLink): Gmail com a senha de app revogada devolvia "gmail send
+  // error: Invalid login: 535-5.7.8 Username and Password not accepted".
+  if (/invalid login|eauth|535[- ]5\.7|534[- ]5\.7|username and password not accepted|application-specific password required/.test(m)) {
+    return 'O Gmail recusou a senha de app deste canal. Um admin precisa gerar uma nova e trocar em Configurações → Canais.';
+  }
   if (/error 463|"?463"?/.test(m)) {
     return 'O WhatsApp recusou o envio agora (limite ou reputação do número). Aguarde alguns minutos e tente novamente.';
   }
@@ -642,6 +648,13 @@ export async function sendMessageToConversation(
       `[send-message] ${provider.id} send failed:`,
       message
     );
+    // Gmail com a senha recusada vira saúde do canal (aviso aos admins + selo
+    // vermelho em Canais). Import dinâmico: send-message é importado em muito
+    // lugar e a saúde só interessa ao Gmail.
+    if (channel.provider === 'gmail') {
+      const { recordGmailSendFailure } = await import('@/lib/channels/gmail-health');
+      await recordGmailSendFailure(channel.id, err, channel.providerMeta);
+    }
     // Show the atendente a clean message; keep the raw in the server log above.
     const friendly = friendlySendError(message);
     throw new SendMessageError(
@@ -649,6 +662,12 @@ export async function sendMessageToConversation(
       friendly ?? `${provider.id} send error: ${message}`,
       502
     );
+  }
+
+  // Gmail: um envio que passou fecha a falha de ENVIO gravada (não a de leitura).
+  if (channel.provider === 'gmail' && gmailHealthOf(channel.providerMeta)?.smtp) {
+    const { recordGmailOk } = await import('@/lib/channels/gmail-health');
+    await recordGmailOk(channel.id, 'smtp');
   }
 
   // The 9th-digit auto-correct is a 1:1 (Meta) thing. NEVER for a group nem para

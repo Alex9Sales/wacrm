@@ -312,12 +312,13 @@ const COLLECTION_EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/
 /**
  * 📧 Um endereço de e-mail utilizável, ou null. Aceita a lista que o Asaas
  * guarda em alguns cadastros ("a@x.com, b@y.com") e fica com o primeiro válido.
+ * `skip`: endereços que voltaram (email_bounces, 15/09 Vale Ouro) — pula.
  */
-export function collectionEmail(value: unknown): string | null {
+export function collectionEmail(value: unknown, skip?: ReadonlySet<string>): string | null {
   if (typeof value !== 'string') return null
   for (const parte of value.split(/[,;\s]+/)) {
     const e = parte.trim().toLowerCase()
-    if (COLLECTION_EMAIL_RE.test(e)) return e
+    if (COLLECTION_EMAIL_RE.test(e) && !skip?.has(e)) return e
   }
   return null
 }
@@ -759,6 +760,8 @@ export interface DeliveryFacts {
   whatsappError: string | null
   /** null = e-mail disponível; senão o motivo (ex.: "nenhum canal de e-mail conectado"). */
   emailError: string | null
+  /** O cliente TEM e-mail, mas todos voltaram (email_bounces): o endereço, pra dizer na fila. */
+  emailBlocked?: string | null
 }
 
 export type DeliveryPlan = { ok: true; whatsapp: boolean; email: boolean; label: string } | { ok: false; error: string }
@@ -769,7 +772,11 @@ export function deliveryPlan(f: DeliveryFacts): DeliveryPlan {
   const wa = f.hasPhone && !f.whatsappError
   const em = f.hasEmail && !f.emailError
   const waWhy = !f.hasPhone ? 'o contato não tem telefone válido' : f.whatsappError!
-  const emWhy = !f.hasEmail ? 'o contato não tem e-mail' : f.emailError!
+  const emWhy = f.emailBlocked && !f.hasEmail
+    ? `o e-mail ${f.emailBlocked} voltou (o endereço não existe) — corrija o e-mail do cliente`
+    : !f.hasEmail
+      ? 'o contato não tem e-mail'
+      : f.emailError!
 
   switch (f.channel) {
     case 'whatsapp':

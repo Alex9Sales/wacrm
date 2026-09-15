@@ -433,6 +433,21 @@ describe('deliveryPlan — por onde a cobrança sai', () => {
     expect(deliveryPlan({ channel: 'both', ...tudo, hasPhone: false })).toEqual({ ok: true, whatsapp: false, email: true, label: 'e-mail' })
   })
 
+  // 15/09 (Vale Ouro): e-mail que voltou fica de fora; a fila diz qual endereço.
+  it('e-mail que voltou: both segue só por WhatsApp; só e-mail diz o endereço', () => {
+    const voltou = { ...tudo, hasEmail: false, emailBlocked: 'financeiro@empresa-exemplo.com.br' }
+    expect(deliveryPlan({ channel: 'both', ...voltou })).toEqual({ ok: true, whatsapp: true, email: false, label: 'WhatsApp' })
+    const r = deliveryPlan({ channel: 'email', ...voltou })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('financeiro@empresa-exemplo.com.br voltou')
+  })
+
+  it('Gmail com a senha recusada: o motivo chega na fila', () => {
+    const r = deliveryPlan({ channel: 'email', ...tudo, emailError: 'a senha de app do Gmail foi recusada pelo Google' })
+    expect(r.ok).toBe(false)
+    if (!r.ok) expect(r.error).toContain('senha de app')
+  })
+
   it('normalizeSettings aceita both e devolve auto para lixo', () => {
     expect(normalizeSettings({ channel: 'both' }).channel).toBe('both')
     expect(normalizeSettings({ channel: 'pombo-correio' }).channel).toBe('auto')

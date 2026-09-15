@@ -1832,7 +1832,7 @@ export const notifications = pgTable("notifications", {
 			foreignColumns: [contacts.id],
 			name: "notifications_contact_id_fkey"
 		}).onDelete("set null"),
-	check("notifications_type_check", sql`type = ANY (ARRAY['conversation_assigned'::text, 'sla_alert'::text, 'mention'::text, 'broadcast_halted'::text, 'deal_transferred'::text, 'deal_ai_suggestion'::text, 'scheduled_message_assigned'::text, 'task_assigned'::text, 'flow_notification'::text, 'contact_opted_out'::text, 'agent_action'::text, 'approval_required'::text])`),
+	check("notifications_type_check", sql`type = ANY (ARRAY['conversation_assigned'::text, 'sla_alert'::text, 'mention'::text, 'broadcast_halted'::text, 'deal_transferred'::text, 'deal_ai_suggestion'::text, 'scheduled_message_assigned'::text, 'task_assigned'::text, 'flow_notification'::text, 'contact_opted_out'::text, 'agent_action'::text, 'approval_required'::text, 'channel_alert'::text])`),
 ]);
 
 export const webhookEndpoints = pgTable("webhook_endpoints", {
@@ -3192,6 +3192,32 @@ export const asaasCharges = pgTable("asaas_charges", {
 	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "asaas_charges_account_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.connectionId], foreignColumns: [asaasConnections.id], name: "asaas_charges_connection_id_fkey" }).onDelete("cascade"),
 	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "asaas_charges_contact_id_fkey" }).onDelete("set null"),
+]);
+
+// 📭 E-mail devolvido (migração 0171) — supressão POR ENDEREÇO. Só devolução
+// permanente (5.x.x) que casou com um envio nosso. cleared_at = liberado de novo.
+export const emailBounces = pgTable("email_bounces", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	/** Sempre em minúsculas (CHECK). */
+	address: text().notNull(),
+	contactId: uuid("contact_id"),
+	channelId: uuid("channel_id"),
+	messageId: uuid("message_id"),
+	statusCode: text("status_code"),
+	diagnostic: text(),
+	bounceCount: integer("bounce_count").default(1).notNull(),
+	firstBouncedAt: timestamp("first_bounced_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	lastBouncedAt: timestamp("last_bounced_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	clearedAt: timestamp("cleared_at", { withTimezone: true, mode: 'string' }),
+	clearedBy: uuid("cleared_by"),
+}, (table) => [
+	uniqueIndex("email_bounces_account_address_uidx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.address.asc().nullsLast().op("text_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "email_bounces_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "email_bounces_contact_id_fkey" }).onDelete("set null"),
+	foreignKey({ columns: [table.channelId], foreignColumns: [channels.id], name: "email_bounces_channel_id_fkey" }).onDelete("set null"),
+	foreignKey({ columns: [table.messageId], foreignColumns: [messages.id], name: "email_bounces_message_id_fkey" }).onDelete("set null"),
+	check("email_bounces_address_lower", sql`address = lower(address)`),
 ]);
 
 // 🧾 Régua de cobrança (migração 0158) — estado por devedor.

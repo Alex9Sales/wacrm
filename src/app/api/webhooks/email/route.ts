@@ -14,6 +14,8 @@ import PostalMime from 'postal-mime'
 import { loadEmailChannelByAddress } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
+import { parseDeliveryReport, type DeliveryReport } from '@/lib/channels/email-bounce'
+import { applyEmailBounce } from '@/lib/channels/email-bounce-apply'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -64,12 +66,20 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
   }
 
+  // 📭 Aviso de devolução (DSN): só dá pra reconhecer no e-mail cru (precisa
+  // dos cabeçalhos e das partes). Vira nota na conversa do envio, nunca contato.
+  // O caminho JSON já parseado não traz cabeçalhos — segue sem essa checagem.
+  let deliveryReport: DeliveryReport | null = null
+
   // Worker "sem dependência" manda o e-mail cru (`raw`) — a gente faz o parse
   // do MIME aqui (assunto/corpo/HTML/remetente). Se vier já parseado (JSON com
   // from/subject/text…), usa direto.
   if (body && typeof body.raw === 'string' && body.raw) {
     try {
       const parsed = await new PostalMime().parse(body.raw)
+      const report = parseDeliveryReport(parsed)
+      // Só aviso de servidor de e-mail; o resto segue como e-mail comum.
+      deliveryReport = report?.trusted ? report : null
       const attachments = (parsed.attachments || [])
         .map((a) => {
           const base64 = attachmentToBase64(a.content)
@@ -121,6 +131,14 @@ export async function POST(request: Request) {
   }
 
   after(async () => {
+    if (deliveryReport) {
+      try {
+        await applyEmailBounce(channel, deliveryReport)
+      } catch (err) {
+        console.error('[webhooks/email] devolução falhou:', err)
+      }
+      return
+    }
     try {
       const parsed = provider.parseWebhook(body)
       for (const ev of parsed.messages) {
