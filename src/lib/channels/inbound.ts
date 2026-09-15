@@ -49,6 +49,7 @@ import {
 import { aiReplyBufferMs } from '@/lib/ai/defaults';
 import { transcribeInboundAudio } from '@/lib/ai/transcribe';
 import { describeImage } from '@/lib/ai/vision';
+import { IMAGE_BURST_LIMIT, shouldDescribeImage } from '@/lib/ai/image-burst';
 import { describeDocument } from '@/lib/ai/document';
 import { loadAiConfig, loadAiConfigForChannel } from '@/lib/ai/config';
 import { getAccountSettings } from '@/lib/settings/account-settings';
@@ -303,7 +304,17 @@ export async function dispatchInboundMessage(
           : cfg.embeddingsApiKey
         : null;
       if (visionKey) {
-        transcription = await describeImage(visionKey, mediaUrl);
+        // 📸 Rajada (14/09, GoLink: 86 fotos em 1 minuto estouraram o limite
+        // por minuto da chave OpenAI da conta): só as primeiras da janela são
+        // descritas. Foto avulsa segue igual.
+        const burst = await shouldDescribeImage(conversation.id);
+        if (burst.describe) {
+          transcription = await describeImage(visionKey, mediaUrl);
+        } else if (burst.position === IMAGE_BURST_LIMIT + 1) {
+          console.log(
+            `[inbound] rajada de imagens na conversa ${conversation.id}: descrevendo só as ${IMAGE_BURST_LIMIT} primeiras do minuto`,
+          );
+        }
       }
     } catch (err) {
       console.error('[inbound] image describe failed:', err);
