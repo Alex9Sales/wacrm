@@ -1041,7 +1041,9 @@ function MessageContent({
                 <Sparkles className="h-3 w-3" />
                 Descrição da IA
               </p>
-              <p className="whitespace-pre-wrap text-sm leading-snug text-foreground/90">
+              {/* 15/09: código de barras (47 dígitos, uma "palavra" só) vazava
+                  da caixa. overflow-wrap:anywhere quebra token longo. */}
+              <p className="whitespace-pre-wrap break-words text-sm leading-snug text-foreground/90 [overflow-wrap:anywhere]">
                 {message.transcription}
               </p>
             </div>
@@ -1087,7 +1089,7 @@ function MessageContent({
                 <Sparkles className="h-3 w-3" />
                 Transcrição
               </p>
-              <p className="whitespace-pre-wrap text-sm leading-snug text-foreground/90">
+              <p className="whitespace-pre-wrap break-words text-sm leading-snug text-foreground/90 [overflow-wrap:anywhere]">
                 {message.transcription}
               </p>
             </div>

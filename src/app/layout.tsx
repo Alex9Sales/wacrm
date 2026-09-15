@@ -51,6 +51,11 @@ export const metadata: Metadata = {
     address: false,
     telephone: false,
   },
+  // <meta name="google" content="notranslate">: o tradutor do Chrome não mexe
+  // na página (ver o comentário no <html> abaixo).
+  other: {
+    google: "notranslate",
+  },
 };
 
 export const viewport: Viewport = {
@@ -97,7 +102,15 @@ export default function RootLayout({
 }>) {
   return (
     <html
-      lang="en"
+      // 15/09 (Renato/Limpeza com Zelo; Wilian/GoLink em 09/09): com lang="en"
+      // o Chrome de quem marcou "sempre traduzir inglês" TRADUZIA o CRM — o
+      // menu virava "Não", "qual de você", "Os" — e, ao mexer no texto por
+      // baixo do React, derrubava a tela com "removeChild" ("Algo deu errado
+      // ao carregar esta tela"). O app é todo em português: lang certo, e
+      // translate="no" + <meta name="google" content="notranslate"> impedem
+      // o tradutor de tocar no DOM.
+      lang="pt-BR"
+      translate="no"
       data-theme={DEFAULT_THEME}
       data-mode={DEFAULT_MODE}
       className={`${inter.variable} h-full antialiased`}
