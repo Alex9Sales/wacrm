@@ -26,8 +26,9 @@ import { markSelfMessage } from '@/lib/ai/self-message'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { phonesMatch } from '@/lib/whatsapp/phone-utils'
 
+import { countEnabledConnections } from './connection-pick'
 import { findDocumentInText } from './document'
-import { createChargeForContact } from './emit'
+import { createChargeForContact, pickChargeConnection } from './emit'
 import { manualChargeMessage, parseDueDate, parseValue } from './emit-rules'
 import {
   DUE_DEFAULTED_NOTE,
@@ -57,11 +58,17 @@ interface Proposal {
   description: string
   /** Parcelas (2–60) ou null = à vista. Vem do pedido ou das condições do negócio no funil. */
   installments?: number | null
+  /**
+   * Conta do Asaas que a regra escolheria (15/09) — SÓ para exibir, e só com
+   * 2+ contas ligadas. O execute continua sem conta escolhida: a regra roda de
+   * novo e a salvaguarda pode trocar; a resposta diz onde ficou de fato.
+   */
+  connectionLabel?: string | null
 }
 
 interface Pending {
   /** collect = pedido em pedaços: guarda o texto acumulado até ter cliente+valor+vencimento.
-   *  document = o Asaas exigiu CPF/CNPJ (produção): esperando o documento pra gerar. */
+   *  document = falta CPF/CNPJ em produção: esperando o documento pra gerar. */
   stage: 'choose' | 'confirm' | 'collect' | 'document'
   candidates?: FoundContact[]
   draft?: Draft
@@ -127,6 +134,21 @@ async function tweakFields<T extends { value: number; dueDate: string; descripti
 }
 
 const proposalText = (p: Proposal & { dueDefaulted?: boolean }) => formatProposal(p) + (p.dueDefaulted ? `\n${DUE_DEFAULTED_NOTE}` : '')
+
+/**
+ * A conta do Asaas que a regra escolheria para este cliente, para a proposta
+ * mostrar ANTES do SIM (15/09, GoLink com duas contas). Com uma conta só → null
+ * e o texto fica como sempre. Só banco; erro → null (a proposta sai sem a conta).
+ */
+async function proposalConnectionLabel(accountId: string, contactId: string): Promise<string | null> {
+  try {
+    const pick = await pickChargeConnection(accountId, contactId, null)
+    return pick.enabledCount >= 2 ? (pick.connection?.label ?? null) : null
+  } catch (err) {
+    console.warn('[owner-command] conta da proposta:', err instanceof Error ? err.message : err)
+    return null
+  }
+}
 
 /**
  * "Me manda o telefone dele que eu cadastro e cobro" — cumpre a promessa:
@@ -225,7 +247,7 @@ async function latestConversationOf(accountId: string, contactId: string): Promi
 }
 
 /** Cria a cobrança e manda o link ao cliente. Devolve o texto para o dono
- *  (e `needsDocument` quando o Asaas exigiu CPF/CNPJ — o chamador pede). */
+ *  (e `needsDocument` quando falta CPF/CNPJ em produção — o chamador pede). */
 async function execute(accountId: string, ownerUserId: string, p: Proposal, cpfCnpj?: string | null): Promise<{ text: string; needsDocument: boolean }> {
   const created = await createChargeForContact({
     accountId,
@@ -276,7 +298,17 @@ async function execute(accountId: string, ownerUserId: string, p: Proposal, cpfC
     console.error('[owner-command] envio do link falhou:', err instanceof Error ? err.message : err)
   }
   void ownerUserId
-  return { text: formatDone(p, created.invoiceUrl, sentVia), needsDocument: false }
+  // Conta na resposta só com 2+ contas (com uma, o texto fica como sempre).
+  const showConnection =
+    !!p.connectionLabel || created.switchedToHome === true || (await countEnabledConnections(accountId).catch(() => 0)) >= 2
+  return {
+    text: formatDone(p, created.invoiceUrl, sentVia, {
+      connectionLabel: showConnection ? created.connectionLabel : null,
+      switchedToHome: created.switchedToHome === true,
+      proposedLabel: p.connectionLabel ?? null,
+    }),
+    needsDocument: false,
+  }
 }
 
 /**
@@ -298,7 +330,7 @@ export async function handleOwnerCommand(args: {
     const pending = (await kvGetJson<Pending>(k)) ?? null
     const text = args.text.trim()
 
-    // ---- o Asaas exigiu CPF/CNPJ (produção, 08/09): esperando o documento
+    // ---- falta CPF/CNPJ em produção (08/09): esperando o documento
     if (pending?.stage === 'document' && pending.proposal) {
       if (looksLikeCancel(text)) {
         await kvDel(k)
@@ -358,7 +390,8 @@ export async function handleOwnerCommand(args: {
         const extra = restLines.join('\n').trim()
         const draft = extra ? (await tweakFields(args.accountId, pending.draft, extra)) ?? pending.draft : pending.draft
         const terms = await installmentsFor(args.accountId, c.id, draft.installments ?? null)
-        const proposal: Proposal & { dueDefaulted?: boolean } = { contactId: c.id, name: c.name, phone: c.phone, ...draft, installments: terms.installments }
+        const connectionLabel = await proposalConnectionLabel(args.accountId, c.id)
+        const proposal: Proposal & { dueDefaulted?: boolean } = { contactId: c.id, name: c.name, phone: c.phone, ...draft, installments: terms.installments, connectionLabel }
         await kvSetJson(k, { stage: 'confirm', proposal } satisfies Pending, TTL_SECONDS)
         await say(proposalText(proposal) + terms.note)
         return true
@@ -433,7 +466,8 @@ export async function handleOwnerCommand(args: {
       return true
     }
     const terms = await installmentsFor(args.accountId, found[0].id, draft.installments ?? null)
-    const proposal: Proposal & { dueDefaulted?: boolean } = { contactId: found[0].id, name: found[0].name, phone: found[0].phone, ...draft, installments: terms.installments }
+    const connectionLabel = await proposalConnectionLabel(args.accountId, found[0].id)
+    const proposal: Proposal & { dueDefaulted?: boolean } = { contactId: found[0].id, name: found[0].name, phone: found[0].phone, ...draft, installments: terms.installments, connectionLabel }
     await kvSetJson(k, { stage: 'confirm', proposal } satisfies Pending, TTL_SECONDS)
     await say(proposalText(proposal) + terms.note)
     return true

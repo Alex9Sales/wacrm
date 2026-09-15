@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { RETRY_AFTER_FAILURE_MS, deliveredEchoSnippet, retryCutoffIso } from './rules'
+import { RETRY_AFTER_FAILURE_MS, deliveredEchoSnippet, holdRefusal, isFinalCollectionError, retryCutoffIso } from './rules'
 
 // 14/09 (A.M Carretos/GoLink): o WAHA devolveu erro mas entregou, e o reenvio do
 // minuto seguinte deu ao devedor a mesma cobrança duas vezes.
@@ -51,5 +51,25 @@ describe('deliveredEchoSnippet', () => {
     const s = deliveredEchoSnippet(comEmoji)!
     expect(s.endsWith('🙏')).toBe(true)
     expect(s).not.toMatch(/�/)
+  })
+})
+
+// 15/09: a recusa pelo freio do devedor (pausa/promessa entre a fila e o envio)
+// é definitiva — o pedido vira 'expired' com o motivo, sem 3 tentativas.
+describe('isFinalCollectionError — o que encerra o pedido sem tentar de novo', () => {
+  it('freio do devedor é final (pausa e promessa)', () => {
+    expect(isFinalCollectionError(holdRefusal('paused', { pausedReason: 'Cliente pediu acordo/parcelamento' }))).toBe(true)
+    expect(isFinalCollectionError(holdRefusal('paused', {}))).toBe(true)
+    expect(isFinalCollectionError(holdRefusal('snoozed', { snoozeUntil: '2026-09-21T03:00:00Z', snoozeReason: 'Cliente prometeu pagar em 19/09' }))).toBe(true)
+  })
+
+  it('pagou ou sumiu entre a fila e o envio continua final', () => {
+    expect(isFinalCollectionError('A parcela já foi paga ou cancelada no Asaas — nada foi enviado.')).toBe(true)
+    expect(isFinalCollectionError('Este cliente não tem mais nada em aberto — a cobrança não foi enviada.')).toBe(true)
+  })
+
+  it('falha temporária tenta de novo', () => {
+    expect(isFinalCollectionError('Não deu para reconferir no Asaas agora: timeout')).toBe(false)
+    expect(isFinalCollectionError('WAHA 500')).toBe(false)
   })
 })

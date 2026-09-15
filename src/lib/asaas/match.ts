@@ -134,6 +134,94 @@ export interface DuplicateGroup {
   customers: { id: string; name: string | null }[]
 }
 
+// ------------------------------------------ qual cadastro recebe a cobrança (15/09)
+// Caso João/GoLink: o CNPJ tinha DOIS cadastros no Asaas — o verdadeiro (com
+// endereço, para a nota fiscal) e um órfão criado pelo CRM. O `limit: 1`
+// pegava qualquer um. Agora a escolha é determinística e fica aqui, pura.
+
+export interface PickableCustomer {
+  id: string
+  cpfCnpj?: string | null
+  externalReference?: string | null
+  postalCode?: string | null
+  addressNumber?: string | null
+  deleted?: boolean | null
+  /** YYYY-MM-DD (o Asaas manda só a data). */
+  dateCreated?: string | null
+}
+
+/** CEP e número preenchidos — o mínimo para o Asaas emitir nota fiscal. */
+export function hasFullAddress(c: { postalCode?: string | null; addressNumber?: string | null }): boolean {
+  return !!(c.postalCode ?? '').replace(/\D/g, '') && !!(c.addressNumber ?? '').trim()
+}
+
+/** Id do Asaas (cus_000005219613): mais curto antes, depois ordem de texto. */
+function compareAsaasId(a: string, b: string): number {
+  if (a.length !== b.length) return a.length - b.length
+  return a < b ? -1 : a > b ? 1 : 0
+}
+
+/** Endereço completo > mais antigo (sem data → menor id) > nosso externalReference > menor id. */
+function preferRealCustomer(externalReference: string | null | undefined) {
+  return (a: PickableCustomer, b: PickableCustomer): number => {
+    const addr = Number(hasFullAddress(b)) - Number(hasFullAddress(a))
+    if (addr) return addr
+    const da = (a.dateCreated ?? '').trim()
+    const dbb = (b.dateCreated ?? '').trim()
+    if (da && dbb) {
+      if (da !== dbb) return da < dbb ? -1 : 1
+    } else {
+      const byId = compareAsaasId(a.id, b.id)
+      if (byId) return byId
+    }
+    if (externalReference) {
+      const ours = Number(b.externalReference === externalReference) - Number(a.externalReference === externalReference)
+      if (ours) return ours
+    }
+    return compareAsaasId(a.id, b.id)
+  }
+}
+
+/**
+ * Entre os cadastros devolvidos pela busca por CPF/CNPJ, o que recebe a
+ * cobrança. Fora os apagados e quem não tem EXATAMENTE esse documento.
+ */
+export function pickCustomerForDocument<T extends PickableCustomer>(
+  list: readonly T[] | null | undefined,
+  doc: string,
+  externalReference?: string | null,
+): T | undefined {
+  const d = normalizeDocument(doc)
+  if (!d) return undefined
+  const ok = (list ?? []).filter((c) => c.deleted !== true && normalizeDocument(c.cpfCnpj) === d)
+  return [...ok].sort(preferRealCustomer(externalReference))[0]
+}
+
+/**
+ * Entre os cadastros com o NOSSO externalReference: o do mesmo documento, senão
+ * o órfão sem documento (para adotar). NUNCA um cadastro com OUTRO documento —
+ * seria cobrar em nome de outra pessoa. Sem documento informado, prefere quem já
+ * tem documento (o Asaas de produção exige) ao órfão.
+ */
+export function pickCustomerForReference<T extends PickableCustomer>(
+  list: readonly T[] | null | undefined,
+  externalReference: string,
+  doc?: string | null,
+): T | undefined {
+  const d = normalizeDocument(doc)
+  const mine = (list ?? []).filter((c) => c.deleted !== true && !!externalReference && c.externalReference === externalReference)
+  const order = preferRealCustomer(externalReference)
+  // Órfão = campo de documento VAZIO. Documento estranho (CNPJ com letras, por
+  // exemplo) não é órfão: é de alguém, e não se sobrescreve.
+  const orphans = () => mine.filter((c) => !(c.cpfCnpj ?? '').trim()).sort(order)
+  if (d) {
+    const same = mine.filter((c) => normalizeDocument(c.cpfCnpj) === d).sort(order)
+    return same[0] ?? orphans()[0]
+  }
+  const withDoc = mine.filter((c) => !!normalizeDocument(c.cpfCnpj)).sort(order)
+  return withDoc[0] ?? orphans()[0]
+}
+
 /** DDD + 8 dígitos locais: tolera 55 e 9º dígito. Vazio quando não parece BR. */
 function phoneIdentity(raw: string | null | undefined): string {
   let d = (raw ?? '').replace(/\D/g, '')

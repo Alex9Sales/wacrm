@@ -28,7 +28,15 @@ import { AsaasApiError, listAllCustomers, setCustomerNotifications, testCredenti
 import { asaasPhoneForContact, daysOverdue, groupDuplicateCustomers, normalizeEmail, type DuplicateGroup } from '@/lib/asaas/match'
 import { findOrCreateContact } from '@/lib/api/v1/contacts'
 import { resolveCollectionTargets, WHATSAPP_PROVIDERS } from '@/lib/collections/outreach'
-import { createChargeForContact } from '@/lib/collections/emit'
+import { createChargeForContact, precheckChargeDocument, resolveChargeDocument } from '@/lib/collections/emit'
+import { connectionHistoryFor, decideConnection, enabledConnectionsOf } from '@/lib/collections/connection-pick'
+import { maskDocument } from '@/lib/collections/document'
+import {
+  accountRefusalText,
+  MANUAL_DOCUMENT_REQUIRED_ERROR,
+  MANUAL_INVALID_DOCUMENT_ERROR,
+  type AccountHistoryView,
+} from '@/lib/collections/charge-form'
 import { changeChargeDueDateCore } from '@/lib/collections/due-date'
 import { manualChargeMessage, parseDueDate, parseValue, validateEmit } from '@/lib/collections/emit-rules'
 import { postInternalNote } from '@/lib/ai/close-actions'
@@ -42,6 +50,8 @@ export interface ActionResult<T = unknown> {
   ok: boolean
   error?: string
   data?: T
+  /** Qual campo a tela destaca (15/09): falta o CPF/CNPJ ou o digitado é inválido. */
+  code?: 'needs_document' | 'invalid_document'
 }
 
 // ------------------------------------------------------------------ conexões
@@ -1162,7 +1172,10 @@ export interface ManualChargeInput {
   sendLink: boolean
   /** Forma de pagamento: UNDEFINED = cliente escolhe (padrão), PIX, BOLETO, CREDIT_CARD. */
   billingType?: 'UNDEFINED' | 'PIX' | 'BOLETO' | 'CREDIT_CARD'
-  /** CPF/CNPJ do cliente, se o cadastro não tiver (Asaas de produção exige). */
+  /**
+   * CPF/CNPJ digitado. Vence o conhecido (carteira > ficha); digitado inválido é
+   * recusado. Em produção sem nenhum dos dois, a action recusa ANTES de tudo.
+   */
   cpfCnpj?: string
   /** Assinatura mensal sem fim (o Asaas gera uma cobrança por mês a partir do vencimento). */
   recurring?: 'MONTHLY'
@@ -1177,6 +1190,11 @@ export interface ManualChargeInput {
   addressNumber?: string
   complement?: string
   province?: string
+  /**
+   * "Cadastrar também na conta escolhida" (15/09): o cliente já existe noutra
+   * conta do Asaas e quem gera confirmou que é cliente das duas empresas.
+   */
+  allowNewCustomerHere?: boolean
 }
 
 export interface ManualChargeResult {
@@ -1192,7 +1210,10 @@ export interface ManualChargeResult {
   subscriptionId?: string | null
 }
 
-export async function createChargeManual(input: ManualChargeInput): Promise<ActionResult<ManualChargeResult>> {
+/** Recusa por conta (15/09): a tela oferece "Usar a conta X" ou "Cadastrar também na Y". */
+export type ManualChargeOutcome = ActionResult<ManualChargeResult> & { otherConnection?: { id: string; label: string } }
+
+export async function createChargeManual(input: ManualChargeInput): Promise<ManualChargeOutcome> {
   const { accountId, userId } = await requireRole('agent')
 
   const value = parseValue(input.valueRaw)
@@ -1211,6 +1232,16 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
       .limit(1),
   )
   if (!contact) return { ok: false, error: 'Contato não encontrado.' }
+
+  // 🛡️ Trava do documento (15/09), ANTES de gravar e-mail na ficha e de abrir
+  // conversa: uma tentativa que o servidor vai recusar não deixa rastro. Só
+  // banco (digitado > carteira > ficha), a mesma regra do createChargeForContact.
+  const pre = await precheckChargeDocument(accountId, input.contactId, input.connectionId, input.cpfCnpj)
+  if (!pre.ok) {
+    if (pre.invalidDocument) return { ok: false, code: 'invalid_document', error: MANUAL_INVALID_DOCUMENT_ERROR }
+    if (pre.needsDocument) return { ok: false, code: 'needs_document', error: MANUAL_DOCUMENT_REQUIRED_ERROR }
+    return { ok: false, error: `Não dá para gerar: ${pre.reason}.` }
+  }
 
   // E-mail digitado aqui também fica na ficha, se ela ainda não tinha um —
   // senão o operador redigita a cada cobrança. Nunca sobrescreve o que existe.
@@ -1269,8 +1300,24 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
       complement: input.complement ?? null,
       province: input.province ?? null,
     },
+    allowNewCustomerHere: input.allowNewCustomerHere === true,
   })
-  if (!created.ok) return { ok: false, error: created.reason }
+  if (!created.ok) {
+    // O cliente já existe noutra conta do Asaas e a conta foi escolhida aqui:
+    // nada foi criado; a tela oferece trocar a conta ou cadastrar também nesta.
+    if (created.otherConnection) {
+      return {
+        ok: false,
+        error: accountRefusalText(created.otherConnection.label, pre.connection.label),
+        otherConnection: { id: created.otherConnection.id, label: created.otherConnection.label },
+      }
+    }
+    if (created.invalidDocument) return { ok: false, code: 'invalid_document', error: MANUAL_INVALID_DOCUMENT_ERROR }
+    // Com documento indo e o Asaas reclamando do CPF/CNPJ, o motivo dele é mais
+    // útil que "falta o documento" — mas o campo é o mesmo.
+    if (created.needsDocument) return { ok: false, code: 'needs_document', error: pre.doc ? created.reason : MANUAL_DOCUMENT_REQUIRED_ERROR }
+    return { ok: false, error: created.reason }
+  }
 
   let sentVia: string | null = null
   let sendError: string | null = null
@@ -1331,6 +1378,102 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Acti
       connectionLabel: created.connectionLabel,
       subscriptionId: created.subscriptionId ?? null,
     },
+  }
+}
+
+// ------------------------------- Nova cobrança: documento e conta (15/09)
+// Leituras leves (só banco, nenhuma chamada ao Asaas) que o diálogo faz ao
+// escolher o contato. Falha vira { ok:false } — nunca "sem documento" ou "sem
+// histórico" fingido, senão a tela afirmaria algo que não conferiu.
+
+export interface ChargeDocumentStatus {
+  known: boolean
+  /** Só o mascarado ("123.***.***-09") — o documento inteiro não sai do servidor. */
+  masked: string | null
+  source: 'wallet' | 'custom_field' | null
+  /** Nome do cadastro no Asaas da cobrança que deu o documento (carteira). */
+  asaasName: string | null
+}
+
+/** Já temos o CPF/CNPJ deste contato? A mesma regra da trava (carteira > ficha). */
+export async function getChargeDocumentStatus(contactId: string): Promise<ActionResult<ChargeDocumentStatus>> {
+  const { accountId } = await requireRole('agent')
+  try {
+    const contact = firstOrNull(
+      await db
+        .select({ id: contacts.id })
+        .from(contacts)
+        .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+        .limit(1),
+    )
+    if (!contact) return { ok: false, error: 'Contato não encontrado.' }
+    const r = await resolveChargeDocument(accountId, contactId)
+    const source = r.source === 'wallet' || r.source === 'custom_field' ? r.source : null
+    return {
+      ok: true,
+      data: {
+        known: !!r.doc,
+        masked: r.doc ? maskDocument(r.doc) : null,
+        source: r.doc ? source : null,
+        asaasName: r.doc ? r.asaasName : null,
+      },
+    }
+  } catch (err) {
+    console.error('[cobranca] conferir documento (tela) falhou:', err instanceof Error ? err.message : err)
+    return { ok: false, error: 'Não deu para conferir o cadastro agora.' }
+  }
+}
+
+export interface ContactAsaasAccount {
+  /** Contas LIGADAS da conta do CRM. Com 1, a tela não muda nada. */
+  enabledCount: number
+  /** A conta da última cobrança do cliente, se ligada (com uma conta só, ela). null = sem sugestão. */
+  suggestedId: string | null
+  /** Onde o cliente tem cobrança no CRM, mais recente primeiro (ligadas ou não). */
+  accounts: AccountHistoryView[]
+  /** O histórico só está numa conta desligada. */
+  disabledHomeLabel: string | null
+}
+
+/**
+ * Em qual conta do Asaas este cliente já é cobrado — para o diálogo pré-escolher
+ * a conta (a conta segue o cliente). Mesma regra da IA e do dono
+ * (decideConnection sem conta pedida), mas a tela só pré-escolhe pelo
+ * HISTÓRICO: sem ele, com 2+ contas, quem gera escolhe.
+ */
+export async function getContactAsaasAccount(contactId: string): Promise<ActionResult<ContactAsaasAccount>> {
+  const { accountId } = await getCurrentAccount()
+  try {
+    const contact = firstOrNull(
+      await db
+        .select({ id: contacts.id })
+        .from(contacts)
+        .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+        .limit(1),
+    )
+    if (!contact) return { ok: false, error: 'Contato não encontrado.' }
+
+    const enabled = await enabledConnectionsOf(accountId)
+    // Uma conta só (ou nenhuma): não há o que decidir — nem lê o histórico.
+    if (enabled.length <= 1) {
+      return { ok: true, data: { enabledCount: enabled.length, suggestedId: enabled[0]?.id ?? null, accounts: [], disabledHomeLabel: null } }
+    }
+    const { doc } = await resolveChargeDocument(accountId, contactId)
+    const history = await connectionHistoryFor(accountId, contactId, doc ? [doc] : [])
+    const d = decideConnection({ enabled, history, requestedId: null })
+    return {
+      ok: true,
+      data: {
+        enabledCount: enabled.length,
+        suggestedId: d.source === 'history' && d.conn ? d.conn.id : null,
+        // Só o que a tela precisa — a linha da conexão tem a chave criptografada.
+        accounts: history.map((h) => ({ id: h.connectionId, label: h.label, enabled: h.enabled, charges: h.charges, lastAt: h.lastAt })),
+        disabledHomeLabel: d.disabledHomeLabel ?? null,
+      },
+    }
+  } catch (err) {
+    console.error('[cobranca] conferir conta do cliente (tela) falhou:', err instanceof Error ? err.message : err)
+    return { ok: false, error: 'Não deu para conferir a conta deste cliente agora.' }
   }
 }
 

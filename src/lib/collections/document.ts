@@ -7,6 +7,7 @@
 // reconhecer que aquilo é um documento — e NÃO confundir com telefone (11
 // dígitos também). Por isso valida os dígitos verificadores: um celular com
 // DDD quase nunca passa como CPF.
+// 15/09: também a trava da cobrança (qual documento vai, e se falta).
 // Puro (sem banco) — importável por teste e por client.
 // ============================================================
 
@@ -69,6 +70,63 @@ export function findDocumentInText(text: string | null | undefined): string | nu
     }
   }
   return null
+}
+
+// ------------------------------------------ trava da cobrança (15/09)
+// Cadastro órfão no Asaas: findOrCreateCustomer criava o cliente SEM CPF e só
+// então o createPayment de produção recusava — a cobrança não nascia, o cliente
+// ficava lá. A decisão agora sai ANTES de qualquer chamada ao Asaas, e é esta.
+
+/** Motivo interno quando falta documento em produção. Contém "CPF ou CNPJ": a regex antiga continua batendo. */
+export const DOCUMENT_REQUIRED_REASON = 'falta o CPF ou CNPJ do cliente (o Asaas de produção não gera cobrança sem ele)'
+
+/** Motivo interno quando o documento DIGITADO não passa nos verificadores. */
+export const INVALID_DOCUMENT_REASON = 'o CPF/CNPJ informado não é válido (confira os números)'
+
+/**
+ * Essa conexão exige documento e não temos? Só o sandbox dispensa: ambiente
+ * desconhecido (ou vazio) conta como produção — falha segura.
+ */
+export function chargeNeedsDocument(environment: string | null | undefined, doc: string | null | undefined): boolean {
+  return environment !== 'sandbox' && !doc
+}
+
+export type ChargeDocumentSource = 'typed' | 'wallet' | 'custom_field'
+
+export interface ChargeDocumentPick {
+  doc: string | null
+  source: ChargeDocumentSource | null
+  /** Digitaram números que não são CPF/CNPJ válido. Nunca cai no documento conhecido. */
+  invalidTyped: boolean
+}
+
+/** 11 ou 14 dígitos → só dígitos; senão null (carteira e ficha já chegam normalizadas). */
+function asDocument(raw: string | null | undefined): string | null {
+  const d = onlyDigits(raw)
+  return d.length === 11 || d.length === 14 ? d : null
+}
+
+/**
+ * Qual documento vai para o Asaas: digitado agora > carteira (cobranças) >
+ * campo personalizado do contato. Digitado com números mas inválido NÃO cai em
+ * silêncio no documento conhecido — quem digitou quis outro (CPF do sócio ×
+ * CNPJ da empresa) e precisa corrigir. Só pontuação/vazio conta como não digitado.
+ */
+export function pickChargeDocument(input: {
+  typed?: string | null
+  wallet?: string | null
+  customField?: string | null
+}): ChargeDocumentPick {
+  const typedDigits = onlyDigits(input.typed)
+  if (typedDigits) {
+    const doc = normalizeValidDocument(typedDigits)
+    return doc ? { doc, source: 'typed', invalidTyped: false } : { doc: null, source: null, invalidTyped: true }
+  }
+  const wallet = asDocument(input.wallet)
+  if (wallet) return { doc: wallet, source: 'wallet', invalidTyped: false }
+  const customField = asDocument(input.customField)
+  if (customField) return { doc: customField, source: 'custom_field', invalidTyped: false }
+  return { doc: null, source: null, invalidTyped: false }
 }
 
 /** Documento parcialmente oculto (só início e verificadores) — pra confirmar sem expor. */

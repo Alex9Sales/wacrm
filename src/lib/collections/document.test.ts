@@ -1,6 +1,15 @@
 import { describe, expect, it } from 'vitest'
 
-import { findDocumentInText, isValidCnpj, isValidCpf, maskDocument, normalizeValidDocument } from './document'
+import {
+  chargeNeedsDocument,
+  DOCUMENT_REQUIRED_REASON,
+  findDocumentInText,
+  isValidCnpj,
+  isValidCpf,
+  maskDocument,
+  normalizeValidDocument,
+  pickChargeDocument,
+} from './document'
 
 // Exemplos públicos de documentação (não são de ninguém).
 const CPF_OK = '529.982.247-25'
@@ -41,5 +50,46 @@ describe('findDocumentInText', () => {
   it('máscara pra confirmar sem expor', () => {
     expect(maskDocument('52998224725')).toBe('529.***.***-25')
     expect(maskDocument('11222333000181')).toBe('11.222.***/****-81')
+  })
+})
+
+describe('trava da cobrança (15/09) — chargeNeedsDocument', () => {
+  it('produção sem documento exige; com documento ou no sandbox, não', () => {
+    expect(chargeNeedsDocument('production', null)).toBe(true)
+    expect(chargeNeedsDocument('production', '52998224725')).toBe(false)
+    expect(chargeNeedsDocument('sandbox', null)).toBe(false)
+  })
+  it('ambiente desconhecido conta como produção (falha segura)', () => {
+    expect(chargeNeedsDocument('', null)).toBe(true)
+    expect(chargeNeedsDocument(null, null)).toBe(true)
+    expect(chargeNeedsDocument('prod', '')).toBe(true)
+  })
+  it('o motivo continua batendo com a regex antiga de "precisa de documento"', () => {
+    expect(/CPF ou CNPJ|cpfCnpj/i.test(DOCUMENT_REQUIRED_REASON)).toBe(true)
+  })
+})
+
+describe('trava da cobrança (15/09) — pickChargeDocument', () => {
+  const WALLET = '11222333000181'
+  const FIELD = '52998224725'
+  it('digitado válido vence carteira e ficha', () => {
+    expect(pickChargeDocument({ typed: CPF_OK, wallet: WALLET, customField: FIELD })).toEqual({ doc: '52998224725', source: 'typed', invalidTyped: false })
+  })
+  it('digitado com verificador errado → inválido e SEM cair no documento conhecido', () => {
+    expect(pickChargeDocument({ typed: '529.982.247-26', wallet: WALLET, customField: FIELD })).toEqual({ doc: null, source: null, invalidTyped: true })
+    // telefone colado no campo também é inválido
+    expect(pickChargeDocument({ typed: '67 99187-5477', wallet: WALLET }).invalidTyped).toBe(true)
+  })
+  it('sem digitado: carteira antes da ficha', () => {
+    expect(pickChargeDocument({ wallet: WALLET, customField: FIELD })).toEqual({ doc: WALLET, source: 'wallet', invalidTyped: false })
+    expect(pickChargeDocument({ wallet: null, customField: FIELD })).toEqual({ doc: FIELD, source: 'custom_field', invalidTyped: false })
+  })
+  it('tudo vazio → sem documento', () => {
+    expect(pickChargeDocument({})).toEqual({ doc: null, source: null, invalidTyped: false })
+    expect(pickChargeDocument({ typed: null, wallet: '', customField: undefined })).toEqual({ doc: null, source: null, invalidTyped: false })
+  })
+  it('digitado só com pontuação ou espaço conta como não digitado', () => {
+    expect(pickChargeDocument({ typed: ' .-/ ', wallet: WALLET })).toEqual({ doc: WALLET, source: 'wallet', invalidTyped: false })
+    expect(pickChargeDocument({ typed: '', customField: FIELD }).source).toBe('custom_field')
   })
 })

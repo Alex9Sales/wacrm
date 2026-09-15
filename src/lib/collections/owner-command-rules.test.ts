@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { formatCandidates, formatProposal, joinCustomerBurst, looksLikeCancel, looksLikeChargeCommand, looksLikeConfirmation, looksLikeCrmOwnText, normalizeParsedCommand, pickCandidateIndex } from './owner-command-rules'
+import { formatCandidates, formatDone, formatProposal, joinCustomerBurst, looksLikeCancel, looksLikeChargeCommand, looksLikeConfirmation, looksLikeCrmOwnText, normalizeParsedCommand, pickCandidateIndex } from './owner-command-rules'
 
 const hoje = new Date(2026, 8, 6)
 
@@ -111,5 +111,55 @@ describe('loop de 09/09 — texto do próprio CRM nunca é pedido nem confirmaç
   it('pedido de gente continua sendo pedido', () => {
     expect(looksLikeCrmOwnText('cria uma cobrança de 150 pro João vencendo dia 10')).toBe(false)
     expect(looksLikeCrmOwnText('quem está devendo?')).toBe(false)
+  })
+})
+
+describe('conta do Asaas no texto do dono (15/09) — só com 2+ contas', () => {
+  const p = { name: 'João Silva', phone: '5567999991234', value: 150, dueDate: '2026-09-10', description: 'Serviço' }
+  const nb = (t: string) => t.replace(/\u00a0/g, ' ')
+
+  it('proposta SEM connectionLabel é idêntica à de antes (quem tem uma conta não vê diferença)', () => {
+    expect(nb(formatProposal(p))).toBe(
+      'Confirma? Cobrar R$ 150,00 de João Silva (5567999991234), vencendo 10/09/2026, "Serviço". Responda SIM para gerar e mandar o link, ou NÃO para cancelar.',
+    )
+    expect(formatProposal({ ...p, connectionLabel: null })).toBe(formatProposal(p))
+    expect(formatProposal({ ...p, connectionLabel: '  ' })).toBe(formatProposal(p))
+  })
+
+  it('proposta COM connectionLabel mostra a conta e continua começando por "Confirma? Cobrar"', () => {
+    const t = nb(formatProposal({ ...p, connectionLabel: 'AsaasGoLink' }))
+    expect(t).toBe(
+      'Confirma? Cobrar R$ 150,00 de João Silva (5567999991234), vencendo 10/09/2026, "Serviço", na conta AsaasGoLink. Responda SIM para gerar e mandar o link, ou NÃO para cancelar.',
+    )
+    expect(t.startsWith('Confirma? Cobrar')).toBe(true)
+    expect(looksLikeCrmOwnText(t)).toBe(true)
+    expect(looksLikeConfirmation(t)).toBe(false)
+  })
+
+  it('formatDone sem conta é idêntico ao de antes; com conta, ", na conta X"', () => {
+    expect(nb(formatDone(p, 'https://asaas/i/1', 'WhatsApp'))).toBe('Pronto ✅ Cobrança de R$ 150,00 para João Silva, vence 10/09/2026. Link enviado por WhatsApp.\nhttps://asaas/i/1')
+    expect(formatDone(p, 'L', null, {})).toBe(formatDone(p, 'L', null))
+    expect(nb(formatDone(p, 'https://asaas/i/1', 'WhatsApp', { connectionLabel: 'AsaasGoLink', proposedLabel: 'AsaasGoLink' }))).toBe(
+      'Pronto ✅ Cobrança de R$ 150,00 para João Silva, vence 10/09/2026, na conta AsaasGoLink. Link enviado por WhatsApp.\nhttps://asaas/i/1',
+    )
+  })
+
+  it('formatDone avisa a troca de conta (e continua começando por "Pronto ✅")', () => {
+    const t = nb(formatDone(p, 'L', 'WhatsApp', { connectionLabel: 'AsaasGoLink', switchedToHome: true, proposedLabel: 'Asaas' }))
+    expect(t).toContain(', na conta AsaasGoLink.')
+    expect(t).toContain('(O cliente já era cadastrado na conta AsaasGoLink do Asaas, então gerei lá.)')
+    expect(t.startsWith('Pronto ✅')).toBe(true)
+    const outra = nb(formatDone(p, 'L', null, { connectionLabel: 'AsaasGoLink', proposedLabel: 'Asaas' }))
+    expect(outra).toContain('(A proposta dizia a conta Asaas, mas gerei na AsaasGoLink.)')
+    expect(looksLikeCrmOwnText(outra)).toBe(true)
+  })
+
+  it('"Não consegui gerar: …" (motivos novos da conta) é texto do CRM, nunca pedido nem SIM', () => {
+    const t =
+      'Não consegui gerar: o cliente está cadastrado em mais de uma conta do Asaas (AsaasGoLink e Asaas) e ninguém escolheu a conta. Gere pela tela Cobranças escolhendo a conta. Nada foi cobrado.'
+    expect(looksLikeCrmOwnText(t)).toBe(true)
+    expect(looksLikeCrmOwnText('Nao consegui gerar: falta o CPF ou CNPJ do cliente')).toBe(true)
+    expect(looksLikeConfirmation(t)).toBe(false)
+    expect(looksLikeConfirmation('Não consegui gerar')).toBe(false)
   })
 })

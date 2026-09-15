@@ -46,6 +46,15 @@ import { isStaleActionError, reloadForStaleAction } from '@/lib/stale-action';
 import { Button } from '@/components/ui/button';
 import { ContactPicker } from '@/components/contacts/contact-picker';
 import { parseDueDate, parseValue } from '@/lib/collections/emit-rules';
+import {
+  accountHint,
+  accountRefusalText,
+  connectionAfterLookup,
+  documentFieldView,
+  MANUAL_INVALID_DOCUMENT_ERROR,
+  type AccountLookup,
+  type DocumentLookup,
+} from '@/lib/collections/charge-form';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
@@ -59,6 +68,8 @@ import {
   getWallet,
   checkAsaasDuplicates,
   createChargeManual,
+  getChargeDocumentStatus,
+  getContactAsaasAccount,
   createContactForDebtor,
   createContactsForPendingDebtors,
   linkDebtorToContact,
@@ -1026,7 +1037,25 @@ function NewChargeDialog({
   onCreated: () => void;
 }) {
   const [contactId, setContactId] = useState('');
-  const [connectionId, setConnectionId] = useState<string>(conns[0]?.id ?? '');
+  // 15/09 (GoLink, duas contas = dois CNPJs): com 2+ contas o select começa
+  // VAZIO — antes vinha com a 1ª e o cliente de uma conta ganhava um segundo
+  // cadastro na outra, com o dinheiro caindo no CNPJ errado. A conta da última
+  // cobrança do cliente entra sozinha quando o contato é escolhido.
+  const [connectionId, setConnectionId] = useState<string>(conns.length > 1 ? '' : (conns[0]?.id ?? ''));
+  const [acct, setAcct] = useState<AccountLookup>({ state: 'idle' });
+  // O CPF/CNPJ que já temos do contato (mascarado) — decide se o campo é obrigatório.
+  const [docStatus, setDocStatus] = useState<DocumentLookup>({ state: 'idle' });
+  // Recusa do servidor: o cliente já está cadastrado noutra conta do Asaas.
+  // chosenId = a conta que o servidor RECUSOU (revisão 15/09): o aviso e o
+  // "Cadastrar também" valem só para ela, não para o que estiver no select depois.
+  const [wrongConn, setWrongConn] = useState<{ id: string; label: string; chosenId: string; chosenLabel: string } | null>(null);
+  const wrongRef = useRef<HTMLDivElement>(null);
+  // O servidor recusou pelo documento: destaca o campo até alguém digitar.
+  const [cpfFlagged, setCpfFlagged] = useState(false);
+  // Guarda de corrida: resposta de um contato que já não é o escolhido é descartada.
+  const pickedRef = useRef('');
+  // Mexeu no select: a sugestão que chega depois não passa por cima (só avisa se for outra).
+  const connTouchedRef = useRef(false);
   const [valueRaw, setValueRaw] = useState('');
   const [dueDate, setDueDate] = useState(() => new Date(Date.now() + 3 * 86_400_000).toISOString().slice(0, 10));
   const [description, setDescription] = useState('');
@@ -1076,11 +1105,140 @@ function NewChargeDialog({
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState<{ url: string; sentVia: string | null; sendError: string | null; reused: boolean; subscription: boolean } | null>(null);
 
+  // Escolheu (ou limpou) o contato: confere, só no banco, o documento que já
+  // temos e em qual conta do Asaas ele é cobrado. As duas respostas passam pela
+  // guarda de corrida.
+  const onContactPicked = useCallback(
+    (id: string) => {
+      const previous = pickedRef.current;
+      pickedRef.current = id;
+      setContactId(id);
+      // O CPF digitado era do contato anterior.
+      setCpfCnpj('');
+      setCpfFlagged(false);
+      setWrongConn(null);
+      // Trocar de contato zera a escolha da conta (a conta segue o cliente). Só
+      // o que foi escolhido ANTES do 1º contato continua valendo.
+      if (previous) connTouchedRef.current = false;
+
+      if (!id) {
+        setDocStatus({ state: 'idle' });
+        setAcct({ state: 'idle' });
+        if (conns.length > 1 && !connTouchedRef.current) setConnectionId('');
+        return;
+      }
+
+      setDocStatus({ state: 'loading' });
+      getChargeDocumentStatus(id)
+        .then((r) => {
+          if (pickedRef.current !== id) return;
+          setDocStatus(
+            r.ok && r.data
+              ? { state: 'ok', known: r.data.known, masked: r.data.masked, asaasName: r.data.asaasName }
+              : { state: 'error' },
+          );
+        })
+        .catch(() => {
+          if (pickedRef.current === id) setDocStatus({ state: 'error' });
+        });
+
+      // Com uma conta só nada muda na tela — nem consulta.
+      if (conns.length <= 1) return;
+      setAcct({ state: 'loading' });
+      if (!connTouchedRef.current) setConnectionId('');
+      getContactAsaasAccount(id)
+        .then((r) => {
+          if (pickedRef.current !== id) return;
+          const next: AccountLookup =
+            r.ok && r.data
+              ? { state: 'ok', suggestedId: r.data.suggestedId, accounts: r.data.accounts, disabledHomeLabel: r.data.disabledHomeLabel }
+              : { state: 'error' };
+          setAcct(next);
+          if (!connTouchedRef.current) setConnectionId(connectionAfterLookup(next, conns));
+        })
+        .catch(() => {
+          if (pickedRef.current === id) setAcct({ state: 'error' });
+        });
+    },
+    [conns],
+  );
+
   const valueOk = parseValue(valueRaw) != null;
   const dueOk = parseDueDate(dueDate) != null;
   const cpfDigits = cpfCnpj.replace(/\D/g, '');
-  const cpfOk = cpfDigits.length === 0 || cpfDigits.length === 11 || cpfDigits.length === 14;
-  const canSubmit = !!contactId && valueOk && dueOk && cpfOk && description.trim().length >= 3 && !busy;
+  // Com 2+ contas, a escolhida no select (vazio = nenhuma ainda); com uma, ela.
+  const selectedConn = conns.length > 1 ? conns.find((c) => c.id === connectionId) : conns[0];
+  // Sem conta escolhida conta como produção (exige documento) — igual ao servidor.
+  const docField = documentFieldView({ hasContact: !!contactId, environment: selectedConn?.environment, lookup: docStatus, typed: cpfCnpj });
+  const acctHint = accountHint(acct, conns, connectionId);
+  const connOk = conns.length <= 1 || !!selectedConn;
+  const canSubmit = !!contactId && valueOk && dueOk && docField.ok && connOk && description.trim().length >= 3 && !busy;
+
+  const submit = async (opts: { allowNewCustomerHere?: boolean; connectionIdOverride?: string } = {}) => {
+    const forContact = contactId;
+    const usedConnId = opts.connectionIdOverride ?? connectionId;
+    setBusy(true);
+    try {
+      const res = await createChargeManual({
+        contactId,
+        connectionId: conns.length > 1 ? usedConnId || null : null,
+        valueRaw,
+        dueDate,
+        description,
+        sendLink,
+        billingType,
+        cpfCnpj: cpfDigits || undefined,
+        recurring: kind === 'subscription' ? 'MONTHLY' : undefined,
+        email: email.trim() || undefined,
+        postalCode: postalCode.trim() || undefined,
+        address: address.trim() || undefined,
+        addressNumber: addressNumber.trim() || undefined,
+        complement: complement.trim() || undefined,
+        province: province.trim() || undefined,
+        allowNewCustomerHere: opts.allowNewCustomerHere ? true : undefined,
+      });
+      if (!res.ok) {
+        toast.error(res.error ?? 'Não foi possível gerar a cobrança.');
+        // Trocou de contato enquanto gerava: o aviso não é mais deste.
+        if (pickedRef.current !== forContact) return;
+        if (res.otherConnection) {
+          setWrongConn({
+            id: res.otherConnection.id,
+            label: res.otherConnection.label,
+            chosenId: usedConnId,
+            chosenLabel: conns.find((c) => c.id === usedConnId)?.label ?? '',
+          });
+          requestAnimationFrame(() => wrongRef.current?.scrollIntoView({ block: 'nearest', behavior: 'smooth' }));
+        }
+        if (res.code === 'needs_document' || res.code === 'invalid_document') {
+          setCpfFlagged(true);
+          // O servidor manda: sem documento pra essa conta, o campo passa a ser obrigatório.
+          if (res.code === 'needs_document' && !cpfDigits) setDocStatus({ state: 'ok', known: false, masked: null, asaasName: null });
+          requestAnimationFrame(() => {
+            const el = document.getElementById('nc-cpf');
+            el?.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            el?.focus();
+          });
+        }
+        return;
+      }
+      setWrongConn(null);
+      const d = res.data!;
+      setDone({ url: d.invoiceUrl, sentVia: d.sentVia, sendError: d.sendError, reused: d.reused, subscription: !!d.subscriptionId });
+      toast.success(
+        d.subscriptionId
+          ? d.sentVia
+            ? `Assinatura criada e link da 1ª cobrança enviado por ${d.sentVia}.`
+            : 'Assinatura mensal criada.'
+          : d.sentVia
+            ? `Cobrança gerada e link enviado por ${d.sentVia}.`
+            : 'Cobrança gerada.',
+      );
+      onCreated();
+    } finally {
+      setBusy(false);
+    }
+  };
 
   return (
     <Dialog open onOpenChange={(v) => !v && onClose()}>
@@ -1141,8 +1299,81 @@ function NewChargeDialog({
           <div className="-mx-1 flex min-h-0 flex-1 flex-col gap-3 overflow-y-auto px-1 pb-1">
             <div className="flex flex-col gap-1.5">
               <Label>Contato</Label>
-              <ContactPicker value={contactId} onChange={(id) => setContactId(id)} />
+              <ContactPicker value={contactId} onChange={(id) => onContactPicked(id)} disabled={busy} />
             </div>
+
+            {/* 15/09: a conta logo abaixo do contato — é ele que decide a conta. */}
+            {conns.length > 1 && (
+              <div className="flex flex-col gap-1.5">
+                <Label htmlFor="nc-conn">Conta do Asaas</Label>
+                <select
+                  id="nc-conn"
+                  className="h-9 w-full rounded-md border bg-background px-2 text-sm"
+                  value={connectionId}
+                  disabled={busy}
+                  onChange={(e) => {
+                    connTouchedRef.current = true;
+                    setConnectionId(e.target.value);
+                    setWrongConn(null);
+                  }}
+                >
+                  <option value="" disabled>
+                    Escolha a conta do Asaas
+                  </option>
+                  {conns.map((c) => (
+                    <option key={c.id} value={c.id}>
+                      {c.label}
+                      {c.environment === 'sandbox' ? ' (sandbox)' : ''}
+                    </option>
+                  ))}
+                </select>
+                {acctHint && (
+                  <p className={cn('text-xs', acctHint.tone === 'warn' ? 'text-amber-700 dark:text-amber-400' : 'text-muted-foreground')}>
+                    {acctHint.tone === 'warn' && <AlertTriangle className="mr-1 inline h-3.5 w-3.5 -translate-y-px" />}
+                    {acctHint.text}
+                  </p>
+                )}
+              </div>
+            )}
+
+            {wrongConn && (conns.length <= 1 || wrongConn.chosenId === connectionId) && (
+              <div
+                ref={wrongRef}
+                className="flex flex-col gap-2 rounded-md border border-amber-500/40 bg-amber-50 px-3 py-2.5 text-sm text-amber-900 dark:bg-amber-950/40 dark:text-amber-200"
+              >
+                <p className="flex items-start gap-2">
+                  <AlertTriangle className="mt-0.5 h-4 w-4 shrink-0" />
+                  <span>{accountRefusalText(wrongConn.label, wrongConn.chosenLabel)}</span>
+                </p>
+                <div className="flex flex-wrap gap-2">
+                  {conns.some((c) => c.id === wrongConn.id) && (
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      disabled={busy}
+                      onClick={() => {
+                        connTouchedRef.current = true;
+                        setConnectionId(wrongConn.id);
+                        setWrongConn(null);
+                        toast.success(
+                          `Conta trocada para ${wrongConn.label}. Confira e clique em ${kind === 'subscription' ? 'Criar assinatura' : 'Gerar cobrança'}.`,
+                        );
+                      }}
+                    >
+                      Usar a conta {wrongConn.label}
+                    </Button>
+                  )}
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    disabled={!canSubmit}
+                    onClick={() => void submit({ allowNewCustomerHere: true, connectionIdOverride: wrongConn.chosenId })}
+                  >
+                    Cadastrar também na {wrongConn.chosenLabel}
+                  </Button>
+                </div>
+              </div>
+            )}
 
             <div className="flex flex-col gap-1.5">
               <Label htmlFor="nc-kind">Tipo</Label>
@@ -1205,40 +1436,32 @@ function NewChargeDialog({
                 )}
               </div>
               <div className="flex flex-col gap-1.5">
-                <Label htmlFor="nc-cpf">CPF/CNPJ do cliente</Label>
+                {/* 15/09: "obrigatório" só em produção sem documento conhecido; o
+                    digitado passa pelos verificadores (telefone colado não vira CPF). */}
+                <Label htmlFor="nc-cpf">{docField.label}</Label>
                 <Input
                   id="nc-cpf"
                   inputMode="numeric"
-                  placeholder="só se o cadastro não tiver"
+                  placeholder={docField.placeholder}
                   value={cpfCnpj}
-                  onChange={(e) => setCpfCnpj(e.target.value)}
-                  aria-invalid={!cpfOk}
-                  className={cn(!cpfOk && 'border-red-500')}
+                  onChange={(e) => {
+                    setCpfCnpj(e.target.value);
+                    setCpfFlagged(false);
+                    // Outro documento: a recusa por conta era do anterior.
+                    setWrongConn(null);
+                  }}
+                  aria-invalid={docField.showInvalid || cpfFlagged}
+                  aria-describedby="nc-cpf-hint"
+                  className={cn((docField.showInvalid || cpfFlagged) && 'border-red-500')}
                 />
               </div>
             </div>
-            <p className="-mt-1 text-xs text-muted-foreground">
-              O Asaas de produção exige CPF/CNPJ pra emitir. Se o contato já tem no cadastro (ou já é cliente do Asaas), pode deixar em branco.
+            <p
+              id="nc-cpf-hint"
+              className={cn('-mt-1 text-xs', docField.showInvalid ? 'text-red-600 dark:text-red-400' : 'text-muted-foreground')}
+            >
+              {docField.showInvalid ? MANUAL_INVALID_DOCUMENT_ERROR : docField.hint}
             </p>
-
-            {conns.length > 1 && (
-              <div className="flex flex-col gap-1.5">
-                <Label htmlFor="nc-conn">Conta do Asaas</Label>
-                <select
-                  id="nc-conn"
-                  className="h-9 w-full rounded-md border bg-background px-2 text-sm"
-                  value={connectionId}
-                  onChange={(e) => setConnectionId(e.target.value)}
-                >
-                  {conns.map((c) => (
-                    <option key={c.id} value={c.id}>
-                      {c.label}
-                      {c.environment === 'sandbox' ? ' (sandbox)' : ''}
-                    </option>
-                  ))}
-                </select>
-              </div>
-            )}
 
             {/* 📄 Dados de nota fiscal: dobrado, porque a maioria das cobranças
                 não precisa. Vai tudo pro cadastro do Asaas e fica lá. */}
@@ -1333,49 +1556,7 @@ function NewChargeDialog({
               <Button variant="outline" onClick={onClose} disabled={busy}>
                 Cancelar
               </Button>
-              <Button
-                disabled={!canSubmit}
-                onClick={async () => {
-                  setBusy(true);
-                  try {
-                    const res = await createChargeManual({
-                      contactId,
-                      connectionId: conns.length > 1 ? connectionId || null : null,
-                      valueRaw,
-                      dueDate,
-                      description,
-                      sendLink,
-                      billingType,
-                      cpfCnpj: cpfDigits || undefined,
-                      recurring: kind === 'subscription' ? 'MONTHLY' : undefined,
-                      email: email.trim() || undefined,
-                      postalCode: postalCode.trim() || undefined,
-                      address: address.trim() || undefined,
-                      addressNumber: addressNumber.trim() || undefined,
-                      complement: complement.trim() || undefined,
-                      province: province.trim() || undefined,
-                    });
-                    if (!res.ok) {
-                      toast.error(res.error ?? 'Não foi possível gerar a cobrança.');
-                      return;
-                    }
-                    const d = res.data!;
-                    setDone({ url: d.invoiceUrl, sentVia: d.sentVia, sendError: d.sendError, reused: d.reused, subscription: !!d.subscriptionId });
-                    toast.success(
-                      d.subscriptionId
-                        ? d.sentVia
-                          ? `Assinatura criada e link da 1ª cobrança enviado por ${d.sentVia}.`
-                          : 'Assinatura mensal criada.'
-                        : d.sentVia
-                          ? `Cobrança gerada e link enviado por ${d.sentVia}.`
-                          : 'Cobrança gerada.',
-                    );
-                    onCreated();
-                  } finally {
-                    setBusy(false);
-                  }
-                }}
-              >
+              <Button disabled={!canSubmit} onClick={() => void submit()}>
                 {busy ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Receipt className="mr-1.5 h-3.5 w-3.5" />}
                 {kind === 'subscription' ? 'Criar assinatura' : 'Gerar cobrança'}
               </Button>

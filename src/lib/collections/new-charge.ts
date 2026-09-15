@@ -251,7 +251,7 @@ export async function queueNewChargeNotices(args: {
       continue
     }
 
-    await db.insert(agentActionRequests).values({
+    const [queuedRow] = await db.insert(agentActionRequests).values({
       accountId: args.accountId,
       agentId: args.agentId,
       contactId: cand.contactId,
@@ -274,7 +274,10 @@ export async function queueNewChargeNotices(args: {
       decision: decision.decision === 'auto_execute' ? 'auto' : decision.decision === 'request_approval' ? 'approve' : 'suggest',
       policy: decision.reason,
       status: 'pending',
-    })
+    }).onConflictDoNothing().returning({ id: agentActionRequests.id })
+    // Pedido pendente do mesmo contato criado por outra rodada ao mesmo tempo:
+    // o índice único recusa e o aviso sai numa próxima (não derruba o lote).
+    if (!queuedRow) continue
     args.alreadyQueued.add(cand.contactId)
     out.queued += 1
     budget -= 1

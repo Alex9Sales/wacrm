@@ -1,6 +1,17 @@
 import { describe, expect, it } from 'vitest'
 
-import { asaasPhoneForContact, brPhoneCandidates, daysOverdue, decideMatch, groupDuplicateCustomers, normalizeDocument, normalizeEmail } from './match'
+import {
+  asaasPhoneForContact,
+  brPhoneCandidates,
+  daysOverdue,
+  decideMatch,
+  groupDuplicateCustomers,
+  hasFullAddress,
+  normalizeDocument,
+  normalizeEmail,
+  pickCustomerForDocument,
+  pickCustomerForReference,
+} from './match'
 
 describe('brPhoneCandidates', () => {
   it('acha o mesmo celular gravado com e sem o 55', () => {
@@ -163,5 +174,84 @@ describe('groupDuplicateCustomers — Renato ×3', () => {
     expect(g.map((x) => x.by)).toEqual(['phone', 'email'])
     expect(g[0].customers.map((c) => c.id)).toEqual(['a', 'b'])
     expect(g[1].customers.map((c) => c.id)).toEqual(['c', 'd'])
+  })
+})
+
+describe('qual cadastro recebe a cobrança (15/09)', () => {
+  const CNPJ = '11222333000181'
+  const OUTRO = '52998224725'
+  const REF = '09e0fe5d-d60d-41a4-9a22-a7e07c28589a'
+
+  it('hasFullAddress: CEP e número preenchidos', () => {
+    expect(hasFullAddress({ postalCode: '79000-000', addressNumber: '12' })).toBe(true)
+    expect(hasFullAddress({ postalCode: '79000000', addressNumber: ' ' })).toBe(false)
+    expect(hasFullAddress({})).toBe(false)
+  })
+
+  describe('pickCustomerForDocument', () => {
+    it('caso João: órfão nosso sem endereço (mais novo) × cadastro com endereço (mais antigo) → o com endereço', () => {
+      const orfao = { id: 'cus_000000000009', cpfCnpj: CNPJ, externalReference: REF, dateCreated: '2026-09-15' }
+      const real = { id: 'cus_000000000002', cpfCnpj: '11.222.333/0001-81', postalCode: '79000000', addressNumber: '100', dateCreated: '2025-01-10' }
+      expect(pickCustomerForDocument([orfao, real], CNPJ, REF)?.id).toBe('cus_000000000002')
+    })
+    it('endereço completo vence mesmo sendo o mais novo', () => {
+      const antigo = { id: 'cus_1', cpfCnpj: CNPJ, dateCreated: '2024-01-01' }
+      const comEndereco = { id: 'cus_2', cpfCnpj: CNPJ, postalCode: '79000000', addressNumber: '1', dateCreated: '2026-01-01' }
+      expect(pickCustomerForDocument([antigo, comEndereco], CNPJ, REF)?.id).toBe('cus_2')
+    })
+    it('ignora apagado e quem tem outro documento', () => {
+      const apagado = { id: 'cus_1', cpfCnpj: CNPJ, postalCode: '79000000', addressNumber: '1', deleted: true, dateCreated: '2020-01-01' }
+      const outro = { id: 'cus_2', cpfCnpj: OUTRO, dateCreated: '2020-01-01' }
+      const certo = { id: 'cus_3', cpfCnpj: CNPJ, dateCreated: '2026-01-01' }
+      expect(pickCustomerForDocument([apagado, outro, certo], CNPJ, REF)?.id).toBe('cus_3')
+      expect(pickCustomerForDocument([apagado, outro], CNPJ, REF)).toBeUndefined()
+    })
+    it('sem endereço nos dois → o mais antigo; sem data → menor id', () => {
+      expect(pickCustomerForDocument([
+        { id: 'cus_1', cpfCnpj: CNPJ, dateCreated: '2026-05-01' },
+        { id: 'cus_2', cpfCnpj: CNPJ, dateCreated: '2025-05-01' },
+      ], CNPJ)?.id).toBe('cus_2')
+      expect(pickCustomerForDocument([
+        { id: 'cus_000000000010', cpfCnpj: CNPJ },
+        { id: 'cus_000000000009', cpfCnpj: CNPJ },
+      ], CNPJ)?.id).toBe('cus_000000000009')
+    })
+    it('empate total (mesmo dia, sem endereço) → o de externalReference nosso', () => {
+      expect(pickCustomerForDocument([
+        { id: 'cus_1', cpfCnpj: CNPJ, dateCreated: '2026-09-15' },
+        { id: 'cus_2', cpfCnpj: CNPJ, dateCreated: '2026-09-15', externalReference: REF },
+      ], CNPJ, REF)?.id).toBe('cus_2')
+    })
+    it('lista vazia ou documento que não é CPF/CNPJ → undefined', () => {
+      expect(pickCustomerForDocument([], CNPJ, REF)).toBeUndefined()
+      expect(pickCustomerForDocument(null, CNPJ, REF)).toBeUndefined()
+      expect(pickCustomerForDocument([{ id: 'cus_1', cpfCnpj: '123' }], '123', REF)).toBeUndefined()
+    })
+  })
+
+  describe('pickCustomerForReference', () => {
+    it('mesmo documento vence o órfão sem documento', () => {
+      const orfao = { id: 'cus_1', externalReference: REF, cpfCnpj: null, dateCreated: '2020-01-01' }
+      const mesmo = { id: 'cus_2', externalReference: REF, cpfCnpj: CNPJ, dateCreated: '2026-01-01' }
+      expect(pickCustomerForReference([orfao, mesmo], REF, CNPJ)?.id).toBe('cus_2')
+    })
+    it('com documento, devolve o órfão sem documento para adotar', () => {
+      expect(pickCustomerForReference([{ id: 'cus_1', externalReference: REF, cpfCnpj: '' }], REF, CNPJ)?.id).toBe('cus_1')
+    })
+    it('NUNCA devolve cadastro com documento diferente do informado', () => {
+      expect(pickCustomerForReference([{ id: 'cus_1', externalReference: REF, cpfCnpj: OUTRO }], REF, CNPJ)).toBeUndefined()
+    })
+    it('ignora ref diferente e apagado', () => {
+      expect(pickCustomerForReference([
+        { id: 'cus_1', externalReference: 'outro-contato', cpfCnpj: CNPJ },
+        { id: 'cus_2', externalReference: REF, cpfCnpj: CNPJ, deleted: true },
+      ], REF, CNPJ)).toBeUndefined()
+    })
+    it('sem documento informado: prefere quem já tem documento ao órfão', () => {
+      const orfao = { id: 'cus_1', externalReference: REF, cpfCnpj: null }
+      const comDoc = { id: 'cus_2', externalReference: REF, cpfCnpj: CNPJ }
+      expect(pickCustomerForReference([orfao, comDoc], REF, null)?.id).toBe('cus_2')
+      expect(pickCustomerForReference([orfao], REF)?.id).toBe('cus_1')
+    })
   })
 })

@@ -13,8 +13,9 @@
 //
 // Travas, na ordem: régua ligada · freio da conta (IA pausada / só sugestões)
 // · janela de horário · teto do dia · cadência. Antes de mandar, o executor
+// confere se o devedor não foi parado (pausa, promessa, comprovante) e
 // reconfere no Asaas se ainda há parcela aberta (executeOrchestrationAction) —
-// quem pagou entre a fila e o envio não recebe cobrança.
+// quem pagou ou foi parado entre a fila e o envio não recebe cobrança.
 // ============================================================
 import { and, asc, eq, gte, inArray, notInArray, or, sql } from 'drizzle-orm'
 
@@ -24,14 +25,11 @@ import { executeOrchestrationAction, recordCollectionTouch } from '@/lib/orchest
 import { getAccountSettings } from '@/lib/settings/account-settings'
 
 import { localParts } from './engine'
-import { autoSendDue, dayBlockedReason, deliveredEchoSnippet, normalizeSettings, retryCutoffIso, withinWindow } from './rules'
+import { autoSendDue, dayBlockedReason, deliveredEchoSnippet, isFinalCollectionError, normalizeSettings, retryCutoffIso, withinWindow } from './rules'
 import { expireStaleCollectionDrafts, localDayKey } from './stale'
 
 /** Tentativas antes de marcar o pedido como falho (rede/canal fora do ar). */
 const MAX_ATTEMPTS = 3
-
-/** Recusas que NÃO são falha temporária: o motivo da cobrança sumiu. */
-const GONE_RE = /nada em aberto|já foi pag|não está mais|não foi enviada/i
 
 export interface SenderStats {
   sent: number
@@ -187,9 +185,10 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
 
   const error = (exec.error ?? 'Não deu certo.').slice(0, 500)
   const attempts = (row.attempts ?? 0) + 1
-  // Pagou entre a fila e o envio (ou a parcela sumiu): não é falha, é o
-  // sistema funcionando — encerra o pedido em vez de tentar de novo.
-  const gone = GONE_RE.test(error)
+  // Pagou entre a fila e o envio (ou a parcela sumiu), ou o devedor foi parado
+  // nesse meio-tempo (pausa, promessa, comprovante): não é falha, é o sistema
+  // funcionando — encerra o pedido em vez de tentar de novo (rules.ts).
+  const gone = isFinalCollectionError(error)
   const final = gone || attempts >= MAX_ATTEMPTS
   await db
     .update(agentActionRequests)

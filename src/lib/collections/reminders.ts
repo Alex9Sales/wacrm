@@ -6,15 +6,21 @@
 // quinta, tá aí o link" — pela mesma fila e política da cobrança. Nada entra na
 // carteira (que continua sendo a de vencidas): a lista vem do Asaas na hora e
 // o executor reconfere no Asaas, cobrança por cobrança, antes de enviar.
-// Um lembrete por parcela; quem já tem parcela vencida não recebe lembrete —
-// recebe a cobrança.
+//
+// Regras (15/09): um lembrete por parcela, e UMA mensagem de cobrança por
+// pessoa por dia — quem já recebeu ou tem na fila régua, lembrete ou aviso de
+// cobrança nova hoje fica para outro dia. Quem também tem parcela vencida
+// recebe o lembrete da parcela nova (antes era barrado e nunca recebia); a
+// vencida a régua cobra à parte. Devedor pausado, com promessa/comprovante ou
+// no limite de toques não recebe. Parcela já avisada como cobrança nova, ou
+// cujo link já saiu numa mensagem para ele, não é lembrada.
 //
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
-import { and, eq, gte, inArray, sql } from 'drizzle-orm'
+import { and, eq, gte, inArray, ne, or, sql } from 'drizzle-orm'
 
-import { db, agentActionRequests, aiConfigs, asaasCharges, asaasConnections, contacts, conversations } from '@/db'
+import { db, agentActionRequests, aiConfigs, asaasCharges, asaasConnections, collectionsTouches, contacts, conversations, messages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfigById } from '@/lib/ai/config'
 import { generateReply } from '@/lib/ai/generate'
@@ -25,7 +31,19 @@ import type { AccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
 import { resolveCollectionTargets } from './outreach'
-import { byNearestDue, collectionEmail, fallbackReminderMessage, formatUpcomingSummary, greetingName, linksInstruction, type CollectionsSettings, type UpcomingLine } from './rules'
+import {
+  byNearestDue,
+  collectionEmail,
+  debtorHold,
+  fallbackReminderMessage,
+  formatUpcomingSummary,
+  freshReminderItems,
+  greetingName,
+  linksInstruction,
+  textHasUrl,
+  type CollectionsSettings,
+  type UpcomingLine,
+} from './rules'
 import { localDayKey } from './stale'
 import { seedFrom, tooSimilar } from './variation'
 
@@ -33,7 +51,14 @@ export interface ReminderRunResult {
   queued: number
   /** Parcelas a vencer encontradas no Asaas na janela. */
   found: number
-  skipped: Partial<Record<'no_contact' | 'opted_out' | 'has_overdue' | 'already' | 'no_channel' | 'paused' | 'budget', number>>
+  /**
+   * same_day = já tem mensagem de cobrança hoje · on_hold = pausado, promessa/
+   * comprovante ou limite de toques · already = parcela já lembrada ou avisada ·
+   * link_sent = o link já saiu numa mensagem · policy = a política bloqueou.
+   */
+  skipped: Partial<
+    Record<'no_contact' | 'opted_out' | 'same_day' | 'on_hold' | 'already' | 'link_sent' | 'no_channel' | 'policy' | 'budget', number>
+  >
 }
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10)
@@ -46,8 +71,10 @@ export async function queueUpcomingReminders(args: {
   agentId: string | null
   /** Quantas ainda cabem no teto do dia. */
   budget: number
-  /** Contatos que já têm pedido pendente nesta rodada. */
+  /** Contatos que já têm pedido na fila (pending/queued), inclusive os desta rodada. */
   alreadyQueued: Set<string>
+  /** Contatos com mensagem de cobrança hoje (pending/queued/sent) — ver `contactedTodaySet`. */
+  contactedToday: Set<string>
   usedToday: number
   moment: string
   dayKey: string
@@ -137,12 +164,39 @@ export async function queueUpcomingReminders(args: {
   if (!byContact.size) return out
 
   const ids = [...byContact.keys()]
-  // Quem já está devendo (parcela vencida na carteira) recebe cobrança, não lembrete.
+  // Quem também tem parcela VENCIDA recebe o lembrete da parcela nova — a
+  // vencida a régua cobra à parte, em outro dia. Serve só para o motivo.
+  // 🐛 Antes era um pulo: `open=true` sem olhar status barrava o lembrete de
+  // quem tinha qualquer coisa aberta (GoLink 15/09: 32 devedores sem lembrete
+  // da parcela seguinte, e a cobrança PENDING criada pelo CRM barrava o
+  // lembrete dela mesma).
   const overdue = await db
     .selectDistinct({ contactId: asaasCharges.contactId })
     .from(asaasCharges)
-    .where(and(eq(asaasCharges.accountId, args.accountId), eq(asaasCharges.open, true), inArray(asaasCharges.contactId, ids)))
-  const hasOverdue = new Set(overdue.map((r) => r.contactId).filter((x): x is string => !!x))
+    .where(
+      and(
+        eq(asaasCharges.accountId, args.accountId),
+        eq(asaasCharges.open, true),
+        inArray(asaasCharges.status, s.overdueStatuses),
+        inArray(asaasCharges.contactId, ids),
+      ),
+    )
+  const withOverdue = new Set(overdue.map((r) => r.contactId).filter((x): x is string => !!x))
+
+  // O freio do devedor (pausa, promessa/comprovante, limite de toques) vale
+  // para o lembrete como vale para a régua — 15/09, Guincho Ribeiro pausado
+  // recebeu lembrete.
+  const touchRows = await db
+    .select({
+      contactId: collectionsTouches.contactId,
+      paused: collectionsTouches.paused,
+      snoozeUntil: collectionsTouches.snoozeUntil,
+      touchCount: collectionsTouches.touchCount,
+      lastTouchAt: collectionsTouches.lastTouchAt,
+    })
+    .from(collectionsTouches)
+    .where(and(eq(collectionsTouches.accountId, args.accountId), inArray(collectionsTouches.contactId, ids)))
+  const touchByContact = new Map(touchRows.map((r) => [r.contactId, r]))
 
   const contactRows = await db
     .select({ id: contacts.id, name: contacts.name, optedOut: contacts.optedOut })
@@ -150,9 +204,10 @@ export async function queueUpcomingReminders(args: {
     .where(and(eq(contacts.accountId, args.accountId), inArray(contacts.id, ids)))
   const contactById = new Map(contactRows.map((r) => [r.id, r]))
 
-  // Um lembrete por parcela: o que já foi lembrado nos últimos 45 dias não repete.
-  // Expirado (envelheceu na fila, stale.ts) ou falho NÃO conta como lembrado —
-  // senão a parcela ficaria sem aviso nenhum.
+  // Um lembrete por parcela: o que já foi lembrado — ou avisado como cobrança
+  // nova, que já levou o link — nos últimos 45 dias não repete. Expirado
+  // (envelheceu na fila, stale.ts) ou falho NÃO conta como lembrado — senão a
+  // parcela ficaria sem aviso nenhum.
   const since = new Date(Date.now() - 45 * 86_400_000).toISOString()
   const previous = await db
     .select({ payload: agentActionRequests.payload })
@@ -162,7 +217,7 @@ export async function queueUpcomingReminders(args: {
         eq(agentActionRequests.accountId, args.accountId),
         eq(agentActionRequests.actionType, 'collect_charges'),
         gte(agentActionRequests.createdAt, since),
-        sql`${agentActionRequests.payload}->>'kind' = 'reminder'`,
+        sql`${agentActionRequests.payload}->>'kind' IN ('reminder', 'new_charge')`,
         sql`${agentActionRequests.status} NOT IN ('expired', 'failed')`,
       ),
     )
@@ -171,6 +226,10 @@ export async function queueUpcomingReminders(args: {
     const list = (r.payload as { asaasIds?: unknown } | null)?.asaasIds
     if (Array.isArray(list)) for (const id of list) if (typeof id === 'string') reminded.add(id)
   }
+
+  // Link que já saiu numa mensagem nestes dias (criação com "mandar o link",
+  // [[COBRAR:]] da IA, colado à mão) não precisa de lembrete.
+  const linksSince = new Date(Date.now() - (s.reminderDaysBefore + 1) * 86_400_000).toISOString()
 
   let budget = args.budget
   let usedToday = args.usedToday
@@ -189,14 +248,30 @@ export async function queueUpcomingReminders(args: {
       bump('opted_out')
       continue
     }
-    if (hasOverdue.has(cand.contactId) || args.alreadyQueued.has(cand.contactId)) {
-      bump('has_overdue')
+    // Uma mensagem de cobrança por pessoa por dia: vale a primeira (a régua
+    // roda antes na rodada); o lembrete tenta de novo no próximo dia da janela.
+    if (args.alreadyQueued.has(cand.contactId) || args.contactedToday.has(cand.contactId)) {
+      bump('same_day')
       continue
     }
-    const fresh = cand.asaasIds.map((id, i) => ({ id, line: cand.lines[i] })).filter((x) => !reminded.has(x.id))
+    if (debtorHold(touchByContact.get(cand.contactId), s)) {
+      bump('on_hold')
+      continue
+    }
+    const items = cand.asaasIds.map((id, i) => ({ id, invoiceUrl: cand.lines[i].invoiceUrl, line: cand.lines[i] }))
+    let fresh = freshReminderItems(items, reminded, new Set<string>())
     if (!fresh.length) {
       bump('already')
       continue
+    }
+    const urls = [...new Set(fresh.map((x) => x.invoiceUrl).filter((u): u is string => !!u))]
+    if (urls.length) {
+      const sentUrls = await linksAlreadySent(args.accountId, cand.contactId, urls, linksSince)
+      fresh = freshReminderItems(fresh, reminded, sentUrls)
+      if (!fresh.length) {
+        bump('link_sent')
+        continue
+      }
     }
     const delivery = await resolveCollectionTargets(args.accountId, cand.contactId, null, { dryRun: true, fallbackEmail: cand.email })
     if (!delivery.ok) {
@@ -245,46 +320,93 @@ export async function queueUpcomingReminders(args: {
       usedForDealToday: 0,
     })
     if (decision.decision === 'blocked') {
-      bump('paused')
+      bump('policy')
       continue
     }
 
     const dueIn = summary.minDays ?? s.reminderDaysBefore
-    await db.insert(agentActionRequests).values({
-      accountId: args.accountId,
-      agentId: args.agentId,
-      contactId: cand.contactId,
-      dealId: null,
-      conversationId: conv?.id ?? null,
-      actionType: 'collect_charges',
-      payload: {
-        kind: 'reminder',
-        connectionId: cand.connectionId,
-        asaasIds: fresh.map((x) => x.id),
-        total: summary.total,
-        lines: summary.lines,
-        links: summary.links,
-        charges: fresh.length,
-        dueIn,
-        touch: 0,
-        delivery: delivery.label,
-        // O executor usa se o contato continuar sem e-mail na hora do envio.
-        ...(cand.email ? { asaasEmail: cand.email } : {}),
-      },
-      suggestedText: text,
-      reason:
-        (fresh.length === 1 ? '1 parcela vence' : `${fresh.length} parcelas vencem`) +
-        (dueIn <= 0 ? ' hoje' : dueIn === 1 ? ' amanhã' : ` em ${dueIn} dias`) +
-        ` — lembrete antes do vencimento, não é cobrança. Vai por ${delivery.label}.`,
-      decision: decision.decision === 'auto_execute' ? 'auto' : decision.decision === 'request_approval' ? 'approve' : 'suggest',
-      policy: decision.reason,
-      status: 'pending',
-    })
+    // Colisão com pedido pendente (índice único por contato) vira pulo, não
+    // derruba o lote de lembretes da rodada.
+    const inserted = await db
+      .insert(agentActionRequests)
+      .values({
+        accountId: args.accountId,
+        agentId: args.agentId,
+        contactId: cand.contactId,
+        dealId: null,
+        conversationId: conv?.id ?? null,
+        actionType: 'collect_charges',
+        payload: {
+          kind: 'reminder',
+          connectionId: cand.connectionId,
+          asaasIds: fresh.map((x) => x.id),
+          total: summary.total,
+          lines: summary.lines,
+          links: summary.links,
+          charges: fresh.length,
+          dueIn,
+          touch: 0,
+          delivery: delivery.label,
+          // O executor usa se o contato continuar sem e-mail na hora do envio.
+          ...(cand.email ? { asaasEmail: cand.email } : {}),
+        },
+        suggestedText: text,
+        reason:
+          (fresh.length === 1 ? '1 parcela vence' : `${fresh.length} parcelas vencem`) +
+          (dueIn <= 0 ? ' hoje' : dueIn === 1 ? ' amanhã' : ` em ${dueIn} dias`) +
+          ' — lembrete antes do vencimento, não é cobrança.' +
+          (withOverdue.has(cand.contactId) ? ' Ele também tem parcela vencida — essa a régua cobra à parte, em outro dia.' : '') +
+          ` Vai por ${delivery.label}.`,
+        decision: decision.decision === 'auto_execute' ? 'auto' : decision.decision === 'request_approval' ? 'approve' : 'suggest',
+        policy: decision.reason,
+        status: 'pending',
+      })
+      .onConflictDoNothing()
+      .returning({ id: agentActionRequests.id })
+    if (!inserted.length) {
+      bump('same_day')
+      continue
+    }
+    args.contactedToday.add(cand.contactId)
+    args.alreadyQueued.add(cand.contactId)
     out.queued += 1
     budget -= 1
     usedToday += 1
   }
   return out
+}
+
+/**
+ * Quais destes links (invoiceUrl) já saíram numa mensagem PARA o cliente desde
+ * `sinceIso`: mensagem não interna, escrita pelo time ou pelo CRM (agent/bot),
+ * em qualquer conversa do contato. É a prova de que o link chegou — a criação
+ * com "mandar o link", o [[COBRAR:]] da IA ou alguém colando à mão. Se o envio
+ * falhou ou o link foi desmarcado, não há mensagem e o lembrete sai.
+ */
+async function linksAlreadySent(accountId: string, contactId: string, urls: string[], sinceIso: string): Promise<Set<string>> {
+  const found = new Set<string>()
+  if (!urls.length) return found
+  const rows = await db
+    .select({ text: messages.contentText })
+    .from(messages)
+    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+    .where(
+      and(
+        eq(conversations.accountId, accountId),
+        eq(conversations.contactId, contactId),
+        eq(messages.isInternal, false),
+        inArray(messages.senderType, ['agent', 'bot']),
+        // Envio que falhou (e-mail devolvido, falha da Meta) não prova que o
+        // link chegou — o lembrete tem de sair (revisão 15/09).
+        ne(messages.status, 'failed'),
+        gte(messages.createdAt, sinceIso),
+        or(...urls.map((u) => sql`position(${u} in ${messages.contentText}) > 0`)),
+      ),
+    )
+    .limit(50)
+  // O banco acha "contém"; aqui confirma que é o link inteiro (…/i/123 ≠ …/i/1234).
+  for (const r of rows) for (const u of urls) if (textHasUrl(r.text, u)) found.add(u)
+  return found
 }
 
 /** Texto do lembrete: leve, sem "atraso", com os fatos prontos. IA quando há agente; senão o de segurança. */

@@ -60,9 +60,11 @@ const MAX_CONFIRMATION_LEN = 60
  * assistente). Nunca é pedido nem confirmação — 09/09: "Confirma? Cobrar
  * R$ 10,00 de …" voltou pelo outro canal, casou com ^confirma e mandou a
  * cobrança pro Asaas (barrou só por falta de CPF).
+ * 15/09: "Não consegui gerar: o cliente está cadastrado em mais de uma conta
+ * do Asaas…" traz "cobrança" + verbo — sem esta guarda voltaria como pedido.
  */
 const CRM_OWN_RE =
-  /^(confirma\? cobrar|qual o valor da cobran[çc]a|preciso do cpf ou cnpj|o asaas exige cpf|pronto ✅|cancelado\. nada foi cobrado|ficou pendente:|encontrei |equipe hoje:|(bom dia|boa tarde|boa noite)! seu resumo|🌟|sou o assistente da sua conta|nenhum neg[óo]cio parado|n[ãa]o achei ninguém|achei mais de um|agenda (de hoje|de amanh[ãa]|da semana)|em aberto: \d+ cobran|feito ✅|marcado ✅|tarefa criada|passei )/iu
+  /^(confirma\? cobrar|qual o valor da cobran[çc]a|preciso do cpf ou cnpj|o asaas exige cpf|pronto ✅|cancelado\. nada foi cobrado|ficou pendente:|encontrei |equipe hoje:|(bom dia|boa tarde|boa noite)! seu resumo|🌟|sou o assistente da sua conta|nenhum neg[óo]cio parado|n[ãa]o achei ninguém|achei mais de um|agenda (de hoje|de amanh[ãa]|da semana)|em aberto: \d+ cobran|feito ✅|marcado ✅|tarefa criada|passei |n[ãa]o consegui gerar)/iu
 
 export function looksLikeCrmOwnText(text: string): boolean {
   return CRM_OWN_RE.test(text.trim())
@@ -142,8 +144,20 @@ export const DUE_DEFAULTED_NOTE = '(Você não disse o vencimento: coloquei 3 di
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const br = (ymd: string) => ymd.slice(0, 10).split('-').reverse().join('/')
 
-export function formatProposal(p: { name: string | null; phone: string; value: number; dueDate: string; description: string; installments?: number | null }): string {
-  return `Confirma? Cobrar ${brl(p.value)}${installmentsLabel(p.value, p.installments)} de ${p.name?.trim() || p.phone} (${p.phone}), vencendo ${br(p.dueDate)}, "${p.description}". Responda SIM para gerar e mandar o link, ou NÃO para cancelar.`
+/** ", na conta X" — só quando a conta tem 2+ contas do Asaas (quem chama decide). Sem rótulo, nada. */
+const onConnection = (label: string | null | undefined) => (label?.trim() ? `, na conta ${label.trim()}` : '')
+
+export function formatProposal(p: {
+  name: string | null
+  phone: string
+  value: number
+  dueDate: string
+  description: string
+  installments?: number | null
+  /** Conta do Asaas que a regra escolheria (15/09). Sem ele o texto é IDÊNTICO ao de antes. */
+  connectionLabel?: string | null
+}): string {
+  return `Confirma? Cobrar ${brl(p.value)}${installmentsLabel(p.value, p.installments)} de ${p.name?.trim() || p.phone} (${p.phone}), vencendo ${br(p.dueDate)}, "${p.description}"${onConnection(p.connectionLabel)}. Responda SIM para gerar e mandar o link, ou NÃO para cancelar.`
 }
 
 export function formatCandidates(cands: { name: string | null; phone: string }[]): string {
@@ -151,6 +165,21 @@ export function formatCandidates(cands: { name: string | null; phone: string }[]
   return `Achei mais de um. Qual é?\n${lines.join('\n')}\nResponda o número.`
 }
 
-export function formatDone(p: { name: string | null; phone: string; value: number; dueDate: string }, link: string, sentVia: string | null): string {
-  return `Pronto ✅ Cobrança de ${brl(p.value)} para ${p.name?.trim() || p.phone}, vence ${br(p.dueDate)}.${sentVia ? ` Link enviado por ${sentVia}.` : ' Não consegui mandar o link — segue para você repassar:'}\n${link}`
+export function formatDone(
+  p: { name: string | null; phone: string; value: number; dueDate: string },
+  link: string,
+  sentVia: string | null,
+  /** Conta onde a cobrança ficou (só com 2+ contas; sem ela o texto é IDÊNTICO ao de antes). */
+  conn: { connectionLabel?: string | null; switchedToHome?: boolean; proposedLabel?: string | null } = {},
+): string {
+  const label = conn.connectionLabel?.trim() || ''
+  const proposed = conn.proposedLabel?.trim() || ''
+  const aviso = !label
+    ? ''
+    : conn.switchedToHome
+      ? ` (O cliente já era cadastrado na conta ${label} do Asaas, então gerei lá.)`
+      : proposed && proposed !== label
+        ? ` (A proposta dizia a conta ${proposed}, mas gerei na ${label}.)`
+        : ''
+  return `Pronto ✅ Cobrança de ${brl(p.value)} para ${p.name?.trim() || p.phone}, vence ${br(p.dueDate)}${onConnection(label)}.${aviso}${sentVia ? ` Link enviado por ${sentVia}.` : ' Não consegui mandar o link — segue para você repassar:'}\n${link}`
 }

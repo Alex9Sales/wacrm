@@ -33,7 +33,7 @@ import { publishEvent } from '@/lib/events/publish'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { resolveCollectionTargets } from '@/lib/collections/outreach'
 import { reminderStillPending } from '@/lib/collections/reminders'
-import { normalizeSettings } from '@/lib/collections/rules'
+import { debtorHold, holdRefusal, normalizeSettings } from '@/lib/collections/rules'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { planStageFollowUp } from '@/lib/ai/followup'
@@ -252,13 +252,40 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
       case 'collect_charges': {
         const text = (input.text ?? '').trim()
         if (!text) return { ok: false, error: 'Sem texto pra enviar.' }
+        const kind = input.payload.kind
+
+        // ✋ Freio do devedor NA HORA DO ENVIO (15/09, GoLink/Guincho Ribeiro:
+        // lembrete saiu para cliente pausado). Entre a fila e o envio o cliente
+        // pode ter sido pausado ou prometido pagar (classificador silencioso,
+        // "Registrar promessa", "não cobrar", "Corrigir"). Vale para o sender,
+        // o "Aprovar" manual e o lote. Pausa segura qualquer tipo; promessa ou
+        // comprovante seguram régua e lembrete — o aviso de cobrança nova só a
+        // pausa, porque ele é marcado "avisado" em qualquer status e se perderia
+        // para sempre. Vem antes do Asaas: poupa a chamada.
+        const touch = firstOrNull(
+          await db
+            .select({
+              paused: collectionsTouches.paused,
+              pausedReason: collectionsTouches.pausedReason,
+              snoozeUntil: collectionsTouches.snoozeUntil,
+              snoozeReason: collectionsTouches.snoozeReason,
+              touchCount: collectionsTouches.touchCount,
+              lastTouchAt: collectionsTouches.lastTouchAt,
+            })
+            .from(collectionsTouches)
+            .where(and(eq(collectionsTouches.accountId, input.accountId), eq(collectionsTouches.contactId, input.contactId)))
+            .limit(1),
+        )
+        const hold = debtorHold(touch, null)
+        if (touch && (hold === 'paused' || (hold === 'snoozed' && kind !== 'new_charge'))) {
+          return { ok: false, error: holdRefusal(hold, touch) }
+        }
 
         // 🔔 Lembrete antes do vencimento (kind='reminder') e 🔗 aviso de
         // cobrança nova (kind='new_charge'): os dois falam de uma parcela
         // específica, então reconferem AO VIVO no Asaas, uma a uma. O aviso de
         // cobrança nova também vale VENCIDA — a do João nasceu vencida no mesmo
         // dia e o cliente nunca tinha recebido o link (11/09).
-        const kind = input.payload.kind
         if (kind === 'reminder' || kind === 'new_charge') {
           const aceitas = kind === 'new_charge' ? (['PENDING', 'OVERDUE'] as const) : (['PENDING'] as const)
           const check = await reminderStillPending(input.accountId, input.payload, aceitas)

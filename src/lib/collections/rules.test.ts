@@ -3,6 +3,8 @@ import { describe, expect, it } from 'vitest'
 import {
   COLLECTIONS_DEFAULTS,
   autoSendDue,
+  countsAsOverdue,
+  debtorHold,
   deliveryPlan,
   duplicateSuspects,
   eligibility,
@@ -14,6 +16,7 @@ import {
   dayBlockedReason,
   describeWeekdays,
   greetingName,
+  holdRefusal,
   normalizeWeekdays,
   phoneSearchDigits,
   thanksDayBlockedReason,
@@ -108,6 +111,76 @@ describe('eligibility — a régua só cobra quem pode ser cobrado', () => {
   it('opt-out vence até a pausa e o atraso — ninguém contorna um "não me mande mais"', () => {
     const d = eligibility({ ...base, optedOut: true, maxDaysLate: 300, state: state({ paused: true }) }, s, agora)
     expect(d).toBe('opted_out')
+  })
+})
+
+// 15/09 (GoLink, Guincho Ribeiro): lembrete saiu para cliente pausado. O freio
+// passou a ser uma fonte só — régua, montagem do lembrete e hora do envio.
+describe('debtorHold — o freio do devedor vale para toda mensagem de cobrança', () => {
+  const futuro = new Date(agora.getTime() + 5 * 24 * 3600_000).toISOString()
+  const passado = new Date(agora.getTime() - 24 * 3600_000).toISOString()
+
+  it('pausa vence tudo: snooze futuro e limite de toques', () => {
+    expect(debtorHold(state({ paused: true, snoozeUntil: futuro, touchCount: 99 }), s, agora)).toBe('paused')
+  })
+
+  it('promessa/comprovante com data futura segura; data passada solta', () => {
+    expect(debtorHold(state({ snoozeUntil: futuro }), s, agora)).toBe('snoozed')
+    expect(debtorHold(state({ snoozeUntil: passado }), s, agora)).toBeNull()
+  })
+
+  it('limite de toques só com as configurações da régua', () => {
+    expect(debtorHold(state({ touchCount: s.maxTouches }), s, agora)).toBe('max_touches')
+    expect(debtorHold(state({ touchCount: s.maxTouches - 1 }), s, agora)).toBeNull()
+    // Na hora do envio (s = null) o limite não segura: a régua já decidiu ao montar.
+    expect(debtorHold(state({ touchCount: 99 }), null, agora)).toBeNull()
+    expect(debtorHold(state({ touchCount: 99, snoozeUntil: futuro }), null, agora)).toBe('snoozed')
+  })
+
+  it('sem estado não há freio', () => {
+    expect(debtorHold(null, s, agora)).toBeNull()
+    expect(debtorHold(undefined, s, agora)).toBeNull()
+    expect(debtorHold(state(), s, agora)).toBeNull()
+  })
+
+  it('data de snooze ilegível não segura (como a régua fazia)', () => {
+    expect(debtorHold(state({ snoozeUntil: 'lixo' }), s, agora)).toBeNull()
+  })
+})
+
+describe('holdRefusal — por que o envio já na fila não saiu', () => {
+  it('pausado, com motivo (texto literal)', () => {
+    expect(holdRefusal('paused', { pausedReason: 'Cliente pediu acordo/parcelamento' })).toBe(
+      'A régua está parada neste cliente (Cliente pediu acordo/parcelamento) — nada foi enviado. Para voltar a cobrar, tire a pausa em Cobranças.',
+    )
+  })
+
+  it('pausado, sem motivo, não sobra "()"', () => {
+    const t = holdRefusal('paused', { pausedReason: null })
+    expect(t).toBe('A régua está parada neste cliente — nada foi enviado. Para voltar a cobrar, tire a pausa em Cobranças.')
+    expect(holdRefusal('paused', { pausedReason: '   ' })).toBe(t)
+  })
+
+  it('promessa: a data sai dd/mm no fuso de SP (texto literal)', () => {
+    expect(
+      holdRefusal('snoozed', { snoozeUntil: '2026-09-21T03:00:00Z', snoozeReason: 'Cliente prometeu pagar em 19/09' }),
+    ).toBe('A régua está parada neste cliente até 21/09 (Cliente prometeu pagar em 19/09) — nada foi enviado.')
+    // 02:59 UTC ainda é dia 20 em São Paulo.
+    expect(holdRefusal('snoozed', { snoozeUntil: '2026-09-21T02:59:00Z' })).toContain('até 20/09')
+  })
+
+  it('promessa sem motivo; formato do banco (timestamptz em texto) também serve', () => {
+    expect(holdRefusal('snoozed', { snoozeUntil: '2026-09-21 03:00:00+00', snoozeReason: null })).toBe(
+      'A régua está parada neste cliente até 21/09 — nada foi enviado.',
+    )
+  })
+
+  it('os dois textos dizem que a régua parou e que nada saiu', () => {
+    for (const t of [holdRefusal('paused', {}), holdRefusal('snoozed', { snoozeUntil: 'lixo' })]) {
+      expect(t).toContain('régua está parada neste cliente')
+      expect(t).toContain('nada foi enviado')
+      expect(t).not.toContain('()')
+    }
   })
 })
 
@@ -341,6 +414,34 @@ describe('formatDebtSummary — os números vêm prontos, a IA não soma', () =>
     expect(inst).toContain('https://x/1')
     expect(inst).toContain('https://x/2')
     expect(linksInstruction(formatDebtSummary([{ ...charges[0], invoiceUrl: null }]))).toBe('')
+  })
+})
+
+// Bug vizinho da regra de 15/09: parcela a vencer aberta na carteira saía na
+// mensagem da régua como "venceu em" uma data futura.
+describe('countsAsOverdue + formatDebtSummary — só o que venceu entra na régua', () => {
+  it('atraso 0 ou negativo não conta; 1 ou mais conta; sem data continua contando', () => {
+    expect(countsAsOverdue(0)).toBe(false)
+    expect(countsAsOverdue(-3)).toBe(false)
+    expect(countsAsOverdue(1)).toBe(true)
+    expect(countsAsOverdue(27)).toBe(true)
+    expect(countsAsOverdue(null)).toBe(true)
+  })
+
+  it('a parcela futura sai da mensagem e nenhuma linha fala "venceu em" data futura', () => {
+    const carteira = [
+      { value: 100, dueDate: '2026-09-05', daysLate: 5, connectionLabel: 'Asaas', invoiceUrl: 'https://x/vencida' },
+      { value: 100, dueDate: '2026-09-14', daysLate: -4, connectionLabel: 'Asaas', invoiceUrl: 'https://x/futura' },
+    ]
+    for (const showValues of [true, false]) {
+      const r = formatDebtSummary(
+        carteira.filter((c) => countsAsOverdue(c.daysLate)),
+        { showValues },
+      )
+      expect(r.lines).toHaveLength(1)
+      expect(r.lines.join('\n')).not.toMatch(/enceu em 14\/09/)
+      expect(r.links).toEqual(['https://x/vencida'])
+    }
   })
 })
 

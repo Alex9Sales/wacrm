@@ -373,6 +373,18 @@ export function retryCutoffIso(nowMs: number): string {
 }
 
 /**
+ * Recusas que NÃO são falha temporária: o motivo da cobrança sumiu (pagou,
+ * cancelou) ou o devedor foi parado entre a fila e o envio (pausa, promessa,
+ * comprovante — `holdRefusal`). O pedido encerra como 'expired' com o motivo,
+ * sem as 3 tentativas. Timeout do Asaas ou canal fora do ar continuam tentando.
+ */
+export const COLLECTION_FINAL_ERROR_RE = /nada em aberto|já foi pag|não está mais|não foi enviada|régua está parada/i
+
+export function isFinalCollectionError(e: string): boolean {
+  return COLLECTION_FINAL_ERROR_RE.test(e)
+}
+
+/**
  * Trecho do rascunho que reconhece a mensagem já entregue. Espaços são
  * normalizados (o banco compara com o mesmo tratamento) e a assinatura
  * ("*João:*") entra ANTES do texto, então procurar o começo do rascunho dentro
@@ -442,18 +454,62 @@ export interface EligibleInput {
   state: TouchState | null
 }
 
+/** Por que a cobrança deste devedor está segurada, independentemente do tipo de mensagem. */
+export type DebtorHold = 'paused' | 'snoozed' | 'max_touches'
+
+/**
+ * ✋ O FREIO do devedor — uma fonte só para a régua, para a montagem do
+ * lembrete e para a hora do envio.
+ *
+ * 15/09 (GoLink, Guincho Ribeiro): o lembrete da parcela nova saiu para um
+ * cliente PAUSADO ("pediu acordo/parcelamento"), porque o lembrete não lia
+ * collections_touches e o executor só reconferia o Asaas. Pausa e promessa
+ * valiam para a régua e não valiam para o resto.
+ *
+ * Ordem: pausa, limite de toques, promessa/comprovante (snooze). O limite de
+ * toques só entra com `s` — na hora do envio (`s = null`) ele não segura: a
+ * régua já decidiu isso ao montar.
+ */
+export function debtorHold(
+  st: TouchState | null | undefined,
+  s: Pick<CollectionsSettings, 'maxTouches'> | null,
+  now = new Date(),
+): DebtorHold | null {
+  if (!st) return null
+  if (st.paused) return 'paused'
+  if (s && st.touchCount >= s.maxTouches) return 'max_touches'
+  if (st.snoozeUntil && Date.parse(st.snoozeUntil) > now.getTime()) return 'snoozed'
+  return null
+}
+
+/**
+ * O motivo da recusa quando o freio segura um envio já na fila (sender, lote e
+ * "Aprovar" manual). Diz o que aconteceu e, na pausa, onde desfazer. Começa
+ * sempre com "A régua está parada neste cliente" — é o que o sender reconhece
+ * como recusa FINAL (`isFinalCollectionError`), sem tentar de novo.
+ */
+export function holdRefusal(
+  hold: 'paused' | 'snoozed',
+  st: { pausedReason?: string | null; snoozeUntil?: string | null; snoozeReason?: string | null },
+): string {
+  const motivo = (m: string | null | undefined) => (m && m.trim() ? ` (${m.trim()})` : '')
+  if (hold === 'paused') {
+    return `A régua está parada neste cliente${motivo(st.pausedReason)} — nada foi enviado. Para voltar a cobrar, tire a pausa em Cobranças.`
+  }
+  const ms = st.snoozeUntil ? Date.parse(st.snoozeUntil) : Number.NaN
+  const ate = Number.isNaN(ms)
+    ? ''
+    : ` até ${new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit' }).format(new Date(ms))}`
+  return `A régua está parada neste cliente${ate}${motivo(st.snoozeReason)} — nada foi enviado.`
+}
+
 export function eligibility(input: EligibleInput, s: CollectionsSettings, now = new Date()): SkipReason {
   if (!input.contactId) return 'no_contact'
   if (input.optedOut) return 'opted_out'
 
   const st = input.state
-  if (st?.paused) return 'paused'
-  if (st && st.touchCount >= s.maxTouches) return 'max_touches'
-
-  if (st?.snoozeUntil) {
-    const until = new Date(st.snoozeUntil)
-    if (!Number.isNaN(until.getTime()) && until.getTime() > now.getTime()) return 'snoozed'
-  }
+  const hold = debtorHold(st, s, now)
+  if (hold) return hold
 
   if (input.maxDaysLate == null || input.maxDaysLate < s.minDaysOverdue) return 'not_due'
 
@@ -547,6 +603,16 @@ export interface ChargeLine {
 
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
 const br = (iso: string | null) => (iso ? iso.slice(0, 10).split('-').reverse().join('/') : 'sem data')
+
+/**
+ * A linha da carteira entra na mensagem de VENCIDAS? Só com atraso de 1 dia ou
+ * mais. Parcela a vencer que está aberta na carteira (criada pelo CRM, ou com o
+ * vencimento movido) saía como "venceu em" uma data futura, e ao mesmo tempo
+ * no lembrete. Sem data conhecida continua entrando, como antes.
+ */
+export function countsAsOverdue(daysLate: number | null): boolean {
+  return daysLate == null || daysLate >= 1
+}
 
 /**
  * O resumo da dívida que vai NA mensagem. Fatos apenas — a IA escreve o texto
@@ -665,6 +731,48 @@ export function formatUpcomingSummary(
   const links = [...new Set(ordered.map((c) => c.invoiceUrl).filter((u): u is string => !!u))]
   const days = ordered.map((c) => c.daysUntil).filter((d): d is number => d != null)
   return { total: ordered.reduce((s, c) => s + c.value, 0), showValues, lines: items.map((i) => i.line), links, items, minDays: days.length ? Math.min(...days) : null }
+}
+
+/**
+ * 📵 Uma mensagem de cobrança por pessoa por dia: quem já tem pedido HOJE na
+ * fila (pending), aprovado esperando o sender (queued) ou enviado (sent) não
+ * recebe outra — vale a primeira, a outra espera o dia seguinte. Expirado,
+ * falho e recusado não contam: nada chegou ao cliente.
+ */
+export function contactedTodaySet(rows: { contactId: string | null; status: string }[]): Set<string> {
+  const out = new Set<string>()
+  for (const r of rows) {
+    if (r.contactId && (r.status === 'pending' || r.status === 'queued' || r.status === 'sent')) out.add(r.contactId)
+  }
+  return out
+}
+
+/**
+ * As parcelas que ainda merecem lembrete: tira as já lembradas ou já avisadas
+ * como cobrança nova (`notified`, por id do Asaas) e as cujo link já saiu numa
+ * mensagem para o cliente (`sentUrls`). Parcela sem link não é descartada pelo
+ * link. A ordem original se mantém.
+ */
+export function freshReminderItems<T extends { id: string; invoiceUrl: string | null }>(
+  items: T[],
+  notified: ReadonlySet<string>,
+  sentUrls: ReadonlySet<string>,
+): T[] {
+  return items.filter((x) => !notified.has(x.id) && !(x.invoiceUrl && sentUrls.has(x.invoiceUrl)))
+}
+
+/**
+ * O texto contém ESTE link, e não um maior que começa igual? `…/i/123` não pode
+ * casar com `…/i/1234`: o caractere logo depois do link tem que encerrar o link
+ * (espaço, pontuação, fim do texto, `?`, `/`).
+ */
+export function textHasUrl(text: string | null | undefined, url: string): boolean {
+  if (!text || !url) return false
+  for (let i = text.indexOf(url); i >= 0; i = text.indexOf(url, i + 1)) {
+    const next = text.charAt(i + url.length)
+    if (!next || !/[A-Za-z0-9_-]/.test(next)) return true
+  }
+  return false
 }
 
 /** Texto de segurança do LEMBRETE (sem IA): leve, sem a palavra "atraso". Varia pela semente. */

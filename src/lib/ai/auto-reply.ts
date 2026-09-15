@@ -19,7 +19,7 @@ import { getCompanyProfile, formatCompanyProfileForPrompt } from './company-prof
 import { formatCatalogForPrompt } from './catalog'
 import { generateWithExternalTools } from './external-tools'
 import { buildSystemPrompt, chargeInstruction, collectionInstruction, HANDOFF_FAREWELL, parseCloseDirectives } from './defaults'
-import { documentFromConversation, emitChargeFromDirective, knownDocumentFor } from '@/lib/collections/emit'
+import { documentFromConversation, emitChargeFromDirective, resolveChargeDocument } from '@/lib/collections/emit'
 import { handleOwnerCommand, isOwnerPhone, ownerCommandApplies } from '@/lib/collections/owner-command'
 import { joinCustomerBurst, looksLikeCrmOwnText } from '@/lib/collections/owner-command-rules'
 import { handleOwnerAssistant } from '@/lib/assistant/handler'
@@ -705,11 +705,13 @@ export async function dispatchInboundToAiReply(
     // Ferramentas ligadas neste agente (Fase A).
     const tools = config.tools ?? []
     // 🧾 O Asaas de produção exige CPF/CNPJ: a instrução de cobrança muda
-    // conforme o documento já é conhecido (carteira) ou já apareceu nas
-    // mensagens do cliente nesta conversa. Só custa consulta quando a
-    // ferramenta de cobrança está ligada no agente.
+    // conforme o documento já é conhecido (carteira ou campo personalizado) ou
+    // já apareceu nas mensagens do cliente nesta conversa. Só custa consulta
+    // quando a ferramenta de cobrança está ligada no agente. 15/09: o MESMO
+    // resolvedor da trava de createChargeForContact — senão o prompt diz "já
+    // temos" e a cobrança volta pedindo CPF (ou pede o que já existe).
     const chargeHasDocument = tools.includes('create_charge')
-      ? !!((await knownDocumentFor(accountId, contactId)) || (await documentFromConversation(conversationId)))
+      ? !!((await resolveChargeDocument(accountId, contactId).catch(() => null))?.doc || (await documentFromConversation(conversationId)))
       : false
     const has = (k: string) => tools.includes(k)
 

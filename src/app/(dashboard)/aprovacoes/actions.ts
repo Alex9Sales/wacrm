@@ -754,12 +754,26 @@ function describeEffect(args: {
       if (p.kind === 'reminder') {
         const dueIn = typeof p.dueIn === 'number' ? p.dueIn : null
         return {
-          effect: `Envia o LEMBRETE abaixo: a parcela ainda não venceu${dueIn == null ? '' : dueIn <= 0 ? ' (vence hoje)' : dueIn === 1 ? ' (vence amanhã)' : ` (vence em ${dueIn} dias)`}. Antes de enviar, o CRM reconfere no Asaas se ela continua em aberto; paga, não sai.`,
+          effect: `Envia o LEMBRETE abaixo: a parcela ainda não venceu${dueIn == null ? '' : dueIn <= 0 ? ' (vence hoje)' : dueIn === 1 ? ' (vence amanhã)' : ` (vence em ${dueIn} dias)`}. Antes de enviar, o CRM reconfere no Asaas se ela continua em aberto e se a cobrança deste cliente não foi parada (pausa, promessa ou comprovante); se foi, não sai.`,
           warnings,
           proposalUrl: null,
         }
       }
-      return { effect: 'Envia a cobrança abaixo ao devedor, com as parcelas vencidas e o link de pagamento. Confira o valor antes de aprovar — depois de entregue não dá para desfazer.', warnings, proposalUrl: null }
+      if (p.kind === 'new_charge') {
+        // Aviso de cobrança nova: no envio só a PAUSA segura (promessa não).
+        return {
+          effect:
+            'Envia o aviso abaixo com o link da cobrança nova que acabou de ser criada no Asaas. Antes de enviar, o CRM reconfere no Asaas se ela continua em aberto; se o cliente for pausado antes do envio, não sai. Confira antes de aprovar — depois de entregue não dá para desfazer.',
+          warnings,
+          proposalUrl: null,
+        }
+      }
+      return {
+        effect:
+          'Envia a cobrança abaixo ao devedor, com as parcelas vencidas e o link de pagamento. Se o cliente for pausado ou prometer pagar antes do envio, ela não sai. Confira o valor antes de aprovar — depois de entregue não dá para desfazer.',
+        warnings,
+        proposalUrl: null,
+      }
     case 'schedule_event': {
       const startsLocal = typeof p.startsLocal === 'string' ? p.startsLocal : ''
       const when = startsLocal ? `${startsLocal.slice(8, 10)}/${startsLocal.slice(5, 7)} às ${startsLocal.slice(11, 16)}` : 'data a definir'

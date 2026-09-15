@@ -30,6 +30,8 @@ import { expireStaleCollectionDrafts, localDayKey } from './stale'
 import { maxSimilarity, seedFrom, tooSimilar, variationInstruction, variationPlan } from './variation'
 
 import {
+  contactedTodaySet,
+  countsAsOverdue,
   dayBlockedReason,
   duplicateSuspects,
   eligibility,
@@ -192,6 +194,11 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   }
   for (const r of rows) {
     if (!r.contactId) continue
+    // Só entra na mensagem de VENCIDAS o que venceu (atraso ≥ 1 dia). Parcela a
+    // vencer aberta na carteira (criada pelo CRM, vencimento movido) saía como
+    // "venceu em" uma data futura — e é trabalho do lembrete, não da régua.
+    const late = daysLateFrom(r.dueDate)
+    if (!countsAsOverdue(late)) continue
     let d = byContact.get(r.contactId)
     if (!d) {
       d = {
@@ -208,7 +215,6 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       }
       byContact.set(r.contactId, d)
     }
-    const late = daysLateFrom(r.dueDate)
     d.charges.push({
       customerId: r.asaasCustomerId,
       customerName: r.customerName,
@@ -242,7 +248,13 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
         sql`to_char(${agentActionRequests.createdAt} AT TIME ZONE ${tz}, 'YYYY-MM-DD') = ${hojeKey}`,
       ),
     )
-  const alreadyQueued = new Set(recent.filter((r) => r.status === 'pending').map((r) => r.contactId))
+  // 📵 Uma mensagem de cobrança por pessoa por dia (15/09): quem já tem pedido
+  // hoje na fila, aprovado esperando o sender ou enviado — régua, lembrete ou
+  // aviso de cobrança nova — espera o dia seguinte. `alreadyQueued` (pending +
+  // queued) é o que o índice único e o aviso de cobrança nova precisam; os dois
+  // conjuntos ganham cada contato inserido nesta rodada.
+  const alreadyQueued = new Set(recent.filter((r) => r.status === 'pending' || r.status === 'queued').map((r) => r.contactId))
+  const contactedToday = contactedTodaySet(recent)
   const usedToday = recent.filter((r) => r.status === 'sent').length
   let budget = Math.max(0, s.dailyCap - usedToday)
   if (budget === 0) return { ...stats, haltedBecause: `Teto de ${s.dailyCap} cobranças por dia já foi atingido.` }
@@ -279,7 +291,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
 
   for (const d of ordered) {
     if (budget <= 0) break
-    if (alreadyQueued.has(d.contactId)) {
+    if (contactedToday.has(d.contactId)) {
       bump('too_soon')
       continue
     }
@@ -367,7 +379,9 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       continue
     }
 
-    await db.insert(agentActionRequests).values({
+    // onConflictDoNothing: duas rodadas ao mesmo tempo ("Rodar agora" + tique do
+    // worker) batiam no índice único e derrubavam a rodada inteira (revisão 15/09).
+    const [queuedRow] = await db.insert(agentActionRequests).values({
       accountId,
       agentId: agent?.id ?? null,
       contactId: d.contactId,
@@ -392,7 +406,15 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       decision: decision.decision === 'auto_execute' ? 'auto' : decision.decision === 'request_approval' ? 'approve' : 'suggest',
       policy: decision.reason,
       status: 'pending',
-    })
+    }).onConflictDoNothing().returning({ id: agentActionRequests.id })
+    if (!queuedRow) {
+      bump('too_soon')
+      continue
+    }
+    // Sem isto o lembrete e o aviso de cobrança nova da MESMA rodada tentariam
+    // um segundo pedido pendente para ele — e o índice único derrubaria o lote.
+    alreadyQueued.add(d.contactId)
+    contactedToday.add(d.contactId)
 
     stats.queued += 1
     budget -= 1
@@ -432,12 +454,18 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
         agentId: agent?.id ?? null,
         budget,
         alreadyQueued,
+        contactedToday,
         usedToday: usedToday + stats.queued,
         moment,
         dayKey,
       })
       stats.reminders = r.queued
       stats.remindersFound = r.found
+      // Os pulos do lembrete não ficam em lugar nenhum — o log é o único rastro.
+      if (r.found) {
+        const pulados = Object.entries(r.skipped).map(([k, v]) => `${k}=${v}`).join(' ')
+        console.log(`[lembrete] ${accountId.slice(0, 8)}: a vencer=${r.found} fila=${r.queued}${pulados ? ` pulados(${pulados})` : ''}`)
+      }
     } catch (err) {
       console.error('[cobranca] lembretes falharam:', err instanceof Error ? err.message : err)
     }

@@ -9,6 +9,8 @@
 // Sem 'server-only' — o worker precisa alcançar isso na Fase 2.
 // ============================================================
 
+import { normalizeDocument, pickCustomerForDocument, pickCustomerForReference } from './match'
+
 export type AsaasEnv = 'sandbox' | 'production'
 
 /** Status de cobrança do Asaas que aparecem numa carteira. */
@@ -69,7 +71,13 @@ function humanError(status: number, body: string): string {
   return `O Asaas recusou a consulta (HTTP ${status}).`
 }
 
-async function asaasGet<T>(cred: AsaasCredential, path: string, query?: Record<string, string | number>): Promise<T> {
+async function asaasGet<T>(
+  cred: AsaasCredential,
+  path: string,
+  query?: Record<string, string | number>,
+  /** Padrão 20s. Menor quando a consulta está no caminho da resposta da IA. */
+  timeoutMs = 20_000,
+): Promise<T> {
   const url = new URL(`${baseUrl(cred.environment)}${path}`)
   for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, String(v))
 
@@ -78,7 +86,7 @@ async function asaasGet<T>(cred: AsaasCredential, path: string, query?: Record<s
     res = await fetch(url, {
       method: 'GET',
       headers: { access_token: cred.apiKey, 'Content-Type': 'application/json' },
-      signal: AbortSignal.timeout(20_000),
+      signal: AbortSignal.timeout(timeoutMs),
     })
   } catch (err) {
     const reason = err instanceof Error && err.name === 'TimeoutError' ? 'demorou demais para responder' : 'não respondeu'
@@ -156,6 +164,16 @@ export interface AsaasCustomer {
   /** true = o Asaas NÃO manda avisos (e-mail/SMS/WhatsApp) para este cliente. */
   notificationDisabled?: boolean
   externalReference?: string | null
+  /** Endereço (nota fiscal) — decide qual cadastro é o verdadeiro quando o documento se repete. */
+  address?: string | null
+  addressNumber?: string | null
+  postalCode?: string | null
+  province?: string | null
+  complement?: string | null
+  /** true = removido no Asaas. Nunca recebe cobrança. */
+  deleted?: boolean | null
+  /** YYYY-MM-DD */
+  dateCreated?: string | null
 }
 
 /**
@@ -242,6 +260,23 @@ export interface AsaasCustomerInput {
   /** Nosso id do contato — é por ele que reencontramos o cliente da próxima vez. */
   externalReference: string
   address?: AsaasCustomerAddress | null
+  /**
+   * Sem documento, NÃO cria nem completa cadastro (lança AsaasDocumentRequiredError
+   * antes de qualquer POST/PUT). Padrão: tudo que não é sandbox — o Asaas de
+   * produção não gera cobrança sem CPF/CNPJ e o cadastro ficaria órfão (15/09).
+   */
+  requireDocument?: boolean
+}
+
+/**
+ * Faltou CPF/CNPJ numa conta que exige. Lançado ANTES de escrever no Asaas:
+ * nada foi criado. A mensagem contém "CPF ou CNPJ" (quem chama reconhece).
+ */
+export class AsaasDocumentRequiredError extends AsaasApiError {
+  constructor() {
+    super('Para gerar cobrança no Asaas de produção é preciso o CPF ou CNPJ do cliente.', 0)
+    this.name = 'AsaasDocumentRequiredError'
+  }
 }
 
 /** Só os campos de endereço realmente preenchidos — o Asaas rejeita string vazia. */
@@ -260,29 +295,84 @@ function addressFields(a: AsaasCustomerAddress | null | undefined): Record<strin
   return out
 }
 
+/** Até quantos cadastros cada busca traz para escolher (a busca não custa chamada a mais). */
+const CUSTOMER_SEARCH_LIMIT = 20
+
 /**
- * Reencontra o cliente no Asaas pelo NOSSO id de contato (externalReference,
- * gravado quando fomos nós que criamos) ou pelo CPF/CNPJ; senão cria.
- *
- * Limitação honesta: cliente que já existia no Asaas SEM esses dois dados não
- * é reencontrado — vira um segundo cadastro lá. O Asaas tolera duplicidade de
- * cliente; a cobrança sai certa do mesmo jeito.
+ * Reencontra o cliente SEM escrever nada (no máximo 2 GETs):
+ *   1. com CPF/CNPJ, pelo documento — o cadastro verdadeiro (endereço completo >
+ *      mais antigo > nosso externalReference), fora os apagados;
+ *   2. senão pelo NOSSO id de contato (externalReference) — mesmo documento,
+ *      ou órfão sem documento para adotar; NUNCA cadastro com OUTRO documento.
+ * null = não existe nesta conta do Asaas.
  */
-export async function findOrCreateCustomer(cred: AsaasCredential, input: AsaasCustomerInput): Promise<AsaasCustomer> {
-  const doc = (input.cpfCnpj ?? '').replace(/\D/g, '')
+export async function findCustomer(
+  cred: AsaasCredential,
+  input: { externalReference: string; cpfCnpj?: string | null },
+): Promise<AsaasCustomer | null> {
+  const doc = normalizeDocument(input.cpfCnpj)
+  if (doc) {
+    const byDoc = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { cpfCnpj: doc, limit: CUSTOMER_SEARCH_LIMIT })
+    const hit = pickCustomerForDocument(byDoc.data ?? [], doc, input.externalReference)
+    if (hit) return hit
+  }
+  if (!input.externalReference) return null
+  const byRef = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', {
+    externalReference: input.externalReference,
+    limit: CUSTOMER_SEARCH_LIMIT,
+  })
+  return pickCustomerForReference(byRef.data ?? [], input.externalReference, doc || null) ?? null
+}
+
+/**
+ * Esse documento já é cliente NESTA conta do Asaas? 1 GET com timeout curto —
+ * roda no caminho da resposta da IA, então não pode segurar 20s por conta.
+ * Lança AsaasApiError (quem chama decide se segue).
+ */
+export async function findCustomerByDocument(
+  cred: AsaasCredential,
+  doc: string,
+  opts: { timeoutMs?: number; externalReference?: string | null } = {},
+): Promise<AsaasCustomer | null> {
+  const d = normalizeDocument(doc)
+  if (!d) return null
+  const res = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { cpfCnpj: d, limit: CUSTOMER_SEARCH_LIMIT }, opts.timeoutMs ?? 8_000)
+  return pickCustomerForDocument(res.data ?? [], d, opts.externalReference ?? null) ?? null
+}
+
+/**
+ * Reencontra o cliente (findCustomer) ou cria. Com `opts.existing`: undefined
+ * busca como sempre; null vai direto ao POST (quem chamou já buscou); um
+ * cadastro só recebe o complemento (documento, e-mail, endereço).
+ *
+ * Nunca escreve externalReference num cadastro que não criamos (o ERP do
+ * cliente pode usar esse campo). Com `requireDocument` (padrão fora do
+ * sandbox), sem documento não há POST nem PUT: lança AsaasDocumentRequiredError.
+ *
+ * Limitação honesta: cliente que já existia no Asaas sem documento e sem o
+ * nosso externalReference não é reencontrado — vira um segundo cadastro lá
+ * (só no sandbox, ou quando veio um documento que ele não tinha).
+ */
+export async function findOrCreateCustomer(
+  cred: AsaasCredential,
+  input: AsaasCustomerInput,
+  opts: { existing?: AsaasCustomer | null } = {},
+): Promise<AsaasCustomer> {
+  const doc = normalizeDocument(input.cpfCnpj)
   const endereco = addressFields(input.address)
   const email = (input.email ?? '').trim()
-  const byRef = await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { externalReference: input.externalReference, limit: 1 })
-  const existente = byRef.data?.[0] ?? (doc.length === 11 || doc.length === 14
-    ? (await asaasGet<AsaasList<AsaasCustomer>>(cred, '/customers', { cpfCnpj: doc, limit: 1 })).data?.[0]
-    : undefined)
+  const requireDocument = input.requireDocument ?? cred.environment !== 'sandbox'
+  const existente = opts.existing !== undefined ? opts.existing : await findCustomer(cred, { externalReference: input.externalReference, cpfCnpj: doc })
 
   if (existente) {
+    // 15/09: órfão sem documento e sem documento agora → não completa nada
+    // (nem endereço/e-mail): a cobrança não sairia e o órfão ganharia dados.
+    if (requireDocument && !doc && !normalizeDocument(existente.cpfCnpj)) throw new AsaasDocumentRequiredError()
     // 08/09: o Asaas de produção exige CPF/CNPJ pra gerar cobrança.
     // 11/09: e e-mail + endereço pra emitir nota fiscal. Cliente que já existe
     // recebe agora o que veio preenchido — sem apagar o que já estava lá.
     const patch: Record<string, string> = { ...endereco }
-    if (!existente.cpfCnpj && (doc.length === 11 || doc.length === 14)) patch.cpfCnpj = doc
+    if (!(existente.cpfCnpj ?? '').trim() && doc) patch.cpfCnpj = doc
     if (email && !existente.email) patch.email = email
     if (Object.keys(patch).length === 0) return existente
     return asaasSend<AsaasCustomer>(cred, 'PUT', `/customers/${encodeURIComponent(existente.id)}`, {
@@ -290,6 +380,8 @@ export async function findOrCreateCustomer(cred: AsaasCredential, input: AsaasCu
       notificationDisabled: true,
     })
   }
+
+  if (requireDocument && !doc) throw new AsaasDocumentRequiredError()
 
   return asaasPost<AsaasCustomer>(cred, '/customers', {
     name: input.name,
