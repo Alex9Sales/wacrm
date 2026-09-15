@@ -63,6 +63,15 @@ export class FakeRedis {
     const prefix = pattern.replace(/\*$/, "");
     return [...redisStore.keys()].filter((k) => k.startsWith(prefix));
   }
+  async exists(key: string): Promise<number> {
+    return live(key) ? 1 : 0;
+  }
+  // set(key, value, "PX", ms) — only the TTL shape the Gmail backoff uses.
+  async set(key: string, _value: string, mode?: string, ttl?: number): Promise<"OK"> {
+    const expireAt = mode === "PX" && ttl ? Date.now() + Number(ttl) : null;
+    redisStore.set(key, { value: 1, expireAt });
+    return "OK";
+  }
   async del(...keys: string[]): Promise<number> {
     let n = 0;
     for (const k of keys) if (redisStore.delete(k)) n += 1;

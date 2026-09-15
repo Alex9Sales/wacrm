@@ -16,7 +16,9 @@
 import { ImapFlow } from 'imapflow'
 import PostalMime from 'postal-mime'
 import { and, eq } from 'drizzle-orm'
+import { Redis, type RedisOptions } from 'ioredis'
 
+import { bullConnection } from '@/lib/queue/connection'
 import { db, channels } from '@/db'
 import { loadChannel } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
@@ -71,9 +73,21 @@ async function pollOneChannel(channelId: string): Promise<number> {
     auth: { user: address, pass: appPassword },
     logger: false,
   })
+  // 15/09 (GoLink, senha de app revogada): login recusado rejeita o connect()
+  // mas o imapflow deixa o socket aberto; 5 min depois o timeout vira evento
+  // 'error' sem ouvinte e DERRUBA o worker inteiro (todas as contas), a cada
+  // tick. Ouvinte + close() no connect falho.
+  client.on('error', (err: { code?: string; message?: string }) => {
+    console.warn('[gmail-poll] imap error canal=%s code=%s %s', channelId, err?.code, err?.message)
+  })
 
   let processed = 0
-  await client.connect()
+  try {
+    await client.connect()
+  } catch (err) {
+    client.close()
+    throw err
+  }
   try {
     const lock = await client.getMailboxLock('INBOX')
     try {
@@ -151,12 +165,80 @@ async function pollOneChannel(channelId: string): Promise<number> {
     }
   } finally {
     try {
-      await client.logout()
+      if (client.usable) await client.logout()
+      else client.close()
     } catch {
-      /* ignore */
+      client.close()
     }
   }
   return processed
+}
+
+// Senha recusada: tentar a cada minuto são ~60 logins inválidos por hora, e o
+// Google pode bloquear a conta. Espera 30 min entre tentativas (Redis; sem
+// Redis, tenta como antes).
+const AUTH_FAIL_BACKOFF_MS = 30 * 60_000
+
+let redisClient: Redis | null | undefined
+
+function redis(): Redis | null {
+  if (redisClient !== undefined) return redisClient
+  try {
+    redisClient = new Redis({
+      ...(bullConnection() as RedisOptions),
+      maxRetriesPerRequest: 1,
+      enableOfflineQueue: false,
+    })
+    redisClient.on('error', () => {
+      /* fail-open */
+    })
+  } catch {
+    redisClient = null
+  }
+  return redisClient
+}
+
+const authFailKey = (channelId: string) => `gmail:authfail:${channelId}`
+
+async function inAuthBackoff(channelId: string): Promise<boolean> {
+  try {
+    return (await redis()?.exists(authFailKey(channelId))) === 1
+  } catch {
+    return false
+  }
+}
+
+async function markAuthFailed(channelId: string): Promise<void> {
+  try {
+    await redis()?.set(authFailKey(channelId), new Date().toISOString(), 'PX', AUTH_FAIL_BACKOFF_MS)
+  } catch {
+    /* fail-open */
+  }
+}
+
+type ImapError = {
+  code?: string
+  message?: string
+  authenticationFailed?: boolean
+  responseStatus?: string
+  serverResponseCode?: string
+  responseText?: string
+  executedCommand?: string
+}
+
+/** Uma linha com o que o Gmail respondeu ("Command failed" sozinho esconde a causa). */
+function describeImapError(err: unknown): string {
+  const e = (err ?? {}) as ImapError
+  return [
+    e.message,
+    e.code && `code=${e.code}`,
+    e.responseStatus && `status=${e.responseStatus}`,
+    e.serverResponseCode && `server=${e.serverResponseCode}`,
+    e.responseText && `text="${e.responseText}"`,
+    e.executedCommand && `cmd="${e.executedCommand}"`,
+  ]
+    .filter(Boolean)
+    .join(' ')
 }
 
 /** Varre TODOS os canais gmail conectados. Um canal com erro (senha revogada,
@@ -172,10 +254,20 @@ export async function runGmailPollSweep(): Promise<{
 
   let messages = 0
   for (const r of rows) {
+    if (await inAuthBackoff(r.id)) continue
     try {
       messages += await pollOneChannel(r.id)
     } catch (err) {
-      console.error('[gmail-poll] canal %s falhou:', r.id, err)
+      if ((err as ImapError)?.authenticationFailed) {
+        await markAuthFailed(r.id)
+        console.error(
+          '[gmail-poll] canal %s: Gmail recusou a senha de app (%s). Próxima tentativa em 30 min.',
+          r.id,
+          describeImapError(err),
+        )
+      } else {
+        console.error('[gmail-poll] canal %s falhou: %s', r.id, describeImapError(err), err)
+      }
     }
   }
   return { channels: rows.length, messages }
