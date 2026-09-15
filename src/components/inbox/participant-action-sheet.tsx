@@ -20,6 +20,7 @@ import {
 } from "@/components/ui/dialog";
 import { ContactAvatar } from "./contact-avatar";
 import { cn } from "@/lib/utils";
+import { formatPhone } from "@/lib/format-phone";
 
 export interface GroupParticipant {
   /** Telefone puro (E.164 sem "+"), vindo do author_key da mensagem. */
@@ -37,21 +38,6 @@ interface ParticipantActionSheetProps {
   onOpen: (p: GroupParticipant) => void;
   /** Abre o formulário de contato pré-preenchido (adicionar aos contatos). */
   onAdicionar: (p: GroupParticipant) => void;
-}
-
-/** "+55 67 99187-5477" a partir de "556791875477" (best-effort BR). */
-function formatPhone(raw: string): string {
-  const d = raw.replace(/\D/g, "");
-  if (d.startsWith("55") && (d.length === 12 || d.length === 13)) {
-    const ddd = d.slice(2, 4);
-    const rest = d.slice(4);
-    const mid =
-      rest.length === 9
-        ? `${rest.slice(0, 5)}-${rest.slice(5)}`
-        : `${rest.slice(0, 4)}-${rest.slice(4)}`;
-    return `+55 ${ddd} ${mid}`;
-  }
-  return `+${d}`;
 }
 
 function ActionButton({

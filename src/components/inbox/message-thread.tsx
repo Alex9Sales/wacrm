@@ -27,6 +27,7 @@ import {
 } from "./participant-action-sheet";
 import { ContactForm } from "@/components/contacts/contact-form";
 import { useAuth } from "@/hooks/use-auth";
+import { otherPersonNumber as numberOfOtherPerson } from "@/lib/channels/other-person-number";
 import { useCrmCallingEnabled } from "@/hooks/use-crm-calling";
 import { hasMinRole } from "@/lib/auth/roles";
 import { usePresence } from "@/hooks/use-presence";
@@ -2078,6 +2079,7 @@ export function MessageThread({
         droppedFile={droppedFile}
         onDroppedFileConsumed={() => setDroppedFile(null)}
         lockedByOtherAgent={lockedByOtherAgentName}
+        otherPersonNumber={numberOfOtherPerson(conversation.channel, user?.id)}
       />
 
       <TemplatePicker

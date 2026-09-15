@@ -24,7 +24,9 @@ import {
   Sparkles,
   MapPin,
   Lock,
+  Smartphone,
 } from "lucide-react";
+import type { OtherPersonNumber } from "@/lib/channels/other-person-number";
 import { Button } from "@/components/ui/button";
 import { GatedButton } from "@/components/ui/gated-button";
 import {
@@ -154,6 +156,9 @@ interface MessageComposerProps {
    *  someone else and the caller isn't supervisor+ — locks the composer
    *  (the server enforces this too; this is just the UX-level mirror). */
   lockedByOtherAgent?: string | null;
+  /** Número da conversa é dedicado a OUTRA pessoa: o que sair daqui vai pelo
+   *  WhatsApp dela, não pelo celular de quem responde. */
+  otherPersonNumber?: OtherPersonNumber | null;
 }
 
 function formatDuration(seconds: number): string {
@@ -186,6 +191,7 @@ export function MessageComposer({
   droppedFile,
   onDroppedFileConsumed,
   lockedByOtherAgent,
+  otherPersonNumber,
 }: MessageComposerProps) {
   // Capability gating (Phase 4). No channel → default to Meta's full
   // capability set so legacy single-Meta accounts are unaffected.
@@ -924,6 +930,21 @@ export function MessageComposer({
               Templates
             </Button>
           )}
+        </div>
+      )}
+
+      {/* 📱 14/09 (João/GoLink): respondeu pelo CRM na conversa do número do
+          Vitor e foi procurar a mensagem no próprio celular. A conversa sai
+          pelo número em que o cliente escreveu — transferir muda quem atende,
+          não o número. Nota interna não sai pro cliente: sem aviso. */}
+      {otherPersonNumber && !noteMode && !readOnly && !locked && (
+        <div className="mb-2 flex items-start gap-2 rounded-lg bg-amber-500/10 px-3 py-2">
+          <Smartphone className="mt-0.5 h-3.5 w-3.5 shrink-0 text-amber-600 dark:text-amber-400" />
+          <p className="text-xs text-amber-700 dark:text-amber-300">
+            Você está respondendo pelo número <strong>{otherPersonNumber.name}</strong>
+            {otherPersonNumber.phone ? ` (${otherPersonNumber.phone})` : ""}, que não é o seu. O cliente recebe
+            desse WhatsApp — a mensagem não aparece no seu celular.
+          </p>
         </div>
       )}
 

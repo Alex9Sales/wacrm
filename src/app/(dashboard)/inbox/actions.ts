@@ -353,13 +353,21 @@ async function aiCatchUpOnEnable(
  *  column null (typed non-null per column by Drizzle) when there's no
  *  match, so we defensively null-check each field. */
 function normalizeChannel(
-  channel: { id: string; provider: string; name: string } | null,
+  channel: {
+    id: string
+    provider: string
+    name: string
+    phoneNumber?: string | null
+    dedicatedUserId?: string | null
+  } | null,
 ): ConversationChannel | undefined {
   if (!channel?.id || !channel.provider) return undefined
   return {
     id: channel.id,
     provider: channel.provider as ChannelProvider,
     name: channel.name ?? '',
+    phone_number: channel.phoneNumber ?? null,
+    dedicated_user_id: channel.dedicatedUserId ?? null,
   }
 }
 
@@ -431,6 +439,9 @@ const channelColumns = {
   id: channels.id,
   provider: channels.provider,
   name: channels.name,
+  // 📱 Pro aviso "respondendo pelo número de outra pessoa" no compositor.
+  phoneNumber: channels.phoneNumber,
+  dedicatedUserId: channels.dedicatedUserId,
 }
 
 // The conversation's sector — name + color for the inbox card badge.

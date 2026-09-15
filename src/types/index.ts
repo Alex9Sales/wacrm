@@ -184,6 +184,10 @@ export interface ConversationChannel {
   id: string;
   provider: ChannelProvider;
   name: string;
+  /** Telefone do número (WhatsApp), quando conhecido. */
+  phone_number?: string | null;
+  /** Dono do número dedicado; null = número comum da empresa. */
+  dedicated_user_id?: string | null;
 }
 
 export interface Conversation {
