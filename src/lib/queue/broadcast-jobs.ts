@@ -8,7 +8,7 @@
 // helpers), matching the worker's constraint.
 // ============================================================
 
-import { and, eq, ne } from 'drizzle-orm';
+import { and, eq, inArray, ne, or } from 'drizzle-orm';
 
 import { db, broadcasts, broadcastRecipients, contacts } from '@/db';
 import { firstOrNull } from '@/db/helpers';
@@ -20,6 +20,7 @@ import {
 } from '@/lib/whatsapp/broadcast-core';
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 import { contactTokenValues } from '@/lib/whatsapp/message-vars';
+import { ALREADY_RECEIVED_ELSEWHERE_ERROR } from '@/lib/broadcasts/duplicate-sends';
 
 /** A broadcast row as the worker sees it. */
 export interface BroadcastRow {
@@ -94,11 +95,18 @@ export async function resolveBroadcastChannel(
 }
 
 /** Move a broadcast to 'sending' (idempotent; only from pre-terminal). */
-export async function markBroadcastSending(broadcastId: string): Promise<void> {
-  await db
+/**
+ * Dispatch → 'sending'. Condicional (conferência 15/09): um Cancelar/Excluir
+ * que chegou entre o dispatch ler o disparo e marcar não pode ser desfeito.
+ * false = o disparo não está mais agendado/enviando — o dispatch para.
+ */
+export async function markBroadcastSending(broadcastId: string): Promise<boolean> {
+  const rows = await db
     .update(broadcasts)
     .set({ status: 'sending', updatedAt: new Date().toISOString() })
-    .where(eq(broadcasts.id, broadcastId));
+    .where(and(eq(broadcasts.id, broadcastId), inArray(broadcasts.status, ['scheduled', 'sending'])))
+    .returning({ id: broadcasts.id });
+  return rows.length > 0;
 }
 
 /** The pending recipient rows of a broadcast (id only — the send job
@@ -363,14 +371,19 @@ export async function finalizeBroadcastIfDone(
   if (remaining.length > 0) return; // still work to do
 
   // "sent" if any recipient is in a non-failed terminal state (sent may
-  // already have advanced to delivered/read/replied via webhooks).
+  // already have advanced to delivered/read/replied via webhooks). Quem o
+  // worker pulou por já ter recebido por outro disparo não é falha
+  // (conferência 15/09): disparo todo pulado assim termina 'sent'.
   const anySent = await db
     .select({ id: broadcastRecipients.id })
     .from(broadcastRecipients)
     .where(
       and(
         eq(broadcastRecipients.broadcastId, broadcastId),
-        ne(broadcastRecipients.status, 'failed'),
+        or(
+          ne(broadcastRecipients.status, 'failed'),
+          eq(broadcastRecipients.errorMessage, ALREADY_RECEIVED_ELSEWHERE_ERROR),
+        ),
       ),
     )
     .limit(1);

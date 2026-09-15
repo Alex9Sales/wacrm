@@ -163,6 +163,8 @@ async function alreadyReceivedElsewhere(ctx: RecipientJobContext): Promise<boole
       messageKind: broadcast.messageKind,
       bodyText: broadcast.bodyText,
       subject: broadcast.subject,
+      // Família do canal: e-mail só compara com e-mail (conferência 15/09).
+      emailChannel: ctx.channel.provider === 'email' || ctx.channel.provider === 'gmail',
       media: broadcast.media,
       mediaUrl: broadcast.mediaUrl,
       mediaFilename: broadcast.mediaFilename,
@@ -388,7 +390,10 @@ async function processDispatchJob(job: Job<BroadcastDispatchJob>): Promise<void>
     return;
   }
 
-  await markBroadcastSending(broadcastId);
+  if (!(await markBroadcastSending(broadcastId))) {
+    log(`dispatch ${broadcastId} skipped: broadcast no longer scheduled/sending`);
+    return;
+  }
   await ensureRecipientWorker(channel.id);
 
   // Each pending recipient carries a slot (humanized drip or a spaced

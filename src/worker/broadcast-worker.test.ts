@@ -52,7 +52,7 @@ vi.mock('@/lib/queue/broadcast-controls', () => ({ haltBroadcast: vi.fn() }))
 vi.mock('@/lib/queue/broadcast-jobs', () => ({
   loadBroadcastRow: vi.fn(),
   resolveBroadcastChannel: vi.fn(),
-  markBroadcastSending: vi.fn(),
+  markBroadcastSending: vi.fn(async () => true),
   listPendingRecipientSlots: vi.fn(async () => []),
   loadRecipientJobContext: vi.fn(async () => ({ kind: 'ok', ctx: h.ctx })),
   markRecipientSent: vi.fn(async (id: string) => {

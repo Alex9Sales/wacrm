@@ -145,7 +145,10 @@ export async function enqueueTextBroadcast(
           'Disparo de texto só em canal não-oficial (WAHA/Evolution/EvoGo) ou de e-mail. Para o Meta use um template.',
       }
     }
-    const subject = (input.subject ?? '').trim()
+    // Assunto só existe em e-mail. O formulário guarda o que foi digitado ao
+    // trocar de canal — gravado num disparo de WhatsApp, desligaria a checagem
+    // de repetidos (conferência 15/09).
+    const subject = isEmail ? (input.subject ?? '').trim() : ''
     if (isEmail && !subject) {
       return { broadcastId: null, totalRecipients: 0, error: 'Informe o assunto do e-mail.' }
     }
@@ -213,6 +216,7 @@ export async function enqueueTextBroadcast(
               .map(mediaFingerprintName)
               .filter((n): n is string => !!n),
             subject: subject || null,
+            emailChannel: isEmail,
           },
         )
       } catch (dupErr) {
@@ -226,7 +230,6 @@ export async function enqueueTextBroadcast(
           return {
             broadcastId: null,
             totalRecipients: 0,
-            // Diz se foi "já recebeu" ou "já está na fila de outro disparo".
             error: allDuplicatesError(skippedDuplicates),
             skippedDuplicates,
           }

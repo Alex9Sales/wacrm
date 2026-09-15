@@ -26,7 +26,6 @@ const h = vi.hoisted(() => ({
   /** user_ids que a INSERT … SELECT da 1ª resposta devolve. */
   firstReplyRows: [] as string[],
   throwOnExecute: false,
-  noteAccess: false,
   executed: [] as { sql: string; params: unknown[] }[],
   findCalls: [] as unknown[][],
   webhooks: [] as unknown[][],
@@ -72,7 +71,7 @@ vi.mock('@/db', async (importOriginal) => {
       if (q.sql.includes('"has_history"')) {
         return { rows: h.hasHistory === null ? [] : [{ has_history: h.hasHistory }] }
       }
-      return { rows: h.noteAccess ? [{ '?column?': 1 }] : [] }
+      return { rows: [] }
     },
   }
   return { ...actual, db }
@@ -96,7 +95,6 @@ vi.mock('@/lib/events/publish', () => ({
 }))
 
 import {
-  hasBroadcastAccessToConversation,
   linkBroadcastConversation,
   linkBroadcastCreatorsOnFirstReply,
 } from './conversation-link'
@@ -129,7 +127,6 @@ beforeEach(() => {
   h.hasHistory = false
   h.firstReplyRows = []
   h.throwOnExecute = false
-  h.noteAccess = false
   h.executed = []
   h.findCalls = []
   h.webhooks = []
@@ -145,6 +142,8 @@ describe('linkBroadcastConversation — canal com eco (WAHA)', () => {
     expect(h.findCalls).toEqual([['acc', 'u-owner', 'c1', 'ch-atendimento']])
     expect([...h.participants]).toEqual(['cv-new:u-vitor'])
     expect(h.inserts[0].conflictTarget).toBeTruthy()
+    // origem gravada: acesso por disparo cai se a conversa virar privada/de outro
+    expect(h.inserts[0].values).toMatchObject({ source: 'broadcast' })
     expect(h.executed).toHaveLength(0)
     expect(h.webhooks).toEqual([
       ['acc', 'conversation.created', { conversation_id: 'cv-new', contact_id: 'c1' }, 'ch-atendimento'],
@@ -168,6 +167,8 @@ describe('linkBroadcastConversation — canal com eco (WAHA)', () => {
     expect(s).toContain('FROM "broadcasts" b')
     expect(s).toContain('m."created_at" < GREATEST(b."created_at", r."last_sent_at" - interval \'10 minutes\')')
     expect(s).toContain('m."sender_type" <> \'agent\'')
+    // robô do cliente que responde antes do sent_at ser gravado não vira histórico
+    expect(s).toContain('COALESCE(r."last_sent_at" - interval \'2 minutes\', \'infinity\'::timestamptz)')
   })
 
   it('conversa PRIVADA de outra pessoa que já existia → sem participante', async () => {
@@ -303,7 +304,10 @@ describe('linkBroadcastCreatorsOnFirstReply', () => {
     expect(h.executed).toHaveLength(1)
     const s = oneLine(h.executed[0].sql)
     expect(h.executed[0].params).toEqual(['cv-meta', 'acc', 'c1', 'ch-oficial'])
-    expect(s).toContain('INSERT INTO "conversation_participants" ("conversation_id", "user_id") SELECT DISTINCT c."id", b."user_id"')
+    expect(s).toContain('INSERT INTO "conversation_participants" ("conversation_id", "user_id", "source") SELECT DISTINCT c."id", b."user_id", \'broadcast\'')
+    // só onde a conversa nasce na resposta (canal com eco: o worker decide no envio)
+    expect(s).toContain('ch."provider" IN (\'meta\', \'evogo\', \'email\', \'gmail\')')
+    expect(s).toContain('b."user_id" IS NOT NULL')
     expect(s).toContain('b."channel_id" = c."channel_id"')
     expect(s).toContain('r."contact_id" = c."contact_id"')
     expect(s).toContain('r."sent_at" IS NOT NULL')
@@ -329,26 +333,5 @@ describe('linkBroadcastCreatorsOnFirstReply', () => {
     await expect(linkBroadcastCreatorsOnFirstReply(reply)).resolves.toBeUndefined()
     expect(err).toHaveBeenCalled()
     err.mockRestore()
-  })
-})
-
-describe('hasBroadcastAccessToConversation (rota /note)', () => {
-  it('só conta disparo DESSA pessoa, mesmo canal/contato/conta, conversa não privada e sem mensagem anterior', async () => {
-    h.noteAccess = true
-    await expect(hasBroadcastAccessToConversation('acc', 'cv1', 'u-vitor')).resolves.toBe(true)
-    const q = h.executed[0]
-    expect(q.params).toEqual(expect.arrayContaining(['u-vitor', 'cv1', 'acc']))
-    const s = oneLine(q.sql)
-    expect(s).toContain('b."user_id" = $1::uuid')
-    expect(s).toContain('b."channel_id" = c."channel_id"')
-    expect(s).toContain('r."contact_id" = c."contact_id"')
-    expect(s).toContain('c."is_private" = false')
-    expect(s).toContain('AND NOT EXISTS ( SELECT 1 FROM "messages" m')
-    expect(s).toContain('m."created_at" < GREATEST(b."created_at", r."sent_at" - interval \'10 minutes\')')
-  })
-
-  it('sem linha (privada, histórico anterior ou disparo de outro) → false', async () => {
-    h.noteAccess = false
-    await expect(hasBroadcastAccessToConversation('acc', 'cv1', 'u-vitor')).resolves.toBe(false)
   })
 })

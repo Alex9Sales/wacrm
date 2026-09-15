@@ -486,6 +486,12 @@ export default function BroadcastDetailPage() {
   // Excluir fica disponível mesmo com envios: o servidor arquiva (histórico
   // fica) em vez de apagar. Só quem criou ou supervisor+.
   const hasSends = broadcast.sent_count > 0 || (broadcast.processed_count ?? 0) > 0;
+  // O que "Excluir" faz, pela regra do servidor: esteve enviando/pausado →
+  // arquiva mesmo sem nenhum envio (conferência 15/09: o texto prometia apagar).
+  const archiveOnDelete = broadcast.delete_mode ? broadcast.delete_mode === 'archive' : hasSends;
+  // Pulados por já terem recebido por outro disparo contam como falha, mas não
+  // há o que reenviar.
+  const retryableFailed = Math.max(0, broadcast.failed_count - (broadcast.skipped_elsewhere_count ?? 0));
   const canDelete = broadcast.can_delete !== false;
   // "Enviar agora" only for a humanized drip still waiting on its slots
   // (pacing present). Bursts (pacing null) already send immediately.
@@ -594,7 +600,7 @@ export default function BroadcastDetailPage() {
               retried the moment it reconnects, without pausing first. Only
               'scheduled' has nothing to retry (retryFailedBroadcast rejects
               it). */}
-          {!archived && broadcast.failed_count > 0 && broadcast.status !== 'scheduled' && (
+          {!archived && retryableFailed > 0 && broadcast.status !== 'scheduled' && (
             <Button
               variant="outline"
               size="sm"
@@ -603,7 +609,7 @@ export default function BroadcastDetailPage() {
               className="border-amber-500/40 text-amber-600 hover:bg-amber-500/10 disabled:opacity-50"
             >
               <RefreshCw className="h-3.5 w-3.5" />
-              Reenviar falhados ({broadcast.failed_count})
+              Reenviar falhados ({retryableFailed})
             </Button>
           )}
 
@@ -658,14 +664,14 @@ export default function BroadcastDetailPage() {
               title={
                 !canDelete
                   ? 'Só quem criou o disparo ou um supervisor pode excluir ou arquivar.'
-                  : hasSends
+                  : archiveOnDelete
                     ? 'Arquivar: sai da lista e o histórico de quem recebeu fica guardado'
                     : 'Excluir este disparo'
               }
               className="border-red-500/30 bg-transparent text-red-400 hover:bg-red-500/10 disabled:opacity-40"
             >
-              {hasSends ? <Archive className="h-3.5 w-3.5" /> : <Trash2 className="h-3.5 w-3.5" />}
-              {hasSends ? 'Arquivar' : 'Excluir'}
+              {archiveOnDelete ? <Archive className="h-3.5 w-3.5" /> : <Trash2 className="h-3.5 w-3.5" />}
+              {archiveOnDelete ? 'Arquivar' : 'Excluir'}
             </Button>
           )}
         </div>
@@ -1004,15 +1010,17 @@ export default function BroadcastDetailPage() {
         <DialogContent className="border-border bg-popover sm:max-w-md">
           <DialogHeader>
             <DialogTitle className="text-popover-foreground">
-              {hasSends ? 'Arquivar disparo' : 'Excluir disparo'}
+              {archiveOnDelete ? 'Arquivar disparo' : 'Excluir disparo'}
             </DialogTitle>
             <DialogDescription className="text-muted-foreground">
-              {hasSends
+              {archiveOnDelete
                 ? `${
                     broadcast.sent_count > 0
                       ? `Este disparo já saiu para ${broadcast.sent_count.toLocaleString('pt-BR')} pessoa(s).`
-                      : 'Este disparo já tentou enviar (com falha).'
-                  } Ele sai da lista, mas o histórico de quem recebeu fica guardado em "Arquivados".`
+                      : hasSends
+                        ? 'Este disparo já tentou enviar (com falha).'
+                        : 'Este disparo já começou a rodar.'
+                  } Ele sai da lista, mas o histórico fica guardado em "Arquivados".`
                 : 'Este disparo ainda não enviou nada. Ele será apagado de vez.'}
               {isLive &&
                 ` Como ainda está ${status.label.toLowerCase()}, quem não recebeu não vai mais receber.`}
@@ -1032,12 +1040,12 @@ export default function BroadcastDetailPage() {
               disabled={deleting}
               className="bg-red-600 text-white hover:bg-red-700 disabled:opacity-50"
             >
-              {hasSends ? <Archive className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
+              {archiveOnDelete ? <Archive className="h-4 w-4" /> : <Trash2 className="h-4 w-4" />}
               {deleting
-                ? hasSends
+                ? archiveOnDelete
                   ? 'Arquivando…'
                   : 'Excluindo…'
-                : hasSends
+                : archiveOnDelete
                   ? 'Arquivar'
                   : 'Excluir'}
             </Button>

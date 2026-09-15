@@ -94,15 +94,43 @@ export async function isAdminUser(
   return !!row;
 }
 
-/** Conversation ids the user is an explicit participant of (@mentioned). */
-export async function getParticipantConversationIds(
+/**
+ * Origem do participante (conversation_participants.source, migr 0175 — ver
+ * lib/inbox/mention-access):
+ *   • 'mention'   — @menção: lê a conversa passando por cima de dono, setor,
+ *                   canal dedicado e privacidade (quem menciona quer que leia).
+ *                   'broadcast_mentioned' (disparo + menção) lê igual.
+ *   • 'broadcast' — criou o disparo que abriu a conversa. Vence setor e canal
+ *                   dedicado, mas NÃO a conversa que depois virou privada ou foi
+ *                   atribuída a outra pessoa (conferência 15/09).
+ */
+export type ParticipantSource = 'mention' | 'broadcast';
+
+/** Vale o acesso de quem criou o disparo? Só sem responsável e não privada. */
+export function broadcastParticipantCanRead(
+  isPrivate: boolean,
+  assignedAgentId: string | null,
+): boolean {
+  return !isPrivate && !assignedAgentId;
+}
+
+/** Participações da pessoa separadas por origem — uma consulta só. */
+export async function getParticipantConversationIdsBySource(
   userId: string,
-): Promise<string[]> {
+): Promise<{ mention: string[]; broadcast: string[] }> {
   const rows = await db
-    .select({ conversationId: conversationParticipants.conversationId })
+    .select({
+      conversationId: conversationParticipants.conversationId,
+      source: conversationParticipants.source,
+    })
     .from(conversationParticipants)
     .where(eq(conversationParticipants.userId, userId));
-  return rows.map((r) => r.conversationId);
+  const out = { mention: [] as string[], broadcast: [] as string[] };
+  for (const r of rows) {
+    if (r.source === 'broadcast') out.broadcast.push(r.conversationId);
+    else out.mention.push(r.conversationId);
+  }
+  return out;
 }
 
 /**
@@ -177,7 +205,10 @@ export async function conversationVisibility(
   // non-private conversation in their sectors (any assignee).
   const sectorIds = await getUserSectorIds(userId);
   const mine = eq(conversations.assignedAgentId, userId);
-  const participant = sql`${conversations.id} IN (SELECT conversation_id FROM conversation_participants WHERE user_id = ${userId})`;
+  const mentioned = sql`${conversations.id} IN (SELECT conversation_id FROM conversation_participants WHERE user_id = ${userId} AND source <> 'broadcast')`;
+  // Quem criou o disparo: só enquanto a conversa não é privada e ninguém a pegou.
+  const viaBroadcast = sql`(${conversations.id} IN (SELECT conversation_id FROM conversation_participants WHERE user_id = ${userId} AND source = 'broadcast') AND "conversations"."is_private" = false AND "conversations"."assigned_agent_id" IS NULL)`;
+  const participant = or(mentioned, viaBroadcast) as SQL;
   const openQueue = and(
     isNull(conversations.sectorId),
     isNull(conversations.assignedAgentId),
@@ -249,9 +280,12 @@ export async function canReadConversation(
     return false;
   }
   // @mention participant — reads this one thread regardless of owner/sector,
-  // canal dedicado incluso (quem menciona quer que a pessoa leia).
-  if (conversationId && (await isParticipant(conversationId, userId))) {
-    return true;
+  // canal dedicado incluso (quem menciona quer que a pessoa leia). Quem criou o
+  // disparo que abriu a conversa lê só enquanto ela está sem dono e não privada.
+  if (conversationId) {
+    const source = await participantSource(conversationId, userId);
+    if (source === 'mention') return true;
+    if (source === 'broadcast' && broadcastParticipantCanRead(isPrivate, assignedAgentId)) return true;
   }
   // 📌 Canal dedicado: abaixo de supervisor, só o dono do canal abre.
   if (conversationId) {
@@ -297,8 +331,10 @@ export async function canListConversation(
   }
   if (hasMinRole(role, 'supervisor')) return true;
   if (assignedAgentId && assignedAgentId === userId) return true;
-  if (conversationId && (await isParticipant(conversationId, userId))) {
-    return true;
+  if (conversationId) {
+    const source = await participantSource(conversationId, userId);
+    if (source === 'mention') return true;
+    if (source === 'broadcast' && broadcastParticipantCanRead(isPrivate, assignedAgentId)) return true;
   }
   // 📌 Canal dedicado: só o dono lista (atribuída/menção já passaram acima).
   if (conversationId) {
@@ -332,6 +368,8 @@ export function agentCanReadRow(args: {
   sectorIds: Set<string>;
   adminIds: Set<string>;
   participantIds: Set<string>;
+  /** Conversas que a pessoa acompanha por ter criado o disparo (source='broadcast'). */
+  broadcastParticipantIds?: Set<string>;
   /** 📌 Canal da conversa + mapa canal→dono (canais dedicados). Opcionais. */
   channelId?: string | null;
   dedicatedByChannel?: Map<string, string>;
@@ -345,12 +383,19 @@ export function agentCanReadRow(args: {
     sectorIds,
     adminIds,
     participantIds,
+    broadcastParticipantIds,
     channelId,
     dedicatedByChannel,
   } = args;
   if (assignedAgentId && assignedAgentId === userId) return true;
   if (assignedAgentId && adminIds.has(assignedAgentId)) return false;
   if (participantIds.has(conversationId)) return true;
+  if (
+    broadcastParticipantIds?.has(conversationId) &&
+    broadcastParticipantCanRead(isPrivate, assignedAgentId)
+  ) {
+    return true;
+  }
   // 📌 Canal dedicado: só o dono lê as conversas dele (atribuída/menção acima).
   if (channelId && dedicatedByChannel?.has(channelId)) {
     return dedicatedByChannel.get(channelId) === userId;
@@ -362,14 +407,14 @@ export function agentCanReadRow(args: {
   return !assignedAgentId;
 }
 
-/** True when the user is an explicit participant of the conversation. */
-export async function isParticipant(
+/** Origem da participação da pessoa na conversa (null = não participa). */
+export async function participantSource(
   conversationId: string,
   userId: string,
-): Promise<boolean> {
+): Promise<ParticipantSource | null> {
   const row = firstOrNull(
     await db
-      .select({ id: conversationParticipants.id })
+      .select({ source: conversationParticipants.source })
       .from(conversationParticipants)
       .where(
         and(
@@ -379,7 +424,8 @@ export async function isParticipant(
       )
       .limit(1),
   );
-  return !!row;
+  if (!row) return null;
+  return row.source === 'broadcast' ? 'broadcast' : 'mention';
 }
 
 // Re-export for callers that need the raw helpers.

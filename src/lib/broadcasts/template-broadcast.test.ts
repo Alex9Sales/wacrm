@@ -110,7 +110,7 @@ beforeEach(() => {
 })
 
 describe('enqueueTemplateBroadcast — envios repetidos', () => {
-  it('template com valores diferentes não barra; mesmos valores e fila ativa ficam de fora', async () => {
+  it('template com valores diferentes não barra; mesmos valores ficam de fora', async () => {
     h.results = [
       contactsRows,
       [
@@ -118,8 +118,9 @@ describe('enqueueTemplateBroadcast — envios repetidos', () => {
         sentRow('c1', ['Flash Baterias']),
         // mesmo template, {{1}} diferente → outra mensagem
         sentRow('c2', ['Piso Decor Ltda']),
-        // na fila de um disparo ativo com os mesmos valores (vazio)
-        sentRow('c3', [''], { status: 'pending', sentAt: null, messageParams: null }),
+        // já recebeu com os mesmos valores (vazio) — quem só está NA FILA de
+        // outro disparo não vem mais do SQL (conferência 15/09)
+        sentRow('c3', [''], { sentAt: '2026-09-15 12:50:00+00', messageParams: null }),
       ],
     ]
     const res = await enqueueTemplateBroadcast('acc', 'u-vitor', base)
@@ -128,7 +129,7 @@ describe('enqueueTemplateBroadcast — envios repetidos', () => {
     expect(res.totalRecipients).toBe(1)
     expect(res.skippedDuplicates).toEqual([
       { contactId: 'c1', name: null, lastSentAt: '2026-09-15T12:50:04.000Z', reason: 'same_template' },
-      { contactId: 'c3', name: null, lastSentAt: '2026-09-15T12:50:00.000Z', reason: 'queued' },
+      { contactId: 'c3', name: null, lastSentAt: '2026-09-15T12:50:00.000Z', reason: 'same_template' },
     ])
     // c3 (sem nome) ficou de fora por repetido e NÃO barrou o disparo por valor faltando
     expect(h.recipientRows.map((r) => r.contactId)).toEqual(['c2'])

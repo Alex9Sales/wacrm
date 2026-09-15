@@ -12,9 +12,10 @@
 // Revisão 15/09 (envios repetidos): "mesma mensagem" num template é nome +
 // idioma + os VALORES que a pessoa vê (corpo, {{1}} do cabeçalho de texto,
 // final dos links) — o mesmo template com outro nome/valor é outra mensagem.
-// A checagem roda depois de montar os valores de cada um, conta quem ainda
-// está na fila de um disparo ativo, e a escolha "enviar mesmo assim" fica
-// gravada em broadcasts.allow_repeats (o worker confere de novo sem ela).
+// A checagem roda depois de montar os valores de cada um e a escolha "enviar
+// mesmo assim" fica gravada em broadcasts.allow_repeats (o worker confere de
+// novo sem ela). Quem só está na fila de outro disparo não sai (conferência
+// 15/09): o worker garante um envio só.
 //
 // Worker-safe (sem 'server-only').
 // ============================================================
@@ -32,7 +33,7 @@ import {
   DUPLICATE_WINDOW_MS,
   latestSkipCollector,
   recipientWithoutOwnVarsSql,
-  sentOrQueuedSinceSql,
+  sentSinceSql,
   templateSendKey,
   type DuplicateSkip,
 } from '@/lib/broadcasts/duplicate-sends'
@@ -128,8 +129,8 @@ export async function enqueueTemplateBroadcast(
       ...buildTemplateRecipientSend(needs, mapping, c),
     }))
 
-    // Quem já recebeu este mesmo template com os mesmos valores hoje (ou está
-    // na fila de um disparo ativo com ele) fica de fora (15/09: envios 2×).
+    // Quem já recebeu este mesmo template com os mesmos valores hoje fica de
+    // fora (15/09: envios 2×).
     // Se a checagem falhar, segue sem pular (mesma escolha do disparo de texto).
     let skippedDuplicates: DuplicateSkip[] = []
     if (input.skipRecentDuplicates !== false) {
@@ -218,8 +219,7 @@ export async function enqueueTemplateBroadcast(
 
 /**
  * Contatos (dentre `planned`) que receberam o MESMO template (nome + idioma +
- * valores, ver templateSendKey) por disparo da conta nas últimas 24 h, ou que
- * estão pendentes num disparo ativo (sending/scheduled) criado nelas com ele.
+ * valores, ver templateSendKey) por disparo da conta nas últimas 24 h.
  * O texto do template muda por lead ({{1}}…), então aqui a mensagem é o
  * template com os valores — a checagem de texto (duplicate-sends.ts) deixa
  * template de fora.
@@ -241,9 +241,7 @@ export async function findRecentTemplateRecipients(
     .select({
       contactId: broadcastRecipients.contactId,
       name: contacts.name,
-      status: broadcastRecipients.status,
       sentAt: broadcastRecipients.sentAt,
-      queuedAt: broadcastRecipients.createdAt,
       params: broadcastRecipients.params,
       messageParams: broadcastRecipients.messageParams,
     })
@@ -257,15 +255,14 @@ export async function findRecentTemplateRecipients(
         eq(broadcasts.templateName, templateName),
         eq(broadcasts.templateLanguage, templateLanguage),
         inArray(broadcastRecipients.contactId, ids),
-        sentOrQueuedSinceSql(since),
+        sentSinceSql(since),
         recipientWithoutOwnVarsSql(),
       ),
     )
   const skips = latestSkipCollector()
   for (const r of rows) {
     if (!r.contactId || keyOf.get(r.contactId) !== templateSendKey(r)) continue
-    if (r.status === 'pending') skips.note(r.contactId, r.name, r.queuedAt, 'queued')
-    else skips.note(r.contactId, r.name, r.sentAt, 'same_template')
+    skips.note(r.contactId, r.name, r.sentAt, 'same_template')
   }
   return skips.list(ids)
 }

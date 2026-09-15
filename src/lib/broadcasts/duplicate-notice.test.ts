@@ -68,25 +68,16 @@ describe('duplicateSkipNotice — por motivo', () => {
     )
   })
 
-  it('na fila de outro disparo', () => {
-    expect(duplicateSkipNotice([{ name: 'Flash Baterias', reason: 'queued' }])).toBe(
-      '1 contato já está na fila de outro disparo com esta mensagem e ficou de fora: Flash Baterias.',
-    )
-    expect(duplicateSkipNotice([{ name: null, reason: 'queued' }, { name: null, reason: 'queued' }])).toBe(
-      '2 contatos já estão na fila de outro disparo com esta mensagem e ficaram de fora.',
-    )
-  })
-
-  it('motivos misturados: uma frase por motivo, texto antes da fila', () => {
+  it('motivos misturados: uma frase por motivo, na ordem texto → arquivos → template', () => {
     expect(
       duplicateSkipNotice([
-        { name: 'C', reason: 'queued' },
+        { name: 'C', reason: 'same_files' },
         { name: 'A', reason: 'same_text' },
         { name: 'B', reason: 'same_text' },
       ]),
     ).toBe(
       '2 contatos já tinham recebido o mesmo texto/legenda hoje e ficaram de fora: A, B. ' +
-        '1 contato já está na fila de outro disparo com esta mensagem e ficou de fora: C.',
+        '1 contato já tinha recebido os mesmos arquivos hoje e ficou de fora: C.',
     )
   })
 })
@@ -95,20 +86,5 @@ describe('allDuplicatesError', () => {
   it('já receberam (com ou sem motivo)', () => {
     expect(allDuplicatesError([{}, {}, {}])).toBe('Todos os 3 contatos já receberam esta mensagem nas últimas 24 h.')
     expect(allDuplicatesError([{ reason: 'same_text' }])).toBe('Este contato já recebeu esta mensagem nas últimas 24 h.')
-  })
-
-  it('todos na fila de outro disparo', () => {
-    expect(allDuplicatesError([{ reason: 'queued' }])).toBe(
-      'Este contato já está na fila de outro disparo com esta mensagem.',
-    )
-    expect(allDuplicatesError([{ reason: 'queued' }, { reason: 'queued' }])).toBe(
-      'Todos os 2 contatos já estão na fila de outro disparo com esta mensagem.',
-    )
-  })
-
-  it('misturado', () => {
-    expect(allDuplicatesError([{ reason: 'queued' }, { reason: 'same_files' }])).toBe(
-      'Todos os 2 contatos já receberam esta mensagem nas últimas 24 h ou estão na fila de outro disparo.',
-    )
   })
 })

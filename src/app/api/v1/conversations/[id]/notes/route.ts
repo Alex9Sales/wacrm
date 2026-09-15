@@ -23,7 +23,6 @@ import {
   notifications,
   member,
   user,
-  conversationParticipants,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { requireApiKey } from '@/lib/auth/api-context'
@@ -31,6 +30,7 @@ import { ok, fail, toApiErrorResponse, badRequest } from '@/lib/api/v1/respond'
 import { resolveAuditUserId } from '@/lib/api/v1/contacts'
 import { publishEvent } from '@/lib/events/publish'
 import { parseMentions } from '@/lib/inbox/mentions'
+import { grantMentionAccess } from '@/lib/inbox/mention-access'
 
 export async function POST(
   request: Request,
@@ -104,12 +104,7 @@ export async function POST(
       ]
       if (mentionedIds.length > 0) {
         // Acesso à conversa pros mencionados (senão a menção é um link morto).
-        await db
-          .insert(conversationParticipants)
-          .values(
-            mentionedIds.map((uid) => ({ conversationId, userId: uid })),
-          )
-          .onConflictDoNothing()
+        await grantMentionAccess(conversationId, mentionedIds)
         await db.insert(notifications).values(
           mentionedIds.map((uid) => ({
             accountId: ctx.accountId,

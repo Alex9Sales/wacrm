@@ -3,15 +3,15 @@
 //
 // 15/09 (GoLink): cada envio cria a conversa no número do disparo, sem
 // responsável; num número dedicado a outra pessoa, quem disparou não via
-// nenhuma. Participante (conversation_participants) já vence a regra de canal
-// dedicado na lista e na leitura (lib/sectors/access.ts) — sem trocar o
+// nenhuma. Vira participante com source='broadcast' (migr 0175) — vence setor e
+// canal dedicado na lista e na leitura (lib/sectors/access.ts) sem trocar o
 // responsável nem o número. Worker-safe (sem 'server-only').
 //
-// ⚠️ Revisão 15/09: participante vence TAMBÉM conversa privada, setor e
-// atribuição a colega — e dá leitura do histórico INTEIRO. Por isso só vale
-// pra conversa que NASCEU do disparo (ver whyNotBornFromBroadcast). Conversa com
-// histórico anterior nunca ganha participante por disparo: quem criou pede
-// atribuição.
+// ⚠️ Revisão 15/09: dá leitura do histórico INTEIRO, então só vale pra conversa
+// que NASCEU do disparo (ver whyNotBornFromBroadcast). Conversa com histórico
+// anterior nunca ganha participante por disparo: quem criou pede atribuição.
+// Conferência 15/09: o acesso por disparo cai quando a conversa vira privada
+// ou alguém a pega (access.ts confere na hora) — @menção continua vencendo.
 //
 // Chamado pelo worker logo depois de marcar o destinatário como enviado.
 //   • Canal COM eco (WAHA/Evolution/IG/Messenger): a conversa é garantida pelo
@@ -36,6 +36,11 @@ import { firstOrNull } from '@/db/helpers'
 /** Canais cujo envio NÃO volta como eco (fromMe) pelo webhook. */
 const NO_ECHO_PROVIDERS = new Set(['meta', 'evogo'])
 
+/** Onde a conversa só nasce na resposta do cliente (ver linkBroadcastCreatorsOnFirstReply). */
+const FIRST_REPLY_PROVIDERS_SQL = sql.raw(
+  [...NO_ECHO_PROVIDERS, 'email', 'gmail'].map((p) => `'${p}'`).join(', '),
+)
+
 /** Janela em que a resposta do cliente ainda "é" resposta ao disparo. */
 const FIRST_REPLY_WINDOW = sql.raw(`interval '7 days'`)
 
@@ -49,18 +54,26 @@ const FIRST_REPLY_WINDOW = sql.raw(`interval '7 days'`)
 const ECHO_SLACK = sql.raw(`interval '10 minutes'`)
 
 /**
+ * Folga pra fala do cliente/robô. sent_at só é gravado quando o provedor
+ * responde; a auto-resposta do cliente (robô de boas-vindas, comum em B2B)
+ * pode entrar antes disso — com envio lento ou nova tentativa, segundos antes
+ * do sent_at. Sem a folga, ela contaria como histórico e quem disparou nunca
+ * ganharia o acesso (conferência 15/09).
+ */
+const REPLY_SLACK = sql.raw(`interval '2 minutes'`)
+
+/**
  * Mensagem `m` que prova histórico ANTERIOR ao disparo `b` (enviado em
  * `sentAt`): qualquer uma antes do corte (created_at do disparo, apertado pra
- * envio − folga no agendado), ou fala do cliente/robô antes do envio — o eco é
- * sempre 'agent', e fala do cliente DEPOIS do envio é a resposta ao disparo.
- * Sem envio registrado, qualquer fala do cliente conta. Única definição, usada
- * no vínculo e na rota /note (a regra não pode divergir entre os dois).
+ * envio − folga no agendado), ou fala do cliente/robô antes do envio (− folga)
+ * — o eco é sempre 'agent', e fala do cliente DEPOIS do envio é a resposta ao
+ * disparo. Sem envio registrado, qualquer fala do cliente conta.
  */
 function priorHistory(sentAt: string) {
   const sent = sql.raw(sentAt)
   return sql`(
     m."created_at" < GREATEST(b."created_at", ${sent} - ${ECHO_SLACK})
-    OR (m."sender_type" <> 'agent' AND m."created_at" < COALESCE(${sent}, 'infinity'::timestamptz))
+    OR (m."sender_type" <> 'agent' AND m."created_at" < COALESCE(${sent} - ${REPLY_SLACK}, 'infinity'::timestamptz))
   )`
 }
 
@@ -150,9 +163,10 @@ export async function linkBroadcastConversation(input: {
       }
     }
 
+    // DO NOTHING: quem já estava por @menção continua com o acesso de menção.
     await db
       .insert(conversationParticipants)
-      .values({ conversationId: conv.id, userId: creatorUserId })
+      .values({ conversationId: conv.id, userId: creatorUserId, source: 'broadcast' })
       .onConflictDoNothing({
         target: [conversationParticipants.conversationId, conversationParticipants.userId],
       })
@@ -229,6 +243,10 @@ async function whyNotBornFromBroadcast(
  * últimos 7 dias entra como participante. Conversa recém-criada = sem histórico
  * anterior, então a regra de linkBroadcastConversation vale sem consulta extra
  * (só confere conta e privacidade). Nunca lança; import leve (só @/db).
+ *
+ * Conferência 15/09: só nesses provedores. Nos canais COM eco o worker já
+ * decidiu no envio — uma conversa recriada depois (a antiga foi excluída) não
+ * pode passar por cima de um "não" dado lá.
  */
 export async function linkBroadcastCreatorsOnFirstReply(input: {
   accountId: string
@@ -240,10 +258,13 @@ export async function linkBroadcastCreatorsOnFirstReply(input: {
   if (!accountId || !conversationId || !contactId || !channelId) return
   try {
     const res = await db.execute(sql`
-      INSERT INTO "conversation_participants" ("conversation_id", "user_id")
-      SELECT DISTINCT c."id", b."user_id"
+      INSERT INTO "conversation_participants" ("conversation_id", "user_id", "source")
+      SELECT DISTINCT c."id", b."user_id", 'broadcast'
       FROM "conversations" c
+      JOIN "channels" ch ON ch."id" = c."channel_id"
+        AND ch."provider" IN (${FIRST_REPLY_PROVIDERS_SQL})
       JOIN "broadcasts" b ON b."account_id" = c."account_id" AND b."channel_id" = c."channel_id"
+        AND b."user_id" IS NOT NULL
       JOIN "broadcast_recipients" r ON r."broadcast_id" = b."id"
         AND r."contact_id" = c."contact_id"
         AND r."sent_at" IS NOT NULL
@@ -268,36 +289,4 @@ export async function linkBroadcastCreatorsOnFirstReply(input: {
   } catch (err) {
     console.error('[broadcast-link] vincular na 1ª resposta falhou', { accountId, conversationId, channelId }, err)
   }
-}
-
-/**
- * Rota /note: a pessoa tem acesso POR DISPARO a esta conversa? (aí escrever
- * nota não revoga o acesso, que não é de menção). Mesma regra do vínculo: a
- * conversa não é privada e nasceu de um disparo DESSA pessoa pelo mesmo
- * número/contato — nenhuma mensagem anterior àquele disparo (priorHistory).
- */
-export async function hasBroadcastAccessToConversation(
-  accountId: string,
-  conversationId: string,
-  userId: string,
-): Promise<boolean> {
-  const res = await db.execute(sql`
-    SELECT 1
-    FROM "conversations" c
-    JOIN "broadcast_recipients" r ON r."contact_id" = c."contact_id" AND r."sent_at" IS NOT NULL
-    JOIN "broadcasts" b ON b."id" = r."broadcast_id"
-      AND b."account_id" = c."account_id"
-      AND b."user_id" = ${userId}::uuid
-      AND b."channel_id" = c."channel_id"
-    WHERE c."id" = ${conversationId}::uuid
-      AND c."account_id" = ${accountId}::uuid
-      AND c."is_private" = false
-      AND NOT EXISTS (
-        SELECT 1 FROM "messages" m
-        WHERE m."conversation_id" = c."id"
-          AND ${priorHistory('r."sent_at"')}
-      )
-    LIMIT 1
-  `)
-  return res.rows.length > 0
 }

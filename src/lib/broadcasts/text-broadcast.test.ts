@@ -101,6 +101,7 @@ describe('enqueueTextBroadcast — envios repetidos', () => {
       bodyText: base.bodyText,
       mediaFilenames: [],
       subject: null,
+      emailChannel: false,
     })
   })
 
@@ -134,19 +135,6 @@ describe('enqueueTextBroadcast — envios repetidos', () => {
     expect(h.broadcastValues[1].allowRepeats).toBe(false)
   })
 
-  it('todos na fila de outro disparo ativo → erro fala da fila', async () => {
-    h.dupResult = ['c1', 'c2', 'c3'].map((contactId) => ({
-      contactId,
-      name: null,
-      lastSentAt: '2026-09-15T12:50:04.000Z',
-      reason: 'queued' as const,
-    }))
-    const res = await enqueueTextBroadcast('acc', 'u-vitor', base)
-    expect(res.broadcastId).toBeNull()
-    expect(res.error).toBe('Todos os 3 contatos já estão na fila de outro disparo com esta mensagem.')
-    expect(h.broadcastValues).toHaveLength(0)
-  })
-
   it('e-mail: manda o assunto pra checagem (assunto diferente não é repetido)', async () => {
     const { loadChannel } = await import('@/lib/channels/channels')
     vi.mocked(loadChannel).mockResolvedValueOnce({
@@ -167,7 +155,19 @@ describe('enqueueTextBroadcast — envios repetidos', () => {
       bodyText: 'Segue em anexo.',
       mediaFilenames: [],
       subject: 'Boleto de setembro',
+      emailChannel: true,
     })
+  })
+
+  // Conferência 15/09: o formulário guardava o assunto ao trocar de e-mail pra WhatsApp.
+  it('WhatsApp: assunto que sobrou não vai pra checagem nem pro disparo', async () => {
+    await enqueueTextBroadcast('acc', 'u-vitor', { ...base, subject: 'Boleto de setembro' })
+    expect(findRecentDuplicateContacts).toHaveBeenCalledWith(
+      'acc',
+      expect.any(Array),
+      expect.objectContaining({ subject: null, emailChannel: false }),
+    )
+    expect(h.broadcastValues[0].subject).toBeNull()
   })
 
   it('mensagem por pessoa ("Chamar de volta", recipientVars) não é comparada', async () => {
@@ -201,6 +201,7 @@ describe('enqueueTextBroadcast — envios repetidos', () => {
       bodyText: null,
       mediaFilenames: ['dia do cliente.jpeg'],
       subject: null,
+      emailChannel: false,
     })
   })
 })

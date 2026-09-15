@@ -10,7 +10,8 @@
 // Revisão 15/09: o aviso diz O QUE bateu. No WhatsApp o texto decide (pega a
 // imagem subida de novo com a mesma legenda), então "esta mensagem" enganava
 // quem trocou a imagem e manteve o texto — agora é "o mesmo texto/legenda".
-// Quem ainda está na fila de outro disparo aparece à parte.
+// Conferência 15/09: quem só está na fila de outro disparo não sai mais (o
+// worker manda uma vez só), então não há aviso de "fila".
 // ============================================================
 
 import type { DuplicateReason, DuplicateSkip } from '@/lib/broadcasts/duplicate-sends'
@@ -33,10 +34,6 @@ function headFor(reason: DuplicateReason | undefined, n: number): string {
       return received('os mesmos arquivos')
     case 'same_template':
       return received('o mesmo template com os mesmos valores')
-    case 'queued':
-      return one
-        ? '1 contato já está na fila de outro disparo com esta mensagem e ficou de fora'
-        : `${n} contatos já estão na fila de outro disparo com esta mensagem e ficaram de fora`
     default:
       return received('esta mensagem')
   }
@@ -52,7 +49,7 @@ function sentence(reason: DuplicateReason | undefined, group: readonly SkipLike[
   return `${head}: ${shown.join(', ')}${rest > 0 ? ` e mais ${rest}` : ''}.`
 }
 
-const REASON_ORDER: DuplicateReason[] = ['same_text', 'same_files', 'same_template', 'queued']
+const REASON_ORDER: DuplicateReason[] = ['same_text', 'same_files', 'same_template']
 
 /**
  * "3 contatos já tinham recebido o mesmo texto/legenda hoje e ficaram de
@@ -71,22 +68,11 @@ export function duplicateSkipNotice(skipped: readonly SkipLike[]): string | null
   return parts.join(' ')
 }
 
-/**
- * Erro quando TODO mundo ficou de fora (nada foi criado). Fila à parte: quem
- * está na fila ainda não recebeu, só vai receber pelo outro disparo.
- */
+/** Erro quando TODO mundo ficou de fora (nada foi criado). */
 export function allDuplicatesError(skipped: readonly Pick<SkipLike, 'reason'>[]): string {
   const n = skipped.length
-  const queued = skipped.filter((s) => s.reason === 'queued').length
-  if (n > 0 && queued === n) {
-    return n === 1
-      ? 'Este contato já está na fila de outro disparo com esta mensagem.'
-      : `Todos os ${n} contatos já estão na fila de outro disparo com esta mensagem.`
-  }
   if (n <= 1) return 'Este contato já recebeu esta mensagem nas últimas 24 h.'
-  return queued > 0
-    ? `Todos os ${n} contatos já receberam esta mensagem nas últimas 24 h ou estão na fila de outro disparo.`
-    : `Todos os ${n} contatos já receberam esta mensagem nas últimas 24 h.`
+  return `Todos os ${n} contatos já receberam esta mensagem nas últimas 24 h.`
 }
 
 /** Dica quando o disparo nem foi criado porque todo mundo já tinha recebido. */

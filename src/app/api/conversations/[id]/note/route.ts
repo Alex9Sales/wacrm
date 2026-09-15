@@ -17,13 +17,12 @@ import {
   notifications,
   member,
   user,
-  conversationParticipants,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, toErrorResponse } from '@/lib/auth/account'
 import { publishEvent } from '@/lib/events/publish'
 import { parseMentions } from '@/lib/inbox/mentions'
-import { hasBroadcastAccessToConversation } from '@/lib/broadcasts/conversation-link'
+import { endMentionAccess, grantMentionAccess } from '@/lib/inbox/mention-access'
 
 export async function POST(
   request: Request,
@@ -86,10 +85,7 @@ export async function POST(
       if (mentioned.length > 0) {
         // Grant the mentioned members access to THIS conversation (even if it's
         // assigned to someone else) — otherwise the mention is a dead link.
-        await db
-          .insert(conversationParticipants)
-          .values(mentioned.map((uid) => ({ conversationId, userId: uid })))
-          .onConflictDoNothing()
+        await grantMentionAccess(conversationId, mentioned)
         await db.insert(notifications).values(
           mentioned.map((uid) => ({
             accountId: ctx.accountId,
@@ -116,22 +112,12 @@ export async function POST(
     // @mention replies (posts this note), their temporary access ends and the
     // conversation drops off their list. The owner (assigned agent) is never
     // removed — they keep the thread regardless.
-    // 15/09 (GoLink): quem criou um DISPARO que abriu esta conversa entra como
-    // participante pra acompanhar as respostas (lib/broadcasts/conversation-link)
-    // — esse acesso NÃO é de menção e não some quando a pessoa escreve uma nota.
-    const viaBroadcast =
-      conv.assignedAgentId !== ctx.userId &&
-      (await createdBroadcastForConversation(ctx.accountId, conversationId, ctx.userId).catch(() => false))
-    if (conv.assignedAgentId !== ctx.userId && !viaBroadcast) {
+    // 15/09 (GoLink): quem acompanha por ter criado o DISPARO que abriu a
+    // conversa (source='broadcast') não perde esse acesso ao escrever — só o de
+    // menção acaba (lib/inbox/mention-access).
+    if (conv.assignedAgentId !== ctx.userId) {
       try {
-        await db
-          .delete(conversationParticipants)
-          .where(
-            and(
-              eq(conversationParticipants.conversationId, conversationId),
-              eq(conversationParticipants.userId, ctx.userId),
-            ),
-          )
+        await endMentionAccess(conversationId, ctx.userId)
       } catch (err) {
         console.error('[note] participant revoke failed:', err)
       }
@@ -148,19 +134,4 @@ export async function POST(
   } catch (err) {
     return toErrorResponse(err)
   }
-}
-
-/**
- * A pessoa tem acesso POR DISPARO a esta conversa? Revisão 15/09: não basta ter
- * disparado pra este contato por este número — a conversa precisa ter NASCIDO
- * do disparo (não privada, sem mensagem anterior a ele). Senão uma @menção numa
- * conversa antiga viraria acesso permanente só porque a pessoa já disparou pro
- * contato. A regra mora em lib/broadcasts/conversation-link (mesma do vínculo).
- */
-function createdBroadcastForConversation(
-  accountId: string,
-  conversationId: string,
-  userId: string,
-): Promise<boolean> {
-  return hasBroadcastAccessToConversation(accountId, conversationId, userId)
 }

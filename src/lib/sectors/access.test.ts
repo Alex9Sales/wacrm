@@ -58,3 +58,32 @@ describe('agentCanReadRow — canal dedicado', () => {
     ).toBe(false)
   })
 })
+
+// Conferência 15/09: quem criou o disparo (source='broadcast') acompanha a
+// conversa que ele abriu — mas perde quando ela vira privada ou alguém a pega.
+describe('agentCanReadRow — participante por disparo', () => {
+  const dedicated = new Map([['ch-leo', 'leonardo']])
+  const viaBroadcast = { broadcastParticipantIds: new Set(['c1']), channelId: 'ch-leo', dedicatedByChannel: dedicated }
+
+  it('conversa nascida do disparo, sem dono, no número dedicado a outro → leio', () => {
+    expect(agentCanReadRow({ ...base, ...viaBroadcast })).toBe(true)
+  })
+
+  it('virou PRIVADA depois → não leio mais', () => {
+    expect(agentCanReadRow({ ...base, ...viaBroadcast, isPrivate: true })).toBe(false)
+  })
+
+  it('um colega pegou a conversa depois → não leio mais', () => {
+    expect(agentCanReadRow({ ...base, ...viaBroadcast, assignedAgentId: 'leonardo' })).toBe(false)
+  })
+
+  it('atribuída a mim → leio (a regra do responsável vale antes)', () => {
+    expect(agentCanReadRow({ ...base, ...viaBroadcast, assignedAgentId: 'wilian', isPrivate: true })).toBe(true)
+  })
+
+  it('@menção continua vencendo privada e responsável', () => {
+    expect(
+      agentCanReadRow({ ...base, ...viaBroadcast, participantIds: new Set(['c1']), isPrivate: true, assignedAgentId: 'leonardo' }),
+    ).toBe(true)
+  })
+})

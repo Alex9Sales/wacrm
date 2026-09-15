@@ -22,10 +22,10 @@
 // Returns { data: { broadcast_id, total_recipients, skipped_duplicates } }.
 //
 // skip_recent_duplicates (15/09, GoLink: envios repetidos): true = tira quem
-// já recebeu a mesma mensagem nas últimas 24 h (ou está na fila de um disparo
-// ativo com ela); `skipped_duplicates` lista quem ficou de fora
-// ([{ contact_id, name, last_sent_at, reason }], reason = same_text |
-// same_files | queued). Padrão false pra integração existente não mudar de
+// já recebeu a mesma mensagem nas últimas 24 h; `skipped_duplicates` lista quem
+// ficou de fora ([{ contact_id, name, last_sent_at, reason }], reason =
+// same_text | same_files). Quem só está na fila de outro disparo continua: o
+// worker manda uma vez só. Padrão false pra integração existente não mudar de
 // comportamento. Se TODOS já tinham recebido → 409 all_recipients_duplicate
 // com a mesma lista em error.
 //

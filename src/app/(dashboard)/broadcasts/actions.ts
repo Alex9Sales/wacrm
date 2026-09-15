@@ -56,11 +56,13 @@ import { otherPersonNumberError } from '@/lib/broadcasts/channel-owner-guard'
 import { logBroadcastEvent, type BroadcastAuditAction } from '@/lib/broadcasts/audit'
 import { removePendingRecipient } from '@/lib/broadcasts/recipient-remove'
 import { canManageBroadcast } from '@/lib/broadcasts/detail-text'
+import { broadcastDeleteOrArchive } from '@/lib/broadcasts/deletion-rule'
+import { ALREADY_RECEIVED_ELSEWHERE_ERROR } from '@/lib/broadcasts/duplicate-sends'
 import {
   agentCanReadRow,
   getAdminUserIds,
   getDedicatedChannelMap,
-  getParticipantConversationIds,
+  getParticipantConversationIdsBySource,
   getUserSectorIds,
   teamSeesAll,
 } from '@/lib/sectors/access'
@@ -184,6 +186,8 @@ export async function getBroadcast(broadcastId: string): Promise<Broadcast | nul
       .select({
         pending: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.status} = 'pending')::int`,
         processed: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.status} <> 'pending')::int`,
+        attempted: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.attempts} > 0)::int`,
+        skippedElsewhere: sql<number>`count(*) FILTER (WHERE ${broadcastRecipients.status} = 'failed' AND ${broadcastRecipients.errorMessage} = ${ALREADY_RECEIVED_ELSEWHERE_ERROR})::int`,
         nextSlot: sql<string | null>`min(${broadcastRecipients.scheduledSlotAt}) FILTER (WHERE ${broadcastRecipients.status} = 'pending')`,
         lastSlot: sql<string | null>`max(${broadcastRecipients.scheduledSlotAt}) FILTER (WHERE ${broadcastRecipients.status} = 'pending')`,
       })
@@ -232,6 +236,16 @@ export async function getBroadcast(broadcastId: string): Promise<Broadcast | nul
     next_slot_at: isoOrNull(agg?.nextSlot),
     last_slot_at: isoOrNull(agg?.lastSlot),
     interval_ms: intervalMs,
+    skipped_elsewhere_count: agg?.skippedElsewhere ?? 0,
+    // Mesma regra de deleteOrArchiveBroadcast (sem olhar a fila: um job ativo
+    // só pode transformar "apagar" em "arquivar", nunca o contrário).
+    delete_mode: broadcastDeleteOrArchive({
+      previousStatus: row.status,
+      sentCount: row.sent_count,
+      nonPendingCount: agg?.processed ?? 0,
+      attemptedCount: agg?.attempted ?? 0,
+      activeJob: false,
+    }),
     can_delete: canManageBroadcast({
       actorUserId: ctx.userId,
       actorRole: ctx.role,
@@ -374,19 +388,21 @@ async function recipientConversationReader(
   const isAdmin = hasMinRole(ctx.role, 'admin')
   const isSupervisor = hasMinRole(ctx.role, 'supervisor')
   const isAgentTier = !isSupervisor
-  const [adminIdsArr, sectorIdsArr, participantIdsArr, dedicatedByChannel, openTeam] =
+  const noParticipation = { mention: [] as string[], broadcast: [] as string[] }
+  const [adminIdsArr, sectorIdsArr, participation, dedicatedByChannel, openTeam] =
     convs.length === 0 || isAdmin
-      ? [[] as string[], [] as string[], [] as string[], new Map<string, string>(), false]
+      ? [[] as string[], [] as string[], noParticipation, new Map<string, string>(), false]
       : await Promise.all([
           needsAdmins ? getAdminUserIds(ctx.accountId) : Promise.resolve([] as string[]),
           isAgentTier ? getUserSectorIds(ctx.userId) : Promise.resolve([] as string[]),
-          isAgentTier ? getParticipantConversationIds(ctx.userId) : Promise.resolve([] as string[]),
+          isAgentTier ? getParticipantConversationIdsBySource(ctx.userId) : Promise.resolve(noParticipation),
           isAgentTier ? getDedicatedChannelMap(ctx.accountId) : Promise.resolve(new Map<string, string>()),
           teamSeesAll(ctx.accountId),
         ])
   const adminIds = new Set(adminIdsArr)
   const sectorIds = new Set(sectorIdsArr)
-  const participantIds = new Set(participantIdsArr)
+  const participantIds = new Set(participation.mention)
+  const broadcastParticipantIds = new Set(participation.broadcast)
 
   for (const c of convs) {
     const assigneeIsAdmin = !!c.assignedAgentId && adminIds.has(c.assignedAgentId)
@@ -409,6 +425,7 @@ async function recipientConversationReader(
       sectorIds,
       adminIds,
       participantIds,
+      broadcastParticipantIds,
       channelId: c.channelId,
       dedicatedByChannel,
     })

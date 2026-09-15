@@ -572,6 +572,16 @@ export interface Broadcast {
   interval_ms?: number;
   /** Quem olha pode excluir/arquivar (quem criou ou supervisor+). */
   can_delete?: boolean;
+  /**
+   * O que "Excluir" faz agora, pela mesma regra do servidor
+   * (lib/broadcasts/deletion-rule): apagar de vez ou arquivar.
+   */
+  delete_mode?: 'delete' | 'archive';
+  /**
+   * Pulados pelo worker porque já tinham recebido a mesma mensagem por outro
+   * disparo (contam em failed_count, mas nada deu errado e não há o que reenviar).
+   */
+  skipped_elsewhere_count?: number;
 }
 
 export interface BroadcastRecipient {

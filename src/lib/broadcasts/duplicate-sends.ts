@@ -8,16 +8,17 @@
 // Duas fontes na criação do disparo, uma consulta cada (inArray nos
 // contatos, janela de 24 h):
 //   (i)  broadcast_recipients de disparos de texto da conta com o mesmo
-//        conteúdo que SAÍRAM (sent/delivered/read/replied) — ou que ainda
-//        estão NA FILA (pending) de um disparo ativo (sending/scheduled)
-//        criado nas últimas 24 h. Revisão 15/09: quem refazia o disparo
-//        achando que não tinha saído mandava 2× pra quem ainda esperava a vez.
-//        Disparo pausado/cancelado não conta: pode nunca sair, e se voltar o
-//        worker confere na hora (contactAlreadyReceivedElsewhere).
+//        conteúdo que SAÍRAM (sent/delivered/read/replied), na mesma família
+//        de canal (e-mail com e-mail, WhatsApp com WhatsApp).
 //        Mesmo conteúdo = texto normalizado igual (+ assunto igual no
-//        e-mail); sem texto, o mesmo conjunto de anexos pelo NOME (a URL muda
-//        a cada upload; o nome não) — nome genérico ("image.png") não prova
-//        nada. Template fica fora (template-broadcast.ts cuida).
+//        e-mail) — a não ser que os dois tenham anexos que se identificam e
+//        sejam outros (panfleto do dia com a mesma legenda); sem texto, o
+//        mesmo conjunto de anexos pelo NOME (a URL muda a cada upload; o nome
+//        não) — nome genérico ("image.png") não prova nada. Template fica
+//        fora (template-broadcast.ts cuida).
+//        Conferência 15/09: quem está só NA FILA de outro disparo NÃO fica de
+//        fora na criação — se o outro fosse cancelado, a pessoa nunca
+//        receberia. Quem garante um envio só é o worker (abaixo).
 //   (ii) messages de agente/robô (não nota interna) nas conversas da conta
 //        com o mesmo texto — pega o envio À MÃO e o de um disparo que foi
 //        excluído (excluir apaga os destinatários, a mensagem fica). A
@@ -27,28 +28,27 @@
 // não depender do lower()/espaço do JS bater com o do Postgres.
 //
 // Na hora do ENVIO o worker chama contactAlreadyReceivedElsewhere (uma
-// consulta, só disparos): cobre o disparo pausado que volta depois que outro
-// já mandou a mesma coisa.
+// consulta, só disparos): quem enviar por segundo pula — cobre os dois
+// disparos na fila ao mesmo tempo e o pausado que volta depois.
 //
 // Worker-safe (sem 'server-only').
 // ============================================================
 
 import { and, eq, gte, inArray, isNotNull, ne, or, sql, type SQL, type SQLWrapper } from 'drizzle-orm'
 
-import { db, broadcasts, broadcastRecipients, contacts, conversations, messages } from '@/db'
+import { db, broadcasts, broadcastRecipients, channels, contacts, conversations, messages } from '@/db'
 import { appendOptOutLine } from '@/lib/contacts/opt-out'
 
-export type DuplicateReason = 'same_text' | 'same_files' | 'same_template' | 'queued'
+export type DuplicateReason = 'same_text' | 'same_files' | 'same_template'
 
 export interface DuplicateSkip {
   contactId: string
   name: string | null
-  /** Quando recebeu a mesma mensagem (ISO). Na fila: quando entrou. */
+  /** Quando recebeu a mesma mensagem (ISO). */
   lastSentAt: string
   /**
    * Por que ficou de fora (revisão 15/09): mesmo texto/legenda, mesmos
-   * arquivos, mesmo template com os mesmos valores, ou já está NA FILA de um
-   * disparo ativo com a mesma mensagem.
+   * arquivos ou mesmo template com os mesmos valores.
    */
   reason?: DuplicateReason
 }
@@ -59,6 +59,12 @@ export interface BroadcastContentFingerprint {
   mediaFilenames: string[]
   /** Assunto do e-mail: quando vem, também tem que bater. */
   subject?: string | null
+  /**
+   * Canal de e-mail/Gmail? Compara só com disparos da mesma família (o mesmo
+   * corpo por e-mail não é "já recebeu no WhatsApp"). Sem o campo: e-mail
+   * quando veio assunto.
+   */
+  emailChannel?: boolean
 }
 
 /** Janela padrão: 24 h. */
@@ -67,8 +73,8 @@ export const DUPLICATE_WINDOW_MS = 24 * 60 * 60 * 1000
 /** Status de destinatário que significam "a mensagem saiu". */
 export const SENT_RECIPIENT_STATUSES = ['sent', 'delivered', 'read', 'replied']
 
-/** Disparo que ainda vai mandar os pendentes (pausado/cancelado ficam fora). */
-export const ACTIVE_BROADCAST_STATUSES = ['sending', 'scheduled']
+/** Provedores de e-mail (família de canal pra comparar repetidos). */
+const EMAIL_PROVIDERS = ['email', 'gmail']
 
 /**
  * Texto mínimo (normalizado) pra uma mensagem À MÃO contar como repetida.
@@ -121,19 +127,26 @@ export function normalizeFilenameSet(names: readonly (string | null | undefined)
  * ontem. Comparado sem extensão e sem "(1)"/"cópia" no fim.
  */
 const GENERIC_FILENAME_PATTERNS: RegExp[] = [
-  // image.png, imagem (2).jpg, arquivo.pdf, documento-1.pdf, foto.jpg, video.mp4
-  /^(image|imagem|img|foto|photo|picture|pic|video|vídeo|audio|áudio|arquivo|documento|document|doc|file|anexo|attachment|download|untitled|sem t[ií]tulo|sem nome)([\s_-]*\d+)?$/u,
+  // image.png, imagem (2).jpg, arquivo.pdf, documento-1.pdf, foto.jpg, video.mp4, unnamed.jpg
+  /^(image|imagem|img|foto|photo|picture|pic|video|vídeo|audio|áudio|arquivo|documento|document|doc|file|anexo|attachment|download|untitled|unnamed|sem t[ií]tulo|sem nome)([\s_-]*\d+)?$/u,
   // IMG_1234, IMG-20260915-WA0001, VID_20260915_101010, PXL_20260915_123456789, DSC01234
   /^(img|vid|aud|ptt|pxl|dsc|dscn|dcim|mvimg|photo|video|image|doc|stk)[\s_-]*\d[\d\s_.-]*(wa\d+)?$/u,
-  // WhatsApp Image 2026-09-15 at 10.00.00
+  // "WhatsApp Image", "Screenshot", "Captura de Tela" SEM data e hora completas
+  // (com elas o nome identifica o arquivo — ver FULL_TIMESTAMP abaixo)
   /^whatsapp (image|video|audio|ptt|document|imagem|vídeo|áudio|documento)(?!\p{L})/u,
-  // Captura de Tela 2026-09-15 às 10.00.00, Screenshot_20260915, Screen Shot …, Print …
   /^(captura de tela|screenshot|screen shot|screen recording|gravação de tela|print|printscreen)(?!\p{L})/u,
   // Canva: "Design sem nome", "Design sem nome (3)", "Untitled design"
   /^(design sem nome|untitled design)(?!\p{L})/u,
   // só dígitos (com separadores): 1726400000000.jpg, 20260915_101010.jpg
   /^[\d\s_.-]+$/u,
 ]
+
+/** Prefixos do app/sistema que, COM data e hora até os segundos, identificam o arquivo. */
+const TIMESTAMPED_PREFIX =
+  /^(whatsapp (image|video|audio|ptt|document|imagem|vídeo|áudio|documento)|captura de tela|screenshot|screen shot|screen recording|gravação de tela)(?!\p{L})/u
+
+/** Data + hora com segundos: "2026-09-15 at 08.44.10", "20260915-101010". */
+const FULL_TIMESTAMP = /\d{4}[-_.]?\d{2}[-_.]?\d{2}\D{1,6}\d{1,2}[.:h_-]?\d{2}[.:m_-]?\d{2}/u
 
 /** true = o nome sozinho não diz que é o mesmo arquivo (ver padrões acima). */
 export function isGenericFilename(name: string | null | undefined): boolean {
@@ -145,6 +158,9 @@ export function isGenericFilename(name: string | null | undefined): boolean {
     .replace(/[\s_-]*(copy|cópia|copia)(\s*\d+)?$/u, '')
     .trim()
   if (!base) return true
+  // Conferência 15/09: "WhatsApp Image 2026-09-15 at 08.44.10" é um arquivo só
+  // (as duas imagens do "dia do cliente" da GoLink tinham esse nome).
+  if (TIMESTAMPED_PREFIX.test(base) && FULL_TIMESTAMP.test(base)) return false
   return GENERIC_FILENAME_PATTERNS.some((re) => re.test(base))
 }
 
@@ -159,6 +175,28 @@ export function sameAttachmentSet(a: readonly string[], b: readonly string[]): b
   const da = a.filter((n) => !isGenericFilename(n))
   const dbn = b.filter((n) => !isGenericFilename(n))
   return da.length > 0 && da.length === dbn.length && da.every((v, i) => v === dbn[i])
+}
+
+/**
+ * Com TEXTO igual, os anexos só desempatam quando dá pra afirmar que são
+ * outros (conferência 15/09): algum dos lados tem nome que identifica o
+ * arquivo e os nomes que identificam não são os mesmos. Panfleto do dia com a
+ * mesma legenda e imagem nova ("oferta-terca.jpg") não é repetido; a mesma
+ * arte subida de novo, ou só "image.png" dos dois lados, continua sendo.
+ */
+export function attachmentsClearlyDiffer(a: readonly string[], b: readonly string[]): boolean {
+  const da = normalizeFilenameSet(a.filter((n) => !isGenericFilename(n)))
+  const dbn = normalizeFilenameSet(b.filter((n) => !isGenericFilename(n)))
+  if (da.length === 0 && dbn.length === 0) return false
+  return da.length !== dbn.length || da.some((v, i) => v !== dbn[i])
+}
+
+/** e-mail/Gmail ou não, na mesma família do disparo atual (canal apagado = não e-mail). */
+function channelFamilySql(emailChannel: boolean): SQL {
+  const providers = sql.join(EMAIL_PROVIDERS.map((p) => sql`${p}`), sql`, `)
+  return emailChannel
+    ? sql`${channels.provider} IN (${providers})`
+    : sql`(${channels.provider} IS NULL OR ${channels.provider} NOT IN (${providers}))`
 }
 
 /**
@@ -221,18 +259,11 @@ export function recipientWithoutOwnVarsSql(): SQL {
   return sql`(${broadcastRecipients.vars} IS NULL OR jsonb_typeof(${broadcastRecipients.vars}) <> 'object' OR ${broadcastRecipients.vars} = '{}'::jsonb)`
 }
 
-/** Saiu nas últimas 24 h, OU está pendente num disparo ativo criado nelas. */
-export function sentOrQueuedSinceSql(since: string): SQL {
-  return or(
-    and(
-      inArray(broadcastRecipients.status, SENT_RECIPIENT_STATUSES),
-      gte(broadcastRecipients.sentAt, since),
-    ),
-    and(
-      eq(broadcastRecipients.status, 'pending'),
-      inArray(broadcasts.status, ACTIVE_BROADCAST_STATUSES),
-      gte(broadcasts.createdAt, since),
-    ),
+/** Saiu nas últimas 24 h (quem só está na fila não conta — ver topo). */
+export function sentSinceSql(since: string): SQL {
+  return and(
+    inArray(broadcastRecipients.status, SENT_RECIPIENT_STATUSES),
+    gte(broadcastRecipients.sentAt, since),
   ) as SQL
 }
 
@@ -271,9 +302,9 @@ function windowStart(sinceMs: number | undefined): string {
 
 /**
  * Contatos (dentre `contactIds`) que receberam a mesma mensagem nas últimas
- * 24 h (padrão) por qualquer canal da conta — disparo ou envio manual — ou
- * que estão na fila de um disparo ativo com ela.
- * Lista vazia (ou mensagem sem texto e sem anexo que identifique) → [] sem consultar.
+ * 24 h (padrão) por um canal da mesma família na conta — disparo ou envio
+ * manual. Lista vazia (ou mensagem sem texto e sem anexo que identifique) →
+ * [] sem consultar.
  */
 export async function findRecentDuplicateContacts(
   accountId: string,
@@ -287,7 +318,10 @@ export async function findRecentDuplicateContacts(
   const bodyText = (content.bodyText ?? '').trim()
   const normalized = normalizeBroadcastText(bodyText)
   const hasText = normalized !== ''
-  const subject = (content.subject ?? '').trim()
+  const rawSubject = (content.subject ?? '').trim()
+  const emailChannel = content.emailChannel ?? rawSubject !== ''
+  // Assunto só existe em e-mail.
+  const subject = emailChannel ? rawSubject : ''
   const mediaNames = normalizeFilenameSet(content.mediaFilenames ?? [])
   // Sem texto e só com nomes genéricos não dá pra dizer que é o mesmo arquivo.
   if (!hasText && !mediaNames.some((n) => !isGenericFilename(n))) return []
@@ -295,12 +329,12 @@ export async function findRecentDuplicateContacts(
   const since = windowStart(opts.sinceMs)
   const skips = latestSkipCollector()
 
-  // (i) Disparos da conta que já saíram (ou estão na fila) pra essas pessoas
-  // com o mesmo conteúdo. Com texto: o texto decide (no SQL) — pega a imagem
-  // subida de novo com a mesma legenda. Sem texto: só os anexos (conferidos
-  // aqui — media é jsonb); o texto do disparo antigo não importa, a pessoa
-  // já recebeu esses arquivos. E-mail: o assunto também tem que bater
-  // ("Segue em anexo." com assuntos diferentes são e-mails diferentes).
+  // (i) Disparos da conta que já saíram pra essas pessoas com o mesmo
+  // conteúdo. Com texto: o texto decide (no SQL) — pega a imagem subida de
+  // novo com a mesma legenda —, salvo anexos claramente outros. Sem texto: só
+  // os anexos (conferidos aqui — media é jsonb); o texto do disparo antigo não
+  // importa, a pessoa já recebeu esses arquivos. E-mail: o assunto também tem
+  // que bater ("Segue em anexo." com assuntos diferentes são e-mails diferentes).
   const contentMatch = hasText
     ? sql`${normSql(broadcasts.bodyText)} = ${normSql(textParam(bodyText))}`
     : (or(isNotNull(broadcasts.media), isNotNull(broadcasts.mediaUrl)) as SQL)
@@ -311,9 +345,7 @@ export async function findRecentDuplicateContacts(
     .select({
       contactId: broadcastRecipients.contactId,
       name: contacts.name,
-      status: broadcastRecipients.status,
       sentAt: broadcastRecipients.sentAt,
-      queuedAt: broadcastRecipients.createdAt,
       media: broadcasts.media,
       mediaUrl: broadcasts.mediaUrl,
       mediaFilename: broadcasts.mediaFilename,
@@ -321,28 +353,33 @@ export async function findRecentDuplicateContacts(
     .from(broadcastRecipients)
     .innerJoin(broadcasts, eq(broadcasts.id, broadcastRecipients.broadcastId))
     .innerJoin(contacts, eq(contacts.id, broadcastRecipients.contactId))
+    .leftJoin(channels, eq(channels.id, broadcasts.channelId))
     .where(
       and(
         eq(broadcasts.accountId, accountId),
         ne(broadcasts.messageKind, 'template'),
         inArray(broadcastRecipients.contactId, ids),
-        sentOrQueuedSinceSql(since),
+        sentSinceSql(since),
         recipientWithoutOwnVarsSql(),
+        channelFamilySql(emailChannel),
         contentMatch,
         subjectMatch,
       ),
     )
   for (const r of recipientRows) {
-    if (!hasText && !sameAttachmentSet(broadcastMediaNames(r), mediaNames)) continue
-    if (r.status === 'pending') skips.note(r.contactId, r.name, r.queuedAt, 'queued')
-    else skips.note(r.contactId, r.name, r.sentAt, hasText ? 'same_text' : 'same_files')
+    const theirNames = broadcastMediaNames(r)
+    if (hasText ? attachmentsClearlyDiffer(theirNames, mediaNames) : !sameAttachmentSet(theirNames, mediaNames)) continue
+    skips.note(r.contactId, r.name, r.sentAt, hasText ? 'same_text' : 'same_files')
   }
 
   // (ii) Mensagens de agente/robô com o mesmo texto (à mão, ou eco de um
   // disparo — com ou sem a linha "responda SAIR" que o worker anexa). Fica de
-  // fora: texto curto (saudação do dia a dia) e e-mail com assunto (a
-  // mensagem não guarda o assunto, então não dá pra conferir).
-  if (hasText && !subject && normalized.length >= MIN_MANUAL_TEXT_CHARS) {
+  // fora: texto curto (saudação do dia a dia), e-mail (a mensagem não guarda o
+  // assunto, então não dá pra conferir) e disparo com anexo que identifica (a
+  // mensagem só guarda a URL, que muda a cada upload — não dá pra saber se a
+  // imagem é a mesma).
+  const hasIdentifyingMedia = mediaNames.some((n) => !isGenericFilename(n))
+  if (hasText && !emailChannel && !hasIdentifyingMedia && normalized.length >= MIN_MANUAL_TEXT_CHARS) {
     const candidates = Array.from(new Set([bodyText, appendOptOutLine(bodyText)]))
     const messageRows = await db
       .select({
@@ -353,9 +390,11 @@ export async function findRecentDuplicateContacts(
       .from(messages)
       .innerJoin(conversations, eq(conversations.id, messages.conversationId))
       .innerJoin(contacts, eq(contacts.id, conversations.contactId))
+      .leftJoin(channels, eq(channels.id, conversations.channelId))
       .where(
         and(
           eq(conversations.accountId, accountId),
+          channelFamilySql(false),
           inArray(conversations.contactId, ids),
           inArray(messages.senderType, ['agent', 'bot']),
           eq(messages.isInternal, false),
@@ -386,6 +425,8 @@ export interface ReceivedElsewhereInput {
   mediaFilename: string | null
   templateName: string | null
   templateLanguage: string | null
+  /** Canal do disparo atual é e-mail/Gmail? (família; sem o campo: e-mail quando tem assunto) */
+  emailChannel?: boolean
   /** Template: valores do corpo deste destinatário. */
   params?: readonly string[] | null
   /** Template: {{1}} do cabeçalho de texto e final dos links dos botões. */
@@ -395,12 +436,13 @@ export interface ReceivedElsewhereInput {
 
 /**
  * Na hora do ENVIO (revisão 15/09): este contato já recebeu a mesma mensagem
- * por OUTRO disparo da conta nas últimas 24 h? Cobre o disparo pausado que
- * volta depois que outro já mandou a mesma coisa — na criação ele não contou
- * como "na fila" (estava pausado). Uma consulta, só em broadcast_recipients
- * que saíram; mesmo conteúdo = texto normalizado (+ assunto no e-mail); sem
- * texto, os mesmos anexos pelo nome (genérico não conta); template = nome +
- * idioma + valores. Quem chama decide o que fazer com erro (o worker segue).
+ * por OUTRO disparo da conta nas últimas 24 h? Quem envia por segundo pula:
+ * cobre dois disparos com a mesma pessoa na fila e o pausado que volta depois.
+ * Uma consulta, só em broadcast_recipients que saíram, mesma família de canal;
+ * mesmo conteúdo = texto normalizado (+ assunto no e-mail), salvo anexos
+ * claramente outros; sem texto, os mesmos anexos pelo nome (genérico não
+ * conta); template = nome + idioma + valores. Quem chama decide o que fazer
+ * com erro (o worker segue).
  */
 export async function contactAlreadyReceivedElsewhere(input: ReceivedElsewhereInput): Promise<boolean> {
   const { accountId, broadcastId, contactId } = input
@@ -437,7 +479,9 @@ export async function contactAlreadyReceivedElsewhere(input: ReceivedElsewhereIn
 
   const bodyText = (input.bodyText ?? '').trim()
   const hasText = normalizeBroadcastText(bodyText) !== ''
-  const subject = (input.subject ?? '').trim()
+  const rawSubject = (input.subject ?? '').trim()
+  const emailChannel = input.emailChannel ?? rawSubject !== ''
+  const subject = emailChannel ? rawSubject : ''
   const mediaNames = broadcastMediaNames(input)
   if (!hasText && !mediaNames.some((n) => !isGenericFilename(n))) return false
 
@@ -449,17 +493,22 @@ export async function contactAlreadyReceivedElsewhere(input: ReceivedElsewhereIn
     })
     .from(broadcastRecipients)
     .innerJoin(broadcasts, eq(broadcasts.id, broadcastRecipients.broadcastId))
+    .leftJoin(channels, eq(channels.id, broadcasts.channelId))
     .where(
       and(
         ...base,
         ne(broadcasts.messageKind, 'template'),
+        channelFamilySql(emailChannel),
         hasText
           ? sql`${normSql(broadcasts.bodyText)} = ${normSql(textParam(bodyText))}`
           : (or(isNotNull(broadcasts.media), isNotNull(broadcasts.mediaUrl)) as SQL),
         subject ? sql`${normSql(broadcasts.subject)} = ${normSql(textParam(subject))}` : undefined,
       ),
     )
-    .limit(hasText ? 1 : 50)
-  if (hasText) return rows.length > 0
-  return rows.some((r) => sameAttachmentSet(broadcastMediaNames(r), mediaNames))
+    .limit(50)
+  return rows.some((r) =>
+    hasText
+      ? !attachmentsClearlyDiffer(broadcastMediaNames(r), mediaNames)
+      : sameAttachmentSet(broadcastMediaNames(r), mediaNames),
+  )
 }

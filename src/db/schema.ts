@@ -2482,6 +2482,8 @@ export const conversationParticipants = pgTable("conversation_participants", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	conversationId: uuid("conversation_id").notNull(),
 	userId: uuid("user_id").notNull(),
+	/** 'mention' (@menção, padrão) | 'broadcast' (criou o disparo que abriu a conversa) | 'broadcast_mentioned' — migr 0175, lib/inbox/mention-access. */
+	source: text().default('mention').notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	uniqueIndex("conversation_participants_unique").using("btree", table.conversationId.asc().nullsLast().op("uuid_ops"), table.userId.asc().nullsLast().op("uuid_ops")),

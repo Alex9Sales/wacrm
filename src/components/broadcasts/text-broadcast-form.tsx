@@ -403,7 +403,7 @@ export function TextBroadcastForm({ emailOnly }: { emailOnly?: boolean } = {}) {
         bodyText: message.trim(),
         media: mediaItems.length > 0 ? mediaItems : undefined,
         includeOptOut,
-        subject: subject.trim() || null,
+        subject: isEmailChannel ? subject.trim() || null : null,
         confirmOtherPersonNumber: !!otherOwner && confirmOtherNumber,
         dailyCap: cap,
         sendNow,

@@ -48,6 +48,7 @@ import {
   isGenericFilename,
   mediaFingerprintName,
   normalizeBroadcastText,
+  attachmentsClearlyDiffer,
   sameAttachmentSet,
   templateSendKey,
 } from './duplicate-sends'
@@ -106,13 +107,15 @@ describe('nome de arquivo genérico', () => {
     'IMG_1234 (1).JPG',
     'VID_20260915_101010.mp4',
     'PXL_20260915_123456789.jpg',
-    'WhatsApp Image 2026-09-15 at 10.00.00.jpeg',
+    'WhatsApp Image.jpeg',
+    'WhatsApp Image (2).jpeg',
     'Design sem nome.png',
     'Design sem nome (3).png',
     'Untitled design.png',
-    'Captura de Tela 2026-09-15 às 10.00.00.png',
-    'Screenshot 2026-09-15 101010.png',
-    'Screenshot_20260915-101010.png',
+    'Captura de Tela.png',
+    'Screenshot.png',
+    'unnamed.jpg',
+    'unnamed (1).png',
     '1726400000000.jpg',
     '20260915_101010.jpg',
     'arquivo.pdf',
@@ -123,7 +126,19 @@ describe('nome de arquivo genérico', () => {
     expect(isGenericFilename(name)).toBe(true)
   })
 
-  it.each(['Dia do Cliente.jpg', 'tabela-precos-setembro.pdf', 'promo 2026.png', 'catalogo golink.pdf', 'printer.png'])(
+  // Conferência 15/09: com data e hora até os segundos, o nome identifica.
+  it.each([
+    'Dia do Cliente.jpg',
+    'tabela-precos-setembro.pdf',
+    'promo 2026.png',
+    'catalogo golink.pdf',
+    'printer.png',
+    'WhatsApp Image 2026-09-15 at 08.44.10.jpeg',
+    'WhatsApp Image 2026-09-15 at 08.44.10 (1).jpeg',
+    'Captura de Tela 2026-09-15 às 10.00.00.png',
+    'Screenshot 2026-09-15 101010.png',
+    'Screenshot_20260915-101010.png',
+  ])(
     '%s identifica o arquivo',
     (name) => {
       expect(isGenericFilename(name)).toBe(false)
@@ -137,6 +152,15 @@ describe('nome de arquivo genérico', () => {
     // um anexo a mais pode ser conteúdo novo
     expect(sameAttachmentSet(['dia do cliente.jpg'], ['dia do cliente.jpg', 'image.png'])).toBe(false)
     expect(sameAttachmentSet([], [])).toBe(false)
+  })
+
+  it('com texto igual, anexos só desempatam quando são claramente outros', () => {
+    expect(attachmentsClearlyDiffer(['oferta-segunda.jpg'], ['oferta-terca.jpg'])).toBe(true)
+    expect(attachmentsClearlyDiffer([], ['oferta-terca.jpg'])).toBe(true)
+    expect(attachmentsClearlyDiffer(['dia do cliente.jpg'], ['Dia do Cliente.jpg'])).toBe(false)
+    // nada que identifique dos dois lados: o texto decide
+    expect(attachmentsClearlyDiffer(['image.png'], ['img_99.jpg'])).toBe(false)
+    expect(attachmentsClearlyDiffer([], [])).toBe(false)
   })
 })
 
@@ -259,61 +283,51 @@ describe('findRecentDuplicateContacts', () => {
     expect(out[1]).toEqual({ contactId: 'c4', name: null, lastSentAt: '2026-09-15T07:00:00.000Z', reason: 'same_files' })
   })
 
-  it('texto: mídia diferente não impede (o texto decide) e o motivo é o texto/legenda', async () => {
+  it('texto: mesma legenda com a mesma arte (ou nomes genéricos) é repetido; o motivo é o texto/legenda', async () => {
     h.results = [
       [
-        {
-          contactId: 'c1',
-          name: 'A',
-          status: 'sent',
-          sentAt: '2026-09-15 09:00:00+00',
-          media: [{ url: 'https://s/x.jpg', filename: 'outra.jpg' }],
-          mediaUrl: null,
-          mediaFilename: null,
-        },
+        { contactId: 'c1', name: 'A', sentAt: '2026-09-15 09:00:00+00', media: [{ url: 'https://s/x.jpg', filename: 'dia.jpg' }], mediaUrl: null, mediaFilename: null },
+        { contactId: 'c2', name: 'B', sentAt: '2026-09-15 09:00:00+00', media: [{ url: 'https://s/y.jpg', filename: 'image.png' }], mediaUrl: null, mediaFilename: null },
       ],
-      [],
-    ]
-    const out = await findRecentDuplicateContacts('acc', ['c1'], {
-      bodyText: 'Oi',
-      mediaFilenames: ['dia.jpg'],
-    })
-    expect(out).toEqual([{ contactId: 'c1', name: 'A', lastSentAt: '2026-09-15T09:00:00.000Z', reason: 'same_text' }])
-  })
-
-  // Revisão 15/09 (A): refazer o disparo achando que não saiu mandava 2× pra
-  // quem ainda esperava a vez na fila.
-  it('pendente de disparo ativo conta como "na fila" (quando entrou)', async () => {
-    h.results = [
-      [
-        { contactId: 'c1', name: 'Flash Baterias', status: 'pending', sentAt: null, queuedAt: '2026-09-15 12:00:00+00', media: null, mediaUrl: null, mediaFilename: null },
-      ],
-      [],
     ]
     const out = await findRecentDuplicateContacts('acc', ['c1', 'c2'], {
-      bodyText: 'Nós da GoLink desejamos um feliz dia do cliente!',
-      mediaFilenames: [],
+      bodyText: 'Oi',
+      mediaFilenames: ['dia.jpg', 'image.png'],
     })
-    expect(out).toEqual([
-      { contactId: 'c1', name: 'Flash Baterias', lastSentAt: '2026-09-15T12:00:00.000Z', reason: 'queued' },
-    ])
+    expect(out.map((d) => [d.contactId, d.reason])).toEqual([['c1', 'same_text']])
   })
 
-  it('fila: só disparo sending/scheduled criado nas 24 h — pausado e cancelado não contam', async () => {
+  // Conferência 15/09: panfleto diário com a mesma legenda e imagem nova.
+  it('texto igual com anexo claramente outro NÃO é repetido (e não consulta mensagens à mão)', async () => {
+    h.results = [
+      [
+        { contactId: 'c1', name: 'A', sentAt: '2026-09-15 09:00:00+00', media: [{ url: 'https://s/x.jpg', filename: 'oferta-segunda.jpg' }], mediaUrl: null, mediaFilename: null },
+      ],
+      [{ contactId: 'c1', name: 'A', createdAt: '2026-09-15 09:00:00+00' }],
+    ]
+    const out = await findRecentDuplicateContacts('acc', ['c1'], {
+      bodyText: 'Confira as ofertas de hoje na GoLink!',
+      mediaFilenames: ['oferta-terca.jpg'],
+    })
+    expect(out).toEqual([])
+    expect(h.selectCalls).toBe(1)
+  })
+
+  // Conferência 15/09: quem só está na fila de outro disparo não sai (se o
+  // outro fosse cancelado, nunca receberia) — o worker garante um envio só.
+  it('só conta quem SAIU, na mesma família de canal', async () => {
     h.results = [[], []]
     await findRecentDuplicateContacts('acc', ['c1'], {
       bodyText: 'Nós da GoLink desejamos um feliz dia do cliente!',
       mediaFilenames: [],
     })
     const q = renderWhere(0)
-    expect(q.sql).toContain('"broadcast_recipients"."status" = $')
-    expect(q.sql).toMatch(/"broadcasts"\."status" in \(\$\d+, \$\d+\)/)
-    expect(q.sql).toContain('"broadcasts"."created_at" >= $')
-    expect(q.params).toContain('pending')
-    expect(q.params).toContain('sending')
-    expect(q.params).toContain('scheduled')
-    expect(q.params).not.toContain('paused')
-    expect(q.params).not.toContain('cancelled')
+    expect(q.params).toContain('sent')
+    expect(q.params).not.toContain('pending')
+    expect(q.sql).not.toContain('"broadcasts"."status"')
+    // WhatsApp não compara com disparo de e-mail
+    expect(q.sql).toContain('("channels"."provider" IS NULL OR "channels"."provider" NOT IN ($')
+    expect(q.params).toContain('gmail')
     // quem tem mensagem própria ({{mensagem}}) não entra na conta
     expect(q.sql).toContain('"broadcast_recipients"."vars" IS NULL')
   })
@@ -333,6 +347,20 @@ describe('findRecentDuplicateContacts', () => {
     const q = renderWhere(0)
     expect(q.sql).toContain('"broadcasts"."subject"')
     expect(q.params).toContain('Boleto de setembro')
+    expect(q.sql).toContain('"channels"."provider" IN ($')
+  })
+
+  // Conferência 15/09: assunto que sobrou do formulário num disparo de WhatsApp.
+  it('WhatsApp com assunto sobrando: assunto ignorado, mensagens à mão consultadas', async () => {
+    h.results = [[], []]
+    await findRecentDuplicateContacts('acc', ['c1'], {
+      bodyText: 'Nós da GoLink desejamos um feliz dia do cliente!',
+      mediaFilenames: [],
+      subject: 'Assunto digitado antes de trocar de canal',
+      emailChannel: false,
+    })
+    expect(renderWhere(0).sql).not.toContain('"broadcasts"."subject"')
+    expect(h.selectCalls).toBe(2)
   })
 
   it('sem assunto (WhatsApp): não filtra por assunto', async () => {
@@ -411,11 +439,11 @@ describe('contactAlreadyReceivedElsewhere', () => {
     templateLanguage: 'en_US',
   }
 
-  it('texto: outro disparo mandou o mesmo texto → true (uma consulta, LIMIT 1)', async () => {
+  it('texto: outro disparo mandou o mesmo texto → true (uma consulta)', async () => {
     h.results = [[{ media: null, mediaUrl: null, mediaFilename: null }]]
     expect(await contactAlreadyReceivedElsewhere(textInput)).toBe(true)
     expect(h.selectCalls).toBe(1)
-    expect(h.limits).toEqual([1])
+    expect(h.limits).toEqual([50])
     const q = renderWhere(0)
     // o próprio disparo não conta; só o que saiu
     expect(q.sql).toContain('"broadcasts"."id" <> $')
@@ -427,6 +455,17 @@ describe('contactAlreadyReceivedElsewhere', () => {
   it('texto: nada encontrado → false', async () => {
     h.results = [[]]
     expect(await contactAlreadyReceivedElsewhere(textInput)).toBe(false)
+  })
+
+  it('texto igual com anexo claramente outro → false; mesma família de canal', async () => {
+    h.results = [[{ media: [{ url: 'https://s/1.jpg', filename: 'oferta-segunda.jpg' }], mediaUrl: null, mediaFilename: null }]]
+    expect(
+      await contactAlreadyReceivedElsewhere({
+        ...textInput,
+        media: [{ url: 'https://s/2.jpg', type: 'image', filename: 'oferta-terca.jpg' }],
+      }),
+    ).toBe(false)
+    expect(renderWhere(0).sql).toContain('"channels"."provider" NOT IN ($')
   })
 
   it('só anexos genéricos → false sem consultar', async () => {

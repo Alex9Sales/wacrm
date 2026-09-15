@@ -41,7 +41,7 @@ import {
   canListConversation,
   agentCanReadRow,
   getAdminUserIds,
-  getParticipantConversationIds,
+  getParticipantConversationIdsBySource,
   getUserSectorIds,
   getDedicatedChannelMap,
   teamSeesAll,
@@ -764,18 +764,19 @@ export async function listConversations(opts?: {
   const isAgentTier = !hasMinRole(ctx.role, 'supervisor')
   // As três listas de visibilidade são independentes — busca em paralelo (antes
   // era 1 round-trip atrás do outro) e só pra o tier de agente.
-  const [adminIdsArr, sectorIdsArr, participantIdsArr, dedicatedByChannel, openTeam] = isAgentTier
+  const [adminIdsArr, sectorIdsArr, participation, dedicatedByChannel, openTeam] = isAgentTier
     ? await Promise.all([
         getAdminUserIds(ctx.accountId),
         getUserSectorIds(ctx.userId),
-        getParticipantConversationIds(ctx.userId),
+        getParticipantConversationIdsBySource(ctx.userId),
         getDedicatedChannelMap(ctx.accountId),
         teamSeesAll(ctx.accountId),
       ])
-    : [[] as string[], [] as string[], [] as string[], new Map<string, string>(), false]
+    : [[] as string[], [] as string[], { mention: [] as string[], broadcast: [] as string[] }, new Map<string, string>(), false]
   const adminIds = new Set(adminIdsArr)
   const sectorIds = new Set(sectorIdsArr)
-  const participantIds = new Set(participantIdsArr)
+  const participantIds = new Set(participation.mention)
+  const broadcastParticipantIds = new Set(participation.broadcast)
 
   return rows.map((row) => {
     const { contact, channel, sector, ...conv } = row
@@ -794,6 +795,7 @@ export async function listConversations(opts?: {
         sectorIds,
         adminIds,
         participantIds,
+        broadcastParticipantIds,
         channelId: conv.channel_id,
         dedicatedByChannel,
       }))
