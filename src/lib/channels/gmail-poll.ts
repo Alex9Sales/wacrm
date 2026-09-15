@@ -26,6 +26,7 @@ import { inGmailAuthBackoff, markGmailAuthFailed } from '@/lib/channels/gmail-au
 import { recordGmailFailure, recordGmailImapLoginOk } from '@/lib/channels/gmail-health'
 import { parseDeliveryReport } from '@/lib/channels/email-bounce'
 import { applyEmailBounce } from '@/lib/channels/email-bounce-apply'
+import { shouldIgnoreAutomatedEmail } from '@/lib/channels/email-automated-filter'
 
 const MAX_ATTACHMENT_BYTES = 20 * 1024 * 1024
 
@@ -150,6 +151,14 @@ async function pollOneChannel(channelId: string): Promise<number> {
             } catch (err) {
               console.error('[gmail-poll] devolução falhou uid=%s canal=%s:', uid, channelId, err)
             }
+            processed++
+            continue
+          }
+
+          // 🤖 15/09 (GoLink): a caixa é da empresa inteira — alerta do Google,
+          // recibo de assinatura e newsletter viravam contato e não lida.
+          // Só com a opção do canal ligada (email-automated.ts).
+          if (await shouldIgnoreAutomatedEmail(ch, { from, replyTo: parsed.replyTo?.[0]?.address, headers: parsed.headers })) {
             processed++
             continue
           }

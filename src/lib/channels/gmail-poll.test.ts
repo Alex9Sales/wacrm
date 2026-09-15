@@ -56,6 +56,8 @@ vi.mock('@/db', () => {
 const bounce = vi.hoisted(() => ({ apply: vi.fn(async () => 'matched') }))
 vi.mock('./email-bounce-apply', () => ({ applyEmailBounce: bounce.apply }))
 const inbound = vi.hoisted(() => ({ dispatch: vi.fn(async () => {}) }))
+const autoFilter = vi.hoisted(() => ({ ignore: vi.fn(async () => null as string | null) }))
+vi.mock('./email-automated-filter', () => ({ shouldIgnoreAutomatedEmail: autoFilter.ignore }))
 vi.mock('@/lib/channels/channels', () => ({
   loadChannel: async (id: string) => ({ id, providerMeta: { gmailLastUid: 129, gmailUidValidity: '1' } }),
 }))
@@ -198,6 +200,13 @@ describe('runGmailPollSweep com aviso de devolução', () => {
     await runGmailPollSweep()
     expect(bounce.apply).toHaveBeenCalledTimes(1)
     expect(inbound.dispatch).toHaveBeenCalledTimes(1)
+  })
+
+  it('e-mail automático com o filtro ligado não vira contato', async () => {
+    autoFilter.ignore.mockResolvedValueOnce('remetente no-reply@')
+    imap.messages = [{ uid: 131, source: cliente }]
+    await runGmailPollSweep()
+    expect(inbound.dispatch).not.toHaveBeenCalled()
   })
 
   it('mesmo se aplicar a devolução der erro, ela não cai no inbox', async () => {

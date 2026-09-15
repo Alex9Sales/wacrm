@@ -16,6 +16,8 @@ import { getProvider } from '@/lib/channels/registry'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
 import { parseDeliveryReport, type DeliveryReport } from '@/lib/channels/email-bounce'
 import { applyEmailBounce } from '@/lib/channels/email-bounce-apply'
+import { shouldIgnoreAutomatedEmail } from '@/lib/channels/email-automated-filter'
+import type { EmailHeader } from '@/lib/channels/email-automated'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -70,6 +72,10 @@ export async function POST(request: Request) {
   // dos cabeçalhos e das partes). Vira nota na conversa do envio, nunca contato.
   // O caminho JSON já parseado não traz cabeçalhos — segue sem essa checagem.
   let deliveryReport: DeliveryReport | null = null
+  // Cabeçalhos do e-mail cru (Auto-Submitted, List-Unsubscribe…) pro filtro de
+  // e-mail automático; no caminho JSON só dá pra olhar o remetente.
+  let rawHeaders: EmailHeader[] | undefined
+  let rawReplyTo: string | undefined
 
   // Worker "sem dependência" manda o e-mail cru (`raw`) — a gente faz o parse
   // do MIME aqui (assunto/corpo/HTML/remetente). Se vier já parseado (JSON com
@@ -77,6 +83,8 @@ export async function POST(request: Request) {
   if (body && typeof body.raw === 'string' && body.raw) {
     try {
       const parsed = await new PostalMime().parse(body.raw)
+      rawHeaders = parsed.headers
+      rawReplyTo = parsed.replyTo?.[0]?.address
       const report = parseDeliveryReport(parsed)
       // Só aviso de servidor de e-mail; o resto segue como e-mail comum.
       deliveryReport = report?.trusted ? report : null
@@ -140,6 +148,8 @@ export async function POST(request: Request) {
       return
     }
     try {
+      const from = bareEmail(body?.from)
+      if (from && (await shouldIgnoreAutomatedEmail(channel, { from, replyTo: rawReplyTo, headers: rawHeaders }))) return
       const parsed = provider.parseWebhook(body)
       for (const ev of parsed.messages) {
         await dispatchInboundMessage(channel, ev)

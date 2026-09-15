@@ -87,6 +87,12 @@ function applyConfigPatch(
       break
   }
 
+  // 🤖 E-mail/Gmail: ignorar e-mails automáticos (no-reply, alertas,
+  // newsletters) — 15/09, GoLink. Booleano explícito liga/desliga.
+  if ('ignore_automated' in config && (ch.provider === 'email' || ch.provider === 'gmail')) {
+    if (typeof config.ignore_automated === 'boolean') metaSet.ignoreAutomated = config.ignore_automated
+  }
+
   // Pix key — cross-provider, per channel (each number is a business with its
   // own key). null clears it.
   if ('pix' in config) {

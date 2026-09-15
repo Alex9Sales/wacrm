@@ -20,6 +20,7 @@ import { requireRole, toErrorResponse } from '@/lib/auth/account'
 import { createChannel, type CreateChannelInput } from '@/lib/channels/channels'
 import { EMAIL_HOSTED_DOMAIN } from '@/lib/channels/providers/email-domains'
 import { gmailHealthOf } from '@/lib/channels/gmail-health-state'
+import { ignoredAutomatedOf } from '@/lib/channels/email-automated'
 import type { ProviderId } from '@/lib/channels/provider'
 
 // Managed (Fluxia-hosted) infra for the non-official providers. When these
@@ -107,6 +108,8 @@ function safeProviderMeta(
       mode: meta.mode ?? null,
       domain_name: meta.domainName ?? null,
       domain_status: meta.domainStatus ?? null,
+      ignore_automated: meta.ignoreAutomated === true,
+      ignored_automated: ignoredAutomatedOf(meta),
       location,
       pix,
     }
@@ -115,7 +118,14 @@ function safeProviderMeta(
     // Endereço + saúde (senha recusada / leitura falhando — 15/09, GoLink: o
     // canal ficou verde a noite toda com a senha revogada). appPassword fica
     // em `credentials` e o ponto de leitura (gmailLastUid/UidValidity) não sai.
-    return { address: meta.address ?? null, health: gmailHealthOf(meta), location, pix }
+    return {
+      address: meta.address ?? null,
+      health: gmailHealthOf(meta),
+      ignore_automated: meta.ignoreAutomated === true,
+      ignored_automated: ignoredAutomatedOf(meta),
+      location,
+      pix,
+    }
   }
   // waha / evolution / evogo: baseUrl + the session or instance name.
   return {
@@ -346,7 +356,8 @@ function buildCreateInput(
         name,
         status: 'connected',
         credentials,
-        providerMeta: { address },
+        // Gmail lê a caixa INTEIRA: nasce ignorando e-mail automático (15/09, GoLink).
+        providerMeta: { address, ignoreAutomated: true },
       }
     }
     case 'waha': {

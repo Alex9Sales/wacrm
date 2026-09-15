@@ -185,7 +185,8 @@ export async function POST(request: Request) {
         name,
         status: 'connected',
         credentials,
-        providerMeta: { address },
+        // Gmail lê a caixa INTEIRA: nasce ignorando e-mail automático (15/09, GoLink).
+        providerMeta: { address, ignoreAutomated: true },
       };
     } else {
       throw badRequest(

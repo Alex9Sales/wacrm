@@ -29,6 +29,7 @@ import {
   Globe,
   BookUser,
   KeyRound,
+  BellOff,
 } from 'lucide-react';
 
 import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider';
@@ -369,6 +370,7 @@ export function ChannelsTab() {
               onLocation={() => setLocating(ch)}
               onPix={() => setPixing(ch)}
               onGmailPassword={() => setGmailPassword(ch)}
+              onChanged={() => void load()}
               onGroups={() => setGrouping(ch)}
               onPhonebook={() => setPhonebooking(ch)}
               onComments={() => setCommenting(ch)}
@@ -612,6 +614,7 @@ function ChannelRow({
   onLocation,
   onPix,
   onGmailPassword,
+  onChanged,
   onGroups,
   onPhonebook,
   onComments,
@@ -624,6 +627,8 @@ function ChannelRow({
   onLocation: () => void;
   onPix: () => void;
   onGmailPassword: () => void;
+  /** Recarrega a lista depois de uma mudança feita direto na linha. */
+  onChanged: () => void;
   onGroups: () => void;
   onPhonebook: () => void;
   onComments: () => void;
@@ -747,6 +752,10 @@ function ChannelRow({
             </Button>
           )}
 
+          {(isGmail || channel.provider === 'email') && (
+            <EmailAutomatedToggle channel={channel} onChanged={onChanged} />
+          )}
+
           {isBrandedEmail && (
             <Button
               variant="outline"
@@ -845,5 +854,88 @@ function ChannelRow({
         </div>
       </CardContent>
     </Card>
+  );
+}
+
+/**
+ * 🤖 Liga/desliga "ignorar e-mails automáticos" (no-reply, alertas,
+ * newsletters) num canal de e-mail/Gmail. 15/09 (GoLink): a caixa do Gmail é
+ * da empresa inteira, e alerta do Google e recibo de assinatura viravam
+ * contato e não lida no inbox da equipe.
+ */
+function EmailAutomatedToggle({
+  channel,
+  onChanged,
+}: {
+  channel: ChannelSummary;
+  onChanged: () => void;
+}) {
+  const meta = channel.provider_meta as {
+    ignore_automated?: boolean;
+    ignored_automated?: { count: number; recent: { from: string; reason: string; at: string }[] };
+  };
+  const on = meta.ignore_automated === true;
+  const ignored = meta.ignored_automated ?? { count: 0, recent: [] };
+  // Rastro do que ficou de fora (revisão 15/09): quem usa o canal enxerga um
+  // falso positivo e cadastra o e-mail no contato pra liberar.
+  const recentList = ignored.recent
+    .slice(0, 5)
+    .map((e) => `• ${e.from} — ${e.reason}`)
+    .join('\n');
+  const [saving, setSaving] = useState(false);
+
+  const toggle = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/channels/${channel.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ config: { ignore_automated: !on } }),
+      });
+      if (!res.ok) {
+        const d = (await res.json().catch(() => ({}))) as { error?: string };
+        toast.error(d.error || 'Não foi possível mudar o filtro de e-mails automáticos.');
+        return;
+      }
+      toast.success(
+        on
+          ? 'E-mails automáticos voltam a entrar neste canal.'
+          : 'Pronto: e-mails automáticos (no-reply, alertas, newsletters) não entram mais neste canal.',
+      );
+      onChanged();
+    } catch (err) {
+      console.error('[channels] filtro de e-mail automático falhou:', err);
+      toast.error('Não foi possível mudar o filtro de e-mails automáticos.');
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      disabled={saving}
+      onClick={() => void toggle()}
+      title={
+        on
+          ? `Ignorando e-mails automáticos (no-reply, alertas, newsletters). Sempre entra: e-mail cadastrado num contato, e-mail de cliente numa cobrança do Asaas, quem já recebeu e-mail pelo CRM e o mesmo domínio de empresa desses clientes. Clique pra voltar a receber tudo.${
+              ignored.count ? `\n\n${ignored.count} ignorado(s). Últimos:\n${recentList}` : ''
+            }`
+          : 'Clique pra ignorar e-mails automáticos (no-reply, alertas, newsletters). E-mail cadastrado num contato, de cliente numa cobrança do Asaas ou de quem já recebeu e-mail pelo CRM sempre entra.'
+      }
+      className={
+        on
+          ? 'text-emerald-600 hover:text-emerald-700'
+          : 'text-muted-foreground hover:text-foreground'
+      }
+    >
+      {saving ? <Loader2 className="size-3.5 animate-spin" /> : <BellOff className="size-3.5" />}
+      {on
+        ? ignored.count
+          ? `Automáticos: ${ignored.count} ignorado${ignored.count === 1 ? '' : 's'}`
+          : 'Automáticos: ignorando'
+        : 'Ignorar automáticos'}
+    </Button>
   );
 }
