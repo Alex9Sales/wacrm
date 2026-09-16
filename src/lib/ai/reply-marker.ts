@@ -173,6 +173,19 @@ export async function kvSetJson(key: string, value: unknown, ttlSeconds: number)
   }
 }
 
+/** INCR com TTL (renovado a cada batida). undefined = Redis fora. Nunca lança. */
+export async function bumpCounter(key: string, ttlSeconds: number): Promise<number | undefined> {
+  const r = redis()
+  if (!r) return undefined
+  try {
+    const n = await r.incr(key)
+    await r.expire(key, Math.max(1, Math.floor(ttlSeconds)))
+    return n
+  } catch {
+    return undefined
+  }
+}
+
 export async function kvDel(key: string): Promise<void> {
   const r = redis()
   if (!r) return

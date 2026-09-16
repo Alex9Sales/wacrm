@@ -26,6 +26,7 @@ import {
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
+import { SAME_ORDER_WINDOW_MS } from './order-window'
 
 /** Nota interna na conversa (só pra equipe, nunca vai pro cliente). */
 export async function postInternalNote(input: {
@@ -216,10 +217,46 @@ export async function applyTagsByName(input: {
   return applied
 }
 
+/** De onde veio o card reaproveitado (null = card novo). */
+export type AiDealReuse = 'conversation' | 'contact'
+
 /**
- * Cria um card (negócio) no funil a partir do que a IA identificou. Só cria se
- * a conversa AINDA não tem um negócio aberto ligado (não duplica). Usa o 1º
- * funil da conta + a 1ª etapa. Best-effort. Devolve o id ou null.
+ * Qual card existente vale como "o mesmo" em vez de criar outro. Pura.
+ *   1. card ABERTO desta conversa;
+ *   2. card desta conversa criado dentro da janela do mesmo pedido, em
+ *      QUALQUER status — na Família do Gás a equipe arrasta pra Ganho em
+ *      minutos e a trava antiga (só aberto) sumia (Toninho 14/09, Flávia 11/09);
+ *   3. card ABERTO do mesmo contato no MESMO funil, vindo de outra conversa
+ *      (cliente que volta por outro anúncio/número — Alex 16/09: só no mesmo
+ *      funil). Ganho/perdido de outra conversa não conta: é compra nova.
+ */
+export function pickDealToReuse(input: {
+  now: number
+  /** Cards desta conversa, mais recente primeiro. */
+  conversationDeals: { id: string; status: string; createdAt: string }[]
+  /** Cards abertos do contato no funil de destino, mais recente primeiro. */
+  contactOpenDeals: { id: string }[]
+}): { dealId: string; reuse: AiDealReuse } | null {
+  const open = input.conversationDeals.find((d) => d.status === 'open')
+  if (open) return { dealId: open.id, reuse: 'conversation' }
+  const recent = input.conversationDeals.find(
+    (d) => input.now - new Date(d.createdAt).getTime() < SAME_ORDER_WINDOW_MS,
+  )
+  if (recent) return { dealId: recent.id, reuse: 'conversation' }
+  const sameContact = input.contactOpenDeals[0]
+  if (sameContact) return { dealId: sameContact.id, reuse: 'contact' }
+  return null
+}
+
+/** Card desta conversa criado há tão pouco que é o MESMO turno (marcador +
+ *  fallback do pedido): reaproveita calado, sem nota repetida no histórico. */
+const SAME_TURN_MS = 5 * 60 * 1000
+
+/**
+ * Cria um card (negócio) no funil a partir do que a IA identificou — ou
+ * REAPROVEITA um existente (ver pickDealToReuse), deixando uma observação no
+ * histórico dele. Usa o funil do agente (ou o 1º da conta) + a 1ª etapa.
+ * Best-effort. Devolve o id (com `reused` quando não criou) ou null.
  */
 export async function createDealFromAi(input: {
   accountId: string
@@ -233,28 +270,20 @@ export async function createDealFromAi(input: {
   note?: string | null
   /** Funil do AGENTE (ai_configs.pipeline_id) — null/inválido cai no 1º funil. */
   pipelineId?: string | null
-}): Promise<{ dealId: string; title: string } | null> {
+}): Promise<{ dealId: string; title: string; reused: AiDealReuse | null } | null> {
   const { accountId, userId, conversationId, contactId } = input
   const title = (input.title || '').trim().slice(0, 200)
   if (!title) return null
   // deals.user_id (criador) é NOT NULL — sem um usuário válido, não cria.
   if (!userId) return null
   try {
-    // Já existe negócio aberto ligado à conversa? Não duplica.
-    const existing = firstOrNull(
-      await db
-        .select({ id: deals.id })
-        .from(deals)
-        .where(
-          and(
-            eq(deals.accountId, accountId),
-            eq(deals.conversationId, conversationId),
-            eq(deals.status, 'open'),
-          ),
-        )
-        .limit(1),
-    )
-    if (existing) return null
+    const note = (input.note ?? '').trim().slice(0, 2000) || null
+    const conversationDeals = await db
+      .select({ id: deals.id, status: deals.status, createdAt: deals.createdAt })
+      .from(deals)
+      .where(and(eq(deals.accountId, accountId), eq(deals.conversationId, conversationId)))
+      .orderBy(desc(deals.createdAt))
+      .limit(5)
 
     // Funil do agente (quando configurado e da conta) — senão 1º funil da conta.
     let pipeline: { id: string } | null = null
@@ -278,6 +307,68 @@ export async function createDealFromAi(input: {
       )
     }
     if (!pipeline) return null
+
+    const contactOpenDeals =
+      contactId && !conversationDeals.some((d) => d.status === 'open')
+        ? await db
+            .select({ id: deals.id, conversationId: deals.conversationId })
+            .from(deals)
+            .where(
+              and(
+                eq(deals.accountId, accountId),
+                eq(deals.contactId, contactId),
+                eq(deals.pipelineId, pipeline.id),
+                eq(deals.status, 'open'),
+              ),
+            )
+            .orderBy(desc(deals.createdAt))
+            .limit(1)
+        : []
+    const reuse = pickDealToReuse({
+      now: Date.now(),
+      conversationDeals: conversationDeals.map((d) => ({
+        id: d.id,
+        status: d.status ?? 'open',
+        // Sem data (não deveria acontecer) = antigo: só conta se estiver aberto.
+        createdAt: d.createdAt ?? new Date(0).toISOString(),
+      })),
+      contactOpenDeals,
+    })
+    if (reuse) {
+      const matched = conversationDeals.find((d) => d.id === reuse.dealId)
+      const sameTurn =
+        !!matched?.createdAt && Date.now() - new Date(matched.createdAt).getTime() < SAME_TURN_MS
+      if (!sameTurn) {
+        const detail = [title, note].filter(Boolean).join(' · ')
+        const text =
+          reuse.reuse === 'contact'
+            ? `📝 Novo contato do mesmo cliente pelo WhatsApp (anexado a este card, sem criar outro):\n${detail}`
+            : `🔁 A IA registrou de novo o pedido desta conversa — card não duplicado:\n${detail}`
+        try {
+          await db.insert(dealEvents).values({
+            accountId,
+            actorUserId: userId,
+            dealId: reuse.dealId,
+            type: 'note',
+            data: { by: 'ai', text },
+          })
+        } catch (err) {
+          console.error('[ai create-card] nota do card reaproveitado falhou:', err)
+        }
+      }
+      // Card que nasceu sem conversa ("Criar negócio com IA" antes de 16/09)
+      // passa a apontar pra esta: a IA volta a enxergar e mover o card.
+      const orphan = contactOpenDeals.find((d) => d.id === reuse.dealId && !d.conversationId)
+      if (orphan) {
+        await db
+          .update(deals)
+          .set({ conversationId })
+          .where(and(eq(deals.id, orphan.id), sql`${deals.conversationId} IS NULL`))
+          .catch((err) => console.error('[ai create-card] vincular conversa falhou:', err))
+      }
+      return { dealId: reuse.dealId, title, reused: reuse.reuse }
+    }
+
     const stage = firstOrNull(
       await db
         .select({ id: pipelineStages.id })
@@ -301,7 +392,6 @@ export async function createDealFromAi(input: {
       typeof input.value === 'number' && Number.isFinite(input.value) && input.value >= 0
         ? input.value
         : null
-    const note = (input.note ?? '').trim().slice(0, 2000) || null
 
     const [created] = await db
       .insert(deals)
@@ -338,7 +428,7 @@ export async function createDealFromAi(input: {
     } catch (err) {
       console.error('[ai create-card] autoCreateStageTasks:', err)
     }
-    return { dealId: created.id, title }
+    return { dealId: created.id, title, reused: null }
   } catch (err) {
     console.error('[ai create-card] falhou:', err)
     return null

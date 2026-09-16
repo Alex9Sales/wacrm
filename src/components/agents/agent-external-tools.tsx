@@ -304,10 +304,15 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
               <span
                 className={cn(
                   'font-medium',
-                  r.status === 'ok' ? 'text-emerald-600' : 'text-red-500',
+                  r.status === 'ok'
+                    ? 'text-emerald-600'
+                    : r.status === 'deduped'
+                      ? 'text-amber-600'
+                      : 'text-red-500',
                 )}
               >
-                {r.status}
+                {/* Trava anti-duplicidade: não é erro, é a repetição que não foi gravada. */}
+                {r.status === 'deduped' ? 'repetida (não gravou)' : r.status}
               </span>{' '}
               · {r.toolSlug}
               {r.httpStatus ? ` · HTTP ${r.httpStatus}` : ''}

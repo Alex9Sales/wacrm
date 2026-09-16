@@ -1215,6 +1215,8 @@ export const deals = pgTable("deals", {
 	index("idx_deals_pipeline").using("btree", table.pipelineId.asc().nullsLast().op("uuid_ops")),
 	index("idx_deals_stage").using("btree", table.stageId.asc().nullsLast().op("uuid_ops")),
 	index("idx_deals_company").using("btree", table.companyId.asc().nullsLast().op("uuid_ops")),
+	// Migração 0176: "card aberto deste contato" (IA reaproveita em vez de duplicar).
+	index("idx_deals_account_contact_status").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops"), table.status.asc().nullsLast().op("text_ops")),
 	foreignKey({
 			columns: [table.accountId],
 			foreignColumns: [organization.id],

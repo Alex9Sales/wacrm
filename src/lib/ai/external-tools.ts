@@ -12,6 +12,7 @@
 // ============================================================
 
 import { crmFallbackForTool } from './crm-fallback'
+import { SAME_ORDER_WINDOW_MS } from './order-window'
 import { failureKey, retryBlockedSummary, withFailureGuidance } from './tool-failure'
 import { and, desc, eq, gte } from 'drizzle-orm'
 import { assertPublicUrl } from '@/lib/net/safe-url'
@@ -204,11 +205,51 @@ export interface ToolRunResult {
   status: 'ok' | 'error' | 'blocked' | 'invalid'
   summary: string
   httpStatus?: number
+  /** A trava anti-duplicidade segurou a chamada: NADA foi gravado. O modelo vê
+   *  'ok' (o registro existe), mas quem cria card/conta escrita olha isto. */
+  deduped?: boolean
 }
 
+/** Status gravado em agent_tool_runs para a chamada segurada pela trava. Não é
+ *  'ok' de propósito: a janela conta a partir do registro REAL (antes, cada
+ *  bloqueio virava um 'ok' novo e empurrava a janela), e o painel de pedidos
+ *  não soma o que não foi pedido. */
+export const DEDUPED_RUN_STATUS = 'deduped'
+
 /** Executa uma ferramenta (com log em agent_tool_runs). Nunca lança. */
-// 🔁 Dedup de ESCRITA: janela que cobre uma conversa de pedido inteira.
-const WRITE_DEDUP_WINDOW_MS = 6 * 60 * 60 * 1000
+// 🔁 Dedup de ESCRITA: janela que cobre uma conversa de pedido inteira — a
+// mesma do card no funil (order-window.ts).
+const WRITE_DEDUP_WINDOW_MS = SAME_ORDER_WINDOW_MS
+
+/** O resultado desta ferramenta pode virar card no funil? Só quando algo foi
+ *  gravado de verdade — a chamada segurada pela trava devolve 'ok' pro modelo,
+ *  mas não criou pedido nenhum (Flávia 11/09: card duplicado 6 s depois). */
+export function outcomeCreatesCard(tool: Pick<ExternalTool, 'createsDeal'> | undefined, outcome: ToolRunResult): boolean {
+  return !!tool?.createsDeal && outcome.status === 'ok' && !outcome.deduped
+}
+
+/** Texto que a IA recebe quando a trava segura uma escrita repetida. */
+export function dedupedSummary(minutesAgo: number, previousSummary: string | null): string {
+  const quando =
+    minutesAgo < 1 ? 'agora há pouco' : minutesAgo < 60 ? `há ${minutesAgo} min` : `há ${Math.round(minutesAgo / 60)} h`
+  return (
+    `JÁ EXISTE um registro desta ação nesta conversa, feito ${quando}` +
+    (previousSummary ? ` (${previousSummary.slice(0, 160)})` : '') +
+    '. NADA novo foi gravado agora. NÃO crie outro e NÃO repita a confirmação: o cliente já foi avisado nesta conversa. ' +
+    // ⚠️ 11/09 (Dayane): aqui estava escrito "agradeça e confirme o que já
+    // está registrado" — e a IA mandou a confirmação INTEIRA de novo
+    // (produto, valor e endereço), 15 s depois da primeira. Mandar duas
+    // vezes faz o cliente achar que saíram dois pedidos.
+    'Responda só o que o cliente perguntou AGORA. Se ele não perguntou nada novo (só disse "isso"/"ok" ou mandou o comprovante), ' +
+    'mande no máximo um "ok" curto — sem repetir produto, valor nem endereço. ' +
+    // ⚠️ 15/09 (Will): "troco pra 200" chegou depois do pedido, a IA tentou
+    // recriar, foi segurada aqui e respondeu "troco anotado" — o troco nunca
+    // chegou ao entregador.
+    'Se o cliente ACRESCENTOU ou MUDOU algo (forma de pagamento, troco, endereço, quantidade), isso NÃO está registrado: ' +
+    'use a ferramenta de EDITAR o registro com o id acima, se existir uma; se não existir, emita [[NOTA:o que mudou]] para o time corrigir. ' +
+    'Nunca diga "anotado" ou "avisei" sem ter registrado.'
+  )
+}
 
 /** Campos "cosméticos" (observação, referência, nota…) NÃO definem a identidade
  *  de um pedido/ação — o modelo às vezes muda só eles entre uma chamada e outra.
@@ -299,21 +340,10 @@ export async function executeTool(
     // São Paulo e mentia uma hora pra conta de Campo Grande (11/09, Dayane —
     // "feito às 14:36" quando era 13:36 lá). Minuto relativo nunca erra.
     const minutos = Math.max(0, Math.round((Date.now() - new Date(previous.createdAt).getTime()) / 60_000))
-    const quando =
-      minutos < 1 ? 'agora há pouco' : minutos < 60 ? `há ${minutos} min` : `há ${Math.round(minutos / 60)} h`
     result = {
       status: 'ok',
-      summary:
-        `JÁ EXISTE um registro desta ação nesta conversa, feito ${quando}` +
-        (previous.resultSummary ? ` (${previous.resultSummary.slice(0, 160)})` : '') +
-        '. NÃO crie outro e NÃO repita a confirmação: o cliente já foi avisado nesta conversa. ' +
-        // ⚠️ 11/09 (Dayane): aqui estava escrito "agradeça e confirme o que já
-        // está registrado" — e a IA mandou a confirmação INTEIRA de novo
-        // (produto, valor e endereço), 15 s depois da primeira. Mandar duas
-        // vezes faz o cliente achar que saíram dois pedidos.
-        'Responda só o que o cliente perguntou AGORA. Se ele não perguntou nada novo (só disse "isso"/"ok" ou mandou o comprovante), ' +
-        'mande no máximo um "ok, já está anotado" curto — sem repetir produto, valor nem endereço. ' +
-        'Se algo mudou de verdade (forma de pagamento, endereço, quantidade), NÃO recrie: diga ao cliente que já vai ajustar e emita [[NOTA:o que mudou]] para o time corrigir.',
+      deduped: true,
+      summary: dedupedSummary(minutos, previous.resultSummary),
     }
   } else if (tool.risk === 'critical') {
     result = {
@@ -391,7 +421,7 @@ export async function executeTool(
       conversationId: ctx.conversationId,
       toolSlug: tool.slug,
       args,
-      status: result.status,
+      status: result.deduped ? DEDUPED_RUN_STATUS : result.status,
       resultSummary: result.summary.slice(0, 2_000),
       httpStatus: result.httpStatus ?? null,
       durationMs: Date.now() - started,
@@ -417,7 +447,11 @@ export async function generateWithExternalTools(
     contactId?: string | null
     timezone?: string
   },
-): Promise<GenerateResult & { orderForCard?: OrderForCard | null }> {
+): Promise<GenerateResult & {
+  orderForCard?: OrderForCard | null
+  /** Uma ferramenta de escrita GRAVOU algo neste turno (a trava não conta). */
+  wroteSomething?: boolean
+}> {
   const tools = await listEnabledTools(args.accountId, args.agentId).catch((err) => {
     console.error('[external-tools] listagem falhou:', err)
     return [] as ExternalTool[]
@@ -469,7 +503,7 @@ export async function generateWithExternalTools(
         if (!text) text = 'Pronto, já registrei aqui! ✅'
       }
 
-      return { ...res, text, orderForCard }
+      return { ...res, text, orderForCard, wroteSomething: writeSucceeded }
     }
     const tool = tools.find((t) => t.slug === call.slug)
     const callKey = failureKey(call.slug, stableArgsKey(call.args))
@@ -500,10 +534,10 @@ export async function generateWithExternalTools(
       shownSummary = withFailureGuidance(tool.slug, outcome.summary) + (fallback ? `\n\n${fallback}` : '')
     }
 
-    if (tool?.createsDeal && outcome.status === 'ok') {
+    if (outcomeCreatesCard(tool, outcome)) {
       orderForCard = orderForCardFromArgs(call.args)
     }
-    if (tool && tool.risk !== 'read' && outcome.status === 'ok') {
+    if (tool && tool.risk !== 'read' && outcome.status === 'ok' && !outcome.deduped) {
       writeSucceeded = true
     }
 
@@ -515,5 +549,5 @@ export async function generateWithExternalTools(
     })
   }
   // inalcançável (o loop retorna antes), mas o TS quer um retorno.
-  return { ...(await generateReply({ ...args, systemPrompt, messages })), orderForCard }
+  return { ...(await generateReply({ ...args, systemPrompt, messages })), orderForCard, wroteSomething: writeSucceeded }
 }

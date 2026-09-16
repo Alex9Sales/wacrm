@@ -21,6 +21,8 @@ const h = vi.hoisted(() => ({
   generateReply: vi.fn(),
   engineSendText: vi.fn(),
   setCoveredUntil: vi.fn(),
+  // 🕰️ contador de respostas velhas descartadas (stale-reply.ts).
+  bumpCounter: vi.fn(),
   // 🔁 reagendamento pós-janela (humano digitando / barge-in) → fila mockada.
   enqueueRecheck: vi.fn(),
   state: {
@@ -72,6 +74,8 @@ vi.mock('./reply-marker', () => ({
         ? new Date(h.state.coveredUntil)
         : null,
   setCoveredUntil: h.setCoveredUntil,
+  bumpCounter: h.bumpCounter,
+  kvDel: vi.fn(async () => {}),
 }))
 vi.mock('@/lib/cdl/metrics', () => ({
   buildCustomerFactsBlock: vi.fn(async () => null),
@@ -84,6 +88,8 @@ vi.mock('./close-actions', () => ({
   applyTagsByName: async () => [],
   loadDealCloseContext: async () => null,
   applyCloseActions: async () => ({ resolved: false, movedTo: null }),
+  postInternalNote: async () => true,
+  createDealFromAi: async () => null,
 }))
 
 vi.mock('@/db', async (importOriginal) => {
@@ -184,6 +190,8 @@ beforeEach(() => {
   h.state.coveredUntil = null
   h.setCoveredUntil.mockReset()
   h.enqueueRecheck.mockReset()
+  h.bumpCounter.mockReset()
+  h.bumpCounter.mockResolvedValue(1)
   h.state.claim = true
   h.state.updatePayload = null
   h.state.sqlCalls = []
@@ -249,6 +257,42 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     ]
     await dispatchInboundToAiReply({ ...ARGS, raceChase: true })
     expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+
+  // 🕰️ Caso Adrieli (15/09): "Cartão" e, 15 s depois, "quantos minutos?" —
+  // a resposta ao "Cartão" já não servia e saiu mesmo assim.
+  const DEPOIS_DA_LEITURA = '2999-01-01T00:00:00.000Z'
+
+  it('🕰️ cliente escreveu durante a geração → a resposta velha NÃO sai e a rechecagem responde tudo junto (Adrieli)', async () => {
+    h.state.lastMessages = [{ senderType: 'customer', createdAt: DEPOIS_DA_LEITURA }]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.generateReply).toHaveBeenCalled()
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.state.sqlCalls).toHaveLength(0) // nem gasta vaga do limite
+    expect(h.enqueueRecheck).toHaveBeenCalledWith(expect.objectContaining({ raceChase: true }), expect.any(Number))
+    expect(h.setCoveredUntil).not.toHaveBeenCalled()
+  })
+
+  it('🕰️ freio: passou de 2 descartes seguidos → a resposta sai (cliente que escreve sem parar)', async () => {
+    h.state.lastMessages = [{ senderType: 'customer', createdAt: DEPOIS_DA_LEITURA }]
+    h.bumpCounter.mockResolvedValue(3)
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalled()
+  })
+
+  it('🕰️ Redis fora: sem contador, manda como antes', async () => {
+    h.state.lastMessages = [{ senderType: 'customer', createdAt: DEPOIS_DA_LEITURA }]
+    h.bumpCounter.mockResolvedValue(undefined)
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalled()
+  })
+
+  it('🕰️ turno com efeito (nota pra equipe) nunca é descartado', async () => {
+    h.state.lastMessages = [{ senderType: 'customer', createdAt: DEPOIS_DA_LEITURA }]
+    h.generateReply.mockResolvedValue({ text: 'Anotado! [[NOTA:troco para R$ 200]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalled()
+    expect(h.bumpCounter).not.toHaveBeenCalled()
   })
 
   it('🏁 marcador é gravado depois de a resposta sair', async () => {

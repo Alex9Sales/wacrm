@@ -1,4 +1,4 @@
-import { and, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, sql } from 'drizzle-orm'
 import { db, automations, conversations, contacts, messages as messagesTable, aiConfigs, agentActionRequests } from '@/db'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
 import { firstOrNull } from '@/db/helpers'
@@ -41,7 +41,8 @@ import { scheduleEventFromAi } from './schedule-actions'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
 import { extractMaterialDirectives, findMaterialByName, listMaterialsForAgent } from './materials'
-import { acquireReplyLock, getCoveredUntil, releaseReplyLock, setCoveredUntil } from './reply-marker'
+import { acquireReplyLock, bumpCounter, getCoveredUntil, kvDel, releaseReplyLock, setCoveredUntil } from './reply-marker'
+import { STALE_DROPS_TTL_SECONDS, staleDropsKey, staleReplyDecision, turnIsDroppable } from './stale-reply'
 import { isNewEpisode } from './reply-episode'
 import { enqueueAiReplyDebounced } from '@/lib/queue/queues'
 
@@ -837,7 +838,7 @@ export async function dispatchInboundToAiReply(
 
     // 🔧 Com ferramentas externas do agente (ERP do cliente etc.) — sem
     // ferramentas, degrada pro generateReply puro.
-    const { text: rawText, handoff, orderForCard } = await generateWithExternalTools({
+    const { text: rawText, handoff, orderForCard, wroteSomething } = await generateWithExternalTools({
       config,
       systemPrompt,
       messages,
@@ -1059,13 +1060,20 @@ export async function dispatchInboundToAiReply(
       }
     }
     // Cria o card no funil + dispara o aviso do responsável. createDealFromAi
-    // dedupe por conversa, então chamar 2x (marcador + fallback) NÃO duplica —
-    // a 2ª chamada volta null e não alerta de novo.
-    const createDealAndAlert = async (card: {
-      title: string
-      value: number | null
-      note: string | null
-    }) => {
+    // reaproveita o card da conversa (aberto, ou criado dentro da janela do
+    // mesmo pedido) e o card aberto do contato no mesmo funil — chamar 2x
+    // (marcador + fallback) NÃO duplica nem alerta de novo.
+    // `fromOrder`: veio de um pedido GRAVADO agora no sistema da loja. Anexado
+    // ao card aberto de OUTRA conversa do cliente, o pedido é novo de verdade
+    // e o despacho precisa do aviso.
+    const createDealAndAlert = async (
+      card: {
+        title: string
+        value: number | null
+        note: string | null
+      },
+      fromOrder = false,
+    ) => {
       const d = await createDealFromAi({
         accountId,
         userId: configOwnerUserId || null,
@@ -1077,7 +1085,8 @@ export async function dispatchInboundToAiReply(
         pipelineId: config.pipelineId ?? null,
       })
       if (!d) return
-      console.log('[ai auto-reply] card criado:', JSON.stringify(d))
+      console.log(`[ai auto-reply] card ${d.reused ? `reaproveitado (${d.reused})` : 'criado'}:`, JSON.stringify(d))
+      if (d.reused === 'conversation' || (d.reused === 'contact' && !fromOrder)) return
       // 📣 Aviso do responsável: pedido confirmado pela IA ("manda no grupo do
       // despacho"). Best-effort — o toggle/telefone é checado lá dentro.
       try {
@@ -1108,11 +1117,16 @@ export async function dispatchInboundToAiReply(
     // sucesso e o modelo NÃO emitiu o marcador → cria mesmo assim (não depende
     // do modelo lembrar). O fallback NÃO é travado por 'create_card'.
     const runCreateCard = async () => {
-      if (has('create_card') && dirs.createCard) {
+      // Transferiu neste turno? O card do MARCADOR não nasce (a regra do
+      // prompt: "transferiu no meio do pedido, não crie o card" — o aviso
+      // "PEDIDO CONFIRMADO" saía antes do handoff). Pedido gravado no sistema
+      // da loja continua virando card: esse existe de verdade.
+      const handingOff = !!handoff || (has('handoff') && !!dirs.transfer)
+      if (has('create_card') && dirs.createCard && !handingOff) {
         await createDealAndAlert(dirs.createCard)
       }
       if (orderForCard) {
-        await createDealAndAlert(orderForCard)
+        await createDealAndAlert(orderForCard, true)
       }
     }
     // Transferir pra humano por etiqueta (ferramenta 'handoff' + [[TRANSFERIR]]).
@@ -1248,6 +1262,14 @@ export async function dispatchInboundToAiReply(
           .filter(Boolean)
           .join(' · ')
           .slice(0, 380)
+        // 16/09: o resumo ia SÓ pro WhatsApp do dono — na conversa a equipe via
+        // a despedida e a IA desligada, sem motivo. Agora fica também na tela.
+        // Prefixo diferente do "Transferido pela IA" (transferência por
+        // etiqueta) pra os dois caminhos continuarem distinguíveis.
+        await postInternalNote({
+          conversationId,
+          text: `🙋 *A IA pediu um humano*${clientTail ? `\nCliente disse: ${clientTail}` : ''}`,
+        }).catch(() => false)
         await sendOwnerAlert(accountId, 'handoff', {
           cliente: c?.name ?? '',
           telefone: c?.phone ?? '',
@@ -1336,6 +1358,68 @@ export async function dispatchInboundToAiReply(
         }).catch(() => {})
       }
       return
+    }
+
+    // 🕰️ Resposta velha (caso Adrieli 15/09, ver stale-reply.ts): o cliente
+    // escreveu de novo enquanto a IA gerava e este turno não gravou nada →
+    // não manda; a rechecagem responde tudo junto, com o histórico inteiro.
+    // Humano escreveu no meio → não manda e ninguém regenera.
+    const droppable = turnIsDroppable({
+      wroteSomething: !!wroteSomething,
+      hasOrder: !!orderForCard,
+      handoff: !!handoff,
+      consequentialDirective: !!(
+        dirs.transfer ||
+        dirs.charge ||
+        dirs.createCard ||
+        dirs.schedule ||
+        dirs.resolve ||
+        dirs.funnelStage ||
+        dirs.lose ||
+        dirs.collection ||
+        dirs.note
+      ),
+    })
+    if (droppable) {
+      try {
+        const newest = firstOrNull(
+          await db
+            .select({ senderType: messagesTable.senderType, createdAt: messagesTable.createdAt })
+            .from(messagesTable)
+            .where(
+              and(
+                eq(messagesTable.conversationId, conversationId),
+                eq(messagesTable.isInternal, false),
+                inArray(messagesTable.senderType, ['customer', 'agent']),
+                gt(messagesTable.createdAt, snapshotAt.toISOString()),
+              ),
+            )
+            .orderBy(desc(messagesTable.createdAt))
+            .limit(1),
+        )
+        const pre = staleReplyDecision({ snapshotAt, newest, droppable, dropsIncludingThis: 0 })
+        const decision =
+          pre === 'drop_regenerate'
+            ? staleReplyDecision({
+                snapshotAt,
+                newest,
+                droppable,
+                dropsIncludingThis: await bumpCounter(staleDropsKey(conversationId), STALE_DROPS_TTL_SECONDS),
+              })
+            : pre
+        if (decision === 'drop_quiet') {
+          console.log('[ai auto-reply] humano escreveu durante a geração — resposta descartada:', conversationId)
+          return
+        }
+        if (decision === 'drop_regenerate') {
+          console.log('[ai auto-reply] cliente escreveu durante a geração — resposta velha descartada, rechecagem agendada:', conversationId)
+          await enqueueAiReplyDebounced({ ...args, raceChase: true }, REPLY_LOCK_RETRY_MS)
+          return
+        }
+      } catch (err) {
+        // Na dúvida, manda: resposta repetida é menos ruim que resposta engolida.
+        console.error('[ai auto-reply] checagem de resposta velha falhou (segue o envio):', err instanceof Error ? err.message : err)
+      }
     }
 
     // Atomically claim a reply slot: the cap check + increment happen in
@@ -1551,6 +1635,8 @@ export async function dispatchInboundToAiReply(
 
     // Respondemos tudo que estava no histórico até `snapshotAt`.
     await setCoveredUntil(conversationId, snapshotAt)
+    // Resposta saiu: zera a contagem de descartes seguidos (stale-reply.ts).
+    if (droppable) await kvDel(staleDropsKey(conversationId))
 
     // Depois de enviar: etiqueta, cria card, agenda, transfere OU encerra
     // (transfer tem prioridade — se transferiu, não resolve/move).

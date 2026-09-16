@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { stableArgsKey } from './external-tools'
+import { dedupedSummary, outcomeCreatesCard, stableArgsKey } from './external-tools'
 
 /**
  * Os TRÊS `criar_pedido` reais do Wellington (Família do Gás, 04/09), copiados
@@ -75,5 +75,30 @@ describe('stableArgsKey — o que ele normaliza de verdade', () => {
 
   it('NÃO ignora o que muda o pedido de verdade', () => {
     expect(stableArgsKey({ quantidade: 1 })).not.toBe(stableArgsKey({ quantidade: 2 }))
+  })
+})
+
+describe('chamada segurada pela trava', () => {
+  const criarPedido = { createsDeal: true }
+
+  it('Flávia (11/09): pedido segurado NÃO vira card — só o pedido gravado vira', () => {
+    expect(outcomeCreatesCard(criarPedido, { status: 'ok', summary: '{"id":"x"}' })).toBe(true)
+    expect(outcomeCreatesCard(criarPedido, { status: 'ok', summary: 'JÁ EXISTE…', deduped: true })).toBe(false)
+    expect(outcomeCreatesCard(criarPedido, { status: 'error', summary: 'HTTP 500' })).toBe(false)
+    expect(outcomeCreatesCard({ createsDeal: false }, { status: 'ok', summary: 'ok' })).toBe(false)
+  })
+
+  it('Will (15/09): o aviso deixa claro que o troco NÃO foi gravado e manda editar', () => {
+    const s = dedupedSummary(1, '{"id":"8e328a5e-0f43-4999-9fb4-9dbb2e12dbaa"}')
+    expect(s).toContain('há 1 min')
+    expect(s).toContain('8e328a5e')
+    expect(s).toContain('NADA novo foi gravado')
+    expect(s).toMatch(/troco/i)
+    expect(s).toContain('EDITAR')
+    expect(s).toContain('Nunca diga "anotado"')
+  })
+
+  it('idade relativa em horas quando passou de 1 h', () => {
+    expect(dedupedSummary(585, null)).toContain('há 10 h')
   })
 })

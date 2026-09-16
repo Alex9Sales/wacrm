@@ -179,6 +179,9 @@ export async function createDealFromProposal(
           pipelineId,
           stageId,
           contactId: conv.contactId,
+          // 16/09: sem a conversa o card ficava invisível pra IA (41 de 41 na
+          // Família do Gás) — ela não movia nem ganhava e criava outro do lado.
+          conversationId: conv.id,
           title,
           value: String(value),
           currency,
