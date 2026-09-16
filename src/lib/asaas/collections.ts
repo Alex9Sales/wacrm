@@ -46,7 +46,12 @@ export class AsaasApiError extends Error {
   }
 }
 
-function baseUrl(env: AsaasEnv): string {
+/**
+ * Raiz da API do Asaas por ambiente (respeita ASAAS_BASE_URL/ASAAS_SANDBOX_BASE_URL).
+ * Exportada em 16/09 para o customer-admin (limpeza de órfãos) não montar a URL
+ * de novo e acabar ignorando o override.
+ */
+export function asaasBaseUrl(env: AsaasEnv): string {
   const override = env === 'sandbox' ? process.env.ASAAS_SANDBOX_BASE_URL : process.env.ASAAS_BASE_URL
   if (override) return override.replace(/\/+$/, '')
   return env === 'sandbox' ? 'https://api-sandbox.asaas.com/v3' : 'https://api.asaas.com/v3'
@@ -78,7 +83,7 @@ async function asaasGet<T>(
   /** Padrão 20s. Menor quando a consulta está no caminho da resposta da IA. */
   timeoutMs = 20_000,
 ): Promise<T> {
-  const url = new URL(`${baseUrl(cred.environment)}${path}`)
+  const url = new URL(`${asaasBaseUrl(cred.environment)}${path}`)
   for (const [k, v] of Object.entries(query ?? {})) url.searchParams.set(k, String(v))
 
   let res: Response
@@ -216,7 +221,7 @@ export async function testCredential(cred: AsaasCredential): Promise<{ ok: true 
 // atendimento. Tudo que escreve fica abaixo desta linha, de propósito.
 
 async function asaasSend<T>(cred: AsaasCredential, method: 'POST' | 'PUT', path: string, body: Record<string, unknown>): Promise<T> {
-  const url = `${baseUrl(cred.environment)}${path}`
+  const url = `${asaasBaseUrl(cred.environment)}${path}`
   let res: Response
   try {
     res = await fetch(url, {
