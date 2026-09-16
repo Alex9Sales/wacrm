@@ -24,7 +24,7 @@
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
-import { and, eq, gte, inArray, isNotNull, lt, ne, sql } from 'drizzle-orm'
+import { and, eq, gte, inArray, isNotNull, lt, notInArray, sql } from 'drizzle-orm'
 
 import { db, agentActionRequests, asaasCharges, asaasConnections, collectionsTouches, contacts, conversations } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -140,9 +140,10 @@ export async function queueNewChargeNotices(args: {
         eq(agentActionRequests.accountId, args.accountId),
         eq(agentActionRequests.actionType, 'collect_charges'),
         sql`${agentActionRequests.payload}->>'kind' = 'new_charge'`,
-        // Aviso que FALHOU não avisou ninguém: pode sair de novo (dentro da
-        // janela de 2 dias). Antes contava como avisado e o link se perdia.
-        ne(agentActionRequests.status, 'failed'),
+        // Aviso que FALHOU ou EXPIROU na fila não avisou ninguém: pode sair de
+        // novo (dentro da janela de 2 dias). Antes contava como avisado e o
+        // link se perdia. `links-sent.ts` ainda barra link que já chegou.
+        notInArray(agentActionRequests.status, ['failed', 'expired']),
       ),
     )
   for (const r of anteriores) {

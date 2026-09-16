@@ -328,7 +328,7 @@ export async function queueUpcomingReminders(args: {
       usedForDealToday: 0,
     })
     if (decision.decision === 'blocked') {
-      bump('policy')
+      bump(/teto/i.test(decision.reason) ? 'budget' : 'policy')
       continue
     }
 

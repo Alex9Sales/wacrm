@@ -682,12 +682,28 @@ function DebtorCard({
               variant="outline"
               className="h-6 px-2 text-[11px]"
               onClick={async () => {
-                const res = await adoptAsaasPhone(debtor.contactId!);
+                const res = await adoptAsaasPhone(debtor.contactId!, debtor.key);
                 if (!res.ok) {
-                  // Número já é de outro contato: abre direto a troca de
-                  // contato, em vez de deixar o aviso sem saída.
-                  toast.error(res.error ?? 'Não foi possível trocar o telefone.');
-                  if ((res.error ?? '').includes('Ligar a um contato')) onLink();
+                  // Número já é de outro contato (16/09, L&M Vidros × "LM
+                  // Vidros"): oferece ligar a cobrança NELE, em um clique — a
+                  // troca de contato buscava pelo nome e não achava.
+                  const clash = res.code === 'phone_clash' ? res.clash : undefined;
+                  if (!clash) {
+                    toast.error(res.error ?? 'Não foi possível trocar o telefone.');
+                    return;
+                  }
+                  toast.error(res.error!, {
+                    duration: 15_000,
+                    action: {
+                      label: `Ligar a ${clash.name}`,
+                      onClick: async () => {
+                        const linked = await linkDebtorToContact(debtor.key, clash.id);
+                        if (!linked.ok) toast.error(linked.error ?? 'Não foi possível ligar.');
+                        else toast.success(`Cobrança ligada a ${clash.name}. A régua conta os envios de novo a partir deste contato.`);
+                        onChanged();
+                      },
+                    },
+                  });
                   return;
                 }
                 const anterior = res.data!.previousPhone;
@@ -1779,7 +1795,7 @@ function LinkContactDialog({
     if (!debtor) return;
     let alive = true;
     const t = setTimeout(async () => {
-      const r = await searchContactsForCharge(q).catch(() => []);
+      const r = await searchContactsForCharge(q, debtor.phone).catch(() => []);
       if (alive) setResults(r);
     }, 250);
     return () => {
@@ -1812,7 +1828,9 @@ function LinkContactDialog({
             <button
               key={c.id}
               type="button"
-              disabled={busy}
+              // O contato que já recebe esta cobrança não é escolha: clicar nele
+              // dizia "Ligado" sem mudar nada (16/09, L&M Vidros).
+              disabled={busy || c.id === debtor.contactId}
               className="rounded-md px-2.5 py-2 text-left text-sm hover:bg-muted disabled:opacity-50"
               onClick={async () => {
                 setBusy(true);
@@ -1830,15 +1848,19 @@ function LinkContactDialog({
               }}
             >
               <span className="font-medium">{c.name}</span>
+              {c.id === debtor.contactId && <span className="ml-1.5 text-xs text-muted-foreground">· já é este</span>}
+              {c.id !== debtor.contactId && samePhone(c.phone, debtor.phone) && (
+                <span className="ml-1.5 text-xs font-medium text-emerald-700 dark:text-emerald-400">· mesmo telefone do Asaas</span>
+              )}
               <span className="block text-xs text-muted-foreground">
-                {c.phone}
+                {c.phone || 'sem telefone'}
                 {c.email ? ` · ${c.email}` : ''}
               </span>
             </button>
           ))}
           {!results.length && (
             <p className="py-6 text-center text-sm text-muted-foreground">
-              {q.trim().length < 2 ? 'Digite ao menos 2 letras.' : 'Nenhum contato encontrado com esse termo.'}
+              {q.trim().length < 2 && !debtor.phone ? 'Digite ao menos 2 letras.' : 'Nenhum contato encontrado com esse termo.'}
             </p>
           )}
         </div>
@@ -2399,7 +2421,20 @@ function RulePanel({
 }
 
 /** Em uma linha: onde a régua está neste devedor. */
+/** Mesmo número pelos 8 últimos dígitos (com/sem 55 e 9º dígito). */
+function samePhone(a: string | null | undefined, b: string | null | undefined): boolean {
+  const ta = (a ?? '').replace(/\D/g, '').slice(-8);
+  const tb = (b ?? '').replace(/\D/g, '').slice(-8);
+  return ta.length === 8 && ta === tb;
+}
+
 function reguaStatus(d: WalletDebtor): string {
+  const base = reguaStatusBase(d);
+  // O contador conta envios, não canais: sem telefone na ficha, "enviada" foi só e-mail.
+  return d.contactId && !d.contactHasPhone ? `${base} Este contato não tem telefone: a cobrança não sai por WhatsApp.` : base;
+}
+
+function reguaStatusBase(d: WalletDebtor): string {
   if (!d.contactId) return 'Sem contato ligado — a régua não cobra este devedor.';
   if (d.duplicateSuspect) return 'Parcela idêntica em dois cadastros do Asaas — a régua não cobra até resolver lá.';
   if (d.paused) return 'Fora da régua: marcado como "não cobrar".';

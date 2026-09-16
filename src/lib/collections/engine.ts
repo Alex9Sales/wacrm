@@ -46,6 +46,7 @@ import {
   type CollectionsSettings,
   type SkipReason,
 } from './rules'
+import { withAutoSend } from './auto-send'
 
 export interface CollectionsRunStats {
   /** Devedores com algo em aberto nesta rodada. */
@@ -259,7 +260,10 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   // conjuntos ganham cada contato inserido nesta rodada.
   const alreadyQueued = new Set(recent.filter((r) => r.status === 'pending' || r.status === 'queued').map((r) => r.contactId))
   const contactedToday = contactedTodaySet(recent)
-  const usedToday = recent.filter((r) => r.status === 'sent').length
+  // O orçamento conta o que já saiu E o que espera o sender (pending/queued de
+  // rodadas anteriores). Só com 'sent', a rodada da tarde enfileirava por cima
+  // da fila, passava do teto e as sobras expiravam à meia-noite (16/09).
+  const usedToday = recent.filter((r) => r.status === 'sent' || r.status === 'pending' || r.status === 'queued').length
   let budget = Math.max(0, s.dailyCap - usedToday)
   if (budget === 0) return { ...stats, haltedBecause: `Teto de ${s.dailyCap} cobranças por dia já foi atingido.` }
 
@@ -379,7 +383,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     })
 
     if (decision.decision === 'blocked') {
-      bump('paused')
+      bump(/teto/i.test(decision.reason) ? 'daily_cap' : 'paused')
       continue
     }
 
@@ -459,7 +463,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
         budget,
         alreadyQueued,
         contactedToday,
-        usedToday: usedToday + stats.queued,
+        usedToday: usedToday + stats.queued + (stats.newCharges ?? 0),
         moment,
         dayKey,
       })
@@ -565,11 +569,7 @@ async function draftCollectionMessage(args: {
   }
 }
 
-/** Política efetiva da régua: com "Enviar sozinha" ligado, collect_charges é automático. */
-export function withAutoSend(policy: AutonomyPolicy, s: Pick<CollectionsSettings, 'autoSend'>): AutonomyPolicy {
-  if (!s.autoSend) return policy
-  return { ...policy, levels: { ...policy.levels, collect_charges: 'auto' } }
-}
+export { withAutoSend }
 
 /** Contas com régua ligada e ao menos uma conexão Asaas (para o tique do worker). */
 export async function accountsWithCollections(): Promise<string[]> {

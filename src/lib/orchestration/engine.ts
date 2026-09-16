@@ -330,7 +330,9 @@ export async function runOrchestrationForAccount(accountId: string): Promise<Run
     usedByAction.set(r.actionType, (usedByAction.get(r.actionType) ?? 0) + 1)
     if (r.dealId) usedByDeal.set(r.dealId, (usedByDeal.get(r.dealId) ?? 0) + 1)
     const meta = ACTION_CATALOG[r.actionType as OrchAction]
-    if (meta?.kind === 'message') messagesToday += 1
+    // A régua de cobrança tem teto próprio (Ajustar) e manda dezenas por dia:
+    // contada aqui, deixava reativação/follow-up automáticos sem cota (16/09).
+    if (meta?.kind === 'message' && r.actionType !== 'collect_charges') messagesToday += 1
   }
   // Quem já está numa cadência ativa não entra em outra.
   const activeCadenceContacts = new Set<string>()

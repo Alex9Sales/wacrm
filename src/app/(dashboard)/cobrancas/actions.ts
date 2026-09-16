@@ -50,8 +50,10 @@ export interface ActionResult<T = unknown> {
   ok: boolean
   error?: string
   data?: T
-  /** Qual campo a tela destaca (15/09): falta o CPF/CNPJ ou o digitado é inválido. */
-  code?: 'needs_document' | 'invalid_document'
+  /** Qual campo a tela destaca (15/09): falta o CPF/CNPJ ou o digitado é inválido.
+   *  'phone_clash' (16/09): o número já é de outro contato — `clash` diz qual. */
+  code?: 'needs_document' | 'invalid_document' | 'phone_clash'
+  clash?: { id: string; name: string }
 }
 
 // ------------------------------------------------------------------ conexões
@@ -293,6 +295,10 @@ export interface WalletDebtor {
    * `null` quando o contato não tem nome próprio (aí o cabeçalho usa o do Asaas).
    */
   contactName: string | null
+  /** A ficha do contato ligado tem telefone? Sem ele a cobrança não sai por
+   *  WhatsApp — só por e-mail (16/09, L&M Vidros: "2 cobranças enviadas", 1 só
+   *  chegou no WhatsApp, e a tela não dizia). */
+  contactHasPhone: boolean
 }
 
 /**
@@ -428,6 +434,7 @@ export async function getWallet(): Promise<WalletSummary> {
         snoozeReason: r.snoozeReason,
         duplicateSuspect: false,
         phoneDiffers: phoneDiff(r.phone, r.contactPhone, r.contactId),
+        contactHasPhone: (r.contactPhone ?? '').replace(/\D/g, '').length >= 10,
       }
       byDebtor.set(key, d)
     }
@@ -544,11 +551,19 @@ export interface ContactOption {
   email: string | null
 }
 
-/** Busca contatos para resolver uma pendência de casamento na mão. */
-export async function searchContactsForCharge(query: string): Promise<ContactOption[]> {
+/**
+ * Busca contatos para resolver uma pendência de casamento na mão.
+ * @param asaasPhone telefone do cadastro no Asaas: quem tem o MESMO número vem
+ *   primeiro, qualquer que seja o termo (16/09, L&M Vidros: a busca começava
+ *   por "L&M Vidros" e o contato certo se chamava "LM Vidros").
+ */
+export async function searchContactsForCharge(query: string, asaasPhone?: string | null): Promise<ContactOption[]> {
   const { accountId } = await getCurrentAccount()
   const q = query.trim()
-  if (q.length < 2) return []
+  const tail = (asaasPhone ?? '').replace(/\D/g, '').slice(-8)
+  // phone_normalized = só dígitos (coluna gerada): a ficha guarda como foi digitado.
+  const samePhone = tail.length === 8 ? sql`right(${contacts.phoneNormalized}, 8) = ${tail}` : null
+  if (q.length < 2 && !samePhone) return []
 
   // 🐛 11/09 (João): buscar "Center Pisos Raspadora" não achava o contato que
   // EXISTIA. A busca por telefone usava `q.replace(/\D/g,'')`, que numa busca
@@ -556,8 +571,9 @@ export async function searchContactsForCharge(query: string): Promise<ContactOpt
   // Com o OR, a lista virava "os 20 primeiros contatos da conta", e o certo
   // quase nunca estava neles. Só procura por telefone quando há dígitos.
   const digitos = phoneSearchDigits(q)
-  const termos = [ilike(contacts.name, `%${q}%`), ilike(contacts.email, `%${q}%`)]
+  const termos = q.length >= 2 ? [ilike(contacts.name, `%${q}%`), ilike(contacts.email, `%${q}%`)] : []
   if (digitos) termos.push(ilike(contacts.phone, `%${digitos}%`))
+  if (samePhone) termos.push(samePhone)
 
   const rows = await db
     .select({ id: contacts.id, name: contacts.name, phone: contacts.phone, email: contacts.email })
@@ -565,7 +581,11 @@ export async function searchContactsForCharge(query: string): Promise<ContactOpt
     .where(and(eq(contacts.accountId, accountId), eq(contacts.isGroup, false), or(...termos)))
     // Quem começa com o que foi digitado vem primeiro — sem isso o contato
     // certo podia ficar fora das 20 linhas.
-    .orderBy(sql`CASE WHEN ${contacts.name} ILIKE ${q + '%'} THEN 0 ELSE 1 END`, contacts.name)
+    .orderBy(
+      ...(samePhone ? [sql`CASE WHEN ${samePhone} THEN 0 ELSE 1 END`] : []),
+      sql`CASE WHEN ${contacts.name} ILIKE ${q + '%'} THEN 0 ELSE 1 END`,
+      contacts.name,
+    )
     .limit(20)
 
   return rows.map((r) => ({ id: r.id, name: r.name ?? r.phone, phone: r.phone, email: r.email }))
@@ -612,14 +632,25 @@ export async function linkDebtorToContact(debtorKey: string, contactId: string):
  * às cegas — recusa quando outro contato da conta já usa esse número, que é o
  * caminho de criar dois cadastros da mesma pessoa.
  */
-export async function adoptAsaasPhone(contactId: string): Promise<ActionResult<{ phone: string; previousPhone: string | null }>> {
+export async function adoptAsaasPhone(
+  contactId: string,
+  /** O devedor do cartão: o número é o DELE (contato ligado a dois cadastros com telefones diferentes). */
+  debtorKey?: string,
+): Promise<ActionResult<{ phone: string; previousPhone: string | null }>> {
   const { accountId } = await requireRole('agent')
 
   const charge = firstOrNull(
     await db
       .select({ phone: asaasCharges.phone })
       .from(asaasCharges)
-      .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, contactId), eq(asaasCharges.open, true)))
+      .where(
+        and(
+          eq(asaasCharges.accountId, accountId),
+          eq(asaasCharges.contactId, contactId),
+          eq(asaasCharges.open, true),
+          ...(debtorKey ? [debtorFilter(debtorKey)] : []),
+        ),
+      )
       .orderBy(desc(asaasCharges.updatedAt))
       .limit(1),
   )
@@ -654,7 +685,9 @@ export async function adoptAsaasPhone(contactId: string): Promise<ActionResult<{
   if (clash) {
     return {
       ok: false,
-      error: `Esse número já é do contato "${clash.name ?? 'sem nome'}". Use "Ligar a um contato" e escolha ele, para não ficar com o cliente em dois cadastros.`,
+      code: 'phone_clash',
+      clash: { id: clash.id, name: clash.name ?? 'sem nome' },
+      error: `Esse número já é do contato "${clash.name ?? 'sem nome'}". Ligue a cobrança a ele, para não ficar com o cliente em dois cadastros.`,
     }
   }
 
@@ -1114,15 +1147,24 @@ function debtorFilter(debtorKey: string) {
   return or(eq(asaasCharges.asaasCustomerId, debtorKey), eq(asaasCharges.cpfCnpj, debtorKey), eq(asaasCharges.asaasId, debtorKey))
 }
 
-async function createAndLink(accountId: string, userId: string, debtorKey: string): Promise<ActionResult<CreatedFromAsaas>> {
+async function createAndLink(
+  accountId: string,
+  userId: string,
+  debtorKey: string,
+  /** Em massa: só quem continua sem contato (alguém pode ter ligado à mão no meio). */
+  opts: { onlyUnlinked?: boolean } = {},
+): Promise<ActionResult<CreatedFromAsaas>> {
+  const unlinked = opts.onlyUnlinked ? [isNull(asaasCharges.contactId)] : []
   const src = firstOrNull(
     await db
       .select({ name: asaasCharges.customerName, phone: asaasCharges.phone, email: asaasCharges.email })
       .from(asaasCharges)
-      .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true), isNull(asaasCharges.contactId), debtorFilter(debtorKey)))
+      // O botão individual não exige "sem contato": na troca de contato
+      // (devedor já ligado) findOrCreateContact reencontra quem tem o número.
+      .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true), debtorFilter(debtorKey), ...unlinked))
       .limit(1),
   )
-  if (!src) return { ok: false, error: 'Nenhuma cobrança pendente para este devedor.' }
+  if (!src) return { ok: false, error: 'Nenhuma cobrança em aberto para este devedor.' }
 
   const phone = asaasPhoneForContact(src.phone)
   const email = normalizeEmail(src.email)
@@ -1170,7 +1212,7 @@ async function createAndLink(accountId: string, userId: string, debtorKey: strin
   const linked = await db
     .update(asaasCharges)
     .set({ contactId: found.id, matchedBy: 'manual', updatedAt: new Date().toISOString() })
-    .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true), debtorFilter(debtorKey)))
+    .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true), debtorFilter(debtorKey), ...unlinked))
     .returning({ id: asaasCharges.id })
 
   return { ok: true, data: { contactId: found.id, created: found.created, linked: linked.length } }
@@ -1196,7 +1238,7 @@ export async function createContactsForPendingDebtors(): Promise<ActionResult<Bu
   const wallet = await getWallet()
   const out: BulkCreateResult = { created: 0, linked: 0, skipped: [] }
   for (const d of wallet.debtors.filter((x) => !x.contactId)) {
-    const res = await createAndLink(accountId, userId, d.key)
+    const res = await createAndLink(accountId, userId, d.key, { onlyUnlinked: true })
     if (!res.ok) out.skipped.push({ name: d.name, reason: res.error ?? 'falhou' })
     else if (res.data!.created) out.created += 1
     else out.linked += 1

@@ -425,6 +425,7 @@ export type SkipReason =
   | 'paused'
   | 'too_soon'
   | 'max_touches'
+  | 'daily_cap'
 
 export const SKIP_LABEL: Record<SkipReason, string> = {
   ok: 'Pronto para cobrar',
@@ -437,6 +438,7 @@ export const SKIP_LABEL: Record<SkipReason, string> = {
   paused: 'A cobrança deste devedor está pausada',
   too_soon: 'O último toque foi há pouco tempo',
   max_touches: 'Atingiu o limite de toques sem resposta — precisa de uma pessoa',
+  daily_cap: 'O teto de envios do dia foi atingido — entra no próximo dia de envio',
 }
 
 export interface TouchState {
