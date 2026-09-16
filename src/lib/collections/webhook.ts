@@ -9,12 +9,15 @@
 // Sem 'server-only' — a rota e o worker alcançam isso.
 // ============================================================
 
-import { and, eq, inArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, isNotNull, ne, sql } from 'drizzle-orm'
 
 import { db, agentActionRequests, asaasCharges, asaasConnections, collectionsTouches } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { countOpenPaymentsForCustomer, type AsaasEnv } from '@/lib/asaas/collections'
+import { decrypt } from '@/lib/whatsapp/encryption'
 
 import { settlePauseAfterPayment } from './pause'
+import type { PauseAfterSettle } from './pause-rules'
 
 /** Status do Asaas de cobrança já paga — o 2º aviso de pagamento não age de novo. */
 const PAID_STATUSES = new Set(['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'])
@@ -56,7 +59,7 @@ export interface WebhookOutcome {
   /** true = a cobrança ESTAVA aberta e fechou agora (evento repetido não conta). */
   transitioned?: boolean
   /** O que aconteceu com a pausa da régua (só em pagamento). */
-  pause?: 'lift' | 'keep_human' | 'none'
+  pause?: PauseAfterSettle
 }
 
 /**
@@ -89,8 +92,13 @@ export async function applyAsaasEvent(connectionId: string, accountId: string, b
 
   // Cobrança que a gente nunca espelhou (a régua só puxa as vencidas). Pagamento
   // de algo que nunca cobramos não exige nada — mas se ela VENCEU agora, a
-  // próxima sincronização traz.
-  if (!charge) return { handled: true, action: 'unknown_charge', cancelledRequests: 0 }
+  // próxima sincronização traz. Exceção: parcela de acordo paga EM DIA nunca
+  // entra na carteira, e é o pagamento dela que quita o acordo — a pausa da
+  // IA que ficou por "ainda tem parcela" precisa ser conferida aqui.
+  if (!charge) {
+    const pause = settled ? await settleUnmirroredPayment(accountId, connectionId, body.payment?.customer ?? null) : 'none'
+    return { handled: true, action: 'unknown_charge', cancelledRequests: 0, ...(pause !== 'none' ? { pause } : {}) }
+  }
 
   const now = new Date().toISOString()
 
@@ -104,6 +112,44 @@ export async function applyAsaasEvent(connectionId: string, accountId: string, b
     return { handled: true, action: 'reopened', cancelledRequests: 0 }
   }
 
+  // 🛑 O ponto da fase: cancelar o que ainda não saiu. Só cancelamos quando o
+  // devedor não tem MAIS NADA em aberto — quem paga uma de três parcelas
+  // continua devendo duas, e a cobrança dessas duas segue de pé. (Fora esta,
+  // que fecha logo abaixo.)
+  const aindaDeve = charge.contactId
+    ? firstOrNull(
+        await db
+          .select({ id: asaasCharges.id })
+          .from(asaasCharges)
+          .where(
+            and(
+              eq(asaasCharges.accountId, accountId),
+              eq(asaasCharges.contactId, charge.contactId),
+              eq(asaasCharges.open, true),
+              ne(asaasCharges.id, charge.id),
+            ),
+          )
+          .limit(1),
+      )
+    : null
+
+  // 🧾 Pausa que a IA pôs (acordo/contestação) sai quando ele quita — senão fica
+  // valendo para sempre e invisível (Guincho Ribeiro, 16/09). A da equipe fica,
+  // com nota. Decidida ANTES de gravar o status pago: se o webhook der erro
+  // depois disto, o reenvio do Asaas ainda é o "1º pagamento" e decide de novo
+  // (tirar a pausa é idempotente — o UPDATE só pega pausa que ainda existe).
+  const pause =
+    settled && charge.contactId && !aindaDeve
+      ? await settlePauseAfterPayment({
+          accountId,
+          contactId: charge.contactId,
+          firstSettle: !PAID_STATUSES.has(String(charge.status ?? '').toUpperCase()),
+          stillOwes: false,
+          nowIso: now,
+          countOpenInAsaas: () => openPaymentsInAsaas(accountId, charge.contactId!, connectionId, body.payment?.customer ?? null),
+        })
+      : 'none'
+
   await db
     .update(asaasCharges)
     .set({ open: false, closedAt: now, status: body.payment?.status ?? (gone ? 'DELETED' : 'RECEIVED'), updatedAt: now })
@@ -111,18 +157,7 @@ export async function applyAsaasEvent(connectionId: string, accountId: string, b
 
   const ref = { chargeId: charge.id, contactId: charge.contactId, transitioned: charge.open === true }
   if (!charge.contactId) return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: 0, ...ref }
-
-  // 🛑 O ponto da fase: cancelar o que ainda não saiu. Só cancelamos quando o
-  // devedor não tem MAIS NADA em aberto — quem paga uma de três parcelas
-  // continua devendo duas, e a cobrança dessas duas segue de pé.
-  const aindaDeve = firstOrNull(
-    await db
-      .select({ id: asaasCharges.id })
-      .from(asaasCharges)
-      .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, charge.contactId), eq(asaasCharges.open, true)))
-      .limit(1),
-  )
-  if (aindaDeve) return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: 0, ...ref }
+  if (aindaDeve) return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: 0, pause, ...ref }
 
   const cancelled = await db
     .update(agentActionRequests)
@@ -148,20 +183,106 @@ export async function applyAsaasEvent(connectionId: string, accountId: string, b
     .set({ touchCount: 0, snoozeUntil: null, snoozeReason: null, updatedAt: now })
     .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, charge.contactId)))
 
-  // 🧾 Pausa que a IA pôs (acordo/contestação) sai quando ele quita — senão fica
-  // valendo para sempre e invisível (Guincho Ribeiro, 16/09). A da equipe fica,
-  // com nota dizendo que continua. Só no 1º pagamento desta cobrança.
-  const pause = settled
-    ? await settlePauseAfterPayment({
-        accountId,
-        contactId: charge.contactId,
-        firstSettle: !PAID_STATUSES.has(String(charge.status ?? '').toUpperCase()),
-        stillOwes: false,
-        nowIso: now,
-      })
-    : 'none'
-
   return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: cancelled.length, pause, ...ref }
+}
+
+/**
+ * Pagamento de cobrança fora da carteira: se o cadastro do Asaas é de UM
+ * contato só, sem nada vencido na carteira, confere a pausa da IA. Sem nota
+ * quando ela fica (cada parcela e cada reenvio repetiriam); tirar é idempotente.
+ */
+async function settleUnmirroredPayment(accountId: string, connectionId: string, customerId: string | null): Promise<PauseAfterSettle> {
+  if (!customerId) return 'none'
+  const owners = await db
+    .selectDistinct({ contactId: asaasCharges.contactId })
+    .from(asaasCharges)
+    .where(
+      and(
+        eq(asaasCharges.accountId, accountId),
+        eq(asaasCharges.connectionId, connectionId),
+        eq(asaasCharges.asaasCustomerId, customerId),
+        isNotNull(asaasCharges.contactId),
+      ),
+    )
+    .limit(2)
+  if (owners.length !== 1 || !owners[0].contactId) return 'none'
+  const contactId = owners[0].contactId
+  const aberta = firstOrNull(
+    await db
+      .select({ id: asaasCharges.id })
+      .from(asaasCharges)
+      .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, contactId), eq(asaasCharges.open, true)))
+      .limit(1),
+  )
+  if (aberta) return 'none'
+  return settlePauseAfterPayment({
+    accountId,
+    contactId,
+    firstSettle: true,
+    stillOwes: false,
+    nowIso: new Date().toISOString(),
+    countOpenInAsaas: () => openPaymentsInAsaas(accountId, contactId, connectionId, customerId),
+    noteWhenKept: false,
+  })
+}
+
+/** Teto da conferência no Asaas dentro do webhook: o Asaas espera a resposta
+ *  e marca falha (e pausa a fila) quando ela demora. */
+const OPEN_CHECK_BUDGET_MS = 6_000
+
+/**
+ * Cobranças em aberto no Asaas (a vencer + vencidas) de TODOS os cadastros
+ * deste contato, em todas as contas ligadas — a carteira só tem as vencidas.
+ * null = alguma consulta falhou ou estourou o teto (quem chama não tira a
+ * pausa no escuro; ela continua na lista "Régua parada sem cobrança vencida").
+ */
+async function openPaymentsInAsaas(
+  accountId: string,
+  contactId: string,
+  eventConnectionId: string,
+  eventCustomerId: string | null,
+): Promise<number | null> {
+  const deadline = Date.now() + OPEN_CHECK_BUDGET_MS
+  try {
+    const pairs = new Map<string, Set<string>>()
+    const add = (conn: string, cus: string | null) => {
+      if (!cus) return
+      const set = pairs.get(conn) ?? new Set<string>()
+      set.add(cus)
+      pairs.set(conn, set)
+    }
+    add(eventConnectionId, eventCustomerId)
+    const known = await db
+      .selectDistinct({ connectionId: asaasCharges.connectionId, customerId: asaasCharges.asaasCustomerId })
+      .from(asaasCharges)
+      .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, contactId), isNotNull(asaasCharges.asaasCustomerId)))
+    for (const k of known) add(k.connectionId, k.customerId)
+    if (!pairs.size) return null
+    const linked = await db
+      .select({ id: asaasConnections.id, apiKeyEnc: asaasConnections.apiKeyEnc, environment: asaasConnections.environment })
+      .from(asaasConnections)
+      .where(and(eq(asaasConnections.accountId, accountId), eq(asaasConnections.enabled, true), inArray(asaasConnections.id, [...pairs.keys()])))
+    // Conta desligada não conta (chave pode estar revogada: travaria para
+    // sempre); sandbox só vale quando não há produção — cobrança de teste
+    // ninguém paga (mesma regra do connection-pick).
+    const conns = linked.some((c) => c.environment === 'production') ? linked.filter((c) => c.environment === 'production') : linked
+    if (!conns.length) return null
+    let total = 0
+    for (const c of conns) {
+      const cred = { apiKey: decrypt(c.apiKeyEnc), environment: c.environment as AsaasEnv }
+      for (const cus of pairs.get(c.id) ?? []) {
+        const left = deadline - Date.now()
+        if (left < 500) return null
+        const n = await countOpenPaymentsForCustomer(cred, cus, Math.min(4_000, left))
+        if (n === null) return null
+        total += n
+      }
+    }
+    return total
+  } catch (err) {
+    console.error('[cobranca] conferir parcelas em aberto no Asaas falhou:', err instanceof Error ? err.message : err)
+    return null
+  }
 }
 
 /** Acha a conexão pelo token da URL. Token inválido = 404, sem detalhe. */

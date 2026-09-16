@@ -87,6 +87,12 @@ export async function settlePauseAfterPayment(args: {
   firstSettle: boolean
   stillOwes: boolean
   nowIso: string
+  /** Cobranças em aberto no Asaas (a vencer + vencidas); null = não deu. Só é
+   *  chamado quando há pausa da IA candidata a sair. */
+  countOpenInAsaas: () => Promise<number | null>
+  /** false = só tira a pausa, sem nota quando ela fica (parcela paga que a
+   *  carteira nunca espelhou: cada uma repetiria a mesma nota). */
+  noteWhenKept?: boolean
 }): Promise<PauseAfterSettle> {
   try {
     const st = firstOrNull(
@@ -100,8 +106,22 @@ export async function settlePauseAfterPayment(args: {
         .where(and(eq(collectionsTouches.accountId, args.accountId), eq(collectionsTouches.contactId, args.contactId)))
         .limit(1),
     )
-    const verdict = pauseAfterSettle(st, { firstSettle: args.firstSettle, stillOwes: args.stillOwes })
+    const pre = pauseAfterSettle(st, { firstSettle: args.firstSettle, stillOwes: args.stillOwes, asaasOpen: 0 })
+    // Parcela a vencer não está na carteira: só o Asaas diz se ele ainda deve.
+    const verdict =
+      pre === 'lift'
+        ? pauseAfterSettle(st, { firstSettle: args.firstSettle, stillOwes: args.stillOwes, asaasOpen: await args.countOpenInAsaas() })
+        : pre
     if (verdict === 'none') return 'none'
+    if (verdict !== 'lift' && args.noteWhenKept === false) return verdict
+    if (verdict === 'keep_owes') {
+      await noteOnLatestConversation(
+        args.accountId,
+        args.contactId,
+        `🧾 Pagou o que estava vencido, mas ainda tem parcela em aberto no Asaas (fora mensalidade de assinatura). A pausa automática da régua ("${st!.pausedReason}") continua — se o acordo já está resolvido, use "Retomar cobrança" na lateral da conversa ou em Cobranças.`,
+      )
+      return 'keep_owes'
+    }
     if (verdict === 'lift') {
       const lifted = await db
         .update(collectionsTouches)
@@ -119,7 +139,7 @@ export async function settlePauseAfterPayment(args: {
       await noteOnLatestConversation(
         args.accountId,
         args.contactId,
-        `🧾 A cobrança foi paga e não sobrou nada vencido na carteira. A pausa automática da régua ("${st!.pausedReason}") foi retirada: parcela a vencer e cobrança nova voltam a receber lembrete e régua.`,
+        `🧾 A cobrança foi paga e não sobrou nada em aberto no Asaas. A pausa automática da régua ("${st!.pausedReason}") foi retirada: cobrança nova deste cliente volta a receber lembrete e régua.`,
       )
       return 'lift'
     }

@@ -33,7 +33,7 @@ export function isAiPause(st: Pick<PauseState, 'pausedSource' | 'pausedReason'>)
   return (AI_PAUSE_REASONS as readonly string[]).includes(st.pausedReason ?? '')
 }
 
-export type PauseAfterSettle = 'lift' | 'keep_human' | 'none'
+export type PauseAfterSettle = 'lift' | 'keep_human' | 'keep_owes' | 'none'
 
 /**
  * O que fazer com a pausa quando uma cobrança é paga.
@@ -41,13 +41,19 @@ export type PauseAfterSettle = 'lift' | 'keep_human' | 'none'
  *   CONFIRMED e ~30 dias depois RECEIVED, e o Asaas reenvia eventos: o
  *   segundo aviso não pode tirar uma pausa nova, de outra dívida.
  * @param stillOwes ainda há cobrança aberta na carteira do contato.
+ * @param asaasOpen cobranças em aberto no ASAAS (a vencer + vencidas) — a
+ *   carteira só espelha as vencidas, então parcela a vencer só aparece aqui.
+ *   null = não deu para consultar (pausa da IA fica, sem nota); undefined =
+ *   não consultado (pausa humana não precisa).
  */
 export function pauseAfterSettle(
   st: PauseState | null | undefined,
-  ev: { firstSettle: boolean; stillOwes: boolean },
+  ev: { firstSettle: boolean; stillOwes: boolean; asaasOpen?: number | null },
 ): PauseAfterSettle {
   if (!st?.paused || !ev.firstSettle || ev.stillOwes) return 'none'
-  return isAiPause(st) ? 'lift' : 'keep_human'
+  if (!isAiPause(st)) return 'keep_human'
+  if (ev.asaasOpen === null || ev.asaasOpen === undefined) return 'none'
+  return ev.asaasOpen > 0 ? 'keep_owes' : 'lift'
 }
 
 export function pauseSourceLabel(source: string | null, reason: string | null): string {

@@ -8,6 +8,7 @@ vi.mock('./pause', () => ({ settlePauseAfterPayment: pauseMock.settle }))
 const state = {
   charge: null as null | { id: string; contactId: string | null; open: boolean; status?: string },
   aindaDeve: false,
+  owners: [] as { contactId: string }[],
   updates: [] as { table: string; set: Record<string, unknown> }[],
   cancelled: [] as { id: string }[],
 }
@@ -28,6 +29,8 @@ vi.mock('@/db', () => {
   return {
     db: {
       update: (t: { _: { name?: string } } | string) => chain(String((t as { tableName?: string }).tableName ?? t)),
+      // dono do cadastro do Asaas (pagamento fora da carteira)
+      selectDistinct: () => ({ from: () => ({ where: () => ({ limit: async () => state.owners }) }) }),
       select: () => ({
         from: (t: unknown) => ({
           where: () => ({
@@ -46,7 +49,7 @@ vi.mock('@/db', () => {
     },
     agentActionRequests: { tableName: 'agentActionRequests', status: {}, accountId: {}, contactId: {}, actionType: {}, id: {} },
     asaasCharges: { tableName: 'asaasCharges', id: {}, accountId: {}, contactId: {}, asaasId: {}, open: {} },
-    asaasConnections: { tableName: 'asaasConnections', id: {}, webhookEvents: {}, webhookToken: {}, accountId: {}, label: {} },
+    asaasConnections: { tableName: 'asaasConnections', id: {}, webhookEvents: {}, webhookToken: {}, accountId: {}, label: {}, enabled: {}, environment: {}, apiKeyEnc: {} },
     collectionsTouches: { tableName: 'collectionsTouches', accountId: {}, contactId: {} },
   }
 })
@@ -60,6 +63,7 @@ const { applyAsaasEvent } = await import('./webhook')
 beforeEach(async () => {
   state.charge = { id: 'ch1', contactId: 'c1', open: true }
   state.aindaDeve = false
+  state.owners = []
   state.updates = []
   state.cancelled = []
   pauseMock.settle.mockClear()
@@ -113,6 +117,25 @@ describe('webhook do Asaas — parar de cobrar quem pagou', () => {
     expect(out.cancelledRequests).toBe(0)
   })
 
+  it('parcela de acordo paga EM DIA (nunca espelhada) confere a pausa do dono do cadastro, sem nota quando fica', async () => {
+    state.charge = null
+    state.owners = [{ contactId: 'c9' }]
+    const dbmod = (await import('@/db')) as unknown as { db: { __reset: () => void } }
+    dbmod.db.__reset()
+    const out = await applyAsaasEvent('conn1', 'acc1', { event: 'PAYMENT_RECEIVED', payment: { id: 'pay_p3', customer: 'cus_9' } })
+    expect(out.action).toBe('unknown_charge')
+    expect(pauseMock.settle).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc1', contactId: 'c9', noteWhenKept: false }))
+  })
+
+  it('cadastro do Asaas de dois contatos, ou sem cadastro no evento: não mexe na pausa', async () => {
+    state.charge = null
+    state.owners = [{ contactId: 'c1' }, { contactId: 'c2' }]
+    await applyAsaasEvent('conn1', 'acc1', { event: 'PAYMENT_RECEIVED', payment: { id: 'pay_x', customer: 'cus_9' } })
+    state.owners = [{ contactId: 'c1' }]
+    await applyAsaasEvent('conn1', 'acc1', { event: 'PAYMENT_RECEIVED', payment: { id: 'pay_y' } })
+    expect(pauseMock.settle).not.toHaveBeenCalled()
+  })
+
   it('evento sem pagamento (teste da URL no Asaas) não faz nada', async () => {
     const out = await applyAsaasEvent('conn1', 'acc1', { event: 'PAYMENT_RECEIVED' })
     expect(out.action).toBe('ignored')
@@ -127,6 +150,26 @@ describe('webhook do Asaas — parar de cobrar quem pagou', () => {
     state.charge = { id: 'ch1', contactId: 'c1', open: true, status: 'OVERDUE' }
     await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_RECEIVED'))
     expect(pauseMock.settle).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc1', contactId: 'c1', firstSettle: true, stillOwes: false }))
+  })
+
+  it('reenvio do Asaas: a pausa é decidida ANTES de gravar a cobrança como paga', async () => {
+    // Se o webhook cair depois de gravar "pago" e antes de mexer na pausa, o
+    // reenvio acharia status pago → "não é 1º pagamento" → pausa presa.
+    state.charge = { id: 'ch1', contactId: 'c1', open: true, status: 'OVERDUE' }
+    let chargeClosedBeforeSettle: boolean | null = null
+    pauseMock.settle.mockImplementationOnce(async () => {
+      chargeClosedBeforeSettle = state.updates.some((u) => u.table === 'asaasCharges' && u.set.open === false)
+      return 'none' as const
+    })
+    await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_RECEIVED'))
+    expect(chargeClosedBeforeSettle).toBe(false)
+    expect(state.updates.some((u) => u.table === 'asaasCharges' && u.set.open === false)).toBe(true)
+  })
+
+  it('manda conferir parcela a vencer no Asaas (a carteira só tem as vencidas)', async () => {
+    state.charge = { id: 'ch1', contactId: 'c1', open: true, status: 'OVERDUE' }
+    await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_RECEIVED'))
+    expect(pauseMock.settle).toHaveBeenCalledWith(expect.objectContaining({ countOpenInAsaas: expect.any(Function) }))
   })
 
   it('2º aviso de pagamento da mesma cobrança (cartão CONFIRMED → RECEIVED) não é 1º pagamento', async () => {

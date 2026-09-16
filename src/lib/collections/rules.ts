@@ -589,6 +589,10 @@ export function describeWeekdays(dias: number[]): string {
 export interface ChargeLine {
   /** Cadastro do Asaas de onde veio (para o detector de duplicata). */
   customerId?: string | null
+  /** Conta do Asaas — duplicata só conta dentro da mesma (16/09). */
+  connectionId?: string | null
+  /** CPF/CNPJ do cadastro — PF e PJ da mesma pessoa não são duplicata. */
+  document?: string | null
   /** Nome do cadastro no Asaas — entra na linha quando o devedor tem mais de
    *  um cadastro (mesma pessoa, duas empresas; João/GoLink 10/09). */
   customerName?: string | null
@@ -907,16 +911,28 @@ export function deliveryPlan(f: DeliveryFacts): DeliveryPlan {
  * quase sempre, o mesmo boleto criado duas vezes (Renato ×3, 05/09: 12
  * parcelas em dobro). A régua NÃO cobra esse devedor até uma pessoa resolver
  * no Asaas — cobrar em dobro é pior que atrasar um dia.
+ *
+ * 16/09: só dentro da MESMA conta do Asaas. O id de cadastro de duas contas
+ * é sempre diferente, e a mesma mensalidade nas duas contas (GoLink tem duas
+ * empresas) virava "duplicata" e a régua nunca cobrava ninguém ali.
+ * Dentro da conta, dois cadastros com documentos DIFERENTES (CPF da pessoa e
+ * CNPJ da empresa dela, mesmo plano) também não são — o dobro do Renato era
+ * cadastro sem documento ou com o mesmo.
  */
-export function duplicateSuspects(charges: { customerId?: string | null; value: number; dueDate: string | null }[]): boolean {
-  const byKey = new Map<string, Set<string>>()
+export function duplicateSuspects(
+  charges: { customerId?: string | null; connectionId?: string | null; document?: string | null; value: number; dueDate: string | null }[],
+): boolean {
+  const byKey = new Map<string, Map<string, string>>()
   for (const c of charges) {
     if (!c.customerId || !c.dueDate) continue
-    const k = `${c.value.toFixed(2)}|${c.dueDate.slice(0, 10)}`
-    const ids = byKey.get(k) ?? new Set<string>()
-    ids.add(c.customerId)
-    byKey.set(k, ids)
-    if (ids.size > 1) return true
+    const k = `${c.connectionId ?? ''}|${c.value.toFixed(2)}|${c.dueDate.slice(0, 10)}`
+    const seen = byKey.get(k) ?? new Map<string, string>()
+    const doc = (c.document ?? '').replace(/\D/g, '')
+    for (const [id, otherDoc] of seen) {
+      if (id !== c.customerId && (!doc || !otherDoc || doc === otherDoc)) return true
+    }
+    if (!seen.has(c.customerId) || !seen.get(c.customerId)) seen.set(c.customerId, doc)
+    byKey.set(k, seen)
   }
   return false
 }

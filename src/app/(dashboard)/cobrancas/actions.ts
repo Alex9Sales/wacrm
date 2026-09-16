@@ -20,7 +20,7 @@ import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
 import { runCollectionsForAccount } from '@/lib/collections/engine'
-import { duplicateSuspects, greetingName, normalizeSettings, phoneSearchDigits, type CollectionsSettings } from '@/lib/collections/rules'
+import { countsAsOverdue, duplicateSuspects, greetingName, normalizeSettings, phoneSearchDigits, type CollectionsSettings } from '@/lib/collections/rules'
 import { evaluatePromotion, promotionHeadline, type PromotionVerdict } from '@/lib/collections/promotion'
 import { criteriaFor, readPromotionOverride, statsFromFeedback } from '@/lib/orchestration/validation'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
@@ -449,11 +449,23 @@ export async function getWallet(): Promise<WalletSummary> {
   }
 
   // Parcela idêntica em dois cadastros do Asaas (Renato ×3): a tela avisa e a
-  // régua não cobra até resolver lá.
+  // régua não cobra até resolver lá. Calculado como a RÉGUA calcula — por
+  // contato, juntando os cadastros e só com as vencidas. Por devedor (um
+  // cadastro por grupo) dava sempre false: a régua pulava e a tela não dizia.
+  const byContact = new Map<string, WalletDebtor[]>()
   for (const d of byDebtor.values()) {
-    d.duplicateSuspect = duplicateSuspects(
-      d.charges.map((c) => ({ customerId: c.asaasCustomerId, value: Number(c.value), dueDate: c.dueDate })),
+    if (!d.contactId) continue
+    byContact.set(d.contactId, [...(byContact.get(d.contactId) ?? []), d])
+  }
+  for (const list of byContact.values()) {
+    const suspect = duplicateSuspects(
+      list.flatMap((d) =>
+        d.charges
+          .filter((c) => countsAsOverdue(c.daysLate))
+          .map((c) => ({ customerId: c.asaasCustomerId, connectionId: c.connectionId, document: d.cpfCnpj, value: Number(c.value), dueDate: c.dueDate })),
+      ),
     )
+    for (const d of list) d.duplicateSuspect = suspect
   }
 
   const debtors = [...byDebtor.values()].sort((a, b) => (b.oldestDaysLate ?? -1) - (a.oldestDaysLate ?? -1))

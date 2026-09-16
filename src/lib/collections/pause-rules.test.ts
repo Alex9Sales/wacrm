@@ -7,7 +7,15 @@ const equipe = { paused: true, pausedSource: 'human', pausedReason: 'Não cobrar
 
 describe('pauseAfterSettle — a pausa da IA sai quando ele quita; a da equipe fica', () => {
   it('Guincho Ribeiro (16/09): IA pausou por "acordo", ele pagou tudo → sai', () => {
-    expect(pauseAfterSettle(ia, { firstSettle: true, stillOwes: false })).toBe('lift')
+    expect(pauseAfterSettle(ia, { firstSettle: true, stillOwes: false, asaasOpen: 0 })).toBe('lift')
+  })
+
+  it('pagou a vencida mas ainda tem parcela A VENCER no Asaas → pausa da IA fica (com nota)', () => {
+    expect(pauseAfterSettle(ia, { firstSettle: true, stillOwes: false, asaasOpen: 2 })).toBe('keep_owes')
+  })
+
+  it('Asaas fora do ar na hora → pausa da IA fica, sem nota (continua visível no painel)', () => {
+    expect(pauseAfterSettle(ia, { firstSettle: true, stillOwes: false, asaasOpen: null })).toBe('none')
   })
 
   it('pausa da equipe nunca some sozinha', () => {
@@ -23,7 +31,7 @@ describe('pauseAfterSettle — a pausa da IA sai quando ele quita; a da equipe f
   })
 
   it('linha antiga (sem origem, antes da migração 0177): decide pelo motivo', () => {
-    expect(pauseAfterSettle({ paused: true, pausedSource: null, pausedReason: 'Cliente contesta a cobrança' }, { firstSettle: true, stillOwes: false })).toBe('lift')
+    expect(pauseAfterSettle({ paused: true, pausedSource: null, pausedReason: 'Cliente contesta a cobrança' }, { firstSettle: true, stillOwes: false, asaasOpen: 0 })).toBe('lift')
     expect(pauseAfterSettle({ paused: true, pausedSource: null, pausedReason: 'não cobrar' }, { firstSettle: true, stillOwes: false })).toBe('keep_human')
   })
 

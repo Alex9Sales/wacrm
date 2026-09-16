@@ -575,6 +575,43 @@ describe('duplicateSuspects — o caso Renato ×3', () => {
     ).toBe(false)
   })
 
+  it('16/09: mesma mensalidade nas DUAS contas do Asaas (GoLink) não é duplicata', () => {
+    expect(
+      duplicateSuspects([
+        { customerId: 'cus_a', connectionId: 'conta-1', value: 350, dueDate: '2026-09-15' },
+        { customerId: 'cus_b', connectionId: 'conta-2', value: 350, dueDate: '2026-09-15' },
+      ]),
+    ).toBe(false)
+    expect(
+      duplicateSuspects([
+        { customerId: 'cus_a', connectionId: 'conta-1', value: 350, dueDate: '2026-09-15' },
+        { customerId: 'cus_b', connectionId: 'conta-1', value: 350, dueDate: '2026-09-15' },
+      ]),
+    ).toBe(true)
+  })
+
+  it('mesma pessoa com CPF e CNPJ (duas empresas) na mesma conta não é duplicata; mesmo documento ou sem documento é', () => {
+    const base = { connectionId: 'conta-1', value: 99.9, dueDate: '2026-09-10' }
+    expect(
+      duplicateSuspects([
+        { ...base, customerId: 'cus_pf', document: '123.456.789-09' },
+        { ...base, customerId: 'cus_pj', document: '12.345.678/0001-95' },
+      ]),
+    ).toBe(false)
+    expect(
+      duplicateSuspects([
+        { ...base, customerId: 'cus_a', document: '123.456.789-09' },
+        { ...base, customerId: 'cus_b', document: '12345678909' },
+      ]),
+    ).toBe(true)
+    expect(
+      duplicateSuspects([
+        { ...base, customerId: 'cus_a', document: '123.456.789-09' },
+        { ...base, customerId: 'cus_orfao', document: null },
+      ]),
+    ).toBe(true)
+  })
+
   it('sem cadastro ou sem vencimento não conta', () => {
     expect(duplicateSuspects([{ customerId: null, value: 10, dueDate: '2026-10-04' }, { customerId: 'x', value: 10, dueDate: null }])).toBe(false)
   })

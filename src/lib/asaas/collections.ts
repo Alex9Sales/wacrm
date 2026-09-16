@@ -501,6 +501,29 @@ export async function updatePaymentDueDate(cred: AsaasCredential, paymentId: str
   return asaasSend<AsaasPayment>(cred, 'PUT', `/payments/${encodeURIComponent(paymentId)}`, { dueDate })
 }
 
+/**
+ * Quantas cobranças o cliente ainda deve nesta conta: vencidas (qualquer uma)
+ * + a vencer que NÃO são mensalidade de assinatura — a próxima mensalidade
+ * existe sempre, não é sinal de acordo em andamento.
+ * null = não deu para saber (a carteira do CRM só espelha as vencidas; quem
+ * decide tirar pausa precisa da resposta do Asaas, não de um palpite).
+ */
+export async function countOpenPaymentsForCustomer(cred: AsaasCredential, customerId: string, budgetMs = 8_000): Promise<number | null> {
+  // Orçamento das DUAS consultas juntas (o webhook tem pressa).
+  const deadline = Date.now() + budgetMs
+  try {
+    const overdue = await asaasGet<AsaasList<AsaasPayment>>(cred, '/payments', { customer: customerId, status: 'OVERDUE', limit: 1 }, budgetMs)
+    const vencidas = typeof overdue.totalCount === 'number' ? overdue.totalCount : overdue.data.length + (overdue.hasMore ? 1 : 0)
+    if (vencidas > 0) return vencidas
+    const left = deadline - Date.now()
+    if (left < 500) return null
+    const pending = await asaasGet<AsaasList<AsaasPayment>>(cred, '/payments', { customer: customerId, status: 'PENDING', limit: 100 }, left)
+    return pending.data.filter((p) => !p.subscription).length
+  } catch {
+    return null
+  }
+}
+
 /** Cobranças PENDING que vencem entre as datas (lembrete antes do vencimento). */
 export async function listPendingDueBetween(cred: AsaasCredential, fromDate: string, untilDate: string): Promise<AsaasPayment[]> {
   const out: AsaasPayment[] = []

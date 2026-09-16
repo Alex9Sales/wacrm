@@ -128,6 +128,8 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     .select({
       contactId: asaasCharges.contactId,
       asaasCustomerId: asaasCharges.asaasCustomerId,
+      connectionId: asaasCharges.connectionId,
+      cpfCnpj: asaasCharges.cpfCnpj,
       contactName: contacts.name,
       customerName: asaasCharges.customerName,
       optedOut: contacts.optedOut,
@@ -217,6 +219,8 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     }
     d.charges.push({
       customerId: r.asaasCustomerId,
+      connectionId: r.connectionId,
+      document: r.cpfCnpj,
       customerName: r.customerName,
       value: Number(r.value ?? 0),
       interestValue: r.interestValue != null ? Number(r.interestValue) : null,
