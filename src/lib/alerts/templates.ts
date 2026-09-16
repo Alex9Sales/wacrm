@@ -45,25 +45,44 @@ Entre na conversa pelo FluxiaCRM pra continuar o atendimento.`,
 Marcado pela página pública de agendamento.`,
 }
 
+const VAR_RE = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g
+/** Separador entre duas variáveis na mesma linha ("{{cliente}} · {{telefone}}"). */
+const SEP = String.raw`[ \t]*(?:·|•|\||—|–|-|,)[ \t]*`
+
+/** Valor numa linha só: quebra vira " / ". 16/09 (caso Gisele): resumo com a
+ *  localização da cliente quebrava o aviso no meio e, em template
+ *  personalizado, fechava o negrito antes da hora. */
+const flat = (v: string | undefined): string =>
+  (v ?? '')
+    .replace(/[ \t]*(?:\r?\n[ \t]*)+/g, ' / ')
+    .replace(/\s+/g, ' ')
+    .replace(/^(?: \/ )+|(?: \/ )+$/g, '')
+    .trim()
+
+const escapeRe = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+
 /** Substitui {{variavel}} pelos valores. Linha que TINHA variável e ficou sem
  *  nenhum dado (todas as vars da linha vazias) é removida — "📝 {{notas}}"
- *  some quando não há notas. */
+ *  some quando não há notas. Variável vazia leva junto o separador vizinho:
+ *  "👤 {{cliente}} · {{telefone}}" sem nome sai "👤 5567…", não "👤  · 5567…". */
 export function renderAlertTemplate(
   template: string,
   vars: Record<string, string>,
 ): string {
   const lines = template.split('\n').map((line) => {
-    const varNames = [...line.matchAll(/\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g)].map(
-      (m) => m[1],
-    )
-    const rendered = line.replace(
-      /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g,
-      (_, k: string) => (vars[k] ?? '').trim(),
-    )
-    if (varNames.length > 0 && varNames.every((k) => !(vars[k] ?? '').trim())) {
+    const varNames = [...line.matchAll(VAR_RE)].map((m) => m[1])
+    if (varNames.length > 0 && varNames.every((k) => !flat(vars[k]))) {
       return null
     }
-    return rendered
+    let l = line
+    for (const k of varNames) {
+      if (flat(vars[k])) continue
+      const v = String.raw`\{\{\s*${escapeRe(k)}\s*\}\}`
+      l = l
+        .replace(new RegExp(`${v}${SEP}(?=\\{\\{)`), '')
+        .replace(new RegExp(`${SEP}${v}`), '')
+    }
+    return l.replace(VAR_RE, (_, k: string) => flat(vars[k])).replace(/[ \t]+$/, '')
   })
   return lines
     .filter((l): l is string => l !== null)

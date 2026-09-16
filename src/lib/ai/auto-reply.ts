@@ -1,4 +1,4 @@
-import { and, desc, eq, gt, inArray, sql } from 'drizzle-orm'
+import { and, desc, eq, gt, inArray, or, sql } from 'drizzle-orm'
 import { db, automations, conversations, contacts, messages as messagesTable, aiConfigs, agentActionRequests } from '@/db'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
 import { firstOrNull } from '@/db/helpers'
@@ -43,6 +43,7 @@ import { latestUserMessage } from './query'
 import { extractMaterialDirectives, findMaterialByName, listMaterialsForAgent } from './materials'
 import { acquireReplyLock, bumpCounter, getCoveredUntil, kvDel, releaseReplyLock, setCoveredUntil } from './reply-marker'
 import { STALE_DROPS_TTL_SECONDS, staleDropsKey, staleReplyDecision, turnIsDroppable } from './stale-reply'
+import { alertContactName, buildClientTail } from '@/lib/alerts/alert-text'
 import { isNewEpisode } from './reply-episode'
 import { enqueueAiReplyDebounced } from '@/lib/queue/queues'
 
@@ -572,6 +573,9 @@ export async function dispatchInboundToAiReply(
             and(
               eq(messagesTable.conversationId, conversationId),
               eq(messagesTable.senderType, 'agent'),
+              // Nota interna não é resposta ao cliente (ex.: "🔇 A IA não
+              // conseguiu ouvir" é gravada como 'agent') — não segura a IA.
+              eq(messagesTable.isInternal, false),
               sql`${messagesTable.createdAt} > now() - make_interval(mins => ${bargeInMin})`,
             ),
           )
@@ -934,7 +938,7 @@ export async function dispatchInboundToAiReply(
           await sendOwnerAlert(accountId, 'demo', {
             cliente: c?.name ?? '',
             telefone: c?.phone ?? '',
-            empresa: c?.company ?? c?.name ?? '',
+            empresa: c?.company?.trim() || alertContactName(c?.name, c?.phone),
             resumo: dirs.ownerAlert.message,
           })
         } catch (err) {
@@ -1255,13 +1259,36 @@ export async function dispatchInboundToAiReply(
         )
         // Resumo automático: últimas falas do CLIENTE (o modelo raramente manda
         // resumo no handoff, e o dono precisa de contexto no aviso — Alex 26/08).
-        const clientTail = messages
-          .filter((m) => m.role === 'user')
-          .slice(-4)
-          .map((m) => stripLeadingTimestamp(String(m.content)).slice(0, 90))
-          .filter(Boolean)
-          .join(' · ')
-          .slice(0, 380)
+        // 16/09 (caso Gisele): do BANCO, não do contexto do prompt — cada fala
+        // numa linha, localização com o link inteiro, áudio pela transcrição,
+        // corte em palavra (ver lib/alerts/alert-text.ts).
+        const lastFromCustomer = await db
+          .select({
+            contentType: messagesTable.contentType,
+            contentText: messagesTable.contentText,
+            transcription: messagesTable.transcription,
+          })
+          .from(messagesTable)
+          .where(
+            and(
+              eq(messagesTable.conversationId, conversationId),
+              eq(messagesTable.senderType, 'customer'),
+              eq(messagesTable.isInternal, false),
+            ),
+          )
+          .orderBy(desc(messagesTable.createdAt))
+          .limit(8)
+          .catch((err) => {
+            console.error('[ai auto-reply] resumo do handoff: leitura das falas falhou:', err instanceof Error ? err.message : err)
+            return []
+          })
+        const clientTail = buildClientTail(
+          lastFromCustomer.reverse().map((m) => ({
+            contentType: m.contentType ?? null,
+            contentText: m.contentText ?? null,
+            transcription: m.transcription ?? null,
+          })),
+        )
         // 16/09: o resumo ia SÓ pro WhatsApp do dono — na conversa a equipe via
         // a despedida e a IA desligada, sem motivo. Agora fica também na tela.
         // Prefixo diferente do "Transferido pela IA" (transferência por
@@ -1274,7 +1301,8 @@ export async function dispatchInboundToAiReply(
           cliente: c?.name ?? '',
           telefone: c?.phone ?? '',
           motivo: 'A IA pediu um humano nesta conversa',
-          resumo: clientTail ? `Cliente disse: ${clientTail}` : text || '',
+          // Sem fala do cliente, a linha some — a despedida do modelo não é resumo.
+          resumo: clientTail ? `Cliente disse: ${clientTail}` : '',
         })
       } catch (err) {
         console.error('[ai auto-reply] aviso de handoff falhou:', err)
@@ -1380,7 +1408,12 @@ export async function dispatchInboundToAiReply(
         dirs.note
       ),
     })
-    if (droppable) {
+    // Roda DUAS vezes: antes de ocupar a vaga do limite e de novo depois do
+    // "digitando…" da 1ª mensagem (16/09, caso Marcia: "Nome dela Nádia" chegou
+    // 1,4 s depois de a geração terminar, durante a pausa de digitação, e a IA
+    // perguntou o nome de novo).
+    const dropIfStale = async (): Promise<boolean> => {
+      if (!droppable) return false
       try {
         const newest = firstOrNull(
           await db
@@ -1392,6 +1425,15 @@ export async function dispatchInboundToAiReply(
                 eq(messagesTable.isInternal, false),
                 inArray(messagesTable.senderType, ['customer', 'agent']),
                 gt(messagesTable.createdAt, snapshotAt.toISOString()),
+                // Só conta o que faria a IA responder: atendente, texto, mídia
+                // com legenda ou lida (transcrição/visão). Áudio que a IA não
+                // ouviu, figurinha e vídeo sem legenda não derrubam a resposta
+                // pronta (revisão 16/09).
+                or(
+                  eq(messagesTable.senderType, 'agent'),
+                  sql`coalesce(btrim(${messagesTable.transcription}), '') <> ''`,
+                  sql`(${messagesTable.contentType} NOT IN ('audio', 'voice', 'ptt') AND coalesce(btrim(${messagesTable.contentText}), '') <> '' AND ${messagesTable.contentText} !~ '^\[[a-z_]+\]$')`,
+                ),
               ),
             )
             .orderBy(desc(messagesTable.createdAt))
@@ -1409,18 +1451,20 @@ export async function dispatchInboundToAiReply(
             : pre
         if (decision === 'drop_quiet') {
           console.log('[ai auto-reply] humano escreveu durante a geração — resposta descartada:', conversationId)
-          return
+          return true
         }
         if (decision === 'drop_regenerate') {
           console.log('[ai auto-reply] cliente escreveu durante a geração — resposta velha descartada, rechecagem agendada:', conversationId)
           await enqueueAiReplyDebounced({ ...args, raceChase: true }, REPLY_LOCK_RETRY_MS)
-          return
+          return true
         }
       } catch (err) {
         // Na dúvida, manda: resposta repetida é menos ruim que resposta engolida.
         console.error('[ai auto-reply] checagem de resposta velha falhou (segue o envio):', err instanceof Error ? err.message : err)
       }
+      return false
     }
+    if (await dropIfStale()) return
 
     // Atomically claim a reply slot: the cap check + increment happen in
     // one UPDATE, so concurrent inbounds can never overshoot the cap. If
@@ -1511,6 +1555,8 @@ export async function dispatchInboundToAiReply(
     let signed = false
 
     const parts = splitIntoMessages(body)
+    /** Alguma parte já saiu? Depois disso a resposta não é mais descartada. */
+    let sentAny = false
     for (const rawPart of parts) {
       // Foto de produto (agente de Vendas): uma parte que é só "[[foto:Nome]]"
       // vira ANEXO de imagem — resolve a URL da foto no catálogo e envia como
@@ -1531,6 +1577,7 @@ export async function dispatchInboundToAiReply(
               link: photo.url,
               caption: photo.name,
             })
+            sentAny = true
           } catch (err) {
             console.error('[ai auto-reply] envio de foto do produto falhou:', err)
           }
@@ -1563,6 +1610,17 @@ export async function dispatchInboundToAiReply(
       )
       if (stillClear?.h && new Date(stillClear.h).getTime() > Date.now()) return
 
+      // 🕰️ Mensagem nova chegou durante o "digitando…" desta 1ª parte? A
+      // resposta ficou velha: devolve a vaga do limite e não manda.
+      if (!sentAny && (await dropIfStale())) {
+        await db
+          .update(conversations)
+          .set({ aiReplyCount: sql`GREATEST(${conversations.aiReplyCount} - 1, 0)` })
+          .where(eq(conversations.id, conversationId))
+          .catch(() => {})
+        return
+      }
+
       if (
         wantsAudio &&
         (ttsKey || (elevenKey && config.voiceId)) &&
@@ -1585,6 +1643,7 @@ export async function dispatchInboundToAiReply(
             // O texto falado vira a transcrição do áudio no CRM (igual inbound).
             transcription: clean,
           })
+          sentAny = true
           continue // enviou como áudio; não manda o texto também
         } catch (err) {
           console.error('[ai auto-reply] TTS falhou, enviando como texto:', err)
@@ -1604,6 +1663,7 @@ export async function dispatchInboundToAiReply(
         contactId,
         text: textToSend,
       })
+      sentAny = true
     }
 
     // 📎 Materiais pedidos pela IA ([[ENVIAR:nome]]) — depois do texto, na ordem.
@@ -1635,8 +1695,9 @@ export async function dispatchInboundToAiReply(
 
     // Respondemos tudo que estava no histórico até `snapshotAt`.
     await setCoveredUntil(conversationId, snapshotAt)
-    // Resposta saiu: zera a contagem de descartes seguidos (stale-reply.ts).
-    if (droppable) await kvDel(staleDropsKey(conversationId))
+    // Resposta saiu: zera a contagem de descartes seguidos (stale-reply.ts) —
+    // qualquer resposta, não só a descartável, senão o freio fica armado.
+    await kvDel(staleDropsKey(conversationId))
 
     // Depois de enviar: etiqueta, cria card, agenda, transfere OU encerra
     // (transfer tem prioridade — se transferiu, não resolve/move).

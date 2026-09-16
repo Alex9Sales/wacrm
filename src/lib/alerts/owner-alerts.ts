@@ -12,6 +12,7 @@ import { listChannels } from '@/lib/channels/channels'
 import { getProvider } from '@/lib/channels/registry'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { markSelfMessage } from '@/lib/ai/self-message'
+import { alertContactName } from './alert-text'
 import {
   DEFAULT_ALERT_TEMPLATES,
   renderAlertTemplate,
@@ -64,7 +65,18 @@ export async function sendOwnerAlert(
     if (!phone || !s[KIND_TOGGLE[kind]]) return false
 
     const template = (s[KIND_TEMPLATE[kind]] || '').trim() || DEFAULT_ALERT_TEMPLATES[kind]
-    const text = renderAlertTemplate(template, vars)
+    // Nome sem letra ("." do perfil do WhatsApp) não é nome: a linha sai só com
+    // o telefone (16/09, caso Gisele: "👤 . · 5567…"). Vale pra todo aviso.
+    const clean = { ...vars }
+    for (const k of ['cliente', 'nome'] as const) {
+      if (!(k in clean)) continue
+      const nice = alertContactName(clean[k], clean.telefone)
+      // Sem telefone pra identificar, fica o nome cru (ex.: "Ⓜⓐⓡⓘⓐ") — só
+      // some quando não sobra nada além de pontuação/espaço.
+      const raw = (clean[k] ?? '').trim()
+      clean[k] = nice || (!clean.telefone?.trim() && /[^\s\p{P}]/u.test(raw) ? raw : '')
+    }
+    const text = renderAlertTemplate(template, clean)
     if (!text) return false
 
     const channels = await listChannels(accountId)

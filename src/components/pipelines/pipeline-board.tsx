@@ -42,6 +42,10 @@ interface PipelineBoardProps {
   staleDays?: number;
   /** Dicas da IA por negócio (próximo passo + nº de sugestões pendentes). */
   aiHints?: Record<string, DealAiHint>;
+  /** Ação do menu do card mudou algo no servidor → a página recarrega os negócios. */
+  onDealChanged?: () => void;
+  /** Card excluído → a página tira da lista na hora. */
+  onDealDeleted?: (dealId: string) => void;
 }
 
 export function PipelineBoard({
@@ -55,6 +59,8 @@ export function PipelineBoard({
   onCreateTask,
   staleDays,
   aiHints,
+  onDealChanged,
+  onDealDeleted,
 }: PipelineBoardProps) {
   const { defaultCurrency } = useAuth();
   // Resolvido UMA vez aqui e passado pra baixo (StageColumn → card), pra não
@@ -160,6 +166,8 @@ export function PipelineBoard({
               onCreateTask={onCreateTask}
               showStats={showStats}
               aiHints={aiHints}
+              onDealChanged={onDealChanged}
+              onDealDeleted={onDealDeleted}
             />
           );
         })}
@@ -242,6 +250,8 @@ function StageColumn({
   callingEnabled,
   staleDays,
   aiHints,
+  onDealChanged,
+  onDealDeleted,
 }: {
   stage: PipelineStage;
   deals: Deal[];
@@ -256,6 +266,8 @@ function StageColumn({
   callingEnabled?: boolean;
   staleDays?: number;
   aiHints?: Record<string, DealAiHint>;
+  onDealChanged?: () => void;
+  onDealDeleted?: (dealId: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: stage.id });
   const [bcastOpen, setBcastOpen] = useState(false);
@@ -361,6 +373,8 @@ function StageColumn({
               onCreateTask={onCreateTask}
               callingEnabled={callingEnabled} staleDays={staleDays}
               aiHint={aiHints?.[deal.id]}
+              onChanged={onDealChanged}
+              onDeleted={onDealDeleted}
             />
           ))
         )}
@@ -397,6 +411,8 @@ function DraggableDealCard({
   callingEnabled,
   staleDays,
   aiHint,
+  onChanged,
+  onDeleted,
 }: {
   deal: Deal;
   stage: PipelineStage;
@@ -406,6 +422,8 @@ function DraggableDealCard({
   callingEnabled?: boolean;
   staleDays?: number;
   aiHint?: DealAiHint;
+  onChanged?: () => void;
+  onDeleted?: (dealId: string) => void;
 }) {
   const { attributes, listeners, setNodeRef, isDragging } = useDraggable({
     id: deal.id,
@@ -428,6 +446,8 @@ function DraggableDealCard({
         onCreateTask={onCreateTask}
         callingEnabled={callingEnabled} staleDays={staleDays}
         aiHint={aiHint}
+        onChanged={onChanged}
+        onDeleted={onDeleted}
       />
     </div>
   );

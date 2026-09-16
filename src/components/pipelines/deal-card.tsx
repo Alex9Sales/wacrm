@@ -36,6 +36,12 @@ interface DealCardProps {
   staleDays?: number;
   /** Dica da IA p/ este negócio (próximo passo sugerido + nº de sugestões). */
   aiHint?: DealAiHint;
+  /** Algo mudou no servidor (transferir/duplicar/pausar/follow-up). O quadro
+   *  guarda os negócios em useState e router.refresh() NÃO recarrega isso —
+   *  16/09: o card excluído só sumia com F5. Sem callback, cai no refresh. */
+  onChanged?: () => void;
+  /** Negócio excluído (ou que já não existia): o quadro tira o card na hora. */
+  onDeleted?: (dealId: string) => void;
 }
 
 function formatDate(dateStr: string) {
@@ -92,8 +98,11 @@ export function DealCard({
   callingEnabled,
   staleDays,
   aiHint,
+  onChanged,
+  onDeleted,
 }: DealCardProps) {
   const router = useRouter();
+  const changed = () => (onChanged ? onChanged() : router.refresh());
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
   const assigneeLabel = deal.assignee?.full_name || null;
   const openTasks = taskCount?.open ?? 0;
@@ -176,27 +185,47 @@ export function DealCard({
     if (!confirm(`Excluir o negócio "${deal.title}"? Esta ação não pode ser desfeita.`))
       return;
     setBusy(true);
-    const { error } = await deleteDeal(deal.id);
-    setBusy(false);
-    setMenuPos(null);
-    if (error) toast.error(error);
-    else {
-      toast.success("Negócio excluído");
-      router.refresh();
+    let res: Awaited<ReturnType<typeof deleteDeal>>;
+    try {
+      res = await deleteDeal(deal.id);
+    } catch {
+      toast.error("Falha ao excluir o negócio. Recarregue a página e tente de novo.");
+      return;
+    } finally {
+      // busy é um só pro card: sem finally, uma falha de rede travava o menu.
+      setBusy(false);
+      setMenuPos(null);
     }
+    const { error, notFound } = res;
+    if (error && !notFound) {
+      toast.error(error);
+      return;
+    }
+    if (notFound) toast.info("Esse negócio já tinha sido excluído");
+    else toast.success("Negócio excluído");
+    if (onDeleted) onDeleted(deal.id);
+    else router.refresh();
   };
 
   const doTransfer = async (userId: string) => {
     if (busy) return;
     setBusy(true);
-    const { error } = await transferDeal(deal.id, userId);
-    setBusy(false);
-    setMenuPos(null);
-    setShowTransfer(false);
+    let res: Awaited<ReturnType<typeof transferDeal>>;
+    try {
+      res = await transferDeal(deal.id, userId);
+    } catch {
+      toast.error("Falha ao transferir. Recarregue a página e tente de novo.");
+      return;
+    } finally {
+      setBusy(false);
+      setMenuPos(null);
+      setShowTransfer(false);
+    }
+    const { error } = res;
     if (error) toast.error(error);
     else {
       toast.success("Negócio transferido");
-      router.refresh();
+      changed();
     }
   };
 
@@ -506,7 +535,7 @@ export function DealCard({
                 if (res.error) toast.error(res.error);
                 else {
                   toast.success(iso ? "Follow-up atualizado" : "Follow-up removido");
-                  router.refresh();
+                  changed();
                 }
               }}
               className="h-6 rounded border border-border bg-background px-1 text-[11px] text-foreground"
@@ -743,14 +772,26 @@ export function DealCard({
         <button
           type="button"
           onClick={async () => {
+            // Sem trava, dois cliques antes da resposta criavam duas cópias.
+            if (busy) return;
             setMenuPos(null);
-            const { error } = await duplicateDeal(deal.id);
+            setBusy(true);
+            let res: Awaited<ReturnType<typeof duplicateDeal>>;
+            try {
+              res = await duplicateDeal(deal.id);
+            } catch {
+              toast.error("Falha ao duplicar. Recarregue a página e tente de novo.");
+              return;
+            } finally {
+              setBusy(false);
+            }
+            const { error } = res;
             if (error) {
               toast.error(error);
               return;
             }
             toast.success("Negócio duplicado");
-            router.refresh();
+            changed();
           }}
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted"
         >
@@ -760,15 +801,26 @@ export function DealCard({
         <button
           type="button"
           onClick={async () => {
+            if (busy) return;
             setMenuPos(null);
             const paused = !deal.paused_at;
-            const { error } = await setDealPaused(deal.id, paused);
+            setBusy(true);
+            let res: Awaited<ReturnType<typeof setDealPaused>>;
+            try {
+              res = await setDealPaused(deal.id, paused);
+            } catch {
+              toast.error("Falha ao pausar/retomar. Recarregue a página e tente de novo.");
+              return;
+            } finally {
+              setBusy(false);
+            }
+            const { error } = res;
             if (error) {
               toast.error(error);
               return;
             }
             toast.success(paused ? "Negócio pausado" : "Negócio retomado");
-            router.refresh();
+            changed();
           }}
           className="flex w-full items-center gap-2 px-3 py-1.5 text-left hover:bg-muted"
         >

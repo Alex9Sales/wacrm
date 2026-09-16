@@ -6,11 +6,21 @@ describe('detectCopyCode — Pix copia e cola', () => {
   const pix =
     '00020101021226960014br.gov.bcb.pix2574api.developer.btgpactual.com/pc/p/v2/cobv/2235d26ddab0472ca6cdd6ce3ea982fe5204000053039865802BR5925ISAAC LOGIA SERVICO6009SAO PAULO62070503***6304F2D6';
 
-  it('detects a BR Code and strips whitespace', () => {
+  it('detects a BR Code and keeps it EXACTLY (spaces in name/city are part of the CRC)', () => {
     const r = detectCopyCode(pix);
     expect(r?.label).toBe('Pix copia e cola');
-    expect(r?.code).not.toMatch(/\s/);
-    expect(r?.code).toContain('br.gov.bcb.pix');
+    expect(r?.code).toBe(pix);
+    expect(r?.code).toContain('ISAAC LOGIA SERVICO');
+  });
+
+  it('a line break inserted by the chat is removed, nothing else', () => {
+    const wrapped = `${pix.slice(0, 60)}\n${pix.slice(60)}`;
+    expect(detectCopyCode(wrapped)?.code).toBe(pix);
+  });
+
+  it('text that merely CONTAINS a Pix stays text (the card used to hide the rest)', () => {
+    expect(detectCopyCode(`Segue o Pix: ${pix}`)).toBeNull();
+    expect(detectCopyCode(`${pix}\nVence dia 20`)).toBeNull();
   });
 
   it('is case-insensitive on the domain marker', () => {

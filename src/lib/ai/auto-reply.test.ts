@@ -37,6 +37,9 @@ const h = vi.hoisted(() => ({
       senderType: string
       createdAt?: string
     }[],
+    // Respostas em ORDEM para as leituras com orderBy+limit (guard, checagens
+    // de resposta velha…). Vazia = cai em lastMessages.
+    orderedReads: [] as { senderType: string; createdAt?: string }[][],
     claim: true as boolean,
     updatePayload: null as Record<string, unknown> | null,
     sqlCalls: [] as string[],
@@ -100,8 +103,12 @@ vi.mock('@/db', async (importOriginal) => {
       // Two select chains: automations (auto-responder guard) and
       // conversations (eligibility read). Distinguished by the table
       // passed to .from() — real table objects survive via importOriginal.
-      select: () => ({
+      select: (fields?: Record<string, unknown>) => ({
         from: (table: unknown) => {
+          // Leituras "quem falou e quando" (guard anti-eco e checagens de
+          // resposta velha) podem vir de uma fila ordenada no teste.
+          const isWhoWhen =
+            !!fields && Object.keys(fields).sort().join(',') === 'createdAt,senderType'
           // The eligibility read joins contacts (for is_group); the automations
           // guard doesn't. `innerJoin` returns the same chain so both shapes
           // resolve through the same where().limit().
@@ -126,7 +133,12 @@ vi.mock('@/db', async (importOriginal) => {
               },
               // 🏁 guard anti-eco (messages + orderBy + limit): última msg.
               orderBy: () => ({
-                limit: () => Promise.resolve(h.state.lastMessages ?? []),
+                limit: () =>
+                  Promise.resolve(
+                    isWhoWhen && h.state.orderedReads.length > 0
+                      ? (h.state.orderedReads.shift() ?? [])
+                      : (h.state.lastMessages ?? []),
+                  ),
               }),
             }),
           }
@@ -188,6 +200,7 @@ beforeEach(() => {
   h.state.recentHumanMsgs = []
   h.state.lastMessages = [{ senderType: 'customer', createdAt: '2026-09-01T15:00:00.000Z' }]
   h.state.coveredUntil = null
+  h.state.orderedReads = []
   h.setCoveredUntil.mockReset()
   h.enqueueRecheck.mockReset()
   h.bumpCounter.mockReset()
@@ -285,6 +298,20 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     h.bumpCounter.mockResolvedValue(undefined)
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).toHaveBeenCalled()
+  })
+
+  it('🕰️ mensagem chegou durante o "digitando…" (Marcia 16/09) → não manda e devolve a vaga', async () => {
+    const antes = { senderType: 'customer', createdAt: '2026-09-01T15:00:00.000Z' }
+    h.state.orderedReads = [
+      [antes], // guard anti-eco: última msg é do cliente
+      [], // 1ª checagem (antes da vaga): nada novo ainda
+      [{ senderType: 'customer', createdAt: DEPOIS_DA_LEITURA }], // depois da pausa: chegou
+    ]
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.state.sqlCalls).toHaveLength(1) // a vaga foi ocupada…
+    expect(h.engineSendText).not.toHaveBeenCalled() // …mas nada saiu
+    expect(Object.keys(h.state.updatePayload ?? {})).toEqual(['aiReplyCount']) // …e foi devolvida
+    expect(h.enqueueRecheck).toHaveBeenCalledWith(expect.objectContaining({ raceChase: true }), expect.any(Number))
   })
 
   it('🕰️ turno com efeito (nota pra equipe) nunca é descartado', async () => {

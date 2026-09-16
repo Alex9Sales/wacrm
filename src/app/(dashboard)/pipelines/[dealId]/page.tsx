@@ -2189,6 +2189,11 @@ export default function DealDetailPage() {
             setEditOpen(false);
             void reload();
           }}
+          // Excluído: volta pro funil (carregamento completo, lista nova) em vez
+          // de ficar na tela "Negócio não encontrado ou você não tem acesso".
+          onDeleted={() => {
+            window.location.href = "/pipelines";
+          }}
         />
       )}
 

@@ -455,12 +455,47 @@ export default function PipelinesPage() {
     setStages(await loadStages(selectedPipelineId));
   }, [loadStages, selectedPipelineId]);
 
+  // Resposta velha não sobrescreve a nova: troca de funil no meio do refresh,
+  // ou um refresh que saiu ANTES de uma exclusão (traria o card de volta).
+  const refreshSeq = useRef(0);
+  /** Refreshes ainda sem resposta (o arraste invalida e pede outro depois). */
+  const refreshInFlight = useRef(0);
+  /** Excluídos nesta tela: um refresh que saiu antes da exclusão não traz de volta. */
+  const deletedIds = useRef(new Set<string>());
+  const pipelineRef = useRef(selectedPipelineId);
+  useEffect(() => {
+    pipelineRef.current = selectedPipelineId;
+  }, [selectedPipelineId]);
+
   const refreshDeals = useCallback(async () => {
-    if (!selectedPipelineId) return;
-    const d = await loadDeals(selectedPipelineId);
+    const pid = selectedPipelineId;
+    if (!pid) return;
+    const seq = ++refreshSeq.current;
+    refreshInFlight.current++;
+    let d: Deal[];
+    try {
+      // Sem o `.catch(() => [])` do loadDeals: agora o refresh roda depois de
+      // toda ação do card, e uma falha momentânea não pode esvaziar o quadro.
+      d = await listDeals(pid);
+    } catch {
+      toast.error("Não foi possível atualizar o funil. Tente o botão de atualizar.");
+      return;
+    } finally {
+      refreshInFlight.current--;
+    }
+    if (seq !== refreshSeq.current || pipelineRef.current !== pid) return;
+    d = d.filter((x) => !deletedIds.current.has(x.id));
     setDeals(d);
     void loadTaskCounts(d);
-  }, [loadDeals, loadTaskCounts, selectedPipelineId]);
+  }, [loadTaskCounts, selectedPipelineId]);
+
+  // Excluiu (menu do card ou painel): some da tela NA HORA. 16/09 (Família do
+  // Gás, card duplicado do Toninho): só saía com F5 — o menu chamava
+  // router.refresh(), que não recarrega o estado desta página (é cliente).
+  const handleDealDeleted = useCallback((dealId: string) => {
+    deletedIds.current.add(dealId);
+    setDeals((prev) => prev.filter((d) => d.id !== dealId));
+  }, []);
 
   // Atualizar o funil inteiro (etapas + negócios) — botão manual no header, pra
   // pegar o que mudou em outra aba/pessoa sem recarregar a página.
@@ -488,6 +523,12 @@ export default function PipelinesPage() {
 
   const handleDealMoved = useCallback(
     async (dealId: string, newStageId: string) => {
+      // Um refresh em voo (pausar/duplicar/transferir de outro card) ainda traz
+      // ESTE card na etapa antiga e desfaria o arraste: invalida e, depois de
+      // gravar o movimento, pede outro (as Server Actions rodam em fila, então
+      // o novo vem com o movimento e com a mudança do outro card).
+      const hadInflight = refreshInFlight.current > 0;
+      refreshSeq.current++;
       // Optimistic update — board already animated; just persist.
       setDeals((prev) =>
         prev.map((d) => (d.id === dealId ? { ...d, stage_id: newStageId } : d)),
@@ -495,7 +536,9 @@ export default function PipelinesPage() {
       const { error } = await moveDealToStage(dealId, newStageId);
       if (error) {
         toast.error("Não foi possível mover o negócio");
-        refreshDeals();
+        void refreshDeals();
+      } else if (hadInflight) {
+        void refreshDeals();
       }
     },
     [refreshDeals],
@@ -980,6 +1023,8 @@ export default function PipelinesPage() {
               onCreateTask={handleCreateTask}
               staleDays={staleDays}
               aiHints={aiHints}
+              onDealChanged={refreshDeals}
+              onDealDeleted={handleDealDeleted}
             />
           )}
         </>
@@ -1050,6 +1095,7 @@ export default function PipelinesPage() {
         stages={stages}
         defaultStageId={defaultStageId}
         onSaved={refreshDeals}
+        onDeleted={handleDealDeleted}
       />
 
       {/* Task creator — reuses the Tarefas TaskForm dialog, prefilled with

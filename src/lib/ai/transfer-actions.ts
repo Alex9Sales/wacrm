@@ -17,6 +17,7 @@ import {
   messages,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
+import { alertContactName, oneLineSummary } from '@/lib/alerts/alert-text'
 
 function norm(s: string): string {
   return s
@@ -74,10 +75,11 @@ export async function applyTransfer(input: {
       : null
     const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
     await sendOwnerAlert(accountId, 'handoff', {
-      cliente: contact?.name?.trim() || 'Contato',
+      cliente: contact?.name ?? '',
       telefone: contact?.phone ?? '',
       motivo: tagName,
-      resumo: summary?.trim() ?? '',
+      // O resumo vem do modelo e pode ter quebra de linha/link: uma linha só.
+      resumo: oneLineSummary(summary),
     })
   } catch (err) {
     console.error('[ai transfer] aviso ao responsável falhou:', err)
@@ -170,7 +172,7 @@ export async function applyTransfer(input: {
             .where(eq(contacts.id, contactId))
             .limit(1),
         )
-        const who = contact?.name?.trim() || contact?.phone || 'um contato'
+        const who = alertContactName(contact?.name, contact?.phone) || contact?.phone || 'um contato'
         await db.insert(notifications).values({
           accountId,
           userId: chosen,

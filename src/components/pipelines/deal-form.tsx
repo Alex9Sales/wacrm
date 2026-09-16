@@ -80,6 +80,9 @@ interface DealFormProps {
    *  pra o card do funil já mostrar a bolinha de chat. */
   defaultConversationId?: string | null;
   onSaved: () => void;
+  /** Chamado NO LUGAR de onSaved quando o negócio é excluído (ou já não
+   *  existia): o quadro tira o card; a página do negócio volta pro funil. */
+  onDeleted?: (dealId: string) => void;
 }
 
 export function DealForm({
@@ -92,6 +95,7 @@ export function DealForm({
   defaultContactId,
   defaultConversationId,
   onSaved,
+  onDeleted,
 }: DealFormProps) {
   const { accountId, defaultCurrency } = useAuth();
 
@@ -365,16 +369,18 @@ export function DealForm({
   async function handleDelete() {
     if (!deal) return;
     setDeleting(true);
-    const { error } = await deleteDeal(deal.id);
+    const { error, notFound } = await deleteDeal(deal.id);
     setDeleting(false);
-    if (error) {
-      toast.error("Falha ao excluir negócio");
+    if (error && !notFound) {
+      toast.error(error);
       return;
     }
-    toast.success("Negócio excluído");
+    if (notFound) toast.info("Esse negócio já tinha sido excluído");
+    else toast.success("Negócio excluído");
     setConfirmDelete(false);
     onOpenChange(false);
-    onSaved();
+    if (onDeleted) onDeleted(deal.id);
+    else onSaved();
   }
 
   return (

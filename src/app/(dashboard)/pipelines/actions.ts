@@ -3160,14 +3160,46 @@ export async function broadcastToStage(input: BroadcastToStageInput): Promise<Br
   }
 }
 
-/** Delete a deal the caller owns. */
-export async function deleteDeal(id: string): Promise<{ error: string | null }> {
+/**
+ * Exclui um negócio. `notFound` = já não existia (outra aba, card fantasma):
+ * quem chama tira o card da tela em vez de mostrar erro. 16/09: devolvia
+ * sucesso mesmo sem apagar nada, e aceitava viewer e negócio de outro atendente.
+ */
+export async function deleteDeal(
+  id: string,
+): Promise<{ error: string | null; notFound?: boolean }> {
+  const GONE = 'Este negócio já não existe (talvez já tenha sido excluído).'
   try {
-    const ctx = await getCurrentAccount()
-    await db.delete(deals).where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
+    // Viewer é só leitura (roles.ts): não exclui.
+    const ctx = await requireRole('agent')
+    const row = firstOrNull(
+      await db
+        .select({ assignedTo: deals.assignedTo, contactId: deals.contactId, stageId: deals.stageId })
+        .from(deals)
+        .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!row) return { error: GONE, notFound: true }
+    // Funil aberto: mesma regra de editar/pausar/duplicar/transferir.
+    if (!dealReadable(ctx.role, ctx.userId, row.assignedTo)) {
+      return { error: 'Este negócio está atribuído a outro atendente.' }
+    }
+    const gone = await db
+      .delete(deals)
+      .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
+      .returning({ id: deals.id })
+    if (gone.length === 0) return { error: GONE, notFound: true }
+    // O histórico do negócio (deal_events) cai em cascata junto: o rastro de
+    // quem excluiu fica no log (sem título — costuma ser o nome do cliente).
+    console.info(
+      '[deal-deleted]',
+      JSON.stringify({ accountId: ctx.accountId, userId: ctx.userId, role: ctx.role, dealId: id, contactId: row.contactId, stageId: row.stageId }),
+    )
     return { error: null }
   } catch (err) {
-    return { error: err instanceof Error ? err.message : 'Failed to delete deal' }
+    if (err instanceof ForbiddenError) return { error: 'Seu perfil é só leitura: não pode excluir negócios.' }
+    console.error('[deleteDeal]', err)
+    return { error: 'Falha ao excluir o negócio.' }
   }
 }
 

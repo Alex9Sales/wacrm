@@ -35,6 +35,7 @@ import { MessageReactions } from "./message-reactions";
 import { RichText } from "@/lib/inbox/rich-text";
 import { GroupText, groupColor } from "@/lib/inbox/group-color";
 import { detectCopyCode } from "@/lib/inbox/copy-code";
+import { detectLocationMessage } from "@/lib/inbox/location-message";
 import { MentionText } from "@/components/inbox/mention-composer";
 import type { MentionMember } from "@/lib/inbox/mentions";
 import { plainAiText } from "@/lib/ai/plain-text";
@@ -224,23 +225,6 @@ function PixCard({ text }: { text: string }) {
   );
 }
 
-/** A shared/sent location = a Google Maps link with `q=lat,lng`. Sent pins are
- *  a bare link, inbound ones carry a "📍 Localização" header + optional place
- *  name. Detect either so the bubble shows a compact card, not a raw URL. */
-function detectLocation(
-  txt: string,
-): { header: string; place?: string; url: string } | null {
-  const m = txt.match(
-    /https?:\/\/[^\s]*google\.[^\s]*maps[^\s]*[?&]q=-?\d+(?:\.\d+)?,-?\d+(?:\.\d+)?[^\s]*/i,
-  );
-  if (!m) return null;
-  const lines = txt.split("\n").filter(Boolean);
-  const header = lines[0]?.startsWith("📍") ? lines[0] : "📍 Localização";
-  // A middle line that isn't the header and isn't the URL is the place name.
-  const place = lines.find((l) => !l.startsWith("📍") && !/^https?:\/\//.test(l));
-  return { header, place, url: m[0] };
-}
-
 /** Compact clickable location card (opens the pin / route in Google Maps). */
 function LocationCard({
   header,
@@ -264,7 +248,7 @@ function LocationCard({
       <span className="flex min-w-0 flex-col leading-tight">
         <span className="text-sm font-medium text-foreground">{header}</span>
         {place && (
-          <span className="truncate text-xs text-muted-foreground">{place}</span>
+          <span className="line-clamp-2 break-words text-xs text-muted-foreground">{place}</span>
         )}
         <span className="mt-0.5 text-xs font-medium text-emerald-600">
           Abrir no Google Maps
@@ -994,7 +978,9 @@ function MessageContent({
       if (txt.startsWith(CONTACT_PREFIX)) return <ContactCard text={txt} channelId={channelId} />;
       const copyCode = detectCopyCode(txt);
       if (copyCode) return <CopyCodeCard {...copyCode} />;
-      const location = detectLocation(txt);
+      // Cartão só quando a mensagem É a localização; texto com link do Maps
+      // no meio (aviso de transferência 16/09) segue como texto.
+      const location = detectLocationMessage(txt);
       if (location) return <LocationCard {...location} />;
       const callLog = parseCallLog(txt);
       if (callLog)
