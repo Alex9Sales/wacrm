@@ -91,6 +91,9 @@ import {
   setAsaasNotifications,
   setCollectionsAutonomy,
   setDebtorPaused,
+  listHeldDebtors,
+  resetDebtorTouches,
+  type HeldDebtor,
   syncNow,
   unlinkDebtor,
   type ConnectionView,
@@ -103,6 +106,7 @@ import {
   registerPaymentPromise,
 } from '@/app/(dashboard)/cobrancas/actions';
 import { CHARGEABLE_STATUSES, WEEKDAY_SHORT, describeWeekdays, type CollectionsSettings } from '@/lib/collections/rules';
+import { pauseSourceLabel } from '@/lib/collections/pause-rules';
 import { listApprovedTemplates } from '@/app/(dashboard)/inbox/actions';
 import type { MessageTemplate } from '@/types';
 
@@ -144,19 +148,23 @@ export function WalletClient() {
   const [bulkBusy, setBulkBusy] = useState(false);
   const [newChargeOpen, setNewChargeOpen] = useState(false);
   const [promo, setPromo] = useState<PromotionView | null>(null);
+  const [held, setHeld] = useState<HeldDebtor[]>([]);
 
   const load = useCallback(async () => {
     try {
-      const [w, c, r, p] = await Promise.all([
+      const [w, c, r, p, h] = await Promise.all([
         getWallet(),
         listConnections(),
         getCollectionsSettings(),
         getCollectionsPromotion(),
+        // Falha aqui não derruba a carteira: a lista de parados é um extra.
+        listHeldDebtors().catch(() => [] as HeldDebtor[]),
       ]);
       setWallet(w);
       setConns(c);
       setRule(r);
       setPromo(p);
+      setHeld(h);
     } catch {
       toast.error('Não foi possível carregar a carteira.');
     } finally {
@@ -481,6 +489,7 @@ export function WalletClient() {
               </div>
             )}
           </div>
+          {held.length > 0 && <HeldDebtorsPanel held={held} onChanged={load} />}
         </>
       )}
 
@@ -503,6 +512,69 @@ export function WalletClient() {
       setSyncing(false);
     }
   }
+}
+
+/**
+ * Régua parada em quem não tem nada vencido — a lista acima só mostra quem
+ * deve, e essas pausas ficavam invisíveis para sempre (16/09, Guincho Ribeiro:
+ * pagou tudo, a pausa da IA continuou e cobrança nova nunca seria avisada).
+ */
+function HeldDebtorsPanel({ held, onChanged }: { held: HeldDebtor[]; onChanged: () => void }) {
+  const [busy, setBusy] = useState<string | null>(null);
+  return (
+    <details className="rounded-md border border-dashed bg-card px-4 py-3 text-sm">
+      <summary className="flex cursor-pointer items-center gap-2 font-medium">
+        <BellOff className="h-4 w-4 text-muted-foreground" />
+        Régua parada sem cobrança vencida ({held.length})
+      </summary>
+      <p className="mt-2 text-xs text-muted-foreground">
+        Estas pessoas não devem nada vencido agora, mas a régua continua parada nelas: cobrança nova não recebe régua, lembrete nem aviso. Retome
+        quem já pode ser cobrado de novo.
+      </p>
+      <ul className="mt-3 flex flex-col divide-y">
+        {held.map((h) => (
+          <li key={h.contactId} className="flex flex-wrap items-center justify-between gap-2 py-2">
+            <div className="min-w-0">
+              <p className="truncate font-medium">{h.name || (h.phone ? fmtPhone(h.phone) : 'Contato')}</p>
+              <p className="text-xs text-muted-foreground">
+                {h.paused
+                  ? `Parada ${pauseSourceLabel(h.pausedSource, h.pausedReason)}${h.pausedReason ? ` · ${h.pausedReason}` : ''}${h.pausedAt ? ` · desde ${new Date(h.pausedAt).toLocaleDateString('pt-BR')}` : ''}`
+                  : `Chegou no limite de ${h.touchCount} cobranças da régua`}
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              {h.conversationId && (
+                <a href={`/inbox?c=${h.conversationId}`} className="text-xs text-muted-foreground underline-offset-2 hover:underline">
+                  Abrir conversa
+                </a>
+              )}
+              <Button
+                size="sm"
+                variant="outline"
+                disabled={busy === h.contactId}
+                onClick={async () => {
+                  setBusy(h.contactId);
+                  try {
+                    const r = h.paused ? await setDebtorPaused(h.contactId, false, null) : await resetDebtorTouches(h.contactId);
+                    if (!r.ok) toast.error(r.error ?? 'Não deu certo.');
+                    else {
+                      toast.success(h.paused ? 'Cobrança retomada.' : 'Toques zerados.');
+                      onChanged();
+                    }
+                  } finally {
+                    setBusy(null);
+                  }
+                }}
+              >
+                {busy === h.contactId ? <Loader2 className="mr-1.5 h-3.5 w-3.5 animate-spin" /> : <Play className="mr-1.5 h-3.5 w-3.5" />}
+                {h.paused ? 'Retomar cobrança' : 'Zerar toques'}
+              </Button>
+            </div>
+          </li>
+        ))}
+      </ul>
+    </details>
+  );
 }
 
 function Stat({ label, value, tone, wide, hint }: { label: string; value: string; tone?: 'warn' | 'good'; wide?: boolean; hint?: string }) {

@@ -2,8 +2,11 @@ import { describe, expect, it, vi, beforeEach } from 'vitest'
 
 // O banco é falsificado: aqui interessa a DECISÃO do webhook (fechar? cancelar
 // o que está na fila? reabrir?), não o SQL.
+const pauseMock = vi.hoisted(() => ({ settle: vi.fn(async () => 'none' as const) }))
+vi.mock('./pause', () => ({ settlePauseAfterPayment: pauseMock.settle }))
+
 const state = {
-  charge: null as null | { id: string; contactId: string | null; open: boolean },
+  charge: null as null | { id: string; contactId: string | null; open: boolean; status?: string },
   aindaDeve: false,
   updates: [] as { table: string; set: Record<string, unknown> }[],
   cancelled: [] as { id: string }[],
@@ -59,6 +62,7 @@ beforeEach(async () => {
   state.aindaDeve = false
   state.updates = []
   state.cancelled = []
+  pauseMock.settle.mockClear()
   const dbmod = (await import('@/db')) as unknown as { db: { __reset: () => void } }
   dbmod.db.__reset()
 })
@@ -117,6 +121,30 @@ describe('webhook do Asaas — parar de cobrar quem pagou', () => {
   it('conta o evento mesmo quando ignora — é assim que a tela sabe que a URL foi colada', async () => {
     await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_UPDATED'))
     expect(state.updates.some((u) => u.table === 'asaasConnections' && 'webhookLastAt' in u.set)).toBe(true)
+  })
+
+  it('16/09 Guincho: quitou tudo → confere a pausa da régua no 1º pagamento', async () => {
+    state.charge = { id: 'ch1', contactId: 'c1', open: true, status: 'OVERDUE' }
+    await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_RECEIVED'))
+    expect(pauseMock.settle).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc1', contactId: 'c1', firstSettle: true, stillOwes: false }))
+  })
+
+  it('2º aviso de pagamento da mesma cobrança (cartão CONFIRMED → RECEIVED) não é 1º pagamento', async () => {
+    state.charge = { id: 'ch1', contactId: 'c1', open: false, status: 'CONFIRMED' }
+    await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_RECEIVED'))
+    expect(pauseMock.settle).toHaveBeenCalledWith(expect.objectContaining({ firstSettle: false }))
+  })
+
+  it('ainda deve outra parcela, cobrança apagada ou estorno: a pausa não é tocada', async () => {
+    state.aindaDeve = true
+    await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_RECEIVED'))
+    state.aindaDeve = false
+    const dbmod = (await import('@/db')) as unknown as { db: { __reset: () => void } }
+    dbmod.db.__reset()
+    await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_DELETED'))
+    dbmod.db.__reset()
+    await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_REFUNDED'))
+    expect(pauseMock.settle).not.toHaveBeenCalled()
   })
 
   it('cobrança paga sem contato casado fecha, mas não tenta cancelar fila', async () => {

@@ -18,14 +18,16 @@
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
-import { and, eq, gte, inArray, ne, or, sql } from 'drizzle-orm'
+import { and, eq, gte, inArray, sql } from 'drizzle-orm'
 
-import { db, agentActionRequests, aiConfigs, asaasCharges, asaasConnections, collectionsTouches, contacts, conversations, messages } from '@/db'
+import { db, agentActionRequests, aiConfigs, asaasCharges, asaasConnections, collectionsTouches, contacts, conversations } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfigById } from '@/lib/ai/config'
 import { generateReply } from '@/lib/ai/generate'
 import { fetchCustomers, getPayment, listPendingDueBetween, type AsaasCredential, type AsaasEnv } from '@/lib/asaas/collections'
 import { findContact } from '@/lib/asaas/sync'
+import { paymentRefsFrom, paymentRefsPayload, reconferPayments } from './payment-refs'
+import { linksAlreadySent } from './links-sent'
 import { decide, type AutonomyPolicy } from '@/lib/orchestration/policy'
 import type { AccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
@@ -40,7 +42,6 @@ import {
   freshReminderItems,
   greetingName,
   linksInstruction,
-  textHasUrl,
   type CollectionsSettings,
   type UpcomingLine,
 } from './rules'
@@ -110,9 +111,10 @@ export async function queueUpcomingReminders(args: {
     /** E-mail do cliente no Asaas (a parcela a vencer não está na carteira). */
     email: string | null
     optedOut: boolean
-    connectionId: string
     lines: UpcomingLine[]
     asaasIds: string[]
+    /** Conta do Asaas de CADA parcela, na ordem de asaasIds (ver payment-refs.ts). */
+    connectionIds: string[]
   }
   const byContact = new Map<string, Candidate>()
 
@@ -151,14 +153,15 @@ export async function queueUpcomingReminders(args: {
           name: cust?.name ?? null,
           email: collectionEmail(cust?.email),
           optedOut: false,
-          connectionId: c.id,
           lines: [],
           asaasIds: [],
+          connectionIds: [],
         }
         byContact.set(decision.contactId, cand)
       }
       cand.lines.push({ value: Number(p.value ?? 0), dueDate: p.dueDate ? p.dueDate.slice(0, 10) : null, daysUntil, connectionLabel: c.label, invoiceUrl: p.invoiceUrl ?? null })
       cand.asaasIds.push(p.id)
+      cand.connectionIds.push(c.id)
     }
   }
   if (!byContact.size) return out
@@ -258,7 +261,12 @@ export async function queueUpcomingReminders(args: {
       bump('on_hold')
       continue
     }
-    const items = cand.asaasIds.map((id, i) => ({ id, invoiceUrl: cand.lines[i].invoiceUrl, line: cand.lines[i] }))
+    const items = cand.asaasIds.map((id, i) => ({
+      id,
+      connectionId: cand.connectionIds[i],
+      invoiceUrl: cand.lines[i].invoiceUrl,
+      line: cand.lines[i],
+    }))
     let fresh = freshReminderItems(items, reminded, new Set<string>())
     if (!fresh.length) {
       bump('already')
@@ -338,8 +346,7 @@ export async function queueUpcomingReminders(args: {
         actionType: 'collect_charges',
         payload: {
           kind: 'reminder',
-          connectionId: cand.connectionId,
-          asaasIds: fresh.map((x) => x.id),
+          ...paymentRefsPayload(fresh.map((x) => ({ asaasId: x.id, connectionId: x.connectionId }))),
           total: summary.total,
           lines: summary.lines,
           links: summary.links,
@@ -374,39 +381,6 @@ export async function queueUpcomingReminders(args: {
     usedToday += 1
   }
   return out
-}
-
-/**
- * Quais destes links (invoiceUrl) já saíram numa mensagem PARA o cliente desde
- * `sinceIso`: mensagem não interna, escrita pelo time ou pelo CRM (agent/bot),
- * em qualquer conversa do contato. É a prova de que o link chegou — a criação
- * com "mandar o link", o [[COBRAR:]] da IA ou alguém colando à mão. Se o envio
- * falhou ou o link foi desmarcado, não há mensagem e o lembrete sai.
- */
-async function linksAlreadySent(accountId: string, contactId: string, urls: string[], sinceIso: string): Promise<Set<string>> {
-  const found = new Set<string>()
-  if (!urls.length) return found
-  const rows = await db
-    .select({ text: messages.contentText })
-    .from(messages)
-    .innerJoin(conversations, eq(conversations.id, messages.conversationId))
-    .where(
-      and(
-        eq(conversations.accountId, accountId),
-        eq(conversations.contactId, contactId),
-        eq(messages.isInternal, false),
-        inArray(messages.senderType, ['agent', 'bot']),
-        // Envio que falhou (e-mail devolvido, falha da Meta) não prova que o
-        // link chegou — o lembrete tem de sair (revisão 15/09).
-        ne(messages.status, 'failed'),
-        gte(messages.createdAt, sinceIso),
-        or(...urls.map((u) => sql`position(${u} in ${messages.contentText}) > 0`)),
-      ),
-    )
-    .limit(50)
-  // O banco acha "contém"; aqui confirma que é o link inteiro (…/i/123 ≠ …/i/1234).
-  for (const r of rows) for (const u of urls) if (textHasUrl(r.text, u)) found.add(u)
-  return found
 }
 
 /** Texto do lembrete: leve, sem "atraso", com os fatos prontos. IA quando há agente; senão o de segurança. */
@@ -470,34 +444,34 @@ export async function reminderStillPending(
    */
   aceitas: readonly string[] = ['PENDING'],
 ): Promise<{ ok: true; pending: string[] } | { ok: false; error: string }> {
-  const connectionId = typeof payload.connectionId === 'string' ? payload.connectionId : null
-  const asaasIds = Array.isArray(payload.asaasIds) ? payload.asaasIds.filter((x): x is string => typeof x === 'string') : []
-  if (!connectionId || !asaasIds.length) return { ok: false, error: 'Sem referência das parcelas — não dá para reconferir no Asaas.' }
-  const conn = firstOrNull(
-    await db
-      .select({ apiKeyEnc: asaasConnections.apiKeyEnc, environment: asaasConnections.environment })
-      .from(asaasConnections)
-      .where(and(eq(asaasConnections.id, connectionId), eq(asaasConnections.accountId, accountId)))
-      .limit(1),
+  const refs = paymentRefsFrom(payload)
+  if (!refs.length) return { ok: false, error: 'Sem referência das parcelas — não dá para reconferir no Asaas.' }
+  const ids = [...new Set(refs.map((r) => r.connectionId))]
+  const conns = await db
+    .select({
+      id: asaasConnections.id,
+      label: asaasConnections.label,
+      apiKeyEnc: asaasConnections.apiKeyEnc,
+      environment: asaasConnections.environment,
+    })
+    .from(asaasConnections)
+    .where(and(eq(asaasConnections.accountId, accountId), inArray(asaasConnections.id, ids)))
+  const byId = new Map(conns.map((c) => [c.id, c]))
+  // Cada parcela é reconferida com a chave da conta DELA (payment-refs.ts).
+  return reconferPayments(
+    refs,
+    async (connectionId) => {
+      const conn = byId.get(connectionId)
+      if (!conn) return { error: 'A conta do Asaas deste lembrete não existe mais no CRM.' }
+      try {
+        return { cred: { apiKey: decrypt(conn.apiKeyEnc), environment: conn.environment as AsaasEnv }, label: conn.label }
+      } catch {
+        return { error: `A chave do Asaas (${conn.label}) não pôde ser lida.` }
+      }
+    },
+    getPayment,
+    aceitas,
   )
-  if (!conn) return { ok: false, error: 'A conta do Asaas deste lembrete não existe mais no CRM.' }
-  let cred: AsaasCredential
-  try {
-    cred = { apiKey: decrypt(conn.apiKeyEnc), environment: conn.environment as AsaasEnv }
-  } catch {
-    return { ok: false, error: 'A chave do Asaas não pôde ser lida.' }
-  }
-  const pending: string[] = []
-  for (const id of asaasIds) {
-    try {
-      const p = await getPayment(cred, id)
-      if (aceitas.includes(String(p.status).toUpperCase())) pending.push(id)
-    } catch (err) {
-      return { ok: false, error: `Não deu para reconferir no Asaas agora: ${err instanceof Error ? err.message : 'falha'}` }
-    }
-  }
-  if (!pending.length) return { ok: false, error: 'A parcela já foi paga ou cancelada no Asaas — nada foi enviado.' }
-  return { ok: true, pending }
 }
 
 /** O agente padrão da conta (política + redação). */

@@ -20,6 +20,7 @@ import { notifyUsers } from '@/lib/orchestration/actions'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 
 import { changeChargeDueDateCore } from './due-date'
+import { pauseByAi } from './pause'
 import { normalizeSettings } from './rules'
 
 export type CollectionReplyKind = 'promessa' | 'comprovante' | 'contesta' | 'acordo'
@@ -118,23 +119,33 @@ export async function applyCollectionReply(input: CollectionReplyInput): Promise
     }
 
     case 'contesta': {
-      await upsertTouch(input.accountId, input.contactId, {
-        paused: true,
-        pausedReason: 'Cliente contesta a cobrança',
-        updatedAt: nowIso,
-      })
+      // A IA pausa com origem 'ai' (sai sozinha quando ele quita) e nunca
+      // passa por cima de pausa da equipe — ver pause-rules.ts.
+      const r = await pauseByAi(input.accountId, input.contactId, 'Cliente contesta a cobrança', nowIso)
       await alertTeam(input, 'Cliente contesta a cobrança', 'Ele diz que não deve ou que já pagou. A régua parou nele até alguém verificar.')
-      return { applied: true, note: '🧾 Cliente contesta a cobrança. A régua parou nele e o time foi avisado — ninguém insiste antes de conferir.' }
+      return {
+        applied: true,
+        note:
+          r === 'paused'
+            ? '🧾 Cliente contesta a cobrança. A régua parou nele e o time foi avisado — ninguém insiste antes de conferir.'
+            : r === 'team_paused'
+              ? '🧾 Cliente contesta a cobrança. A régua já estava parada pela equipe (mantida) e o time foi avisado.'
+              : '🧾 Cliente contesta a cobrança. A régua NÃO foi parada: uma pessoa retomou a cobrança há pouco. O time foi avisado.',
+      }
     }
 
     case 'acordo': {
-      await upsertTouch(input.accountId, input.contactId, {
-        paused: true,
-        pausedReason: 'Cliente pediu acordo/parcelamento',
-        updatedAt: nowIso,
-      })
+      const r = await pauseByAi(input.accountId, input.contactId, 'Cliente pediu acordo/parcelamento', nowIso)
       await alertTeam(input, 'Cliente pediu acordo', 'Ele pediu desconto, prazo ou parcelamento. A IA não negocia: a régua parou e a conversa é sua.')
-      return { applied: true, note: '🧾 Cliente pediu acordo ou parcelamento. A IA não negocia — a régua parou e o time foi avisado.' }
+      return {
+        applied: true,
+        note:
+          r === 'paused'
+            ? '🧾 Cliente pediu acordo ou parcelamento. A IA não negocia — a régua parou e o time foi avisado. Se ele quitar o que está vencido, a régua volta sozinha.'
+            : r === 'team_paused'
+              ? '🧾 Cliente pediu acordo ou parcelamento. A régua já estava parada pela equipe (mantida) e o time foi avisado.'
+              : '🧾 Cliente pediu acordo ou parcelamento. A régua NÃO foi parada: uma pessoa retomou a cobrança há pouco. O time foi avisado.',
+      }
     }
 
     default:

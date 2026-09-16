@@ -24,7 +24,7 @@
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
-import { and, eq, gte, inArray, isNotNull, lt, sql } from 'drizzle-orm'
+import { and, eq, gte, inArray, isNotNull, lt, ne, sql } from 'drizzle-orm'
 
 import { db, agentActionRequests, asaasCharges, asaasConnections, collectionsTouches, contacts, conversations } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -34,6 +34,8 @@ import type { AccountSettings } from '@/lib/settings/account-settings'
 import { newChargesMessage, type NewChargeLine } from './emit-rules'
 import { resolveCollectionTargets } from './outreach'
 import { greetingName, type CollectionsSettings } from './rules'
+import { paymentRefsPayload, type PaymentRef } from './payment-refs'
+import { linksAlreadySent } from './links-sent'
 
 /**
  * Quanto tempo depois de a cobrança NASCER NO ASAAS o aviso ainda faz sentido.
@@ -57,7 +59,7 @@ const CONEXAO_NOVA_MS = 3 * 24 * 3_600_000
 export interface NewChargeRunResult {
   queued: number
   found: number
-  skipped: Partial<Record<'conexao_nova' | 'ja_avisado' | 'sem_contato' | 'opt_out' | 'pausado' | 'sem_canal' | 'politica' | 'teto', number>>
+  skipped: Partial<Record<'conexao_nova' | 'ja_avisado' | 'link_ja_enviado' | 'sem_contato' | 'opt_out' | 'pausado' | 'sem_canal' | 'politica' | 'teto', number>>
 }
 
 export async function queueNewChargeNotices(args: {
@@ -138,6 +140,9 @@ export async function queueNewChargeNotices(args: {
         eq(agentActionRequests.accountId, args.accountId),
         eq(agentActionRequests.actionType, 'collect_charges'),
         sql`${agentActionRequests.payload}->>'kind' = 'new_charge'`,
+        // Aviso que FALHOU não avisou ninguém: pode sair de novo (dentro da
+        // janela de 2 dias). Antes contava como avisado e o link se perdia.
+        ne(agentActionRequests.status, 'failed'),
       ),
     )
   for (const r of anteriores) {
@@ -147,9 +152,10 @@ export async function queueNewChargeNotices(args: {
 
   interface Candidato {
     contactId: string
-    connectionId: string
     nomeAsaas: string | null
     asaasIds: string[]
+    /** Conta do Asaas de cada cobrança (16/09: GoLink tem duas — payment-refs.ts). */
+    refs: PaymentRef[]
     linhas: NewChargeLine[]
   }
   const porContato = new Map<string, Candidato>()
@@ -169,10 +175,11 @@ export async function queueNewChargeNotices(args: {
     }
     let c = porContato.get(contactId)
     if (!c) {
-      c = { contactId, connectionId: n.connectionId, nomeAsaas: n.customerName, asaasIds: [], linhas: [] }
+      c = { contactId, nomeAsaas: n.customerName, asaasIds: [], refs: [], linhas: [] }
       porContato.set(contactId, c)
     }
     c.asaasIds.push(n.asaasId)
+    c.refs.push({ asaasId: n.asaasId, connectionId: n.connectionId })
     c.linhas.push({
       value: Number(n.value ?? 0),
       dueDate: (n.dueDate ?? '').slice(0, 10),
@@ -215,6 +222,24 @@ export async function queueNewChargeNotices(args: {
     if (pausado.has(cand.contactId)) {
       bump('pausado')
       continue
+    }
+    // Link que já chegou numa mensagem para ele (alguém mandou à mão, ou um
+    // aviso anterior que deu 'failed' mas entregou) não sai de novo.
+    const jaChegou = await linksAlreadySent(
+      args.accountId,
+      cand.contactId,
+      cand.linhas.map((l) => l.url),
+      new Date(now.getTime() - (JANELA_DIAS + 1) * 86_400_000).toISOString(),
+    )
+    if (jaChegou.size) {
+      const fica = cand.linhas.map((l, i) => i).filter((i) => !jaChegou.has(cand.linhas[i].url))
+      if (!fica.length) {
+        bump('link_ja_enviado')
+        continue
+      }
+      cand.linhas = fica.map((i) => cand.linhas[i])
+      cand.asaasIds = fica.map((i) => cand.asaasIds[i])
+      cand.refs = fica.map((i) => cand.refs[i])
     }
     const delivery = await resolveCollectionTargets(args.accountId, cand.contactId, null, { dryRun: true })
     if (!delivery.ok) {
@@ -260,8 +285,7 @@ export async function queueNewChargeNotices(args: {
       actionType: 'collect_charges',
       payload: {
         kind: 'new_charge',
-        connectionId: cand.connectionId,
-        asaasIds: cand.asaasIds,
+        ...paymentRefsPayload(cand.refs),
         charges: cand.linhas.length,
         total: cand.linhas.reduce((acc, l) => acc + l.value, 0),
         touch: 0,

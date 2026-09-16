@@ -14,6 +14,11 @@ import { and, eq, inArray, sql } from 'drizzle-orm'
 import { db, agentActionRequests, asaasCharges, asaasConnections, collectionsTouches } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 
+import { settlePauseAfterPayment } from './pause'
+
+/** Status do Asaas de cobrança já paga — o 2º aviso de pagamento não age de novo. */
+const PAID_STATUSES = new Set(['RECEIVED', 'CONFIRMED', 'RECEIVED_IN_CASH'])
+
 /** Eventos do Asaas que significam "não deve mais". */
 const SETTLED_EVENTS = new Set([
   'PAYMENT_RECEIVED',
@@ -50,6 +55,8 @@ export interface WebhookOutcome {
   contactId?: string | null
   /** true = a cobrança ESTAVA aberta e fechou agora (evento repetido não conta). */
   transitioned?: boolean
+  /** O que aconteceu com a pausa da régua (só em pagamento). */
+  pause?: 'lift' | 'keep_human' | 'none'
 }
 
 /**
@@ -69,7 +76,7 @@ export async function applyAsaasEvent(connectionId: string, accountId: string, b
 
   const charge = firstOrNull(
     await db
-      .select({ id: asaasCharges.id, contactId: asaasCharges.contactId, open: asaasCharges.open })
+      .select({ id: asaasCharges.id, contactId: asaasCharges.contactId, open: asaasCharges.open, status: asaasCharges.status })
       .from(asaasCharges)
       .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.asaasId, paymentId)))
       .limit(1),
@@ -141,7 +148,20 @@ export async function applyAsaasEvent(connectionId: string, accountId: string, b
     .set({ touchCount: 0, snoozeUntil: null, snoozeReason: null, updatedAt: now })
     .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, charge.contactId)))
 
-  return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: cancelled.length, ...ref }
+  // 🧾 Pausa que a IA pôs (acordo/contestação) sai quando ele quita — senão fica
+  // valendo para sempre e invisível (Guincho Ribeiro, 16/09). A da equipe fica,
+  // com nota dizendo que continua. Só no 1º pagamento desta cobrança.
+  const pause = settled
+    ? await settlePauseAfterPayment({
+        accountId,
+        contactId: charge.contactId,
+        firstSettle: !PAID_STATUSES.has(String(charge.status ?? '').toUpperCase()),
+        stillOwes: false,
+        nowIso: now,
+      })
+    : 'none'
+
+  return { handled: true, action: settled ? 'settled' : 'gone', cancelledRequests: cancelled.length, pause, ...ref }
 }
 
 /** Acha a conexão pelo token da URL. Token inválido = 404, sem detalhe. */

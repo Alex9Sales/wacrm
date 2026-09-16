@@ -64,10 +64,10 @@ export async function revertOrchestrationAction(input: RevertInput): Promise<Rev
         if (input.action === 'collect_charges' && contactId) {
           await db
             .insert(collectionsTouches)
-            .values({ accountId: input.accountId, contactId, paused: true, pausedReason: input.reason ?? 'Cobrança marcada como errada', pausedBy: input.actorUserId })
+            .values({ accountId: input.accountId, contactId, paused: true, pausedReason: input.reason ?? 'Cobrança marcada como errada', pausedBy: input.actorUserId, pausedSource: 'revert', pausedAt: new Date().toISOString() })
             .onConflictDoUpdate({
               target: [collectionsTouches.accountId, collectionsTouches.contactId],
-              set: { paused: true, pausedReason: input.reason ?? 'Cobrança marcada como errada', pausedBy: input.actorUserId, updatedAt: new Date().toISOString() },
+              set: { paused: true, pausedReason: input.reason ?? 'Cobrança marcada como errada', pausedBy: input.actorUserId, pausedSource: 'revert', pausedAt: new Date().toISOString(), updatedAt: new Date().toISOString() },
             })
         }
         if (input.conversationId) {

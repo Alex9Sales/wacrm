@@ -853,18 +853,27 @@ export interface ContactCollectionStatus {
   snoozeReason: string | null
   paused: boolean
   pausedReason: string | null
+  /** 'human' | 'ai' | 'revert' | null (linha antiga) — migração 0177. */
+  pausedSource: string | null
+  pausedAt: string | null
   lastTouchAt: string | null
   touchCount: number
+  /** Chegou no limite de toques da régua (não recebe mais nada). */
+  maxed: boolean
 }
 
-/** Situação de cobrança de UM contato — a lateral da conversa mostra e age. */
+/**
+ * Situação de cobrança de UM contato — a lateral da conversa mostra e age.
+ * 16/09: também devolve quem está SEGURADO sem nada vencido na carteira
+ * (pausa, promessa, limite de toques) — antes voltava null e a pausa ficava
+ * invisível para sempre (Guincho Ribeiro).
+ */
 export async function getContactCollectionStatus(contactId: string): Promise<ContactCollectionStatus | null> {
   const { accountId } = await getCurrentAccount()
   const rows = await db
     .select({ value: asaasCharges.value, dueDate: asaasCharges.dueDate })
     .from(asaasCharges)
     .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, contactId), eq(asaasCharges.open, true)))
-  if (!rows.length) return null
   const today = new Date()
   let oldest: number | null = null
   for (const r of rows) {
@@ -879,6 +888,8 @@ export async function getContactCollectionStatus(contactId: string): Promise<Con
         snoozeReason: collectionsTouches.snoozeReason,
         paused: collectionsTouches.paused,
         pausedReason: collectionsTouches.pausedReason,
+        pausedSource: collectionsTouches.pausedSource,
+        pausedAt: collectionsTouches.pausedAt,
         lastTouchAt: collectionsTouches.lastTouchAt,
         touchCount: collectionsTouches.touchCount,
       })
@@ -886,6 +897,10 @@ export async function getContactCollectionStatus(contactId: string): Promise<Con
       .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, contactId)))
       .limit(1),
   )
+  const settings = normalizeSettings((await getAccountSettings(accountId)).collections)
+  const maxed = !!t && t.touchCount >= settings.maxTouches
+  const snoozing = !!t?.snoozeUntil && Date.parse(t.snoozeUntil) > today.getTime()
+  if (!rows.length && !(t?.paused || snoozing || maxed)) return null
   return {
     openCount: rows.length,
     total: rows.reduce((s, r) => s + (Number(r.value) || 0), 0),
@@ -894,9 +909,78 @@ export async function getContactCollectionStatus(contactId: string): Promise<Con
     snoozeReason: t?.snoozeReason ?? null,
     paused: t?.paused ?? false,
     pausedReason: t?.pausedReason ?? null,
+    pausedSource: t?.pausedSource ?? null,
+    pausedAt: t?.pausedAt ?? null,
     lastTouchAt: t?.lastTouchAt ?? null,
     touchCount: t?.touchCount ?? 0,
+    maxed,
   }
+}
+
+export interface HeldDebtor {
+  contactId: string
+  name: string | null
+  phone: string | null
+  conversationId: string | null
+  paused: boolean
+  pausedReason: string | null
+  pausedSource: string | null
+  pausedAt: string | null
+  snoozeUntil: string | null
+  snoozeReason: string | null
+  touchCount: number
+  maxed: boolean
+}
+
+/**
+ * Régua parada em quem NÃO tem nada vencido na carteira — a lista da carteira
+ * só mostra quem deve, então essas pausas ficavam invisíveis (16/09). Promessa
+ * sem cobrança aberta fica de fora: vence sozinha e costuma ser vencimento
+ * movido no Asaas (caso Silvia).
+ */
+export async function listHeldDebtors(): Promise<HeldDebtor[]> {
+  const { accountId } = await getCurrentAccount()
+  const settings = normalizeSettings((await getAccountSettings(accountId)).collections)
+  const rows = await db
+    .select({
+      contactId: collectionsTouches.contactId,
+      name: contacts.name,
+      phone: contacts.phone,
+      paused: collectionsTouches.paused,
+      pausedReason: collectionsTouches.pausedReason,
+      pausedSource: collectionsTouches.pausedSource,
+      pausedAt: collectionsTouches.pausedAt,
+      snoozeUntil: collectionsTouches.snoozeUntil,
+      snoozeReason: collectionsTouches.snoozeReason,
+      touchCount: collectionsTouches.touchCount,
+      conversationId: sql<string | null>`(SELECT "conversations"."id" FROM "conversations" WHERE "conversations"."account_id" = "collections_touches"."account_id" AND "conversations"."contact_id" = "collections_touches"."contact_id" ORDER BY COALESCE("conversations"."last_message_at", "conversations"."created_at") DESC LIMIT 1)`,
+    })
+    .from(collectionsTouches)
+    .innerJoin(contacts, eq(contacts.id, collectionsTouches.contactId))
+    .where(
+      and(
+        eq(collectionsTouches.accountId, accountId),
+        or(eq(collectionsTouches.paused, true), sql`${collectionsTouches.touchCount} >= ${settings.maxTouches}`),
+        sql`NOT EXISTS (SELECT 1 FROM "asaas_charges" WHERE "asaas_charges"."account_id" = "collections_touches"."account_id" AND "asaas_charges"."contact_id" = "collections_touches"."contact_id" AND "asaas_charges"."open" = true)`,
+      ),
+    )
+    .orderBy(desc(collectionsTouches.updatedAt))
+    .limit(200)
+  return rows.map((r) => ({ ...r, maxed: r.touchCount >= settings.maxTouches }))
+}
+
+/** Zera os toques da régua de um contato que chegou no limite. */
+export async function resetDebtorTouches(contactId: string): Promise<ActionResult> {
+  const { accountId } = await requireRole('agent')
+  const now = new Date().toISOString()
+  const done = await db
+    .update(collectionsTouches)
+    .set({ touchCount: 0, updatedAt: now })
+    .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, contactId)))
+    .returning({ contactId: collectionsTouches.contactId })
+  if (!done.length) return { ok: false, error: 'Este contato não tem régua registrada.' }
+  revalidatePath('/cobrancas')
+  return { ok: true }
 }
 
 export async function setDebtorPaused(contactId: string, paused: boolean, reason: string | null): Promise<ActionResult> {
@@ -910,12 +994,17 @@ export async function setDebtorPaused(contactId: string, paused: boolean, reason
   if (!c) return { ok: false, error: 'Contato não encontrado nesta conta.' }
 
   const now = new Date().toISOString()
+  // Pausa da equipe nunca some sozinha (pause-rules.ts). Retomar grava
+  // 'resumed' + quando: a IA não pausa de novo por 7 dias (pause.ts).
+  const pause = paused
+    ? { paused, pausedReason: reason, pausedBy: userId, pausedSource: 'human', pausedAt: now }
+    : { paused, pausedReason: null, pausedBy: userId, pausedSource: 'resumed', pausedAt: now }
   await db
     .insert(collectionsTouches)
-    .values({ accountId, contactId, paused, pausedReason: reason, pausedBy: userId, updatedAt: now })
+    .values({ accountId, contactId, ...pause, updatedAt: now })
     .onConflictDoUpdate({
       target: [collectionsTouches.accountId, collectionsTouches.contactId],
-      set: { paused, pausedReason: reason, pausedBy: userId, updatedAt: now },
+      set: { ...pause, updatedAt: now },
     })
   revalidatePath('/cobrancas')
   return { ok: true }

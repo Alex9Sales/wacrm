@@ -3265,6 +3265,11 @@ export const collectionsTouches = pgTable("collections_touches", {
 	paused: boolean().default(false).notNull(),
 	pausedReason: text("paused_reason"),
 	pausedBy: uuid("paused_by"),
+	/** Migração 0177: quem pausou — 'human' | 'ai' | 'revert' (pausa da IA sai
+	 *  sozinha quando o cliente quita; a humana nunca). NULL em linha antiga. */
+	pausedSource: text("paused_source"),
+	/** Migração 0177: quando a pausa começou (a lateral mostra "desde"). */
+	pausedAt: timestamp("paused_at", { withTimezone: true, mode: 'string' }),
 	/** Últimas 3 mensagens de cobrança enviadas (mais recente primeiro) — a IA recebe para não repetir. */
 	recentTexts: jsonb("recent_texts").$type<string[]>().default([]).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),

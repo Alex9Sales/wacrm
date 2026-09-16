@@ -47,8 +47,11 @@ import {
   clearPaymentPromise,
   getContactCollectionStatus,
   registerPaymentPromise,
+  resetDebtorTouches,
+  setDebtorPaused,
   type ContactCollectionStatus,
 } from "@/app/(dashboard)/cobrancas/actions";
+import { pauseSourceLabel } from "@/lib/collections/pause-rules";
 import { CustomFieldInput } from "@/components/contacts/custom-field-input";
 import { CallButton } from "@/components/calls/call-button";
 import type {
@@ -897,27 +900,58 @@ export function ContactSidebar({
           </div>
 
           <div className="mt-3">
-            {/* ---- Cobrança (só quando o contato tem parcela em aberto) ---- */}
+            {/* ---- Cobrança (parcela em aberto, ou régua parada sem nada vencido) ---- */}
             {collection && contactId && (
               <Section icon={Receipt} title="Cobrança" defaultOpen>
                 <div className="flex flex-col gap-2 px-1 text-sm">
-                  <p>
-                    <span className="font-medium">
-                      {collection.openCount === 1 ? "1 parcela em aberto" : `${collection.openCount} parcelas em aberto`}
-                    </span>{" "}
-                    · {collection.total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
-                    {collection.oldestDaysLate != null && collection.oldestDaysLate > 0 ? ` · ${collection.oldestDaysLate} dias de atraso` : ""}
-                  </p>
+                  {collection.openCount > 0 ? (
+                    <p>
+                      <span className="font-medium">
+                        {collection.openCount === 1 ? "1 parcela em aberto" : `${collection.openCount} parcelas em aberto`}
+                      </span>{" "}
+                      · {collection.total.toLocaleString("pt-BR", { style: "currency", currency: "BRL" })}
+                      {collection.oldestDaysLate != null && collection.oldestDaysLate > 0 ? ` · ${collection.oldestDaysLate} dias de atraso` : ""}
+                    </p>
+                  ) : (
+                    <p className="font-medium">Nenhuma cobrança vencida na carteira</p>
+                  )}
                   <p className="text-xs text-muted-foreground">
                     {collection.paused
-                      ? `Fora da régua: "não cobrar"${collection.pausedReason ? ` (${collection.pausedReason})` : ""}.`
+                      ? `Régua PARADA ${pauseSourceLabel(collection.pausedSource, collection.pausedReason)}${collection.pausedReason ? ` (${collection.pausedReason})` : ""}${collection.pausedAt ? ` desde ${new Date(collection.pausedAt).toLocaleDateString("pt-BR")}` : ""}. Cobrança nova dele não recebe régua, lembrete nem aviso.`
+                      : collection.maxed
+                        ? `Chegou no limite de ${collection.touchCount} cobranças da régua — não recebe mais nada até zerar.`
                       : collection.snoozeUntil && new Date(collection.snoozeUntil).getTime() > Date.now()
                         ? `Promessa: a régua dorme até ${new Date(collection.snoozeUntil).toLocaleDateString("pt-BR")}${collection.snoozeReason ? ` · ${collection.snoozeReason}` : ""}.`
                         : collection.touchCount
                           ? `${collection.touchCount} ${collection.touchCount === 1 ? "cobrança enviada" : "cobranças enviadas"} pela régua${collection.lastTouchAt ? `, a última em ${new Date(collection.lastTouchAt).toLocaleDateString("pt-BR")}` : ""}.`
                           : "Ainda não foi cobrado pela régua."}
                   </p>
-                  {!collection.paused && (
+                  {(collection.paused || collection.maxed) && (
+                    <div className="flex flex-wrap gap-2">
+                      <button
+                        type="button"
+                        disabled={promiseBusy}
+                        onClick={async () => {
+                          if (!confirm(collection.paused ? "Retomar a cobrança? A régua, o lembrete e o aviso de cobrança nova voltam a valer para ele." : "Zerar as cobranças da régua? Ele volta a receber do primeiro toque.")) return;
+                          setPromiseBusy(true);
+                          try {
+                            const r = collection.paused ? await setDebtorPaused(contactId, false, null) : await resetDebtorTouches(contactId);
+                            if (!r.ok) toast.error(r.error ?? "Não deu certo.");
+                            else {
+                              toast.success(collection.paused ? "Cobrança retomada." : "Toques zerados.");
+                              setCollection(await getContactCollectionStatus(contactId).catch(() => null));
+                            }
+                          } finally {
+                            setPromiseBusy(false);
+                          }
+                        }}
+                        className="inline-flex h-8 items-center rounded-md border border-border px-2.5 text-xs font-medium text-foreground hover:bg-muted disabled:opacity-50"
+                      >
+                        {collection.paused ? "Retomar cobrança" : "Zerar toques"}
+                      </button>
+                    </div>
+                  )}
+                  {!collection.paused && collection.openCount > 0 && (
                     <div className="flex flex-wrap items-end gap-2">
                       <div className="flex flex-col gap-1">
                         <label htmlFor="sb-promise-date" className="text-[11px] text-muted-foreground">
