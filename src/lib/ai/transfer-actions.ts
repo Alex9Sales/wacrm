@@ -27,6 +27,34 @@ function norm(s: string): string {
     .toLowerCase()
 }
 
+/**
+ * Atendentes da etiqueta que a IA escreveu. Pura. Ordem:
+ *   1. nome exato;
+ *   2. etiqueta que aparece como PALAVRA INTEIRA no que a IA escreveu
+ *      ("Responsável - Gás do Povo" → "Responsável"), ficando só a MAIS LONGA
+ *      ("Gerente Financeiro" vence "Gerente"; "TI" não casa dentro de "Garantia");
+ *   3. o que a IA escreveu é pedaço de UMA única etiqueta ("Financeiro" →
+ *      "Gerente Financeiro").
+ * `want` e `tagName` já normalizados (sem acento, minúsculo).
+ */
+export function matchRoutingTag<T extends { tagName: string }>(candidates: T[], want: string): T[] {
+  if (!want) return []
+  const n = (c: T) => norm(c.tagName)
+  const exact = candidates.filter((c) => n(c) === want)
+  if (exact.length) return exact
+  const esc = (s: string) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+  const whole = candidates.filter((c) => {
+    const t = n(c)
+    return !!t && new RegExp(`(^|[^a-z0-9])${esc(t)}([^a-z0-9]|$)`).test(want)
+  })
+  if (whole.length) {
+    const longest = Math.max(...whole.map((c) => n(c).length))
+    return whole.filter((c) => n(c).length === longest)
+  }
+  const partOf = candidates.filter((c) => n(c).includes(want))
+  return new Set(partOf.map(n)).size === 1 ? partOf : []
+}
+
 /** Etiquetas que estão em pelo menos UM atendente (opções de roteamento). */
 export async function listRoutingTags(accountId: string): Promise<string[]> {
   const rows = await db
@@ -96,10 +124,30 @@ export async function applyTransfer(input: {
         and(eq(tags.accountId, accountId), eq(member.organizationId, accountId)),
       )
     const want = norm(tagName)
-    const matched = candidates.filter(
-      (c) => norm(c.tagName) === want || norm(c.tagName).includes(want),
-    )
-    if (matched.length === 0) return result
+    const matched = matchRoutingTag(candidates, want)
+    if (matched.length === 0) {
+      // Ninguém com a etiqueta: a IA já disse ao cliente que um humano vai
+      // continuar — então ela PARA, a conversa fica pendente e o resumo fica
+      // na tela (antes seguia respondendo como se nada tivesse acontecido).
+      try {
+        const note = (summary || '').trim()
+        await db.insert(messages).values({
+          conversationId,
+          senderType: 'bot',
+          contentType: 'text',
+          contentText: `🔁 *Transferido pela IA* — ${tagName} (nenhum atendente com essa etiqueta)${note ? `\n${note}` : ''}`,
+          isInternal: true,
+          status: 'sent',
+        })
+        await db
+          .update(conversations)
+          .set({ aiAutoreplyDisabled: true, status: 'pending', updatedAt: new Date().toISOString() })
+          .where(eq(conversations.id, conversationId))
+      } catch (err) {
+        console.error('[ai transfer] sem atendente com a etiqueta — pausar a IA falhou:', err)
+      }
+      return result
+    }
 
     // Menos carregado: menos conversas abertas atribuídas a ele.
     let chosen = matched[0].userId

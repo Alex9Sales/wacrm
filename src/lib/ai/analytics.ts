@@ -499,7 +499,16 @@ export async function getUsageDashboard(
         AND (
           (m.is_internal = true AND m.content_text LIKE '%Transferido pela IA%')
           OR (m.is_internal = false AND m.sender_type = 'bot'
-              AND m.content_text LIKE ${HANDOFF_FAREWELL.slice(0, 45) + '%'})
+              AND m.content_text LIKE ${HANDOFF_FAREWELL.slice(0, 45) + '%'}
+              -- 16/09: a transferência por etiqueta sem despedida do modelo
+              -- também manda esta despedida + grava a nota — conta uma vez só.
+              AND NOT EXISTS (
+                SELECT 1 FROM messages n
+                WHERE n.conversation_id = m.conversation_id
+                  AND n.is_internal = true
+                  AND n.content_text LIKE '%Transferido pela IA%'
+                  AND n.created_at BETWEEN m.created_at - interval '1 minute' AND m.created_at + interval '5 minutes'
+              ))
         )
     `),
     db.execute(sql`

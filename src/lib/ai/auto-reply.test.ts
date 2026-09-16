@@ -23,6 +23,8 @@ const h = vi.hoisted(() => ({
   setCoveredUntil: vi.fn(),
   // 🕰️ contador de respostas velhas descartadas (stale-reply.ts).
   bumpCounter: vi.fn(),
+  // 🔁 transferência por etiqueta (transfer-actions.ts).
+  applyTransfer: vi.fn(),
   // 🔁 reagendamento pós-janela (humano digitando / barge-in) → fila mockada.
   enqueueRecheck: vi.fn(),
   state: {
@@ -79,6 +81,10 @@ vi.mock('./reply-marker', () => ({
   setCoveredUntil: h.setCoveredUntil,
   bumpCounter: h.bumpCounter,
   kvDel: vi.fn(async () => {}),
+}))
+vi.mock('./transfer-actions', () => ({
+  listRoutingTags: async () => ['Responsável'],
+  applyTransfer: h.applyTransfer,
 }))
 vi.mock('@/lib/cdl/metrics', () => ({
   buildCustomerFactsBlock: vi.fn(async () => null),
@@ -205,6 +211,8 @@ beforeEach(() => {
   h.enqueueRecheck.mockReset()
   h.bumpCounter.mockReset()
   h.bumpCounter.mockResolvedValue(1)
+  h.applyTransfer.mockReset()
+  h.applyTransfer.mockResolvedValue({ assignedUserId: 'user-2', tag: 'Responsável' })
   h.state.claim = true
   h.state.updatePayload = null
   h.state.sqlCalls = []
@@ -484,6 +492,56 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).not.toHaveBeenCalled()
     expect(h.engineSendText).not.toHaveBeenCalled()
+  })
+})
+
+describe('dispatchInboundToAiReply — transferência por etiqueta (16/09, Gás do Povo)', () => {
+  const comHandoff = () => h.loadAiConfig.mockResolvedValue(aiConfig({ tools: ['handoff'] } as Partial<AiConfig>))
+
+  it('só o marcador, sem despedida → manda a despedida padrão e transfere', async () => {
+    comHandoff()
+    h.generateReply.mockResolvedValue({ text: '[[TRANSFERIR:Responsável|Kelly, CPF 07020022162, entrega]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalledTimes(1)
+    expect((h.engineSendText.mock.calls[0][0] as { text: string }).text).toContain('responsável')
+    expect(h.applyTransfer).toHaveBeenCalledWith(expect.objectContaining({ tagName: 'Responsável', summary: 'Kelly, CPF 07020022162, entrega' }))
+  })
+
+  it('despedida + marcador com "]" no resumo → o cliente recebe só a despedida', async () => {
+    comHandoff()
+    h.generateReply.mockResolvedValue({
+      text: 'Perfeito! Já passo pro responsável 😊\n[[TRANSFERIR:Responsável|Kelly [Gás do Povo], CPF 07020022162]]',
+      handoff: false,
+    })
+    await dispatchInboundToAiReply(ARGS)
+    const enviados = h.engineSendText.mock.calls.map((c) => (c[0] as { text: string }).text).join('\n')
+    expect(enviados).toContain('Já passo pro responsável')
+    expect(enviados).not.toContain('07020022162')
+    expect(h.applyTransfer).toHaveBeenCalled()
+  })
+
+  it('sem vaga no limite → não responde, mas transfere', async () => {
+    comHandoff()
+    h.state.claim = false
+    h.generateReply.mockResolvedValue({ text: 'Já passo pro responsável 😊\n[[TRANSFERIR:Responsável|Kelly]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).not.toHaveBeenCalled()
+    expect(h.applyTransfer).toHaveBeenCalled()
+  })
+
+  it('[[IGNORAR]] junto de [[TRANSFERIR]] → a transferência ganha', async () => {
+    h.loadAiConfig.mockResolvedValue(aiConfig({ tools: ['handoff', 'skip_reply'] } as Partial<AiConfig>))
+    h.generateReply.mockResolvedValue({ text: '[[IGNORAR]]\n[[TRANSFERIR:Responsável|Kelly]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.applyTransfer).toHaveBeenCalled()
+  })
+
+  it('marcador que ninguém reconhece nunca vai pro cliente', async () => {
+    h.generateReply.mockResolvedValue({ text: 'Oi! Tudo certo 😊 [[XPTO:cpf 07020022162]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    const enviados = h.engineSendText.mock.calls.map((c) => (c[0] as { text: string }).text).join('\n')
+    expect(enviados).toContain('Oi! Tudo certo')
+    expect(enviados).not.toContain('XPTO')
   })
 })
 

@@ -870,6 +870,15 @@ export async function dispatchInboundToAiReply(
       dirs.text = ex.text
       materialNames.push(...ex.names)
     }
+    // Rede de segurança: marcador [[…]] que nenhum parser reconheceu nunca vai
+    // pro cliente (pode carregar resumo com CPF). Ficam só [[AUDIO]] e [[foto:…]].
+    // Aqui, ANTES da decisão "tem texto?": resposta só de marcador desconhecido
+    // cai no ramo sem texto (nota de tropeço), não ocupa vaga em silêncio.
+    const unknownMarker = /\[\[(?!\s*(?:audio\s*\]\]|foto\s*:))[\s\S]*?\]\]/gi
+    if (unknownMarker.test(dirs.text)) {
+      console.warn('[ai auto-reply] marcador desconhecido removido da resposta:', conversationId)
+      dirs.text = dirs.text.replace(unknownMarker, '').replace(/\n{3,}/g, '\n\n').trim()
+    }
     const text = dirs.text
 
     // Ações "leves" da conversa: etiquetar, nota interna, atributo, voz.
@@ -1235,7 +1244,9 @@ export async function dispatchInboundToAiReply(
 
     // skip_reply: a msg não pedia resposta — NÃO responde, mas mantém a IA
     // ativa (não desabilita, não consome slot). Ainda pode etiquetar.
-    if (has('skip_reply') && dirs.skipReply) {
+    // [[IGNORAR]] junto de [[TRANSFERIR]]: a transferência ganha (senão ela se
+    // perdia e o cliente ficava esperando o responsável).
+    if (has('skip_reply') && dirs.skipReply && !(has('handoff') && dirs.transfer)) {
       await applyTags()
       return
     }
@@ -1331,6 +1342,21 @@ export async function dispatchInboundToAiReply(
       // Sem texto: se foi transferência/encerramento (marcadores sem despedida),
       // executa e sai; senão, desabilita a IA (nada útil pra responder).
       if (has('handoff') && dirs.transfer) {
+        // Só o marcador, sem despedida: manda a padrão — o cliente não pode
+        // ficar no vácuo enquanto a conversa vai pro responsável (igual ao
+        // [[HANDOFF]] sem texto).
+        try {
+          await engineSendText({
+            accountId,
+            userId: configOwnerUserId,
+            conversationId,
+            contactId,
+            text: HANDOFF_FAREWELL,
+          })
+          await setCoveredUntil(conversationId, snapshotAt)
+        } catch (err) {
+          console.error('[ai auto-reply] despedida da transferência falhou:', err)
+        }
         await applyTags()
         await runTransfer()
         return
@@ -1475,7 +1501,15 @@ export async function dispatchInboundToAiReply(
       sql`SELECT claim_ai_reply_slot(${conversationId}, ${config.autoReplyMaxPerConversation}) AS claimed`,
     )
     const claimed = (res.rows[0] as { claimed?: boolean } | undefined)?.claimed
-    if (claimed !== true) return
+    if (claimed !== true) {
+      // Sem vaga no limite: a resposta não sai, mas a TRANSFERÊNCIA ainda vale —
+      // é ela que tira a IA da conversa e põe um humano (16/09).
+      if (has('handoff') && dirs.transfer) {
+        await applyTags()
+        await runTransfer()
+      }
+      return
+    }
 
     // Responde como algumas mensagens curtas e humanas (quebra de linha),
     // mostrando "digitando…" e uma pausa antes de cada uma. A IA decide texto

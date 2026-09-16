@@ -104,9 +104,11 @@ export const COLLECTION_DIRECTIVE =
  */
 export const CHARGE_DIRECTIVE =
   /\[\[\s*cobrar\s*:\s*([^|\]]+?)\s*\|\s*([^|\]]+?)\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
-/** Transferir pra humano por etiqueta: [[TRANSFERIR:etiqueta|resumo]]. */
+/** Transferir pra humano por etiqueta: [[TRANSFERIR:etiqueta|resumo]]. O
+ *  resumo vai até o "]]" — 16/09: um "]" dentro do resumo ("Kelly [Gás do
+ *  Povo]") fazia o marcador não casar e ele saía CRU pro cliente, com o CPF. */
 export const TRANSFER_DIRECTIVE =
-  /\[\[\s*transferir\s*:\s*([^\]|]+?)\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
+  /\[\[\s*transferir\s*:\s*([^\]|]+?)\s*(?:\|\s*([\s\S]+?))?\s*\]\](?!\])/i
 /** Criar card no funil: [[CRIARCARD:título | valor | observação]] (valor e
  *  observação opcionais — review da 1ª venda da Maria 26/08: card nascia sem
  *  valor nem resumo do pedido). */

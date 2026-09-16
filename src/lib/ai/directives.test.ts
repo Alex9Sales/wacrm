@@ -41,6 +41,27 @@ describe('parseCloseDirectives', () => {
     expect(d.text).toBe('Vou te passar pro gerente, um instante!')
   })
 
+  it('[[TRANSFERIR]] com "]" e quebra de linha no resumo continua casando (e sai do texto)', () => {
+    const d = parseCloseDirectives(
+      'Perfeito! Já passo pro responsável 😊\n[[TRANSFERIR:Responsável|Kelly [Gás do Povo], CPF 07020022162,\nentrega]]',
+    )
+    expect(d.transfer).toEqual({ tag: 'Responsável', summary: 'Kelly [Gás do Povo], CPF 07020022162,\nentrega' })
+    expect(d.text).toBe('Perfeito! Já passo pro responsável 😊')
+  })
+
+  it('[[TRANSFERIR]] com resumo terminando em "]" não deixa colchete sobrando', () => {
+    const d = parseCloseDirectives('Perfeito!\n[[TRANSFERIR:Responsável|Kelly [Gás do Povo]]]')
+    expect(d.transfer?.summary).toBe('Kelly [Gás do Povo]')
+    expect(d.text).toBe('Perfeito!')
+  })
+
+  it('[[TRANSFERIR]] seguido de outro marcador não engole o texto do meio', () => {
+    const d = parseCloseDirectives('[[TRANSFERIR:X|a]] texto do meio [[NOTA:b]]')
+    expect(d.transfer?.summary).toBe('a')
+    expect(d.note).toBe('b')
+    expect(d.text).toBe('texto do meio')
+  })
+
   it('extrai [[CRIARCARD:título]]', () => {
     const d = parseCloseDirectives(
       'Show! Vou registrar aqui.\n[[CRIARCARD:Matheus - interesse plano Pro]]',
