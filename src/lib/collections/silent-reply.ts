@@ -31,7 +31,7 @@ import type { AiConfig } from '@/lib/ai/types'
 import { notifyUsers } from '@/lib/orchestration/actions'
 
 import { applyCollectionReply, openDebtForPrompt, type CollectionReplyKind } from './reply'
-import { loadBurstRows, loadReplyGuardContext } from './reply-context'
+import { claimReplyNote, loadBurstRows, loadReplyGuardContext } from './reply-context'
 import {
   alreadyApplied,
   buildClassifierInput,
@@ -240,6 +240,9 @@ export async function detectCollectionReplySilently(args: {
 
     if (decision.action === 'note') {
       // Sem efeito na régua: nota na conversa e aviso só para o responsável.
+      // A mesma nota nas últimas 12 h não se repete (revisão 16/09: a rajada é
+      // relida a cada balão novo, e o "visto" guarda só o balão mais novo).
+      if (!(await claimReplyNote(args.conversationId, decision.kind, decision.text))) return
       await postInternalNote({ conversationId: args.conversationId, text: `${decision.text} ${SUFFIX}` })
       const { assignedAgentId, who } = await assigneeAndName(args.conversationId, args.contactId)
       if (assignedAgentId) {
@@ -267,7 +270,7 @@ export async function detectCollectionReplySilently(args: {
         kind: decision.kind,
         date: decision.date,
       },
-      { moveDueDate: decision.moveDueDate, pause: decision.pause, maxPromiseDays: MAX_PROMISE_DAYS },
+      { moveDueDate: decision.moveDueDate, pause: decision.pause, maxPromiseDays: MAX_PROMISE_DAYS, countSiblings: true },
     )
     if (!applied.applied) return
 

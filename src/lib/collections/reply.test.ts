@@ -83,6 +83,14 @@ describe('promiseDeadline — a régua dorme, mas não para sempre', () => {
     // A tela (padrão) continua aceitando.
     expect(promiseDeadline('2026-10-20', hoje)).not.toBeNull()
   })
+
+  it('sem teto (tela, revisão 16/09): o limite de 1 ano segue contado até o fim da tolerância, como antes', () => {
+    // hoje = 04/09/2026 15:00 UTC. 02/09/2027 acorda 04/09/2027 03:00 (dentro do ano);
+    // 03/09/2027 acorda 05/09/2027 03:00 (fora) — a regra nova, pelo dia prometido, aceitaria.
+    expect(promiseDeadline('2027-09-02', hoje)).not.toBeNull()
+    expect(promiseDeadline('2027-09-03', hoje)).toBeNull()
+    expect(promiseDeadline('2027-09-03', hoje, 365)).not.toBeNull()
+  })
 })
 
 describe('instrução de cobrança da IA que conversa (16/09)', () => {

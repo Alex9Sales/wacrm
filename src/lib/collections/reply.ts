@@ -21,7 +21,7 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 
 import { changeChargeDueDateCore } from './due-date'
 import { pauseByAi } from './pause'
-import { loadOpenChargesWithSiblings } from './reply-context'
+import { loadOpenChargesWithSiblings, markReceiptApplied } from './reply-context'
 import { ACORDO_PAUSE_REASON, CONTESTA_PAUSE_REASON, RECEIPT_SNOOZE_REASON, promiseSnoozeReason } from './reply-guard'
 import { normalizeSettings } from './rules'
 
@@ -65,6 +65,12 @@ export interface CollectionReplyOptions {
   pause?: boolean
   /** Promessa mais distante que isto é recusada (a IA passa 45; a tela fica no padrão de 365). */
   maxPromiseDays?: number
+  /**
+   * true = "uma parcela só" (para mover o vencimento) soma as parcelas dos
+   * cadastros irmãos (mesmo cliente do Asaas). Só a IA passa: 16/09 (revisão),
+   * a "Registrar promessa" da tela fica como era — conta só as do contato.
+   */
+  countSiblings?: boolean
 }
 
 export async function applyCollectionReply(input: CollectionReplyInput, opts: CollectionReplyOptions = {}): Promise<CollectionReplyResult> {
@@ -98,15 +104,17 @@ export async function applyCollectionReply(input: CollectionReplyInput, opts: Co
       // Lacuna 3 (07/09): com a configuração ligada e UMA parcela em aberto, a
       // promessa também move o vencimento no Asaas — senão o boleto fica com a
       // data velha e os juros do Asaas continuam contando enquanto a régua dorme.
-      // 16/09: só com resposta DIRETA à cobrança (uma promessa lida errado não
-      // escreve no Asaas) e contando as parcelas dos cadastros irmãos — a Ultra
-      // Visão tem uma parcela em cada contato e "uma só" era mentira.
+      // 16/09: na IA, só com resposta DIRETA à cobrança (uma promessa lida
+      // errado não escreve no Asaas) e contando as parcelas dos cadastros irmãos
+      // — a Ultra Visão tem uma parcela em cada contato e "uma só" era mentira.
       let extra = ''
       try {
         const s = normalizeSettings((await getAccountSettings(input.accountId)).collections)
         if (s.promiseUpdatesDueDate && opts.moveDueDate !== false) {
-          const allOpen = await loadOpenChargesWithSiblings(input.accountId, input.contactId)
-          if (allOpen.length === 1 && openCharges.length === 1) {
+          const onlyOne = opts.countSiblings
+            ? openCharges.length === 1 && (await loadOpenChargesWithSiblings(input.accountId, input.contactId)).length === 1
+            : openCharges.length === 1
+          if (onlyOne) {
             const moved = await changeChargeDueDateCore({ accountId: input.accountId, chargeId: open.id, dueDate: input.date!.slice(0, 10), actor: 'pela IA (promessa do cliente)' })
             extra = moved.ok
               ? ` Vencimento no Asaas movido para ${br(moved.dueDate)}${moved.invoiceUrl ? ' (novo link gerado)' : ''}.`
@@ -143,6 +151,9 @@ export async function applyCollectionReply(input: CollectionReplyInput, opts: Co
           },
         })
         .returning({ snoozeUntil: collectionsTouches.snoozeUntil })
+      // O motivo pode ter ficado o da promessa (GREATEST acima): a trava de
+      // comprovante repetido lê este registro, não o motivo (Rack 95, revisão).
+      await markReceiptApplied(input.accountId, input.contactId, nowIso)
       const finalUntil = kept[0]?.snoozeUntil ? new Date(kept[0].snoozeUntil) : until
       const longer = finalUntil.getTime() > until.getTime() + 60_000
       await alertTeam(input, 'Comprovante recebido', 'O cliente mandou comprovante. Confira no Asaas e dê a baixa por lá — a IA não dá baixa em pagamento.')
@@ -212,10 +223,12 @@ const BR_UTC_OFFSET_HOURS = 3
  * dorme o dia 30 e o dia 1º inteiros, e acorda na madrugada do dia 2.
  *
  * Recusa data no passado (o modelo errou o ano) ou muito distante.
- * `maxDays` conta até o DIA prometido (00:00 no Brasil): a IA passa 45 — 16/09,
- * "pago no vencimento" de parcela a vencer adiaria a vencida por semanas.
+ * `maxDays` (só a IA passa, 45) conta até o DIA prometido (00:00 no Brasil) —
+ * 16/09, "pago no vencimento" de parcela a vencer adiaria a vencida por
+ * semanas. Sem `maxDays` (a tela) fica a regra de antes: até o fim da
+ * tolerância, 365 dias.
  */
-export function promiseDeadline(date: string | null, now = new Date(), maxDays = 365): Date | null {
+export function promiseDeadline(date: string | null, now = new Date(), maxDays?: number): Date | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec((date ?? '').slice(0, 10))
   if (!m) return null
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
@@ -224,10 +237,13 @@ export function promiseDeadline(date: string | null, now = new Date(), maxDays =
   if (Number.isNaN(until.getTime())) return null
   // Data que já passou: o modelo errou o ano ou o cliente falou de outra coisa.
   if (until.getTime() <= now.getTime()) return null
+  if (maxDays != null) {
+    const promisedDay = Date.UTC(y, mo - 1, d, BR_UTC_OFFSET_HOURS, 0, 0)
+    return promisedDay - now.getTime() > maxDays * 86_400_000 ? null : until
+  }
   // Mais de um ano à frente quase sempre é ano errado; não congelamos a régua
   // por 12 meses com base num palpite.
-  const promisedDay = Date.UTC(y, mo - 1, d, BR_UTC_OFFSET_HOURS, 0, 0)
-  if (promisedDay - now.getTime() > maxDays * 86_400_000) return null
+  if (until.getTime() - now.getTime() > 365 * 86_400_000) return null
   return until
 }
 

@@ -18,6 +18,8 @@ import { firstOrNull } from '@/db/helpers'
 import { AsaasApiError, updatePaymentDueDate, type AsaasCredential, type AsaasEnv } from '@/lib/asaas/collections'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
+import { dueDateMovedReason } from './reply-guard'
+
 export type DueDateOutcome = { ok: true; dueDate: string; invoiceUrl: string | null } | { ok: false; error: string }
 
 const br = (iso: string) => iso.slice(0, 10).split('-').reverse().join('/')
@@ -105,12 +107,14 @@ export async function changeChargeDueDateCore(args: {
   if (charge.contactId) {
     const [y, m, d] = args.dueDate.split('-').map(Number)
     const until = new Date(Date.UTC(y, m - 1, d + 2, 3, 0, 0)).toISOString()
+    // Motivo lido pela trava de promessa repetida (reply-guard.ts): texto num lugar só.
+    const reason = dueDateMovedReason(args.dueDate)
     await db
       .insert(collectionsTouches)
-      .values({ accountId: args.accountId, contactId: charge.contactId, snoozeUntil: until, snoozeReason: `Vencimento alterado para ${br(args.dueDate)}`, updatedAt: now })
+      .values({ accountId: args.accountId, contactId: charge.contactId, snoozeUntil: until, snoozeReason: reason, updatedAt: now })
       .onConflictDoUpdate({
         target: [collectionsTouches.accountId, collectionsTouches.contactId],
-        set: { snoozeUntil: until, snoozeReason: `Vencimento alterado para ${br(args.dueDate)}`, updatedAt: now },
+        set: { snoozeUntil: until, snoozeReason: reason, updatedAt: now },
       })
   }
 

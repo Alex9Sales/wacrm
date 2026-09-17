@@ -935,11 +935,13 @@ export async function dispatchInboundToAiReply(
               JSON.stringify({ conversationId, kind: dirs.collection.kind, relevance: collectionCheck.relevance, reason: d.reason }),
             )
           } else if (d.action === 'note') {
-            await postInternalNote({ conversationId, text: d.text })
+            // A IA reemite o marcador a cada turno: a mesma nota em 12 h não se repete.
+            const { claimReplyNote } = await import('@/lib/collections/reply-context')
+            if (await claimReplyNote(conversationId, d.kind, d.text)) await postInternalNote({ conversationId, text: d.text })
           } else {
             const r = await applyCollectionReply(
               { accountId, contactId, conversationId, kind: d.kind, date: d.date },
-              { moveDueDate: d.moveDueDate, pause: d.pause, maxPromiseDays: MAX_PROMISE_DAYS },
+              { moveDueDate: d.moveDueDate, pause: d.pause, maxPromiseDays: MAX_PROMISE_DAYS, countSiblings: true },
             )
             if (r.note) await postInternalNote({ conversationId, text: r.note })
           }

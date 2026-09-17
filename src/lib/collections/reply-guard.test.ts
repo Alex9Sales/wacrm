@@ -8,13 +8,17 @@ import {
   ASKED_DEBT_RE,
   buildClassifierInput,
   collectionReplyRelevance,
+  CONTEST_RE,
   dayKeyIn,
   decideCollectionReply,
   NEGOTIATION_RE,
+  noteSignature,
   otherPixWithin,
+  PAID_CLAIM_RE,
   parsePtDates,
   PAY_WORD_RE,
   pickBurst,
+  pickMarkerBurst,
   resolveDate,
   type BurstRow,
   type OpenCharge,
@@ -589,6 +593,42 @@ describe('palavras — bordas testadas com os textos reais', () => {
     expect(ASKED_DEBT_RE.test('O domínio vencido precisa ser renovado')).toBe(false)
     expect(ASKED_DEBT_RE.test('Sua campanha do Google Ads está sem saldo, podemos carregar?')).toBe(false)
   })
+  it('revisão 16/09: transferir, depositar, pague, pagaremos, pagá-lo contam como pagar', () => {
+    for (const t of ['vou transferir amanhã', 'vou depositar amanhã', 'pague', 'pagaremos amanhã', 'vou pagá-lo', 'Vou transferir agora o de vocês', 'faço a transferência hoje']) {
+      expect(PAY_WORD_RE.test(t), t).toBe(true)
+    }
+    // Sem pagar escondido em outra palavra.
+    expect(PAY_WORD_RE.test('apagaram a mensagem')).toBe(false)
+    expect(PAY_WORD_RE.test('hoje tem pagode')).toBe(false)
+  })
+  it('revisão 16/09: "nunca contratei", "não solicitei", "não autorizei" são contestação', () => {
+    for (const t of ['nunca contratei isso', 'não solicitei esse serviço', 'nao autorizei essa cobrança', 'não fiz esse pedido']) {
+      expect(CONTEST_RE.test(t), t).toBe(true)
+    }
+    expect(CONTEST_RE.test('solicitei o boleto ontem')).toBe(false)
+    expect(PAID_CLAIM_RE.test('nunca contratei isso')).toBe(false)
+  })
+  it('Villa Vitória escrito "Vou transferir agora o de vocês" (cobrança 46 h antes) → promessa', () => {
+    // Sem o "link para pagamento do Google" junto, só "transferir" fala em pagar.
+    const c = { ...APPLY[10].c, typed: 'Vou transferir agora o de vocês.' }
+    const { relevance, decision } = judge(c, { kind: 'promessa', date: '2026-09-16' })
+    expect(relevance).toBe('recent_collection')
+    expect(decision).toMatchObject({ action: 'apply', kind: 'promessa', date: '2026-09-16', moveDueDate: false })
+  })
+  it('Ale Brasil com "Vou depositar amanhã sem falta" e 72 h de silêncio → fala espontânea de pagamento', () => {
+    const c = ctx({ newestAt: at('2026-09-10T11:17:00-03:00'), typed: 'Bom dia\nVou depositar amanhã sem falta', outboundLast72h: 0 })
+    expect(judge(c, { kind: 'promessa', date: '2026-09-11' })).toMatchObject({ relevance: 'spontaneous_payment', decision: { action: 'apply', date: '2026-09-11' } })
+  })
+  it('contestação "nunca contratei isso" em resposta direta pausa', () => {
+    const c = ctx({
+      newestAt: at('2026-09-16T10:01:00-03:00'),
+      typed: 'nunca contratei isso',
+      sameConvCollectAt: at('2026-09-16T10:00:00-03:00'),
+      outboundLast72h: 1,
+      ourRecent: ours(['2026-09-16T10:00:00-03:00', COLLECT('Cobranças')]),
+    })
+    expect(judge(c, { kind: 'contesta', date: null }).decision).toMatchObject({ action: 'apply', kind: 'contesta', pause: true })
+  })
 })
 
 describe('parsePtDates — datas em português', () => {
@@ -616,6 +656,46 @@ describe('parsePtDates — datas em português', () => {
     expect(parsePtDates('pago 25/09', '2026-09-16')).toEqual(['2026-09-25'])
     expect(parsePtDates('o Pix é de 11/09 05:27', '2026-09-16')).toEqual([])
     expect(parsePtDates('pago 05/01', '2026-12-20')).toEqual(['2027-01-05'])
+  })
+  it('revisão 16/09: "dia N de <mês>" e "dia N do mês que vem" usam o mês dito', () => {
+    expect(parsePtDates('consigo pagar dia 25 de outubro', '2026-09-16')).toEqual(['2026-10-25'])
+    expect(parsePtDates('pago dia 20 do mês que vem', '2026-09-16')).toEqual(['2026-10-20'])
+    expect(parsePtDates('pago dia 5 de novembro', '2026-09-16')).toEqual(['2026-11-05'])
+    expect(parsePtDates('pago dia 20 do próximo mês', '2026-09-16')).toEqual(['2026-10-20'])
+    expect(parsePtDates('pago dia 10 de março', '2026-09-16')).toEqual([])
+    expect(parsePtDates('pago dia 5 de janeiro', '2026-12-20')).toEqual(['2027-01-05'])
+    expect(parsePtDates('pago dia 10 do mês que vem', '2026-12-20')).toEqual(['2027-01-10'])
+    // Dia que não existe no mês seguinte: sem token (o modelo decide).
+    expect(parsePtDates('pago dia 31 do mês que vem', '2026-10-16')).toEqual([])
+    expect(parsePtDates('pago dia 31 de setembro', '2026-09-16')).toEqual([])
+  })
+  it('revisão 16/09: "sexta que vem" e "sexta da semana que vem" não são data', () => {
+    expect(parsePtDates('pago na sexta da semana que vem', '2026-09-16')).toEqual([])
+    expect(parsePtDates('sexta-feira que vem', '2026-09-16')).toEqual([])
+    expect(parsePtDates('sexta feira que vem', '2026-09-16')).toEqual([])
+    expect(parsePtDates('sexta que vem', '2026-09-16')).toEqual([])
+    expect(parsePtDates('pago na segunda da outra semana', '2026-09-16')).toEqual([])
+    expect(parsePtDates('pago na quinta da próxima semana', '2026-09-16')).toEqual([])
+    // A sexta desta semana continua data.
+    expect(parsePtDates('pago sexta', '2026-09-16')).toEqual(['2026-09-18'])
+    expect(parsePtDates('pago sexta-feira, sem falta', '2026-09-16')).toEqual(['2026-09-18'])
+  })
+  it('revisão 16/09: a data certa do modelo não é mais derrubada pelo leitor', () => {
+    const direct = (typed: string) =>
+      ctx({
+        newestAt: at('2026-09-16T10:01:00-03:00'),
+        typed,
+        sameConvCollectAt: at('2026-09-16T10:00:00-03:00'),
+        anyCollectAt: at('2026-09-16T10:00:00-03:00'),
+        outboundLast72h: 1,
+        ourRecent: ours(['2026-09-16T10:00:00-03:00', COLLECT('Cobranças')]),
+      })
+    expect(judge(direct('consigo pagar dia 25 de outubro'), { kind: 'promessa', date: '2026-10-25' }).decision).toMatchObject({ action: 'apply', kind: 'promessa', date: '2026-10-25' })
+    // Sem data do modelo, o leitor dá 20/10 — antes gravava 20/09, um mês antes.
+    expect(judge(direct('pago dia 20 do mês que vem'), { kind: 'promessa', date: null }).decision).toMatchObject({ action: 'apply', kind: 'promessa', date: '2026-10-20' })
+    expect(judge(direct('pago na sexta da semana que vem'), { kind: 'promessa', date: '2026-09-25' }).decision).toMatchObject({ action: 'apply', kind: 'promessa', date: '2026-09-25' })
+    // "Sexta que vem" sem data do modelo: ninguém chuta, fica a nota.
+    expect(judge(direct('pago sexta que vem'), { kind: 'promessa', date: null }).decision).toMatchObject({ action: 'note', kind: 'promessa' })
   })
 })
 
@@ -654,9 +734,65 @@ describe('valores do comprovante', () => {
     expect(amountMatchesOpen([330], charges(165, 165))).toBe(true)
     expect(amountMatchesOpen([315], charges(105, 105, 105, 105))).toBe(true)
   })
-  it('com juros informados pelo Asaas, vale valor + juros', () => {
+  it('com juros informados pelo Asaas, vale de valor até o maior entre valor + juros e valor + 10 %', () => {
     expect(amountMatchesOpen([106.79], [{ value: 100, interestValue: 6.79 }])).toBe(true)
-    expect(amountMatchesOpen([110], [{ value: 100, interestValue: 6.79 }])).toBe(false)
+    // 110 contra 100 + 6,79: ainda dentro dos 10 %.
+    expect(amountMatchesOpen([110], [{ value: 100, interestValue: 6.79 }])).toBe(true)
+    expect(amountMatchesOpen([112], [{ value: 100, interestValue: 6.79 }])).toBe(false)
+    // Juros maiores que 10 %: vale até valor + juros.
+    expect(amountMatchesOpen([125], [{ value: 100, interestValue: 25 }])).toBe(true)
+  })
+  it('revisão 16/09: quem paga o valor ORIGINAL (boleto sem juros) bate mesmo com juros informados', () => {
+    const open = [{ value: 165, interestValue: 5.93 }]
+    expect(amountMatchesOpen([165], open)).toBe(true)
+    expect(amountMatchesOpen([170.93], open)).toBe(true)
+    expect(amountMatchesOpen([150], open)).toBe(false)
+    const c = ctx({
+      newestAt: at('2026-09-16T10:01:00-03:00'),
+      media: 'Comprovante Pix no valor de R$ 165,00',
+      sameConvCollectAt: at('2026-09-16T10:00:00-03:00'),
+      anyCollectAt: at('2026-09-16T10:00:00-03:00'),
+      outboundLast72h: 1,
+      ourRecent: ours(['2026-09-16T10:00:00-03:00', COLLECT('Cobranças')]),
+      openCharges: open,
+    })
+    expect(judge(c, { kind: 'comprovante', date: null }).decision).toMatchObject({ action: 'apply', kind: 'comprovante' })
+  })
+})
+
+describe('efeito repetido — revisão 16/09', () => {
+  const touch = (p: Partial<TouchState>): TouchState => ({
+    snoozeUntil: '2026-09-20T03:00:00.000Z',
+    snoozeReason: null,
+    paused: false,
+    pausedSource: null,
+    pausedReason: null,
+    updatedAt: '2026-09-16T12:16:41.000Z',
+    ...p,
+  })
+  const now = at('2026-09-16T09:16:50-03:00')
+
+  it('promessa: vencimento movido no Asaas para o mesmo dia conta como já aplicada', () => {
+    expect(alreadyApplied(touch({ snoozeReason: 'Vencimento alterado para 18/09/2026' }), 'promessa', '2026-09-18', now)).toBe(true)
+    expect(alreadyApplied(touch({ snoozeReason: 'Vencimento alterado para 19/09/2026' }), 'promessa', '2026-09-18', now)).toBe(false)
+  })
+  it('promessa: a registrada pela tela não é sobrescrita pela IA', () => {
+    expect(alreadyApplied(touch({ snoozeReason: 'Prometeu pagar em 18/09/2026 — registrado por João: ligou' }), 'promessa', '2026-09-18', now)).toBe(true)
+    expect(alreadyApplied(touch({ snoozeReason: 'Prometeu pagar em 25/09/2026 — registrado por João' }), 'promessa', '2026-09-18', now)).toBe(false)
+  })
+  it('Rack 95: comprovante lido 2x em 9 s com promessa mais longa gravada → a 2ª é repetida', () => {
+    const t = touch({ snoozeReason: 'Cliente prometeu pagar em 18/09/2026', receiptAt: '2026-09-16T12:16:41.000Z' })
+    expect(alreadyApplied(t, 'comprovante', null, now)).toBe(true)
+    // Sem o registro do comprovante, o motivo da promessa não barrava.
+    expect(alreadyApplied({ ...t, receiptAt: null }, 'comprovante', null, now)).toBe(false)
+    // Registro com mais de 12 h não barra.
+    expect(alreadyApplied(t, 'comprovante', null, at('2026-09-17T10:00:00-03:00'))).toBe(false)
+  })
+  it('assinatura da nota: mesmo tipo e texto repetem; texto ou tipo diferente não', () => {
+    const a = noteSignature('promessa', '🧾 O cliente falou em pagar, mas sem data.')
+    expect(noteSignature('promessa', '🧾 O cliente falou em pagar, mas sem data.')).toBe(a)
+    expect(noteSignature('acordo', '🧾 O cliente falou em pagar, mas sem data.')).not.toBe(a)
+    expect(noteSignature('comprovante', 'R$ 150,00')).not.toBe(noteSignature('comprovante', 'R$ 151,00'))
   })
 })
 
@@ -700,6 +836,37 @@ describe('pickBurst — a rajada ancora no balão mais novo', () => {
   it('última mensagem nossa → sem rajada', () => {
     expect(pickBurst([row('a', 'bot', '2026-09-16T09:00:00-03:00', { contentText: 'Oi' })])).toBeNull()
     expect(pickBurst([])).toBeNull()
+  })
+
+  it('marcador (revisão 16/09): partes da resposta anterior depois do "pago sexta" são puladas', () => {
+    const rows = [
+      row('b3', 'bot', '2026-09-16T09:01:14-03:00', { contentText: 'Posso ajudar?' }),
+      row('b2', 'bot', '2026-09-16T09:01:10-03:00', { contentText: 'Sua parcela vence dia 18' }),
+      row('c2', 'customer', '2026-09-16T09:01:07-03:00', { contentText: 'pago sexta' }),
+      row('b1', 'bot', '2026-09-16T09:01:03-03:00', { contentText: 'Oi!' }),
+      row('c1', 'customer', '2026-09-16T09:00:50-03:00', { contentText: 'oi' }),
+    ]
+    // O pickBurst puro via o bot por último e descartava o marcador.
+    expect(pickBurst(rows)).toBeNull()
+    const b = pickMarkerBurst(rows)!
+    expect(b.newestId).toBe('c2')
+    expect(b.bubbles.map((x) => x.id)).toEqual(['c2'])
+    expect(b.typed).toBe('pago sexta')
+    expect(b.newestAt.toISOString()).toBe('2026-09-16T12:01:07.000Z')
+  })
+
+  it('marcador: humano no topo não é pulado; só bot → sem rajada', () => {
+    expect(
+      pickMarkerBurst([
+        row('a1', 'agent', '2026-09-16T09:02:00-03:00', { contentText: '*João:* Combinado' }),
+        row('c1', 'customer', '2026-09-16T09:01:00-03:00', { contentText: 'pago sexta' }),
+      ]),
+    ).toBeNull()
+    expect(pickMarkerBurst([row('b1', 'bot', '2026-09-16T09:00:00-03:00', { contentText: 'Oi' })])).toBeNull()
+    expect(pickMarkerBurst([])).toBeNull()
+    // Sem bot no topo, igual ao pickBurst.
+    const plain = [row('c1', 'customer', '2026-09-16T09:01:00-03:00', { contentText: 'pago sexta' })]
+    expect(pickMarkerBurst(plain)).toEqual(pickBurst(plain))
   })
 })
 

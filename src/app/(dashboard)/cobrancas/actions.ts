@@ -38,6 +38,7 @@ import {
   type AccountHistoryView,
 } from '@/lib/collections/charge-form'
 import { changeChargeDueDateCore } from '@/lib/collections/due-date'
+import { manualPromiseReasonPrefix } from '@/lib/collections/reply-guard'
 import { manualChargeMessage, parseDueDate, parseValue, validateEmit } from '@/lib/collections/emit-rules'
 import { postInternalNote } from '@/lib/ai/close-actions'
 import { numberHasWhatsApp } from '@/lib/whatsapp/number-exists'
@@ -847,7 +848,8 @@ export async function registerPaymentPromise(input: {
 
   const who = firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, userId)).limit(1))
   const extra = (input.note ?? '').trim()
-  const reason = `Prometeu pagar em ${date.split('-').reverse().join('/')} — registrado por ${who?.name ?? 'alguém da equipe'}${extra ? `: ${extra}` : ''}`
+  // O começo do motivo é lido pela trava de promessa repetida da IA (reply-guard.ts).
+  const reason = `${manualPromiseReasonPrefix(date)} — registrado por ${who?.name ?? 'alguém da equipe'}${extra ? `: ${extra}` : ''}`
   const touch = firstOrNull(
     await db
       .select({ until: collectionsTouches.snoozeUntil })

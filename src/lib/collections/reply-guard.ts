@@ -56,8 +56,9 @@ export const OTHER_PIX_WINDOW_MS = DAY_MS
 /** Promessa para mais de 45 dias não segura a régua: "pago no vencimento" de
  *  uma parcela A VENCER adiaria a cobrança da vencida por semanas. */
 export const MAX_PROMISE_DAYS = 45
-/** Encargos aceitos quando o Asaas não informa juros: José Luiz pagou 170,93
- *  por 165 (3,6 %); a MP Raspagem mandou 200 ao Google contra 180 (11 %). */
+/** Encargos aceitos acima do valor (ou os juros do Asaas, se forem maiores):
+ *  José Luiz pagou 170,93 por 165 (3,6 %); a MP Raspagem mandou 200 ao Google
+ *  contra 180 (11 %). */
 export const RECEIPT_TOLERANCE_RATIO = 0.1
 /** Folga de arredondamento, em reais. */
 export const RECEIPT_TOLERANCE_ABS = 1
@@ -69,6 +70,8 @@ export const BURST_MAX_BUBBLES = 6
 export const BURST_MAX_SPAN_MS = 3 * HOUR_MS
 /** Comprovante igual dentro de 12 h é a mesma rajada lida de novo. */
 export const RECEIPT_DEDUP_MS = 12 * HOUR_MS
+/** Nota igual (mesmo tipo e texto) na mesma conversa dentro de 12 h não se repete. */
+export const NOTE_DEDUP_MS = 12 * HOUR_MS
 
 // ---------------------------------------------------------------- motivos gravados na régua
 
@@ -79,6 +82,10 @@ export const CONTESTA_PAUSE_REASON = 'Cliente contesta a cobrança'
 /** "2026-09-18" → "18/09/2026". */
 export const brDate = (iso: string) => iso.slice(0, 10).split('-').reverse().join('/')
 export const promiseSnoozeReason = (date: string) => `Cliente prometeu pagar em ${brDate(date)}`
+/** Motivo que due-date.ts grava ao mover o vencimento no Asaas (a régua acorda no mesmo instante da promessa). */
+export const dueDateMovedReason = (date: string) => `Vencimento alterado para ${brDate(date)}`
+/** Começo do motivo que a "Registrar promessa" da tela grava ("… — registrado por João: obs"). */
+export const manualPromiseReasonPrefix = (date: string) => `Prometeu pagar em ${brDate(date)}`
 
 // ---------------------------------------------------------------- palavras
 // \b do JS não respeita acento ("simão" casaria "sim"): início e fim de
@@ -92,9 +99,17 @@ const W = (s: string) => new RegExp(`${B}(?:${s})${E}`, 'iu')
 export const DEBT_WORD_RE = W('boletos?|faturas?|parcelas?|mensalidades?|cobran[çc]as?|d[ée]bitos?|d[íi]vidas?|em aberto|atrasad[oa]s?|vencid[oa]s?|juros|asaas|pend[êe]ncias?')
 /** Sem "vencido": "domínio vencido" aparece nas conversas da GoLink e não é cobrança. */
 export const ASKED_DEBT_RE = W('boletos?|faturas?|parcelas?|mensalidades?|cobran[çc]as?|d[ée]bitos?|em aberto|pend[êe]ncias?')
-export const PAY_WORD_RE = W('pag(?:ar|o|ou|uei|amento|amentos|ando|arei|aria|amos)|psgar|pgar|pix|transferi|depositei|comprovante|quit(?:ar|o|ei)|acert(?:ar|o|amos)|efetu(?:ar|o|ei)')
+// 16/09 (revisão): como estes regex VETAM o palpite do modelo, forma que falta
+// derruba caso certo — "Vou transferir agora o de vocês" (Villa Vitória) virava
+// "promessa sem falar em pagar", e "vou depositar amanhã" não contava como fala
+// espontânea de pagamento.
+export const PAY_WORD_RE = W(
+  'pag(?:a|as|am|ar|arei|aria|aremos|arem|amos|ando|amento|amentos|o|ou|ue|uem|uei|[áa]-?l[oa])|psgar|pgar|pix|transfer(?:ir|i|o|imos|[êe]ncia)|deposit(?:ar|o|amos|ei)|comprovante|quit(?:ar|o|ei)|acert(?:ar|o|amos)|efetu(?:ar|o|ei)',
+)
 export const NEGOTIATION_RE = W('parcel(?:ar|amento|ad[oa]|inha)|em \\d+ ?(?:x|vezes)|\\d+ ?x|divid(?:ir|e|imos)|desconto|descontinho|abat(?:er|imento)|(?:re)?negoci\\p{L}*|acordo|reduz(?:ir|ido|a)?|diminuir|abaixar|baixar o valor|valor menor|metade|fica bom pra|faz(?:er)? por|tirar (?:os )?juros|sem (?:os )?juros|isen(?:tar|[çc][ãa]o)|o resto|restante|uma parte|entrada')
-export const CONTEST_RE = W('n[ãa]o devo|n[ãa]o reconhe[çc]\\p{L}*|cancelei|cancelad[oa]|n[ãa]o contratei|n[ãa]o pedi|cobran[çc]a (?:errad|indevid)\\p{L}*|valor errado|est[áa] errad[oa]|n[ãa]o [ée] (?:meu|minha|nosso|nossa)|engano')
+export const CONTEST_RE = W(
+  'n[ãa]o devo|n[ãa]o reconhe[çc]\\p{L}*|cancelei|cancelad[oa]|n[ãa]o contratei|nunca contratei|n[ãa]o pedi|n[ãa]o (?:solicitei|autorizei|fiz (?:esse|essa|este|esta) (?:pedido|compra))|cobran[çc]a (?:errad|indevid)\\p{L}*|valor errado|est[áa] errad[oa]|n[ãa]o [ée] (?:meu|minha|nosso|nossa)|engano',
+)
 export const PAID_CLAIM_RE = W('j[áa] (?:paguei|pago|foi pag[oa]|quitei|est[áa] pag[oa]|fiz o pix|transferi)|paguei|t[áa] pag[oa]|segue (?:o )?comprovante|fiz o pix|pix feito')
 
 /** Pix copia-e-cola que NÃO é do Asaas (Ultra Visão 16/09: o atendente mandou o Pix do Google). */
@@ -190,6 +205,23 @@ export function pickBurst(
   return { bubbles, newestId: newest.id, newestAt: new Date(newestMs), typed: typed.join('\n'), media: media.join('\n') }
 }
 
+/**
+ * Rajada para o marcador [[COBRANCA:]] da IA que conversa: pula as partes da
+ * NOSSA resposta anterior que saíram depois da fala do cliente.
+ *
+ * 16/09 (revisão): a IA responde em partes, com "digitando…" entre elas. Se o
+ * cliente escreve "pago sexta" durante a parte 2, as partes 2 e 3 (bot) ficam
+ * mais novas que ele; a rechecagem de corrida responde com
+ * [[COBRANCA:promessa|…]] e o pickBurst puro via "bot por último" → sem rajada
+ * → marcador descartado. A IA confirmava a data e a régua seguia cobrando.
+ * Só 'bot' é pulado: 'agent' é gente no meio, e aí a IA nem responde.
+ */
+export function pickMarkerBurst(rowsNewestFirst: BurstRow[], opts: { maxBubbles?: number; maxSpanMs?: number } = {}): CustomerBurst | null {
+  let i = 0
+  while (i < rowsNewestFirst.length && rowsNewestFirst[i].senderType === 'bot') i++
+  return pickBurst(rowsNewestFirst.slice(i), opts)
+}
+
 // ---------------------------------------------------------------- relevância
 
 export type Relevance = 'direct' | 'recent_collection' | 'asked_debt' | 'mentions_debt' | 'amount_match' | 'spontaneous_payment'
@@ -275,28 +307,70 @@ export function addDaysKey(key: string, n: number): string {
 }
 
 const WEEKDAY_INDEX: Record<string, number> = { domingo: 0, segunda: 1, terca: 2, quarta: 3, quinta: 4, sexta: 5, sabado: 6 }
+const MONTH_INDEX: Record<string, number> = {
+  janeiro: 1,
+  fevereiro: 2,
+  marco: 3,
+  abril: 4,
+  maio: 5,
+  junho: 6,
+  julho: 7,
+  agosto: 8,
+  setembro: 9,
+  outubro: 10,
+  novembro: 11,
+  dezembro: 12,
+}
 const stripAccents = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '')
 
 // Um regex só, para os tokens saírem na ORDEM em que aparecem no texto.
 // Dia da semana seguido de parcela/via/vez/etapa não é data ("segunda via do
 // boleto", "segunda parcela").
+//
+// 16/09 (revisão): o leitor VENCE o modelo quando os dois discordam, então
+// data lida pela metade é pior que nenhuma. "dia 25 de outubro" virava 25/09 e
+// zerava a promessa de 25/10 do modelo; "dia 20 do mês que vem" virava 20/09 e,
+// sem data do modelo, gravava a promessa um mês antes. Agora "dia N de <mês>" e
+// "dia N do mês que vem" calculam o mês; "sexta que vem" e "sexta da semana
+// que vem" não emitem token (o modelo decide). O `(?![- ]feira)` impede o
+// regex de recuar e aceitar só "sexta" em "sexta-feira que vem".
 const DATE_TOKEN_RE = new RegExp(
   `${B}(?:` +
     '(depois de amanh[ãa])' +
     '|(amanh[ãa])' +
     '|(hoje)' +
-    '|(domingo|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado)(?:[- ]feira)?(?!\\s*(?:parcela|via|vez|etapa))' +
+    '|(domingo|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado)(?:[- ]feira)?(?![- ]feira)' +
+    '(?!\\s*(?:parcela|via|vez|etapa|(?:d[ao]\\s+|n[ao]\\s+)?(?:semana\\s+que\\s+vem|pr[óo]xima\\s+semana|outra\\s+semana)|que\\s+vem))' +
     '|(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2}|\\d{4}))?' +
     '|dia (\\d{1,2})(?![\\d/])' +
+    '(?:\\s+(?:d[eo]\\s+)?(?:(janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)|(m[êe]s\\s+que\\s+vem|pr[óo]ximo\\s+m[êe]s)))?' +
     `)${E}`,
   'giu',
 )
+
+/** Dia e mês sem ano: deste ano se ainda não passou; senão o ano que vem, só até 60 dias à frente. */
+function dayMonthFrom(today: Date, month: number, day: number): Date | null {
+  const y = today.getUTCFullYear()
+  const d = validUtc(y, month, day)
+  if (d && d >= today) return d
+  // Virada de ano ("05/01" dito em dezembro); data velha ("paguei 11/09") fica de fora.
+  const next = validUtc(y + 1, month, day)
+  return next && next.getTime() - today.getTime() <= 60 * DAY_MS ? next : null
+}
+
+/** "Dia N" do mês seguinte ao de hoje (dezembro → janeiro do ano que vem). */
+function dayOfNextMonth(today: Date, day: number): Date | null {
+  const y = today.getUTCFullYear()
+  const month = today.getUTCMonth() + 1
+  return month === 12 ? validUtc(y + 1, 1, day) : validUtc(y, month + 1, day)
+}
 
 /**
  * Datas citadas pelo cliente, em ordem, sem repetir ("YYYY-MM-DD"):
  * hoje · amanhã · depois de amanhã · dia da semana com ou sem "-feira"
  * (próxima ocorrência; se é hoje, +7) · dd/mm[/aa] (de hoje em diante) ·
- * "dia N" (mês que vem se N já passou). "Semana que vem" não é data.
+ * "dia N de <mês>" · "dia N do mês que vem" · "dia N" (mês que vem se N já
+ * passou). "Semana que vem" e "sexta que vem" não são data.
  * Leitor de reserva e de conferência: a WR disse "segurar até sexta" e o
  * modelo devolveu acordo SEM data — sem isso não havia de onde tirar 18/09.
  */
@@ -328,21 +402,22 @@ export function parsePtDates(text: string, todayKey: string): string[] {
         if (d && d >= today) push(d)
         continue
       }
-      const y = today.getUTCFullYear()
-      const d = validUtc(y, month, day)
-      if (d && d >= today) push(d)
-      else {
-        // Virada de ano ("05/01" dito em dezembro); data velha ("paguei 11/09") fica de fora.
-        const next = validUtc(y + 1, month, day)
-        if (next && next.getTime() - today.getTime() <= 60 * DAY_MS) push(next)
-      }
+      push(dayMonthFrom(today, month, day))
     } else if (m[8]) {
       const n = Number(m[8])
       if (n < 1 || n > 31) continue
-      const y = today.getUTCFullYear()
-      const month = today.getUTCMonth() + 1
-      if (n >= today.getUTCDate()) push(validUtc(y, month, n))
-      else push(month === 12 ? validUtc(y + 1, 1, n) : validUtc(y, month + 1, n))
+      if (m[9]) {
+        // "dia 25 de outubro": o mês dito manda.
+        const month = MONTH_INDEX[stripAccents(m[9].toLowerCase())]
+        if (month) push(dayMonthFrom(today, month, n))
+      } else if (m[10]) {
+        // "dia 20 do mês que vem" / "do próximo mês": sempre o mês seguinte.
+        push(dayOfNextMonth(today, n))
+      } else if (n >= today.getUTCDate()) {
+        push(validUtc(today.getUTCFullYear(), today.getUTCMonth() + 1, n))
+      } else {
+        push(dayOfNextMonth(today, n))
+      }
     }
   }
   return out
@@ -391,8 +466,13 @@ export function amountsIn(text: string): number[] {
 
 /**
  * Algum valor bate com uma parcela aberta ou com uma soma delas (até 10)?
- * Com juros informados pelo Asaas, vale valor + juros (± R$ 1); sem juros,
- * de valor − R$ 1 até valor + 10 % + R$ 1.
+ * Por parcela, de valor − R$ 1 até o MAIOR entre valor + juros do Asaas e
+ * valor + 10 %, + R$ 1.
+ *
+ * 16/09 (revisão): com juros informados valia só valor + juros (± R$ 1) — quem
+ * pagou o valor original por boleto (R$ 165 contra 165 + 5,93) ganhava nota
+ * "não bate com R$ 165,00", e juros que cresceram depois do último sync também
+ * ficavam de fora.
  */
 export function amountMatchesOpen(amounts: number[], charges: OpenCharge[]): boolean {
   const list = charges.slice(0, RECEIPT_MAX_CHARGES)
@@ -409,13 +489,8 @@ export function amountMatchesOpen(amounts: number[], charges: OpenCharge[]): boo
       const v = cents(list[i].value)
       const iv = list[i].interestValue
       const j = iv != null && iv > 0 ? cents(iv) : 0
-      if (j > 0) {
-        lo += v + j
-        hi += v + j
-      } else {
-        lo += v
-        hi += Math.round(v * (1 + RECEIPT_TOLERANCE_RATIO))
-      }
+      lo += v
+      hi += Math.max(v + j, Math.round(v * (1 + RECEIPT_TOLERANCE_RATIO)))
     }
     if (want.some((a) => a >= lo - slack && a <= hi + slack)) return true
   }
@@ -552,6 +627,12 @@ export interface TouchState {
   pausedSource: string | null
   pausedReason: string | null
   updatedAt: string | null
+  /**
+   * Quando o último comprovante foi aplicado (KV de 12 h, reply-context.ts).
+   * O motivo gravado não basta: o GREATEST do comprovante mantém a promessa
+   * mais longa e o motivo dela.
+   */
+  receiptAt?: string | null
 }
 
 /**
@@ -565,9 +646,23 @@ export function alreadyApplied(touch: TouchState | null | undefined, kind: Colle
   const until = toMs(touch.snoozeUntil)
   const sleeping = Number.isFinite(until) && until > now.getTime()
   switch (kind) {
-    case 'promessa':
-      return !!date && sleeping && touch.snoozeReason === promiseSnoozeReason(date)
+    case 'promessa': {
+      if (!date || !sleeping) return false
+      // 16/09 (revisão): a mesma promessa aparece gravada de três jeitos. Com
+      // "mover vencimento" ligado, changeChargeDueDateCore regrava o motivo como
+      // "Vencimento alterado para 18/09/2026" — e o "sem falta" 9 s depois
+      // tentava mover de novo e deixava nota de erro ("O vencimento já é…").
+      // Promessa registrada pela tela ("… — registrado por João: obs") também
+      // vale: a IA não sobrescreve o motivo que a pessoa escreveu.
+      const reason = touch.snoozeReason ?? ''
+      return reason === promiseSnoozeReason(date) || reason === dueDateMovedReason(date) || reason.startsWith(manualPromiseReasonPrefix(date))
+    }
     case 'comprovante': {
+      // Rack 95 (revisão): promessa até 20/09 + comprovante lido 2x em 9 s → o
+      // motivo continuava o da promessa e a 2ª leitura repetia nota e aviso a
+      // todos. O registro do comprovante aplicado vale mesmo sem o motivo.
+      const receipt = toMs(touch.receiptAt)
+      if (Number.isFinite(receipt) && now.getTime() - receipt < RECEIPT_DEDUP_MS) return true
       const updated = toMs(touch.updatedAt)
       return sleeping && touch.snoozeReason === RECEIPT_SNOOZE_REASON && Number.isFinite(updated) && now.getTime() - updated < RECEIPT_DEDUP_MS
     }
@@ -578,6 +673,20 @@ export function alreadyApplied(touch: TouchState | null | undefined, kind: Colle
     default:
       return false
   }
+}
+
+/**
+ * Assinatura curta de uma nota sem efeito (tipo + texto), para a trava de nota
+ * repetida. 16/09 (revisão): nota não mexe na régua, então alreadyApplied não
+ * a enxerga — "vou pagar" e, 2 min depois, "assim que cair o dinheiro" davam
+ * duas notas iguais e dois avisos ao responsável. O texto é nosso (modelo de
+ * frase + valores), nunca a fala do cliente.
+ */
+export function noteSignature(kind: CollectionReplyKind, text: string): string {
+  let h = 5381
+  const s = `${kind}\n${text}`
+  for (let i = 0; i < s.length; i++) h = ((h * 33) ^ s.charCodeAt(i)) >>> 0
+  return `${kind}:${h.toString(16)}`
 }
 
 // ---------------------------------------------------------------- fuso e entrada do classificador
