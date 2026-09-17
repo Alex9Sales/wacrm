@@ -2746,6 +2746,11 @@ export const calendarConnections = pgTable("calendar_connections", {
 	refreshToken: text("refresh_token"),
 	tokenExpiry: timestamp("token_expiry", { withTimezone: true, mode: 'string' }),
 	scope: text(),
+	// Sincronização automática (migração 0180): quando terminou bem e qual foi o
+	// último erro do Google. Sem isso a agenda só atualizava no clique e uma
+	// conexão morta ficava verde na tela.
+	lastSyncedAt: timestamp("last_synced_at", { withTimezone: true, mode: 'string' }),
+	lastSyncError: text("last_sync_error"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

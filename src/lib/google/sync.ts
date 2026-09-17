@@ -52,7 +52,7 @@ function mapTimes(ev: GoogleEvent): { startsAt: string; endsAt: string; allDay: 
 export async function importGoogleEvents(
   accountId: string,
   connectionId: string,
-): Promise<{ imported: number }> {
+): Promise<{ imported: number; cancelled: number }> {
   const conn = firstOrNull(
     await db
       .select({
@@ -65,63 +65,179 @@ export async function importGoogleEvents(
       .where(and(eq(calendarConnections.id, connectionId), eq(calendarConnections.accountId, accountId)))
       .limit(1),
   )
-  if (!conn) return { imported: 0 }
+  if (!conn) return { imported: 0, cancelled: 0 }
 
-  const accessToken = await getValidAccessToken(conn)
+  try {
+    const accessToken = await getValidAccessToken(conn)
 
-  const cals = await db
-    .select({ id: calendars.id, googleCalendarId: calendars.googleCalendarId })
-    .from(calendars)
-    .where(and(eq(calendars.accountId, accountId), eq(calendars.connectionId, connectionId)))
+    const cals = await db
+      .select({ id: calendars.id, googleCalendarId: calendars.googleCalendarId })
+      .from(calendars)
+      .where(and(eq(calendars.accountId, accountId), eq(calendars.connectionId, connectionId)))
 
-  const timeMin = new Date(Date.now() - 7 * 86_400_000).toISOString()
-  const timeMax = new Date(Date.now() + 60 * 86_400_000).toISOString()
+    const timeMin = new Date(Date.now() - 7 * 86_400_000).toISOString()
+    const timeMax = new Date(Date.now() + 60 * 86_400_000).toISOString()
 
-  let imported = 0
-  for (const cal of cals) {
-    if (!cal.googleCalendarId) continue
-    const events = await listGoogleEvents(accessToken, cal.googleCalendarId, timeMin, timeMax)
-    for (const ev of events) {
-      const times = mapTimes(ev)
-      if (!times) continue
-      const status = ev.status === 'cancelled' ? 'cancelled' : 'confirmed'
-      const existing = firstOrNull(
-        await db
-          .select({ id: calendarEvents.id })
-          .from(calendarEvents)
-          .where(and(eq(calendarEvents.calendarId, cal.id), eq(calendarEvents.googleEventId, ev.id)))
-          .limit(1),
-      )
-      const values = {
-        title: ev.summary?.trim() || '(sem título)',
-        description: ev.description ?? null,
-        location: ev.location ?? null,
-        startsAt: times.startsAt,
-        endsAt: times.endsAt,
-        allDay: times.allDay,
-        status,
-      }
-      if (existing) {
-        await db.update(calendarEvents).set({ ...values, updatedAt: sql`now()` }).where(eq(calendarEvents.id, existing.id))
-      } else {
-        await db.insert(calendarEvents).values({
-          accountId,
-          calendarId: cal.id,
-          title: values.title,
-          description: values.description,
-          location: values.location,
-          startsAt: values.startsAt,
-          endsAt: values.endsAt,
-          allDay: values.allDay,
-          status: values.status,
-          source: 'google',
-          googleEventId: ev.id,
-        })
-        imported += 1
+    let imported = 0
+    let cancelled = 0
+    for (const cal of cals) {
+      if (!cal.googleCalendarId) continue
+      // showDeleted: o apagado precisa CHEGAR aqui pra liberar o horário.
+      const events = await listGoogleEvents(accessToken, cal.googleCalendarId, timeMin, timeMax, {
+        showDeleted: true,
+      })
+      for (const ev of events) {
+        // Apagado no Google. Vem antes de mapTimes de propósito: evento apagado
+        // costuma voltar só com o id, sem start/end — se caísse no mapTimes,
+        // seria descartado e a cópia daqui seguiria ocupando o horário.
+        if (ev.status === 'cancelled') {
+          const res = await db
+            .update(calendarEvents)
+            .set({ status: 'cancelled', updatedAt: sql`now()` })
+            .where(
+              and(
+                eq(calendarEvents.calendarId, cal.id),
+                eq(calendarEvents.googleEventId, ev.id),
+                eq(calendarEvents.status, 'confirmed'),
+              ),
+            )
+            .returning({ id: calendarEvents.id })
+          cancelled += res.length
+          continue
+        }
+        const times = mapTimes(ev)
+        if (!times) continue
+        const existing = firstOrNull(
+          await db
+            .select({ id: calendarEvents.id })
+            .from(calendarEvents)
+            .where(and(eq(calendarEvents.calendarId, cal.id), eq(calendarEvents.googleEventId, ev.id)))
+            .limit(1),
+        )
+        const values = {
+          title: ev.summary?.trim() || '(sem título)',
+          description: ev.description ?? null,
+          location: ev.location ?? null,
+          startsAt: times.startsAt,
+          endsAt: times.endsAt,
+          allDay: times.allDay,
+          status: 'confirmed',
+        }
+        if (existing) {
+          await db.update(calendarEvents).set({ ...values, updatedAt: sql`now()` }).where(eq(calendarEvents.id, existing.id))
+        } else {
+          await db.insert(calendarEvents).values({
+            accountId,
+            calendarId: cal.id,
+            title: values.title,
+            description: values.description,
+            location: values.location,
+            startsAt: values.startsAt,
+            endsAt: values.endsAt,
+            allDay: values.allDay,
+            status: values.status,
+            source: 'google',
+            googleEventId: ev.id,
+          })
+          imported += 1
+        }
       }
     }
+    await db
+      .update(calendarConnections)
+      .set({ lastSyncedAt: sql`now()`, lastSyncError: null, updatedAt: sql`now()` })
+      .where(eq(calendarConnections.id, connectionId))
+    return { imported, cancelled }
+  } catch (err) {
+    // Grava o motivo em vez de sumir com ele: token revogado tem que aparecer
+    // na tela como "reconecte", não virar agenda vazia (= IA oferecendo tudo).
+    const msg = err instanceof Error ? err.message : String(err)
+    await db
+      .update(calendarConnections)
+      .set({ lastSyncError: msg.slice(0, 500), updatedAt: sql`now()` })
+      .where(eq(calendarConnections.id, connectionId))
+      .catch(() => {})
+    throw err
   }
-  return { imported }
+}
+
+// ============================================================
+// Sincronização automática. Até 17/09 a importação só rodava no clique
+// ("Sincronizar" na Agenda) ou no instante da conexão — com a IA marcando
+// reunião sozinha, isso significa oferecer horário em cima de uma foto velha
+// da agenda do dono.
+// ============================================================
+
+/** Quanto tempo uma sincronização continua "fresca" para o caminho da IA. */
+export const SYNC_FRESH_MS = 90_000
+
+type ConnRef = { id: string; accountId: string }
+
+async function connectionsOf(accountId?: string): Promise<ConnRef[]> {
+  const base = db
+    .select({ id: calendarConnections.id, accountId: calendarConnections.accountId })
+    .from(calendarConnections)
+  return accountId ? base.where(eq(calendarConnections.accountId, accountId)) : base
+}
+
+/**
+ * Sincroniza as conexões de UMA conta. Usada antes de a IA oferecer horário.
+ * Nunca lança e nunca demora: respeita a carência de `maxAgeMs` (não martela o
+ * Google a cada mensagem) e desiste em `timeoutMs` — agenda um pouco velha é
+ * ruim, resposta travada é pior.
+ */
+export async function syncAccountCalendars(
+  accountId: string,
+  opts: { maxAgeMs?: number; timeoutMs?: number } = {},
+): Promise<{ synced: number }> {
+  const maxAgeMs = opts.maxAgeMs ?? SYNC_FRESH_MS
+  const timeoutMs = opts.timeoutMs ?? 4_000
+  try {
+    const stale = await db
+      .select({ id: calendarConnections.id })
+      .from(calendarConnections)
+      .where(
+        and(
+          eq(calendarConnections.accountId, accountId),
+          sql`(${calendarConnections.lastSyncedAt} IS NULL OR ${calendarConnections.lastSyncedAt} < now() - ${sql.raw(`interval '${Math.round(maxAgeMs / 1000)} seconds'`)})`,
+        ),
+      )
+    if (!stale.length) return { synced: 0 }
+
+    const work = Promise.all(
+      stale.map((c) => importGoogleEvents(accountId, c.id).catch(() => null)),
+    )
+    const done = await Promise.race([
+      work.then((rs) => rs.filter(Boolean).length),
+      new Promise<number>((resolve) => setTimeout(() => resolve(0), timeoutMs)),
+    ])
+    return { synced: done }
+  } catch (err) {
+    console.error('[google sync] conta', accountId, err instanceof Error ? err.message : err)
+    return { synced: 0 }
+  }
+}
+
+/** Varre TODAS as contas — é o que o worker periódico chama. */
+export async function syncAllGoogleConnections(): Promise<{ ok: number; failed: number }> {
+  let ok = 0
+  let failed = 0
+  const conns = await connectionsOf()
+  for (const c of conns) {
+    try {
+      const r = await importGoogleEvents(c.accountId, c.id)
+      ok += 1
+      if (r.imported || r.cancelled) {
+        console.log(`[google sync] ${c.accountId}: +${r.imported} novo(s), ${r.cancelled} liberado(s)`)
+      }
+    } catch (err) {
+      // Uma conexão podre (token revogado) não pode derrubar a varredura das
+      // outras contas. O motivo já foi gravado em last_sync_error.
+      failed += 1
+      console.error(`[google sync] ${c.accountId} falhou:`, err instanceof Error ? err.message : err)
+    }
+  }
+  return { ok, failed }
 }
 
 // ============================================================

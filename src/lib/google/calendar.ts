@@ -148,26 +148,51 @@ export type GoogleEvent = {
   end?: { dateTime?: string; date?: string }
 }
 
+/** Teto de páginas por agenda — trava de segurança contra loop de pageToken. */
+const EVENTS_MAX_PAGES = 10
+
+/**
+ * Eventos de uma agenda na janela pedida.
+ *
+ * Duas coisas que a v1 não fazia e custavam caro pra IA:
+ *  - `showDeleted`: sem isso, evento apagado no Google somem da resposta e a
+ *    cópia daqui fica 'confirmed' pra sempre — a IA segue achando o horário
+ *    ocupado. Com ele, o apagado volta com status 'cancelled' e o sync libera.
+ *  - paginação: `maxResults` é teto POR PÁGINA. Uma agenda cheia passava de 250
+ *    na janela e o resto sumia em silêncio — e o que some aqui vira reunião
+ *    marcada em cima de compromisso.
+ */
 export async function listGoogleEvents(
   accessToken: string,
   calendarId: string,
   timeMin: string,
   timeMax: string,
+  opts: { showDeleted?: boolean } = {},
 ): Promise<GoogleEvent[]> {
-  const params = new URLSearchParams({
-    timeMin,
-    timeMax,
-    singleEvents: 'true',
-    orderBy: 'startTime',
-    maxResults: '250',
-  })
-  const res = await fetch(
-    `${CAL_BASE}/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`,
-    { headers: { Authorization: `Bearer ${accessToken}` } },
-  )
-  if (!res.ok) throw new Error(`Google events (${res.status}): ${await res.text()}`)
-  const data = (await res.json()) as { items?: GoogleEvent[] }
-  return data.items ?? []
+  const items: GoogleEvent[] = []
+  let pageToken: string | undefined
+  for (let page = 0; page < EVENTS_MAX_PAGES; page++) {
+    const params = new URLSearchParams({
+      timeMin,
+      timeMax,
+      singleEvents: 'true',
+      orderBy: 'startTime',
+      maxResults: '250',
+    })
+    if (opts.showDeleted) params.set('showDeleted', 'true')
+    if (pageToken) params.set('pageToken', pageToken)
+    const res = await fetch(
+      `${CAL_BASE}/calendars/${encodeURIComponent(calendarId)}/events?${params.toString()}`,
+      { headers: { Authorization: `Bearer ${accessToken}` } },
+    )
+    if (!res.ok) throw new Error(`Google events (${res.status}): ${await res.text()}`)
+    const data = (await res.json()) as { items?: GoogleEvent[]; nextPageToken?: string }
+    items.push(...(data.items ?? []))
+    if (!data.nextPageToken) return items
+    pageToken = data.nextPageToken
+  }
+  console.warn(`[google sync] ${calendarId}: parei em ${EVENTS_MAX_PAGES} páginas de eventos`)
+  return items
 }
 
 // --- escrita (CRM → Google) ---

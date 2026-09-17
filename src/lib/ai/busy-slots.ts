@@ -1,8 +1,8 @@
 // ============================================================
 // 📅 Horários já ocupados na Agenda — pra IA não marcar duas reuniões no mesmo
-// horário. 17/09 (Limpeza com Zelo): a Zélia vai agendar direto na agenda do
-// CRM (a sincronização com o Google não foi liberada), e até aqui a IA oferecia
-// horário sem enxergar nada da agenda. Sem 'server-only' — o worker da IA usa.
+// horário. 17/09 (Limpeza com Zelo): até aqui a IA oferecia horário sem enxergar
+// nada da agenda. Lê a agenda do CRM, que é para onde o sync do Google importa
+// os compromissos — então cobre as duas. Sem 'server-only': o worker da IA usa.
 // ============================================================
 
 import { and, asc, eq, gte, lt } from 'drizzle-orm'

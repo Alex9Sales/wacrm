@@ -41,6 +41,7 @@ import {
 } from './close-actions'
 import { scheduleEventFromAi } from './schedule-actions'
 import { loadBusySlots } from './busy-slots'
+import { syncAccountCalendars } from '@/lib/google/sync'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
 import { extractMaterialDirectives, findMaterialByName, listMaterialsForAgent } from './materials'
@@ -803,9 +804,14 @@ export async function dispatchInboundToAiReply(
     }
 
     // 📅 Agenda: a IA só oferece horário que não bate com reunião já marcada.
-    const busySlots = tools.includes('schedule')
-      ? await loadBusySlots(accountId, settings.businessTimezone || 'America/Sao_Paulo')
-      : undefined
+    // Puxa o Google antes de ler (o tick do worker é de 5 min; um compromisso
+    // marcado no celular agorinha ainda não estaria aqui). Tem carência e prazo
+    // curto lá dentro — nunca lança e nunca segura a resposta.
+    let busySlots: string[] | undefined
+    if (tools.includes('schedule')) {
+      await syncAccountCalendars(accountId)
+      busySlots = await loadBusySlots(accountId, settings.businessTimezone || 'America/Sao_Paulo')
+    }
 
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,

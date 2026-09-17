@@ -111,6 +111,15 @@ import('./meta-health-worker')
     console.error('[worker] meta-health failed to start:', err);
   });
 
+// 📅 Agenda do Google — tick de 5 min: importa os compromissos das agendas
+// conectadas. Antes só rodava no clique de "Sincronizar", e a IA acabava
+// oferecendo horário em cima de compromisso marcado pelo celular.
+import('./google-sync-worker')
+  .then((m) => m.startGoogleSyncWorker())
+  .catch((err) => {
+    console.error('[worker] google-sync failed to start:', err);
+  });
+
 // 📒 Agenda do celular — tick de 6 h: reconfere a agenda dos números que já
 // importaram e aplica a regra de nome (CRM > agenda > perfil do WhatsApp).
 import('./phonebook-sync-worker')
