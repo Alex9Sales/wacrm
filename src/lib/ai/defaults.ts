@@ -712,16 +712,20 @@ export function buildSystemPrompt(args: {
  * A regra mais importante está escrita em letra grande de propósito: a IA
  * agradece o comprovante mas NUNCA declara nada pago. Quem confirma pagamento
  * é o Asaas, nunca uma conversa.
+ *
+ * 16/09 (WR Caminhão Pipa): "prazo" levava a acordo e pausava a régua sem
+ * data — "segura até sexta" é promessa. "Já paguei isso" pausava como
+ * contestação; é comprovante (a régua dorme 3 dias e alguém confere).
  */
 export function collectionInstruction(debt: string): string {
   return (
     'COBRANÇA EM ABERTO. Este cliente tem valor vencido com a gente:\n' +
     debt +
-    '\n\nQuando ele falar sobre esse pagamento, além de responder normalmente, emita UM marcador de controle (nunca mostre o marcador ao cliente):\n' +
-    '• Prometeu pagar em uma data ("dia 30", "semana que vem", "quando eu receber, dia 5") → "[[COBRANCA:promessa|AAAA-MM-DD]]" com a data ABSOLUTA calculada a partir da data de hoje informada acima. Confirme a data com ele em palavras, uma vez. Se ele não deu data que dê pra calcular, NÃO use este marcador.\n' +
-    '• Mandou comprovante, print ou disse que acabou de pagar → "[[COBRANCA:comprovante]]". AGRADEÇA e diga que vai conferir. NUNCA diga que está pago, quitado, baixado ou confirmado: quem confirma pagamento é o sistema financeiro, não você.\n' +
-    '• Discorda da cobrança ("já paguei isso", "não reconheço", "cancelei") → "[[COBRANCA:contesta]]". Não discuta e não afirme que ele deve: diga que vai verificar e que alguém retorna.\n' +
-    '• Pede desconto, parcelamento, prazo ou acordo → "[[COBRANCA:acordo]]". NÃO negocie, não ofereça valor, não prometa condição: diga que vai passar para quem decide isso.\n\n' +
+    '\n\nQuando ele falar sobre ESSE pagamento (não sobre outro produto, recarga ou anúncio), além de responder normalmente, emita UM marcador de controle (nunca mostre o marcador ao cliente):\n' +
+    '• Prometeu pagar em uma data ("dia 30", "semana que vem", "quando eu receber, dia 5") — inclui pedido de prazo com dia ("segura até sexta") → "[[COBRANCA:promessa|AAAA-MM-DD]]" com a data ABSOLUTA calculada a partir da data de hoje informada acima. Confirme a data com ele em palavras, uma vez. Se ele não deu data que dê pra calcular, NÃO use este marcador.\n' +
+    '• Mandou comprovante, print, disse que acabou de pagar ou diz que já pagou esta cobrança ("já paguei isso") → "[[COBRANCA:comprovante]]". AGRADEÇA e diga que vai conferir. NUNCA diga que está pago, quitado, baixado ou confirmado: quem confirma pagamento é o sistema financeiro, não você.\n' +
+    '• Discorda da cobrança ("não devo", "não reconheço", "cancelei") → "[[COBRANCA:contesta]]". Não discuta e não afirme que ele deve: diga que vai verificar e que alguém retorna.\n' +
+    '• Pede desconto, parcelamento, dividir, pagar só uma parte ou tirar juros → "[[COBRANCA:acordo]]". NÃO negocie, não ofereça valor, não prometa condição: diga que vai passar para quem decide isso.\n\n' +
     'NUNCA fale em juros, multa, protesto, negativação, SPC/Serasa, cobrança judicial ou corte de serviço. Nunca ameace. Nunca invente valor, data de vencimento ou desconto — use só os valores acima.'
   )
 }

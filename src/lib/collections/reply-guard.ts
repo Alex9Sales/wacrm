@@ -1,0 +1,667 @@
+// ============================================================
+// 🧾 Trava da resposta de cobrança — PURO (sem banco, testável).
+//
+// 16/09 (GoLink): o detector silencioso marcou promessa → acordo (pausa) →
+// comprovante numa conversa da Ultra Visão sobre RECARGA do Google Ads, no
+// canal Atendimento, 3 a 5 dias depois da última cobrança (que saiu por outro
+// canal). "Vamos fazer amanhã" virou promessa, "Qual valor mínimo ?" virou
+// acordo e o Pix de R$ 150 para o Google virou comprovante da parcela de
+// R$ 325. No mesmo dia a WR Caminhão Pipa ("se puder segurar até sexta")
+// virou ACORDO e parou a régua sem prazo; na conta Fluxia, uma conversa
+// pessoal do Matheus MB sobre entregas rendeu 6 marcações.
+//
+// O modelo continua dando o palpite, mas quem decide é o código:
+//   1. a fala tem de estar num CONTEXTO de cobrança (relevância) — sem isso
+//      nem chamamos o modelo;
+//   2. o regex só VETA ou REBAIXA o que o modelo disse, nunca promove;
+//   3. pausa (acordo) só em resposta DIRETA à cobrança; fora disso vira nota;
+//   4. comprovante com valor que não bate com o que está aberto não mexe na
+//      régua;
+//   5. o mesmo efeito já aplicado não se repete (Rack 95: rajada lida 2x em 9 s).
+//
+// Os limites (7 d, 5 mensagens, 48 h, 72 h, 10 %, 45 d) foram calibrados com
+// as 25 marcações reais de 09/09 a 16/09 — ficam como constantes exportadas.
+//
+// Sem 'server-only' e sem @/db: roda no worker, na auto-resposta e nos testes.
+// ============================================================
+
+import { neutralizeUntrusted } from '@/lib/ai/untrusted'
+
+import { isAiPause } from './pause-rules'
+import type { CollectionReplyKind } from './reply'
+
+// ---------------------------------------------------------------- limites
+
+const HOUR_MS = 3_600_000
+const DAY_MS = 24 * HOUR_MS
+
+/** Cobrança NESTA conversa vale como resposta direta por até 7 dias… */
+export const DIRECT_WINDOW_MS = 7 * DAY_MS
+/** …se a conversa não andou: até 5 mensagens nossas depois dela (Silvia: 4;
+ *  Matheus MB: 78 a 177 mensagens sobre entregas depois do link de teste). */
+export const DIRECT_MAX_OUTBOUND = 5
+/** Nas primeiras 24 h a cobrança da conversa vale mesmo com conversa andando. */
+export const DIRECT_FRESH_MS = DAY_MS
+/** Cobrança em QUALQUER conversa do contato (o cliente responde por outro
+ *  número): José Luiz 4 h e Clínica Villa Vitória 46 h entram; Ultra Visão,
+ *  76 h ou mais, fica de fora. */
+export const RECENT_COLLECTION_MS = 48 * HOUR_MS
+/** "Nós perguntamos da dívida" sem link (Leonardo Financeiro: "Consegue fazer
+ *  a parcela de hoje?") — a última mensagem nossa da conversa, até 7 dias. */
+export const ASKED_DEBT_WINDOW_MS = 7 * DAY_MS
+/** O cliente puxa o pagamento sem mensagem nossa na conversa há 72 h (Ale Brasil). */
+export const SPONTANEOUS_QUIET_MS = 72 * HOUR_MS
+/** Pix de terceiro que NÓS mandamos (Google) nas 24 h antes do comprovante. */
+export const OTHER_PIX_WINDOW_MS = DAY_MS
+/** Promessa para mais de 45 dias não segura a régua: "pago no vencimento" de
+ *  uma parcela A VENCER adiaria a cobrança da vencida por semanas. */
+export const MAX_PROMISE_DAYS = 45
+/** Encargos aceitos quando o Asaas não informa juros: José Luiz pagou 170,93
+ *  por 165 (3,6 %); a MP Raspagem mandou 200 ao Google contra 180 (11 %). */
+export const RECEIPT_TOLERANCE_RATIO = 0.1
+/** Folga de arredondamento, em reais. */
+export const RECEIPT_TOLERANCE_ABS = 1
+/** Até quantas parcelas entram na soma ("acerte pelo menos três"). */
+export const RECEIPT_MAX_CHARGES = 10
+/** Rajada do cliente: até 6 balões, no máximo 3 h antes do mais novo. José
+ *  Luiz 14/09: um "👍" de 11/09 colado na imagem do comprovante mudava a âncora. */
+export const BURST_MAX_BUBBLES = 6
+export const BURST_MAX_SPAN_MS = 3 * HOUR_MS
+/** Comprovante igual dentro de 12 h é a mesma rajada lida de novo. */
+export const RECEIPT_DEDUP_MS = 12 * HOUR_MS
+
+// ---------------------------------------------------------------- motivos gravados na régua
+
+export const RECEIPT_SNOOZE_REASON = 'Cliente mandou comprovante — aguardando conferência'
+export const ACORDO_PAUSE_REASON = 'Cliente pediu acordo/parcelamento'
+export const CONTESTA_PAUSE_REASON = 'Cliente contesta a cobrança'
+
+/** "2026-09-18" → "18/09/2026". */
+export const brDate = (iso: string) => iso.slice(0, 10).split('-').reverse().join('/')
+export const promiseSnoozeReason = (date: string) => `Cliente prometeu pagar em ${brDate(date)}`
+
+// ---------------------------------------------------------------- palavras
+// \b do JS não respeita acento ("simão" casaria "sim"): início e fim de
+// palavra por letra/número Unicode. Sem fim de palavra, "pagode" casava
+// "pago", "acordou" casava "acordo" e "dividendo" casava "divide".
+
+const B = '(?<![\\p{L}\\p{N}])'
+const E = '(?![\\p{L}\\p{N}])'
+const W = (s: string) => new RegExp(`${B}(?:${s})${E}`, 'iu')
+
+export const DEBT_WORD_RE = W('boletos?|faturas?|parcelas?|mensalidades?|cobran[çc]as?|d[ée]bitos?|d[íi]vidas?|em aberto|atrasad[oa]s?|vencid[oa]s?|juros|asaas|pend[êe]ncias?')
+/** Sem "vencido": "domínio vencido" aparece nas conversas da GoLink e não é cobrança. */
+export const ASKED_DEBT_RE = W('boletos?|faturas?|parcelas?|mensalidades?|cobran[çc]as?|d[ée]bitos?|em aberto|pend[êe]ncias?')
+export const PAY_WORD_RE = W('pag(?:ar|o|ou|uei|amento|amentos|ando|arei|aria|amos)|psgar|pgar|pix|transferi|depositei|comprovante|quit(?:ar|o|ei)|acert(?:ar|o|amos)|efetu(?:ar|o|ei)')
+export const NEGOTIATION_RE = W('parcel(?:ar|amento|ad[oa]|inha)|em \\d+ ?(?:x|vezes)|\\d+ ?x|divid(?:ir|e|imos)|desconto|descontinho|abat(?:er|imento)|(?:re)?negoci\\p{L}*|acordo|reduz(?:ir|ido|a)?|diminuir|abaixar|baixar o valor|valor menor|metade|fica bom pra|faz(?:er)? por|tirar (?:os )?juros|sem (?:os )?juros|isen(?:tar|[çc][ãa]o)|o resto|restante|uma parte|entrada')
+export const CONTEST_RE = W('n[ãa]o devo|n[ãa]o reconhe[çc]\\p{L}*|cancelei|cancelad[oa]|n[ãa]o contratei|n[ãa]o pedi|cobran[çc]a (?:errad|indevid)\\p{L}*|valor errado|est[áa] errad[oa]|n[ãa]o [ée] (?:meu|minha|nosso|nossa)|engano')
+export const PAID_CLAIM_RE = W('j[áa] (?:paguei|pago|foi pag[oa]|quitei|est[áa] pag[oa]|fiz o pix|transferi)|paguei|t[áa] pag[oa]|segue (?:o )?comprovante|fiz o pix|pix feito')
+
+/** Pix copia-e-cola que NÃO é do Asaas (Ultra Visão 16/09: o atendente mandou o Pix do Google). */
+export const isOtherPix = (t: string) => /br\.gov\.bcb\.pix/i.test(t) && !/asaas/i.test(t)
+
+// ---------------------------------------------------------------- rajada do cliente
+
+export interface BurstRow {
+  id: string
+  senderType: string
+  contentText: string | null
+  transcription: string | null
+  contentType: string | null
+  createdAt: string | null
+}
+
+export interface CustomerBurst {
+  /** Balões do cliente, do mais velho para o mais novo. */
+  bubbles: BurstRow[]
+  newestId: string
+  /** Âncora de TODAS as buscas: o balão mais novo, nunca o primeiro. */
+  newestAt: Date
+  /** O que ele escreveu ou falou (texto e transcrição de áudio). */
+  typed: string
+  /** Descrição de imagem/documento (visão). */
+  media: string
+}
+
+/** Placeholder de mídia sem transcrição ("[audio]", "[image]") não classifica. */
+const PLACEHOLDER_RE = /^\[[a-z]+\]$/i
+
+const isReceiptMedia = (contentType: string | null) => contentType === 'image' || contentType === 'document'
+
+/**
+ * Texto que o cliente mandou: transcrição do áudio quando houver, senão o
+ * texto (numa imagem, o texto é a descrição que a IA gerou — "transferência
+ * concluída, R$ 400" — e isso É comprovante).
+ */
+export function customerTextOf(row: { contentText: string | null; transcription: string | null; contentType: string | null }): string {
+  const t = (row.transcription ?? '').trim()
+  if (t) return t
+  const c = (row.contentText ?? '').trim()
+  if (!c || PLACEHOLDER_RE.test(c)) return ''
+  if (isReceiptMedia(row.contentType)) return `[imagem: ${c}]`
+  return c
+}
+
+const toMs = (v: string | Date | null | undefined): number => {
+  if (!v) return NaN
+  return v instanceof Date ? v.getTime() : new Date(v).getTime()
+}
+
+/**
+ * A rajada: balões do cliente seguidos, a partir do mais novo. Para no
+ * primeiro balão que não é dele OU que é mais de 3 h mais velho que o mais
+ * novo. `rowsNewestFirst` = mensagens não internas, da mais nova para a mais
+ * velha. Sem balão do cliente no topo → null.
+ */
+export function pickBurst(
+  rowsNewestFirst: BurstRow[],
+  opts: { maxBubbles?: number; maxSpanMs?: number } = {},
+): CustomerBurst | null {
+  const maxBubbles = opts.maxBubbles ?? BURST_MAX_BUBBLES
+  const maxSpanMs = opts.maxSpanMs ?? BURST_MAX_SPAN_MS
+  const newest = rowsNewestFirst[0]
+  if (!newest || newest.senderType !== 'customer') return null
+  const newestMs = toMs(newest.createdAt)
+  if (!Number.isFinite(newestMs)) return null
+
+  const picked: BurstRow[] = []
+  for (const r of rowsNewestFirst) {
+    if (r.senderType !== 'customer') break
+    const at = toMs(r.createdAt)
+    if (!Number.isFinite(at) || newestMs - at > maxSpanMs) break
+    picked.push(r)
+    if (picked.length >= maxBubbles) break
+  }
+  const bubbles = picked.reverse()
+
+  const typed: string[] = []
+  const media: string[] = []
+  for (const b of bubbles) {
+    const t = (b.transcription ?? '').trim()
+    if (t) {
+      typed.push(t)
+      continue
+    }
+    const c = (b.contentText ?? '').trim()
+    if (!c || PLACEHOLDER_RE.test(c)) continue
+    if (isReceiptMedia(b.contentType)) media.push(c)
+    else typed.push(c)
+  }
+  return { bubbles, newestId: newest.id, newestAt: new Date(newestMs), typed: typed.join('\n'), media: media.join('\n') }
+}
+
+// ---------------------------------------------------------------- relevância
+
+export type Relevance = 'direct' | 'recent_collection' | 'asked_debt' | 'mentions_debt' | 'amount_match' | 'spontaneous_payment'
+
+export interface OurMessage {
+  at: Date
+  text: string
+}
+
+export interface OpenCharge {
+  value: number
+  interestValue: number | null
+}
+
+export interface ReplyGuardContext {
+  newestAt: Date
+  typed: string
+  media: string
+  /** Última mensagem nossa com link de cobrança NESTA conversa (7 d antes de newestAt). */
+  sameConvCollectAt: Date | null
+  /** Mensagens nossas nesta conversa depois dela (e antes de newestAt). */
+  outboundSinceCollect: number
+  /** Última mensagem nossa com link de cobrança em QUALQUER conversa do contato. */
+  anyCollectAt: Date | null
+  /** Mensagens nossas nesta conversa nas 72 h antes de newestAt. */
+  outboundLast72h: number
+  /** Últimas mensagens nossas nesta conversa antes da rajada, da mais nova para a mais velha. */
+  ourRecent: OurMessage[]
+  /** Parcelas abertas do contato e dos cadastros irmãos (mesmo cliente do Asaas). */
+  openCharges: OpenCharge[]
+}
+
+/** Nós mandamos um Pix que não é do Asaas pouco antes? (o comprovante é dele) */
+export function otherPixWithin(ours: OurMessage[], newestAt: Date, windowMs = OTHER_PIX_WINDOW_MS): boolean {
+  const t = newestAt.getTime()
+  return ours.some((m) => t - m.at.getTime() <= windowMs && isOtherPix(m.text))
+}
+
+/**
+ * A fala do cliente está num contexto de cobrança? null = não, e nem vale
+ * chamar o modelo. Todas as buscas são ANTES do balão mais novo.
+ */
+export function collectionReplyRelevance(c: ReplyGuardContext): Relevance | null {
+  const t = c.newestAt.getTime()
+  const ago = (d: Date | null | undefined) => (d ? t - d.getTime() : Infinity)
+
+  const sinceSame = ago(c.sameConvCollectAt)
+  if (sinceSame <= DIRECT_WINDOW_MS && (c.outboundSinceCollect <= DIRECT_MAX_OUTBOUND || sinceSame <= DIRECT_FRESH_MS)) return 'direct'
+  if (ago(c.anyCollectAt) <= RECENT_COLLECTION_MS) return 'recent_collection'
+  const lastOurs = c.ourRecent[0]
+  if (lastOurs && ago(lastOurs.at) <= ASKED_DEBT_WINDOW_MS && ASKED_DEBT_RE.test(lastOurs.text)) return 'asked_debt'
+  if (DEBT_WORD_RE.test(c.typed)) return 'mentions_debt'
+  const amounts = amountsIn(c.media)
+  if (amounts.length && amountMatchesOpen(amounts, c.openCharges) && !otherPixWithin(c.ourRecent, c.newestAt)) return 'amount_match'
+  if (c.outboundLast72h === 0 && (PAY_WORD_RE.test(c.typed) || PAID_CLAIM_RE.test(c.typed))) return 'spontaneous_payment'
+  return null
+}
+
+// ---------------------------------------------------------------- datas em português
+
+const pad2 = (n: number) => String(n).padStart(2, '0')
+const keyOf = (d: Date) => `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())}`
+
+function utcFromKey(key: string): Date | null {
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(key)
+  if (!m) return null
+  const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])))
+  return keyOf(d) === key ? d : null
+}
+
+/** Data válida (31/09 não existe) em UTC, ou null. */
+function validUtc(y: number, month: number, day: number): Date | null {
+  const d = new Date(Date.UTC(y, month - 1, day))
+  return d.getUTCFullYear() === y && d.getUTCMonth() === month - 1 && d.getUTCDate() === day ? d : null
+}
+
+const addDays = (d: Date, n: number) => new Date(d.getTime() + n * DAY_MS)
+
+/** "YYYY-MM-DD" + n dias. */
+export function addDaysKey(key: string, n: number): string {
+  const d = utcFromKey(key)
+  return d ? keyOf(addDays(d, n)) : key
+}
+
+const WEEKDAY_INDEX: Record<string, number> = { domingo: 0, segunda: 1, terca: 2, quarta: 3, quinta: 4, sexta: 5, sabado: 6 }
+const stripAccents = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '')
+
+// Um regex só, para os tokens saírem na ORDEM em que aparecem no texto.
+// Dia da semana seguido de parcela/via/vez/etapa não é data ("segunda via do
+// boleto", "segunda parcela").
+const DATE_TOKEN_RE = new RegExp(
+  `${B}(?:` +
+    '(depois de amanh[ãa])' +
+    '|(amanh[ãa])' +
+    '|(hoje)' +
+    '|(domingo|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado)(?:[- ]feira)?(?!\\s*(?:parcela|via|vez|etapa))' +
+    '|(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2}|\\d{4}))?' +
+    '|dia (\\d{1,2})(?![\\d/])' +
+    `)${E}`,
+  'giu',
+)
+
+/**
+ * Datas citadas pelo cliente, em ordem, sem repetir ("YYYY-MM-DD"):
+ * hoje · amanhã · depois de amanhã · dia da semana com ou sem "-feira"
+ * (próxima ocorrência; se é hoje, +7) · dd/mm[/aa] (de hoje em diante) ·
+ * "dia N" (mês que vem se N já passou). "Semana que vem" não é data.
+ * Leitor de reserva e de conferência: a WR disse "segurar até sexta" e o
+ * modelo devolveu acordo SEM data — sem isso não havia de onde tirar 18/09.
+ */
+export function parsePtDates(text: string, todayKey: string): string[] {
+  const today = utcFromKey(todayKey)
+  if (!today || !text) return []
+  const out: string[] = []
+  const push = (d: Date | null) => {
+    if (!d) return
+    const k = keyOf(d)
+    if (!out.includes(k)) out.push(k)
+  }
+
+  for (const m of text.matchAll(DATE_TOKEN_RE)) {
+    if (m[1]) push(addDays(today, 2))
+    else if (m[2]) push(addDays(today, 1))
+    else if (m[3]) push(today)
+    else if (m[4]) {
+      const wd = WEEKDAY_INDEX[stripAccents(m[4].toLowerCase())]
+      if (wd === undefined) continue
+      const diff = (wd - today.getUTCDay() + 7) % 7 || 7
+      push(addDays(today, diff))
+    } else if (m[5] && m[6]) {
+      const day = Number(m[5])
+      const month = Number(m[6])
+      if (m[7]) {
+        const y = m[7].length === 2 ? 2000 + Number(m[7]) : Number(m[7])
+        const d = validUtc(y, month, day)
+        if (d && d >= today) push(d)
+        continue
+      }
+      const y = today.getUTCFullYear()
+      const d = validUtc(y, month, day)
+      if (d && d >= today) push(d)
+      else {
+        // Virada de ano ("05/01" dito em dezembro); data velha ("paguei 11/09") fica de fora.
+        const next = validUtc(y + 1, month, day)
+        if (next && next.getTime() - today.getTime() <= 60 * DAY_MS) push(next)
+      }
+    } else if (m[8]) {
+      const n = Number(m[8])
+      if (n < 1 || n > 31) continue
+      const y = today.getUTCFullYear()
+      const month = today.getUTCMonth() + 1
+      if (n >= today.getUTCDate()) push(validUtc(y, month, n))
+      else push(month === 12 ? validUtc(y + 1, 1, n) : validUtc(y, month + 1, n))
+    }
+  }
+  return out
+}
+
+/**
+ * A data que vale: a do modelo quando o leitor a encontra no texto (ou quando
+ * o texto não traz data que o leitor entenda); a do leitor quando o modelo não
+ * deu nenhuma e só há UMA no texto ("não tenho hoje, pago sexta" sem data do
+ * modelo é ambíguo → nenhuma). Os dois divergem → nenhuma. Passado ou depois
+ * de hoje+45 dias → nenhuma.
+ */
+export function resolveDate(model: string | null, parsed: string[], todayKey: string): string | null {
+  const d = agreedDate(model, parsed)
+  if (!d) return null
+  if (d < todayKey) return null
+  if (isTooFar(d, todayKey)) return null
+  return d
+}
+
+/** A data em que modelo e leitor concordam, sem olhar se já passou ou se é longe. */
+function agreedDate(model: string | null, parsed: string[]): string | null {
+  const m = model && /^\d{4}-\d{2}-\d{2}$/.test(model) ? model : null
+  if (m && parsed.includes(m)) return m
+  if (!parsed.length) return m
+  if (!m) return parsed.length === 1 ? parsed[0] : null
+  return null
+}
+
+const isTooFar = (d: string, todayKey: string) => d > addDaysKey(todayKey, MAX_PROMISE_DAYS)
+
+// ---------------------------------------------------------------- valores
+
+const AMOUNT_RE = /R\$\s*(\d{1,3}(?:\.\d{3})+|\d+)(?:,(\d{2}))?/g
+
+/** Valores em reais citados ("R$ 1.234,56", "R$ 170,93", "R$ 150"). */
+export function amountsIn(text: string): number[] {
+  const out: number[] = []
+  for (const m of (text ?? '').matchAll(AMOUNT_RE)) {
+    const reais = Number(m[1].replace(/\./g, ''))
+    const cents = m[2] ? Number(m[2]) : 0
+    if (Number.isFinite(reais)) out.push((reais * 100 + cents) / 100)
+  }
+  return out
+}
+
+/**
+ * Algum valor bate com uma parcela aberta ou com uma soma delas (até 10)?
+ * Com juros informados pelo Asaas, vale valor + juros (± R$ 1); sem juros,
+ * de valor − R$ 1 até valor + 10 % + R$ 1.
+ */
+export function amountMatchesOpen(amounts: number[], charges: OpenCharge[]): boolean {
+  const list = charges.slice(0, RECEIPT_MAX_CHARGES)
+  const n = list.length
+  if (!n || !amounts.length) return false
+  const cents = (v: number) => Math.round(v * 100)
+  const want = amounts.map(cents)
+  const slack = cents(RECEIPT_TOLERANCE_ABS)
+  for (let mask = 1; mask < 1 << n; mask++) {
+    let lo = 0
+    let hi = 0
+    for (let i = 0; i < n; i++) {
+      if (!(mask & (1 << i))) continue
+      const v = cents(list[i].value)
+      const iv = list[i].interestValue
+      const j = iv != null && iv > 0 ? cents(iv) : 0
+      if (j > 0) {
+        lo += v + j
+        hi += v + j
+      } else {
+        lo += v
+        hi += Math.round(v * (1 + RECEIPT_TOLERANCE_RATIO))
+      }
+    }
+    if (want.some((a) => a >= lo - slack && a <= hi + slack)) return true
+  }
+  return false
+}
+
+const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+
+// ---------------------------------------------------------------- decisão
+
+export type ReplyDecision =
+  | { action: 'apply'; kind: CollectionReplyKind; date: string | null; pause: boolean; moveDueDate: boolean; relevance: Relevance }
+  | { action: 'note'; kind: CollectionReplyKind; text: string; relevance: Relevance }
+  | { action: 'skip'; reason: string }
+
+export interface ReplyDecisionInput {
+  /** Palpite do modelo (silencioso) ou marcador da IA que conversa. */
+  kind: CollectionReplyKind | 'nenhum'
+  date: string | null
+  /** O modelo disse que a fala é sobre a dívida? (ausente = não disse) */
+  aboutDebt?: boolean | null
+  relevance: Relevance | null
+  typed: string
+  media: string
+  openCharges: OpenCharge[]
+  otherPixLast24h: boolean
+  /** Hoje no fuso da conta ("YYYY-MM-DD"). */
+  todayKey: string
+}
+
+const CONTEST_RELEVANCE: ReadonlySet<Relevance> = new Set(['direct', 'recent_collection', 'asked_debt', 'mentions_debt'])
+
+/**
+ * O que fazer com a resposta: aplicar na régua, só deixar nota para o
+ * responsável ou nada. O regex nunca transforma "nenhum" em efeito.
+ */
+export function decideCollectionReply(input: ReplyDecisionInput): ReplyDecision {
+  const { relevance, typed } = input
+  const skip = (reason: string): ReplyDecision => ({ action: 'skip', reason })
+  if (!relevance) return skip('fora de contexto de cobrança')
+  const modelKind = input.kind
+  if (modelKind === 'nenhum') return skip('modelo: nenhum')
+  if (input.aboutDebt === false) return skip('modelo: outro assunto')
+
+  const direct = relevance === 'direct'
+  const nearCollection = direct || relevance === 'recent_collection'
+  // Responde a uma pergunta NOSSA sobre a dívida: a cobrança com link na
+  // conversa, ou o Leonardo perguntando "Consegue fazer a parcela de hoje?"
+  // sem link — aí "consigo sexta" basta, sem palavra de pagamento.
+  const answersUs = direct || relevance === 'asked_debt'
+  const parsed = parsePtDates(typed, input.todayKey)
+  const date = resolveDate(input.date, parsed, input.todayKey)
+  const agreed = agreedDate(input.date, parsed)
+  const tooFar = !!agreed && isTooFar(agreed, input.todayKey)
+  const apply = (kind: CollectionReplyKind, extra: { date?: string | null; pause?: boolean; moveDueDate?: boolean } = {}): ReplyDecision => ({
+    action: 'apply',
+    kind,
+    date: extra.date ?? null,
+    pause: extra.pause ?? false,
+    moveDueDate: extra.moveDueDate ?? false,
+    relevance,
+  })
+  const note = (kind: CollectionReplyKind, text: string): ReplyDecision => ({ action: 'note', kind, text, relevance })
+
+  let kind: CollectionReplyKind = modelKind
+
+  // "Já paguei isso" marcado como contestação: é comprovante (régua dorme 3
+  // dias e alguém confere), não pausa sem fim.
+  if (kind === 'contesta' && !CONTEST_RE.test(typed)) {
+    if (!PAID_CLAIM_RE.test(typed)) return skip('contesta sem contestação explícita')
+    kind = 'comprovante'
+  }
+
+  if (kind === 'acordo') {
+    if (!NEGOTIATION_RE.test(typed)) {
+      // WR 14/09: "se puder segurar até sexta" é prazo com dia → promessa.
+      // "Qual valor mínimo ?" (recarga) e "me manda o link p eu acertar" → nada.
+      if (!date) return skip('acordo sem pedido explícito de negociação')
+      kind = 'promessa'
+    } else if (!direct) {
+      return note('acordo', '🧾 Parece pedido de acordo ou parcelamento, mas não em resposta a uma cobrança desta conversa — a régua NÃO parou. Se for o caso, pause na lateral da conversa.')
+    } else {
+      return apply('acordo', { pause: true })
+    }
+  }
+
+  if (kind === 'contesta') {
+    if (CONTEST_RELEVANCE.has(relevance)) return apply('contesta', { pause: true })
+    return note('contesta', '🧾 Parece que o cliente contesta a cobrança, mas a mensagem não responde a uma cobrança recente — a régua NÃO parou. Se for o caso, pause na lateral da conversa.')
+  }
+
+  if (kind === 'promessa') {
+    // Fora da conversa da cobrança, promessa exige falar em pagar ou na dívida:
+    // "Vamos fazer amanhã" (recarga) não segura a régua nem com cobrança ontem.
+    if (!answersUs && !PAY_WORD_RE.test(typed) && !PAID_CLAIM_RE.test(typed) && !DEBT_WORD_RE.test(typed)) {
+      return skip('promessa sem falar em pagar fora da conversa da cobrança')
+    }
+    if (!date) {
+      // Data depois de hoje+45: não segura a régua; só a conversa da cobrança ganha nota.
+      if (tooFar && agreed) {
+        if (!direct) return skip('promessa para mais de 45 dias')
+        return note('promessa', `🧾 O cliente falou em pagar só em ${brDate(agreed)}, mais de ${MAX_PROMISE_DAYS} dias à frente. A régua continua no ritmo normal — se isso foi combinado, use "Registrar promessa".`)
+      }
+      if (!nearCollection) return skip('promessa sem data')
+      return note('promessa', '🧾 O cliente falou em pagar, mas sem data que desse para calcular. A régua continua no ritmo normal — se ele combinou um dia, use "Registrar promessa".')
+    }
+    // Vencimento no Asaas só se move com resposta DIRETA à cobrança.
+    return apply('promessa', { date, moveDueDate: direct })
+  }
+
+  // comprovante
+  const amounts = amountsIn(input.media)
+  if (amounts.length && !amountMatchesOpen(amounts, input.openCharges)) {
+    // Ultra Visão 16/09: Pix de R$ 150 ao Google logo depois de mandarmos o Pix do Google.
+    if (input.otherPixLast24h || !nearCollection) return skip('valor do comprovante não bate com o que está aberto')
+    const open = input.openCharges.slice(0, 4).map((c) => brl(c.value)).join(', ')
+    return note(
+      'comprovante',
+      `🧾 Chegou um comprovante de ${amounts.map(brl).join(', ')}, que não bate com o que está em aberto (${open}). A régua não mudou — confira se é desta cobrança.`,
+    )
+  }
+  if (!input.media.trim() && !answersUs && !PAID_CLAIM_RE.test(typed) && !PAY_WORD_RE.test(typed)) {
+    return skip('comprovante sem imagem nem fala de pagamento fora da conversa da cobrança')
+  }
+  return apply('comprovante')
+}
+
+// ---------------------------------------------------------------- duplicata
+
+export interface TouchState {
+  snoozeUntil: string | null
+  snoozeReason: string | null
+  paused: boolean
+  pausedSource: string | null
+  pausedReason: string | null
+  updatedAt: string | null
+}
+
+/**
+ * O mesmo efeito já está na régua? (a rajada é classificada de novo a cada
+ * balão: Rack 95 16/09 09:16:41 e :50, Silvia 12:21 e 12:29, Mapami 13:53 e
+ * 14:00). As execuções da mesma conversa andam em fila pelo lock da
+ * auto-resposta, então olhar o estado gravado basta — sem migração.
+ */
+export function alreadyApplied(touch: TouchState | null | undefined, kind: CollectionReplyKind, date: string | null, now = new Date()): boolean {
+  if (!touch) return false
+  const until = toMs(touch.snoozeUntil)
+  const sleeping = Number.isFinite(until) && until > now.getTime()
+  switch (kind) {
+    case 'promessa':
+      return !!date && sleeping && touch.snoozeReason === promiseSnoozeReason(date)
+    case 'comprovante': {
+      const updated = toMs(touch.updatedAt)
+      return sleeping && touch.snoozeReason === RECEIPT_SNOOZE_REASON && Number.isFinite(updated) && now.getTime() - updated < RECEIPT_DEDUP_MS
+    }
+    case 'acordo':
+      return touch.paused && isAiPause(touch) && touch.pausedReason === ACORDO_PAUSE_REASON
+    case 'contesta':
+      return touch.paused && isAiPause(touch) && touch.pausedReason === CONTESTA_PAUSE_REASON
+    default:
+      return false
+  }
+}
+
+// ---------------------------------------------------------------- fuso e entrada do classificador
+
+function partsIn(date: Date, timezone: string): Record<string, string> | null {
+  try {
+    const parts = new Intl.DateTimeFormat('en-GB', {
+      timeZone: timezone,
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      hourCycle: 'h23',
+    }).formatToParts(date)
+    return Object.fromEntries(parts.map((p) => [p.type, p.value]))
+  } catch {
+    return null
+  }
+}
+
+/** Hoje ("YYYY-MM-DD") no fuso da conta; fuso inválido → horário de Brasília. */
+export function dayKeyIn(timezone: string, now = new Date()): string {
+  const p = partsIn(now, timezone) ?? partsIn(now, 'America/Sao_Paulo')
+  if (!p) return new Date(now.getTime() - 3 * HOUR_MS).toISOString().slice(0, 10)
+  return `${p.year}-${p.month}-${p.day}`
+}
+
+/** "14/09 14:35" no fuso da conta. */
+export function stampIn(date: Date, timezone: string): string {
+  const p = partsIn(date, timezone) ?? partsIn(date, 'America/Sao_Paulo')
+  if (!p) return date.toISOString().slice(5, 16)
+  return `${p.day}/${p.month} ${p.hour}:${p.minute}`
+}
+
+/** Texto de terceiro dentro de uma marca <…>: sem marcador e sem fechar a marca. */
+const inTag = (s: string, maxChars: number) => neutralizeUntrusted(s, { maxChars }).replace(/</g, '‹')
+
+/**
+ * Entrada do classificador silencioso: a dívida, quando saiu a última
+ * cobrança, as últimas mensagens da empresa e a rajada do cliente. Antes o
+ * modelo via só `<cliente>Vamos fazer amanhã</cliente>` e não tinha como saber
+ * que o assunto era a recarga do Google Ads.
+ */
+export function buildClassifierInput(args: {
+  debt: string | null
+  lastCollection: { at: Date; sameConversation: boolean } | null
+  /** Da mais nova para a mais velha (entram as 4 mais novas). */
+  ours: OurMessage[]
+  /** Do mais velho para o mais novo. */
+  bubbles: BurstRow[]
+  timezone: string
+}): string {
+  const lines: string[] = []
+  lines.push('<divida>', args.debt?.trim() || 'sem detalhe', '</divida>')
+  lines.push(
+    args.lastCollection
+      ? `Última cobrança enviada: ${stampIn(args.lastCollection.at, args.timezone)} ${args.lastCollection.sameConversation ? 'nesta conversa' : 'em outro canal'}`
+      : 'Última cobrança enviada: nenhuma nos últimos 7 dias',
+  )
+
+  const ours = args.ours.slice(0, 4).reverse()
+  lines.push('<empresa>')
+  if (!ours.length) lines.push('(nenhuma mensagem recente)')
+  for (const m of ours) {
+    const t = (m.text ?? '').replace(/\s+/g, ' ').trim()
+    lines.push(`[${stampIn(m.at, args.timezone)}] ${t ? inTag(t, 300) : '(mídia)'}`)
+  }
+  lines.push('</empresa>')
+
+  lines.push('<cliente>')
+  let budget = 1500
+  for (const b of args.bubbles) {
+    if (budget <= 0) break
+    const t = (b.transcription ?? '').trim()
+    const c = (b.contentText ?? '').trim()
+    let body = ''
+    if (t) body = inTag(t, budget)
+    else if (c && !PLACEHOLDER_RE.test(c)) body = isReceiptMedia(b.contentType) ? `[imagem: ${inTag(c, budget)}]` : inTag(c, budget)
+    if (!body) continue
+    budget -= body.length
+    const at = toMs(b.createdAt)
+    lines.push(Number.isFinite(at) ? `[${stampIn(new Date(at), args.timezone)}] ${body}` : body)
+  }
+  lines.push('</cliente>')
+  return lines.join('\n')
+}

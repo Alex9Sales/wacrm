@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { COLLECTION_DIRECTIVE, parseCloseDirectives } from '@/lib/ai/defaults'
+import { COLLECTION_DIRECTIVE, collectionInstruction, parseCloseDirectives } from '@/lib/ai/defaults'
 
 import { promiseDeadline } from './reply'
 
@@ -74,5 +74,33 @@ describe('promiseDeadline — a régua dorme, mas não para sempre', () => {
 
   it('aceita hoje mesmo (paga até o fim do dia)', () => {
     expect(promiseDeadline('2026-09-04', hoje)).not.toBeNull()
+  })
+
+  it('com teto de 45 dias (IA, 16/09): o 45º dia vale, o 46º não', () => {
+    // "Pago no vencimento" de parcela a vencer não pode adiar a vencida por semanas.
+    expect(promiseDeadline('2026-10-19', hoje, 45)).not.toBeNull()
+    expect(promiseDeadline('2026-10-20', hoje, 45)).toBeNull()
+    // A tela (padrão) continua aceitando.
+    expect(promiseDeadline('2026-10-20', hoje)).not.toBeNull()
+  })
+})
+
+describe('instrução de cobrança da IA que conversa (16/09)', () => {
+  const lines = collectionInstruction('- R$ 110,00, venceu em 10/09/2026').split('\n')
+  const line = (marker: string) => lines.find((l) => l.includes(marker)) ?? ''
+
+  it('pedido de prazo com dia é promessa (WR: "segura até sexta")', () => {
+    expect(line('[[COBRANCA:promessa')).toContain('segura até sexta')
+  })
+  it('acordo não fala em prazo', () => {
+    expect(line('[[COBRANCA:acordo]]')).not.toMatch(/prazo/i)
+    expect(line('[[COBRANCA:acordo]]')).toContain('pagar só uma parte')
+  })
+  it('"já paguei isso" é comprovante, não contestação', () => {
+    expect(line('[[COBRANCA:comprovante]]')).toContain('já paguei isso')
+    expect(line('[[COBRANCA:contesta]]')).not.toContain('já paguei isso')
+  })
+  it('só vale para ESSE pagamento, não recarga ou anúncio', () => {
+    expect(lines.join('\n')).toContain('não sobre outro produto, recarga ou anúncio')
   })
 })

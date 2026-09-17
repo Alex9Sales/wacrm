@@ -25,6 +25,8 @@ import { joinCustomerBurst, looksLikeCrmOwnText } from '@/lib/collections/owner-
 import { handleOwnerAssistant } from '@/lib/assistant/handler'
 import { isChannelPhone, isSelfMessage } from './self-message'
 import { applyCollectionReply, openDebtForPrompt } from '@/lib/collections/reply'
+import type { CollectionMarkerCheck } from '@/lib/collections/reply-context'
+import { MAX_PROMISE_DAYS } from '@/lib/collections/reply-guard'
 import { normalizeSettings as normalizeCollectionsSettings } from '@/lib/collections/rules'
 import {
   applyCloseActions,
@@ -881,6 +883,29 @@ export async function dispatchInboundToAiReply(
     }
     const text = dirs.text
 
+    // 🧾 Trava do marcador [[COBRANCA:]] (16/09, Ultra Visão/WR): as mesmas do
+    // detector silencioso — contexto de cobrança, palavra que confirma o tipo,
+    // valor do comprovante, efeito repetido. Decide AQUI, antes do envio: depois
+    // dele a última mensagem da conversa é a nossa e a rajada do cliente some.
+    let collectionCheck: CollectionMarkerCheck | null = null
+    if (dirs.collection && openDebt) {
+      try {
+        const { evaluateCollectionMarker } = await import('@/lib/collections/reply-context')
+        collectionCheck = await evaluateCollectionMarker({
+          accountId,
+          conversationId,
+          contactId,
+          kind: dirs.collection.kind,
+          date: dirs.collection.date,
+          timezone: settings.businessTimezone || 'America/Sao_Paulo',
+        })
+      } catch (err) {
+        // Sem a trava, o marcador não mexe na régua: pausa errada custa mais
+        // que um toque a mais da régua.
+        console.error('[ai auto-reply] trava do marcador de cobrança falhou (marcador ignorado):', err instanceof Error ? err.message : err)
+      }
+    }
+
     // Ações "leves" da conversa: etiquetar, nota interna, atributo, voz.
     const applyTags = async () => {
       if (has('tag') && dirs.tags.length) {
@@ -897,18 +922,27 @@ export async function dispatchInboundToAiReply(
         await postInternalNote({ conversationId, text: dirs.note })
       }
       // 🧾 O que o devedor fez com a cobrança. Não depende de ferramenta ligada:
-      // se a conta tem cobrança em aberto, a consequência SEMPRE vale — e a nota
-      // interna registra o que a régua fez, para ninguém descobrir depois.
-      if (dirs.collection && openDebt) {
+      // com cobrança em aberto, a consequência vale depois de passar pela trava
+      // (collectionCheck, decidida antes do envio) — e a nota interna registra o
+      // que a régua fez, para ninguém descobrir depois.
+      if (dirs.collection && openDebt && collectionCheck) {
         try {
-          const r = await applyCollectionReply({
-            accountId,
-            contactId,
-            conversationId,
-            kind: dirs.collection.kind,
-            date: dirs.collection.date,
-          })
-          if (r.note) await postInternalNote({ conversationId, text: r.note })
+          const d = collectionCheck.decision
+          if (d.action === 'skip') {
+            // Sem conteúdo da mensagem no log: só o tipo e o motivo.
+            console.log(
+              '[ai auto-reply] marcador de cobrança descartado:',
+              JSON.stringify({ conversationId, kind: dirs.collection.kind, relevance: collectionCheck.relevance, reason: d.reason }),
+            )
+          } else if (d.action === 'note') {
+            await postInternalNote({ conversationId, text: d.text })
+          } else {
+            const r = await applyCollectionReply(
+              { accountId, contactId, conversationId, kind: d.kind, date: d.date },
+              { moveDueDate: d.moveDueDate, pause: d.pause, maxPromiseDays: MAX_PROMISE_DAYS },
+            )
+            if (r.note) await postInternalNote({ conversationId, text: r.note })
+          }
         } catch (err) {
           console.error('[ai auto-reply] cobrança (resposta) falhou:', err instanceof Error ? err.message : err)
         }
