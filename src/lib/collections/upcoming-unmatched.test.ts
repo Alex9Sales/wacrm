@@ -4,13 +4,23 @@ import {
   addDaysKey,
   buildUnmatchedRows,
   canCreateFromAsaas,
+  canRemoveCreatedContact,
+  chargesChangedByLink,
   customerRefKey,
   dueInText,
+  MAX_CHARGE_RESTORE,
   purgePlan,
+  reminderAfterLinkText,
+  restoreTarget,
   sameDocumentOthers,
+  sanitizeChargeRestore,
+  undoResultText,
   uniqueCustomerRefs,
+  unlinkDebtorText,
   unmatchedReasonText,
   visibleUpcoming,
+  type ChargeRestore,
+  type CreatedContactDeps,
   type UnmatchedEntry,
 } from './upcoming-unmatched'
 
@@ -168,10 +178,190 @@ describe('canCreateFromAsaas', () => {
   })
 })
 
+// ids no formato do banco (uuid) — o desfazer descarta o que não for.
+const X = '11111111-1111-4111-8111-111111111111'
+const Y = '22222222-2222-4222-8222-222222222222'
+const Z = '33333333-3333-4333-8333-333333333333'
+const VENCIDA = 'aaaaaaaa-0000-4000-8000-000000000001'
+const DA_IA = 'aaaaaaaa-0000-4000-8000-000000000002'
+const SOLTA = 'aaaaaaaa-0000-4000-8000-000000000003'
+const POR_TELEFONE = 'aaaaaaaa-0000-4000-8000-000000000004'
+
+/**
+ * O que o banco faz, em memória: ligar muda só `chargesChangedByLink`; o
+ * desfazer devolve cada item com `restoreTarget`, e só se a linha ainda está
+ * 'manual' no contato do clique (a condição do UPDATE em unlinkUpcomingCustomer).
+ */
+function linkThenUndo(
+  rows: ChargeRestore[],
+  contactId: string,
+  existing: ReadonlySet<string>,
+  /** Alguém mexe entre o clique e o desfazer. */
+  between: (rows: ChargeRestore[]) => ChargeRestore[] = (r) => r,
+) {
+  const restore = chargesChangedByLink(rows, contactId)
+  const changedIds = new Set(restore.map((r) => r.id))
+  const afterLink = between(rows.map((r) => (changedIds.has(r.id) ? { ...r, contactId, matchedBy: 'manual' } : { ...r })))
+  // Ida e volta pelo navegador (JSON), como no toast.
+  const byId = new Map(sanitizeChargeRestore(JSON.parse(JSON.stringify(restore))).map((r) => [r.id, r]))
+  const afterUndo = afterLink.map((r) => {
+    const item = byId.get(r.id)
+    if (!item || r.contactId !== contactId || r.matchedBy !== 'manual') return r
+    return { ...r, ...restoreTarget(item, existing) }
+  })
+  return { restore, afterLink, afterUndo }
+}
+
+describe('Desfazer do painel — devolve só o que o clique mudou (16/09)', () => {
+  it('vencida ligada à mão a X ANTES da 0178 e cobrança criada pela IA para X: ligar a X não mexe nelas e o desfazer não as zera', () => {
+    const rows: ChargeRestore[] = [
+      { id: VENCIDA, contactId: X, matchedBy: 'manual' },
+      { id: DA_IA, contactId: X, matchedBy: 'manual' },
+    ]
+    const { restore, afterUndo } = linkThenUndo(rows, X, new Set([X]))
+    expect(restore).toEqual([])
+    expect(afterUndo).toEqual(rows)
+  })
+
+  it('a vencida era de Z (à mão) e o clique foi em Y: o desfazer devolve para Z, não para "Sem contato"', () => {
+    const rows: ChargeRestore[] = [
+      { id: VENCIDA, contactId: Z, matchedBy: 'manual' },
+      { id: SOLTA, contactId: null, matchedBy: null },
+      { id: POR_TELEFONE, contactId: X, matchedBy: 'phone' },
+    ]
+    const { restore, afterLink, afterUndo } = linkThenUndo(rows, Y, new Set([Z, X]))
+    expect(restore).toEqual(rows)
+    expect(afterLink.every((r) => r.contactId === Y && r.matchedBy === 'manual')).toBe(true)
+    expect(afterUndo).toEqual(rows)
+  })
+
+  it('uma já "manual" no contato do clique e outra dele só por telefone: só a do telefone entra no desfazer', () => {
+    const restore = chargesChangedByLink(
+      [
+        { id: VENCIDA, contactId: X, matchedBy: 'manual' },
+        { id: POR_TELEFONE, contactId: X, matchedBy: 'phone' },
+      ],
+      X,
+    )
+    expect(restore).toEqual([{ id: POR_TELEFONE, contactId: X, matchedBy: 'phone' }])
+  })
+
+  it('quem mexeu depois do clique não é sobrescrito', () => {
+    const rows: ChargeRestore[] = [
+      { id: VENCIDA, contactId: Z, matchedBy: 'manual' },
+      { id: SOLTA, contactId: null, matchedBy: null },
+    ]
+    // Entre o clique (em Y) e o desfazer, alguém desligou a vencida na carteira.
+    const { afterUndo } = linkThenUndo(rows, Y, new Set([Z, Y]), (r) =>
+      r.map((c) => (c.id === VENCIDA ? { ...c, contactId: null, matchedBy: null } : c)),
+    )
+    expect(afterUndo).toEqual([
+      { id: VENCIDA, contactId: null, matchedBy: null },
+      { id: SOLTA, contactId: null, matchedBy: null },
+    ])
+  })
+
+  it('contato de antes apagado no meio: a cobrança volta sem contato (sem "manual" preso a ninguém)', () => {
+    expect(restoreTarget({ id: VENCIDA, contactId: Z, matchedBy: 'manual' }, new Set())).toEqual({ contactId: null, matchedBy: null })
+    expect(restoreTarget({ id: VENCIDA, contactId: Z, matchedBy: 'manual' }, new Set([Z]))).toEqual({ contactId: Z, matchedBy: 'manual' })
+    expect(restoreTarget({ id: SOLTA, contactId: null, matchedBy: null }, new Set())).toEqual({ contactId: null, matchedBy: null })
+  })
+})
+
+describe('sanitizeChargeRestore — a lista volta do navegador', () => {
+  it('descarta id que não é uuid, contato inválido vira nulo, matched_by desconhecido vira nulo, sem repetir', () => {
+    expect(
+      sanitizeChargeRestore([
+        { id: VENCIDA, contactId: Z, matchedBy: 'manual' },
+        { id: VENCIDA, contactId: X, matchedBy: 'phone' },
+        { id: 'pay_123', contactId: Z, matchedBy: 'manual' },
+        { id: SOLTA, contactId: "x' OR 1=1", matchedBy: 'hack' },
+        null,
+        'lixo',
+      ]),
+    ).toEqual([
+      { id: VENCIDA, contactId: X, matchedBy: 'phone' },
+      { id: SOLTA, contactId: null, matchedBy: null },
+    ])
+  })
+
+  it('não-lista vira lista vazia e há teto', () => {
+    expect(sanitizeChargeRestore(undefined)).toEqual([])
+    expect(sanitizeChargeRestore({ id: VENCIDA })).toEqual([])
+    const muitos = Array.from({ length: MAX_CHARGE_RESTORE + 50 }, (_, i) => ({
+      id: `aaaaaaaa-0000-4000-8000-${String(i).padStart(12, '0')}`,
+      contactId: null,
+      matchedBy: null,
+    }))
+    expect(sanitizeChargeRestore(muitos)).toHaveLength(MAX_CHARGE_RESTORE)
+  })
+})
+
+describe('canRemoveCreatedContact — "Criar contato" desfeito apaga o contato que acabou de nascer', () => {
+  const livre: CreatedContactDeps = { recent: true, conversations: false, deals: false, links: false, charges: false, actionRequests: false }
+
+  it('recém-criado e sem nada preso: apaga (senão o telefone do Asaas casava sozinho com ele — Speed Gás)', () => {
+    expect(canRemoveCreatedContact(livre)).toBe(true)
+  })
+
+  it('qualquer dependência, ou criado há mais tempo, mantém', () => {
+    for (const k of ['conversations', 'deals', 'links', 'charges', 'actionRequests'] as const) {
+      expect(canRemoveCreatedContact({ ...livre, [k]: true })).toBe(false)
+    }
+    expect(canRemoveCreatedContact({ ...livre, recent: false })).toBe(false)
+    expect(canRemoveCreatedContact(null)).toBe(false)
+  })
+})
+
+describe('textos do Ligar/Criar/Desfazer — sem prometer o que não acontece', () => {
+  it('ligar: com a régua desligada o lembrete não sai "na próxima rodada"', () => {
+    expect(reminderAfterLinkText(true)).toBe('O lembrete sai na próxima rodada da régua.')
+    expect(reminderAfterLinkText(false)).toBe('A régua está desligada: o lembrete só sai quando ela for religada.')
+  })
+
+  it('desfazer o ligar', () => {
+    expect(undoResultText({ kind: 'linked', contactRemoved: false, contactName: 'LM Vidros', ruleEnabled: true })).toBe(
+      'Desfeito: o cliente volta para a lista na próxima rodada da régua.',
+    )
+    expect(undoResultText({ kind: 'linked', contactRemoved: false, contactName: 'LM Vidros', ruleEnabled: false })).toBe(
+      'Desfeito: o cliente volta para a lista quando a régua for religada.',
+    )
+  })
+
+  it('desfazer o criar: apagado diz que apagou; mantido avisa que vai casar de novo', () => {
+    expect(undoResultText({ kind: 'created', contactRemoved: true, contactName: 'Speed Gás e Água', ruleEnabled: true })).toBe(
+      'Desfeito: o contato criado foi apagado e o cliente volta para a lista na próxima rodada da régua.',
+    )
+    const mantido = undoResultText({ kind: 'created', contactRemoved: false, contactName: 'Speed Gás e Água', ruleEnabled: true })
+    expect(mantido).toContain('"Speed Gás e Água" continua no CRM')
+    expect(mantido).toContain('vai casar com ele de novo')
+    expect(mantido).not.toContain('volta para a lista')
+  })
+
+  it('desfazer quando o contato já existia: nunca diz que o cliente volta para a lista', () => {
+    const t = undoResultText({ kind: 'existing', contactRemoved: false, contactName: 'Speed Gás Matriz', ruleEnabled: true })
+    expect(t).toContain('"Speed Gás Matriz" já existia')
+    expect(t).toContain('vai continuar casando com ele')
+    expect(t).not.toContain('volta para a lista')
+  })
+
+  it('desligar contato na carteira: casamento automático volta na sincronização, e a tela diz', () => {
+    expect(unlinkDebtorText('manual')).toBe(
+      'Contato desligado — voltou para as pendências. A próxima sincronização só liga de novo se o telefone, o e-mail ou o CPF/CNPJ do Asaas for o desta ficha.',
+    )
+    for (const via of ['phone', 'email', 'code', null]) {
+      const t = unlinkDebtorText(via)
+      expect(t).toContain('a próxima sincronização liga de novo')
+      expect(t).not.toContain('deixam de ir para ele')
+    }
+  })
+})
+
 describe('textos da tela', () => {
   it('motivo', () => {
     expect(unmatchedReasonText('no_contact')).toBe('Nenhum contato do CRM com este telefone, e-mail ou CPF/CNPJ')
-    expect(unmatchedReasonText('ambiguous')).toBe('Mais de um contato do CRM com este telefone — escolha o certo')
+    // Empate por e-mail ou CPF/CNPJ também é "ambiguous" (decideMatch).
+    expect(unmatchedReasonText('ambiguous')).toBe('Mais de um contato do CRM com o mesmo telefone, e-mail ou CPF/CNPJ — escolha o certo')
   })
 
   it('quando vence', () => {

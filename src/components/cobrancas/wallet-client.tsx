@@ -108,6 +108,7 @@ import {
   registerPaymentPromise,
 } from '@/app/(dashboard)/cobrancas/actions';
 import { UpcomingUnmatchedPanel } from '@/components/cobrancas/upcoming-unmatched-panel';
+import { unlinkDebtorText } from '@/lib/collections/upcoming-unmatched';
 import { CHARGEABLE_STATUSES, WEEKDAY_SHORT, describeWeekdays, type CollectionsSettings } from '@/lib/collections/rules';
 import { pauseSourceLabel } from '@/lib/collections/pause-rules';
 import { listApprovedTemplates } from '@/app/(dashboard)/inbox/actions';
@@ -890,7 +891,10 @@ function DebtorCard({
                   toast.error(res.error ?? 'Não foi possível desligar o contato.');
                   return;
                 }
-                toast.success('Contato desligado — voltou para as pendências. As próximas parcelas deste cliente também deixam de ir para ele.');
+                // Não promete que as próximas parcelas deixam de ir para ele:
+                // casamento automático (telefone/e-mail/CPF) liga de novo na
+                // sincronização seguinte (16/09).
+                toast.success(unlinkDebtorText(debtor.matchedBy), { duration: debtor.matchedBy === 'manual' ? 6_000 : 12_000 });
                 onUnlink();
               }}
             >

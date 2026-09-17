@@ -18,16 +18,25 @@ import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { isStaleActionError, reloadForStaleAction } from '@/lib/stale-action';
-import { dueInText, unmatchedReasonText } from '@/lib/collections/upcoming-unmatched';
+import {
+  dueInText,
+  reminderAfterLinkText,
+  undoResultText,
+  unmatchedReasonText,
+  type UpcomingUndoKind,
+} from '@/lib/collections/upcoming-unmatched';
 import {
   createContactForUpcoming,
   linkUpcomingCustomer,
   searchContactsForCharge,
   unlinkUpcomingCustomer,
   type ContactOption,
+  type UpcomingUndoInput,
   type UpcomingUnmatchedCard,
   type UpcomingUnmatchedView,
 } from '@/app/(dashboard)/cobrancas/actions';
+
+type UndoFn = (card: UpcomingUnmatchedCard, input: UpcomingUndoInput, kind: UpcomingUndoKind, contactName: string) => Promise<void>;
 
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
@@ -102,22 +111,25 @@ export function UpcomingUnmatchedPanel({
   if (!view?.enabled || !cards.length) return null;
 
   const keyOf = (c: UpcomingUnmatchedCard) => `${c.connectionId}:${c.customerId}`;
+  const ruleEnabled = view.ruleEnabled;
 
-  async function undo(card: UpcomingUnmatchedCard, previousContactId: string | null, created: boolean) {
+  const undo: UndoFn = async (card, input, kind, contactName) => {
     try {
-      const back = await unlinkUpcomingCustomer(card.connectionId, card.customerId, previousContactId);
+      const back = await unlinkUpcomingCustomer(card.connectionId, card.customerId, input);
       if (!back.ok) {
         toast.error(back.error ?? 'Não foi possível desfazer.');
         return;
       }
-      toast.success(
-        'Desfeito. O cliente volta para a lista na próxima rodada da régua.' + (created ? ' O contato criado continua no CRM.' : ''),
-      );
+      const contactRemoved = !!back.data?.contactRemoved;
+      const text = undoResultText({ kind, contactRemoved, contactName, ruleEnabled });
+      // Contato que continua casando sozinho não é "desfeito" de verdade: aviso, não sucesso.
+      if (kind === 'linked' || contactRemoved) toast.success(text);
+      else toast.warning(text, { duration: 15_000 });
       onChanged();
     } catch (err) {
       handleActionError(err, 'Não foi possível desfazer. Tente de novo.');
     }
-  }
+  };
 
   async function createFor(card: UpcomingUnmatchedCard) {
     setBusy(keyOf(card));
@@ -129,13 +141,21 @@ export function UpcomingUnmatchedPanel({
         return;
       }
       const d = res.data;
+      // O Desfazer leva o estado de antes das cobranças e, quando o contato
+      // nasceu agora, o id dele — para apagá-lo se nada depender dele (16/09).
+      const input: UpcomingUndoInput = {
+        contactId: d.contactId,
+        previousContactId: d.previousContactId,
+        restore: d.restore,
+        createdContactId: d.created ? d.contactId : null,
+      };
       toast.success(
         d.created
-          ? 'Contato criado e ligado. O lembrete sai na próxima rodada da régua.'
-          : 'Já existia um contato com esse telefone ou e-mail — o cliente foi ligado a ele.',
+          ? `Contato criado e ligado. ${reminderAfterLinkText(ruleEnabled)}`
+          : `Já existia o contato "${d.contactName}" com esse telefone ou e-mail — o cliente foi ligado a ele.`,
         {
           duration: 12_000,
-          action: { label: 'Desfazer', onClick: () => void undo(card, d.previousContactId, d.created) },
+          action: { label: 'Desfazer', onClick: () => void undo(card, input, d.created ? 'created' : 'existing', d.contactName) },
         },
       );
       onChanged();
@@ -154,16 +174,25 @@ export function UpcomingUnmatchedPanel({
       </summary>
       <p className="mt-2 text-xs text-amber-900/90 dark:text-amber-200/90">
         O lembrete antes do vencimento não sai para estes clientes do Asaas: nenhum contato do CRM tem o telefone, o e-mail ou o CPF/CNPJ
-        deles — ou mais de um contato tem o mesmo telefone. Ligue ao contato certo ou crie um — o CRM nunca cria contato sozinho. Quando a
-        parcela vence, o cliente passa para a carteira acima.
+        deles — ou mais de um contato tem o mesmo telefone, e-mail ou CPF/CNPJ. Ligue ao contato certo ou crie um — o CRM nunca cria contato
+        sozinho. Quando a parcela vence, o cliente passa para a carteira acima.
       </p>
+      {!ruleEnabled && (
+        <p className="mt-2 flex items-start gap-1.5 text-xs font-medium text-amber-900 dark:text-amber-200">
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>
+            A régua está desligada: esta lista parou na última leitura{view.checkedAt ? ` (${checkedAtText(view.checkedAt)})` : ''} e pode
+            ter quem já pagou. Ligar um cliente aqui vale para as próximas parcelas, mas o lembrete só sai quando a régua for religada.
+          </span>
+        </p>
+      )}
 
       <ul className="mt-3 flex flex-col gap-2">
         {cards.map((c) => {
           const k = keyOf(c);
           const createBlocked =
             c.reason === 'ambiguous'
-              ? 'Mais de um contato tem este telefone — use "Ligar a um contato" e escolha o certo'
+              ? 'Mais de um contato tem o mesmo telefone, e-mail ou CPF/CNPJ — use "Ligar a um contato" e escolha o certo'
               : !c.canCreate
                 ? 'Sem telefone válido nem e-mail no Asaas'
                 : null;
@@ -238,21 +267,32 @@ export function UpcomingUnmatchedPanel({
         {view.checkedAt ? ` · ${checkedAtText(view.checkedAt)}` : ''} · a lista é refeita a cada rodada da régua, no horário de cobrança.
       </p>
 
-      {linkFor && <LinkUpcomingDialog key={keyOf(linkFor)} card={linkFor} onClose={() => setLinkFor(null)} onLinked={onChanged} onUndo={undo} />}
+      {linkFor && (
+        <LinkUpcomingDialog
+          key={keyOf(linkFor)}
+          card={linkFor}
+          ruleEnabled={ruleEnabled}
+          onClose={() => setLinkFor(null)}
+          onLinked={onChanged}
+          onUndo={undo}
+        />
+      )}
     </details>
   );
 }
 
 function LinkUpcomingDialog({
   card,
+  ruleEnabled,
   onClose,
   onLinked,
   onUndo,
 }: {
   card: UpcomingUnmatchedCard;
+  ruleEnabled: boolean;
   onClose: () => void;
   onLinked: () => void;
-  onUndo: (card: UpcomingUnmatchedCard, previousContactId: string | null, created: boolean) => Promise<void>;
+  onUndo: UndoFn;
 }) {
   // Começa pelo nome do Asaas; quem tem o MESMO telefone vem primeiro de
   // qualquer jeito (searchContactsForCharge, 16/09 L&M Vidros × "LM Vidros").
@@ -301,7 +341,8 @@ function LinkUpcomingDialog({
 
         {card.reason === 'ambiguous' && (
           <p className="rounded-md border border-amber-500/40 bg-amber-50 px-2.5 py-1.5 text-xs text-amber-900 dark:bg-amber-950/40 dark:text-amber-200">
-            Mais de um contato tem este telefone. Confira qual é o cliente certo antes de ligar.
+            Mais de um contato tem o mesmo telefone, e-mail ou CPF/CNPJ deste cliente. Confira qual é o certo antes de ligar — busque também
+            pelo e-mail.
           </p>
         )}
 
@@ -326,9 +367,15 @@ function LinkUpcomingDialog({
                     return;
                   }
                   const d = res.data;
-                  toast.success(`Ligado a ${d.contactName}. O lembrete desta parcela sai na próxima rodada da régua.`, {
+                  const input: UpcomingUndoInput = {
+                    contactId: c.id,
+                    previousContactId: d.previousContactId,
+                    restore: d.restore,
+                    createdContactId: null,
+                  };
+                  toast.success(`Ligado a ${d.contactName}. ${reminderAfterLinkText(ruleEnabled)}`, {
                     duration: 12_000,
-                    action: { label: 'Desfazer', onClick: () => void onUndo(card, d.previousContactId, false) },
+                    action: { label: 'Desfazer', onClick: () => void onUndo(card, input, 'linked', d.contactName) },
                   });
                   // O lembrete vai para o número da FICHA, não para o do Asaas.
                   if (!d.contactPhone) {

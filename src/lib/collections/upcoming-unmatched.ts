@@ -16,7 +16,7 @@
 
 import { asaasPhoneForContact, normalizeDocument, normalizeEmail } from '@/lib/asaas/match'
 
-/** no_contact = ninguém tem o telefone/e-mail/documento · ambiguous = 2+ contatos com o mesmo telefone. */
+/** no_contact = ninguém tem o telefone/e-mail/documento · ambiguous = 2+ contatos com o mesmo telefone (ou, sem telefone que case, o mesmo e-mail/documento). */
 export type UnmatchedReason = 'no_contact' | 'ambiguous'
 
 export interface UnmatchedPayment {
@@ -214,9 +214,132 @@ export function canCreateFromAsaas(phone: string | null | undefined, email: stri
   return !!asaasPhoneForContact(phone) || !!normalizeEmail(email)
 }
 
+// ------------------------------------------------ "Desfazer" do painel (16/09)
+// A primeira versão do desfazer zerava TODA cobrança aberta do cliente que
+// estivesse 'manual' no contato do vínculo. Isso apagava ligação feita à mão
+// ANTES do clique — na carteira, antes da 0178 (sem vínculo retroativo), ou
+// pela IA em emit.ts (nasce 'manual', sem vínculo): a vencida virava "Sem
+// contato" e a régua parava de cobrá-la. Agora o clique guarda o estado de
+// antes só das linhas que ele MUDA, e o desfazer devolve exatamente essas.
+
+/** Uma cobrança aberta como estava antes do clique. */
+export interface ChargeRestore {
+  id: string
+  contactId: string | null
+  matchedBy: string | null
+}
+
+/**
+ * Das cobranças abertas do cliente, as que ligar a `contactId` muda de fato.
+ * A que já está 'manual' neste mesmo contato não é tocada nem entra no
+ * desfazer — ela já era assim antes do clique.
+ */
+export function chargesChangedByLink(rows: readonly ChargeRestore[], contactId: string): ChargeRestore[] {
+  return rows
+    .filter((r) => r.contactId !== contactId || r.matchedBy !== 'manual')
+    .map((r) => ({ id: r.id, contactId: r.contactId ?? null, matchedBy: r.matchedBy ?? null }))
+}
+
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
+const MATCHED_BY_VALUES = new Set(['phone', 'email', 'code', 'manual'])
+/** Um cliente do Asaas com mais parcelas abertas que isto não existe na prática — é só o teto contra payload inventado. */
+export const MAX_CHARGE_RESTORE = 200
+
+export function isUuid(v: unknown): v is string {
+  return typeof v === 'string' && UUID_RE.test(v)
+}
+
+/**
+ * A lista do desfazer volta do NAVEGADOR: só passa o que tem forma de cobrança
+ * (id uuid, contato uuid ou nulo, matched_by conhecido ou nulo), sem repetir e
+ * com teto. O servidor ainda confere conta, cliente e estado de cada linha.
+ */
+export function sanitizeChargeRestore(raw: unknown): ChargeRestore[] {
+  if (!Array.isArray(raw)) return []
+  const out = new Map<string, ChargeRestore>()
+  for (const item of raw) {
+    if (out.size >= MAX_CHARGE_RESTORE) break
+    if (!item || typeof item !== 'object') continue
+    const { id, contactId, matchedBy } = item as Record<string, unknown>
+    if (!isUuid(id)) continue
+    out.set(id, {
+      id,
+      contactId: isUuid(contactId) ? contactId : null,
+      matchedBy: typeof matchedBy === 'string' && MATCHED_BY_VALUES.has(matchedBy) ? matchedBy : null,
+    })
+  }
+  return [...out.values()]
+}
+
+/** Contato de antes que sumiu da conta no meio: a cobrança volta sem contato, para o casamento automático tentar. */
+export function restoreTarget(item: ChargeRestore, existingContactIds: ReadonlySet<string>): { contactId: string | null; matchedBy: string | null } {
+  if (item.contactId && !existingContactIds.has(item.contactId)) return { contactId: null, matchedBy: null }
+  return { contactId: item.contactId, matchedBy: item.matchedBy }
+}
+
+/** O que prende o contato que o "Criar contato" acabou de criar (lido depois de desfazer vínculo e cobranças). */
+export interface CreatedContactDeps {
+  /** Criado há pouco (o desfazer vive 12 s no toast; a folga é de minutos). */
+  recent: boolean
+  conversations: boolean
+  deals: boolean
+  /** Outro cliente do Asaas ligado a ele. */
+  links: boolean
+  /** Cobrança (de qualquer cliente) ainda apontando para ele. */
+  charges: boolean
+  /** Lembrete/cobrança já na fila para ele. */
+  actionRequests: boolean
+}
+
+/**
+ * 16/09: desfazer o "Criar contato" apagando só o vínculo não desfazia nada —
+ * o contato criado tem o telefone/e-mail do Asaas e a leitura seguinte casava
+ * sozinha com ele (o cartão nunca voltava). O contato sai junto quando acabou
+ * de nascer e nada depende dele; senão fica, e a tela diz a verdade.
+ */
+export function canRemoveCreatedContact(d: CreatedContactDeps | null): boolean {
+  return !!d && d.recent && !d.conversations && !d.deals && !d.links && !d.charges && !d.actionRequests
+}
+
+/** Quando o lembrete sai depois de ligar — com a régua desligada, a "próxima rodada" não vem. */
+export function reminderAfterLinkText(ruleEnabled: boolean): string {
+  return ruleEnabled ? 'O lembrete sai na próxima rodada da régua.' : 'A régua está desligada: o lembrete só sai quando ela for religada.'
+}
+
+/** linked = "Ligar a um contato" · created = "Criar contato" criou · existing = "Criar contato" achou um que já existia. */
+export type UpcomingUndoKind = 'linked' | 'created' | 'existing'
+
+/** O toast do "Desfazer" — nunca promete que o cartão volta quando o contato vai casar sozinho de novo. */
+export function undoResultText(input: { kind: UpcomingUndoKind; contactRemoved: boolean; contactName: string; ruleEnabled: boolean }): string {
+  const back = input.ruleEnabled ? 'o cliente volta para a lista na próxima rodada da régua' : 'o cliente volta para a lista quando a régua for religada'
+  const name = input.contactName.trim() || 'contato'
+  if (input.kind === 'linked') return `Desfeito: ${back}.`
+  if (input.kind === 'created' && input.contactRemoved) return `Desfeito: o contato criado foi apagado e ${back}.`
+  if (input.kind === 'created') {
+    return `Vínculo desfeito, mas o contato "${name}" continua no CRM (já tem conversa, negócio ou outra cobrança) com o telefone ou o e-mail do Asaas — a régua vai casar com ele de novo. Se foi engano, apague esse contato ou corrija o telefone e o e-mail dele.`
+  }
+  return `Vínculo desfeito, mas o contato "${name}" já existia com o mesmo telefone ou e-mail do Asaas — a régua vai continuar casando com ele. Se não é este cliente, corrija o telefone ou o e-mail desse contato.`
+}
+
+/**
+ * Toast do "desligar contato" da carteira. 16/09: prometia que as próximas
+ * parcelas deixavam de ir para o contato, mas desligar só apaga o vínculo —
+ * quando o casamento era automático (telefone, e-mail ou CPF/CNPJ), a
+ * sincronização seguinte liga de novo ao MESMO contato.
+ */
+export function unlinkDebtorText(matchedBy: string | null | undefined): string {
+  const base = 'Contato desligado — voltou para as pendências.'
+  if (matchedBy === 'manual') {
+    return `${base} A próxima sincronização só liga de novo se o telefone, o e-mail ou o CPF/CNPJ do Asaas for o desta ficha.`
+  }
+  return `${base} Ele foi ligado pelo telefone, e-mail ou CPF/CNPJ do Asaas, então a próxima sincronização liga de novo. Para não voltar, corrija o cadastro no Asaas ou a ficha do contato.`
+}
+
 export function unmatchedReasonText(reason: UnmatchedReason): string {
+  // decideMatch também empata por e-mail ou CPF/CNPJ quando o telefone não
+  // achou ninguém — "com este telefone" mentia nesses casos (16/09).
   return reason === 'ambiguous'
-    ? 'Mais de um contato do CRM com este telefone — escolha o certo'
+    ? 'Mais de um contato do CRM com o mesmo telefone, e-mail ou CPF/CNPJ — escolha o certo'
     : 'Nenhum contato do CRM com este telefone, e-mail ou CPF/CNPJ'
 }
 

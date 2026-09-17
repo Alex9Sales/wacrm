@@ -55,10 +55,16 @@ import { changeChargeDueDateCore } from '@/lib/collections/due-date'
 import { localDayKey } from '@/lib/collections/stale'
 import {
   canCreateFromAsaas,
+  canRemoveCreatedContact,
+  chargesChangedByLink,
   customerRefKey,
+  isUuid,
+  restoreTarget,
   sameDocumentOthers,
+  sanitizeChargeRestore,
   uniqueCustomerRefs,
   visibleUpcoming,
+  type ChargeRestore,
   type UnmatchedCustomerRef,
   type UnmatchedPayment,
   type UnmatchedReason,
@@ -1393,6 +1399,12 @@ export interface UpcomingUnmatchedCard {
 export interface UpcomingUnmatchedView {
   /** Lembrete antes do vencimento ligado em Ajustar. Desligado = nada a mostrar. */
   enabled: boolean
+  /**
+   * A régua está ligada. Desligada, o worker nem lê o Asaas: a lista fica
+   * parada na última leitura (pode ter quem já pagou) e o lembrete não sai —
+   * a tela avisa em vez de prometer "na próxima rodada" (16/09).
+   */
+  ruleEnabled: boolean
   daysBefore: number
   /** Hoje no fuso da conta (YYYY-MM-DD) — "vence hoje/amanhã" na tela. */
   todayKey: string
@@ -1404,7 +1416,8 @@ export interface UpcomingUnmatchedView {
 const UPCOMING_GONE = 'Este cliente já saiu da lista (pagou, venceu ou já foi ligado). Atualize a tela.'
 const UPCOMING_ALREADY_LINKED = 'Este cliente do Asaas já foi ligado a outro contato (por outra pessoa ou em outra aba). Atualize a tela.'
 const UPCOMING_AMBIGUOUS =
-  'Já existe mais de um contato com o telefone deste cliente. Use "Ligar a um contato" e escolha o certo — criar outro só piora.'
+  'Já existe mais de um contato com o telefone, o e-mail ou o CPF/CNPJ deste cliente. Use "Ligar a um contato" e escolha o certo — criar outro só piora.'
+const UPCOMING_RELINKED = 'Este cliente foi ligado de novo depois (por outra pessoa ou em outra aba). Atualize a tela antes de desfazer.'
 const UPCOMING_NO_DATA = 'Este cliente não tem telefone válido nem e-mail no Asaas. Cadastre o contato na mão e use "Ligar a um contato".'
 
 /**
@@ -1420,7 +1433,7 @@ export async function getUpcomingUnmatched(): Promise<ActionResult<UpcomingUnmat
     const s = normalizeSettings(accountSettings.collections)
     const todayKey = localDayKey(accountSettings.businessTimezone || 'America/Sao_Paulo')
     if (s.reminderDaysBefore <= 0) {
-      return { ok: true, data: { enabled: false, daysBefore: 0, todayKey, checkedAt: null, cards: [] } }
+      return { ok: true, data: { enabled: false, ruleEnabled: s.enabled, daysBefore: 0, todayKey, checkedAt: null, cards: [] } }
     }
 
     const rows = await db
@@ -1500,6 +1513,7 @@ export async function getUpcomingUnmatched(): Promise<ActionResult<UpcomingUnmat
       ok: true,
       data: {
         enabled: true,
+        ruleEnabled: s.enabled,
         daysBefore: s.reminderDaysBefore,
         todayKey,
         checkedAt: checkedAtMs ? new Date(checkedAtMs).toISOString() : null,
@@ -1516,15 +1530,16 @@ export async function getUpcomingUnmatched(): Promise<ActionResult<UpcomingUnmat
  * Liga UM cliente do Asaas (numa conta do Asaas) a um contato: grava o vínculo,
  * leva junto as cobranças abertas dele na carteira e tira o cartão do painel.
  * Recusa quando outra pessoa já ligou o mesmo cliente a outro contato — a tela
- * estava velha, e trocar calado seria pior. Devolve o vínculo anterior (o mesmo
- * contato, quando o clique repete) para o "Desfazer".
+ * estava velha, e trocar calado seria pior. Devolve para o "Desfazer" o vínculo
+ * anterior (o mesmo contato, quando o clique repete) e o estado de ANTES das
+ * cobranças que o clique mudou.
  */
 async function linkCustomerTo(
   accountId: string,
   userId: string,
   ref: UnmatchedCustomerRef,
   contactId: string,
-): Promise<{ ok: true; previousContactId: string | null } | { ok: false; error: string }> {
+): Promise<{ ok: true; previousContactId: string | null; restore: ChargeRestore[] } | { ok: false; error: string }> {
   const previous = firstOrNull(
     await db
       .select({ contactId: asaasCustomerLinks.contactId })
@@ -1540,14 +1555,28 @@ async function linkCustomerTo(
   )
   if (previous && previous.contactId !== contactId) return { ok: false, error: UPCOMING_ALREADY_LINKED }
 
-  await db.transaction(async (tx) => {
+  const restore = await db.transaction(async (tx) => {
     await upsertCustomerLinks(tx, accountId, userId, [ref], contactId)
-    await tx
-      .update(asaasCharges)
-      .set({ contactId, matchedBy: 'manual', updatedAt: new Date().toISOString() })
+    // 16/09: o estado de ANTES, só das linhas que o clique muda — o RETURNING
+    // do update devolveria os valores novos. Sem isso o "Desfazer" zerava a
+    // vencida ligada à mão na carteira antes da 0178 (sem vínculo retroativo)
+    // ou a cobrança criada pela IA (emit.ts nasce 'manual' sem vínculo): ela
+    // virava "Sem contato" e a régua parava de cobrá-la.
+    const open = await tx
+      .select({ id: asaasCharges.id, contactId: asaasCharges.contactId, matchedBy: asaasCharges.matchedBy })
+      .from(asaasCharges)
       .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true), chargeRefsWhere([ref])))
+      .for('update')
+    const changed = chargesChangedByLink(open, contactId)
+    if (changed.length) {
+      await tx
+        .update(asaasCharges)
+        .set({ contactId, matchedBy: 'manual', updatedAt: new Date().toISOString() })
+        .where(and(eq(asaasCharges.accountId, accountId), inArray(asaasCharges.id, changed.map((c) => c.id))))
+    }
+    return changed
   })
-  return { ok: true, previousContactId: previous?.contactId ?? null }
+  return { ok: true, previousContactId: previous?.contactId ?? null, restore }
 }
 
 async function connectionOfAccount(accountId: string, connectionId: string): Promise<boolean> {
@@ -1565,7 +1594,7 @@ export async function linkUpcomingCustomer(
   connectionId: string,
   customerId: string,
   contactId: string,
-): Promise<ActionResult<{ contactName: string; contactPhone: string | null; previousContactId: string | null }>> {
+): Promise<ActionResult<{ contactName: string; contactPhone: string | null; previousContactId: string | null; restore: ChargeRestore[] }>> {
   const { accountId, userId } = await requireRole('agent')
   try {
     const contact = firstOrNull(
@@ -1583,7 +1612,12 @@ export async function linkUpcomingCustomer(
     revalidatePath('/cobrancas')
     return {
       ok: true,
-      data: { contactName: contact.name || contact.phone || 'contato sem nome', contactPhone: contact.phone || null, previousContactId: r.previousContactId },
+      data: {
+        contactName: contact.name || contact.phone || 'contato sem nome',
+        contactPhone: contact.phone || null,
+        previousContactId: r.previousContactId,
+        restore: r.restore,
+      },
     }
   } catch (err) {
     console.error('[cobranca] ligar cliente a vencer falhou:', err instanceof Error ? err.message : err)
@@ -1599,7 +1633,7 @@ export async function linkUpcomingCustomer(
 export async function createContactForUpcoming(
   connectionId: string,
   customerId: string,
-): Promise<ActionResult<{ contactId: string; created: boolean; contactName: string; previousContactId: string | null }>> {
+): Promise<ActionResult<{ contactId: string; created: boolean; contactName: string; previousContactId: string | null; restore: ChargeRestore[] }>> {
   const { accountId, userId } = await requireRole('agent')
   try {
     const row = firstOrNull(
@@ -1629,14 +1663,29 @@ export async function createContactForUpcoming(
 
     const r = await linkCustomerTo(accountId, userId, { connectionId, customerId }, made.data.id)
     if (!r.ok) return { ok: false, error: r.error }
+
+    let contactName = (row.name ?? '').trim() || 'contato'
+    if (!made.data.created) {
+      // Achou um contato que já existia: a tela fala o nome DELE, não o do
+      // Asaas — o desfazer avisa que é este contato que continua casando.
+      const existing = firstOrNull(
+        await db
+          .select({ name: contacts.name, phone: contacts.phone })
+          .from(contacts)
+          .where(and(eq(contacts.id, made.data.id), eq(contacts.accountId, accountId)))
+          .limit(1),
+      )
+      contactName = existing?.name?.trim() || existing?.phone || contactName
+    }
     revalidatePath('/cobrancas')
     return {
       ok: true,
       data: {
         contactId: made.data.id,
         created: made.data.created,
-        contactName: (row.name ?? '').trim() || 'contato',
+        contactName,
         previousContactId: r.previousContactId,
+        restore: r.restore,
       },
     }
   } catch (err) {
@@ -1645,16 +1694,68 @@ export async function createContactForUpcoming(
   }
 }
 
+export interface UpcomingUndoInput {
+  /** O contato que o clique ligou. O desfazer só age se o vínculo ainda aponta para ele. */
+  contactId: string
+  /** Vínculo que já existia antes do clique (é o mesmo contato — linkCustomerTo recusa outro): ele fica. */
+  previousContactId: string | null
+  /** Cobranças abertas que o clique mudou, com o contato e o matched_by de antes (linkCustomerTo). */
+  restore: ChargeRestore[]
+  /** O "Criar contato" CRIOU este contato: sai junto quando nada depende dele. */
+  createdContactId: string | null
+}
+
 /**
- * "Desfazer" do painel: volta o vínculo que existia antes (quando havia) ou
- * apaga o vínculo, e devolve as cobranças abertas que o clique tinha levado.
- * Nunca apaga contato — o criado continua no CRM. Sem vínculo, o cliente volta
- * para a lista na próxima leitura do lembrete.
+ * Apaga o contato que o "Criar contato" acabou de criar, se nada depende dele
+ * (canRemoveCreatedContact). Roda na transação do desfazer, DEPOIS de apagar o
+ * vínculo e devolver as cobranças — senão o próprio clique o prenderia.
+ * Contato que já não existe conta como apagado.
  */
-export async function unlinkUpcomingCustomer(connectionId: string, customerId: string, previousContactId?: string | null): Promise<ActionResult> {
-  const { accountId, userId } = await requireRole('agent')
+async function removeCreatedContact(tx: DbTx, accountId: string, contactId: string): Promise<boolean> {
+  // Subquery raw com "tabela"."coluna" (gotcha do Drizzle: sem qualificar, a
+  // coluna casa com a tabela de fora).
+  const deps = firstOrNull(
+    await tx
+      .select({
+        recent: sql<boolean>`"contacts"."created_at" > now() - interval '15 minutes'`,
+        conversations: sql<boolean>`EXISTS (SELECT 1 FROM "conversations" WHERE "conversations"."contact_id" = "contacts"."id")`,
+        deals: sql<boolean>`(EXISTS (SELECT 1 FROM "deals" WHERE "deals"."contact_id" = "contacts"."id") OR EXISTS (SELECT 1 FROM "deal_contacts" WHERE "deal_contacts"."contact_id" = "contacts"."id"))`,
+        links: sql<boolean>`EXISTS (SELECT 1 FROM "asaas_customer_links" WHERE "asaas_customer_links"."contact_id" = "contacts"."id")`,
+        charges: sql<boolean>`EXISTS (SELECT 1 FROM "asaas_charges" WHERE "asaas_charges"."contact_id" = "contacts"."id")`,
+        actionRequests: sql<boolean>`EXISTS (SELECT 1 FROM "agent_action_requests" WHERE "agent_action_requests"."contact_id" = "contacts"."id")`,
+      })
+      .from(contacts)
+      .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+      .for('update')
+      .limit(1),
+  )
+  if (!deps) return true
+  if (!canRemoveCreatedContact(deps)) return false
+  await tx.delete(contacts).where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+  return true
+}
+
+/**
+ * "Desfazer" do painel. Devolve cada cobrança que o clique mudou ao estado de
+ * antes (contato e matched_by) — só enquanto ela está como o clique deixou,
+ * para não passar por cima de quem mexeu depois — e apaga o vínculo quando
+ * ele não existia antes do clique. O contato que o clique CRIOU sai junto se
+ * acabou de nascer e nada depende dele: com o telefone/e-mail do Asaas, ele
+ * casaria sozinho na leitura seguinte e o desfazer não desfaria nada (16/09).
+ *
+ * O cliente só volta para a lista se nenhum contato casar pelo telefone,
+ * e-mail ou CPF/CNPJ na próxima leitura — a tela diz isso (undoResultText).
+ */
+export async function unlinkUpcomingCustomer(
+  connectionId: string,
+  customerId: string,
+  undo: UpcomingUndoInput,
+): Promise<ActionResult<{ contactRemoved: boolean }>> {
+  const { accountId } = await requireRole('agent')
   try {
-    if (!customerId || !(await connectionOfAccount(accountId, connectionId))) return { ok: false, error: UPCOMING_GONE }
+    if (!customerId || !isUuid(connectionId) || !(await connectionOfAccount(accountId, connectionId))) return { ok: false, error: UPCOMING_GONE }
+    const linkedContactId = undo?.contactId
+    if (!isUuid(linkedContactId)) return { ok: false, error: 'Não há o que desfazer. Atualize a tela.' }
     const ref: UnmatchedCustomerRef = { connectionId, customerId }
     const current = firstOrNull(
       await db
@@ -1669,46 +1770,47 @@ export async function unlinkUpcomingCustomer(connectionId: string, customerId: s
         )
         .limit(1),
     )
+    // Outra pessoa (ou outra aba) ligou a outro contato depois do clique:
+    // desfazer agora apagaria a decisão DELA.
+    if (current && current.contactId !== linkedContactId) return { ok: false, error: UPCOMING_RELINKED }
 
-    if (previousContactId) {
-      const prev = firstOrNull(
-        await db
-          .select({ id: contacts.id })
-          .from(contacts)
-          .where(and(eq(contacts.id, previousContactId), eq(contacts.accountId, accountId)))
-          .limit(1),
-      )
-      if (!prev) return { ok: false, error: 'O contato de antes não existe mais nesta conta.' }
-      await db.transaction(async (tx) => {
-        await upsertCustomerLinks(tx, accountId, userId, [ref], prev.id)
+    const restore = sanitizeChargeRestore(undo.restore)
+    const before = [...new Set(restore.map((r) => r.contactId).filter((id): id is string => !!id))]
+    const stillThere = new Set(
+      before.length
+        ? (await db.select({ id: contacts.id }).from(contacts).where(and(eq(contacts.accountId, accountId), inArray(contacts.id, before)))).map((r) => r.id)
+        : [],
+    )
+    const keepLink = !!undo.previousContactId
+    const createdContactId = !keepLink && undo.createdContactId === linkedContactId ? linkedContactId : null
+
+    const contactRemoved = await db.transaction(async (tx) => {
+      if (current && !keepLink) {
+        await tx.delete(asaasCustomerLinks).where(and(eq(asaasCustomerLinks.accountId, accountId), linkRefsWhere([ref])))
+      }
+      const now = new Date().toISOString()
+      for (const item of restore) {
+        const target = restoreTarget(item, stillThere)
+        // A lista veio do navegador: conta, cliente e "ainda como o clique
+        // deixou" são conferidos aqui, linha por linha.
         await tx
           .update(asaasCharges)
-          .set({ contactId: prev.id, matchedBy: 'manual', updatedAt: new Date().toISOString() })
-          .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true), chargeRefsWhere([ref])))
-      })
-    } else {
-      await db.transaction(async (tx) => {
-        await tx.delete(asaasCustomerLinks).where(and(eq(asaasCustomerLinks.accountId, accountId), linkRefsWhere([ref])))
-        // Só o que o clique levou: cobrança aberta deste cliente presa na mão ao
-        // contato do vínculo. A sincronização seguinte casa de novo sozinha.
-        if (current) {
-          await tx
-            .update(asaasCharges)
-            .set({ contactId: null, matchedBy: null, updatedAt: new Date().toISOString() })
-            .where(
-              and(
-                eq(asaasCharges.accountId, accountId),
-                eq(asaasCharges.open, true),
-                eq(asaasCharges.contactId, current.contactId),
-                eq(asaasCharges.matchedBy, 'manual'),
-                chargeRefsWhere([ref]),
-              ),
-            )
-        }
-      })
-    }
+          .set({ contactId: target.contactId, matchedBy: target.matchedBy, updatedAt: now })
+          .where(
+            and(
+              eq(asaasCharges.id, item.id),
+              eq(asaasCharges.accountId, accountId),
+              eq(asaasCharges.open, true),
+              chargeRefsWhere([ref]),
+              eq(asaasCharges.contactId, linkedContactId),
+              eq(asaasCharges.matchedBy, 'manual'),
+            ),
+          )
+      }
+      return createdContactId ? removeCreatedContact(tx, accountId, createdContactId) : false
+    })
     revalidatePath('/cobrancas')
-    return { ok: true }
+    return { ok: true, data: { contactRemoved } }
   } catch (err) {
     console.error('[cobranca] desfazer ligação de cliente a vencer falhou:', err instanceof Error ? err.message : err)
     return { ok: false, error: 'Não foi possível desfazer. Tente de novo.' }
