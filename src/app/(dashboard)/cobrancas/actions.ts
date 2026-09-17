@@ -42,7 +42,7 @@ import { levelFor, readPolicy } from '@/lib/orchestration/policy'
 import { AsaasApiError, listAllCustomers, setCustomerNotifications, testCredential, type AsaasCredential, type AsaasEnv } from '@/lib/asaas/collections'
 import { asaasPhoneForContact, daysOverdue, groupDuplicateCustomers, normalizeEmail, type DuplicateGroup } from '@/lib/asaas/match'
 import { findOrCreateContact } from '@/lib/api/v1/contacts'
-import { resolveCollectionTargets, WHATSAPP_PROVIDERS } from '@/lib/collections/outreach'
+import { EMAIL_PROVIDERS, resolveCollectionTargets, WHATSAPP_PROVIDERS } from '@/lib/collections/outreach'
 import { createChargeForContact, precheckChargeDocument, resolveChargeDocument } from '@/lib/collections/emit'
 import { connectionHistoryFor, decideConnection, enabledConnectionsOf } from '@/lib/collections/connection-pick'
 import { maskDocument } from '@/lib/collections/document'
@@ -2808,7 +2808,14 @@ export async function getSendsReport(): Promise<SendsReport> {
     delivery: (['sent', 'delivered', 'read', 'failed'].includes(r.delivery ?? '')
       ? r.delivery
       : null) as SendDelivery,
-    channel: r.channel === 'email' ? 'email' : r.channel ? 'whatsapp' : null,
+    // ⚠️ O provedor de e-mail da GoLink é 'gmail', não 'email' — comparar com
+    // a string 'email' mandava todo envio por e-mail pro ícone do WhatsApp.
+    // A lista canônica está em outreach.ts; é ela que manda aqui também.
+    channel: (EMAIL_PROVIDERS as readonly string[]).includes(r.channel ?? '')
+      ? 'email'
+      : r.channel
+        ? 'whatsapp'
+        : null,
     replied: r.replied === true,
     error: r.error,
   }))
