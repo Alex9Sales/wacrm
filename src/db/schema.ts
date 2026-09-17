@@ -3222,6 +3222,9 @@ export const asaasCustomerLinks = pgTable("asaas_customer_links", {
 	contactId: uuid("contact_id").notNull(),
 	/** Quem ligou (null = veio de fora da tela). */
 	linkedBy: uuid("linked_by"),
+	/** Nome no Asaas quando foi ligado (migr 0179) — "Ligados nos últimos dias" diz quem é
+	 *  mesmo depois de o retrato ser apagado. null = ligado antes da coluna ou sem nome. */
+	customerName: text("customer_name"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [

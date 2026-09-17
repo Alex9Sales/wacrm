@@ -64,6 +64,7 @@ import {
   freshReminderItems,
   greetingName,
   linksInstruction,
+  remindedByContact,
   type CollectionsSettings,
   type UpcomingLine,
 } from './rules'
@@ -378,25 +379,25 @@ export async function queueUpcomingReminders(args: {
   // Um lembrete por parcela: o que já foi lembrado — ou avisado como cobrança
   // nova, que já levou o link — nos últimos 45 dias não repete. Expirado
   // (envelheceu na fila, stale.ts) ou falho NÃO conta como lembrado — senão a
-  // parcela ficaria sem aviso nenhum.
+  // parcela ficaria sem aviso nenhum. Conta POR CONTATO (revisão 16/09): o
+  // lembrete que foi (ou foi recusado) para o contato ligado por engano não
+  // segura o do contato certo, ligado depois — ver `remindedByContact`.
   const since = new Date(Date.now() - 45 * 86_400_000).toISOString()
   const previous = await db
-    .select({ payload: agentActionRequests.payload })
+    .select({ contactId: agentActionRequests.contactId, payload: agentActionRequests.payload })
     .from(agentActionRequests)
     .where(
       and(
         eq(agentActionRequests.accountId, args.accountId),
         eq(agentActionRequests.actionType, 'collect_charges'),
+        inArray(agentActionRequests.contactId, ids),
         gte(agentActionRequests.createdAt, since),
         sql`${agentActionRequests.payload}->>'kind' IN ('reminder', 'new_charge')`,
         sql`${agentActionRequests.status} NOT IN ('expired', 'failed')`,
       ),
     )
-  const reminded = new Set<string>()
-  for (const r of previous) {
-    const list = (r.payload as { asaasIds?: unknown } | null)?.asaasIds
-    if (Array.isArray(list)) for (const id of list) if (typeof id === 'string') reminded.add(id)
-  }
+  const remindedOf = remindedByContact(previous)
+  const nothingReminded: ReadonlySet<string> = new Set<string>()
 
   // Link que já saiu numa mensagem nestes dias (criação com "mandar o link",
   // [[COBRAR:]] da IA, colado à mão) não precisa de lembrete.
@@ -435,6 +436,7 @@ export async function queueUpcomingReminders(args: {
       invoiceUrl: cand.lines[i].invoiceUrl,
       line: cand.lines[i],
     }))
+    const reminded = remindedOf.get(cand.contactId) ?? nothingReminded
     let fresh = freshReminderItems(items, reminded, new Set<string>())
     if (!fresh.length) {
       bump('already')

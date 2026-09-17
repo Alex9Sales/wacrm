@@ -221,7 +221,13 @@ export async function syncConnection(
           // (asaas_customer_links, que chega aqui como 'manual') vence um
           // 'manual' antigo gravado na linha: cobrança que reabre, ligada a A no
           // passado, segue o contato B que a equipe escolheu depois (16/09).
-          contactId: sql`CASE WHEN excluded.matched_by = 'manual' THEN excluded.contact_id WHEN ${asaasCharges.matchedBy} = 'manual' THEN ${asaasCharges.contactId} ELSE excluded.contact_id END`,
+          // Só na cobrança espelhada (origin 'sync') ou sem contato: a que o CRM
+          // emitiu (IA ou "Nova cobrança" — emit.ts grava 'manual') é do contato
+          // da conversa em que nasceu. Revisão 16/09: cliente cus_X ligado ao
+          // financeiro (B) e cobrança pedida pelo sócio (C, mesmo CNPJ) depois
+          // do vínculo — ao vencer, a sincronização a mudava para B e a régua
+          // cobrava quem não pediu. Linha sem contato (ficha apagada), o vínculo preenche.
+          contactId: sql`CASE WHEN excluded.matched_by = 'manual' AND (${asaasCharges.origin} = 'sync' OR ${asaasCharges.contactId} IS NULL) THEN excluded.contact_id WHEN ${asaasCharges.matchedBy} = 'manual' THEN ${asaasCharges.contactId} ELSE excluded.contact_id END`,
           matchedBy: sql`CASE WHEN excluded.matched_by = 'manual' OR ${asaasCharges.matchedBy} = 'manual' THEN 'manual' ELSE excluded.matched_by END`,
         },
       })

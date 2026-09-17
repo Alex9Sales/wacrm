@@ -8,11 +8,13 @@
 // quem é, e resolve um por um: "Ligar a um contato" ou "Criar contato". O CRM
 // nunca cria contato nem vínculo sozinho. Todo clique tem "Desfazer": uma
 // ligação errada numa parcela paga em dia nunca apareceria em tela nenhuma.
+// Depois que o aviso some, a lista "Ligados nos últimos dias" guarda o
+// "Desligar" (revisão 16/09).
 // ============================================================
 
 import { useEffect, useMemo, useState } from 'react';
 import { toast } from 'sonner';
-import { CalendarClock, ExternalLink, Link2, Loader2, RefreshCw, Search, TriangleAlert, UserPlus } from 'lucide-react';
+import { CalendarClock, ExternalLink, Link2, Link2Off, Loader2, RefreshCw, Search, TriangleAlert, UserPlus } from 'lucide-react';
 
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
@@ -20,17 +22,23 @@ import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } f
 import { isStaleActionError, reloadForStaleAction } from '@/lib/stale-action';
 import {
   dueInText,
-  reminderAfterLinkText,
+  linkOutcomeTexts,
+  RECENT_LINK_EXTRA_DAYS,
+  recentLinkName,
+  recentUnlinkText,
   undoResultText,
   unmatchedReasonText,
+  type LinkDeliveryInfo,
   type UpcomingUndoKind,
 } from '@/lib/collections/upcoming-unmatched';
 import {
   createContactForUpcoming,
   linkUpcomingCustomer,
   searchContactsForCharge,
+  unlinkRecentUpcomingCustomer,
   unlinkUpcomingCustomer,
   type ContactOption,
+  type UpcomingRecentLink,
   type UpcomingUndoInput,
   type UpcomingUnmatchedCard,
   type UpcomingUnmatchedView,
@@ -76,6 +84,16 @@ function handleActionError(err: unknown, fallback: string) {
   toast.error(fallback);
 }
 
+/**
+ * Aviso de canal depois de ligar/criar. 16/09: a tela prometia o lembrete sem
+ * saber se ele sai — o servidor confere como a fila confere (linkOutcomeTexts).
+ */
+function showDeliveryWarning(warning: string | null, info: LinkDeliveryInfo) {
+  if (!warning) return;
+  if (info.deliveryError) toast.error(warning, { duration: 15_000 });
+  else toast.warning(warning, { duration: 12_000 });
+}
+
 export function UpcomingUnmatchedPanel({
   view,
   error,
@@ -108,10 +126,26 @@ export function UpcomingUnmatchedPanel({
       </div>
     );
   }
-  if (!view?.enabled || !cards.length) return null;
+  if (!view?.enabled) return null;
+
+  const ruleEnabled = view.ruleEnabled;
+  const recent = (view.recentLinks ?? []).filter((l) => !connFilter || l.connectionId === connFilter);
+  const recentBlock =
+    recent.length || view.recentLinksFailed ? (
+      <RecentLinks
+        links={recent}
+        failed={view.recentLinksFailed}
+        daysBefore={view.daysBefore}
+        ruleEnabled={ruleEnabled}
+        standalone={!cards.length}
+        onChanged={onChanged}
+      />
+    ) : null;
+  // Sem cartão, a lista de ligados continua à mão: é o único lugar para
+  // desligar um cliente que só tem parcela a vencer.
+  if (!cards.length) return recentBlock;
 
   const keyOf = (c: UpcomingUnmatchedCard) => `${c.connectionId}:${c.customerId}`;
-  const ruleEnabled = view.ruleEnabled;
 
   const undo: UndoFn = async (card, input, kind, contactName) => {
     try {
@@ -149,15 +183,22 @@ export function UpcomingUnmatchedPanel({
         restore: d.restore,
         createdContactId: d.created ? d.contactId : null,
       };
+      const { reminder, warning } = linkOutcomeTexts(card.name, ruleEnabled, d);
       toast.success(
-        d.created
-          ? `Contato criado e ligado. ${reminderAfterLinkText(ruleEnabled)}`
-          : `Já existia o contato "${d.contactName}" com esse telefone ou e-mail — o cliente foi ligado a ele.`,
+        [
+          d.created
+            ? 'Contato criado e ligado.'
+            : `Já existia o contato "${d.contactName}" com esse telefone ou e-mail — o cliente foi ligado a ele.`,
+          reminder,
+        ]
+          .filter(Boolean)
+          .join(' '),
         {
           duration: 12_000,
           action: { label: 'Desfazer', onClick: () => void undo(card, input, d.created ? 'created' : 'existing', d.contactName) },
         },
       );
+      showDeliveryWarning(warning, d);
       onChanged();
     } catch (err) {
       handleActionError(err, 'Não foi possível criar o contato. Tente de novo.');
@@ -267,6 +308,8 @@ export function UpcomingUnmatchedPanel({
         {view.checkedAt ? ` · ${checkedAtText(view.checkedAt)}` : ''} · a lista é refeita a cada rodada da régua, no horário de cobrança.
       </p>
 
+      {recentBlock && <div className="mt-3">{recentBlock}</div>}
+
       {linkFor && (
         <LinkUpcomingDialog
           key={keyOf(linkFor)}
@@ -276,6 +319,134 @@ export function UpcomingUnmatchedPanel({
           onLinked={onChanged}
           onUndo={undo}
         />
+      )}
+    </details>
+  );
+}
+
+/** "em 16/09 às 14:02 por Joyce". */
+function linkedText(l: UpcomingRecentLink): string {
+  const d = new Date(l.linkedAt);
+  const quando = Number.isNaN(d.getTime())
+    ? ''
+    : `em ${d.toLocaleDateString('pt-BR', { day: '2-digit', month: '2-digit' })} às ${d.toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })}`;
+  return [quando, l.linkedByName ? `por ${l.linkedByName}` : ''].filter(Boolean).join(' ');
+}
+
+/**
+ * "Ligados nos últimos dias" (revisão 16/09). Cliente que só tem parcela A
+ * VENCER não aparece na carteira e o cartão some deste painel assim que é
+ * ligado: sem esta lista, uma ligação errada só podia ser desfeita nos 12 s do
+ * aviso — depois o lembrete saía com o valor e o link de um cliente para o
+ * contato errado, e ninguém tinha onde ver.
+ */
+function RecentLinks({
+  links,
+  failed,
+  daysBefore,
+  ruleEnabled,
+  standalone,
+  onChanged,
+}: {
+  links: UpcomingRecentLink[];
+  /** A lista não carregou: diz na tela, nunca parece "ninguém ligado". */
+  failed: boolean;
+  daysBefore: number;
+  ruleEnabled: boolean;
+  /** Sem cartões a vencer: a lista aparece sozinha, com borda própria. */
+  standalone: boolean;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState<string | null>(null);
+
+  async function unlink(l: UpcomingRecentLink) {
+    const key = `${l.connectionId}:${l.customerId}`;
+    setBusy(key);
+    try {
+      // Só o vínculo sai; cliente que já tem cobrança aberta o servidor recusa (desliga na carteira).
+      const res = await unlinkRecentUpcomingCustomer(l.connectionId, l.customerId, l.contactId);
+      if (!res.ok) {
+        toast.error(res.error ?? 'Não foi possível desligar.');
+        onChanged();
+        return;
+      }
+      // Revisão 16/09: clique errado aqui não tinha volta — a linha some, o
+      // cliente não está na carteira nem no painel até a próxima rodada, e o nome
+      // do Asaas ia junto com o vínculo. O Desfazer religa ao mesmo contato.
+      toast.success(recentUnlinkText({ customerName: recentLinkName(l.customerName, l.customerId), contactName: l.contactName, ruleEnabled }), {
+        duration: 15_000,
+        action: { label: 'Desfazer', onClick: () => void relink(l) },
+      });
+      onChanged();
+    } catch (err) {
+      handleActionError(err, 'Não foi possível desligar. Tente de novo.');
+    } finally {
+      setBusy(null);
+    }
+  }
+
+  async function relink(l: UpcomingRecentLink) {
+    try {
+      const res = await linkUpcomingCustomer(l.connectionId, l.customerId, l.contactId, l.customerName);
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Não foi possível desfazer.');
+        onChanged();
+        return;
+      }
+      const d = res.data;
+      const { reminder, warning } = linkOutcomeTexts(recentLinkName(l.customerName, l.customerId), ruleEnabled, d);
+      toast.success([`Desfeito: ligado de novo a ${d.contactName}.`, reminder].filter(Boolean).join(' '));
+      showDeliveryWarning(warning, d);
+      onChanged();
+    } catch (err) {
+      handleActionError(err, 'Não foi possível desfazer. Tente de novo.');
+    }
+  }
+
+  return (
+    <details
+      open={failed}
+      className={
+        standalone
+          ? 'rounded-md border bg-card px-3.5 py-2.5 text-sm'
+          : 'rounded-md border bg-card/60 px-3 py-2 text-sm'
+      }
+    >
+      <summary className="flex cursor-pointer items-center gap-1.5 text-xs font-medium text-muted-foreground">
+        <Link2 className="h-3.5 w-3.5 shrink-0" /> Ligados nos últimos dias ({links.length})
+      </summary>
+      <p className="mt-1.5 text-xs text-muted-foreground">
+        Clientes do Asaas ligados a um contato nos últimos {daysBefore + RECENT_LINK_EXTRA_DAYS} dias que não têm cobrança aberta na carteira. O
+        lembrete antes do vencimento vai para o contato ligado — se a ligação estiver errada, desligue aqui.
+      </p>
+      {failed && (
+        <p className="mt-1.5 flex items-start gap-1.5 text-xs font-medium text-red-700 dark:text-red-300">
+          <TriangleAlert className="mt-0.5 h-3.5 w-3.5 shrink-0" />
+          <span>Não deu para carregar os clientes ligados recentemente — isso não quer dizer que não há nenhum. Atualize a tela para conferir.</span>
+        </p>
+      )}
+      {links.length > 0 && (
+        <ul className="mt-2 flex flex-col gap-1.5">
+          {links.map((l) => {
+            const key = `${l.connectionId}:${l.customerId}`;
+            return (
+              <li key={key} className="flex flex-wrap items-center justify-between gap-x-3 gap-y-1 rounded-md border px-2.5 py-1.5 text-xs">
+                <span className="min-w-0">
+                  <span className="font-medium">{recentLinkName(l.customerName, l.customerId)}</span> → {l.contactName}
+                  {!l.contactHasPhone && <span className="text-amber-800 dark:text-amber-300"> (ficha sem telefone)</span>}
+                  <span className="block text-muted-foreground">
+                    {l.connectionLabel}
+                    {linkedText(l) ? ` · ligado ${linkedText(l)}` : ''}
+                  </span>
+                </span>
+                <Button size="sm" variant="ghost" className="h-7 px-2 text-xs" disabled={busy !== null} onClick={() => void unlink(l)}>
+                  {busy === key ? <Loader2 className="mr-1 h-3 w-3 animate-spin" /> : <Link2Off className="mr-1 h-3 w-3" />}
+                  Desligar
+                </Button>
+              </li>
+            );
+          })}
+        </ul>
       )}
     </details>
   );
@@ -373,18 +544,14 @@ function LinkUpcomingDialog({
                     restore: d.restore,
                     createdContactId: null,
                   };
-                  toast.success(`Ligado a ${d.contactName}. ${reminderAfterLinkText(ruleEnabled)}`, {
+                  // O lembrete vai para o número da FICHA, não para o do Asaas —
+                  // e só sai pelo canal que o servidor conferiu (16/09).
+                  const { reminder, warning } = linkOutcomeTexts(card.name, ruleEnabled, d);
+                  toast.success([`Ligado a ${d.contactName}.`, reminder].filter(Boolean).join(' '), {
                     duration: 12_000,
                     action: { label: 'Desfazer', onClick: () => void onUndo(card, input, 'linked', d.contactName) },
                   });
-                  // O lembrete vai para o número da FICHA, não para o do Asaas.
-                  if (!d.contactPhone) {
-                    toast.warning(`A ficha de ${d.contactName} não tem telefone — o lembrete não sai por WhatsApp.`, { duration: 10_000 });
-                  } else if (card.phone && !samePhone(d.contactPhone, card.phone)) {
-                    toast.warning(`A ficha de ${d.contactName} tem outro telefone — o lembrete vai para o número da ficha, não para o do Asaas.`, {
-                      duration: 10_000,
-                    });
-                  }
+                  showDeliveryWarning(warning, d);
                   onClose();
                   onLinked();
                 } catch (err) {
