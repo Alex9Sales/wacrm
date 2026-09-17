@@ -15,17 +15,39 @@
 // no limite de toques não recebe. Parcela já avisada como cobrança nova, ou
 // cujo link já saiu numa mensagem para ele, não é lembrada.
 //
+// 16/09 (Speed Gás e Água): a LEITURA (scanUpcoming) é separada da FILA
+// (queueUpcomingReminders). A leitura roda antes do teto do dia e grava quem
+// vai vencer sem contato no CRM — a tela mostra; antes só o log sabia.
+//
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
-import { and, eq, gte, inArray, sql } from 'drizzle-orm'
+import { and, eq, gte, inArray, lt, notInArray, sql } from 'drizzle-orm'
 
-import { db, agentActionRequests, aiConfigs, asaasCharges, asaasConnections, collectionsTouches, contacts, conversations } from '@/db'
+import {
+  db,
+  agentActionRequests,
+  aiConfigs,
+  asaasCharges,
+  asaasConnections,
+  collectionsTouches,
+  collectionsUpcomingUnmatched,
+  contacts,
+  conversations,
+} from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { loadAiConfigById } from '@/lib/ai/config'
 import { generateReply } from '@/lib/ai/generate'
-import { fetchCustomers, getPayment, listPendingDueBetween, type AsaasCredential, type AsaasEnv } from '@/lib/asaas/collections'
-import { findContact } from '@/lib/asaas/sync'
+import {
+  fetchCustomers,
+  getPayment,
+  listPendingDueBetween,
+  type AsaasCredential,
+  type AsaasCustomer,
+  type AsaasEnv,
+} from '@/lib/asaas/collections'
+import { findContact, loadCustomerLinks } from '@/lib/asaas/sync'
+import { buildUnmatchedRows, purgePlan, type UnmatchedEntry, type UnmatchedRow } from './upcoming-unmatched'
 import { paymentRefsFrom, paymentRefsPayload, reconferPayments } from './payment-refs'
 import { linksAlreadySent } from './links-sent'
 import { decide, type AutonomyPolicy } from '@/lib/orchestration/policy'
@@ -53,39 +75,70 @@ export interface ReminderRunResult {
   /** Parcelas a vencer encontradas no Asaas na janela. */
   found: number
   /**
-   * same_day = já tem mensagem de cobrança hoje · on_hold = pausado, promessa/
-   * comprovante ou limite de toques · already = parcela já lembrada ou avisada ·
-   * link_sent = o link já saiu numa mensagem · policy = a política bloqueou.
+   * no_contact = nenhum contato casou · ambiguous = 2+ contatos com o mesmo
+   * telefone · customer_unavailable = o Asaas não deixou abrir o cadastro do
+   * cliente nesta rodada · same_day = já tem mensagem de cobrança hoje ·
+   * on_hold = pausado, promessa/comprovante ou limite de toques · already =
+   * parcela já lembrada ou avisada · link_sent = o link já saiu numa mensagem ·
+   * policy = a política bloqueou.
    */
   skipped: Partial<
-    Record<'no_contact' | 'opted_out' | 'same_day' | 'on_hold' | 'already' | 'link_sent' | 'no_channel' | 'policy' | 'budget', number>
+    Record<
+      | 'no_contact'
+      | 'ambiguous'
+      | 'customer_unavailable'
+      | 'opted_out'
+      | 'same_day'
+      | 'on_hold'
+      | 'already'
+      | 'link_sent'
+      | 'no_channel'
+      | 'policy'
+      | 'budget',
+      number
+    >
   >
+}
+
+/** Quem vai receber lembrete: um por contato, com as parcelas dele de todas as contas do Asaas. */
+export interface UpcomingCandidate {
+  contactId: string
+  name: string | null
+  /** E-mail do cliente no Asaas (a parcela a vencer não está na carteira). */
+  email: string | null
+  optedOut: boolean
+  lines: UpcomingLine[]
+  asaasIds: string[]
+  /** Conta do Asaas de CADA parcela, na ordem de asaasIds (ver payment-refs.ts). */
+  connectionIds: string[]
+}
+
+/** A LEITURA das parcelas a vencer, separada da fila (ver scanUpcoming). */
+export interface UpcomingScan {
+  found: number
+  byContact: Map<string, UpcomingCandidate>
+  skipped: ReminderRunResult['skipped']
 }
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10)
 
-export async function queueUpcomingReminders(args: {
-  accountId: string
-  settings: CollectionsSettings
-  accountSettings: AccountSettings
-  policy: AutonomyPolicy
-  agentId: string | null
-  /** Quantas ainda cabem no teto do dia. */
-  budget: number
-  /** Contatos que já têm pedido na fila (pending/queued), inclusive os desta rodada. */
-  alreadyQueued: Set<string>
-  /** Contatos com mensagem de cobrança hoje (pending/queued/sent) — ver `contactedTodaySet`. */
-  contactedToday: Set<string>
-  usedToday: number
-  moment: string
-  dayKey: string
-}): Promise<ReminderRunResult> {
-  const out: ReminderRunResult = { queued: 0, found: 0, skipped: {} }
+/**
+ * Lê no Asaas o que vence nos próximos N dias e casa com os contatos. NÃO
+ * enfileira nada e NÃO depende do teto do dia.
+ *
+ * 🐛 16/09 (Speed Gás e Água, GoLink): a leitura vivia dentro da fila e só
+ * rodava com orçamento — no dia em que o teto acabava ninguém olhava, e o
+ * cliente sem contato era um `bump('no_contact')` que só o log via. Agora ela
+ * roda antes do teto e grava o retrato "a vencer sem contato"
+ * (collections_upcoming_unmatched) que a tela /cobrancas mostra.
+ */
+export async function scanUpcoming(args: { accountId: string; settings: CollectionsSettings; tz: string }): Promise<UpcomingScan> {
+  const out: UpcomingScan = { found: 0, byContact: new Map(), skipped: {} }
   const bump = (k: keyof ReminderRunResult['skipped']) => {
     out.skipped[k] = (out.skipped[k] ?? 0) + 1
   }
   const s = args.settings
-  if (s.reminderDaysBefore <= 0 || args.budget <= 0) return out
+  if (s.reminderDaysBefore <= 0) return out
 
   const conns = await db
     .select({ id: asaasConnections.id, label: asaasConnections.label, apiKeyEnc: asaasConnections.apiKeyEnc, environment: asaasConnections.environment })
@@ -94,8 +147,7 @@ export async function queueUpcomingReminders(args: {
   if (!conns.length) return out
 
   const today = new Date()
-  const tz = args.accountSettings.businessTimezone || 'America/Sao_Paulo'
-  const todayKey = localDayKey(tz, today)
+  const todayKey = localDayKey(args.tz || 'America/Sao_Paulo', today)
   const daysUntilFrom = (ymd: string): number | null => {
     const venc = Date.parse(`${ymd.slice(0, 10)}T00:00:00Z`)
     const hoje = Date.parse(`${todayKey}T00:00:00Z`)
@@ -104,19 +156,7 @@ export async function queueUpcomingReminders(args: {
   }
   const from = isoDay(today)
   const until = isoDay(new Date(today.getTime() + s.reminderDaysBefore * 86_400_000))
-
-  interface Candidate {
-    contactId: string
-    name: string | null
-    /** E-mail do cliente no Asaas (a parcela a vencer não está na carteira). */
-    email: string | null
-    optedOut: boolean
-    lines: UpcomingLine[]
-    asaasIds: string[]
-    /** Conta do Asaas de CADA parcela, na ordem de asaasIds (ver payment-refs.ts). */
-    connectionIds: string[]
-  }
-  const byContact = new Map<string, Candidate>()
+  const byContact = out.byContact
 
   for (const c of conns) {
     let cred: AsaasCredential
@@ -125,21 +165,50 @@ export async function queueUpcomingReminders(args: {
     } catch {
       continue
     }
+    // Carimbo do INÍCIO da leitura: a limpeza apaga só o que é mais velho que
+    // ele — uma leitura mais nova rodando junto não perde o que gravou.
+    const scanStartedAt = new Date().toISOString()
     let payments
     try {
       payments = await listPendingDueBetween(cred, from, until)
     } catch (err) {
+      // Listagem falhou: nada é gravado nem apagado do retrato desta conta.
       console.warn(`[lembrete] ${c.label}: não deu para listar a vencer — ${err instanceof Error ? err.message : err}`)
       continue
     }
     out.found += payments.length
-    if (!payments.length) continue
-    const customers = await fetchCustomers(cred, payments.map((p) => p.customer)).catch(() => new Map())
+    const links = payments.length ? await loadCustomerLinks(args.accountId, c.id) : new Map<string, string>()
+    let customersOk = true
+    const customers = payments.length
+      ? await fetchCustomers(cred, payments.map((p) => p.customer)).catch((err) => {
+          customersOk = false
+          console.warn(`[lembrete] ${c.label}: não deu para abrir os clientes — ${err instanceof Error ? err.message : err}`)
+          return new Map<string, AsaasCustomer>()
+        })
+      : new Map<string, AsaasCustomer>()
+    const unmatched: UnmatchedEntry[] = []
+    const unknown = new Set<string>()
     for (const p of payments) {
       const cust = customers.get(p.customer)
-      const decision = await findContact(args.accountId, cust?.mobilePhone || cust?.phone || null, cust?.email ?? null, cust?.cpfCnpj ?? null)
+      const linked = links.get(p.customer) ?? null
+      if (!cust && !linked) {
+        // Sem o cadastro não dá para casar nem para mostrar: antes virava
+        // "no_contact" e, no retrato, um cartão sem nome nem telefone.
+        bump('customer_unavailable')
+        unknown.add(p.customer)
+        continue
+      }
+      const decision = await findContact(args.accountId, cust?.mobilePhone || cust?.phone || null, cust?.email ?? null, cust?.cpfCnpj ?? null, linked)
       if (!decision.contactId) {
-        bump('no_contact')
+        const reason = decision.ambiguous ? 'ambiguous' : 'no_contact'
+        bump(reason)
+        unmatched.push({
+          connectionId: c.id,
+          customerId: p.customer,
+          customer: cust ?? {},
+          reason,
+          payment: { id: p.id, value: p.value, dueDate: p.dueDate, invoiceUrl: p.invoiceUrl, description: p.description },
+        })
         continue
       }
       // Dias até vencer pela DATA no fuso da conta (mesma conta da régua):
@@ -159,12 +228,111 @@ export async function queueUpcomingReminders(args: {
         }
         byContact.set(decision.contactId, cand)
       }
+      if (!cand.name && cust?.name) cand.name = cust.name
+      if (!cand.email && cust?.email) cand.email = collectionEmail(cust.email)
       cand.lines.push({ value: Number(p.value ?? 0), dueDate: p.dueDate ? p.dueDate.slice(0, 10) : null, daysUntil, connectionLabel: c.label, invoiceUrl: p.invoiceUrl ?? null })
       cand.asaasIds.push(p.id)
       cand.connectionIds.push(c.id)
     }
+    // O retrato não pode parar o lembrete: falhou (migração fora de ordem,
+    // banco ocupado), fica no log e a fila segue.
+    try {
+      await writeUpcomingSnapshot(args.accountId, c.id, buildUnmatchedRows(unmatched), purgePlan({ customersOk, unknownCustomerIds: unknown }), scanStartedAt)
+    } catch (err) {
+      console.error(`[lembrete] ${c.label}: não deu para gravar os a vencer sem contato — ${err instanceof Error ? err.message : err}`)
+    }
   }
-  if (!byContact.size) return out
+  return out
+}
+
+/**
+ * Grava o retrato "a vencer sem contato" de UMA conexão: atualiza quem apareceu
+ * nesta leitura e, se a leitura dos clientes deu certo, apaga quem não
+ * apareceu (pagou, venceu, saiu da janela, ganhou contato ou foi ligado) —
+ * menos os clientes que o Asaas não deixou abrir.
+ */
+export async function writeUpcomingSnapshot(
+  accountId: string,
+  connectionId: string,
+  rows: readonly UnmatchedRow[],
+  plan: { purge: boolean; keep: readonly string[] },
+  scanStartedAt: string,
+): Promise<void> {
+  if (!rows.length && !plan.purge) return
+  await db.transaction(async (tx) => {
+    for (const r of rows) {
+      await tx
+        .insert(collectionsUpcomingUnmatched)
+        .values({
+          accountId,
+          connectionId,
+          asaasCustomerId: r.customerId,
+          customerName: r.name,
+          phone: r.phone,
+          email: r.email,
+          cpfCnpj: r.cpfCnpj,
+          reason: r.reason,
+          payments: r.payments,
+          nextDueDate: r.nextDueDate,
+          total: r.total.toFixed(2),
+          firstSeenAt: scanStartedAt,
+          lastSeenAt: scanStartedAt,
+        })
+        .onConflictDoUpdate({
+          target: [collectionsUpcomingUnmatched.accountId, collectionsUpcomingUnmatched.connectionId, collectionsUpcomingUnmatched.asaasCustomerId],
+          // first_seen_at não muda: é desde quando o cliente está sem contato.
+          set: {
+            customerName: sql`excluded.customer_name`,
+            phone: sql`excluded.phone`,
+            email: sql`excluded.email`,
+            cpfCnpj: sql`excluded.cpf_cnpj`,
+            reason: sql`excluded.reason`,
+            payments: sql`excluded.payments`,
+            nextDueDate: sql`excluded.next_due_date`,
+            total: sql`excluded.total`,
+            lastSeenAt: sql`excluded.last_seen_at`,
+          },
+        })
+    }
+    if (!plan.purge) return
+    await tx
+      .delete(collectionsUpcomingUnmatched)
+      .where(
+        and(
+          eq(collectionsUpcomingUnmatched.accountId, accountId),
+          eq(collectionsUpcomingUnmatched.connectionId, connectionId),
+          lt(collectionsUpcomingUnmatched.lastSeenAt, scanStartedAt),
+          ...(plan.keep.length ? [notInArray(collectionsUpcomingUnmatched.asaasCustomerId, [...plan.keep])] : []),
+        ),
+      )
+  })
+}
+
+export async function queueUpcomingReminders(args: {
+  accountId: string
+  settings: CollectionsSettings
+  accountSettings: AccountSettings
+  policy: AutonomyPolicy
+  agentId: string | null
+  /** Quantas ainda cabem no teto do dia. */
+  budget: number
+  /** Contatos que já têm pedido na fila (pending/queued), inclusive os desta rodada. */
+  alreadyQueued: Set<string>
+  /** Contatos com mensagem de cobrança hoje (pending/queued/sent) — ver `contactedTodaySet`. */
+  contactedToday: Set<string>
+  usedToday: number
+  moment: string
+  dayKey: string
+  /** A leitura feita antes do teto (scanUpcoming). */
+  scan: UpcomingScan
+}): Promise<ReminderRunResult> {
+  const out: ReminderRunResult = { queued: 0, found: args.scan.found, skipped: { ...args.scan.skipped } }
+  const bump = (k: keyof ReminderRunResult['skipped']) => {
+    out.skipped[k] = (out.skipped[k] ?? 0) + 1
+  }
+  const s = args.settings
+  const byContact = args.scan.byContact
+  if (s.reminderDaysBefore <= 0 || args.budget <= 0 || !byContact.size) return out
 
   const ids = [...byContact.keys()]
   // Quem também tem parcela VENCIDA recebe o lembrete da parcela nova — a

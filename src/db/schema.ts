@@ -3207,6 +3207,61 @@ export const asaasCharges = pgTable("asaas_charges", {
 	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "asaas_charges_contact_id_fkey" }).onDelete("set null"),
 ]);
 
+// 🔗 Cliente do Asaas → contato do CRM, decidido por uma PESSOA (migração 0178).
+// Vence o casamento automático no lembrete e na sincronização e vale para as
+// parcelas seguintes — antes a ligação feita à mão ficava só nas cobranças já
+// espelhadas e a próxima parcela era casada de novo por palpite (16/09, Ultra
+// Visão dividida em dois contatos). Só nasce por clique; "desligar contato"
+// na carteira apaga.
+export const asaasCustomerLinks = pgTable("asaas_customer_links", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	/** O cus_ é por conta do Asaas: a chave inclui a conexão. */
+	connectionId: uuid("connection_id").notNull(),
+	asaasCustomerId: text("asaas_customer_id").notNull(),
+	contactId: uuid("contact_id").notNull(),
+	/** Quem ligou (null = veio de fora da tela). */
+	linkedBy: uuid("linked_by"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("asaas_customer_links_customer_uidx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.connectionId.asc().nullsLast().op("uuid_ops"), table.asaasCustomerId.asc().nullsLast().op("text_ops")),
+	index("asaas_customer_links_contact_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "asaas_customer_links_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.connectionId], foreignColumns: [asaasConnections.id], name: "asaas_customer_links_connection_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "asaas_customer_links_contact_id_fkey" }).onDelete("cascade"),
+]);
+
+// 🔔 Retrato (migração 0178): quem vence na janela do lembrete e NÃO casou com
+// contato (nenhum, ou mais de um com o mesmo telefone). Refeito a cada rodada
+// do lembrete, por conexão. Não é carteira: nada aqui é cobrado. Existe porque
+// o lembrete da Speed Gás (16/09) pulava "no_contact" e só o log sabia.
+export const collectionsUpcomingUnmatched = pgTable("collections_upcoming_unmatched", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	connectionId: uuid("connection_id").notNull(),
+	asaasCustomerId: text("asaas_customer_id").notNull(),
+	customerName: text("customer_name"),
+	phone: text(),
+	email: text(),
+	cpfCnpj: text("cpf_cnpj"),
+	/** no_contact | ambiguous */
+	reason: text().notNull(),
+	/** Em ordem de vencimento (dueDate = YYYY-MM-DD). A tela filtra por ESTAS datas, não pela menor. */
+	payments: jsonb().$type<{ id: string; value: number; dueDate: string | null; invoiceUrl: string | null; description?: string | null }[]>().default([]).notNull(),
+	nextDueDate: date("next_due_date"),
+	total: numeric({ precision: 12, scale: 2 }).default('0').notNull(),
+	firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	/** Início da leitura que viu este cliente — a limpeza apaga o que é mais velho. */
+	lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("collections_upcoming_unmatched_customer_uidx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.connectionId.asc().nullsLast().op("uuid_ops"), table.asaasCustomerId.asc().nullsLast().op("text_ops")),
+	index("collections_upcoming_unmatched_due_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.nextDueDate.asc().nullsLast()),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "collections_upcoming_unmatched_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.connectionId], foreignColumns: [asaasConnections.id], name: "collections_upcoming_unmatched_connection_id_fkey" }).onDelete("cascade"),
+	check("collections_upcoming_unmatched_reason_check", sql`reason IN ('no_contact', 'ambiguous')`),
+]);
+
 // 📣 Rastro das ações em disparos (migração 0174). Sem FK para broadcasts:
 // o evento de exclusão sobrevive à linha apagada.
 export const broadcastEvents = pgTable("broadcast_events", {

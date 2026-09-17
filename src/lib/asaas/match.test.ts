@@ -5,6 +5,7 @@ import {
   brPhoneCandidates,
   daysOverdue,
   decideMatch,
+  decideWithLink,
   groupDuplicateCustomers,
   hasFullAddress,
   normalizeDocument,
@@ -88,6 +89,40 @@ describe('decideMatch — nunca chuta', () => {
     ])
     expect(d.contactId).toBe('c1')
     expect(d.ambiguous).toBe(false)
+  })
+})
+
+describe('decideWithLink — o vínculo feito por uma pessoa vence o palpite (16/09)', () => {
+  it('com vínculo e o telefone apontando para OUTRO contato, vence o vínculo (caso Ultra Visão)', () => {
+    expect(decideWithLink('c9', [{ id: 'c1', via: 'phone' }])).toEqual({ contactId: 'c9', matchedBy: 'manual', ambiguous: false })
+  })
+
+  it('com vínculo, empate de telefone deixa de ser pendência', () => {
+    const d = decideWithLink('c9', [
+      { id: 'c1', via: 'phone' },
+      { id: 'c2', via: 'phone' },
+    ])
+    expect(d).toEqual({ contactId: 'c9', matchedBy: 'manual', ambiguous: false })
+  })
+
+  it('com vínculo e sem candidato nenhum, casa pelo vínculo', () => {
+    expect(decideWithLink('c9', [])).toEqual({ contactId: 'c9', matchedBy: 'manual', ambiguous: false })
+  })
+
+  it('sem vínculo é igual ao decideMatch, nos três níveis', () => {
+    const casos: Parameters<typeof decideMatch>[0][] = [
+      [{ id: 'c1', via: 'phone' }],
+      [{ id: 'c1', via: 'phone' }, { id: 'c2', via: 'phone' }],
+      [{ id: 'm1', via: 'email' }],
+      [{ id: 'm1', via: 'email' }, { id: 'm2', via: 'email' }],
+      [{ id: 'k1', via: 'code' }],
+      [],
+    ]
+    for (const c of casos) {
+      expect(decideWithLink(null, c)).toEqual(decideMatch(c))
+      expect(decideWithLink(undefined, c)).toEqual(decideMatch(c))
+      expect(decideWithLink('', c)).toEqual(decideMatch(c))
+    }
   })
 })
 

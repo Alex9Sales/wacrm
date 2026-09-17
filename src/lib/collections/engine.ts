@@ -25,7 +25,7 @@ import { syncAccount } from '@/lib/asaas/sync'
 
 import { resolveCollectionTargets } from './outreach'
 import { queueNewChargeNotices } from './new-charge'
-import { queueUpcomingReminders } from './reminders'
+import { queueUpcomingReminders, scanUpcoming, type ReminderRunResult, type UpcomingScan } from './reminders'
 import { expireStaleCollectionDrafts, localDayKey } from './stale'
 import { maxSimilarity, seedFrom, tooSimilar, variationInstruction, variationPlan } from './variation'
 
@@ -122,6 +122,20 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   if (Date.now() - lastSync > SYNC_STALE_MS) {
     const r = await syncAccount(accountId, s.overdueStatuses)
     if (!r.ok) return { ...stats, haltedBecause: `Não deu para ler o Asaas agora: ${r.error ?? 'falha'}` }
+  }
+
+  // 🔔 A LEITURA do que vence nos próximos dias vem ANTES do teto (16/09, Speed
+  // Gás e Água): ela refaz o painel "A vencer sem contato" e não enfileira
+  // nada. Dentro do orçamento, no dia em que o teto acabava ninguém olhava —
+  // e o cliente sem contato continuava invisível. Falhou: a régua segue.
+  let upcomingScan: UpcomingScan | null = null
+  if (s.reminderDaysBefore > 0) {
+    try {
+      upcomingScan = await scanUpcoming({ accountId, settings: s, tz })
+      stats.remindersFound = upcomingScan.found
+    } catch (err) {
+      console.error('[cobranca] leitura das parcelas a vencer falhou:', err instanceof Error ? err.message : err)
+    }
   }
 
   // 2) A carteira em aberto, já com o contato e o estado da régua.
@@ -265,7 +279,11 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   // da fila, passava do teto e as sobras expiravam à meia-noite (16/09).
   const usedToday = recent.filter((r) => r.status === 'sent' || r.status === 'pending' || r.status === 'queued').length
   let budget = Math.max(0, s.dailyCap - usedToday)
-  if (budget === 0) return { ...stats, haltedBecause: `Teto de ${s.dailyCap} cobranças por dia já foi atingido.` }
+  if (budget === 0) {
+    // Os pulos da leitura (no_contact, ambiguous…) não somem no dia de teto.
+    if (upcomingScan) logReminderRound(accountId, { queued: 0, found: upcomingScan.found, skipped: upcomingScan.skipped }, 'teto do dia')
+    return { ...stats, haltedBecause: `Teto de ${s.dailyCap} cobranças por dia já foi atingido.` }
+  }
 
   // 4) Política do agente (a mesma da orquestração — a cobrança não tem
   //    governança paralela).
@@ -451,35 +469,50 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   }
 
   // 🔔 Lembrete antes de vencer (lacuna 2, 07/09): mesma fila, mesma política,
-  // mesmo teto do dia — o que sobrou do orçamento depois das vencidas.
-  if (s.reminderDaysBefore > 0 && budget > 0) {
-    try {
-      const r = await queueUpcomingReminders({
-        accountId,
-        settings: s,
-        accountSettings,
-        policy,
-        agentId: agent?.id ?? null,
-        budget,
-        alreadyQueued,
-        contactedToday,
-        usedToday: usedToday + stats.queued + (stats.newCharges ?? 0),
-        moment,
-        dayKey,
-      })
-      stats.reminders = r.queued
-      stats.remindersFound = r.found
-      // Os pulos do lembrete não ficam em lugar nenhum — o log é o único rastro.
-      if (r.found) {
-        const pulados = Object.entries(r.skipped).map(([k, v]) => `${k}=${v}`).join(' ')
-        console.log(`[lembrete] ${accountId.slice(0, 8)}: a vencer=${r.found} fila=${r.queued}${pulados ? ` pulados(${pulados})` : ''}`)
+  // mesmo teto do dia — o que sobrou do orçamento depois das vencidas. A
+  // leitura já foi feita lá em cima (scanUpcoming), antes do teto.
+  if (s.reminderDaysBefore > 0 && upcomingScan) {
+    if (budget > 0) {
+      try {
+        const r = await queueUpcomingReminders({
+          accountId,
+          settings: s,
+          accountSettings,
+          policy,
+          agentId: agent?.id ?? null,
+          budget,
+          alreadyQueued,
+          contactedToday,
+          usedToday: usedToday + stats.queued + (stats.newCharges ?? 0),
+          moment,
+          dayKey,
+          scan: upcomingScan,
+        })
+        stats.reminders = r.queued
+        stats.remindersFound = r.found
+        logReminderRound(accountId, r)
+      } catch (err) {
+        console.error('[cobranca] lembretes falharam:', err instanceof Error ? err.message : err)
       }
-    } catch (err) {
-      console.error('[cobranca] lembretes falharam:', err instanceof Error ? err.message : err)
+    } else {
+      logReminderRound(accountId, { queued: 0, found: upcomingScan.found, skipped: upcomingScan.skipped }, 'teto do dia')
     }
   }
 
   return stats
+}
+
+/**
+ * Os pulos do lembrete que não viram painel (same_day, on_hold, no_channel…)
+ * ficam só no log. Quem vence sem contato também está no painel "A vencer sem
+ * contato" da tela /cobrancas (16/09).
+ */
+function logReminderRound(accountId: string, r: ReminderRunResult, note?: string): void {
+  if (!r.found) return
+  const pulados = Object.entries(r.skipped).map(([k, v]) => `${k}=${v}`).join(' ')
+  console.log(
+    `[lembrete] ${accountId.slice(0, 8)}: a vencer=${r.found} fila=${r.queued}${pulados ? ` pulados(${pulados})` : ''}${note ? ` · ${note}` : ''}`,
+  )
 }
 
 /**

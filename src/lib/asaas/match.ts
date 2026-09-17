@@ -91,6 +91,18 @@ export function decideMatch(candidates: MatchCandidate[]): MatchDecision {
   return { contactId: null, matchedBy: null, ambiguous: false }
 }
 
+/**
+ * O vínculo feito por uma PESSOA (asaas_customer_links, migr 0178) vence
+ * qualquer palpite: telefone de outro contato, empate de telefone, e-mail.
+ * 16/09 (Ultra Visão): ligada à mão num contato, a parcela seguinte casou por
+ * telefone com OUTRO — cobrada por WhatsApp num e por e-mail no outro.
+ * Sem vínculo, é o casamento automático de sempre.
+ */
+export function decideWithLink(linkedContactId: string | null | undefined, candidates: MatchCandidate[]): MatchDecision {
+  if (linkedContactId) return { contactId: linkedContactId, matchedBy: 'manual', ambiguous: false }
+  return decideMatch(candidates)
+}
+
 /** Dias de atraso a partir do vencimento (negativo = ainda não venceu). */
 export function daysOverdue(dueDate: string | null | undefined, today = new Date()): number | null {
   if (!dueDate) return null

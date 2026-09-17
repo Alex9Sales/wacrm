@@ -10,7 +10,7 @@
 
 import { and, eq, inArray, notInArray, sql } from 'drizzle-orm'
 
-import { db, asaasCharges, asaasConnections, contacts } from '@/db'
+import { db, asaasCharges, asaasConnections, asaasCustomerLinks, contacts } from '@/db'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
 import {
@@ -28,7 +28,7 @@ import { normalizeSettings } from '@/lib/collections/rules'
 
 import {
   brPhoneCandidates,
-  decideMatch,
+  decideWithLink,
   normalizeDocument,
   normalizeEmail,
   type MatchCandidate,
@@ -153,6 +153,9 @@ export async function syncConnection(
   const now = new Date().toISOString()
   const seen: string[] = []
   let matched = 0
+  // Vínculos feitos na tela (migr 0178): a parcela nova do cliente segue o
+  // contato que a equipe escolheu, em vez de ser casada de novo por palpite.
+  const links = await loadCustomerLinks(accountId, connectionId)
 
   for (const p of payments) {
     const cust = customers.get(p.customer)
@@ -160,7 +163,7 @@ export async function syncConnection(
     const email = cust?.email ?? null
     const doc = cust?.cpfCnpj ?? null
 
-    const decision = await findContact(accountId, phone, email, doc)
+    const decision = await findContact(accountId, phone, email, doc, links.get(p.customer) ?? null)
     if (decision.contactId) matched++
 
     await db
@@ -214,9 +217,12 @@ export async function syncConnection(
           lastSeenAt: sql`excluded.last_seen_at`,
           updatedAt: sql`excluded.updated_at`,
           // Casamento feito na MÃO não é sobrescrito por um palpite automático:
-          // quem corrigiu na tela sabia mais que a heurística.
-          contactId: sql`CASE WHEN ${asaasCharges.matchedBy} = 'manual' THEN ${asaasCharges.contactId} ELSE excluded.contact_id END`,
-          matchedBy: sql`CASE WHEN ${asaasCharges.matchedBy} = 'manual' THEN 'manual' ELSE excluded.matched_by END`,
+          // quem corrigiu na tela sabia mais que a heurística. E o vínculo ATUAL
+          // (asaas_customer_links, que chega aqui como 'manual') vence um
+          // 'manual' antigo gravado na linha: cobrança que reabre, ligada a A no
+          // passado, segue o contato B que a equipe escolheu depois (16/09).
+          contactId: sql`CASE WHEN excluded.matched_by = 'manual' THEN excluded.contact_id WHEN ${asaasCharges.matchedBy} = 'manual' THEN ${asaasCharges.contactId} ELSE excluded.contact_id END`,
+          matchedBy: sql`CASE WHEN excluded.matched_by = 'manual' OR ${asaasCharges.matchedBy} = 'manual' THEN 'manual' ELSE excluded.matched_by END`,
         },
       })
 
@@ -309,15 +315,39 @@ async function markError(connectionId: string, error: string): Promise<void> {
 }
 
 /**
+ * Vínculos "cliente do Asaas → contato" desta conexão (migr 0178), só para
+ * contato que ainda existe nesta conta. Nunca lança: se a tabela não existir
+ * (migração fora de ordem) ou a consulta falhar, devolve vazio e o casamento
+ * automático segue — a régua e o lembrete não param por causa do vínculo.
+ */
+export async function loadCustomerLinks(accountId: string, connectionId: string): Promise<Map<string, string>> {
+  try {
+    const rows = await db
+      .select({ customerId: asaasCustomerLinks.asaasCustomerId, contactId: asaasCustomerLinks.contactId })
+      .from(asaasCustomerLinks)
+      .innerJoin(contacts, and(eq(contacts.id, asaasCustomerLinks.contactId), eq(contacts.accountId, accountId)))
+      .where(and(eq(asaasCustomerLinks.accountId, accountId), eq(asaasCustomerLinks.connectionId, connectionId)))
+    return new Map(rows.map((r) => [r.customerId, r.contactId]))
+  } catch (err) {
+    console.warn('[cobranca] vínculos do Asaas indisponíveis — segue o casamento automático:', err instanceof Error ? err.message : err)
+    return new Map()
+  }
+}
+
+/**
  * Procura o contato do CRM por telefone, e-mail e código do cliente — nessa
  * ordem de confiança. Empate em qualquer nível devolve "sem contato".
+ * Com `linkedContactId` (vínculo feito na tela, ver loadCustomerLinks) nem
+ * procura: quem ligou na mão sabia mais que a heurística.
  */
 export async function findContact(
   accountId: string,
   phone: string | null,
   email: string | null,
   document: string | null,
+  linkedContactId?: string | null,
 ) {
+  if (linkedContactId) return decideWithLink(linkedContactId, [])
   const found: MatchCandidate[] = []
 
   const phones = brPhoneCandidates(phone)
@@ -350,5 +380,5 @@ export async function findContact(
     found.push(...rows.map((r) => ({ id: r.id, via: 'code' as const })))
   }
 
-  return decideMatch(found)
+  return decideWithLink(null, found)
 }
