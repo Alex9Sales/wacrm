@@ -12,7 +12,7 @@
 // Sem 'server-only' — roda no worker (auto-resposta).
 // ============================================================
 
-import { and, eq } from 'drizzle-orm'
+import { and, eq, sql } from 'drizzle-orm'
 
 import { db, asaasCharges, collectionsTouches, contacts, member } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -21,6 +21,8 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 
 import { changeChargeDueDateCore } from './due-date'
 import { pauseByAi } from './pause'
+import { loadOpenChargesWithSiblings, markReceiptApplied } from './reply-context'
+import { ACORDO_PAUSE_REASON, CONTESTA_PAUSE_REASON, RECEIPT_SNOOZE_REASON, promiseSnoozeReason } from './reply-guard'
 import { normalizeSettings } from './rules'
 
 export type CollectionReplyKind = 'promessa' | 'comprovante' | 'contesta' | 'acordo'
@@ -50,7 +52,28 @@ const PROMISE_GRACE_DAYS = 1
 /** Comprovante: dorme enquanto uma pessoa confere no Asaas. */
 const RECEIPT_HOLD_DAYS = 3
 
-export async function applyCollectionReply(input: CollectionReplyInput): Promise<CollectionReplyResult> {
+/**
+ * Opções de quem chama. O padrão é o comportamento de sempre — é o que a
+ * "Registrar promessa" da tela usa. A IA (detector silencioso e marcador)
+ * passa o que a trava decidiu (reply-guard.ts): 16/09, uma conversa sobre
+ * recarga do Google Ads pausou a régua da Ultra Visão por "acordo".
+ */
+export interface CollectionReplyOptions {
+  /** false = a promessa nunca mexe no vencimento do Asaas (não foi resposta direta à cobrança). */
+  moveDueDate?: boolean
+  /** false = acordo/contestação só avisam, sem pausar a régua. */
+  pause?: boolean
+  /** Promessa mais distante que isto é recusada (a IA passa 45; a tela fica no padrão de 365). */
+  maxPromiseDays?: number
+  /**
+   * true = "uma parcela só" (para mover o vencimento) soma as parcelas dos
+   * cadastros irmãos (mesmo cliente do Asaas). Só a IA passa: 16/09 (revisão),
+   * a "Registrar promessa" da tela fica como era — conta só as do contato.
+   */
+  countSiblings?: boolean
+}
+
+export async function applyCollectionReply(input: CollectionReplyInput, opts: CollectionReplyOptions = {}): Promise<CollectionReplyResult> {
   // Só faz sentido se este contato REALMENTE tem cobrança em aberto. Sem isso,
   // um marcador alucinado numa conversa qualquer mexeria no estado da régua.
   const openCharges = await db
@@ -66,7 +89,7 @@ export async function applyCollectionReply(input: CollectionReplyInput): Promise
 
   switch (input.kind) {
     case 'promessa': {
-      const until = promiseDeadline(input.date, now)
+      const until = promiseDeadline(input.date, now, opts.maxPromiseDays)
       if (!until) {
         // Sem data utilizável não inventamos uma: a régua segue no ritmo normal
         // e o time vê na nota que houve promessa vaga.
@@ -74,18 +97,24 @@ export async function applyCollectionReply(input: CollectionReplyInput): Promise
       }
       await upsertTouch(input.accountId, input.contactId, {
         snoozeUntil: until.toISOString(),
-        snoozeReason: `Cliente prometeu pagar em ${br(input.date!)}`,
+        snoozeReason: promiseSnoozeReason(input.date!),
         touchCount: 0,
         updatedAt: nowIso,
       })
       // Lacuna 3 (07/09): com a configuração ligada e UMA parcela em aberto, a
       // promessa também move o vencimento no Asaas — senão o boleto fica com a
       // data velha e os juros do Asaas continuam contando enquanto a régua dorme.
+      // 16/09: na IA, só com resposta DIRETA à cobrança (uma promessa lida
+      // errado não escreve no Asaas) e contando as parcelas dos cadastros irmãos
+      // — a Ultra Visão tem uma parcela em cada contato e "uma só" era mentira.
       let extra = ''
       try {
         const s = normalizeSettings((await getAccountSettings(input.accountId)).collections)
-        if (s.promiseUpdatesDueDate) {
-          if (openCharges.length === 1) {
+        if (s.promiseUpdatesDueDate && opts.moveDueDate !== false) {
+          const onlyOne = opts.countSiblings
+            ? openCharges.length === 1 && (await loadOpenChargesWithSiblings(input.accountId, input.contactId)).length === 1
+            : openCharges.length === 1
+          if (onlyOne) {
             const moved = await changeChargeDueDateCore({ accountId: input.accountId, chargeId: open.id, dueDate: input.date!.slice(0, 10), actor: 'pela IA (promessa do cliente)' })
             extra = moved.ok
               ? ` Vencimento no Asaas movido para ${br(moved.dueDate)}${moved.invoiceUrl ? ' (novo link gerado)' : ''}.`
@@ -105,24 +134,46 @@ export async function applyCollectionReply(input: CollectionReplyInput): Promise
 
     case 'comprovante': {
       const until = new Date(now.getTime() + RECEIPT_HOLD_DAYS * 86_400_000)
-      await upsertTouch(input.accountId, input.contactId, {
-        snoozeUntil: until.toISOString(),
-        snoozeReason: 'Cliente mandou comprovante — aguardando conferência',
-        touchCount: 0,
-        updatedAt: nowIso,
-      })
+      const untilIso = until.toISOString()
+      // 16/09 (Rack 95): comprovante de 1 das 3 parcelas chegando depois de uma
+      // promessa até 20/09 gravava 3 dias por cima e ANTECIPAVA a régua. O
+      // adiamento só cresce; o motivo só troca se o prazo novo for maior.
+      const kept = await db
+        .insert(collectionsTouches)
+        .values({ accountId: input.accountId, contactId: input.contactId, snoozeUntil: untilIso, snoozeReason: RECEIPT_SNOOZE_REASON, touchCount: 0, updatedAt: nowIso })
+        .onConflictDoUpdate({
+          target: [collectionsTouches.accountId, collectionsTouches.contactId],
+          set: {
+            snoozeUntil: sql`GREATEST(COALESCE(${collectionsTouches.snoozeUntil}, 'epoch'::timestamptz), ${untilIso}::timestamptz)`,
+            snoozeReason: sql`CASE WHEN ${collectionsTouches.snoozeUntil} IS NULL OR ${collectionsTouches.snoozeUntil} < ${untilIso}::timestamptz THEN ${RECEIPT_SNOOZE_REASON} ELSE ${collectionsTouches.snoozeReason} END`,
+            touchCount: 0,
+            updatedAt: nowIso,
+          },
+        })
+        .returning({ snoozeUntil: collectionsTouches.snoozeUntil })
+      // O motivo pode ter ficado o da promessa (GREATEST acima): a trava de
+      // comprovante repetido lê este registro, não o motivo (Rack 95, revisão).
+      await markReceiptApplied(input.accountId, input.contactId, nowIso)
+      const finalUntil = kept[0]?.snoozeUntil ? new Date(kept[0].snoozeUntil) : until
+      const longer = finalUntil.getTime() > until.getTime() + 60_000
       await alertTeam(input, 'Comprovante recebido', 'O cliente mandou comprovante. Confira no Asaas e dê a baixa por lá — a IA não dá baixa em pagamento.')
       return {
         applied: true,
-        note: `🧾 Cliente mandou comprovante. A cobrança **não** foi baixada: alguém precisa conferir no Asaas. A régua para por ${RECEIPT_HOLD_DAYS} dias enquanto isso.`,
+        note: longer
+          ? `🧾 Cliente mandou comprovante. A cobrança **não** foi baixada: alguém precisa conferir no Asaas. A régua já estava parada até ${finalUntil.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo' })} e continua assim.`
+          : `🧾 Cliente mandou comprovante. A cobrança **não** foi baixada: alguém precisa conferir no Asaas. A régua para por ${RECEIPT_HOLD_DAYS} dias enquanto isso.`,
       }
     }
 
     case 'contesta': {
+      if (opts.pause === false) {
+        await alertTeam(input, 'Cliente contesta a cobrança', 'Ele diz que não deve, cancelou ou não reconhece a cobrança. A régua NÃO parou: confira a conversa.')
+        return { applied: true, note: '🧾 Cliente contesta a cobrança. A régua NÃO parou — o time foi avisado para conferir.' }
+      }
       // A IA pausa com origem 'ai' (sai sozinha quando ele quita) e nunca
       // passa por cima de pausa da equipe — ver pause-rules.ts.
-      const r = await pauseByAi(input.accountId, input.contactId, 'Cliente contesta a cobrança', nowIso)
-      await alertTeam(input, 'Cliente contesta a cobrança', 'Ele diz que não deve ou que já pagou. A régua parou nele até alguém verificar.')
+      const r = await pauseByAi(input.accountId, input.contactId, CONTESTA_PAUSE_REASON, nowIso)
+      await alertTeam(input, 'Cliente contesta a cobrança', 'Ele diz que não deve, cancelou ou não reconhece a cobrança.')
       return {
         applied: true,
         note:
@@ -135,8 +186,12 @@ export async function applyCollectionReply(input: CollectionReplyInput): Promise
     }
 
     case 'acordo': {
-      const r = await pauseByAi(input.accountId, input.contactId, 'Cliente pediu acordo/parcelamento', nowIso)
-      await alertTeam(input, 'Cliente pediu acordo', 'Ele pediu desconto, prazo ou parcelamento. A IA não negocia: a régua parou e a conversa é sua.')
+      if (opts.pause === false) {
+        await alertTeam(input, 'Cliente pediu acordo', 'Ele pediu desconto, parcelamento ou para pagar só uma parte. A régua NÃO parou: confira a conversa.')
+        return { applied: true, note: '🧾 Cliente pediu acordo ou parcelamento. A régua NÃO parou — o time foi avisado para conferir.' }
+      }
+      const r = await pauseByAi(input.accountId, input.contactId, ACORDO_PAUSE_REASON, nowIso)
+      await alertTeam(input, 'Cliente pediu acordo', 'Ele pediu desconto, parcelamento ou para pagar só uma parte. A IA não negocia: a régua parou e a conversa é sua.')
       return {
         applied: true,
         note:
@@ -168,8 +223,12 @@ const BR_UTC_OFFSET_HOURS = 3
  * dorme o dia 30 e o dia 1º inteiros, e acorda na madrugada do dia 2.
  *
  * Recusa data no passado (o modelo errou o ano) ou muito distante.
+ * `maxDays` (só a IA passa, 45) conta até o DIA prometido (00:00 no Brasil) —
+ * 16/09, "pago no vencimento" de parcela a vencer adiaria a vencida por
+ * semanas. Sem `maxDays` (a tela) fica a regra de antes: até o fim da
+ * tolerância, 365 dias.
  */
-export function promiseDeadline(date: string | null, now = new Date()): Date | null {
+export function promiseDeadline(date: string | null, now = new Date(), maxDays?: number): Date | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})/.exec((date ?? '').slice(0, 10))
   if (!m) return null
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
@@ -178,6 +237,10 @@ export function promiseDeadline(date: string | null, now = new Date()): Date | n
   if (Number.isNaN(until.getTime())) return null
   // Data que já passou: o modelo errou o ano ou o cliente falou de outra coisa.
   if (until.getTime() <= now.getTime()) return null
+  if (maxDays != null) {
+    const promisedDay = Date.UTC(y, mo - 1, d, BR_UTC_OFFSET_HOURS, 0, 0)
+    return promisedDay - now.getTime() > maxDays * 86_400_000 ? null : until
+  }
   // Mais de um ano à frente quase sempre é ano errado; não congelamos a régua
   // por 12 meses com base num palpite.
   if (until.getTime() - now.getTime() > 365 * 86_400_000) return null
