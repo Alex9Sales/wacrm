@@ -65,6 +65,7 @@ import { cn } from '@/lib/utils';
 import {
   getCollectionsPromotion,
   getCollectionsSettings,
+  getUpcomingUnmatched,
   getWallet,
   checkAsaasDuplicates,
   createChargeManual,
@@ -99,12 +100,14 @@ import {
   type ConnectionView,
   type ContactOption,
   type PromotionView,
+  type UpcomingUnmatchedView,
   type WalletDebtor,
   type WalletSummary,
   changeChargeDueDate,
   clearPaymentPromise,
   registerPaymentPromise,
 } from '@/app/(dashboard)/cobrancas/actions';
+import { UpcomingUnmatchedPanel } from '@/components/cobrancas/upcoming-unmatched-panel';
 import { CHARGEABLE_STATUSES, WEEKDAY_SHORT, describeWeekdays, type CollectionsSettings } from '@/lib/collections/rules';
 import { pauseSourceLabel } from '@/lib/collections/pause-rules';
 import { listApprovedTemplates } from '@/app/(dashboard)/inbox/actions';
@@ -149,22 +152,32 @@ export function WalletClient() {
   const [newChargeOpen, setNewChargeOpen] = useState(false);
   const [promo, setPromo] = useState<PromotionView | null>(null);
   const [held, setHeld] = useState<HeldDebtor[]>([]);
+  // 🔔 16/09 (Speed Gás e Água): quem vence sem contato no CRM e não recebe o
+  // lembrete. Erro de carga fica marcado — nunca vira "ninguém sem contato".
+  const [upcomingView, setUpcomingView] = useState<UpcomingUnmatchedView | null>(null);
+  const [upcomingError, setUpcomingError] = useState(false);
 
   const load = useCallback(async () => {
     try {
-      const [w, c, r, p, h] = await Promise.all([
+      const [w, c, r, p, h, u] = await Promise.all([
         getWallet(),
         listConnections(),
         getCollectionsSettings(),
         getCollectionsPromotion(),
         // Falha aqui não derruba a carteira: a lista de parados é um extra.
         listHeldDebtors().catch(() => [] as HeldDebtor[]),
+        // Nem esta — mas a falha aparece no painel, não some.
+        getUpcomingUnmatched()
+          .then((res) => (res.ok && res.data ? res.data : null))
+          .catch(() => null),
       ]);
       setWallet(w);
       setConns(c);
       setRule(r);
       setPromo(p);
       setHeld(h);
+      setUpcomingView(u);
+      setUpcomingError(u === null);
     } catch {
       toast.error('Não foi possível carregar a carteira.');
     } finally {
@@ -229,6 +242,11 @@ export function WalletClient() {
   }, [wallet, onlyPending, onlyPromises, connFilter]);
 
   const promisesCount = useMemo(() => (wallet?.debtors ?? []).filter((d) => hasPromise(d)).length, [wallet]);
+
+  const upcomingUnmatchedCount = useMemo(
+    () => (upcomingView?.enabled ? upcomingView.cards.filter((c) => !connFilter || c.connectionId === connFilter).length : 0),
+    [upcomingView, connFilter],
+  );
 
   // Números do topo acompanham o filtro (sem filtro = os da carteira inteira).
   const totals = useMemo(() => {
@@ -365,7 +383,11 @@ export function WalletClient() {
           )}
           <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
             <Stat label="Clientes em atraso" value={String(totals.debtors)} hint="um por pessoa, com todas as parcelas dele" />
-            <Stat label="Parcelas vencidas" value={String(totals.charges)} hint="a vencer não entra aqui — só o lembrete" />
+            <Stat
+              label="Parcelas vencidas"
+              value={String(totals.charges)}
+              hint={upcomingUnmatchedCount ? 'a vencer não entra aqui — veja “A vencer sem contato” abaixo' : 'a vencer não entra aqui — só o lembrete'}
+            />
             <Stat label={connFilterLabel ? `Em aberto · ${connFilterLabel}` : 'Total em aberto'} value={brl(totals.value)} wide />
             <Stat
               label={`Recuperado (${wallet?.recovered.days ?? 30} dias)`}
@@ -441,6 +463,8 @@ export function WalletClient() {
               </Button>
             </div>
           )}
+
+          <UpcomingUnmatchedPanel view={upcomingView} error={upcomingError} connFilter={connFilter} onChanged={load} />
 
           {promisesCount > 0 && (
             <div className="flex flex-wrap items-center gap-2 text-sm">
@@ -859,8 +883,14 @@ function DebtorCard({
               type="button"
               className="mt-2.5 inline-flex items-center gap-1 text-xs text-muted-foreground underline underline-offset-2"
               onClick={async () => {
-                await unlinkDebtor(debtor.key);
-                toast.success('Contato desligado — voltou para as pendências.');
+                // 16/09: desligar agora também apaga o vínculo do cliente do
+                // Asaas — se falhar, tem que dizer (antes o aviso saía sempre).
+                const res = await unlinkDebtor(debtor.key);
+                if (!res.ok) {
+                  toast.error(res.error ?? 'Não foi possível desligar o contato.');
+                  return;
+                }
+                toast.success('Contato desligado — voltou para as pendências. As próximas parcelas deste cliente também deixam de ir para ele.');
                 onUnlink();
               }}
             >
