@@ -917,6 +917,11 @@ export async function saveCollectionsSettings(input: Partial<CollectionsSettings
   const { accountId } = await requireRole('admin')
   const current = normalizeSettings((await getAccountSettings(accountId)).collections)
   const next = normalizeSettings({ ...current, ...input })
+  // 🔗 Piso do aviso de cobrança nova (17/09): quando o "CRM assume os avisos"
+  // é LIGADO agora, guarda o instante — a cobrança criada até aqui o próprio
+  // Asaas já avisou. O campo é do servidor: o que a tela manda é ignorado.
+  next.asaasNotificationsOffAt =
+    next.asaasNotificationsOff && !current.asaasNotificationsOff ? new Date().toISOString() : current.asaasNotificationsOffAt
 
   if (next.endHour <= next.startHour) {
     return { ok: false, error: 'A janela de cobrança precisa terminar depois de começar.' }
@@ -945,7 +950,9 @@ export async function runCollectionsNow(): Promise<ActionResult<{ queued: number
   revalidatePath('/cobrancas')
   revalidatePath('/aprovacoes')
   if (r.haltedBecause) return { ok: false, error: r.haltedBecause, data: { queued: 0, debtors: r.debtors, halted: r.haltedBecause } }
-  return { ok: true, data: { queued: r.queued, debtors: r.debtors } }
+  // Aviso de cobrança nova e lembrete entram na mesma fila: "Rodar agora" que
+  // enfileirou só esses dizia "Nenhum devedor elegível" (17/09).
+  return { ok: true, data: { queued: r.queued + (r.newCharges ?? 0) + (r.reminders ?? 0), debtors: r.debtors } }
 }
 
 /** Pausa/retoma a régua num devedor (acordo em andamento, caso jurídico…). */

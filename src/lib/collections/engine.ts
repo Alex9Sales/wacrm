@@ -24,7 +24,7 @@ import { decide, readPolicy, type AutonomyPolicy } from '@/lib/orchestration/pol
 import { syncAccount } from '@/lib/asaas/sync'
 
 import { resolveCollectionTargets } from './outreach'
-import { queueNewChargeNotices } from './new-charge'
+import { queueNewChargeNotices, type NewChargeRunResult } from './new-charge'
 import { queueUpcomingReminders, scanUpcoming, type ReminderRunResult, type UpcomingScan } from './reminders'
 import { expireStaleCollectionDrafts, localDayKey } from './stale'
 import { maxSimilarity, seedFrom, tooSimilar, variationInstruction, variationPlan } from './variation'
@@ -63,6 +63,8 @@ export interface CollectionsRunStats {
   remindersFound?: number
   /** Avisos de cobrança NOVA (criada no painel do Asaas) propostos nesta rodada. */
   newCharges?: number
+  /** Cobranças novas de verdade achadas no Asaas (criadas na janela, fora do CRM, vencendo no horizonte). */
+  newChargesFound?: number
 }
 
 /** Não bate no Asaas a cada tique: uma sincronização por hora basta. */
@@ -302,6 +304,36 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   //    uma mensagem a cada N minutos.
   const policy: AutonomyPolicy = withAutoSend(readPolicy(agent?.autonomy ?? null), s)
 
+  // 🔗 Cobrança nova que o CRM não criou (11/09, João/GoLink): quando a conta
+  // desligou os avisos do Asaas, quem manda o link é o CRM. Vem ANTES da régua
+  // no orçamento do dia (decisão 17/09): são poucas (~4 por semana na GoLink)
+  // e, depois da régua, dois dias de teto estourado tiravam a cobrança da
+  // janela — o cliente ficava sem o link até vencer. A régua desse contato
+  // espera um dia (uma mensagem de cobrança por pessoa por dia).
+  if (s.asaasNotificationsOff) {
+    try {
+      const n = await queueNewChargeNotices({
+        accountId,
+        settings: s,
+        accountSettings,
+        policy,
+        agentId: agent?.id ?? null,
+        budget,
+        alreadyQueued,
+        contactedToday,
+        usedToday,
+        tz,
+        customers: upcomingScan?.customers,
+      })
+      stats.newCharges = n.queued
+      stats.newChargesFound = n.found
+      budget = Math.max(0, budget - n.queued)
+      logNewChargeRound(accountId, n)
+    } catch (err) {
+      console.error('[cobranca] aviso de cobrança nova falhou:', err instanceof Error ? err.message : err)
+    }
+  }
+
   // Do mais atrasado para o menos: se o teto cortar, corta o que espera menos.
   const ordered = [...byContact.values()].sort(
     (a, b) => Math.max(...b.charges.map((c) => c.daysLate ?? -1)) - Math.max(...a.charges.map((c) => c.daysLate ?? -1)),
@@ -395,8 +427,9 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       // cobrança (10/09, João: "no dia do vencimento pode ser automático") —
       // a régua não é a IA conversando; quem responde é a pessoa mesmo.
       aiDisabledInConversation: s.autoSend ? false : conv?.aiOff === true,
-      usedToday,
-      messagesToday: usedToday,
+      // Os avisos de cobrança nova desta rodada já ocupam o dia (vêm antes).
+      usedToday: usedToday + (stats.newCharges ?? 0),
+      messagesToday: usedToday + (stats.newCharges ?? 0),
       usedForDealToday: 0,
     })
 
@@ -437,35 +470,13 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       bump('too_soon')
       continue
     }
-    // Sem isto o lembrete e o aviso de cobrança nova da MESMA rodada tentariam
-    // um segundo pedido pendente para ele — e o índice único derrubaria o lote.
+    // Sem isto o lembrete da MESMA rodada tentaria um segundo pedido pendente
+    // para ele — e o índice único derrubaria o lote.
     alreadyQueued.add(d.contactId)
     contactedToday.add(d.contactId)
 
     stats.queued += 1
     budget -= 1
-  }
-
-  // 🔗 Cobrança nova que o CRM não criou (11/09, João/GoLink): quando a conta
-  // desligou os avisos do Asaas, quem manda o link é o CRM. Vem ANTES do
-  // lembrete porque é mais urgente — o cliente ainda não sabe que existe.
-  if (budget > 0) {
-    try {
-      const n = await queueNewChargeNotices({
-        accountId,
-        settings: s,
-        accountSettings,
-        policy,
-        agentId: agent?.id ?? null,
-        budget,
-        alreadyQueued,
-        usedToday: usedToday + stats.queued,
-      })
-      stats.newCharges = n.queued
-      budget -= n.queued
-    } catch (err) {
-      console.error('[cobranca] aviso de cobrança nova falhou:', err instanceof Error ? err.message : err)
-    }
   }
 
   // 🔔 Lembrete antes de vencer (lacuna 2, 07/09): mesma fila, mesma política,
@@ -483,7 +494,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
           budget,
           alreadyQueued,
           contactedToday,
-          usedToday: usedToday + stats.queued + (stats.newCharges ?? 0),
+          usedToday: usedToday + (stats.newCharges ?? 0) + stats.queued,
           moment,
           dayKey,
           scan: upcomingScan,
@@ -513,6 +524,17 @@ function logReminderRound(accountId: string, r: ReminderRunResult, note?: string
   console.log(
     `[lembrete] ${accountId.slice(0, 8)}: a vencer=${r.found} fila=${r.queued}${pulados ? ` pulados(${pulados})` : ''}${note ? ` · ${note}` : ''}`,
   )
+}
+
+/**
+ * Os pulos do aviso de cobrança nova ficam no log (sem tela nesta entrega):
+ * renovação que vence longe, criada pelo CRM, sem contato, o Asaas ainda avisa…
+ * Só loga quando o Asaas listou alguma cobrança criada na janela.
+ */
+function logNewChargeRound(accountId: string, r: NewChargeRunResult): void {
+  if (!r.listed && !r.queued) return
+  const pulados = Object.entries(r.skipped).map(([k, v]) => `${k}=${v}`).join(' ')
+  console.log(`[cobranca nova] ${accountId.slice(0, 8)}: criadas=${r.listed} novas=${r.found} fila=${r.queued}${pulados ? ` pulados(${pulados})` : ''}`)
 }
 
 /**

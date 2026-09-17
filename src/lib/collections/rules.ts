@@ -92,6 +92,14 @@ export interface CollectionsSettings {
    */
   asaasNotificationsOff: boolean
   /**
+   * Quando o "CRM assume os avisos" foi LIGADO (ISO). Gravado pelo servidor ao
+   * salvar Ajustar, nunca pela tela. É o piso do aviso de cobrança nova (17/09):
+   * cobrança criada até esse dia o próprio Asaas já avisou — mandar de novo
+   * seria dobrado. Conta que já estava ligada antes de existir o campo fica
+   * sem piso (null).
+   */
+  asaasNotificationsOffAt: string | null
+  /**
    * Agradecer quando o pagamento entra (webhook do Asaas). Só para quem a
    * régua/CRM cobrou ou cuja cobrança nasceu aqui — nunca para quem nunca
    * ouviu falar da gente por aqui. (07/09, pedido do cliente no áudio.)
@@ -171,6 +179,7 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   tone: '',
   emitMaxValue: 500,
   asaasNotificationsOff: false,
+  asaasNotificationsOffAt: null,
   thankOnPayment: true,
   reminderDaysBefore: 0,
   promiseUpdatesDueDate: false,
@@ -231,6 +240,10 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
       return Number.isFinite(n) ? Math.min(100_000, Math.max(1, Math.round(n * 100) / 100)) : 500
     })(),
     asaasNotificationsOff: r.asaasNotificationsOff === true,
+    asaasNotificationsOffAt:
+      typeof r.asaasNotificationsOffAt === 'string' && !Number.isNaN(Date.parse(r.asaasNotificationsOffAt))
+        ? r.asaasNotificationsOffAt.slice(0, 40)
+        : null,
     thankOnPayment: r.thankOnPayment !== false,
     reminderDaysBefore: int(r.reminderDaysBefore, 0, 0, 15),
     promiseUpdatesDueDate: r.promiseUpdatesDueDate === true,

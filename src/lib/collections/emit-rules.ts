@@ -8,6 +8,8 @@
 // e descrição; este módulo decide se pode.
 // ============================================================
 
+import { shortChargeDescription } from './new-charge-rules'
+
 export interface EmitGuard {
   /** Acima disso a IA NÃO emite sozinha — vira aviso pra uma pessoa. */
   maxValue: number
@@ -142,17 +144,27 @@ export interface NewChargeLine {
  * quando a dívida passa do atraso mínimo. Entre as duas coisas, silêncio.
  *
  * É aviso, não cobrança: não fala em atraso, não pressiona, só entrega o link.
+ *
+ * 17/09 (GoLink): respeita "Mostrar valores" (`showValues`) como a régua e o
+ * lembrete — a conta desligou e o aviso sairia com "R$". A descrição do painel
+ * do Asaas costuma ser um parágrafo inteiro: vai numa linha, cortada.
  */
-export function newChargesMessage(firstName: string | null, charges: NewChargeLine[]): string {
+export function newChargesMessage(firstName: string | null, charges: NewChargeLine[], opts: { showValues?: boolean } = {}): string {
+  const showValues = opts.showValues !== false
   const oi = firstName ? `Oi, ${firstName}! ` : 'Oi! '
+  const dia = (d: string) => d.slice(0, 10).split('-').reverse().join('/')
   if (charges.length === 1) {
     const c = charges[0]
-    return manualChargeMessage(firstName, c.value, c.dueDate, c.description, c.url)
+    const desc = shortChargeDescription(c.description)
+    if (showValues) return manualChargeMessage(firstName, c.value, c.dueDate, desc, c.url)
+    const sobre = desc ? ` (${desc})` : ''
+    return `${oi}Segue o link para pagamento${sobre}, com vencimento em ${dia(c.dueDate)}:\n${c.url}\n\nQualquer dúvida é só responder por aqui.`
   }
   const brl = (v: number) => v.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
-  const dia = (d: string) => d.slice(0, 10).split('-').reverse().join('/')
   const linhas = charges.map((c) => {
-    const sobre = c.description.trim() ? ` (${c.description.trim()})` : ''
+    const desc = shortChargeDescription(c.description)
+    if (!showValues) return `• ${desc ? `${desc}, vence` : 'Vence'} ${dia(c.dueDate)}:\n${c.url}`
+    const sobre = desc ? ` (${desc})` : ''
     return `• ${brl(c.value)}${sobre}, vence ${dia(c.dueDate)}:\n${c.url}`
   })
   return `${oi}Seguem os links para pagamento:\n\n${linhas.join('\n\n')}\n\nQualquer dúvida é só responder por aqui.`

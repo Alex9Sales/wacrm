@@ -621,4 +621,15 @@ describe('duplicateSuspects — o caso Renato ×3', () => {
     expect(normalizeSettings({ asaasNotificationsOff: true }).asaasNotificationsOff).toBe(true)
     expect(normalizeSettings({ asaasNotificationsOff: 'sim' }).asaasNotificationsOff).toBe(false)
   })
+
+  // 17/09: piso do aviso de cobrança nova. Conta antiga fica sem (null); lixo não vira data.
+  it('asaasNotificationsOffAt: preserva a data gravada, descarta o resto', () => {
+    expect(normalizeSettings({}).asaasNotificationsOffAt).toBeNull()
+    expect(normalizeSettings({ asaasNotificationsOffAt: '2026-09-16T14:05:00.000Z' }).asaasNotificationsOffAt).toBe('2026-09-16T14:05:00.000Z')
+    expect(normalizeSettings({ asaasNotificationsOffAt: 'ontem' }).asaasNotificationsOffAt).toBeNull()
+    expect(normalizeSettings({ asaasNotificationsOffAt: 123 }).asaasNotificationsOffAt).toBeNull()
+    // Uma volta pelo normalize (salvar Ajustar) não perde o campo.
+    const salvo = normalizeSettings({ asaasNotificationsOff: true, asaasNotificationsOffAt: '2026-09-16T14:05:00.000Z' })
+    expect(normalizeSettings({ ...salvo, tone: 'x' }).asaasNotificationsOffAt).toBe('2026-09-16T14:05:00.000Z')
+  })
 })

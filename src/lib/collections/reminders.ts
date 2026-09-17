@@ -12,8 +12,10 @@
 // cobrança nova hoje fica para outro dia. Quem também tem parcela vencida
 // recebe o lembrete da parcela nova (antes era barrado e nunca recebia); a
 // vencida a régua cobra à parte. Devedor pausado, com promessa/comprovante ou
-// no limite de toques não recebe. Parcela já avisada como cobrança nova, ou
-// cujo link já saiu numa mensagem para ele, não é lembrada.
+// no limite de toques não recebe. Parcela já lembrada, ou cujo link já saiu
+// numa mensagem para ele, não é lembrada. Aviso de cobrança nova só conta como
+// lembrado se foi feito nos últimos reminderDaysBefore+1 dias (17/09): a
+// parcela avisada 6 a 15 dias antes na criação ainda recebe o lembrete D-5.
 //
 // 16/09 (Speed Gás e Água): a LEITURA (scanUpcoming) é separada da FILA
 // (queueUpcomingReminders). A leitura roda antes do teto do dia e grava quem
@@ -48,6 +50,7 @@ import {
 } from '@/lib/asaas/collections'
 import { findContact, loadCustomerLinks } from '@/lib/asaas/sync'
 import { buildUnmatchedRows, purgePlan, type UnmatchedEntry, type UnmatchedRow } from './upcoming-unmatched'
+import { remindedFilter } from './new-charge-rules'
 import { paymentRefsFrom, paymentRefsPayload, reconferPayments } from './payment-refs'
 import { linksAlreadySent } from './links-sent'
 import { decide, type AutonomyPolicy } from '@/lib/orchestration/policy'
@@ -119,6 +122,12 @@ export interface UpcomingScan {
   found: number
   byContact: Map<string, UpcomingCandidate>
   skipped: ReminderRunResult['skipped']
+  /**
+   * Cadastros do Asaas já abertos nesta leitura, por conexão → cliente. O aviso
+   * de cobrança nova reaproveita na mesma rodada (17/09): cada GET a menos é um
+   * 429 a menos no Asaas.
+   */
+  customers: Map<string, Map<string, AsaasCustomer>>
 }
 
 const isoDay = (d: Date) => d.toISOString().slice(0, 10)
@@ -134,7 +143,7 @@ const isoDay = (d: Date) => d.toISOString().slice(0, 10)
  * (collections_upcoming_unmatched) que a tela /cobrancas mostra.
  */
 export async function scanUpcoming(args: { accountId: string; settings: CollectionsSettings; tz: string }): Promise<UpcomingScan> {
-  const out: UpcomingScan = { found: 0, byContact: new Map(), skipped: {} }
+  const out: UpcomingScan = { found: 0, byContact: new Map(), skipped: {}, customers: new Map() }
   const bump = (k: keyof ReminderRunResult['skipped']) => {
     out.skipped[k] = (out.skipped[k] ?? 0) + 1
   }
@@ -187,6 +196,7 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
           return new Map<string, AsaasCustomer>()
         })
       : new Map<string, AsaasCustomer>()
+    if (customers.size) out.customers.set(c.id, customers)
     const unmatched: UnmatchedEntry[] = []
     const unknown = new Set<string>()
     for (const p of payments) {
@@ -376,15 +386,28 @@ export async function queueUpcomingReminders(args: {
     .where(and(eq(contacts.accountId, args.accountId), inArray(contacts.id, ids)))
   const contactById = new Map(contactRows.map((r) => [r.id, r]))
 
-  // Um lembrete por parcela: o que já foi lembrado — ou avisado como cobrança
-  // nova, que já levou o link — nos últimos 45 dias não repete. Expirado
-  // (envelheceu na fila, stale.ts) ou falho NÃO conta como lembrado — senão a
-  // parcela ficaria sem aviso nenhum. Conta POR CONTATO (revisão 16/09): o
-  // lembrete que foi (ou foi recusado) para o contato ligado por engano não
-  // segura o do contato certo, ligado depois — ver `remindedByContact`.
+  // Link que já saiu numa mensagem nestes dias (criação com "mandar o link",
+  // [[COBRAR:]] da IA, colado à mão) não precisa de lembrete.
+  const linksSince = new Date(Date.now() - (s.reminderDaysBefore + 1) * 86_400_000).toISOString()
+
+  // Um lembrete por parcela: o que já foi lembrado nos últimos 45 dias não
+  // repete. Expirado (envelheceu na fila, stale.ts) ou falho NÃO conta como
+  // lembrado — senão a parcela ficaria sem aviso nenhum. Conta POR CONTATO
+  // (revisão 16/09): o lembrete que foi (ou foi recusado) para o contato ligado
+  // por engano não segura o do contato certo, ligado depois — ver
+  // `remindedByContact`.
+  // 🔗 Aviso de cobrança nova só conta dentro da janela do lembrete (17/09,
+  // `remindedFilter`): com o aviso na criação para o que vence em até 15 dias,
+  // contar por 45 dias apagava o lembrete D-5 (Alpha Gás, criada 15/09, vence
+  // 26/09 — o lembrete de 21/09 não sairia).
   const since = new Date(Date.now() - 45 * 86_400_000).toISOString()
   const previous = await db
-    .select({ contactId: agentActionRequests.contactId, payload: agentActionRequests.payload })
+    .select({
+      contactId: agentActionRequests.contactId,
+      payload: agentActionRequests.payload,
+      createdAt: agentActionRequests.createdAt,
+      kind: sql<string | null>`${agentActionRequests.payload}->>'kind'`,
+    })
     .from(agentActionRequests)
     .where(
       and(
@@ -396,12 +419,8 @@ export async function queueUpcomingReminders(args: {
         sql`${agentActionRequests.status} NOT IN ('expired', 'failed')`,
       ),
     )
-  const remindedOf = remindedByContact(previous)
+  const remindedOf = remindedByContact(remindedFilter(previous, linksSince))
   const nothingReminded: ReadonlySet<string> = new Set<string>()
-
-  // Link que já saiu numa mensagem nestes dias (criação com "mandar o link",
-  // [[COBRAR:]] da IA, colado à mão) não precisa de lembrete.
-  const linksSince = new Date(Date.now() - (s.reminderDaysBefore + 1) * 86_400_000).toISOString()
 
   let budget = args.budget
   let usedToday = args.usedToday

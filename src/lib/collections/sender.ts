@@ -12,7 +12,8 @@
 // fila), e o lote aprovado saía de uma vez.
 //
 // Travas, na ordem: régua ligada · freio da conta (IA pausada / só sugestões)
-// · janela de horário · teto do dia · cadência. Antes de mandar, o executor
+// · janela de horário · carência de 30 min do aviso de cobrança nova (17/09)
+// · teto do dia · cadência. Antes de mandar, o executor
 // confere se o devedor não foi parado (pausa, promessa, comprovante) e
 // reconfere no Asaas se ainda há parcela aberta (executeOrchestrationAction) —
 // quem pagou ou foi parado entre a fila e o envio não recebe cobrança.
@@ -25,6 +26,7 @@ import { executeOrchestrationAction, recordCollectionTouch } from '@/lib/orchest
 import { getAccountSettings } from '@/lib/settings/account-settings'
 
 import { localParts } from './engine'
+import { newChargeGraceCutoffIso } from './new-charge-rules'
 import { autoSendDue, dayBlockedReason, deliveredEchoSnippet, isFinalCollectionError, normalizeSettings, retryCutoffIso, withinWindow } from './rules'
 import { expireStaleCollectionDrafts, localDayKey } from './stale'
 
@@ -80,6 +82,12 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
             and(eq(agentActionRequests.status, 'pending'), eq(agentActionRequests.decision, 'auto')),
           ),
           sql`(${agentActionRequests.payload}->>'lastAttemptAt' IS NULL OR (${agentActionRequests.payload}->>'lastAttemptAt')::timestamptz <= ${retryCutoffIso(now.getTime())}::timestamptz)`,
+          // 🔗 Carência do aviso de cobrança nova (17/09, GoLink): o João cria a
+          // cobrança no painel do Asaas e cola o link à mão minutos depois. Sem
+          // esperar, o aviso podia sair antes do eco da mensagem dele e o cliente
+          // recebia o link duas vezes. Passados 30 min, o executor confere se o
+          // link já chegou. Filtro (não espera): os outros pedidos seguem a vez.
+          sql`(${agentActionRequests.payload}->>'kind' IS DISTINCT FROM 'new_charge' OR ${agentActionRequests.createdAt} <= ${newChargeGraceCutoffIso(now.getTime())}::timestamptz)`,
         ),
       )
       .orderBy(asc(agentActionRequests.createdAt))

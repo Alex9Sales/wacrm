@@ -122,6 +122,10 @@ export interface AsaasPayment {
   installmentNumber?: number | null
   /** Assinatura de origem, quando a cobrança nasceu de uma recorrência. */
   subscription?: string | null
+  /** Parcelamento de origem (as parcelas 2..N de um "em 3x" apontam para ele). */
+  installment?: string | null
+  /** Nosso rastro quando o CRM criou (conversa/contato; na conta Fluxia, a organização). */
+  externalReference?: string | null
 }
 
 interface AsaasList<T> {
@@ -539,6 +543,64 @@ export async function listPendingDueBetween(cred: AsaasCredential, fromDate: str
     if (!res.hasMore || !res.data?.length) break
   }
   return out
+}
+
+/**
+ * Cobranças CRIADAS no Asaas desde o dia (inclusive), em qualquer status —
+ * base do aviso de cobrança nova (17/09). A carteira do CRM só espelha as
+ * vencidas, então a PENDING criada no painel só é vista perguntando assim.
+ * Na GoLink (15/09 a 17/09) são 20 a 40 por conta: renovações de assinatura e
+ * Pix recebidos entram aqui e quem separa é `classifyNewCharge`.
+ */
+export async function listPaymentsCreatedSince(cred: AsaasCredential, since: string): Promise<AsaasPayment[]> {
+  const out: AsaasPayment[] = []
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const res = await asaasGet<AsaasList<AsaasPayment>>(cred, '/payments', {
+      'dateCreated[ge]': since.slice(0, 10),
+      offset: page * PAGE_SIZE,
+      limit: PAGE_SIZE,
+    })
+    out.push(...(res.data ?? []))
+    if (!res.hasMore || !res.data?.length) break
+  }
+  return out
+}
+
+interface AsaasCustomerNotification {
+  event?: string | null
+  enabled?: boolean | null
+  deleted?: boolean | null
+  emailEnabledForCustomer?: boolean | null
+  smsEnabledForCustomer?: boolean | null
+  whatsappEnabledForCustomer?: boolean | null
+  phoneCallEnabledForCustomer?: boolean | null
+}
+
+/**
+ * O Asaas avisa este cliente quando uma cobrança é CRIADA? Lê as chaves por
+ * evento (GET /customers/{id}/notifications) e olha só PAYMENT_CREATED.
+ * Somente leitura. Sem o evento na lista = o Asaas não avisa.
+ *
+ * Por que (17/09): cliente com a varredura recusada ou criado no painel depois
+ * dela ainda recebe o aviso do Asaas — o CRM mandar de novo seria dobrado.
+ * Lança AsaasApiError (quem chama decide; 429 para a rodada da conta).
+ */
+export async function getCustomerPaymentCreatedFlags(
+  cred: AsaasCredential,
+  customerId: string,
+): Promise<{ enabled: boolean; anyChannel: boolean }> {
+  const res = await asaasGet<AsaasList<AsaasCustomerNotification>>(cred, `/customers/${encodeURIComponent(customerId)}/notifications`, { limit: 100 })
+  const eventos = (res.data ?? []).filter((n) => n && n.event === 'PAYMENT_CREATED' && n.deleted !== true)
+  const enabled = eventos.some((n) => n.enabled === true)
+  const anyChannel = eventos.some(
+    (n) =>
+      n.enabled === true &&
+      (n.emailEnabledForCustomer === true ||
+        n.smsEnabledForCustomer === true ||
+        n.whatsappEnabledForCustomer === true ||
+        n.phoneCallEnabledForCustomer === true),
+  )
+  return { enabled, anyChannel }
 }
 
 // ============================================================ ITEM 5 (05/09)

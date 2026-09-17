@@ -1,5 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
+import { NEW_CHARGE_LINK_SENT_ERROR } from './new-charge-rules'
 import { RETRY_AFTER_FAILURE_MS, deliveredEchoSnippet, holdRefusal, isFinalCollectionError, retryCutoffIso } from './rules'
 
 // 14/09 (A.M Carretos/GoLink): o WAHA devolveu erro mas entregou, e o reenvio do
@@ -66,6 +67,14 @@ describe('isFinalCollectionError — o que encerra o pedido sem tentar de novo',
   it('pagou ou sumiu entre a fila e o envio continua final', () => {
     expect(isFinalCollectionError('A parcela já foi paga ou cancelada no Asaas — nada foi enviado.')).toBe(true)
     expect(isFinalCollectionError('Este cliente não tem mais nada em aberto — a cobrança não foi enviada.')).toBe(true)
+  })
+
+  // 17/09 (GoLink): o João manda o link à mão logo depois de criar no painel.
+  // O aviso de cobrança nova expira em vez de tentar 3 vezes — e a próxima
+  // varredura remonta só o link que faltar.
+  it('link da cobrança nova que já chegou ao cliente é final', () => {
+    expect(isFinalCollectionError(NEW_CHARGE_LINK_SENT_ERROR)).toBe(true)
+    expect(NEW_CHARGE_LINK_SENT_ERROR).toBe('O link desta cobrança já chegou ao cliente — a mensagem não foi enviada de novo.')
   })
 
   it('falha temporária tenta de novo', () => {

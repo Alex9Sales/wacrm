@@ -31,6 +31,8 @@ import { firstOrNull } from '@/db/helpers'
 import { cancelEnrollment, enrollContactInCadence } from '@/lib/cadences/cadence'
 import { publishEvent } from '@/lib/events/publish'
 import { engineSendText } from '@/lib/flows/meta-send'
+import { linksAlreadySent } from '@/lib/collections/links-sent'
+import { NEW_CHARGE_LINK_SENT_ERROR } from '@/lib/collections/new-charge-rules'
 import { resolveCollectionTargets } from '@/lib/collections/outreach'
 import { reminderStillPending } from '@/lib/collections/reminders'
 import { debtorHold, holdRefusal, normalizeSettings } from '@/lib/collections/rules'
@@ -279,6 +281,23 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         const hold = debtorHold(touch, null)
         if (touch && (hold === 'paused' || (hold === 'snoozed' && kind !== 'new_charge'))) {
           return { ok: false, error: holdRefusal(hold, touch) }
+        }
+
+        // 🔗 Aviso de cobrança nova: o link já chegou ao cliente entre a fila e
+        // o envio? (17/09, GoLink: em 15/09 o João mandou à mão, do celular, os
+        // links de Alpha Gás, Leva Entulho, Andressa Amorelli e Convictus logo
+        // depois de criar no painel.) Basta UM link ter chegado para recusar:
+        // o pedido expira e a próxima varredura remonta só o que faltar — sem
+        // isso, com 1 de 2 mandado à mão, os 2 saíam e um chegava em dobro.
+        // Antes do Asaas: poupa a chamada.
+        if (kind === 'new_charge') {
+          const urls = Array.isArray(input.payload.links)
+            ? input.payload.links.filter((u): u is string => typeof u === 'string' && !!u)
+            : []
+          if (urls.length) {
+            const chegaram = await linksAlreadySent(input.accountId, input.contactId, urls, new Date(Date.now() - 4 * 86_400_000).toISOString())
+            if (chegaram.size > 0) return { ok: false, error: NEW_CHARGE_LINK_SENT_ERROR }
+          }
         }
 
         // 🔔 Lembrete antes do vencimento (kind='reminder') e 🔗 aviso de
