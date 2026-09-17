@@ -315,15 +315,24 @@ export function transferInstruction(routingTags: string[]): string {
 }
 
 /** Instrução: agendar reunião de verdade quando combinar um horário. */
-export function scheduleInstruction(opts: { approval?: boolean } = {}): string {
+export function scheduleInstruction(opts: { approval?: boolean; busySlots?: string[] } = {}): string {
   // 09/09: com aprovação, a IA NÃO pode dizer que está marcado — o humano
   // aprova em Precisa de você e o CRM manda a confirmação depois.
   const closing = opts.approval
     ? 'IMPORTANT: a person on the team must APPROVE the appointment before it is booked. So in the SAME reply where you emit the marker, tell the customer you are going to CONFIRM the time shortly (e.g. "vou confirmar esse horário e já te retorno") — NEVER say it is booked, confirmed or "marcado". The CRM will send the confirmation after approval. Do not emit the marker again for the same appointment.'
     : 'Confirm the agreed day and time ONCE, in the SAME reply where you schedule it. After it is scheduled, do NOT restate the full appointment confirmation again in later messages (the meeting is already booked in the history) — a brief mention is fine, but never re-send the whole "confirmed for <day> at <time>" block again unless the customer explicitly asks to change or reconfirm it.'
+  // 17/09 (Limpeza com Zelo): sem enxergar a agenda, a IA oferecia horário que
+  // já tinha reunião. undefined = não consultado (texto de sempre).
+  const busy =
+    opts.busySlots === undefined
+      ? ''
+      : opts.busySlots.length
+        ? ` Times ALREADY BOOKED in the calendar (next days, business timezone) — never offer, accept or book a time that overlaps any of these; offer other times instead: ${opts.busySlots.join('; ')}.`
+        : ' The calendar has no booked appointments in the next days.'
   return (
     'Scheduling: when you and the customer clearly AGREE on a specific date and time for a meeting, call, or appointment, emit ONCE the marker "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>]]" — computing the ABSOLUTE date/time from the current date/time given above (business timezone). Resolve relative times ("tomorrow at 3pm", "friday morning") to the real date, use 24h time (e.g. 15:00), and put a short title after the "|" (e.g. the customer name and topic). Emit it ONLY when a concrete time is actually agreed — never for a vague "sometime". ' +
     closing +
+    busy +
     ' This marker is control metadata: never show it to the customer.'
   )
 }
@@ -440,6 +449,9 @@ export function buildSystemPrompt(args: {
   /** 📅 Marcar compromisso exige aprovação humana (nível da ação
    *  `schedule_event` na matriz ≠ automática): a IA diz que VAI confirmar. */
   scheduleApproval?: boolean
+  /** 📅 Compromissos já marcados nos próximos dias (formatados). Só com a
+   *  ferramenta schedule; undefined = não consultado. */
+  busySlots?: string[]
   /** Etapas do funil ligado (pra ferramenta move_card escolher pelo nome). */
   pipelineStages?: string[]
   /** Etiquetas EXISTENTES da conta (pra ferramenta tag escolher). */
@@ -572,7 +584,7 @@ export function buildSystemPrompt(args: {
     if (has('tag') && args.availableTags && args.availableTags.length > 0) {
       parts.push(tagInstruction(args.availableTags))
     }
-    if (has('schedule')) parts.push(scheduleInstruction({ approval: !!args.scheduleApproval }))
+    if (has('schedule')) parts.push(scheduleInstruction({ approval: !!args.scheduleApproval, busySlots: args.busySlots }))
     if (has('create_card')) parts.push(createCardInstruction())
     if (has('private_note')) parts.push(noteInstruction())
     if (has('send_material') && args.materials && args.materials.length > 0) {

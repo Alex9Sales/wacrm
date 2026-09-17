@@ -40,6 +40,7 @@ import {
   setVoicePreference,
 } from './close-actions'
 import { scheduleEventFromAi } from './schedule-actions'
+import { loadBusySlots } from './busy-slots'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
 import { extractMaterialDirectives, findMaterialByName, listMaterialsForAgent } from './materials'
@@ -801,6 +802,11 @@ export async function dispatchInboundToAiReply(
       console.error('[ai auto-reply] dívida em aberto falhou:', err instanceof Error ? err.message : err)
     }
 
+    // 📅 Agenda: a IA só oferece horário que não bate com reunião já marcada.
+    const busySlots = tools.includes('schedule')
+      ? await loadBusySlots(accountId, settings.businessTimezone || 'America/Sao_Paulo')
+      : undefined
+
     const systemPrompt = buildSystemPrompt({
       userPrompt: config.systemPrompt,
       mode: 'auto_reply',
@@ -817,6 +823,7 @@ export async function dispatchInboundToAiReply(
       catalog,
       timezone: settings.businessTimezone,
       scheduleApproval,
+      busySlots,
       extraInstructions: (() => {
         const extra: string[] = []
         if (openDebt) extra.push(collectionInstruction(openDebt))
