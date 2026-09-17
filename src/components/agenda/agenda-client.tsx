@@ -26,6 +26,7 @@ import {
   type EventRow,
   type GoogleStatus,
 } from '@/app/(dashboard)/agenda/actions'
+import { inkOn } from '@/lib/ui/ink-on'
 
 const WEEKDAYS = ['Dom', 'Seg', 'Ter', 'Qua', 'Qui', 'Sex', 'Sáb']
 
@@ -484,8 +485,8 @@ export function AgendaClient() {
                         e.stopPropagation()
                         openEdit(ev)
                       }}
-                      className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] text-white"
-                      style={{ background: ev.calendarColor }}
+                      className="flex items-center gap-1 truncate rounded px-1 py-0.5 text-[11px] font-medium"
+                      style={{ background: ev.calendarColor, color: inkOn(ev.calendarColor) }}
                       title={ev.title}
                     >
                       {!ev.allDay && (
@@ -567,8 +568,8 @@ function DayView({
             <span
               key={ev.id}
               onClick={() => onEdit(ev)}
-              className="cursor-pointer truncate rounded px-2 py-0.5 text-xs text-white"
-              style={{ background: ev.calendarColor }}
+              className="cursor-pointer truncate rounded px-2 py-0.5 text-xs font-medium"
+              style={{ background: ev.calendarColor, color: inkOn(ev.calendarColor) }}
               title={ev.title}
             >
               {ev.title}
@@ -603,11 +604,12 @@ function DayView({
               <div
                 key={ev.id}
                 onClick={() => onEdit(ev)}
-                className="absolute left-14 right-2 cursor-pointer overflow-hidden rounded-md px-2 py-1 text-xs text-white shadow-sm"
+                className="absolute left-14 right-2 cursor-pointer overflow-hidden rounded-md px-2 py-1 text-xs shadow-sm"
                 style={{
                   top: startH * HOUR_H + 1,
                   height: Math.max(20, durH * HOUR_H - 2),
                   background: ev.calendarColor,
+                  color: inkOn(ev.calendarColor),
                 }}
                 title={ev.title}
               >
