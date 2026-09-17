@@ -8,6 +8,8 @@ import { and, eq, sql } from 'drizzle-orm'
 import { db, calendarConnections, calendars, calendarEvents } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { encrypt, decrypt } from '@/lib/whatsapp/encryption'
+import { zonedIso } from '@/lib/assistant/rules'
+import { getAccountSettings } from '@/lib/settings/account-settings'
 import {
   refreshAccessToken,
   listGoogleEvents,
@@ -41,11 +43,47 @@ export async function getValidAccessToken(conn: ConnectionRow): Promise<string> 
   return refreshed.access_token
 }
 
-function mapTimes(ev: GoogleEvent): { startsAt: string; endsAt: string; allDay: boolean } | null {
-  const s = ev.start?.dateTime ?? (ev.start?.date ? `${ev.start.date}T00:00:00` : null)
-  const e = ev.end?.dateTime ?? (ev.end?.date ? `${ev.end.date}T00:00:00` : null)
+/** 'YYYY-MM-DD' − 1 dia (o fim de evento de dia inteiro no Google é EXCLUSIVO). */
+function previousDay(date: string): string {
+  const d = new Date(`${date}T00:00:00Z`)
+  d.setUTCDate(d.getUTCDate() - 1)
+  return d.toISOString().slice(0, 10)
+}
+
+/**
+ * Datas do Google → instantes nossos.
+ *
+ * O evento de DIA INTEIRO é uma data solta ("2026-09-15"), não um instante. A v1
+ * fazia `new Date('2026-09-15T00:00:00')`, que o Node lê no fuso do servidor
+ * (UTC no container) — em Brasília isso vira 14/09 21:00, e o compromisso
+ * aparecia um dia antes (o "Equipotel" do Renato, 17/09). Agora a data é
+ * ancorada no fuso da conta, na mesma convenção que a Agenda já usa pros
+ * eventos criados aqui: 00:00 do primeiro dia → 23:59 do último dia coberto.
+ */
+function mapTimes(ev: GoogleEvent, tz: string): { startsAt: string; endsAt: string; allDay: boolean } | null {
+  if (ev.start?.date && ev.end?.date) {
+    const lastDay = previousDay(ev.end.date)
+    const endDay = lastDay < ev.start.date ? ev.start.date : lastDay
+    return {
+      startsAt: zonedIso(ev.start.date, '00:00', tz),
+      endsAt: zonedIso(endDay, '23:59', tz),
+      allDay: true,
+    }
+  }
+  const s = ev.start?.dateTime ?? null
+  const e = ev.end?.dateTime ?? null
   if (!s || !e) return null
-  return { startsAt: new Date(s).toISOString(), endsAt: new Date(e).toISOString(), allDay: Boolean(ev.start?.date) }
+  return { startsAt: new Date(s).toISOString(), endsAt: new Date(e).toISOString(), allDay: false }
+}
+
+/** 'YYYY-MM-DD' de um instante, no fuso da conta (pro Google, que quer data). */
+function dateInTz(iso: string, tz: string): string {
+  return new Intl.DateTimeFormat('en-CA', {
+    timeZone: tz,
+    year: 'numeric',
+    month: '2-digit',
+    day: '2-digit',
+  }).format(new Date(iso))
 }
 
 /** Importa eventos (janela -7d…+60d) de todas as agendas Google desta conexão. */
@@ -69,6 +107,8 @@ export async function importGoogleEvents(
 
   try {
     const accessToken = await getValidAccessToken(conn)
+    // Fuso da conta: é o que ancora as datas dos eventos de dia inteiro.
+    const tz = (await getAccountSettings(accountId)).businessTimezone || 'America/Sao_Paulo'
 
     const cals = await db
       .select({ id: calendars.id, googleCalendarId: calendars.googleCalendarId })
@@ -105,7 +145,7 @@ export async function importGoogleEvents(
           cancelled += res.length
           continue
         }
-        const times = mapTimes(ev)
+        const times = mapTimes(ev, tz)
         if (!times) continue
         const existing = firstOrNull(
           await db
@@ -259,7 +299,7 @@ type PushRow = {
   connectionId: string | null
 }
 
-function toGoogleBody(row: PushRow): GoogleEventBody {
+function toGoogleBody(row: PushRow, tz: string): GoogleEventBody {
   const body: GoogleEventBody = {
     summary: row.title,
     description: row.description ?? undefined,
@@ -268,15 +308,15 @@ function toGoogleBody(row: PushRow): GoogleEventBody {
     end: {},
   }
   if (row.allDay) {
-    // Google usa datas (YYYY-MM-DD); fim é exclusivo.
-    body.start.date = row.startsAt.slice(0, 10)
-    let endDate = row.endsAt.slice(0, 10)
-    if (endDate <= row.startsAt.slice(0, 10)) {
-      const d = new Date(`${row.startsAt.slice(0, 10)}T00:00:00Z`)
-      d.setUTCDate(d.getUTCDate() + 1)
-      endDate = d.toISOString().slice(0, 10)
-    }
-    body.end.date = endDate
+    // Google usa datas (YYYY-MM-DD) e o fim é EXCLUSIVO. As datas saem do fuso
+    // da conta, não de `slice(0,10)` do ISO: fatiar o UTC só acerta por acidente
+    // em fuso negativo e erra o dia em qualquer fuso a leste de Greenwich.
+    const startDate = dateInTz(row.startsAt, tz)
+    const lastDay = dateInTz(row.endsAt, tz)
+    const exclusive = new Date(`${(lastDay < startDate ? startDate : lastDay)}T00:00:00Z`)
+    exclusive.setUTCDate(exclusive.getUTCDate() + 1)
+    body.start.date = startDate
+    body.end.date = exclusive.toISOString().slice(0, 10)
   } else {
     // O Postgres devolve timestamptz como "2026-08-13 15:00:00+00" (com espaço,
     // sem T/Z) — o Google exige RFC3339. new Date().toISOString() normaliza.
@@ -336,7 +376,8 @@ export async function pushEventToGoogle(
     return
   }
 
-  const body = toGoogleBody(row as PushRow)
+  const tz = (await getAccountSettings(accountId)).businessTimezone || 'America/Sao_Paulo'
+  const body = toGoogleBody(row as PushRow, tz)
 
   if (op === 'update' && row.googleEventId) {
     try {

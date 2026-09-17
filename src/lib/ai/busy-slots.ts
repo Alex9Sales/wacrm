@@ -13,7 +13,14 @@ import { db, calendarEvents } from '@/db'
 export const BUSY_SLOTS_DAYS = 14
 const MAX_SLOTS = 40
 
-/** "qua 23/09 14:00–14:45" no fuso da conta (puro). Dia inteiro: "qua 23/09 (dia todo)". */
+/**
+ * "qua 23/09 14:00–14:45" no fuso da conta.
+ *
+ * Dia inteiro vira "qua 23/09 (dia todo)" — e, quando atravessa vários dias,
+ * "seg 15/09 a qui 18/09 (dia todo)". A versão anterior mostrava só o dia de
+ * início: a feira de 4 dias do Renato (Equipotel, 15 a 18/09) chegava pra IA
+ * como um dia só, e ela ofereceria reunião nos outros três.
+ */
 export function formatBusySlot(ev: { startsAt: string; endsAt: string; allDay?: boolean | null }, tz: string): string {
   const start = new Date(ev.startsAt)
   const end = new Date(ev.endsAt)
@@ -25,11 +32,16 @@ export function formatBusySlot(ev: { startsAt: string; endsAt: string; allDay?: 
       return 'America/Sao_Paulo'
     }
   })()
-  const day = new Intl.DateTimeFormat('pt-BR', { timeZone: zone, weekday: 'short', day: '2-digit', month: '2-digit' })
-    .format(start)
-    .replace('.', '')
-    .replace(',', '')
-  if (ev.allDay) return `${day} (dia todo)`
+  const dayOf = (d: Date) =>
+    new Intl.DateTimeFormat('pt-BR', { timeZone: zone, weekday: 'short', day: '2-digit', month: '2-digit' })
+      .format(d)
+      .replace('.', '')
+      .replace(',', '')
+  const day = dayOf(start)
+  if (ev.allDay) {
+    const lastDay = dayOf(end)
+    return lastDay === day ? `${day} (dia todo)` : `${day} a ${lastDay} (dia todo)`
+  }
   const hm = (d: Date) => new Intl.DateTimeFormat('pt-BR', { timeZone: zone, hour: '2-digit', minute: '2-digit', hour12: false }).format(d)
   return `${day} ${hm(start)}–${hm(end)}`
 }
