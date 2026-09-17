@@ -9,6 +9,7 @@ import {
   buildClassifierInput,
   collectionReplyRelevance,
   CONTEST_RE,
+  countOurTurns,
   dayKeyIn,
   decideCollectionReply,
   NEGOTIATION_RE,
@@ -16,6 +17,7 @@ import {
   otherPixWithin,
   PAID_CLAIM_RE,
   parsePtDates,
+  parsePtDateTokens,
   PAY_WORD_RE,
   pickBurst,
   pickMarkerBurst,
@@ -697,6 +699,78 @@ describe('parsePtDates — datas em português', () => {
     // "Sexta que vem" sem data do modelo: ninguém chuta, fica a nota.
     expect(judge(direct('pago sexta que vem'), { kind: 'promessa', date: null }).decision).toMatchObject({ action: 'note', kind: 'promessa' })
   })
+  it('revisão 2: mês dito ANTES do dia, "q vem" e "outro mês"', () => {
+    for (const t of [
+      'mês q vem dia 20',
+      'consigo só mês q vem dia 20',
+      'dia 20 do mês q vem',
+      'só no outro mês, dia 20',
+      'dia 20 do outro mês',
+      'outubro dia 20',
+      'só em outubro, dia 20',
+      'consigo só mês que vem dia 20',
+      'se puder segurar até o mês que vem dia 20',
+      'pago no próximo mês, dia 20',
+    ]) {
+      expect(parsePtDates(t, '2026-09-16'), t).toEqual(['2026-10-20'])
+    }
+    // Dia que já passou continua certo, agora pelo motivo certo.
+    expect(parsePtDates('mes que vem dia 5', '2026-09-16')).toEqual(['2026-10-05'])
+    // Dezembro → janeiro.
+    expect(parsePtDates('mês q vem dia 10', '2026-12-20')).toEqual(['2027-01-10'])
+  })
+  it('revisão 2: "semana que vem" com dia da semana, em qualquer ordem, não é data', () => {
+    for (const t of ['semana que vem na sexta', 'sexta, semana que vem', 'semana que vem sexta', 'semana q vem na segunda-feira', 'próxima semana, na quinta', 'sexta semana q vem']) {
+      expect(parsePtDates(t, '2026-09-16'), t).toEqual([])
+    }
+    // A vírgula só vale antes de "semana que vem": segunda-feira continua data.
+    expect(parsePtDates('pago segunda, via pix', '2026-09-16')).toEqual(['2026-09-21'])
+    expect(parsePtDates('me manda a segunda via do boleto', '2026-09-16')).toEqual([])
+    // Rack 95: a sexta desta semana e o restante "a semana que vem" em outra linha.
+    expect(parsePtDates('Vou pagar 1 na sexta feira\nOk\nO restante a semana que vem\nEstou aguardando pagamentos', '2026-09-16')).toEqual(['2026-09-18'])
+    expect(parsePtDates('pago sexta', '2026-09-16')).toEqual(['2026-09-18'])
+  })
+  it('revisão 2: marcador "consigo só mês q vem dia 20" com 20/10 da IA → aplica 20/10 (antes: nota "sem data")', () => {
+    const direct = (typed: string) =>
+      ctx({
+        newestAt: at('2026-09-16T10:01:00-03:00'),
+        typed,
+        sameConvCollectAt: at('2026-09-16T10:00:00-03:00'),
+        anyCollectAt: at('2026-09-16T10:00:00-03:00'),
+        outboundLast72h: 1,
+        ourRecent: ours(['2026-09-16T10:00:00-03:00', COLLECT('Cobranças')]),
+      })
+    expect(judge(direct('consigo só mês q vem dia 20'), { kind: 'promessa', date: '2026-10-20' }).decision).toMatchObject({ action: 'apply', kind: 'promessa', date: '2026-10-20' })
+    // Silencioso: acordo SEM data do modelo (caso WR) → promessa 20/10, não 20/09.
+    expect(judge(direct('se puder segurar até o mês que vem dia 20'), { kind: 'acordo', date: null }).decision).toMatchObject({
+      action: 'apply',
+      kind: 'promessa',
+      date: '2026-10-20',
+      moveDueDate: true,
+    })
+    // "semana que vem na sexta" com 25/09 do modelo: o leitor não veta mais.
+    expect(judge(direct('pago semana que vem na sexta'), { kind: 'promessa', date: '2026-09-25' }).decision).toMatchObject({ action: 'apply', date: '2026-09-25' })
+  })
+  it('revisão 2: dois turnos — o cliente diz só "dia 20" e o modelo sabe que é o mês que vem', () => {
+    expect(parsePtDateTokens('dia 20', '2026-09-16')).toEqual({ dates: ['2026-09-20'], bareDays: [20] })
+    expect(parsePtDateTokens('dia 20 de outubro', '2026-09-16')).toEqual({ dates: ['2026-10-20'], bareDays: [] })
+    expect(resolveDate('2026-10-20', ['2026-09-20'], '2026-09-16', [20])).toBe('2026-10-20')
+    // Outro dia do mês continua divergência.
+    expect(resolveDate('2026-10-21', ['2026-09-20'], '2026-09-16', [20])).toBeNull()
+    // "dia 20 de setembro" dito com mês não aceita outro mês do modelo.
+    expect(resolveDate('2026-10-20', ['2026-09-20'], '2026-09-16', [])).toBeNull()
+    // E o limite de 45 dias continua valendo.
+    expect(resolveDate('2026-11-20', ['2026-09-20'], '2026-09-16', [20])).toBeNull()
+    const c = ctx({
+      newestAt: at('2026-09-16T10:05:00-03:00'),
+      typed: 'dia 20',
+      sameConvCollectAt: at('2026-09-16T10:00:00-03:00'),
+      anyCollectAt: at('2026-09-16T10:00:00-03:00'),
+      outboundLast72h: 2,
+      ourRecent: ours(['2026-09-16T10:04:00-03:00', 'Qual dia do mês que vem você consegue pagar a parcela?']),
+    })
+    expect(judge(c, { kind: 'promessa', date: '2026-10-20' }).decision).toMatchObject({ action: 'apply', kind: 'promessa', date: '2026-10-20' })
+  })
 })
 
 describe('resolveDate — modelo e leitor', () => {
@@ -788,6 +862,20 @@ describe('efeito repetido — revisão 16/09', () => {
     // Registro com mais de 12 h não barra.
     expect(alreadyApplied(t, 'comprovante', null, at('2026-09-17T10:00:00-03:00'))).toBe(false)
   })
+  it('revisão 2: depois do "Cobrar agora" (adiamento zerado), o comprovante verdadeiro 5 h depois NÃO é repetido', () => {
+    const receiptAt = '2026-09-16T12:00:00.000Z' // 09:00
+    const later = at('2026-09-16T14:00:00-03:00')
+    const cleared: TouchState = { snoozeUntil: null, snoozeReason: null, paused: false, pausedSource: null, pausedReason: null, updatedAt: '2026-09-16T13:00:00.000Z', receiptAt }
+    expect(alreadyApplied(cleared, 'comprovante', null, later)).toBe(false)
+    // O adiamento do comprovante ainda valendo: a mesma rajada relida é repetida.
+    const held = touch({ snoozeUntil: '2026-09-19T12:00:00.000Z', snoozeReason: 'Cliente mandou comprovante — aguardando conferência', receiptAt, receiptUntil: '2026-09-19T12:00:00.000Z' })
+    expect(alreadyApplied(held, 'comprovante', null, later)).toBe(true)
+    // "Cobrar agora" e depois uma promessa mais curta que o adiamento do comprovante: não é dele.
+    const promised = touch({ snoozeUntil: '2026-09-19T03:00:00.000Z', snoozeReason: 'Cliente prometeu pagar em 17/09/2026', receiptAt, receiptUntil: '2026-09-19T12:00:00.000Z' })
+    expect(alreadyApplied(promised, 'comprovante', null, later)).toBe(false)
+    // Registro antigo, sem receiptUntil: vale enquanto a régua dorme.
+    expect(alreadyApplied({ ...promised, receiptUntil: null }, 'comprovante', null, later)).toBe(true)
+  })
   it('assinatura da nota: mesmo tipo e texto repetem; texto ou tipo diferente não', () => {
     const a = noteSignature('promessa', '🧾 O cliente falou em pagar, mas sem data.')
     expect(noteSignature('promessa', '🧾 O cliente falou em pagar, mas sem data.')).toBe(a)
@@ -808,9 +896,10 @@ describe('pickBurst — a rajada ancora no balão mais novo', () => {
   })
 
   it('José Luiz: o "👍" de 3 dias antes fica de fora', () => {
+    // Como o inbound grava: descrição da imagem em transcription, "[image]" no texto.
     const b = pickBurst([
       row('m3', 'customer', '2026-09-14T17:24:30-03:00', { contentText: '🤝' }),
-      row('m2', 'customer', '2026-09-14T17:24:10-03:00', { contentType: 'image', contentText: 'O valor do pagamento é R$ 170,93' }),
+      row('m2', 'customer', '2026-09-14T17:24:10-03:00', { contentType: 'image', contentText: '[image]', transcription: 'O valor do pagamento é R$ 170,93' }),
       row('m1', 'customer', '2026-09-11T09:03:00-03:00', { contentText: '👍' }),
       row('m0', 'agent', '2026-09-11T09:00:00-03:00', { contentText: 'Montagem confirmada' }),
     ])!
@@ -819,6 +908,53 @@ describe('pickBurst — a rajada ancora no balão mais novo', () => {
     expect(b.newestAt.toISOString()).toBe('2026-09-14T20:24:30.000Z')
     expect(b.typed).toBe('🤝')
     expect(b.media).toContain('R$ 170,93')
+  })
+
+  it('revisão 2: descrição da imagem/documento (transcription) vai para media; a legenda, para typed', () => {
+    const b = pickBurst([
+      row('d1', 'customer', '2026-09-16T09:10:00-03:00', { contentType: 'document', contentText: '[document]', transcription: 'Comprovante de boleto de R$ 325,00 pago em 16/09' }),
+      row('i1', 'customer', '2026-09-16T09:09:00-03:00', { contentType: 'image', contentText: 'segue comprovante', transcription: 'Comprovante Pix de R$ 150,00' }),
+    ])!
+    expect(b.typed).toBe('segue comprovante')
+    expect(b.media).toBe('Comprovante Pix de R$ 150,00\nComprovante de boleto de R$ 325,00 pago em 16/09')
+    // A data impressa no comprovante não vira data de promessa.
+    expect(parsePtDates(b.typed, '2026-09-16')).toEqual([])
+  })
+
+  it('revisão 2: Ultra Visão no formato de PRODUÇÃO (cobrança 22 h antes por outro canal + Pix do Google) → descarta', () => {
+    const b = pickBurst([
+      row('u1', 'customer', '2026-09-16T08:34:17-03:00', {
+        contentType: 'image',
+        contentText: '[image]',
+        transcription: 'A imagem é um comprovante de pagamento Pix no valor de R$ 150,00, destinatário GOOGLE BRASIL INTERNET LTDA.',
+      }),
+      row('a1', 'agent', '2026-09-16T08:26:00-03:00', { contentText: GOOGLE_PIX }),
+    ])!
+    expect(b.media).toContain('R$ 150,00')
+    expect(b.typed).toBe('')
+    const c = ctx({
+      newestAt: b.newestAt,
+      typed: b.typed,
+      media: b.media,
+      anyCollectAt: at('2026-09-15T10:30:00-03:00'),
+      outboundLast72h: 2,
+      ourRecent: ours(['2026-09-16T08:26:00-03:00', GOOGLE_PIX]),
+      openCharges: charges(325, 325),
+    })
+    // Marcador da IA que conversa e palpite do silencioso dão o mesmo.
+    const { relevance, decision } = judge(c, { kind: 'comprovante', date: null })
+    expect(relevance).toBe('recent_collection')
+    expect(decision).toMatchObject({ action: 'skip', reason: 'valor do comprovante não bate com o que está aberto' })
+    // Antes (descrição em typed, media vazia) o mesmo caso virava comprovante aplicado.
+    expect(judge({ ...c, typed: b.media, media: '' }, { kind: 'comprovante', date: null }).decision.action).toBe('apply')
+  })
+
+  it('revisão 2: comprovante de valor certo no formato de produção bate com a parcela (amount_match)', () => {
+    const b = pickBurst([
+      row('j1', 'customer', '2026-09-14T17:24:10-03:00', { contentType: 'image', contentText: '[image]', transcription: 'O valor do pagamento é R$ 170,93' }),
+    ])!
+    const c = ctx({ newestAt: b.newestAt, typed: b.typed, media: b.media, outboundLast72h: 1, ourRecent: ours(['2026-09-14T09:00:00-03:00', 'Bom dia!']), openCharges: charges(165) })
+    expect(collectionReplyRelevance(c)).toBe('amount_match')
   })
 
   it('para na mensagem nossa, usa a transcrição e ignora placeholder de mídia', () => {
@@ -887,6 +1023,72 @@ describe('entrada do classificador', () => {
     expect(input).toContain('[14/09 14:48] Vamos fazer amanhã')
     expect(input.match(/<\/cliente>/g)).toHaveLength(1)
     expect(input).not.toContain('[[COBRANCA')
+  })
+
+  it('revisão 2: imagem com descrição em transcription e legenda → [imagem: …] seguido da legenda', () => {
+    const input = buildClassifierInput({
+      debt: null,
+      lastCollection: null,
+      ours: [],
+      bubbles: [
+        { id: 'i', senderType: 'customer', contentText: 'segue', transcription: 'Comprovante Pix de R$ 80,00', contentType: 'image', createdAt: '2026-09-14T10:11:00-03:00' },
+        { id: 'd', senderType: 'customer', contentText: '[document]', transcription: 'Boleto pago de R$ 80,00', contentType: 'document', createdAt: '2026-09-14T10:12:00-03:00' },
+        { id: 'p', senderType: 'customer', contentText: '[image]', transcription: null, contentType: 'image', createdAt: '2026-09-14T10:13:00-03:00' },
+      ],
+      timezone: 'America/Sao_Paulo',
+    })
+    expect(input).toContain('[14/09 10:11] [imagem: Comprovante Pix de R$ 80,00] segue')
+    expect(input).toContain('[14/09 10:12] [documento: Boleto pago de R$ 80,00]')
+    expect(input).not.toContain('10:13')
+  })
+})
+
+describe('turnos nossos depois da cobrança — revisão 2', () => {
+  const s = (...types: string[]) => types.map((senderType) => ({ senderType }))
+
+  it('balões seguidos da IA são UMA resposta; pessoa conta cada mensagem; cliente separa', () => {
+    // 2 respostas da IA com 3 balões cada (da mais nova para a mais velha).
+    expect(countOurTurns(s('bot', 'bot', 'bot', 'customer', 'bot', 'bot', 'bot', 'customer'))).toBe(2)
+    expect(countOurTurns(s('bot', 'agent', 'bot'))).toBe(3)
+    expect(countOurTurns(s('agent', 'agent', 'agent', 'agent'))).toBe(4)
+    expect(countOurTurns(s('customer', 'customer'))).toBe(0)
+    expect(countOurTurns([])).toBe(0)
+  })
+
+  it('cobrança 25 h antes nesta conversa + 2 turnos da IA (6 balões): "sexta" continua resposta direta', () => {
+    const rows = s('bot', 'bot', 'bot', 'customer', 'bot', 'bot', 'bot', 'customer')
+    const base = {
+      newestAt: at('2026-09-15T11:00:00-03:00'),
+      typed: 'sexta',
+      sameConvCollectAt: at('2026-09-14T10:00:00-03:00'),
+      anyCollectAt: at('2026-09-14T10:00:00-03:00'),
+      outboundLast72h: 7,
+      ourRecent: ours(['2026-09-15T10:59:00-03:00', 'Consegue me dizer quando paga a parcela?']),
+      openCharges: charges(325),
+    }
+    const c = ctx({ ...base, outboundSinceCollect: countOurTurns(rows) })
+    const { relevance, decision } = judge(c, { kind: 'promessa', date: '2026-09-18' })
+    expect(relevance).toBe('direct')
+    expect(decision).toMatchObject({ action: 'apply', kind: 'promessa', date: '2026-09-18', moveDueDate: true })
+    // "dá pra parcelar em 3x?" pausa, em vez de virar nota "não em resposta a uma cobrança desta conversa".
+    expect(judge({ ...c, typed: 'dá pra parcelar em 3x?' }, { kind: 'acordo', date: null }).decision).toMatchObject({ action: 'apply', kind: 'acordo', pause: true })
+    // Contando balões (6), caía fora de "direct".
+    expect(collectionReplyRelevance(ctx({ ...base, outboundSinceCollect: rows.filter((r) => r.senderType === 'bot').length }))).not.toBe('direct')
+  })
+
+  it('Leonardo: pergunta nossa sobre a parcela vence a cobrança recente por outro número (30 h antes)', () => {
+    const c = ctx({
+      newestAt: at('2026-09-16T10:05:00-03:00'),
+      typed: 'consigo sexta',
+      anyCollectAt: at('2026-09-15T04:05:00-03:00'),
+      outboundLast72h: 1,
+      ourRecent: ours(['2026-09-16T10:00:00-03:00', '*Leonardo Financeiro:* Consegue fazer a parcela de hoje? R$ 100,00']),
+    })
+    const { relevance, decision } = judge(c, { kind: 'promessa', date: '2026-09-18' })
+    expect(relevance).toBe('asked_debt')
+    expect(decision).toMatchObject({ action: 'apply', kind: 'promessa', date: '2026-09-18', moveDueDate: false })
+    // Promessa sem data respondendo à nossa pergunta: nota (antes: descartada).
+    expect(judge({ ...c, typed: 'vou ver e te falo quando consigo' }, { kind: 'promessa', date: null }).decision).toMatchObject({ action: 'note', kind: 'promessa' })
   })
 })
 

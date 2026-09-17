@@ -19,7 +19,7 @@
 //      régua;
 //   5. o mesmo efeito já aplicado não se repete (Rack 95: rajada lida 2x em 9 s).
 //
-// Os limites (7 d, 5 mensagens, 48 h, 72 h, 10 %, 45 d) foram calibrados com
+// Os limites (7 d, 5 respostas, 48 h, 72 h, 10 %, 45 d) foram calibrados com
 // as 25 marcações reais de 09/09 a 16/09 — ficam como constantes exportadas.
 //
 // Sem 'server-only' e sem @/db: roda no worker, na auto-resposta e nos testes.
@@ -37,8 +37,9 @@ const DAY_MS = 24 * HOUR_MS
 
 /** Cobrança NESTA conversa vale como resposta direta por até 7 dias… */
 export const DIRECT_WINDOW_MS = 7 * DAY_MS
-/** …se a conversa não andou: até 5 mensagens nossas depois dela (Silvia: 4;
- *  Matheus MB: 78 a 177 mensagens sobre entregas depois do link de teste). */
+/** …se a conversa não andou: até 5 respostas nossas depois dela (Silvia: 4;
+ *  Matheus MB: 78 a 177 mensagens sobre entregas depois do link de teste).
+ *  Conta TURNOS, não balões — ver countOurTurns. */
 export const DIRECT_MAX_OUTBOUND = 5
 /** Nas primeiras 24 h a cobrança da conversa vale mesmo com conversa andando. */
 export const DIRECT_FRESH_MS = DAY_MS
@@ -132,7 +133,7 @@ export interface CustomerBurst {
   newestId: string
   /** Âncora de TODAS as buscas: o balão mais novo, nunca o primeiro. */
   newestAt: Date
-  /** O que ele escreveu ou falou (texto e transcrição de áudio). */
+  /** O que ele escreveu ou falou (texto, legenda da mídia e transcrição de áudio) — SEM descrição de imagem. */
   typed: string
   /** Descrição de imagem/documento (visão). */
   media: string
@@ -142,19 +143,39 @@ export interface CustomerBurst {
 const PLACEHOLDER_RE = /^\[[a-z]+\]$/i
 
 const isReceiptMedia = (contentType: string | null) => contentType === 'image' || contentType === 'document'
+const mediaLabel = (contentType: string | null) => (contentType === 'document' ? 'documento' : 'imagem')
+
+type BubbleContent = { contentText: string | null; transcription: string | null; contentType: string | null }
 
 /**
- * Texto que o cliente mandou: transcrição do áudio quando houver, senão o
- * texto (numa imagem, o texto é a descrição que a IA gerou — "transferência
- * concluída, R$ 400" — e isso É comprovante).
+ * O que um balão traz, separado em fala e descrição de mídia.
+ *
+ * 16/09 (revisão): o inbound grava a DESCRIÇÃO da imagem ou do documento em
+ * `transcription` (describeImage/describeDocument em channels/inbound.ts) e
+ * deixa em contentText a legenda ou "[image]". Lendo a transcrição antes do
+ * tipo, todo comprovante descrito caía na fala e a mídia ficava vazia em
+ * produção: a conferência de valor nunca rodava e o Pix de R$ 150 ao Google
+ * (Ultra Visão) virava comprovante da parcela de R$ 325 — os testes punham a
+ * descrição em contentText e não pegavam. Numa imagem ou documento: descrição
+ * → mídia; legenda ("segue comprovante") → fala. A data impressa no
+ * comprovante ("pago em 16/09") também deixa de virar data de promessa.
  */
-export function customerTextOf(row: { contentText: string | null; transcription: string | null; contentType: string | null }): string {
+function bubbleParts(row: BubbleContent): { typed: string; media: string } {
   const t = (row.transcription ?? '').trim()
-  if (t) return t
   const c = (row.contentText ?? '').trim()
-  if (!c || PLACEHOLDER_RE.test(c)) return ''
-  if (isReceiptMedia(row.contentType)) return `[imagem: ${c}]`
-  return c
+  const caption = c && !PLACEHOLDER_RE.test(c) ? c : ''
+  if (isReceiptMedia(row.contentType)) return { typed: caption, media: t }
+  return { typed: t || caption, media: '' }
+}
+
+/**
+ * Texto que o cliente mandou num balão: a transcrição do áudio, o texto, e numa
+ * imagem ou documento a descrição da IA ("[imagem: transferência de R$ 400]")
+ * seguida da legenda. Mesma regra do pickBurst (bubbleParts).
+ */
+export function customerTextOf(row: BubbleContent): string {
+  const { typed, media } = bubbleParts(row)
+  return [media ? `[${mediaLabel(row.contentType)}: ${media}]` : '', typed].filter(Boolean).join('\n')
 }
 
 const toMs = (v: string | Date | null | undefined): number => {
@@ -192,15 +213,9 @@ export function pickBurst(
   const typed: string[] = []
   const media: string[] = []
   for (const b of bubbles) {
-    const t = (b.transcription ?? '').trim()
-    if (t) {
-      typed.push(t)
-      continue
-    }
-    const c = (b.contentText ?? '').trim()
-    if (!c || PLACEHOLDER_RE.test(c)) continue
-    if (isReceiptMedia(b.contentType)) media.push(c)
-    else typed.push(c)
+    const parts = bubbleParts(b)
+    if (parts.media) media.push(parts.media)
+    if (parts.typed) typed.push(parts.typed)
   }
   return { bubbles, newestId: newest.id, newestAt: new Date(newestMs), typed: typed.join('\n'), media: media.join('\n') }
 }
@@ -242,7 +257,7 @@ export interface ReplyGuardContext {
   media: string
   /** Última mensagem nossa com link de cobrança NESTA conversa (7 d antes de newestAt). */
   sameConvCollectAt: Date | null
-  /** Mensagens nossas nesta conversa depois dela (e antes de newestAt). */
+  /** Respostas nossas nesta conversa depois dela (e antes de newestAt), em turnos (countOurTurns). */
   outboundSinceCollect: number
   /** Última mensagem nossa com link de cobrança em QUALQUER conversa do contato. */
   anyCollectAt: Date | null
@@ -261,8 +276,41 @@ export function otherPixWithin(ours: OurMessage[], newestAt: Date, windowMs = OT
 }
 
 /**
+ * Quantas RESPOSTAS nossas há numa sequência de mensagens (qualquer ordem
+ * entre turnos; cliente incluído só para separar os turnos): cada mensagem de
+ * pessoa ('agent') conta 1; balões seguidos da IA ('bot') contam 1.
+ *
+ * 16/09 (revisão): a IA manda até 4 balões por resposta (splitIntoMessages) e
+ * cada um contava como mensagem — dois turnos da IA passavam do limite de 5 e
+ * a própria conversa da cobrança deixava de ser "direct": "sexta" virava
+ * promessa descartada e "dá pra parcelar em 3x?" só nota, com a IA já tendo
+ * confirmado a data ao cliente. 'bot' continua contando (a IA falando de outro
+ * assunto dias depois do link não pode valer como resposta direta por 7 dias).
+ */
+export function countOurTurns(rows: { senderType: string }[]): number {
+  let turns = 0
+  let inBotBlock = false
+  for (const r of rows) {
+    if (r.senderType === 'bot') {
+      if (!inBotBlock) turns++
+      inBotBlock = true
+    } else {
+      if (r.senderType === 'agent') turns++
+      inBotBlock = false
+    }
+  }
+  return turns
+}
+
+/**
  * A fala do cliente está num contexto de cobrança? null = não, e nem vale
  * chamar o modelo. Todas as buscas são ANTES do balão mais novo.
+ *
+ * 16/09 (revisão): "nós perguntamos da dívida" vem ANTES de "cobrança recente
+ * em qualquer conversa". Na ordem antiga, o "consigo sexta" do Leonardo com a
+ * régua tendo mandado link por outro número 30 h antes caía em
+ * recent_collection e a promessa era descartada; com 54 h, aplicava — quanto
+ * mais recente a cobrança, pior.
  */
 export function collectionReplyRelevance(c: ReplyGuardContext): Relevance | null {
   const t = c.newestAt.getTime()
@@ -270,9 +318,9 @@ export function collectionReplyRelevance(c: ReplyGuardContext): Relevance | null
 
   const sinceSame = ago(c.sameConvCollectAt)
   if (sinceSame <= DIRECT_WINDOW_MS && (c.outboundSinceCollect <= DIRECT_MAX_OUTBOUND || sinceSame <= DIRECT_FRESH_MS)) return 'direct'
-  if (ago(c.anyCollectAt) <= RECENT_COLLECTION_MS) return 'recent_collection'
   const lastOurs = c.ourRecent[0]
   if (lastOurs && ago(lastOurs.at) <= ASKED_DEBT_WINDOW_MS && ASKED_DEBT_RE.test(lastOurs.text)) return 'asked_debt'
+  if (ago(c.anyCollectAt) <= RECENT_COLLECTION_MS) return 'recent_collection'
   if (DEBT_WORD_RE.test(c.typed)) return 'mentions_debt'
   const amounts = amountsIn(c.media)
   if (amounts.length && amountMatchesOpen(amounts, c.openCharges) && !otherPixWithin(c.ourRecent, c.newestAt)) return 'amount_match'
@@ -334,16 +382,39 @@ const stripAccents = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '')
 // "dia N do mês que vem" calculam o mês; "sexta que vem" e "sexta da semana
 // que vem" não emitem token (o modelo decide). O `(?![- ]feira)` impede o
 // regex de recuar e aceitar só "sexta" em "sexta-feira que vem".
+//
+// 16/09 (revisão 2): o mês dito ANTES do dia era ignorado — "mês q vem dia
+// 20", "só no outro mês, dia 20", "outubro dia 20" e até "segurar até o mês
+// que vem dia 20" viravam 20/09. No detector silencioso, com acordo sem data
+// do modelo (caso WR), a promessa ia para 20/09 e o vencimento no Asaas
+// também; no marcador, a IA confirmava 20/10 e o leitor vetava. "semana que
+// vem na sexta" e "sexta, semana que vem" viravam a sexta DESTA semana. Agora:
+// "q vem" = "que vem"; mês antes do dia conta; "semana que vem" + dia da
+// semana, em qualquer ordem, não emite token. A trava continua LOCAL (colada
+// ao dia): "Vou pagar 1 na sexta feira / Ok / O restante a semana que vem"
+// (Rack 95) segue sendo 18/09.
+const QV = 'q(?:ue)?\\s+vem'
+const NEXT_MONTH = `m[êe]s\\s+${QV}|pr[óo]ximo\\s+m[êe]s|outro\\s+m[êe]s`
+const NEXT_WEEK = `semana\\s+${QV}|pr[óo]xima\\s+semana|outra\\s+semana`
+const MONTHS = 'janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro'
+const WEEKDAYS = 'domingo|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado'
+// Grupos: 1 mês antes do dia · 2 "mês que vem" antes do dia · 3 dia desses
+// dois · 4 depois de amanhã · 5 amanhã · 6 hoje · 7 dia da semana · 8/9/10
+// dd/mm/aa · 11 "dia N" · 12 mês depois do dia · 13 "mês que vem" depois do dia.
+// A alternativa "semana que vem + dia da semana" não captura nada: consome e cala.
 const DATE_TOKEN_RE = new RegExp(
   `${B}(?:` +
-    '(depois de amanh[ãa])' +
+    `(?:(${MONTHS})|(${NEXT_MONTH}))[\\s,]+(?:(?:s[óo]|n[oa]|l[áa]|pr[oa]|para\\s+o|pra)\\s+)*dia\\s+(\\d{1,2})(?![\\d/])` +
+    `|(?:${NEXT_WEEK})[\\s,]+(?:(?:n[oa]|s[óo]|l[áa])\\s+)*(?:${WEEKDAYS})(?:[- ]feira)?` +
+    '|(depois de amanh[ãa])' +
     '|(amanh[ãa])' +
     '|(hoje)' +
-    '|(domingo|segunda|ter[çc]a|quarta|quinta|sexta|s[áa]bado)(?:[- ]feira)?(?![- ]feira)' +
-    '(?!\\s*(?:parcela|via|vez|etapa|(?:d[ao]\\s+|n[ao]\\s+)?(?:semana\\s+que\\s+vem|pr[óo]xima\\s+semana|outra\\s+semana)|que\\s+vem))' +
+    `|(${WEEKDAYS})(?:[- ]feira)?(?![- ]feira)` +
+    // Vírgula só antes de "semana que vem": "pago segunda, via pix" é segunda-feira.
+    `(?!\\s*(?:parcela|via|vez|etapa)|[\\s,]*(?:(?:d[ao]\\s+|n[ao]\\s+)?(?:${NEXT_WEEK})|${QV}))` +
     '|(\\d{1,2})\\/(\\d{1,2})(?:\\/(\\d{2}|\\d{4}))?' +
     '|dia (\\d{1,2})(?![\\d/])' +
-    '(?:\\s+(?:d[eo]\\s+)?(?:(janeiro|fevereiro|mar[çc]o|abril|maio|junho|julho|agosto|setembro|outubro|novembro|dezembro)|(m[êe]s\\s+que\\s+vem|pr[óo]ximo\\s+m[êe]s)))?' +
+    `(?:\\s+(?:d[eo]\\s+|n[oa]\\s+)?(?:(${MONTHS})|(${NEXT_MONTH})))?` +
     `)${E}`,
   'giu',
 )
@@ -369,69 +440,94 @@ function dayOfNextMonth(today: Date, day: number): Date | null {
  * Datas citadas pelo cliente, em ordem, sem repetir ("YYYY-MM-DD"):
  * hoje · amanhã · depois de amanhã · dia da semana com ou sem "-feira"
  * (próxima ocorrência; se é hoje, +7) · dd/mm[/aa] (de hoje em diante) ·
- * "dia N de <mês>" · "dia N do mês que vem" · "dia N" (mês que vem se N já
- * passou). "Semana que vem" e "sexta que vem" não são data.
+ * "dia N de <mês>" · "<mês> dia N" · "dia N do mês que vem" · "mês que vem
+ * dia N" · "dia N" (mês que vem se N já passou). "Semana que vem" com dia da
+ * semana e "sexta que vem" não são data.
  * Leitor de reserva e de conferência: a WR disse "segurar até sexta" e o
  * modelo devolveu acordo SEM data — sem isso não havia de onde tirar 18/09.
  */
 export function parsePtDates(text: string, todayKey: string): string[] {
+  return parsePtDateTokens(text, todayKey).dates
+}
+
+/**
+ * parsePtDates + os "dia N" ditos SEM mês (`bareDays`), para a conferência
+ * com o modelo: numa conversa em dois turnos (a IA pergunta "qual dia do mês
+ * que vem?" e o cliente diz só "dia 20"), o leitor só vê "dia 20" e lê 20/09;
+ * quem sabe que é outubro é o modelo, que leu a conversa.
+ */
+export function parsePtDateTokens(text: string, todayKey: string): { dates: string[]; bareDays: number[] } {
   const today = utcFromKey(todayKey)
-  if (!today || !text) return []
-  const out: string[] = []
+  const dates: string[] = []
+  const bareDays: number[] = []
+  if (!today || !text) return { dates, bareDays }
   const push = (d: Date | null) => {
     if (!d) return
     const k = keyOf(d)
-    if (!out.includes(k)) out.push(k)
+    if (!dates.includes(k)) dates.push(k)
   }
+  const monthOf = (name: string) => MONTH_INDEX[stripAccents(name.toLowerCase())]
 
   for (const m of text.matchAll(DATE_TOKEN_RE)) {
-    if (m[1]) push(addDays(today, 2))
-    else if (m[2]) push(addDays(today, 1))
-    else if (m[3]) push(today)
-    else if (m[4]) {
-      const wd = WEEKDAY_INDEX[stripAccents(m[4].toLowerCase())]
+    if (m[3]) {
+      // "outubro, dia 20" / "mês que vem dia 20": o mês veio antes do dia.
+      const n = Number(m[3])
+      if (n < 1 || n > 31) continue
+      if (m[1]) {
+        const month = monthOf(m[1])
+        if (month) push(dayMonthFrom(today, month, n))
+      } else {
+        push(dayOfNextMonth(today, n))
+      }
+    } else if (m[4]) push(addDays(today, 2))
+    else if (m[5]) push(addDays(today, 1))
+    else if (m[6]) push(today)
+    else if (m[7]) {
+      const wd = WEEKDAY_INDEX[stripAccents(m[7].toLowerCase())]
       if (wd === undefined) continue
       const diff = (wd - today.getUTCDay() + 7) % 7 || 7
       push(addDays(today, diff))
-    } else if (m[5] && m[6]) {
-      const day = Number(m[5])
-      const month = Number(m[6])
-      if (m[7]) {
-        const y = m[7].length === 2 ? 2000 + Number(m[7]) : Number(m[7])
+    } else if (m[8] && m[9]) {
+      const day = Number(m[8])
+      const month = Number(m[9])
+      if (m[10]) {
+        const y = m[10].length === 2 ? 2000 + Number(m[10]) : Number(m[10])
         const d = validUtc(y, month, day)
         if (d && d >= today) push(d)
         continue
       }
       push(dayMonthFrom(today, month, day))
-    } else if (m[8]) {
-      const n = Number(m[8])
+    } else if (m[11]) {
+      const n = Number(m[11])
       if (n < 1 || n > 31) continue
-      if (m[9]) {
+      if (m[12]) {
         // "dia 25 de outubro": o mês dito manda.
-        const month = MONTH_INDEX[stripAccents(m[9].toLowerCase())]
+        const month = monthOf(m[12])
         if (month) push(dayMonthFrom(today, month, n))
-      } else if (m[10]) {
+      } else if (m[13]) {
         // "dia 20 do mês que vem" / "do próximo mês": sempre o mês seguinte.
         push(dayOfNextMonth(today, n))
-      } else if (n >= today.getUTCDate()) {
-        push(validUtc(today.getUTCFullYear(), today.getUTCMonth() + 1, n))
       } else {
-        push(dayOfNextMonth(today, n))
+        if (!bareDays.includes(n)) bareDays.push(n)
+        if (n >= today.getUTCDate()) push(validUtc(today.getUTCFullYear(), today.getUTCMonth() + 1, n))
+        else push(dayOfNextMonth(today, n))
       }
     }
+    // Sem grupo: "semana que vem na sexta" — consumido sem data (o modelo decide).
   }
-  return out
+  return { dates, bareDays }
 }
 
 /**
  * A data que vale: a do modelo quando o leitor a encontra no texto (ou quando
- * o texto não traz data que o leitor entenda); a do leitor quando o modelo não
- * deu nenhuma e só há UMA no texto ("não tenho hoje, pago sexta" sem data do
- * modelo é ambíguo → nenhuma). Os dois divergem → nenhuma. Passado ou depois
- * de hoje+45 dias → nenhuma.
+ * o texto não traz data que o leitor entenda, ou quando o cliente disse só
+ * "dia N" e o modelo deu o mesmo dia N em outro mês); a do leitor quando o
+ * modelo não deu nenhuma e só há UMA no texto ("não tenho hoje, pago sexta"
+ * sem data do modelo é ambíguo → nenhuma). Os dois divergem → nenhuma. Passado
+ * ou depois de hoje+45 dias → nenhuma.
  */
-export function resolveDate(model: string | null, parsed: string[], todayKey: string): string | null {
-  const d = agreedDate(model, parsed)
+export function resolveDate(model: string | null, parsed: string[], todayKey: string, bareDays: number[] = []): string | null {
+  const d = agreedDate(model, parsed, bareDays)
   if (!d) return null
   if (d < todayKey) return null
   if (isTooFar(d, todayKey)) return null
@@ -439,11 +535,14 @@ export function resolveDate(model: string | null, parsed: string[], todayKey: st
 }
 
 /** A data em que modelo e leitor concordam, sem olhar se já passou ou se é longe. */
-function agreedDate(model: string | null, parsed: string[]): string | null {
+function agreedDate(model: string | null, parsed: string[], bareDays: number[] = []): string | null {
   const m = model && /^\d{4}-\d{2}-\d{2}$/.test(model) ? model : null
   if (m && parsed.includes(m)) return m
   if (!parsed.length) return m
   if (!m) return parsed.length === 1 ? parsed[0] : null
+  // "dia 20" sem mês e o modelo deu dia 20 de outro mês: o mês veio da
+  // conversa ("qual dia do mês que vem?"), que o leitor não vê.
+  if (bareDays.includes(Number(m.slice(8, 10)))) return m
   return null
 }
 
@@ -536,14 +635,16 @@ export function decideCollectionReply(input: ReplyDecisionInput): ReplyDecision 
   if (input.aboutDebt === false) return skip('modelo: outro assunto')
 
   const direct = relevance === 'direct'
-  const nearCollection = direct || relevance === 'recent_collection'
+  // Quem responde a uma pergunta nossa sobre a dívida nunca fica pior do que
+  // quem só recebeu um link (revisão 16/09).
+  const nearCollection = direct || relevance === 'recent_collection' || relevance === 'asked_debt'
   // Responde a uma pergunta NOSSA sobre a dívida: a cobrança com link na
   // conversa, ou o Leonardo perguntando "Consegue fazer a parcela de hoje?"
   // sem link — aí "consigo sexta" basta, sem palavra de pagamento.
   const answersUs = direct || relevance === 'asked_debt'
-  const parsed = parsePtDates(typed, input.todayKey)
-  const date = resolveDate(input.date, parsed, input.todayKey)
-  const agreed = agreedDate(input.date, parsed)
+  const { dates: parsed, bareDays } = parsePtDateTokens(typed, input.todayKey)
+  const date = resolveDate(input.date, parsed, input.todayKey, bareDays)
+  const agreed = agreedDate(input.date, parsed, bareDays)
   const tooFar = !!agreed && isTooFar(agreed, input.todayKey)
   const apply = (kind: CollectionReplyKind, extra: { date?: string | null; pause?: boolean; moveDueDate?: boolean } = {}): ReplyDecision => ({
     action: 'apply',
@@ -633,6 +734,8 @@ export interface TouchState {
    * mais longa e o motivo dela.
    */
   receiptAt?: string | null
+  /** Até quando a régua ficou parada DEPOIS daquele comprovante (mesmo KV). */
+  receiptUntil?: string | null
 }
 
 /**
@@ -661,8 +764,19 @@ export function alreadyApplied(touch: TouchState | null | undefined, kind: Colle
       // Rack 95 (revisão): promessa até 20/09 + comprovante lido 2x em 9 s → o
       // motivo continuava o da promessa e a 2ª leitura repetia nota e aviso a
       // todos. O registro do comprovante aplicado vale mesmo sem o motivo.
+      //
+      // Revisão 2 (16/09): só enquanto aquele adiamento AINDA vale. Comprovante
+      // errado às 09:00 (A.M Carretos: Pix para outra pessoa), João confere,
+      // não acha e clica "Cobrar agora" (zera o adiamento, o KV fica); às 14:00
+      // chega o comprovante verdadeiro e era descartado sem nota nem aviso — a
+      // régua voltava a cobrar quem tinha acabado de pagar. Adiamento novo mais
+      // curto que o do comprovante (promessa gravada depois do "Cobrar agora")
+      // também não é dele.
       const receipt = toMs(touch.receiptAt)
-      if (Number.isFinite(receipt) && now.getTime() - receipt < RECEIPT_DEDUP_MS) return true
+      if (sleeping && Number.isFinite(receipt) && now.getTime() - receipt < RECEIPT_DEDUP_MS) {
+        const heldUntil = toMs(touch.receiptUntil)
+        if (!Number.isFinite(heldUntil) || until >= heldUntil - 60_000) return true
+      }
       const updated = toMs(touch.updatedAt)
       return sleeping && touch.snoozeReason === RECEIPT_SNOOZE_REASON && Number.isFinite(updated) && now.getTime() - updated < RECEIPT_DEDUP_MS
     }
@@ -761,11 +875,13 @@ export function buildClassifierInput(args: {
   let budget = 1500
   for (const b of args.bubbles) {
     if (budget <= 0) break
-    const t = (b.transcription ?? '').trim()
-    const c = (b.contentText ?? '').trim()
-    let body = ''
-    if (t) body = inTag(t, budget)
-    else if (c && !PLACEHOLDER_RE.test(c)) body = isReceiptMedia(b.contentType) ? `[imagem: ${inTag(c, budget)}]` : inTag(c, budget)
+    // Mesma separação do pickBurst: a descrição da mídia vem marcada como
+    // imagem/documento; a legenda, como fala do cliente.
+    const { typed, media } = bubbleParts(b)
+    const parts: string[] = []
+    if (media) parts.push(`[${mediaLabel(b.contentType)}: ${inTag(media, budget)}]`)
+    if (typed) parts.push(inTag(typed, budget))
+    const body = parts.join(' ')
     if (!body) continue
     budget -= body.length
     const at = toMs(b.createdAt)

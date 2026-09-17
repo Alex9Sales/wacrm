@@ -21,7 +21,7 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 
 import { changeChargeDueDateCore } from './due-date'
 import { pauseByAi } from './pause'
-import { loadOpenChargesWithSiblings, markReceiptApplied } from './reply-context'
+import { claimPauseOutcome, loadOpenChargesWithSiblings, markReceiptApplied } from './reply-context'
 import { ACORDO_PAUSE_REASON, CONTESTA_PAUSE_REASON, RECEIPT_SNOOZE_REASON, promiseSnoozeReason } from './reply-guard'
 import { normalizeSettings } from './rules'
 
@@ -151,10 +151,13 @@ export async function applyCollectionReply(input: CollectionReplyInput, opts: Co
           },
         })
         .returning({ snoozeUntil: collectionsTouches.snoozeUntil })
+      const keptUntil = kept[0]?.snoozeUntil ? new Date(kept[0].snoozeUntil) : null
+      const finalUntil = keptUntil && !Number.isNaN(keptUntil.getTime()) ? keptUntil : until
       // O motivo pode ter ficado o da promessa (GREATEST acima): a trava de
       // comprovante repetido lê este registro, não o motivo (Rack 95, revisão).
-      await markReceiptApplied(input.accountId, input.contactId, nowIso)
-      const finalUntil = kept[0]?.snoozeUntil ? new Date(kept[0].snoozeUntil) : until
+      // Grava também até quando a régua parou: depois de um "Cobrar agora" o
+      // registro não vale mais (revisão 2).
+      await markReceiptApplied(input.accountId, input.contactId, nowIso, finalUntil.toISOString())
       const longer = finalUntil.getTime() > until.getTime() + 60_000
       await alertTeam(input, 'Comprovante recebido', 'O cliente mandou comprovante. Confira no Asaas e dê a baixa por lá — a IA não dá baixa em pagamento.')
       return {
@@ -173,6 +176,9 @@ export async function applyCollectionReply(input: CollectionReplyInput, opts: Co
       // A IA pausa com origem 'ai' (sai sozinha quando ele quita) e nunca
       // passa por cima de pausa da equipe — ver pause-rules.ts.
       const r = await pauseByAi(input.accountId, input.contactId, CONTESTA_PAUSE_REASON, nowIso)
+      // Pausa que não aconteceu (equipe já pausou / retomada recente): avisa
+      // uma vez; a mesma rajada relida não repete nota nem aviso (revisão 2).
+      if (r !== 'paused' && !(await claimPauseOutcome(input.accountId, input.contactId, 'contesta', r))) return { applied: false, note: '' }
       await alertTeam(input, 'Cliente contesta a cobrança', 'Ele diz que não deve, cancelou ou não reconhece a cobrança.')
       return {
         applied: true,
@@ -191,6 +197,7 @@ export async function applyCollectionReply(input: CollectionReplyInput, opts: Co
         return { applied: true, note: '🧾 Cliente pediu acordo ou parcelamento. A régua NÃO parou — o time foi avisado para conferir.' }
       }
       const r = await pauseByAi(input.accountId, input.contactId, ACORDO_PAUSE_REASON, nowIso)
+      if (r !== 'paused' && !(await claimPauseOutcome(input.accountId, input.contactId, 'acordo', r))) return { applied: false, note: '' }
       await alertTeam(input, 'Cliente pediu acordo', 'Ele pediu desconto, parcelamento ou para pagar só uma parte. A IA não negocia: a régua parou e a conversa é sua.')
       return {
         applied: true,

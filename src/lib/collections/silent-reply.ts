@@ -95,10 +95,29 @@ async function classifierConfig(accountId: string, channelId: string | null, giv
   }
 }
 
-function todayLine(tz: string): string {
-  const now = new Date()
-  const dia = now.toLocaleDateString('pt-BR', { timeZone: tz, weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })
+function todayLine(tz: string, now = new Date()): string {
+  let dia: string
+  try {
+    dia = now.toLocaleDateString('pt-BR', { timeZone: tz, weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })
+  } catch {
+    dia = now.toLocaleDateString('pt-BR', { timeZone: 'America/Sao_Paulo', weekday: 'long', day: '2-digit', month: '2-digit', year: 'numeric' })
+  }
   return `Hoje é ${dia} (fuso ${tz}).`
+}
+
+/**
+ * O "hoje" da leitura: o dia do balão MAIS VELHO da rajada, no fuso da conta.
+ *
+ * 16/09 (revisão 2): a rajada é relida a cada balão novo e junta até 3 h.
+ * "vou pagar amanhã" às 23:40 virava promessa de 17/09; o "sem falta" às 00:20
+ * relia a mesma rajada com hoje = 17/09 e o leitor achava 18/09 — nota
+ * contraditória ("sem data") ou adiamento um dia depois do prometido, com nota
+ * e aviso repetidos. Leitor e modelo usam a mesma âncora.
+ */
+export function burstAnchor(bubbles: { createdAt: string | null }[], fallback: Date): Date {
+  const first = bubbles[0]?.createdAt
+  const d = first ? new Date(first) : null
+  return d && !Number.isNaN(d.getTime()) ? d : fallback
 }
 
 /**
@@ -194,6 +213,7 @@ export async function detectCollectionReplySilently(args: {
     }
 
     const debt = await openDebtForPrompt(args.accountId, args.contactId)
+    const anchor = burstAnchor(burst.bubbles, burst.newestAt)
     const lastCollection = ctx.sameConvCollectAt
       ? { at: ctx.sameConvCollectAt, sameConversation: true }
       : ctx.anyCollectAt
@@ -201,7 +221,7 @@ export async function detectCollectionReplySilently(args: {
         : null
     const r = await generateReply({
       config,
-      systemPrompt: silentClassifierSystemPrompt(todayLine(args.timezone)),
+      systemPrompt: silentClassifierSystemPrompt(todayLine(args.timezone, anchor)),
       messages: [
         {
           role: 'user',
@@ -225,7 +245,7 @@ export async function detectCollectionReplySilently(args: {
       media: burst.media,
       openCharges: ctx.openCharges,
       otherPixLast24h: ctx.otherPixLast24h,
-      todayKey: dayKeyIn(args.timezone),
+      todayKey: dayKeyIn(args.timezone, anchor),
     })
 
     if (decision.action === 'skip') {

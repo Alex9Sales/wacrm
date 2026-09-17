@@ -21,6 +21,7 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 import {
   alreadyApplied,
   collectionReplyRelevance,
+  countOurTurns,
   dayKeyIn,
   decideCollectionReply,
   noteSignature,
@@ -124,21 +125,47 @@ const toDate = (v: string | null | undefined): Date | null => {
   return Number.isNaN(d.getTime()) ? null : d
 }
 
-/** Quantas mensagens nossas lemos para trás: basta passar do limite do "direct". */
+/** Quantas mensagens nossas lemos para trás (pergunta sobre a dívida, Pix de terceiro, 72 h, classificador). */
 const OURS_LIMIT = Math.max(12, DIRECT_MAX_OUTBOUND + 2)
 
 // ---------------------------------------------------------------- travas no KV (fail-open)
 
 const receiptKey = (accountId: string, contactId: string) => `collections:receipt:${accountId}:${contactId}`
 
-/** Registra que um comprovante acabou de ser aplicado neste contato (12 h). */
-export async function markReceiptApplied(accountId: string, contactId: string, atIso: string): Promise<void> {
-  await kvSetJson(receiptKey(accountId, contactId), { at: atIso }, Math.round(RECEIPT_DEDUP_MS / 1000)).catch(() => {})
+/**
+ * Registra que um comprovante acabou de ser aplicado neste contato (12 h) e
+ * até quando a régua ficou parada por causa dele — a trava de repetido só vale
+ * enquanto esse adiamento continua (revisão 2, "Cobrar agora" no meio).
+ */
+export async function markReceiptApplied(accountId: string, contactId: string, atIso: string, untilIso: string | null = null): Promise<void> {
+  await kvSetJson(receiptKey(accountId, contactId), { at: atIso, until: untilIso }, Math.round(RECEIPT_DEDUP_MS / 1000)).catch(() => {})
 }
 
-async function lastReceiptAt(accountId: string, contactId: string): Promise<string | null> {
-  const v = await kvGetJson<{ at?: unknown }>(receiptKey(accountId, contactId)).catch(() => null)
-  return typeof v?.at === 'string' ? v.at : null
+async function lastReceipt(accountId: string, contactId: string): Promise<{ at: string | null; until: string | null }> {
+  const v = await kvGetJson<{ at?: unknown; until?: unknown }>(receiptKey(accountId, contactId)).catch(() => null)
+  return {
+    at: typeof v?.at === 'string' ? v.at : null,
+    until: typeof v?.until === 'string' ? v.until : null,
+  }
+}
+
+/**
+ * Reserva o aviso de uma pausa que NÃO aconteceu (equipe já tinha pausado, ou
+ * uma pessoa retomou há pouco): false = o mesmo resultado já foi avisado para
+ * este contato nas últimas 12 h.
+ *
+ * 16/09 (revisão 2): alreadyApplied só reconhece pausa da IA. Com a régua
+ * pausada pela equipe (ou retomada há menos de 7 dias), cada balão da rajada
+ * ("consigo parcelar em 3x?" e, 10 s depois, "sem juros?") chamava pauseByAi
+ * de novo — nada mudava, mas saíam nota nova e aviso para a conta inteira a
+ * cada leitura. O primeiro aviso continua saindo. Redis fora → true.
+ */
+export async function claimPauseOutcome(accountId: string, contactId: string, kind: CollectionReplyKind, outcome: string): Promise<boolean> {
+  const key = `collections:pause-outcome:${accountId}:${contactId}:${kind}`
+  const prev = await kvGetJson<{ outcome?: unknown }>(key).catch(() => null)
+  if (prev?.outcome === outcome) return false
+  await kvSetJson(key, { outcome }, Math.round(NOTE_DEDUP_MS / 1000)).catch(() => {})
+  return true
 }
 
 /**
@@ -188,10 +215,10 @@ export async function loadReplyGuardContext(args: {
 }): Promise<ReplyGuardData> {
   const newestIso = args.newestAt.toISOString()
   const sinceIso = new Date(args.newestAt.getTime() - DIRECT_WINDOW_MS).toISOString()
-  const [charges, templateName, receiptAt] = await Promise.all([
+  const [charges, templateName, receipt] = await Promise.all([
     loadOpenChargesWithSiblings(args.accountId, args.contactId),
     collectionTemplateName(args.accountId),
-    lastReceiptAt(args.accountId, args.contactId),
+    lastReceipt(args.accountId, args.contactId),
   ])
   const urls = [...new Set(charges.map((c) => c.invoiceUrl).filter((u): u is string => !!u))].slice(0, 20)
 
@@ -255,10 +282,10 @@ export async function loadReplyGuardContext(args: {
     if (at) ourRecent.push({ at, text: r.text ?? '' })
   }
   const t = args.newestAt.getTime()
-  // Contagens a partir das últimas OURS_LIMIT mensagens: só importa "até 5" e
-  // "nenhuma em 72 h", e o teto passa dos dois.
-  const outboundSinceCollect = sameConvCollectAt ? ourRecent.filter((m) => m.at.getTime() > sameConvCollectAt.getTime()).length : 0
+  // Contagem a partir das últimas OURS_LIMIT mensagens: só importa "nenhuma em
+  // 72 h", e o teto passa disso.
   const outboundLast72h = ourRecent.filter((m) => t - m.at.getTime() <= SPONTANEOUS_QUIET_MS).length
+  const outboundSinceCollect = sameConvCollectAt ? await ourTurnsSince(args.conversationId, sameConvCollectAt, newestIso) : 0
 
   return {
     newestAt: args.newestAt,
@@ -271,8 +298,40 @@ export async function loadReplyGuardContext(args: {
     ourRecent,
     openCharges: charges.map((c) => ({ value: c.value, interestValue: c.interestValue })),
     otherPixLast24h: otherPixWithin(ourRecent, args.newestAt),
-    touch: touch ? { ...touch, receiptAt } : null,
+    touch: touch ? { ...touch, receiptAt: receipt.at, receiptUntil: receipt.until } : null,
   }
+}
+
+/** Linhas lidas para contar turnos; passou disso, a conversa andou demais para ser "direct". */
+const TURN_ROWS_LIMIT = 80
+
+/**
+ * Respostas nossas nesta conversa depois da cobrança e antes da rajada, em
+ * TURNOS (countOurTurns). Lê também as falas do cliente — são elas que separam
+ * uma resposta da IA (até 4 balões) da seguinte.
+ */
+async function ourTurnsSince(conversationId: string, collectAt: Date, newestIso: string): Promise<number> {
+  const rows = await db
+    .select({ senderType: messages.senderType, at: messages.createdAt })
+    .from(messages)
+    .where(
+      and(
+        eq(messages.conversationId, conversationId),
+        eq(messages.isInternal, false),
+        or(eq(messages.senderType, 'customer'), and(inArray(messages.senderType, ['agent', 'bot']), ne(messages.status, 'failed'))),
+        gte(messages.createdAt, collectAt.toISOString()),
+        lt(messages.createdAt, newestIso),
+      ),
+    )
+    .orderBy(desc(messages.createdAt))
+    .limit(TURN_ROWS_LIMIT)
+  // Mesma régua de antes: a própria mensagem da cobrança (mesmo milissegundo) não conta.
+  const after = rows.filter((r) => {
+    const at = toDate(r.at)
+    return !!at && at.getTime() > collectAt.getTime()
+  })
+  const turns = countOurTurns(after)
+  return rows.length >= TURN_ROWS_LIMIT ? Math.max(turns, DIRECT_MAX_OUTBOUND + 1) : turns
 }
 
 export interface CollectionMarkerCheck {

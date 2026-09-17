@@ -1,6 +1,7 @@
 import { describe, expect, it } from 'vitest'
 
-import { customerTextOf, parseClassification, silentClassifierSystemPrompt } from './silent-reply'
+import { dayKeyIn, parsePtDates } from './reply-guard'
+import { burstAnchor, customerTextOf, parseClassification, silentClassifierSystemPrompt } from './silent-reply'
 
 describe('detector silencioso — parse do JSON do modelo', () => {
   it('lê o JSON mesmo com texto em volta e normaliza o tipo', () => {
@@ -52,5 +53,27 @@ describe('detector silencioso — texto do cliente', () => {
   })
   it('texto normal passa', () => {
     expect(customerTextOf({ contentText: 'já paguei ontem', transcription: null, contentType: 'text' })).toBe('já paguei ontem')
+  })
+  it('revisão 2: imagem como o inbound grava — descrição em transcription vira [imagem: …], a legenda vem depois', () => {
+    expect(customerTextOf({ contentText: '[image]', transcription: 'Comprovante Pix de R$ 150,00', contentType: 'image' })).toBe('[imagem: Comprovante Pix de R$ 150,00]')
+    expect(customerTextOf({ contentText: 'segue', transcription: 'Comprovante Pix de R$ 150,00', contentType: 'image' })).toBe('[imagem: Comprovante Pix de R$ 150,00]\nsegue')
+    expect(customerTextOf({ contentText: '[document]', transcription: 'Boleto pago', contentType: 'document' })).toBe('[documento: Boleto pago]')
+    // Legenda sem descrição (visão desligada) é fala do cliente.
+    expect(customerTextOf({ contentText: 'segue comprovante', transcription: null, contentType: 'image' })).toBe('segue comprovante')
+  })
+})
+
+describe('detector silencioso — "hoje" da rajada (revisão 2)', () => {
+  it('ancora no balão mais velho: "pago amanhã" 23:40 e "sem falta" 00:20 leem o mesmo amanhã', () => {
+    const bubbles = [{ createdAt: '2026-09-16T23:40:00-03:00' }, { createdAt: '2026-09-17T00:20:00-03:00' }]
+    const anchor = burstAnchor(bubbles, new Date('2026-09-17T03:20:00.000Z'))
+    expect(dayKeyIn('America/Sao_Paulo', anchor)).toBe('2026-09-16')
+    expect(parsePtDates('vou pagar amanhã\nsem falta', dayKeyIn('America/Sao_Paulo', anchor))).toEqual(['2026-09-17'])
+  })
+  it('sem data legível no balão, usa a reserva', () => {
+    const fallback = new Date('2026-09-16T12:00:00.000Z')
+    expect(burstAnchor([], fallback)).toBe(fallback)
+    expect(burstAnchor([{ createdAt: null }], fallback)).toBe(fallback)
+    expect(burstAnchor([{ createdAt: 'lixo' }], fallback)).toBe(fallback)
   })
 })

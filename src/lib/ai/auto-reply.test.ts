@@ -27,6 +27,12 @@ const h = vi.hoisted(() => ({
   applyTransfer: vi.fn(),
   // 🔁 reagendamento pós-janela (humano digitando / barge-in) → fila mockada.
   enqueueRecheck: vi.fn(),
+  // 🧾 marcador [[COBRANCA:]] (collections/reply + reply-context).
+  openDebtForPrompt: vi.fn(),
+  applyCollectionReply: vi.fn(),
+  evaluateCollectionMarker: vi.fn(),
+  claimReplyNote: vi.fn(),
+  postInternalNote: vi.fn(),
   state: {
     // 🏁 marcador "até onde a última resposta viu" (reply-marker.ts):
     // string ISO = há marca · null = sem marca · undefined = Redis fora.
@@ -97,8 +103,20 @@ vi.mock('./close-actions', () => ({
   applyTagsByName: async () => [],
   loadDealCloseContext: async () => null,
   applyCloseActions: async () => ({ resolved: false, movedTo: null }),
-  postInternalNote: async () => true,
+  postInternalNote: h.postInternalNote,
   createDealFromAi: async () => null,
+}))
+// 🧾 Cobrança: sem estes mocks, openDebtForPrompt lia o db mockado e voltava
+// sempre null — o caminho do marcador nunca rodava nos testes (revisão 16/09).
+vi.mock('@/lib/collections/reply', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/collections/reply')>()),
+  openDebtForPrompt: h.openDebtForPrompt,
+  applyCollectionReply: h.applyCollectionReply,
+}))
+vi.mock('@/lib/collections/reply-context', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('@/lib/collections/reply-context')>()),
+  evaluateCollectionMarker: h.evaluateCollectionMarker,
+  claimReplyNote: h.claimReplyNote,
 }))
 
 vi.mock('@/db', async (importOriginal) => {
@@ -213,6 +231,15 @@ beforeEach(() => {
   h.bumpCounter.mockResolvedValue(1)
   h.applyTransfer.mockReset()
   h.applyTransfer.mockResolvedValue({ assignedUserId: 'user-2', tag: 'Responsável' })
+  h.openDebtForPrompt.mockReset()
+  h.openDebtForPrompt.mockResolvedValue(null)
+  h.applyCollectionReply.mockReset()
+  h.applyCollectionReply.mockResolvedValue({ applied: false, note: '' })
+  h.evaluateCollectionMarker.mockReset()
+  h.claimReplyNote.mockReset()
+  h.claimReplyNote.mockResolvedValue(true)
+  h.postInternalNote.mockReset()
+  h.postInternalNote.mockResolvedValue(true)
   h.state.claim = true
   h.state.updatePayload = null
   h.state.sqlCalls = []
@@ -542,6 +569,81 @@ describe('dispatchInboundToAiReply — transferência por etiqueta (16/09, Gás 
     const enviados = h.engineSendText.mock.calls.map((c) => (c[0] as { text: string }).text).join('\n')
     expect(enviados).toContain('Oi! Tudo certo')
     expect(enviados).not.toContain('XPTO')
+  })
+})
+
+describe('dispatchInboundToAiReply — marcador de cobrança [[COBRANCA:]] (16/09)', () => {
+  const DIVIDA = '- R$ 325,00, venceu em 10/09/2026'
+  const enviados = () => h.engineSendText.mock.calls.map((c) => (c[0] as { text: string }).text).join('\n')
+  const decisao = (decision: Record<string, unknown>) => h.evaluateCollectionMarker.mockResolvedValue({ decision, relevance: 'direct' })
+
+  it('sem dívida aberta: nem passa pela trava, não mexe na régua e o marcador não vai pro cliente', async () => {
+    h.generateReply.mockResolvedValue({ text: 'Vou passar pra quem decide 😊 [[COBRANCA:acordo]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.evaluateCollectionMarker).not.toHaveBeenCalled()
+    expect(h.applyCollectionReply).not.toHaveBeenCalled()
+    expect(enviados()).toContain('Vou passar pra quem decide')
+    expect(enviados()).not.toContain('COBRANCA')
+  })
+
+  it('trava falhou: a resposta sai e o marcador é ignorado (nada na régua)', async () => {
+    h.openDebtForPrompt.mockResolvedValue(DIVIDA)
+    h.evaluateCollectionMarker.mockRejectedValue(new Error('banco fora'))
+    h.generateReply.mockResolvedValue({ text: 'Combinado, sexta! [[COBRANCA:promessa|2026-09-18]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(enviados()).toContain('Combinado, sexta!')
+    expect(enviados()).not.toContain('COBRANCA')
+    expect(h.applyCollectionReply).not.toHaveBeenCalled()
+    expect(h.postInternalNote).not.toHaveBeenCalled()
+  })
+
+  it('a trava decide ANTES do envio (depois dele a rajada do cliente some da leitura)', async () => {
+    h.openDebtForPrompt.mockResolvedValue(DIVIDA)
+    decisao({ action: 'skip', reason: 'modelo: nenhum' })
+    h.generateReply.mockResolvedValue({ text: 'Combinado, sexta! [[COBRANCA:promessa|2026-09-18]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.evaluateCollectionMarker).toHaveBeenCalledWith(expect.objectContaining({ conversationId: 'conv-1', contactId: 'contact-1', kind: 'promessa', date: '2026-09-18' }))
+    expect(h.evaluateCollectionMarker.mock.invocationCallOrder[0]).toBeLessThan(h.engineSendText.mock.invocationCallOrder[0])
+  })
+
+  it('skip: sem nota e sem régua', async () => {
+    h.openDebtForPrompt.mockResolvedValue(DIVIDA)
+    decisao({ action: 'skip', reason: 'fora de contexto de cobrança' })
+    h.generateReply.mockResolvedValue({ text: 'Entendi! [[COBRANCA:comprovante]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.engineSendText).toHaveBeenCalled()
+    expect(h.applyCollectionReply).not.toHaveBeenCalled()
+    expect(h.postInternalNote).not.toHaveBeenCalled()
+  })
+
+  it('note: uma nota só (a trava de nota repetida manda), régua intacta', async () => {
+    h.openDebtForPrompt.mockResolvedValue(DIVIDA)
+    const text = '🧾 O cliente falou em pagar, mas sem data que desse para calcular.'
+    decisao({ action: 'note', kind: 'promessa', text, relevance: 'direct' })
+    h.generateReply.mockResolvedValue({ text: 'Tudo bem! [[COBRANCA:promessa]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.applyCollectionReply).not.toHaveBeenCalled()
+    expect(h.postInternalNote).toHaveBeenCalledTimes(1)
+    expect(h.postInternalNote).toHaveBeenCalledWith({ conversationId: 'conv-1', text })
+
+    h.postInternalNote.mockClear()
+    h.claimReplyNote.mockResolvedValue(false)
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.postInternalNote).not.toHaveBeenCalled()
+  })
+
+  it('apply: aplica com as opções que a trava decidiu e registra a nota do resultado', async () => {
+    h.openDebtForPrompt.mockResolvedValue(DIVIDA)
+    decisao({ action: 'apply', kind: 'promessa', date: '2026-09-18', pause: false, moveDueDate: true, relevance: 'direct' })
+    h.applyCollectionReply.mockResolvedValue({ applied: true, note: '🧾 Cliente prometeu pagar em 18/09/2026.' })
+    h.generateReply.mockResolvedValue({ text: 'Combinado, sexta! [[COBRANCA:promessa|2026-09-18]]', handoff: false })
+    await dispatchInboundToAiReply(ARGS)
+    expect(h.applyCollectionReply).toHaveBeenCalledWith(
+      expect.objectContaining({ accountId: 'acct-1', contactId: 'contact-1', conversationId: 'conv-1', kind: 'promessa', date: '2026-09-18' }),
+      expect.objectContaining({ moveDueDate: true, pause: false, maxPromiseDays: 45, countSiblings: true }),
+    )
+    expect(h.postInternalNote).toHaveBeenCalledWith({ conversationId: 'conv-1', text: '🧾 Cliente prometeu pagar em 18/09/2026.' })
+    expect(enviados()).not.toContain('COBRANCA')
   })
 })
 
