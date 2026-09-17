@@ -8,7 +8,10 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 //   • o aviso depois de ligar sabe se o lembrete vai sair;
 //   • o nome do Asaas vai para o vínculo;
 //   • a lista "Ligados nos últimos dias" chega à tela (e a falha dela também);
-//   • o Desfazer do "Criar contato" só apaga o contato de quem criou.
+//   • o Desfazer do "Criar contato" só apaga o contato de quem criou;
+//   • revisão 16/09: o aviso olha o freio da régua, "Criar" confere pela chave
+//     que cria, ligar não leva cobrança do CRM e o Desligar recusa quem já
+//     está na carteira.
 
 type Rec = { op: string; table?: unknown; values?: unknown; set?: unknown; returning?: boolean }
 
@@ -103,10 +106,17 @@ vi.mock('@/lib/whatsapp/number-exists', () => ({}))
 vi.mock('@/lib/whatsapp/send-message', () => ({}))
 vi.mock('@/lib/whatsapp/encryption', () => ({ decrypt: vi.fn(), encrypt: vi.fn() }))
 
-import { asaasCustomerLinks, contacts } from '@/db'
+import { asaasCharges, asaasCustomerLinks, contacts } from '@/db'
 import { CREATE_AMBIGUOUS_ERROR, linkOutcomeTexts } from '@/lib/collections/upcoming-unmatched'
 
-import { createContactForDebtor, createContactForUpcoming, getUpcomingUnmatched, linkUpcomingCustomer, unlinkUpcomingCustomer } from './actions'
+import {
+  createContactForDebtor,
+  createContactForUpcoming,
+  getUpcomingUnmatched,
+  linkUpcomingCustomer,
+  unlinkRecentUpcomingCustomer,
+  unlinkUpcomingCustomer,
+} from './actions'
 
 const CONN = '11111111-1111-4111-8111-111111111111'
 const CONTACT = '22222222-2222-4222-8222-222222222222'
@@ -123,6 +133,7 @@ beforeEach(() => {
   h.findOrCreateContact.mockReset()
   h.resolveCollectionTargets.mockReset()
   h.getAccountSettings.mockReset()
+  h.getAccountSettings.mockResolvedValue({ businessTimezone: 'America/Sao_Paulo', collections: { enabled: true, reminderDaysBefore: 3 } })
   vi.spyOn(console, 'error').mockImplementation(() => {})
   vi.spyOn(console, 'warn').mockImplementation(() => {})
 })
@@ -137,8 +148,8 @@ describe('carteira: "Criar contato e ligar" com devedor ambíguo', () => {
     const res = await createContactForDebtor('cus_Y')
 
     expect(res).toEqual({ ok: false, error: CREATE_AMBIGUOUS_ERROR })
-    // O casamento é o da sincronização SEM vínculo (4 argumentos).
-    expect(h.findContact).toHaveBeenCalledWith('acc-1', '5511999990000', 'fin@lojay.com', '12.345.678/0001-90')
+    // O casamento é o da sincronização SEM vínculo, pela chave que a criação usa: o telefone.
+    expect(h.findContact).toHaveBeenCalledWith('acc-1', '5511999990000', null, null)
     expect(h.findOrCreateContact).not.toHaveBeenCalled()
     expect(h.state.tx).toBe(0)
     expect(writes('insert', asaasCustomerLinks)).toHaveLength(0)
@@ -170,6 +181,31 @@ describe('carteira: "Criar contato e ligar" com devedor ambíguo', () => {
     expect(res.ok).toBe(false)
     expect(res.error).toMatch(/Tente de novo/)
     expect(h.findOrCreateContact).not.toHaveBeenCalled()
+  })
+
+  it('revisão 16/09 (a): celular que ninguém tem + e-mail do financeiro em 2 contatos: confere só o telefone e cria', async () => {
+    h.state.results.push([{ name: 'Loja Y', phone: '(11) 99999-0000', email: 'financeiro@lojay.com', cpfCnpj: '12.345.678/0001-90' }])
+    // Pelo telefone ninguém — o empate do e-mail/CNPJ não entra, a criação não procura por eles.
+    h.findContact.mockImplementation(async (_acc: string, phone: string | null, email: string | null) => (phone && !email ? NOBODY : AMBIGUOUS))
+    h.findOrCreateContact.mockResolvedValue({ id: NEW_CONTACT, created: true })
+    h.state.results.push([{ id: 'ch-1', connectionId: CONN, asaasCustomerId: 'cus_Y', customerName: 'Loja Y' }])
+
+    const res = await createContactForDebtor('cus_Y')
+
+    expect(h.findContact).toHaveBeenCalledWith('acc-1', '5511999990000', null, null)
+    expect(res).toEqual({ ok: true, data: { contactId: NEW_CONTACT, created: true, linked: 1 } })
+  })
+
+  it('revisão 16/09 (b): telefone que não serve para criar ("+1…") com e-mail em 2 contatos: confere pelo e-mail e recusa', async () => {
+    h.state.results.push([{ name: 'Loja Y', phone: '+1 415 555 0123', email: ' Fin@LojaY.com ', cpfCnpj: null }])
+    h.findContact.mockImplementation(async (_acc: string, phone: string | null) => (phone ? NOBODY : AMBIGUOUS))
+
+    const res = await createContactForDebtor('cus_Y')
+
+    expect(h.findContact).toHaveBeenCalledWith('acc-1', null, 'fin@lojay.com', null)
+    expect(res).toEqual({ ok: false, error: CREATE_AMBIGUOUS_ERROR })
+    expect(h.findOrCreateContact).not.toHaveBeenCalled()
+    expect(h.state.tx).toBe(0)
   })
 
   it('sem telefone nem e-mail: nem confere, diz o que fazer', async () => {
@@ -254,6 +290,101 @@ describe('painel: aviso depois de ligar', () => {
   })
 })
 
+describe('painel: o aviso olha o freio da régua como a fila (revisão 16/09)', () => {
+  const snap = { name: 'Center Piso', phone: '11999990000', email: null, cpfCnpj: null, reason: 'no_contact' }
+  const ficha = { name: 'Center Piso Matriz', phone: '5511999990000', optedOut: false }
+  const touch = { paused: false, pausedReason: null as string | null, touchCount: 0, lastTouchAt: null, snoozeUntil: null as string | null, snoozeReason: null as string | null }
+  // contato, conta do Asaas, retrato, vínculo atual, cobranças abertas, ficha — e a régua do contato
+  const linkWith = (st: typeof touch) => h.state.results.push([{ id: CONTACT }], [{ id: CONN }], [snap], [], [], [ficha], [st])
+
+  beforeEach(() => {
+    h.resolveCollectionTargets.mockResolvedValue({ ok: true, whatsapp: { conversationId: '', created: false }, email: null, label: 'WhatsApp' })
+  })
+
+  it('ficha em "Régua parada" (pausa humana): NÃO vai sair e diz onde retomar — nem confere canal', async () => {
+    linkWith({ ...touch, paused: true, pausedReason: 'pediu acordo' })
+
+    const res = await linkUpcomingCustomer(CONN, 'cus_cp', CONTACT)
+
+    expect(res.ok).toBe(true)
+    expect(h.resolveCollectionTargets).not.toHaveBeenCalled()
+    expect(res.data).toMatchObject({ deliveryLabel: null, deliveryError: expect.stringContaining('(pediu acordo)') })
+    const t = linkOutcomeTexts('Center Piso', true, res.data!)
+    expect(t.reminder).toBe('')
+    expect(t.warning).toMatch(/^O lembrete de Center Piso NÃO vai sair: A régua está parada neste cliente \(pediu acordo\)/)
+    expect(t.warning).toContain('Retomar cobrança')
+  })
+
+  it('promessa com data no futuro segura; promessa vencida não', async () => {
+    linkWith({ ...touch, snoozeUntil: new Date(Date.now() + 3 * 86_400_000).toISOString(), snoozeReason: 'prometeu pagar' })
+    const held = await linkUpcomingCustomer(CONN, 'cus_cp', CONTACT)
+    expect(linkOutcomeTexts('Center Piso', true, held.data!).warning).toMatch(
+      /NÃO vai sair: A régua está parada neste cliente até \d{2}\/\d{2} \(prometeu pagar\)/,
+    )
+    expect(h.resolveCollectionTargets).not.toHaveBeenCalled()
+
+    linkWith({ ...touch, snoozeUntil: new Date(Date.now() - 86_400_000).toISOString(), snoozeReason: 'prometeu pagar' })
+    const free = await linkUpcomingCustomer(CONN, 'cus_cp', CONTACT)
+    expect(free.data).toMatchObject({ deliveryLabel: 'WhatsApp', deliveryError: null })
+    expect(linkOutcomeTexts('Center Piso', true, free.data!)).toEqual({ reminder: 'O lembrete sai por WhatsApp na próxima rodada da régua.', warning: null })
+  })
+
+  it('limite de toques pelas settings da conta (maxTouches 3): NÃO vai sair', async () => {
+    h.getAccountSettings.mockResolvedValue({ businessTimezone: 'America/Sao_Paulo', collections: { enabled: true, reminderDaysBefore: 3, maxTouches: 3 } })
+    linkWith({ ...touch, touchCount: 3 })
+
+    const res = await linkUpcomingCustomer(CONN, 'cus_cp', CONTACT)
+
+    const t = linkOutcomeTexts('Center Piso', true, res.data!)
+    expect(t.reminder).toBe('')
+    expect(t.warning).toMatch(/NÃO vai sair: Chegou no limite de cobranças/)
+  })
+
+  it('não deu para ler o freio: não promete canal nem que sai', async () => {
+    h.getAccountSettings.mockRejectedValue(new Error('timeout'))
+    h.state.results.push([{ id: CONTACT }], [{ id: CONN }], [snap], [], [], [ficha])
+
+    const res = await linkUpcomingCustomer(CONN, 'cus_cp', CONTACT)
+
+    expect(res.ok).toBe(true)
+    expect(h.resolveCollectionTargets).not.toHaveBeenCalled()
+    expect(res.data).toMatchObject({ deliveryLabel: null, deliveryError: null })
+    expect(linkOutcomeTexts('Center Piso', true, res.data!).reminder).toMatch(/^Não deu para conferir/)
+  })
+})
+
+describe('painel: ligar não leva a cobrança emitida pelo CRM (revisão 16/09)', () => {
+  const SOCIO = '44444444-4444-4444-8444-444444444444'
+
+  it('a do sócio (origin ai) fica com ele; a espelhada sem contato vai para o contato escolhido', async () => {
+    h.state.results.push([{ id: CONTACT }], [{ id: CONN }], [{ name: 'Loja X', phone: null, email: null, cpfCnpj: null, reason: 'no_contact' }], [])
+    h.state.results.push([
+      { id: 'ch-crm', contactId: SOCIO, matchedBy: 'manual', origin: 'ai' },
+      { id: 'ch-sync', contactId: null, matchedBy: null, origin: 'sync' },
+    ])
+    h.state.results.push([{ name: 'Financeiro', phone: '5511999990000', optedOut: false }])
+    h.resolveCollectionTargets.mockResolvedValue({ ok: true, whatsapp: { conversationId: '', created: false }, email: null, label: 'WhatsApp' })
+
+    const res = await linkUpcomingCustomer(CONN, 'cus_X', CONTACT)
+
+    expect(res.ok).toBe(true)
+    expect(res.data?.restore).toEqual([{ id: 'ch-sync', contactId: null, matchedBy: null }])
+    expect(writes('update', asaasCharges)).toHaveLength(1)
+  })
+
+  it('só cobrança do CRM com contato: nada muda na carteira', async () => {
+    h.state.results.push([{ id: CONTACT }], [{ id: CONN }], [], [])
+    h.state.results.push([{ id: 'ch-crm', contactId: SOCIO, matchedBy: 'manual', origin: 'manual' }])
+    h.resolveCollectionTargets.mockResolvedValue({ ok: true, whatsapp: { conversationId: '', created: false }, email: null, label: 'WhatsApp' })
+
+    const res = await linkUpcomingCustomer(CONN, 'cus_X', CONTACT)
+
+    expect(res.ok).toBe(true)
+    expect(res.data?.restore).toEqual([])
+    expect(writes('update', asaasCharges)).toHaveLength(0)
+  })
+})
+
 describe('Desfazer / Desligar', () => {
   const unused = {
     recent: true,
@@ -298,6 +429,45 @@ describe('Desfazer / Desligar', () => {
     expect(res).toEqual({ ok: true, data: { contactRemoved: false } })
     expect(writes('delete', asaasCustomerLinks)).toHaveLength(1)
     expect(writes('delete', contacts)).toHaveLength(0)
+  })
+
+  it('"Desligar" da lista velha: a parcela venceu e já está na carteira — recusa e não apaga o vínculo', async () => {
+    h.state.results.push([{ id: CONN }], [{ contactId: NEW_CONTACT }], [{ id: 'ch-overdue' }]) // conta, vínculo, cobrança aberta
+
+    const res = await unlinkRecentUpcomingCustomer(CONN, 'cus_speed', NEW_CONTACT)
+
+    expect(res.ok).toBe(false)
+    expect(res.error).toMatch(/cobrança aberta na carteira/)
+    expect(writes('delete', asaasCustomerLinks)).toHaveLength(0)
+  })
+
+  it('"Desligar" da lista sem cobrança aberta: só o vínculo sai', async () => {
+    h.state.results.push([{ id: CONN }], [{ contactId: NEW_CONTACT }], [])
+
+    const res = await unlinkRecentUpcomingCustomer(CONN, 'cus_speed', NEW_CONTACT)
+
+    expect(res).toEqual({ ok: true, data: { contactRemoved: false } })
+    expect(writes('delete', asaasCustomerLinks)).toHaveLength(1)
+    expect(writes('delete', contacts)).toHaveLength(0)
+  })
+
+  it('"Desfazer" de um clique não confere cobrança aberta (a que ele não mudou já era assim)', async () => {
+    h.state.results.push([{ id: CONN }], [{ contactId: NEW_CONTACT }], [{ id: 'ch-ja-manual' }])
+
+    const res = await unlinkUpcomingCustomer(CONN, 'cus_speed', undoOf(null))
+
+    expect(res).toEqual({ ok: true, data: { contactRemoved: false } })
+    expect(writes('delete', asaasCustomerLinks)).toHaveLength(1)
+  })
+
+  it('"Desfazer" do Desligar religa com o nome do Asaas que a lista tinha (o retrato já não existe)', async () => {
+    h.state.results.push([{ id: NEW_CONTACT }], [{ id: CONN }], [], [], [], [{ name: 'Speed Matriz', phone: '5512996706499', optedOut: false }])
+    h.resolveCollectionTargets.mockResolvedValue({ ok: true, whatsapp: { conversationId: '', created: false }, email: null, label: 'WhatsApp' })
+
+    const res = await linkUpcomingCustomer(CONN, 'cus_speed', NEW_CONTACT, '  Speed Gás e Água ')
+
+    expect(res.ok).toBe(true)
+    expect(writes('insert', asaasCustomerLinks)[0].values).toEqual([expect.objectContaining({ customerName: 'Speed Gás e Água', contactId: NEW_CONTACT })])
   })
 
   it('vínculo trocado por outra pessoa depois: não desliga nada', async () => {

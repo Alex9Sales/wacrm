@@ -768,6 +768,36 @@ export function freshReminderItems<T extends { id: string; invoiceUrl: string | 
 }
 
 /**
+ * "Já lembrado" POR CONTATO: contato → parcelas (asaasIds) de lembrete ou aviso
+ * de cobrança nova nos pedidos lidos.
+ *
+ * Revisão 16/09 (A vencer sem contato): o conjunto era só por parcela, de todos
+ * os contatos. Cliente do Asaas ligado por engano ao contato B recebia o
+ * lembrete (ou ele ficava na fila e alguém recusava em "Precisa de você");
+ * desligado e ligado ao contato certo A, a parcela contava como já lembrada e A
+ * nunca recebia o aviso antes do vencimento. Pedido de OUTRO contato não segura
+ * este — o mesmo corte do `linksAlreadySent`, que já é por contato.
+ */
+export function remindedByContact(rows: readonly { contactId: string | null; payload: unknown }[]): Map<string, Set<string>> {
+  const out = new Map<string, Set<string>>()
+  for (const r of rows) {
+    if (!r.contactId) continue
+    const list = (r.payload as { asaasIds?: unknown } | null)?.asaasIds
+    if (!Array.isArray(list)) continue
+    let set = out.get(r.contactId)
+    for (const id of list) {
+      if (typeof id !== 'string' || !id) continue
+      if (!set) {
+        set = new Set<string>()
+        out.set(r.contactId, set)
+      }
+      set.add(id)
+    }
+  }
+  return out
+}
+
+/**
  * O texto contém ESTE link, e não um maior que começa igual? `…/i/123` não pode
  * casar com `…/i/1234`: o caractere logo depois do link tem que encerrar o link
  * (espaço, pontuação, fim do texto, `?`, `/`).

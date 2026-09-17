@@ -8,10 +8,13 @@ import {
   chargesChangedByLink,
   CREATE_AMBIGUOUS_ERROR,
   CREATE_CHECK_FAILED_ERROR,
+  createProbeKeys,
   createRefusal,
   customerRefKey,
   dueInText,
+  holdDeliveryError,
   linkDeliveryInfo,
+  linkMayMoveCharge,
   linkOutcomeTexts,
   MAX_CHARGE_RESTORE,
   OPTED_OUT_DELIVERY_ERROR,
@@ -19,6 +22,7 @@ import {
   recentLinkName,
   recentLinksSince,
   recentUnlinkText,
+  relinkCustomerName,
   reminderAfterLinkText,
   restoreTarget,
   sameDocumentOthers,
@@ -208,6 +212,18 @@ describe('createRefusal — "Criar contato" nunca chuta entre dois contatos (rev
   })
 })
 
+describe('createProbeKeys — confere pela mesma chave que a criação procura (revisão 16/09)', () => {
+  it('telefone que serve para criar: só o telefone (e-mail e CPF/CNPJ empatados não recusam)', () => {
+    expect(createProbeKeys('(12) 99670-6499', 'financeiro@empresa.com')).toEqual({ phone: '5512996706499', email: null })
+  })
+
+  it('telefone que não serve ("+1…", vazio): só o e-mail, normalizado', () => {
+    expect(createProbeKeys('+1 415 555 0123', ' Fin@X.com ')).toEqual({ phone: null, email: 'fin@x.com' })
+    expect(createProbeKeys(null, 'fin@x.com')).toEqual({ phone: null, email: 'fin@x.com' })
+    expect(createProbeKeys('', '  ')).toEqual({ phone: null, email: null })
+  })
+})
+
 describe('linkDeliveryInfo / linkOutcomeTexts — o aviso depois de ligar só promete o canal conferido', () => {
   const base: LinkDeliveryInfo = { contactName: 'LM Vidros', contactHasPhone: true, phoneDiffers: false, deliveryLabel: 'WhatsApp', deliveryError: null }
 
@@ -275,6 +291,53 @@ describe('linkDeliveryInfo / linkOutcomeTexts — o aviso depois de ligar só pr
   })
 })
 
+describe('freio da régua no aviso depois de ligar — a mesma ordem da fila (revisão 16/09)', () => {
+  const ok = { ok: true as const, label: 'WhatsApp' }
+  const info = (hold: Parameters<typeof linkDeliveryInfo>[0]['hold'], over: Partial<Parameters<typeof linkDeliveryInfo>[0]> = {}) =>
+    linkDeliveryInfo({ contactName: 'Center Piso', contactPhone: '5511999990000', optedOut: false, asaasPhone: null, delivery: ok, hold, ...over })
+
+  it('pausado: NÃO vai sair, com o motivo e o botão de retomar; sem rótulo de canal', () => {
+    const r = info({ kind: 'paused', reason: ' pediu acordo ' })
+    expect(r).toMatchObject({ deliveryLabel: null, deliveryError: 'A régua está parada neste cliente (pediu acordo) — use "Retomar cobrança" em Cobranças para o lembrete sair.' })
+    const t = linkOutcomeTexts('Center Piso', true, r)
+    expect(t.reminder).toBe('')
+    expect(t.warning).toMatch(/^O lembrete de Center Piso NÃO vai sair: /)
+  })
+
+  it('promessa: diz até quando, no fuso da conta; sem data válida, sem "até"', () => {
+    expect(holdDeliveryError({ kind: 'snoozed', reason: 'prometeu pagar', until: '2026-09-20T02:00:00Z' })).toBe(
+      'A régua está parada neste cliente até 19/09 (prometeu pagar) — enquanto isso, o lembrete não sai.',
+    )
+    expect(holdDeliveryError({ kind: 'snoozed', until: '2026-09-20T02:00:00Z' }, 'UTC')).toContain('até 20/09 —')
+    // Fuso quebrado cai no de São Paulo em vez de derrubar o aviso.
+    expect(holdDeliveryError({ kind: 'snoozed', until: '2026-09-20T02:00:00Z' }, 'Nada/Disso')).toContain('até 19/09')
+    expect(holdDeliveryError({ kind: 'snoozed', until: 'lixo' })).toBe('A régua está parada neste cliente — enquanto isso, o lembrete não sai.')
+    expect(linkOutcomeTexts('X', true, info({ kind: 'snoozed', until: '2026-09-20T12:00:00Z' })).reminder).toBe('')
+  })
+
+  it('limite de toques: NÃO vai sair e diz como zerar', () => {
+    const r = info({ kind: 'max_touches' })
+    expect(r.deliveryError).toContain('Zerar toques')
+    expect(linkOutcomeTexts('X', true, r).warning).toMatch(/NÃO vai sair: Chegou no limite/)
+  })
+
+  it('SAIR vence o freio; sem freio, vale a conferência do canal', () => {
+    expect(info({ kind: 'paused' }, { optedOut: true }).deliveryError).toBe(OPTED_OUT_DELIVERY_ERROR)
+    expect(info(null)).toMatchObject({ deliveryLabel: 'WhatsApp', deliveryError: null })
+    expect(info(undefined, { delivery: { ok: false, error: 'sem canal' } })).toMatchObject({ deliveryLabel: null, deliveryError: 'sem canal' })
+  })
+})
+
+describe('linkMayMoveCharge — o Ligar do painel segue a regra da sincronização (revisão 16/09)', () => {
+  it('espelhada do Asaas vai; emitida pelo CRM só quando está sem contato', () => {
+    expect(linkMayMoveCharge({ origin: 'sync', contactId: 'c1' })).toBe(true)
+    expect(linkMayMoveCharge({ origin: 'sync', contactId: null })).toBe(true)
+    expect(linkMayMoveCharge({ origin: 'ai', contactId: 'socio' })).toBe(false)
+    expect(linkMayMoveCharge({ origin: 'manual', contactId: 'socio' })).toBe(false)
+    expect(linkMayMoveCharge({ origin: 'ai', contactId: null })).toBe(true)
+  })
+})
+
 describe('"Ligados nos últimos dias" — onde desligar depois que o Desfazer some', () => {
   it('janela: dias do lembrete + 7', () => {
     const now = Date.parse('2026-09-16T12:00:00Z')
@@ -297,6 +360,22 @@ describe('"Ligados nos últimos dias" — onde desligar depois que o Desfazer so
     expect(t).toContain('inclusive Speed Matriz')
     expect(t).toContain('não é cancelado')
     expect(recentUnlinkText({ customerName: 'A', contactName: 'B', ruleEnabled: false })).toContain('quando a régua for religada')
+  })
+
+  it('fila: manda recusar o de hoje sem prometer que tira o lembrete do contato certo (revisão 16/09)', () => {
+    const t = recentUnlinkText({ customerName: 'Speed Gás e Água', contactName: 'Speed Matriz', ruleEnabled: true })
+    expect(t).toContain('O lembrete de hoje que ainda estiver na fila para Speed Matriz não é cancelado: recuse em "Precisa de você"')
+    expect(t).toContain('o contato certo ainda recebe o lembrete quando for ligado')
+    expect(t).toContain('Pedido de outro dia já expirou sozinho.')
+    expect(t).not.toMatch(/confira em "Precisa de você"/)
+  })
+
+  it('nome devolvido pelo Desfazer do Desligar: só texto, aparado, com teto', () => {
+    expect(relinkCustomerName('  Speed Gás e Água ')).toBe('Speed Gás e Água')
+    expect(relinkCustomerName('   ')).toBeNull()
+    expect(relinkCustomerName(42)).toBeNull()
+    expect(relinkCustomerName(null)).toBeNull()
+    expect(relinkCustomerName('x'.repeat(500))).toHaveLength(200)
   })
 })
 

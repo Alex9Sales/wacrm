@@ -35,6 +35,7 @@ import {
   createContactForUpcoming,
   linkUpcomingCustomer,
   searchContactsForCharge,
+  unlinkRecentUpcomingCustomer,
   unlinkUpcomingCustomer,
   type ContactOption,
   type UpcomingRecentLink,
@@ -362,26 +363,43 @@ function RecentLinks({
     const key = `${l.connectionId}:${l.customerId}`;
     setBusy(key);
     try {
-      // Sem cobrança para devolver, sem vínculo anterior, sem contato criado: só o vínculo sai.
-      const res = await unlinkUpcomingCustomer(l.connectionId, l.customerId, {
-        contactId: l.contactId,
-        previousContactId: null,
-        restore: [],
-        createdContactId: null,
-      });
+      // Só o vínculo sai; cliente que já tem cobrança aberta o servidor recusa (desliga na carteira).
+      const res = await unlinkRecentUpcomingCustomer(l.connectionId, l.customerId, l.contactId);
       if (!res.ok) {
         toast.error(res.error ?? 'Não foi possível desligar.');
         onChanged();
         return;
       }
+      // Revisão 16/09: clique errado aqui não tinha volta — a linha some, o
+      // cliente não está na carteira nem no painel até a próxima rodada, e o nome
+      // do Asaas ia junto com o vínculo. O Desfazer religa ao mesmo contato.
       toast.success(recentUnlinkText({ customerName: recentLinkName(l.customerName, l.customerId), contactName: l.contactName, ruleEnabled }), {
         duration: 15_000,
+        action: { label: 'Desfazer', onClick: () => void relink(l) },
       });
       onChanged();
     } catch (err) {
       handleActionError(err, 'Não foi possível desligar. Tente de novo.');
     } finally {
       setBusy(null);
+    }
+  }
+
+  async function relink(l: UpcomingRecentLink) {
+    try {
+      const res = await linkUpcomingCustomer(l.connectionId, l.customerId, l.contactId, l.customerName);
+      if (!res.ok || !res.data) {
+        toast.error(res.error ?? 'Não foi possível desfazer.');
+        onChanged();
+        return;
+      }
+      const d = res.data;
+      const { reminder, warning } = linkOutcomeTexts(recentLinkName(l.customerName, l.customerId), ruleEnabled, d);
+      toast.success([`Desfeito: ligado de novo a ${d.contactName}.`, reminder].filter(Boolean).join(' '));
+      showDeliveryWarning(warning, d);
+      onChanged();
+    } catch (err) {
+      handleActionError(err, 'Não foi possível desfazer. Tente de novo.');
     }
   }
 

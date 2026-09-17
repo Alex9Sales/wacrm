@@ -15,6 +15,7 @@
 // ============================================================
 
 import { asaasPhoneForContact, normalizeDocument, normalizeEmail } from '@/lib/asaas/match'
+import type { DebtorHold } from './rules'
 
 /** no_contact = ninguém tem o telefone/e-mail/documento · ambiguous = 2+ contatos com o mesmo telefone (ou, sem telefone que case, o mesmo e-mail/documento). */
 export type UnmatchedReason = 'no_contact' | 'ambiguous'
@@ -244,12 +245,31 @@ export const CREATE_CHECK_FAILED_ERROR = 'Não deu para conferir agora se já ex
 
 /**
  * Pode criar? `probe` é o casamento da sincronização SEM o vínculo (findContact
- * com telefone, e-mail e CPF/CNPJ), feito na hora do clique; null = a
+ * com as chaves de `createProbeKeys`), feito na hora do clique; null = a
  * conferência falhou — aí recusa: criar às cegas é o chute que isto evita.
  */
 export function createRefusal(probe: { ambiguous: boolean } | null): string | null {
   if (!probe) return CREATE_CHECK_FAILED_ERROR
   return probe.ambiguous ? CREATE_AMBIGUOUS_ERROR : null
+}
+
+/**
+ * Com que chave conferir antes de criar: a MESMA que a criação procura
+ * (createOrFindContactFromAsaas) — o telefone quando ele serve para criar;
+ * senão, só o e-mail.
+ *
+ * Revisão 16/09: a conferência olhava telefone, e-mail e CPF/CNPJ juntos, e a
+ * criação só um deles. (a) Celular que ninguém tem + e-mail do financeiro em 2
+ * contatos: recusava, embora criar fizesse um contato novo dono do número (que
+ * casa sozinho dali em diante) — regressão na carteira. (b) Telefone que não
+ * serve para criar ("+1…") mas acha 1 contato: "não ambíguo", e a criação ia
+ * pelo e-mail com `.limit(1)` entre 2 contatos — o chute que a trava existe
+ * para impedir.
+ */
+export function createProbeKeys(phone: string | null | undefined, email: string | null | undefined): { phone: string | null; email: string | null } {
+  const p = asaasPhoneForContact(phone)
+  if (p) return { phone: p, email: null }
+  return { phone: null, email: normalizeEmail(email) || null }
 }
 
 // ------------------------------------ por onde sai o lembrete depois de ligar
@@ -278,6 +298,45 @@ export interface LinkDeliveryInfo {
 /** Contato que pediu para não receber (SAIR): a fila do lembrete pula, então o aviso também diz. */
 export const OPTED_OUT_DELIVERY_ERROR = 'O contato pediu para não receber mensagens.'
 
+// Revisão 16/09: o aviso depois de ligar espelhava o opt-out e o canal, mas não
+// o FREIO do devedor, que a fila confere logo depois (debtorHold: pausa,
+// limite de toques, promessa/comprovante). Ligar à ficha da empresa que está
+// em "Régua parada" mostrava "O lembrete sai por WhatsApp", a rodada pulava
+// calada ("on_hold" só na contagem) e o cartão já tinha sumido.
+
+/** O freio do contato, como a fila lê de collections_touches (`debtorHold` + motivo/data). */
+export interface DeliveryHold {
+  kind: DebtorHold
+  /** Motivo da pausa ou da promessa, quando há. */
+  reason?: string | null
+  /** Até quando a promessa/comprovante segura (ISO) — só no 'snoozed'. */
+  until?: string | null
+}
+
+/**
+ * Por que o lembrete não sai com o freio ligado. Não reusa `holdRefusal`: ele
+ * diz "nada foi enviado", texto de envio que já estava na fila.
+ */
+export function holdDeliveryError(hold: DeliveryHold, timeZone = 'America/Sao_Paulo'): string {
+  const motivo = hold.reason && hold.reason.trim() ? ` (${hold.reason.trim()})` : ''
+  // Os nomes dos botões de "Régua parada sem cobrança vencida" (wallet-client).
+  if (hold.kind === 'paused') return `A régua está parada neste cliente${motivo} — use "Retomar cobrança" em Cobranças para o lembrete sair.`
+  if (hold.kind === 'max_touches') return 'Chegou no limite de cobranças da régua sem resposta — use "Zerar toques" em Cobranças para o lembrete sair.'
+  const ms = hold.until ? Date.parse(hold.until) : Number.NaN
+  const ate = Number.isNaN(ms) ? '' : ` até ${dayMonthIn(ms, timeZone)}`
+  return `A régua está parada neste cliente${ate}${motivo} — enquanto isso, o lembrete não sai.`
+}
+
+/** DD/MM no fuso da conta; fuso inválido cai no de São Paulo (padrão da conta). */
+function dayMonthIn(ms: number, timeZone: string): string {
+  const fmt = (tz: string) => new Intl.DateTimeFormat('pt-BR', { timeZone: tz, day: '2-digit', month: '2-digit' }).format(new Date(ms))
+  try {
+    return fmt(timeZone)
+  } catch {
+    return fmt('America/Sao_Paulo')
+  }
+}
+
 export function linkDeliveryInfo(input: {
   contactName: string | null
   contactPhone: string | null
@@ -285,18 +344,24 @@ export function linkDeliveryInfo(input: {
   /** Telefone do cliente no Asaas (como veio). */
   asaasPhone: string | null
   delivery: DeliveryCheck
+  /** Freio do contato (debtorHold). null/ausente = sem freio (ou leitura falhou — aí `delivery` vem null). */
+  hold?: DeliveryHold | null
+  /** Fuso da conta, para a data da promessa. */
+  timeZone?: string
 }): LinkDeliveryInfo {
   const digits = (input.contactPhone ?? '').replace(/\D/g, '')
   const asaasTail = (input.asaasPhone ?? '').replace(/\D/g, '').slice(-8)
   const d = input.delivery
+  // A mesma ordem da fila: SAIR, depois o freio, depois o canal.
+  const blocked = input.optedOut ? OPTED_OUT_DELIVERY_ERROR : input.hold ? holdDeliveryError(input.hold, input.timeZone) : null
   return {
     contactName: (input.contactName ?? '').trim() || (input.contactPhone ?? '').trim() || 'contato sem nome',
     // O mesmo corte da fila (outreach: 10 dígitos ou mais).
     contactHasPhone: digits.length >= 10,
     // Pelos 8 últimos dígitos: com/sem 55 e com/sem o 9º dígito é o mesmo número.
     phoneDiffers: digits.length >= 8 && asaasTail.length === 8 && digits.slice(-8) !== asaasTail,
-    deliveryLabel: input.optedOut ? null : d?.ok ? d.label : null,
-    deliveryError: input.optedOut ? OPTED_OUT_DELIVERY_ERROR : d && !d.ok ? d.error : null,
+    deliveryLabel: blocked ? null : d?.ok ? d.label : null,
+    deliveryError: blocked ?? (d && !d.ok ? d.error : null),
   }
 }
 
@@ -352,6 +417,11 @@ export function recentLinkName(customerName: string | null | undefined, customer
  * Aviso do "Desligar". Desligar só apaga o vínculo: se algum contato (inclusive
  * o que foi desligado) tem o telefone, o e-mail ou o CPF/CNPJ do Asaas, a régua
  * liga a ele de novo sozinha. E o lembrete que já está na fila não é cancelado.
+ *
+ * Revisão 16/09: o texto mandava só "conferir em Precisa de você" — recusar lá
+ * fazia a parcela contar como já lembrada e o contato certo nunca recebia.
+ * Agora "já lembrado" é por contato (remindedByContact), e o pedido pending de
+ * outro dia já expirou sozinho (stale.ts): o que sobra é o de HOJE.
  */
 export function recentUnlinkText(input: { customerName: string; contactName: string; ruleEnabled: boolean }): string {
   const back = input.ruleEnabled ? 'na próxima rodada da régua' : 'quando a régua for religada'
@@ -359,8 +429,15 @@ export function recentUnlinkText(input: { customerName: string; contactName: str
     `Desligado: ${input.customerName} não está mais ligado a ${input.contactName}. ` +
     `Se nenhum contato tiver o telefone, o e-mail ou o CPF/CNPJ do Asaas, o cliente volta para "A vencer sem contato" ${back}; ` +
     `se algum tiver (inclusive ${input.contactName}), a régua liga a ele sozinha. ` +
-    `Lembrete que já estava na fila para ${input.contactName} não é cancelado — confira em "Precisa de você".`
+    `O lembrete de hoje que ainda estiver na fila para ${input.contactName} não é cancelado: recuse em "Precisa de você" — ` +
+    'o contato certo ainda recebe o lembrete quando for ligado. Pedido de outro dia já expirou sozinho.'
   )
+}
+
+/** Nome do Asaas que o "Desfazer" do Desligar devolve ao vínculo (volta do navegador: só texto, aparado e com teto). */
+export function relinkCustomerName(raw: unknown): string | null {
+  if (typeof raw !== 'string') return null
+  return blankToNull(raw.slice(0, 200))
 }
 
 // ------------------------------------------------ "Desfazer" do painel (16/09)
@@ -376,6 +453,22 @@ export interface ChargeRestore {
   id: string
   contactId: string | null
   matchedBy: string | null
+}
+
+/**
+ * A cobrança aberta que o "Ligar" do painel pode levar para o contato escolhido:
+ * a espelhada do Asaas (origin 'sync') ou a que está sem contato — a MESMA
+ * condição do CASE da sincronização (sync.ts).
+ *
+ * Revisão 16/09: a sincronização passou a deixar a cobrança emitida pelo CRM
+ * (IA ou "Nova cobrança", emit.ts grava 'manual') com o contato da conversa,
+ * mas o clique de ligar ainda a levava. Sócio C pede a cobrança pela conversa
+ * (emit reaproveita cus_X), alguém liga cus_X ao financeiro B no painel: a
+ * linha de C virava B/'manual', a sincronização mantinha B e, ao vencer, a
+ * régua cobrava quem não pediu — dependia só da ordem dos cliques.
+ */
+export function linkMayMoveCharge(r: { origin: string | null; contactId: string | null }): boolean {
+  return r.origin === 'sync' || !r.contactId
 }
 
 /**

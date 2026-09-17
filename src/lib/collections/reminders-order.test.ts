@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 
-import { byNearestDue, contactedTodaySet, fixedCollectionRoute, freshReminderItems, textHasUrl } from './rules'
+import { byNearestDue, contactedTodaySet, fixedCollectionRoute, freshReminderItems, remindedByContact, textHasUrl } from './rules'
 
 const cand = (nome: string, ...dias: (number | null)[]) => ({ nome, lines: dias.map((daysUntil) => ({ daysUntil })) })
 
@@ -86,6 +86,30 @@ describe('freshReminderItems — a parcela que ainda merece lembrete', () => {
     const r = freshReminderItems(items, new Set(['pay_3']), new Set())
     expect(r.map((x) => x.id)).toEqual(['pay_1', 'pay_2', 'pay_4'])
     expect(items).toHaveLength(4)
+  })
+})
+
+describe('remindedByContact — "já lembrado" é por contato (revisão 16/09)', () => {
+  it('lembrete recusado/enviado ao contato ligado por engano (B) não segura o do contato certo (A)', () => {
+    const map = remindedByContact([
+      { contactId: 'B', payload: { kind: 'reminder', asaasIds: ['pay_1'] } },
+      { contactId: 'A', payload: { kind: 'new_charge', asaasIds: ['pay_9'] } },
+    ])
+    const items = [{ id: 'pay_1', invoiceUrl: null }]
+    expect(freshReminderItems(items, map.get('A') ?? new Set(), new Set()).map((x) => x.id)).toEqual(['pay_1'])
+    expect(freshReminderItems(items, map.get('B') ?? new Set(), new Set())).toEqual([])
+  })
+
+  it('junta os pedidos do mesmo contato; payload sem asaasIds, ids que não são texto e contato nulo não contam', () => {
+    const map = remindedByContact([
+      { contactId: 'A', payload: { asaasIds: ['pay_1', 2, '', null] } },
+      { contactId: 'A', payload: { asaasIds: ['pay_2', 'pay_1'] } },
+      { contactId: 'C', payload: { asaasIds: 'pay_3' } },
+      { contactId: 'D', payload: null },
+      { contactId: null, payload: { asaasIds: ['pay_4'] } },
+    ])
+    expect([...(map.get('A') ?? [])].sort()).toEqual(['pay_1', 'pay_2'])
+    expect([...map.keys()]).toEqual(['A'])
   })
 })
 

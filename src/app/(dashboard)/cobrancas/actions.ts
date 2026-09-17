@@ -34,7 +34,7 @@ import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
 import { runCollectionsForAccount } from '@/lib/collections/engine'
-import { countsAsOverdue, duplicateSuspects, greetingName, normalizeSettings, phoneSearchDigits, type CollectionsSettings } from '@/lib/collections/rules'
+import { countsAsOverdue, debtorHold, duplicateSuspects, greetingName, normalizeSettings, phoneSearchDigits, type CollectionsSettings } from '@/lib/collections/rules'
 import { evaluatePromotion, promotionHeadline, type PromotionVerdict } from '@/lib/collections/promotion'
 import { criteriaFor, readPromotionOverride, statsFromFeedback } from '@/lib/orchestration/validation'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
@@ -59,11 +59,14 @@ import {
   canRemoveCreatedContact,
   chargesChangedByLink,
   CREATE_AMBIGUOUS_ERROR,
+  createProbeKeys,
   createRefusal,
   customerRefKey,
   isUuid,
   linkDeliveryInfo,
+  linkMayMoveCharge,
   recentLinksSince,
+  relinkCustomerName,
   restoreTarget,
   RECENT_LINKS_LIMIT,
   sameDocumentOthers,
@@ -72,6 +75,7 @@ import {
   visibleUpcoming,
   type ChargeRestore,
   type DeliveryCheck,
+  type DeliveryHold,
   type LinkDeliveryInfo,
   type UnmatchedCustomerRef,
   type UnmatchedPayment,
@@ -1340,15 +1344,14 @@ async function createAndLink(
  * cliente do Asaas → contato — que vence o casamento automático nas próximas
  * parcelas e no lembrete. O chute virava regra. A conferência é o casamento da
  * sincronização SEM o vínculo ("quem tem estes dados?"), na hora do clique: a
- * carteira e o retrato do painel podem ser de horas atrás. Devolve o erro para
- * a tela, ou null quando pode criar; se a conferência falhar, recusa.
+ * carteira e o retrato do painel podem ser de horas atrás. Confere pela MESMA
+ * chave que a criação usa (createProbeKeys: telefone, ou só o e-mail). Devolve
+ * o erro para a tela, ou null quando pode criar; se a conferência falhar, recusa.
  */
-async function createAmbiguityRefusal(
-  accountId: string,
-  src: { phone: string | null; email: string | null; cpfCnpj: string | null },
-): Promise<string | null> {
+async function createAmbiguityRefusal(accountId: string, src: { phone: string | null; email: string | null }): Promise<string | null> {
+  const keys = createProbeKeys(src.phone, src.email)
   try {
-    return createRefusal(await findContact(accountId, src.phone, src.email, src.cpfCnpj))
+    return createRefusal(await findContact(accountId, keys.phone, keys.email, null))
   } catch (err) {
     console.error('[cobranca] conferir contatos antes de criar falhou:', err instanceof Error ? err.message : err)
     return createRefusal(null)
@@ -1516,6 +1519,8 @@ const UPCOMING_GONE = 'Este cliente já saiu da lista (pagou, venceu ou já foi 
 const UPCOMING_ALREADY_LINKED = 'Este cliente do Asaas já foi ligado a outro contato (por outra pessoa ou em outra aba). Atualize a tela.'
 const UPCOMING_RELINKED = 'Este cliente foi ligado de novo depois (por outra pessoa ou em outra aba). Atualize a tela antes de desfazer.'
 const UPCOMING_NO_DATA = 'Este cliente não tem telefone válido nem e-mail no Asaas. Cadastre o contato na mão e use "Ligar a um contato".'
+const UPCOMING_HAS_OPEN_CHARGE =
+  'Este cliente já tem cobrança aberta na carteira — desligue por lá ("desligar contato" no cartão dele), que as cobranças saem junto. Atualize a tela.'
 
 /**
  * Quem vence na janela do lembrete e não tem contato no CRM. Só conexões
@@ -1686,12 +1691,14 @@ async function recentUpcomingLinks(accountId: string, reminderDaysBefore: number
 }
 
 /**
- * Por onde sai o lembrete para o contato que acabou de ser ligado, com o MESMO
- * teste da fila do lembrete (resolveCollectionTargets em dryRun, com o e-mail
- * do Asaas de reserva) e o mesmo pulo de quem pediu SAIR. A ligação já foi
- * gravada: conferir é só para o aviso, nunca desfaz nem lança — se falhar, a
- * tela diz que não deu para conferir em vez de prometer canal (e o clique não
- * vira "Não foi possível ligar" com a ligação feita).
+ * Por onde sai o lembrete para o contato que acabou de ser ligado, com os
+ * MESMOS testes da fila do lembrete, na mesma ordem: quem pediu SAIR, o freio
+ * do devedor (debtorHold com as settings da conta — pausa, limite de toques,
+ * promessa) e o canal (resolveCollectionTargets em dryRun, com o e-mail do
+ * Asaas de reserva). A ligação já foi gravada: conferir é só para o aviso,
+ * nunca desfaz nem lança — se falhar, a tela diz que não deu para conferir em
+ * vez de prometer canal (e o clique não vira "Não foi possível ligar" com a
+ * ligação feita).
  */
 async function upcomingDeliveryInfo(
   accountId: string,
@@ -1712,18 +1719,59 @@ async function upcomingDeliveryInfo(
     // Sem a ficha não dá para dizer nada: nem canal, nem "sem telefone".
     return { contactName: 'o contato', contactHasPhone: true, phoneDiffers: false, deliveryLabel: null, deliveryError: null, contactPhone: null }
   }
-  const delivery: DeliveryCheck = await resolveCollectionTargets(accountId, contactId, null, { dryRun: true, fallbackEmail: asaas.email }).catch(
-    (err) => {
-      console.warn('[cobranca] conferir canal do lembrete (a vencer) falhou:', err instanceof Error ? err.message : err)
-      return null
-    },
-  )
+
+  // Revisão 16/09: o freio que a fila confere antes do canal. Contato em
+  // "Régua parada" (pausa humana só sai no Retomar) ou com promessa ganhava
+  // "O lembrete sai por WhatsApp" e a rodada pulava calada.
+  let hold: DeliveryHold | null = null
+  let holdChecked = false
+  let timeZone = 'America/Sao_Paulo'
+  try {
+    const accountSettings = await getAccountSettings(accountId)
+    timeZone = accountSettings.businessTimezone || timeZone
+    const st = firstOrNull(
+      await db
+        .select({
+          paused: collectionsTouches.paused,
+          pausedReason: collectionsTouches.pausedReason,
+          touchCount: collectionsTouches.touchCount,
+          lastTouchAt: collectionsTouches.lastTouchAt,
+          snoozeUntil: collectionsTouches.snoozeUntil,
+          snoozeReason: collectionsTouches.snoozeReason,
+        })
+        .from(collectionsTouches)
+        .where(and(eq(collectionsTouches.accountId, accountId), eq(collectionsTouches.contactId, contactId)))
+        .limit(1),
+    )
+    const kind = debtorHold(st, normalizeSettings(accountSettings.collections))
+    if (kind) {
+      hold = {
+        kind,
+        reason: kind === 'paused' ? st?.pausedReason : kind === 'snoozed' ? st?.snoozeReason : null,
+        until: kind === 'snoozed' ? st?.snoozeUntil : null,
+      }
+    }
+    holdChecked = true
+  } catch (err) {
+    console.warn('[cobranca] ler o freio da régua para o aviso do lembrete (a vencer) falhou:', err instanceof Error ? err.message : err)
+  }
+
+  // Freio ligado: o canal nem importa. Freio não conferido: não promete canal.
+  const delivery: DeliveryCheck =
+    holdChecked && !hold
+      ? await resolveCollectionTargets(accountId, contactId, null, { dryRun: true, fallbackEmail: asaas.email }).catch((err) => {
+          console.warn('[cobranca] conferir canal do lembrete (a vencer) falhou:', err instanceof Error ? err.message : err)
+          return null
+        })
+      : null
   const info = linkDeliveryInfo({
     contactName: contact?.name ?? null,
     contactPhone: contact?.phone ?? null,
     optedOut: contact?.optedOut === true,
     asaasPhone: asaas.phone,
     delivery,
+    hold,
+    timeZone,
   })
   return { ...info, contactPhone: (contact?.phone ?? '').trim() || null }
 }
@@ -1756,7 +1804,8 @@ async function upcomingSnapshotRow(
 
 /**
  * Liga UM cliente do Asaas (numa conta do Asaas) a um contato: grava o vínculo,
- * leva junto as cobranças abertas dele na carteira e tira o cartão do painel.
+ * leva junto as cobranças abertas dele na carteira (menos a emitida pelo CRM
+ * que já tem contato) e tira o cartão do painel.
  * Recusa quando outra pessoa já ligou o mesmo cliente a outro contato — a tela
  * estava velha, e trocar calado seria pior. Devolve para o "Desfazer" o vínculo
  * anterior (o mesmo contato, quando o clique repete) e o estado de ANTES das
@@ -1791,11 +1840,13 @@ async function linkCustomerTo(
     // ou a cobrança criada pela IA (emit.ts nasce 'manual' sem vínculo): ela
     // virava "Sem contato" e a régua parava de cobrá-la.
     const open = await tx
-      .select({ id: asaasCharges.id, contactId: asaasCharges.contactId, matchedBy: asaasCharges.matchedBy })
+      .select({ id: asaasCharges.id, contactId: asaasCharges.contactId, matchedBy: asaasCharges.matchedBy, origin: asaasCharges.origin })
       .from(asaasCharges)
       .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true), chargeRefsWhere([ref])))
       .for('update')
-    const changed = chargesChangedByLink(open, contactId)
+    // Cobrança emitida pelo CRM fica com o contato da conversa (revisão 16/09,
+    // linkMayMoveCharge) — a mesma regra da sincronização.
+    const changed = chargesChangedByLink(open.filter(linkMayMoveCharge), contactId)
     if (changed.length) {
       await tx
         .update(asaasCharges)
@@ -1818,7 +1869,17 @@ async function connectionOfAccount(accountId: string, connectionId: string): Pro
   return !!row
 }
 
-export async function linkUpcomingCustomer(connectionId: string, customerId: string, contactId: string): Promise<ActionResult<UpcomingLinkResult>> {
+export async function linkUpcomingCustomer(
+  connectionId: string,
+  customerId: string,
+  contactId: string,
+  /**
+   * Só o "Desfazer" do Desligar manda (revisão 16/09): o retrato foi apagado ao
+   * ligar e o vínculo ao desligar — sem isto, religar perdia o nome do Asaas e
+   * a lista mostraria só o cus_.
+   */
+  customerName?: string | null,
+): Promise<ActionResult<UpcomingLinkResult>> {
   const { accountId, userId } = await requireRole('agent')
   try {
     const contact = firstOrNull(
@@ -1834,7 +1895,8 @@ export async function linkUpcomingCustomer(connectionId: string, customerId: str
     // Antes de ligar: ligar apaga a linha do retrato, e dela vêm o nome (para
     // o vínculo) e o telefone/e-mail do Asaas (para o aviso de canal).
     const snap = await upcomingSnapshotRow(accountId, { connectionId, customerId })
-    const r = await linkCustomerTo(accountId, userId, { connectionId, customerId, customerName: snap?.name ?? null }, contact.id)
+    const name = (snap?.name ?? '').trim() || relinkCustomerName(customerName)
+    const r = await linkCustomerTo(accountId, userId, { connectionId, customerId, customerName: name }, contact.id)
     if (!r.ok) return { ok: false, error: r.error }
     const info = await upcomingDeliveryInfo(accountId, contact.id, { phone: snap?.phone ?? null, email: snap?.email ?? null })
     revalidatePath('/cobrancas')
@@ -1952,15 +2014,40 @@ async function removeCreatedContact(tx: DbTx, accountId: string, userId: string,
  *
  * O cliente só volta para a lista se nenhum contato casar pelo telefone,
  * e-mail ou CPF/CNPJ na próxima leitura — a tela diz isso (undoResultText).
- *
- * Também é o "Desligar" da lista "Ligados nos últimos dias" (revisão 16/09):
- * sem cobrança para devolver (restore vazio), sem vínculo anterior e sem
- * contato criado — só o vínculo sai, e só se ainda aponta para o contato da lista.
  */
 export async function unlinkUpcomingCustomer(
   connectionId: string,
   customerId: string,
   undo: UpcomingUndoInput,
+): Promise<ActionResult<{ contactRemoved: boolean }>> {
+  return undoUpcomingLink(connectionId, customerId, undo, { refuseOpenCharge: false })
+}
+
+/**
+ * "Desligar" da lista "Ligados nos últimos dias" (revisão 16/09): sem cobrança
+ * para devolver, sem vínculo anterior e sem contato criado — só o vínculo sai,
+ * e só se ainda aponta para o contato da lista.
+ *
+ * Recusa quando o cliente tem cobrança aberta. A lista pode ser de manhã: a
+ * parcela venceu, a rodada espelhou a cobrança já no contato do vínculo (B,
+ * 'manual') e o Desligar da lista velha apagava só o vínculo — a cobrança
+ * seguia em B, e a sincronização nunca corrige 'manual'. Cobrança aberta = o
+ * cliente está na carteira: desliga por lá, onde as cobranças saem junto. (O
+ * "Desfazer" do clique não recusa: a cobrança que ele não mudou já era assim.)
+ */
+export async function unlinkRecentUpcomingCustomer(
+  connectionId: string,
+  customerId: string,
+  contactId: string,
+): Promise<ActionResult<{ contactRemoved: boolean }>> {
+  return undoUpcomingLink(connectionId, customerId, { contactId, previousContactId: null, restore: [], createdContactId: null }, { refuseOpenCharge: true })
+}
+
+async function undoUpcomingLink(
+  connectionId: string,
+  customerId: string,
+  undo: UpcomingUndoInput,
+  opts: { refuseOpenCharge: boolean },
 ): Promise<ActionResult<{ contactRemoved: boolean }>> {
   const { accountId, userId } = await requireRole('agent')
   try {
@@ -1995,7 +2082,18 @@ export async function unlinkUpcomingCustomer(
     const keepLink = !!undo.previousContactId
     const createdContactId = !keepLink && undo.createdContactId === linkedContactId ? linkedContactId : null
 
-    const contactRemoved = await db.transaction(async (tx) => {
+    const outcome = await db.transaction(async (tx): Promise<{ openCharge: true } | { openCharge: false; contactRemoved: boolean }> => {
+      // Só o "Desligar" da lista (ver unlinkRecentUpcomingCustomer).
+      if (opts.refuseOpenCharge) {
+        const open = firstOrNull(
+          await tx
+            .select({ id: asaasCharges.id })
+            .from(asaasCharges)
+            .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true), chargeRefsWhere([ref])))
+            .limit(1),
+        )
+        if (open) return { openCharge: true }
+      }
       if (current && !keepLink) {
         await tx.delete(asaasCustomerLinks).where(and(eq(asaasCustomerLinks.accountId, accountId), linkRefsWhere([ref])))
       }
@@ -2018,13 +2116,14 @@ export async function unlinkUpcomingCustomer(
             ),
           )
       }
-      return createdContactId ? removeCreatedContact(tx, accountId, userId, createdContactId) : false
+      return { openCharge: false, contactRemoved: createdContactId ? await removeCreatedContact(tx, accountId, userId, createdContactId) : false }
     })
+    if (outcome.openCharge) return { ok: false, error: UPCOMING_HAS_OPEN_CHARGE }
     revalidatePath('/cobrancas')
-    return { ok: true, data: { contactRemoved } }
+    return { ok: true, data: { contactRemoved: outcome.contactRemoved } }
   } catch (err) {
-    console.error('[cobranca] desfazer ligação de cliente a vencer falhou:', err instanceof Error ? err.message : err)
-    return { ok: false, error: 'Não foi possível desfazer. Tente de novo.' }
+    console.error('[cobranca] desfazer/desligar ligação de cliente a vencer falhou:', err instanceof Error ? err.message : err)
+    return { ok: false, error: opts.refuseOpenCharge ? 'Não foi possível desligar. Tente de novo.' : 'Não foi possível desfazer. Tente de novo.' }
   }
 }
 
