@@ -49,6 +49,7 @@ import { getAccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
 import { toBrE164IfNational } from '@/lib/whatsapp/phone-utils'
 
+import { listChargesAtSilencing, recordSilenced } from './asaas-silenced'
 import {
   connectionHistoryFor,
   decideConnection,
@@ -551,7 +552,19 @@ export async function createChargeForContact(input: CreateChargeInput): Promise<
       // Segunda defesa: sem documento fora do sandbox, nada de POST/PUT.
       requireDocument: conn.environment !== 'sandbox',
     }
-    const customer = await findOrCreateCustomer(cred, customerInput, { existing })
+    const caladosAgora: string[] = []
+    const customer = await findOrCreateCustomer(cred, customerInput, {
+      existing,
+      onSilenced: (id) => caladosAgora.push(id),
+    })
+    if (caladosAgora.length) {
+      // 🔕 Revisão 17/09 (aviso de cobrança nova): o complemento de cadastro
+      // calou um cliente que o Asaas ainda avisava. Guarda quando e quais
+      // cobranças dele já existiam — a do painel criada mais cedo o Asaas
+      // avisou; a criada depois, o CRM avisa. 1 GET curto só deste cliente, só
+      // neste caso raro; falhou → grava sem a lista (regra do dia) e segue.
+      await recordSilenced(conn.id, caladosAgora, await listChargesAtSilencing(cred, { customer: customer.id, timeoutMs: 8_000 }))
+    }
     const homeNote = switchedToHome ? ' (o cliente já era cadastrado nessa conta)' : ''
 
     // 🔁 Assinatura mensal: o Asaas gera as cobranças, uma por mês, sem fim.

@@ -34,6 +34,7 @@ import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
 import { runCollectionsForAccount } from '@/lib/collections/engine'
+import { listChargesAtSilencing, markAsaasNotificationsSwept, recordSilenced } from '@/lib/collections/asaas-silenced'
 import { countsAsOverdue, debtorHold, duplicateSuspects, greetingName, normalizeSettings, phoneSearchDigits, type CollectionsSettings } from '@/lib/collections/rules'
 import { evaluatePromotion, promotionHeadline, type PromotionVerdict } from '@/lib/collections/promotion'
 import { criteriaFor, readPromotionOverride, statsFromFeedback } from '@/lib/orchestration/validation'
@@ -920,8 +921,12 @@ export async function saveCollectionsSettings(input: Partial<CollectionsSettings
   // 🔗 Piso do aviso de cobrança nova (17/09): quando o "CRM assume os avisos"
   // é LIGADO agora, guarda o instante — a cobrança criada até aqui o próprio
   // Asaas já avisou. O campo é do servidor: o que a tela manda é ignorado.
-  next.asaasNotificationsOffAt =
-    next.asaasNotificationsOff && !current.asaasNotificationsOff ? new Date().toISOString() : current.asaasNotificationsOffAt
+  const ligandoAvisos = next.asaasNotificationsOff && !current.asaasNotificationsOff
+  next.asaasNotificationsOffAt = ligandoAvisos ? new Date().toISOString() : current.asaasNotificationsOffAt
+  // Revisão 17/09: o piso conta da primeira varredura DEPOIS de ligar (o Asaas
+  // só para de avisar quando ela cala os clientes). Ligar de novo zera; quem
+  // grava é a varredura (sync.ts) ou o botão de desligar avisos — nunca a tela.
+  next.asaasNotificationsSweptAt = ligandoAvisos ? null : current.asaasNotificationsSweptAt
 
   if (next.endHour <= next.startHour) {
     return { ok: false, error: 'A janela de cobrança precisa terminar depois de começar.' }
@@ -2572,19 +2577,29 @@ export async function setAsaasNotifications(connectionId: string, disabled: bool
   const c = await connectionCred(accountId, connectionId)
   if (!c) return { ok: false, error: 'Conexão não encontrada.' }
   try {
+    // Instante da lista: quem existia até aqui fica calado se não sobrar ninguém.
+    const listedAt = new Date().toISOString()
     const all = await listAllCustomers(c.cred)
     const pending = all.filter((cu) => (cu.notificationDisabled === true) !== disabled)
     const batch = pending.slice(0, NOTIFICATIONS_BATCH)
+    const calados: string[] = []
     let changed = 0
     let failed = 0
     for (const cu of batch) {
       try {
         await setCustomerNotifications(c.cred, cu.id, disabled)
         changed++
+        if (disabled) calados.push(cu.id)
       } catch (err) {
         failed++
         if (err instanceof AsaasApiError && err.status === 429) break
       }
+    }
+    if (calados.length) {
+      // 🔕 Revisão 17/09 (aviso de cobrança nova): guarda quando o CRM calou
+      // esses clientes e quais cobranças deles já existiam (listadas logo
+      // depois — essas o Asaas avisou; as que nascerem daqui em diante, não).
+      await recordSilenced(c.id, calados, await listChargesAtSilencing(c.cred))
     }
     const remaining = pending.length - changed
     const now = new Date().toISOString()
@@ -2592,6 +2607,9 @@ export async function setAsaasNotifications(connectionId: string, disabled: bool
       .update(asaasConnections)
       .set({ notificationsOffAt: disabled ? (remaining === 0 ? now : null) : null, updatedAt: now })
       .where(eq(asaasConnections.id, c.id))
+    // Todos calados = varredura completa: vale como piso do aviso de cobrança
+    // nova (só grava se "o CRM assume os avisos" já estava ligado antes).
+    if (disabled && remaining === 0) await markAsaasNotificationsSwept(accountId, listedAt)
     revalidatePath('/cobrancas')
     return { ok: true, data: { changed, alreadyDone: all.length - pending.length, failed, total: all.length, remaining } }
   } catch (err) {

@@ -79,8 +79,14 @@ export function daysBetweenYmd(from: string, to: string): number | null {
  * Hoje segunda 21/09 com 2 dias → quinta 17/09: a de sexta 17h30 entra.
  *
  * Nunca antes de nenhum piso: o dia em que a conexão foi ligada (tudo antes é
- * carga inicial) e o dia SEGUINTE a ligar "o CRM assume os avisos" (até lá o
- * Asaas avisava sozinho — mandar de novo seria dobrado).
+ * carga inicial) e o dia SEGUINTE à primeira varredura depois de ligar "o CRM
+ * assume os avisos" (até lá o Asaas avisava sozinho — `ligaAvisosFloor`).
+ *
+ * Piso no futuro NÃO é trazido para hoje (revisão 17/09): no dia em que a
+ * opção é ligada o piso é amanhã, e trazer para hoje punha na janela a
+ * cobrança das 08:00 que o Asaas já tinha avisado — a varredura das 10:30
+ * calava o cliente e o CRM mandava o link de novo. Devolve o piso como está;
+ * quem chama vê `since > hoje` e pula a conexão (sem janela até amanhã).
  */
 export function newChargeSince(
   todayKey: string,
@@ -102,8 +108,34 @@ export function newChargeSince(
     const piso = typeof f === 'string' ? f.slice(0, 10) : ''
     if (/^\d{4}-\d{2}-\d{2}$/.test(piso) && piso > since) since = piso
   }
-  // Piso no futuro (relógio torto) não pode esconder o dia de hoje.
-  return since > todayKey ? todayKey : since
+  return since
+}
+
+/**
+ * Piso do "CRM assume os avisos": o dia SEGUINTE à primeira varredura completa
+ * DEPOIS de ligar a opção — não o dia seguinte ao clique (revisão 17/09).
+ *
+ * Por quê: o Asaas só para de avisar quando a varredura desliga os clientes, e
+ * ela só roda numa rodada dentro do horário. Ligada na sexta 17h30, a primeira
+ * varredura é segunda 9h: as cobranças de sábado e domingo o Asaas avisou, e
+ * com o piso no sábado (dia seguinte ao clique) o CRM mandava de novo na segunda.
+ *
+ * - `offAt` null: conta que já tinha ligado antes de existir o campo (GoLink) —
+ *   sem piso, como antes;
+ * - sem varredura, ou varredura anterior ao `offAt` (desligou e religou):
+ *   `wait` — a varredura de cobrança nova não roda até a próxima;
+ * - senão: dia seguinte (no fuso da conta) ao instante da varredura.
+ */
+export function ligaAvisosFloor(
+  offAt: string | null | undefined,
+  sweptAt: string | null | undefined,
+  dayOf: (iso: string) => string,
+): { wait: true } | { wait: false; floor: string | null } {
+  const off = offAt ? Date.parse(offAt) : Number.NaN
+  if (Number.isNaN(off)) return { wait: false, floor: null }
+  const varrida = sweptAt ? Date.parse(sweptAt) : Number.NaN
+  if (Number.isNaN(varrida) || varrida < off) return { wait: true }
+  return { wait: false, floor: addDaysYmd(dayOf(new Date(varrida).toISOString()), 1) }
 }
 
 /** Os campos da cobrança do Asaas que a classificação lê. */
@@ -117,6 +149,10 @@ export interface NewChargePayment {
   installment?: string | null
   subscription?: string | null
   billingType?: string | null
+  /** Link de pagamento do Asaas de onde o próprio cliente gerou a cobrança. */
+  paymentLink?: string | null
+  /** Checkout do Asaas de onde o próprio cliente gerou a cobrança. */
+  checkoutSession?: string | null
 }
 
 export type NewChargeVerdict =
@@ -130,6 +166,8 @@ export type NewChargeVerdict =
   | 'ja_avisado'
   /** O CRM criou (por id, pela referência ou pelo grupo): o link saiu na criação. */
   | 'criada_pelo_crm'
+  /** O próprio cliente gerou num link de pagamento/checkout do Asaas: ele já está com o boleto na tela. */
+  | 'gerada_pelo_cliente'
   /** Vence além do horizonte: renovação, parcelas 2..N — trabalho do lembrete D-5. */
   | 'vence_longe'
   /** Mensalidade no cartão de crédito: o Asaas debita sozinho, "segue o link" confunde. */
@@ -175,6 +213,10 @@ export function classifyNewCharge(p: NewChargePayment, ctx: NewChargeContext): N
   ) {
     return 'criada_pelo_crm'
   }
+  // Revisão 17/09: conta que divulga um link de pagamento do Asaas — o cliente
+  // abre, escolhe boleto e a cobrança nasce sem referência. "Segue o link para
+  // pagamento" 30 min depois, para quem acabou de gerar, parece robô quebrado.
+  if ((p.paymentLink ?? '').trim() || (p.checkoutSession ?? '').trim()) return 'gerada_pelo_cliente'
   const dias = p.dueDate ? daysBetweenYmd(ctx.todayKey, p.dueDate) : null
   if (dias == null || dias > (ctx.horizonDays ?? NEW_CHARGE_HORIZON_DAYS)) return 'vence_longe'
   if (p.subscription && String(p.billingType ?? '').toUpperCase() === 'CREDIT_CARD') return 'cartao_recorrente'
@@ -183,37 +225,148 @@ export function classifyNewCharge(p: NewChargePayment, ctx: NewChargeContext): N
 
 /** Aviso de "cobrança criada" do próprio Asaas para um cliente (GET /customers/{id}/notifications). */
 export interface PaymentCreatedFlags {
+  /** PAYMENT_CREATED ligado. */
   enabled: boolean
-  /** Algum canal PARA O CLIENTE ligado (e-mail, SMS, WhatsApp, ligação). */
-  anyChannel: boolean
+  /** Canais PARA O CLIENTE ligados nesse evento. */
+  email: boolean
+  sms: boolean
+  whatsapp: boolean
+  phoneCall: boolean
+}
+
+/**
+ * O que o CRM guardou quando desligou os avisos do Asaas de um cliente
+ * (`asaas-silenced.ts`, Redis com validade). Sem isso não dá para saber se o
+ * cliente já estava calado quando a cobrança nasceu: o `notificationDisabled`
+ * que o Asaas devolve é o de AGORA, e a data de criação só tem o dia.
+ */
+export interface SilencedRecord {
+  /** Quando o CRM desligou (ISO). */
+  at: string
+  /** Primeiro dia (YYYY-MM-DD) coberto pela lista `before`. */
+  beforeSince?: string | null
+  /**
+   * Cobranças do cliente que já existiam quando ele foi calado (listadas logo
+   * DEPOIS do PUT: a que nasceu nesses segundos conta como avisada pelo Asaas —
+   * no máximo um aviso a menos, nunca dobrado). Ausente = não deu para listar.
+   */
+  before?: readonly string[] | null
+}
+
+const YMD_RE = /^\d{4}-\d{2}-\d{2}$/
+const temValor = (v: string | null | undefined) => !!(v ?? '').trim()
+
+/**
+ * O Asaas CONSEGUE entregar o aviso de cobrança criada a este cliente? Canal
+ * ligado sem o dado do canal não entrega nada (revisão 17/09): cliente só com
+ * celular e só o e-mail ligado ficava sem o link — o Asaas não mandava (não há
+ * endereço) e o CRM achava que ele mandou. SMS e WhatsApp vão para o celular;
+ * a ligação, para o fixo ou o celular.
+ */
+export function asaasReachesCustomer(
+  f: PaymentCreatedFlags,
+  c: { email?: string | null; mobilePhone?: string | null; phone?: string | null },
+): boolean {
+  if (!f.enabled) return false
+  return (
+    (f.email && temValor(c.email)) ||
+    ((f.sms || f.whatsapp) && temValor(c.mobilePhone)) ||
+    (f.phoneCall && (temValor(c.phone) || temValor(c.mobilePhone)))
+  )
+}
+
+/**
+ * O cliente já estava calado quando a cobrança nasceu?
+ *
+ * Revisão 17/09 — antes comparava a criação do CLIENTE com o `since`, que anda
+ * um dia por dia: a mesma cobrança dava "o Asaas avisa" na quarta e na quinta e
+ * "não avisa" na sexta (cliente criado terça 14h, cobrança quarta 08:00, varredura
+ * quarta 9h) — e o CRM mandava na sexta o link que o Asaas mandou na quarta. E o
+ * contrário: cliente calado dentro da janela caía nas chaves por evento (que o
+ * Asaas não mexe ao calar) e ninguém avisava. Agora a âncora é o que não muda:
+ * a cobrança e o registro de quando o CRM calou o cliente.
+ *
+ *   - sem leitura do registro (Redis fora) → 'nao_sei' (as chaves decidem);
+ *   - sem registro → 'antes': o cliente nasceu calado (ERP/API, ou o CRM criou)
+ *     ou foi calado há mais tempo que a validade do registro (35 dias, maior que
+ *     qualquer janela). ⚠️ No dia do deploy, cliente calado por varredura antiga
+ *     não tem registro — pode dobrar o aviso de uma cobrança criada antes dessa
+ *     varredura, só em cliente com PAYMENT_CREATED ligado (GoLink tem desligado);
+ *   - com a lista do que já existia ao calar e a cobrança no período da lista →
+ *     está na lista = 'depois' (nasceu com o Asaas ligado, ou nos segundos até a
+ *     lista — conta como avisada, nunca dobra); não está = 'antes';
+ *   - sem a lista, pelo DIA: cobrança de dia anterior ao calar = 'depois';
+ *     de dia posterior = 'antes'; do MESMO dia, 'depois' só se o cliente também
+ *     nasceu nesse dia (criados juntos antes da varredura das 9h) — a cobrança
+ *     do painel é de horário comercial, depois da varredura.
+ */
+export function silencedBeforeCharge(
+  c: { dateCreated?: string | null },
+  chargeId: string,
+  chargeCreated: string,
+  silenced: SilencedRecord | null | undefined,
+  dayOf: (iso: string) => string,
+): 'antes' | 'depois' | 'nao_sei' {
+  if (silenced === undefined) return 'nao_sei'
+  if (silenced === null) return 'antes'
+  const at = Date.parse(silenced.at)
+  const criadaEm = chargeCreated.slice(0, 10)
+  if (Number.isNaN(at) || !YMD_RE.test(criadaEm)) return 'nao_sei'
+  const desde = (silenced.beforeSince ?? '').slice(0, 10)
+  if (Array.isArray(silenced.before) && YMD_RE.test(desde) && criadaEm >= desde) {
+    return silenced.before.includes(chargeId) ? 'depois' : 'antes'
+  }
+  const diaCalado = dayOf(new Date(at).toISOString())
+  if (criadaEm < diaCalado) return 'depois'
+  if (criadaEm > diaCalado) return 'antes'
+  return (c.dateCreated ?? '').slice(0, 10) === diaCalado ? 'depois' : 'antes'
 }
 
 /**
  * O PRÓPRIO Asaas avisa (ou avisou) este cliente da cobrança criada? Se sim, o
  * CRM não manda: dois avisos do mesmo link é pior que um.
  *
- * Três casos em que ele ainda avisa, mesmo com a conta tendo desligado:
+ * Casos em que ele ainda avisa, mesmo com a conta tendo desligado:
  *   1. a varredura foi recusada ("possui cobranças agendadas", assinatura ativa);
  *   2. cliente criado no painel depois da varredura do dia — nasce com aviso
- *      ligado; a varredura da manhã seguinte desliga e apaga o rastro;
- *   3. conta que acabou de ligar o "CRM assume os avisos" (piso em newChargeSince).
+ *      ligado e a cobrança nasce antes de a varredura seguinte calar;
+ *   3. conta que acabou de ligar o "CRM assume os avisos" (piso em `ligaAvisosFloor`).
  * Andressa e Convictus (15/09) estão com PAYMENT_CREATED desligado em todos os
  * canais; o Dom Burguer, criado pelo CRM, com SMS ligado — por isso olhar.
  *
+ * O veredito é o mesmo em todos os dias da janela: não depende de "hoje".
  * 'need_flags' = só o GET das chaves por evento decide (cache na rodada).
  */
 export function asaasNotifies(
-  c: { notificationDisabled?: boolean | null; dateCreated?: string | null; externalReference?: string | null },
-  ctx: { since: string; isCrmRef: (ref?: string | null) => boolean },
+  c: {
+    notificationDisabled?: boolean | null
+    dateCreated?: string | null
+    externalReference?: string | null
+    email?: string | null
+    mobilePhone?: string | null
+    phone?: string | null
+  },
+  ctx: {
+    chargeId: string
+    /** Dia de criação da cobrança (YYYY-MM-DD, como o Asaas devolve). */
+    chargeCreated: string
+    isCrmRef: (ref?: string | null) => boolean
+    /** Registro de quando o CRM calou o cliente: null = não há; undefined = não deu para ler. */
+    silenced: SilencedRecord | null | undefined
+    /** Dia local (fuso da conta) de um instante ISO. */
+    dayOf: (iso: string) => string
+  },
   flags?: PaymentCreatedFlags | null,
 ): 'yes' | 'no' | 'need_flags' {
   // Cliente criado pelo CRM nasce com os avisos desligados (findOrCreateCustomer).
   if (ctx.isCrmRef(c.externalReference)) return 'no'
-  const criado = (c.dateCreated ?? '').slice(0, 10)
-  // Já estava calado antes da janela: a varredura desligou antes da cobrança nascer.
-  if (c.notificationDisabled === true && /^\d{4}-\d{2}-\d{2}$/.test(criado) && criado < ctx.since) return 'no'
+  if (c.notificationDisabled === true && silencedBeforeCharge(c, ctx.chargeId, ctx.chargeCreated, ctx.silenced, ctx.dayOf) === 'antes') {
+    return 'no'
+  }
+  // Ligado, ou calado DEPOIS de a cobrança nascer: o Asaas avisou se as chaves
+  // do evento estavam ligadas e o canal tem para onde mandar.
   if (!flags) return 'need_flags'
-  return flags.enabled && flags.anyChannel ? 'yes' : 'no'
+  return asaasReachesCustomer(flags, c) ? 'yes' : 'no'
 }
 
 /** Pedido de aviso criado depois deste instante ainda está na carência (sender). */

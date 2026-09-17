@@ -19,7 +19,11 @@ const state = vi.hoisted(() => ({
   payments: {} as Record<string, AsaasPayment[]>,
   customers: {} as Record<string, AsaasCustomer>,
   customers429: {} as Record<string, boolean>,
-  flags: {} as Record<string, { enabled: boolean; anyChannel: boolean }>,
+  flags: {} as Record<string, { enabled: boolean; email: boolean; sms: boolean; whatsapp: boolean; phoneCall: boolean }>,
+  /** Registro de quando o CRM calou cada cliente (chave `${connectionId}|${customerId}`). */
+  silenced: {} as Record<string, { at: string; beforeSince?: string | null; before?: string[] | null }>,
+  /** Redis fora: loadSilenced devolve null. */
+  silencedDown: false,
   contactOf: {} as Record<string, string>,
   linksSent: [] as string[],
   delivery: { ok: true, label: 'WhatsApp' } as { ok: true; label: string } | { ok: false; error: string },
@@ -100,7 +104,7 @@ vi.mock('@/lib/asaas/collections', () => {
     }),
     getCustomerPaymentCreatedFlags: vi.fn(async (_cred: unknown, id: string) => {
       state.flagCalls.push(id)
-      return state.flags[id] ?? { enabled: false, anyChannel: false }
+      return state.flags[id] ?? { enabled: false, email: false, sms: false, whatsapp: false, phoneCall: false }
     }),
   }
 })
@@ -109,6 +113,12 @@ vi.mock('@/lib/asaas/sync', () => ({
   findContact: vi.fn(async (_acc: string, phone: string | null) => {
     const hit = Object.entries(state.contactOf).find(([cus]) => !!phone && state.customers[cus]?.mobilePhone === phone)
     return { contactId: hit ? hit[1] : null, matchedBy: hit ? 'phone' : null, ambiguous: false }
+  }),
+}))
+vi.mock('./asaas-silenced', () => ({
+  loadSilenced: vi.fn(async (pairs: { connectionId: string; customerId: string }[]) => {
+    if (state.silencedDown) return null
+    return new Map(pairs.map((p) => [`${p.connectionId}|${p.customerId}`, state.silenced[`${p.connectionId}|${p.customerId}`] ?? null]))
   }),
 }))
 vi.mock('./links-sent', () => ({
@@ -278,7 +288,12 @@ describe('queueNewChargeNotices — lê no Asaas o que foi CRIADO, não a cartei
       { id: 'ct_leva', name: 'Leva', optedOut: false },
       { id: 'ct_alpha', name: 'Alpha', optedOut: false },
     ]
-    state.flags = { cus_alpha: { enabled: true, anyChannel: false } }
+    state.flags = { cus_alpha: { enabled: true, email: false, sms: false, whatsapp: false, phoneCall: false } }
+    // Alpha nasceu no painel em 15/09 com os avisos ligados; a varredura de 16/09
+    // às 9h calou e a lista tirada logo depois tinha a pay_alpha1 (o Asaas podia
+    // ter avisado). Leva é calado há meses: sem registro.
+    state.silenced = { 'c-asaas|cus_alpha': { at: '2026-09-16T12:05:00Z', beforeSince: '2026-09-15', before: ['pay_alpha1'] } }
+    state.silencedDown = false
     state.previous = []
     state.crmCharges = [{ asaasId: 'pay_crm_p1' }]
     state.crmConversationIds = [CONV_CRM]
@@ -340,16 +355,52 @@ describe('queueNewChargeNotices — lê no Asaas o que foi CRIADO, não a cartei
     expect((state.inserts[1].payload as Record<string, unknown>).asaasEmail).toBeUndefined()
     expect([...contactedToday].sort()).toEqual(['ct_alpha', 'ct_leva'])
     expect([...alreadyQueued].sort()).toEqual(['ct_alpha', 'ct_leva'])
-    // Alpha é cliente novo: só as chaves do Asaas dizem se ele avisou. Leva é antigo e calado: sem GET.
+    // Alpha foi calado DEPOIS da cobrança nascer: só as chaves do Asaas dizem se ele avisou. Leva é calado há tempo: sem GET.
     expect(state.flagCalls).toEqual(['cus_alpha'])
     expect(state.fallbackEmails).toEqual(['financeiro@leva.com', null])
   })
 
   it('uma mensagem de cobrança por pessoa por dia; o Asaas que ainda avisa não ganha segundo aviso', async () => {
-    state.flags = { cus_alpha: { enabled: true, anyChannel: true } }
+    state.flags = { cus_alpha: { enabled: true, email: false, sms: true, whatsapp: false, phoneCall: false } }
     const r = await run({ contactedToday: new Set(['ct_leva']) })
     expect(r.queued).toBe(0)
     expect(r.skipped).toMatchObject({ mesmo_dia: 1, asaas_avisa: 1 })
+  })
+
+  // Revisão 17/09: o Asaas com só o e-mail ligado não entrega a quem não tem e-mail.
+  it('chave de e-mail ligada num cadastro sem e-mail → o Asaas não entregou, o CRM avisa', async () => {
+    state.flags = { cus_alpha: { enabled: true, email: true, sms: false, whatsapp: false, phoneCall: false } }
+    const r = await run()
+    expect(r.skipped.asaas_avisa).toBeUndefined()
+    expect(state.inserts.map((i) => i.contactId)).toEqual(['ct_leva', 'ct_alpha'])
+  })
+
+  // Revisão 17/09: a cobrança nasceu DEPOIS de a varredura calar o cliente (fora
+  // da lista) → o Asaas não avisou, mesmo com as chaves ligadas; nem pergunta.
+  it('cobrança criada depois de o CRM calar o cliente → avisa sem perguntar as chaves', async () => {
+    state.flags = { cus_alpha: { enabled: true, email: false, sms: true, whatsapp: false, phoneCall: false } }
+    state.silenced = { 'c-asaas|cus_alpha': { at: '2026-09-15T12:05:00Z', beforeSince: '2026-09-14', before: [] } }
+    const r = await run()
+    expect(r.skipped.asaas_avisa).toBeUndefined()
+    expect(state.flagCalls).toEqual([])
+    expect(state.inserts.map((i) => i.contactId)).toEqual(['ct_leva', 'ct_alpha'])
+  })
+
+  it('Redis fora: sem saber quando calou, as chaves decidem (até do cliente calado há tempo)', async () => {
+    state.silencedDown = true
+    state.flags = { cus_alpha: { enabled: true, email: false, sms: true, whatsapp: false, phoneCall: false } }
+    const r = await run()
+    expect(state.flagCalls.sort()).toEqual(['cus_alpha', 'cus_leva'])
+    expect(r.skipped.asaas_avisa).toBe(1)
+    expect(state.inserts.map((i) => i.contactId)).toEqual(['ct_leva'])
+  })
+
+  // Revisão 17/09: quem gerou o boleto num link de pagamento do Asaas já está com ele.
+  it('cobrança gerada pelo cliente num link de pagamento do Asaas → não avisa', async () => {
+    state.payments.k1 = state.payments.k1.map((p) => (p.id === 'pay_leva1' ? { ...p, paymentLink: 'lnk_golink' } : p))
+    const r = await run()
+    expect(r.skipped.gerada_pelo_cliente).toBe(1)
+    expect(state.inserts.map((i) => i.contactId)).toEqual(['ct_alpha'])
   })
 
   it('teto: sai quem vence antes, o resto conta como teto', async () => {
@@ -403,10 +454,29 @@ describe('queueNewChargeNotices — lê no Asaas o que foi CRIADO, não a cartei
     expect(String(leva.suggestedText).split('Seguem os links').length).toBe(2)
   })
 
-  it('só depois do dia em que o "CRM assume os avisos" foi ligado', async () => {
-    await run({ settings: { ...golink, asaasNotificationsOffAt: '2026-09-15T20:00:00Z' } })
+  it('só depois do dia da 1ª varredura que seguiu o "CRM assume os avisos"', async () => {
+    await run({ settings: { ...golink, asaasNotificationsOffAt: '2026-09-15T13:00:00Z', asaasNotificationsSweptAt: '2026-09-15T20:00:00Z' } })
+    expect(state.listCalls).toHaveLength(2)
     expect(state.listCalls.every((c) => c.since === '2026-09-16')).toBe(true)
     // Leva e Alpha nasceram em 15/09: o Asaas ainda avisava.
+    expect(state.inserts).toHaveLength(0)
+  })
+
+  // Revisão 17/09: ligada sexta 17h30, a varredura só roda segunda 9h — o Asaas
+  // avisou as do fim de semana; contar do clique mandava o link de novo.
+  it('ligou e a varredura ainda não calou ninguém → não lê nada, "aguardando_varredura"', async () => {
+    const r = await run({ settings: { ...golink, asaasNotificationsOffAt: '2026-09-16T20:30:00Z', asaasNotificationsSweptAt: null } })
+    expect(state.listCalls).toHaveLength(0)
+    expect(r.skipped.aguardando_varredura).toBe(2)
+    expect(state.inserts).toHaveLength(0)
+  })
+
+  // Revisão 17/09: ligada às 10:00 e varrida às 10:30 de hoje → o piso é amanhã.
+  // Trazer para hoje punha na janela a das 08:00 que o Asaas já tinha avisado.
+  it('varredura de hoje → piso amanhã: sem janela hoje, nenhuma listagem', async () => {
+    const r = await run({ settings: { ...golink, asaasNotificationsOffAt: '2026-09-17T12:00:00Z', asaasNotificationsSweptAt: '2026-09-17T12:30:00Z' } })
+    expect(state.listCalls).toHaveLength(0)
+    expect(r.skipped.aguardando_varredura).toBe(2)
     expect(state.inserts).toHaveLength(0)
   })
 

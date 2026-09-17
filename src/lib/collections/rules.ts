@@ -100,6 +100,16 @@ export interface CollectionsSettings {
    */
   asaasNotificationsOffAt: string | null
   /**
+   * Quando terminou a primeira varredura COMPLETA (todos os clientes da conexão)
+   * depois de `asaasNotificationsOffAt` (ISO). Gravado pelo servidor — pela
+   * varredura (sync.ts) e pelo botão "desligar avisos do Asaas" — e apagado ao
+   * ligar a opção. Revisão 17/09: o Asaas só para de avisar quando a varredura
+   * cala os clientes, não no clique; ligada na sexta 17h30, a varredura é segunda
+   * 9h e o Asaas avisou as cobranças do fim de semana. O piso do aviso de
+   * cobrança nova é o dia seguinte a ESTE instante.
+   */
+  asaasNotificationsSweptAt: string | null
+  /**
    * Agradecer quando o pagamento entra (webhook do Asaas). Só para quem a
    * régua/CRM cobrou ou cuja cobrança nasceu aqui — nunca para quem nunca
    * ouviu falar da gente por aqui. (07/09, pedido do cliente no áudio.)
@@ -180,6 +190,7 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   emitMaxValue: 500,
   asaasNotificationsOff: false,
   asaasNotificationsOffAt: null,
+  asaasNotificationsSweptAt: null,
   thankOnPayment: true,
   reminderDaysBefore: 0,
   promiseUpdatesDueDate: false,
@@ -243,6 +254,10 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     asaasNotificationsOffAt:
       typeof r.asaasNotificationsOffAt === 'string' && !Number.isNaN(Date.parse(r.asaasNotificationsOffAt))
         ? r.asaasNotificationsOffAt.slice(0, 40)
+        : null,
+    asaasNotificationsSweptAt:
+      typeof r.asaasNotificationsSweptAt === 'string' && !Number.isNaN(Date.parse(r.asaasNotificationsSweptAt))
+        ? r.asaasNotificationsSweptAt.slice(0, 40)
         : null,
     thankOnPayment: r.thankOnPayment !== false,
     reminderDaysBefore: int(r.reminderDaysBefore, 0, 0, 15),

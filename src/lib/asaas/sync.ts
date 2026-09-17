@@ -24,6 +24,7 @@ import {
   type AsaasEnv,
 } from './collections'
 import { getAccountSettings } from '@/lib/settings/account-settings'
+import { listChargesAtSilencing, markAsaasNotificationsSwept, recordSilenced } from '@/lib/collections/asaas-silenced'
 import { normalizeSettings } from '@/lib/collections/rules'
 
 import {
@@ -117,11 +118,18 @@ export async function syncConnection(
       const lastSweep = conn.notificationsOffAt ? new Date(conn.notificationsOffAt).getTime() : 0
       const sweepAll = Date.now() - lastSweep > FULL_SWEEP_MS
       let pool = [...customers.values()]
+      // Instante da lista de clientes: quem existia até aqui foi calado (ou recusado).
+      const sweepStartedAt = new Date().toISOString()
+      let everyoneListed = false
       if (sweepAll) {
         // Falha na listagem não pode derrubar a sincronização: cai na carteira.
         const everyone = await listAllCustomers(cred).catch(() => null)
-        if (everyone) pool = everyone
+        if (everyone) {
+          pool = everyone
+          everyoneListed = true
+        }
       }
+      const calados: string[] = []
       for (const c of pool) {
         if (c.notificationDisabled === true) continue
         try {
@@ -129,6 +137,7 @@ export async function syncConnection(
           c.notificationDisabled = true
           const inWallet = customers.get(c.id)
           if (inWallet) inWallet.notificationDisabled = true
+          calados.push(c.id)
           notificationsOff++
         } catch {
           // Assinatura ativa ("possui cobranças agendadas") recusa sempre — a
@@ -136,12 +145,23 @@ export async function syncConnection(
           notificationsRefused++
         }
       }
+      if (calados.length) {
+        // 🔕 Revisão 17/09 (aviso de cobrança nova): guarda QUANDO o CRM calou
+        // esses clientes e quais cobranças deles já existiam — a do painel criada
+        // antes da varredura o Asaas avisou; a criada depois, o CRM avisa. Lista
+        // só se alguém foi calado (a recusa diária da assinatura ativa não gasta GET).
+        await recordSilenced(connectionId, calados, await listChargesAtSilencing(cred))
+      }
       if (sweepAll) {
         await db
           .update(asaasConnections)
           .set({ notificationsOffAt: new Date().toISOString() })
           .where(eq(asaasConnections.id, connectionId))
           .catch(() => {})
+        // Primeira varredura COMPLETA depois de ligar a opção: é daí que o
+        // aviso de cobrança nova conta o piso (não do clique). Listagem que
+        // falhou não conta — a carteira sozinha não cala o cliente novo.
+        if (everyoneListed) await markAsaasNotificationsSwept(accountId, sweepStartedAt)
         if (notificationsRefused) {
           console.warn(`[cobranca] ${conn.label}: ${notificationsRefused} cliente(s) o Asaas não deixou desligar os avisos (provável assinatura ativa).`)
         }

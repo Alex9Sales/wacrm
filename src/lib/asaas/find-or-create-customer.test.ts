@@ -170,6 +170,27 @@ describe('findOrCreateCustomer — sandbox e opções', () => {
     await expect(findOrCreateCustomer(PROD, input(), { existing: null })).rejects.toBeInstanceOf(AsaasDocumentRequiredError)
     expect(calls).toHaveLength(0)
   })
+
+  // Revisão 17/09 (aviso de cobrança nova): o PUT de complemento cala o Asaas.
+  // Quem chama precisa saber, para gravar QUANDO o cliente parou de ser avisado.
+  it('onSilenced: só quando o PUT calou um cadastro que ainda recebia avisos', async () => {
+    const calados: string[] = []
+    const onSilenced = (id: string) => calados.push(id)
+    // Avisos ligados + e-mail que faltava → PUT com notificationDisabled → avisa.
+    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, email: 'nota@empresa.com' }), {
+      existing: { id: 'cus_painel', cpfCnpj: CNPJ, notificationDisabled: false },
+      onSilenced,
+    })
+    // Já calado → PUT sai, mas nada muda nos avisos.
+    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ, email: 'nota@empresa.com' }), {
+      existing: { id: 'cus_calado', cpfCnpj: CNPJ, notificationDisabled: true },
+      onSilenced,
+    })
+    // Sem nada a completar → nenhum PUT, nada calado.
+    await findOrCreateCustomer(PROD, input({ cpfCnpj: CNPJ }), { existing: { id: 'cus_pronto', cpfCnpj: CNPJ, notificationDisabled: false }, onSilenced })
+    expect(calados).toEqual(['cus_painel'])
+    expect(writes().map((w) => w.url.pathname.split('/').pop())).toEqual(['cus_painel', 'cus_calado'])
+  })
 })
 
 describe('findCustomer / findCustomerByDocument — só leitura', () => {

@@ -632,4 +632,14 @@ describe('duplicateSuspects — o caso Renato ×3', () => {
     const salvo = normalizeSettings({ asaasNotificationsOff: true, asaasNotificationsOffAt: '2026-09-16T14:05:00.000Z' })
     expect(normalizeSettings({ ...salvo, tone: 'x' }).asaasNotificationsOffAt).toBe('2026-09-16T14:05:00.000Z')
   })
+
+  // Revisão 17/09: o piso conta da 1ª varredura depois de ligar (gravada pelo servidor).
+  it('asaasNotificationsSweptAt: nasce vazio, preserva a data gravada, descarta o resto', () => {
+    expect(normalizeSettings({}).asaasNotificationsSweptAt).toBeNull()
+    expect(normalizeSettings({ asaasNotificationsSweptAt: '2026-09-21T12:00:00.000Z' }).asaasNotificationsSweptAt).toBe('2026-09-21T12:00:00.000Z')
+    expect(normalizeSettings({ asaasNotificationsSweptAt: 'segunda' }).asaasNotificationsSweptAt).toBeNull()
+    expect(normalizeSettings({ asaasNotificationsSweptAt: 0 }).asaasNotificationsSweptAt).toBeNull()
+    const salvo = normalizeSettings({ asaasNotificationsOff: true, asaasNotificationsSweptAt: '2026-09-21T12:00:00.000Z' })
+    expect(normalizeSettings({ ...salvo, tone: 'x' }).asaasNotificationsSweptAt).toBe('2026-09-21T12:00:00.000Z')
+  })
 })

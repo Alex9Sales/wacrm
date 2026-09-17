@@ -126,6 +126,10 @@ export interface AsaasPayment {
   installment?: string | null
   /** Nosso rastro quando o CRM criou (conversa/contato; na conta Fluxia, a organização). */
   externalReference?: string | null
+  /** Link de pagamento do Asaas de onde o cliente gerou a cobrança (ele mesmo já tem o boleto). */
+  paymentLink?: string | null
+  /** Checkout do Asaas de onde o cliente gerou a cobrança. */
+  checkoutSession?: string | null
 }
 
 interface AsaasList<T> {
@@ -365,7 +369,15 @@ export async function findCustomerByDocument(
 export async function findOrCreateCustomer(
   cred: AsaasCredential,
   input: AsaasCustomerInput,
-  opts: { existing?: AsaasCustomer | null } = {},
+  opts: {
+    existing?: AsaasCustomer | null
+    /**
+     * Chamado quando o PUT de complemento CALOU um cadastro que estava com os
+     * avisos ligados (revisão 17/09): o aviso de cobrança nova precisa saber
+     * quando o Asaas parou de avisar esse cliente (`asaas-silenced.ts`).
+     */
+    onSilenced?: (customerId: string) => void
+  } = {},
 ): Promise<AsaasCustomer> {
   const doc = normalizeDocument(input.cpfCnpj)
   const endereco = addressFields(input.address)
@@ -384,10 +396,12 @@ export async function findOrCreateCustomer(
     if (!(existente.cpfCnpj ?? '').trim() && doc) patch.cpfCnpj = doc
     if (email && !existente.email) patch.email = email
     if (Object.keys(patch).length === 0) return existente
-    return asaasSend<AsaasCustomer>(cred, 'PUT', `/customers/${encodeURIComponent(existente.id)}`, {
+    const atualizado = await asaasSend<AsaasCustomer>(cred, 'PUT', `/customers/${encodeURIComponent(existente.id)}`, {
       ...patch,
       notificationDisabled: true,
     })
+    if (existente.notificationDisabled !== true) opts.onSilenced?.(existente.id)
+    return atualizado
   }
 
   if (requireDocument && !doc) throw new AsaasDocumentRequiredError()
@@ -552,14 +566,25 @@ export async function listPendingDueBetween(cred: AsaasCredential, fromDate: str
  * Na GoLink (15/09 a 17/09) são 20 a 40 por conta: renovações de assinatura e
  * Pix recebidos entram aqui e quem separa é `classifyNewCharge`.
  */
-export async function listPaymentsCreatedSince(cred: AsaasCredential, since: string): Promise<AsaasPayment[]> {
+export async function listPaymentsCreatedSince(
+  cred: AsaasCredential,
+  since: string,
+  /** `customer`: só as desse cliente. `timeoutMs`: menor no caminho da emissão (emit.ts). */
+  opts: { customer?: string; timeoutMs?: number } = {},
+): Promise<AsaasPayment[]> {
   const out: AsaasPayment[] = []
   for (let page = 0; page < MAX_PAGES; page++) {
-    const res = await asaasGet<AsaasList<AsaasPayment>>(cred, '/payments', {
-      'dateCreated[ge]': since.slice(0, 10),
-      offset: page * PAGE_SIZE,
-      limit: PAGE_SIZE,
-    })
+    const res = await asaasGet<AsaasList<AsaasPayment>>(
+      cred,
+      '/payments',
+      {
+        'dateCreated[ge]': since.slice(0, 10),
+        ...(opts.customer ? { customer: opts.customer } : {}),
+        offset: page * PAGE_SIZE,
+        limit: PAGE_SIZE,
+      },
+      opts.timeoutMs,
+    )
     out.push(...(res.data ?? []))
     if (!res.hasMore || !res.data?.length) break
   }
@@ -583,24 +608,24 @@ interface AsaasCustomerNotification {
  *
  * Por que (17/09): cliente com a varredura recusada ou criado no painel depois
  * dela ainda recebe o aviso do Asaas — o CRM mandar de novo seria dobrado.
+ * Devolve cada canal separado (revisão 17/09): canal ligado sem o dado do
+ * cliente (e-mail ligado, cadastro sem e-mail) não entrega nada, e quem cruza
+ * com o cadastro é `asaasReachesCustomer`.
  * Lança AsaasApiError (quem chama decide; 429 para a rodada da conta).
  */
 export async function getCustomerPaymentCreatedFlags(
   cred: AsaasCredential,
   customerId: string,
-): Promise<{ enabled: boolean; anyChannel: boolean }> {
+): Promise<{ enabled: boolean; email: boolean; sms: boolean; whatsapp: boolean; phoneCall: boolean }> {
   const res = await asaasGet<AsaasList<AsaasCustomerNotification>>(cred, `/customers/${encodeURIComponent(customerId)}/notifications`, { limit: 100 })
-  const eventos = (res.data ?? []).filter((n) => n && n.event === 'PAYMENT_CREATED' && n.deleted !== true)
-  const enabled = eventos.some((n) => n.enabled === true)
-  const anyChannel = eventos.some(
-    (n) =>
-      n.enabled === true &&
-      (n.emailEnabledForCustomer === true ||
-        n.smsEnabledForCustomer === true ||
-        n.whatsappEnabledForCustomer === true ||
-        n.phoneCallEnabledForCustomer === true),
-  )
-  return { enabled, anyChannel }
+  const ligados = (res.data ?? []).filter((n) => n && n.event === 'PAYMENT_CREATED' && n.deleted !== true && n.enabled === true)
+  return {
+    enabled: ligados.length > 0,
+    email: ligados.some((n) => n.emailEnabledForCustomer === true),
+    sms: ligados.some((n) => n.smsEnabledForCustomer === true),
+    whatsapp: ligados.some((n) => n.whatsappEnabledForCustomer === true),
+    phoneCall: ligados.some((n) => n.phoneCallEnabledForCustomer === true),
+  }
 }
 
 // ============================================================ ITEM 5 (05/09)

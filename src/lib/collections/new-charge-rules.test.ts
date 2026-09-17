@@ -5,15 +5,20 @@ import {
   NEW_CHARGE_HORIZON_DAYS,
   addDaysYmd,
   asaasNotifies,
+  asaasReachesCustomer,
   classifyNewCharge,
   isUuidRef,
+  ligaAvisosFloor,
   newChargeGraceCutoffIso,
   newChargeSince,
   remindedFilter,
   shortChargeDescription,
+  silencedBeforeCharge,
   weekdayOfYmd,
   type NewChargeContext,
   type NewChargePayment,
+  type PaymentCreatedFlags,
+  type SilencedRecord,
 } from './new-charge-rules'
 import { COLLECTIONS_DEFAULTS, dayBlockedReason, type CollectionsSettings } from './rules'
 
@@ -47,14 +52,56 @@ describe('newChargeSince — janela em dias de ENVIO, não corridos', () => {
     expect(newChargeSince('2026-09-18', [null, addDaysYmd('2026-09-16', 1)], diaDeEnvio(golink))).toBe('2026-09-17')
   })
 
-  it('piso inválido é ignorado; piso no futuro não passa de hoje', () => {
+  it('piso inválido é ignorado', () => {
     expect(newChargeSince('2026-09-17', ['lixo', undefined], diaDeEnvio(golink))).toBe('2026-09-15')
-    expect(newChargeSince('2026-09-17', ['2026-09-30'], diaDeEnvio(golink))).toBe('2026-09-17')
+  })
+
+  // Revisão 17/09: trazer o piso de amanhã para hoje punha na janela a cobrança
+  // das 08:00 que o Asaas avisou antes de a varredura das 10:30 calar o cliente.
+  it('piso no futuro volta como está (quem chama pula a conexão: sem janela até lá)', () => {
+    expect(newChargeSince('2026-09-17', ['2026-09-18'], diaDeEnvio(golink))).toBe('2026-09-18')
+    expect(newChargeSince('2026-09-17', ['2026-09-30'], diaDeEnvio(golink))).toBe('2026-09-30')
   })
 
   it('conta que só cobra às segundas volta duas semanas (três, com o 7 de Setembro no caminho)', () => {
     expect(newChargeSince('2026-09-21', [], diaDeEnvio({ ...golink, sendWeekdays: [1], skipHolidays: false }))).toBe('2026-09-07')
     expect(newChargeSince('2026-09-21', [], diaDeEnvio({ ...golink, sendWeekdays: [1] }))).toBe('2026-08-31')
+  })
+})
+
+// Dia local em Brasília (UTC-3, sem horário de verão desde 2019).
+const diaBrasilia = (iso: string) => new Date(Date.parse(iso) - 3 * 3_600_000).toISOString().slice(0, 10)
+
+describe('ligaAvisosFloor — o piso conta da 1ª varredura DEPOIS de ligar, não do clique', () => {
+  it('conta que ligou antes de existir o campo (GoLink) → sem piso, como antes', () => {
+    expect(ligaAvisosFloor(null, null, diaBrasilia)).toEqual({ wait: false, floor: null })
+    expect(ligaAvisosFloor(null, '2026-09-17T12:00:00Z', diaBrasilia)).toEqual({ wait: false, floor: null })
+  })
+
+  it('ligou e a varredura ainda não rodou → espera (o Asaas segue avisando)', () => {
+    expect(ligaAvisosFloor('2026-09-18T20:30:00Z', null, diaBrasilia)).toEqual({ wait: true })
+    // Varredura de antes do clique (desligou e religou) não vale.
+    expect(ligaAvisosFloor('2026-09-18T20:30:00Z', '2026-09-18T12:00:00Z', diaBrasilia)).toEqual({ wait: true })
+  })
+
+  it('ligada sexta 17h30, 1ª varredura segunda 9h → piso terça: as de sábado e domingo o Asaas avisou', () => {
+    const r = ligaAvisosFloor('2026-09-18T20:30:00Z', '2026-09-21T12:00:00Z', diaBrasilia)
+    expect(r).toEqual({ wait: false, floor: '2026-09-22' })
+    const piso = (r as { floor: string }).floor
+    // Segunda: o piso está no futuro → sem janela (antes o piso era sábado e a de sábado saía de novo).
+    expect(newChargeSince('2026-09-21', [piso], diaDeEnvio(golink))).toBe('2026-09-22')
+    // Terça: só o que nasceu de terça em diante.
+    expect(newChargeSince('2026-09-22', [piso], diaDeEnvio(golink))).toBe('2026-09-22')
+  })
+
+  it('ligada 10:00 e varrida 10:30 do mesmo dia → nada de hoje entra hoje (a das 08:00 o Asaas avisou)', () => {
+    const r = ligaAvisosFloor('2026-09-17T13:00:00Z', '2026-09-17T13:30:00Z', diaBrasilia)
+    expect(r).toEqual({ wait: false, floor: '2026-09-18' })
+    expect(newChargeSince('2026-09-17', [(r as { floor: string }).floor], diaDeEnvio(golink))).toBe('2026-09-18')
+  })
+
+  it('varredura às 22h de Brasília (já é outro dia em UTC) conta pelo dia local', () => {
+    expect(ligaAvisosFloor('2026-09-17T13:00:00Z', '2026-09-18T01:00:00Z', diaBrasilia)).toEqual({ wait: false, floor: '2026-09-18' })
   })
 })
 
@@ -141,37 +188,135 @@ describe('classifyNewCharge — o que é cobrança nova de verdade', () => {
     expect(classifyNewCharge(pay({ subscription: 'sub_cc', billingType: 'CREDIT_CARD' }), ctx())).toBe('cartao_recorrente')
     expect(classifyNewCharge(pay({ billingType: 'CREDIT_CARD' }), ctx())).toBe('ok')
   })
+
+  // Revisão 17/09: quem abriu o link de pagamento e gerou o boleto já está com ele na tela.
+  it('gerada pelo cliente num link de pagamento ou checkout do Asaas → gerada_pelo_cliente', () => {
+    expect(classifyNewCharge(pay({ paymentLink: 'lnk_abc123' }), ctx())).toBe('gerada_pelo_cliente')
+    expect(classifyNewCharge(pay({ checkoutSession: 'chk_987' }), ctx())).toBe('gerada_pelo_cliente')
+    expect(classifyNewCharge(pay({ paymentLink: '  ', checkoutSession: null }), ctx())).toBe('ok')
+    // Já avisada continua pesando antes (não abre nada no Asaas).
+    expect(classifyNewCharge(pay({ id: 'pay_l', paymentLink: 'lnk_1' }), ctx({ noticed: new Set(['pay_l']) }))).toBe('ja_avisado')
+  })
+})
+
+const semCanal: PaymentCreatedFlags = { enabled: true, email: false, sms: false, whatsapp: false, phoneCall: false }
+const soSms: PaymentCreatedFlags = { ...semCanal, sms: true }
+
+describe('asaasReachesCustomer — canal ligado sem o dado do canal não entrega nada', () => {
+  it('só o e-mail ligado e cliente sem e-mail → o Asaas não avisa (revisão 17/09)', () => {
+    expect(asaasReachesCustomer({ ...semCanal, email: true }, { mobilePhone: '67990000001' })).toBe(false)
+    expect(asaasReachesCustomer({ ...semCanal, email: true }, { email: ' ', mobilePhone: '67990000001' })).toBe(false)
+    expect(asaasReachesCustomer({ ...semCanal, email: true }, { email: 'fin@leva.com' })).toBe(true)
+  })
+
+  it('SMS e WhatsApp vão para o celular; a ligação, para o fixo ou o celular', () => {
+    expect(asaasReachesCustomer(soSms, { email: 'fin@leva.com' })).toBe(false)
+    expect(asaasReachesCustomer(soSms, { mobilePhone: '67990000001' })).toBe(true)
+    expect(asaasReachesCustomer({ ...semCanal, whatsapp: true }, { phone: '6733330000' })).toBe(false)
+    expect(asaasReachesCustomer({ ...semCanal, whatsapp: true }, { mobilePhone: '67990000001' })).toBe(true)
+    expect(asaasReachesCustomer({ ...semCanal, phoneCall: true }, { phone: '6733330000' })).toBe(true)
+    expect(asaasReachesCustomer({ ...semCanal, phoneCall: true }, {})).toBe(false)
+  })
+
+  it('evento desligado não entrega, mesmo com canal e dado', () => {
+    expect(asaasReachesCustomer({ ...soSms, enabled: false }, { mobilePhone: '67990000001' })).toBe(false)
+  })
+})
+
+describe('silencedBeforeCharge — o cliente já estava calado quando a cobrança nasceu?', () => {
+  // Varredura de quarta 16/09 às 9h (12:00Z), lista tirada logo depois, desde 15/09.
+  const varredura: SilencedRecord = { at: '2026-09-16T12:00:00Z', beforeSince: '2026-09-15', before: ['pay_x'] }
+
+  it('está na lista do que já existia ao calar → depois (o Asaas avisou); não está → antes', () => {
+    expect(silencedBeforeCharge({ dateCreated: '2026-09-15' }, 'pay_x', '2026-09-16', varredura, diaBrasilia)).toBe('depois')
+    expect(silencedBeforeCharge({ dateCreated: '2026-09-15' }, 'pay_y', '2026-09-16', varredura, diaBrasilia)).toBe('antes')
+    expect(silencedBeforeCharge({ dateCreated: '2026-09-15' }, 'pay_z', '2026-09-18', varredura, diaBrasilia)).toBe('antes')
+  })
+
+  it('cobrança de antes do período da lista → depois (nasceu antes de calar)', () => {
+    expect(silencedBeforeCharge({ dateCreated: '2026-01-01' }, 'pay_v', '2026-09-14', varredura, diaBrasilia)).toBe('depois')
+  })
+
+  it('sem registro → antes (nasceu calado ou foi calado há mais de 35 dias); Redis fora → não sei', () => {
+    expect(silencedBeforeCharge({ dateCreated: '2026-09-16' }, 'pay_x', '2026-09-16', null, diaBrasilia)).toBe('antes')
+    expect(silencedBeforeCharge({ dateCreated: '2026-09-16' }, 'pay_x', '2026-09-16', undefined, diaBrasilia)).toBe('nao_sei')
+  })
+
+  it('sem a lista, pelo dia: antes do dia de calar = depois; depois = antes; mesmo dia só se o cliente nasceu nele', () => {
+    const semLista: SilencedRecord = { at: '2026-09-16T12:00:00Z' }
+    expect(silencedBeforeCharge({ dateCreated: '2026-09-01' }, 'p', '2026-09-15', semLista, diaBrasilia)).toBe('depois')
+    expect(silencedBeforeCharge({ dateCreated: '2026-09-01' }, 'p', '2026-09-17', semLista, diaBrasilia)).toBe('antes')
+    expect(silencedBeforeCharge({ dateCreated: '2026-09-01' }, 'p', '2026-09-16', semLista, diaBrasilia)).toBe('antes')
+    expect(silencedBeforeCharge({ dateCreated: '2026-09-16' }, 'p', '2026-09-16', semLista, diaBrasilia)).toBe('depois')
+  })
+
+  it('data da cobrança ou do registro inválida → não sei', () => {
+    expect(silencedBeforeCharge({}, 'p', '', varredura, diaBrasilia)).toBe('nao_sei')
+    expect(silencedBeforeCharge({}, 'p', '2026-09-16', { at: 'ontem' }, diaBrasilia)).toBe('nao_sei')
+  })
 })
 
 describe('asaasNotifies — o próprio Asaas ainda avisa este cliente?', () => {
   const crmContact = '44f5e06c-0000-4000-8000-000000000001'
-  const ctx = { since: '2026-09-15', isCrmRef: (r?: string | null) => r === crmContact }
+  const base = { isCrmRef: (r?: string | null) => r === crmContact, dayOf: diaBrasilia }
+  const ctx = (chargeId: string, chargeCreated: string, silenced: SilencedRecord | null | undefined) => ({ ...base, chargeId, chargeCreated, silenced })
+  const celular = '67990000001'
 
-  it('avisos desligados antes da janela → não avisa, sem GET', () => {
-    expect(asaasNotifies({ notificationDisabled: true, dateCreated: '2026-08-01' }, ctx)).toBe('no')
+  it('calado há tempo (sem registro) → não avisa, sem GET', () => {
+    expect(asaasNotifies({ notificationDisabled: true, dateCreated: '2026-08-01', mobilePhone: celular }, ctx('p', '2026-09-16', null))).toBe('no')
   })
 
   it('avisos ligados (varredura recusada por assinatura ativa) → precisa das chaves', () => {
-    expect(asaasNotifies({ notificationDisabled: false, dateCreated: '2026-08-01' }, ctx)).toBe('need_flags')
+    expect(asaasNotifies({ notificationDisabled: false, dateCreated: '2026-08-01' }, ctx('p', '2026-09-16', null))).toBe('need_flags')
   })
 
-  it('cliente novo, calado pela varredura depois de criado → precisa das chaves', () => {
-    expect(asaasNotifies({ notificationDisabled: true, dateCreated: '2026-09-15' }, ctx)).toBe('need_flags')
+  // Achado da revisão 17/09: a mesma cobrança dava "o Asaas avisa" na quarta e
+  // na quinta e "não avisa" na sexta (o `since` andava) — e o link saía dobrado.
+  it('cliente criado terça 14h, cobrança quarta 08:00, varredura quarta 9h → o veredito não depende do dia', () => {
+    const cliente = { notificationDisabled: true, dateCreated: '2026-09-15', mobilePhone: celular }
+    const calado: SilencedRecord = { at: '2026-09-16T12:00:00Z', beforeSince: '2026-09-15', before: ['pay_x'] }
+    // Nada no contexto é "hoje" nem a janela: quarta, quinta e sexta dão o mesmo.
+    expect(asaasNotifies(cliente, ctx('pay_x', '2026-09-16', calado))).toBe('need_flags')
+    expect(asaasNotifies(cliente, ctx('pay_x', '2026-09-16', calado), soSms)).toBe('yes')
+  })
+
+  // Achado da revisão 17/09: calado dentro da janela caía nas chaves por evento
+  // (que o Asaas não mexe ao calar) e ninguém avisava.
+  it('cliente de ERP que já nasce calado, cobrança no mesmo dia → o CRM avisa (as chaves nem são lidas)', () => {
+    expect(asaasNotifies({ notificationDisabled: true, dateCreated: '2026-09-16', mobilePhone: celular }, ctx('pay_erp', '2026-09-16', null))).toBe('no')
+  })
+
+  it('calado pela varredura de terça 9h, 2ª cobrança terça 11h (fora da lista) → o CRM avisa no mesmo dia', () => {
+    const calado: SilencedRecord = { at: '2026-09-15T12:00:00Z', beforeSince: '2026-09-14', before: ['pay_1a'] }
+    const cliente = { notificationDisabled: true, dateCreated: '2026-09-14', mobilePhone: celular }
+    expect(asaasNotifies(cliente, ctx('pay_2a', '2026-09-15', calado))).toBe('no')
+    expect(asaasNotifies(cliente, ctx('pay_1a', '2026-09-15', calado))).toBe('need_flags')
+  })
+
+  it('Redis fora (não deu para ler o registro) → as chaves decidem', () => {
+    expect(asaasNotifies({ notificationDisabled: true, dateCreated: '2026-08-01' }, ctx('p', '2026-09-16', undefined))).toBe('need_flags')
   })
 
   it('Andressa/Convictus: PAYMENT_CREATED sem canal nenhum → não avisa', () => {
-    expect(asaasNotifies({ notificationDisabled: true, dateCreated: '2026-09-15' }, ctx, { enabled: true, anyChannel: false })).toBe('no')
-    expect(asaasNotifies({ notificationDisabled: false, dateCreated: '2026-09-15' }, ctx, { enabled: false, anyChannel: false })).toBe('no')
+    expect(asaasNotifies({ notificationDisabled: false, dateCreated: '2026-09-15', mobilePhone: celular }, ctx('p', '2026-09-15', null), semCanal)).toBe('no')
+    expect(asaasNotifies({ notificationDisabled: false, dateCreated: '2026-09-15' }, ctx('p', '2026-09-15', null), { ...semCanal, enabled: false })).toBe('no')
   })
 
-  it('cliente novo com SMS de cobrança criada ligado → o Asaas avisa', () => {
-    expect(asaasNotifies({ notificationDisabled: false, dateCreated: '2026-09-15' }, ctx, { enabled: true, anyChannel: true })).toBe('yes')
+  it('cliente novo com SMS de cobrança criada ligado e celular → o Asaas avisa', () => {
+    expect(asaasNotifies({ notificationDisabled: false, dateCreated: '2026-09-15', mobilePhone: celular }, ctx('p', '2026-09-15', null), soSms)).toBe('yes')
+  })
+
+  // Achado da revisão 17/09: só o e-mail ligado num cadastro sem e-mail — nem o Asaas nem o CRM mandavam.
+  it('só o e-mail ligado e cadastro sem e-mail → o Asaas não avisa, o CRM manda', () => {
+    expect(
+      asaasNotifies({ notificationDisabled: false, dateCreated: '2026-09-15', mobilePhone: celular }, ctx('p', '2026-09-15', null), { ...semCanal, email: true }),
+    ).toBe('no')
   })
 
   it('cliente criado pelo CRM → não avisa (nasce calado), mesmo com chave ligada', () => {
-    expect(asaasNotifies({ notificationDisabled: false, dateCreated: '2026-09-11', externalReference: crmContact }, ctx, { enabled: true, anyChannel: true })).toBe(
-      'no',
-    )
+    expect(
+      asaasNotifies({ notificationDisabled: false, dateCreated: '2026-09-11', externalReference: crmContact, mobilePhone: celular }, ctx('p', '2026-09-16', null), soSms),
+    ).toBe('no')
   })
 })
 

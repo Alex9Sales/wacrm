@@ -21,7 +21,8 @@
 //
 // Travas, porque aqui o erro é caro (blast):
 //   · só quando a conta assumiu os avisos (`asaasNotificationsOff`), e nunca
-//     cobrança criada até o dia em que ligou (o Asaas já avisou);
+//     cobrança criada até o dia da primeira varredura depois de ligar (o Asaas
+//     avisou até a varredura calar os clientes — revisão 17/09);
 //   · só cobrança que o CRM NÃO criou (id, referência ou grupo) — a que ele
 //     cria já manda o link na hora;
 //   · só o que nasceu nos últimos 2 dias de ENVIO e vence em até 15 dias
@@ -60,13 +61,14 @@ import type { AccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
 import { newChargesMessage, type NewChargeLine } from './emit-rules'
+import { loadSilenced } from './asaas-silenced'
 import { linksAlreadySent } from './links-sent'
 import {
   NEW_CHARGE_HORIZON_DAYS,
-  addDaysYmd,
   asaasNotifies,
   classifyNewCharge,
   isUuidRef,
+  ligaAvisosFloor,
   newChargeSince,
   weekdayOfYmd,
   type NewChargeVerdict,
@@ -91,6 +93,11 @@ export type NewChargeSkip =
   | Exclude<NewChargeVerdict, 'ok'>
   | 'conexao_nova'
   | 'sandbox'
+  /**
+   * "O CRM assume os avisos" ligado há pouco: sem janela até o dia seguinte à
+   * primeira varredura completa depois do clique (até lá o Asaas avisava).
+   */
+  | 'aguardando_varredura'
   /** O Asaas não respondeu (listagem, cadastro ou chaves de aviso; 429). Tenta no próximo tique. */
   | 'conta_indisponivel'
   /** O próprio Asaas avisa este cliente da cobrança criada. */
@@ -126,6 +133,8 @@ interface Linha {
   document: string | null
   /** Desde quando a cobrança contava como nova na conta dela. */
   since: string
+  /** Dia de criação da cobrança no Asaas (YYYY-MM-DD): âncora do "o Asaas já estava calado?". */
+  chargeCreated: string
   cust: AsaasCustomer
   line: NewChargeLine
 }
@@ -245,15 +254,31 @@ export async function queueNewChargeNotices(args: {
   }
   const isCrmRef = (ref?: string | null) => !!ref && crmRefs.has(ref.trim().toLowerCase())
 
-  // Piso do "CRM assume os avisos": o dia SEGUINTE a ligar (até lá o Asaas avisava).
-  const offAtMs = s.asaasNotificationsOffAt ? Date.parse(s.asaasNotificationsOffAt) : Number.NaN
-  const pisoLigaAvisos = Number.isNaN(offAtMs) ? null : addDaysYmd(localDayKey(tz, new Date(offAtMs)), 1)
+  // Piso do "CRM assume os avisos": o dia SEGUINTE à primeira varredura completa
+  // depois de ligar — não ao clique (revisão 17/09). Ligada na sexta 17h30, a
+  // varredura só roda segunda 9h; o Asaas avisou as cobranças do fim de semana
+  // e, com o piso no sábado, o CRM mandava o mesmo link de novo na segunda.
+  const dayOf = (iso: string) => localDayKey(tz, new Date(iso))
+  const ligaAvisos = ligaAvisosFloor(s.asaasNotificationsOffAt, s.asaasNotificationsSweptAt, dayOf)
+  const pisoLigaAvisos = ligaAvisos.wait ? null : ligaAvisos.floor
   const isSendingDay = (ymd: string) => !dayBlockedReason(weekdayOfYmd(ymd), s, ymd)
 
   const credPor = new Map<string, AsaasCredential>()
   const porContato = new Map<string, Candidato>()
 
   for (const c of conexoes) {
+    if (ligaAvisos.wait) {
+      bump('aguardando_varredura')
+      continue
+    }
+    const since = newChargeSince(todayKey, [localDayKey(tz, new Date(c.createdAt)), pisoLigaAvisos], isSendingDay)
+    // Piso no futuro (a varredura foi hoje): sem janela até amanhã. Trazer para
+    // hoje punha na janela a cobrança das 08:00 que o Asaas avisou antes de a
+    // varredura das 10:30 calar o cliente (revisão 17/09).
+    if (since > todayKey) {
+      bump('aguardando_varredura')
+      continue
+    }
     let cred: AsaasCredential
     try {
       cred = { apiKey: decrypt(c.apiKeyEnc), environment: c.environment as AsaasEnv }
@@ -261,7 +286,6 @@ export async function queueNewChargeNotices(args: {
       bump('conta_indisponivel')
       continue
     }
-    const since = newChargeSince(todayKey, [localDayKey(tz, new Date(c.createdAt)), pisoLigaAvisos], isSendingDay)
 
     let pays: AsaasPayment[]
     try {
@@ -364,6 +388,7 @@ export async function queueNewChargeNotices(args: {
         customerId: p.customer,
         document: cust.cpfCnpj ?? null,
         since,
+        chargeCreated: (p.dateCreated ?? '').slice(0, 10),
         cust,
         line: {
           value: Number(p.value ?? 0),
@@ -408,6 +433,16 @@ export async function queueNewChargeNotices(args: {
     flagsCache.set(key, flags)
     return flags
   }
+
+  // Quando o CRM calou cada cliente calado (um MGET por rodada). null = Redis
+  // fora: "não sei" — as chaves do Asaas decidem, o lado conservador.
+  const calados = await loadSilenced(
+    [...porContato.values()]
+      .flatMap((cand) => cand.linhas)
+      .filter((l) => l.cust.notificationDisabled === true && !isCrmRef(l.cust.externalReference))
+      .map((l) => ({ connectionId: l.connectionId, customerId: l.customerId })),
+  )
+  const silencedOf = (l: Linha) => (calados ? (calados.get(`${l.connectionId}|${l.customerId}`) ?? null) : undefined)
 
   let budget = args.budget
   let usedToday = args.usedToday
@@ -471,14 +506,17 @@ export async function queueNewChargeNotices(args: {
     const semAviso: Linha[] = []
     let naoDeuPraLer = false
     for (const l of linhas) {
-      let quem = asaasNotifies(l.cust, { since: l.since, isCrmRef })
+      // Âncora na COBRANÇA e no registro de quando o CRM calou o cliente — o
+      // veredito não muda de um dia para o outro (revisão 17/09).
+      const quemCtx = { chargeId: l.asaasId, chargeCreated: l.chargeCreated, isCrmRef, silenced: silencedOf(l), dayOf }
+      let quem = asaasNotifies(l.cust, quemCtx)
       if (quem === 'need_flags') {
         const flags = await flagsOf(l)
         if (!flags) {
           naoDeuPraLer = true
           break
         }
-        quem = asaasNotifies(l.cust, { since: l.since, isCrmRef }, flags)
+        quem = asaasNotifies(l.cust, quemCtx, flags)
       }
       if (quem === 'yes') bump('asaas_avisa')
       else semAviso.push(l)
