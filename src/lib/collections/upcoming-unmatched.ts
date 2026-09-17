@@ -67,6 +67,12 @@ export interface UnmatchedRow {
 export interface UnmatchedCustomerRef {
   connectionId: string
   customerId: string
+  /**
+   * Nome no Asaas, gravado no vínculo (migr 0179). Cliente que só tem parcela a
+   * vencer some do retrato ao ser ligado e não está na carteira: sem o nome no
+   * vínculo, "Ligados nos últimos dias" só mostraria o cus_ (16/09).
+   */
+  customerName?: string | null
 }
 
 const blankToNull = (v: string | null | undefined): string | null => {
@@ -198,13 +204,19 @@ export function customerRefKey(r: { connectionId: string; customerId: string }):
   return `${r.connectionId}:${r.customerId}`
 }
 
-/** (conexão, cliente) sem repetição, ignorando cobrança sem cliente do Asaas. */
-export function uniqueCustomerRefs(list: readonly { connectionId: string; asaasCustomerId: string | null }[]): UnmatchedCustomerRef[] {
+/**
+ * (conexão, cliente) sem repetição, ignorando cobrança sem cliente do Asaas.
+ * Leva junto o primeiro nome não vazio (quando a linha traz) — vai para o vínculo.
+ */
+export function uniqueCustomerRefs(
+  list: readonly { connectionId: string; asaasCustomerId: string | null; customerName?: string | null }[],
+): UnmatchedCustomerRef[] {
   const seen = new Map<string, UnmatchedCustomerRef>()
   for (const r of list) {
     if (!r.asaasCustomerId) continue
-    const ref = { connectionId: r.connectionId, customerId: r.asaasCustomerId }
-    seen.set(customerRefKey(ref), ref)
+    const key = customerRefKey({ connectionId: r.connectionId, customerId: r.asaasCustomerId })
+    const name = seen.get(key)?.customerName || blankToNull(r.customerName)
+    seen.set(key, name ? { connectionId: r.connectionId, customerId: r.asaasCustomerId, customerName: name } : { connectionId: r.connectionId, customerId: r.asaasCustomerId })
   }
   return [...seen.values()]
 }
@@ -212,6 +224,143 @@ export function uniqueCustomerRefs(list: readonly { connectionId: string; asaasC
 /** "Criar contato" só com telefone brasileiro válido ou e-mail — senão é contato de lixo. */
 export function canCreateFromAsaas(phone: string | null | undefined, email: string | null | undefined): boolean {
   return !!asaasPhoneForContact(phone) || !!normalizeEmail(email)
+}
+
+// ------------------------------------------- "Criar contato" nunca chuta (16/09)
+// Devedor AMBÍGUO (2+ contatos com o telefone, o e-mail ou o CPF/CNPJ dele —
+// duplicata antiga com e sem o 9º dígito) passava pelo "Criar contato e ligar"
+// e pelo "Criar contatos do Asaas" da carteira: findOrCreateContact reaproveita
+// o primeiro contato que o banco devolver, e o clique agora grava o vínculo
+// cliente do Asaas → contato, que vence o casamento automático nas próximas
+// parcelas e no lembrete. O chute virava regra e o caso sumia das pendências
+// sem ninguém ter escolhido. No painel, o retrato pode ser de horas atrás: um
+// duplicado criado depois da leitura deixava o cartão "sem contato".
+
+/** A mesma recusa na carteira (individual e em massa) e no painel "A vencer sem contato". */
+export const CREATE_AMBIGUOUS_ERROR =
+  'Já existe mais de um contato com o telefone, o e-mail ou o CPF/CNPJ deste cliente. Use "Ligar a um contato" e escolha o certo — criar outro só piora.'
+
+export const CREATE_CHECK_FAILED_ERROR = 'Não deu para conferir agora se já existe contato com estes dados. Tente de novo.'
+
+/**
+ * Pode criar? `probe` é o casamento da sincronização SEM o vínculo (findContact
+ * com telefone, e-mail e CPF/CNPJ), feito na hora do clique; null = a
+ * conferência falhou — aí recusa: criar às cegas é o chute que isto evita.
+ */
+export function createRefusal(probe: { ambiguous: boolean } | null): string | null {
+  if (!probe) return CREATE_CHECK_FAILED_ERROR
+  return probe.ambiguous ? CREATE_AMBIGUOUS_ERROR : null
+}
+
+// ------------------------------------ por onde sai o lembrete depois de ligar
+// 16/09: o aviso depois de ligar contava só com a ficha — "sem telefone" virava
+// promessa de e-mail, e "o lembrete sai na próxima rodada" saía mesmo quando a
+// fila ia pular o contato (sem e-mail usável, régua só por WhatsApp, nenhum
+// canal de e-mail conectado: "no_channel", só no log). E o cartão já tinha
+// sumido da tela. Agora o servidor confere com o MESMO teste da fila do
+// lembrete (resolveCollectionTargets em dryRun, com o e-mail do Asaas de
+// reserva) e a tela só diz o que vai acontecer.
+
+/** Resultado de resolveCollectionTargets em dryRun — só o que o aviso usa. null = não deu para conferir. */
+export type DeliveryCheck = { ok: true; label: string } | { ok: false; error: string } | null
+
+export interface LinkDeliveryInfo {
+  contactName: string
+  contactHasPhone: boolean
+  /** A ficha tem OUTRO telefone que o do Asaas: o lembrete vai para o da ficha. */
+  phoneDiffers: boolean
+  /** "WhatsApp", "e-mail" ou "WhatsApp e e-mail". null = não sai, ou não deu para conferir. */
+  deliveryLabel: string | null
+  /** Por que o lembrete NÃO sai para este contato. null = sai, ou não deu para conferir. */
+  deliveryError: string | null
+}
+
+/** Contato que pediu para não receber (SAIR): a fila do lembrete pula, então o aviso também diz. */
+export const OPTED_OUT_DELIVERY_ERROR = 'O contato pediu para não receber mensagens.'
+
+export function linkDeliveryInfo(input: {
+  contactName: string | null
+  contactPhone: string | null
+  optedOut: boolean
+  /** Telefone do cliente no Asaas (como veio). */
+  asaasPhone: string | null
+  delivery: DeliveryCheck
+}): LinkDeliveryInfo {
+  const digits = (input.contactPhone ?? '').replace(/\D/g, '')
+  const asaasTail = (input.asaasPhone ?? '').replace(/\D/g, '').slice(-8)
+  const d = input.delivery
+  return {
+    contactName: (input.contactName ?? '').trim() || (input.contactPhone ?? '').trim() || 'contato sem nome',
+    // O mesmo corte da fila (outreach: 10 dígitos ou mais).
+    contactHasPhone: digits.length >= 10,
+    // Pelos 8 últimos dígitos: com/sem 55 e com/sem o 9º dígito é o mesmo número.
+    phoneDiffers: digits.length >= 8 && asaasTail.length === 8 && digits.slice(-8) !== asaasTail,
+    deliveryLabel: input.optedOut ? null : d?.ok ? d.label : null,
+    deliveryError: input.optedOut ? OPTED_OUT_DELIVERY_ERROR : d && !d.ok ? d.error : null,
+  }
+}
+
+/**
+ * O que a tela diz depois de ligar (ou criar): `reminder` completa o aviso de
+ * sucesso e `warning`, quando há, vai num aviso à parte. Nunca promete canal
+ * que não foi conferido.
+ */
+export function linkOutcomeTexts(customerName: string, ruleEnabled: boolean, r: LinkDeliveryInfo): { reminder: string; warning: string | null } {
+  if (r.deliveryError) {
+    return { reminder: '', warning: `O lembrete de ${customerName} NÃO vai sair: ${r.deliveryError}` }
+  }
+  const label = r.deliveryLabel
+  let reminder: string
+  if (!ruleEnabled) reminder = reminderAfterLinkText(false)
+  else if (label) reminder = `O lembrete sai por ${label} na próxima rodada da régua.`
+  // A conferência falhou: não prometo que sai.
+  else reminder = 'Não deu para conferir por onde o lembrete sai — confira o telefone e o e-mail da ficha.'
+
+  let warning: string | null = null
+  if (!r.contactHasPhone) {
+    warning = label
+      ? `A ficha de ${r.contactName} não tem telefone: o lembrete não sai por WhatsApp, só por ${label}.`
+      : `A ficha de ${r.contactName} não tem telefone: o lembrete não sai por WhatsApp.`
+  } else if (r.phoneDiffers && (!label || label.includes('WhatsApp'))) {
+    warning = `A ficha de ${r.contactName} tem outro telefone — o lembrete vai para o número da ficha, não para o do Asaas.`
+  }
+  return { reminder, warning }
+}
+
+// ------------------------------------------- "Ligados nos últimos dias" (16/09)
+// Ligação errada feita no painel só podia ser desfeita nos 12 s do "Desfazer".
+// Depois o cartão sumia, e cliente que só tem parcela A VENCER não aparece na
+// carteira (lá só entra cobrança aberta): não havia onde ver nem desligar, e o
+// lembrete saía com o valor e o link de um cliente para o contato errado.
+
+/** O lembrete sai até N dias antes do vencimento; uma semana a mais dá tempo de alguém notar a ligação errada. */
+export const RECENT_LINK_EXTRA_DAYS = 7
+export const RECENT_LINKS_LIMIT = 50
+
+/** Desde quando (ISO) um vínculo conta como "recente". */
+export function recentLinksSince(nowMs: number, reminderDaysBefore: number): string {
+  const days = Math.max(0, Math.floor(Number(reminderDaysBefore) || 0)) + RECENT_LINK_EXTRA_DAYS
+  return new Date(nowMs - days * 86_400_000).toISOString()
+}
+
+/** Nome do cliente na lista; vínculo gravado antes da 0179 (ou cadastro sem nome) mostra o cus_. */
+export function recentLinkName(customerName: string | null | undefined, customerId: string): string {
+  return blankToNull(customerName) ?? `cliente ${customerId} do Asaas`
+}
+
+/**
+ * Aviso do "Desligar". Desligar só apaga o vínculo: se algum contato (inclusive
+ * o que foi desligado) tem o telefone, o e-mail ou o CPF/CNPJ do Asaas, a régua
+ * liga a ele de novo sozinha. E o lembrete que já está na fila não é cancelado.
+ */
+export function recentUnlinkText(input: { customerName: string; contactName: string; ruleEnabled: boolean }): string {
+  const back = input.ruleEnabled ? 'na próxima rodada da régua' : 'quando a régua for religada'
+  return (
+    `Desligado: ${input.customerName} não está mais ligado a ${input.contactName}. ` +
+    `Se nenhum contato tiver o telefone, o e-mail ou o CPF/CNPJ do Asaas, o cliente volta para "A vencer sem contato" ${back}; ` +
+    `se algum tiver (inclusive ${input.contactName}), a régua liga a ele sozinha. ` +
+    `Lembrete que já estava na fila para ${input.contactName} não é cancelado — confira em "Precisa de você".`
+  )
 }
 
 // ------------------------------------------------ "Desfazer" do painel (16/09)
@@ -281,6 +430,8 @@ export function restoreTarget(item: ChargeRestore, existingContactIds: ReadonlyS
 export interface CreatedContactDeps {
   /** Criado há pouco (o desfazer vive 12 s no toast; a folga é de minutos). */
   recent: boolean
+  /** Quem desfaz é quem criou — o id do contato volta do navegador. */
+  createdByUser: boolean
   conversations: boolean
   deals: boolean
   /** Outro cliente do Asaas ligado a ele. */
@@ -289,16 +440,27 @@ export interface CreatedContactDeps {
   charges: boolean
   /** Lembrete/cobrança já na fila para ele. */
   actionRequests: boolean
+  /** Nota ou tarefa. */
+  notes: boolean
+  /** Etiqueta. */
+  tags: boolean
+  /** Mensagem agendada ou evento na agenda. */
+  schedule: boolean
+  /** Régua (collections_touches) ou compra registrada (customer_transactions). */
+  history: boolean
 }
 
 /**
  * 16/09: desfazer o "Criar contato" apagando só o vínculo não desfazia nada —
  * o contato criado tem o telefone/e-mail do Asaas e a leitura seguinte casava
  * sozinha com ele (o cartão nunca voltava). O contato sai junto quando acabou
- * de nascer e nada depende dele; senão fica, e a tela diz a verdade.
+ * de nascer, foi quem desfaz que criou e nada depende dele; senão fica, e a
+ * tela diz a verdade. Só um `false` claro conta como "sem uso": o apagar é em
+ * cascata (nota, etiqueta, régua e fila iriam junto).
  */
 export function canRemoveCreatedContact(d: CreatedContactDeps | null): boolean {
-  return !!d && d.recent && !d.conversations && !d.deals && !d.links && !d.charges && !d.actionRequests
+  if (!d || d.recent !== true || d.createdByUser !== true) return false
+  return [d.conversations, d.deals, d.links, d.charges, d.actionRequests, d.notes, d.tags, d.schedule, d.history].every((v) => v === false)
 }
 
 /** Quando o lembrete sai depois de ligar — com a régua desligada, a "próxima rodada" não vem. */

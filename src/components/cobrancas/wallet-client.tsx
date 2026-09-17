@@ -429,7 +429,7 @@ export function WalletClient() {
                 variant="outline"
                 className="ml-auto shrink-0"
                 disabled={bulkBusy}
-                title="Cria um contato novo para cada pendência com telefone, com nome/telefone/e-mail do Asaas, e liga as cobranças"
+                title="Cria um contato novo para cada pendência com telefone ou e-mail, com nome/telefone/e-mail do Asaas, e liga as cobranças. Quem já tem 2+ contatos com os mesmos dados fica pendente: use “Ligar a um contato”."
                 onClick={async () => {
                   setBulkBusy(true);
                   try {

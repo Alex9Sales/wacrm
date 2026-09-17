@@ -1,0 +1,16 @@
+-- 16/09 (revisão do "A vencer sem contato", GoLink): ligação errada feita no
+-- painel só podia ser desfeita nos 12 s do "Desfazer". Cliente que só tem
+-- parcela A VENCER não aparece na carteira (lá só entra cobrança aberta) e o
+-- cartão dele some do painel ao ser ligado — o retrato é apagado no clique.
+-- A tela ganha a lista "Ligados nos últimos dias", com "Desligar", e ela
+-- precisa dizer QUEM foi ligado: sem o nome guardado no vínculo, mostraria só
+-- o cus_ do Asaas (a parcela a vencer não está em asaas_charges, e o retrato
+-- já foi apagado).
+--
+-- Vínculo gravado antes desta coluna fica com o nome vazio (a tela mostra o
+-- cus_) até ser ligado de novo — sem preenchimento retroativo.
+--
+-- Aditiva. Rodar nos DOIS bancos (crmfluxia e crmfluxia_prod) ANTES do deploy:
+-- toda ligação na tela (carteira e painel) passa a gravar customer_name — sem
+-- a coluna, ligar e criar contato falham.
+ALTER TABLE "asaas_customer_links" ADD COLUMN IF NOT EXISTS "customer_name" text;

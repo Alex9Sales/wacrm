@@ -6,10 +6,19 @@ import {
   canCreateFromAsaas,
   canRemoveCreatedContact,
   chargesChangedByLink,
+  CREATE_AMBIGUOUS_ERROR,
+  CREATE_CHECK_FAILED_ERROR,
+  createRefusal,
   customerRefKey,
   dueInText,
+  linkDeliveryInfo,
+  linkOutcomeTexts,
   MAX_CHARGE_RESTORE,
+  OPTED_OUT_DELIVERY_ERROR,
   purgePlan,
+  recentLinkName,
+  recentLinksSince,
+  recentUnlinkText,
   reminderAfterLinkText,
   restoreTarget,
   sameDocumentOthers,
@@ -21,6 +30,7 @@ import {
   visibleUpcoming,
   type ChargeRestore,
   type CreatedContactDeps,
+  type LinkDeliveryInfo,
   type UnmatchedEntry,
 } from './upcoming-unmatched'
 
@@ -166,6 +176,128 @@ describe('uniqueCustomerRefs', () => {
       { connectionId: ASAAS, customerId: 'cus_1' },
     ])
   })
+
+  it('leva o primeiro nome não vazio do Asaas para o vínculo (lista "Ligados nos últimos dias")', () => {
+    expect(
+      uniqueCustomerRefs([
+        { connectionId: GOLINK, asaasCustomerId: 'cus_1', customerName: '  ' },
+        { connectionId: GOLINK, asaasCustomerId: 'cus_1', customerName: 'Speed Gás e Água' },
+        { connectionId: GOLINK, asaasCustomerId: 'cus_1', customerName: 'Outro nome' },
+        { connectionId: ASAAS, asaasCustomerId: 'cus_2', customerName: null },
+      ]),
+    ).toEqual([
+      { connectionId: GOLINK, customerId: 'cus_1', customerName: 'Speed Gás e Água' },
+      { connectionId: ASAAS, customerId: 'cus_2' },
+    ])
+  })
+})
+
+describe('createRefusal — "Criar contato" nunca chuta entre dois contatos (revisão 16/09)', () => {
+  it('2+ contatos com o telefone, e-mail ou CPF/CNPJ: recusa com a mesma mensagem da carteira e do painel', () => {
+    expect(createRefusal({ ambiguous: true })).toBe(CREATE_AMBIGUOUS_ERROR)
+    expect(CREATE_AMBIGUOUS_ERROR).toContain('Ligar a um contato')
+  })
+
+  it('ninguém, ou um só: pode criar (um só, findOrCreateContact reencontra ele)', () => {
+    expect(createRefusal({ ambiguous: false })).toBeNull()
+  })
+
+  it('a conferência falhou: recusa em vez de criar às cegas', () => {
+    expect(createRefusal(null)).toBe(CREATE_CHECK_FAILED_ERROR)
+    expect(CREATE_CHECK_FAILED_ERROR).toContain('Tente de novo')
+  })
+})
+
+describe('linkDeliveryInfo / linkOutcomeTexts — o aviso depois de ligar só promete o canal conferido', () => {
+  const base: LinkDeliveryInfo = { contactName: 'LM Vidros', contactHasPhone: true, phoneDiffers: false, deliveryLabel: 'WhatsApp', deliveryError: null }
+
+  it('monta a partir da ficha: nome cai para o telefone, 10+ dígitos é telefone, diferença pelos 8 últimos', () => {
+    expect(
+      linkDeliveryInfo({ contactName: ' ', contactPhone: '5512996706499', optedOut: false, asaasPhone: '(12) 99670-6499', delivery: { ok: true, label: 'WhatsApp' } }),
+    ).toEqual({ contactName: '5512996706499', contactHasPhone: true, phoneDiffers: false, deliveryLabel: 'WhatsApp', deliveryError: null })
+    // Sem o 9º dígito no Asaas: os 8 últimos batem, não é "outro telefone".
+    expect(linkDeliveryInfo({ contactName: 'Speed', contactPhone: '5512996706499', optedOut: false, asaasPhone: '1296706499', delivery: null }).phoneDiffers).toBe(false)
+    expect(linkDeliveryInfo({ contactName: 'Speed', contactPhone: '5512996706499', optedOut: false, asaasPhone: '12 3648-8533', delivery: null }).phoneDiffers).toBe(true)
+    // Ficha sem telefone: não é "outro telefone", é "sem telefone".
+    expect(linkDeliveryInfo({ contactName: 'LM Vidros', contactPhone: '', optedOut: false, asaasPhone: '1136488533', delivery: null })).toMatchObject({
+      contactHasPhone: false,
+      phoneDiffers: false,
+      deliveryLabel: null,
+      deliveryError: null,
+    })
+  })
+
+  it('resultado da conferência: rótulo quando sai, motivo quando não sai; quem pediu SAIR não recebe', () => {
+    const noWay = { ok: false as const, error: 'A régua cobra só por WhatsApp e o contato não tem telefone válido.' }
+    expect(linkDeliveryInfo({ contactName: 'X', contactPhone: null, optedOut: false, asaasPhone: null, delivery: noWay })).toMatchObject({
+      deliveryLabel: null,
+      deliveryError: noWay.error,
+    })
+    expect(
+      linkDeliveryInfo({ contactName: 'X', contactPhone: '5512996706499', optedOut: true, asaasPhone: null, delivery: { ok: true, label: 'WhatsApp' } }),
+    ).toMatchObject({ deliveryLabel: null, deliveryError: OPTED_OUT_DELIVERY_ERROR })
+  })
+
+  it('lembrete que não sai (L&M Vidros: ficha sem telefone, régua só por WhatsApp): diz que NÃO sai e não promete e-mail', () => {
+    const r = { ...base, contactHasPhone: false, deliveryLabel: null, deliveryError: 'A régua cobra só por WhatsApp e o contato não tem telefone válido.' }
+    const t = linkOutcomeTexts('L&M Vidros', true, r)
+    expect(t.warning).toBe('O lembrete de L&M Vidros NÃO vai sair: A régua cobra só por WhatsApp e o contato não tem telefone válido.')
+    expect(t.reminder).toBe('')
+    expect(`${t.reminder} ${t.warning}`).not.toMatch(/e-mail|próxima rodada/)
+  })
+
+  it('ficha sem telefone com e-mail que a régua usa: sai só por e-mail, e a tela diz', () => {
+    const t = linkOutcomeTexts('L&M Vidros', true, { ...base, contactHasPhone: false, deliveryLabel: 'e-mail' })
+    expect(t.reminder).toBe('O lembrete sai por e-mail na próxima rodada da régua.')
+    expect(t.warning).toBe('A ficha de LM Vidros não tem telefone: o lembrete não sai por WhatsApp, só por e-mail.')
+  })
+
+  it('conferência falhou: não promete canal nem que sai', () => {
+    const t = linkOutcomeTexts('L&M Vidros', true, { ...base, contactHasPhone: false, deliveryLabel: null })
+    expect(t.reminder).toMatch(/^Não deu para conferir/)
+    expect(t.warning).toBe('A ficha de LM Vidros não tem telefone: o lembrete não sai por WhatsApp.')
+    expect(`${t.reminder} ${t.warning}`).not.toMatch(/só por e-mail/)
+  })
+
+  it('tudo certo: diz o canal e não avisa; régua desligada não promete "próxima rodada"', () => {
+    expect(linkOutcomeTexts('Speed Gás', true, base)).toEqual({ reminder: 'O lembrete sai por WhatsApp na próxima rodada da régua.', warning: null })
+    expect(linkOutcomeTexts('Speed Gás', false, base).reminder).toBe(reminderAfterLinkText(false))
+  })
+
+  it('telefone diferente do Asaas avisa quando o lembrete vai por WhatsApp; só por e-mail, não importa', () => {
+    expect(linkOutcomeTexts('Speed Gás', true, { ...base, phoneDiffers: true }).warning).toMatch(/tem outro telefone/)
+    expect(linkOutcomeTexts('Speed Gás', true, { ...base, phoneDiffers: true, deliveryLabel: 'WhatsApp e e-mail' }).warning).toMatch(/tem outro telefone/)
+    expect(linkOutcomeTexts('Speed Gás', true, { ...base, phoneDiffers: true, deliveryLabel: 'e-mail' }).warning).toBeNull()
+    // Não sai de jeito nenhum: o motivo vence o aviso do telefone.
+    expect(linkOutcomeTexts('Speed Gás', true, { ...base, phoneDiffers: true, deliveryLabel: null, deliveryError: 'Sem como alcançar: x; y.' }).warning).toMatch(
+      /NÃO vai sair/,
+    )
+  })
+})
+
+describe('"Ligados nos últimos dias" — onde desligar depois que o Desfazer some', () => {
+  it('janela: dias do lembrete + 7', () => {
+    const now = Date.parse('2026-09-16T12:00:00Z')
+    expect(recentLinksSince(now, 3)).toBe('2026-09-06T12:00:00.000Z')
+    expect(recentLinksSince(now, 0)).toBe('2026-09-09T12:00:00.000Z')
+    expect(recentLinksSince(now, Number.NaN)).toBe('2026-09-09T12:00:00.000Z')
+  })
+
+  it('nome: o do Asaas; vínculo sem nome (antes da 0179) mostra o cus_', () => {
+    expect(recentLinkName(' Speed Gás e Água ', 'cus_1')).toBe('Speed Gás e Água')
+    expect(recentLinkName(null, 'cus_000123')).toBe('cliente cus_000123 do Asaas')
+    expect(recentLinkName('  ', 'cus_000123')).toBe('cliente cus_000123 do Asaas')
+  })
+
+  it('desligar: não promete que o cliente volta (a régua casa sozinha se alguém tiver os dados) e avisa da fila', () => {
+    const t = recentUnlinkText({ customerName: 'Speed Gás e Água', contactName: 'Speed Matriz', ruleEnabled: true })
+    expect(t).toMatch(/^Desligado: Speed Gás e Água não está mais ligado a Speed Matriz\./)
+    expect(t).toContain('Se nenhum contato tiver o telefone, o e-mail ou o CPF/CNPJ do Asaas')
+    expect(t).toContain('na próxima rodada da régua')
+    expect(t).toContain('inclusive Speed Matriz')
+    expect(t).toContain('não é cancelado')
+    expect(recentUnlinkText({ customerName: 'A', contactName: 'B', ruleEnabled: false })).toContain('quando a régua for religada')
+  })
 })
 
 describe('canCreateFromAsaas', () => {
@@ -298,18 +430,36 @@ describe('sanitizeChargeRestore — a lista volta do navegador', () => {
 })
 
 describe('canRemoveCreatedContact — "Criar contato" desfeito apaga o contato que acabou de nascer', () => {
-  const livre: CreatedContactDeps = { recent: true, conversations: false, deals: false, links: false, charges: false, actionRequests: false }
+  const livre: CreatedContactDeps = {
+    recent: true,
+    createdByUser: true,
+    conversations: false,
+    deals: false,
+    links: false,
+    charges: false,
+    actionRequests: false,
+    notes: false,
+    tags: false,
+    schedule: false,
+    history: false,
+  }
 
-  it('recém-criado e sem nada preso: apaga (senão o telefone do Asaas casava sozinho com ele — Speed Gás)', () => {
+  it('recém-criado por quem desfaz e sem nada preso: apaga (senão o telefone do Asaas casava sozinho com ele — Speed Gás)', () => {
     expect(canRemoveCreatedContact(livre)).toBe(true)
   })
 
-  it('qualquer dependência, ou criado há mais tempo, mantém', () => {
-    for (const k of ['conversations', 'deals', 'links', 'charges', 'actionRequests'] as const) {
+  it('qualquer dependência (o apagar é em cascata), criado há mais tempo ou por outra pessoa, mantém', () => {
+    for (const k of ['conversations', 'deals', 'links', 'charges', 'actionRequests', 'notes', 'tags', 'schedule', 'history'] as const) {
       expect(canRemoveCreatedContact({ ...livre, [k]: true })).toBe(false)
     }
     expect(canRemoveCreatedContact({ ...livre, recent: false })).toBe(false)
+    expect(canRemoveCreatedContact({ ...livre, createdByUser: false })).toBe(false)
     expect(canRemoveCreatedContact(null)).toBe(false)
+  })
+
+  it('só um false claro conta como "sem uso" (o banco pode devolver null)', () => {
+    expect(canRemoveCreatedContact({ ...livre, tags: null as unknown as boolean })).toBe(false)
+    expect(canRemoveCreatedContact({ ...livre, createdByUser: null as unknown as boolean })).toBe(false)
   })
 })
 
