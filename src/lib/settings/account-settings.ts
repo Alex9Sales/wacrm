@@ -113,6 +113,11 @@ export interface AccountSettings {
    *  conectado) e quais eventos avisam. Tudo OFF por padrão. */
   alertPhone: string
   alertChannelId: string | null
+  /** Template aprovado usado quando o canal OFICIAL recusa texto livre (fora da
+   *  janela de 24h). Corpo com UMA variável, que recebe o aviso em uma linha.
+   *  Vazio = sem plano B (o aviso se perde fora da janela). */
+  alertTemplateName: string | null
+  alertTemplateLanguage: string | null
   /** Avisar quando um negócio for marcado como GANHO (resumo da venda). */
   alertOnWon: boolean
   /** Avisar quando a IA transferir um atendimento pra humano (com resumo). */
@@ -205,6 +210,8 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   onboardingHiddenAt: null,
   alertPhone: '',
   alertChannelId: null,
+  alertTemplateName: null,
+  alertTemplateLanguage: null,
   alertOnWon: false,
   alertOnHandoff: false,
   alertOnBooking: false,

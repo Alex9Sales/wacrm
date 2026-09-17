@@ -23,6 +23,19 @@ const WHATSAPP_PROVIDERS = ['waha', 'meta', 'evolution', 'evogo']
 
 export type { OwnerAlertKind }
 
+/**
+ * O aviso em UMA linha, pro corpo do template. A Meta recusa variável com
+ * quebra de linha, tabulação ou 4 espaços seguidos — então as linhas viram
+ * " · " e o texto é cortado com reticências.
+ */
+export function flattenForTemplate(text: string, max = 900): string {
+  const one = text
+    .replace(/\s*\n+\s*/g, ' · ')
+    .replace(/\s{3,}/g, ' ')
+    .trim()
+  return one.length > max ? `${one.slice(0, max - 1).trimEnd()}…` : one
+}
+
 const KIND_TOGGLE: Record<
   OwnerAlertKind,
   'alertOnWon' | 'alertOnHandoff' | 'alertOnBooking' | 'alertOnOrder' | 'alertOnDemo'
@@ -94,9 +107,30 @@ export async function sendOwnerAlert(
     }
     // Destino pode ser um canal com IA (ver lib/ai/self-message.ts): marca o
     // texto pra IA não responder ao próprio aviso do sistema.
-    await markSelfMessage(text)
-    await getProvider(wa.provider).sendText(wa, phone, text)
-    return true
+    const provider = getProvider(wa.provider)
+    try {
+      await markSelfMessage(text)
+      await provider.sendText(wa, phone, text)
+      return true
+    } catch (err) {
+      // 🚫 Canal oficial (Meta) fora da janela de 24h recusa texto livre, e o
+      // aviso sumia (17/09, Limpeza com Zelo: o resumo da reunião nunca
+      // chegaria no WhatsApp do dono). Com um template aprovado configurado,
+      // o MESMO aviso vai por ele, em uma linha só.
+      const tpl = (s.alertTemplateName || '').trim()
+      if (!tpl || !provider.sendTemplate) throw err
+      const flat = flattenForTemplate(text)
+      await markSelfMessage(flat)
+      await provider.sendTemplate(wa, phone, {
+        name: tpl,
+        language: (s.alertTemplateLanguage || '').trim() || 'pt_BR',
+        params: [flat],
+      })
+      console.warn(
+        `[owner-alerts] texto recusado pelo canal (${err instanceof Error ? err.message : err}); aviso ${kind} enviado pelo template ${tpl}`,
+      )
+      return true
+    }
   } catch (err) {
     console.error(`[owner-alerts] falha ao enviar aviso ${kind}:`, err)
     return false
