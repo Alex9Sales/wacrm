@@ -108,6 +108,7 @@ import {
   registerPaymentPromise,
 } from '@/app/(dashboard)/cobrancas/actions';
 import { UpcomingUnmatchedPanel } from '@/components/cobrancas/upcoming-unmatched-panel';
+import { SendsPanel } from '@/components/cobrancas/sends-panel';
 import { unlinkDebtorText } from '@/lib/collections/upcoming-unmatched';
 import { CHARGEABLE_STATUSES, WEEKDAY_SHORT, describeWeekdays, type CollectionsSettings } from '@/lib/collections/rules';
 import { pauseSourceLabel } from '@/lib/collections/pause-rules';
@@ -464,6 +465,8 @@ export function WalletClient() {
               </Button>
             </div>
           )}
+
+          <SendsPanel />
 
           <UpcomingUnmatchedPanel view={upcomingView} error={upcomingError} connFilter={connFilter} onChanged={load} />
 

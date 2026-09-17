@@ -2666,3 +2666,178 @@ export async function lookupCep(cep: string): Promise<CepLookup> {
     return { ...vazio, error: 'Não foi possível consultar o CEP agora. Dá para preencher à mão.' }
   }
 }
+
+// ============================================================
+// 📮 Envios da régua — o que saiu hoje, o que respondeu, o que falhou.
+//
+// Pedido do Alex (17/09): "no painel a gente coloca quantos vai enviar no dia,
+// quantos enviou, e no fim quantos no mês e o que teve de resposta — com a
+// auditoria e o ícone de conversa pra clicar e conferir se a mensagem chegou".
+//
+// A fonte é a fila da régua (`agent_action_requests` do tipo collect_charges),
+// que é onde cada pedido nasce e morre — não a contagem de toques, que é por
+// pessoa/dia e some quando a mesma pessoa tem duas parcelas. Entrega e resposta
+// vêm da mensagem que o pedido gerou, então "enviado" aqui é enviado de fato,
+// com tique, e não "mandamos e torcemos".
+// ============================================================
+
+export type SendDelivery = 'sent' | 'delivered' | 'read' | 'failed' | null
+
+export interface SendAuditRow {
+  id: string
+  contactId: string | null
+  conversationId: string | null
+  name: string
+  /** Quando saiu (ou quando entrou na fila, se ainda não saiu). */
+  at: string
+  status: 'sent' | 'failed' | 'expired' | 'queued' | 'pending'
+  /** Tique do WhatsApp / estado do e-mail. null = não achamos a mensagem. */
+  delivery: SendDelivery
+  channel: 'whatsapp' | 'email' | null
+  replied: boolean
+  error: string | null
+}
+
+export interface SendsReport {
+  today: {
+    sent: number
+    failed: number
+    waiting: number
+    expired: number
+    replied: number
+    delivered: number
+    firstAt: string | null
+    lastAt: string | null
+    /** Teto do dia configurado na régua (null = sem teto). */
+    cap: number | null
+  }
+  month: { sent: number; expired: number; replied: number }
+  rows: SendAuditRow[]
+}
+
+const SENDS_ROWS_LIMIT = 200
+
+/**
+ * Relatório dos envios da régua desta conta. O dia é o dia do FUSO DA CONTA —
+ * a GoLink fecha o dia às 23:59 de São Paulo, não de Londres.
+ */
+export async function getSendsReport(): Promise<SendsReport> {
+  const { accountId } = await getCurrentAccount()
+  const settings = await getAccountSettings(accountId)
+  const tz = settings.businessTimezone || 'America/Sao_Paulo'
+  const s = normalizeSettings(settings.collections)
+
+  const linha = sql`
+    WITH pedido AS (
+      SELECT r.id, r.contact_id, r.conversation_id, r.status, r.error,
+             coalesce(r.executed_at, r.created_at) AS at,
+             (coalesce(r.executed_at, r.created_at) AT TIME ZONE ${tz})::date AS dia
+        FROM agent_action_requests r
+       WHERE r.account_id = ${accountId}
+         AND r.action_type = 'collect_charges'
+         AND coalesce(r.executed_at, r.created_at)
+             >= date_trunc('month', (now() AT TIME ZONE ${tz}))::timestamp AT TIME ZONE ${tz}
+    )
+    SELECT p.id, p.contact_id, p.conversation_id, p.status, p.error, p.at, p.dia,
+           coalesce(ct.name, '(sem nome)') AS name,
+           msg.status  AS delivery,
+           msg.channel AS channel,
+           EXISTS (
+             SELECT 1 FROM messages mr
+              JOIN conversations cr ON cr.id = mr.conversation_id
+              WHERE cr.contact_id = p.contact_id
+                AND mr.sender_type = 'customer'
+                AND mr.created_at > p.at
+           ) AS replied
+      FROM pedido p
+      LEFT JOIN contacts ct ON ct.id = p.contact_id
+      LEFT JOIN LATERAL (
+        SELECT m.status, ch.provider AS channel
+          FROM messages m
+          JOIN conversations c2 ON c2.id = m.conversation_id
+          LEFT JOIN channels ch ON ch.id = c2.channel_id
+         WHERE c2.contact_id = p.contact_id
+           AND m.is_internal = false
+           AND m.sender_type IN ('bot','agent')
+           AND m.created_at BETWEEN p.at - interval '2 minutes' AND p.at + interval '5 minutes'
+         ORDER BY m.created_at DESC
+         LIMIT 1
+      ) msg ON true
+     ORDER BY p.at DESC
+     LIMIT ${SENDS_ROWS_LIMIT}
+  `
+
+  type Raw = {
+    id: string
+    contact_id: string | null
+    conversation_id: string | null
+    status: string
+    error: string | null
+    at: string
+    dia: string
+    name: string
+    delivery: string | null
+    channel: string | null
+    replied: boolean
+  }
+
+  const hojeKey = localDayKey(tz, new Date())
+  let raw: Raw[] = []
+  try {
+    const res = (await db.execute(linha)) as unknown
+    raw = (Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])) as Raw[]
+  } catch (err) {
+    // Painel de leitura nunca derruba a tela da carteira.
+    console.error('[cobranças] relatório de envios falhou:', err instanceof Error ? err.message : err)
+    return {
+      today: { sent: 0, failed: 0, waiting: 0, expired: 0, replied: 0, delivered: 0, firstAt: null, lastAt: null, cap: null },
+      month: { sent: 0, expired: 0, replied: 0 },
+      rows: [],
+    }
+  }
+
+  const rows: SendAuditRow[] = raw.map((r) => ({
+    id: r.id,
+    contactId: r.contact_id,
+    conversationId: r.conversation_id,
+    name: r.name,
+    at: typeof r.at === 'string' ? r.at : new Date(r.at).toISOString(),
+    status: (['sent', 'failed', 'expired', 'queued', 'pending'].includes(r.status)
+      ? r.status
+      : 'pending') as SendAuditRow['status'],
+    delivery: (['sent', 'delivered', 'read', 'failed'].includes(r.delivery ?? '')
+      ? r.delivery
+      : null) as SendDelivery,
+    channel: r.channel === 'email' ? 'email' : r.channel ? 'whatsapp' : null,
+    replied: r.replied === true,
+    error: r.error,
+  }))
+
+  const doDia = raw.filter((r) => String(r.dia).slice(0, 10) === hojeKey)
+  const horas = doDia
+    .filter((r) => r.status === 'sent')
+    .map((r) => (typeof r.at === 'string' ? r.at : new Date(r.at).toISOString()))
+    .sort()
+
+  const conta = (list: Raw[], st: string) => list.filter((r) => r.status === st).length
+
+  return {
+    today: {
+      sent: conta(doDia, 'sent'),
+      failed: conta(doDia, 'failed'),
+      waiting: doDia.filter((r) => r.status === 'queued' || r.status === 'pending').length,
+      expired: conta(doDia, 'expired'),
+      replied: doDia.filter((r) => r.status === 'sent' && r.replied).length,
+      delivered: doDia.filter((r) => r.delivery === 'delivered' || r.delivery === 'read').length,
+      firstAt: horas[0] ?? null,
+      lastAt: horas[horas.length - 1] ?? null,
+      cap: s.dailyCap > 0 ? s.dailyCap : null,
+    },
+    month: {
+      sent: conta(raw, 'sent'),
+      expired: conta(raw, 'expired'),
+      replied: raw.filter((r) => r.status === 'sent' && r.replied).length,
+    },
+    rows,
+  }
+}
