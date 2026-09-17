@@ -17,6 +17,7 @@ const PROVIDER_LABEL: Record<LoadedLeadSource['provider'], string> = {
   tiktok: 'TikTok',
   meta: 'Meta',
   linkedin: 'LinkedIn',
+  rdstation: 'RD Station',
 }
 
 /** Etiquetas da origem — pra filtrar o lead no funil num piscar de olhos. */

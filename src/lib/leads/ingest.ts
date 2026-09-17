@@ -59,6 +59,13 @@ export interface IngestLeadInput {
   fallbackNote?: string
   /** WhatsApp de abertura (best-effort). Só dispara se `introText` vier. */
   introText?: string | null
+  /**
+   * Template aprovado pra abertura. Lead NOVO nunca falou com a gente, então no
+   * canal oficial (Meta) não existe janela de 24h aberta e texto livre é
+   * recusado — só template chega. Quando o canal exige template e ele vem aqui,
+   * é ele que sai; senão cai no `introText` (WAHA não tem janela).
+   */
+  introTemplate?: { name: string; language?: string | null; params?: string[] } | null
   /** Canal p/ o WhatsApp de abertura (null → resolve automaticamente). */
   channelId?: string | null
   /** Origem estruturada do lead (Site/Instagram/Indicação/…) → deals.origin. */
@@ -299,7 +306,8 @@ export async function ingestLead(
   //    (se ligada no canal) assume quando o lead responder.
   let whatsappSent = false
   const introText = input.introText?.trim()
-  if (introText) {
+  const introTemplate = input.introTemplate
+  if (introText || introTemplate) {
     try {
       const resolved = await resolveConversationByPhone(
         accountId,
@@ -307,12 +315,32 @@ export async function ingestLead(
         name ?? null,
         input.channelId ?? null,
       )
-      await sendMessageToConversation(accountId, {
-        conversationId: resolved.conversationId,
-        messageType: 'text',
-        contentText: introText,
-      })
-      whatsappSent = true
+      // Template primeiro quando houver: lead novo nunca falou com a gente, e
+      // no canal oficial texto livre é RECUSADO pela Meta fora da janela de 24h
+      // — que, pra quem nunca escreveu, está sempre fechada. Se o canal não
+      // trabalha com template (WAHA), a tentativa falha e o texto assume.
+      if (introTemplate?.name) {
+        try {
+          await sendMessageToConversation(accountId, {
+            conversationId: resolved.conversationId,
+            messageType: 'template',
+            templateName: introTemplate.name,
+            templateLanguage: introTemplate.language || 'pt_BR',
+            templateParams: introTemplate.params ?? [],
+          })
+          whatsappSent = true
+        } catch (err) {
+          console.error('[ingestLead] template de abertura falhou:', err)
+        }
+      }
+      if (!whatsappSent && introText) {
+        await sendMessageToConversation(accountId, {
+          conversationId: resolved.conversationId,
+          messageType: 'text',
+          contentText: introText,
+        })
+        whatsappSent = true
+      }
     } catch (err) {
       console.error('[ingestLead] intro whatsapp failed:', err)
     }
