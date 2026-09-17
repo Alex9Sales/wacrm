@@ -7,6 +7,7 @@ import {
   asaasNotifies,
   asaasReachesCustomer,
   classifyNewCharge,
+  fullSweepReason,
   isUuidRef,
   ligaAvisosFloor,
   newChargeGraceCutoffIso,
@@ -102,6 +103,67 @@ describe('ligaAvisosFloor — o piso conta da 1ª varredura DEPOIS de ligar, nã
 
   it('varredura às 22h de Brasília (já é outro dia em UTC) conta pelo dia local', () => {
     expect(ligaAvisosFloor('2026-09-17T13:00:00Z', '2026-09-18T01:00:00Z', diaBrasilia)).toEqual({ wait: false, floor: '2026-09-18' })
+  })
+})
+
+// Revisão 17/09: ligar a opção zerava a varredura, mas o portão de 20 h olhava a
+// CONEXÃO — com o selo clicado antes, nada varria por um dia e as cobranças
+// desse meio-tempo viravam "antiga" para sempre (cliente calado, ninguém avisava).
+describe('fullSweepReason — ligar "o CRM assume os avisos" antecipa a varredura completa', () => {
+  const H = 3_600_000
+  const everyMs = 20 * H
+  // Segunda 21/09/2026, horário de Brasília (UTC-3).
+  const seg = (hhmm: string) => `2026-09-21T${String(Number(hhmm.slice(0, 2)) + 3).padStart(2, '0')}:${hhmm.slice(3)}:00.000Z`
+  const agora = (hhmm: string) => Date.parse(seg(hhmm))
+
+  it('selo seg 10:00, opção ligada 10:05, sincronização 11:00 → varre já (antes: só depois de 20 h)', () => {
+    expect(fullSweepReason({ nowMs: agora('11:00'), lastSweepAt: seg('10:00'), offAt: seg('10:05'), sweptAt: null, everyMs })).toBe('espera_varredura')
+  })
+
+  it('o cenário inteiro: com a varredura de 11:00, a quarta já avisa o que nasceu na terça', () => {
+    // A varredura de 11:00 grava o instante (markAsaasNotificationsSwept): o piso é terça.
+    const r = ligaAvisosFloor(seg('10:05'), seg('11:00'), diaBrasilia)
+    expect(r).toEqual({ wait: false, floor: '2026-09-22' })
+    const piso = (r as { floor: string }).floor
+    // Quarta: a janela começa terça — antes, com a varredura só na terça 9h, começava quarta
+    // e as cobranças de segunda e terça (clientes calados pelo selo) ficavam "antiga".
+    // As de segunda, dia em que a opção foi ligada, continuam fora: o piso é o dia seguinte à varredura.
+    expect(newChargeSince('2026-09-23', [piso], diaDeEnvio(golink))).toBe('2026-09-22')
+    // E, gravada a varredura, a conexão volta à rotina.
+    expect(fullSweepReason({ nowMs: agora('12:00'), lastSweepAt: seg('11:00'), offAt: seg('10:05'), sweptAt: seg('11:00'), everyMs })).toBeNull()
+  })
+
+  it('listagem que falhou renova a conexão mas não grava a varredura → a próxima sincronização tenta de novo', () => {
+    // A tentativa das 11:00 falhou: notifications_off_at da conexão = 11:00, sweptAt segue nulo.
+    expect(fullSweepReason({ nowMs: agora('12:00'), lastSweepAt: seg('11:00'), offAt: seg('10:05'), sweptAt: null, everyMs })).toBe('espera_varredura')
+  })
+
+  it('desmarcar e remarcar numa conta com a varredura diária (GoLink às 9h) → varre já', () => {
+    // Remarcou às 10:05: o Salvar zerou a varredura; a das 9h (antes do clique) não vale.
+    expect(fullSweepReason({ nowMs: agora('10:30'), lastSweepAt: seg('09:00'), offAt: seg('10:05'), sweptAt: null, everyMs })).toBe('espera_varredura')
+    // Um Salvar concorrente que regravou a varredura antiga também não engana.
+    expect(fullSweepReason({ nowMs: agora('10:30'), lastSweepAt: seg('09:00'), offAt: seg('10:05'), sweptAt: seg('09:00'), everyMs })).toBe('espera_varredura')
+  })
+
+  it('duas contas do Asaas: a 1ª gravou a varredura; a 2ª, varrida antes do clique, também varre já', () => {
+    expect(fullSweepReason({ nowMs: agora('11:05'), lastSweepAt: seg('09:00'), offAt: seg('10:05'), sweptAt: seg('11:00'), everyMs })).toBe('conexao_antes_do_clique')
+  })
+
+  it('sem o campo (conta que ligou antes dele, GoLink hoje) → só a rotina de 20 h', () => {
+    expect(fullSweepReason({ nowMs: agora('11:00'), lastSweepAt: seg('09:00'), offAt: null, sweptAt: null, everyMs })).toBeNull()
+    expect(fullSweepReason({ nowMs: agora('11:00'), lastSweepAt: '2026-09-20T12:00:00.000Z', offAt: null, sweptAt: null, everyMs })).toBe('rotina')
+  })
+
+  it('rotina: conexão nunca varrida, ou há mais de 20 h (data do banco com espaço e +00 também serve)', () => {
+    expect(fullSweepReason({ nowMs: agora('11:00'), lastSweepAt: null, offAt: null, sweptAt: null, everyMs })).toBe('rotina')
+    expect(fullSweepReason({ nowMs: agora('11:00'), lastSweepAt: '2026-09-21 12:00:00.123+00', offAt: null, sweptAt: null, everyMs })).toBeNull()
+    expect(fullSweepReason({ nowMs: agora('11:00'), lastSweepAt: '2026-09-20 16:00:00+00', offAt: null, sweptAt: null, everyMs })).toBe('rotina')
+  })
+
+  it('ligada há dias, varrida depois do clique → só a rotina', () => {
+    expect(
+      fullSweepReason({ nowMs: agora('11:00'), lastSweepAt: seg('09:00'), offAt: '2026-09-01T12:00:00.000Z', sweptAt: '2026-09-01T13:00:00.000Z', everyMs }),
+    ).toBeNull()
   })
 })
 

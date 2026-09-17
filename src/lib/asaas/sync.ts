@@ -25,6 +25,7 @@ import {
 } from './collections'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { listChargesAtSilencing, markAsaasNotificationsSwept, recordSilenced } from '@/lib/collections/asaas-silenced'
+import { fullSweepReason } from '@/lib/collections/new-charge-rules'
 import { normalizeSettings } from '@/lib/collections/rules'
 
 import {
@@ -40,6 +41,7 @@ import {
  * Asaas, e não só os da carteira vencida. Cliente novo nasce lá com aviso
  * ligado; um dia é rápido o bastante para o dono não pagar por isso, e raro o
  * bastante para não pesar na rodada da régua (a listagem é paginada).
+ * É a rotina: ligar "o CRM assume os avisos" antecipa a próxima (`fullSweepReason`).
  */
 const FULL_SWEEP_MS = 20 * 3_600_000
 
@@ -115,15 +117,36 @@ export async function syncConnection(
   try {
     const s = normalizeSettings((await getAccountSettings(accountId)).collections)
     if (s.asaasNotificationsOff) {
-      const lastSweep = conn.notificationsOffAt ? new Date(conn.notificationsOffAt).getTime() : 0
-      const sweepAll = Date.now() - lastSweep > FULL_SWEEP_MS
+      // Revisão 17/09: além da rotina de 20 h, varre JÁ quando a opção foi ligada
+      // depois da última varredura — antes, com a conexão varrida há pouco (selo
+      // clicado antes de marcar a opção, ou desmarcar e remarcar), o aviso de
+      // cobrança nova esperava até um dia e as cobranças desse meio-tempo nunca
+      // eram avisadas. Regras em `fullSweepReason`.
+      const motivoVarredura = fullSweepReason({
+        nowMs: Date.now(),
+        lastSweepAt: conn.notificationsOffAt,
+        offAt: s.asaasNotificationsOffAt,
+        sweptAt: s.asaasNotificationsSweptAt,
+        everyMs: FULL_SWEEP_MS,
+      })
+      const sweepAll = motivoVarredura !== null
+      if (motivoVarredura && motivoVarredura !== 'rotina') {
+        console.log(`[cobranca] ${conn.label}: varredura completa dos avisos antecipada (${motivoVarredura}) — "o CRM assume os avisos" foi ligado depois da última.`)
+      }
       let pool = [...customers.values()]
       // Instante da lista de clientes: quem existia até aqui foi calado (ou recusado).
       const sweepStartedAt = new Date().toISOString()
       let everyoneListed = false
       if (sweepAll) {
         // Falha na listagem não pode derrubar a sincronização: cai na carteira.
-        const everyone = await listAllCustomers(cred).catch(() => null)
+        // Mas não some em silêncio: sem a lista completa a varredura não conta
+        // para o aviso de cobrança nova, que segue esperando (e tenta de novo).
+        const everyone = await listAllCustomers(cred).catch((err: unknown) => {
+          console.warn(
+            `[cobranca] ${conn.label}: não deu para listar todos os clientes do Asaas — a varredura de avisos ficou só na carteira (${err instanceof Error ? err.message : String(err)}).`,
+          )
+          return null
+        })
         if (everyone) {
           pool = everyone
           everyoneListed = true

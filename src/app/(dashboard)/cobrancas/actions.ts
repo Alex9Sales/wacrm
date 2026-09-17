@@ -926,6 +926,8 @@ export async function saveCollectionsSettings(input: Partial<CollectionsSettings
   // Revisão 17/09: o piso conta da primeira varredura DEPOIS de ligar (o Asaas
   // só para de avisar quando ela cala os clientes). Ligar de novo zera; quem
   // grava é a varredura (sync.ts) ou o botão de desligar avisos — nunca a tela.
+  // Zerado, a próxima sincronização varre na hora, sem a rotina de 20 h da
+  // conexão (`fullSweepReason`): com o selo clicado antes, o aviso esperava um dia.
   next.asaasNotificationsSweptAt = ligandoAvisos ? null : current.asaasNotificationsSweptAt
 
   if (next.endHour <= next.startHour) {

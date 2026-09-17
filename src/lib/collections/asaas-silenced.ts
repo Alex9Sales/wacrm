@@ -109,18 +109,37 @@ export async function recordSilenced(
 ): Promise<void> {
   const ids = [...new Set(customerIds.filter(Boolean))]
   if (!ids.length) return
+  // Revisão 17/09: sem rastro, o aviso de cobrança nova lê "calado antes"
+  // (silencedBeforeCharge) e manda o link sem olhar as chaves do Asaas — para
+  // quem o Asaas avisou antes de a varredura calar, sai dobrado. A falha não
+  // pode sumir em silêncio: fica no log com a conexão e os clientes, para saber
+  // que o "antes" deles é chute.
+  const semRastro = (quantos: number, motivo: string) => {
+    const amostra = ids.slice(0, 5).join(', ') + (ids.length > 5 ? ', …' : '')
+    console.warn(
+      `[cobranca] rastro de avisos calados NÃO gravado para ${quantos} de ${ids.length} cliente(s) da conexão ${connectionId} (${amostra}): ${motivo} — o aviso de cobrança nova pode repetir o link que o Asaas já mandou a eles.`,
+    )
+  }
   try {
     const r = redis()
-    if (!r) return
+    if (!r) {
+      semRastro(ids.length, 'Redis indisponível')
+      return
+    }
     const at = now.toISOString()
     const pipe = r.pipeline()
     for (const id of ids) {
       const rec: SilencedRecord = charges ? { at, beforeSince: charges.since, before: charges.byCustomer.get(id) ?? [] } : { at }
       pipe.set(silencedKey(connectionId, id), JSON.stringify(rec), 'PX', SILENCED_TTL_MS)
     }
-    await pipe.exec()
-  } catch {
-    /* sem rastro: o aviso trata como cliente calado antes (ver silencedBeforeCharge) */
+    // O ioredis NÃO rejeita o exec quando um comando falha (Redis fora, tempo
+    // esgotado): devolve [erro, resposta] por comando. Só o catch não via nada.
+    const res = await pipe.exec()
+    const falhas = (res ?? []).filter(([err]) => err)
+    if (!res) semRastro(ids.length, 'o Redis não respondeu')
+    else if (falhas.length) semRastro(falhas.length, falhas[0][0]?.message || 'erro do Redis')
+  } catch (err) {
+    semRastro(ids.length, err instanceof Error ? err.message : String(err))
   }
 }
 
@@ -170,7 +189,8 @@ export async function loadSilenced(
  * válida — a primeira vale; as seguintes não empurram o piso. Nunca lança.
  *
  * Se um "Salvar" concorrente sobrescrever o campo, o aviso espera a próxima
- * varredura (um dia a mais sem aviso — o lado seguro).
+ * varredura — que a sincronização seguinte antecipa enquanto a conta espera
+ * (`fullSweepReason`), sem a rotina de 20 h.
  */
 export async function markAsaasNotificationsSwept(accountId: string, atIso: string): Promise<void> {
   try {

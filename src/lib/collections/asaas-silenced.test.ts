@@ -7,6 +7,8 @@ import { beforeEach, describe, expect, it, vi } from 'vitest'
 const fake = vi.hoisted(() => ({
   store: new Map<string, { value: string; px: number | null }>(),
   down: false,
+  /** Como o ioredis de verdade com o Redis fora: o exec RESOLVE, com o erro de cada comando. */
+  commandErrors: false,
   listed: [] as { since: string; opts: unknown }[],
   payments: [] as { id?: string; customer?: string }[],
   listFails: false,
@@ -28,8 +30,9 @@ vi.mock('ioredis', () => {
         },
         exec: async () => {
           if (fake.down) throw new Error('Redis fora')
+          if (fake.commandErrors) return ops.map(() => [new Error('Reached the max retries per request limit (which is 1).')])
           ops.forEach((op) => op())
-          return []
+          return ops.map(() => [null, 'OK'])
         },
       }
       return p
@@ -75,6 +78,7 @@ const CRED = { apiKey: 'k', environment: 'production' as const }
 beforeEach(() => {
   fake.store.clear()
   fake.down = false
+  fake.commandErrors = false
   fake.listed = []
   fake.payments = []
   fake.listFails = false
@@ -106,10 +110,14 @@ describe('listChargesAtSilencing — o que já existia quando o CRM calou', () =
 
 describe('recordSilenced / loadSilenced — o rastro no Redis', () => {
   it('grava por conexão e cliente, com validade de 35 dias, e lê de volta num MGET', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     const lista = { since: '2026-09-15', byCustomer: new Map([['cus_alpha', ['pay_alpha1']]]) }
     await recordSilenced('c-asaas', ['cus_alpha', 'cus_leva', 'cus_alpha', ''], lista, new Date('2026-09-16T12:05:00Z'))
     expect([...fake.store.keys()].sort()).toEqual([silencedKey('c-asaas', 'cus_alpha'), silencedKey('c-asaas', 'cus_leva')])
     expect(fake.store.get(silencedKey('c-asaas', 'cus_alpha'))?.px).toBe(SILENCED_TTL_MS)
+    // Gravou tudo: nada no log.
+    expect(warn).not.toHaveBeenCalled()
+    warn.mockRestore()
 
     const r = await loadSilenced([
       { connectionId: 'c-asaas', customerId: 'cus_alpha' },
@@ -132,8 +140,40 @@ describe('recordSilenced / loadSilenced — o rastro no Redis', () => {
 
   it('Redis fora: gravar não lança; ler devolve null ("não sei")', async () => {
     fake.down = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
     await expect(recordSilenced('c-asaas', ['cus_x'], null)).resolves.toBeUndefined()
+    // Sem rastro, o "calado antes" do cliente é chute: a falha não some em silêncio.
+    expect(warn).toHaveBeenCalledTimes(1)
+    expect(String(warn.mock.calls[0][0])).toContain('Redis fora')
     await expect(loadSilenced([{ connectionId: 'c-asaas', customerId: 'cus_x' }])).resolves.toBeNull()
+    warn.mockRestore()
+  })
+
+  // Revisão 17/09: o ioredis não rejeita o exec quando o comando falha — o catch
+  // nunca via nada e o rastro sumia sem log (o aviso lia "calado antes" e dobrava).
+  it('Redis recusou os comandos (o exec resolve com o erro de cada um): nada gravado, e a falha vai para o log', async () => {
+    fake.commandErrors = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await expect(recordSilenced('c-asaas', ['cus_a', 'cus_b'], null)).resolves.toBeUndefined()
+    expect(fake.store.size).toBe(0)
+    expect(warn).toHaveBeenCalledTimes(1)
+    const msg = String(warn.mock.calls[0][0])
+    expect(msg).toContain('c-asaas')
+    expect(msg).toContain('2 de 2')
+    expect(msg).toContain('cus_a, cus_b')
+    expect(msg).toContain('max retries')
+    warn.mockRestore()
+  })
+
+  it('muitos clientes calados de uma vez: o log mostra só uma amostra', async () => {
+    fake.commandErrors = true
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {})
+    await recordSilenced('c-asaas', ['c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7'], null)
+    const msg = String(warn.mock.calls[0][0])
+    expect(msg).toContain('7 de 7')
+    expect(msg).toContain('c1, c2, c3, c4, c5, …')
+    expect(msg).not.toContain('c6')
+    warn.mockRestore()
   })
 
   it('ninguém para ler ou gravar → nada no Redis', async () => {

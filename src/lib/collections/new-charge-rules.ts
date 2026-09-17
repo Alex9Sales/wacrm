@@ -123,7 +123,8 @@ export function newChargeSince(
  * - `offAt` null: conta que já tinha ligado antes de existir o campo (GoLink) —
  *   sem piso, como antes;
  * - sem varredura, ou varredura anterior ao `offAt` (desligou e religou):
- *   `wait` — a varredura de cobrança nova não roda até a próxima;
+ *   `wait` — a varredura de cobrança nova não roda até a próxima (que a
+ *   sincronização antecipa: `fullSweepReason`);
  * - senão: dia seguinte (no fuso da conta) ao instante da varredura.
  */
 export function ligaAvisosFloor(
@@ -136,6 +137,60 @@ export function ligaAvisosFloor(
   const varrida = sweptAt ? Date.parse(sweptAt) : Number.NaN
   if (Number.isNaN(varrida) || varrida < off) return { wait: true }
   return { wait: false, floor: addDaysYmd(dayOf(new Date(varrida).toISOString()), 1) }
+}
+
+/** Por que a sincronização varre agora TODOS os clientes da conexão (null = só a carteira). */
+export type FullSweepReason =
+  /** A conta espera a 1ª varredura completa depois de ligar "o CRM assume os avisos". */
+  | 'espera_varredura'
+  /** A última varredura completa DESTA conexão é de antes do clique (a outra conta do Asaas já varreu). */
+  | 'conexao_antes_do_clique'
+  /** Rotina: uma vez a cada `everyMs` (cliente novo nasce no Asaas com aviso ligado). */
+  | 'rotina'
+
+/**
+ * A sincronização desta conexão varre TODOS os clientes do Asaas agora, e não
+ * só os da carteira vencida? null = não.
+ *
+ * Revisão 17/09 (aviso de cobrança nova): ligar "o CRM assume os avisos" zera
+ * `asaasNotificationsSweptAt`, mas o portão de rotina (20 h) olha a última
+ * varredura da CONEXÃO, não o clique. Com a conexão varrida há pouco — o selo
+ * "desligar avisos do Asaas" clicado antes de marcar a opção (o texto de ajuda
+ * manda usar o selo), ou desmarcar e remarcar numa conta com a varredura diária
+ * — nada varria por até um dia: o aviso ficava em "aguardando_varredura" e, com
+ * o piso no dia seguinte à varredura, as cobranças criadas nesse meio-tempo
+ * viravam "antiga" para sempre. Com o cliente já calado, nem o Asaas nem o CRM
+ * mandavam o link. Varrer logo é tão seguro quanto a 1ª varredura de uma conexão
+ * nova: o piso continua sendo o dia seguinte a ela.
+ *
+ * - `espera_varredura`: enquanto a conta espera (`ligaAvisosFloor` → wait). A
+ *   listagem que falhou não grava a varredura, então a espera continua e a
+ *   próxima sincronização tenta de novo — não volta para o portão de 20 h, que
+ *   a mesma tentativa falha já teria renovado na conexão;
+ * - `conexao_antes_do_clique`: com duas contas do Asaas, a 1ª varrida grava a
+ *   varredura da conta; a outra, varrida antes do clique, não fica mais um dia
+ *   com os clientes novos avisados (e cobrados) pelo Asaas;
+ * - `rotina`: nunca varrida, ou há mais de `everyMs`.
+ *
+ * Conta que ligou antes de existir o campo (`offAt` null, GoLink) segue só a rotina.
+ */
+export function fullSweepReason(p: {
+  nowMs: number
+  /** Última varredura completa desta conexão (`asaas_connections.notifications_off_at`). */
+  lastSweepAt: string | null | undefined
+  /** Quando "o CRM assume os avisos" foi ligado (ajustes). */
+  offAt: string | null | undefined
+  /** 1ª varredura completa depois de ligar (ajustes). */
+  sweptAt: string | null | undefined
+  everyMs: number
+}): FullSweepReason | null {
+  // Para saber se espera, o dia não importa (só o `wait`).
+  if (ligaAvisosFloor(p.offAt, p.sweptAt, (iso) => iso.slice(0, 10)).wait) return 'espera_varredura'
+  const ultima = p.lastSweepAt ? Date.parse(p.lastSweepAt) : Number.NaN
+  if (Number.isNaN(ultima)) return 'rotina'
+  const ligou = p.offAt ? Date.parse(p.offAt) : Number.NaN
+  if (!Number.isNaN(ligou) && ultima < ligou) return 'conexao_antes_do_clique'
+  return p.nowMs - ultima > p.everyMs ? 'rotina' : null
 }
 
 /** Os campos da cobrança do Asaas que a classificação lê. */
