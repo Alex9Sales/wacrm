@@ -68,12 +68,17 @@ describe('rdStatusOf', () => {
 describe('lostReasonIdFor', () => {
   const reasons = [
     { _id: 'r1', name: 'Lead interessado em serviço' },
+    { _id: 'r2', name: 'Não respondeu' },
     { _id: 'r9', name: 'Outros' },
   ]
   it('same name wins, otherwise "Outros"', () => {
     expect(lostReasonIdFor(reasons, 'lead interessado em servico')).toBe('r1')
     expect(lostReasonIdFor(reasons, 'Achou caro')).toBe('r9')
     expect(lostReasonIdFor([], 'x')).toBeNull()
+  })
+  it('detail in parentheses (follow-up give-up) still matches the RD reason', () => {
+    expect(lostReasonIdFor(reasons, 'Não respondeu (5 follow-ups)')).toBe('r2')
+    expect(lostReasonIdFor(reasons, 'Achou caro (cliente)')).toBe('r9')
   })
 })
 

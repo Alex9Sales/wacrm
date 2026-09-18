@@ -94,8 +94,13 @@ export function lostReasonIdFor(
   reasons: { id?: string; _id?: string; name?: string }[],
   reason: string | null | undefined,
 ): string | null {
-  const want = canonName(reason)
-  const hit = want ? reasons.find((r) => canonName(r.name) === want) : undefined
+  const find = (text: string | null | undefined) => {
+    const want = canonName(text)
+    return want ? reasons.find((r) => canonName(r.name) === want) : undefined
+  }
+  // "Não respondeu (5 follow-ups)" (desistência do follow-up) é o "Não
+  // respondeu" do RD — o detalhe entre parênteses segue na nota da perda.
+  const hit = find(reason) ?? find((reason ?? '').replace(/\s*\([^)]*\)\s*$/, ''))
   const other = reasons.find((r) => canonName(r.name) === 'outros')
   return rid(hit ?? other ?? null)
 }

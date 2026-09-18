@@ -521,9 +521,9 @@ function readStageTrigger(raw: unknown): StageTrigger | null {
 }
 
 /**
- * O reengajamento NÃO se aplica se o negócio já avançou: reunião futura marcada
- * pro contato ("já agendou") ou negócio ligado ganho/perdido. Best-effort —
- * na dúvida (erro), deixa reengajar (fail-open).
+ * O reengajamento NÃO se aplica se o negócio já avançou: reunião marcada pro
+ * contato (futura ou que começou há até 14 dias) ou negócio ligado
+ * ganho/perdido. Best-effort — na dúvida (erro), deixa reengajar (fail-open).
  */
 async function isReengageBlocked(
   accountId: string,
@@ -544,6 +544,12 @@ async function isReengageBlocked(
     if (deal && (deal.status === 'won' || deal.status === 'lost')) return true
 
     if (contactId) {
+      // Reunião que JÁ ACONTECEU também trava: a trava só olhava reunião futura
+      // e soltava a escada na hora em que a reunião começava — 3 h depois do
+      // último lembrete vinha "retome de onde parou" e, dias depois, a
+      // despedida, no meio da negociação com o vendedor (Zelo 18/09). O
+      // pós-reunião é dos gatilhos de etapa (No-show, Envio da COF) e dos
+      // lembretes "depois".
       const ev = firstOrNull(
         await db
           .select({ id: calendarEvents.id })
@@ -553,7 +559,7 @@ async function isReengageBlocked(
               eq(calendarEvents.accountId, accountId),
               eq(calendarEvents.contactId, contactId),
               eq(calendarEvents.status, 'confirmed'),
-              gt(calendarEvents.startsAt, sql`now()`),
+              gt(calendarEvents.startsAt, sql`now() - interval '14 days'`),
             ),
           )
           .limit(1),
