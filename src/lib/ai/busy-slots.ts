@@ -5,7 +5,7 @@
 // os compromissos — então cobre as duas. Sem 'server-only': o worker da IA usa.
 // ============================================================
 
-import { and, asc, eq, gte, lt } from 'drizzle-orm'
+import { and, asc, eq, gt, gte, isNull, lt, ne, or } from 'drizzle-orm'
 
 import { db, calendarEvents } from '@/db'
 
@@ -46,8 +46,18 @@ export function formatBusySlot(ev: { startsAt: string; endsAt: string; allDay?: 
   return `${day} ${hm(start)}–${hm(end)}`
 }
 
-/** Compromissos confirmados dos próximos dias, já formatados. Nunca lança (erro → []). */
-export async function loadBusySlots(accountId: string, tz: string, now = new Date()): Promise<string[]> {
+/**
+ * Compromissos confirmados dos próximos dias, já formatados. Nunca lança (erro → []).
+ * `excludeContactId`: a reunião DESTE lead não entra como ocupada — Zelo 18/09:
+ * a IA marcou às 10h, na resposta seguinte viu "10h ocupado" (era a própria
+ * reunião) e disse ao lead que precisava "ajustar o horário".
+ */
+export async function loadBusySlots(
+  accountId: string,
+  tz: string,
+  now = new Date(),
+  opts: { excludeContactId?: string | null } = {},
+): Promise<string[]> {
   try {
     const until = new Date(now.getTime() + BUSY_SLOTS_DAYS * 86_400_000)
     const rows = await db
@@ -57,6 +67,9 @@ export async function loadBusySlots(accountId: string, tz: string, now = new Dat
         and(
           eq(calendarEvents.accountId, accountId),
           eq(calendarEvents.status, 'confirmed'),
+          opts.excludeContactId
+            ? or(isNull(calendarEvents.contactId), ne(calendarEvents.contactId, opts.excludeContactId))
+            : undefined,
           // "Mostrar como: Disponível" no Google não bloqueia (Zelo 18/09: um
           // evento de dia inteiro marcado como livre fechou a terça inteira).
           eq(calendarEvents.busy, true),
@@ -70,5 +83,37 @@ export async function loadBusySlots(accountId: string, tz: string, now = new Dat
   } catch (err) {
     console.error('[ai busy-slots] agenda indisponível (segue sem):', err instanceof Error ? err.message : err)
     return []
+  }
+}
+
+/**
+ * A próxima reunião JÁ marcada com este lead ("seg 21/09 09:00–10:00"), ou null.
+ * Vai pro prompt: a IA não remarca nem oferece outro horário à toa.
+ */
+export async function loadBookedForContact(
+  accountId: string,
+  contactId: string,
+  tz: string,
+  now = new Date(),
+): Promise<string | null> {
+  try {
+    const row = (
+      await db
+        .select({ startsAt: calendarEvents.startsAt, endsAt: calendarEvents.endsAt, allDay: calendarEvents.allDay })
+        .from(calendarEvents)
+        .where(
+          and(
+            eq(calendarEvents.accountId, accountId),
+            eq(calendarEvents.contactId, contactId),
+            eq(calendarEvents.status, 'confirmed'),
+            gt(calendarEvents.startsAt, now.toISOString()),
+          ),
+        )
+        .orderBy(asc(calendarEvents.startsAt))
+        .limit(1)
+    )[0]
+    return row ? formatBusySlot(row, tz) : null
+  } catch {
+    return null
   }
 }

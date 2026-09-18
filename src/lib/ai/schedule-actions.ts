@@ -4,7 +4,7 @@
 // for do Google (pushEventToGoogle, best-effort). Nunca lança.
 // ============================================================
 
-import { and, asc, eq, gt, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, sql } from 'drizzle-orm'
 import { db, calendarConnections, calendars, calendarEvents, contacts, deals, scheduledMessages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { pushEventToGoogle } from '@/lib/google/sync'
@@ -183,6 +183,27 @@ export interface ScheduleResult {
   title: string
   /** Link do Google Meet quando a reunião saiu online (aiMeetingOnline). */
   meetLink?: string | null
+  /** A reunião JÁ existia e mudou de horário (remarcação). */
+  rescheduled?: boolean
+  /** O convite do Google foi pro e-mail do lead. */
+  invitedLead?: boolean
+}
+
+/** "segunda-feira, 21/09, às 9h" (ou "às 9h30") no fuso da conta. */
+export function formatMeetingWhen(iso: string, tz: string): string {
+  const d = new Date(iso)
+  const part = (o: Intl.DateTimeFormatOptions) => {
+    try {
+      return new Intl.DateTimeFormat('pt-BR', { ...o, timeZone: tz }).format(d)
+    } catch {
+      return new Intl.DateTimeFormat('pt-BR', { ...o, timeZone: 'America/Sao_Paulo' }).format(d)
+    }
+  }
+  const weekday = part({ weekday: 'long' })
+  const day = part({ day: '2-digit', month: '2-digit' })
+  const [h, m] = part({ hour: '2-digit', minute: '2-digit', hour12: false }).split(':')
+  const hour = `${Number(h)}h${m && m !== '00' ? m : ''}`
+  return `${weekday}, ${day}, às ${hour}`
 }
 
 /**
@@ -209,7 +230,9 @@ export async function scheduleEventFromAi(input: {
     const calendarId = await ensureAiCalendar(accountId, userId)
     const title = (input.title || 'Reunião').trim().slice(0, 200)
 
-    // Vincula ao negócio ligado à conversa (se houver).
+    // Vincula ao negócio ABERTO mais novo da conversa (depois de um [[GANHO]]
+    // com cópia, o aberto é a cópia no funil comercial — é ela que vai pra
+    // reunião).
     const deal = firstOrNull(
       await db
         .select({ id: deals.id })
@@ -220,21 +243,23 @@ export async function scheduleEventFromAi(input: {
             eq(deals.conversationId, conversationId),
           ),
         )
+        .orderBy(sql`(${deals.status} = 'open') DESC`, desc(deals.createdAt))
         .limit(1),
     )
 
     // Dedup: a IA às vezes emite [[AGENDAR]] em turnos seguidos. Se já existe um
-    // evento confirmado FUTURO pro mesmo negócio (ou contato), ATUALIZA o horário
-    // em vez de criar outro — 1 reunião = 1 evento (evita lembrete em dobro).
-    const dupMatch = deal?.id
-      ? eq(calendarEvents.dealId, deal.id)
-      : contactId
-        ? eq(calendarEvents.contactId, contactId)
+    // evento confirmado FUTURO pro mesmo CONTATO (senão, pro mesmo negócio),
+    // ATUALIZA o horário em vez de criar outro — 1 reunião = 1 evento. Pelo
+    // contato primeiro: o negócio muda quando o ganho abre a cópia (Zelo 18/09).
+    const dupMatch = contactId
+      ? eq(calendarEvents.contactId, contactId)
+      : deal?.id
+        ? eq(calendarEvents.dealId, deal.id)
         : null
     if (dupMatch) {
       const existing = firstOrNull(
         await db
-          .select({ id: calendarEvents.id })
+          .select({ id: calendarEvents.id, startsAt: calendarEvents.startsAt, location: calendarEvents.location })
           .from(calendarEvents)
           .where(
             and(
@@ -248,16 +273,27 @@ export async function scheduleEventFromAi(input: {
           .limit(1),
       )
       if (existing) {
+        const sameTime = new Date(existing.startsAt).getTime() === start.getTime()
         await db
           .update(calendarEvents)
-          .set({ startsAt: start.toISOString(), endsAt: end.toISOString(), title })
+          .set({ startsAt: start.toISOString(), endsAt: end.toISOString(), title, ...(deal?.id ? { dealId: deal.id } : {}) })
           .where(eq(calendarEvents.id, existing.id))
-        try {
-          await pushEventToGoogle(accountId, existing.id, 'update')
-        } catch (err) {
-          console.error('[ai schedule] google update falhou:', err)
+        if (!sameTime) {
+          try {
+            await pushEventToGoogle(accountId, existing.id, 'update')
+          } catch (err) {
+            console.error('[ai schedule] google update falhou:', err)
+          }
         }
-        return { eventId: existing.id, startsAt: start.toISOString(), title }
+        return {
+          eventId: existing.id,
+          startsAt: start.toISOString(),
+          title,
+          // Remarcou (horário mudou): quem chama avisa o lead com o link de
+          // sempre. Mesmo horário = marcador repetido, nada a avisar.
+          rescheduled: !sameTime,
+          meetLink: existing.location && /meet\.google\.com/.test(existing.location) ? existing.location : null,
+        }
       }
     }
 
@@ -281,6 +317,7 @@ export async function scheduleEventFromAi(input: {
     // reunião ONLINE (aiMeetingOnline): sala do Meet + convite por e-mail pro
     // lead e pros convidados fixos — Renato/Zelo 18/09.
     let meetLink: string | null = null
+    let invitedLead = false
     try {
       const settings = await getAccountSettings(accountId)
       let attendees: string[] = []
@@ -303,6 +340,7 @@ export async function scheduleEventFromAi(input: {
         attendees,
       })
       meetLink = (pushed && pushed.hangoutLink) || null
+      invitedLead = settings.aiMeetingOnline && attendees.length > (settings.aiMeetingInvitees ?? []).length
     } catch (err) {
       console.error('[ai schedule] google push falhou:', err)
     }
@@ -313,7 +351,7 @@ export async function scheduleEventFromAi(input: {
     // duplicava (1 por evento, sem dedup) e causava spam quando havia eventos
     // repetidos.
 
-    return { eventId: created.id, startsAt: start.toISOString(), title, meetLink }
+    return { eventId: created.id, startsAt: start.toISOString(), title, meetLink, invitedLead }
   } catch (err) {
     console.error('[ai schedule] criar evento falhou:', err)
     return null

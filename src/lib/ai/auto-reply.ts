@@ -41,14 +41,14 @@ import {
   listContactFieldNames,
   setVoicePreference,
 } from './close-actions'
-import { scheduleEventFromAi } from './schedule-actions'
-import { loadBusySlots } from './busy-slots'
+import { formatMeetingWhen, scheduleEventFromAi } from './schedule-actions'
+import { loadBookedForContact, loadBusySlots } from './busy-slots'
 import { loadLeadFormContext } from './lead-form-context'
 import { syncAccountCalendars } from '@/lib/google/sync'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
 import { extractMaterialDirectives, findMaterialByName, listMaterialsForAgent } from './materials'
-import { acquireReplyLock, bumpCounter, getCoveredUntil, kvDel, releaseReplyLock, setCoveredUntil } from './reply-marker'
+import { acquireReplyLock, bumpCounter, claimOnce, getCoveredUntil, kvDel, releaseReplyLock, setCoveredUntil } from './reply-marker'
 import { STALE_DROPS_TTL_SECONDS, staleDropsKey, staleReplyDecision, turnIsDroppable } from './stale-reply'
 import { alertContactName, buildClientTail } from '@/lib/alerts/alert-text'
 import { isNewEpisode } from './reply-episode'
@@ -820,9 +820,14 @@ export async function dispatchInboundToAiReply(
     // marcado no celular agorinha ainda não estaria aqui). Tem carência e prazo
     // curto lá dentro — nunca lança e nunca segura a resposta.
     let busySlots: string[] | undefined
+    let bookedForLead: string | null = null
     if (tools.includes('schedule')) {
       await syncAccountCalendars(accountId)
-      busySlots = await loadBusySlots(accountId, settings.businessTimezone || 'America/Sao_Paulo')
+      const tz = settings.businessTimezone || 'America/Sao_Paulo'
+      // A reunião DESTE lead não conta como ocupada — e vai à parte pro prompt
+      // (a IA não "ajusta o horário" da própria reunião; Zelo 18/09).
+      busySlots = await loadBusySlots(accountId, tz, undefined, { excludeContactId: contactId })
+      bookedForLead = contactId ? await loadBookedForContact(accountId, contactId, tz) : null
     }
 
     const systemPrompt = buildSystemPrompt({
@@ -842,6 +847,7 @@ export async function dispatchInboundToAiReply(
       timezone: settings.businessTimezone,
       scheduleApproval,
       busySlots,
+      bookedForLead,
       extraInstructions: (() => {
         const extra: string[] = []
         if (openDebt) extra.push(collectionInstruction(openDebt))
@@ -993,7 +999,20 @@ export async function dispatchInboundToAiReply(
       }
       // 📣 Avisar o dono no WhatsApp (ex.: SDR marcou teste/demo). NÃO é travado
       // por ferramenta — best-effort, gated pelo telefone + toggle 'demo' da conta.
-      if (dirs.ownerAlert) {
+      // 📣 Uma vez por reunião: o modelo às vezes repete [[AVISARDONO]] nas
+      // respostas seguintes (Zelo 18/09: o dono recebeu 3 avisos da MESMA
+      // reunião). Chave = conversa + horário marcado neste turno; sem horário,
+      // uma vez a cada 12 h. Redis fora (undefined) → manda, como antes.
+      const ownerAlertOnce = dirs.ownerAlert
+        ? (await claimOnce(
+            `owner-alert:demo:${conversationId}:${dirs.schedule?.startsLocal ?? 'sem-horario'}`,
+            12 * 3600,
+          )) !== false
+        : false
+      if (dirs.ownerAlert && !ownerAlertOnce) {
+        console.log('[ai auto-reply] aviso ao dono repetido — não reenviado:', conversationId)
+      }
+      if (dirs.ownerAlert && ownerAlertOnce) {
         try {
           const { sendOwnerAlert } = await import('@/lib/alerts/owner-alerts')
           const c = firstOrNull(
@@ -1132,20 +1151,32 @@ export async function dispatchInboundToAiReply(
               conversationId,
             }).catch(() => 0)
           }
-          // 🔗 Reunião ONLINE (conta com aiMeetingOnline): o link do Meet vai
-          // pro lead aqui, depois da confirmação que a IA acabou de mandar — o
-          // convite do Google vai pro e-mail, mas é no WhatsApp que ele olha.
-          if (ev.meetLink) {
+          // 🔗 Reunião ONLINE (conta com aiMeetingOnline): a confirmação FINAL
+          // pro lead — dia, hora, link e o convite por e-mail — depois da fala
+          // da IA. Remarcação manda o horário novo; marcador repetido no mesmo
+          // horário não manda nada (Zelo 18/09: o Alex pediu "no final,
+          // certinho, bonitinho pro cliente").
+          const shouldConfirm = ev.meetLink && ev.rescheduled !== false
+          if (shouldConfirm) {
+            const when = formatMeetingWhen(ev.startsAt, tz)
+            const tzLabel = tz === 'America/Sao_Paulo' ? ' (horário de Brasília)' : ''
+            const lines = ev.rescheduled
+              ? [`📅 Reunião remarcada: ${when}${tzLabel}.`, `🔗 Link da videochamada: ${ev.meetLink}`]
+              : [
+                  `📅 Reunião confirmada: ${when}${tzLabel}.`,
+                  `🔗 Link da videochamada: ${ev.meetLink}`,
+                  ...(ev.invitedLead ? ['✉️ O convite também foi para o seu e-mail.'] : []),
+                ]
             try {
               await engineSendText({
                 accountId,
                 userId: configOwnerUserId,
                 conversationId,
                 contactId,
-                text: `📅 Link da nossa reunião (Google Meet): ${ev.meetLink}`,
+                text: lines.join('\n'),
               })
             } catch (err) {
-              console.error('[ai auto-reply] envio do link do Meet falhou:', err)
+              console.error('[ai auto-reply] confirmação da reunião falhou:', err)
             }
           }
         }

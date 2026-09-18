@@ -335,7 +335,7 @@ export function transferInstruction(routingTags: string[]): string {
 }
 
 /** Instrução: agendar reunião de verdade quando combinar um horário. */
-export function scheduleInstruction(opts: { approval?: boolean; busySlots?: string[] } = {}): string {
+export function scheduleInstruction(opts: { approval?: boolean; busySlots?: string[]; booked?: string | null } = {}): string {
   // 09/09: com aprovação, a IA NÃO pode dizer que está marcado — o humano
   // aprova em Precisa de você e o CRM manda a confirmação depois.
   const closing = opts.approval
@@ -349,10 +349,16 @@ export function scheduleInstruction(opts: { approval?: boolean; busySlots?: stri
       : opts.busySlots.length
         ? ` Times ALREADY BOOKED in the calendar (next days, business timezone) — never offer, accept or book a time that overlaps any of these; offer other times instead: ${opts.busySlots.join('; ')}.`
         : ' The calendar has no booked appointments in the next days.'
+  // 18/09 (Zelo): sem saber que a reunião do lead já estava marcada, a IA
+  // re-emitia [[AGENDAR]] a cada resposta e chegou a "ajustar" o horário.
+  const booked = opts.booked
+    ? ` THIS customer ALREADY HAS a meeting booked: ${opts.booked} (business timezone). That slot is taken by THIS meeting, not by a conflict — do not offer other times because of it, do not say you need to adjust it, and do NOT emit [[AGENDAR]] again unless the customer explicitly asks to change the day or time.`
+    : ''
   return (
     'Scheduling: when you and the customer clearly AGREE on a specific date and time for a meeting, call, or appointment, emit ONCE the marker "[[AGENDAR:YYYY-MM-DDTHH:MM|<short title>]]" — computing the ABSOLUTE date/time from the current date/time given above (business timezone). Resolve relative times ("tomorrow at 3pm", "friday morning") to the real date, use 24h time (e.g. 15:00), and put a short title after the "|" (e.g. the customer name and topic). Emit it ONLY when a concrete time is actually agreed — never for a vague "sometime". ' +
     closing +
     busy +
+    booked +
     ' This marker is control metadata: never show it to the customer.'
   )
 }
@@ -472,6 +478,8 @@ export function buildSystemPrompt(args: {
   /** 📅 Compromissos já marcados nos próximos dias (formatados). Só com a
    *  ferramenta schedule; undefined = não consultado. */
   busySlots?: string[]
+  /** 📅 Reunião JÁ marcada com ESTE lead (formatada), ou null. */
+  bookedForLead?: string | null
   /** Etapas do funil ligado (pra ferramenta move_card escolher pelo nome). */
   pipelineStages?: string[]
   /** OUTROS funis da conta (ferramenta move_funnel): nome + etapas em ordem. */
@@ -623,7 +631,7 @@ export function buildSystemPrompt(args: {
     if (has('tag') && args.availableTags && args.availableTags.length > 0) {
       parts.push(tagInstruction(args.availableTags))
     }
-    if (has('schedule')) parts.push(scheduleInstruction({ approval: !!args.scheduleApproval, busySlots: args.busySlots }))
+    if (has('schedule')) parts.push(scheduleInstruction({ approval: !!args.scheduleApproval, busySlots: args.busySlots, booked: args.bookedForLead }))
     if (has('create_card')) parts.push(createCardInstruction())
     if (has('private_note')) parts.push(noteInstruction())
     if (has('send_material') && args.materials && args.materials.length > 0) {

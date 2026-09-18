@@ -24,9 +24,10 @@
 // ============================================================
 
 import { randomBytes } from 'crypto'
-import { and, asc, eq, inArray, isNull, sql } from 'drizzle-orm'
+import { and, asc, eq, gt, inArray, isNull, sql } from 'drizzle-orm'
 
 import {
+  calendarEvents,
   contacts,
   crmDealLinks,
   crmIntegrations,
@@ -41,6 +42,8 @@ import {
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
+import { getAccountSettings } from '@/lib/settings/account-settings'
+import { formatMeetingWhen } from '@/lib/ai/schedule-actions'
 import { rdCrm, rid, type RdContact, type RdCrmClient, type RdDeal } from './client'
 import {
   canonName,
@@ -410,6 +413,32 @@ async function saveLink(
     })
 }
 
+/** Texto da anotação de ganho no RD: a reunião futura do lead, se houver. */
+async function wonNoteFor(accountId: string, deal: LocalDeal): Promise<string> {
+  if (deal.contactId) {
+    const ev = firstOrNull(
+      await db
+        .select({ startsAt: calendarEvents.startsAt })
+        .from(calendarEvents)
+        .where(
+          and(
+            eq(calendarEvents.accountId, accountId),
+            eq(calendarEvents.contactId, deal.contactId),
+            eq(calendarEvents.status, 'confirmed'),
+            gt(calendarEvents.startsAt, new Date().toISOString()),
+          ),
+        )
+        .orderBy(asc(calendarEvents.startsAt))
+        .limit(1),
+    )
+    if (ev) {
+      const tz = (await getAccountSettings(accountId)).businessTimezone || 'America/Sao_Paulo'
+      return `Ganho via FluxiaCRM — IA marcou a reunião para ${formatMeetingWhen(ev.startsAt, tz)}.`
+    }
+  }
+  return 'Ganho via FluxiaCRM.'
+}
+
 export type SyncOutcome =
   | { kind: 'ok'; note?: string }
   | { kind: 'skip'; why: string }
@@ -466,6 +495,14 @@ export async function syncDealToRd(accountId: string, dealId: string): Promise<S
   if (plan.close === 'won') {
     await api.updateDeal(externalId, { deal: { win: true } })
     statusNow = 'won'
+    // "Motivo do ganho" (Jordan/Zelo): o RD não tem campo pra isso — vai como
+    // anotação no negócio, com a reunião que a IA marcou quando houver.
+    try {
+      const author = rid(rdDeal.user) ?? integ.config.defaultOwnerExternalId ?? null
+      if (author) await api.createActivity(externalId, author, await wonNoteFor(accountId, deal))
+    } catch (err) {
+      console.error('[rd-crm] anotação do ganho falhou:', err instanceof Error ? err.message : err)
+    }
   } else if (plan.close === 'lost') {
     const reasonText = (deal.lostReason ?? '').trim()
     const exact = lostReasonIdFor(ctx.lostReasons, reasonText)

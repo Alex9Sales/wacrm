@@ -21,7 +21,7 @@ import { loadLeadSourceForWebhook } from '@/lib/leads/sources'
 import { parseRdWebhook, pickIntroForOrigin, rdOriginLabel } from '@/lib/leads/providers/rdstation'
 import { buildLeadNotes } from '@/lib/leads/providers/shared'
 import { ingestLead } from '@/lib/leads/ingest'
-import { extractLeadFacts } from '@/lib/leads/lead-facts'
+import { extractLeadFacts, isSyntheticConversion } from '@/lib/leads/lead-facts'
 import { fillDealFactFields } from '@/lib/leads/deal-fact-fields'
 import { resolveAuditUserId } from '@/lib/api/v1/contacts'
 import { firstNameForGreeting, greeting } from '@/lib/cdl/names'
@@ -70,6 +70,16 @@ export async function POST(
         : 'pt_BR'
 
     for (const lead of leads) {
+      // "Negociação criada no RD Station CRM" é o RD registrando um negócio que
+      // o próprio CRM criou — pela integração do RD Marketing ou pelo espelho
+      // do Fluxia. Não é lead novo: tratar como conversão criava card repetido
+      // e, com o espelho ligado, um CICLO (card → negócio no RD → conversão →
+      // card novo…). A conversão real do lead (formulário) já chegou antes.
+      const latest = lead.meta['Última conversão'] || lead.meta['Primeira conversão']
+      if (isSyntheticConversion(latest)) {
+        console.log(`[rd-station] conversão do próprio RD CRM ignorada (fonte ${source.id})`)
+        continue
+      }
       if (!lead.phone) {
         console.error(`[rd-station] lead sem telefone (fonte ${source.id}) — ignorado`)
         continue

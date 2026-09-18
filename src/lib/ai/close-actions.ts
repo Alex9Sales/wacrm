@@ -765,11 +765,44 @@ export async function applyCloseActions(input: {
   // 0) Ganho/perda + OUTRO funil: fecha este card onde está (o pré-vendas
   // registra onde converteu ou por que saiu) e ABRE um novo no destino —
   // Jordan/Zelo 18/09. Destino não achado → só fecha em pé, como antes.
-  const crossClose =
+  let crossClose =
     (wantLose || wantWin) &&
     !!input.allowCrossFunnel &&
     !!funnelStageName &&
     !!splitCrossFunnel(funnelStageName)
+  // 🔁 Já está no funil de destino (o card é a CÓPIA aberta por um ganho
+  // anterior): repetir "[[GANHO]] + [[FUNIL:…]]" não fecha nem copia de novo.
+  // Zelo 18/09: a IA repetiu os marcadores em 3 respostas seguidas e gerou 3
+  // cópias (2 delas ganhas). No máximo anda de etapa dentro do funil.
+  let alreadyThere: { id: string; pipelineId: string; stageId: string } | null = null
+  if (crossClose) {
+    const open = firstOrNull(
+      await db
+        .select({ id: deals.id, pipelineId: deals.pipelineId, stageId: deals.stageId })
+        .from(deals)
+        .where(
+          and(
+            eq(deals.accountId, accountId),
+            eq(deals.conversationId, conversationId),
+            eq(deals.status, 'open'),
+          ),
+        )
+        .orderBy(desc(deals.createdAt))
+        .limit(1),
+    )
+    const target = open ? resolveFunnelTarget(await loadAccountFunnels(accountId), funnelStageName!) : null
+    if (open && target && target.pipelineId === open.pipelineId) {
+      crossClose = false
+      alreadyThere = open
+      if (target.stageId !== open.stageId) {
+        const moved = await moveDealToOtherFunnel({ accountId, userId, deal: open, raw: funnelStageName! }).catch(() => null)
+        if (moved) {
+          movedTo = moved.stageName
+          movedToFunnel = moved.pipelineName
+        }
+      }
+    }
+  }
   if (crossClose) {
     try {
       const source = firstOrNull(
@@ -822,7 +855,7 @@ export async function applyCloseActions(input: {
 
   // 1) Perder EM PÉ tem PRIORIDADE sobre mover: se a IA pediu [[PERDER:]], marca
   // perdido mantendo a etapa e NÃO move o card (mover um perdido não faz sentido).
-  if (!crossClose && wantLose) {
+  if (!crossClose && !alreadyThere && wantLose) {
     const r = await markDealLostInPlace({
       accountId,
       userId,
@@ -833,14 +866,14 @@ export async function applyCloseActions(input: {
     lost = !!r
   }
   // 1b) Ganho EM PÉ (sem outro funil).
-  if (!crossClose && wantWin) {
+  if (!crossClose && !alreadyThere && wantWin) {
     const r = await markDealWonInPlace({ accountId, userId, conversationId, by: 'ai' })
     won = !!r
   }
 
   // 2) Mover o card do funil (se a IA pediu, casar uma etapa e NÃO tiver
   // perdido/ganhado — card fechado não anda).
-  if (!crossClose && !lost && !won && funnelStageName && funnelStageName.trim()) {
+  if (!crossClose && !alreadyThere && !lost && !won && funnelStageName && funnelStageName.trim()) {
     try {
       const deal = firstOrNull(
         await db
