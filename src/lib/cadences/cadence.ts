@@ -1052,9 +1052,14 @@ export async function onCadenceStepSent(
 }
 
 /**
- * Antes de ENVIAR um degrau: a inscrição ainda faz sentido? O card fechou
- * (ganho/perdido — o Renato ligou e fechou, a Zélia marcou reunião) ou mudou
- * de funil (alguém arrastou no RD) → cancela a inscrição e o degrau NÃO sai.
+ * Antes de ENVIAR um degrau de cadência que ANDA O CARD pelas etapas (tem
+ * "mover o card para" em algum toque — ex.: pré-vendas da Zelo): o card
+ * fechou (o Renato ligou e fechou, a Zélia marcou reunião) ou foi pra outro
+ * funil (alguém arrastou no RD)? Então cancela a inscrição e o toque NÃO sai.
+ *
+ * Cadência que não anda o card fica como sempre foi — inclusive a de
+ * pós-venda/recuperação, que ENTRA com o card já ganho/perdido (gatilho de
+ * status da conta) e não pode ser cancelada por isso.
  * Best-effort: erro aqui deixa enviar (fail-open, como antes).
  */
 export async function checkCadenceStepStillWanted(
@@ -1079,6 +1084,17 @@ export async function checkCadenceStepStillWanted(
     if (enr.status !== 'active') return { ok: false, reason: `inscrição ${enr.status}` }
     if (!enr.dealId) return { ok: true }
 
+    // Funil da cadência = o das etapas pra onde os toques movem o card.
+    const stageIds = (
+      await db
+        .select({ id: cadenceSteps.moveToStageId })
+        .from(cadenceSteps)
+        .where(and(eq(cadenceSteps.cadenceId, enr.cadenceId), isNotNull(cadenceSteps.moveToStageId)))
+    )
+      .map((r) => r.id)
+      .filter((id): id is string => !!id)
+    if (!stageIds.length) return { ok: true } // não anda o card: comportamento de sempre
+
     const deal = firstOrNull(
       await db
         .select({ status: deals.status, pipelineId: deals.pipelineId })
@@ -1090,30 +1106,11 @@ export async function checkCadenceStepStillWanted(
     if (!deal) reason = 'card apagado'
     else if (deal.status !== 'open') reason = `card ${deal.status === 'won' ? 'ganho' : 'perdido'}`
     else {
-      // Funil da cadência = o das etapas que ela move (contato feito e degraus).
-      const stageIds = (
-        await db
-          .select({ id: cadenceSteps.moveToStageId })
-          .from(cadenceSteps)
-          .where(and(eq(cadenceSteps.cadenceId, enr.cadenceId), isNotNull(cadenceSteps.moveToStageId)))
-      )
-        .map((r) => r.id)
-        .filter((id): id is string => !!id)
-      const cad = firstOrNull(
-        await db
-          .select({ contactedStageId: cadences.contactedStageId })
-          .from(cadences)
-          .where(eq(cadences.id, enr.cadenceId))
-          .limit(1),
-      )
-      if (cad?.contactedStageId) stageIds.push(cad.contactedStageId)
-      if (stageIds.length) {
-        const funnels = await db
-          .selectDistinct({ pipelineId: pipelineStages.pipelineId })
-          .from(pipelineStages)
-          .where(inArray(pipelineStages.id, stageIds))
-        if (funnels.length && !funnels.some((f) => f.pipelineId === deal.pipelineId)) reason = 'card mudou de funil'
-      }
+      const funnels = await db
+        .selectDistinct({ pipelineId: pipelineStages.pipelineId })
+        .from(pipelineStages)
+        .where(inArray(pipelineStages.id, stageIds))
+      if (funnels.length && !funnels.some((f) => f.pipelineId === deal.pipelineId)) reason = 'card mudou de funil'
     }
     if (!reason) return { ok: true }
     await endEnrollment(accountId, enr, 'cancelled', reason)
