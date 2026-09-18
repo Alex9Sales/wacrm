@@ -92,7 +92,7 @@ export const organization = pgTable("organization", {
 	// Property name MUST match the additionalField `fieldName` in
 	// src/lib/auth.ts ("default_currency") — the Better Auth Drizzle
 	// adapter resolves additionalFields by that key on the table object.
-	default_currency: text("default_currency").default('USD').notNull(),
+	default_currency: text("default_currency").default('BRL').notNull(),
 }, (table) => [
 	unique("organization_slug_key").on(table.slug),
 ]);
@@ -1181,7 +1181,7 @@ export const deals = pgTable("deals", {
 	assignedTo: uuid("assigned_to"),
 	title: text().notNull(),
 	value: numeric({ precision: 12, scale:  2 }).default('0').notNull(),
-	currency: text().default('USD'),
+	currency: text().default('BRL'),
 	notes: text(),
 	expectedCloseDate: date("expected_close_date"),
 	status: text().default('open'),

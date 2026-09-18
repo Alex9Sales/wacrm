@@ -86,7 +86,7 @@ export async function GET() {
     account = {
       id: ctx.account.id,
       name: ctx.account.name,
-      default_currency: ctx.defaultCurrency ?? "USD",
+      default_currency: ctx.defaultCurrency ?? "BRL",
     };
     // Trial em andamento (não expirado — o gate já teria barrado): expõe o fim
     // pra o banner de "faltam X dias".

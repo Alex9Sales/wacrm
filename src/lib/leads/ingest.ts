@@ -356,6 +356,16 @@ export async function ingestLead(
           .set({ aiAgentId: input.aiAgentId })
           .where(eq(conversations.id, resolved.conversationId))
       }
+      // O card segue a conversa da abertura. A IA acha o card PELA CONVERSA
+      // (deals.conversation_id: etapas no prompt, [[FUNIL:]], [[PERDER:]],
+      // agendamento) — card de lead nascia sem conversa e a IA nunca o via
+      // (Zelo 18/09: Zélia não movia nem perdia nenhum lead do RD).
+      if (dealId) {
+        await db
+          .update(deals)
+          .set({ conversationId: resolved.conversationId })
+          .where(and(eq(deals.id, dealId), eq(deals.accountId, accountId)))
+      }
       // Template primeiro quando houver: lead novo nunca falou com a gente, e
       // no canal oficial texto livre é RECUSADO pela Meta fora da janela de 24h
       // — que, pra quem nunca escreveu, está sempre fechada. Se o canal não

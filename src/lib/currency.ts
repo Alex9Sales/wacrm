@@ -10,8 +10,10 @@
  * nothing is known.
  */
 
-/** App-wide fallback when no account/deal currency is available. */
-export const DEFAULT_CURRENCY = "USD";
+/** App-wide fallback when no account/deal currency is available.
+ *  BRL (18/09): o FluxiaCRM só atende empresas brasileiras — "USD" herdado do
+ *  upstream fazia card nascer "US$" (migração 0182). */
+export const DEFAULT_CURRENCY = "BRL";
 
 export interface CurrencyOption {
   /** ISO-4217 code, e.g. "USD". Stored verbatim in the DB. */
