@@ -58,6 +58,7 @@ import {
 } from '@/lib/whatsapp/phone-utils';
 import type { MessageTemplate } from '@/types';
 import { isMessageTemplate } from '@/lib/whatsapp/template-row-guard';
+import { renderTemplateText } from '@/lib/whatsapp/template-text';
 
 export const MEDIA_KINDS = ['image', 'video', 'document', 'audio'] as const;
 export const VALID_MESSAGE_TYPES = [
@@ -690,6 +691,15 @@ export async function sendMessageToConversation(
       .where(eq(contacts.id, contact.id));
   }
 
+  // Template sem texto do chamador (envio do sistema: abertura de lead, teste):
+  // grava o que o cliente LEU — o corpo aprovado com as variáveis preenchidas.
+  // Antes a bolha saía vazia e a lista mostrava só "📋 Modelo" (Zelo 18/09).
+  const storedText =
+    contentText ||
+    (messageType === 'template'
+      ? renderTemplateText(templateRow?.body_text, templateParams) || null
+      : null);
+
   // Persist the sent message.
   let messageRecord: { id: string };
   try {
@@ -700,7 +710,7 @@ export async function sendMessageToConversation(
           conversationId,
           senderType: 'agent',
           contentType: messageType,
-          contentText: contentText || null,
+          contentText: storedText || null,
           mediaUrl: mediaUrl || null,
           templateName: templateName || null,
           messageId: waMessageId,
@@ -755,7 +765,7 @@ export async function sendMessageToConversation(
   await db
     .update(conversations)
     .set({
-      lastMessageText: contentText || `[${messageType}]`,
+      lastMessageText: storedText || `[${messageType}]`,
       lastMessageAt: new Date().toISOString(),
       updatedAt: new Date().toISOString(),
     })

@@ -21,6 +21,8 @@ import { loadLeadSourceForWebhook } from '@/lib/leads/sources'
 import { parseRdWebhook, pickIntroForOrigin, rdOriginLabel } from '@/lib/leads/providers/rdstation'
 import { buildLeadNotes } from '@/lib/leads/providers/shared'
 import { ingestLead } from '@/lib/leads/ingest'
+import { extractLeadFacts } from '@/lib/leads/lead-facts'
+import { fillDealFactFields } from '@/lib/leads/deal-fact-fields'
 import { resolveAuditUserId } from '@/lib/api/v1/contacts'
 import { firstNameForGreeting, greeting } from '@/lib/cdl/names'
 import { renderForContact } from '@/lib/whatsapp/message-vars'
@@ -78,7 +80,7 @@ export async function POST(
         const origem = rdOriginLabel(lead)
         // Abertura certa pro TIPO de lead (franquia × orçamento × vaga).
         const intro = pickIntroForOrigin(source.providerMeta, origem)
-        await ingestLead(source.accountId, auditUserId, {
+        const result = await ingestLead(source.accountId, auditUserId, {
           rawPhone: lead.phone,
           name: lead.name,
           email: lead.email,
@@ -108,10 +110,12 @@ export async function POST(
               ? renderForContact(intro.text, { name: lead.name })
               : introTextOf(lead.name)
             : null,
+          // Número da abertura: o da REGRA desse tipo de lead, senão o da fonte.
           channelId:
-            typeof source.providerMeta.introChannelId === 'string'
+            intro.channelId ??
+            (typeof source.providerMeta.introChannelId === 'string'
               ? source.providerMeta.introChannelId
-              : null,
+              : null),
           // Agente dono da conversa de abertura — a IA atende o lead mesmo num
           // número que não é dela (ver IngestLeadInput.aiAgentId).
           aiAgentId:
@@ -119,6 +123,16 @@ export async function POST(
               ? source.providerMeta.introAgentId
               : null,
         })
+        // Cidade/Estado/Investimento/Campanha nos CAMPOS do card (só os que a
+        // conta criou) — Renato 18/09: "no card não aparece investimento nem
+        // cidade". Conversão nova do mesmo lead atualiza com o dado mais novo.
+        if (result.dealId) {
+          const facts = extractLeadFacts([
+            ...Object.entries(lead.meta),
+            ...Object.entries(lead.fields),
+          ])
+          await fillDealFactFields(source.accountId, result.dealId, facts)
+        }
       } catch (err) {
         console.error('[rd-station] falha ao ingerir lead:', err)
       }

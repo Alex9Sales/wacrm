@@ -63,6 +63,12 @@ export function crossFunnelInstruction(funnels: { name: string; stages: string[]
   return (
     'Moving the card to ANOTHER funnel: besides the linked deal\'s funnel, this account has these funnels: ' +
     list +
-    '. Only when the conversation makes it CLEAR that the lead belongs to one of them — a different kind of request than the current funnel handles (for example: they want to HIRE the service instead of what this funnel sells, or they are LOOKING FOR A JOB) — move the card by emitting "[[FUNIL:<funnel name> > <stage name>]]" on its own line, copying EXACTLY one funnel name and one of ITS stages from the list (usually its first stage). Do it once, at the moment it becomes clear; never move it back and forth. This marker is control metadata: never show it to the customer.'
+    '. Only when the conversation makes it CLEAR that the lead belongs to one of them — a different kind of request than the current funnel handles (for example: they want to HIRE the service instead of what this funnel sells, or they are LOOKING FOR A JOB) — move the card by emitting "[[FUNIL:<funnel name> > <stage name>]]" on its own line, copying EXACTLY one funnel name and one of ITS stages from the list (usually its first stage). Do it once, at the moment it becomes clear; never move it back and forth. ' +
+    // Zelo 18/09 (Jordan): o pré-vendas registra ONDE o lead converteu ou por
+    // que saiu, e o próximo funil ganha um card NOVO — medir campanha.
+    'Two combinations CLOSE the current card and OPEN a new one in the other funnel instead of moving it — use them only when your instructions ask for it: ' +
+    '(a) "[[GANHO]]" together with "[[FUNIL:<funnel> > <stage>]]" = the current card achieved its funnel\'s goal (e.g. the pre-sales meeting was booked): it is marked WON where it is and a new card opens in that funnel/stage; ' +
+    '(b) "[[PERDER:<reason>]]" together with "[[FUNIL:<funnel> > <stage>]]" = the lead came for something else (e.g. arrived through the franchise campaign but wants a job or wants to hire the service): the current card is marked LOST with that reason (use a reason your instructions give, word for word) and a new card opens in the right funnel/stage. ' +
+    'These markers are control metadata: never show them to the customer.'
   )
 }

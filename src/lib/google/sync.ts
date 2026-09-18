@@ -162,6 +162,8 @@ export async function importGoogleEvents(
           endsAt: times.endsAt,
           allDay: times.allDay,
           status: 'confirmed',
+          // "Mostrar como: Disponível" no Google não ocupa o horário (0183).
+          busy: ev.transparency !== 'transparent',
         }
         if (existing) {
           await db.update(calendarEvents).set({ ...values, updatedAt: sql`now()` }).where(eq(calendarEvents.id, existing.id))
@@ -176,6 +178,7 @@ export async function importGoogleEvents(
             endsAt: values.endsAt,
             allDay: values.allDay,
             status: values.status,
+            busy: values.busy,
             source: 'google',
             googleEventId: ev.id,
           })
@@ -332,7 +335,13 @@ export async function pushEventToGoogle(
   accountId: string,
   eventId: string,
   op: 'create' | 'update' | 'delete',
-): Promise<void> {
+  /**
+   * Só na criação: sala do Google Meet + convidados (o Google manda o convite
+   * por e-mail). Renato/Zelo 18/09: "teria que ir pro calendário, marcar a
+   * reunião, convidar ela e eu e agendar o Google Meet".
+   */
+  opts: { meet?: boolean; attendees?: string[] } = {},
+): Promise<{ hangoutLink?: string } | void> {
   const row = firstOrNull(
     await db
       .select({
@@ -398,9 +407,26 @@ export async function pushEventToGoogle(
   }
 
   // create (ou update de um evento que ainda não existe no Google)
+  if (op === 'create') {
+    const emails = [...new Set((opts.attendees ?? []).map((e) => e.trim().toLowerCase()).filter((e) => /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(e)))]
+    if (emails.length) body.attendees = emails.map((email) => ({ email }))
+    if (opts.meet) {
+      body.conferenceData = {
+        createRequest: { requestId: `fluxia-${eventId}`, conferenceSolutionKey: { type: 'hangoutsMeet' } },
+      }
+    }
+  }
   const created = await insertGoogleEvent(accessToken, row.calGoogleId, body)
   await db
     .update(calendarEvents)
-    .set({ googleEventId: created.id, source: 'google', updatedAt: sql`now()` })
+    .set({
+      googleEventId: created.id,
+      source: 'google',
+      // O link da sala vira o "local" da reunião (quem abre na Agenda do CRM
+      // já vê onde entrar) — sem apagar um local que já existia.
+      ...(created.hangoutLink && !row.location ? { location: created.hangoutLink } : {}),
+      updatedAt: sql`now()`,
+    })
     .where(eq(calendarEvents.id, eventId))
+  return { hangoutLink: created.hangoutLink }
 }

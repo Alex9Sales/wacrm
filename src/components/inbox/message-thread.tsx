@@ -18,6 +18,8 @@ import {
   dismissTransferNote,
   setConversationPrivacy,
   setConversationAiPaused,
+  handConversationToAiAgent,
+  listAiAgentsForHandover,
   startNewConversation,
   continueOnMyNumber,
   listMyWhatsAppNumbers,
@@ -593,6 +595,48 @@ export function MessageThread({
       );
     }
   }, [conversation, aiPaused, canAssign]);
+
+  // 🤖 "Passar para a IA" — conversa em que nenhuma IA responde (ex.: o dono
+  // chamou o lead à mão num número que não é da IA). Zelo 18/09: dois leads
+  // ficaram sem a Zélia e não havia como entregar a conversa pra ela.
+  const [handoverOpen, setHandoverOpen] = useState(false);
+  const [handoverAgents, setHandoverAgents] = useState<
+    { id: string; name: string }[] | null
+  >(null);
+  const [handoverBusy, setHandoverBusy] = useState(false);
+  const openHandover = useCallback(async () => {
+    setHandoverOpen(true);
+    setHandoverAgents(null);
+    try {
+      setHandoverAgents(await listAiAgentsForHandover());
+    } catch {
+      setHandoverAgents([]);
+      toast.error("Não consegui carregar os agentes. Recarregue a página e tente de novo.");
+    }
+  }, []);
+  const handOver = useCallback(
+    async (agent: { id: string; name: string }) => {
+      if (!conversation) return;
+      setHandoverBusy(true);
+      try {
+        const { error } = await handConversationToAiAgent(conversation.id, agent.id);
+        if (error) {
+          toast.error(error);
+          return;
+        }
+        toast.success(
+          `Conversa passada para ${agent.name}. Se o cliente estiver esperando resposta, a IA responde agora.`,
+        );
+        setHandoverOpen(false);
+        onRefresh?.();
+      } catch {
+        toast.error("Não consegui passar a conversa para a IA. Recarregue a página e tente de novo.");
+      } finally {
+        setHandoverBusy(false);
+      }
+    },
+    [conversation, onRefresh],
+  );
   const [replyTo, setReplyTo] = useState<ReplyDraft | null>(null);
   // The message being forwarded (opens the ForwardDialog).
   const [forwarding, setForwarding] = useState<Message | null>(null);
@@ -1836,6 +1880,63 @@ export function MessageThread({
               não faz sentido — a IA não responde ali).
               ⏳ 15/09 (GoLink): ligada COM responsável = "IA em espera" — o
               auto-reply não responde conversa atribuída, e "IA on" enganava. */}
+          {!conversation.ai_active_channel && !isGroupConversation && (
+            <>
+              <button
+                type="button"
+                onClick={() => void openHandover()}
+                aria-label="Passar para a IA"
+                title="Nenhuma IA responde esta conversa — clique para passar para um agente de IA"
+                className="inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-xs font-medium text-muted-foreground transition-colors hover:bg-muted hover:text-foreground"
+              >
+                <Bot className="h-3.5 w-3.5" />
+                <span className="hidden sm:inline">Passar p/ IA</span>
+              </button>
+              <Dialog
+                open={handoverOpen}
+                onOpenChange={(open) => {
+                  if (!handoverBusy) setHandoverOpen(open);
+                }}
+              >
+                <DialogContent className="border-border bg-popover sm:max-w-md">
+                  <DialogHeader>
+                    <DialogTitle className="text-popover-foreground">
+                      Passar esta conversa para a IA
+                    </DialogTitle>
+                    <DialogDescription className="text-muted-foreground">
+                      O agente escolhido passa a responder só esta conversa, mesmo
+                      que o número não seja dele. Se alguém da equipe escrever, ele
+                      espera.
+                    </DialogDescription>
+                  </DialogHeader>
+                  {handoverAgents === null ? (
+                    <p className="text-sm text-muted-foreground">Carregando agentes…</p>
+                  ) : handoverAgents.length === 0 ? (
+                    <p className="text-sm text-muted-foreground">
+                      Nenhum agente de IA ativo com resposta automática. Ative um em
+                      Agentes IA.
+                    </p>
+                  ) : (
+                    <div className="flex flex-col gap-2">
+                      {handoverAgents.map((a) => (
+                        <button
+                          key={a.id}
+                          type="button"
+                          disabled={handoverBusy}
+                          onClick={() => void handOver(a)}
+                          className="inline-flex items-center gap-2 rounded-md border border-border px-3 py-2 text-left text-sm text-popover-foreground transition-colors hover:bg-muted disabled:opacity-50"
+                        >
+                          <Bot className="h-4 w-4 text-primary" />
+                          {a.name}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </DialogContent>
+              </Dialog>
+            </>
+          )}
+
           {conversation.ai_active_channel && (
           <>
           <button

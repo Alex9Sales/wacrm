@@ -196,6 +196,8 @@ async function busyRanges(
         eq(calendarEvents.accountId, scheduler.accountId),
         eq(calendarEvents.ownerUserId, scheduler.userId),
         ne(calendarEvents.status, 'cancelled'),
+        // "Disponível" no Google não bloqueia horário (migração 0183).
+        eq(calendarEvents.busy, true),
         lt(calendarEvents.startsAt, endIso),
         gt(calendarEvents.endsAt, nowIso),
       ),
@@ -328,6 +330,7 @@ export async function bookSlot(
               eq(calendarEvents.accountId, scheduler.accountId),
               eq(calendarEvents.ownerUserId, scheduler.userId),
               ne(calendarEvents.status, 'cancelled'),
+              eq(calendarEvents.busy, true),
               lt(calendarEvents.startsAt, endIso),
               gt(calendarEvents.endsAt, startIso),
             ),

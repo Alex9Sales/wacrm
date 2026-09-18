@@ -57,6 +57,9 @@ export async function loadBusySlots(accountId: string, tz: string, now = new Dat
         and(
           eq(calendarEvents.accountId, accountId),
           eq(calendarEvents.status, 'confirmed'),
+          // "Mostrar como: Disponível" no Google não bloqueia (Zelo 18/09: um
+          // evento de dia inteiro marcado como livre fechou a terça inteira).
+          eq(calendarEvents.busy, true),
           gte(calendarEvents.endsAt, now.toISOString()),
           lt(calendarEvents.startsAt, until.toISOString()),
         ),

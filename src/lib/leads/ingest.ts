@@ -92,6 +92,8 @@ export interface IngestLeadResult {
   taskId: string | null
   tagsApplied: string[]
   whatsappSent: boolean
+  /** true = a submissão foi anexada a um card ABERTO que o contato já tinha. */
+  dealReused: boolean
 }
 
 /** Erro de telefone inválido — o chamador mapeia p/ 400/ignora conforme o caso. */
@@ -269,10 +271,23 @@ export async function ingestLead(
     console.error('[ingestLead] deal create failed:', err)
   }
 
-  // 3) Tarefa de follow-up (best-effort).
+  // 3) Tarefa de follow-up (best-effort). Card REAPROVEITADO que já tem tarefa
+  // aberta não ganha outra: o RD manda 2–3 conversões por lead em minutos (o
+  // formulário + "Negociação criada no RD CRM") e um lead ficou com 3 tarefas
+  // "Falar com…" iguais (Zelo 18/09).
   let taskId: string | null = null
   try {
-    const inserted = firstOrNull(
+    const openTask =
+      dealReused && dealId
+        ? firstOrNull(
+            await db
+              .select({ id: tasks.id })
+              .from(tasks)
+              .where(and(eq(tasks.dealId, dealId), eq(tasks.status, 'open')))
+              .limit(1),
+          )
+        : null
+    const inserted = openTask ? openTask : firstOrNull(
       await db
         .insert(tasks)
         .values({
@@ -346,7 +361,7 @@ export async function ingestLead(
         console.log(
           `[ingestLead] abertura pulada: conversa ${resolved.conversationId} já teve envio nas últimas 12 h`,
         )
-        return { contactId, contactCreated, dealId, taskId, tagsApplied, whatsappSent }
+        return { contactId, contactCreated, dealId, taskId, tagsApplied, whatsappSent, dealReused }
       }
       // Dono da conversa só quando a abertura vai sair de fato — conversa em
       // que alguém da equipe falou nas últimas 12 h não é tomada pela IA.
@@ -402,5 +417,5 @@ export async function ingestLead(
     }
   }
 
-  return { contactId, contactCreated, dealId, taskId, tagsApplied, whatsappSent }
+  return { contactId, contactCreated, dealId, taskId, tagsApplied, whatsappSent, dealReused }
 }

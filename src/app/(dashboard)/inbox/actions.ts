@@ -27,6 +27,7 @@ import {
   channels,
   sectors,
   quickReplies,
+  aiConfigs,
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import {
@@ -443,6 +444,112 @@ export async function setConversationAiPaused(
     return { error: null, warning, assignee }
   } catch (err) {
     return { error: err instanceof Error ? err.message : 'Falha ao alterar a IA' }
+  }
+}
+
+/** Agentes de IA que podem ASSUMIR uma conversa (ativos, com resposta
+ *  automática). Pro botão "Passar para a IA" das conversas sem IA. */
+export async function listAiAgentsForHandover(): Promise<{ id: string; name: string }[]> {
+  try {
+    const ctx = await getCurrentAccount()
+    const rows = await db
+      .select({ id: aiConfigs.id, name: aiConfigs.name })
+      .from(aiConfigs)
+      .where(
+        and(
+          eq(aiConfigs.accountId, ctx.accountId),
+          eq(aiConfigs.isActive, true),
+          eq(aiConfigs.autoReplyEnabled, true),
+        ),
+      )
+      .orderBy(asc(aiConfigs.name))
+    return rows.map((r) => ({ id: r.id, name: r.name?.trim() || 'Agente' }))
+  } catch (err) {
+    console.error('[listAiAgentsForHandover]', err instanceof Error ? err.message : err)
+    return []
+  }
+}
+
+/**
+ * Passa ESTA conversa pra um agente de IA (conversations.ai_agent_id): ele
+ * responde aqui mesmo que o número não seja dele — só nesta conversa.
+ *
+ * Zelo 18/09: conversa que o dono começa à mão no número de recados não tinha
+ * IA (lá a Zélia só pega as aberturas do RD, porque o número tem conversa
+ * pessoal) e não havia jeito de entregar o lead pra ela. Mensagem do cliente
+ * parada é respondida na hora; se alguém da equipe falou há pouco, a IA espera
+ * a janela de "humano presente" como sempre.
+ */
+export async function handConversationToAiAgent(
+  conversationId: string,
+  agentId: string,
+): Promise<{ error: string | null }> {
+  try {
+    const ctx = await getCurrentAccount()
+    const current = firstOrNull(
+      await db
+        .select({
+          assignedAgentId: conversations.assignedAgentId,
+          sectorId: conversations.sectorId,
+          isPrivate: conversations.isPrivate,
+        })
+        .from(conversations)
+        .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!current) return { error: 'Conversa não encontrada.' }
+    if (
+      !(await canReadConversation(
+        ctx.role,
+        ctx.userId,
+        ctx.accountId,
+        current.sectorId,
+        current.assignedAgentId,
+        conversationId,
+        current.isPrivate,
+      ))
+    ) {
+      return { error: 'Sem permissão para esta conversa.' }
+    }
+    const agent = firstOrNull(
+      await db
+        .select({ id: aiConfigs.id, name: aiConfigs.name })
+        .from(aiConfigs)
+        .where(
+          and(
+            eq(aiConfigs.id, agentId),
+            eq(aiConfigs.accountId, ctx.accountId),
+            eq(aiConfigs.isActive, true),
+            eq(aiConfigs.autoReplyEnabled, true),
+          ),
+        )
+        .limit(1),
+    )
+    if (!agent) return { error: 'Agente de IA não encontrado ou desligado.' }
+    await db
+      .update(conversations)
+      .set({
+        aiAgentId: agent.id,
+        aiAutoreplyDisabled: false,
+        aiReplyCount: 0,
+        updatedAt: new Date().toISOString(),
+      })
+      .where(and(eq(conversations.id, conversationId), eq(conversations.accountId, ctx.accountId)))
+    try {
+      const who = firstOrNull(await db.select({ name: user.name }).from(user).where(eq(user.id, ctx.userId)).limit(1))
+      await postInternalNote({
+        conversationId,
+        text: `🤖 ${who?.name?.trim() || 'A equipe'} passou esta conversa para a IA "${agent.name?.trim() || 'Agente'}".${
+          current.assignedAgentId ? ' Ela tem responsável: a IA só responde depois que tirarem o responsável.' : ''
+        }`,
+      })
+    } catch (err) {
+      console.error('[handConversationToAiAgent] nota interna:', err instanceof Error ? err.message : err)
+    }
+    await aiCatchUpOnEnable(ctx.accountId, conversationId)
+    return { error: null }
+  } catch (err) {
+    return { error: err instanceof Error ? err.message : 'Falha ao passar a conversa para a IA' }
   }
 }
 

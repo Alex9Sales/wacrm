@@ -5,10 +5,11 @@
 // ============================================================
 
 import { and, asc, eq, gt, sql } from 'drizzle-orm'
-import { db, calendars, calendarEvents, deals, scheduledMessages } from '@/db'
+import { db, calendarConnections, calendars, calendarEvents, contacts, deals, scheduledMessages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { pushEventToGoogle } from '@/lib/google/sync'
 import { enqueueScheduledMessage } from '@/lib/queue/queues'
+import { getAccountSettings } from '@/lib/settings/account-settings'
 
 /** DD/MM às HH:mm no fuso da conta. */
 function fmtLocal(date: Date, tz: string): string {
@@ -111,11 +112,49 @@ export function zonedWallToUtc(local: string, tz: string): Date | null {
   return Number.isNaN(inst.getTime()) ? null : inst
 }
 
-/** Primeira agenda da conta (cria "Minha agenda" se não houver). */
+/**
+ * Agenda onde a IA marca. Ordem: a escolhida na conta (`aiCalendarId`) → a
+ * PRINCIPAL de um Google conectado (o id da agenda principal no Google é o
+ * próprio e-mail da conta) → a primeira da conta (cria "Minha agenda").
+ *
+ * Zelo 18/09: pegava sempre a MAIS ANTIGA — a "Minha agenda" interna, criada
+ * antes de o Google ser conectado. A reunião marcada pela IA nunca chegava no
+ * Google do dono (o espelho só roda em agenda do Google).
+ */
 async function ensureAiCalendar(
   accountId: string,
   userId: string | null,
 ): Promise<string> {
+  try {
+    const chosen = (await getAccountSettings(accountId)).aiCalendarId
+    if (chosen) {
+      const ok = firstOrNull(
+        await db
+          .select({ id: calendars.id })
+          .from(calendars)
+          .where(and(eq(calendars.id, chosen), eq(calendars.accountId, accountId)))
+          .limit(1),
+      )
+      if (ok) return ok.id
+    }
+    const primary = firstOrNull(
+      await db
+        .select({ id: calendars.id })
+        .from(calendars)
+        .innerJoin(calendarConnections, eq(calendarConnections.id, calendars.connectionId))
+        .where(
+          and(
+            eq(calendars.accountId, accountId),
+            eq(calendars.googleCalendarId, calendarConnections.googleEmail),
+          ),
+        )
+        .orderBy(asc(calendars.createdAt))
+        .limit(1),
+    )
+    if (primary) return primary.id
+  } catch (err) {
+    console.error('[ai schedule] escolha da agenda (segue na primeira):', err)
+  }
   const existing = firstOrNull(
     await db
       .select({ id: calendars.id })
@@ -142,6 +181,8 @@ export interface ScheduleResult {
   eventId: string
   startsAt: string
   title: string
+  /** Link do Google Meet quando a reunião saiu online (aiMeetingOnline). */
+  meetLink?: string | null
 }
 
 /**
@@ -236,9 +277,32 @@ export async function scheduleEventFromAi(input: {
       })
       .returning({ id: calendarEvents.id })
 
-    // Espelha no Google (best-effort, só se a agenda for do Google).
+    // Espelha no Google (best-effort, só se a agenda for do Google). Conta com
+    // reunião ONLINE (aiMeetingOnline): sala do Meet + convite por e-mail pro
+    // lead e pros convidados fixos — Renato/Zelo 18/09.
+    let meetLink: string | null = null
     try {
-      await pushEventToGoogle(accountId, created.id, 'create')
+      const settings = await getAccountSettings(accountId)
+      let attendees: string[] = []
+      if (settings.aiMeetingOnline) {
+        const leadEmail = contactId
+          ? firstOrNull(
+              await db
+                .select({ email: contacts.email })
+                .from(contacts)
+                .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
+                .limit(1),
+            )?.email ?? null
+          : null
+        attendees = [leadEmail, ...(settings.aiMeetingInvitees ?? [])].filter(
+          (e): e is string => typeof e === 'string' && e.includes('@'),
+        )
+      }
+      const pushed = await pushEventToGoogle(accountId, created.id, 'create', {
+        meet: settings.aiMeetingOnline,
+        attendees,
+      })
+      meetLink = (pushed && pushed.hangoutLink) || null
     } catch (err) {
       console.error('[ai schedule] google push falhou:', err)
     }
@@ -249,7 +313,7 @@ export async function scheduleEventFromAi(input: {
     // duplicava (1 por evento, sem dedup) e causava spam quando havia eventos
     // repetidos.
 
-    return { eventId: created.id, startsAt: start.toISOString(), title }
+    return { eventId: created.id, startsAt: start.toISOString(), title, meetLink }
   } catch (err) {
     console.error('[ai schedule] criar evento falhou:', err)
     return null

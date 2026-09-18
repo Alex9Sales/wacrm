@@ -9,11 +9,169 @@
 // (a perda automática da cadência também dispara).
 // ============================================================
 
-import { and, asc, eq } from 'drizzle-orm'
+import { and, asc, eq, isNull } from 'drizzle-orm'
 
-import { db, deals, dealEvents, pipelines, pipelineStages } from '@/db'
+import { db, deals, dealCustomValues, dealEvents, pipelines, pipelineStages } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { getAccountSettings } from '@/lib/settings/account-settings'
+
+/**
+ * Abre o PRÓXIMO card num funil/etapa ESCOLHIDOS, a partir de um card que
+ * acabou de ser ganho ou perdido. Diferente do automático por conta (abaixo,
+ * sempre a 1ª etapa do funil configurado): aqui quem escolhe o destino é quem
+ * fechou — a IA com "[[GANHO]]/[[PERDER:…]] + [[FUNIL:<funil> > <etapa>]]".
+ *
+ * Zelo 18/09 (Jordan): o pré-vendas registra ONDE o lead converteu (ganho na
+ * 4ª tentativa) ou por que saiu (perdido: "Lead interessado em serviço"), e o
+ * comercial recebe um card NOVO — assim dá pra medir cada campanha.
+ *
+ * Copia contato, conversa, título, valor, dono, observações, origem e os campos
+ * personalizados. Contato que já tem card ABERTO no funil de destino não ganha
+ * outro: devolve o existente (e liga à conversa, se ele não tinha). Nunca lança.
+ */
+export async function spawnDealInFunnel(input: {
+  accountId: string
+  userId: string | null
+  sourceDealId: string
+  pipelineId: string
+  stageId: string
+  kind: 'won' | 'lost'
+  by?: 'ai' | 'system'
+}): Promise<{ dealId: string; created: boolean } | null> {
+  const { accountId, userId, sourceDealId, pipelineId, stageId, kind } = input
+  try {
+    const src = firstOrNull(
+      await db
+        .select({
+          id: deals.id,
+          contactId: deals.contactId,
+          conversationId: deals.conversationId,
+          companyId: deals.companyId,
+          title: deals.title,
+          value: deals.value,
+          currency: deals.currency,
+          assignedTo: deals.assignedTo,
+          userId: deals.userId,
+          notes: deals.notes,
+          origin: deals.origin,
+          source: deals.source,
+        })
+        .from(deals)
+        .where(and(eq(deals.id, sourceDealId), eq(deals.accountId, accountId)))
+        .limit(1),
+    )
+    if (!src) return null
+    const target = firstOrNull(
+      await db
+        .select({ pipelineName: pipelines.name, stageName: pipelineStages.name })
+        .from(pipelineStages)
+        .innerJoin(pipelines, eq(pipelines.id, pipelineStages.pipelineId))
+        .where(
+          and(
+            eq(pipelineStages.id, stageId),
+            eq(pipelineStages.pipelineId, pipelineId),
+            eq(pipelines.accountId, accountId),
+          ),
+        )
+        .limit(1),
+    )
+    if (!target) return null
+
+    if (src.contactId) {
+      const open = firstOrNull(
+        await db
+          .select({ id: deals.id })
+          .from(deals)
+          .where(
+            and(
+              eq(deals.accountId, accountId),
+              eq(deals.pipelineId, pipelineId),
+              eq(deals.contactId, src.contactId),
+              eq(deals.status, 'open'),
+            ),
+          )
+          .limit(1),
+      )
+      if (open) {
+        if (src.conversationId) {
+          await db
+            .update(deals)
+            .set({ conversationId: src.conversationId })
+            .where(and(eq(deals.id, open.id), isNull(deals.conversationId)))
+        }
+        return { dealId: open.id, created: false }
+      }
+    }
+
+    const [created] = await db
+      .insert(deals)
+      .values({
+        accountId,
+        pipelineId,
+        stageId,
+        contactId: src.contactId,
+        conversationId: src.conversationId,
+        companyId: src.companyId,
+        title: src.title,
+        value: src.value,
+        currency: src.currency,
+        status: 'open',
+        assignedTo: src.assignedTo,
+        userId: userId || src.userId,
+        notes: src.notes,
+        origin: src.origin,
+        source: src.source,
+        stageChangedAt: new Date().toISOString(),
+      })
+      .returning({ id: deals.id })
+    if (!created) return null
+
+    try {
+      const values = await db
+        .select({ customFieldId: dealCustomValues.customFieldId, value: dealCustomValues.value })
+        .from(dealCustomValues)
+        .where(eq(dealCustomValues.dealId, src.id))
+      if (values.length) {
+        await db
+          .insert(dealCustomValues)
+          .values(values.map((v) => ({ accountId, dealId: created.id, customFieldId: v.customFieldId, value: v.value })))
+          .onConflictDoNothing()
+      }
+    } catch (err) {
+      console.error('[cross-funnel] cópia dos campos falhou:', err)
+    }
+    try {
+      await db.insert(dealEvents).values({
+        accountId,
+        actorUserId: userId,
+        dealId: created.id,
+        type: 'created',
+        data: {
+          by: input.by ?? 'ai',
+          from: kind,
+          fromDealId: src.id,
+          toPipeline: target.pipelineName,
+          toStage: target.stageName,
+        },
+      })
+    } catch (err) {
+      console.error('[cross-funnel] deal event falhou:', err)
+    }
+    try {
+      const { autoCreateStageTasks } = await import('@/lib/pipelines/stage-tasks')
+      await autoCreateStageTasks({ accountId, userId }, created.id, stageId)
+    } catch (err) {
+      console.error('[cross-funnel] stage tasks falhou:', err)
+    }
+    console.log(
+      `[cross-funnel] ${kind} → novo card ${created.id} em "${target.pipelineName} › ${target.stageName}" (de ${src.id})`,
+    )
+    return { dealId: created.id, created: true }
+  } catch (err) {
+    console.error('[cross-funnel] spawnDealInFunnel:', err)
+    return null
+  }
+}
 
 /**
  * Abre o negócio-espelho no funil de destino do evento (won → wonPipelineId,

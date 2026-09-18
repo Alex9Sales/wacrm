@@ -32,10 +32,12 @@ Detalhes no funil do FluxiaCRM.`,
 
 👤 {{cliente}} · {{telefone}}
 🏷️ Motivo: {{motivo}}
+📍 {{origem}}
 
 📋 Resumo: {{resumo}}
 
-Entre na conversa pelo FluxiaCRM pra continuar o atendimento.`,
+💬 Chamar no WhatsApp: {{whatsapp}}
+🔗 Conversa no FluxiaCRM: {{link}}`,
   booking: `📅 *NOVO AGENDAMENTO*
 
 👤 {{nome}} · {{telefone}}

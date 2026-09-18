@@ -30,6 +30,7 @@ import { MAX_PROMISE_DAYS } from '@/lib/collections/reply-guard'
 import { normalizeSettings as normalizeCollectionsSettings } from '@/lib/collections/rules'
 import {
   applyCloseActions,
+  handoffDealLine,
   loadDealCloseContext,
   listOtherFunnels,
   listAccountTagNames,
@@ -42,6 +43,7 @@ import {
 } from './close-actions'
 import { scheduleEventFromAi } from './schedule-actions'
 import { loadBusySlots } from './busy-slots'
+import { loadLeadFormContext } from './lead-form-context'
 import { syncAccountCalendars } from '@/lib/google/sync'
 import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
@@ -789,6 +791,10 @@ export async function dispatchInboundToAiReply(
       settings.businessTimezone,
     ).catch(() => null)
 
+    // 📝 O que o lead já respondeu no formulário / está no card (Zelo 18/09: a
+    // IA perguntava de novo cidade e capital que o RD já tinha). Best-effort.
+    const leadFormData = await loadLeadFormContext(accountId, conversationId).catch(() => null)
+
     // 📎 Materiais que este agente pode enviar ([[ENVIAR:nome]]).
     let materials: Awaited<ReturnType<typeof listMaterialsForAgent>> = []
     if (tools.includes('send_material')) {
@@ -860,6 +866,7 @@ export async function dispatchInboundToAiReply(
         : null,
       priorContactContext,
       customerFacts,
+      leadFormData,
     })
 
     // 🔧 Com ferramentas externas do agente (ERP do cliente etc.) — sem
@@ -1125,6 +1132,22 @@ export async function dispatchInboundToAiReply(
               conversationId,
             }).catch(() => 0)
           }
+          // 🔗 Reunião ONLINE (conta com aiMeetingOnline): o link do Meet vai
+          // pro lead aqui, depois da confirmação que a IA acabou de mandar — o
+          // convite do Google vai pro e-mail, mas é no WhatsApp que ele olha.
+          if (ev.meetLink) {
+            try {
+              await engineSendText({
+                accountId,
+                userId: configOwnerUserId,
+                conversationId,
+                contactId,
+                text: `📅 Link da nossa reunião (Google Meet): ${ev.meetLink}`,
+              })
+            } catch (err) {
+              console.error('[ai auto-reply] envio do link do Meet falhou:', err)
+            }
+          }
         }
       }
     }
@@ -1214,16 +1237,22 @@ export async function dispatchInboundToAiReply(
       return false
     }
     // Encerrar (ferramentas 'resolve' / 'move_card', gate individual).
-    const runClose = async () => {
-      const wantResolve = has('resolve') && dirs.resolve
+    // `withResolve: false` no handoff: a conversa vai pro humano, não fecha —
+    // mas o card ainda anda (Jordan/Zelo 18/09: "move pro funil E manda pro
+    // Renato"; antes o handoff saía antes e o [[FUNIL:]] se perdia).
+    const runClose = async (opts: { withResolve?: boolean } = {}) => {
+      const wantResolve = opts.withResolve !== false && has('resolve') && dirs.resolve
       // "[[FUNIL:<funil> > <etapa>]]" = troca de funil (ferramenta move_funnel);
       // sem ">" = etapa dentro do funil (move_card). Cada um no seu gate.
       const crossMove = !!dirs.funnelStage && dirs.funnelStage.includes('>')
       const wantMove =
         !!dirs.funnelStage && (crossMove ? has('move_funnel') : has('move_card'))
-      // Perder EM PÉ compartilha o gate de mutação do card ('move_card').
-      const wantLose = has('move_card') && dirs.lose
-      if (wantResolve || wantMove || wantLose) {
+      // Perder/ganhar EM PÉ compartilham o gate de mutação do card
+      // ('move_card'; com troca de funil, 'move_funnel' também serve).
+      const cardGate = has('move_card') || (crossMove && has('move_funnel'))
+      const wantLose = cardGate && dirs.lose
+      const wantWin = cardGate && dirs.win
+      if (wantResolve || wantMove || wantLose || wantWin) {
         const r = await applyCloseActions({
           accountId,
           userId: configOwnerUserId || null,
@@ -1231,6 +1260,7 @@ export async function dispatchInboundToAiReply(
           resolve: wantResolve,
           funnelStageName: wantMove ? dirs.funnelStage : null,
           loseReason: wantLose ? dirs.lose!.reason : null,
+          win: !!wantWin,
           allowCrossFunnel: crossMove && has('move_funnel'),
         })
         console.log('[ai auto-reply] encerramento:', JSON.stringify(r))
@@ -1361,20 +1391,40 @@ export async function dispatchInboundToAiReply(
             transcription: m.transcription ?? null,
           })),
         )
+        // 18/09 (Zelo — Jordan: "esse resumo é muito importante"): o resumo
+        // ESCRITO PELA IA ([[RESUMO:…]]) vem primeiro; as últimas falas do
+        // cliente ficam como apoio. Antes o Renato recebia só "Cliente disse:
+        // <bairro> / 1 vez por mês", sem saber que era pedido de orçamento.
+        const aiSummary = (dirs.handoffSummary ?? '').trim()
+        const dealLine = await handoffDealLine(accountId, conversationId)
         // 16/09: o resumo ia SÓ pro WhatsApp do dono — na conversa a equipe via
         // a despedida e a IA desligada, sem motivo. Agora fica também na tela.
         // Prefixo diferente do "Transferido pela IA" (transferência por
         // etiqueta) pra os dois caminhos continuarem distinguíveis.
         await postInternalNote({
           conversationId,
-          text: `🙋 *A IA pediu um humano*${clientTail ? `\nCliente disse: ${clientTail}` : ''}`,
+          text: [
+            '🙋 *A IA pediu um humano*',
+            aiSummary ? `📋 ${aiSummary}` : null,
+            clientTail ? `Cliente disse: ${clientTail}` : null,
+          ]
+            .filter(Boolean)
+            .join('\n'),
         }).catch(() => false)
+        const phoneDigits = (c?.phone ?? '').replace(/\D/g, '')
+        const appBase = (process.env.BETTER_AUTH_URL ?? '').replace(/\/$/, '')
         await sendOwnerAlert(accountId, 'handoff', {
           cliente: c?.name ?? '',
           telefone: c?.phone ?? '',
           motivo: 'A IA pediu um humano nesta conversa',
-          // Sem fala do cliente, a linha some — a despedida do modelo não é resumo.
-          resumo: clientTail ? `Cliente disse: ${clientTail}` : '',
+          // Sem resumo nem fala do cliente, a linha some — a despedida do
+          // modelo não é resumo.
+          resumo: aiSummary || (clientTail ? `Cliente disse: ${clientTail}` : ''),
+          origem: dealLine ?? '',
+          // "Manda o lead pro WhatsApp dele" (Jordan/Alex 18/09): um toque abre
+          // a conversa com o lead no WhatsApp de quem recebe o aviso.
+          whatsapp: phoneDigits ? `https://wa.me/${phoneDigits}` : '',
+          link: appBase ? `${appBase}/inbox?c=${conversationId}` : '',
         })
       } catch (err) {
         console.error('[ai auto-reply] aviso de handoff falhou:', err)
@@ -1395,6 +1445,7 @@ export async function dispatchInboundToAiReply(
         console.error('[ai auto-reply] despedida do handoff falhou:', err)
       }
       await applyTags()
+      await runClose({ withResolve: false })
       await finishHandoff()
       return
     }
@@ -1424,7 +1475,7 @@ export async function dispatchInboundToAiReply(
       }
       if (
         (has('resolve') && dirs.resolve) ||
-        (has('move_card') && (dirs.funnelStage || dirs.lose)) ||
+        (has('move_card') && (dirs.funnelStage || dirs.lose || dirs.win)) ||
         (has('move_funnel') && !!dirs.funnelStage?.includes('>'))
       ) {
         await runClose()
@@ -1800,8 +1851,10 @@ export async function dispatchInboundToAiReply(
     await applyTags()
     await runCreateCard()
     // Handoff COM texto: a despedida já foi enviada acima — agora desliga a IA
-    // e avisa o responsável. Sem agendar/mover depois de pedir humano.
+    // e avisa o responsável. Não agenda depois de pedir humano, mas o card
+    // ainda anda/fecha se a IA pediu (sem resolver a conversa).
     if (handoff) {
+      await runClose({ withResolve: false })
       await finishHandoff()
       return
     }

@@ -94,6 +94,29 @@ describe('mapRdLead', () => {
     expect(rdOriginLabel(mapRdLead(LEAD)!)).toBe('Formulário Contato')
     expect(rdOriginLabel(mapRdLead({ ...LEAD, first_conversion: null, last_conversion: null })!)).toBe('RD Station')
   })
+
+  // Zelo 18/09: o RD registra "Negociação criada no RD Station CRM" como
+  // conversão quando a integração cria o negócio — isso não é campanha.
+  it('ignora a conversão sintética "Negociação criada no RD" na origem', () => {
+    const lead = mapRdLead({
+      ...LEAD,
+      first_conversion: { content: { identificador: 'solicite-um-orcamento' } },
+      last_conversion: { content: { identificador: 'Negociação criada no RD Station CRM' } },
+    })!
+    expect(rdOriginLabel(lead)).toBe('solicite-um-orcamento')
+  })
+
+  it('guarda a campanha do anúncio (conversion_origin) quando o RD manda', () => {
+    const m = mapRdLead({
+      ...LEAD,
+      last_conversion: {
+        content: { identificador: 'Formulário Contato' },
+        conversion_origin: { source: 'facebook', medium: 'cpc', campaign: 'franquia-setembro' },
+      },
+    })!.meta
+    expect(m['Campanha']).toBe('franquia-setembro')
+    expect(m['Canal da conversão']).toBe('facebook / cpc')
+  })
 })
 
 // Zelo 18/09: uma fonte do RD recebe franquia, pedido de orçamento e vaga — o
@@ -103,7 +126,7 @@ describe('pickIntroForOrigin', () => {
     introText: 'FRANQUIA',
     introTemplateName: 'boas_vindas_v2',
     introTextRules: [
-      { match: 'or[çc]amento|servi[çc]o', text: 'SERVICO' },
+      { match: 'or[çc]amento|servi[çc]o', text: 'SERVICO', channelId: 'canal-recados' },
       { match: 'trabalhe|vaga|curr[ií]culo', text: 'VAGA', templateName: 'vaga_v1' },
       { match: '([', text: 'REGEX QUEBRADA' },
     ],
@@ -113,22 +136,24 @@ describe('pickIntroForOrigin', () => {
     expect(pickIntroForOrigin(meta, 'https-limpezacomzelo-com-br-solicite-um-orcamento-11-09-26')).toEqual({
       text: 'SERVICO',
       templateName: null,
+      channelId: 'canal-recados',
     })
   })
 
   it('regra com template próprio usa ele', () => {
-    expect(pickIntroForOrigin(meta, 'trabalhe-conosco-2026')).toEqual({ text: 'VAGA', templateName: 'vaga_v1' })
+    expect(pickIntroForOrigin(meta, 'trabalhe-conosco-2026')).toEqual({ text: 'VAGA', templateName: 'vaga_v1', channelId: null })
   })
 
   it('nada casou → abertura padrão da fonte (franquia)', () => {
     expect(pickIntroForOrigin(meta, 'seja-um-franqueado-site-01-09-26')).toEqual({
       text: 'FRANQUIA',
       templateName: 'boas_vindas_v2',
+      channelId: null,
     })
     expect(pickIntroForOrigin(meta, '11/09/26 | v1 | Instant Forms Lóg. Condicional').text).toBe('FRANQUIA')
   })
 
   it('regex inválida na config é ignorada; sem regras e sem texto → nulos', () => {
-    expect(pickIntroForOrigin({}, 'qualquer')).toEqual({ text: null, templateName: null })
+    expect(pickIntroForOrigin({}, 'qualquer')).toEqual({ text: null, templateName: null, channelId: null })
   })
 })

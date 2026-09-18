@@ -146,6 +146,10 @@ export type GoogleEvent = {
   location?: string
   start?: { dateTime?: string; date?: string }
   end?: { dateTime?: string; date?: string }
+  /** 'transparent' = "Mostrar como: Disponível" (não ocupa o horário). Ausente = ocupado. */
+  transparency?: string
+  /** Link do Google Meet, quando o evento tem videochamada. */
+  hangoutLink?: string
 }
 
 /** Teto de páginas por agenda — trava de segurança contra loop de pageToken. */
@@ -203,20 +207,36 @@ export type GoogleEventBody = {
   location?: string
   start: { dateTime?: string; date?: string }
   end: { dateTime?: string; date?: string }
+  /** Convidados (o Google manda o convite por e-mail com sendUpdates=all). */
+  attendees?: { email: string }[]
+  /** Pede uma sala do Google Meet (exige conferenceDataVersion=1). */
+  conferenceData?: {
+    createRequest: { requestId: string; conferenceSolutionKey: { type: 'hangoutsMeet' } }
+  }
 }
 
 export async function insertGoogleEvent(
   accessToken: string,
   calendarId: string,
   body: GoogleEventBody,
-): Promise<{ id: string }> {
-  const res = await fetch(`${CAL_BASE}/calendars/${encodeURIComponent(calendarId)}/events`, {
-    method: 'POST',
-    headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify(body),
-  })
+): Promise<{ id: string; hangoutLink?: string }> {
+  // Meet e convite só funcionam com estes parâmetros: sem conferenceDataVersion
+  // o Google ignora o pedido de sala; sem sendUpdates o convidado não recebe o
+  // e-mail (só aparece na agenda de quem criou).
+  const params = new URLSearchParams()
+  if (body.conferenceData) params.set('conferenceDataVersion', '1')
+  if (body.attendees?.length) params.set('sendUpdates', 'all')
+  const qs = params.toString()
+  const res = await fetch(
+    `${CAL_BASE}/calendars/${encodeURIComponent(calendarId)}/events${qs ? `?${qs}` : ''}`,
+    {
+      method: 'POST',
+      headers: { Authorization: `Bearer ${accessToken}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    },
+  )
   if (!res.ok) throw new Error(`Google insert event (${res.status}): ${await res.text()}`)
-  return (await res.json()) as { id: string }
+  return (await res.json()) as { id: string; hangoutLink?: string }
 }
 
 export async function patchGoogleEvent(

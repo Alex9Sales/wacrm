@@ -5,6 +5,10 @@
 //
 //   [[RESOLVER]]        → fecha a conversa (status 'closed').
 //   [[FUNIL:<etapa>]]   → move o card do funil ligado pra etapa cujo NOME casa.
+//   [[PERDER:<motivo>]] → perde EM PÉ (mantém a etapa).
+//   [[GANHO]]           → ganha EM PÉ (o card cumpriu o objetivo do funil dele).
+//   [[GANHO]] ou [[PERDER:…]] + [[FUNIL:<funil> > <etapa>]] → fecha este card
+//                         e abre um NOVO no outro funil (spawnDealInFunnel).
 //
 // A IA escolhe a etapa pelo nome (injetamos as etapas do funil no prompt).
 // ============================================================
@@ -487,6 +491,9 @@ export async function markDealLostInPlace(input: {
   reason?: string | null
   by?: 'ai' | 'followup' | 'system'
   followUps?: number | null
+  /** Quem fechou já escolheu o próximo funil (spawnDealInFunnel): não dispara
+   *  também o funil de resgate automático da conta. */
+  skipAccountAutomation?: boolean
 }): Promise<{ dealId: string; stageName: string | null } | null> {
   const { accountId, userId, conversationId, dealId } = input
   const by = input.by ?? 'ai'
@@ -560,19 +567,161 @@ export async function markDealLostInPlace(input: {
       })
     }
     // 🔀 Funil→funil: perda automática também abre o negócio de resgate.
-    try {
-      const { maybeSpawnCrossFunnelDeal } = await import(
-        '@/lib/pipelines/cross-funnel'
-      )
-      await maybeSpawnCrossFunnelDeal(accountId, userId, deal.id, 'lost')
-    } catch (err) {
-      console.error('[ai lose] cross-funnel falhou:', err)
+    if (!input.skipAccountAutomation) {
+      try {
+        const { maybeSpawnCrossFunnelDeal } = await import(
+          '@/lib/pipelines/cross-funnel'
+        )
+        await maybeSpawnCrossFunnelDeal(accountId, userId, deal.id, 'lost')
+      } catch (err) {
+        console.error('[ai lose] cross-funnel falhou:', err)
+      }
     }
     return { dealId: deal.id, stageName }
   } catch (err) {
     console.error('[ai lose] falhou:', err)
     return null
   }
+}
+
+/**
+ * Marca o negócio ligado à conversa (ou por id) como GANHO mantendo a etapa —
+ * o card cumpriu o objetivo DO FUNIL DELE (ex.: pré-vendas que marcou a
+ * reunião; Jordan/Zelo 18/09: "dá o ganho na 4ª tentativa"). Não é "venda
+ * fechada": NÃO manda o aviso de venda nem grava compra no histórico do
+ * cliente (isso é do ganho pelo funil, em pipelines/actions). Nunca lança.
+ */
+export async function markDealWonInPlace(input: {
+  accountId: string
+  userId: string | null
+  conversationId?: string | null
+  dealId?: string | null
+  by?: 'ai' | 'system'
+  /** Quem fechou já escolheu o próximo funil: não dispara o pós-venda da conta. */
+  skipAccountAutomation?: boolean
+}): Promise<{ dealId: string; stageName: string | null } | null> {
+  const { accountId, userId, conversationId, dealId } = input
+  const by = input.by ?? 'ai'
+  try {
+    const deal = firstOrNull(
+      await db
+        .select({ id: deals.id, stageId: deals.stageId })
+        .from(deals)
+        .where(
+          and(
+            eq(deals.accountId, accountId),
+            eq(deals.status, 'open'),
+            dealId
+              ? eq(deals.id, dealId)
+              : conversationId
+                ? eq(deals.conversationId, conversationId)
+                : sql`false`,
+          ),
+        )
+        .orderBy(desc(deals.createdAt))
+        .limit(1),
+    )
+    if (!deal) return null
+    const stageName =
+      firstOrNull(
+        await db
+          .select({ name: pipelineStages.name })
+          .from(pipelineStages)
+          .where(eq(pipelineStages.id, deal.stageId))
+          .limit(1),
+      )?.name ?? null
+
+    await db.transaction(async (tx) => {
+      await tx
+        .update(deals)
+        .set({ status: 'won', lostReason: null })
+        .where(and(eq(deals.id, deal.id), eq(deals.accountId, accountId)))
+      await tx.insert(dealEvents).values({
+        accountId,
+        actorUserId: userId || null,
+        dealId: deal.id,
+        type: 'status_changed',
+        data: { from: 'open', to: 'won', stageId: deal.stageId, stageName, by },
+      })
+    })
+
+    if (conversationId) {
+      await postInternalNote({
+        conversationId,
+        text: `🏆 Negócio marcado como GANHO${stageName ? ` na etapa "${stageName}"` : ''}. (${by === 'ai' ? 'IA' : by})`,
+      })
+    }
+    if (!input.skipAccountAutomation) {
+      try {
+        const { maybeSpawnCrossFunnelDeal } = await import('@/lib/pipelines/cross-funnel')
+        await maybeSpawnCrossFunnelDeal(accountId, userId, deal.id, 'won')
+      } catch (err) {
+        console.error('[ai win] cross-funnel falhou:', err)
+      }
+    }
+    return { dealId: deal.id, stageName }
+  } catch (err) {
+    console.error('[ai win] falhou:', err)
+    return null
+  }
+}
+
+/**
+ * Uma linha sobre o card aberto da conversa pro aviso de handoff —
+ * "3. Comercial | Serviços › Novo lead · RD Station — solicite-um-orcamento".
+ * Quem recebe no WhatsApp sabe de cara que tipo de lead é. Null sem card.
+ */
+export async function handoffDealLine(accountId: string, conversationId: string): Promise<string | null> {
+  try {
+    const row = firstOrNull(
+      await db
+        .select({
+          pipeline: pipelines.name,
+          stage: pipelineStages.name,
+          origin: deals.origin,
+          source: deals.source,
+        })
+        .from(deals)
+        .innerJoin(pipelines, eq(pipelines.id, deals.pipelineId))
+        .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
+        .where(
+          and(
+            eq(deals.accountId, accountId),
+            eq(deals.conversationId, conversationId),
+            eq(deals.status, 'open'),
+          ),
+        )
+        .orderBy(desc(deals.createdAt))
+        .limit(1),
+    )
+    if (!row) return null
+    const origin = [row.origin, row.source].map((s) => (s ?? '').trim()).filter(Boolean).join(' — ')
+    return `${row.pipeline} › ${row.stage}${origin ? ` · ${origin}` : ''}`
+  } catch {
+    return null
+  }
+}
+
+/** Funis da conta com as etapas em ordem (pra casar "[[FUNIL:<funil> > <etapa>]]"). */
+async function loadAccountFunnels(accountId: string): Promise<FunnelOption[]> {
+  const rows = await db
+    .select({
+      pipelineId: pipelines.id,
+      pipelineName: pipelines.name,
+      stageId: pipelineStages.id,
+      stageName: pipelineStages.name,
+    })
+    .from(pipelines)
+    .innerJoin(pipelineStages, eq(pipelineStages.pipelineId, pipelines.id))
+    .where(eq(pipelines.accountId, accountId))
+    .orderBy(asc(pipelines.name), asc(pipelineStages.position))
+  const byFunnel = new Map<string, FunnelOption>()
+  for (const r of rows) {
+    const f = byFunnel.get(r.pipelineId) ?? { id: r.pipelineId, name: r.pipelineName, stages: [] }
+    f.stages.push({ id: r.stageId, name: r.stageName })
+    byFunnel.set(r.pipelineId, f)
+  }
+  return [...byFunnel.values()]
 }
 
 /**
@@ -587,21 +736,93 @@ export async function applyCloseActions(input: {
   funnelStageName: string | null
   /** Motivo da perda (marcador [[PERDER:]]) — perde EM PÉ, não move de etapa. */
   loseReason?: string | null
+  /** [[GANHO]] — ganha EM PÉ (o card cumpriu o objetivo do funil dele). */
+  win?: boolean
   /**
    * Ferramenta 'move_funnel': "[[FUNIL:<funil> > <etapa>]]" pode levar o card
    * pra OUTRO funil da conta. Sem ela, o marcador só anda dentro do funil.
    */
   allowCrossFunnel?: boolean
-}): Promise<{ resolved: boolean; movedTo: string | null; movedToFunnel?: string | null; lost: boolean }> {
+}): Promise<{
+  resolved: boolean
+  movedTo: string | null
+  movedToFunnel?: string | null
+  lost: boolean
+  won?: boolean
+  /** Card NOVO aberto no outro funil (ganho/perda + [[FUNIL:<funil> > <etapa>]]). */
+  spawnedDealId?: string | null
+}> {
   const { accountId, userId, conversationId, resolve, funnelStageName, loseReason } = input
   let movedToFunnel: string | null = null
   let resolved = false
   let movedTo: string | null = null
   let lost = false
+  let won = false
+  let spawnedDealId: string | null = null
+  const wantLose = loseReason !== undefined && loseReason !== null
+  const wantWin = !!input.win && !wantLose // perder vence ganhar (mais seguro)
 
-  // 0) Perder EM PÉ tem PRIORIDADE sobre mover: se a IA pediu [[PERDER:]], marca
+  // 0) Ganho/perda + OUTRO funil: fecha este card onde está (o pré-vendas
+  // registra onde converteu ou por que saiu) e ABRE um novo no destino —
+  // Jordan/Zelo 18/09. Destino não achado → só fecha em pé, como antes.
+  const crossClose =
+    (wantLose || wantWin) &&
+    !!input.allowCrossFunnel &&
+    !!funnelStageName &&
+    !!splitCrossFunnel(funnelStageName)
+  if (crossClose) {
+    try {
+      const source = firstOrNull(
+        await db
+          .select({ id: deals.id })
+          .from(deals)
+          .where(
+            and(
+              eq(deals.accountId, accountId),
+              eq(deals.conversationId, conversationId),
+              eq(deals.status, 'open'),
+            ),
+          )
+          .orderBy(desc(deals.createdAt))
+          .limit(1),
+      )
+      const target = source
+        ? resolveFunnelTarget(await loadAccountFunnels(accountId), funnelStageName!)
+        : null
+      if (source) {
+        const closed = wantWin
+          ? await markDealWonInPlace({ accountId, userId, conversationId, dealId: source.id, by: 'ai', skipAccountAutomation: !!target })
+          : await markDealLostInPlace({ accountId, userId, conversationId, dealId: source.id, reason: loseReason, by: 'ai', skipAccountAutomation: !!target })
+        won = wantWin && !!closed
+        lost = wantLose && !!closed
+        if (closed && target) {
+          const spawned = await (await import('@/lib/pipelines/cross-funnel')).spawnDealInFunnel({
+            accountId,
+            userId,
+            sourceDealId: source.id,
+            pipelineId: target.pipelineId,
+            stageId: target.stageId,
+            kind: wantWin ? 'won' : 'lost',
+          })
+          if (spawned) {
+            spawnedDealId = spawned.dealId
+            movedTo = target.stageName
+            movedToFunnel = target.pipelineName
+            await postInternalNote({
+              conversationId,
+              text: `➡️ Card ${spawned.created ? 'novo' : 'existente'} em "${target.pipelineName} › ${target.stageName}".`,
+            })
+          }
+        }
+      }
+    } catch (err) {
+      console.error('[ai close] fechar + abrir no outro funil falhou:', err)
+    }
+  }
+
+  // 1) Perder EM PÉ tem PRIORIDADE sobre mover: se a IA pediu [[PERDER:]], marca
   // perdido mantendo a etapa e NÃO move o card (mover um perdido não faz sentido).
-  if (loseReason !== undefined && loseReason !== null) {
+  if (!crossClose && wantLose) {
     const r = await markDealLostInPlace({
       accountId,
       userId,
@@ -611,9 +832,15 @@ export async function applyCloseActions(input: {
     })
     lost = !!r
   }
+  // 1b) Ganho EM PÉ (sem outro funil).
+  if (!crossClose && wantWin) {
+    const r = await markDealWonInPlace({ accountId, userId, conversationId, by: 'ai' })
+    won = !!r
+  }
 
-  // 1) Mover o card do funil (se a IA pediu, casar uma etapa e NÃO tiver perdido).
-  if (!lost && funnelStageName && funnelStageName.trim()) {
+  // 2) Mover o card do funil (se a IA pediu, casar uma etapa e NÃO tiver
+  // perdido/ganhado — card fechado não anda).
+  if (!crossClose && !lost && !won && funnelStageName && funnelStageName.trim()) {
     try {
       const deal = firstOrNull(
         await db
@@ -649,7 +876,7 @@ export async function applyCloseActions(input: {
           .from(pipelineStages)
           .where(eq(pipelineStages.pipelineId, deal.pipelineId))
         const want = norm(funnelStageName)
-        let target =
+        const target =
           stages.find((s) => norm(s.name) === want) ??
           stages.find(
             (s) => norm(s.name).includes(want) || want.includes(norm(s.name)),
@@ -680,7 +907,7 @@ export async function applyCloseActions(input: {
     }
   }
 
-  // 2) Resolver (fechar) a conversa.
+  // 3) Resolver (fechar) a conversa.
   if (resolve) {
     try {
       await db
@@ -698,7 +925,7 @@ export async function applyCloseActions(input: {
     }
   }
 
-  return { resolved, movedTo, movedToFunnel, lost }
+  return { resolved, movedTo, movedToFunnel, lost, won, spawnedDealId }
 }
 
 /**
@@ -713,24 +940,9 @@ async function moveDealToOtherFunnel(input: {
   raw: string
 }): Promise<FunnelTarget | null> {
   const { accountId, userId, deal, raw } = input
-  const rows = await db
-    .select({
-      pipelineId: pipelines.id,
-      pipelineName: pipelines.name,
-      stageId: pipelineStages.id,
-      stageName: pipelineStages.name,
-    })
-    .from(pipelines)
-    .innerJoin(pipelineStages, eq(pipelineStages.pipelineId, pipelines.id))
-    .where(eq(pipelines.accountId, accountId))
-    .orderBy(asc(pipelines.name), asc(pipelineStages.position))
-  const byFunnel = new Map<string, FunnelOption>()
-  for (const r of rows) {
-    const f = byFunnel.get(r.pipelineId) ?? { id: r.pipelineId, name: r.pipelineName, stages: [] }
-    f.stages.push({ id: r.stageId, name: r.stageName })
-    byFunnel.set(r.pipelineId, f)
-  }
-  const target = resolveFunnelTarget([...byFunnel.values()], raw)
+  const funnels = await loadAccountFunnels(accountId)
+  const byFunnel = new Map(funnels.map((f) => [f.id, f]))
+  const target = resolveFunnelTarget(funnels, raw)
   if (!target || (target.pipelineId === deal.pipelineId && target.stageId === deal.stageId)) return null
 
   const from = byFunnel.get(deal.pipelineId)

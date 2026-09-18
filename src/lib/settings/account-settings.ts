@@ -148,6 +148,16 @@ export interface AccountSettings {
   /** Marcador anti-duplicação: 'YYYY-MM-DD' (no fuso da conta) do último envio.
    *  Escrito SÓ pelo worker — chave separada pra o save da UI não sobrescrever. */
   ownerDigestLastSent: string | null
+  /** 📅 Agenda onde a IA marca as reuniões. null = automático: a agenda
+   *  PRINCIPAL do Google conectado (senão a primeira da conta). Zelo 18/09: a IA
+   *  marcava na "Minha agenda" interna e o dono não via nada no Google. */
+  aiCalendarId: string | null
+  /** 📅 Reunião marcada pela IA sai ONLINE: sala do Google Meet + convite por
+   *  e-mail pro lead (e pros `aiMeetingInvitees`) + o link vai pro lead no
+   *  WhatsApp. OFF por padrão (clínica/loja marca atendimento presencial). */
+  aiMeetingOnline: boolean
+  /** E-mails convidados em TODA reunião marcada pela IA (ex.: o vendedor). */
+  aiMeetingInvitees: string[]
 }
 
 /** Mon–Fri 08:00–18:00, weekend closed. Index 0=Sunday … 6=Saturday. */
@@ -227,6 +237,9 @@ export const DEFAULT_ACCOUNT_SETTINGS: AccountSettings = {
   ownerDigestPhone: '',
   ownerDigestChannelId: null,
   ownerDigestLastSent: null,
+  aiCalendarId: null,
+  aiMeetingOnline: false,
+  aiMeetingInvitees: [],
 }
 
 /** Read an account's settings, merged over the defaults. */

@@ -2717,6 +2717,10 @@ export const calendarEvents = pgTable("calendar_events", {
 	// 'local' | 'google'
 	source: text().default('local').notNull(),
 	googleEventId: text("google_event_id"),
+	// Ocupa o horário? false = "Mostrar como: Disponível" no Google
+	// (transparency=transparent). Migração 0183 — Zelo 18/09: um evento de dia
+	// inteiro marcado como Disponível fez a IA recusar a terça inteira.
+	busy: boolean("busy").default(true).notNull(),
 	createdBy: uuid("created_by"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),

@@ -15,6 +15,7 @@
 // ============================================================
 
 import { type FetchedLead, str } from './shared'
+import { isSyntheticConversion } from '../lead-facts'
 
 /** Campos que já viram nome/telefone/e-mail — não repetir nas anotações. */
 const CORE_KEYS = new Set([
@@ -62,6 +63,19 @@ function conversionDate(v: unknown): string {
 }
 
 /**
+ * Campanha/canal de ANÚNCIO da conversão (`conversion_origin`: utm_campaign,
+ * fonte, meio) — o "campo campanha" que o Jordan (Zelo 18/09) quer que a IA
+ * leia pra saber de qual campanha o lead veio. Vazio quando o RD não manda.
+ */
+function conversionOrigin(v: unknown): { campaign: string; channel: string } {
+  if (!isBag(v) || !isBag(v.conversion_origin)) return { campaign: '', channel: '' }
+  const o = v.conversion_origin
+  const campaign = str(o.campaign).trim()
+  const channel = [str(o.source), str(o.medium)].map((s) => s.trim()).filter(Boolean).join(' / ')
+  return { campaign, channel }
+}
+
+/**
  * Um lead do RD → o formato que o motor de leads já entende.
  * Nunca lança: campo estranho vira anotação, campo faltando vira null.
  */
@@ -91,6 +105,13 @@ export function mapRdLead(raw: unknown): FetchedLead | null {
   if (last && last !== first) meta['Última conversão'] = last
   const when = conversionDate(raw.last_conversion) || conversionDate(raw.first_conversion)
   if (when) meta['Data da conversão'] = when
+  // Campanha do anúncio: da última conversão real, senão da primeira.
+  const lastIsReal = !!last && !isSyntheticConversion(last)
+  const lastOrigin = conversionOrigin(raw.last_conversion)
+  const firstOrigin = conversionOrigin(raw.first_conversion)
+  const adOrigin = lastIsReal && (lastOrigin.campaign || lastOrigin.channel) ? lastOrigin : firstOrigin
+  if (adOrigin.campaign) meta['Campanha'] = adOrigin.campaign
+  if (adOrigin.channel) meta['Canal da conversão'] = adOrigin.channel
   if (Array.isArray(raw.tags)) {
     const tags = raw.tags.map(str).filter(Boolean)
     if (tags.length) meta['Tags no RD'] = tags.join(', ')
@@ -128,9 +149,17 @@ export function parseRdWebhook(body: unknown): FetchedLead[] {
   return raw.map(mapRdLead).filter((l): l is FetchedLead => !!l)
 }
 
-/** Identificador da conversão — vira a origem do lead no card do funil. */
+/**
+ * Identificador da conversão — vira a origem do lead no card do funil e decide
+ * a abertura. A conversão sintética "Negociação criada no RD Station CRM" não
+ * conta: ela diria "franquia" pra um pedido de orçamento.
+ */
 export function rdOriginLabel(lead: FetchedLead): string {
-  return lead.meta['Última conversão'] || lead.meta['Primeira conversão'] || 'RD Station'
+  const last = lead.meta['Última conversão']
+  const first = lead.meta['Primeira conversão']
+  return (
+    [last, first].find((c) => c && !isSyntheticConversion(c)) || first || last || 'RD Station'
+  )
 }
 
 export interface IntroChoice {
@@ -138,6 +167,12 @@ export interface IntroChoice {
   text: string | null
   /** Template da Meta pra esse tipo de lead; null = não usar template. */
   templateName: string | null
+  /**
+   * Número que abre ESTE tipo de lead; null = o da fonte. Zelo 18/09: franquia
+   * volta pro oficial (tem template aprovado), mas orçamento/vaga ainda não
+   * têm — seguem pelo número de recados até a Meta aprovar os modelos.
+   */
+  channelId: string | null
 }
 
 /**
@@ -164,6 +199,7 @@ export function pickIntroForOrigin(meta: Record<string, unknown>, origin: string
       return {
         text: r.text.trim() || null,
         templateName: typeof r.templateName === 'string' && r.templateName.trim() ? r.templateName.trim() : null,
+        channelId: typeof r.channelId === 'string' && r.channelId.trim() ? r.channelId.trim() : null,
       }
     }
   }
@@ -173,5 +209,6 @@ export function pickIntroForOrigin(meta: Record<string, unknown>, origin: string
       typeof meta.introTemplateName === 'string' && meta.introTemplateName.trim()
         ? meta.introTemplateName.trim()
         : null,
+    channelId: null,
   }
 }
