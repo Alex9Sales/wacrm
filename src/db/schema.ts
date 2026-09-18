@@ -2462,7 +2462,7 @@ export const voiceSettings = pgTable("voice_settings", {
 
 // Group participant name registry — maps a participant's wa_key (LID user-part
 // or phone digits) to the pushName we saw on their messages, so mentions inside
-// group messages ("@146089705500852") render as the name ("@Guilherme Andrade").
+// group messages ("@123456789012345") render as the name ("@Carla Teste").
 // Best-effort cache accumulated at ingestion; keyed per account.
 export const groupParticipantNames = pgTable("group_participant_names", {
 	accountId: uuid("account_id").notNull(),
@@ -3215,8 +3215,8 @@ export const asaasCharges = pgTable("asaas_charges", {
 // 🔗 Cliente do Asaas → contato do CRM, decidido por uma PESSOA (migração 0178).
 // Vence o casamento automático no lembrete e na sincronização e vale para as
 // parcelas seguintes — antes a ligação feita à mão ficava só nas cobranças já
-// espelhadas e a próxima parcela era casada de novo por palpite (16/09, Ultra
-// Visão dividida em dois contatos). Só nasce por clique; "desligar contato"
+// espelhadas e a próxima parcela era casada de novo por palpite (16/09, Ótica
+// Exemplo dividida em dois contatos). Só nasce por clique; "desligar contato"
 // na carteira apaga.
 export const asaasCustomerLinks = pgTable("asaas_customer_links", {
 	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
@@ -3243,7 +3243,7 @@ export const asaasCustomerLinks = pgTable("asaas_customer_links", {
 // 🔔 Retrato (migração 0178): quem vence na janela do lembrete e NÃO casou com
 // contato (nenhum, ou mais de um com o mesmo telefone). Refeito a cada rodada
 // do lembrete, por conexão. Não é carteira: nada aqui é cobrado. Existe porque
-// o lembrete da Speed Gás (16/09) pulava "no_contact" e só o log sabia.
+// o lembrete da Veloz Gás (16/09) pulava "no_contact" e só o log sabia.
 export const collectionsUpcomingUnmatched = pgTable("collections_upcoming_unmatched", {
 	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
 	accountId: uuid("account_id").notNull(),

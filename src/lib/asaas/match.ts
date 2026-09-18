@@ -167,7 +167,7 @@ export function hasFullAddress(c: { postalCode?: string | null; addressNumber?: 
   return !!(c.postalCode ?? '').replace(/\D/g, '') && !!(c.addressNumber ?? '').trim()
 }
 
-/** Id do Asaas (cus_000005219613): mais curto antes, depois ordem de texto. */
+/** Id do Asaas (cus_000001234567): mais curto antes, depois ordem de texto. */
 function compareAsaasId(a: string, b: string): number {
   if (a.length !== b.length) return a.length - b.length
   return a < b ? -1 : a > b ? 1 : 0

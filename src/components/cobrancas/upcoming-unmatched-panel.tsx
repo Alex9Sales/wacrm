@@ -48,7 +48,7 @@ type UndoFn = (card: UpcomingUnmatchedCard, input: UpcomingUndoInput, kind: Upco
 
 const brl = (n: number) => n.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' });
 
-/** "5512997075373" → "(12) 99707-5373" (o mesmo da carteira). O que não for número BR sai como veio. */
+/** "5512900001234" → "(12) 90000-1234" (o mesmo da carteira). O que não for número BR sai como veio. */
 function fmtPhone(raw: string): string {
   const d = raw.replace(/\D/g, '');
   const local = d.startsWith('55') && d.length >= 12 ? d.slice(2) : d;

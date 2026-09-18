@@ -1,12 +1,12 @@
 -- Group participant name registry (Grupos — polimento: menções por nome).
 --
 -- Inside a group, a mention arrives in the text as the participant's LID/phone
--- digits (e.g. "@146089705500852"), NOT their name — WhatsApp resolves the name
+-- digits (e.g. "@123456789012345"), NOT their name — WhatsApp resolves the name
 -- client-side from its address book. The gows group participant list carries no
 -- DisplayName, so the only name source we have is the pushName that rides along
 -- every message the person sends. This table accumulates that mapping: as each
 -- group message is ingested we upsert (wa_key -> name), then rewrite mentions in
--- later messages to the name ("@Guilherme Andrade"). Self-improving: someone who
+-- later messages to the name ("@Carla Teste"). Self-improving: someone who
 -- has posted before gets resolved; a never-seen mention stays as the number,
 -- exactly like WhatsApp when it doesn't know the contact.
 --

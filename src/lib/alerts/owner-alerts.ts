@@ -79,7 +79,7 @@ export async function sendOwnerAlert(
 
     const template = (s[KIND_TEMPLATE[kind]] || '').trim() || DEFAULT_ALERT_TEMPLATES[kind]
     // Nome sem letra ("." do perfil do WhatsApp) não é nome: a linha sai só com
-    // o telefone (16/09, caso Gisele: "👤 . · 5567…"). Vale pra todo aviso.
+    // o telefone (16/09, Família do Gás: "👤 . · 5567…"). Vale pra todo aviso.
     const clean = { ...vars }
     for (const k of ['cliente', 'nome'] as const) {
       if (!(k in clean)) continue

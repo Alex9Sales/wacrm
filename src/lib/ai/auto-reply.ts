@@ -198,7 +198,7 @@ export async function dispatchInboundToAiReply(
     // 🔒 Uma geração por conversa de cada vez. Outra em voo → NÃO gera em
     // paralelo: reagenda uma rechecagem, que vai ler o histórico JÁ com a
     // resposta anterior (e com a IA desligada, se houve handoff). Ver
-    // reply-marker.ts — casos Miriam/Nubia 06/09 (despedida em dobro, resposta
+    // reply-marker.ts — casos de 06/09 (despedida em dobro, resposta
     // depois da transferência).
     replyLock = await acquireReplyLock(conversationId)
     if (replyLock === null) {
@@ -332,19 +332,19 @@ export async function dispatchInboundToAiReply(
     // cliente (a resposta em voo cobriu tudo, ou um humano respondeu), não
     // gera outra. É o que torna seguro o ciclo de RECHECAGEM ("chase") que o
     // enqueue agenda quando uma mensagem chega durante uma geração — caso
-    // Cristina 31/08: pergunta 2s após a leitura do histórico ficou sem
+    // de 31/08: pergunta 2s após a leitura do histórico ficou sem
     // resposta porque o re-add era engolido pelo job ativo.
     //
-    // v3 (01/09, caso Rose): "quem falou por último" não basta. A pergunta
+    // v3 (01/09): "quem falou por último" não basta. A pergunta
     // certa é "existe mensagem do CLIENTE que a última resposta NÃO viu?" —
     // e quem sabe isso é o marcador `coveredUntil` (instante em que a última
     // geração leu o histórico, gravado depois de a resposta sair). Ver
     // reply-marker.ts. Regras, em ordem:
     //   1. humano falou por último → a IA cala (sempre);
     //   2. IA falou por último e a msg mais nova do cliente é ANTERIOR ao
-    //      marcador → já coberta, não repete (Rose);
+    //      marcador → já coberta, não repete (caso 01/09);
     //   3. IA falou por último e há msg do cliente DEPOIS do marcador → responde
-    //      (Debora/Rafaela), mesmo sem ser rechecagem;
+    //      (casos de 01/09), mesmo sem ser rechecagem;
     //   4. sem marcador / Redis fora → regra antiga (rechecagem passa).
     const recent = await db
       .select({
@@ -445,7 +445,7 @@ export async function dispatchInboundToAiReply(
       })
     }
     // 🧾 Onde a IA NÃO responde, a régua ainda precisa ouvir o devedor
-    // (10/09, Rack/GoLink: "pago segunda" num canal sem IA passou em branco).
+    // (10/09, devedor da GoLink: "pago segunda" num canal sem IA passou em branco).
     // Classifica em silêncio e aplica na régua — nunca responde ao cliente.
     const silentCollectionCheck = async (cfg: typeof config) => {
       if (conv.isGroup) return
@@ -537,7 +537,7 @@ export async function dispatchInboundToAiReply(
     if (conv.assignedAgentId || conv.aiAutoreplyDisabled) {
       // a human owns this thread / handed off or turned off here — a IA não
       // responde, mas o devedor pode ter prometido pagar: régua ouve em silêncio.
-      // 🔎 15/09 (GoLink, Dra. Andressa): "IA on" e sem resposta, e o log não
+      // 🔎 15/09 (GoLink, uma devedora): "IA on" e sem resposta, e o log não
       // dizia por quê. Uma linha com o motivo — sem conteúdo de mensagem.
       console.log(
         '[ai auto-reply] calada:',
@@ -588,7 +588,7 @@ export async function dispatchInboundToAiReply(
       if (recentHuman) {
         // 🔁 Não deixa a mensagem do cliente pendurada: reagenda pro FIM da
         // janela. Se o humano continuar respondendo, o guard "humano falou por
-        // último" segura; se ele sumir, a IA retoma (caso Moacyr/Rafael 01/09:
+        // último" segura; se ele sumir, a IA retoma (caso 01/09:
         // cliente escreveu 18:38 dentro da janela, ninguém respondeu, a IA
         // nunca voltou — "a IA parou de novo").
         const humanAt = recentHuman.createdAt
@@ -598,7 +598,7 @@ export async function dispatchInboundToAiReply(
         return
       }
     }
-    // 🔁 Teto POR EPISÓDIO, não por vida da conversa (caso Poliana, 05/09):
+    // 🔁 Teto POR EPISÓDIO, não por vida da conversa (caso de 05/09):
     // cliente de gás tem UMA conversa de WhatsApp pra sempre, e o teto de 10
     // estourava a cada ~3 pedidos, calando a IA no meio de uma venda. Se a IA
     // não fala há EPISODE_GAP_HOURS, o que chegou agora é pedido novo: o
@@ -632,12 +632,12 @@ export async function dispatchInboundToAiReply(
     // Cheap early-out; the authoritative cap check is the atomic claim
     // below (this read can race a concurrent inbound).
     if (conv.aiReplyCount >= config.autoReplyMaxPerConversation) {
-      // 🛑 Limite de respostas por conversa atingido. Antes (01/09, Rafael/
-      // Moacyr) a IA simplesmente calava e ninguém sabia por quê. Agora: log +
+      // 🛑 Limite de respostas por conversa atingido. Antes (01/09) a IA
+      // simplesmente calava e ninguém sabia por quê. Agora: log +
       // nota interna no thread explicando como destravar.
       //
       // ⚠️ 05/09: a nota era escrita UMA vez por conversa, PARA SEMPRE — na
-      // segunda batida do teto (Poliana) ficou tudo em silêncio de novo. Agora
+      // segunda batida do teto (mesmo caso) ficou tudo em silêncio de novo. Agora
       // a dedup é por janela de 24h: bateu de novo amanhã, avisa de novo.
       console.log(
         `[ai-reply] limite por conversa atingido conv=${conversationId} (${conv.aiReplyCount}/${config.autoReplyMaxPerConversation})`,
@@ -896,7 +896,7 @@ export async function dispatchInboundToAiReply(
     }
     const text = dirs.text
 
-    // 🧾 Trava do marcador [[COBRANCA:]] (16/09, Ultra Visão/WR): as mesmas do
+    // 🧾 Trava do marcador [[COBRANCA:]] (16/09, dois devedores da GoLink): as mesmas do
     // detector silencioso — contexto de cobrança, palavra que confirma o tipo,
     // valor do comprovante, efeito repetido. Decide AQUI, antes do envio: depois
     // dele a última mensagem da conversa é a nossa e a rajada do cliente some.
@@ -1319,7 +1319,7 @@ export async function dispatchInboundToAiReply(
         )
         // Resumo automático: últimas falas do CLIENTE (o modelo raramente manda
         // resumo no handoff, e o dono precisa de contexto no aviso — Alex 26/08).
-        // 16/09 (caso Gisele): do BANCO, não do contexto do prompt — cada fala
+        // 16/09 (caso de handoff): do BANCO, não do contexto do prompt — cada fala
         // numa linha, localização com o link inteiro, áudio pela transcrição,
         // corte em palavra (ver lib/alerts/alert-text.ts).
         const lastFromCustomer = await db
@@ -1418,7 +1418,7 @@ export async function dispatchInboundToAiReply(
         await applyTags()
         return
       }
-      // ⚠️ 04/09 (caso Wellington, Família do Gás): aqui a IA se DESLIGAVA
+      // ⚠️ 04/09 (comprador da Família do Gás): aqui a IA se DESLIGAVA
       // sozinha, em silêncio, sempre que um turno saía sem texto — e um turno
       // sai sem texto com facilidade, por exemplo quando a rodada foi gasta
       // executando ferramenta (ele criou o pedido às 17:12 e emudeceu no meio
@@ -1463,7 +1463,7 @@ export async function dispatchInboundToAiReply(
       return
     }
 
-    // 🕰️ Resposta velha (caso Adrieli 15/09, ver stale-reply.ts): o cliente
+    // 🕰️ Resposta velha (caso 15/09, ver stale-reply.ts): o cliente
     // escreveu de novo enquanto a IA gerava e este turno não gravou nada →
     // não manda; a rechecagem responde tudo junto, com o histórico inteiro.
     // Humano escreveu no meio → não manda e ninguém regenera.
@@ -1484,7 +1484,7 @@ export async function dispatchInboundToAiReply(
       ),
     })
     // Roda DUAS vezes: antes de ocupar a vaga do limite e de novo depois do
-    // "digitando…" da 1ª mensagem (16/09, caso Marcia: "Nome dela Nádia" chegou
+    // "digitando…" da 1ª mensagem (16/09: "Nome dela Carla" chegou
     // 1,4 s depois de a geração terminar, durante a pausa de digitação, e a IA
     // perguntou o nome de novo).
     const dropIfStale = async (): Promise<boolean> => {

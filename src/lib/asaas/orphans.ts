@@ -26,7 +26,7 @@ import { normalizeDocument } from './match'
 /** O CRM grava o id do contato (UUID) no externalReference; ERP costuma usar código próprio. */
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
-/** Id de cliente do Asaas (cus_000199053973). Nada além disso entra numa URL de escrita. */
+/** Id de cliente do Asaas (cus_000012345678). Nada além disso entra numa URL de escrita. */
 export const ASAAS_CUSTOMER_ID_RE = /^cus_[0-9A-Za-z]+$/
 
 export interface OrphanShape {

@@ -30,9 +30,9 @@ describe('CPF/CNPJ — validação', () => {
     expect(isValidCnpj('00000000000000')).toBe(false)
   })
   it('celular com DDD (11 dígitos) não vira CPF', () => {
-    expect(isValidCpf('67991875477')).toBe(false)
-    expect(normalizeValidDocument('67 99187-5477')).toBeNull()
-    expect(normalizeValidDocument('5567991875477')).toBeNull()
+    expect(isValidCpf('67990001234')).toBe(false)
+    expect(normalizeValidDocument('67 99000-1234')).toBeNull()
+    expect(normalizeValidDocument('5567990001234')).toBeNull()
   })
 })
 
@@ -43,7 +43,7 @@ describe('findDocumentInText', () => {
     expect(findDocumentInText(`CNPJ ${CNPJ_OK}`)).toBe('11222333000181')
   })
   it('ignora telefone e valores; vazio → null', () => {
-    expect(findDocumentInText('manda pro 67 99187-5477, valor 150,00')).toBeNull()
+    expect(findDocumentInText('manda pro 67 99000-1234, valor 150,00')).toBeNull()
     expect(findDocumentInText('')).toBeNull()
     expect(findDocumentInText(null)).toBeNull()
   })
@@ -78,7 +78,7 @@ describe('trava da cobrança (15/09) — pickChargeDocument', () => {
   it('digitado com verificador errado → inválido e SEM cair no documento conhecido', () => {
     expect(pickChargeDocument({ typed: '529.982.247-26', wallet: WALLET, customField: FIELD })).toEqual({ doc: null, source: null, invalidTyped: true })
     // telefone colado no campo também é inválido
-    expect(pickChargeDocument({ typed: '67 99187-5477', wallet: WALLET }).invalidTyped).toBe(true)
+    expect(pickChargeDocument({ typed: '67 99000-1234', wallet: WALLET }).invalidTyped).toBe(true)
   })
   it('sem digitado: carteira antes da ficha', () => {
     expect(pickChargeDocument({ wallet: WALLET, customField: FIELD })).toEqual({ doc: WALLET, source: 'wallet', invalidTyped: false })

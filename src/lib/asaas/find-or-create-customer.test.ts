@@ -15,7 +15,7 @@ import {
 
 const PROD: AsaasCredential = { apiKey: 'k', environment: 'production' }
 const SANDBOX: AsaasCredential = { apiKey: 'k', environment: 'sandbox' }
-const REF = '09e0fe5d-d60d-41a4-9a22-a7e07c28589a'
+const REF = '0f0e0d0c-0b0a-4908-8706-050403020100'
 const CNPJ = '11222333000181'
 const OUTRO_CPF = '52998224725'
 

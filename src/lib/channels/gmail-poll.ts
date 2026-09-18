@@ -138,7 +138,7 @@ async function pollOneChannel(channelId: string): Promise<number> {
           // Pula o que a própria conta enviou (aparece em alguns fetches).
           if (!from || from === address) continue
 
-          // 📭 15/09 (Vale Ouro): aviso de devolução NÃO é cliente escrevendo —
+          // 📭 15/09 (Vale Modelo): aviso de devolução NÃO é cliente escrevendo —
           // virava contato "Mail Delivery Subsystem". Vira nota na conversa do
           // envio + supressão (email-bounce-apply.ts) e nunca cai no inbox,
           // nem se aplicar der erro.

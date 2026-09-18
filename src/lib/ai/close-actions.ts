@@ -225,7 +225,7 @@ export type AiDealReuse = 'conversation' | 'contact'
  *   1. card ABERTO desta conversa;
  *   2. card desta conversa criado dentro da janela do mesmo pedido, em
  *      QUALQUER status — na Família do Gás a equipe arrasta pra Ganho em
- *      minutos e a trava antiga (só aberto) sumia (Toninho 14/09, Flávia 11/09);
+ *      minutos e a trava antiga (só aberto) sumia (casos de 14/09 e 11/09);
  *   3. card ABERTO do mesmo contato no MESMO funil, vindo de outra conversa
  *      (cliente que volta por outro anúncio/número — Alex 16/09: só no mesmo
  *      funil). Ganho/perdido de outra conversa não conta: é compra nova.

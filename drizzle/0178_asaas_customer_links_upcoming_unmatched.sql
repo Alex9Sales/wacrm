@@ -1,9 +1,9 @@
--- 16/09 (Speed Gás e Água, GoLink): parcela A VENCER de cliente do Asaas que
+-- 16/09 (Veloz Gás e Água, GoLink): parcela A VENCER de cliente do Asaas que
 -- não casava com nenhum contato do CRM era invisível. O lembrete pulava
 -- ("no_contact") e só o log do worker sabia — o log se perdeu quando o
 -- container foi recriado. E não havia vínculo durável "cliente do Asaas →
 -- contato": a ligação feita à mão na carteira valia só para as cobranças já
--- espelhadas, e a PRÓXIMA parcela era casada de novo por palpite (Ultra Visão
+-- espelhadas, e a PRÓXIMA parcela era casada de novo por palpite (Ótica Exemplo
 -- ficou dividida em dois contatos, cobrada em 11/09 por WhatsApp e em 14/09
 -- por e-mail).
 --
@@ -18,8 +18,8 @@
 -- duas.
 --
 -- Só DDL, aditiva. SEM vínculo retroativo aqui: o INSERT das ligações manuais
--- antigas prenderia L&M Vidros e Ultra Visão a contatos SEM telefone (a
--- cobrança da Ultra Visão pararia de sair por WhatsApp). Se um dia for feito,
+-- antigas prenderia R&S Vidros e Ótica Exemplo a contatos SEM telefone (a
+-- cobrança da Ótica Exemplo pararia de sair por WhatsApp). Se um dia for feito,
 -- é script à parte, com dry-run, depois de a equipe resolver esses dois.
 --
 -- Rodar nos DOIS bancos (crmfluxia e crmfluxia_prod) ANTES do deploy: a

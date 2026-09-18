@@ -3,11 +3,11 @@ import PostalMime from 'postal-mime'
 
 import { bounceNoteText, bounceReason, isAddressFailure, parseDeliveryReport, reportFromDeliveryStatus } from './email-bounce'
 
-// 15/09 (GoLink/Vale Ouro): a devolução do Gmail virou contato "Mail Delivery
+// 15/09 (GoLink/Vale Modelo): a devolução do Gmail virou contato "Mail Delivery
 // Subsystem". Fixture no formato REAL do aviso do Gmail (anexos
 // message/delivery-status + text/rfc822-headers), com endereços trocados.
 
-const ORIGINAL_ID = '<4a3e832e-1107-f5f2-480c-221184622209@gmail.com>'
+const ORIGINAL_ID = '<0a1b2c3d-4e5f-6a7b-8c9d-0e1f2a3b4c5d@gmail.com>'
 
 function gmailDsn(opts: { action?: string; status?: string; diagnostic?: string } = {}): string {
   const action = opts.action ?? 'failed'
@@ -19,7 +19,7 @@ function gmailDsn(opts: { action?: string; status?: string; diagnostic?: string 
     'From: Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
     'To: cobranca@exemplo.com.br',
     'Subject: Delivery Status Notification (Failure)',
-    'Message-ID: <6aa7ef9a.8f302248.3dd33.5e05.GMR@mx.google.com>',
+    'Message-ID: <1a2b3c4d.5e6f7a8b.1c2d3.4e5f.GMR@mx.google.com>',
     'Auto-Submitted: auto-replied',
     'MIME-Version: 1.0',
     'Content-Type: multipart/report; boundary="b1"; report-type=delivery-status',

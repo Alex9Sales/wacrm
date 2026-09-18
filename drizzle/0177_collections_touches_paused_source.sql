@@ -1,4 +1,4 @@
--- 16/09 (Guincho Ribeiro, GoLink): a pausa da régua que a IA pôs ("acordo")
+-- 16/09 (Reboque Modelo, GoLink): a pausa da régua que a IA pôs ("acordo")
 -- ficou valendo para sempre depois de ele pagar tudo, invisível em qualquer
 -- tela. A pausa passa a guardar QUEM pausou e QUANDO: a da IA sai sozinha
 -- quando o cliente quita o que estava vencido (lib/collections/pause.ts); a da

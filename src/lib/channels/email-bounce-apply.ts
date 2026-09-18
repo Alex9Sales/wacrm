@@ -2,7 +2,7 @@
 // 📭 Devolução de e-mail — o que fazer com ela. Worker-safe (sem
 // 'server-only'): o gmail-poll chama daqui; o webhook de e-mail também.
 //
-// 15/09 (GoLink/Vale Ouro): a devolução da cobrança virou contato/conversa
+// 15/09 (GoLink/Vale Modelo): a devolução da cobrança virou contato/conversa
 // falsos, a mensagem seguiu "enviada" e a régua ia repetir o envio. Agora:
 //   1. acha o NOSSO envio que voltou (Message-ID, só na mesma conta, só
 //      mensagem de agente/robô que saiu de verdade) — sem casamento, só log:

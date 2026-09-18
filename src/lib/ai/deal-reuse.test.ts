@@ -3,15 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { pickDealToReuse } from './close-actions'
 
 const H = 60 * 60 * 1000
-// Toninho (Família do Gás): 1º card 14/09 10:22 (Campo Grande), arrastado pra
+// Comprador da Família do Gás: 1º card 14/09 10:22 (Campo Grande), arrastado pra
 // Ganho em 13 min; pagou e a IA "fechou" de novo às 20:07.
-const primeiroCard = { id: 'card-toninho', status: 'won', createdAt: '2026-09-14T14:22:00.000Z' }
+const primeiroCard = { id: 'card-1', status: 'won', createdAt: '2026-09-14T14:22:00.000Z' }
 const quandoPagou = new Date('2026-09-15T00:07:00.000Z').getTime()
 
 describe('pickDealToReuse — card da mesma conversa', () => {
-  it('Toninho: card já GANHO 9h45 antes, mesma conversa → reaproveita (não nasce o 2º card)', () => {
+  it('comprador de 14/09: card já GANHO 9h45 antes, mesma conversa → reaproveita (não nasce o 2º card)', () => {
     expect(pickDealToReuse({ now: quandoPagou, conversationDeals: [primeiroCard], contactOpenDeals: [] })).toEqual({
-      dealId: 'card-toninho',
+      dealId: 'card-1',
       reuse: 'conversation',
     })
   })
@@ -21,7 +21,7 @@ describe('pickDealToReuse — card da mesma conversa', () => {
     expect(pickDealToReuse({ now: quandoPagou, conversationDeals: [aberto], contactOpenDeals: [] })?.dealId).toBe('a')
   })
 
-  it('compra de amanhã na mesma conversa (fora das 10 h) → card novo (Poleana compra todo dia)', () => {
+  it('compra de amanhã na mesma conversa (fora das 10 h) → card novo (cliente que compra todo dia)', () => {
     const ontem = { id: 'ontem', status: 'won', createdAt: new Date(quandoPagou - 11 * H).toISOString() }
     expect(pickDealToReuse({ now: quandoPagou, conversationDeals: [ontem], contactOpenDeals: [] })).toBeNull()
   })
@@ -42,6 +42,6 @@ describe('pickDealToReuse — mesmo cliente, outra conversa', () => {
   it('a conversa manda antes do contato', () => {
     expect(
       pickDealToReuse({ now: quandoPagou, conversationDeals: [primeiroCard], contactOpenDeals: [{ id: 'lead' }] })?.dealId,
-    ).toBe('card-toninho')
+    ).toBe('card-1')
   })
 })

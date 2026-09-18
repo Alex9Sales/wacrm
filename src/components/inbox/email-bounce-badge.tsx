@@ -3,7 +3,7 @@
 // ============================================================
 // 📭 Selo "E-mail voltou" abaixo do e-mail do contato.
 //
-// 15/09 (GoLink/Vale Ouro): quando uma cobrança por e-mail volta como não
+// 15/09 (GoLink/Vale Modelo): quando uma cobrança por e-mail volta como não
 // entregue, a régua para de mandar e-mail pra aquele endereço. Aqui a equipe
 // vê o motivo e, se o cliente corrigiu a caixa, libera de novo.
 // ============================================================

@@ -13,7 +13,7 @@
 /**
  * True only for a WhatsApp GROUP jid. Matches the suffixed form (`…@g.us`)
  * AND the bare numeric id shape that WAHA NOWEB sometimes delivers with the
- * `@g.us` suffix stripped (e.g. `120363400053019227`) — WhatsApp group ids are
+ * `@g.us` suffix stripped (e.g. `120363000000000001`) — WhatsApp group ids are
  * long (16+ digits, usually prefixed `120363`) while an E.164 phone is at most
  * 15 digits.
  *

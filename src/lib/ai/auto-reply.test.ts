@@ -265,7 +265,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('🏁 marcador: IA falou por último, mas o cliente falou DEPOIS do que a última resposta viu → RESPONDE (Debora)', async () => {
+  it('🏁 marcador: IA falou por último, mas o cliente falou DEPOIS do que a última resposta viu → RESPONDE (caso 01/09)', async () => {
     h.state.coveredUntil = '2026-09-01T15:52:10.000Z'
     h.state.lastMessages = [
       { senderType: 'bot', createdAt: '2026-09-01T15:52:39.000Z' },
@@ -275,7 +275,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).toHaveBeenCalled()
   })
 
-  it('🏁 marcador: msg do cliente JÁ COBERTA pela última resposta → não repete, nem em rechecagem (Rose)', async () => {
+  it('🏁 marcador: msg do cliente JÁ COBERTA pela última resposta → não repete, nem em rechecagem (caso 01/09)', async () => {
     h.state.coveredUntil = '2026-09-01T15:52:35.000Z'
     h.state.lastMessages = [
       { senderType: 'bot', createdAt: '2026-09-01T15:52:39.000Z' },
@@ -307,11 +307,11 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  // 🕰️ Caso Adrieli (15/09): "Cartão" e, 15 s depois, "quantos minutos?" —
+  // 🕰️ Caso de 15/09: "Cartão" e, 15 s depois, "quantos minutos?" —
   // a resposta ao "Cartão" já não servia e saiu mesmo assim.
   const DEPOIS_DA_LEITURA = '2999-01-01T00:00:00.000Z'
 
-  it('🕰️ cliente escreveu durante a geração → a resposta velha NÃO sai e a rechecagem responde tudo junto (Adrieli)', async () => {
+  it('🕰️ cliente escreveu durante a geração → a resposta velha NÃO sai e a rechecagem responde tudo junto (caso 15/09)', async () => {
     h.state.lastMessages = [{ senderType: 'customer', createdAt: DEPOIS_DA_LEITURA }]
     await dispatchInboundToAiReply(ARGS)
     expect(h.generateReply).toHaveBeenCalled()
@@ -335,7 +335,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).toHaveBeenCalled()
   })
 
-  it('🕰️ mensagem chegou durante o "digitando…" (Marcia 16/09) → não manda e devolve a vaga', async () => {
+  it('🕰️ mensagem chegou durante o "digitando…" (caso 16/09) → não manda e devolve a vaga', async () => {
     const antes = { senderType: 'customer', createdAt: '2026-09-01T15:00:00.000Z' }
     h.state.orderedReads = [
       [antes], // guard anti-eco: última msg é do cliente

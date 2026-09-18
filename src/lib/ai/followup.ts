@@ -667,14 +667,14 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         ${channelCond}
         -- As duas exclusões abaixo viviam no JS, DEPOIS do LIMIT: conversa
         -- morta (sem inbound nunca / escada esgotada sem resposta) ocupava as
-        -- vagas do LIMIT pra sempre e a fila crescia todo dia. Caso Gerson
-        -- 01/09: 101 candidatas, ele na posição 99, follow-up "parou do nada".
+        -- vagas do LIMIT pra sempre e a fila crescia todo dia. Caso de
+        -- 01/09: 101 candidatas, o cliente na posição 99, follow-up "parou do nada".
         -- (Sem interpolação aqui dentro: um placeholder num comentário vira
         -- parâmetro bound que o Postgres não consegue tipar — quebrou o sweep
         -- em prod por 2 ticks em 01/09.)
         -- Humano falou por último → a IA NÃO reengaja (mesma regra do
         -- auto-reply: atendente que assumiu a linha é dono dela). 01/09: o
-        -- sweep mandou follow-up por cima da resposta humana ao Gerson, com
+        -- sweep mandou follow-up por cima da resposta humana ao cliente, com
         -- preço diferente do que o atendente tinha acabado de passar.
         AND coalesce((SELECT ml.sender_type FROM messages ml
                        WHERE ml.conversation_id = c.id AND ml.is_internal = false
@@ -712,7 +712,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
     `)
     const cands = candRes.rows as unknown as CandRow[]
     if (cands.length === 0) continue
-    // Teto por tick: uma fila represada (como a do Gerson) não pode virar
+    // Teto por tick: uma fila represada (como a de 01/09) não pode virar
     // rajada de 40 mensagens num minuto — drena aos poucos, 1 tick/min.
     const sentBefore = sent
 
@@ -880,7 +880,7 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         // 🚫 Este caminho gera com generateReply — SEM executar ferramentas
         // (criar_pedido, cadastro, etc.). O prompt do agente descreve essas
         // ferramentas, e o modelo narrava ações que não aconteceram: 01/09 o
-        // follow-up disse à Madalena "pedido registrado" sem pedido nenhum no
+        // follow-up disse a uma cliente "pedido registrado" sem pedido nenhum no
         // ERP (ela tinha pago por Pix). Aqui a IA só conversa.
         // ⚠️ Encerrar a conversa / mover o card (RESOLVER / FUNIL) NÃO é
         // ferramenta — é o sistema quem executa (applyCloseActions) e é o

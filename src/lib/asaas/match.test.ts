@@ -181,16 +181,16 @@ describe('asaasPhoneForContact — telefone do Asaas vira contato', () => {
     expect(asaasPhoneForContact(null)).toBeNull()
     expect(asaasPhoneForContact('99000')).toBeNull()
     expect(asaasPhoneForContact('0190001631')).toBeNull()
-    expect(asaasPhoneForContact('+370 63949836')).toBeNull()
+    expect(asaasPhoneForContact('+370 60001234')).toBeNull()
   })
 })
 
-describe('groupDuplicateCustomers — Renato ×3', () => {
+describe('groupDuplicateCustomers — o mesmo cliente ×3', () => {
   it('agrupa por CPF, e cada cadastro entra em um grupo só', () => {
     const g = groupDuplicateCustomers([
-      { id: 'a', name: 'Renato', cpfCnpj: '123.456.789-00', mobilePhone: '67999996855' },
-      { id: 'b', name: 'Renato ticolat', cpfCnpj: '12345678900', mobilePhone: '5567999996855' },
-      { id: 'c', name: 'Renato T', cpfCnpj: '12345678900', mobilePhone: '6799996855' },
+      { id: 'a', name: 'Carlos', cpfCnpj: '123.456.789-00', mobilePhone: '67999990011' },
+      { id: 'b', name: 'Carlos Tste', cpfCnpj: '12345678900', mobilePhone: '5567999990011' },
+      { id: 'c', name: 'Carlos T', cpfCnpj: '12345678900', mobilePhone: '6799990011' },
       { id: 'd', name: 'Outra pessoa', cpfCnpj: '98765432100', mobilePhone: '67911112222' },
     ])
     expect(g).toHaveLength(1)

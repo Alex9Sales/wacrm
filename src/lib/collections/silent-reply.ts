@@ -174,7 +174,7 @@ export async function detectCollectionReplySilently(args: {
     if (!open.length) return
 
     // A RAJADA do cliente: os últimos balões dele desde a última mensagem do
-    // CRM (Psi Jéssica 10/09: comprovante numa imagem + "esqueci" num áudio —
+    // CRM (caso de cobrança 10/09: comprovante numa imagem + "esqueci" num áudio —
     // olhando só o último balão, o comprovante passava). Até 6, no máximo 3 h
     // antes do mais novo (Jorge Teste 14/09: um "👍" de 3 dias antes vinha junto).
     const burst = pickBurst(await loadBurstRows(args.conversationId))

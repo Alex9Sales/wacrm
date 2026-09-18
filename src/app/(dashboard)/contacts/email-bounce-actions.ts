@@ -3,7 +3,7 @@
 // ============================================================
 // 📭 "E-mail voltou" na lateral do contato — ler e liberar.
 //
-// 15/09 (GoLink/Vale Ouro): a devolução da cobrança agora suprime o endereço
+// 15/09 (GoLink/Vale Modelo): a devolução da cobrança agora suprime o endereço
 // (email_bounces) e a régua para de mandar e-mail pra ele. Sem mostrar isso, a
 // equipe não saberia por que o cliente parou de receber e-mail, nem teria como
 // desfazer quando o cliente corrigir a caixa. Os endereços vêm do contato e

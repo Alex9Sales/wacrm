@@ -256,7 +256,7 @@ export async function getConversationWithContact(
     channelId: channel?.id,
     aiAgentId,
   })
-  // 15/09 (GoLink, Dra. Andressa): "IA on" com responsável humano não responde
+  // 15/09 (GoLink, Dra. Carla): "IA on" com responsável humano não responde
   // (gate do auto-reply). O estado diz isso, com o nome de quem está com ela.
   const aiStateNow = aiState({
     aiActiveChannel,
@@ -318,7 +318,7 @@ export async function setConversationAiPaused(
 ): Promise<{
   error: string | null
   /** Ligou a IA, mas a conversa tem responsável: ela segue calada até tirar
-   *  (15/09, GoLink — Dra. Andressa). A UI mostra como toast de aviso. */
+   *  (15/09, GoLink — Dra. Carla). A UI mostra como toast de aviso. */
   warning?: string | null
   /** Quem está com a conversa, quando há `warning` — pro "Tirar responsável".
    *  `losesAccessOnUnassign`: sem a atribuição essa pessoa deixa de abrir a
@@ -372,7 +372,7 @@ export async function setConversationAiPaused(
       )
     // ⏳ Ligou com responsável humano: liga mesmo assim (quando tirarem o
     // responsável ela já volta), mas avisa — o auto-reply cala a IA em conversa
-    // atribuída e o "IA on" enganava (15/09, GoLink: Dra. Andressa sem resposta).
+    // atribuída e o "IA on" enganava (15/09, GoLink: Dra. Carla sem resposta).
     let warning: string | null = null
     let assignee: { id: string; name: string | null; losesAccessOnUnassign: boolean } | null = null
     // Revisão 15/09: só avisa "em espera"/oferece "Tirar responsável" se a IA
@@ -2121,7 +2121,7 @@ export async function startNewEmailConversation(input: {
 }
 
 // ---- ↪️ Continuar pelo meu número -------------------------------------------
-// 15/09 (Alex, caso Will Santos/GoLink). Transferir NÃO troca de número (os
+// 15/09 (Alex, caso de um cliente da GoLink). Transferir NÃO troca de número (os
 // números são da empresa); este botão é a ESCOLHA de quem atende. Regras e
 // textos em lib/inbox/continue-on-number.ts.
 

@@ -490,7 +490,7 @@ export default function PipelinesPage() {
   }, [loadTaskCounts, selectedPipelineId]);
 
   // Excluiu (menu do card ou painel): some da tela NA HORA. 16/09 (Família do
-  // Gás, card duplicado do Toninho): só saía com F5 — o menu chamava
+  // Gás, card duplicado de um comprador): só saía com F5 — o menu chamava
   // router.refresh(), que não recarrega o estado desta página (é cliente).
   const handleDealDeleted = useCallback((dealId: string) => {
     deletedIds.current.add(dealId);

@@ -16,25 +16,25 @@ function toque(p: Partial<OtherChannelTouch> = {}): OtherChannelTouch {
 
 describe('aviso de cliente em mais de um canal', () => {
   it('não avisa nada quando o cliente só falou aqui', () => {
-    expect(crossChannelNote('Jordy', [], agora)).toBeNull()
+    expect(crossChannelNote('Carla', [], agora)).toBeNull()
   })
 
   it('diz quem, onde e quando', () => {
-    const nota = crossChannelNote('Jordy Arruda', [toque()], agora)!
-    expect(nota).toContain('Jordy Arruda')
+    const nota = crossChannelNote('Carla Teste', [toque()], agora)!
+    expect(nota).toContain('Carla Teste')
     expect(nota).toContain('Aliança Gás 2')
     expect(nota).toContain('há 20 min')
   })
 
   it('mostra o que respondemos no outro canal — é o que o time quer comparar', () => {
-    // Caso Jordy: 125 num canal, 120 no outro. A nota tem que deixar ver isso.
-    const nota = crossChannelNote('Jordy', [toque()], agora)!
+    // Caso de 04/09: 125 num canal, 120 no outro. A nota tem que deixar ver isso.
+    const nota = crossChannelNote('Carla', [toque()], agora)!
     expect(nota).toContain('R$ 120,00')
   })
 
   it('conta certo quando são vários canais', () => {
     const nota = crossChannelNote(
-      'Gerson',
+      'Beto',
       [toque(), toque({ channelName: 'Família do Gás 1' })],
       agora,
     )!
@@ -42,7 +42,7 @@ describe('aviso de cliente em mais de um canal', () => {
   })
 
   it('deixa explícito que é interno — ninguém pode achar que foi pro cliente', () => {
-    const nota = crossChannelNote('Jordy', [toque()], agora)!
+    const nota = crossChannelNote('Carla', [toque()], agora)!
     expect(nota).toContain('o cliente não vê nada')
   })
 
@@ -52,19 +52,19 @@ describe('aviso de cliente em mais de um canal', () => {
   })
 
   it('aguenta o outro canal sem resposta nossa ainda', () => {
-    const nota = crossChannelNote('Jordy', [toque({ lastOutboundText: null })], agora)!
+    const nota = crossChannelNote('Carla', [toque({ lastOutboundText: null })], agora)!
     expect(nota).toContain('Aliança Gás 2')
     expect(nota).not.toContain('respondemos lá')
   })
 
   it('corta resposta muito longa em vez de despejar a mensagem inteira', () => {
-    const nota = crossChannelNote('Jordy', [toque({ lastOutboundText: 'x'.repeat(400) })], agora)!
+    const nota = crossChannelNote('Carla', [toque({ lastOutboundText: 'x'.repeat(400) })], agora)!
     expect(nota.length).toBeLessThan(600)
   })
 
   it('fala em horas quando já faz tempo', () => {
     const nota = crossChannelNote(
-      'Jordy',
+      'Carla',
       [toque({ lastCustomerAt: new Date(agora.getTime() - 5 * 3_600_000).toISOString() })],
       agora,
     )!

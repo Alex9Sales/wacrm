@@ -170,7 +170,7 @@ export interface ChannelCtx {
 
 /** 📒 Um contato salvo na agenda do celular pareado (ver listPhonebook). */
 export interface PhonebookContact {
-  /** Dígitos do id do WhatsApp (ex.: 556791875477 — às vezes sem o 9º dígito). */
+  /** Dígitos do id do WhatsApp (ex.: 556790001234 — às vezes sem o 9º dígito). */
   phone: string;
   /** Nome como está salvo na agenda do aparelho. */
   name: string;

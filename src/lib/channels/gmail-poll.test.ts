@@ -64,7 +64,7 @@ vi.mock('@/lib/channels/channels', () => ({
 vi.mock('@/lib/channels/registry', () => ({ getProvider: () => ({ parseWebhook: () => ({ messages: [{ id: 'm1' }] }) }) }))
 vi.mock('@/lib/channels/inbound', () => ({ dispatchInboundMessage: inbound.dispatch }))
 vi.mock('@/lib/channels/providers/gmail', () => ({
-  gmailAddressOf: () => 'golinkoficial@gmail.com',
+  gmailAddressOf: () => 'cobranca@exemplo.com.br',
   appPasswordOf: () => 'abcdabcdabcdabcd',
 }))
 
@@ -161,14 +161,14 @@ describe('runGmailPollSweep com aviso de devolução', () => {
   const dsn = Buffer.from(
     [
       'From: Mail Delivery Subsystem <mailer-daemon@googlemail.com>',
-      'To: golinkoficial@gmail.com',
+      'To: cobranca@exemplo.com.br',
       'Subject: Delivery Status Notification (Failure)',
       'Content-Type: multipart/report; boundary="b1"; report-type=delivery-status',
       '',
       '--b1',
       'Content-Type: message/delivery-status',
       '',
-      'X-Original-Message-ID: <4a3e832e-1107-f5f2-480c-221184622209@gmail.com>',
+      'X-Original-Message-ID: <00000000-0000-4000-8000-000000000001@gmail.com>',
       '',
       'Final-Recipient: rfc822; financeiro@empresa-exemplo.com.br',
       'Action: failed',
@@ -178,7 +178,7 @@ describe('runGmailPollSweep com aviso de devolução', () => {
       '',
     ].join('\r\n'),
   )
-  const cliente = Buffer.from(['From: Cliente <cliente@empresa-exemplo.com.br>', 'To: golinkoficial@gmail.com', 'Subject: Oi', 'Content-Type: text/plain', '', 'Já paguei.'].join('\r\n'))
+  const cliente = Buffer.from(['From: Cliente <cliente@empresa-exemplo.com.br>', 'To: cobranca@exemplo.com.br', 'Subject: Oi', 'Content-Type: text/plain', '', 'Já paguei.'].join('\r\n'))
 
   beforeEach(() => {
     imap.instances.length = 0

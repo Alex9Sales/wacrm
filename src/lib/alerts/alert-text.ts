@@ -1,7 +1,7 @@
 // ============================================================
 // Texto dos avisos pro WhatsApp do dono — PURO (worker e client podem usar).
 //
-// 16/09 (Família do Gás, caso Gisele): o aviso "IA TRANSFERIU PRA HUMANO"
+// 16/09 (Família do Gás, caso de handoff): o aviso "IA TRANSFERIU PRA HUMANO"
 // levou no resumo o texto cru das falas — a localização da cliente com quebra
 // de linha no meio, fala de áudio cortada no meio da palavra ("só que até a")
 // e o nome do contato "." ("👤 . · 5567…"). No CRM, o link do Maps ainda fez a

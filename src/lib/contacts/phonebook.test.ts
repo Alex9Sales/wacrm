@@ -16,7 +16,7 @@ describe('agenda do celular — chave de identidade (09/09)', () => {
   });
 
   it('número estrangeiro usa os dígitos crus; vazio vira null', () => {
-    expect(identityKeyOf('37063949836')).toBe('37063949836');
+    expect(identityKeyOf('37060001234')).toBe('37060001234');
     expect(identityKeyOf('')).toBeNull();
     expect(identityKeyOf('abc')).toBeNull();
   });

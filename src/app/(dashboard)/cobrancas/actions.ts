@@ -499,7 +499,7 @@ export async function getWallet(): Promise<WalletSummary> {
     })
   }
 
-  // Parcela idêntica em dois cadastros do Asaas (Renato ×3): a tela avisa e a
+  // Parcela idêntica em dois cadastros do Asaas (cliente ×3): a tela avisa e a
   // régua não cobra até resolver lá. Calculado como a RÉGUA calcula — por
   // contato, juntando os cadastros e só com as vencidas. Por devedor (um
   // cadastro por grupo) dava sempre false: a régua pulava e a tela não dizia.
@@ -2536,7 +2536,7 @@ export interface DuplicateCheckResult {
 
 /**
  * Procura cadastros repetidos no Asaas (mesmo CPF/CNPJ, telefone ou e-mail).
- * Só mostra — apagar é decisão de gente, no Asaas. Caso Renato ×3 (05/09).
+ * Só mostra — apagar é decisão de gente, no Asaas. Caso do cliente cadastrado ×3 (05/09).
  */
 export async function checkAsaasDuplicates(connectionId: string): Promise<ActionResult<DuplicateCheckResult>> {
   const { accountId } = await requireRole('supervisor')

@@ -49,7 +49,7 @@ const VAR_RE = /\{\{\s*([a-zA-Z0-9_]+)\s*\}\}/g
 /** Separador entre duas variáveis na mesma linha ("{{cliente}} · {{telefone}}"). */
 const SEP = String.raw`[ \t]*(?:·|•|\||—|–|-|,)[ \t]*`
 
-/** Valor numa linha só: quebra vira " / ". 16/09 (caso Gisele): resumo com a
+/** Valor numa linha só: quebra vira " / ". 16/09 (Família do Gás): resumo com a
  *  localização da cliente quebrava o aviso no meio e, em template
  *  personalizado, fechava o negrito antes da hora. */
 const flat = (v: string | undefined): string =>

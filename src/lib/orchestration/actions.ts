@@ -256,7 +256,7 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         if (!text) return { ok: false, error: 'Sem texto pra enviar.' }
         const kind = input.payload.kind
 
-        // ✋ Freio do devedor NA HORA DO ENVIO (15/09, GoLink/Guincho Ribeiro:
+        // ✋ Freio do devedor NA HORA DO ENVIO (15/09, GoLink:
         // lembrete saiu para cliente pausado). Entre a fila e o envio o cliente
         // pode ter sido pausado ou prometido pagar (classificador silencioso,
         // "Registrar promessa", "não cobrar", "Corrigir"). Vale para o sender,
@@ -285,8 +285,8 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
 
         // 🔗 Aviso de cobrança nova: o link já chegou ao cliente entre a fila e
         // o envio? (17/09, GoLink: em 15/09 o João mandou à mão, do celular, os
-        // links de Alpha Gás, Leva Entulho, Andressa Amorelli e Convictus logo
-        // depois de criar no painel.) Basta UM link ter chegado para recusar:
+        // links de quatro devedores logo depois de criar no painel.) Basta UM
+        // link ter chegado para recusar:
         // o pedido expira e a próxima varredura remonta só o que faltar — sem
         // isso, com 1 de 2 mandado à mão, os 2 saíam e um chegava em dobro.
         // Antes do Asaas: poupa a chamada.

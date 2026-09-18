@@ -4,7 +4,7 @@
 // 11/09 (João/GoLink): eu tinha barrado telefone FIXO no aviso de telefone da
 // carteira, supondo que fixo não tem WhatsApp. Estava errado: o WhatsApp
 // Business aceita número fixo (verificação por chamada de voz), e o fixo do
-// cliente dele — 12 3648-8533 — respondeu `numberExists: true` no check-exists.
+// cliente dele — 12 3000-1234 — respondeu `numberExists: true` no check-exists.
 // Formato de número não decide isso; só o WhatsApp decide.
 //
 // Somente leitura: nada é enviado. `null` = não deu para perguntar (canal fora

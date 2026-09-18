@@ -312,7 +312,7 @@ function rawBase64(b64: string): string {
 /**
  * Resolve the CANONICAL chatId for a phone via WhatsApp (check-exists).
  * Critical in Brazil because of the "9th digit": the dialed number
- * (e.g. 5567 9 92539584) often has a different WhatsApp id (5567 92539584,
+ * (e.g. 5567 9 90001234) often has a different WhatsApp id (5567 90001234,
  * without the extra 9). Sending to the wrong JID makes the message "send"
  * but never arrive — so we always resolve BEFORE sending.
  *
@@ -326,7 +326,7 @@ async function resolveChatId(ch: ChannelCtx, toE164: string): Promise<string> {
   if (/@g\.us$/i.test(toE164)) return toE164;
   // Telefone nacional sem 55 (formato do ERP importado) vira E.164 ANTES do
   // check-exists — senão o WhatsApp lê "67…" como Fiji e a mensagem morre
-  // em "sent" (caso Gerson 01/09). Ver toBrE164IfNational.
+  // em "sent" (caso de 01/09, Família do Gás). Ver toBrE164IfNational.
   const digits = toBrE164IfNational(normalizePhone(toE164));
   // A GROUP target passed as bare digits (16+) — best-effort `<digits>@g.us`.
   // (Legacy hyphen jids should arrive already suffixed via the line above; this
@@ -852,7 +852,7 @@ const WA_NET_RE = /@s\.whatsapp\.net$/i;
  *
  * We match both the suffixed form (`@g.us` / `@newsletter` / `@broadcast`)
  * AND the bare id shape: WAHA NOWEB sometimes delivers a group message with
- * the chat as a raw numeric id (e.g. `120363400053019227`) with no `@g.us`
+ * the chat as a raw numeric id (e.g. `120363000000000001`) with no `@g.us`
  * suffix. WhatsApp group/newsletter ids are long (18+ digits, usually
  * prefixed `120363`), while an E.164 phone is at most 15 digits — so a bare
  * numeric local part of 16+ digits is a group/newsletter that lost its suffix.
@@ -1374,7 +1374,7 @@ export const wahaProvider: WhatsAppProvider = {
   /**
    * 📒 Agenda do celular pareado. VERIFICADO no gows da Fluxia (09/09/2026):
    *   GET {base}/api/contacts/all?session=<s>&limit=<n>&offset=<o>
-   *   → [{ id: "556791875477@c.us" | "…@lid", name, pushname }]
+   *   → [{ id: "556790001234@c.us" | "…@lid", name, pushname }]
    * `name` = nome SALVO na agenda (vazio pra quem só mandou mensagem);
    * `pushname` = nome de perfil da pessoa. Só entradas @c.us carregam nome
    * (as @lid vêm sem). O store inteiro é grande (35 mil na conta do Alex,
@@ -1710,7 +1710,7 @@ export const wahaProvider: WhatsAppProvider = {
       if (locationText) text = locationText;
       const raw = serializedIdToString(p.id);
       const externalMessageId = raw ? normalizeSerializedId(raw) : '';
-      // GOWS alts carry the multi-device suffix ("556…5477:9@s.whatsapp.net");
+      // GOWS alts carry the multi-device suffix ("556…1234:9@s.whatsapp.net");
       // strip it BEFORE normalizing or the digits gain a phantom tail and
       // spawn a duplicate contact + conversation.
       // For a group, `chat` is the group jid; attribute the message to the
@@ -2066,7 +2066,7 @@ export const wahaProvider: WhatsAppProvider = {
     );
     if (!ok) return { status: 'error' };
     const st = String((body as { status?: unknown }).status || '');
-    // The paired number lives in `me.id` (e.g. "556791875477@c.us"). Surface
+    // The paired number lives in `me.id` (e.g. "556790001234@c.us"). Surface
     // it so the channel row can persist phone_number once WORKING.
     const meId = (body as { me?: { id?: unknown } }).me?.id;
     const phoneNumber =

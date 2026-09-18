@@ -133,7 +133,7 @@ export async function dispatchInboundMessage(
   // brand-new rows we need SOME member id. We resolve it lazily below.
   // Normalize the inbound number to E.164 up front. Some engines deliver a
   // Brazilian number in national-dialing form ("0 + carrier code + DDD +
-  // número", e.g. "01527999438466"), whose leading 0 fails isValidE164 → the
+  // número", e.g. "01527900001234"), whose leading 0 fails isValidE164 → the
   // contact is created unsendable and replying errors with "Invalid phone
   // number format" until the agent hand-edits it. normalizeInboundPhoneBR only
   // touches numbers that start with 0, so clean 55… numbers pass through as-is.
@@ -191,7 +191,7 @@ export async function dispatchInboundMessage(
 
   // `fromMe` = the operator answered from their OWN phone. On such echoes the
   // pushName is the OPERATOR's WhatsApp name, NOT the contact's — using it
-  // would rename every customer to the operator ("Alex Sales"). So only carry
+  // would rename every customer to the operator ("Carla Atendente"). So only carry
   // the pushName for genuine incoming (customer) messages; fromMe passes no
   // name (a new contact falls back to its phone number).
   const isFromMe = ev.fromMe === true;
@@ -425,7 +425,7 @@ export async function dispatchInboundMessage(
     // antes do INSERT do envio commitar → grava a 2ª linha (mesmo wamid). A
     // trava real é o índice único parcial (conversation_id, message_id) no banco
     // + este ON CONFLICT (sem alvo = no-op até o índice existir; seguro deployar
-    // antes). Afonso 29/08: "Pagamento confirmado" 2x no CRM, 1x no WhatsApp.
+    // antes). Caso de 29/08: "Pagamento confirmado" 2x no CRM, 1x no WhatsApp.
     const inserted = await db
       .insert(messages)
       .values({

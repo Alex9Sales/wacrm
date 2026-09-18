@@ -211,7 +211,7 @@ describe('documentFieldView — CPF/CNPJ só obrigatório em produção sem docu
     expect(errado.showInvalid).toBe(true)
     expect(errado.ok).toBe(false)
     // Telefone colado no campo não vira CPF.
-    expect(view({ environment: 'sandbox', typed: '67991875477' }).ok).toBe(false)
+    expect(view({ environment: 'sandbox', typed: '67990001234' }).ok).toBe(false)
   })
 
   it('digitando: trava, mas só mostra o erro a partir de 11 números', () => {

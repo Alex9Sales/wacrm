@@ -725,7 +725,7 @@ export function buildSystemPrompt(args: {
  * agradece o comprovante mas NUNCA declara nada pago. Quem confirma pagamento
  * é o Asaas, nunca uma conversa.
  *
- * 16/09 (WR Caminhão Pipa): "prazo" levava a acordo e pausava a régua sem
+ * 16/09 (caso de cobrança da GoLink): "prazo" levava a acordo e pausava a régua sem
  * data — "segura até sexta" é promessa. "Já paguei isso" pausava como
  * contestação; é comprovante (a régua dorme 3 dias e alguém confere).
  */

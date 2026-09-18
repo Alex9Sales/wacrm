@@ -60,12 +60,12 @@ describe('comando do dono — rajada de balões (08/09)', () => {
       { senderType: 'customer', text: 'Pix', createdAt: at(50) },
       { senderType: 'customer', text: 'Vencimento amanhã', createdAt: at(40) },
       { senderType: 'customer', text: 'Valor de 5 reais', createdAt: at(30) },
-      { senderType: 'customer', text: 'Para Danyela Souza', createdAt: at(20) },
+      { senderType: 'customer', text: 'Para Carla Teste', createdAt: at(20) },
       { senderType: 'customer', text: 'Cria uma cobrança', createdAt: at(10) },
       { senderType: 'bot', text: 'Bom dia, Alex!', createdAt: at(0) },
     ]
     const burst = joinCustomerBurst(rows)
-    expect(burst).toBe('Cria uma cobrança\nPara Danyela Souza\nValor de 5 reais\nVencimento amanhã\nPix')
+    expect(burst).toBe('Cria uma cobrança\nPara Carla Teste\nValor de 5 reais\nVencimento amanhã\nPix')
     expect(looksLikeChargeCommand('Pix')).toBe(false)
     expect(looksLikeChargeCommand(burst)).toBe(true)
   })
@@ -88,22 +88,22 @@ describe('comando do dono — rajada de balões (08/09)', () => {
 
 describe('loop de 09/09 — texto do próprio CRM nunca é pedido nem confirmação', () => {
   const own = [
-    'Confirma? Cobrar R$ 10,00 de Alex Sanabria (556791875477), vencendo 12/09/2026, "Cobrança"',
-    'Qual o valor da cobrança para Alex Sanabria? Exemplo: "150,00".',
-    'Preciso do CPF ou CNPJ de Alex Sanabria (11 ou 14 números) pra gerar no Asaas — ou responda NÃO pra cancelar.',
-    'O Asaas exige CPF ou CNPJ pra gerar a cobrança de Alex Sanabria. Me manda o documento.',
-    'Pronto ✅ Cobrança de R$ 10,00 para Alex, vence 12/09/2026.',
+    'Confirma? Cobrar R$ 10,00 de Carla Teste (556790001234), vencendo 12/09/2026, "Cobrança"',
+    'Qual o valor da cobrança para Carla Teste? Exemplo: "150,00".',
+    'Preciso do CPF ou CNPJ de Carla Teste (11 ou 14 números) pra gerar no Asaas — ou responda NÃO pra cancelar.',
+    'O Asaas exige CPF ou CNPJ pra gerar a cobrança de Carla Teste. Me manda o documento.',
+    'Pronto ✅ Cobrança de R$ 10,00 para Carla, vence 12/09/2026.',
     'Cancelado. Nada foi cobrado.',
-    'Ficou pendente: Confirma? Cobrar R$ 10,00 de Alex…',
-    'Equipe hoje:\n• Alex Sales — 8 conversas atendidas · 78 abertas',
+    'Ficou pendente: Confirma? Cobrar R$ 10,00 de Carla…',
+    'Equipe hoje:\n• Carla Teste — 8 conversas atendidas · 78 abertas',
     '🌟 Bom dia! Seu resumo da Fluxia — 09/09',
-    'Encontrei o Luan: negócio "Agente Gestão de Dados DRE"…',
+    'Encontrei o Bruno: negócio "Projeto Modelo"…',
   ]
   it('reconhece os textos que o CRM manda pro dono', () => {
     for (const t of own) expect(looksLikeCrmOwnText(t), t).toBe(true)
   })
   it('"Confirma? Cobrar…" NÃO conta como SIM (era o que criava a cobrança); "sim" curto continua valendo', () => {
-    expect(looksLikeConfirmation('Confirma? Cobrar R$ 10,00 de Alex Sanabria (556791875477), vencendo 12/09/2026')).toBe(false)
+    expect(looksLikeConfirmation('Confirma? Cobrar R$ 10,00 de Carla Teste (556790001234), vencendo 12/09/2026')).toBe(false)
     expect(looksLikeConfirmation('confirma')).toBe(true)
     expect(looksLikeConfirmation('sim, pode mandar')).toBe(true)
     expect(looksLikeConfirmation('sim ' + 'x'.repeat(70))).toBe(false)

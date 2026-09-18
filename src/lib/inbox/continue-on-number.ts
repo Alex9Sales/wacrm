@@ -1,7 +1,7 @@
 // ============================================================
 // ↪️ "Continuar pelo meu número" — regras e textos puros.
 //
-// 15/09 (Alex, caso Will Santos/GoLink): o cliente escreveu pro número do
+// 15/09 (Alex, caso de um cliente da GoLink): o cliente escreveu pro número do
 // Vitor, a conversa foi transferida pro João, e tudo que o João respondia
 // saía pelo WhatsApp do Vitor. Transferir NÃO troca de número — e é o certo:
 // os números são da empresa. Este botão é uma ESCOLHA de quem atende: abre a

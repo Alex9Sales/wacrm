@@ -59,7 +59,7 @@ export interface OrderForCard {
 // FORÇADA a responder o cliente. 4 era baixo pra fluxos de venda com muitas
 // tools: a Maria (gás) gasta buscar_cliente→última_compra→estoque→distância→
 // criar_cliente e estourava ANTES do criar_pedido+confirmação, terminando muda
-// (Rosane, 29/08). 8 dá folga pra fechar sem virar loop infinito.
+// (caso de 29/08). 8 dá folga pra fechar sem virar loop infinito.
 const MAX_TOOL_STEPS = 8
 const FETCH_TIMEOUT_MS = 12_000
 const RESULT_CAP = 4_000
@@ -223,7 +223,7 @@ const WRITE_DEDUP_WINDOW_MS = SAME_ORDER_WINDOW_MS
 
 /** O resultado desta ferramenta pode virar card no funil? Só quando algo foi
  *  gravado de verdade — a chamada segurada pela trava devolve 'ok' pro modelo,
- *  mas não criou pedido nenhum (Flávia 11/09: card duplicado 6 s depois). */
+ *  mas não criou pedido nenhum (caso 11/09: card duplicado 6 s depois). */
 export function outcomeCreatesCard(tool: Pick<ExternalTool, 'createsDeal'> | undefined, outcome: ToolRunResult): boolean {
   return !!tool?.createsDeal && outcome.status === 'ok' && !outcome.deduped
 }
@@ -236,7 +236,7 @@ export function dedupedSummary(minutesAgo: number, previousSummary: string | nul
     `JÁ EXISTE um registro desta ação nesta conversa, feito ${quando}` +
     (previousSummary ? ` (${previousSummary.slice(0, 160)})` : '') +
     '. NADA novo foi gravado agora. NÃO crie outro e NÃO repita a confirmação: o cliente já foi avisado nesta conversa. ' +
-    // ⚠️ 11/09 (Dayane): aqui estava escrito "agradeça e confirme o que já
+    // ⚠️ 11/09 (Família do Gás): aqui estava escrito "agradeça e confirme o que já
     // está registrado" — e a IA mandou a confirmação INTEIRA de novo
     // (produto, valor e endereço), 15 s depois da primeira. Mandar duas
     // vezes faz o cliente achar que saíram dois pedidos.
@@ -333,11 +333,11 @@ export async function executeTool(
       : null
 
   if (previous) {
-    // ⚠️ 04/09 (Wellington): o cliente trocou de cartão pra Pix e depois mandou
+    // ⚠️ 04/09 (Família do Gás): o cliente trocou de cartão pra Pix e depois mandou
     // o comprovante — a IA criou o pedido nas TRÊS vezes. Aqui ela é avisada do
     // que já existe e do que fazer quando algo muda, em vez de recriar.
     // Idade RELATIVA em vez de hora no relógio: o fuso aqui era fixo em
-    // São Paulo e mentia uma hora pra conta de Campo Grande (11/09, Dayane —
+    // São Paulo e mentia uma hora pra conta de Campo Grande (11/09 —
     // "feito às 14:36" quando era 13:36 lá). Minuto relativo nunca erra.
     const minutos = Math.max(0, Math.round((Date.now() - new Date(previous.createdAt).getTime()) / 60_000))
     result = {
@@ -477,7 +477,7 @@ export async function generateWithExternalTools(
       // Segurança: nunca deixa um marcador cru vazar pro cliente.
       let text = (res.text ?? '').replace(TOOL_MARKER_RE, '').trim()
 
-      // ⚠️ Wellington (04/09) e Julio (05/09): criar_pedido rodou OK e a geração
+      // ⚠️ Casos de 04/09 e 05/09: criar_pedido rodou OK e a geração
       // final voltou VAZIA — o cliente disse "à vista" e não ouviu nada. Depois
       // de uma escrita bem-sucedida, silêncio não é resposta aceitável: pede
       // uma confirmação curta; se ainda vier vazia, manda uma mínima. O que

@@ -6,26 +6,26 @@ import { wahaProvider } from './waha';
 // not the participant jid — otherwise every message from one author collapses to
 // their constant lid and gets dropped by the inbound dedup after the first.
 function groupMessage(hash: string, participantLid: string) {
-  const from = '556792539584-1481125514@g.us';
+  const from = '556790001234-1480000000@g.us';
   return {
     event: 'message',
     payload: {
       id: `false_${from}_${hash}_${participantLid}@lid`,
       from,
       fromMe: false,
-      body: '@82270249553931 oi',
+      body: '@11110000000001 oi',
       _data: {
         Info: {
           Chat: from,
           Sender: `${participantLid}@lid`,
           IsGroup: true,
-          SenderAlt: '556791875477@s.whatsapp.net',
-          PushName: 'Alex Sales',
+          SenderAlt: '556790005678@s.whatsapp.net',
+          PushName: 'Carla Teste',
         },
         Message: {
           extendedTextMessage: {
-            text: '@82270249553931 oi',
-            contextInfo: { mentionedJID: ['82270249553931@lid'] },
+            text: '@11110000000001 oi',
+            contextInfo: { mentionedJID: ['11110000000001@lid'] },
           },
         },
       },
@@ -35,8 +35,8 @@ function groupMessage(hash: string, participantLid: string) {
 
 describe('waha group message id dedup key', () => {
   it('uses the message HASH, not the trailing participant jid', () => {
-    const a = wahaProvider.parseWebhook(groupMessage('AAAA1111', '201824992784483'));
-    const b = wahaProvider.parseWebhook(groupMessage('BBBB2222', '201824992784483'));
+    const a = wahaProvider.parseWebhook(groupMessage('AAAA1111', '222200000000001'));
+    const b = wahaProvider.parseWebhook(groupMessage('BBBB2222', '222200000000001'));
     // Same author, two different messages → two DIFFERENT dedup keys.
     expect(a.messages[0].externalMessageId).toBe('AAAA1111');
     expect(b.messages[0].externalMessageId).toBe('BBBB2222');

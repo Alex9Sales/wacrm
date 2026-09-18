@@ -1,4 +1,4 @@
--- 16/09 (Família do Gás, Toninho/Flávia): a IA passa a procurar o card ABERTO
+-- 16/09 (Família do Gás, caso de um comprador): a IA passa a procurar o card ABERTO
 -- do mesmo contato no funil antes de criar outro (close-actions.ts,
 -- pickDealToReuse), e o `ingestLead` já fazia essa busca. `deals` não tinha
 -- índice em contact_id.

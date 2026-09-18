@@ -1,5 +1,5 @@
--- 15/09 (GoLink/Vale Ouro): o Gmail devolveu a cobrança de 14/09
--- (taubate@valeouro.com.br — domínio com Null MX, 5.1.10) e a devolução virou
+-- 15/09 (GoLink/Vale Modelo): o Gmail devolveu a cobrança de 14/09
+-- (financeiro@empresa-exemplo.com.br — domínio com Null MX, 5.1.10) e a devolução virou
 -- um contato "Mail Delivery Subsystem" com conversa aberta. A régua ia mandar
 -- de novo pro mesmo endereço em 17/09.
 --

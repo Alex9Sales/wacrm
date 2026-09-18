@@ -353,7 +353,7 @@ export async function sendMessageToConversation(
 
   // For a GROUP, the provider must receive the FULL group jid. contact.phone is
   // the digits only, which loses the hyphen of a legacy `<creator>-<ts>` jid
-  // (e.g. 556792539584-1481125514@g.us) — sending to the reconstructed
+  // (e.g. 556790001234-1480000000@g.us) — sending to the reconstructed
   // hyphen-less id makes WAHA hang and abort. The intact jid lives in
   // monitored_groups.group_jid; look it up by matching digits.
   // O CANAL decide o alvo (lib/channels/target.ts): e-mail → e-mail do contato
@@ -714,7 +714,7 @@ export async function sendMessageToConversation(
     // vezes chega ANTES deste insert e grava a linha primeiro — aí o insert
     // bate no índice único `messages_conv_wamid_uidx` e a gente devolvia 500.
     // Pra atendente isso aparecia como "não foi possível enviar" COM O CLIENTE
-    // JÁ TENDO RECEBIDO (caso Felipe/Isadora 03/09) — o falso negativo mais
+    // JÁ TENDO RECEBIDO (caso CEMA 03/09) — o falso negativo mais
     // caro que existe, porque leva a mandar tudo de novo. Se a linha existe,
     // o envio foi um SUCESSO: seguimos com ela.
     let existing: { id: string } | null = null;

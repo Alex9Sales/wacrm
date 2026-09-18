@@ -1,4 +1,4 @@
-/** "+55 67 99187-5477" a partir de "556791875477" (best-effort BR). */
+/** "+55 67 99000-1234" a partir de "5567990001234" (best-effort BR). */
 export function formatPhone(raw: string): string {
   const d = raw.replace(/\D/g, '')
   if (d.startsWith('55') && (d.length === 12 || d.length === 13)) {

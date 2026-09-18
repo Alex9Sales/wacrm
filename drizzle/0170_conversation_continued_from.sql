@@ -1,4 +1,4 @@
--- 15/09 (Alex, caso Will Santos/GoLink): botão OPCIONAL "Continuar pelo meu
+-- 15/09 (Alex, caso de um cliente da GoLink): botão OPCIONAL "Continuar pelo meu
 -- número". O cliente escreveu pro número do Vitor, a conversa foi transferida
 -- pro João, e tudo que o João respondia saía pelo WhatsApp do Vitor. O botão
 -- abre a conversa com o mesmo cliente no número de quem atende.
