@@ -794,6 +794,61 @@ export const leadAdSources = pgTable("lead_ad_sources", {
 	check("lead_ad_sources_provider_check", sql`provider = ANY (ARRAY['tiktok'::text, 'meta'::text, 'linkedin'::text])`),
 ]);
 
+// ============================================================
+// 🔁 Espelho com CRM externo (RD Station CRM) — migração 0184.
+// A conta usa o RD CRM como base e o FluxiaCRM como "backend": o que muda no
+// card daqui vai pro negócio de lá (fila por GATILHO em deals), e o que o time
+// move lá volta pra cá (webhook). Ver lib/integrations/rdcrm/.
+// ============================================================
+export const crmIntegrations = pgTable("crm_integrations", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	// 'rdstation_crm'
+	provider: text().notNull(),
+	// Token CRIPTOGRAFADO (mesma cripto dos canais). No RD é por USUÁRIO.
+	tokenEncrypted: text("token_encrypted").notNull(),
+	// Segredo da URL do webhook de volta (o RD não assina o webhook).
+	webhookSecret: text("webhook_secret").notNull(),
+	config: jsonb().default({}).notNull(),
+	enabled: boolean().default(true).notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	unique("crm_integrations_account_provider_key").on(table.accountId, table.provider),
+	unique("crm_integrations_webhook_secret_key").on(table.webhookSecret),
+]);
+
+export const crmDealLinks = pgTable("crm_deal_links", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	provider: text().notNull(),
+	dealId: uuid("deal_id").notNull(),
+	externalId: text("external_id").notNull(),
+	// Último estado CONHECIDO do negócio de lá (anti-eco nos dois sentidos).
+	externalStageId: text("external_stage_id"),
+	// 'open' | 'won' | 'lost'
+	externalStatus: text("external_status"),
+	syncedAt: timestamp("synced_at", { withTimezone: true, mode: 'string' }),
+	lastError: text("last_error"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	unique("crm_deal_links_provider_deal_key").on(table.provider, table.dealId),
+	unique("crm_deal_links_provider_external_key").on(table.provider, table.accountId, table.externalId),
+	// FK deal_id → deals(id) ON DELETE CASCADE existe no banco (0184); fica fora
+	// daqui porque `deals` é declarado mais abaixo neste arquivo.
+]);
+
+export const crmSyncOutbox = pgTable("crm_sync_outbox", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	dealId: uuid("deal_id").notNull(),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	processedAt: timestamp("processed_at", { withTimezone: true, mode: 'string' }),
+	attempts: integer().default(0).notNull(),
+	lastError: text("last_error"),
+});
+
 export const conversations = pgTable("conversations", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),

@@ -120,6 +120,14 @@ import('./google-sync-worker')
     console.error('[worker] google-sync failed to start:', err);
   });
 
+// 🔁 Espelho com o RD Station CRM — tick de 20 s: leva pro RD as mudanças de
+// card das contas com integração ligada (fila crm_sync_outbox, por gatilho).
+import('./crm-sync-worker')
+  .then((m) => m.startCrmSyncWorker())
+  .catch((err) => {
+    console.error('[worker] crm-sync failed to start:', err);
+  });
+
 // 📒 Agenda do celular — tick de 6 h: reconfere a agenda dos números que já
 // importaram e aplica a regra de nome (CRM > agenda > perfil do WhatsApp).
 import('./phonebook-sync-worker')
