@@ -44,6 +44,7 @@ import { firstOrNull } from '@/db/helpers'
 import { decrypt, encrypt } from '@/lib/whatsapp/encryption'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { formatMeetingWhen } from '@/lib/ai/schedule-actions'
+import { claimOnce, kvDel } from '@/lib/ai/reply-marker'
 import { rdCrm, rid, type RdContact, type RdCrmClient, type RdDeal } from './client'
 import {
   canonName,
@@ -68,6 +69,11 @@ const LINK_WINDOW_MS = 3 * 86_400_000
 /** Junta mudanças seguidas do mesmo card (IA move + abre card novo). */
 const DEBOUNCE_MS = 20_000
 const MAX_ATTEMPTS = 10
+/** Trava da rodada da fila — ver processCrmSyncOutbox. */
+const TICK_LOCK_KEY = 'crm-sync:tick-lock'
+const TICK_LOCK_TTL_S = 240
+/** Rodada para de pegar card novo depois disso (bem antes da trava vencer). */
+const TICK_BUDGET_MS = 60_000
 
 export interface RdIntegration {
   id: string
@@ -525,8 +531,22 @@ export async function syncDealToRd(accountId: string, dealId: string): Promise<S
  * Processa a fila (worker, a cada 20 s). Um card por vez, na ordem da 1ª
  * mudança — o card que a IA fechou sincroniza ANTES do card novo que ela abriu,
  * senão o novo poderia pegar pra si o negócio que é do fechado.
+ *
+ * Uma rodada por vez (trava no Redis): no deploy o worker velho e o novo rodam
+ * juntos por alguns segundos e os dois pegaram o mesmo card (18/09). Redis
+ * fora do ar segue sem trava, como antes.
  */
 export async function processCrmSyncOutbox(limit = 40): Promise<{ ok: number; failed: number; waiting: number }> {
+  if ((await claimOnce(TICK_LOCK_KEY, TICK_LOCK_TTL_S)) === false) return { ok: 0, failed: 0, waiting: 0 }
+  try {
+    return await drainOutbox(limit)
+  } finally {
+    await kvDel(TICK_LOCK_KEY)
+  }
+}
+
+async function drainOutbox(limit: number): Promise<{ ok: number; failed: number; waiting: number }> {
+  const started = Date.now()
   const rows = await db
     .select()
     .from(crmSyncOutbox)
@@ -546,6 +566,8 @@ export async function processCrmSyncOutbox(limit = 40): Promise<{ ok: number; fa
   let failed = 0
   let waiting = 0
   for (const dealId of order.slice(0, limit)) {
+    // Rodada curta: o resto fica pra próxima (e a trava nunca vence no meio).
+    if (Date.now() - started > TICK_BUDGET_MS) break
     const group = byDeal.get(dealId)!
     const newest = Math.max(...group.map((g) => Date.parse(g.createdAt)))
     if (Date.now() - newest < DEBOUNCE_MS) {

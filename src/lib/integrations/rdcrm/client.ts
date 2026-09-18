@@ -65,6 +65,20 @@ export function rid(x: Ref | null | undefined): string | null {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/**
+ * Texto de ANOTAÇÃO (POST /activities) sem acento. Esse endpoint do RD grava
+ * acento torto ("reuniÃ£o", "â€”") — até com o JSON todo em ASCII (ã) e
+ * com charset=utf-8; nome de negócio e etapa pelo /deals saem certos, e nota
+ * escrita na tela também. Visto ao vivo em 18/09. Sem acento, lê-se sempre.
+ */
+export function rdActivityText(text: string): string {
+  return text
+    .replace(/[‒-―]/g, '-')
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .replace(/[^\t\n\r\x20-\x7e]/g, '')
+}
+
 export function rdCrm(token: string) {
   async function call<T>(
     method: 'GET' | 'POST' | 'PUT' | 'DELETE',
@@ -117,7 +131,9 @@ export function rdCrm(token: string) {
     setContactDeals: (id: string, dealIds: string[]) =>
       call<RdContact>('PUT', `/contacts/${encodeURIComponent(id)}`, { body: { contact: { deal_ids: dealIds } } }),
     createActivity: (dealId: string, userId: string, text: string) =>
-      call<Ref>('POST', '/activities', { body: { activity: { deal_id: dealId, user_id: userId, text } } }),
+      call<Ref>('POST', '/activities', {
+        body: { activity: { deal_id: dealId, user_id: userId, text: rdActivityText(text) } },
+      }),
     listWebhooks: async () =>
       (await call<{ webhooks?: { uuid: string; event_type: string; url: string; status?: string }[] }>('GET', '/webhooks'))
         .webhooks ?? [],

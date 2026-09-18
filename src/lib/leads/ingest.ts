@@ -140,6 +140,8 @@ export async function ingestLead(
   let dealId: string | null = null
   /** true = reaproveitamos o card aberto do contato em vez de criar outro. */
   let dealReused = false
+  /** true = o lead já foi ganho neste funil e está num card aberto de outro. */
+  let leadAdvanced = false
   // Responsável: explícito, senão o rodízio (distribuição automática). Null =
   // rodízio desligado / sem membros → cai sem dono, como antes.
   let assignee: string | null = null
@@ -175,6 +177,19 @@ export async function ingestLead(
       if (reused) {
         dealId = reused.id
         dealReused = true
+      } else if (!input.allowDuplicateDeal) {
+        // 🧭 LEAD QUE JÁ ANDOU: ganho neste funil há pouco e com card ABERTO em
+        // outro (Zelo 18/09: a Zélia marcou a reunião, o card do pré-vendas foi
+        // ganho e abriu um em "2. Comercial | Franquia"; uma conversão repetida
+        // abriu card NOVO no pré-vendas e mandou a boas-vindas de novo, por
+        // outro número). A submissão vira nota no card aberto — sem card,
+        // tarefa ou abertura novos.
+        const advanced = await findAdvancedDeal(accountId, contactId, pipelineId)
+        if (advanced) {
+          dealId = advanced
+          dealReused = true
+          leadAdvanced = true
+        }
       }
       assignee =
         input.assignedTo ?? (await pickAssignee(accountId).catch(() => null))
@@ -217,9 +232,11 @@ export async function ingestLead(
               actorUserId: auditUserId,
               type: 'note',
               data: {
-                text: dealReused
-                  ? `📝 ${originLabel} — NOVA submissão do mesmo lead (anexada a este card):\n${historyText}`
-                  : `📝 ${originLabel} — dados do lead:\n${historyText}`,
+                text: leadAdvanced
+                  ? `📝 ${originLabel} — NOVA submissão de um lead que já passou do funil de entrada (anexada a este card, sem abrir outro nem reenviar a abertura):\n${historyText}`
+                  : dealReused
+                    ? `📝 ${originLabel} — NOVA submissão do mesmo lead (anexada a este card):\n${historyText}`
+                    : `📝 ${originLabel} — dados do lead:\n${historyText}`,
               },
             })
           } catch (err) {
@@ -276,36 +293,39 @@ export async function ingestLead(
   // formulário + "Negociação criada no RD CRM") e um lead ficou com 3 tarefas
   // "Falar com…" iguais (Zelo 18/09).
   let taskId: string | null = null
-  try {
-    const openTask =
-      dealReused && dealId
-        ? firstOrNull(
-            await db
-              .select({ id: tasks.id })
-              .from(tasks)
-              .where(and(eq(tasks.dealId, dealId), eq(tasks.status, 'open')))
-              .limit(1),
-          )
-        : null
-    const inserted = openTask ? openTask : firstOrNull(
-      await db
-        .insert(tasks)
-        .values({
-          accountId,
-          title: `Falar com ${displayName} — ${taskSuffix}`,
-          description: notes,
-          type: 'follow_up',
-          status: 'open',
-          contactId,
-          dealId,
-          assignedTo: assignee,
-          assigneeIds: assignee ? [assignee] : [],
-        })
-        .returning({ id: tasks.id }),
-    )
-    taskId = inserted?.id ?? null
-  } catch (err) {
-    console.error('[ingestLead] task create failed:', err)
+  // Lead que já andou está com o time: a nota no card basta.
+  if (!leadAdvanced) {
+    try {
+      const openTask =
+        dealReused && dealId
+          ? firstOrNull(
+              await db
+                .select({ id: tasks.id })
+                .from(tasks)
+                .where(and(eq(tasks.dealId, dealId), eq(tasks.status, 'open')))
+                .limit(1),
+            )
+          : null
+      const inserted = openTask ? openTask : firstOrNull(
+        await db
+          .insert(tasks)
+          .values({
+            accountId,
+            title: `Falar com ${displayName} — ${taskSuffix}`,
+            description: notes,
+            type: 'follow_up',
+            status: 'open',
+            contactId,
+            dealId,
+            assignedTo: assignee,
+            assigneeIds: assignee ? [assignee] : [],
+          })
+          .returning({ id: tasks.id }),
+      )
+      taskId = inserted?.id ?? null
+    } catch (err) {
+      console.error('[ingestLead] task create failed:', err)
+    }
   }
 
   // 4) Etiquetas (best-effort) — união com as existentes, nunca apaga.
@@ -331,8 +351,59 @@ export async function ingestLead(
   let whatsappSent = false
   const introText = input.introText?.trim()
   const introTemplate = input.introTemplate
-  if (introText || introTemplate) {
+  if ((introText || introTemplate) && leadAdvanced) {
+    console.log(`[ingestLead] abertura pulada: lead já passou do funil de entrada (card ${dealId})`)
+  } else if (introText || introTemplate) {
     try {
+      // Conversou com a conta nas últimas 12 h, em QUALQUER número? Não recebe
+      // abertura — muito menos de outro número (Zelo 18/09: o lead falou com a
+      // Zélia pelo número de recados e ganhou a boas-vindas de novo pelo
+      // oficial). A checagem de baixo só olha a conversa do número da abertura;
+      // esta vem antes pra nem abrir conversa vazia no outro número.
+      const talkedRecently = firstOrNull(
+        await db
+          .select({ conversationId: messages.conversationId })
+          .from(messages)
+          .innerJoin(conversations, eq(conversations.id, messages.conversationId))
+          .where(
+            and(
+              eq(conversations.accountId, accountId),
+              eq(conversations.contactId, contactId),
+              eq(messages.isInternal, false),
+              gt(messages.createdAt, sql`now() - interval '12 hours'`),
+            ),
+          )
+          .orderBy(desc(messages.createdAt))
+          .limit(1),
+      )
+      if (talkedRecently) {
+        // Card NOVO vai pra conversa em que o lead está falando — a IA acha o
+        // card pela conversa — se ela ainda não tem outro card aberto.
+        if (dealId && !dealReused) {
+          const taken = firstOrNull(
+            await db
+              .select({ id: deals.id })
+              .from(deals)
+              .where(
+                and(
+                  eq(deals.accountId, accountId),
+                  eq(deals.conversationId, talkedRecently.conversationId),
+                  eq(deals.status, 'open'),
+                  ne(deals.id, dealId),
+                ),
+              )
+              .limit(1),
+          )
+          if (!taken) {
+            await db
+              .update(deals)
+              .set({ conversationId: talkedRecently.conversationId })
+              .where(and(eq(deals.id, dealId), eq(deals.accountId, accountId)))
+          }
+        }
+        console.log(`[ingestLead] abertura pulada: contato ${contactId} conversou com a conta nas últimas 12 h`)
+        return { contactId, contactCreated, dealId, taskId, tagsApplied, whatsappSent, dealReused }
+      }
       const resolved = await resolveConversationByPhone(
         accountId,
         phone,
@@ -418,4 +489,47 @@ export async function ingestLead(
   }
 
   return { contactId, contactCreated, dealId, taskId, tagsApplied, whatsappSent, dealReused }
+}
+
+/**
+ * Card ABERTO em outro funil de um lead GANHO neste funil nos últimos 30 dias
+ * — o lead já andou (ex.: pré-vendas → comercial). null = não andou.
+ */
+async function findAdvancedDeal(
+  accountId: string,
+  contactId: string,
+  pipelineId: string,
+): Promise<string | null> {
+  const wonHere = firstOrNull(
+    await db
+      .select({ id: deals.id })
+      .from(deals)
+      .where(
+        and(
+          eq(deals.accountId, accountId),
+          eq(deals.contactId, contactId),
+          eq(deals.pipelineId, pipelineId),
+          eq(deals.status, 'won'),
+          gt(deals.updatedAt, sql`now() - interval '30 days'`),
+        ),
+      )
+      .limit(1),
+  )
+  if (!wonHere) return null
+  const openElsewhere = firstOrNull(
+    await db
+      .select({ id: deals.id })
+      .from(deals)
+      .where(
+        and(
+          eq(deals.accountId, accountId),
+          eq(deals.contactId, contactId),
+          ne(deals.pipelineId, pipelineId),
+          eq(deals.status, 'open'),
+        ),
+      )
+      .orderBy(desc(deals.createdAt))
+      .limit(1),
+  )
+  return openElsewhere?.id ?? null
 }
