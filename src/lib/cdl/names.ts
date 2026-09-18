@@ -1,7 +1,7 @@
 // ============================================================
 // 🙋 Saudação por nome — só chama de "Oi Fulano" quando o primeiro token
-// PARECE nome de pessoa. Contatos salvos como frase/negócio ("Meus Filhos
-// Minha Vida 💙🩷", "Casa da Sogra", "Loja do Zé") não viram "Oi Meus!".
+// PARECE nome de pessoa. Contatos salvos como frase/negócio ("Meus Netinhos
+// Queridos 🌻🩵", "Casa da Praia", "Loja do Zé") não viram "Oi Meus!".
 // Pura (sem server-only) — usada no rascunho da IA (worker) e na UI.
 // ============================================================
 

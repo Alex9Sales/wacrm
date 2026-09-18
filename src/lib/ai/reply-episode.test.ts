@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { EPISODE_GAP_HOURS, isNewEpisode } from './reply-episode'
 
-const agora = new Date('2026-09-05T08:26:41-03:00')
+const agora = new Date('2026-09-05T08:30:00-03:00')
 const horasAtras = (h: number) => new Date(agora.getTime() - h * 3_600_000)
 
 describe('isNewEpisode — o teto vale por episódio, não por vida da conversa', () => {
@@ -11,7 +11,7 @@ describe('isNewEpisode — o teto vale por episódio, não por vida da conversa'
   })
 
   it('IA falou há pouco = mesmo episódio, contador continua', () => {
-    // Caso Poliana: a IA respondeu às 08:26:34 e o "Sim" chegou 08:26:41.
+    // Caso Paula Exemplo: o "Sim" chegou uns 7 s depois da resposta da IA.
     expect(isNewEpisode(horasAtras(0.002), agora)).toBe(false)
   })
 

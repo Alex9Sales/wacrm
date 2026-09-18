@@ -94,8 +94,8 @@ describe('validateStageBroadcastBasics', () => {
 
 describe('hasSendableEmail', () => {
   it('mesmo teste do motor', () => {
-    expect(hasSendableEmail('andressa@clinica.com.br')).toBe(true)
-    expect(hasSendableEmail(' andressa@clinica ')).toBe(false)
+    expect(hasSendableEmail('carla@clinica.com.br')).toBe(true)
+    expect(hasSendableEmail(' carla@clinica ')).toBe(false)
     expect(hasSendableEmail(null)).toBe(false)
   })
 })

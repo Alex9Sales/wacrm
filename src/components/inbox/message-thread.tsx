@@ -490,7 +490,7 @@ export function MessageThread({
   useEffect(() => {
     setAiPaused(!!conversation?.ai_autoreply_disabled);
   }, [conversation?.id, conversation?.ai_autoreply_disabled]);
-  // ⏳ Estado honesto (15/09, GoLink — Dra. Andressa): IA ligada com responsável
+  // ⏳ Estado honesto (15/09, GoLink — Dra. Helena Teste): IA ligada com responsável
   // humano NÃO responde. Recalcula aqui com o toggle otimista e a atribuição
   // trocada na hora (o ai_state do servidor só muda ao recarregar a conversa).
   const aiUiState = aiState({

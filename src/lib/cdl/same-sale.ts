@@ -5,7 +5,7 @@
 // grava às 12:00 UTC), ERP ('erp', hora exata) e Ganho no funil ('deal', a
 // hora em que alguém clicou). 06/09: Família do Gás com 4.032 pares
 // importação×ERP e 178 negócio×ERP. A dedupe das métricas comparava a DATA em
-// UTC — venda das 21h local cai no dia seguinte e contava duas vezes (Miriam).
+// UTC — venda das 21h local cai no dia seguinte e contava duas vezes (Marta Teste).
 //
 // Regra: mesmo contato + mesmo valor + até 36h de distância = mesma venda.
 // 36h cobre "só a data" (meio-dia UTC) contra qualquer hora do mesmo dia local

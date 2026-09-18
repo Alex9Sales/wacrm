@@ -33,7 +33,7 @@ export async function recomputeMetricsForContacts(
       : sql``
 
   // Data LOCAL da conta: a planilha grava só a data (12:00 UTC) e o ERP a hora
-  // exata — venda das 21h local caía no dia seguinte em UTC e contava 2x (Miriam 06/09).
+  // exata — venda das 21h local caía no dia seguinte em UTC e contava 2x (Marta Teste 06/09).
   const tz = (await getAccountSettings(accountId)).businessTimezone || 'America/Sao_Paulo'
 
   await db.execute(sql`
@@ -50,7 +50,7 @@ export async function recomputeMetricsForContacts(
     ),
     tx AS (
       -- ⚠️ A MESMA venda pode chegar por 3 caminhos (planilha 'import', ERP 'erp' e
-      -- Ganho no funil 'deal'). Caso Fátima 03/09: 1 botijão em 29/08 virou "3 compras,
+      -- Ganho no funil 'deal'). Caso Fernanda Exemplo 03/09: 1 botijão em 29/08 virou "3 compras,
       -- média 0,22 dia" e disparou reativação pra quem comprou há 4 dias. Regra:
       -- mesmo contato + mesmo DIA LOCAL + mesmo valor = mesma venda (fica 1, priorizando
       -- erp > deal > import). Desde 06/09 as repetidas já chegam 'merged' (merge.ts);

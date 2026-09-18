@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { MAX_STALE_DROPS, staleReplyDecision, turnIsDroppable } from './stale-reply'
 
 const semEfeito = { wroteSomething: false, hasOrder: false, handoff: false, consequentialDirective: false }
-// Leitura do histórico da resposta ao "Cartão" (Adrieli, 15/09, horário de Campo Grande).
-const leitura = new Date('2026-09-15T11:01:14.000Z')
+// Leitura do histórico da resposta ao "Cartão" (caso Bruna Teste, 15/09; horários arredondados).
+const leitura = new Date('2026-09-15T11:00:00.000Z')
 
 describe('turnIsDroppable — só descarta o que não deixou rastro', () => {
   it('turno só de texto pode ser descartado', () => {
@@ -20,11 +20,11 @@ describe('turnIsDroppable — só descarta o que não deixou rastro', () => {
 })
 
 describe('staleReplyDecision', () => {
-  it('Adrieli: "quantos minutos?" chegou 6 s depois da leitura → descarta e regenera', () => {
+  it('caso Bruna Teste: "vai demorar muito?" chegou 6 s depois da leitura → descarta e regenera', () => {
     expect(
       staleReplyDecision({
         snapshotAt: leitura,
-        newest: { senderType: 'customer', createdAt: '2026-09-15T11:01:20.000Z' },
+        newest: { senderType: 'customer', createdAt: '2026-09-15T11:00:06.000Z' },
         droppable: true,
         dropsIncludingThis: 1,
       }),
@@ -36,7 +36,7 @@ describe('staleReplyDecision', () => {
     expect(
       staleReplyDecision({
         snapshotAt: leitura,
-        newest: { senderType: 'customer', createdAt: '2026-09-15T11:01:05.000Z' },
+        newest: { senderType: 'customer', createdAt: '2026-09-15T10:59:50.000Z' },
         droppable: true,
         dropsIncludingThis: 1,
       }),
@@ -47,7 +47,7 @@ describe('staleReplyDecision', () => {
     expect(
       staleReplyDecision({
         snapshotAt: leitura,
-        newest: { senderType: 'customer', createdAt: '2026-09-15T11:01:20.000Z' },
+        newest: { senderType: 'customer', createdAt: '2026-09-15T11:00:06.000Z' },
         droppable: false,
         dropsIncludingThis: 1,
       }),
@@ -58,7 +58,7 @@ describe('staleReplyDecision', () => {
     expect(
       staleReplyDecision({
         snapshotAt: leitura,
-        newest: { senderType: 'agent', createdAt: '2026-09-15T11:01:20.000Z' },
+        newest: { senderType: 'agent', createdAt: '2026-09-15T11:00:06.000Z' },
         droppable: true,
       }),
     ).toBe('drop_quiet')
@@ -67,7 +67,7 @@ describe('staleReplyDecision', () => {
   it(`freio: até ${MAX_STALE_DROPS} descartes seguidos; depois manda`, () => {
     const base = {
       snapshotAt: leitura,
-      newest: { senderType: 'customer', createdAt: '2026-09-15T11:01:20.000Z' },
+      newest: { senderType: 'customer', createdAt: '2026-09-15T11:00:06.000Z' },
       droppable: true,
     }
     expect(staleReplyDecision({ ...base, dropsIncludingThis: MAX_STALE_DROPS })).toBe('drop_regenerate')
@@ -78,7 +78,7 @@ describe('staleReplyDecision', () => {
     expect(
       staleReplyDecision({
         snapshotAt: leitura,
-        newest: { senderType: 'customer', createdAt: '2026-09-15T11:01:20.000Z' },
+        newest: { senderType: 'customer', createdAt: '2026-09-15T11:00:06.000Z' },
         droppable: true,
         dropsIncludingThis: undefined,
       }),

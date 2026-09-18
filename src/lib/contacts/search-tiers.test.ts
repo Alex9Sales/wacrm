@@ -3,8 +3,8 @@ import { describe, expect, it } from 'vitest'
 import { nameSearchTiers } from './search-tiers'
 
 describe('busca por nome em camadas', () => {
-  it('"Danyela Souza": frase inteira → as duas palavras → só "Danyela"', () => {
-    expect(nameSearchTiers('Danyela Souza')).toEqual([['Danyela Souza'], ['Danyela', 'Souza'], ['Danyela']])
+  it('"Carla Teste": frase inteira → as duas palavras → só "Carla"', () => {
+    expect(nameSearchTiers('Carla Teste')).toEqual([['Carla Teste'], ['Carla', 'Teste'], ['Carla']])
   })
   it('um nome só tem uma camada', () => {
     expect(nameSearchTiers('João')).toEqual([['João']])

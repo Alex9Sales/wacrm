@@ -4,13 +4,13 @@ import { detectCopyCode } from './copy-code';
 
 describe('detectCopyCode — Pix copia e cola', () => {
   const pix =
-    '00020101021226960014br.gov.bcb.pix2574api.developer.btgpactual.com/pc/p/v2/cobv/2235d26ddab0472ca6cdd6ce3ea982fe5204000053039865802BR5925ISAAC LOGIA SERVICO6009SAO PAULO62070503***6304F2D6';
+    '00020101021226810014br.gov.bcb.pix2559pix.example.com/qr/v2/cobv/0123456789abcdef0123456789abcdef5204000053039865802BR5919OFICINA MODELO LTDA6009SAO PAULO62070503***63042003';
 
   it('detects a BR Code and keeps it EXACTLY (spaces in name/city are part of the CRC)', () => {
     const r = detectCopyCode(pix);
     expect(r?.label).toBe('Pix copia e cola');
     expect(r?.code).toBe(pix);
-    expect(r?.code).toContain('ISAAC LOGIA SERVICO');
+    expect(r?.code).toContain('OFICINA MODELO LTDA');
   });
 
   it('a line break inserted by the chat is removed, nothing else', () => {
@@ -48,7 +48,7 @@ describe('detectCopyCode — must NOT fire on normal messages', () => {
   });
 
   it('ignores a short number like a phone or price', () => {
-    expect(detectCopyCode('67991646764')).toBeNull();
+    expect(detectCopyCode('67990001234')).toBeNull();
     expect(detectCopyCode('125,00')).toBeNull();
   });
 

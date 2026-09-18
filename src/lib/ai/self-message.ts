@@ -1,10 +1,10 @@
 // ============================================================
 // Eco interno — "essa mensagem do cliente foi o PRÓPRIO CRM que mandou?"
 //
-// Caso 08/09 (conta Fluxia): o Sócio IA sai do canal WAHA "Alex Sales" (o
+// Caso 08/09 (conta Fluxia): o Sócio IA sai do canal WAHA "Alex" (o
 // celular do Alex) pro número oficial da Fluxia — que é OUTRO canal da mesma
 // conta, com IA ligada. O resumo entra no canal oficial como mensagem
-// recebida de "Alex Sanabria" e o agente de vendas responde ao resumo como
+// recebida de "Alex" e o agente de vendas responde ao resumo como
 // se fosse um lead ("A Fluxia centraliza o atendimento…"). O mesmo desenho
 // vira loop de duas IAs conversando sozinhas entre contas: resposta da IA A
 // chega no canal da IA B, que responde, que chega na A…

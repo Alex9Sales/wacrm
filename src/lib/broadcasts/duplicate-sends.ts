@@ -2,7 +2,7 @@
 // Quem JÁ recebeu esta mesma mensagem hoje — pra não mandar 2×.
 //
 // 15/09 (GoLink): o Vitor refez o "dia do cliente" 3 vezes (outro número,
-// imagem subida de novo) e Flash Baterias, Piso Decor e Vidro e Cia
+// imagem subida de novo) e Flash Baterias, Pisos Modelo e Vidro e Cia
 // receberam a mesma imagem 2×; outros já tinham recebido à mão.
 //
 // Duas fontes na criação do disparo, uma consulta cada (inArray nos

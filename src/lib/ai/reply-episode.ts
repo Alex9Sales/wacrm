@@ -1,10 +1,10 @@
 // ============================================================
 // 🔁 Episódio de conversa — quando o teto de respostas da IA deve zerar.
 //
-// Caso Poliana (Família do Gás, 05/09 08:26): cliente recorrente, conversa
-// aberta desde 26/08, 22 respostas da IA ao longo de 7 dias. O teto de 10
-// era POR VIDA DA CONVERSA — e conversa de WhatsApp com cliente de gás nunca
-// fecha. Resultado: a cada ~3 pedidos a IA calava no meio de uma venda
+// Caso Paula Exemplo (Família do Gás, 05/09, de manhã): cliente recorrente,
+// conversa aberta desde 26/08, 22 respostas da IA ao longo de 7 dias. O teto
+// de 10 era POR VIDA DA CONVERSA — e conversa de WhatsApp com cliente de gás
+// nunca fecha. Resultado: a cada ~3 pedidos a IA calava no meio de uma venda
 // ("Sim" pro Pix de R$ 113 e ninguém respondeu).
 //
 // O teto existe pra segurar loop (IA respondendo sem parar). Um silêncio de

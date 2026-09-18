@@ -58,8 +58,9 @@ export interface AiReplyJob {
    * uma geração já estava rodando, então ela com certeza NÃO estava no
    * histórico que a resposta em voo leu. Sem esta marca, o anti-eco do
    * dispatch ("última mensagem já não é do cliente") engolia a mensagem pra
-   * sempre — caso Debora/Rafaela 01/09: mandaram endereço + pagamento e a
-   * Maria seguiu pedindo o que já tinha sido dito, e depois emudeceu.
+   * sempre — caso Sônia Teste/Tânia Exemplo 01/09: mandaram endereço +
+   * pagamento e a Maria seguiu pedindo o que já tinha sido dito, e depois
+   * emudeceu.
    */
   raceChase?: boolean;
 }
@@ -158,7 +159,7 @@ export async function enqueueAiReplyDebounced(
       const state = await existing.getState().catch(() => 'unknown');
       if (state === 'active') {
         // ⚠️ Job RODANDO: a geração já leu o histórico SEM esta mensagem
-        // (corrida de segundos — caso Cristina 31/08). O add normal seria
+        // (corrida de segundos — caso Cláudia Teste 31/08). O add normal seria
         // IGNORADO pelo BullMQ (jobId duplicado de job vivo) e a mensagem
         // ficava sem resposta. Agenda uma RECHECAGEM marcada com `raceChase`.
         //

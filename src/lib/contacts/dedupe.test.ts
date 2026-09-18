@@ -103,7 +103,7 @@ describe("isExactMatch", () => {
 
   it("is false for a trunk-variant (fuzzy) match", () => {
     // last-8 match but not the same full number
-    expect(isExactMatch({ id: "1", phone: "37063949836" }, "370063949836")).toBe(
+    expect(isExactMatch({ id: "1", phone: "37061234567" }, "370061234567")).toBe(
       false,
     );
   });
@@ -147,8 +147,8 @@ describe("dedupeByPhone", () => {
 
 describe("findExistingContact", () => {
   it("returns a trunk-variant match via phonesMatch", async () => {
-    state.rows = [{ id: "c1", phone: "37063949836" }];
-    const hit = await findExistingContact("acct", "+370 063 949 836");
+    state.rows = [{ id: "c1", phone: "37061234567" }];
+    const hit = await findExistingContact("acct", "+370 061 234 567");
     expect(hit?.id).toBe("c1");
   });
 

@@ -2,7 +2,7 @@
 // Busca de contato por nome OU telefone, no servidor (sem sessão).
 // Usada pelo comando do dono ("cria uma cobrança pro Fulano"). Devolve poucos
 // e deixa a ambiguidade visível — escolher entre dois Joãos é decisão de gente.
-// Nome em camadas (search-tiers.ts): "Danyela Souza" acha o contato "Danyela".
+// Nome em camadas (search-tiers.ts): "Carla Teste" acha o contato "Carla".
 // Sem 'server-only' — o worker alcança.
 // ============================================================
 

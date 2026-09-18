@@ -374,7 +374,7 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
                 </div>
               </div>
 
-              {/* 🔁 Anti-duplicidade. Nasceu do pedido triplicado do Wellington
+              {/* 🔁 Anti-duplicidade. Nasceu do pedido triplicado do Paulo Exemplo
                   (04/09): o cliente trocou a forma de pagamento e depois mandou
                   o comprovante, e a IA criou o pedido nas três vezes. */}
               {form.risk === 'write' && (

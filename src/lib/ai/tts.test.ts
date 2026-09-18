@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { normalizePtBrForTts } from './tts'
 
 // 15/09 (Alex, Família do Gás): no áudio de um pedido a voz enrolou o número da
-// rua ("2280") e a hora ("17h"). Só moeda e sequências de 7+ dígitos eram
+// rua e a hora ("17h"). Só moeda e sequências de 7+ dígitos eram
 // tratadas — e a regra de soletrar ainda destruía datas.
 // Identificador (CPF, CNPJ, Pix, telefone, CEP) = soletrado, porque quem ouve
 // anota; número comum (endereço, quantidade) = por extenso, como se fala.
@@ -11,11 +11,11 @@ import { normalizePtBrForTts } from './tts'
 describe('normalizePtBrForTts — o caso que gerou a correção', () => {
   it('endereço e hora saem falados, não enrolados', () => {
     const out = normalizePtBrForTts(
-      'Fechou, Paulo! Já deixei separado um Ultragaz P-13 por R$ 125,00, para entregar na Rua Exemplo, 2280. Você pode fazer o Pix às 17h, tranquilo 😊',
+      'Fechou, Paulo! Já deixei separado um Ultragaz P-13 por R$ 125,00, para entregar na Rua Exemplo, 123. Você pode fazer o Pix às 17h, tranquilo 😊',
     )
     expect(out).toContain('pê treze')
     expect(out).toContain('cento e vinte e cinco reais')
-    expect(out).toContain('Exemplo, dois mil duzentos e oitenta')
+    expect(out).toContain('Exemplo, cento e vinte e três')
     expect(out).toContain('às dezessete horas')
     expect(out).not.toMatch(/\d/)
     expect(out).not.toContain('😊')
@@ -79,8 +79,8 @@ describe('normalizePtBrForTts — números do dia a dia do gás', () => {
   })
 
   it('número de casa, apartamento e nome de rua com número', () => {
-    const out = normalizePtBrForTts('Rua 24 de Outubro, 1573, casa 76, apto 11')
-    expect(out).toBe('Rua vinte e quatro de Outubro, mil quinhentos e setenta e três, casa setenta e seis, apto onze')
+    const out = normalizePtBrForTts('Rua 21 de Exemplo, 1234, casa 45, apto 12')
+    expect(out).toBe('Rua vinte e um de Exemplo, mil duzentos e trinta e quatro, casa quarenta e cinco, apto doze')
   })
 
   it('não mexe em código colado a letra ou barra', () => {

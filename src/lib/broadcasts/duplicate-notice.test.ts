@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { allDuplicatesError, duplicateSkipNotice } from './duplicate-notice'
 
-// 15/09 (GoLink): mesma imagem 2× pra Flash Baterias, Piso Decor e Vidro e Cia.
+// 15/09 (GoLink): mesma imagem 2× pra Flash Baterias, Pisos Modelo e Vidro e Cia.
 describe('duplicateSkipNotice', () => {
   it('ninguém pulado: sem aviso', () => {
     expect(duplicateSkipNotice([])).toBeNull()
@@ -10,15 +10,15 @@ describe('duplicateSkipNotice', () => {
 
   it('lista os nomes', () => {
     expect(
-      duplicateSkipNotice([{ name: 'Flash Baterias' }, { name: 'Piso Decor' }, { name: 'Vidro e Cia' }]),
+      duplicateSkipNotice([{ name: 'Flash Baterias' }, { name: 'Pisos Modelo' }, { name: 'Vidro e Cia' }]),
     ).toBe(
-      '3 contatos já tinham recebido esta mensagem hoje e ficaram de fora: Flash Baterias, Piso Decor, Vidro e Cia.',
+      '3 contatos já tinham recebido esta mensagem hoje e ficaram de fora: Flash Baterias, Pisos Modelo, Vidro e Cia.',
     )
   })
 
   it('singular', () => {
-    expect(duplicateSkipNotice([{ name: 'Dra. Andressa' }])).toBe(
-      '1 contato já tinha recebido esta mensagem hoje e ficou de fora: Dra. Andressa.',
+    expect(duplicateSkipNotice([{ name: 'Dra. Carla' }])).toBe(
+      '1 contato já tinha recebido esta mensagem hoje e ficou de fora: Dra. Carla.',
     )
   })
 
@@ -51,9 +51,9 @@ describe('duplicateSkipNotice — por motivo', () => {
     expect(
       duplicateSkipNotice([
         { name: 'Flash Baterias', reason: 'same_text' },
-        { name: 'Piso Decor', reason: 'same_text' },
+        { name: 'Pisos Modelo', reason: 'same_text' },
       ]),
-    ).toBe('2 contatos já tinham recebido o mesmo texto/legenda hoje e ficaram de fora: Flash Baterias, Piso Decor.')
+    ).toBe('2 contatos já tinham recebido o mesmo texto/legenda hoje e ficaram de fora: Flash Baterias, Pisos Modelo.')
   })
 
   it('mesmos arquivos', () => {

@@ -25,7 +25,7 @@ const promo: TemplateShape & { footer_text?: string; header_media_url?: string }
   footer_text: 'GoLink',
 }
 
-const andressa = { name: 'Andressa Lima', phone: '5567999990001', email: '', company: 'Clínica Sorriso' }
+const carla = { name: 'Carla Teste', phone: '5567999990001', email: '', company: 'Clínica Sorriso' }
 
 describe('templateNeeds', () => {
   it('corpo, cabeçalho de mídia e só o botão de link com {{1}}', () => {
@@ -51,15 +51,15 @@ describe('templateNeeds', () => {
 
 describe('resolveTemplateVar', () => {
   it('campo do contato, com "Se faltar" quando vazio', () => {
-    expect(resolveTemplateVar({ source: 'first_name', value: 'cliente' }, andressa)).toBe('Andressa')
-    expect(resolveTemplateVar({ source: 'email', value: 'sem e-mail' }, andressa)).toBe('sem e-mail')
-    expect(resolveTemplateVar({ source: 'email' }, andressa)).toBe('')
-    expect(resolveTemplateVar({ source: 'company' }, andressa)).toBe('Clínica Sorriso')
+    expect(resolveTemplateVar({ source: 'first_name', value: 'cliente' }, carla)).toBe('Carla')
+    expect(resolveTemplateVar({ source: 'email', value: 'sem e-mail' }, carla)).toBe('sem e-mail')
+    expect(resolveTemplateVar({ source: 'email' }, carla)).toBe('')
+    expect(resolveTemplateVar({ source: 'company' }, carla)).toBe('Clínica Sorriso')
   })
 
   it('texto fixo', () => {
-    expect(resolveTemplateVar({ source: 'static', value: ' GoLink ' }, andressa)).toBe('GoLink')
-    expect(resolveTemplateVar(undefined, andressa)).toBe('')
+    expect(resolveTemplateVar({ source: 'static', value: ' GoLink ' }, carla)).toBe('GoLink')
+    expect(resolveTemplateVar(undefined, carla)).toBe('')
   })
 })
 
@@ -107,8 +107,8 @@ describe('buildTemplateRecipientSend', () => {
   }
 
   it('params do corpo + mídia do cabeçalho + botão; aponta o que ficou vazio', () => {
-    expect(buildTemplateRecipientSend(needs, mapping, andressa)).toEqual({
-      params: ['Andressa', ''],
+    expect(buildTemplateRecipientSend(needs, mapping, carla)).toEqual({
+      params: ['Carla', ''],
       messageParams: {
         headerMediaUrl: 'https://crm.exemplo.com/api/files/media/nova.jpg',
         buttonParams: { 1: 'setembro' },
@@ -118,7 +118,7 @@ describe('buildTemplateRecipientSend', () => {
   })
 
   it('template sem variável: nada de messageParams', () => {
-    expect(buildTemplateRecipientSend(templateNeeds({ body_text: 'Oi' }), { variables: {} }, andressa)).toEqual({
+    expect(buildTemplateRecipientSend(templateNeeds({ body_text: 'Oi' }), { variables: {} }, carla)).toEqual({
       params: [],
       messageParams: undefined,
       missing: [],
@@ -153,9 +153,9 @@ describe('missingValuesError', () => {
 describe('previewTemplate', () => {
   it('troca o que tem valor e deixa {{n}} no que falta', () => {
     const mapping: TemplateSendMapping = { variables: { '1': { source: 'first_name', value: 'cliente' } } }
-    expect(previewTemplate(promo, mapping, andressa)).toEqual({
+    expect(previewTemplate(promo, mapping, carla)).toEqual({
       header: null,
-      body: 'Oi Andressa, a {{2}} preparou o dia do cliente pra você!',
+      body: 'Oi Carla, a {{2}} preparou o dia do cliente pra você!',
       footer: 'GoLink',
     })
     expect(previewTemplate(promo, mapping, { name: '' }).body).toMatch(/^Oi cliente,/)

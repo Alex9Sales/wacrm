@@ -65,7 +65,7 @@ describe('decideIncidentAlert', () => {
 
   it('texto: título se basta e manda trocar em Canais', () => {
     const health = { imap: { verdict: 'auth_failed' as const, error: 'x', strikes: 1, first_fail_at: iso(0), last_at: iso(0) } }
-    const t = incidentAlertText({ channelName: 'GoLinkAsaas', address: 'golink@gmail.com', problem: gmailProblem(health, NOW)!, health }, NOW)
+    const t = incidentAlertText({ channelName: 'GoLinkAsaas', address: 'cobranca.exemplo@gmail.com', problem: gmailProblem(health, NOW)!, health }, NOW)
     expect(t.title).toContain('senha de app recusada')
     expect(t.body).toContain('Configurações → Canais')
   })

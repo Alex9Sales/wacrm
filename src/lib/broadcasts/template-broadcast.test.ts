@@ -73,7 +73,7 @@ import { enqueueTemplateBroadcast, findRecentTemplateRecipients } from './templa
 
 const contactsRows = [
   { id: 'c1', name: 'Flash Baterias', phone: '5567999990001', email: null, company: null },
-  { id: 'c2', name: 'Piso Decor', phone: '5567999990002', email: null, company: null },
+  { id: 'c2', name: 'Pisos Modelo', phone: '5567999990002', email: null, company: null },
   // sem nome: {{1}} fica vazio (sem "Se faltar") — barraria o disparo
   { id: 'c3', name: null, phone: '5567999990003', email: null, company: null },
 ]
@@ -93,7 +93,7 @@ const sentRow = (contactId: string, params: string[], extra: Record<string, unkn
   contactId,
   name: null,
   status: 'delivered',
-  sentAt: '2026-09-15 12:50:04+00',
+  sentAt: '2026-09-15 12:55:00+00',
   queuedAt: '2026-09-15 12:50:00+00',
   params,
   messageParams: { headerMediaUrl: 'https://crm/api/files/media/upload-antigo.jpg' },
@@ -117,7 +117,7 @@ describe('enqueueTemplateBroadcast — envios repetidos', () => {
         // mesmo template, mesmo {{1}}, arquivo do cabeçalho subido de novo → repetido
         sentRow('c1', ['Flash Baterias']),
         // mesmo template, {{1}} diferente → outra mensagem
-        sentRow('c2', ['Piso Decor Ltda']),
+        sentRow('c2', ['Pisos Modelo Ltda']),
         // já recebeu com os mesmos valores (vazio) — quem só está NA FILA de
         // outro disparo não vem mais do SQL (conferência 15/09)
         sentRow('c3', [''], { sentAt: '2026-09-15 12:50:00+00', messageParams: null }),
@@ -128,12 +128,12 @@ describe('enqueueTemplateBroadcast — envios repetidos', () => {
     expect(res.broadcastId).toBe('b-new')
     expect(res.totalRecipients).toBe(1)
     expect(res.skippedDuplicates).toEqual([
-      { contactId: 'c1', name: null, lastSentAt: '2026-09-15T12:50:04.000Z', reason: 'same_template' },
+      { contactId: 'c1', name: null, lastSentAt: '2026-09-15T12:55:00.000Z', reason: 'same_template' },
       { contactId: 'c3', name: null, lastSentAt: '2026-09-15T12:50:00.000Z', reason: 'same_template' },
     ])
     // c3 (sem nome) ficou de fora por repetido e NÃO barrou o disparo por valor faltando
     expect(h.recipientRows.map((r) => r.contactId)).toEqual(['c2'])
-    expect(h.recipientRows[0].params).toEqual(['Piso Decor'])
+    expect(h.recipientRows[0].params).toEqual(['Pisos Modelo'])
     expect(h.broadcastValues[0].allowRepeats).toBe(false)
     expect(h.dispatched).toEqual(['b-new'])
   })
@@ -141,7 +141,7 @@ describe('enqueueTemplateBroadcast — envios repetidos', () => {
   it('todos já receberam → erro, sem gravar', async () => {
     h.results = [
       contactsRows.slice(0, 2),
-      [sentRow('c1', ['Flash Baterias']), sentRow('c2', ['Piso Decor'])],
+      [sentRow('c1', ['Flash Baterias']), sentRow('c2', ['Pisos Modelo'])],
     ]
     const res = await enqueueTemplateBroadcast('acc', 'u-vitor', { ...base, recipientContactIds: ['c1', 'c2'] })
     expect(res.broadcastId).toBeNull()

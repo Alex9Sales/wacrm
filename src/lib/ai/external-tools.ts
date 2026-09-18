@@ -242,9 +242,9 @@ export function dedupedSummary(minutesAgo: number, previousSummary: string | nul
     // vezes faz o cliente achar que saíram dois pedidos.
     'Responda só o que o cliente perguntou AGORA. Se ele não perguntou nada novo (só disse "isso"/"ok" ou mandou o comprovante), ' +
     'mande no máximo um "ok" curto — sem repetir produto, valor nem endereço. ' +
-    // ⚠️ 15/09 (Will): "troco pra 200" chegou depois do pedido, a IA tentou
-    // recriar, foi segurada aqui e respondeu "troco anotado" — o troco nunca
-    // chegou ao entregador.
+    // ⚠️ 15/09 (Márcio Teste): o pedido de troco pra nota de 200 chegou depois
+    // do pedido, a IA tentou recriar, foi segurada aqui e respondeu "troco
+    // anotado" — o troco nunca chegou ao entregador.
     'Se o cliente ACRESCENTOU ou MUDOU algo (forma de pagamento, troco, endereço, quantidade), isso NÃO está registrado: ' +
     'use a ferramenta de EDITAR o registro com o id acima, se existir uma; se não existir, emita [[NOTA:o que mudou]] para o time corrigir. ' +
     'Nunca diga "anotado" ou "avisei" sem ter registrado.'

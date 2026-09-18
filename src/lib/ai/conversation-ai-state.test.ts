@@ -21,7 +21,7 @@ describe('aiState', () => {
     ).toBe('paused')
   })
 
-  it('ligada com responsável = em espera (Dra. Andressa, GoLink 15/09)', () => {
+  it('ligada com responsável = em espera (Dra. Helena Teste, GoLink 15/09)', () => {
     expect(
       aiState({ aiActiveChannel: true, aiAutoreplyDisabled: false, assignedAgentId: 'u1' }),
     ).toBe('waiting_assignee')

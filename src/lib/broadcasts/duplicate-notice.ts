@@ -1,7 +1,7 @@
 // ============================================================
 // Texto do aviso "já tinham recebido esta mensagem hoje". PURO (client-safe).
 //
-// 15/09 (GoLink): o Vitor refez o disparo e Flash Baterias, Piso Decor e
+// 15/09 (GoLink): o Vitor refez o disparo e Flash Baterias, Pisos Modelo e
 // Vidro e Cia receberam a mesma imagem 2×. Agora quem já recebeu fica de
 // fora (duplicate-sends.ts) e a tela conta quem ficou — com até 5 nomes, pra
 // dar pra conferir sem abrir o disparo. Usado no formulário de Disparos e no

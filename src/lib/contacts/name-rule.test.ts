@@ -8,13 +8,13 @@ import {
   nameSourceLabel,
 } from './name-rule';
 
-const phone = '5567991875477';
+const phone = '5567990001234';
 
 describe('regra do nome do contato (09/09)', () => {
   it('telefone disfarçado de nome não conta como nome', () => {
-    expect(isBarePhone('+55 67 99187-5477')).toBe(true);
-    expect(isBarePhone('5567991875477')).toBe(true);
-    expect(isBarePhone('Alex Sales')).toBe(false);
+    expect(isBarePhone('+55 67 99000-1234')).toBe(true);
+    expect(isBarePhone('5567990001234')).toBe(true);
+    expect(isBarePhone('Paulo Exemplo')).toBe(false);
     expect(hasRealName('', phone)).toBe(false);
     expect(hasRealName(phone, phone)).toBe(false);
     expect(hasRealName('Alex', phone)).toBe(true);
@@ -41,7 +41,7 @@ describe('regra do nome do contato (09/09)', () => {
     expect(
       decideContactName({
         current: { name: '', phone, source: null },
-        incoming: { name: '+55 67 99187-5477', source: 'whatsapp' },
+        incoming: { name: '+55 67 99000-1234', source: 'whatsapp' },
       }),
     ).toEqual({ apply: false, reason: 'empty-incoming' });
   });
@@ -50,8 +50,8 @@ describe('regra do nome do contato (09/09)', () => {
     for (const source of ['whatsapp', 'phonebook', null] as const) {
       expect(
         decideContactName({
-          current: { name: 'Luan Cliente', phone, source: 'crm' },
-          incoming: { name: 'Lu 💕', source },
+          current: { name: 'Carla Cliente', phone, source: 'crm' },
+          incoming: { name: 'Cacá 🌷', source },
           mode: 'override',
         }),
       ).toEqual({ apply: false, reason: 'crm-wins' });
@@ -61,14 +61,14 @@ describe('regra do nome do contato (09/09)', () => {
   it('nome de perfil do WhatsApp só preenche — nunca troca um nome existente', () => {
     expect(
       decideContactName({
-        current: { name: 'Lu 💕', phone, source: 'whatsapp' },
-        incoming: { name: 'Luana', source: 'whatsapp' },
+        current: { name: 'Cacá 🌷', phone, source: 'whatsapp' },
+        incoming: { name: 'Carla', source: 'whatsapp' },
       }),
     ).toEqual({ apply: false, reason: 'lower-priority' });
     expect(
       decideContactName({
-        current: { name: 'Luana Dentista', phone, source: null },
-        incoming: { name: 'Lu 💕', source: 'whatsapp' },
+        current: { name: 'Carla Professora', phone, source: null },
+        incoming: { name: 'Cacá 🌷', source: 'whatsapp' },
       }),
     ).toEqual({ apply: false, reason: 'lower-priority' });
   });
@@ -76,34 +76,34 @@ describe('regra do nome do contato (09/09)', () => {
   it('agenda do celular troca nome de perfil e acompanha a própria agenda', () => {
     expect(
       decideContactName({
-        current: { name: 'Lu 💕', phone, source: 'whatsapp' },
-        incoming: { name: 'Luana Dentista', source: 'phonebook' },
+        current: { name: 'Cacá 🌷', phone, source: 'whatsapp' },
+        incoming: { name: 'Carla Professora', source: 'phonebook' },
       }),
     ).toEqual({ apply: true, reason: 'upgrade' });
     expect(
       decideContactName({
-        current: { name: 'Luana Dentista', phone, source: 'phonebook' },
-        incoming: { name: 'Luana Dentista Campo Grande', source: 'phonebook' },
+        current: { name: 'Carla Professora', phone, source: 'phonebook' },
+        incoming: { name: 'Carla Professora Centro', source: 'phonebook' },
       }),
     ).toEqual({ apply: true, reason: 'mirror' });
   });
 
   it('nome legado (origem desconhecida) só troca no modo "agenda do celular manda"', () => {
-    const current = { name: 'Luana', phone, source: null };
+    const current = { name: 'Carla', phone, source: null };
     expect(
-      decideContactName({ current, incoming: { name: 'Luana Dentista', source: 'phonebook' } }),
+      decideContactName({ current, incoming: { name: 'Carla Professora', source: 'phonebook' } }),
     ).toEqual({ apply: false, reason: 'legacy-kept' });
     expect(
       decideContactName({
         current,
-        incoming: { name: 'Luana Dentista', source: 'phonebook' },
+        incoming: { name: 'Carla Professora', source: 'phonebook' },
         mode: 'fill',
       }),
     ).toEqual({ apply: false, reason: 'legacy-kept' });
     expect(
       decideContactName({
         current,
-        incoming: { name: 'Luana Dentista', source: 'phonebook' },
+        incoming: { name: 'Carla Professora', source: 'phonebook' },
         mode: 'override',
       }),
     ).toEqual({ apply: true, reason: 'override' });
@@ -112,14 +112,14 @@ describe('regra do nome do contato (09/09)', () => {
   it('formulário/API troca perfil e legado (como sempre), mas não a agenda nem o CRM', () => {
     expect(
       decideContactName({
-        current: { name: 'Lu 💕', phone, source: 'whatsapp' },
-        incoming: { name: 'Luana Silva', source: null },
+        current: { name: 'Cacá 🌷', phone, source: 'whatsapp' },
+        incoming: { name: 'Carla Teste', source: null },
       }),
     ).toEqual({ apply: true, reason: 'override' });
     expect(
       decideContactName({
-        current: { name: 'Luana Dentista', phone, source: 'phonebook' },
-        incoming: { name: 'Luana Silva', source: null },
+        current: { name: 'Carla Professora', phone, source: 'phonebook' },
+        incoming: { name: 'Carla Teste', source: null },
       }),
     ).toEqual({ apply: false, reason: 'phonebook-wins' });
   });
@@ -127,8 +127,8 @@ describe('regra do nome do contato (09/09)', () => {
   it('mesmo nome = nada a fazer', () => {
     expect(
       decideContactName({
-        current: { name: 'Luana', phone, source: 'whatsapp' },
-        incoming: { name: ' Luana ', source: 'phonebook' },
+        current: { name: 'Carla', phone, source: 'whatsapp' },
+        incoming: { name: ' Carla ', source: 'phonebook' },
       }),
     ).toEqual({ apply: false, reason: 'same' });
   });

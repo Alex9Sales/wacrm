@@ -14,7 +14,7 @@ import { parseDueDate, parseValue } from './emit-rules'
 /**
  * Junta a "rajada" do dono: as últimas mensagens dele (só do cliente da
  * conversa) até a última resposta do CRM, dentro da janela, em ordem
- * cronológica. Caso 08/09 (Alex): "Cria uma cobrança" / "Para Danyela Souza" /
+ * cronológica. Caso 08/09 (Alex): "Cria uma cobrança" / "Para Carla Teste" /
  * "Valor de 5 reais" / "Vencimento amanhã" / "Pix" em CINCO balões — olhando só
  * o último ("Pix") não parece pedido nenhum e o agente de vendas assumia.
  * `rowsNewestFirst` = mensagens não-internas, da mais nova pra mais velha.

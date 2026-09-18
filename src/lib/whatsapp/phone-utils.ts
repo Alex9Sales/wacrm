@@ -1,7 +1,7 @@
 /**
  * Sanitize phone number for Meta WhatsApp API.
  * Meta requires digits only — no + prefix, no spaces, no dashes.
- * e.g. "+370 63949836" → "37063949836"
+ * e.g. "+370 61234567" → "37061234567"
  */
 export function sanitizePhoneForMeta(phone: string): string {
   if (!phone) return ''
@@ -48,7 +48,7 @@ export function brIdentityKey(digits: string): string | null {
  *
  * Agora: dois números brasileiros comparam por DDD + 8 locais (com 55 e 9º
  * dígito tolerados). Se algum dos dois não parece brasileiro, mantém a
- * tolerância antiga de tronco (ex.: "370063949836" × "37063949836", Lituânia).
+ * tolerância antiga de tronco (ex.: "370061234567" × "37061234567", Lituânia).
  */
 export function phonesMatch(phone1: string, phone2: string): boolean {
   const n1 = normalizePhone(phone1)
@@ -147,7 +147,7 @@ export function toBrE164IfNational(digits: string): string {
  *
  * Many countries use a "trunk prefix" 0 for domestic dialing that is
  * meant to be dropped in international format (e.g. Lithuanian
- * "+370 063 949 836" domestically → "+370 63 949 836" international).
+ * "+370 061 234 567" domestically → "+370 61 234 567" international).
  * But some sandboxes register the number with the trunk 0 included,
  * causing sends to the correct international format to fail.
  *

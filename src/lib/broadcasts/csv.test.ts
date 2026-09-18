@@ -14,7 +14,7 @@ describe('summarizeCsvNames', () => {
   })
 
   it('telefone,nome sem cabeçalho: só as linhas com nome vazio contam', () => {
-    const rows = parseCsv('67999990001,Flash Baterias\n67999990002,\n67999990003;Piso Decor')
+    const rows = parseCsv('67999990001,Flash Baterias\n67999990002,\n67999990003;Pisos Modelo')
     const s = summarizeCsvNames(rows)
     expect(s.total).toBe(3)
     expect(s.withoutName).toBe(1)

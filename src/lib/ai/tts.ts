@@ -25,7 +25,7 @@ export interface TtsConfig {
 //
 //   identificador (CPF, CNPJ, chave Pix, telefone, CEP) → soletrado, porque
 //   quem ouve vai ANOTAR; número comum (endereço, quantidade) → por extenso,
-//   que é como se fala ("Bonfim, dois mil duzentos e oitenta").
+//   que é como se fala ("Rua Exemplo, cento e vinte e três").
 //
 // Só muda o que vai pro ÁUDIO: o texto da conversa e a transcrição continuam
 // com o original (auto-reply.ts manda `clean` pros dois). Nunca mover daqui.

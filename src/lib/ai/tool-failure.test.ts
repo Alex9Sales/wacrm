@@ -25,9 +25,9 @@ describe('ferramenta que falhou — o modelo lê o que fazer, não só que falho
 
 describe('fonte alternativa — o CRM responde quando o ERP não responde', () => {
   it('ferramenta de cliente → histórico do CRM vira cadastro válido, sem inventar endereço', () => {
-    const t = formatCrmFallback({ kind: 'customer', contactName: 'Miriam', facts: 'Cliente recorrente: 3 compras no histórico.\nProduto mais comprado: P-13 UltraGaz.' })
+    const t = formatCrmFallback({ kind: 'customer', contactName: 'Marta Teste', facts: 'Cliente recorrente: 3 compras no histórico.\nProduto mais comprado: P-13 UltraGaz.' })
     expect(t).toContain('HISTÓRICO DO CRM')
-    expect(t).toContain('Cliente: Miriam.')
+    expect(t).toContain('Cliente: Marta Teste.')
     expect(t).toContain('3 compras')
     expect(t).toContain('NÃO passa pelo teste de distância')
     expect(t).toContain('NÃO tem o endereço')

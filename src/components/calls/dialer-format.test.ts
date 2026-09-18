@@ -4,7 +4,7 @@ import { formatDisplay, isDialable, toDialDigits } from './dialer-format';
 
 describe('toDialDigits', () => {
   it('adds 55 to a bare mobile (DDD + 9 digits)', () => {
-    expect(toDialDigits('67991646764')).toBe('5567991646764');
+    expect(toDialDigits('67990001234')).toBe('5567990001234');
   });
 
   it('adds 55 to a bare landline (DDD + 8 digits)', () => {
@@ -12,15 +12,15 @@ describe('toDialDigits', () => {
   });
 
   it('leaves a number that already has 55 alone', () => {
-    expect(toDialDigits('5567991646764')).toBe('5567991646764');
+    expect(toDialDigits('5567990001234')).toBe('5567990001234');
   });
 
   it('strips formatting from a pasted number', () => {
-    expect(toDialDigits('+55 (67) 99164-6764')).toBe('5567991646764');
+    expect(toDialDigits('+55 (67) 99000-1234')).toBe('5567990001234');
   });
 
   it('does not double-prefix a formatted number that already has 55', () => {
-    expect(toDialDigits('+55 67 99164-6764')).toBe('5567991646764');
+    expect(toDialDigits('+55 67 99000-1234')).toBe('5567990001234');
   });
 
   it('is empty for empty input', () => {
@@ -31,7 +31,7 @@ describe('toDialDigits', () => {
 
 describe('isDialable', () => {
   it('accepts a full mobile', () => {
-    expect(isDialable('67991646764')).toBe(true);
+    expect(isDialable('67990001234')).toBe(true);
   });
 
   it('accepts a full landline', () => {
@@ -49,14 +49,14 @@ describe('isDialable', () => {
 
 describe('formatDisplay', () => {
   it('formats a full mobile as +55 (DD) NNNNN-NNNN', () => {
-    expect(formatDisplay('5567991646764')).toBe('+55 (67) 99164-6764');
+    expect(formatDisplay('5567990001234')).toBe('+55 (67) 99000-1234');
   });
 
   it('formats progressively as the agent types', () => {
     expect(formatDisplay('67')).toBe('+55 (67');
-    expect(formatDisplay('679916')).toBe('+55 (67) 9916'); // no hyphen until >4 digits
+    expect(formatDisplay('679900')).toBe('+55 (67) 9900'); // no hyphen until >4 digits
     // partial mid-type: last 4 always split off (cosmetic while typing)
-    expect(formatDisplay('6799164')).toBe('+55 (67) 9-9164');
+    expect(formatDisplay('6799000')).toBe('+55 (67) 9-9000');
   });
 
   it('is empty for empty input', () => {

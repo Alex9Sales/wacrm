@@ -1,7 +1,7 @@
 // ============================================================
 // Camadas da busca por NOME (parte pura de lib/contacts/search.ts).
 //
-// O dono escreve "Danyela Souza"; o contato está salvo só como "Danyela"
+// O dono escreve "Carla Teste"; o contato está salvo só como "Carla"
 // (caso 08/09). Frase inteira não acha → tenta todas as palavras → tenta só o
 // primeiro nome. A ambiguidade continua visível: se o primeiro nome devolver
 // vários, o fluxo lista pra escolher — nunca chuta.

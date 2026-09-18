@@ -1,12 +1,12 @@
 // ============================================================
 // Ferramenta que falhou: o que o modelo vê, e o que ele NÃO pode fazer.
 //
-// 06/09 (Miriam, Nubia): o ERP ficou lento por 4 minutos, buscar_cliente e
-// consultar_estoque estouraram o timeout de 12s — e a IA (1) chamou a MESMA
-// ferramenta 4 vezes seguidas na mesma resposta (48s parada) e (2) leu
-// "Falha na chamada" como "não tenho informação segura" e TRANSFERIU um
-// cliente que só queria um gás. Nada disso é decisão de prompt: é o texto
-// que o resultado da ferramenta leva. Puro e testável.
+// 06/09 (Marta Teste, Neusa Exemplo): o ERP ficou lento por 4 minutos,
+// buscar_cliente e consultar_estoque estouraram o timeout de 12s — e a IA
+// (1) chamou a MESMA ferramenta 4 vezes seguidas na mesma resposta (48s
+// parada) e (2) leu "Falha na chamada" como "não tenho informação segura" e
+// TRANSFERIU um cliente que só queria um gás. Nada disso é decisão de prompt:
+// é o texto que o resultado da ferramenta leva. Puro e testável.
 // ============================================================
 
 /** Chave de "já falhou nesta resposta": ferramenta + argumentos. */

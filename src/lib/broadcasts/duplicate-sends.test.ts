@@ -3,7 +3,7 @@ import { PgDialect } from 'drizzle-orm/pg-core'
 import type { SQL } from 'drizzle-orm'
 
 // 15/09 (GoLink): "dia do cliente" refeito 3× — a mesma imagem chegou 2× pra
-// Flash Baterias, Piso Decor e Vidro e Cia. O db é trocado por uma fila de
+// Flash Baterias, Pisos Modelo e Vidro e Cia. O db é trocado por uma fila de
 // respostas (uma por consulta, na ordem: disparos, depois mensagens). O
 // `where` de cada consulta fica guardado pra conferir o SQL gerado (filtros
 // que o mock não aplica: fila ativa, assunto, disparo atual).
@@ -175,7 +175,7 @@ describe('templateSendKey', () => {
       messageParams: { headerText: 'Oi', headerMediaUrl: 'https://s/2.jpg', buttonParams: { 0: 'y', 1: 'x' } },
     })
     expect(a).toBe(b)
-    expect(templateSendKey({ params: ['Piso Decor', '15/09'], messageParams: null })).not.toBe(
+    expect(templateSendKey({ params: ['Pisos Modelo', '15/09'], messageParams: null })).not.toBe(
       templateSendKey({ params: ['Flash Baterias', '15/09'], messageParams: null }),
     )
     expect(templateSendKey({ params: ['A'], messageParams: { headerText: 'Oi' } })).not.toBe(
@@ -206,13 +206,13 @@ describe('findRecentDuplicateContacts', () => {
     h.results = [
       // (i) broadcast_recipients (texto já filtrado no SQL)
       [
-        { contactId: 'c2', name: 'Piso Decor', status: 'sent', sentAt: '2026-09-15 10:00:00+00', media: null, mediaUrl: null, mediaFilename: null },
+        { contactId: 'c2', name: 'Pisos Modelo', status: 'sent', sentAt: '2026-09-15 10:00:00+00', media: null, mediaUrl: null, mediaFilename: null },
         { contactId: 'c1', name: 'Flash Baterias', status: 'delivered', sentAt: '2026-09-15 09:00:00+00', media: null, mediaUrl: null, mediaFilename: null },
       ],
       // (ii) messages
       [
         { contactId: 'c1', name: 'Flash Baterias', createdAt: '2026-09-15 11:30:00.5+00' },
-        { contactId: 'c2', name: 'Piso Decor', createdAt: '2026-09-15 08:00:00+00' },
+        { contactId: 'c2', name: 'Pisos Modelo', createdAt: '2026-09-15 08:00:00+00' },
       ],
     ]
     const out = await findRecentDuplicateContacts('acc', ['c1', 'c2', 'c3', 'c1'], {
@@ -222,7 +222,7 @@ describe('findRecentDuplicateContacts', () => {
     expect(h.selectCalls).toBe(2)
     expect(out).toEqual([
       { contactId: 'c1', name: 'Flash Baterias', lastSentAt: '2026-09-15T11:30:00.500Z', reason: 'same_text' },
-      { contactId: 'c2', name: 'Piso Decor', lastSentAt: '2026-09-15T10:00:00.000Z', reason: 'same_text' },
+      { contactId: 'c2', name: 'Pisos Modelo', lastSentAt: '2026-09-15T10:00:00.000Z', reason: 'same_text' },
     ])
   })
 
@@ -502,7 +502,7 @@ describe('contactAlreadyReceivedElsewhere', () => {
       params: ['Flash Baterias'],
       messageParams: { headerMediaUrl: 'https://s/novo.jpg' },
     }
-    h.results = [[{ params: ['Piso Decor'], messageParams: null }]]
+    h.results = [[{ params: ['Pisos Modelo'], messageParams: null }]]
     expect(await contactAlreadyReceivedElsewhere(input)).toBe(false)
     const q = renderWhere(0)
     expect(q.params).toContain('dia_do_cliente')

@@ -7,8 +7,8 @@ const erp = (id: string, at: string, amount = 125): SaleLike => ({ id, source: '
 const deal = (id: string, at: string, amount = 125): SaleLike => ({ id, source: 'deal', amount, occurredAt: at })
 
 describe('isSameSale — a mesma venda por caminhos diferentes', () => {
-  it('planilha (só a data) × ERP no mesmo dia local, mesmo depois da meia-noite UTC (Miriam)', () => {
-    expect(isSameSale(imp('i', '2026-06-08'), erp('e', '2026-06-09T00:25:39.666Z'))).toBe(true)
+  it('planilha (só a data) × ERP no mesmo dia local, mesmo depois da meia-noite UTC (Marta Teste)', () => {
+    expect(isSameSale(imp('i', '2026-06-08'), erp('e', '2026-06-09T00:30:00.000Z'))).toBe(true)
   })
 
   it('valor diferente não é a mesma venda (planilha × ERP é exato)', () => {
@@ -31,12 +31,12 @@ describe('isSameSale — a mesma venda por caminhos diferentes', () => {
 
 describe('planMerges — quem fica, quem some', () => {
   it('importação some dentro do ERP; o ERP fica', () => {
-    const p = planMerges([imp('i1', '2026-05-03'), erp('e1', '2026-05-03T18:02:49Z'), imp('i2', '2026-06-08'), erp('e2', '2026-06-09T00:25:39Z')])
+    const p = planMerges([imp('i1', '2026-05-03'), erp('e1', '2026-05-03T18:00:00Z'), imp('i2', '2026-06-08'), erp('e2', '2026-06-09T00:30:00Z')])
     expect(p.map((d) => `${d.merge.id}→${d.keep.id}`).sort()).toEqual(['i1→e1', 'i2→e2'])
   })
 
   it('duas vendas do ERP no mesmo dia e uma planilha: a planilha some numa delas, as duas do ERP ficam', () => {
-    const p = planMerges([imp('i1', '2026-08-17'), erp('e1', '2026-08-17T13:48:22Z'), erp('e2', '2026-08-17T13:49:24Z')])
+    const p = planMerges([imp('i1', '2026-08-17'), erp('e1', '2026-08-17T13:45:00Z'), erp('e2', '2026-08-17T13:50:00Z')])
     expect(p).toHaveLength(1)
     expect(p[0].merge.id).toBe('i1')
   })

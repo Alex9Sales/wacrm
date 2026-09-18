@@ -1,7 +1,7 @@
 // ============================================================
 // Estado HONESTO da IA numa conversa — o que o botão do topo mostra.
 //
-// 15/09 (GoLink, Dra. Andressa): o botão dizia "IA on" e a IA não respondia.
+// 15/09 (GoLink, Dra. Helena Teste): o botão dizia "IA on" e a IA não respondia.
 // A conversa tinha responsável humano, e o auto-reply (auto-reply.ts) cala a IA
 // em toda conversa com responsável — mas nada na tela avisava. Agora o estado
 // separa "ligada e respondendo" de "ligada mas esperando o responsável sair".

@@ -1,7 +1,7 @@
 // ============================================================
 // 🔀 O mesmo cliente falando com MAIS DE UM canal da mesma conta.
 //
-// Nasceu do caso Jordy (04/09, Família do Gás): ele perguntou o preço na
+// Nasceu do caso Carla Teste (04/09, Família do Gás): ela perguntou o preço na
 // Família do Gás 1, depois no Aliança Gás e no Aliança Gás 2. Como o contato é
 // UM SÓ entre os canais, a IA já reconhece e aplica a política de preço que o
 // cliente configurou — isso já funcionava e não se mexe aqui.

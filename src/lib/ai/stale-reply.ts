@@ -3,11 +3,12 @@
 // mensagem enquanto ela gerava. Pura (sem banco) — o auto-reply busca os
 // dados e aplica a decisão.
 //
-// Caso Adrieli (Família do Gás, 15/09): "Cartão" 07:01:05 → "Quantos minutos,
-// eu tenho que trabalhar" 07:01:20 → a resposta ao "Cartão" saiu 07:01:29
-// ("É crédito ou débito? O P-13 fica R$ 125…") e a rechecagem respondeu os
-// minutos 18 s depois PERGUNTANDO DE NOVO crédito ou débito. Duas vezes
-// seguidas na mesma manhã; a cliente: "Senhor amado, é crédito uma vez".
+// Caso Bruna Teste (Família do Gás, 15/09, por volta das 7h): "Cartão" → uns
+// 15 s depois "Vai demorar muito? Daqui a pouco saio pro serviço" → uns 10 s
+// depois saiu a resposta ao "Cartão" ("É crédito ou débito? O P-13 fica
+// R$ 125…") e a rechecagem respondeu a demora 18 s depois PERGUNTANDO DE NOVO
+// crédito ou débito. Duas vezes seguidas na mesma manhã; a cliente: "Ai meu
+// Deus, já falei: crédito à vista".
 // O marcador de cobertura (reply-marker.ts) garante que a mensagem nova é
 // respondida — mas não impede a resposta que já não serve de sair antes.
 //

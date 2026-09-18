@@ -88,7 +88,7 @@ beforeEach(() => {
 
 describe('enqueueTextBroadcast — envios repetidos', () => {
   it('tira quem já recebeu e devolve a lista de pulados', async () => {
-    h.dupResult = [{ contactId: 'c2', name: 'Piso Decor', lastSentAt: '2026-09-15T12:50:04.000Z' }]
+    h.dupResult = [{ contactId: 'c2', name: 'Pisos Modelo', lastSentAt: '2026-09-15T12:55:00.000Z' }]
     const res = await enqueueTextBroadcast('acc', 'u-vitor', base)
     expect(res.error).toBeNull()
     expect(res.broadcastId).toBe('b-new')
@@ -109,7 +109,7 @@ describe('enqueueTextBroadcast — envios repetidos', () => {
     h.dupResult = ['c1', 'c2', 'c3'].map((contactId) => ({
       contactId,
       name: null,
-      lastSentAt: '2026-09-15T12:50:04.000Z',
+      lastSentAt: '2026-09-15T12:55:00.000Z',
     }))
     const res = await enqueueTextBroadcast('acc', 'u-vitor', base)
     expect(res.broadcastId).toBeNull()

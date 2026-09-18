@@ -11,7 +11,7 @@ import {
 
 describe("sanitizePhoneForMeta", () => {
   it("strips +, spaces, and dashes leaving only digits", () => {
-    expect(sanitizePhoneForMeta("+370 639 49836")).toBe("37063949836");
+    expect(sanitizePhoneForMeta("+370 612 34567")).toBe("37061234567");
     expect(sanitizePhoneForMeta("+1 (415) 555-1212")).toBe("14155551212");
   });
 
@@ -39,16 +39,16 @@ describe("normalizePhone", () => {
 
 describe("phonesMatch", () => {
   it("returns true for exact digit matches", () => {
-    expect(phonesMatch("+37063949836", "37063949836")).toBe(true);
+    expect(phonesMatch("+37061234567", "37061234567")).toBe(true);
   });
 
   it("matches across trunk-prefix variants by last-8 fallback", () => {
-    // Lithuanian trunk-0 variant. Last 8 digits ("63949836") collide.
-    expect(phonesMatch("370063949836", "37063949836")).toBe(true);
+    // Lithuanian trunk-0 variant. Last 8 digits ("61234567") collide.
+    expect(phonesMatch("370061234567", "37061234567")).toBe(true);
   });
 
   it("rejects mismatched numbers", () => {
-    expect(phonesMatch("+37063949836", "+37063949837")).toBe(false);
+    expect(phonesMatch("+37061234567", "+37061234568")).toBe(false);
   });
 
   it("rejects very short inputs that would false-positive on tail match", () => {
@@ -59,7 +59,7 @@ describe("phonesMatch", () => {
   });
 
   it("ignores formatting noise on both sides", () => {
-    expect(phonesMatch("+370 6 394 9836", "37063949836")).toBe(true);
+    expect(phonesMatch("+370 6 123 4567", "37061234567")).toBe(true);
     expect(phonesMatch("(415) 555-1212", "+1 415-555-1212")).toBe(true);
   });
 });
@@ -95,8 +95,8 @@ describe("phonesMatch — números brasileiros: o DDD faz parte da identidade", 
 
 describe("isValidE164", () => {
   it("accepts numbers 7–15 digits with optional + and non-zero start", () => {
-    expect(isValidE164("+37063949836")).toBe(true);
-    expect(isValidE164("37063949836")).toBe(true);
+    expect(isValidE164("+37061234567")).toBe(true);
+    expect(isValidE164("37061234567")).toBe(true);
     expect(isValidE164("+1234567")).toBe(true); // 7 digits — lower bound
     expect(isValidE164("+123456789012345")).toBe(true); // 15 digits — upper bound
   });
@@ -128,35 +128,35 @@ describe("phoneVariants", () => {
   });
 
   it("always lists the original number first", () => {
-    const out = phoneVariants("37063949836");
-    expect(out[0]).toBe("37063949836");
+    const out = phoneVariants("37061234567");
+    expect(out[0]).toBe("37061234567");
   });
 
   it("inserts a trunk 0 after each plausible country-code length", () => {
-    // Input "37063949836" — CC-1 → "3" + "0" + "7063949836",
-    //                       CC-3 → "370" + "0" + "63949836".
-    // CC-2 is skipped because "063949836" already starts with 0.
-    const out = phoneVariants("37063949836");
+    // Input "37061234567" — CC-1 → "3" + "0" + "7061234567",
+    //                       CC-3 → "370" + "0" + "61234567".
+    // CC-2 is skipped because "061234567" already starts with 0.
+    const out = phoneVariants("37061234567");
     expect(out).toEqual(
       expect.arrayContaining([
-        "37063949836",
-        "307063949836",
-        "370063949836",
+        "37061234567",
+        "307061234567",
+        "370061234567",
       ]),
     );
   });
 
   it("removes a leading 0 after the country code when present", () => {
-    // Input "370063949836" — CC-2 strips one leading 0 from
-    // "0063949836" → "37" + "063949836" = "37063949836". Only one zero
+    // Input "370061234567" — CC-2 strips one leading 0 from
+    // "0061234567" → "37" + "061234567" = "37061234567". Only one zero
     // comes off per pass; that's what the live retry loop needs.
-    const out = phoneVariants("370063949836");
-    expect(out).toContain("370063949836");
-    expect(out).toContain("37063949836");
+    const out = phoneVariants("370061234567");
+    expect(out).toContain("370061234567");
+    expect(out).toContain("37061234567");
   });
 
   it("deduplicates variants that collapse to the same digits", () => {
-    const out = phoneVariants("37063949836");
+    const out = phoneVariants("37061234567");
     expect(new Set(out).size).toBe(out.length);
   });
 
@@ -182,7 +182,7 @@ describe("normalizeInboundPhoneBR", () => {
   it("leaves clean E.164 numbers completely untouched (never corrupts them)", () => {
     expect(normalizeInboundPhoneBR("5527990001234")).toBe("5527990001234");
     expect(normalizeInboundPhoneBR("12025550181")).toBe("12025550181"); // US
-    expect(normalizeInboundPhoneBR("37063949836")).toBe("37063949836"); // LT
+    expect(normalizeInboundPhoneBR("37061234567")).toBe("37061234567"); // LT
   });
 
   it("strips formatting noise", () => {

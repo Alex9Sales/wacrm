@@ -4,12 +4,12 @@
 // O guard anti-eco do auto-reply precisa responder UMA pergunta: "existe
 // mensagem do cliente que NENHUMA resposta da IA cobriu?". Olhar só quem
 // falou por último não resolve os dois lados:
-//   - Debora (01/09): endereço chegou DURANTE a geração → resposta em voo
+//   - Sônia Teste (01/09): endereço chegou DURANTE a geração → resposta em voo
 //     não viu → mas como a última msg passou a ser da IA, a rechecagem era
 //     engolida e o endereço morria.
-//   - Rose (01/09): "brindes?" chegou com o job ativo, mas ANTES da leitura
-//     do histórico (as tools rodam primeiro) → a resposta em voo cobriu →
-//     e a rechecagem, liberada por "job ativo", repetiu a pergunta.
+//   - Rita Exemplo (01/09): "vem brinde junto?" chegou com o job ativo, mas
+//     ANTES da leitura do histórico (as tools rodam primeiro) → a resposta em
+//     voo cobriu → e a rechecagem, liberada por "job ativo", repetiu a pergunta.
 // "Job ativo" não é o critério certo. O critério certo é o INSTANTE em que
 // a geração leu o histórico: tudo que chegou antes está coberto, o que
 // chegou depois não. É isso que este marcador guarda, gravado só depois de
@@ -80,7 +80,7 @@ export async function setCoveredUntil(
 }
 
 // ---------------------------------------------------------------- lock
-// 🔒 UMA geração por conversa de cada vez (06/09, casos Miriam e Nubia).
+// 🔒 UMA geração por conversa de cada vez (06/09, casos Marta Teste e Neusa Exemplo).
 //
 // Com o ERP lento (4 timeouts de 12s), uma geração levou 30–40s. Nesse tempo a
 // rechecagem ("chase") de uma mensagem nova rodava EM PARALELO (worker com

@@ -110,7 +110,7 @@ describe('alertContactName', () => {
     expect(alertContactName('Zé')).toBe('Zé')
     expect(alertContactName('~Gi~')).toBe('Gi')
     expect(alertContactName('*Maria José*')).toBe('Maria José')
-    expect(alertContactName('Meus Filhos Minha Vida 💙🩷')).toBe('Meus Filhos Minha Vida 💙🩷')
+    expect(alertContactName('Meus Netinhos Queridos 🌻🩵')).toBe('Meus Netinhos Queridos 🌻🩵')
     expect(alertContactName('Família \u{1F468}\u200D\u{1F469}\u200D\u{1F467} Souza')).toBe('Família \u{1F468}\u200D\u{1F469}\u200D\u{1F467} Souza')
   })
 })
