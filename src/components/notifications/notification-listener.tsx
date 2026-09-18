@@ -3,7 +3,7 @@
 import { useCallback, useRef } from "react";
 import { useRouter } from "next/navigation";
 import { toast } from "sonner";
-import { MessageSquare, Users, CheckCheck } from "lucide-react";
+import { MessageSquare, Users, CheckCheck, X } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
 import { useServerEvents } from "@/hooks/use-server-events";
@@ -86,6 +86,7 @@ export function NotificationListener() {
     }) => {
       const newId = toast.custom(
         (id) => (
+          <div className="relative w-full">
           <button
             type="button"
             onClick={() => {
@@ -113,7 +114,7 @@ export function NotificationListener() {
                 window.location.assign(opts.href);
               }
             }}
-            className="flex w-full items-start gap-3 rounded-xl border border-border bg-card p-3 text-left shadow-lg shadow-black/10 transition-colors hover:bg-muted/60"
+            className="flex w-full items-start gap-3 rounded-xl border border-border bg-card p-3 pr-9 text-left shadow-lg shadow-black/10 transition-colors hover:bg-muted/60"
           >
             <span className="mt-0.5 flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary">
               {opts.variant === "internal" ? (
@@ -131,6 +132,21 @@ export function NotificationListener() {
               </span>
             </span>
           </button>
+          {/* Fechar SEM abrir a conversa (João/GoLink 18/09: pra tirar um aviso
+              do caminho tinha que arrastar pro lado ou clicar e abrir). */}
+          <button
+            type="button"
+            aria-label="Fechar aviso"
+            title="Fechar"
+            onClick={() => {
+              toast.dismiss(id);
+              untrack(id);
+            }}
+            className="absolute right-1.5 top-1.5 flex size-6 items-center justify-center rounded-md text-muted-foreground transition-colors hover:bg-muted hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+          >
+            <X className="size-3.5" />
+          </button>
+          </div>
         ),
         {
           duration: 12000,

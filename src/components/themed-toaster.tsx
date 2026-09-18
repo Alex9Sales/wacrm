@@ -38,7 +38,13 @@ export function ThemedToaster() {
   return (
     <Toaster
       theme={isClient ? mode : DEFAULT_MODE}
-      position="top-right"
+      // Embaixo, não em cima (João/GoLink 18/09): no canto de cima o aviso
+      // tampava o menu da conta (Perfil/Configurações/Sair) — quem troca de
+      // conta o dia todo não conseguia clicar. Embaixo à direita ele fica
+      // sobre o painel do contato, longe do campo de digitar e do Enviar; no
+      // celular, sobe o suficiente pra não cobrir a caixa de mensagem.
+      position="bottom-right"
+      mobileOffset={{ bottom: 88 }}
       toastOptions={{
         style: {
           background: "var(--popover)",
