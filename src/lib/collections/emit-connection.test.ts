@@ -170,7 +170,7 @@ const base = (over: Partial<Parameters<typeof createChargeForContact>[0]> = {}) 
 const m = <T extends (...a: never[]) => unknown>(fn: T) => fn as unknown as ReturnType<typeof vi.fn>
 
 beforeEach(() => {
-  state.contact = { name: 'Dom Burguer', phone: '5567999991234', email: null }
+  state.contact = { name: 'Tio Burguer', phone: '5567999991234', email: null }
   state.conns = [A, G]
   state.history = []
   state.wallet = []
@@ -336,14 +336,14 @@ describe('trava do documento — recusa ANTES de qualquer chamada ao Asaas', () 
   })
 
   it('documento digitado inválido → invalidDocument, sem cair no documento da carteira', async () => {
-    state.wallet = [{ doc: CNPJ, customerName: 'Dom Burguer Susan' }]
+    state.wallet = [{ doc: CNPJ, customerName: 'Tio Burguer Lanches' }]
     const out = await createChargeForContact(base({ cpfCnpj: '529.982.247-26' }))
     expect(out).toMatchObject({ ok: false, needsDocument: true, invalidDocument: true })
     noAsaas()
   })
 
   it('sem digitado, o documento da carteira vale (e vai para a busca do cliente)', async () => {
-    state.wallet = [{ doc: '11.222.333/0001-81', customerName: 'Dom Burguer Susan' }]
+    state.wallet = [{ doc: '11.222.333/0001-81', customerName: 'Tio Burguer Lanches' }]
     state.conns = [A]
     state.foundByKey['key-asaas'] = { id: 'cus_a', cpfCnpj: CNPJ }
     const out = await createChargeForContact(base({ cpfCnpj: null, connectionId: null }))

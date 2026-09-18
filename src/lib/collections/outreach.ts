@@ -153,10 +153,10 @@ export async function resolveCollectionTargets(
   // com e-mail no Asaas ficavam sem e-mail nenhum — com os avisos do Asaas
   // desligados, ninguém mais mandava. Sem e-mail no contato, vale o do cliente
   // no Asaas. Não gravamos no contato: parcela ligada ao contato errado (o
-  // teste "Sérgio Lemes" caiu no número do próprio João) espalharia o e-mail
+  // teste "Paulo Exemplo" caiu no número do próprio João) espalharia o e-mail
   // de um cliente em outro.
   //
-  // 📭 15/09 (Vale Ouro): endereço que voltou como não entregue
+  // 📭 15/09 (Vale Modelo): endereço que voltou como não entregue
   // (email_bounces) fica de fora em todos eles — a régua ia mandar de novo pro
   // domínio que não recebe e-mail. Se a consulta falhar, manda como antes.
   const hint = typeof opts.fallbackEmail === 'string' ? opts.fallbackEmail : null

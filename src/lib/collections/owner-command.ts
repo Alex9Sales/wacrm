@@ -277,8 +277,8 @@ async function execute(accountId: string, ownerUserId: string, p: Proposal, cpfC
   try {
     const targets = await resolveCollectionTargets(accountId, p.contactId, null)
     if (targets.ok) {
-      // 11/09 (João): a primeira palavra crua virava "Oi, Dom!" para
-      // "Dom Burguer Susan". Mesma regra da régua — greetingName.
+      // 11/09 (João): a primeira palavra crua virava "Oi, Tio!" para
+      // "Tio Burguer Lanches". Mesma regra da régua — greetingName.
       const firstName = greetingName(p.name)
       const text = manualChargeMessage(firstName, p.value, p.dueDate, p.description, created.invoiceUrl)
       const convIds = [targets.whatsapp?.conversationId, targets.email?.conversationId].filter((c): c is string => !!c)

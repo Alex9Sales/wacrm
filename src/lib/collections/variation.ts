@@ -29,7 +29,7 @@ const OPENINGS = [
   'Comece perguntando se está tudo bem, e só depois entre no assunto.',
   // ⚠️ Era "Comece agradecendo a atenção." — e numa cobrança a IA só acha
   // UMA coisa pra agradecer: que o cliente "conferiu" a parcela. 17/09,
-  // Marcelo Santos (GoLink) recebeu "Agradeço por conferir esta cobrança"
+  // Renan Exemplo (GoLink) recebeu "Agradeço por conferir esta cobrança"
   // sem nunca ter aberto nada; o João achou que o sistema tinha trocado a
   // mensagem. Agradecer supõe uma interação que não houve.
   'Comece de forma cordial, com uma frase curta e simpática antes do assunto.',

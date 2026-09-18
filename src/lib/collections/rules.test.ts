@@ -114,7 +114,7 @@ describe('eligibility — a régua só cobra quem pode ser cobrado', () => {
   })
 })
 
-// 15/09 (GoLink, Guincho Ribeiro): lembrete saiu para cliente pausado. O freio
+// 15/09 (GoLink, Reboque Modelo): lembrete saiu para cliente pausado. O freio
 // passou a ser uma fonte só — régua, montagem do lembrete e hora do envio.
 describe('debtorHold — o freio do devedor vale para toda mensagem de cobrança', () => {
   const futuro = new Date(agora.getTime() + 5 * 24 * 3600_000).toISOString()
@@ -206,22 +206,22 @@ describe('autoSend / cadência (09/09, GoLink "uma a cada N minutos")', () => {
 
 describe('greetingName — nome como está no Asaas (10/09, GoLink)', () => {
   it('até 3 palavras vai inteiro: empresa curta e apelido não viram "primeiro nome"', () => {
-    expect(greetingName('Drogaria Imaculada')).toBe('Drogaria Imaculada')
-    expect(greetingName('Rack 95')).toBe('Rack 95')
-    expect(greetingName('Alipé Podologia')).toBe('Alipé Podologia')
+    expect(greetingName('Drogaria Exemplo')).toBe('Drogaria Exemplo')
+    expect(greetingName('Loja 77')).toBe('Loja 77')
+    expect(greetingName('Podologia Modelo')).toBe('Podologia Modelo')
   })
-  // 11/09 — os nomes reais da carteira da GoLink que cortar em duas estragaria.
+  // 11/09 — nomes no formato dos da carteira da GoLink (fictícios) que cortar em duas estragaria.
   it('nome de 3 palavras não pode perder a terceira', () => {
-    expect(greetingName('Canal da Pizza')).toBe('Canal da Pizza')
-    expect(greetingName('UTI dos Fogões')).toBe('UTI dos Fogões')
-    expect(greetingName('Marcenaria São José')).toBe('Marcenaria São José')
-    expect(greetingName('Drogaria Faria Lima')).toBe('Drogaria Faria Lima')
-    expect(greetingName('Depósito São Caetano')).toBe('Depósito São Caetano')
+    expect(greetingName('Casa da Pizza')).toBe('Casa da Pizza')
+    expect(greetingName('SOS dos Fogões')).toBe('SOS dos Fogões')
+    expect(greetingName('Marcenaria Nova Esperança')).toBe('Marcenaria Nova Esperança')
+    expect(greetingName('Drogaria Vila Exemplo')).toBe('Drogaria Vila Exemplo')
+    expect(greetingName('Depósito Bela Vista')).toBe('Depósito Bela Vista')
   })
   it('mais longo: duas primeiras, ou só a primeira quando a segunda é conector', () => {
-    expect(greetingName('Ultra Visão e Regrava Vale Taubaté')).toBe('Ultra Visão')
+    expect(greetingName('Ótica Exemplo e Filial Centro Norte')).toBe('Ótica Exemplo')
     expect(greetingName('João da Silva Pereira')).toBe('João')
-    expect(greetingName('CRIIS Mármores e Granitos')).toBe('CRIIS Mármores')
+    expect(greetingName('XPTO Mármores e Granitos')).toBe('XPTO Mármores')
   })
   it('vazio vira null', () => {
     expect(greetingName('')).toBeNull()
@@ -229,34 +229,34 @@ describe('greetingName — nome como está no Asaas (10/09, GoLink)', () => {
     expect(greetingName('   ')).toBeNull()
   })
 
-  // 11/09 — os dois nomes que o João mandou depois de ver o "Oi, Dom!".
+  // 11/09 — os dois nomes que o João mandou depois de ver o "Oi, Tio!".
   it('artigo na frente leva mais uma palavra (senão vira "Oi, A!")', () => {
-    expect(greetingName('A Pellogia Corretora E Administracao De Seguros Lt')).toBe('A Pellogia Corretora')
-    expect(greetingName('O Boticário')).toBe('O Boticário')
+    expect(greetingName('A Exemplar Corretora E Administracao De Seguros Lt')).toBe('A Exemplar Corretora')
+    expect(greetingName('O Pioneiro')).toBe('O Pioneiro')
   })
   it('separador solto não vira parte do nome', () => {
-    expect(greetingName('Ecosistema - Gestão de Seguros')).toBe('Ecosistema')
+    expect(greetingName('Seguralia - Gestão de Seguros')).toBe('Seguralia')
   })
 })
 
-describe('phoneSearchDigits — por que "Center Pisos Raspadora" não era achado (11/09)', () => {
+describe('phoneSearchDigits — por que "Centro Pisos Modelo" não era achado (11/09)', () => {
   it('busca por NOME não procura telefone (senão o ILIKE vira %% e casa com a conta toda)', () => {
-    expect(phoneSearchDigits('Center Pisos Raspadora')).toBeNull()
+    expect(phoneSearchDigits('Centro Pisos Modelo')).toBeNull()
     expect(phoneSearchDigits('')).toBeNull()
     expect(phoneSearchDigits(null)).toBeNull()
-    expect(phoneSearchDigits('L&M Vidros')).toBeNull()
+    expect(phoneSearchDigits('R&S Vidros')).toBeNull()
   })
   it('dígito solto do nome também não abre a busca por telefone', () => {
-    expect(phoneSearchDigits('Rack 95')).toBeNull()
-    expect(phoneSearchDigits('M&P 12')).toBeNull()
+    expect(phoneSearchDigits('Loja 77')).toBeNull()
+    expect(phoneSearchDigits('K&W 12')).toBeNull()
   })
   it('telefone de verdade procura pelos dígitos', () => {
-    expect(phoneSearchDigits('(12) 99701-0439')).toBe('12997010439')
-    expect(phoneSearchDigits('997010439')).toBe('997010439')
+    expect(phoneSearchDigits('(12) 99000-5678')).toBe('12990005678')
+    expect(phoneSearchDigits('990005678')).toBe('990005678')
   })
   it('sufixo de razão social não é jeito de chamar ninguém', () => {
-    expect(greetingName('Pellogia Ltda')).toBe('Pellogia')
-    expect(greetingName('Vale Ouro ME')).toBe('Vale Ouro')
+    expect(greetingName('Exemplar Ltda')).toBe('Exemplar')
+    expect(greetingName('Vale Modelo ME')).toBe('Vale Modelo')
   })
 })
 
@@ -534,7 +534,7 @@ describe('deliveryPlan — por onde a cobrança sai', () => {
     expect(deliveryPlan({ channel: 'both', ...tudo, hasPhone: false })).toEqual({ ok: true, whatsapp: false, email: true, label: 'e-mail' })
   })
 
-  // 15/09 (Vale Ouro): e-mail que voltou fica de fora; a fila diz qual endereço.
+  // 15/09 (Vale Modelo): e-mail que voltou fica de fora; a fila diz qual endereço.
   it('e-mail que voltou: both segue só por WhatsApp; só e-mail diz o endereço', () => {
     const voltou = { ...tudo, hasEmail: false, emailBlocked: 'financeiro@empresa-exemplo.com.br' }
     expect(deliveryPlan({ channel: 'both', ...voltou })).toEqual({ ok: true, whatsapp: true, email: false, label: 'WhatsApp' })

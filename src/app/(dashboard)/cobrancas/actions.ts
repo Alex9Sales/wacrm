@@ -340,7 +340,7 @@ export interface WalletDebtor {
    */
   contactName: string | null
   /** A ficha do contato ligado tem telefone? Sem ele a cobrança não sai por
-   *  WhatsApp — só por e-mail (16/09, L&M Vidros: "2 cobranças enviadas", 1 só
+   *  WhatsApp — só por e-mail (16/09, R&S Vidros: "2 cobranças enviadas", 1 só
    *  chegou no WhatsApp, e a tela não dizia). */
   contactHasPhone: boolean
 }
@@ -348,7 +348,7 @@ export interface WalletDebtor {
 /**
  * O contato do WhatsApp que nunca teve nome salvo vem com o próprio número no
  * lugar do nome. Mostrar isso como nome do devedor esconde de quem é a cobrança
- * (11/09: "Center Pisos Raspadora" aparecia como 5512991103109).
+ * (11/09: "Centro Pisos Modelo" aparecia como 5512990001111).
  */
 function looksLikeBarePhone(name: string | null | undefined): boolean {
   const t = (name ?? '').trim()
@@ -390,7 +390,7 @@ function phoneDiff(
 ): { asaas: string; crm: string | null } | null {
   if (!contactId) return null
   // Fixo TAMBÉM entra: o WhatsApp Business aceita número fixo, e o do cliente
-  // da GoLink (12 3648-8533) respondeu `numberExists: true` no check-exists
+  // da GoLink (12 3000-4321) respondeu `numberExists: true` no check-exists
   // (11/09). Quem decide se o número serve é o WhatsApp, na hora de adotar —
   // não o formato.
   const asaas = asaasPhoneForContact(asaasRaw)
@@ -598,8 +598,8 @@ export interface ContactOption {
 /**
  * Busca contatos para resolver uma pendência de casamento na mão.
  * @param asaasPhone telefone do cadastro no Asaas: quem tem o MESMO número vem
- *   primeiro, qualquer que seja o termo (16/09, L&M Vidros: a busca começava
- *   por "L&M Vidros" e o contato certo se chamava "LM Vidros").
+ *   primeiro, qualquer que seja o termo (16/09, R&S Vidros: a busca começava
+ *   por "R&S Vidros" e o contato certo se chamava "RS Vidros").
  */
 export async function searchContactsForCharge(query: string, asaasPhone?: string | null): Promise<ContactOption[]> {
   const { accountId } = await getCurrentAccount()
@@ -609,7 +609,7 @@ export async function searchContactsForCharge(query: string, asaasPhone?: string
   const samePhone = tail.length === 8 ? sql`right(${contacts.phoneNormalized}, 8) = ${tail}` : null
   if (q.length < 2 && !samePhone) return []
 
-  // 🐛 11/09 (João): buscar "Center Pisos Raspadora" não achava o contato que
+  // 🐛 11/09 (João): buscar "Centro Pisos Modelo" não achava o contato que
   // EXISTIA. A busca por telefone usava `q.replace(/\D/g,'')`, que numa busca
   // sem dígitos vira string vazia — `phone ILIKE '%%'` casa com TODO MUNDO.
   // Com o OR, a lista virava "os 20 primeiros contatos da conta", e o certo
@@ -636,7 +636,7 @@ export async function searchContactsForCharge(query: string, asaasPhone?: string
 }
 
 // ------------------------------- vínculo cliente do Asaas → contato (migr 0178)
-// 16/09 (Ultra Visão): a ligação feita à mão valia só para as cobranças já
+// 16/09 (Ótica Exemplo): a ligação feita à mão valia só para as cobranças já
 // espelhadas; a PRÓXIMA parcela casava de novo por palpite, com outro contato.
 // Agora toda ligação feita na tela grava o vínculo, que a sincronização e o
 // lembrete respeitam — e "desligar contato" apaga.
@@ -812,7 +812,7 @@ export async function adoptAsaasPhone(
 
   // Guarda o número anterior para o "Desfazer" do aviso — clicar errado aqui
   // troca para onde a cobrança vai, e sem volta o cliente fica sem saída
-  // (11/09, João: "cliquei errado aqui em center piso raspadora, como volto?").
+  // (11/09, João: "cliquei errado aqui em centro pisos modelo, como volto?").
   const antes = firstOrNull(
     await db
       .select({ phone: contacts.phone })
@@ -1055,7 +1055,7 @@ export interface ContactCollectionStatus {
  * Situação de cobrança de UM contato — a lateral da conversa mostra e age.
  * 16/09: também devolve quem está SEGURADO sem nada vencido na carteira
  * (pausa, promessa, limite de toques) — antes voltava null e a pausa ficava
- * invisível para sempre (Guincho Ribeiro).
+ * invisível para sempre (Reboque Modelo).
  */
 export async function getContactCollectionStatus(contactId: string): Promise<ContactCollectionStatus | null> {
   const { accountId } = await getCurrentAccount()
@@ -1125,7 +1125,7 @@ export interface HeldDebtor {
  * Régua parada em quem NÃO tem nada vencido na carteira — a lista da carteira
  * só mostra quem deve, então essas pausas ficavam invisíveis (16/09). Promessa
  * sem cobrança aberta fica de fora: vence sozinha e costuma ser vencimento
- * movido no Asaas (caso Silvia).
+ * movido no Asaas (caso Lúcia).
  */
 export async function listHeldDebtors(): Promise<HeldDebtor[]> {
   const { accountId } = await getCurrentAccount()
@@ -1452,7 +1452,7 @@ export async function createContactsForPendingDebtors(): Promise<ActionResult<Bu
 }
 
 // ------------------------------------------ a vencer sem contato (16/09)
-// Speed Gás e Água (GoLink): a parcela a vencer de cliente do Asaas que não
+// Veloz Gás e Água (GoLink): a parcela a vencer de cliente do Asaas que não
 // casava com contato não recebia o lembrete antes do vencimento, e só o log do
 // worker sabia. A rodada do lembrete grava o retrato
 // (collections_upcoming_unmatched) e a tela resolve um por um — o CRM nunca
@@ -2360,8 +2360,8 @@ export async function createChargeManual(input: ManualChargeInput): Promise<Manu
   let sendError: string | null = null
   // Assinatura cuja 1ª cobrança ainda não existe: sem link pra mandar agora.
   if (targets?.ok && created.invoiceUrl) {
-    // 11/09 (João): a primeira palavra crua virava "Oi, Dom!" para
-    // "Dom Burguer Susan". Mesma regra da régua (greetingName), e o nome do
+    // 11/09 (João): a primeira palavra crua virava "Oi, Tio!" para
+    // "Tio Burguer Lanches". Mesma regra da régua (greetingName), e o nome do
     // ASAAS na frente do apelido do CRM — que às vezes é só o número.
     const asaasName = firstOrNull(
       await db
@@ -2741,7 +2741,7 @@ const SENDS_ROWS_LIMIT = 300
  * como se não tivesse sido:
  *   1. A lista trazia o MÊS inteiro mas mostrava só HH:MM. Um rascunho que
  *      expirou dia 15 às 09:10 aparecia como "09:10 · não saiu" do lado de
- *      quem foi cobrado HOJE às 09:47 — o Diego aparecia duas vezes, uma delas
+ *      quem foi cobrado HOJE às 09:47 — o Hugo aparecia duas vezes, uma delas
  *      "não saiu".
  *   2. O total do mês saía da lista, e a lista tinha LIMIT 200: o mês real
  *      (158 enviadas + 70 expiradas = 228 pedidos) virava 156 + 44.

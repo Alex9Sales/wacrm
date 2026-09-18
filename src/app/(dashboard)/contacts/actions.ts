@@ -381,7 +381,7 @@ export async function saveContact(
   if (!phone) return { ok: false, duplicate: false, error: 'Phone number is required' }
   // Reject a malformed number at save time instead of letting it through and
   // failing later (silently) at send time. Real incident: a contact saved as
-  // "01528999632794" (leading 0, 14 digits) passed here and only surfaced as
+  // "01528990005678" (leading 0, 14 digits) passed here and only surfaced as
   // "Invalid phone number format" when someone tried to message them.
   if (!isValidE164(sanitizePhoneForMeta(phone))) {
     return {
@@ -552,7 +552,7 @@ export async function importContacts(
   // 2) Match against numbers already in this account using the SAME
   //    9th-digit / trunk-tolerant rule the webhook + contact form use
   //    (last-8 suffix + phonesMatch), NOT an exact-digits set — otherwise a
-  //    "5511947650435" in the file would miss an existing "551147650435"
+  //    "5511990001234" in the file would miss an existing "551190001234"
   //    (or vice-versa) and slip through as a fresh duplicate. Pre-filter in
   //    SQL by suffix so we don't pull the whole account.
   const suffixes = [

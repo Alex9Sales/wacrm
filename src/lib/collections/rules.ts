@@ -278,7 +278,7 @@ const NAME_STOPWORDS = new Set(['e', 'de', 'da', 'do', 'das', 'dos', '&', 'em', 
  * por telefone.
  *
  * 🐛 11/09 (João/GoLink): a carteira montava `phone ILIKE '%' || digitos || '%'`
- * sem essa guarda. Buscando "Center Pisos Raspadora" os dígitos davam string
+ * sem essa guarda. Buscando "Centro Pisos Modelo" os dígitos davam string
  * VAZIA, o ILIKE virava `'%%'` e casava com os 286 contatos da conta — a lista
  * devolvia 20 contatos quaisquer e o certo nunca aparecia ("n acha").
  */
@@ -287,7 +287,7 @@ export function phoneSearchDigits(query: string | null | undefined): string | nu
   return d.length >= 4 ? d : null
 }
 
-/** Artigo sozinho não é nome de ninguém: "A Pellogia…" tem que levar mais uma palavra. */
+/** Artigo sozinho não é nome de ninguém: "A Exemplar…" tem que levar mais uma palavra. */
 const NAME_ARTICLES = new Set(['a', 'o', 'as', 'os'])
 
 /** Sufixo de razão social: ninguém quer ser chamado de "Ltda". */
@@ -297,16 +297,16 @@ const NAME_LEGAL_SUFFIX = new Set(['ltda', 'ltda.', 'lt', 'me', 'mei', 'epp', 'e
  * Como chamar o cliente na mensagem, a partir do nome COMO ESTÁ NO ASAAS
  * (decisão João/Alex 10/09: prevalece o Asaas, não o apelido do WhatsApp).
  * Sem IA não dá pra saber se é pessoa ou empresa, então a regra é de tamanho:
- * até 3 palavras vai INTEIRO ("Drogaria Faria Lima", "UTI dos Fogões",
- * "Marcenaria São José" — cortar em duas estraga todos esses); mais longo, as
- * duas primeiras ("Ultra Visão"), ou só a primeira quando a segunda é conector
+ * até 3 palavras vai INTEIRO ("Drogaria Vila Exemplo", "SOS dos Fogões",
+ * "Marcenaria Nova Esperança" — cortar em duas estraga todos esses); mais longo, as
+ * duas primeiras ("Ótica Exemplo"), ou só a primeira quando a segunda é conector
  * ("João da…" → "João").
  *
  * ⚠️ 11/09: passei a regra pelos 51 clientes reais da GoLink antes de subir.
- * Forçar "duas primeiras" para atender "Dom Burguer Susan" quebrava 8 nomes
- * ("Canal da Pizza" → "Canal", "UTI dos Fogões" → "UTI"). Ficou o limite de 3.
+ * Forçar "duas primeiras" para atender "Tio Burguer Lanches" quebrava 8 nomes
+ * ("Casa da Pizza" → "Casa", "SOS dos Fogões" → "SOS"). Ficou o limite de 3.
  * Os dois consertos que a lista real pediu: ARTIGO na frente não conta como
- * palavra ("A Pellogia Corretora E…" virava "A Pellogia") e SUFIXO de razão
+ * palavra ("A Exemplar Corretora E…" virava "A Exemplar") e SUFIXO de razão
  * social ("Ltda", "ME") não é jeito de chamar ninguém.
  * A IA recebe o nome completo com a instrução pessoa/empresa (engine.ts).
  */
@@ -340,7 +340,7 @@ const COLLECTION_EMAIL_RE = /^[^\s@,;]+@[^\s@,;]+\.[^\s@,;]+$/
 /**
  * 📧 Um endereço de e-mail utilizável, ou null. Aceita a lista que o Asaas
  * guarda em alguns cadastros ("a@x.com, b@y.com") e fica com o primeiro válido.
- * `skip`: endereços que voltaram (email_bounces, 15/09 Vale Ouro) — pula.
+ * `skip`: endereços que voltaram (email_bounces, 15/09 Vale Modelo) — pula.
  */
 export function collectionEmail(value: unknown, skip?: ReadonlySet<string>): string | null {
   if (typeof value !== 'string') return null
@@ -384,7 +384,7 @@ export function byNearestDue<T extends { lines: { daysUntil: number | null }[] }
 /**
  * 🔁 Depois de uma tentativa que falhou, quanto falta para poder tentar de novo.
  *
- * 14/09 (A.M Carretos/GoLink): o WAHA devolveu erro mas ENTREGOU; o sender
+ * 14/09 (B.C Fretes/GoLink): o WAHA devolveu erro mas ENTREGOU; o sender
  * tentou de novo no minuto seguinte e o devedor recebeu a mesma cobrança duas
  * vezes. A espera dá tempo do eco da mensagem chegar — e o sender procura esse
  * eco antes de reenviar.
@@ -491,7 +491,7 @@ export type DebtorHold = 'paused' | 'snoozed' | 'max_touches'
  * ✋ O FREIO do devedor — uma fonte só para a régua, para a montagem do
  * lembrete e para a hora do envio.
  *
- * 15/09 (GoLink, Guincho Ribeiro): o lembrete da parcela nova saiu para um
+ * 15/09 (GoLink, Reboque Modelo): o lembrete da parcela nova saiu para um
  * cliente PAUSADO ("pediu acordo/parcelamento"), porque o lembrete não lia
  * collections_touches e o executor só reconferia o Asaas. Pausa e promessa
  * valiam para a régua e não valiam para o resto.

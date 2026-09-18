@@ -126,7 +126,7 @@ export function ChannelPixDialog({
             <input
               value={key}
               onChange={(e) => setKey(e.target.value)}
-              placeholder="Ex: 30365250000196"
+              placeholder="Ex: 00.000.000/0000-00"
               className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
             />
           </div>
@@ -137,7 +137,7 @@ export function ChannelPixDialog({
             <input
               value={name}
               onChange={(e) => setName(e.target.value)}
-              placeholder="Ex: Danyela Glayce Leite de Souza Ltda"
+              placeholder="Ex: Nome da sua empresa"
               className="w-full rounded-lg border border-border bg-background px-3 py-2 text-sm text-foreground"
             />
           </div>

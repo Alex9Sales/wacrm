@@ -6,12 +6,12 @@ describe('formatPixMessage', () => {
   it('formats key + type + name like the inbound Pix card', () => {
     expect(
       formatPixMessage({
-        key: '30365250000196',
+        key: '11222333000181',
         keyType: 'CNPJ',
-        name: 'Danyela Glayce Leite de Souza Ltda',
+        name: 'Empresa Exemplo Ltda',
       }),
     ).toBe(
-      '💠 Chave Pix • CNPJ\nDanyela Glayce Leite de Souza Ltda\n30365250000196',
+      '💠 Chave Pix • CNPJ\nEmpresa Exemplo Ltda\n11222333000181',
     );
   });
 

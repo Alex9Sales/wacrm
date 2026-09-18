@@ -1,7 +1,7 @@
 // ============================================================
 // Troca a senha de app de um canal Gmail SEM recriar o canal.
 //
-// 15/09 (GoLink, golinkoficial@gmail.com): o Google revogou a senha de app às
+// 15/09 (GoLink, Gmail do canal de cobrança): o Google revogou a senha de app às
 // 23:13 de 14/09 (acontece sempre que alguém troca a senha da conta Google).
 // O único jeito de consertar era apagar e criar o canal de novo — o que apaga
 // as conversas (FK em cascata) e zera o ponto de leitura (e-mails que chegaram

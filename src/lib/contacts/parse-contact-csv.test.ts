@@ -109,12 +109,12 @@ Bob,+15559876543,,`;
   it('skips a leading title line before the header row', () => {
     const csv = `clientes-ddd11
 Telefone,Nome
-5511947650435,Carla`;
+5511990001234,Carla`;
 
     const result = parseContactCsv(csv);
     expect(result.rows).toEqual([
       {
-        phone: '5511947650435',
+        phone: '5511990001234',
         name: 'Carla',
         email: undefined,
         company: undefined,

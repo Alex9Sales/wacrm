@@ -11,12 +11,12 @@ import {
 
 describe('isGroupJid', () => {
   it('matches the @g.us suffixed form', () => {
-    expect(isGroupJid('120363400053019227@g.us')).toBe(true);
-    expect(isGroupJid('120363400053019227@G.US')).toBe(true);
+    expect(isGroupJid('120363000000000001@g.us')).toBe(true);
+    expect(isGroupJid('120363000000000001@G.US')).toBe(true);
   });
 
   it('matches a bare numeric group id that lost its suffix', () => {
-    expect(isGroupJid('120363400053019227')).toBe(true);
+    expect(isGroupJid('120363000000000001')).toBe(true);
     // exactly 16 digits is the lower bound (E.164 max is 15)
     expect(isGroupJid('1234567890123456')).toBe(true);
   });
@@ -44,13 +44,13 @@ describe('isGroupJid', () => {
 
 describe('groupJidDigits', () => {
   it('strips the suffix and non-digits', () => {
-    expect(groupJidDigits('120363400053019227@g.us')).toBe('120363400053019227');
-    expect(groupJidDigits('120363400053019227')).toBe('120363400053019227');
+    expect(groupJidDigits('120363000000000001@g.us')).toBe('120363000000000001');
+    expect(groupJidDigits('120363000000000001')).toBe('120363000000000001');
   });
 
   it('matches across the @g.us-vs-bare mismatch (opt-in lookup robustness)', () => {
-    expect(groupJidDigits('120363400053019227@g.us')).toBe(
-      groupJidDigits('120363400053019227'),
+    expect(groupJidDigits('120363000000000001@g.us')).toBe(
+      groupJidDigits('120363000000000001'),
     );
   });
 });
@@ -73,12 +73,12 @@ describe('prefixGroupAuthor', () => {
 describe('mentionUsers', () => {
   it('extracts the user-part of LID and phone jids', () => {
     expect(
-      mentionUsers(['146089705500852@lid', '5513992126485@s.whatsapp.net']),
-    ).toEqual(['146089705500852', '5513992126485']);
+      mentionUsers(['140000000000001@lid', '5513990001234@s.whatsapp.net']),
+    ).toEqual(['140000000000001', '5513990001234']);
   });
 
   it('strips the :device tag', () => {
-    expect(mentionUsers(['146089705500852:4@lid'])).toEqual(['146089705500852']);
+    expect(mentionUsers(['140000000000001:4@lid'])).toEqual(['140000000000001']);
   });
 
   it('returns [] for non-arrays / garbage', () => {
@@ -92,34 +92,34 @@ describe('parseGroupParticipants', () => {
   it('pairs the @lid mention token with the phone jid (gows shape)', () => {
     expect(
       parseGroupParticipants([
-        { JID: '146089705500852@lid', PhoneNumber: '5513992126485@s.whatsapp.net' },
+        { JID: '140000000000001@lid', PhoneNumber: '5513990001234@s.whatsapp.net' },
       ]),
-    ).toEqual([{ lidUser: '146089705500852', phone: '5513992126485' }]);
+    ).toEqual([{ lidUser: '140000000000001', phone: '5513990001234' }]);
   });
 
   it('accepts @c.us phones and the :device tag', () => {
     expect(
       parseGroupParticipants([
-        { JID: '146089705500852:4@lid', PN: '5513992126485@c.us' },
+        { JID: '140000000000001:4@lid', PN: '5513990001234@c.us' },
       ]),
-    ).toEqual([{ lidUser: '146089705500852', phone: '5513992126485' }]);
+    ).toEqual([{ lidUser: '140000000000001', phone: '5513990001234' }]);
   });
 
   it('falls back to bare PhoneNumber/LID field names', () => {
     expect(
       parseGroupParticipants([
-        { LID: '146089705500852', PhoneNumber: '5513992126485' },
+        { LID: '140000000000001', PhoneNumber: '5513990001234' },
       ]),
-    ).toEqual([{ lidUser: '146089705500852', phone: '5513992126485' }]);
+    ).toEqual([{ lidUser: '140000000000001', phone: '5513990001234' }]);
   });
 
   it('keeps a participant with only one id resolvable', () => {
     expect(
       parseGroupParticipants([
-        { JID: '5513992126485@s.whatsapp.net' },
-        { JID: '146089705500852@lid' },
+        { JID: '5513990001234@s.whatsapp.net' },
+        { JID: '140000000000001@lid' },
       ]),
-    ).toEqual([{ phone: '5513992126485' }, { lidUser: '146089705500852' }]);
+    ).toEqual([{ phone: '5513990001234' }, { lidUser: '140000000000001' }]);
   });
 
   it('skips empty/garbage participants and non-arrays', () => {
@@ -130,21 +130,21 @@ describe('parseGroupParticipants', () => {
 });
 
 describe('buildOutboundGroupMentions', () => {
-  const nameToUser = { 'Ana Paula': '111@x', Ana: '222', João: '146089705500852' };
+  const nameToUser = { 'Ana Paula': '111@x', Ana: '222', João: '140000000000001' };
   const jidByUser = {
     '111@x': '111@lid', // (won't be used — Ana Paula's user is odd on purpose)
-    '222': '5567992539584@c.us',
-    '146089705500852': '146089705500852@lid',
+    '222': '5567990001234@c.us',
+    '140000000000001': '140000000000001@lid',
   };
 
   it('rewrites @Name to @<user> and collects the jid', () => {
     const r = buildOutboundGroupMentions(
       'bom dia @João, confirma?',
-      { João: '146089705500852' },
-      { '146089705500852': '146089705500852@lid' },
+      { João: '140000000000001' },
+      { '140000000000001': '140000000000001@lid' },
     );
-    expect(r.text).toBe('bom dia @146089705500852, confirma?');
-    expect(r.mentions).toEqual(['146089705500852@lid']);
+    expect(r.text).toBe('bom dia @140000000000001, confirma?');
+    expect(r.mentions).toEqual(['140000000000001@lid']);
   });
 
   it('prefers the longest name (Ana Paula over Ana)', () => {
@@ -172,19 +172,19 @@ describe('resolveGroupMentions', () => {
   it('rewrites a known mention to its name', () => {
     expect(
       resolveGroupMentions(
-        '@146089705500852 obrigado!',
-        ['146089705500852'],
-        { '146089705500852': 'Guilherme Andrade' },
+        '@140000000000001 obrigado!',
+        ['140000000000001'],
+        { '140000000000001': 'Paulo Exemplo' },
       ),
-    ).toBe('@Guilherme Andrade obrigado!');
+    ).toBe('@Paulo Exemplo obrigado!');
   });
 
   it('leaves an unknown mention as the raw number', () => {
     expect(
-      resolveGroupMentions('@999 e @146089705500852', ['999', '146089705500852'], {
-        '146089705500852': 'Guilherme Andrade',
+      resolveGroupMentions('@999 e @140000000000001', ['999', '140000000000001'], {
+        '140000000000001': 'Paulo Exemplo',
       }),
-    ).toBe('@999 e @Guilherme Andrade');
+    ).toBe('@999 e @Paulo Exemplo');
   });
 
   it('does not rewrite a shorter user inside a longer one', () => {
@@ -204,14 +204,14 @@ describe('resolveGroupMentions', () => {
 });
 
 describe('parseGroupParticipants — resposta REAL do gows (04/09)', () => {
-  // Capturado da API do WAHA no grupo ELITE MORENA DIGITAL, conta do Alex.
+  // Formato capturado da API do WAHA num grupo da conta do Alex (dados trocados por fictícios).
   // Chaves em MAIÚSCULAS e JID em @lid: era exatamente isso que o parser do
   // wahaGroupParticipants não lia, e o import respondia "privacidade do grupo".
   const real = [
     {
-      JID: '77472720781555@lid',
-      PhoneNumber: '556792639104@s.whatsapp.net',
-      LID: '77472720781555@lid',
+      JID: '70000000000001@lid',
+      PhoneNumber: '556790001234@s.whatsapp.net',
+      LID: '70000000000001@lid',
       IsAdmin: false,
       IsSuperAdmin: false,
       DisplayName: '',
@@ -219,9 +219,9 @@ describe('parseGroupParticipants — resposta REAL do gows (04/09)', () => {
       AddRequest: null,
     },
     {
-      JID: '33694119161894@lid',
-      PhoneNumber: '556796856146@s.whatsapp.net',
-      LID: '33694119161894@lid',
+      JID: '30000000000002@lid',
+      PhoneNumber: '556790005678@s.whatsapp.net',
+      LID: '30000000000002@lid',
       IsAdmin: false,
       IsSuperAdmin: false,
       DisplayName: '',
@@ -232,12 +232,12 @@ describe('parseGroupParticipants — resposta REAL do gows (04/09)', () => {
 
   it('extrai o telefone real de cada membro', () => {
     const out = parseGroupParticipants(real)
-    expect(out.map((p) => p.phone)).toEqual(['556792639104', '556796856146'])
+    expect(out.map((p) => p.phone)).toEqual(['556790001234', '556790005678'])
   })
 
   it('guarda o LID junto, para quem não tiver telefone visível', () => {
     const out = parseGroupParticipants(real)
-    expect(out[0].lidUser).toBe('77472720781555')
+    expect(out[0].lidUser).toBe('70000000000001')
   })
 
   it('membro que só tem @lid não é descartado — vira lid para resolver depois', () => {

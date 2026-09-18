@@ -53,33 +53,33 @@ beforeEach(() => {
 describe("resolveOrCreateContactIdsByPhone", () => {
   it("maps a Brazilian 9th-digit variant to the existing contact (no dup)", async () => {
     // Existing contact stored WITHOUT the extra 9; CSV imports it WITH the 9.
-    state.rows = [{ id: "existing-davi", phone: "556792753945" }];
+    state.rows = [{ id: "existing-paulo", phone: "556790001234" }];
     const out = await resolveOrCreateContactIdsByPhone("acct", "user", [
-      { phone: "+5567992753945", name: "Davi Cliente" },
+      { phone: "+5567990001234", name: "Paulo Exemplo" },
     ]);
-    expect(out.get("+5567992753945")).toBe("existing-davi");
+    expect(out.get("+5567990001234")).toBe("existing-paulo");
     expect(state.inserted).toHaveLength(0); // never created a duplicate
   });
 
   it("collapses with/without-9 variants that appear in the same batch", async () => {
     state.rows = []; // neither exists yet
     const out = await resolveOrCreateContactIdsByPhone("acct", "user", [
-      { phone: "556792753945" },
-      { phone: "+5567992753945" },
+      { phone: "556790001234" },
+      { phone: "+5567990001234" },
     ]);
     // One insert, both input phones resolve to the same id.
     expect(state.inserted).toHaveLength(1);
-    expect(out.get("556792753945")).toBe(out.get("+5567992753945"));
+    expect(out.get("556790001234")).toBe(out.get("+5567990001234"));
   });
 
   it("creates genuinely-different numbers separately", async () => {
     state.rows = [];
     const out = await resolveOrCreateContactIdsByPhone("acct", "user", [
-      { phone: "556792753945" },
-      { phone: "556792754325" },
+      { phone: "556790001234" },
+      { phone: "556790005678" },
     ]);
     expect(state.inserted).toHaveLength(2);
-    expect(out.get("556792753945")).not.toBe(out.get("556792754325"));
+    expect(out.get("556790001234")).not.toBe(out.get("556790005678"));
   });
 });
 

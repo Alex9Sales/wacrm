@@ -1,6 +1,6 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest'
 
-// Revisão 16/09 do "A vencer sem contato" (Speed Gás e Água, GoLink). Banco
+// Revisão 16/09 do "A vencer sem contato" (Veloz Gás e Água, GoLink). Banco
 // falso: cada consulta awaited (select, ou escrita com RETURNING) consome a
 // próxima resposta da fila, e as escritas ficam registradas. O SQL não é
 // testado — aqui interessa a DECISÃO:
@@ -220,13 +220,13 @@ describe('carteira: "Criar contato e ligar" com devedor ambíguo', () => {
 })
 
 describe('painel: "Criar contato" confere o casamento na hora', () => {
-  const snap = { name: 'Speed Gás e Água', phone: '12996706499', email: null, cpfCnpj: null, reason: 'no_contact' }
+  const snap = { name: 'Veloz Gás e Água', phone: '12990001234', email: null, cpfCnpj: null, reason: 'no_contact' }
 
   it('retrato diz "sem contato", mas um duplicado apareceu depois da leitura: recusa', async () => {
     h.state.results.push([snap])
     h.findContact.mockResolvedValue(AMBIGUOUS)
 
-    const res = await createContactForUpcoming(CONN, 'cus_speed')
+    const res = await createContactForUpcoming(CONN, 'cus_veloz')
 
     expect(res).toEqual({ ok: false, error: CREATE_AMBIGUOUS_ERROR })
     expect(h.findOrCreateContact).not.toHaveBeenCalled()
@@ -238,25 +238,25 @@ describe('painel: "Criar contato" confere o casamento na hora', () => {
     h.findContact.mockResolvedValue(NOBODY)
     h.findOrCreateContact.mockResolvedValue({ id: NEW_CONTACT, created: true })
     h.state.results.push([], []) // vínculo atual, cobranças abertas
-    h.state.results.push([{ name: 'Speed Gás e Água', phone: '5512996706499', optedOut: false }]) // ficha
+    h.state.results.push([{ name: 'Veloz Gás e Água', phone: '5512990001234', optedOut: false }]) // ficha
     h.resolveCollectionTargets.mockResolvedValue({ ok: true, whatsapp: { conversationId: '', created: false }, email: null, label: 'WhatsApp' })
 
-    const res = await createContactForUpcoming(CONN, 'cus_speed')
+    const res = await createContactForUpcoming(CONN, 'cus_veloz')
 
     expect(res.ok).toBe(true)
     expect(res.data).toMatchObject({ contactId: NEW_CONTACT, created: true, contactHasPhone: true, phoneDiffers: false, deliveryLabel: 'WhatsApp' })
-    expect(writes('insert', asaasCustomerLinks)[0].values).toEqual([expect.objectContaining({ customerName: 'Speed Gás e Água', contactId: NEW_CONTACT })])
-    expect(linkOutcomeTexts('Speed Gás e Água', true, res.data!)).toEqual({ reminder: 'O lembrete sai por WhatsApp na próxima rodada da régua.', warning: null })
+    expect(writes('insert', asaasCustomerLinks)[0].values).toEqual([expect.objectContaining({ customerName: 'Veloz Gás e Água', contactId: NEW_CONTACT })])
+    expect(linkOutcomeTexts('Veloz Gás e Água', true, res.data!)).toEqual({ reminder: 'O lembrete sai por WhatsApp na próxima rodada da régua.', warning: null })
   })
 })
 
 describe('painel: aviso depois de ligar', () => {
-  const snap = { name: 'L&M Vidros', phone: '1136488533', email: null, cpfCnpj: null, reason: 'no_contact' }
+  const snap = { name: 'R&S Vidros', phone: '1130004321', email: null, cpfCnpj: null, reason: 'no_contact' }
 
   it('ficha sem telefone e sem como mandar e-mail: o resultado diz que o lembrete NÃO sai (nada de "só por e-mail")', async () => {
     h.state.results.push([{ id: CONTACT }], [{ id: CONN }], [snap]) // contato, conta do Asaas, retrato (lido ANTES de ligar)
     h.state.results.push([], []) // vínculo atual, cobranças abertas
-    h.state.results.push([{ name: 'LM Vidros', phone: '', optedOut: false }]) // ficha
+    h.state.results.push([{ name: 'RS Vidros', phone: '', optedOut: false }]) // ficha
     h.resolveCollectionTargets.mockResolvedValue({ ok: false, error: 'A régua cobra só por WhatsApp e o contato não tem telefone válido.' })
 
     const res = await linkUpcomingCustomer(CONN, 'cus_lm', CONTACT)
@@ -265,34 +265,34 @@ describe('painel: aviso depois de ligar', () => {
     // Mesmo teste da fila do lembrete: dryRun, com o e-mail do Asaas de reserva.
     expect(h.resolveCollectionTargets).toHaveBeenCalledWith('acc-1', CONTACT, null, { dryRun: true, fallbackEmail: null })
     expect(res.data).toMatchObject({
-      contactName: 'LM Vidros',
+      contactName: 'RS Vidros',
       contactHasPhone: false,
       deliveryLabel: null,
       deliveryError: 'A régua cobra só por WhatsApp e o contato não tem telefone válido.',
     })
-    expect(linkOutcomeTexts('L&M Vidros', true, res.data!).warning).toMatch(/^O lembrete de L&M Vidros NÃO vai sair/)
+    expect(linkOutcomeTexts('R&S Vidros', true, res.data!).warning).toMatch(/^O lembrete de R&S Vidros NÃO vai sair/)
     // O nome do Asaas vai no vínculo (lista "Ligados nos últimos dias").
-    expect(writes('insert', asaasCustomerLinks)[0].values).toEqual([expect.objectContaining({ customerName: 'L&M Vidros', contactId: CONTACT })])
+    expect(writes('insert', asaasCustomerLinks)[0].values).toEqual([expect.objectContaining({ customerName: 'R&S Vidros', contactId: CONTACT })])
   })
 
   it('a conferência do canal falhar não desfaz a ligação nem inventa canal', async () => {
-    h.state.results.push([{ id: CONTACT }], [{ id: CONN }], [{ ...snap, phone: null, email: 'lm@x.com' }], [], [], [{ name: 'LM Vidros', phone: '', optedOut: false }])
+    h.state.results.push([{ id: CONTACT }], [{ id: CONN }], [{ ...snap, phone: null, email: 'rs@x.com' }], [], [], [{ name: 'RS Vidros', phone: '', optedOut: false }])
     h.resolveCollectionTargets.mockRejectedValue(new Error('timeout'))
 
     const res = await linkUpcomingCustomer(CONN, 'cus_lm', CONTACT)
 
     expect(res.ok).toBe(true)
-    expect(h.resolveCollectionTargets).toHaveBeenCalledWith('acc-1', CONTACT, null, { dryRun: true, fallbackEmail: 'lm@x.com' })
+    expect(h.resolveCollectionTargets).toHaveBeenCalledWith('acc-1', CONTACT, null, { dryRun: true, fallbackEmail: 'rs@x.com' })
     expect(res.data).toMatchObject({ deliveryLabel: null, deliveryError: null })
-    const t = linkOutcomeTexts('L&M Vidros', true, res.data!)
-    expect(t.warning).toBe('A ficha de LM Vidros não tem telefone: o lembrete não sai por WhatsApp.')
+    const t = linkOutcomeTexts('R&S Vidros', true, res.data!)
+    expect(t.warning).toBe('A ficha de RS Vidros não tem telefone: o lembrete não sai por WhatsApp.')
     expect(t.reminder).toMatch(/^Não deu para conferir/)
   })
 })
 
 describe('painel: o aviso olha o freio da régua como a fila (revisão 16/09)', () => {
-  const snap = { name: 'Center Piso', phone: '11999990000', email: null, cpfCnpj: null, reason: 'no_contact' }
-  const ficha = { name: 'Center Piso Matriz', phone: '5511999990000', optedOut: false }
+  const snap = { name: 'Centro Pisos', phone: '11999990000', email: null, cpfCnpj: null, reason: 'no_contact' }
+  const ficha = { name: 'Centro Pisos Matriz', phone: '5511999990000', optedOut: false }
   const touch = { paused: false, pausedReason: null as string | null, touchCount: 0, lastTouchAt: null, snoozeUntil: null as string | null, snoozeReason: null as string | null }
   // contato, conta do Asaas, retrato, vínculo atual, cobranças abertas, ficha — e a régua do contato
   const linkWith = (st: typeof touch) => h.state.results.push([{ id: CONTACT }], [{ id: CONN }], [snap], [], [], [ficha], [st])
@@ -309,16 +309,16 @@ describe('painel: o aviso olha o freio da régua como a fila (revisão 16/09)', 
     expect(res.ok).toBe(true)
     expect(h.resolveCollectionTargets).not.toHaveBeenCalled()
     expect(res.data).toMatchObject({ deliveryLabel: null, deliveryError: expect.stringContaining('(pediu acordo)') })
-    const t = linkOutcomeTexts('Center Piso', true, res.data!)
+    const t = linkOutcomeTexts('Centro Pisos', true, res.data!)
     expect(t.reminder).toBe('')
-    expect(t.warning).toMatch(/^O lembrete de Center Piso NÃO vai sair: A régua está parada neste cliente \(pediu acordo\)/)
+    expect(t.warning).toMatch(/^O lembrete de Centro Pisos NÃO vai sair: A régua está parada neste cliente \(pediu acordo\)/)
     expect(t.warning).toContain('Retomar cobrança')
   })
 
   it('promessa com data no futuro segura; promessa vencida não', async () => {
     linkWith({ ...touch, snoozeUntil: new Date(Date.now() + 3 * 86_400_000).toISOString(), snoozeReason: 'prometeu pagar' })
     const held = await linkUpcomingCustomer(CONN, 'cus_cp', CONTACT)
-    expect(linkOutcomeTexts('Center Piso', true, held.data!).warning).toMatch(
+    expect(linkOutcomeTexts('Centro Pisos', true, held.data!).warning).toMatch(
       /NÃO vai sair: A régua está parada neste cliente até \d{2}\/\d{2} \(prometeu pagar\)/,
     )
     expect(h.resolveCollectionTargets).not.toHaveBeenCalled()
@@ -326,7 +326,7 @@ describe('painel: o aviso olha o freio da régua como a fila (revisão 16/09)', 
     linkWith({ ...touch, snoozeUntil: new Date(Date.now() - 86_400_000).toISOString(), snoozeReason: 'prometeu pagar' })
     const free = await linkUpcomingCustomer(CONN, 'cus_cp', CONTACT)
     expect(free.data).toMatchObject({ deliveryLabel: 'WhatsApp', deliveryError: null })
-    expect(linkOutcomeTexts('Center Piso', true, free.data!)).toEqual({ reminder: 'O lembrete sai por WhatsApp na próxima rodada da régua.', warning: null })
+    expect(linkOutcomeTexts('Centro Pisos', true, free.data!)).toEqual({ reminder: 'O lembrete sai por WhatsApp na próxima rodada da régua.', warning: null })
   })
 
   it('limite de toques pelas settings da conta (maxTouches 3): NÃO vai sair', async () => {
@@ -335,7 +335,7 @@ describe('painel: o aviso olha o freio da régua como a fila (revisão 16/09)', 
 
     const res = await linkUpcomingCustomer(CONN, 'cus_cp', CONTACT)
 
-    const t = linkOutcomeTexts('Center Piso', true, res.data!)
+    const t = linkOutcomeTexts('Centro Pisos', true, res.data!)
     expect(t.reminder).toBe('')
     expect(t.warning).toMatch(/NÃO vai sair: Chegou no limite de cobranças/)
   })
@@ -349,7 +349,7 @@ describe('painel: o aviso olha o freio da régua como a fila (revisão 16/09)', 
     expect(res.ok).toBe(true)
     expect(h.resolveCollectionTargets).not.toHaveBeenCalled()
     expect(res.data).toMatchObject({ deliveryLabel: null, deliveryError: null })
-    expect(linkOutcomeTexts('Center Piso', true, res.data!).reminder).toMatch(/^Não deu para conferir/)
+    expect(linkOutcomeTexts('Centro Pisos', true, res.data!).reminder).toMatch(/^Não deu para conferir/)
   })
 })
 
@@ -404,7 +404,7 @@ describe('Desfazer / Desligar', () => {
   it('"Criar contato" desfeito: apaga o vínculo e o contato recém-criado sem uso', async () => {
     h.state.results.push([{ id: CONN }], [{ contactId: NEW_CONTACT }], [unused]) // conta, vínculo atual, uso do contato
 
-    const res = await unlinkUpcomingCustomer(CONN, 'cus_speed', undoOf(NEW_CONTACT))
+    const res = await unlinkUpcomingCustomer(CONN, 'cus_veloz', undoOf(NEW_CONTACT))
 
     expect(res).toEqual({ ok: true, data: { contactRemoved: true } })
     expect(writes('delete', asaasCustomerLinks)).toHaveLength(1)
@@ -413,10 +413,10 @@ describe('Desfazer / Desligar', () => {
 
   it('contato criado por OUTRA pessoa (id forjado no navegador) ou já com etiqueta: fica', async () => {
     h.state.results.push([{ id: CONN }], [{ contactId: NEW_CONTACT }], [{ ...unused, createdByUser: false }])
-    expect(await unlinkUpcomingCustomer(CONN, 'cus_speed', undoOf(NEW_CONTACT))).toEqual({ ok: true, data: { contactRemoved: false } })
+    expect(await unlinkUpcomingCustomer(CONN, 'cus_veloz', undoOf(NEW_CONTACT))).toEqual({ ok: true, data: { contactRemoved: false } })
 
     h.state.results.push([{ id: CONN }], [{ contactId: NEW_CONTACT }], [{ ...unused, tags: true }])
-    expect(await unlinkUpcomingCustomer(CONN, 'cus_speed', undoOf(NEW_CONTACT))).toEqual({ ok: true, data: { contactRemoved: false } })
+    expect(await unlinkUpcomingCustomer(CONN, 'cus_veloz', undoOf(NEW_CONTACT))).toEqual({ ok: true, data: { contactRemoved: false } })
 
     expect(writes('delete', contacts)).toHaveLength(0)
   })
@@ -424,7 +424,7 @@ describe('Desfazer / Desligar', () => {
   it('"Desligar" da lista (sem contato criado): só o vínculo sai', async () => {
     h.state.results.push([{ id: CONN }], [{ contactId: NEW_CONTACT }])
 
-    const res = await unlinkUpcomingCustomer(CONN, 'cus_speed', undoOf(null))
+    const res = await unlinkUpcomingCustomer(CONN, 'cus_veloz', undoOf(null))
 
     expect(res).toEqual({ ok: true, data: { contactRemoved: false } })
     expect(writes('delete', asaasCustomerLinks)).toHaveLength(1)
@@ -434,7 +434,7 @@ describe('Desfazer / Desligar', () => {
   it('"Desligar" da lista velha: a parcela venceu e já está na carteira — recusa e não apaga o vínculo', async () => {
     h.state.results.push([{ id: CONN }], [{ contactId: NEW_CONTACT }], [{ id: 'ch-overdue' }]) // conta, vínculo, cobrança aberta
 
-    const res = await unlinkRecentUpcomingCustomer(CONN, 'cus_speed', NEW_CONTACT)
+    const res = await unlinkRecentUpcomingCustomer(CONN, 'cus_veloz', NEW_CONTACT)
 
     expect(res.ok).toBe(false)
     expect(res.error).toMatch(/cobrança aberta na carteira/)
@@ -444,7 +444,7 @@ describe('Desfazer / Desligar', () => {
   it('"Desligar" da lista sem cobrança aberta: só o vínculo sai', async () => {
     h.state.results.push([{ id: CONN }], [{ contactId: NEW_CONTACT }], [])
 
-    const res = await unlinkRecentUpcomingCustomer(CONN, 'cus_speed', NEW_CONTACT)
+    const res = await unlinkRecentUpcomingCustomer(CONN, 'cus_veloz', NEW_CONTACT)
 
     expect(res).toEqual({ ok: true, data: { contactRemoved: false } })
     expect(writes('delete', asaasCustomerLinks)).toHaveLength(1)
@@ -454,26 +454,26 @@ describe('Desfazer / Desligar', () => {
   it('"Desfazer" de um clique não confere cobrança aberta (a que ele não mudou já era assim)', async () => {
     h.state.results.push([{ id: CONN }], [{ contactId: NEW_CONTACT }], [{ id: 'ch-ja-manual' }])
 
-    const res = await unlinkUpcomingCustomer(CONN, 'cus_speed', undoOf(null))
+    const res = await unlinkUpcomingCustomer(CONN, 'cus_veloz', undoOf(null))
 
     expect(res).toEqual({ ok: true, data: { contactRemoved: false } })
     expect(writes('delete', asaasCustomerLinks)).toHaveLength(1)
   })
 
   it('"Desfazer" do Desligar religa com o nome do Asaas que a lista tinha (o retrato já não existe)', async () => {
-    h.state.results.push([{ id: NEW_CONTACT }], [{ id: CONN }], [], [], [], [{ name: 'Speed Matriz', phone: '5512996706499', optedOut: false }])
+    h.state.results.push([{ id: NEW_CONTACT }], [{ id: CONN }], [], [], [], [{ name: 'Veloz Matriz', phone: '5512990001234', optedOut: false }])
     h.resolveCollectionTargets.mockResolvedValue({ ok: true, whatsapp: { conversationId: '', created: false }, email: null, label: 'WhatsApp' })
 
-    const res = await linkUpcomingCustomer(CONN, 'cus_speed', NEW_CONTACT, '  Speed Gás e Água ')
+    const res = await linkUpcomingCustomer(CONN, 'cus_veloz', NEW_CONTACT, '  Veloz Gás e Água ')
 
     expect(res.ok).toBe(true)
-    expect(writes('insert', asaasCustomerLinks)[0].values).toEqual([expect.objectContaining({ customerName: 'Speed Gás e Água', contactId: NEW_CONTACT })])
+    expect(writes('insert', asaasCustomerLinks)[0].values).toEqual([expect.objectContaining({ customerName: 'Veloz Gás e Água', contactId: NEW_CONTACT })])
   })
 
   it('vínculo trocado por outra pessoa depois: não desliga nada', async () => {
     h.state.results.push([{ id: CONN }], [{ contactId: CONTACT }])
 
-    const res = await unlinkUpcomingCustomer(CONN, 'cus_speed', undoOf(null))
+    const res = await unlinkUpcomingCustomer(CONN, 'cus_veloz', undoOf(null))
 
     expect(res.ok).toBe(false)
     expect(writes('delete', asaasCustomerLinks)).toHaveLength(0)
@@ -490,11 +490,11 @@ describe('getUpcomingUnmatched: "Ligados nos últimos dias"', () => {
       {
         connectionId: CONN,
         connectionLabel: 'GoLink',
-        customerId: 'cus_speed',
-        customerName: 'Speed Gás e Água',
+        customerId: 'cus_veloz',
+        customerName: 'Veloz Gás e Água',
         contactId: CONTACT,
         contactName: ' ',
-        contactPhone: '5512996706499',
+        contactPhone: '5512990001234',
         linkedByName: 'Joyce',
         linkedAt: '2026-09-16T14:02:00.000Z',
       },
@@ -509,10 +509,10 @@ describe('getUpcomingUnmatched: "Ligados nos últimos dias"', () => {
       {
         connectionId: CONN,
         connectionLabel: 'GoLink',
-        customerId: 'cus_speed',
-        customerName: 'Speed Gás e Água',
+        customerId: 'cus_veloz',
+        customerName: 'Veloz Gás e Água',
         contactId: CONTACT,
-        contactName: '5512996706499',
+        contactName: '5512990001234',
         contactHasPhone: true,
         linkedByName: 'Joyce',
         linkedAt: '2026-09-16T14:02:00.000Z',

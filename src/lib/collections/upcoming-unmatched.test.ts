@@ -43,8 +43,8 @@ const ASAAS = 'conn-asaas'
 
 const entry = (over: Partial<UnmatchedEntry> & { payment: UnmatchedEntry['payment'] }): UnmatchedEntry => ({
   connectionId: GOLINK,
-  customerId: 'cus_speed',
-  customer: { name: 'Speed Gás e Água', mobilePhone: '12996706499', email: 'speed@x.com', cpfCnpj: '12.345.678/0001-90' },
+  customerId: 'cus_veloz',
+  customer: { name: 'Veloz Gás e Água', mobilePhone: '12990001234', email: 'veloz@x.com', cpfCnpj: '12.345.678/0001-90' },
   reason: 'no_contact',
   ...over,
 })
@@ -60,7 +60,7 @@ describe('buildUnmatchedRows — o retrato de quem vai vencer sem contato', () =
     expect(rows[0].nextDueDate).toBe('2026-09-18')
     expect(rows[0].payments.map((p) => p.id)).toEqual(['pay_2', 'pay_1'])
     expect(rows[0].payments[1].invoiceUrl).toBe('https://asaas/i/1')
-    expect(rows[0]).toMatchObject({ name: 'Speed Gás e Água', phone: '12996706499', email: 'speed@x.com', cpfCnpj: '12.345.678/0001-90' })
+    expect(rows[0]).toMatchObject({ name: 'Veloz Gás e Água', phone: '12990001234', email: 'veloz@x.com', cpfCnpj: '12.345.678/0001-90' })
   })
 
   it('o mesmo cus_ em conexões diferentes vira 2 cartões (o id é por conta do Asaas)', () => {
@@ -82,12 +82,12 @@ describe('buildUnmatchedRows — o retrato de quem vai vencer sem contato', () =
   it('corta a data, valor null vira 0, telefone fixo quando não há celular, nome só com espaço vira null', () => {
     const [r] = buildUnmatchedRows([
       entry({
-        customer: { name: '   ', mobilePhone: '', phone: '(12) 3648-8533', email: null, cpfCnpj: null },
+        customer: { name: '   ', mobilePhone: '', phone: '(12) 3000-4321', email: null, cpfCnpj: null },
         payment: { id: 'pay_1', value: null, dueDate: '2026-09-20T00:00:00' },
       }),
     ])
     expect(r.name).toBeNull()
-    expect(r.phone).toBe('(12) 3648-8533')
+    expect(r.phone).toBe('(12) 3000-4321')
     expect(r.payments[0]).toEqual({ id: 'pay_1', value: 0, dueDate: '2026-09-20', invoiceUrl: null, description: null })
     expect(r.total).toBe(0)
   })
@@ -185,12 +185,12 @@ describe('uniqueCustomerRefs', () => {
     expect(
       uniqueCustomerRefs([
         { connectionId: GOLINK, asaasCustomerId: 'cus_1', customerName: '  ' },
-        { connectionId: GOLINK, asaasCustomerId: 'cus_1', customerName: 'Speed Gás e Água' },
+        { connectionId: GOLINK, asaasCustomerId: 'cus_1', customerName: 'Veloz Gás e Água' },
         { connectionId: GOLINK, asaasCustomerId: 'cus_1', customerName: 'Outro nome' },
         { connectionId: ASAAS, asaasCustomerId: 'cus_2', customerName: null },
       ]),
     ).toEqual([
-      { connectionId: GOLINK, customerId: 'cus_1', customerName: 'Speed Gás e Água' },
+      { connectionId: GOLINK, customerId: 'cus_1', customerName: 'Veloz Gás e Água' },
       { connectionId: ASAAS, customerId: 'cus_2' },
     ])
   })
@@ -214,7 +214,7 @@ describe('createRefusal — "Criar contato" nunca chuta entre dois contatos (rev
 
 describe('createProbeKeys — confere pela mesma chave que a criação procura (revisão 16/09)', () => {
   it('telefone que serve para criar: só o telefone (e-mail e CPF/CNPJ empatados não recusam)', () => {
-    expect(createProbeKeys('(12) 99670-6499', 'financeiro@empresa.com')).toEqual({ phone: '5512996706499', email: null })
+    expect(createProbeKeys('(12) 99000-1234', 'financeiro@empresa.com')).toEqual({ phone: '5512990001234', email: null })
   })
 
   it('telefone que não serve ("+1…", vazio): só o e-mail, normalizado', () => {
@@ -225,17 +225,17 @@ describe('createProbeKeys — confere pela mesma chave que a criação procura (
 })
 
 describe('linkDeliveryInfo / linkOutcomeTexts — o aviso depois de ligar só promete o canal conferido', () => {
-  const base: LinkDeliveryInfo = { contactName: 'LM Vidros', contactHasPhone: true, phoneDiffers: false, deliveryLabel: 'WhatsApp', deliveryError: null }
+  const base: LinkDeliveryInfo = { contactName: 'RS Vidros', contactHasPhone: true, phoneDiffers: false, deliveryLabel: 'WhatsApp', deliveryError: null }
 
   it('monta a partir da ficha: nome cai para o telefone, 10+ dígitos é telefone, diferença pelos 8 últimos', () => {
     expect(
-      linkDeliveryInfo({ contactName: ' ', contactPhone: '5512996706499', optedOut: false, asaasPhone: '(12) 99670-6499', delivery: { ok: true, label: 'WhatsApp' } }),
-    ).toEqual({ contactName: '5512996706499', contactHasPhone: true, phoneDiffers: false, deliveryLabel: 'WhatsApp', deliveryError: null })
+      linkDeliveryInfo({ contactName: ' ', contactPhone: '5512990001234', optedOut: false, asaasPhone: '(12) 99000-1234', delivery: { ok: true, label: 'WhatsApp' } }),
+    ).toEqual({ contactName: '5512990001234', contactHasPhone: true, phoneDiffers: false, deliveryLabel: 'WhatsApp', deliveryError: null })
     // Sem o 9º dígito no Asaas: os 8 últimos batem, não é "outro telefone".
-    expect(linkDeliveryInfo({ contactName: 'Speed', contactPhone: '5512996706499', optedOut: false, asaasPhone: '1296706499', delivery: null }).phoneDiffers).toBe(false)
-    expect(linkDeliveryInfo({ contactName: 'Speed', contactPhone: '5512996706499', optedOut: false, asaasPhone: '12 3648-8533', delivery: null }).phoneDiffers).toBe(true)
+    expect(linkDeliveryInfo({ contactName: 'Veloz', contactPhone: '5512990001234', optedOut: false, asaasPhone: '1290001234', delivery: null }).phoneDiffers).toBe(false)
+    expect(linkDeliveryInfo({ contactName: 'Veloz', contactPhone: '5512990001234', optedOut: false, asaasPhone: '12 3000-4321', delivery: null }).phoneDiffers).toBe(true)
     // Ficha sem telefone: não é "outro telefone", é "sem telefone".
-    expect(linkDeliveryInfo({ contactName: 'LM Vidros', contactPhone: '', optedOut: false, asaasPhone: '1136488533', delivery: null })).toMatchObject({
+    expect(linkDeliveryInfo({ contactName: 'RS Vidros', contactPhone: '', optedOut: false, asaasPhone: '1130004321', delivery: null })).toMatchObject({
       contactHasPhone: false,
       phoneDiffers: false,
       deliveryLabel: null,
@@ -250,42 +250,42 @@ describe('linkDeliveryInfo / linkOutcomeTexts — o aviso depois de ligar só pr
       deliveryError: noWay.error,
     })
     expect(
-      linkDeliveryInfo({ contactName: 'X', contactPhone: '5512996706499', optedOut: true, asaasPhone: null, delivery: { ok: true, label: 'WhatsApp' } }),
+      linkDeliveryInfo({ contactName: 'X', contactPhone: '5512990001234', optedOut: true, asaasPhone: null, delivery: { ok: true, label: 'WhatsApp' } }),
     ).toMatchObject({ deliveryLabel: null, deliveryError: OPTED_OUT_DELIVERY_ERROR })
   })
 
-  it('lembrete que não sai (L&M Vidros: ficha sem telefone, régua só por WhatsApp): diz que NÃO sai e não promete e-mail', () => {
+  it('lembrete que não sai (R&S Vidros: ficha sem telefone, régua só por WhatsApp): diz que NÃO sai e não promete e-mail', () => {
     const r = { ...base, contactHasPhone: false, deliveryLabel: null, deliveryError: 'A régua cobra só por WhatsApp e o contato não tem telefone válido.' }
-    const t = linkOutcomeTexts('L&M Vidros', true, r)
-    expect(t.warning).toBe('O lembrete de L&M Vidros NÃO vai sair: A régua cobra só por WhatsApp e o contato não tem telefone válido.')
+    const t = linkOutcomeTexts('R&S Vidros', true, r)
+    expect(t.warning).toBe('O lembrete de R&S Vidros NÃO vai sair: A régua cobra só por WhatsApp e o contato não tem telefone válido.')
     expect(t.reminder).toBe('')
     expect(`${t.reminder} ${t.warning}`).not.toMatch(/e-mail|próxima rodada/)
   })
 
   it('ficha sem telefone com e-mail que a régua usa: sai só por e-mail, e a tela diz', () => {
-    const t = linkOutcomeTexts('L&M Vidros', true, { ...base, contactHasPhone: false, deliveryLabel: 'e-mail' })
+    const t = linkOutcomeTexts('R&S Vidros', true, { ...base, contactHasPhone: false, deliveryLabel: 'e-mail' })
     expect(t.reminder).toBe('O lembrete sai por e-mail na próxima rodada da régua.')
-    expect(t.warning).toBe('A ficha de LM Vidros não tem telefone: o lembrete não sai por WhatsApp, só por e-mail.')
+    expect(t.warning).toBe('A ficha de RS Vidros não tem telefone: o lembrete não sai por WhatsApp, só por e-mail.')
   })
 
   it('conferência falhou: não promete canal nem que sai', () => {
-    const t = linkOutcomeTexts('L&M Vidros', true, { ...base, contactHasPhone: false, deliveryLabel: null })
+    const t = linkOutcomeTexts('R&S Vidros', true, { ...base, contactHasPhone: false, deliveryLabel: null })
     expect(t.reminder).toMatch(/^Não deu para conferir/)
-    expect(t.warning).toBe('A ficha de LM Vidros não tem telefone: o lembrete não sai por WhatsApp.')
+    expect(t.warning).toBe('A ficha de RS Vidros não tem telefone: o lembrete não sai por WhatsApp.')
     expect(`${t.reminder} ${t.warning}`).not.toMatch(/só por e-mail/)
   })
 
   it('tudo certo: diz o canal e não avisa; régua desligada não promete "próxima rodada"', () => {
-    expect(linkOutcomeTexts('Speed Gás', true, base)).toEqual({ reminder: 'O lembrete sai por WhatsApp na próxima rodada da régua.', warning: null })
-    expect(linkOutcomeTexts('Speed Gás', false, base).reminder).toBe(reminderAfterLinkText(false))
+    expect(linkOutcomeTexts('Veloz Gás', true, base)).toEqual({ reminder: 'O lembrete sai por WhatsApp na próxima rodada da régua.', warning: null })
+    expect(linkOutcomeTexts('Veloz Gás', false, base).reminder).toBe(reminderAfterLinkText(false))
   })
 
   it('telefone diferente do Asaas avisa quando o lembrete vai por WhatsApp; só por e-mail, não importa', () => {
-    expect(linkOutcomeTexts('Speed Gás', true, { ...base, phoneDiffers: true }).warning).toMatch(/tem outro telefone/)
-    expect(linkOutcomeTexts('Speed Gás', true, { ...base, phoneDiffers: true, deliveryLabel: 'WhatsApp e e-mail' }).warning).toMatch(/tem outro telefone/)
-    expect(linkOutcomeTexts('Speed Gás', true, { ...base, phoneDiffers: true, deliveryLabel: 'e-mail' }).warning).toBeNull()
+    expect(linkOutcomeTexts('Veloz Gás', true, { ...base, phoneDiffers: true }).warning).toMatch(/tem outro telefone/)
+    expect(linkOutcomeTexts('Veloz Gás', true, { ...base, phoneDiffers: true, deliveryLabel: 'WhatsApp e e-mail' }).warning).toMatch(/tem outro telefone/)
+    expect(linkOutcomeTexts('Veloz Gás', true, { ...base, phoneDiffers: true, deliveryLabel: 'e-mail' }).warning).toBeNull()
     // Não sai de jeito nenhum: o motivo vence o aviso do telefone.
-    expect(linkOutcomeTexts('Speed Gás', true, { ...base, phoneDiffers: true, deliveryLabel: null, deliveryError: 'Sem como alcançar: x; y.' }).warning).toMatch(
+    expect(linkOutcomeTexts('Veloz Gás', true, { ...base, phoneDiffers: true, deliveryLabel: null, deliveryError: 'Sem como alcançar: x; y.' }).warning).toMatch(
       /NÃO vai sair/,
     )
   })
@@ -294,14 +294,14 @@ describe('linkDeliveryInfo / linkOutcomeTexts — o aviso depois de ligar só pr
 describe('freio da régua no aviso depois de ligar — a mesma ordem da fila (revisão 16/09)', () => {
   const ok = { ok: true as const, label: 'WhatsApp' }
   const info = (hold: Parameters<typeof linkDeliveryInfo>[0]['hold'], over: Partial<Parameters<typeof linkDeliveryInfo>[0]> = {}) =>
-    linkDeliveryInfo({ contactName: 'Center Piso', contactPhone: '5511999990000', optedOut: false, asaasPhone: null, delivery: ok, hold, ...over })
+    linkDeliveryInfo({ contactName: 'Centro Pisos', contactPhone: '5511999990000', optedOut: false, asaasPhone: null, delivery: ok, hold, ...over })
 
   it('pausado: NÃO vai sair, com o motivo e o botão de retomar; sem rótulo de canal', () => {
     const r = info({ kind: 'paused', reason: ' pediu acordo ' })
     expect(r).toMatchObject({ deliveryLabel: null, deliveryError: 'A régua está parada neste cliente (pediu acordo) — use "Retomar cobrança" em Cobranças para o lembrete sair.' })
-    const t = linkOutcomeTexts('Center Piso', true, r)
+    const t = linkOutcomeTexts('Centro Pisos', true, r)
     expect(t.reminder).toBe('')
-    expect(t.warning).toMatch(/^O lembrete de Center Piso NÃO vai sair: /)
+    expect(t.warning).toMatch(/^O lembrete de Centro Pisos NÃO vai sair: /)
   })
 
   it('promessa: diz até quando, no fuso da conta; sem data válida, sem "até"', () => {
@@ -347,31 +347,31 @@ describe('"Ligados nos últimos dias" — onde desligar depois que o Desfazer so
   })
 
   it('nome: o do Asaas; vínculo sem nome (antes da 0179) mostra o cus_', () => {
-    expect(recentLinkName(' Speed Gás e Água ', 'cus_1')).toBe('Speed Gás e Água')
+    expect(recentLinkName(' Veloz Gás e Água ', 'cus_1')).toBe('Veloz Gás e Água')
     expect(recentLinkName(null, 'cus_000123')).toBe('cliente cus_000123 do Asaas')
     expect(recentLinkName('  ', 'cus_000123')).toBe('cliente cus_000123 do Asaas')
   })
 
   it('desligar: não promete que o cliente volta (a régua casa sozinha se alguém tiver os dados) e avisa da fila', () => {
-    const t = recentUnlinkText({ customerName: 'Speed Gás e Água', contactName: 'Speed Matriz', ruleEnabled: true })
-    expect(t).toMatch(/^Desligado: Speed Gás e Água não está mais ligado a Speed Matriz\./)
+    const t = recentUnlinkText({ customerName: 'Veloz Gás e Água', contactName: 'Veloz Matriz', ruleEnabled: true })
+    expect(t).toMatch(/^Desligado: Veloz Gás e Água não está mais ligado a Veloz Matriz\./)
     expect(t).toContain('Se nenhum contato tiver o telefone, o e-mail ou o CPF/CNPJ do Asaas')
     expect(t).toContain('na próxima rodada da régua')
-    expect(t).toContain('inclusive Speed Matriz')
+    expect(t).toContain('inclusive Veloz Matriz')
     expect(t).toContain('não é cancelado')
     expect(recentUnlinkText({ customerName: 'A', contactName: 'B', ruleEnabled: false })).toContain('quando a régua for religada')
   })
 
   it('fila: manda recusar o de hoje sem prometer que tira o lembrete do contato certo (revisão 16/09)', () => {
-    const t = recentUnlinkText({ customerName: 'Speed Gás e Água', contactName: 'Speed Matriz', ruleEnabled: true })
-    expect(t).toContain('O lembrete de hoje que ainda estiver na fila para Speed Matriz não é cancelado: recuse em "Precisa de você"')
+    const t = recentUnlinkText({ customerName: 'Veloz Gás e Água', contactName: 'Veloz Matriz', ruleEnabled: true })
+    expect(t).toContain('O lembrete de hoje que ainda estiver na fila para Veloz Matriz não é cancelado: recuse em "Precisa de você"')
     expect(t).toContain('o contato certo ainda recebe o lembrete quando for ligado')
     expect(t).toContain('Pedido de outro dia já expirou sozinho.')
     expect(t).not.toMatch(/confira em "Precisa de você"/)
   })
 
   it('nome devolvido pelo Desfazer do Desligar: só texto, aparado, com teto', () => {
-    expect(relinkCustomerName('  Speed Gás e Água ')).toBe('Speed Gás e Água')
+    expect(relinkCustomerName('  Veloz Gás e Água ')).toBe('Veloz Gás e Água')
     expect(relinkCustomerName('   ')).toBeNull()
     expect(relinkCustomerName(42)).toBeNull()
     expect(relinkCustomerName(null)).toBeNull()
@@ -381,8 +381,8 @@ describe('"Ligados nos últimos dias" — onde desligar depois que o Desfazer so
 
 describe('canCreateFromAsaas', () => {
   it('celular ou fixo brasileiro servem; estrangeiro sem e-mail não; e-mail sozinho serve', () => {
-    expect(canCreateFromAsaas('(12) 99670-6499', null)).toBe(true)
-    expect(canCreateFromAsaas('(12) 3648-8533', null)).toBe(true)
+    expect(canCreateFromAsaas('(12) 99000-1234', null)).toBe(true)
+    expect(canCreateFromAsaas('(12) 3000-4321', null)).toBe(true)
     expect(canCreateFromAsaas('+370 612 34567', null)).toBe(false)
     expect(canCreateFromAsaas(null, 'Fin@X.com ')).toBe(true)
     expect(canCreateFromAsaas(null, '')).toBe(false)
@@ -523,7 +523,7 @@ describe('canRemoveCreatedContact — "Criar contato" desfeito apaga o contato q
     history: false,
   }
 
-  it('recém-criado por quem desfaz e sem nada preso: apaga (senão o telefone do Asaas casava sozinho com ele — Speed Gás)', () => {
+  it('recém-criado por quem desfaz e sem nada preso: apaga (senão o telefone do Asaas casava sozinho com ele — Veloz Gás)', () => {
     expect(canRemoveCreatedContact(livre)).toBe(true)
   })
 
@@ -549,27 +549,27 @@ describe('textos do Ligar/Criar/Desfazer — sem prometer o que não acontece', 
   })
 
   it('desfazer o ligar', () => {
-    expect(undoResultText({ kind: 'linked', contactRemoved: false, contactName: 'LM Vidros', ruleEnabled: true })).toBe(
+    expect(undoResultText({ kind: 'linked', contactRemoved: false, contactName: 'RS Vidros', ruleEnabled: true })).toBe(
       'Desfeito: o cliente volta para a lista na próxima rodada da régua.',
     )
-    expect(undoResultText({ kind: 'linked', contactRemoved: false, contactName: 'LM Vidros', ruleEnabled: false })).toBe(
+    expect(undoResultText({ kind: 'linked', contactRemoved: false, contactName: 'RS Vidros', ruleEnabled: false })).toBe(
       'Desfeito: o cliente volta para a lista quando a régua for religada.',
     )
   })
 
   it('desfazer o criar: apagado diz que apagou; mantido avisa que vai casar de novo', () => {
-    expect(undoResultText({ kind: 'created', contactRemoved: true, contactName: 'Speed Gás e Água', ruleEnabled: true })).toBe(
+    expect(undoResultText({ kind: 'created', contactRemoved: true, contactName: 'Veloz Gás e Água', ruleEnabled: true })).toBe(
       'Desfeito: o contato criado foi apagado e o cliente volta para a lista na próxima rodada da régua.',
     )
-    const mantido = undoResultText({ kind: 'created', contactRemoved: false, contactName: 'Speed Gás e Água', ruleEnabled: true })
-    expect(mantido).toContain('"Speed Gás e Água" continua no CRM')
+    const mantido = undoResultText({ kind: 'created', contactRemoved: false, contactName: 'Veloz Gás e Água', ruleEnabled: true })
+    expect(mantido).toContain('"Veloz Gás e Água" continua no CRM')
     expect(mantido).toContain('vai casar com ele de novo')
     expect(mantido).not.toContain('volta para a lista')
   })
 
   it('desfazer quando o contato já existia: nunca diz que o cliente volta para a lista', () => {
-    const t = undoResultText({ kind: 'existing', contactRemoved: false, contactName: 'Speed Gás Matriz', ruleEnabled: true })
-    expect(t).toContain('"Speed Gás Matriz" já existia')
+    const t = undoResultText({ kind: 'existing', contactRemoved: false, contactName: 'Veloz Gás Matriz', ruleEnabled: true })
+    expect(t).toContain('"Veloz Gás Matriz" já existia')
     expect(t).toContain('vai continuar casando com ele')
     expect(t).not.toContain('volta para a lista')
   })

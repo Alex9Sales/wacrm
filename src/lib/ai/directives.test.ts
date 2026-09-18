@@ -43,15 +43,15 @@ describe('parseCloseDirectives', () => {
 
   it('[[TRANSFERIR]] com "]" e quebra de linha no resumo continua casando (e sai do texto)', () => {
     const d = parseCloseDirectives(
-      'Perfeito! Já passo pro responsável 😊\n[[TRANSFERIR:Responsável|Kelly [Gás do Povo], CPF 07020022162,\nentrega]]',
+      'Perfeito! Já passo pro responsável 😊\n[[TRANSFERIR:Responsável|Carla [Gás do Povo], CPF 12345678909,\nentrega]]',
     )
-    expect(d.transfer).toEqual({ tag: 'Responsável', summary: 'Kelly [Gás do Povo], CPF 07020022162,\nentrega' })
+    expect(d.transfer).toEqual({ tag: 'Responsável', summary: 'Carla [Gás do Povo], CPF 12345678909,\nentrega' })
     expect(d.text).toBe('Perfeito! Já passo pro responsável 😊')
   })
 
   it('[[TRANSFERIR]] com resumo terminando em "]" não deixa colchete sobrando', () => {
-    const d = parseCloseDirectives('Perfeito!\n[[TRANSFERIR:Responsável|Kelly [Gás do Povo]]]')
-    expect(d.transfer?.summary).toBe('Kelly [Gás do Povo]')
+    const d = parseCloseDirectives('Perfeito!\n[[TRANSFERIR:Responsável|Carla [Gás do Povo]]]')
+    expect(d.transfer?.summary).toBe('Carla [Gás do Povo]')
     expect(d.text).toBe('Perfeito!')
   })
 
@@ -76,12 +76,12 @@ describe('parseCloseDirectives', () => {
 
   it('extrai [[CRIARCARD:título | valor | observação]]', () => {
     const d = parseCloseDirectives(
-      'Pedido confirmado!\n[[CRIARCARD:Zulma — botijão P-13 | R$ 125,00 | 1 Ultragaz P-13 · Rua Farol 37 · cartão]]',
+      'Pedido confirmado!\n[[CRIARCARD:Carla Teste — botijão P-13 | R$ 125,00 | 1 Ultragaz P-13 · Rua Exemplo 123 · cartão]]',
     )
     expect(d.createCard).toEqual({
-      title: 'Zulma — botijão P-13',
+      title: 'Carla Teste — botijão P-13',
       value: 125,
-      note: '1 Ultragaz P-13 · Rua Farol 37 · cartão',
+      note: '1 Ultragaz P-13 · Rua Exemplo 123 · cartão',
     })
     expect(d.text).toBe('Pedido confirmado!')
   })
@@ -148,24 +148,24 @@ describe('parseCloseDirectives', () => {
 })
 
 describe('buildSystemPrompt — contato da conversa', () => {
-  it('JID antigo sem o nono dígito → telefone de consulta ganha o 9 (caso Day Manicure)', () => {
+  it('JID antigo sem o nono dígito → telefone de consulta ganha o 9 (caso 26/08)', () => {
     const p = buildSystemPrompt({
       userPrompt: null,
       mode: 'auto_reply',
-      contact: { name: 'Day Manicure', phone: '556793431165' },
+      contact: { name: 'Carla Teste', phone: '556790001234' },
     })
-    expect(p).toContain('phone: 556793431165')
-    expect(p).toContain('67993431165') // 67 9 9343-1165 — como o ERP guarda
+    expect(p).toContain('phone: 556790001234')
+    expect(p).toContain('67990001234') // 67 9 9000-1234 — como o ERP guarda
   })
 
   it('número já com 11 dígitos locais fica intacto (só tira o 55)', () => {
     const p = buildSystemPrompt({
       userPrompt: null,
       mode: 'auto_reply',
-      contact: { name: null, phone: '5567991252907' },
+      contact: { name: null, phone: '5567990005678' },
     })
-    expect(p).toContain('67991252907')
-    expect(p).not.toContain('679991252907')
+    expect(p).toContain('67990005678')
+    expect(p).not.toContain('679990005678')
   })
 
   it('não perde venda: histórico de outra conversa entra como PRIOR CONTEXT', () => {

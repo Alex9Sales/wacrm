@@ -4,8 +4,8 @@ import type { AsaasCredential } from '@/lib/asaas/collections'
 
 import { paymentRefsFrom, paymentRefsPayload, reconferPayments, refsByConnection } from './payment-refs'
 
-const CONTA1 = '697711e8-9a2b-4c78-ac49-c55b8946c221' // GoLink "Asaas"
-const CONTA2 = '8d396790-2403-4603-beb1-7992368ea18d' // GoLink "AsaasGoLink"
+const CONTA1 = 'aaaaaaaa-1111-4111-8111-111111111111' // GoLink "Asaas"
+const CONTA2 = 'bbbbbbbb-2222-4222-8222-222222222222' // GoLink "AsaasGoLink"
 
 describe('paymentRefsPayload', () => {
   it('uma conta: mantém connectionId (leitor antigo durante o deploy)', () => {

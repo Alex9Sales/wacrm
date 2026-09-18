@@ -1,7 +1,7 @@
 // ============================================================
 // Política efetiva da régua com "Enviar sozinha" — PURO (testável).
 //
-// 16/09 (João/GoLink, Speed Gás sem aviso): "Enviar sozinha" só trocava o
+// 16/09 (João/GoLink, Veloz Gás sem aviso): "Enviar sozinha" só trocava o
 // nível de collect_charges para automático. O teto genérico da orquestração
 // continuava valendo: 20 por ação/dia (capFor, sem `caps` no agente) e 30
 // mensagens automáticas. Depois do 20º envio do dia (~10h45) a régua parava

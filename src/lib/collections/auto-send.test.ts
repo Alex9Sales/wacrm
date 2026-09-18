@@ -23,7 +23,7 @@ const ctx = (policy: DecisionContext['policy'], usedToday: number): DecisionCont
 })
 
 describe('withAutoSend — o teto que vale é o de Ajustar', () => {
-  it('Speed Gás (15/09 à tarde): 25 enviados, teto 50 → ainda cobra', () => {
+  it('Veloz Gás (15/09 à tarde): 25 enviados, teto 50 → ainda cobra', () => {
     expect(decide(ctx(withAutoSend(golink, { autoSend: true, dailyCap: 50 }), 25)).decision).toBe('auto_execute')
   })
 

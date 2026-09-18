@@ -103,7 +103,7 @@ export interface RecentCharge {
 /**
  * Já existe cobrança igual, aberta, criada há pouco nesta conversa? Então
  * NÃO cria outra — reaproveita o link. É a mesma lição do pedido triplicado
- * (Wellington, 04/09): o cliente confirma de novo, manda comprovante, muda
+ * (Família do Gás, 04/09): o cliente confirma de novo, manda comprovante, muda
  * de ideia — e a IA re-chama a ferramenta.
  */
 export function findDuplicateCharge(recent: RecentCharge[], value: number, now: Date = new Date(), windowHours = 6): RecentCharge | null {

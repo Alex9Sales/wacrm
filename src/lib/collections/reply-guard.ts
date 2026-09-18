@@ -2,13 +2,13 @@
 // 🧾 Trava da resposta de cobrança — PURO (sem banco, testável).
 //
 // 16/09 (GoLink): o detector silencioso marcou promessa → acordo (pausa) →
-// comprovante numa conversa da Ultra Visão sobre RECARGA do Google Ads, no
+// comprovante numa conversa da Ótica Exemplo sobre RECARGA do Google Ads, no
 // canal Atendimento, 3 a 5 dias depois da última cobrança (que saiu por outro
-// canal). "Vamos fazer amanhã" virou promessa, "Qual valor mínimo ?" virou
+// canal). "Fazemos amanhã então" virou promessa, "Quanto é o mínimo ?" virou
 // acordo e o Pix de R$ 150 para o Google virou comprovante da parcela de
-// R$ 325. No mesmo dia a WR Caminhão Pipa ("se puder segurar até sexta")
+// R$ 325. No mesmo dia a KB Transportes ("se puder esperar até sexta")
 // virou ACORDO e parou a régua sem prazo; na conta Fluxia, uma conversa
-// pessoal do Matheus MB sobre entregas rendeu 6 marcações.
+// pessoal do Bruno TX sobre entregas rendeu 6 marcações.
 //
 // O modelo continua dando o palpite, mas quem decide é o código:
 //   1. a fala tem de estar num CONTEXTO de cobrança (relevância) — sem isso
@@ -17,7 +17,7 @@
 //   3. pausa (acordo) só em resposta DIRETA à cobrança; fora disso vira nota;
 //   4. comprovante com valor que não bate com o que está aberto não mexe na
 //      régua;
-//   5. o mesmo efeito já aplicado não se repete (Rack 95: rajada lida 2x em 9 s).
+//   5. o mesmo efeito já aplicado não se repete (Loja 77: rajada lida 2x em 9 s).
 //
 // Os limites (7 d, 5 respostas, 48 h, 72 h, 10 %, 45 d) foram calibrados com
 // as 25 marcações reais de 09/09 a 16/09 — ficam como constantes exportadas.
@@ -37,20 +37,20 @@ const DAY_MS = 24 * HOUR_MS
 
 /** Cobrança NESTA conversa vale como resposta direta por até 7 dias… */
 export const DIRECT_WINDOW_MS = 7 * DAY_MS
-/** …se a conversa não andou: até 5 respostas nossas depois dela (Silvia: 4;
- *  Matheus MB: 78 a 177 mensagens sobre entregas depois do link de teste).
+/** …se a conversa não andou: até 5 respostas nossas depois dela (Lúcia: 4;
+ *  Bruno TX: 78 a 177 mensagens sobre entregas depois do link de teste).
  *  Conta TURNOS, não balões — ver countOurTurns. */
 export const DIRECT_MAX_OUTBOUND = 5
 /** Nas primeiras 24 h a cobrança da conversa vale mesmo com conversa andando. */
 export const DIRECT_FRESH_MS = DAY_MS
 /** Cobrança em QUALQUER conversa do contato (o cliente responde por outro
- *  número): José Luiz 4 h e Clínica Villa Vitória 46 h entram; Ultra Visão,
+ *  número): Jorge Teste 4 h e Clínica Modelo 46 h entram; Ótica Exemplo,
  *  76 h ou mais, fica de fora. */
 export const RECENT_COLLECTION_MS = 48 * HOUR_MS
 /** "Nós perguntamos da dívida" sem link (Leonardo Financeiro: "Consegue fazer
  *  a parcela de hoje?") — a última mensagem nossa da conversa, até 7 dias. */
 export const ASKED_DEBT_WINDOW_MS = 7 * DAY_MS
-/** O cliente puxa o pagamento sem mensagem nossa na conversa há 72 h (Ale Brasil). */
+/** O cliente puxa o pagamento sem mensagem nossa na conversa há 72 h (Casa Aurora). */
 export const SPONTANEOUS_QUIET_MS = 72 * HOUR_MS
 /** Pix de terceiro que NÓS mandamos (Google) nas 24 h antes do comprovante. */
 export const OTHER_PIX_WINDOW_MS = DAY_MS
@@ -58,15 +58,15 @@ export const OTHER_PIX_WINDOW_MS = DAY_MS
  *  uma parcela A VENCER adiaria a cobrança da vencida por semanas. */
 export const MAX_PROMISE_DAYS = 45
 /** Encargos aceitos acima do valor (ou os juros do Asaas, se forem maiores):
- *  José Luiz pagou 170,93 por 165 (3,6 %); a MP Raspagem mandou 200 ao Google
+ *  Jorge Teste pagou 170,93 por 165 (3,6 %); a PR Pisos mandou 200 ao Google
  *  contra 180 (11 %). */
 export const RECEIPT_TOLERANCE_RATIO = 0.1
 /** Folga de arredondamento, em reais. */
 export const RECEIPT_TOLERANCE_ABS = 1
 /** Até quantas parcelas entram na soma ("acerte pelo menos três"). */
 export const RECEIPT_MAX_CHARGES = 10
-/** Rajada do cliente: até 6 balões, no máximo 3 h antes do mais novo. José
- *  Luiz 14/09: um "👍" de 11/09 colado na imagem do comprovante mudava a âncora. */
+/** Rajada do cliente: até 6 balões, no máximo 3 h antes do mais novo. Jorge
+ *  Teste 14/09: um "👍" de 11/09 colado na imagem do comprovante mudava a âncora. */
 export const BURST_MAX_BUBBLES = 6
 export const BURST_MAX_SPAN_MS = 3 * HOUR_MS
 /** Comprovante igual dentro de 12 h é a mesma rajada lida de novo. */
@@ -101,7 +101,7 @@ export const DEBT_WORD_RE = W('boletos?|faturas?|parcelas?|mensalidades?|cobran[
 /** Sem "vencido": "domínio vencido" aparece nas conversas da GoLink e não é cobrança. */
 export const ASKED_DEBT_RE = W('boletos?|faturas?|parcelas?|mensalidades?|cobran[çc]as?|d[ée]bitos?|em aberto|pend[êe]ncias?')
 // 16/09 (revisão): como estes regex VETAM o palpite do modelo, forma que falta
-// derruba caso certo — "Vou transferir agora o de vocês" (Villa Vitória) virava
+// derruba caso certo — "Vou transferir agora o de vocês" (Clínica Modelo) virava
 // "promessa sem falar em pagar", e "vou depositar amanhã" não contava como fala
 // espontânea de pagamento.
 export const PAY_WORD_RE = W(
@@ -113,7 +113,7 @@ export const CONTEST_RE = W(
 )
 export const PAID_CLAIM_RE = W('j[áa] (?:paguei|pago|foi pag[oa]|quitei|est[áa] pag[oa]|fiz o pix|transferi)|paguei|t[áa] pag[oa]|segue (?:o )?comprovante|fiz o pix|pix feito')
 
-/** Pix copia-e-cola que NÃO é do Asaas (Ultra Visão 16/09: o atendente mandou o Pix do Google). */
+/** Pix copia-e-cola que NÃO é do Asaas (Ótica Exemplo 16/09: o atendente mandou o Pix do Google). */
 export const isOtherPix = (t: string) => /br\.gov\.bcb\.pix/i.test(t) && !/asaas/i.test(t)
 
 // ---------------------------------------------------------------- rajada do cliente
@@ -155,7 +155,7 @@ type BubbleContent = { contentText: string | null; transcription: string | null;
  * deixa em contentText a legenda ou "[image]". Lendo a transcrição antes do
  * tipo, todo comprovante descrito caía na fala e a mídia ficava vazia em
  * produção: a conferência de valor nunca rodava e o Pix de R$ 150 ao Google
- * (Ultra Visão) virava comprovante da parcela de R$ 325 — os testes punham a
+ * (Ótica Exemplo) virava comprovante da parcela de R$ 325 — os testes punham a
  * descrição em contentText e não pegavam. Numa imagem ou documento: descrição
  * → mídia; legenda ("segue comprovante") → fala. A data impressa no
  * comprovante ("pago em 16/09") também deixa de virar data de promessa.
@@ -386,13 +386,13 @@ const stripAccents = (s: string) => s.normalize('NFD').replace(/\p{M}/gu, '')
 // 16/09 (revisão 2): o mês dito ANTES do dia era ignorado — "mês q vem dia
 // 20", "só no outro mês, dia 20", "outubro dia 20" e até "segurar até o mês
 // que vem dia 20" viravam 20/09. No detector silencioso, com acordo sem data
-// do modelo (caso WR), a promessa ia para 20/09 e o vencimento no Asaas
+// do modelo (caso KB), a promessa ia para 20/09 e o vencimento no Asaas
 // também; no marcador, a IA confirmava 20/10 e o leitor vetava. "semana que
 // vem na sexta" e "sexta, semana que vem" viravam a sexta DESTA semana. Agora:
 // "q vem" = "que vem"; mês antes do dia conta; "semana que vem" + dia da
 // semana, em qualquer ordem, não emite token. A trava continua LOCAL (colada
-// ao dia): "Vou pagar 1 na sexta feira / Ok / O restante a semana que vem"
-// (Rack 95) segue sendo 18/09.
+// ao dia): "Pago 1 na sexta feira / Beleza / O resto semana que vem"
+// (Loja 77) segue sendo 18/09.
 const QV = 'q(?:ue)?\\s+vem'
 const NEXT_MONTH = `m[êe]s\\s+${QV}|pr[óo]ximo\\s+m[êe]s|outro\\s+m[êe]s`
 const NEXT_WEEK = `semana\\s+${QV}|pr[óo]xima\\s+semana|outra\\s+semana`
@@ -443,7 +443,7 @@ function dayOfNextMonth(today: Date, day: number): Date | null {
  * "dia N de <mês>" · "<mês> dia N" · "dia N do mês que vem" · "mês que vem
  * dia N" · "dia N" (mês que vem se N já passou). "Semana que vem" com dia da
  * semana e "sexta que vem" não são data.
- * Leitor de reserva e de conferência: a WR disse "segurar até sexta" e o
+ * Leitor de reserva e de conferência: a KB disse "esperar até sexta" e o
  * modelo devolveu acordo SEM data — sem isso não havia de onde tirar 18/09.
  */
 export function parsePtDates(text: string, todayKey: string): string[] {
@@ -667,8 +667,8 @@ export function decideCollectionReply(input: ReplyDecisionInput): ReplyDecision 
 
   if (kind === 'acordo') {
     if (!NEGOTIATION_RE.test(typed)) {
-      // WR 14/09: "se puder segurar até sexta" é prazo com dia → promessa.
-      // "Qual valor mínimo ?" (recarga) e "me manda o link p eu acertar" → nada.
+      // KB 14/09: "se puder esperar até sexta" é prazo com dia → promessa.
+      // "Quanto é o mínimo ?" (recarga) e "me passa o link pra eu acertar" → nada.
       if (!date) return skip('acordo sem pedido explícito de negociação')
       kind = 'promessa'
     } else if (!direct) {
@@ -685,7 +685,7 @@ export function decideCollectionReply(input: ReplyDecisionInput): ReplyDecision 
 
   if (kind === 'promessa') {
     // Fora da conversa da cobrança, promessa exige falar em pagar ou na dívida:
-    // "Vamos fazer amanhã" (recarga) não segura a régua nem com cobrança ontem.
+    // "Fazemos amanhã então" (recarga) não segura a régua nem com cobrança ontem.
     if (!answersUs && !PAY_WORD_RE.test(typed) && !PAID_CLAIM_RE.test(typed) && !DEBT_WORD_RE.test(typed)) {
       return skip('promessa sem falar em pagar fora da conversa da cobrança')
     }
@@ -705,7 +705,7 @@ export function decideCollectionReply(input: ReplyDecisionInput): ReplyDecision 
   // comprovante
   const amounts = amountsIn(input.media)
   if (amounts.length && !amountMatchesOpen(amounts, input.openCharges)) {
-    // Ultra Visão 16/09: Pix de R$ 150 ao Google logo depois de mandarmos o Pix do Google.
+    // Ótica Exemplo 16/09: Pix de R$ 150 ao Google logo depois de mandarmos o Pix do Google.
     if (input.otherPixLast24h || !nearCollection) return skip('valor do comprovante não bate com o que está aberto')
     const open = input.openCharges.slice(0, 4).map((c) => brl(c.value)).join(', ')
     return note(
@@ -740,7 +740,7 @@ export interface TouchState {
 
 /**
  * O mesmo efeito já está na régua? (a rajada é classificada de novo a cada
- * balão: Rack 95 16/09 09:16:41 e :50, Silvia 12:21 e 12:29, Mapami 13:53 e
+ * balão: Loja 77 16/09 09:16:41 e :50, Lúcia 12:21 e 12:29, Modelix 13:53 e
  * 14:00). As execuções da mesma conversa andam em fila pelo lock da
  * auto-resposta, então olhar o estado gravado basta — sem migração.
  */
@@ -761,12 +761,12 @@ export function alreadyApplied(touch: TouchState | null | undefined, kind: Colle
       return reason === promiseSnoozeReason(date) || reason === dueDateMovedReason(date) || reason.startsWith(manualPromiseReasonPrefix(date))
     }
     case 'comprovante': {
-      // Rack 95 (revisão): promessa até 20/09 + comprovante lido 2x em 9 s → o
+      // Loja 77 (revisão): promessa até 20/09 + comprovante lido 2x em 9 s → o
       // motivo continuava o da promessa e a 2ª leitura repetia nota e aviso a
       // todos. O registro do comprovante aplicado vale mesmo sem o motivo.
       //
       // Revisão 2 (16/09): só enquanto aquele adiamento AINDA vale. Comprovante
-      // errado às 09:00 (A.M Carretos: Pix para outra pessoa), João confere,
+      // errado às 09:00 (B.C Fretes: Pix para outra pessoa), João confere,
       // não acha e clica "Cobrar agora" (zera o adiamento, o KV fica); às 14:00
       // chega o comprovante verdadeiro e era descartado sem nota nem aviso — a
       // régua voltava a cobrar quem tinha acabado de pagar. Adiamento novo mais
@@ -842,7 +842,7 @@ const inTag = (s: string, maxChars: number) => neutralizeUntrusted(s, { maxChars
 /**
  * Entrada do classificador silencioso: a dívida, quando saiu a última
  * cobrança, as últimas mensagens da empresa e a rajada do cliente. Antes o
- * modelo via só `<cliente>Vamos fazer amanhã</cliente>` e não tinha como saber
+ * modelo via só `<cliente>Fazemos amanhã então</cliente>` e não tinha como saber
  * que o assunto era a recarga do Google Ads.
  */
 export function buildClassifierInput(args: {

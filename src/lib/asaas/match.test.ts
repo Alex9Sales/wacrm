@@ -16,17 +16,17 @@ import {
 
 describe('brPhoneCandidates', () => {
   it('acha o mesmo celular gravado com e sem o 55', () => {
-    const semDDI = brPhoneCandidates('(67) 99236-1631')
-    expect(semDDI).toContain('67992361631')
-    expect(semDDI).toContain('5567992361631')
+    const semDDI = brPhoneCandidates('(67) 99000-1631')
+    expect(semDDI).toContain('67990001631')
+    expect(semDDI).toContain('5567990001631')
 
-    const comDDI = brPhoneCandidates('5567992361631')
-    expect(comDDI).toContain('67992361631')
+    const comDDI = brPhoneCandidates('5567990001631')
+    expect(comDDI).toContain('67990001631')
   })
 
   it('cobre o 9º dígito nos dois sentidos (número antigo × novo)', () => {
-    expect(brPhoneCandidates('6792361631')).toContain('67992361631')
-    expect(brPhoneCandidates('67992361631')).toContain('6792361631')
+    expect(brPhoneCandidates('6790001631')).toContain('67990001631')
+    expect(brPhoneCandidates('67990001631')).toContain('6790001631')
   })
 
   it('não inventa DDI para DDD que não existe', () => {
@@ -93,7 +93,7 @@ describe('decideMatch — nunca chuta', () => {
 })
 
 describe('decideWithLink — o vínculo feito por uma pessoa vence o palpite (16/09)', () => {
-  it('com vínculo e o telefone apontando para OUTRO contato, vence o vínculo (caso Ultra Visão)', () => {
+  it('com vínculo e o telefone apontando para OUTRO contato, vence o vínculo (caso Ótica Exemplo)', () => {
     expect(decideWithLink('c9', [{ id: 'c1', via: 'phone' }])).toEqual({ contactId: 'c9', matchedBy: 'manual', ambiguous: false })
   })
 
@@ -167,20 +167,20 @@ describe('daysOverdue', () => {
 
 describe('asaasPhoneForContact — telefone do Asaas vira contato', () => {
   it('celular e fixo nacionais ganham o 55', () => {
-    expect(asaasPhoneForContact('67992361631')).toBe('5567992361631')
-    expect(asaasPhoneForContact('(67) 99236-1631')).toBe('5567992361631')
-    expect(asaasPhoneForContact('6732361631')).toBe('556732361631')
+    expect(asaasPhoneForContact('67990001631')).toBe('5567990001631')
+    expect(asaasPhoneForContact('(67) 99000-1631')).toBe('5567990001631')
+    expect(asaasPhoneForContact('6730001631')).toBe('556730001631')
   })
 
   it('já com 55 fica como está', () => {
-    expect(asaasPhoneForContact('+55 67 99236-1631')).toBe('5567992361631')
+    expect(asaasPhoneForContact('+55 67 99000-1631')).toBe('5567990001631')
   })
 
   it('vazio, curto demais, DDD impossível ou estrangeiro → null (vira pendência, não contato)', () => {
     expect(asaasPhoneForContact('')).toBeNull()
     expect(asaasPhoneForContact(null)).toBeNull()
-    expect(asaasPhoneForContact('99236')).toBeNull()
-    expect(asaasPhoneForContact('0192361631')).toBeNull()
+    expect(asaasPhoneForContact('99000')).toBeNull()
+    expect(asaasPhoneForContact('0190001631')).toBeNull()
     expect(asaasPhoneForContact('+370 63949836')).toBeNull()
   })
 })
@@ -200,8 +200,8 @@ describe('groupDuplicateCustomers — Renato ×3', () => {
 
   it('sem CPF, agrupa por telefone tolerando 55 e 9º dígito; e-mail por último', () => {
     const g = groupDuplicateCustomers([
-      { id: 'a', name: 'Ana', mobilePhone: '(67) 99236-1631' },
-      { id: 'b', name: 'Ana Paula', mobilePhone: '556792361631' },
+      { id: 'a', name: 'Ana', mobilePhone: '(67) 99000-1631' },
+      { id: 'b', name: 'Ana Paula', mobilePhone: '556790001631' },
       { id: 'c', name: 'Beto', email: 'Beto@x.com' },
       { id: 'd', name: 'Roberto', email: 'beto@x.com' },
       { id: 'e', name: 'Solo', email: 'solo@x.com' },
@@ -215,7 +215,7 @@ describe('groupDuplicateCustomers — Renato ×3', () => {
 describe('qual cadastro recebe a cobrança (15/09)', () => {
   const CNPJ = '11222333000181'
   const OUTRO = '52998224725'
-  const REF = '09e0fe5d-d60d-41a4-9a22-a7e07c28589a'
+  const REF = '0f0e0d0c-0b0a-4908-8706-050403020100'
 
   it('hasFullAddress: CEP e número preenchidos', () => {
     expect(hasFullAddress({ postalCode: '79000-000', addressNumber: '12' })).toBe(true)

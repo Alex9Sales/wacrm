@@ -30,7 +30,7 @@ describe('detector silencioso — prompt do classificador (16/09)', () => {
     expect(p).toContain('"about_debt":true|false')
     expect(p).toContain('SEMPRE que o cliente citar um dia')
   })
-  it('prazo com dia é promessa, não acordo (WR: "segura até sexta")', () => {
+  it('prazo com dia é promessa, não acordo (KB: "segura até sexta")', () => {
     const acordo = p.split('\n').find((l) => l.startsWith('- acordo:'))!
     // O que é acordo (antes do primeiro ponto) não fala em prazo.
     expect(acordo.split('.')[0]).not.toMatch(/prazo/i)

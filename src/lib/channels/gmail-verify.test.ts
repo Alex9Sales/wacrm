@@ -69,7 +69,7 @@ const imapAuthError = Object.assign(new Error('Command failed'), {
   responseStatus: 'NO',
   serverResponseCode: 'AUTHENTICATIONFAILED',
   responseText: 'Invalid credentials (Failure)',
-  executedCommand: '3 LOGIN "golinkoficial@gmail.com" "abcdabcdabcdabcd"',
+  executedCommand: '3 LOGIN "cobranca.exemplo@gmail.com" "abcdabcdabcdabcd"',
 })
 
 beforeEach(() => {
@@ -85,7 +85,7 @@ beforeEach(() => {
 describe('verifyGmailImap', () => {
   it('login recusado: fecha a conexão, ouve "error" e devolve kind auth', async () => {
     imap.connectError = imapAuthError
-    const err = await verifyGmailImap('golinkoficial@gmail.com', 'abcd abcd abcd abcd').catch((e) => e)
+    const err = await verifyGmailImap('cobranca.exemplo@gmail.com', 'abcd abcd abcd abcd').catch((e) => e)
     expect(err).toBeInstanceOf(GmailVerifyError)
     expect(err).toMatchObject({ kind: 'auth', step: 'imap', code: 'AUTHENTICATIONFAILED' })
     const [client] = imap.instances
@@ -96,7 +96,7 @@ describe('verifyGmailImap', () => {
 
   it('o erro não carrega a senha nem o comando de login', async () => {
     imap.connectError = imapAuthError
-    const err = (await verifyGmailImap('golinkoficial@gmail.com', 'abcdabcdabcdabcd').catch(
+    const err = (await verifyGmailImap('cobranca.exemplo@gmail.com', 'abcdabcdabcdabcd').catch(
       (e) => e,
     )) as GmailVerifyError
     expect(JSON.stringify({ ...err, message: err.message })).not.toContain('abcdabcdabcdabcd')
@@ -112,12 +112,12 @@ describe('verifyGmailImap', () => {
   })
 
   it('ok: STATUS da INBOX sem SELECT, normaliza login e sai com logout', async () => {
-    await expect(verifyGmailImap('  GoLinkOficial@Gmail.com ', 'abcd efgh ijkl mnop')).resolves.toEqual({
+    await expect(verifyGmailImap('  Cobranca.Exemplo@Gmail.com ', 'abcd efgh ijkl mnop')).resolves.toEqual({
       uidValidity: '1',
       uidNext: 131,
     })
     const [client] = imap.instances
-    expect(client.opts.auth).toEqual({ user: 'golinkoficial@gmail.com', pass: 'abcdefghijklmnop' })
+    expect(client.opts.auth).toEqual({ user: 'cobranca.exemplo@gmail.com', pass: 'abcdefghijklmnop' })
     expect(client.status).toHaveBeenCalledWith('INBOX', { uidValidity: true, uidNext: true })
     expect(client.logout).toHaveBeenCalled()
     expect(client.close).not.toHaveBeenCalled()

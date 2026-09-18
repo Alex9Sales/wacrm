@@ -2112,7 +2112,7 @@ export function AiConfig({
                   </p>
                   <p className="text-xs text-muted-foreground">
                     Quando ligado, a IA assina a primeira mensagem com o nome
-                    abaixo (ex.: <strong>*Danyela*</strong>), como um atendente.
+                    abaixo (ex.: <strong>*Carla*</strong>), como um atendente.
                   </p>
                 </div>
                 <Switch
@@ -2128,7 +2128,7 @@ export function AiConfig({
                     id="ai-signature"
                     value={signatureName}
                     onChange={(e) => setSignatureName(e.target.value.slice(0, 60))}
-                    placeholder="Ex.: Danyela"
+                    placeholder="Ex.: Carla"
                     disabled={disabled || !autoReplyEnabled}
                     className="mt-1 max-w-xs"
                   />

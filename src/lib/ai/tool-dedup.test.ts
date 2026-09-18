@@ -3,14 +3,15 @@ import { describe, expect, it } from 'vitest'
 import { dedupedSummary, outcomeCreatesCard, stableArgsKey } from './external-tools'
 
 /**
- * Os TRÊS `criar_pedido` reais do Wellington (Família do Gás, 04/09), copiados
- * de `agent_tool_runs`. Um botijão, três pedidos — o Alex apagou dois na mão.
+ * Os TRÊS `criar_pedido` de um cliente (Família do Gás, 04/09), reconstruídos de
+ * `agent_tool_runs` com dados fictícios. Um botijão, três pedidos — o Alex apagou
+ * dois na mão.
  */
 const cartao = {
-  nome: 'Wellington',
-  bairro: 'Mata do Jacinto',
-  endereco: 'Rua Jorge Kalil Duailibi, 10',
-  telefone: '67993204562',
+  nome: 'Paulo Exemplo',
+  bairro: 'Bairro Exemplo',
+  endereco: 'Rua Exemplo, 123',
+  telefone: '67990001234',
   pagamento: 'credito_avista',
   produto_id: 'e69c3897-7618-4dac-ac8a-5b04f35d423a',
   quantidade: 1,
@@ -27,15 +28,15 @@ const pix = {
 
 const pixComprovante = {
   ...pix,
-  bairro: 'Mata Do Jacinto',
-  // O modelo redigitou a rua: sem o "i" e sem a vírgula.
-  endereco: 'Rua Jorge Kalil Dualib 10',
+  bairro: 'Bairro exemplo',
+  // O modelo redigitou a rua: sem o "e" e sem a vírgula.
+  endereco: 'Rua Exmplo 123',
   obs_entrega: 'Pix de R$ 125,00 enviado em 04/09/2026. Há um cachorro no local; chamar o cliente antes da entrega.',
 }
 
 describe('por que a trava por ARGUMENTOS não segurou o pedido triplicado', () => {
   it('maiúscula e observação sozinhas NÃO furam a trava — isso já era normalizado', () => {
-    const so_cosmetico = { ...pix, bairro: 'MATA DO JACINTO', obs_entrega: 'qualquer outra observação' }
+    const so_cosmetico = { ...pix, bairro: 'BAIRRO EXEMPLO', obs_entrega: 'qualquer outra observação' }
     expect(stableArgsKey(so_cosmetico)).toBe(stableArgsKey(pix))
   })
 
@@ -45,7 +46,7 @@ describe('por que a trava por ARGUMENTOS não segurou o pedido triplicado', () =
   })
 
   it('o modelo redigitar a rua também escapa da trava por argumento', () => {
-    // "Duailibi, 10" × "Dualib 10": humanamente o mesmo endereço, comparação
+    // "Exemplo, 123" × "Exmplo 123": humanamente o mesmo endereço, comparação
     // de string não tem como saber.
     expect(stableArgsKey(pix)).not.toBe(stableArgsKey(pixComprovante))
   })
@@ -81,14 +82,14 @@ describe('stableArgsKey — o que ele normaliza de verdade', () => {
 describe('chamada segurada pela trava', () => {
   const criarPedido = { createsDeal: true }
 
-  it('Flávia (11/09): pedido segurado NÃO vira card — só o pedido gravado vira', () => {
+  it('caso 11/09: pedido segurado NÃO vira card — só o pedido gravado vira', () => {
     expect(outcomeCreatesCard(criarPedido, { status: 'ok', summary: '{"id":"x"}' })).toBe(true)
     expect(outcomeCreatesCard(criarPedido, { status: 'ok', summary: 'JÁ EXISTE…', deduped: true })).toBe(false)
     expect(outcomeCreatesCard(criarPedido, { status: 'error', summary: 'HTTP 500' })).toBe(false)
     expect(outcomeCreatesCard({ createsDeal: false }, { status: 'ok', summary: 'ok' })).toBe(false)
   })
 
-  it('Will (15/09): o aviso deixa claro que o troco NÃO foi gravado e manda editar', () => {
+  it('caso 15/09: o aviso deixa claro que o troco NÃO foi gravado e manda editar', () => {
     const s = dedupedSummary(1, '{"id":"8e328a5e-0f43-4999-9fb4-9dbb2e12dbaa"}')
     expect(s).toContain('há 1 min')
     expect(s).toContain('8e328a5e')

@@ -146,7 +146,7 @@ describe('webhook do Asaas — parar de cobrar quem pagou', () => {
     expect(state.updates.some((u) => u.table === 'asaasConnections' && 'webhookLastAt' in u.set)).toBe(true)
   })
 
-  it('16/09 Guincho: quitou tudo → confere a pausa da régua no 1º pagamento', async () => {
+  it('16/09 Reboque: quitou tudo → confere a pausa da régua no 1º pagamento', async () => {
     state.charge = { id: 'ch1', contactId: 'c1', open: true, status: 'OVERDUE' }
     await applyAsaasEvent('conn1', 'acc1', ev('PAYMENT_RECEIVED'))
     expect(pauseMock.settle).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc1', contactId: 'c1', firstSettle: true, stillOwes: false }))

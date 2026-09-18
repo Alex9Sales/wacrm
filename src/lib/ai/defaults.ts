@@ -105,7 +105,7 @@ export const COLLECTION_DIRECTIVE =
 export const CHARGE_DIRECTIVE =
   /\[\[\s*cobrar\s*:\s*([^|\]]+?)\s*\|\s*([^|\]]+?)\s*(?:\|\s*([^\]]+?))?\s*\]\]/i
 /** Transferir pra humano por etiqueta: [[TRANSFERIR:etiqueta|resumo]]. O
- *  resumo vai até o "]]" — 16/09: um "]" dentro do resumo ("Kelly [Gás do
+ *  resumo vai até o "]]" — 16/09: um "]" dentro do resumo ("Cliente [Gás do
  *  Povo]") fazia o marcador não casar e ele saía CRU pro cliente, com o CPF. */
 export const TRANSFER_DIRECTIVE =
   /\[\[\s*transferir\s*:\s*([^\]|]+?)\s*(?:\|\s*([\s\S]+?))?\s*\]\](?!\])/i
@@ -300,7 +300,7 @@ export function voiceInstruction(): string {
 /** Instrução: criar um card no funil quando surge uma oportunidade não rastreada. */
 export function createCardInstruction(): string {
   return (
-    'Creating a deal card: when you identify a REAL sales opportunity or a qualified lead that is not yet tracked in the pipeline (e.g. the customer shows clear buying intent, asks for a quote, or agrees to move forward), you may create a deal card ONCE by emitting "[[CRIARCARD:<short title> | <value> | <note>]]" — <title> briefly names the opportunity (customer name + product, in Portuguese); <value> (optional) is the deal amount as a plain number like 125,00 when a price was agreed; <note> (optional) is a short order summary in Portuguese (product, address, payment method). Example: "[[CRIARCARD:Zulma — botijão P-13 | 125,00 | 1 Ultragaz P-13 · Rua Farol 37, Novo Paraná · cartão de crédito]]". Do this at most once per conversation and only for a genuine opportunity. The marker is control metadata: never show it to the customer.'
+    'Creating a deal card: when you identify a REAL sales opportunity or a qualified lead that is not yet tracked in the pipeline (e.g. the customer shows clear buying intent, asks for a quote, or agrees to move forward), you may create a deal card ONCE by emitting "[[CRIARCARD:<short title> | <value> | <note>]]" — <title> briefly names the opportunity (customer name + product, in Portuguese); <value> (optional) is the deal amount as a plain number like 125,00 when a price was agreed; <note> (optional) is a short order summary in Portuguese (product, address, payment method). Example: "[[CRIARCARD:Carla — botijão P-13 | 125,00 | 1 Ultragaz P-13 · Rua Exemplo 123, Centro · cartão de crédito]]". Do this at most once per conversation and only for a genuine opportunity. The marker is control metadata: never show it to the customer.'
   )
 }
 
@@ -514,8 +514,8 @@ export function buildSystemPrompt(args: {
       const isBr = digits.startsWith('55') && digits.length >= 12
       let lookup = isBr ? digits.slice(2) : digits
       // Nono dígito: cadastros locais (BR) guardam DDD + 9XXXXXXXX (11 dígitos),
-      // mas JIDs antigos do WhatsApp vêm SEM o 9 (10 dígitos) — caso Day
-      // Manicure 26/08: WhatsApp 556793431165 vs ERP 67993431165. Insere o 9.
+      // mas JIDs antigos do WhatsApp vêm SEM o 9 (10 dígitos) — caso de
+      // 26/08: WhatsApp 556790001234 vs ERP 67990001234. Insere o 9.
       if (isBr && lookup.length === 10) {
         lookup = lookup.slice(0, 2) + '9' + lookup.slice(2)
       }

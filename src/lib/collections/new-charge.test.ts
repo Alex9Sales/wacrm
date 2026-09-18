@@ -134,12 +134,12 @@ vi.mock('./outreach', () => ({
 // Espaço fino / NBSP do toLocaleString atrapalha a leitura do teste.
 const norm = (s: string) => s.replace(/ | /g, ' ')
 
-describe('newChargesMessage — o aviso de cobrança NOVA (11/09, caso Sérgio Lemes)', () => {
+describe('newChargesMessage — o aviso de cobrança NOVA (11/09, caso Paulo Exemplo)', () => {
   const uma = { value: 10, dueDate: '2026-09-10', description: 'Teste Asaas', url: 'https://asaas.com/i/abc' }
 
   it('uma cobrança sai igual ao link mandado à mão: entrega o link, não cobra', () => {
-    const m = norm(newChargesMessage('Sérgio Lemes', [uma]))
-    expect(m).toContain('Oi, Sérgio Lemes!')
+    const m = norm(newChargesMessage('Paulo Exemplo', [uma]))
+    expect(m).toContain('Oi, Paulo Exemplo!')
     expect(m).toContain('R$ 10,00')
     expect(m).toContain('(Teste Asaas)')
     expect(m).toContain('vencimento em 10/09/2026')
@@ -156,7 +156,7 @@ describe('newChargesMessage — o aviso de cobrança NOVA (11/09, caso Sérgio L
 
   it('mais de uma vira uma lista só, com um link por linha', () => {
     const m = norm(
-      newChargesMessage('Drogaria Imaculada', [
+      newChargesMessage('Drogaria Exemplo', [
         uma,
         { value: 250.5, dueDate: '2026-10-01', description: '', url: 'https://asaas.com/i/def' },
       ]),
@@ -175,11 +175,11 @@ describe('newChargesMessage — o aviso de cobrança NOVA (11/09, caso Sérgio L
 // sairia com "R$". E a descrição do painel do Asaas vem num parágrafo inteiro.
 describe('newChargesMessage — sem valores e descrição longa', () => {
   const alpha = { value: 189.9, dueDate: '2026-09-26', description: 'Plano Site', url: 'https://www.asaas.com/i/alpha' }
-  const leva = { value: 300, dueDate: '2026-09-20', description: 'Leva Entulho 1/3', url: 'https://www.asaas.com/i/leva1' }
+  const leva = { value: 300, dueDate: '2026-09-20', description: 'Caçamba Exemplo 1/3', url: 'https://www.asaas.com/i/leva1' }
 
   it('uma cobrança sem valores: descrição, vencimento e link, nenhum R$', () => {
-    const m = norm(newChargesMessage('Alpha Gás', [alpha], { showValues: false }))
-    expect(m).toContain('Oi, Alpha Gás!')
+    const m = norm(newChargesMessage('Ômega Gás', [alpha], { showValues: false }))
+    expect(m).toContain('Oi, Ômega Gás!')
     expect(m).toContain('Segue o link para pagamento (Plano Site), com vencimento em 26/09/2026:')
     expect(m).toContain('https://www.asaas.com/i/alpha')
     expect(m).not.toContain('R$')
@@ -189,7 +189,7 @@ describe('newChargesMessage — sem valores e descrição longa', () => {
   it('várias sem valores continuam UMA mensagem, com um link por linha', () => {
     const m = norm(newChargesMessage(null, [leva, { ...alpha, description: '' }], { showValues: false }))
     expect(m).not.toContain('R$')
-    expect(m).toContain('• Leva Entulho 1/3, vence 20/09/2026:\nhttps://www.asaas.com/i/leva1')
+    expect(m).toContain('• Caçamba Exemplo 1/3, vence 20/09/2026:\nhttps://www.asaas.com/i/leva1')
     expect(m).toContain('• Vence 26/09/2026:\nhttps://www.asaas.com/i/alpha')
     expect(m.split('Seguem os links').length).toBe(2)
   })
@@ -197,7 +197,7 @@ describe('newChargesMessage — sem valores e descrição longa', () => {
   it('descrição de 200 caracteres é cortada (com e sem valores)', () => {
     const longa = { ...alpha, description: `Contrato de manutenção ${'x'.repeat(200)}` }
     for (const showValues of [true, false]) {
-      const m = norm(newChargesMessage('Alpha Gás', [longa], { showValues }))
+      const m = norm(newChargesMessage('Ômega Gás', [longa], { showValues }))
       expect(m).not.toContain('x'.repeat(100))
       expect(m).toContain('…)')
       expect(m).toContain('https://www.asaas.com/i/alpha')
@@ -205,8 +205,8 @@ describe('newChargesMessage — sem valores e descrição longa', () => {
   })
 
   it('sem a opção, igual a antes (com valores)', () => {
-    expect(newChargesMessage('Alpha Gás', [alpha])).toBe(newChargesMessage('Alpha Gás', [alpha], { showValues: true }))
-    expect(norm(newChargesMessage('Alpha Gás', [alpha]))).toContain('R$ 189,90 (Plano Site)')
+    expect(newChargesMessage('Ômega Gás', [alpha])).toBe(newChargesMessage('Ômega Gás', [alpha], { showValues: true }))
+    expect(norm(newChargesMessage('Ômega Gás', [alpha]))).toContain('R$ 189,90 (Plano Site)')
   })
 })
 
@@ -257,41 +257,41 @@ describe('queueNewChargeNotices — lê no Asaas o que foi CRIADO, não a cartei
         pay({ id: 'pay_ren', customer: 'cus_ren', dateCreated: '2026-09-17', dueDate: '2026-10-26', subscription: 'sub_ren' }),
         // Pix recebido gerado automaticamente.
         pay({ id: 'pay_pix', customer: 'cus_pix', status: 'RECEIVED', billingType: 'PIX', dateCreated: '2026-09-16' }),
-        // Leva Entulho 3x, criada no painel em 15/09.
+        // Caçamba Exemplo 3x, criada no painel em 15/09.
         pay({ id: 'pay_leva1', customer: 'cus_leva', installment: 'ins_leva', dueDate: '2026-09-20' }),
         pay({ id: 'pay_leva2', customer: 'cus_leva', installment: 'ins_leva', dueDate: '2026-10-20' }),
         pay({ id: 'pay_leva3', customer: 'cus_leva', installment: 'ins_leva', dueDate: '2026-11-20' }),
-        // Alpha Gás, assinatura nova no painel em 15/09.
+        // Ômega Gás, assinatura nova no painel em 15/09.
         pay({ id: 'pay_alpha1', customer: 'cus_alpha', subscription: 'sub_alpha', dueDate: '2026-09-26' }),
       ],
       k2: [
         // Criadas pelo CRM: por referência (conversa) e pelo grupo de uma parcela da carteira.
-        pay({ id: 'pay_crm_ref', customer: 'cus_dom', externalReference: CONV_CRM, dateCreated: '2026-09-16', dueDate: '2026-09-25' }),
-        pay({ id: 'pay_crm_p1', customer: 'cus_dom', installment: 'ins_crm', dateCreated: '2026-09-16', dueDate: '2026-09-24' }),
-        pay({ id: 'pay_crm_p2', customer: 'cus_dom', installment: 'ins_crm', dateCreated: '2026-09-16', dueDate: '2026-09-29' }),
-        // Andressa e Convictus: o cadastro do Asaas não tem telefone.
-        pay({ id: 'pay_andressa', customer: 'cus_andressa' }),
-        pay({ id: 'pay_conv1', customer: 'cus_convictus', subscription: 'sub_conv', dueDate: '2026-09-20' }),
-        pay({ id: 'pay_conv2', customer: 'cus_convictus', subscription: 'sub_conv', dueDate: '2026-10-20' }),
+        pay({ id: 'pay_crm_ref', customer: 'cus_tio', externalReference: CONV_CRM, dateCreated: '2026-09-16', dueDate: '2026-09-25' }),
+        pay({ id: 'pay_crm_p1', customer: 'cus_tio', installment: 'ins_crm', dateCreated: '2026-09-16', dueDate: '2026-09-24' }),
+        pay({ id: 'pay_crm_p2', customer: 'cus_tio', installment: 'ins_crm', dateCreated: '2026-09-16', dueDate: '2026-09-29' }),
+        // Beatriz e Numerus: o cadastro do Asaas não tem telefone.
+        pay({ id: 'pay_beatriz', customer: 'cus_beatriz' }),
+        pay({ id: 'pay_conv1', customer: 'cus_contabil', subscription: 'sub_conv', dueDate: '2026-09-20' }),
+        pay({ id: 'pay_conv2', customer: 'cus_contabil', subscription: 'sub_conv', dueDate: '2026-10-20' }),
       ],
       k3: [pay({ id: 'pay_teste', customer: 'cus_leva' })],
     }
     state.customers = {
-      cus_leva: { id: 'cus_leva', name: 'Leva Entulho', mobilePhone: '67990000001', email: 'financeiro@leva.com', notificationDisabled: true, dateCreated: '2025-03-01' },
-      cus_alpha: { id: 'cus_alpha', name: 'Alpha Gás', mobilePhone: '67990000002', notificationDisabled: true, dateCreated: '2026-09-15' },
-      cus_andressa: { id: 'cus_andressa', name: 'Fisioterapeuta Andressa Amorelli', notificationDisabled: true, dateCreated: '2026-09-15' },
-      cus_convictus: { id: 'cus_convictus', name: 'Convictus Contabilidade', notificationDisabled: true, dateCreated: '2026-09-15' },
+      cus_leva: { id: 'cus_leva', name: 'Caçamba Exemplo', mobilePhone: '67990000001', email: 'financeiro@cacamba.com', notificationDisabled: true, dateCreated: '2025-03-01' },
+      cus_alpha: { id: 'cus_alpha', name: 'Ômega Gás', mobilePhone: '67990000002', notificationDisabled: true, dateCreated: '2026-09-15' },
+      cus_beatriz: { id: 'cus_beatriz', name: 'Fisioterapeuta Beatriz Teste', notificationDisabled: true, dateCreated: '2026-09-15' },
+      cus_contabil: { id: 'cus_contabil', name: 'Numerus Contabilidade', notificationDisabled: true, dateCreated: '2026-09-15' },
     }
     state.customers429 = {}
     state.contactOf = { cus_leva: 'ct_leva', cus_alpha: 'ct_alpha' }
     state.fichas = [
-      { id: 'ct_leva', name: 'Leva', optedOut: false },
-      { id: 'ct_alpha', name: 'Alpha', optedOut: false },
+      { id: 'ct_leva', name: 'Caçamba', optedOut: false },
+      { id: 'ct_alpha', name: 'Ômega', optedOut: false },
     ]
     state.flags = { cus_alpha: { enabled: true, email: false, sms: false, whatsapp: false, phoneCall: false } }
-    // Alpha nasceu no painel em 15/09 com os avisos ligados; a varredura de 16/09
+    // Ômega nasceu no painel em 15/09 com os avisos ligados; a varredura de 16/09
     // às 9h calou e a lista tirada logo depois tinha a pay_alpha1 (o Asaas podia
-    // ter avisado). Leva é calado há meses: sem registro.
+    // ter avisado). Caçamba é calado há meses: sem registro.
     state.silenced = { 'c-asaas|cus_alpha': { at: '2026-09-16T12:05:00Z', beforeSince: '2026-09-15', before: ['pay_alpha1'] } }
     state.silencedDown = false
     state.previous = []
@@ -324,11 +324,11 @@ describe('queueNewChargeNotices — lê no Asaas o que foi CRIADO, não a cartei
     expect(state.listCalls.map((c) => c.apiKey)).toEqual(['k1', 'k2'])
     expect(state.listCalls.every((c) => c.since === '2026-09-15')).toBe(true)
     // Cadastro só de quem passou na classificação; chave de aviso só de quem ia receber.
-    expect(state.customerCalls.flat().sort()).toEqual(['cus_alpha', 'cus_andressa', 'cus_convictus', 'cus_leva'])
+    expect(state.customerCalls.flat().sort()).toEqual(['cus_alpha', 'cus_beatriz', 'cus_contabil', 'cus_leva'])
     expect(state.flagCalls).toEqual([])
   })
 
-  it('sem o envio à mão: Leva 1/3 e Alpha Gás recebem o link, sem valores, e ocupam o dia', async () => {
+  it('sem o envio à mão: Caçamba 1/3 e Ômega Gás recebem o link, sem valores, e ocupam o dia', async () => {
     const contactedToday = new Set<string>()
     const alreadyQueued = new Set<string>()
     const r = await run({ contactedToday, alreadyQueued })
@@ -345,7 +345,7 @@ describe('queueNewChargeNotices — lê no Asaas o que foi CRIADO, não a cartei
       links: [url('pay_leva1')],
       charges: 1,
       touch: 0,
-      asaasEmail: 'financeiro@leva.com',
+      asaasEmail: 'financeiro@cacamba.com',
     })
     expect(leva.decision).toBe('auto')
     expect(String(leva.suggestedText)).toContain(url('pay_leva1'))
@@ -355,9 +355,9 @@ describe('queueNewChargeNotices — lê no Asaas o que foi CRIADO, não a cartei
     expect((state.inserts[1].payload as Record<string, unknown>).asaasEmail).toBeUndefined()
     expect([...contactedToday].sort()).toEqual(['ct_alpha', 'ct_leva'])
     expect([...alreadyQueued].sort()).toEqual(['ct_alpha', 'ct_leva'])
-    // Alpha foi calado DEPOIS da cobrança nascer: só as chaves do Asaas dizem se ele avisou. Leva é calado há tempo: sem GET.
+    // Ômega foi calado DEPOIS da cobrança nascer: só as chaves do Asaas dizem se ele avisou. Caçamba é calado há tempo: sem GET.
     expect(state.flagCalls).toEqual(['cus_alpha'])
-    expect(state.fallbackEmails).toEqual(['financeiro@leva.com', null])
+    expect(state.fallbackEmails).toEqual(['financeiro@cacamba.com', null])
   })
 
   it('uma mensagem de cobrança por pessoa por dia; o Asaas que ainda avisa não ganha segundo aviso', async () => {
@@ -429,17 +429,17 @@ describe('queueNewChargeNotices — lê no Asaas o que foi CRIADO, não a cartei
 
   it('429 ao abrir os clientes de uma conta não derruba a rodada: a outra conta segue', async () => {
     state.customers429 = { k1: true }
-    state.contactOf = { ...state.contactOf, cus_andressa: 'ct_andressa' }
-    state.customers.cus_andressa = { ...state.customers.cus_andressa, mobilePhone: '67990000003', dateCreated: '2025-01-01' }
-    state.fichas = [...state.fichas, { id: 'ct_andressa', name: 'Andressa', optedOut: false }]
+    state.contactOf = { ...state.contactOf, cus_beatriz: 'ct_beatriz' }
+    state.customers.cus_beatriz = { ...state.customers.cus_beatriz, mobilePhone: '67990000003', dateCreated: '2025-01-01' }
+    state.fichas = [...state.fichas, { id: 'ct_beatriz', name: 'Beatriz', optedOut: false }]
     const r = await run()
     expect(r.skipped.conta_indisponivel).toBe(1)
-    expect(state.inserts.map((i) => i.contactId)).toEqual(['ct_andressa'])
+    expect(state.inserts.map((i) => i.contactId)).toEqual(['ct_beatriz'])
   })
 
   it('mesmo contato nas duas contas do Asaas: UMA mensagem, cada parcela com a conta dela', async () => {
     state.payments.k2.push(pay({ id: 'pay_leva_b', customer: 'cus_leva_b', dueDate: '2026-09-22' }))
-    state.customers.cus_leva_b = { id: 'cus_leva_b', name: 'Leva Entulho ME', mobilePhone: '67990000001', notificationDisabled: true, dateCreated: '2024-01-01' }
+    state.customers.cus_leva_b = { id: 'cus_leva_b', name: 'Caçamba Exemplo ME', mobilePhone: '67990000001', notificationDisabled: true, dateCreated: '2024-01-01' }
     state.contactOf = { ...state.contactOf, cus_leva_b: 'ct_leva' }
     await run()
     const leva = state.inserts.find((i) => i.contactId === 'ct_leva')!
@@ -458,7 +458,7 @@ describe('queueNewChargeNotices — lê no Asaas o que foi CRIADO, não a cartei
     await run({ settings: { ...golink, asaasNotificationsOffAt: '2026-09-15T13:00:00Z', asaasNotificationsSweptAt: '2026-09-15T20:00:00Z' } })
     expect(state.listCalls).toHaveLength(2)
     expect(state.listCalls.every((c) => c.since === '2026-09-16')).toBe(true)
-    // Leva e Alpha nasceram em 15/09: o Asaas ainda avisava.
+    // Caçamba e Ômega nasceram em 15/09: o Asaas ainda avisava.
     expect(state.inserts).toHaveLength(0)
   })
 

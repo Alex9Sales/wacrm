@@ -6,15 +6,15 @@ describe('wahaProvider.parseWebhook', () => {
     const { messages } = wahaProvider.parseWebhook({
       event: 'message',
       payload: {
-        id: 'true_5567992539584@c.us_ABCDEF123456',
-        from: '5567992539584@c.us',
+        id: 'true_5567990001234@c.us_ABCDEF123456',
+        from: '5567990001234@c.us',
         fromMe: false,
         body: 'oi',
       },
     });
     expect(messages).toHaveLength(1);
     expect(messages[0].externalMessageId).toBe('ABCDEF123456');
-    expect(messages[0].fromPhoneE164).toBe('5567992539584');
+    expect(messages[0].fromPhoneE164).toBe('5567990001234');
     expect(messages[0].contentType).toBe('text');
     expect(messages[0].contentText).toBe('oi');
     expect(messages[0].fromMe).toBe(false);
@@ -38,12 +38,12 @@ describe('wahaProvider.parseWebhook', () => {
       payload: {
         id: 'true_123@lid_HASH',
         from: '123456@lid',
-        _data: { key: { remoteJidAlt: '5567992539584@s.whatsapp.net' } },
+        _data: { key: { remoteJidAlt: '5567990001234@s.whatsapp.net' } },
         body: 'via lid',
       },
     });
     expect(messages).toHaveLength(1);
-    expect(messages[0].fromPhoneE164).toBe('5567992539584');
+    expect(messages[0].fromPhoneE164).toBe('5567990001234');
   });
 
   it('emits a @lid chat with no alt as senderLid (route resolves the phone)', () => {
@@ -66,12 +66,12 @@ describe('wahaProvider.parseWebhook', () => {
       payload: {
         id: 'x_y_H2',
         from: '123456@lid',
-        _data: { key: { remoteJidAlt: '5567992539584@s.whatsapp.net' } },
+        _data: { key: { remoteJidAlt: '5567990001234@s.whatsapp.net' } },
         body: 'via alt',
       },
     });
     expect(messages).toHaveLength(1);
-    expect(messages[0].fromPhoneE164).toBe('5567992539584');
+    expect(messages[0].fromPhoneE164).toBe('5567990001234');
     expect(messages[0].senderLid).toBeUndefined();
   });
 
@@ -83,7 +83,7 @@ describe('wahaProvider.parseWebhook', () => {
       event: 'message',
       payload: {
         id: 'a_b_H',
-        from: '120363400053019227@g.us',
+        from: '120363000000000001@g.us',
         body: 'grupo',
         participant: '5567999998888@s.whatsapp.net',
         _data: { pushName: 'Fulano' },
@@ -91,7 +91,7 @@ describe('wahaProvider.parseWebhook', () => {
     });
     expect(messages).toHaveLength(1);
     expect(messages[0].group).toBeDefined();
-    expect(messages[0].group?.jid).toBe('120363400053019227@g.us');
+    expect(messages[0].group?.jid).toBe('120363000000000001@g.us');
     expect(messages[0].group?.authorName).toBe('Fulano');
     expect(messages[0].group?.authorPhone).toBe('5567999998888');
     expect(messages[0].contentText).toBe('grupo');
@@ -102,10 +102,10 @@ describe('wahaProvider.parseWebhook', () => {
     // 18-digit id (prefixed 120363) and no suffix — still recognized as group.
     const bare = wahaProvider.parseWebhook({
       event: 'message',
-      payload: { id: 'g_b_H', from: '120363400053019227', body: 'grupo raw' },
+      payload: { id: 'g_b_H', from: '120363000000000001', body: 'grupo raw' },
     });
     expect(bare.messages).toHaveLength(1);
-    expect(bare.messages[0].group?.jid).toBe('120363400053019227');
+    expect(bare.messages[0].group?.jid).toBe('120363000000000001');
 
     // A normal E.164 phone (≤15 digits) must still pass through as 1:1.
     const direct = wahaProvider.parseWebhook({
@@ -122,7 +122,7 @@ describe('wahaProvider.parseWebhook', () => {
       event: 'message',
       payload: {
         id: 'r_1_H',
-        from: '120363400053019227@g.us',
+        from: '120363000000000001@g.us',
         _data: {
           Message: {
             encReactionMessage: { targetMessageKey: { ID: 'ABC' } },
@@ -149,7 +149,7 @@ describe('wahaProvider.parseWebhook', () => {
       event: 'message',
       payload: {
         id: 'cm_1_H',
-        from: '120363428050370478@g.us',
+        from: '120363000000000002@g.us',
         _data: {
           Message: {
             messageContextInfo: {},
@@ -190,7 +190,7 @@ describe('wahaProvider.parseWebhook', () => {
       event: 'message',
       payload: {
         id: 't_1_H',
-        from: '5511932227906@c.us',
+        from: '5511990001235@c.us',
         _data: {
           Message: {
             templateMessage: {
@@ -215,7 +215,7 @@ describe('wahaProvider.parseWebhook', () => {
       event: 'message',
       payload: {
         id: 'tb_1_H',
-        from: '5567936180557@c.us',
+        from: '5567990001236@c.us',
         _data: {
           Message: {
             templateMessage: {
@@ -243,7 +243,7 @@ describe('wahaProvider.parseWebhook', () => {
       event: 'message',
       payload: {
         id: 'tu_1_H',
-        from: '5511936200210@c.us',
+        from: '5511990001237@c.us',
         _data: {
           Message: {
             templateMessage: {
@@ -276,7 +276,7 @@ describe('wahaProvider.parseWebhook', () => {
       event: 'message',
       payload: {
         id: 'cta_1_H',
-        from: '5511955023337@c.us',
+        from: '5511990001238@c.us',
         _data: {
           Message: {
             interactiveMessage: {

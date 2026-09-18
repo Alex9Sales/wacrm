@@ -17,7 +17,7 @@
 // lembrado se foi feito nos últimos reminderDaysBefore+1 dias (17/09): a
 // parcela avisada 6 a 15 dias antes na criação ainda recebe o lembrete D-5.
 //
-// 16/09 (Speed Gás e Água): a LEITURA (scanUpcoming) é separada da FILA
+// 16/09 (Veloz Gás e Água): a LEITURA (scanUpcoming) é separada da FILA
 // (queueUpcomingReminders). A leitura roda antes do teto do dia e grava quem
 // vai vencer sem contato no CRM — a tela mostra; antes só o log sabia.
 //
@@ -136,7 +136,7 @@ const isoDay = (d: Date) => d.toISOString().slice(0, 10)
  * Lê no Asaas o que vence nos próximos N dias e casa com os contatos. NÃO
  * enfileira nada e NÃO depende do teto do dia.
  *
- * 🐛 16/09 (Speed Gás e Água, GoLink): a leitura vivia dentro da fila e só
+ * 🐛 16/09 (Veloz Gás e Água, GoLink): a leitura vivia dentro da fila e só
  * rodava com orçamento — no dia em que o teto acabava ninguém olhava, e o
  * cliente sem contato era um `bump('no_contact')` que só o log via. Agora ela
  * roda antes do teto e grava o retrato "a vencer sem contato"
@@ -366,7 +366,7 @@ export async function queueUpcomingReminders(args: {
   const withOverdue = new Set(overdue.map((r) => r.contactId).filter((x): x is string => !!x))
 
   // O freio do devedor (pausa, promessa/comprovante, limite de toques) vale
-  // para o lembrete como vale para a régua — 15/09, Guincho Ribeiro pausado
+  // para o lembrete como vale para a régua — 15/09, Reboque Modelo pausado
   // recebeu lembrete.
   const touchRows = await db
     .select({
@@ -398,7 +398,7 @@ export async function queueUpcomingReminders(args: {
   // `remindedByContact`.
   // 🔗 Aviso de cobrança nova só conta dentro da janela do lembrete (17/09,
   // `remindedFilter`): com o aviso na criação para o que vence em até 15 dias,
-  // contar por 45 dias apagava o lembrete D-5 (Alpha Gás, criada 15/09, vence
+  // contar por 45 dias apagava o lembrete D-5 (Ômega Gás, criada 15/09, vence
   // 26/09 — o lembrete de 21/09 não sairia).
   const since = new Date(Date.now() - 45 * 86_400_000).toISOString()
   const previous = await db

@@ -154,7 +154,7 @@ export function WalletClient() {
   const [newChargeOpen, setNewChargeOpen] = useState(false);
   const [promo, setPromo] = useState<PromotionView | null>(null);
   const [held, setHeld] = useState<HeldDebtor[]>([]);
-  // 🔔 16/09 (Speed Gás e Água): quem vence sem contato no CRM e não recebe o
+  // 🔔 16/09 (Veloz Gás e Água): quem vence sem contato no CRM e não recebe o
   // lembrete. Erro de carga fica marcado — nunca vira "ninguém sem contato".
   const [upcomingView, setUpcomingView] = useState<UpcomingUnmatchedView | null>(null);
   const [upcomingError, setUpcomingError] = useState(false);
@@ -544,7 +544,7 @@ export function WalletClient() {
 
 /**
  * Régua parada em quem não tem nada vencido — a lista acima só mostra quem
- * deve, e essas pausas ficavam invisíveis para sempre (16/09, Guincho Ribeiro:
+ * deve, e essas pausas ficavam invisíveis para sempre (16/09, Reboque Modelo:
  * pagou tudo, a pausa da IA continuou e cobrança nova nunca seria avisada).
  */
 function HeldDebtorsPanel({ held, onChanged }: { held: HeldDebtor[]; onChanged: () => void }) {
@@ -712,7 +712,7 @@ function DebtorCard({
               onClick={async () => {
                 const res = await adoptAsaasPhone(debtor.contactId!, debtor.key);
                 if (!res.ok) {
-                  // Número já é de outro contato (16/09, L&M Vidros × "LM
+                  // Número já é de outro contato (16/09, R&S Vidros × "RS
                   // Vidros"): oferece ligar a cobrança NELE, em um clique — a
                   // troca de contato buscava pelo nome e não achava.
                   const clash = res.code === 'phone_clash' ? res.clash : undefined;
@@ -816,7 +816,7 @@ function DebtorCard({
                 </Button>
                 {/* 11/09: trocar o contato ligado também precisa existir. O
                     devedor cujo número do Asaas já pertence a OUTRO contato
-                    (Center Pisos × Center Raspadora) não tinha saída na tela:
+                    (Centro Pisos × Centro Modelo) não tinha saída na tela:
                     "Usar o do Asaas" recusava e mandava religar, e o botão de
                     religar só aparecia para devedor SEM contato. */}
                 <Button size="sm" variant="ghost" onClick={onLink} title="Trocar o contato do CRM que recebe esta cobrança">
@@ -1866,7 +1866,7 @@ function LinkContactDialog({
               key={c.id}
               type="button"
               // O contato que já recebe esta cobrança não é escolha: clicar nele
-              // dizia "Ligado" sem mudar nada (16/09, L&M Vidros).
+              // dizia "Ligado" sem mudar nada (16/09, R&S Vidros).
               disabled={busy || c.id === debtor.contactId}
               className="rounded-md px-2.5 py-2 text-left text-sm hover:bg-muted disabled:opacity-50"
               onClick={async () => {

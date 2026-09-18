@@ -13,7 +13,7 @@ import {
 const TZ = 'America/Sao_Paulo'
 const JOAO = 'u-joao'
 
-// 15/09 (Alex): caso Will Santos — escreveu pro número do Vitor, a conversa foi
+// 15/09 (Alex): caso de um cliente da GoLink — escreveu pro número do Vitor, a conversa foi
 // transferida pro João, e as respostas do João saíam pelo WhatsApp do Vitor.
 describe('myWhatsAppNumbers', () => {
   const canais = [
@@ -47,12 +47,12 @@ describe('transcriptLines', () => {
   it('rotula quem falou e põe data e hora no fuso da conta', () => {
     const linhas = transcriptLines(
       [
-        row('customer', '2026-09-14T19:52:37Z', 'Sou William da Lumival'),
+        row('customer', '2026-09-14T19:52:37Z', 'Sou Paulo da Oficina Modelo'),
         row('agent', '2026-09-14T20:43:31Z', 'Vou transferir esse chat para o João.'),
       ],
       TZ,
     )
-    expect(linhas).toEqual(['[14/09 16:52] Cliente: Sou William da Lumival', '[14/09 17:43] Atendimento: Vou transferir esse chat para o João.'])
+    expect(linhas).toEqual(['[14/09 16:52] Cliente: Sou Paulo da Oficina Modelo', '[14/09 17:43] Atendimento: Vou transferir esse chat para o João.'])
   })
 
   it('mídia vira rótulo + descrição, sem o marcador cru', () => {
@@ -84,21 +84,21 @@ describe('notas e rascunho', () => {
   it('nota da conversa nova diz de onde veio, quem trouxe e as últimas falas', () => {
     const nota = noteForNewConversation({
       fromChannelName: 'Vitor',
-      fromPhone: '5512992306060',
+      fromPhone: '5512990001234',
       byName: 'João',
       at,
       tz: TZ,
-      lines: ['[14/09 16:52] Cliente: Sou William da Lumival'],
+      lines: ['[14/09 16:52] Cliente: Sou Paulo da Oficina Modelo'],
     })
-    expect(nota.startsWith('↪️ Continuação do atendimento que começou no número Vitor (+55 12 99230-6060), trazido pra cá por João em 15/09 01:30.')).toBe(true)
-    expect(nota).toContain('Últimas mensagens de lá:\n[14/09 16:52] Cliente: Sou William da Lumival')
+    expect(nota.startsWith('↪️ Continuação do atendimento que começou no número Vitor (+55 12 99000-1234), trazido pra cá por João em 15/09 01:30.')).toBe(true)
+    expect(nota).toContain('Últimas mensagens de lá:\n[14/09 16:52] Cliente: Sou Paulo da Oficina Modelo')
     expect(nota).toContain('Ver conversa anterior')
   })
 
   it('nota da conversa antiga avisa por onde o atendimento seguiu', () => {
-    const nota = noteForOldConversation({ toChannelName: 'João', toPhone: '5512974074219', byName: 'João', at, tz: TZ })
+    const nota = noteForOldConversation({ toChannelName: 'João', toPhone: '5512990005678', byName: 'João', at, tz: TZ })
     expect(nota).toBe(
-      '↪️ João continuou este atendimento pelo número João (+55 12 97407-4219) em 15/09 01:30. Se o cliente escrever aqui de novo, avise João: o que for respondido nesta conversa sai por este número.',
+      '↪️ João continuou este atendimento pelo número João (+55 12 99000-5678) em 15/09 01:30. Se o cliente escrever aqui de novo, avise João: o que for respondido nesta conversa sai por este número.',
     )
   })
 

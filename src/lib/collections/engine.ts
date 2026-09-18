@@ -126,7 +126,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     if (!r.ok) return { ...stats, haltedBecause: `Não deu para ler o Asaas agora: ${r.error ?? 'falha'}` }
   }
 
-  // 🔔 A LEITURA do que vence nos próximos dias vem ANTES do teto (16/09, Speed
+  // 🔔 A LEITURA do que vence nos próximos dias vem ANTES do teto (16/09, Veloz
   // Gás e Água): ela refaz o painel "A vencer sem contato" e não enfileira
   // nada. Dentro do orçamento, no dia em que o teto acabava ninguém olhava —
   // e o cliente sem contato continuava invisível. Falhou: a régua segue.
@@ -386,7 +386,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
 
     const summary = formatDebtSummary(d.charges, { showValues: s.showValues })
     // Nome como está no ASAAS prevalece (João/Alex 10/09) — o apelido salvo
-    // no celular ("Rack 95") ou o "primeiro nome" de uma empresa ("Drogaria")
+    // no celular ("Loja 77") ou o "primeiro nome" de uma empresa ("Drogaria")
     // saía errado na saudação.
     const customerName = d.asaasName ?? d.name
     const firstName = greetingName(customerName)
@@ -592,7 +592,7 @@ async function draftCollectionMessage(args: {
             .join('\n')}`
         : '',
       `Situação: ${args.summary.lines.length} ${args.summary.lines.length === 1 ? 'parcela vencida' : 'parcelas vencidas'}${args.maxDaysLate != null ? `, a mais antiga há ${args.maxDaysLate} dias` : ''}.`,
-      // 17/09, Marcelo Santos (GoLink): "Agradeço por conferir esta cobrança"
+      // 17/09, Renan Exemplo (GoLink): "Agradeço por conferir esta cobrança"
       // pra quem nunca abriu nada. Você só sabe o que ESTÁ nas linhas acima.
       'NUNCA agradeça nem comente algo que o cliente não fez: ele NÃO conferiu, NÃO abriu o link, NÃO respondeu e NÃO pagou esta cobrança — não invente interação. Se usar um "obrigado", é só no fecho, como cortesia ("obrigado!"), nunca por uma ação dele.',
       'NUNCA ameace nem fale em protesto, negativação ou consequência jurídica. O "com juros e multa" que aparece nas linhas é FATO calculado pelo Asaas: copie como está, sem ameaçar nem explicar. Nunca ofereça desconto, parcelamento ou prazo — se o cliente pedir, quem decide é uma pessoa. Sobre continuidade do serviço/anúncio, fale APENAS se as instruções da empresa abaixo pedirem — como informação, nunca como ameaça.',

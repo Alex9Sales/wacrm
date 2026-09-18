@@ -8,7 +8,7 @@ describe('automatedSenderReason', () => {
   it.each([
     'no-reply@accounts.google.com',
     'noreply-accounts@google.com',
-    'no-reply-vhsi6m0tencsoa13-3avca@mail.anthropic.com',
+    'no-reply-abc123exemplo-7xyz@mail.anthropic.com',
     'noreply@tm.openai.com',
     'notifications@link.com',
     'no-reply@email.claude.com',
@@ -34,7 +34,7 @@ describe('automatedSenderReason', () => {
     'joao.silva@gmail.com',
     'contato@loja.com',
     'noreplyer@gmail.com',
-    'renato@limpezacomzelo.com.br',
+    'paulo@oficina-modelo.com.br',
   ])('%s é pessoa', (from) => {
     expect(automatedSenderReason({ from })).toBeNull()
   })
@@ -57,19 +57,19 @@ describe('automatedSenderReason — casos de gente', () => {
     expect(
       automatedSenderReason({
         from: 'joao@devedor.com.br',
-        channelAddress: 'vitor@golink.com.br',
+        channelAddress: 'vendedor@empresa-exemplo.com.br',
         headers: [
           { key: 'precedence', value: 'list' },
-          { key: 'list-id', value: '<cobranca.golink.com.br>' },
+          { key: 'list-id', value: '<cobranca.empresa-exemplo.com.br>' },
           { key: 'x-google-group-id', value: '123' },
-          { key: 'list-unsubscribe', value: '<mailto:cobranca+unsubscribe@golink.com.br>' },
+          { key: 'list-unsubscribe', value: '<mailto:cobranca+unsubscribe@empresa-exemplo.com.br>' },
         ],
       }),
     ).toBeNull()
   })
 
   it('newsletter de fora continua sendo robô', () => {
-    expect(automatedSenderReason({ from: 'learn@email1.asana.com', channelAddress: 'golinkoficial@gmail.com', headers: [{ key: 'list-unsubscribe', value: '<https://x>' }] })).not.toBeNull()
+    expect(automatedSenderReason({ from: 'learn@email1.asana.com', channelAddress: 'cobranca.exemplo@gmail.com', headers: [{ key: 'list-unsubscribe', value: '<https://x>' }] })).not.toBeNull()
   })
 
   it('aviso de formulário: From de robô com Reply-To do lead é pessoa', () => {

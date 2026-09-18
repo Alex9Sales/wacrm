@@ -6,7 +6,7 @@
 // esta página" do Chrome, sem saída. Aqui o usuário ganha um botão de
 // recarregar, e sessão perdida vai direto pro login.
 //
-// 09/09/2026 (Renato/Limpeza com Zelo e Wilian/GoLink viam isto "toda hora"):
+// 09/09/2026 (clientes da Limpeza com Zelo e da GoLink viam isto "toda hora"):
 //  1. erro de CHUNK (pedaço do código de uma versão antiga que o servidor já
 //     não tem) → recarrega sozinho UMA vez, sem mostrar a tela;
 //  2. todo erro é reportado em /api/client-errors → aparece no log do web,
@@ -87,7 +87,7 @@ export default function DashboardError({
               : 'Já registramos o erro. Recarregar resolve na maioria das vezes; se voltar, avise o suporte com o código abaixo.'}
         </p>
         {/* O que quebrou, em texto: o suporte lê na foto da tela sem precisar
-            do console do navegador (Renato/Zelo mandou foto às 22h e a gente
+            do console do navegador (um cliente mandou foto às 22h e a gente
             não tinha como saber o erro). Erro de servidor em produção vem sem
             mensagem — aí fica só o código. */}
         {(error?.digest || (!staleChunk && error?.message)) && (

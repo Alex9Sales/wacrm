@@ -4,7 +4,7 @@ import { PgDialect } from 'drizzle-orm/pg-core'
 
 import { FakeRedis, redisStore } from '@/lib/__mocks__/fake-redis'
 
-// 15/09 (GoLink): o Google revogou a senha de app do golinkoficial@gmail.com.
+// 15/09 (GoLink): o Google revogou a senha de app do Gmail do canal de cobrança.
 // Trocar a senha não pode apagar o canal, mexer no ponto de leitura, nem
 // gravar uma senha que o Google recusa.
 
@@ -53,8 +53,8 @@ import { decryptCredentials } from '@/lib/channels/channels'
 import { GmailVerifyError } from './gmail-verify'
 import { GMAIL_MSG, replaceGmailAppPassword } from './gmail-credentials'
 
-const ACCOUNT = '4bdb977c-b522-4b34-a852-b27955b31f9f'
-const CHANNEL = 'ddb0432e-09e9-4573-a9da-472666435fdb'
+const ACCOUNT = 'aaaaaaaa-0000-4000-8000-000000000001'
+const CHANNEL = 'bbbbbbbb-0000-4000-8000-000000000002'
 const NEW_PW = 'novasenhadeappok'
 
 function golinkChannel(meta: Record<string, unknown> = {}) {
@@ -64,9 +64,9 @@ function golinkChannel(meta: Record<string, unknown> = {}) {
     provider: 'gmail',
     name: 'GoLinkAsaas',
     phoneNumber: null,
-    credentials: { address: 'golinkoficial@gmail.com', appPassword: 'senhavelharevoga', fromName: 'GoLink' },
+    credentials: { address: 'cobranca.exemplo@gmail.com', appPassword: 'senhavelharevoga', fromName: 'GoLink' },
     providerMeta: {
-      address: 'golinkoficial@gmail.com',
+      address: 'cobranca.exemplo@gmail.com',
       gmailUidValidity: '1',
       gmailLastUid: 129,
       health: { imap: { verdict: 'auth_failed', error: 'x', strikes: 3, first_fail_at: '2026-09-15T02:13:00Z', last_at: '2026-09-15T03:00:00Z' } },
@@ -159,15 +159,15 @@ describe('replaceGmailAppPassword', () => {
     expect(res).toMatchObject({ ok: true })
 
     // Testou no Google com o endereço salvo e a senha sem espaços.
-    expect(verify.smtp).toHaveBeenCalledWith('golinkoficial@gmail.com', NEW_PW)
-    expect(verify.imap).toHaveBeenCalledWith('golinkoficial@gmail.com', NEW_PW)
+    expect(verify.smtp).toHaveBeenCalledWith('cobranca.exemplo@gmail.com', NEW_PW)
+    expect(verify.imap).toHaveBeenCalledWith('cobranca.exemplo@gmail.com', NEW_PW)
 
     expect(dbm.set).toHaveBeenCalledTimes(1)
     const patch = dbm.set.mock.calls[0][0] as Record<string, unknown>
     expect(patch.status).toBe('connected')
 
     const creds = decryptCredentials(patch.credentials as string)
-    expect(creds).toEqual({ address: 'golinkoficial@gmail.com', appPassword: NEW_PW, fromName: 'GoLink' })
+    expect(creds).toEqual({ address: 'cobranca.exemplo@gmail.com', appPassword: NEW_PW, fromName: 'GoLink' })
 
     // Nunca o objeto lido no começo (o worker grava o mesmo campo).
     expect(is(patch.providerMeta, SQL)).toBe(true)

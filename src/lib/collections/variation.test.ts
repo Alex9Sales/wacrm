@@ -42,7 +42,7 @@ describe('seedFrom + variationPlan — sorteio determinístico', () => {
 })
 
 describe('aberturas — nenhuma pode supor que o cliente interagiu', () => {
-  // 17/09, Marcelo Santos (GoLink): a abertura "Comece agradecendo a atenção"
+  // 17/09, Renan Exemplo (GoLink): a abertura "Comece agradecendo a atenção"
   // fez a IA escrever "Agradeço por conferir esta cobrança" pra quem nunca
   // abriu nada. Numa cobrança não existe atenção a agradecer.
   it('nenhuma abertura sorteável manda agradecer', () => {

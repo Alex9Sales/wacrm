@@ -396,7 +396,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     // silêncio temporário: NÃO desliga a IA
     expect(h.state.updatePayload).toBeNull()
     // …mas a msg do cliente não fica pendurada: volta a checar quando a janela acabar
-    // (caso Moacyr/Rafael 01/09).
+    // (caso 01/09).
     expect(h.enqueueRecheck).toHaveBeenCalledWith(
       expect.objectContaining({ conversationId: 'conv-1' }),
       expect.any(Number),
@@ -498,7 +498,7 @@ describe('dispatchInboundToAiReply — eligibility gates', () => {
     expect(h.engineSendText).not.toHaveBeenCalled()
   })
 
-  it('teto batido mas IA calada há horas = episódio novo: zera e responde (caso Poliana)', async () => {
+  it('teto batido mas IA calada há horas = episódio novo: zera e responde (caso 05/09)', async () => {
     // 05/09: cliente recorrente, conversa aberta desde 26/08, 22 respostas.
     // O teto por vida da conversa calava a IA a cada ~3 pedidos, no meio da
     // venda. Agora um silêncio de horas reabre o episódio.
@@ -527,30 +527,30 @@ describe('dispatchInboundToAiReply — transferência por etiqueta (16/09, Gás 
 
   it('só o marcador, sem despedida → manda a despedida padrão e transfere', async () => {
     comHandoff()
-    h.generateReply.mockResolvedValue({ text: '[[TRANSFERIR:Responsável|Kelly, CPF 07020022162, entrega]]', handoff: false })
+    h.generateReply.mockResolvedValue({ text: '[[TRANSFERIR:Responsável|Carla, CPF 12345678909, entrega]]', handoff: false })
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).toHaveBeenCalledTimes(1)
     expect((h.engineSendText.mock.calls[0][0] as { text: string }).text).toContain('responsável')
-    expect(h.applyTransfer).toHaveBeenCalledWith(expect.objectContaining({ tagName: 'Responsável', summary: 'Kelly, CPF 07020022162, entrega' }))
+    expect(h.applyTransfer).toHaveBeenCalledWith(expect.objectContaining({ tagName: 'Responsável', summary: 'Carla, CPF 12345678909, entrega' }))
   })
 
   it('despedida + marcador com "]" no resumo → o cliente recebe só a despedida', async () => {
     comHandoff()
     h.generateReply.mockResolvedValue({
-      text: 'Perfeito! Já passo pro responsável 😊\n[[TRANSFERIR:Responsável|Kelly [Gás do Povo], CPF 07020022162]]',
+      text: 'Perfeito! Já passo pro responsável 😊\n[[TRANSFERIR:Responsável|Carla [Gás do Povo], CPF 12345678909]]',
       handoff: false,
     })
     await dispatchInboundToAiReply(ARGS)
     const enviados = h.engineSendText.mock.calls.map((c) => (c[0] as { text: string }).text).join('\n')
     expect(enviados).toContain('Já passo pro responsável')
-    expect(enviados).not.toContain('07020022162')
+    expect(enviados).not.toContain('12345678909')
     expect(h.applyTransfer).toHaveBeenCalled()
   })
 
   it('sem vaga no limite → não responde, mas transfere', async () => {
     comHandoff()
     h.state.claim = false
-    h.generateReply.mockResolvedValue({ text: 'Já passo pro responsável 😊\n[[TRANSFERIR:Responsável|Kelly]]', handoff: false })
+    h.generateReply.mockResolvedValue({ text: 'Já passo pro responsável 😊\n[[TRANSFERIR:Responsável|Carla]]', handoff: false })
     await dispatchInboundToAiReply(ARGS)
     expect(h.engineSendText).not.toHaveBeenCalled()
     expect(h.applyTransfer).toHaveBeenCalled()
@@ -558,13 +558,13 @@ describe('dispatchInboundToAiReply — transferência por etiqueta (16/09, Gás 
 
   it('[[IGNORAR]] junto de [[TRANSFERIR]] → a transferência ganha', async () => {
     h.loadAiConfig.mockResolvedValue(aiConfig({ tools: ['handoff', 'skip_reply'] } as Partial<AiConfig>))
-    h.generateReply.mockResolvedValue({ text: '[[IGNORAR]]\n[[TRANSFERIR:Responsável|Kelly]]', handoff: false })
+    h.generateReply.mockResolvedValue({ text: '[[IGNORAR]]\n[[TRANSFERIR:Responsável|Carla]]', handoff: false })
     await dispatchInboundToAiReply(ARGS)
     expect(h.applyTransfer).toHaveBeenCalled()
   })
 
   it('marcador que ninguém reconhece nunca vai pro cliente', async () => {
-    h.generateReply.mockResolvedValue({ text: 'Oi! Tudo certo 😊 [[XPTO:cpf 07020022162]]', handoff: false })
+    h.generateReply.mockResolvedValue({ text: 'Oi! Tudo certo 😊 [[XPTO:cpf 12345678909]]', handoff: false })
     await dispatchInboundToAiReply(ARGS)
     const enviados = h.engineSendText.mock.calls.map((c) => (c[0] as { text: string }).text).join('\n')
     expect(enviados).toContain('Oi! Tudo certo')

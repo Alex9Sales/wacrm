@@ -200,14 +200,14 @@ describe('classifyNewCharge — o que é cobrança nova de verdade', () => {
     expect(classifyNewCharge(pay({ status: 'CONFIRMED' }), ctx())).toBe('status')
   })
 
-  it('Leva Entulho em 3x (20/09, 20/10, 20/11) → só a 1ª', () => {
+  it('Caçamba Exemplo em 3x (20/09, 20/10, 20/11) → só a 1ª', () => {
     const c = ctx()
     expect(classifyNewCharge(pay({ id: 'p1', dueDate: '2026-09-20', installment: 'ins_1' }), c)).toBe('ok')
     expect(classifyNewCharge(pay({ id: 'p2', dueDate: '2026-10-20', installment: 'ins_1' }), c)).toBe('vence_longe')
     expect(classifyNewCharge(pay({ id: 'p3', dueDate: '2026-11-20', installment: 'ins_1' }), c)).toBe('vence_longe')
   })
 
-  it('Convictus: assinatura nova com 1ª em 20/09 e 2ª em 20/10 → 1ª ok, 2ª vence_longe', () => {
+  it('Numerus: assinatura nova com 1ª em 20/09 e 2ª em 20/10 → 1ª ok, 2ª vence_longe', () => {
     const c = ctx()
     expect(classifyNewCharge(pay({ id: 'c1', dueDate: '2026-09-20', subscription: 'sub_c' }), c)).toBe('ok')
     expect(classifyNewCharge(pay({ id: 'c2', dueDate: '2026-10-20', subscription: 'sub_c' }), c)).toBe('vence_longe')
@@ -225,7 +225,7 @@ describe('classifyNewCharge — o que é cobrança nova de verdade', () => {
   it('criada pelo CRM: por id, por referência (conversa/contato/conta, maiúscula ou não) e pelo grupo', () => {
     const conv = '3f2504e0-4f89-41d3-9a0c-0305e82c3301'
     expect(classifyNewCharge(pay({ id: 'pay_crm' }), ctx({ crmPaymentIds: new Set(['pay_crm']) }))).toBe('criada_pelo_crm')
-    // 2ª mensalidade do Dom Burguer: o Asaas repassa a referência da assinatura.
+    // 2ª mensalidade do Tio Burguer: o Asaas repassa a referência da assinatura.
     expect(classifyNewCharge(pay({ externalReference: conv.toUpperCase() }), ctx({ crmRefs: new Set([conv]) }))).toBe('criada_pelo_crm')
     expect(classifyNewCharge(pay({ installment: 'ins_crm' }), ctx({ crmGroups: new Set(['ins_crm']) }))).toBe('criada_pelo_crm')
     expect(classifyNewCharge(pay({ subscription: 'sub_crm' }), ctx({ crmGroups: new Set(['sub_crm']) }))).toBe('criada_pelo_crm')
@@ -242,7 +242,7 @@ describe('classifyNewCharge — o que é cobrança nova de verdade', () => {
     expect(classifyNewCharge(pay({ dateCreated: null }), ctx())).toBe('antiga')
   })
 
-  it('nasceu vencida hoje (caso Sérgio Lemes) → ok', () => {
+  it('nasceu vencida hoje (caso Paulo Exemplo) → ok', () => {
     expect(classifyNewCharge(pay({ status: 'OVERDUE', dueDate: '2026-09-15' }), ctx())).toBe('ok')
   })
 
@@ -268,11 +268,11 @@ describe('asaasReachesCustomer — canal ligado sem o dado do canal não entrega
   it('só o e-mail ligado e cliente sem e-mail → o Asaas não avisa (revisão 17/09)', () => {
     expect(asaasReachesCustomer({ ...semCanal, email: true }, { mobilePhone: '67990000001' })).toBe(false)
     expect(asaasReachesCustomer({ ...semCanal, email: true }, { email: ' ', mobilePhone: '67990000001' })).toBe(false)
-    expect(asaasReachesCustomer({ ...semCanal, email: true }, { email: 'fin@leva.com' })).toBe(true)
+    expect(asaasReachesCustomer({ ...semCanal, email: true }, { email: 'fin@cacamba.com' })).toBe(true)
   })
 
   it('SMS e WhatsApp vão para o celular; a ligação, para o fixo ou o celular', () => {
-    expect(asaasReachesCustomer(soSms, { email: 'fin@leva.com' })).toBe(false)
+    expect(asaasReachesCustomer(soSms, { email: 'fin@cacamba.com' })).toBe(false)
     expect(asaasReachesCustomer(soSms, { mobilePhone: '67990000001' })).toBe(true)
     expect(asaasReachesCustomer({ ...semCanal, whatsapp: true }, { phone: '6733330000' })).toBe(false)
     expect(asaasReachesCustomer({ ...semCanal, whatsapp: true }, { mobilePhone: '67990000001' })).toBe(true)
@@ -359,7 +359,7 @@ describe('asaasNotifies — o próprio Asaas ainda avisa este cliente?', () => {
     expect(asaasNotifies({ notificationDisabled: true, dateCreated: '2026-08-01' }, ctx('p', '2026-09-16', undefined))).toBe('need_flags')
   })
 
-  it('Andressa/Convictus: PAYMENT_CREATED sem canal nenhum → não avisa', () => {
+  it('Beatriz/Numerus: PAYMENT_CREATED sem canal nenhum → não avisa', () => {
     expect(asaasNotifies({ notificationDisabled: false, dateCreated: '2026-09-15', mobilePhone: celular }, ctx('p', '2026-09-15', null), semCanal)).toBe('no')
     expect(asaasNotifies({ notificationDisabled: false, dateCreated: '2026-09-15' }, ctx('p', '2026-09-15', null), { ...semCanal, enabled: false })).toBe('no')
   })
@@ -404,7 +404,7 @@ describe('remindedFilter — o aviso na criação não apaga o lembrete D-5', ()
   const corte = diasAtras(6)
   const row = (kind: string, dias: number) => ({ kind, createdAt: diasAtras(dias), contactId: 'c1', payload: { kind, asaasIds: ['p'] } })
 
-  it('aviso de cobrança nova de 10 dias atrás (Alpha Gás) não conta → o lembrete sai', () => {
+  it('aviso de cobrança nova de 10 dias atrás (Ômega Gás) não conta → o lembrete sai', () => {
     expect(remindedFilter([row('new_charge', 10)], corte)).toHaveLength(0)
   })
 

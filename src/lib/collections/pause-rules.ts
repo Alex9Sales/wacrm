@@ -1,7 +1,7 @@
 // ============================================================
 // Pausa da régua: de quem é e quando some — PURO (client-safe, testável).
 //
-// 16/09 (Guincho Ribeiro, GoLink): a IA leu "me manda link aqui p eu acertar"
+// 16/09 (Reboque Modelo, GoLink): a IA leu "me passa o link aqui pra eu acertar"
 // como pedido de ACORDO e pausou a régua. Ele pagou tudo, a cobrança saiu da
 // carteira — e a pausa ficou valendo para sempre, sem aparecer em tela
 // nenhuma (a carteira e a lateral só mostravam quem tem cobrança aberta).

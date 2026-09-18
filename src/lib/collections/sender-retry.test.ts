@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest'
 import { NEW_CHARGE_LINK_SENT_ERROR } from './new-charge-rules'
 import { RETRY_AFTER_FAILURE_MS, deliveredEchoSnippet, holdRefusal, isFinalCollectionError, retryCutoffIso } from './rules'
 
-// 14/09 (A.M Carretos/GoLink): o WAHA devolveu erro mas entregou, e o reenvio do
+// 14/09 (B.C Fretes/GoLink): o WAHA devolveu erro mas entregou, e o reenvio do
 // minuto seguinte deu ao devedor a mesma cobrança duas vezes.
 describe('retryCutoffIso — pedido que falhou sai da vez por 3 minutos', () => {
   const falhou = '2026-09-14T13:09:03.000Z'
@@ -27,11 +27,11 @@ describe('retryCutoffIso — pedido que falhou sai da vez por 3 minutos', () => 
 
 describe('deliveredEchoSnippet', () => {
   const rascunho =
-    'A.M Carretos, identificamos uma parcela vencida em 10/09/2026, com 4 dias de atraso.\n\nSe já pagou, é só responder por aqui.'
+    'B.C Fretes, identificamos uma parcela vencida em 10/09/2026, com 4 dias de atraso.\n\nSe já pagou, é só responder por aqui.'
 
   it('pega o começo do rascunho com espaços normalizados', () => {
     const s = deliveredEchoSnippet(rascunho)!
-    expect(s.startsWith('A.M Carretos, identificamos uma parcela vencida')).toBe(true)
+    expect(s.startsWith('B.C Fretes, identificamos uma parcela vencida')).toBe(true)
     expect(Array.from(s).length).toBeLessThanOrEqual(80)
     expect(s).not.toMatch(/\n/)
   })

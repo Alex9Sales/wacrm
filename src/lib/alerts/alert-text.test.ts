@@ -6,42 +6,42 @@ import { alertContactName, buildClientTail, clipAtWord, oneLine, oneLineSummary,
 import { DEFAULT_ALERT_TEMPLATES, renderAlertTemplate } from './templates'
 
 const text = (contentText: string) => ({ contentType: 'text', contentText, transcription: null })
-const PIN = 'https://www.google.com/maps?q=-20.3722465,-54.5781869'
+const PIN = 'https://www.google.com/maps?q=-20.1234567,-54.7654321'
 
-describe('resumo do aviso — caso Gisele (15/09 18:22)', () => {
+describe('resumo do aviso — caso Família do Gás (15/09 18:22)', () => {
   const falas = [
-    text('Comunidade indígena água bonita 114'),
+    text('Rua Exemplo 123'),
     text(`📍 Localização\n${PIN}`),
-    text('É esse endereço, mas o número é 114'),
-    text('Quase em frente a convivência da aldeia'),
+    text('É esse endereço, mas o número é 123'),
+    text('Quase em frente à escola do bairro'),
   ]
 
   it('localização vira uma linha com o link INTEIRO; falas separadas por " · "', () => {
     expect(buildClientTail(falas)).toBe(
-      `Comunidade indígena água bonita 114 · 📍 localização: ${PIN} · É esse endereço, mas o número é 114 · Quase em frente a convivência da aldeia`,
+      `Rua Exemplo 123 · 📍 localização: ${PIN} · É esse endereço, mas o número é 123 · Quase em frente à escola do bairro`,
     )
   })
 
   it('o aviso renderizado não tem nome ".", nem link quebrado de linha', () => {
     const out = renderAlertTemplate(DEFAULT_ALERT_TEMPLATES.handoff, {
       cliente: alertContactName('.'),
-      telefone: '556791270860',
+      telefone: '556790001234',
       motivo: 'A IA pediu um humano nesta conversa',
       resumo: `Cliente disse: ${buildClientTail(falas)}`,
     })
-    expect(out).toContain('\n👤 556791270860\n')
+    expect(out).toContain('\n👤 556790001234\n')
     expect(out).not.toContain('👤 .')
     expect(out).not.toContain('\nhttps')
     expect(out).toContain(PIN)
   })
 })
 
-describe('resumo do aviso — caso joselina (áudio cortado no meio da palavra)', () => {
+describe('resumo do aviso — áudio cortado no meio da palavra', () => {
   const audio = {
     contentType: 'audio',
     contentText: '[audio]',
     transcription:
-      'Não, eu passei na loja e fiz o pedido de dois burjão, já deixei pago, só que até agora ninguém veio entregar aqui em casa, já faz duas horas que eu tô esperando',
+      'Não, eu passei no depósito hoje cedo e pedi dois botijões, paguei na hora, mas até agora ninguém trouxe aqui em casa, faz mais de duas horas que estou esperando',
   }
 
   it('áudio mostra a transcrição, cortada em palavra inteira com reticências', () => {
@@ -75,7 +75,7 @@ describe('summarizeClientMessage — mídia e casos especiais', () => {
 
   it('link cortado some inteiro', () => {
     const s = clipAtWord(`${'palavra '.repeat(10)}${PIN}`, 90)
-    expect(s).not.toMatch(/https?:|htt…|maps\?q=-20\.3722465,-5…/)
+    expect(s).not.toMatch(/https?:|htt…|maps\?q=-20\.1234567,-5…/)
     expect(s.endsWith('…')).toBe(true)
     expect(clipAtWord(`${'a'.repeat(84)} https://www.google.com`, 90)).toBe(`${'a'.repeat(84)}…`)
   })
@@ -87,7 +87,7 @@ describe('summarizeClientMessage — mídia e casos especiais', () => {
   })
 
   it('fala que é só um link longo não vira vazio', () => {
-    const longo = `https://www.google.com/maps/place/Rua+Salim+Felicio,+16/@-20.4697,-54.6201,17z/data=${'x'.repeat(120)}`
+    const longo = `https://www.google.com/maps/place/Rua+Exemplo,+123/@-20.4512,-54.6034,17z/data=${'x'.repeat(120)}`
     expect(summarizeClientMessage(text(longo))).toBe('🔗 mandou um link')
     expect(buildClientTail([text('oi'), text(longo)])).toBe('oi · 🔗 mandou um link')
   })
@@ -100,7 +100,7 @@ describe('summarizeClientMessage — mídia e casos especiais', () => {
 
 describe('alertContactName', () => {
   it('nome sem letra não é nome', () => {
-    for (const lixo of ['.', '...', '🙂', 'ㅤ', '⠀', '  ', '556791270860', '+55 67 99127-0860']) {
+    for (const lixo of ['.', '...', '🙂', 'ㅤ', '⠀', '  ', '556790001234', '+55 67 99000-1234']) {
       expect(alertContactName(lixo)).toBe('')
     }
     expect(alertContactName(null)).toBe('')
@@ -117,8 +117,8 @@ describe('alertContactName', () => {
 
 describe('renderAlertTemplate — valor vira uma linha e variável vazia leva o separador', () => {
   it('cliente vazio → só o telefone; telefone vazio → só o nome', () => {
-    expect(renderAlertTemplate('👤 {{cliente}} · {{telefone}}', { cliente: '', telefone: '556791270860' })).toBe('👤 556791270860')
-    expect(renderAlertTemplate('👤 {{cliente}} · {{telefone}}', { cliente: 'Gisele', telefone: '' })).toBe('👤 Gisele')
+    expect(renderAlertTemplate('👤 {{cliente}} · {{telefone}}', { cliente: '', telefone: '556790001234' })).toBe('👤 556790001234')
+    expect(renderAlertTemplate('👤 {{cliente}} · {{telefone}}', { cliente: 'Carla', telefone: '' })).toBe('👤 Carla')
     expect(renderAlertTemplate('🗓️ {{quando}} — {{agenda}}', { quando: '', agenda: 'Consulta' })).toBe('🗓️ Consulta')
   })
 
@@ -128,13 +128,13 @@ describe('renderAlertTemplate — valor vira uma linha e variável vazia leva o 
 
   it('aviso de pedido mantém o link do endereço (o despacho precisa dele)', () => {
     const out = renderAlertTemplate(DEFAULT_ALERT_TEMPLATES.order, {
-      titulo: 'Gisele — P-13',
+      titulo: 'Carla — P-13',
       valor: 'R$ 125,00',
-      cliente: 'Gisele',
-      telefone: '556791270860',
-      resumo: `Aldeia Água Bonita 114\n${PIN}`,
+      cliente: 'Carla',
+      telefone: '556790001234',
+      resumo: `Rua Exemplo 123\n${PIN}`,
     })
-    expect(out).toContain(`📝 Aldeia Água Bonita 114 / ${PIN}`)
+    expect(out).toContain(`📝 Rua Exemplo 123 / ${PIN}`)
   })
 
   it('linha sem nenhum dado continua sumindo', () => {

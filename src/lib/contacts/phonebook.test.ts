@@ -4,15 +4,15 @@ import { identityKeyOf, planPhonebook } from './phonebook';
 
 describe('agenda do celular — chave de identidade (09/09)', () => {
   it('id do WhatsApp sem o 9º dígito casa com o contato do CRM com o 9º dígito', () => {
-    // O gows devolve "556791875477@c.us" (12 dígitos) pro mesmo assinante que
-    // o CRM guarda como "5567991875477" (13, com o 9). Mesma pessoa.
-    expect(identityKeyOf('556791875477')).toBe('6791875477');
-    expect(identityKeyOf('5567991875477')).toBe('6791875477');
-    expect(identityKeyOf('+55 (67) 99187-5477')).toBe('6791875477');
+    // O gows devolve "556790001234@c.us" (12 dígitos) pro mesmo assinante que
+    // o CRM guarda como "5567990001234" (13, com o 9). Mesma pessoa.
+    expect(identityKeyOf('556790001234')).toBe('6790001234');
+    expect(identityKeyOf('5567990001234')).toBe('6790001234');
+    expect(identityKeyOf('+55 (67) 99000-1234')).toBe('6790001234');
   });
 
-  it('DDD faz parte da identidade (caso Vinícius 43 × 47)', () => {
-    expect(identityKeyOf('5543996345005')).not.toBe(identityKeyOf('5547996345005'));
+  it('DDD faz parte da identidade (caso DDD 43 × 47)', () => {
+    expect(identityKeyOf('5543990001234')).not.toBe(identityKeyOf('5547990001234'));
   });
 
   it('número estrangeiro usa os dígitos crus; vazio vira null', () => {
@@ -24,17 +24,17 @@ describe('agenda do celular — chave de identidade (09/09)', () => {
 
 describe('agenda do celular — plano (puro)', () => {
   const contacts = [
-    { id: 'a', phone: '5567991875477', name: 'Lu 💕', nameSource: 'whatsapp' },
-    { id: 'b', phone: '5567999990001', name: 'Poleana Editada', nameSource: 'crm' },
+    { id: 'a', phone: '5567990001234', name: 'Ca 💕', nameSource: 'whatsapp' },
+    { id: 'b', phone: '5567999990001', name: 'Paula Editada', nameSource: 'crm' },
     { id: 'c', phone: '5567999990002', name: '5567999990002', nameSource: null },
-    { id: 'd', phone: '5567999990003', name: 'Gerson', nameSource: null },
+    { id: 'd', phone: '5567999990003', name: 'Paulo', nameSource: null },
     { id: 'e', phone: '5567999990004', name: 'Igual', nameSource: 'phonebook' },
   ];
   const entries = [
-    { phone: '556791875477', name: 'Luana Dentista' }, // sem o 9 — mesma pessoa que 'a'
-    { phone: '556799990001', name: 'Poleana Agenda' },
+    { phone: '556790001234', name: 'Carla Dentista' }, // sem o 9 — mesma pessoa que 'a'
+    { phone: '556799990001', name: 'Paula Agenda' },
     { phone: '556799990002', name: 'Cliente Novo Nome' },
-    { phone: '556799990003', name: 'Gerson Gás' },
+    { phone: '556799990003', name: 'Paulo Gás' },
     { phone: '556799990004', name: 'Igual' },
     { phone: '556799990009', name: 'Só na Agenda' },
   ];
@@ -51,11 +51,11 @@ describe('agenda do celular — plano (puro)', () => {
       keptCrm: 1, keptLegacy: 1, unchanged: 1,
     });
     expect(updates).toEqual([
-      { id: 'a', name: 'Luana Dentista' },
+      { id: 'a', name: 'Carla Dentista' },
       { id: 'c', name: 'Cliente Novo Nome' },
     ]);
     expect(creates).toEqual([{ phone: '556799990009', name: 'Só na Agenda' }]);
-    expect(summary.examples).toEqual([{ from: 'Lu 💕', to: 'Luana Dentista' }]);
+    expect(summary.examples).toEqual([{ from: 'Ca 💕', to: 'Carla Dentista' }]);
   });
 
   it('modo override: troca também o legado, nunca o editado no CRM', () => {
@@ -80,8 +80,8 @@ describe('agenda do celular — plano (puro)', () => {
   it('a 1ª entrada de cada pessoa vence (ordem = prioridade) e nome vazio é ignorado', () => {
     const { summary, updates } = planPhonebook(
       [
-        { phone: '556791875477', name: 'Mais Recente' },
-        { phone: '5567991875477', name: 'Mais Antigo' },
+        { phone: '556790001234', name: 'Mais Recente' },
+        { phone: '5567990001234', name: 'Mais Antigo' },
         { phone: '556799990003', name: '   ' },
       ],
       contacts,

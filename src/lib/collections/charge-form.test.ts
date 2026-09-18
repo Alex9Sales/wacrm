@@ -145,7 +145,7 @@ describe('accountRefusalText — recusa do servidor', () => {
 describe('documentFieldView — CPF/CNPJ só obrigatório em produção sem documento conhecido', () => {
   const CPF_OK = '529.982.247-25'
   const unknown: Extract<DocumentLookup, { state: 'ok' }> = { state: 'ok', known: false, masked: null, asaasName: null }
-  const known: Extract<DocumentLookup, { state: 'ok' }> = { state: 'ok', known: true, masked: '11.222.***/****-81', asaasName: 'Dom Burguer Susan' }
+  const known: Extract<DocumentLookup, { state: 'ok' }> = { state: 'ok', known: true, masked: '11.222.***/****-81', asaasName: 'Tio Burguer Lanches' }
   const view = (over: Partial<Parameters<typeof documentFieldView>[0]>) =>
     documentFieldView({ hasContact: true, environment: 'production', lookup: unknown, typed: '', ...over })
 
@@ -182,7 +182,7 @@ describe('documentFieldView — CPF/CNPJ só obrigatório em produção sem docu
     expect(v.label).toBe('CPF/CNPJ do cliente')
     expect(v.placeholder).toBe('já temos no cadastro')
     expect(v.hint).toBe(
-      'Já temos o CPF/CNPJ deste contato: 11.222.***/****-81 (Dom Burguer Susan). Deixe em branco para usar esse, ou digite outro.',
+      'Já temos o CPF/CNPJ deste contato: 11.222.***/****-81 (Tio Burguer Lanches). Deixe em branco para usar esse, ou digite outro.',
     )
     expect(v.ok).toBe(true)
     expect(view({ lookup: { ...known, asaasName: null } }).hint).toBe(

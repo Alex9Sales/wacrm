@@ -4,16 +4,16 @@ import { parseRdWebhook, mapRdLead, rdOriginLabel } from './rdstation'
 
 // Pacote no formato que o RD documenta hoje (o próprio RD avisa que vai mudar).
 const LEAD = {
-  id: '390319847',
-  email: 'karen@exemplo.com',
-  name: 'Karen Souza',
+  id: '100000001',
+  email: 'carla@exemplo.com',
+  name: 'Carla Teste',
   company: null,
   job_title: 'Analista',
-  public_url: 'http://rdstation.com.br/leads/public/807029c7',
+  public_url: 'http://rdstation.com.br/leads/public/00000000',
   created_at: '2026-09-16T17:57:10.189-03:00',
   opportunity: 'true',
   number_conversions: '3',
-  mobile_phone: '+55 11 98683-5848',
+  mobile_phone: '+55 11 99000-1234',
   personal_phone: '+55 11 3333-3333',
   city: 'São Paulo',
   estado: 'SP',
@@ -36,8 +36,8 @@ describe('parseRdWebhook', () => {
   it('lê o formato documentado {leads:[…]}', () => {
     const out = parseRdWebhook({ leads: [LEAD] })
     expect(out).toHaveLength(1)
-    expect(out[0].name).toBe('Karen Souza')
-    expect(out[0].email).toBe('karen@exemplo.com')
+    expect(out[0].name).toBe('Carla Teste')
+    expect(out[0].email).toBe('carla@exemplo.com')
   })
 
   it('aguenta os formatos que o RD ainda pode mandar', () => {
@@ -56,7 +56,7 @@ describe('parseRdWebhook', () => {
 
 describe('mapRdLead', () => {
   it('prefere o celular ao fixo (é o que tem WhatsApp)', () => {
-    expect(mapRdLead(LEAD)?.phone).toBe('+55 11 98683-5848')
+    expect(mapRdLead(LEAD)?.phone).toBe('+55 11 99000-1234')
   })
 
   it('cai no fixo quando não há celular', () => {

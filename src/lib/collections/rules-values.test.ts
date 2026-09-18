@@ -48,7 +48,7 @@ describe('formatDebtSummary — juros, dois cadastros e "sem valores" (João 10/
     )
     expect(s.lines[0]).toBe('Venceu em 30/07/2026 (43 dias de atraso)')
     expect(s.lines.join('\n')).not.toContain('R$')
-    const msg = fallbackMessage('Alipé', s, 0, 0, { offerDate: false })
+    const msg = fallbackMessage('Podologia', s, 0, 0, { offerDate: false })
     expect(msg).not.toContain('R$')
     expect(msg).not.toContain('Total')
     expect(msg).toContain('https://x/1')

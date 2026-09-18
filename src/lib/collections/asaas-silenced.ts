@@ -2,7 +2,7 @@
 // 🔕 Quando o CRM calou o Asaas — o rastro que o aviso de cobrança nova lê.
 //
 // Por que existe (revisão 17/09 do aviso de cobrança nova, GoLink): em 15/09 o
-// João criou Alpha Gás, Leva Entulho, Andressa Amorelli e Convictus no painel
+// João criou Ômega Gás, Caçamba Exemplo, Beatriz Teste e Numerus no painel
 // do Asaas e mandou os links à mão do celular — o aviso do CRM nunca disparou.
 // Consertada a leitura, sobrou a pergunta que decide entre "dois avisos" e
 // "nenhum aviso": o Asaas já estava calado para esse cliente quando a cobrança

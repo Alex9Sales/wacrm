@@ -6,7 +6,7 @@ const ia = { paused: true, pausedSource: 'ai', pausedReason: 'Cliente pediu acor
 const equipe = { paused: true, pausedSource: 'human', pausedReason: 'Não cobrar: cliente parceiro' }
 
 describe('pauseAfterSettle — a pausa da IA sai quando ele quita; a da equipe fica', () => {
-  it('Guincho Ribeiro (16/09): IA pausou por "acordo", ele pagou tudo → sai', () => {
+  it('Reboque Modelo (16/09): IA pausou por "acordo", ele pagou tudo → sai', () => {
     expect(pauseAfterSettle(ia, { firstSettle: true, stillOwes: false, asaasOpen: 0 })).toBe('lift')
   })
 

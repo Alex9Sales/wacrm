@@ -56,7 +56,7 @@ const RECEIPT_HOLD_DAYS = 3
  * Opções de quem chama. O padrão é o comportamento de sempre — é o que a
  * "Registrar promessa" da tela usa. A IA (detector silencioso e marcador)
  * passa o que a trava decidiu (reply-guard.ts): 16/09, uma conversa sobre
- * recarga do Google Ads pausou a régua da Ultra Visão por "acordo".
+ * recarga do Google Ads pausou a régua da Ótica Exemplo por "acordo".
  */
 export interface CollectionReplyOptions {
   /** false = a promessa nunca mexe no vencimento do Asaas (não foi resposta direta à cobrança). */
@@ -106,7 +106,7 @@ export async function applyCollectionReply(input: CollectionReplyInput, opts: Co
       // data velha e os juros do Asaas continuam contando enquanto a régua dorme.
       // 16/09: na IA, só com resposta DIRETA à cobrança (uma promessa lida
       // errado não escreve no Asaas) e contando as parcelas dos cadastros irmãos
-      // — a Ultra Visão tem uma parcela em cada contato e "uma só" era mentira.
+      // — a Ótica Exemplo tem uma parcela em cada contato e "uma só" era mentira.
       let extra = ''
       try {
         const s = normalizeSettings((await getAccountSettings(input.accountId)).collections)
@@ -135,7 +135,7 @@ export async function applyCollectionReply(input: CollectionReplyInput, opts: Co
     case 'comprovante': {
       const until = new Date(now.getTime() + RECEIPT_HOLD_DAYS * 86_400_000)
       const untilIso = until.toISOString()
-      // 16/09 (Rack 95): comprovante de 1 das 3 parcelas chegando depois de uma
+      // 16/09 (Loja 77): comprovante de 1 das 3 parcelas chegando depois de uma
       // promessa até 20/09 gravava 3 dias por cima e ANTECIPAVA a régua. O
       // adiamento só cresce; o motivo só troca se o prazo novo for maior.
       const kept = await db
@@ -154,7 +154,7 @@ export async function applyCollectionReply(input: CollectionReplyInput, opts: Co
       const keptUntil = kept[0]?.snoozeUntil ? new Date(kept[0].snoozeUntil) : null
       const finalUntil = keptUntil && !Number.isNaN(keptUntil.getTime()) ? keptUntil : until
       // O motivo pode ter ficado o da promessa (GREATEST acima): a trava de
-      // comprovante repetido lê este registro, não o motivo (Rack 95, revisão).
+      // comprovante repetido lê este registro, não o motivo (Loja 77, revisão).
       // Grava também até quando a régua parou: depois de um "Cobrar agora" o
       // registro não vale mais (revisão 2).
       await markReceiptApplied(input.accountId, input.contactId, nowIso, finalUntil.toISOString())

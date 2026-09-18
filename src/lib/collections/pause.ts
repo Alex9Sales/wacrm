@@ -25,8 +25,8 @@ export type AiPauseResult = 'paused' | 'team_paused' | 'recently_resumed'
 
 /**
  * A IA pausa a régua (acordo/contestação) — sem passar por cima de pausa que
- * uma pessoa pôs, nem desfazer um "Retomar cobrança" recente (16/09: Mapami e
- * Matheus MB foram pausados de novo minutos depois — a IA lê errado "me manda
+ * uma pessoa pôs, nem desfazer um "Retomar cobrança" recente (16/09: Modelix e
+ * Bruno TX foram pausados de novo minutos depois — a IA lê errado "me manda
  * o link que eu acerto" como pedido de acordo).
  */
 export async function pauseByAi(accountId: string, contactId: string, reason: string, nowIso: string): Promise<AiPauseResult> {

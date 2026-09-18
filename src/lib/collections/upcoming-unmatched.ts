@@ -1,5 +1,5 @@
 // ============================================================
-// 🔔 A vencer sem contato no CRM (16/09, Speed Gás e Água / GoLink).
+// 🔔 A vencer sem contato no CRM (16/09, Veloz Gás e Água / GoLink).
 //
 // A parcela a vencer de um cliente do Asaas que não casava com nenhum contato
 // era invisível: o lembrete antes do vencimento pulava ("no_contact") e só o

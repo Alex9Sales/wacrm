@@ -94,7 +94,7 @@ export function decideMatch(candidates: MatchCandidate[]): MatchDecision {
 /**
  * O vínculo feito por uma PESSOA (asaas_customer_links, migr 0178) vence
  * qualquer palpite: telefone de outro contato, empate de telefone, e-mail.
- * 16/09 (Ultra Visão): ligada à mão num contato, a parcela seguinte casou por
+ * 16/09 (Ótica Exemplo): ligada à mão num contato, a parcela seguinte casou por
  * telefone com OUTRO — cobrada por WhatsApp num e por e-mail no outro.
  * Sem vínculo, é o casamento automático de sempre.
  */
@@ -113,7 +113,7 @@ export function daysOverdue(dueDate: string | null | undefined, today = new Date
 }
 
 /**
- * Telefone como o Asaas guarda ("67992361631", "(67) 99236-1631", "5567…") →
+ * Telefone como o Asaas guarda ("67990001631", "(67) 99000-1631", "5567…") →
  * dígitos com DDI, prontos para virar contato do CRM. Só aceita número
  * brasileiro plausível: cadastro com telefone estrangeiro ou quebrado continua
  * pendência (uma pessoa resolve), não vira contato de lixo.

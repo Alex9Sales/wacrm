@@ -1,5 +1,5 @@
 // ============================================================
-// 🧾 Detector SILENCIOSO da resposta do devedor (10/09, Rack/GoLink).
+// 🧾 Detector SILENCIOSO da resposta do devedor (10/09, Loja 77/GoLink).
 //
 // A régua marca promessa/comprovante/contestação/acordo pelo marcador
 // [[COBRANCA:…]] que a IA escreve na resposta dela. Só que a IA fica MUDA em
@@ -11,7 +11,7 @@
 // régua (applyCollectionReply), deixa nota interna e avisa quem é dono da
 // conversa.
 //
-// 16/09 (Ultra Visão, WR Caminhão Pipa, Matheus MB): classificar TODA fala de
+// 16/09 (Ótica Exemplo, KB Transportes, Bruno TX): classificar TODA fala de
 // quem tem cobrança aberta, vendo só o texto do cliente, pausou a régua por
 // uma conversa sobre recarga do Google Ads. Agora:
 //   • sem contexto de cobrança (reply-guard.ts) nem chama o modelo;
@@ -122,7 +122,7 @@ export function burstAnchor(bubbles: { createdAt: string | null }[], fallback: D
 
 /**
  * Prompt do classificador. 16/09: "prazo" levava a acordo e contradizia a
- * regra de promessa ("até sexta") — a WR pediu para segurar até sexta e a
+ * regra de promessa ("até sexta") — a KB pediu para esperar até sexta e a
  * régua parou sem prazo. E o modelo não sabia que a conversa era sobre outro
  * assunto: agora vê a dívida e o que a empresa escreveu antes.
  */
@@ -176,7 +176,7 @@ export async function detectCollectionReplySilently(args: {
     // A RAJADA do cliente: os últimos balões dele desde a última mensagem do
     // CRM (Psi Jéssica 10/09: comprovante numa imagem + "esqueci" num áudio —
     // olhando só o último balão, o comprovante passava). Até 6, no máximo 3 h
-    // antes do mais novo (José Luiz 14/09: um "👍" de 3 dias antes vinha junto).
+    // antes do mais novo (Jorge Teste 14/09: um "👍" de 3 dias antes vinha junto).
     const burst = pickBurst(await loadBurstRows(args.conversationId))
     if (!burst) return
     // Só mensagem RECENTE: uma chamada fora do fluxo de entrada (sonda,

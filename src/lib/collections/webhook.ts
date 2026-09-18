@@ -134,7 +134,7 @@ export async function applyAsaasEvent(connectionId: string, accountId: string, b
     : null
 
   // 🧾 Pausa que a IA pôs (acordo/contestação) sai quando ele quita — senão fica
-  // valendo para sempre e invisível (Guincho Ribeiro, 16/09). A da equipe fica,
+  // valendo para sempre e invisível (Reboque Modelo, 16/09). A da equipe fica,
   // com nota. Decidida ANTES de gravar o status pago: se o webhook der erro
   // depois disto, o reenvio do Asaas ainda é o "1º pagamento" e decide de novo
   // (tirar a pausa é idempotente — o UPDATE só pega pausa que ainda existe).

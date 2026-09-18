@@ -3,7 +3,7 @@
 //
 // 08/09: o Asaas de PRODUÇÃO exige CPF ou CNPJ do cliente pra gerar qualquer
 // cobrança ("Para criar esta cobrança é necessário preencher o CPF ou CNPJ do
-// cliente"). O dono manda o número num balão ("03289662152") e o CRM precisa
+// cliente"). O dono manda o número num balão ("12345678909") e o CRM precisa
 // reconhecer que aquilo é um documento — e NÃO confundir com telefone (11
 // dígitos também). Por isso valida os dígitos verificadores: um celular com
 // DDD quase nunca passa como CPF.

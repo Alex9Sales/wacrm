@@ -2,15 +2,15 @@ import { describe, expect, it } from 'vitest'
 
 import { otherPersonNumber } from './other-person-number'
 
-const JOAO = 'e2f09ff9-joao'
-const VITOR = '0ca49a46-vitor'
-const canalVitor = { provider: 'waha', name: 'Vitor', phone_number: '5512992306060', dedicated_user_id: VITOR }
+const JOAO = 'u-joao'
+const VITOR = 'u-vitor'
+const canalVitor = { provider: 'waha', name: 'Vitor', phone_number: '5512990001234', dedicated_user_id: VITOR }
 
 // 14/09 (João/GoLink): respondeu pelo CRM na conversa do número do Vitor e foi
 // procurar a mensagem no próprio celular.
 describe('otherPersonNumber', () => {
   it('avisa quando o número da conversa é dedicado a outra pessoa', () => {
-    expect(otherPersonNumber(canalVitor, JOAO)).toEqual({ name: 'Vitor', phone: '+55 12 99230-6060' })
+    expect(otherPersonNumber(canalVitor, JOAO)).toEqual({ name: 'Vitor', phone: '+55 12 99000-1234' })
   })
 
   it('não avisa no próprio número', () => {

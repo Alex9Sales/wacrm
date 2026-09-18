@@ -18,7 +18,7 @@ const WHATSAPP = new Set(['meta', 'waha', 'evolution', 'evogo'])
 export interface OtherPersonNumber {
   /** Nome do canal, como aparece no seletor de números. */
   name: string
-  /** Telefone formatado ("+55 12 99230-6060"), quando conhecido. */
+  /** Telefone formatado ("+55 12 99000-1234"), quando conhecido. */
   phone: string | null
 }
 

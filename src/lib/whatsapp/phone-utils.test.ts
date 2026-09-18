@@ -65,25 +65,25 @@ describe("phonesMatch", () => {
 });
 
 describe("phonesMatch — números brasileiros: o DDD faz parte da identidade", () => {
-  it("NÃO iguala DDDs diferentes com o mesmo final (caso Vinícius 43 × 47, 05/09)", () => {
+  it("NÃO iguala DDDs diferentes com o mesmo final (caso DDD 43 × 47, 05/09)", () => {
     // Antes: os 8 últimos dígitos batiam e o inbound do 43 caiu no contato do
     // 47 — endereço do outro, contato renomeado, resposta entregue a um estranho.
-    expect(phonesMatch("43996345005", "47996345005")).toBe(false);
-    expect(phonesMatch("5543996345005", "5547996345005")).toBe(false);
-    expect(phonesMatch("6792361631", "6892361631")).toBe(false);
+    expect(phonesMatch("43990001234", "47990001234")).toBe(false);
+    expect(phonesMatch("5543990001234", "5547990001234")).toBe(false);
+    expect(phonesMatch("6790001234", "6890001234")).toBe(false);
   });
 
   it("continua tolerando o 55 na frente", () => {
-    expect(phonesMatch("5567992361631", "67992361631")).toBe(true);
+    expect(phonesMatch("5567990001234", "67990001234")).toBe(true);
   });
 
   it("continua tolerando o 9º dígito (celular antigo × novo)", () => {
-    expect(phonesMatch("67992361631", "6792361631")).toBe(true);
-    expect(phonesMatch("5567992361631", "6792361631")).toBe(true);
+    expect(phonesMatch("67990001234", "6790001234")).toBe(true);
+    expect(phonesMatch("5567990001234", "6790001234")).toBe(true);
   });
 
   it("55 + 9º dígito juntos, nos dois sentidos", () => {
-    expect(phonesMatch("6792361631", "5567992361631")).toBe(true);
+    expect(phonesMatch("6790001234", "5567990001234")).toBe(true);
   });
 
   it("brasileiro × estrangeiro com o mesmo final não casa como brasileiro (cai na regra antiga só se ambos forem não-BR)", () => {
@@ -168,26 +168,26 @@ describe("phoneVariants", () => {
 
 describe("normalizeInboundPhoneBR", () => {
   it("fixes the '0 + carrier code + DDD + número' national-dial format", () => {
-    // Ronaldo: 0 + CSP 15 + DDD 27 + 999438466 → 55 27 99943 8466
-    expect(normalizeInboundPhoneBR("01527999438466")).toBe("5527999438466");
-    // Geovane: 0 + CSP 15 + DDD 28 + 999632794
-    expect(normalizeInboundPhoneBR("01528999632794")).toBe("5528999632794");
+    // 0 + CSP 15 + DDD 27 + 990001234 → 55 27 99000 1234
+    expect(normalizeInboundPhoneBR("01527990001234")).toBe("5527990001234");
+    // 0 + CSP 15 + DDD 28 + 990005678
+    expect(normalizeInboundPhoneBR("01528990005678")).toBe("5528990005678");
   });
 
   it("fixes a trunk-0-only national number (0 + DDD + número)", () => {
-    expect(normalizeInboundPhoneBR("027999438466")).toBe("5527999438466"); // mobile (11)
+    expect(normalizeInboundPhoneBR("027990001234")).toBe("5527990001234"); // mobile (11)
     expect(normalizeInboundPhoneBR("02733334444")).toBe("552733334444"); // landline (10)
   });
 
   it("leaves clean E.164 numbers completely untouched (never corrupts them)", () => {
-    expect(normalizeInboundPhoneBR("5527999438466")).toBe("5527999438466");
+    expect(normalizeInboundPhoneBR("5527990001234")).toBe("5527990001234");
     expect(normalizeInboundPhoneBR("12025550181")).toBe("12025550181"); // US
     expect(normalizeInboundPhoneBR("37063949836")).toBe("37063949836"); // LT
   });
 
   it("strips formatting noise", () => {
-    expect(normalizeInboundPhoneBR("+55 27 99943-8466")).toBe("5527999438466");
-    expect(normalizeInboundPhoneBR("0 15 27 99943 8466")).toBe("5527999438466");
+    expect(normalizeInboundPhoneBR("+55 27 99000-1234")).toBe("5527990001234");
+    expect(normalizeInboundPhoneBR("0 15 27 99000 1234")).toBe("5527990001234");
   });
 
   it("does not mangle a foreign number that happens to carry a trunk 0", () => {
@@ -197,7 +197,7 @@ describe("normalizeInboundPhoneBR", () => {
   });
 
   it("is idempotent", () => {
-    const once = normalizeInboundPhoneBR("01527999438466");
+    const once = normalizeInboundPhoneBR("01527990001234");
     expect(normalizeInboundPhoneBR(once)).toBe(once);
   });
 

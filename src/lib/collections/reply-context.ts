@@ -6,7 +6,7 @@
 // nós escrevemos antes, as parcelas abertas do contato e dos cadastros irmãos
 // e o estado atual da régua. Antes o detector só perguntava "tem cobrança
 // aberta?" — e classificava qualquer conversa do contato, em qualquer canal
-// (Ultra Visão: recarga do Google Ads virou promessa, acordo e comprovante).
+// (Ótica Exemplo: recarga do Google Ads virou promessa, acordo e comprovante).
 //
 // Sem 'server-only' — roda no worker (auto-resposta e detector silencioso).
 // ============================================================
@@ -76,8 +76,8 @@ export interface OpenChargeRow {
 
 /**
  * Parcelas abertas do contato e dos cadastros IRMÃOS (mesma conexão e mesmo
- * cliente do Asaas em outro contato). Ultra Visão: 92d1d99e (WhatsApp) e
- * 1ff2003d (só e-mail) são o mesmo cus_. Nesta entrega os irmãos só entram na
+ * cliente do Asaas em outro contato). Ótica Exemplo: um contato (WhatsApp) e
+ * outro (só e-mail) com o mesmo cus_. Nesta entrega os irmãos só entram na
  * CONTA (valor do comprovante, "exatamente 1 parcela" para mover vencimento):
  * pausa e adiamento continuam por contato, porque "Retomar" é por contato.
  */

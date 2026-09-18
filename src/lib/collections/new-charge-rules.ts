@@ -4,8 +4,8 @@
 // Por que existe (17/09, GoLink): o aviso NUNCA disparou. Ele lia
 // `asaas_charges`, que só espelha VENCIDAS — a cobrança PENDING criada no
 // painel do Asaas só entrava lá depois de vencer, fora da janela de 2 dias.
-// Em 15/09 o João criou Alpha Gás, Leva Entulho (3x), Andressa Amorelli e
-// Convictus no painel e mandou os 4 links à mão, do celular, entre 17:37 e
+// Em 15/09 o João criou Ômega Gás, Caçamba Exemplo (3x), Beatriz Teste e
+// Numerus no painel e mandou os 4 links à mão, do celular, entre 17:37 e
 // 18:20. Com os avisos do Asaas desligados, sem ele ninguém teria mandado nada
 // até vencer.
 //
@@ -13,7 +13,7 @@
 // (`dateCreated[ge]`), e estas regras decidem o que é cobrança nova de verdade:
 //   · 78 cobranças criadas de 10 a 17/09 nas duas contas: 59 renovações de
 //     assinatura (o Asaas gera 39 dias antes do vencimento), 10 "Pix recebido
-//     gerado automaticamente", 2 do CRM (Dom Burguer) e 7 do painel;
+//     gerado automaticamente", 2 do CRM (Tio Burguer) e 7 do painel;
 //   · renovação e parcelas 2..N vencem longe → ficam com o lembrete D-5;
 //   · Pix recebido não está em aberto → fora;
 //   · o que o CRM criou já mandou o link na criação → fora.
@@ -386,8 +386,8 @@ export function silencedBeforeCharge(
  *   2. cliente criado no painel depois da varredura do dia — nasce com aviso
  *      ligado e a cobrança nasce antes de a varredura seguinte calar;
  *   3. conta que acabou de ligar o "CRM assume os avisos" (piso em `ligaAvisosFloor`).
- * Andressa e Convictus (15/09) estão com PAYMENT_CREATED desligado em todos os
- * canais; o Dom Burguer, criado pelo CRM, com SMS ligado — por isso olhar.
+ * Beatriz e Numerus (15/09) estão com PAYMENT_CREATED desligado em todos os
+ * canais; o Tio Burguer, criado pelo CRM, com SMS ligado — por isso olhar.
  *
  * O veredito é o mesmo em todos os dias da janela: não depende de "hoje".
  * 'need_flags' = só o GET das chaves por evento decide (cache na rodada).
@@ -434,7 +434,7 @@ export function newChargeGraceCutoffIso(nowMs: number, min = NEW_CHARGE_GRACE_MI
  *
  * Aviso de cobrança nova só conta se foi criado a partir de `newChargeCountsSinceIso`
  * (reminderDaysBefore+1 dias). Com o horizonte de 15 dias, a parcela avisada
- * 6 a 15 dias antes perdia o lembrete perto do vencimento (Alpha Gás: criada
+ * 6 a 15 dias antes perdia o lembrete perto do vencimento (Ômega Gás: criada
  * 15/09, vence 26/09 — o lembrete de 21/09 não sairia). Lembrete conta sempre.
  */
 export function remindedFilter<T extends { kind?: unknown; createdAt: string | null; contactId: string | null; payload: unknown }>(

@@ -4,7 +4,7 @@ import { mapsLink } from '@/lib/whatsapp/location'
 
 import { detectLocationMessage } from './location-message'
 
-const PIN = 'https://www.google.com/maps?q=-20.3722465,-54.5781869'
+const PIN = 'https://www.google.com/maps?q=-20.1234567,-54.7654321'
 
 describe('detectLocationMessage — vira cartão (é uma localização)', () => {
   it('WAHA simples', () => {
@@ -25,7 +25,7 @@ describe('detectLocationMessage — vira cartão (é uma localização)', () => 
   })
 
   it('pino enviado pelo CRM (mapsLink) — trava o contrato com location.ts', () => {
-    const sent = mapsLink({ lat: -20.4697, lng: -54.6201 })
+    const sent = mapsLink({ lat: -20.4512, lng: -54.6034 })
     expect(detectLocationMessage(sent)).toEqual({ header: '📍 Localização', url: sent })
     expect(detectLocationMessage('https://maps.google.com/maps?q=-20,-54&z=17&hl=pt-BR')).not.toBeNull()
   })
@@ -53,8 +53,8 @@ describe('detectLocationMessage — vira cartão (é uma localização)', () => 
 describe('detectLocationMessage — continua TEXTO (só contém um link)', () => {
   it('16/09: o aviso de transferência com o pino da cliente no resumo', () => {
     const aviso =
-      '🔁 *IA TRANSFERIU PRA HUMANO*\n\n👤 . · 556791270860\n🏷️ Motivo: A IA pediu um humano nesta conversa\n\n' +
-      `📋 Resumo: Cliente disse: Comunidade indígena água bonita 114 · 📍 Localização\n${PIN} · É esse endereço, mas o número é 114 · Quase em frente a convivência da aldeia\n\n` +
+      '🔁 *IA TRANSFERIU PRA HUMANO*\n\n👤 . · 556790001234\n🏷️ Motivo: A IA pediu um humano nesta conversa\n\n' +
+      `📋 Resumo: Cliente disse: Rua Exemplo 123 · 📍 Localização\n${PIN} · É esse endereço, mas o número é 123 · Quase em frente à escola do bairro\n\n` +
       'Entre na conversa pelo FluxiaCRM pra continuar o atendimento.'
     expect(detectLocationMessage(aviso)).toBeNull()
   })

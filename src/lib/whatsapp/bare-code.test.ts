@@ -17,13 +17,13 @@ describe('looksLikeBareCode', () => {
   })
 
   it('link sozinho é código', () => {
-    expect(looksLikeBareCode('https://www.asaas.com/i/zlp8zxalwwoavsd7')).toBe(true)
+    expect(looksLikeBareCode('https://www.asaas.com/i/exemplo000000001')).toBe(true)
   })
 
   it('texto de gente NÃO é código', () => {
-    expect(looksLikeBareCode('Oi Hudson, tudo bem? Segue o Pix pra recarga.')).toBe(false)
+    expect(looksLikeBareCode('Oi Paulo, tudo bem? Segue o Pix pra recarga.')).toBe(false)
     expect(looksLikeBareCode(`Segue o código:\n${PIX}`)).toBe(false)
-    expect(looksLikeBareCode('Meu telefone: 11 97690-5279')).toBe(false)
+    expect(looksLikeBareCode('Meu telefone: 11 99000-1234')).toBe(false)
     expect(looksLikeBareCode('12345')).toBe(false)
     expect(looksLikeBareCode('')).toBe(false)
     expect(looksLikeBareCode(null)).toBe(false)

@@ -220,7 +220,7 @@ export type CreateChargeOutcome =
  * Último CPF/CNPJ que a carteira viu para este contato, com o nome do cadastro
  * no Asaas. Primeiro o de cobrança NOSSA (origin ai/manual) ou casada à mão/por
  * código; só depois a sincronizada casada por telefone — que pode ser de outra
- * pessoa (15/09: cobrança do Sérgio Lemes casada com o número do João).
+ * pessoa (15/09: cobrança do Paulo Exemplo casada com o número do João).
  */
 export async function walletDocumentFor(accountId: string, contactId: string): Promise<{ doc: string; customerName: string | null } | null> {
   const rows = await db

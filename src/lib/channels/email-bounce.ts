@@ -2,8 +2,8 @@
 // 📭 Devolução de e-mail (DSN, RFC 3464) — LEITURA. PURO: sem banco, sem
 // 'server-only', sem Buffer (roda no worker, na web e no navegador).
 //
-// 15/09 (GoLink/Vale Ouro): a cobrança de 14/09 que saiu pelo Gmail para
-// taubate@valeouro.com.br voltou — o domínio tem Null MX (5.1.10). O aviso do
+// 15/09 (GoLink/Vale Modelo): a cobrança de 14/09 que saiu pelo Gmail para
+// financeiro@empresa-exemplo.com.br voltou — o domínio tem Null MX (5.1.10). O aviso do
 // mailer-daemon@googlemail.com entrou como e-mail comum: virou o contato
 // "Mail Delivery Subsystem" com conversa aberta, a mensagem original seguiu
 // "enviada" e a régua ia mandar de novo para o mesmo endereço em 17/09.

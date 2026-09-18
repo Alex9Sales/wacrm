@@ -2,7 +2,7 @@ import { describe, expect, it } from 'vitest'
 
 import { normalizePtBrForTts } from './tts'
 
-// 15/09 (Alex, Família do Gás): no áudio do Toninho a voz enrolou o número da
+// 15/09 (Alex, Família do Gás): no áudio de um pedido a voz enrolou o número da
 // rua ("2280") e a hora ("17h"). Só moeda e sequências de 7+ dígitos eram
 // tratadas — e a regra de soletrar ainda destruía datas.
 // Identificador (CPF, CNPJ, Pix, telefone, CEP) = soletrado, porque quem ouve
@@ -11,11 +11,11 @@ import { normalizePtBrForTts } from './tts'
 describe('normalizePtBrForTts — o caso que gerou a correção', () => {
   it('endereço e hora saem falados, não enrolados', () => {
     const out = normalizePtBrForTts(
-      'Fechou, Toninho! Já deixei separado um Ultragaz P-13 por R$ 125,00, para entregar na Avenida Senhor do Bonfim, 2280. Você pode fazer o Pix às 17h, tranquilo 😊',
+      'Fechou, Paulo! Já deixei separado um Ultragaz P-13 por R$ 125,00, para entregar na Rua Exemplo, 2280. Você pode fazer o Pix às 17h, tranquilo 😊',
     )
     expect(out).toContain('pê treze')
     expect(out).toContain('cento e vinte e cinco reais')
-    expect(out).toContain('Bonfim, dois mil duzentos e oitenta')
+    expect(out).toContain('Exemplo, dois mil duzentos e oitenta')
     expect(out).toContain('às dezessete horas')
     expect(out).not.toMatch(/\d/)
     expect(out).not.toContain('😊')
@@ -34,8 +34,8 @@ describe('normalizePtBrForTts — identificadores (soletrados)', () => {
   })
 
   it('CNPJ e chave Pix continuam soletrados', () => {
-    expect(normalizePtBrForTts('CNPJ 30.365.250/0001-96')).toContain('três, zero, três, seis, cinco')
-    expect(normalizePtBrForTts('Chave 30365250000196')).toContain('três, zero, três, seis, cinco')
+    expect(normalizePtBrForTts('CNPJ 11.222.333/0001-81')).toContain('um, um, dois, dois, dois')
+    expect(normalizePtBrForTts('Chave 11222333000181')).toContain('um, um, dois, dois, dois')
   })
 })
 

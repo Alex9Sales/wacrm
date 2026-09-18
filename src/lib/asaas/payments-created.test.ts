@@ -63,7 +63,7 @@ describe('listPaymentsCreatedSince', () => {
 })
 
 describe('getCustomerPaymentCreatedFlags', () => {
-  it('Andressa/Convictus: PAYMENT_CREATED sem canal para o cliente', async () => {
+  it('Beatriz/Numerus: PAYMENT_CREATED sem canal para o cliente', async () => {
     handler = () =>
       json({
         data: [

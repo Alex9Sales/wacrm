@@ -1,7 +1,7 @@
 // ============================================================
 // 📭 E-mails que voltaram — consulta e liberação da supressão.
 //
-// 15/09 (GoLink/Vale Ouro): a cobrança por e-mail para um domínio com Null MX
+// 15/09 (GoLink/Vale Modelo): a cobrança por e-mail para um domínio com Null MX
 // voltou e a régua ia mandar de novo em 17/09. email-bounce-apply.ts grava a
 // devolução PERMANENTE em email_bounces (por endereço, não por contato — o
 // mesmo e-mail aparece em mais de um contato e em asaas_charges.email).

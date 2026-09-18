@@ -16,12 +16,12 @@ import {
 } from './orphans'
 
 // Caso real (16/09): órfão da FluxiaCRM criado em 08/09 14:48 para o contato
-// do Alex, sem CPF; o cadastro verdadeiro é cus_000199053973.
-const REF = '09e0fe5d-d60d-41a4-9a22-a7e07c28589a'
+// do Alex, sem CPF; o cadastro verdadeiro é cus_000000000001.
+const REF = '0f0e0d0c-0b0a-4908-8706-050403020100'
 const CPF = '52998224725'
 const OUTRO_CPF = '11144477735'
 const CNPJ = '11222333000181'
-const CONN = '13c62959-a509-4a6d-8bba-c7587ed6aad4'
+const CONN = '5a5a5a5a-1b1b-4c2c-9d3d-4e4e4e4e4e4e'
 
 const facts = (over: Partial<OrphanFacts> = {}): OrphanFacts => ({
   contactExists: true,
@@ -98,9 +98,9 @@ describe('pickKnownDocument — de onde veio o documento', () => {
 
 describe('classifyOrphan', () => {
   it('caso da Fluxia: contato existe, tudo zero, válido noutro cadastro → delete com o válido no motivo', () => {
-    const d = classifyOrphan(facts({ validElsewhere: ['FluxiaCRM:cus_000199053973'] }))
+    const d = classifyOrphan(facts({ validElsewhere: ['FluxiaCRM:cus_000000000001'] }))
     expect(d.verdict).toBe('delete')
-    expect(d.reason).toContain('FluxiaCRM:cus_000199053973')
+    expect(d.reason).toContain('FluxiaCRM:cus_000000000001')
   })
 
   it('consulta que falhou (null) → review, nunca delete', () => {
@@ -122,7 +122,7 @@ describe('classifyOrphan', () => {
     expect(classifyOrphan(facts({ isBillingCustomer: true })).verdict).toBe('skip')
   })
 
-  it('com cobrança e documento casado por TELEFONE → keep_warn, nunca set_document (15/09 Sérgio × João)', () => {
+  it('com cobrança e documento casado por TELEFONE → keep_warn, nunca set_document (15/09 Paulo × João)', () => {
     const d = classifyOrphan(facts({ payments: 1, knownDoc: CPF, knownDocSource: 'phone_match' }))
     expect(d.verdict).toBe('keep_warn')
     expect(d.reason).not.toContain(CPF)
@@ -155,7 +155,7 @@ describe('safeToDelete — reconferência ao vivo', () => {
   })
 
   it('ref diferente, apagado ou sem GET → false', () => {
-    expect(safeToDelete({ ...orphan, externalReference: '7864e77d-0000-4000-8000-000000000000' }, REF, zero)).toBe(false)
+    expect(safeToDelete({ ...orphan, externalReference: '11111111-0000-4000-8000-000000000000' }, REF, zero)).toBe(false)
     expect(safeToDelete({ ...orphan, deleted: true }, REF, zero)).toBe(false)
     expect(safeToDelete(null, REF, zero)).toBe(false)
   })

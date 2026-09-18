@@ -5,15 +5,15 @@ describe('parseVCard', () => {
   it('parses a vCard 2.1 card (FN + CELL)', () => {
     const vcf = `BEGIN:VCARD
 VERSION:2.1
-N:;Lucineide;;;
-FN:Lucineide
-TEL;CELL:+5511968169134
+N:;Carla;;;
+FN:Carla
+TEL;CELL:+5511990001234
 END:VCARD`;
     const { rows } = parseVCard(vcf);
     expect(rows).toEqual([
       {
-        phone: '+5511968169134',
-        name: 'Lucineide',
+        phone: '+5511990001234',
+        name: 'Carla',
         email: undefined,
         company: undefined,
         tagNames: [],
@@ -26,12 +26,12 @@ END:VCARD`;
     const vcf = `BEGIN:VCARD
 VERSION:2.1
 FN:Bob
-TEL;CELL:968169134
-TEL;CELL:968169134
+TEL;CELL:990001234
+TEL;CELL:990001234
 END:VCARD`;
     const { rows } = parseVCard(vcf);
     expect(rows).toHaveLength(1);
-    expect(rows[0]).toMatchObject({ name: 'Bob', phone: '968169134' });
+    expect(rows[0]).toMatchObject({ name: 'Bob', phone: '990001234' });
   });
 
   it('emits one row per DISTINCT phone (a pessoa com 2 números)', () => {

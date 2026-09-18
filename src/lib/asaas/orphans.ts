@@ -15,7 +15,7 @@
 //  - cadastro com qualquer vínculo (cobrança, assinatura, nota) nunca é
 //    apagado: o DELETE do Asaas leva junto cobranças pendentes e assinaturas;
 //  - documento só é gravado se veio de gente (digitado ou cobrança confirmada),
-//    nunca de cobrança casada por telefone (15/09: CPF do Sérgio Lemes no João).
+//    nunca de cobrança casada por telefone (15/09: CPF do Paulo Exemplo no João).
 // Sem 'server-only'.
 // ============================================================
 
@@ -67,7 +67,7 @@ export function maskDigits(raw: string | null | undefined): string {
  *  - confirmed: cobrança NOSSA (origin ai/manual) ou casada à mão/por código;
  *  - custom_field: campo personalizado do contato;
  *  - phone_match: cobrança sincronizada casada por telefone/e-mail. PODE SER
- *    DE OUTRA PESSOA (15/09, Sérgio Lemes × João): nunca vira PUT.
+ *    DE OUTRA PESSOA (15/09, Paulo Exemplo × João): nunca vira PUT.
  */
 export type DocSource = 'typed' | 'confirmed' | 'phone_match' | 'custom_field' | null
 

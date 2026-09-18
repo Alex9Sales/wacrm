@@ -2,7 +2,7 @@
 // 🔗 Aviso de COBRANÇA NOVA — o CRM viu no Asaas uma cobrança que ele mesmo
 // não criou e manda o link para o cliente.
 //
-// Por que existe (11/09, João/GoLink — cobrança de teste do Sérgio Lemes):
+// Por que existe (11/09, João/GoLink — cobrança de teste do Paulo Exemplo):
 // ele criou a cobrança direto no painel do Asaas e o cliente não recebeu nada.
 // Três comportamentos corretos somando silêncio:
 //   1. os avisos do Asaas estão DESLIGADOS (a pedido dele, pra não pagar a
@@ -13,8 +13,8 @@
 //
 // 🐛 17/09 (GoLink): o aviso NUNCA disparou. Ele lia `asaas_charges`, e a
 // carteira só espelha VENCIDAS — a PENDING criada no painel só aparecia lá
-// depois de vencer, fora da janela. Em 15/09 o João criou Alpha Gás, Leva
-// Entulho (3x), Andressa Amorelli e Convictus no painel e mandou os 4 links à
+// depois de vencer, fora da janela. Em 15/09 o João criou Ômega Gás, Caçamba
+// Exemplo (3x), Beatriz Teste e Numerus no painel e mandou os 4 links à
 // mão, do celular; o aviso do CRM não viu nenhum. Agora a varredura pergunta ao
 // Asaas, ao vivo, o que foi CRIADO nos últimos dias de envio (só GET) e as
 // regras puras (`new-charge-rules.ts`) separam o que é novo de verdade.
@@ -301,7 +301,7 @@ export async function queueNewChargeNotices(args: {
     // O que o CRM criou está na carteira com origin <> 'sync' (só a 1ª parcela;
     // o grupo — parcelamento/assinatura — leva as outras junto). Assinatura do
     // CRM cuja 1ª parcela não nasceu a tempo de entrar na carteira (emit.ts)
-    // cai pela referência, que o Asaas repassa (Dom Burguer): ninguém manda o
+    // cai pela referência, que o Asaas repassa (Tio Burguer): ninguém manda o
     // link na criação e o lembrete D-5 cobre — limitação conhecida.
     const doCrm = await db
       .select({ asaasId: asaasCharges.asaasId })
@@ -368,7 +368,7 @@ export async function queueNewChargeNotices(args: {
         links.get(p.customer) ?? null,
       )
       if (!decision.contactId) {
-        // Andressa e Convictus (15/09): o cadastro do Asaas não tem telefone e
+        // Beatriz e Numerus (15/09): o cadastro do Asaas não tem telefone e
         // nada casa. Sem tela nova nesta entrega: fica no log com o id.
         bump(decision.ambiguous ? 'ambiguo' : 'sem_contato')
         console.log(

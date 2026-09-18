@@ -97,7 +97,7 @@ describe('instrução de cobrança da IA que conversa (16/09)', () => {
   const lines = collectionInstruction('- R$ 110,00, venceu em 10/09/2026').split('\n')
   const line = (marker: string) => lines.find((l) => l.includes(marker)) ?? ''
 
-  it('pedido de prazo com dia é promessa (WR: "segura até sexta")', () => {
+  it('pedido de prazo com dia é promessa (KB: "segura até sexta")', () => {
     expect(line('[[COBRANCA:promessa')).toContain('segura até sexta')
   })
   it('acordo não fala em prazo', () => {

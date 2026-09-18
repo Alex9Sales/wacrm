@@ -38,10 +38,10 @@ export function brIdentityKey(digits: string): string | null {
 /**
  * Dois telefones são a MESMA pessoa?
  *
- * ⚠️ 05/09 (caso Vinícius, Família do Gás): esta função comparava só os 8
+ * ⚠️ 05/09 (caso DDD 43 × 47, Família do Gás): esta função comparava só os 8
  * últimos dígitos. Serve pro 9º dígito e pro `55`, mas de tabela também
- * igualava DDDs diferentes: o 43 99634-5005 (Vinícius) casou com um contato
- * antigo do 47 99634-5005 — outra pessoa. A IA puxou o endereço do outro
+ * igualava DDDs diferentes: o 43 99000-1234 (um cliente) casou com um contato
+ * antigo do 47 99000-1234 — outra pessoa. A IA puxou o endereço do outro
  * ("como da última vez"), o contato foi renomeado, e a resposta foi ENTREGUE
  * NO 47, pra um estranho. No Brasil o DDD faz parte da identidade do número:
  * mesmo final com DDD diferente é outro assinante.
@@ -92,9 +92,9 @@ export function isPlausibleDDD(dd: string): boolean {
  * number that already works — is returned untouched and can never be corrupted.
  * Idempotent.
  *
- *   "01527999438466" (0 + CSP 15 + DDD 27 + 999438466) → "5527999438466"
- *   "027999438466"   (0 + DDD 27 + 999438466)          → "5527999438466"
- *   "5527999438466"  (already E.164)                    → "5527999438466" (untouched)
+ *   "01527990001234" (0 + CSP 15 + DDD 27 + 990001234) → "5527990001234"
+ *   "027990001234"   (0 + DDD 27 + 990001234)          → "5527990001234"
+ *   "5527990001234"  (already E.164)                    → "5527990001234" (untouched)
  *   "+1 202 555 0181"                                   → "12025550181" (untouched)
  */
 export function normalizeInboundPhoneBR(raw: string): string {
@@ -125,11 +125,11 @@ export function normalizeInboundPhoneBR(raw: string): string {
  * Número NACIONAL brasileiro sem o 55 (DDD + 8/9 dígitos) → E.164 com 55.
  * Qualquer outra forma volta intacta.
  *
- * Por que existe (01/09, caso Gerson): o import do ERP grava telefone como
- * "6792361631" (DDD + local, sem 55). Ao enviar, o check-exists do WhatsApp
+ * Por que existe (01/09, caso Família do Gás): o import do ERP grava telefone como
+ * "6790001234" (DDD + local, sem 55). Ao enviar, o check-exists do WhatsApp
  * recebia esse número cru e lia como +679 (Fiji) → numberExists:false →
- * fallback "6792361631@c.us" → a mensagem ficava em "sent" pra sempre e o
- * cliente nunca via nada (11 mensagens do Gerson, a chave Pix incluída).
+ * fallback "6790001234@c.us" → a mensagem ficava em "sent" pra sempre e o
+ * cliente nunca via nada (11 mensagens do cliente, a chave Pix incluída).
  * Com 11 dígitos o WhatsApp ainda adivinha o país; com 10 (número antigo sem
  * o 9º dígito), não.
  */

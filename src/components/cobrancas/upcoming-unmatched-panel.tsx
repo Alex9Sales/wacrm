@@ -1,7 +1,7 @@
 'use client';
 
 // ============================================================
-// 🔔 A vencer sem contato no CRM (16/09, Speed Gás e Água / GoLink).
+// 🔔 A vencer sem contato no CRM (16/09, Veloz Gás e Água / GoLink).
 //
 // O lembrete antes do vencimento não sai para cliente do Asaas que não casou
 // com nenhum contato — e isso só aparecia no log do worker. Este painel mostra
@@ -466,7 +466,7 @@ function LinkUpcomingDialog({
   onUndo: UndoFn;
 }) {
   // Começa pelo nome do Asaas; quem tem o MESMO telefone vem primeiro de
-  // qualquer jeito (searchContactsForCharge, 16/09 L&M Vidros × "LM Vidros").
+  // qualquer jeito (searchContactsForCharge, 16/09 R&S Vidros × "RS Vidros").
   // O painel monta um diálogo novo por cliente (key), então o estado nasce certo.
   const [q, setQ] = useState(card.name === 'Sem nome' ? '' : card.name);
   const [results, setResults] = useState<ContactOption[]>([]);
