@@ -42,8 +42,10 @@ import {
   updateCadence,
   deleteCadence,
   listStagesForCadence,
+  listTemplatesForCadence,
   type CadenceRow,
   type CadenceStepInput,
+  type CadenceTemplateOption,
   type StagePickerOption,
 } from './actions'
 
@@ -55,6 +57,10 @@ type Draft = {
   pauseOnReply: boolean
   funnelAutomation: boolean
   contactedStageId: string
+  /** Horas de espera depois do último toque antes de perder (0 = na hora). */
+  loseAfterHours: number
+  /** Motivo da perda automática (vazio = "Não respondeu à cadência"). */
+  lostReason: string
   steps: CadenceStepInput[]
 }
 
@@ -66,7 +72,14 @@ const EMPTY_DRAFT: Draft = {
   pauseOnReply: true,
   funnelAutomation: false,
   contactedStageId: '',
+  loseAfterHours: 0,
+  lostReason: '',
   steps: [{ delayValue: 0, delayUnit: 'days', channel: 'whatsapp', subject: '', body: '' }],
+}
+
+/** Valores padrão de {{1}}, {{2}}… ao escolher um modelo: {{1}} é o nome. */
+function defaultTemplateParams(count: number): string[] {
+  return Array.from({ length: count }, (_, i) => (i === 0 ? '{{primeiro_nome|tudo bem}}' : ''))
 }
 
 const CHANNEL_META: Record<
@@ -92,6 +105,7 @@ export default function CadenciasPage() {
   const [saving, setSaving] = useState(false)
   const [busyId, setBusyId] = useState<string | null>(null)
   const [stageOptions, setStageOptions] = useState<StagePickerOption[]>([])
+  const [templateOptions, setTemplateOptions] = useState<CadenceTemplateOption[]>([])
 
   const load = useCallback(async () => {
     setItems(await listCadences())
@@ -100,6 +114,7 @@ export default function CadenciasPage() {
   useEffect(() => {
     void load()
     listStagesForCadence().then(setStageOptions).catch(() => {})
+    listTemplatesForCadence().then(setTemplateOptions).catch(() => {})
   }, [load])
 
   function openNew() {
@@ -123,12 +138,18 @@ export default function CadenciasPage() {
       pauseOnReply: cad.pause_on_reply,
       funnelAutomation: cad.funnel_automation,
       contactedStageId: cad.contacted_stage_id ?? '',
+      loseAfterHours: cad.lose_after_hours ?? 0,
+      lostReason: cad.lost_reason ?? '',
       steps: cad.steps.map((s) => ({
         delayValue: s.delay_value,
         delayUnit: s.delay_unit as CadenceStepInput['delayUnit'],
         channel: s.channel as CadenceStepInput['channel'],
         subject: s.subject ?? '',
         body: s.body,
+        templateName: s.template_name,
+        templateLanguage: s.template_language,
+        templateParams: s.template_params,
+        moveToStageId: s.move_to_stage_id,
       })),
     })
     setFormOpen(true)
@@ -174,7 +195,10 @@ export default function CadenciasPage() {
       contactedStageId: draft.funnelAutomation && draft.contactedStageId
         ? draft.contactedStageId
         : null,
-      steps,
+      loseAfterHours: draft.funnelAutomation ? draft.loseAfterHours : null,
+      lostReason: draft.funnelAutomation ? draft.lostReason : null,
+      // Mover o card por toque só vale com a automação de funil ligada.
+      steps: steps.map((s) => (draft.funnelAutomation ? s : { ...s, moveToStageId: null })),
     }
     const res = draft.id
       ? await updateCadence(draft.id, payload)
@@ -379,6 +403,45 @@ export default function CadenciasPage() {
                     O negócio só é movido se a etapa for do funil dele e estiver à
                     frente da atual (nunca volta pra trás).
                   </p>
+                  <div className="mt-2 grid gap-3 sm:grid-cols-2">
+                    <div className="grid gap-1.5">
+                      <Label className="text-xs">
+                        Esperar depois do último toque (horas)
+                      </Label>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={720}
+                        value={draft.loseAfterHours}
+                        onChange={(e) =>
+                          setDraft((d) => ({
+                            ...d,
+                            loseAfterHours: Math.max(0, parseInt(e.target.value, 10) || 0),
+                          }))
+                        }
+                        className="h-9"
+                      />
+                      <p className="text-[11px] text-muted-foreground">
+                        0 = marca perdido logo depois do último toque. Se o lead
+                        responder durante a espera, não perde.
+                      </p>
+                    </div>
+                    <div className="grid gap-1.5">
+                      <Label className="text-xs">Motivo da perda</Label>
+                      <Input
+                        value={draft.lostReason}
+                        onChange={(e) =>
+                          setDraft((d) => ({ ...d, lostReason: e.target.value }))
+                        }
+                        placeholder="Não respondeu à cadência"
+                        className="h-9"
+                      />
+                      <p className="text-[11px] text-muted-foreground">
+                        Use o mesmo nome da sua lista de motivos (e do RD, se
+                        estiver ligado).
+                      </p>
+                    </div>
+                  </div>
                 </div>
               )}
             </div>
@@ -479,6 +542,77 @@ export default function CadenciasPage() {
                       rows={2}
                       className="mt-2 w-full resize-none rounded-md border border-border bg-background px-2 py-1.5 text-sm text-foreground outline-none focus:border-primary"
                     />
+                    {/* Número oficial: fora da janela de 24 h só modelo aprovado chega. */}
+                    {step.channel === 'whatsapp' && templateOptions.length > 0 && (
+                      <div className="mt-2 grid gap-1.5">
+                        <Label className="text-xs text-muted-foreground">
+                          Modelo aprovado (número oficial, quando o lead não falou nas
+                          últimas 24 h)
+                        </Label>
+                        <select
+                          value={step.templateName ?? ''}
+                          onChange={(e) => {
+                            const opt = templateOptions.find((t) => t.name === e.target.value)
+                            patchStep(i, {
+                              templateName: opt?.name ?? null,
+                              templateLanguage: opt?.language ?? null,
+                              templateParams: opt ? defaultTemplateParams(opt.params) : null,
+                            })
+                          }}
+                          className="h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                        >
+                          <option value="">Sem modelo — só o texto acima</option>
+                          {templateOptions.map((t) => (
+                            <option key={`${t.name}|${t.language}`} value={t.name}>
+                              {t.name}
+                            </option>
+                          ))}
+                        </select>
+                        {step.templateName && (
+                          <>
+                            <p className="text-[11px] text-muted-foreground">
+                              {templateOptions.find((t) => t.name === step.templateName)?.preview ??
+                                'Modelo não está mais aprovado.'}
+                            </p>
+                            {(step.templateParams ?? []).map((p, pi) => (
+                              <div key={pi} className="flex items-center gap-2">
+                                <span className="w-10 text-xs text-muted-foreground">{`{{${pi + 1}}}`}</span>
+                                <Input
+                                  value={p}
+                                  onChange={(e) =>
+                                    patchStep(i, {
+                                      templateParams: (step.templateParams ?? []).map((x, xi) =>
+                                        xi === pi ? e.target.value : x,
+                                      ),
+                                    })
+                                  }
+                                  className="h-8 text-sm"
+                                />
+                              </div>
+                            ))}
+                          </>
+                        )}
+                      </div>
+                    )}
+                    {draft.funnelAutomation && (
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        <span className="text-xs text-muted-foreground">
+                          Ao enviar, mover o card para
+                        </span>
+                        <select
+                          value={step.moveToStageId ?? ''}
+                          onChange={(e) => patchStep(i, { moveToStageId: e.target.value || null })}
+                          className="h-8 min-w-0 flex-1 rounded-md border border-border bg-background px-2 text-sm text-foreground"
+                        >
+                          <option value="">Não mover</option>
+                          {stageOptions.map((s) => (
+                            <option key={s.id} value={s.id}>
+                              {s.label}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                    )}
                   </div>
                 )
               })}

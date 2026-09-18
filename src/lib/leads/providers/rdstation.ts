@@ -173,6 +173,12 @@ export interface IntroChoice {
    * têm — seguem pelo número de recados até a Meta aprovar os modelos.
    */
   channelId: string | null
+  /**
+   * Cadência de quem não responde a ESTA abertura; null = nenhuma. Zelo: só a
+   * de franquia (padrão da fonte, `introCadenceId`) — orçamento/vaga vão pra
+   * pessoa, não pra nutrição de franquia.
+   */
+  cadenceId: string | null
 }
 
 /**
@@ -200,6 +206,7 @@ export function pickIntroForOrigin(meta: Record<string, unknown>, origin: string
         text: r.text.trim() || null,
         templateName: typeof r.templateName === 'string' && r.templateName.trim() ? r.templateName.trim() : null,
         channelId: typeof r.channelId === 'string' && r.channelId.trim() ? r.channelId.trim() : null,
+        cadenceId: typeof r.cadenceId === 'string' && r.cadenceId.trim() ? r.cadenceId.trim() : null,
       }
     }
   }
@@ -210,5 +217,7 @@ export function pickIntroForOrigin(meta: Record<string, unknown>, origin: string
         ? meta.introTemplateName.trim()
         : null,
     channelId: null,
+    cadenceId:
+      typeof meta.introCadenceId === 'string' && meta.introCadenceId.trim() ? meta.introCadenceId.trim() : null,
   }
 }

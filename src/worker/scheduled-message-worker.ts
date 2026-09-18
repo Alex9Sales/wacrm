@@ -21,9 +21,11 @@
 // ============================================================
 
 import { Worker, UnrecoverableError, type Job } from 'bullmq';
-import { eq, and, isNull } from 'drizzle-orm';
+import { eq, and, isNull, sql } from 'drizzle-orm';
 
-import { db, scheduledMessages, contacts, conversations } from '@/db';
+import { db, scheduledMessages, contacts, conversations, channels, messages } from '@/db';
+import { CAPABILITIES, type ProviderId } from '@/lib/channels/provider';
+import { cadenceSendMode } from '@/lib/cadences/schedule-rules';
 import { renderForContact } from '@/lib/whatsapp/message-vars';
 import { bullConnection } from '@/lib/queue/connection';
 import {
@@ -40,6 +42,7 @@ import { isContactOptedOut } from '@/lib/contacts/opt-out';
 import {
   onCadenceStepSent,
   finalizeEnrollmentIfDrained,
+  checkCadenceStepStillWanted,
 } from '@/lib/cadences/cadence';
 
 function log(...args: unknown[]): void {
@@ -101,8 +104,63 @@ async function processScheduledMessageJob(
     return;
   }
 
+  // Cadência: o card fechou ou mudou de funil desde o agendamento? Então o
+  // toque não faz mais sentido — a inscrição é cancelada e nada sai.
+  if (row.cadenceEnrollmentId) {
+    const wanted = await checkCadenceStepStillWanted(row.accountId, row.cadenceEnrollmentId);
+    if (!wanted.ok) {
+      await db
+        .update(scheduledMessages)
+        .set({
+          status: 'cancelled',
+          lastError: `Cadência encerrada: ${wanted.reason}`,
+          updatedAt: new Date().toISOString(),
+        })
+        .where(and(eq(scheduledMessages.id, scheduledMessageId), eq(scheduledMessages.status, 'pending')));
+      log(`${scheduledMessageId} skipped: cadência encerrada (${wanted.reason})`);
+      return;
+    }
+  }
+
   const attempts = row.attempts + 1;
   const now = new Date().toISOString();
+
+  // Degrau com MODELO aprovado: no canal que exige modelo (Meta) e com a
+  // janela de 24 h FECHADA, sai o modelo; senão, o texto de sempre.
+  let sendAsTemplate = false;
+  if (row.templateName) {
+    try {
+      const ch = (
+        await db
+          .select({ provider: channels.provider })
+          .from(conversations)
+          .innerJoin(channels, eq(channels.id, conversations.channelId))
+          .where(eq(conversations.id, row.conversationId))
+          .limit(1)
+      )[0];
+      const lastIn = (
+        await db
+          .select({ at: sql<string | null>`max(${messages.createdAt})` })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, row.conversationId),
+              eq(messages.senderType, 'customer'),
+              eq(messages.isInternal, false),
+            ),
+          )
+      )[0];
+      sendAsTemplate =
+        cadenceSendMode({
+          channelTakesTemplates: !!ch && CAPABILITIES[ch.provider as ProviderId]?.templates === true,
+          templateName: row.templateName,
+          lastInboundAt: lastIn?.at ?? null,
+        }) === 'template';
+    } catch (err) {
+      log(`${scheduledMessageId} não deu pra decidir texto × modelo (vai texto): ${String(err)}`);
+    }
+  }
+  let templateParams: string[] = Array.isArray(row.templateParams) ? row.templateParams.map(String) : [];
 
   // Personalização {nome}/{{nome}} etc. no ENVIO (cadências e agendadas):
   // resolve os tokens com o contato — cobre também degraus já agendados com
@@ -111,7 +169,9 @@ async function processScheduledMessageJob(
   let subject = row.subject ?? undefined;
   if (
     row.contactId &&
-    ((contentText ?? '').includes('{') || (subject ?? '').includes('{'))
+    ((contentText ?? '').includes('{') ||
+      (subject ?? '').includes('{') ||
+      (sendAsTemplate && templateParams.some((p) => p.includes('{'))))
   ) {
     try {
       const c = (
@@ -129,6 +189,7 @@ async function processScheduledMessageJob(
       if (c) {
         if (contentText) contentText = renderForContact(contentText, c);
         if (subject) subject = renderForContact(subject, c);
+        if (sendAsTemplate) templateParams = templateParams.map((p) => renderForContact(p, c));
       }
     } catch (err) {
       log(`${scheduledMessageId} personalização falhou (segue cru): ${String(err)}`);
@@ -142,15 +203,25 @@ async function processScheduledMessageJob(
     const anexos = Array.isArray(row.media) ? row.media.filter((a) => a && typeof a.url === 'string') : [];
     const extras = anexos.slice(1);
 
-    const result = await sendMessageToConversation(row.accountId, {
-      conversationId: row.conversationId,
-      messageType: row.messageType,
-      contentText,
-      mediaUrl: row.mediaUrl,
-      filename: row.filename,
-      // Assunto (degrau de e-mail da cadência); WhatsApp/IG ignoram.
-      subject,
-    });
+    const result = sendAsTemplate
+      ? // O texto guardado na conversa é o do MODELO renderizado (send-message
+        // monta a partir do corpo aprovado) — é o que o lead recebeu.
+        await sendMessageToConversation(row.accountId, {
+          conversationId: row.conversationId,
+          messageType: 'template',
+          templateName: row.templateName as string,
+          templateLanguage: row.templateLanguage || 'pt_BR',
+          templateParams,
+        })
+      : await sendMessageToConversation(row.accountId, {
+          conversationId: row.conversationId,
+          messageType: row.messageType,
+          contentText,
+          mediaUrl: row.mediaUrl,
+          filename: row.filename,
+          // Assunto (degrau de e-mail da cadência); WhatsApp/IG ignoram.
+          subject,
+        });
 
     // Os demais anexos, um a um. Falha num deles NÃO derruba o agendamento
     // inteiro (o primeiro já saiu): registra no log e segue — melhor 4 de 5

@@ -70,6 +70,12 @@ export interface IngestLeadInput {
   /** Canal p/ o WhatsApp de abertura (null → resolve automaticamente). */
   channelId?: string | null
   /**
+   * Cadência de quem NÃO responde (inscrição automática) — entra logo depois
+   * que a abertura SAI. Resposta do lead pausa; a IA segue a conversa. Zelo
+   * 18/09: pré-vendas do playbook (1ª..5ª tentativa → Definição → perdido).
+   */
+  cadenceId?: string | null
+  /**
    * Agente de IA DONO da conversa de abertura (conversations.ai_agent_id): ele
    * responde nessa conversa mesmo se o canal não estiver na lista dele. Serve
    * pra abrir o lead por um número "emprestado" sem ligar a IA no número todo
@@ -481,6 +487,27 @@ export async function ingestLead(
             contentText: part,
           })
           whatsappSent = true
+        }
+      }
+      // 🔁 Cadência de quem não responde: começa depois que a abertura SAIU.
+      // Automática = ninguém vira responsável (a IA segue dona da conversa) e
+      // nada sai de madrugada. Falha aqui não desfaz a abertura.
+      if (whatsappSent && input.cadenceId) {
+        try {
+          const { enrollContactInCadence } = await import('@/lib/cadences/cadence')
+          const r = await enrollContactInCadence(
+            { accountId, userId: auditUserId },
+            {
+              cadenceId: input.cadenceId,
+              contactId,
+              conversationId: resolved.conversationId,
+              dealId,
+            },
+            { automatic: true },
+          )
+          if (!r.ok) console.error('[ingestLead] cadência não começou:', r.error)
+        } catch (err) {
+          console.error('[ingestLead] cadência falhou:', err)
         }
       }
     } catch (err) {

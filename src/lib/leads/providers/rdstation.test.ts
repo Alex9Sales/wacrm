@@ -125,35 +125,43 @@ describe('pickIntroForOrigin', () => {
   const meta = {
     introText: 'FRANQUIA',
     introTemplateName: 'boas_vindas_v2',
+    introCadenceId: 'cad-franquia',
     introTextRules: [
       { match: 'or[çc]amento|servi[çc]o', text: 'SERVICO', channelId: 'canal-recados' },
-      { match: 'trabalhe|vaga|curr[ií]culo', text: 'VAGA', templateName: 'vaga_v1' },
+      { match: 'trabalhe|vaga|curr[ií]culo', text: 'VAGA', templateName: 'vaga_v1', cadenceId: 'cad-vaga' },
       { match: '([', text: 'REGEX QUEBRADA' },
     ],
   }
 
-  it('pedido de orçamento pega o texto de serviço e NÃO o template de franquia', () => {
+  it('pedido de orçamento pega o texto de serviço e NÃO o template nem a cadência de franquia', () => {
     expect(pickIntroForOrigin(meta, 'https-limpezacomzelo-com-br-solicite-um-orcamento-11-09-26')).toEqual({
       text: 'SERVICO',
       templateName: null,
       channelId: 'canal-recados',
+      cadenceId: null,
     })
   })
 
-  it('regra com template próprio usa ele', () => {
-    expect(pickIntroForOrigin(meta, 'trabalhe-conosco-2026')).toEqual({ text: 'VAGA', templateName: 'vaga_v1', channelId: null })
+  it('regra com template e cadência próprios usa os dela', () => {
+    expect(pickIntroForOrigin(meta, 'trabalhe-conosco-2026')).toEqual({
+      text: 'VAGA',
+      templateName: 'vaga_v1',
+      channelId: null,
+      cadenceId: 'cad-vaga',
+    })
   })
 
-  it('nada casou → abertura padrão da fonte (franquia)', () => {
+  it('nada casou → abertura e cadência padrão da fonte (franquia)', () => {
     expect(pickIntroForOrigin(meta, 'seja-um-franqueado-site-01-09-26')).toEqual({
       text: 'FRANQUIA',
       templateName: 'boas_vindas_v2',
       channelId: null,
+      cadenceId: 'cad-franquia',
     })
     expect(pickIntroForOrigin(meta, '11/09/26 | v1 | Instant Forms Lóg. Condicional').text).toBe('FRANQUIA')
   })
 
   it('regex inválida na config é ignorada; sem regras e sem texto → nulos', () => {
-    expect(pickIntroForOrigin({}, 'qualquer')).toEqual({ text: null, templateName: null, channelId: null })
+    expect(pickIntroForOrigin({}, 'qualquer')).toEqual({ text: null, templateName: null, channelId: null, cadenceId: null })
   })
 })

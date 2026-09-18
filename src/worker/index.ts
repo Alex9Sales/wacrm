@@ -128,6 +128,14 @@ import('./crm-sync-worker')
     console.error('[worker] crm-sync failed to start:', err);
   });
 
+// ⏳ Cadência — perdas que venceram (espera depois do último toque, ex.: Zelo
+// 72 h após a Definição). Tick de 5 min.
+import('./cadence-loss-worker')
+  .then((m) => m.startCadenceLossWorker())
+  .catch((err) => {
+    console.error('[worker] cadence-loss failed to start:', err);
+  });
+
 // 📒 Agenda do celular — tick de 6 h: reconfere a agenda dos números que já
 // importaram e aplica a regra de nome (CRM > agenda > perfil do WhatsApp).
 import('./phonebook-sync-worker')

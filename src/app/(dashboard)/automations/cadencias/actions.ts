@@ -11,6 +11,7 @@ import {
   scheduledMessages,
   conversations,
   deals,
+  messageTemplates,
   pipelines,
   pipelineStages,
 } from '@/db'
@@ -32,6 +33,13 @@ export interface CadenceStepInput {
   channel: StepChannel
   subject?: string | null
   body: string
+  /** Modelo aprovado usado quando o canal exige (oficial, janela fechada). */
+  templateName?: string | null
+  templateLanguage?: string | null
+  /** Valores de {{1}}, {{2}}… (aceitam {{primeiro_nome}} etc.). */
+  templateParams?: string[] | null
+  /** Ao enviar este toque, o card anda pra esta etapa (só pra frente). */
+  moveToStageId?: string | null
 }
 
 export interface CadenceInput {
@@ -44,6 +52,10 @@ export interface CadenceInput {
   funnelAutomation?: boolean
   /** Etapa de "contato feito" — pra onde o negócio vai ao inscrever/responder. */
   contactedStageId?: string | null
+  /** Horas de espera depois do último toque antes de marcar perdido (0 = na hora). */
+  loseAfterHours?: number | null
+  /** Motivo da perda automática (vazio = "Não respondeu à cadência"). */
+  lostReason?: string | null
   steps: CadenceStepInput[]
 }
 
@@ -65,6 +77,10 @@ export interface CadenceStepRow {
   channel: string
   subject: string | null
   body: string
+  template_name: string | null
+  template_language: string | null
+  template_params: string[] | null
+  move_to_stage_id: string | null
 }
 
 export interface CadenceDetail {
@@ -75,7 +91,18 @@ export interface CadenceDetail {
   pause_on_reply: boolean
   funnel_automation: boolean
   contacted_stage_id: string | null
+  lose_after_hours: number | null
+  lost_reason: string | null
   steps: CadenceStepRow[]
+}
+
+/** Modelo aprovado pro seletor do degrau (canal oficial). */
+export interface CadenceTemplateOption {
+  name: string
+  language: string
+  /** Quantos {{n}} o corpo tem. */
+  params: number
+  preview: string
 }
 
 export interface StagePickerOption {
@@ -93,17 +120,33 @@ function sanitizeSteps(steps: CadenceStepInput[]): {
   channel: string
   subject: string | null
   body: string
+  templateName: string | null
+  templateLanguage: string | null
+  templateParams: string[] | null
+  moveToStageId: string | null
 }[] {
   return (steps ?? [])
-    .map((s, i) => ({
-      position: i,
-      delayValue: Number.isFinite(s.delayValue) ? Math.max(0, Math.trunc(s.delayValue)) : 0,
-      delayUnit: UNITS.has(s.delayUnit) ? s.delayUnit : 'days',
-      channel: CHANNELS.has(s.channel) ? s.channel : 'whatsapp',
-      subject: (s.subject ?? '').trim() || null,
-      body: (s.body ?? '').trim(),
-    }))
+    .map((s) => {
+      const channel = CHANNELS.has(s.channel) ? s.channel : 'whatsapp'
+      // Modelo só existe no WhatsApp (canal oficial).
+      const templateName = channel === 'whatsapp' ? (s.templateName ?? '').trim() || null : null
+      return {
+        delayValue: Number.isFinite(s.delayValue) ? Math.max(0, Math.trunc(s.delayValue)) : 0,
+        delayUnit: UNITS.has(s.delayUnit) ? s.delayUnit : 'days',
+        channel,
+        subject: (s.subject ?? '').trim() || null,
+        body: (s.body ?? '').trim(),
+        templateName,
+        templateLanguage: templateName ? (s.templateLanguage ?? '').trim() || 'pt_BR' : null,
+        templateParams: templateName
+          ? (Array.isArray(s.templateParams) ? s.templateParams : []).map((p) => String(p ?? '').slice(0, 200))
+          : null,
+        moveToStageId: (s.moveToStageId ?? '').trim() || null,
+      }
+    })
     .filter((s) => s.body.length > 0)
+    // Posição DEPOIS do filtro: o motor acha o degrau enviado pela posição.
+    .map((s, i) => ({ ...s, position: i }))
 }
 
 // ------------------------------------------------------------
@@ -145,6 +188,8 @@ export async function getCadence(id: string): Promise<CadenceDetail | null> {
           pause_on_reply: cadences.pauseOnReply,
           funnel_automation: cadences.funnelAutomation,
           contacted_stage_id: cadences.contactedStageId,
+          lose_after_hours: cadences.loseAfterHours,
+          lost_reason: cadences.lostReason,
         })
         .from(cadences)
         .where(and(eq(cadences.id, id), eq(cadences.accountId, ctx.accountId)))
@@ -160,6 +205,10 @@ export async function getCadence(id: string): Promise<CadenceDetail | null> {
         channel: cadenceSteps.channel,
         subject: cadenceSteps.subject,
         body: cadenceSteps.body,
+        template_name: cadenceSteps.templateName,
+        template_language: cadenceSteps.templateLanguage,
+        template_params: cadenceSteps.templateParams,
+        move_to_stage_id: cadenceSteps.moveToStageId,
       })
       .from(cadenceSteps)
       .where(and(eq(cadenceSteps.cadenceId, id), eq(cadenceSteps.accountId, ctx.accountId)))
@@ -193,8 +242,21 @@ export async function listStagesForCadence(): Promise<StagePickerOption[]> {
   }
 }
 
+/** Ids de etapa que são DESTA conta (etapa de outra conta vira null). */
+async function ownStageIds(accountId: string, ids: (string | null | undefined)[]): Promise<Set<string>> {
+  const wanted = [...new Set(ids.filter((id): id is string => !!id))]
+  if (!wanted.length) return new Set()
+  const rows = await db
+    .select({ id: pipelineStages.id })
+    .from(pipelineStages)
+    .innerJoin(pipelines, eq(pipelines.id, pipelineStages.pipelineId))
+    .where(and(eq(pipelines.accountId, accountId), inArray(pipelineStages.id, wanted)))
+  return new Set(rows.map((r) => r.id))
+}
+
 async function replaceSteps(accountId: string, cadenceId: string, steps: CadenceStepInput[]) {
   const clean = sanitizeSteps(steps)
+  const own = await ownStageIds(accountId, clean.map((s) => s.moveToStageId))
   await db.delete(cadenceSteps).where(eq(cadenceSteps.cadenceId, cadenceId))
   if (clean.length > 0) {
     await db.insert(cadenceSteps).values(
@@ -207,9 +269,44 @@ async function replaceSteps(accountId: string, cadenceId: string, steps: Cadence
         channel: s.channel,
         subject: s.subject,
         body: s.body,
+        templateName: s.templateName,
+        templateLanguage: s.templateLanguage,
+        templateParams: s.templateParams,
+        moveToStageId: s.moveToStageId && own.has(s.moveToStageId) ? s.moveToStageId : null,
         updatedAt: sql`now()`,
       })),
     )
+  }
+}
+
+/** Espera antes de perder: 0–720 h (30 dias); vazio/inválido = na hora. */
+function cleanLoseAfterHours(v: number | null | undefined): number | null {
+  const n = Math.trunc(Number(v))
+  return Number.isFinite(n) && n > 0 ? Math.min(n, 720) : null
+}
+
+/** Modelos APROVADOS da conta, pro seletor do degrau (canal oficial). */
+export async function listTemplatesForCadence(): Promise<CadenceTemplateOption[]> {
+  try {
+    const ctx = await getCurrentAccount()
+    const rows = await db
+      .select({
+        name: messageTemplates.name,
+        language: messageTemplates.language,
+        body: messageTemplates.bodyText,
+      })
+      .from(messageTemplates)
+      .where(and(eq(messageTemplates.accountId, ctx.accountId), eq(messageTemplates.status, 'APPROVED')))
+      .orderBy(asc(messageTemplates.name))
+    return rows.map((r) => ({
+      name: r.name,
+      language: r.language || 'pt_BR',
+      params: new Set((r.body.match(/\{\{\s*(\d+)\s*\}\}/g) ?? []).map((m) => m.replace(/\D/g, ''))).size,
+      preview: r.body.replace(/\s+/g, ' ').slice(0, 160),
+    }))
+  } catch (err) {
+    console.error('[listTemplatesForCadence]', err)
+    return []
   }
 }
 
@@ -231,6 +328,8 @@ export async function createCadence(
           pauseOnReply: input.pauseOnReply ?? true,
           funnelAutomation: input.funnelAutomation ?? false,
           contactedStageId: input.contactedStageId ?? null,
+          loseAfterHours: cleanLoseAfterHours(input.loseAfterHours),
+          lostReason: (input.lostReason ?? '').trim().slice(0, 120) || null,
           createdBy: ctx.userId,
           updatedAt: sql`now()`,
         })
@@ -269,6 +368,8 @@ export async function updateCadence(
         pauseOnReply: input.pauseOnReply ?? true,
         funnelAutomation: input.funnelAutomation ?? false,
         contactedStageId: input.contactedStageId ?? null,
+        loseAfterHours: cleanLoseAfterHours(input.loseAfterHours),
+        lostReason: (input.lostReason ?? '').trim().slice(0, 120) || null,
         updatedAt: sql`now()`,
       })
       .where(and(eq(cadences.id, id), eq(cadences.accountId, ctx.accountId)))
@@ -338,8 +439,8 @@ export async function enrollLeadInCadence(input: {
   try {
     const ctx = await getCurrentAccount()
     let contactId = input.contactId ?? null
-    let conversationId = input.conversationId ?? null
-    let dealId = input.dealId ?? null
+    const conversationId = input.conversationId ?? null
+    const dealId = input.dealId ?? null
 
     // Resolve o contato a partir da conversa ou do negócio, se preciso.
     if (!contactId && conversationId) {

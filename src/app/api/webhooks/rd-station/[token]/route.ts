@@ -132,6 +132,8 @@ export async function POST(
             source.deliverToAi && typeof source.providerMeta.introAgentId === 'string'
               ? source.providerMeta.introAgentId
               : null,
+          // Cadência de quem não responde a ESTA abertura (só com a IA ligada).
+          cadenceId: source.deliverToAi ? intro.cadenceId : null,
         })
         // Cidade/Estado/Investimento/Campanha nos CAMPOS do card (só os que a
         // conta criou) — Renato 18/09: "no card não aparece investimento nem

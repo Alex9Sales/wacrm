@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, inArray, isNotNull, lte, sql } from 'drizzle-orm'
 
 import {
   db,
@@ -22,6 +22,8 @@ import {
   removeScheduledMessageJob,
 } from '@/lib/queue/queues'
 import { contactTokenValues, renderMessageVars } from '@/lib/whatsapp/message-vars'
+import { getAccountSettings } from '@/lib/settings/account-settings'
+import { shiftOutOfQuietHours } from './schedule-rules'
 
 // ============================================================
 // Cadências — motor. Uma CADÊNCIA (sequência de mensagens fixas) é INSCRITA
@@ -158,13 +160,16 @@ async function onCadenceCompletedWithoutReply(
   try {
     const cad = firstOrNull(
       await db
-        .select({ funnelAutomation: cadences.funnelAutomation })
+        .select({ funnelAutomation: cadences.funnelAutomation, lostReason: cadences.lostReason })
         .from(cadences)
         .where(eq(cadences.id, enr.cadenceId))
         .limit(1),
     )
     if (!cad?.funnelAutomation) return
     if (!enr.dealId && !enr.conversationId) return
+    // Motivo da cadência (ex.: "Não respondeu", da lista fechada da conta e do
+    // RD) — sem motivo configurado, o texto de sempre.
+    const reason = cad.lostReason?.trim() || 'Não respondeu à cadência'
 
     // Perde EM PÉ: negócio ABERTO (por id, senão o mais recente da conversa) →
     // status='lost' + motivo + evento datado (o Raio-X data a perda pelo evento).
@@ -200,7 +205,7 @@ async function onCadenceCompletedWithoutReply(
         await db.transaction(async (tx) => {
           await tx
             .update(deals)
-            .set({ status: 'lost', lostReason: 'Não respondeu à cadência' })
+            .set({ status: 'lost', lostReason: reason })
             .where(and(eq(deals.id, deal.id), eq(deals.accountId, accountId)))
           await tx.insert(dealEvents).values({
             accountId,
@@ -210,7 +215,7 @@ async function onCadenceCompletedWithoutReply(
             data: {
               from: 'open',
               to: 'lost',
-              reason: 'Não respondeu à cadência',
+              reason,
               stageId: deal.stageId,
               stageName,
               by: 'cadence',
@@ -376,6 +381,17 @@ interface SchedulableContact {
   company: string | null
 }
 
+/** Como agendar os degraus. Inscrição MANUAL (padrão): a pessoa que inscreveu
+ *  vira responsável pela conversa e o horário é o exato. AUTOMÁTICA (lead que
+ *  chegou sozinho): ninguém é atribuído — atribuir tiraria a conversa da IA — e
+ *  nada sai de madrugada (`timezone` liga o horário de silêncio). */
+interface ScheduleOptions {
+  /** undefined = quem inscreveu (ctx.userId); null = ninguém. */
+  assignTo?: string | null
+  /** Fuso da conta p/ empurrar o envio pra fora do silêncio (21h–8h → 9h). */
+  timezone?: string | null
+}
+
 /** Agenda uma lista de degraus como scheduled_messages sob uma inscrição:
  *  roteia pro canal certo (pula o que o lead não tem), interpola as variáveis
  *  e enfileira. `sendAtMsFor` decide QUANDO cada degrau sai (epoch ms). Reusado
@@ -387,7 +403,9 @@ async function scheduleCadenceSteps(
   routing: RoutingContext,
   steps: CadenceStepRow[],
   sendAtMsFor: (step: CadenceStepRow) => number,
+  opts: ScheduleOptions = {},
 ): Promise<{ scheduled: number; skipped: number }> {
+  const assignTo = opts.assignTo === undefined ? ctx.userId : opts.assignTo
   // Inclui `primeiro_nome` (1ª palavra do nome). contactTokenValues é a fonte
   // única (mesmos tokens do disparo/agendamento).
   const vars = contactTokenValues({
@@ -470,9 +488,13 @@ async function scheduleCadenceSteps(
       }
     }
 
-    const sendAt = new Date(sendAtMsFor(step))
+    const rawSendAt = sendAtMsFor(step)
+    const sendAt = new Date(opts.timezone ? shiftOutOfQuietHours(rawSendAt, opts.timezone) : rawSendAt)
     const body = interpolate(step.body, vars)
     const subject = step.channel === 'email' ? interpolate(step.subject, vars) || null : null
+    // Modelo só vale no WhatsApp; os parâmetros ficam CRUS ({{primeiro_nome}})
+    // e o worker resolve no envio, com o nome do contato daquele momento.
+    const templateName = step.channel === 'whatsapp' ? step.templateName?.trim() || null : null
 
     let insertedId: string | null = null
     try {
@@ -486,11 +508,14 @@ async function scheduleCadenceSteps(
             messageType: 'text',
             contentText: body,
             subject,
+            templateName,
+            templateLanguage: templateName ? step.templateLanguage?.trim() || 'pt_BR' : null,
+            templateParams: templateName ? (step.templateParams ?? []) : null,
             scheduledAt: sendAt.toISOString(),
             status: 'pending',
             createdBy: ctx.userId,
-            assignedTo: ctx.userId,
-            assignedBy: ctx.userId,
+            assignedTo: assignTo,
+            assignedBy: assignTo ? ctx.userId : null,
             cadenceEnrollmentId: enrollment.id,
             cadenceStepPosition: step.position,
           })
@@ -520,6 +545,10 @@ async function scheduleCadenceSteps(
  * Inscreve um contato numa cadência: agenda cada degrau como scheduled_message
  * no canal certo (pulando os que o lead não tem). Substitui a inscrição ativa
  * anterior do contato (1 cadência ativa por lead).
+ *
+ * `automatic`: inscrição feita pelo sistema (ex.: lead do RD depois da
+ * abertura) — ninguém vira responsável pela conversa (a IA segue atendendo
+ * quando o lead responder) e nada sai no horário de silêncio da conta.
  */
 export async function enrollContactInCadence(
   ctx: CadenceCtx,
@@ -529,6 +558,7 @@ export async function enrollContactInCadence(
     conversationId?: string | null
     dealId?: string | null
   },
+  opts: { automatic?: boolean } = {},
 ): Promise<EnrollResult> {
   try {
     const cadence = firstOrNull(
@@ -545,6 +575,8 @@ export async function enrollContactInCadence(
         .limit(1),
     )
     if (!cadence) return { ok: false, error: 'Cadência não encontrada.' }
+    // Desligar a cadência na tela para as entradas automáticas.
+    if (opts.automatic && !cadence.active) return { ok: false, error: 'Cadência desligada.' }
 
     const steps = await db
       .select()
@@ -624,6 +656,16 @@ export async function enrollContactInCadence(
     // editor (+2d/+4d/+7d) já era absoluto; era o motor que somava (d0→d2→d6→
     // d13…). Piso de 60s (o agendamento exige futuro; D0 sai em ~1 min).
     const enrolledAtMs = Date.now()
+    let scheduleOpts: ScheduleOptions = {}
+    if (opts.automatic) {
+      let timezone = 'America/Sao_Paulo'
+      try {
+        timezone = (await getAccountSettings(ctx.accountId)).businessTimezone || timezone
+      } catch {
+        /* fuso padrão */
+      }
+      scheduleOpts = { assignTo: null, timezone }
+    }
     const { scheduled, skipped } = await scheduleCadenceSteps(
       ctx,
       enrollment,
@@ -631,10 +673,11 @@ export async function enrollContactInCadence(
       routing,
       steps,
       (step) => enrolledAtMs + Math.max(delayMsOf(step.delayValue, step.delayUnit), 60_000),
+      scheduleOpts,
     )
 
     await recordCadenceEvent(ctx.accountId, enrollment, 'enrolled', {
-      data: { cadence: cadence.name, scheduled, skipped },
+      data: { cadence: cadence.name, scheduled, skipped, automatic: !!opts.automatic },
     })
 
     // Se nada foi agendado (todos pulados), encerra como concluída (nada a fazer).
@@ -890,6 +933,7 @@ export async function finalizeEnrollmentIfDrained(
           dealId: cadenceEnrollments.dealId,
           conversationId: cadenceEnrollments.conversationId,
           status: cadenceEnrollments.status,
+          loseAt: cadenceEnrollments.loseAt,
         })
         .from(cadenceEnrollments)
         .where(
@@ -914,6 +958,29 @@ export async function finalizeEnrollmentIfDrained(
         .limit(1),
     )
     if (pending) return
+    // Espera antes de perder (ex.: Zelo — "sem resposta 72 h após a Definição
+    // → perdido"): a inscrição segue ATIVA até `lose_at`, então uma resposta
+    // do lead ainda PAUSA e ele nunca é perdido; quem conclui é a varredura
+    // `runCadenceLossSweep`.
+    const cad = firstOrNull(
+      await db
+        .select({ funnelAutomation: cadences.funnelAutomation, loseAfterHours: cadences.loseAfterHours })
+        .from(cadences)
+        .where(eq(cadences.id, enr.cadenceId))
+        .limit(1),
+    )
+    const waitHours = cad?.funnelAutomation ? Math.max(0, cad.loseAfterHours ?? 0) : 0
+    if (waitHours > 0) {
+      if (!enr.loseAt) {
+        const loseAt = new Date(Date.now() + waitHours * 3_600_000).toISOString()
+        await db
+          .update(cadenceEnrollments)
+          .set({ loseAt, updatedAt: new Date().toISOString() })
+          .where(eq(cadenceEnrollments.id, enrollmentId))
+        await recordCadenceEvent(accountId, enr, 'awaiting_loss', { data: { loseAt, hours: waitHours } })
+      }
+      return
+    }
     await db
       .update(cadenceEnrollments)
       .set({ status: 'done', updatedAt: new Date().toISOString() })
@@ -965,9 +1032,145 @@ export async function onCadenceStepSent(
         stepPosition,
         data: { scheduledMessageId },
       })
+      // O card anda junto com o toque (ex.: Zelo — 2ª tentativa, 3ª…,
+      // Definição). Só pra frente e só no funil dele (moveDealForward).
+      if (enr.dealId && stepPosition != null) {
+        const step = firstOrNull(
+          await db
+            .select({ moveToStageId: cadenceSteps.moveToStageId })
+            .from(cadenceSteps)
+            .where(and(eq(cadenceSteps.cadenceId, enr.cadenceId), eq(cadenceSteps.position, stepPosition)))
+            .limit(1),
+        )
+        if (step?.moveToStageId) await moveDealForward(accountId, null, enr.dealId, step.moveToStageId)
+      }
     }
     await finalizeEnrollmentIfDrained(accountId, enrollmentId)
   } catch (err) {
     console.error('[cadence] onCadenceStepSent:', err)
   }
+}
+
+/**
+ * Antes de ENVIAR um degrau: a inscrição ainda faz sentido? O card fechou
+ * (ganho/perdido — o Renato ligou e fechou, a Zélia marcou reunião) ou mudou
+ * de funil (alguém arrastou no RD) → cancela a inscrição e o degrau NÃO sai.
+ * Best-effort: erro aqui deixa enviar (fail-open, como antes).
+ */
+export async function checkCadenceStepStillWanted(
+  accountId: string,
+  enrollmentId: string,
+): Promise<{ ok: true } | { ok: false; reason: string }> {
+  try {
+    const enr = firstOrNull(
+      await db
+        .select({
+          id: cadenceEnrollments.id,
+          cadenceId: cadenceEnrollments.cadenceId,
+          contactId: cadenceEnrollments.contactId,
+          dealId: cadenceEnrollments.dealId,
+          status: cadenceEnrollments.status,
+        })
+        .from(cadenceEnrollments)
+        .where(and(eq(cadenceEnrollments.id, enrollmentId), eq(cadenceEnrollments.accountId, accountId)))
+        .limit(1),
+    )
+    if (!enr) return { ok: false, reason: 'inscrição não existe mais' }
+    if (enr.status !== 'active') return { ok: false, reason: `inscrição ${enr.status}` }
+    if (!enr.dealId) return { ok: true }
+
+    const deal = firstOrNull(
+      await db
+        .select({ status: deals.status, pipelineId: deals.pipelineId })
+        .from(deals)
+        .where(and(eq(deals.id, enr.dealId), eq(deals.accountId, accountId)))
+        .limit(1),
+    )
+    let reason: string | null = null
+    if (!deal) reason = 'card apagado'
+    else if (deal.status !== 'open') reason = `card ${deal.status === 'won' ? 'ganho' : 'perdido'}`
+    else {
+      // Funil da cadência = o das etapas que ela move (contato feito e degraus).
+      const stageIds = (
+        await db
+          .select({ id: cadenceSteps.moveToStageId })
+          .from(cadenceSteps)
+          .where(and(eq(cadenceSteps.cadenceId, enr.cadenceId), isNotNull(cadenceSteps.moveToStageId)))
+      )
+        .map((r) => r.id)
+        .filter((id): id is string => !!id)
+      const cad = firstOrNull(
+        await db
+          .select({ contactedStageId: cadences.contactedStageId })
+          .from(cadences)
+          .where(eq(cadences.id, enr.cadenceId))
+          .limit(1),
+      )
+      if (cad?.contactedStageId) stageIds.push(cad.contactedStageId)
+      if (stageIds.length) {
+        const funnels = await db
+          .selectDistinct({ pipelineId: pipelineStages.pipelineId })
+          .from(pipelineStages)
+          .where(inArray(pipelineStages.id, stageIds))
+        if (funnels.length && !funnels.some((f) => f.pipelineId === deal.pipelineId)) reason = 'card mudou de funil'
+      }
+    }
+    if (!reason) return { ok: true }
+    await endEnrollment(accountId, enr, 'cancelled', reason)
+    return { ok: false, reason }
+  } catch (err) {
+    console.error('[cadence] checkCadenceStepStillWanted:', err)
+    return { ok: true }
+  }
+}
+
+/**
+ * Perdas que VENCERAM: inscrição ativa com `lose_at` no passado (todos os
+ * toques saíram, o lead não respondeu e a espera acabou) → conclui e marca o
+ * card perdido com o motivo da cadência. Roda no worker (tick).
+ */
+export async function runCadenceLossSweep(limit = 50): Promise<{ lost: number }> {
+  let lost = 0
+  const due = await db
+    .select({
+      id: cadenceEnrollments.id,
+      accountId: cadenceEnrollments.accountId,
+      cadenceId: cadenceEnrollments.cadenceId,
+      contactId: cadenceEnrollments.contactId,
+      dealId: cadenceEnrollments.dealId,
+      conversationId: cadenceEnrollments.conversationId,
+    })
+    .from(cadenceEnrollments)
+    .where(
+      and(
+        eq(cadenceEnrollments.status, 'active'),
+        isNotNull(cadenceEnrollments.loseAt),
+        lte(cadenceEnrollments.loseAt, sql`now()`),
+      ),
+    )
+    .orderBy(asc(cadenceEnrollments.loseAt))
+    .limit(limit)
+  for (const enr of due) {
+    try {
+      // Só quem AINDA está ativa (uma resposta de última hora pausou → sai).
+      const closed = await db
+        .update(cadenceEnrollments)
+        .set({ status: 'done', updatedAt: new Date().toISOString() })
+        .where(and(eq(cadenceEnrollments.id, enr.id), eq(cadenceEnrollments.status, 'active')))
+        .returning({ id: cadenceEnrollments.id })
+      if (!closed.length) continue
+      await recordCadenceEvent(enr.accountId, enr, 'completed', {
+        data: { reason: 'sem resposta até o fim da espera' },
+      })
+      await onCadenceCompletedWithoutReply(enr.accountId, {
+        cadenceId: enr.cadenceId,
+        dealId: enr.dealId,
+        conversationId: enr.conversationId,
+      })
+      lost += 1
+    } catch (err) {
+      console.error('[cadence] perda vencida falhou:', err)
+    }
+  }
+  return { lost }
 }

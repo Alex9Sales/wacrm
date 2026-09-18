@@ -1166,6 +1166,10 @@ export const cadences = pgTable("cadences", {
 	funnelAutomation: boolean("funnel_automation").default(false).notNull(),
 	// Etapa de "contato feito" — pra onde o negócio vai ao inscrever/responder.
 	contactedStageId: uuid("contacted_stage_id"),
+	// Migr 0185: terminou sem resposta → espera N horas antes de perder
+	// (null/0 = na hora) e com qual motivo (null = "Não respondeu à cadência").
+	loseAfterHours: integer("lose_after_hours"),
+	lostReason: text("lost_reason"),
 	createdBy: uuid("created_by"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
@@ -1183,6 +1187,13 @@ export const cadenceSteps = pgTable("cadence_steps", {
 	channel: text().default('whatsapp').notNull(),
 	subject: text(),
 	body: text().notNull(),
+	// Migr 0185: modelo aprovado pro canal que exige (Meta fora da janela de
+	// 24 h) — o texto do degrau segue valendo nos outros casos.
+	templateName: text("template_name"),
+	templateLanguage: text("template_language"),
+	templateParams: jsonb("template_params").$type<string[]>(),
+	// Ao ENVIAR o degrau, o card anda pra esta etapa (só pra frente, no funil dele).
+	moveToStageId: uuid("move_to_stage_id"),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
@@ -1200,6 +1211,9 @@ export const cadenceEnrollments = pgTable("cadence_enrollments", {
 	enrolledBy: uuid("enrolled_by"),
 	enrolledAt: timestamp("enrolled_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	// Migr 0185: todos os toques saíram sem resposta e a cadência espera
+	// `lose_after_hours` antes de perder — a inscrição segue ATIVA até aqui.
+	loseAt: timestamp("lose_at", { withTimezone: true, mode: 'string' }),
 }, (table) => [
 	index("idx_cadence_enroll_account_status").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.status.asc().nullsLast().op("text_ops")),
 	index("idx_cadence_enroll_deal").using("btree", table.dealId.asc().nullsLast().op("uuid_ops")),
@@ -2386,6 +2400,11 @@ export const scheduledMessages = pgTable("scheduled_messages", {
 	cadenceStepPosition: integer("cadence_step_position"),
 	// Assunto do e-mail (degrau de e-mail da cadência). Null = assunto padrão.
 	subject: text(),
+	// Migr 0185: modelo aprovado do degrau de cadência. O worker decide no
+	// ENVIO: canal oficial com a janela de 24 h fechada → modelo; senão, texto.
+	templateName: text("template_name"),
+	templateLanguage: text("template_language"),
+	templateParams: jsonb("template_params").$type<string[]>(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 	updatedAt: timestamp("updated_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
