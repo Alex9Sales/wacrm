@@ -12,7 +12,13 @@
 // Optional fallback with a pipe: {{primeiro_nome|cliente}} → uses "cliente"
 // when the contact has no first name. Unknown tokens are left untouched so
 // a typo stays visible in the preview instead of silently vanishing.
+//
+// {{primeiro_nome}} só sai quando PARECE nome de pessoa (firstNameForGreeting):
+// agenda de empresa tem "Dr. João", "💎 Ana", "+55 12 9…", "Google Ads" — a
+// 1ª palavra crua virava "Boa tarde, Dr.!" / "Boa tarde, +55!" (GoLink 18/09).
 // ============================================================
+
+import { firstNameForGreeting } from '@/lib/cdl/names';
 
 export interface ContactVars {
   name?: string | null;
@@ -24,10 +30,9 @@ export interface ContactVars {
 /** Map of supported token → resolved value from a contact. */
 export function contactTokenValues(c: ContactVars): Record<string, string> {
   const name = (c.name ?? '').trim();
-  const firstName = name ? name.split(/\s+/)[0] : '';
   return {
     nome: name,
-    primeiro_nome: firstName,
+    primeiro_nome: firstNameForGreeting(name),
     telefone: (c.phone ?? '').trim(),
     email: (c.email ?? '').trim(),
     empresa: (c.company ?? '').trim(),
@@ -43,7 +48,12 @@ export const SUPPORTED_TOKENS = [
   'empresa',
 ] as const;
 
-const TOKEN_RE = /\{\{\s*([a-zA-Z_]+)\s*(?:\|([^}]*))?\}\}/g;
+// O separador ANTES do token (", " ou espaços) e a vírgula DEPOIS vêm juntos
+// no match: quando o token fica vazio eles se ajeitam — "Boa tarde,
+// {{primeiro_nome}}!" vira "Boa tarde!", "Olá {{primeiro_nome}}, tudo bem?"
+// vira "Olá, tudo bem?" e "{{primeiro_nome}}, tudo bem?" vira "tudo bem?".
+// Só espaço/tab: quebra de linha fica.
+const TOKEN_RE = /(,[ \t]*|[ \t]+)?\{\{\s*([a-zA-Z_]+)\s*(?:\|([^}]*))?\}\}(,[ \t]*)?/g;
 
 // Chave SIMPLES ({nome}) também vale — usuário esquece a dupla direto (caso
 // real: cadência do Rafael 24/08 saiu "{nome}," pro cliente). Normaliza pra
@@ -61,20 +71,32 @@ function normalizeSingleBraces(body: string): string {
 
 /**
  * Render `body`, replacing supported {{tokens}} with `values`. A token with
- * no value falls back to its `|fallback` (or empty string). Unknown tokens
- * are returned verbatim.
+ * no value falls back to its `|fallback`; with no fallback either, it
+ * disappears together with the ", " / space before it. Unknown tokens are
+ * returned verbatim.
  */
 export function renderMessageVars(
   body: string,
   values: Record<string, string>,
 ): string {
-  return normalizeSingleBraces(body).replace(TOKEN_RE, (match, rawKey: string, rawFallback?: string) => {
-    const key = rawKey.toLowerCase();
-    if (!(key in values)) return match; // unknown token — leave as-is
-    const value = values[key];
-    if (value && value.length > 0) return value;
-    return (rawFallback ?? '').trim();
-  });
+  return normalizeSingleBraces(body).replace(
+    TOKEN_RE,
+    (
+      match,
+      sep: string | undefined,
+      rawKey: string,
+      rawFallback: string | undefined,
+      comma: string | undefined,
+    ) => {
+      const key = rawKey.toLowerCase();
+      if (!(key in values)) return match; // unknown token — leave as-is
+      const value = values[key] || (rawFallback ?? '').trim();
+      if (value) return `${sep ?? ''}${value}${comma ?? ''}`;
+      // Vazio: some o token e o separador de antes; a vírgula de depois só
+      // fica se havia algo antes dela ("Olá, tudo bem?").
+      return sep !== undefined ? (comma ?? '') : '';
+    },
+  );
 }
 
 /** Convenience: render a body for a single contact. */

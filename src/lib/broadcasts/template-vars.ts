@@ -218,7 +218,12 @@ export function missingValuesError(
     const noun = m && m.source !== 'static' ? SOURCE_NOUN[m.source] : 'valor'
     const label = where === 'header' ? '{{1}} do cabeçalho' : `{{${where}}}`
     const leads = n === 1 ? '1 lead está' : `${n} leads estão`
-    return `${leads} sem ${noun} pra ${label}. Preencha o "Se faltar" ou escolha outro campo.`
+    // Primeiro nome só conta quando parece de pessoa: "Google Ads", "+55…" e
+    // siglas contam como faltando — sem isso o dono abre o lead, vê o nome
+    // preenchido e não entende o bloqueio.
+    const why =
+      m?.source === 'first_name' ? ' usável (nome de empresa, número ou sigla não serve)' : ''
+    return `${leads} sem ${noun}${why} pra ${label}. Preencha o "Se faltar" ou escolha outro campo.`
   }
   return null
 }

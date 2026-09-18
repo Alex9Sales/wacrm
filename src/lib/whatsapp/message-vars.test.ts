@@ -35,8 +35,36 @@ describe('renderForContact', () => {
     );
   });
 
-  it('empties a valueless token with no fallback', () => {
-    expect(renderForContact('Olá {{primeiro_nome}}!', { name: null })).toBe('Olá !');
+  it('drops a valueless token together with the separator before it', () => {
+    expect(renderForContact('Olá {{primeiro_nome}}!', { name: null })).toBe('Olá!');
+    expect(renderForContact('Boa tarde, {{primeiro_nome}}! Tudo bem?', { name: null })).toBe(
+      'Boa tarde! Tudo bem?',
+    );
+    expect(renderForContact('Olá {{primeiro_nome}}, tudo bem?', { name: '' })).toBe(
+      'Olá, tudo bem?',
+    );
+    // token no começo: a vírgula de depois some junto
+    expect(renderForContact('{{primeiro_nome}}, tudo bem?', { name: '' })).toBe('tudo bem?');
+    expect(renderForContact('Oi, {{primeiro_nome}}, tudo bem?', { name: '' })).toBe('Oi, tudo bem?');
+    expect(renderForContact('{{primeiro_nome}}, tudo bem?', contact)).toBe('Maria, tudo bem?');
+    // quebra de linha antes do token NÃO some
+    expect(renderForContact('Linha\n{{primeiro_nome}}', { name: '' })).toBe('Linha\n');
+    // com valor, o separador fica
+    expect(renderForContact('Boa tarde, {{primeiro_nome}}!', contact)).toBe('Boa tarde, Maria!');
+  });
+
+  // Agenda real da GoLink (18/09): "Boa tarde, Dr.!" / "Boa tarde, +55!".
+  it('never greets with a title alone, a number or an emoji', () => {
+    const msg = 'Boa tarde, {{primeiro_nome}}!';
+    expect(renderForContact(msg, { name: 'Dr. João Silva' })).toBe('Boa tarde, Dr. João!');
+    expect(renderForContact(msg, { name: 'Dra. Ana' })).toBe('Boa tarde, Dra. Ana!');
+    expect(renderForContact(msg, { name: 'Dr.' })).toBe('Boa tarde!');
+    expect(renderForContact(msg, { name: '+55 12 99123-4567' })).toBe('Boa tarde!');
+    expect(renderForContact(msg, { name: '💎 Carla Souza' })).toBe('Boa tarde, Carla!');
+    expect(renderForContact(msg, { name: 'Google Ads Suporte' })).toBe('Boa tarde!');
+    expect(renderForContact(msg, { name: 'JMJ Materiais' })).toBe('Boa tarde!');
+    expect(renderForContact(msg, { name: 'FERNANDO LIMA' })).toBe('Boa tarde, Fernando!');
+    expect(renderForContact('Olá {{primeiro_nome|cliente}}!', { name: 'Dr.' })).toBe('Olá cliente!');
   });
 
   it('leaves unknown tokens untouched', () => {

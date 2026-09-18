@@ -22,6 +22,7 @@ import { parseRdWebhook, rdOriginLabel } from '@/lib/leads/providers/rdstation'
 import { buildLeadNotes } from '@/lib/leads/providers/shared'
 import { ingestLead } from '@/lib/leads/ingest'
 import { resolveAuditUserId } from '@/lib/api/v1/contacts'
+import { firstNameForGreeting, greeting } from '@/lib/cdl/names'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -97,7 +98,7 @@ export async function POST(
           // Primeira mensagem: no canal oficial tem que ser template (contato
           // frio = janela fechada). O nome do lead vai como {{1}}.
           introTemplate: source.deliverToAi && introTemplate
-            ? { ...introTemplate, params: [lead.name?.split(/\s+/)[0] || 'tudo bem'] }
+            ? { ...introTemplate, params: [firstNameForGreeting(lead.name) || 'tudo bem'] }
             : null,
           introText: source.deliverToAi ? introTextOf(lead.name) : null,
           channelId:
@@ -116,6 +117,5 @@ export async function POST(
 
 /** Texto de abertura pros canais sem template (WAHA). */
 function introTextOf(name: string | null): string {
-  const first = name?.trim().split(/\s+/)[0]
-  return `Oi${first ? ' ' + first : ''}! Recebemos o seu contato. Como posso te ajudar?`
+  return `${greeting(name)} Recebemos o seu contato. Como posso te ajudar?`
 }

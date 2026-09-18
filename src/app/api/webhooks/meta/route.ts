@@ -53,6 +53,9 @@ interface MetaRawStatus {
   status: string
   timestamp?: string
   recipient_id?: string
+  // Só em status 'failed': o PORQUÊ da Meta (131049 limite de marketing,
+  // 131026 não recebe, 131042 pagamento, 132xxx modelo…).
+  errors?: { code?: number; title?: string; message?: string; error_data?: { details?: string } }[]
 }
 
 interface MetaRawReaction {
@@ -263,6 +266,17 @@ async function processWebhook(body: MetaRawBody) {
       if (Array.isArray(value.statuses)) {
         for (const status of value.statuses) {
           if (!status.id) continue
+          // O status 'failed' traz o motivo — antes ele era jogado fora e a
+          // bolha só ficava com o X vermelho, sem ninguém saber por quê
+          // (Zelo 18/09: 3 aberturas do RD recusadas, código perdido).
+          if (status.status === 'failed') {
+            const why = (Array.isArray(status.errors) ? status.errors : [])
+              .map((e) => `${e?.code ?? '?'} ${e?.title ?? e?.message ?? ''}${e?.error_data?.details ? ` — ${e.error_data.details}` : ''}`)
+              .join(' | ')
+            console.warn(
+              `[webhooks/meta] envio RECUSADO pela Meta wamid=${status.id} número=${value.metadata?.phone_number_id ?? '?'} motivo=${why || '(sem motivo no payload)'}`,
+            )
+          }
           await applyStatusUpdate({
             externalMessageId: status.id,
             status: status.status,

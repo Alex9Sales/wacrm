@@ -15,9 +15,9 @@
 // 2–5 são BEST-EFFORT: falhar ali nunca perde o contato.
 // ============================================================
 
-import { and, desc, eq } from 'drizzle-orm'
+import { and, desc, eq, gt, ne, sql } from 'drizzle-orm'
 
-import { db, dealEvents, deals, notifications, tasks } from '@/db'
+import { db, dealEvents, deals, messages, notifications, tasks } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { pickAssignee } from '@/lib/leads/distribution'
 import { normalizeInboundPhoneBR } from '@/lib/whatsapp/phone-utils'
@@ -315,6 +315,30 @@ export async function ingestLead(
         name ?? null,
         input.channelId ?? null,
       )
+      // Lead que converte de novo em minutos (RD manda 1 evento por conversão)
+      // recebia a abertura DE NOVO — Zelo 18/09: Alexandre ganhou 2 às 07:11 e
+      // 07:13. Se já saiu qualquer coisa nossa pra essa conversa nas últimas
+      // 12 h (inclusive envio que falhou — repetir não conserta), não repete.
+      const recentOutbound = firstOrNull(
+        await db
+          .select({ id: messages.id })
+          .from(messages)
+          .where(
+            and(
+              eq(messages.conversationId, resolved.conversationId),
+              ne(messages.senderType, 'customer'),
+              eq(messages.isInternal, false),
+              gt(messages.createdAt, sql`now() - interval '12 hours'`),
+            ),
+          )
+          .limit(1),
+      )
+      if (recentOutbound) {
+        console.log(
+          `[ingestLead] abertura pulada: conversa ${resolved.conversationId} já teve envio nas últimas 12 h`,
+        )
+        return { contactId, contactCreated, dealId, taskId, tagsApplied, whatsappSent }
+      }
       // Template primeiro quando houver: lead novo nunca falou com a gente, e
       // no canal oficial texto livre é RECUSADO pela Meta fora da janela de 24h
       // — que, pra quem nunca escreveu, está sempre fechada. Se o canal não
