@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { parseRdWebhook, mapRdLead, rdOriginLabel } from './rdstation'
+import { parseRdWebhook, mapRdLead, rdOriginLabel, pickIntroForOrigin } from './rdstation'
 
 // Pacote no formato que o RD documenta hoje (o próprio RD avisa que vai mudar).
 const LEAD = {
@@ -93,5 +93,42 @@ describe('mapRdLead', () => {
   it('a origem do card é a conversão mais recente', () => {
     expect(rdOriginLabel(mapRdLead(LEAD)!)).toBe('Formulário Contato')
     expect(rdOriginLabel(mapRdLead({ ...LEAD, first_conversion: null, last_conversion: null })!)).toBe('RD Station')
+  })
+})
+
+// Zelo 18/09: uma fonte do RD recebe franquia, pedido de orçamento e vaga — o
+// cliente pedindo orçamento recebia a abertura de franquia.
+describe('pickIntroForOrigin', () => {
+  const meta = {
+    introText: 'FRANQUIA',
+    introTemplateName: 'boas_vindas_v2',
+    introTextRules: [
+      { match: 'or[çc]amento|servi[çc]o', text: 'SERVICO' },
+      { match: 'trabalhe|vaga|curr[ií]culo', text: 'VAGA', templateName: 'vaga_v1' },
+      { match: '([', text: 'REGEX QUEBRADA' },
+    ],
+  }
+
+  it('pedido de orçamento pega o texto de serviço e NÃO o template de franquia', () => {
+    expect(pickIntroForOrigin(meta, 'https-limpezacomzelo-com-br-solicite-um-orcamento-11-09-26')).toEqual({
+      text: 'SERVICO',
+      templateName: null,
+    })
+  })
+
+  it('regra com template próprio usa ele', () => {
+    expect(pickIntroForOrigin(meta, 'trabalhe-conosco-2026')).toEqual({ text: 'VAGA', templateName: 'vaga_v1' })
+  })
+
+  it('nada casou → abertura padrão da fonte (franquia)', () => {
+    expect(pickIntroForOrigin(meta, 'seja-um-franqueado-site-01-09-26')).toEqual({
+      text: 'FRANQUIA',
+      templateName: 'boas_vindas_v2',
+    })
+    expect(pickIntroForOrigin(meta, '11/09/26 | v1 | Instant Forms Lóg. Condicional').text).toBe('FRANQUIA')
+  })
+
+  it('regex inválida na config é ignorada; sem regras e sem texto → nulos', () => {
+    expect(pickIntroForOrigin({}, 'qualquer')).toEqual({ text: null, templateName: null })
   })
 })

@@ -132,3 +132,46 @@ export function parseRdWebhook(body: unknown): FetchedLead[] {
 export function rdOriginLabel(lead: FetchedLead): string {
   return lead.meta['Última conversão'] || lead.meta['Primeira conversão'] || 'RD Station'
 }
+
+export interface IntroChoice {
+  /** Texto de abertura (pode ter partes separadas por uma linha "---"). */
+  text: string | null
+  /** Template da Meta pra esse tipo de lead; null = não usar template. */
+  templateName: string | null
+}
+
+/**
+ * Qual abertura mandar pra ESTE lead. Uma fonte do RD recebe conversões de
+ * tipos diferentes — franquia, pedido de orçamento, vaga (Zelo 18/09: cliente
+ * pedindo orçamento de limpeza recebeu o template "interesse no nosso modelo
+ * de franquia"). `introTextRules` no provider_meta: [{match, text,
+ * templateName?}], `match` = regex (sem diferenciar maiúscula) testada no
+ * identificador da conversão; a 1ª que casar vence. Regra casada SEM
+ * templateName não usa template — o template padrão é de outro tipo de lead.
+ * Nenhuma casou → `introText` + `introTemplateName` da fonte.
+ */
+export function pickIntroForOrigin(meta: Record<string, unknown>, origin: string): IntroChoice {
+  const rules = Array.isArray(meta.introTextRules) ? meta.introTextRules : []
+  for (const r of rules) {
+    if (!isBag(r) || typeof r.match !== 'string' || typeof r.text !== 'string') continue
+    let re: RegExp
+    try {
+      re = new RegExp(r.match, 'i')
+    } catch {
+      continue // regex inválida na config não derruba o lead
+    }
+    if (re.test(origin)) {
+      return {
+        text: r.text.trim() || null,
+        templateName: typeof r.templateName === 'string' && r.templateName.trim() ? r.templateName.trim() : null,
+      }
+    }
+  }
+  return {
+    text: typeof meta.introText === 'string' && meta.introText.trim() ? meta.introText.trim() : null,
+    templateName:
+      typeof meta.introTemplateName === 'string' && meta.introTemplateName.trim()
+        ? meta.introTemplateName.trim()
+        : null,
+  }
+}

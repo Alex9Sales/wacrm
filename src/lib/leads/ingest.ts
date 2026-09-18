@@ -30,6 +30,7 @@ import { firstPipelineOf, firstStageOf } from '@/lib/api/v1/deals'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
+import { splitIntroParts } from '@/lib/leads/intro-parts'
 
 export interface IngestLeadInput {
   /** Telefone cru (será normalizado p/ E.164, ciente do formato BR). */
@@ -374,12 +375,17 @@ export async function ingestLead(
         }
       }
       if (!whatsappSent && introText) {
-        await sendMessageToConversation(accountId, {
-          conversationId: resolved.conversationId,
-          messageType: 'text',
-          contentText: introText,
-        })
-        whatsappSent = true
+        // "Dá uma quebrada, tá grande" (Alex 18/09): linha "---" separa a
+        // abertura em mensagens curtas, com uma pausa pra chegar em ordem.
+        for (const [i, part] of splitIntroParts(introText).entries()) {
+          if (i > 0) await new Promise((r) => setTimeout(r, 1500))
+          await sendMessageToConversation(accountId, {
+            conversationId: resolved.conversationId,
+            messageType: 'text',
+            contentText: part,
+          })
+          whatsappSent = true
+        }
       }
     } catch (err) {
       console.error('[ingestLead] intro whatsapp failed:', err)

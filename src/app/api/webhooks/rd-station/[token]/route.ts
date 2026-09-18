@@ -18,7 +18,7 @@
 import { NextResponse, after } from 'next/server'
 
 import { loadLeadSourceForWebhook } from '@/lib/leads/sources'
-import { parseRdWebhook, rdOriginLabel } from '@/lib/leads/providers/rdstation'
+import { parseRdWebhook, pickIntroForOrigin, rdOriginLabel } from '@/lib/leads/providers/rdstation'
 import { buildLeadNotes } from '@/lib/leads/providers/shared'
 import { ingestLead } from '@/lib/leads/ingest'
 import { resolveAuditUserId } from '@/lib/api/v1/contacts'
@@ -62,17 +62,10 @@ export async function POST(
   // lenta como falha. Criar contato + card + primeira mensagem não cabe nele.
   after(async () => {
     const auditUserId = await resolveAuditUserId(source.accountId)
-    const introTemplate =
-      typeof source.providerMeta.introTemplateName === 'string' &&
-      source.providerMeta.introTemplateName.trim()
-        ? {
-            name: source.providerMeta.introTemplateName.trim(),
-            language:
-              typeof source.providerMeta.introTemplateLanguage === 'string'
-                ? source.providerMeta.introTemplateLanguage
-                : 'pt_BR',
-          }
-        : null
+    const templateLanguage =
+      typeof source.providerMeta.introTemplateLanguage === 'string'
+        ? source.providerMeta.introTemplateLanguage
+        : 'pt_BR'
 
     for (const lead of leads) {
       if (!lead.phone) {
@@ -83,6 +76,8 @@ export async function POST(
         const known = [lead.name, lead.phone, lead.email, lead.company]
         const notes = buildLeadNotes(lead.fields, lead.meta, known)
         const origem = rdOriginLabel(lead)
+        // Abertura certa pro TIPO de lead (franquia × orçamento × vaga).
+        const intro = pickIntroForOrigin(source.providerMeta, origem)
         await ingestLead(source.accountId, auditUserId, {
           rawPhone: lead.phone,
           name: lead.name,
@@ -98,14 +93,19 @@ export async function POST(
           source: origem,
           // Primeira mensagem: no canal oficial tem que ser template (contato
           // frio = janela fechada). O nome do lead vai como {{1}}.
-          introTemplate: source.deliverToAi && introTemplate
-            ? { ...introTemplate, params: [firstNameForGreeting(lead.name) || 'tudo bem'] }
+          introTemplate: source.deliverToAi && intro.templateName
+            ? {
+                name: intro.templateName,
+                language: templateLanguage,
+                params: [firstNameForGreeting(lead.name) || 'tudo bem'],
+              }
             : null,
-          // Texto de abertura (canal sem template, ou template recusado):
-          // `introText` da fonte, com {{primeiro_nome}}, senão o genérico.
+          // Texto de abertura (canal sem template, ou template recusado): o
+          // da regra/fonte com {{primeiro_nome}}, senão o genérico. Linha
+          // "---" separa em mensagens curtas.
           introText: source.deliverToAi
-            ? typeof source.providerMeta.introText === 'string' && source.providerMeta.introText.trim()
-              ? renderForContact(source.providerMeta.introText, { name: lead.name })
+            ? intro.text
+              ? renderForContact(intro.text, { name: lead.name })
               : introTextOf(lead.name)
             : null,
           channelId:
