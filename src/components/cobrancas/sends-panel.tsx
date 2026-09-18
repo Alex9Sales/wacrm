@@ -159,7 +159,10 @@ export function SendsPanel({ timezone = 'America/Sao_Paulo' }: { timezone?: stri
           ) : (
             <ul className="divide-y divide-border">
               {rows.map((r) => {
-                const st = sendOutcome({ status: r.status, delivery: r.delivery })
+                // A situação é a do WhatsApp quando houve WhatsApp: é o único
+                // canal que sabe dizer se chegou. Só e-mail → fica em "enviada".
+                const wa = r.channels.find((c) => c.channel === 'whatsapp')
+                const st = sendOutcome({ status: r.status, delivery: (wa ?? r.channels[0])?.delivery ?? null })
                 return (
                   <li key={r.id} className="flex items-center gap-3 px-4 py-2 text-sm">
                     <span className="w-11 shrink-0 tabular-nums text-xs text-muted-foreground">
@@ -172,26 +175,36 @@ export function SendsPanel({ timezone = 'America/Sao_Paulo' }: { timezone?: stri
                     <span className={`w-20 shrink-0 text-right text-xs ${TOM[st.tom]}`} title={r.error ?? undefined}>
                       {st.texto}
                     </span>
-                    {r.conversationId ? (
-                      <button
-                        type="button"
-                        onClick={() => router.push(`/inbox?c=${r.conversationId}`)}
-                        title={
-                          r.channel === 'email'
-                            ? 'Abrir o e-mail deste cliente'
-                            : 'Abrir a conversa deste cliente'
-                        }
-                        className="inline-flex h-7 w-7 shrink-0 items-center justify-center rounded-md text-primary transition-colors hover:bg-primary/10"
-                      >
-                        {r.channel === 'email' ? (
-                          <Mail className="h-4 w-4" />
+                    {/* Um ícone por canal por onde saiu — quem tem e-mail e
+                        WhatsApp recebe nos dois, e os dois abrem a conversa. */}
+                    <span className="flex w-16 shrink-0 justify-end gap-0.5">
+                      {r.channels.length === 0 && <span className="h-7 w-7" aria-hidden />}
+                      {r.channels.map((c) => {
+                        const alvo = c.conversationId ?? r.conversationId
+                        const Icone = c.channel === 'email' ? Mail : MessageSquare
+                        const rotulo =
+                          c.channel === 'email' ? 'Abrir o e-mail deste cliente' : 'Abrir a conversa no WhatsApp'
+                        return alvo ? (
+                          <button
+                            key={c.channel}
+                            type="button"
+                            onClick={() => router.push(`/inbox?c=${alvo}`)}
+                            title={rotulo}
+                            className="inline-flex h-7 w-7 items-center justify-center rounded-md text-primary transition-colors hover:bg-primary/10"
+                          >
+                            <Icone className="h-4 w-4" />
+                          </button>
                         ) : (
-                          <MessageSquare className="h-4 w-4" />
-                        )}
-                      </button>
-                    ) : (
-                      <span className="h-7 w-7 shrink-0" aria-hidden />
-                    )}
+                          <span
+                            key={c.channel}
+                            title={rotulo}
+                            className="inline-flex h-7 w-7 items-center justify-center text-muted-foreground"
+                          >
+                            <Icone className="h-4 w-4" />
+                          </span>
+                        )
+                      })}
+                    </span>
                   </li>
                 )
               })}

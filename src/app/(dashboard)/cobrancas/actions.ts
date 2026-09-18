@@ -2683,6 +2683,14 @@ export async function lookupCep(cep: string): Promise<CepLookup> {
 
 export type SendDelivery = 'sent' | 'delivered' | 'read' | 'failed' | null
 
+/** Um canal por onde a cobrança saiu. O mesmo envio pode ter dois. */
+export interface SendChannelResult {
+  channel: 'whatsapp' | 'email'
+  /** Tique do WhatsApp. E-mail não tem tique: fica em 'sent'. */
+  delivery: SendDelivery
+  conversationId: string | null
+}
+
 export interface SendAuditRow {
   id: string
   contactId: string | null
@@ -2691,9 +2699,11 @@ export interface SendAuditRow {
   /** Quando saiu (ou quando entrou na fila, se ainda não saiu). */
   at: string
   status: 'sent' | 'failed' | 'expired' | 'queued' | 'pending'
-  /** Tique do WhatsApp / estado do e-mail. null = não achamos a mensagem. */
-  delivery: SendDelivery
-  channel: 'whatsapp' | 'email' | null
+  /**
+   * Por onde saiu. Devedor com e-mail E WhatsApp recebe nos DOIS — a régua
+   * manda nos dois de propósito, e a auditoria tem que mostrar os dois.
+   */
+  channels: SendChannelResult[]
   replied: boolean
   error: string | null
 }
@@ -2740,8 +2750,7 @@ export async function getSendsReport(): Promise<SendsReport> {
     )
     SELECT p.id, p.contact_id, p.conversation_id, p.status, p.error, p.at, p.dia,
            coalesce(ct.name, '(sem nome)') AS name,
-           msg.status  AS delivery,
-           msg.channel AS channel,
+           msg.canais AS canais,
            EXISTS (
              SELECT 1 FROM messages mr
               JOIN conversations cr ON cr.id = mr.conversation_id
@@ -2752,16 +2761,26 @@ export async function getSendsReport(): Promise<SendsReport> {
       FROM pedido p
       LEFT JOIN contacts ct ON ct.id = p.contact_id
       LEFT JOIN LATERAL (
-        SELECT m.status, ch.provider AS channel
-          FROM messages m
-          JOIN conversations c2 ON c2.id = m.conversation_id
-          LEFT JOIN channels ch ON ch.id = c2.channel_id
-         WHERE c2.contact_id = p.contact_id
-           AND m.is_internal = false
-           AND m.sender_type IN ('bot','agent')
-           AND m.created_at BETWEEN p.at - interval '2 minutes' AND p.at + interval '5 minutes'
-         ORDER BY m.created_at DESC
-         LIMIT 1
+        -- ⚠️ TODOS os canais, não o último. Quando o devedor tem e-mail E
+        -- WhatsApp, a régua manda nos DOIS — e pegar só um (o e-mail, que é o
+        -- mais recente) escondia o tique do WhatsApp e fazia 28 dos 39 envios
+        -- de hoje parecerem "sem entrega" quando tinham chegado.
+        SELECT json_agg(json_build_object(
+                 'provider', x.provider, 'status', x.status, 'conversationId', x.conv
+               ) ORDER BY x.provider) AS canais
+          FROM (
+            SELECT DISTINCT ON (ch.provider)
+                   ch.provider, m.status, c2.id AS conv
+              FROM messages m
+              JOIN conversations c2 ON c2.id = m.conversation_id
+              LEFT JOIN channels ch ON ch.id = c2.channel_id
+             WHERE c2.contact_id = p.contact_id
+               AND m.is_internal = false
+               AND m.sender_type IN ('bot','agent')
+               AND ch.provider IS NOT NULL
+               AND m.created_at BETWEEN p.at - interval '2 minutes' AND p.at + interval '5 minutes'
+             ORDER BY ch.provider, m.created_at DESC
+          ) x
       ) msg ON true
      ORDER BY p.at DESC
      LIMIT ${SENDS_ROWS_LIMIT}
@@ -2776,8 +2795,7 @@ export async function getSendsReport(): Promise<SendsReport> {
     at: string
     dia: string
     name: string
-    delivery: string | null
-    channel: string | null
+    canais: { provider: string | null; status: string | null; conversationId: string | null }[] | null
     replied: boolean
   }
 
@@ -2805,17 +2823,19 @@ export async function getSendsReport(): Promise<SendsReport> {
     status: (['sent', 'failed', 'expired', 'queued', 'pending'].includes(r.status)
       ? r.status
       : 'pending') as SendAuditRow['status'],
-    delivery: (['sent', 'delivered', 'read', 'failed'].includes(r.delivery ?? '')
-      ? r.delivery
-      : null) as SendDelivery,
-    // ⚠️ O provedor de e-mail da GoLink é 'gmail', não 'email' — comparar com
-    // a string 'email' mandava todo envio por e-mail pro ícone do WhatsApp.
-    // A lista canônica está em outreach.ts; é ela que manda aqui também.
-    channel: (EMAIL_PROVIDERS as readonly string[]).includes(r.channel ?? '')
-      ? 'email'
-      : r.channel
-        ? 'whatsapp'
-        : null,
+    // ⚠️ O provedor de e-mail da GoLink é 'gmail', não 'email'. A lista
+    // canônica está em outreach.ts; é ela que manda aqui também.
+    channels: (r.canais ?? [])
+      .filter((c) => c.provider)
+      .map((c) => ({
+        channel: (EMAIL_PROVIDERS as readonly string[]).includes(c.provider ?? '')
+          ? ('email' as const)
+          : ('whatsapp' as const),
+        delivery: (['sent', 'delivered', 'read', 'failed'].includes(c.status ?? '')
+          ? c.status
+          : null) as SendDelivery,
+        conversationId: c.conversationId,
+      })),
     replied: r.replied === true,
     error: r.error,
   }))
@@ -2835,7 +2855,15 @@ export async function getSendsReport(): Promise<SendsReport> {
       waiting: doDia.filter((r) => r.status === 'queued' || r.status === 'pending').length,
       expired: conta(doDia, 'expired'),
       replied: doDia.filter((r) => r.status === 'sent' && r.replied).length,
-      delivered: doDia.filter((r) => r.delivery === 'delivered' || r.delivery === 'read').length,
+      // Só o WhatsApp sabe dizer se chegou. E-mail não tem tique — contar
+      // e-mail aqui inflaria o número com uma entrega que ninguém confirmou.
+      delivered: doDia.filter((r) =>
+        (r.canais ?? []).some(
+          (c) =>
+            !(EMAIL_PROVIDERS as readonly string[]).includes(c.provider ?? '') &&
+            (c.status === 'delivered' || c.status === 'read'),
+        ),
+      ).length,
       firstAt: horas[0] ?? null,
       lastAt: horas[horas.length - 1] ?? null,
       cap: s.dailyCap > 0 ? s.dailyCap : null,
