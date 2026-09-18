@@ -118,12 +118,10 @@ export function SendsPanel({ timezone = 'America/Sao_Paulo' }: { timezone?: stri
               <b className="tabular-nums text-foreground">{month.replied}</b> com resposta
             </>
           )}
-          {month.expired > 0 && (
-            <>
-              {' · '}
-              <b className="tabular-nums text-foreground">{month.expired}</b> não saíram
-            </>
-          )}
+          {/* Sem "não saíram" do mês de propósito (17/09, João): rascunho que
+              expira é a régua REFAZENDO no dia seguinte, não cliente sem
+              cobrança. Dos 70 da GoLink, 46 eram de gente cobrada em outro dia —
+              o número levava a crer que 70 pessoas ficaram sem cobrar. */}
         </span>
       </div>
 

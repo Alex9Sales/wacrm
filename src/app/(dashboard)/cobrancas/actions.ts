@@ -2725,11 +2725,25 @@ export interface SendsReport {
   rows: SendAuditRow[]
 }
 
-const SENDS_ROWS_LIMIT = 200
+/** Teto de segurança da lista do DIA. Dia normal da GoLink tem ~40. */
+const SENDS_ROWS_LIMIT = 300
 
 /**
  * Relatório dos envios da régua desta conta. O dia é o dia do FUSO DA CONTA —
  * a GoLink fecha o dia às 23:59 de São Paulo, não de Londres.
+ *
+ * ⚠️ 17/09, João (GoLink) com vídeo: "não tá batendo com o relatório". Três
+ * erros meus na 1ª versão, todos com o mesmo efeito — mostrar cliente cobrado
+ * como se não tivesse sido:
+ *   1. A lista trazia o MÊS inteiro mas mostrava só HH:MM. Um rascunho que
+ *      expirou dia 15 às 09:10 aparecia como "09:10 · não saiu" do lado de
+ *      quem foi cobrado HOJE às 09:47 — o Diego aparecia duas vezes, uma delas
+ *      "não saiu".
+ *   2. O total do mês saía da lista, e a lista tinha LIMIT 200: o mês real
+ *      (158 enviadas + 70 expiradas = 228 pedidos) virava 156 + 44.
+ *   3. "(200)" ao lado da lista era o teto do LIMIT, não uma contagem.
+ * Agora: a lista é SÓ o dia (casa com a manchete "N enviadas hoje") e o mês é
+ * uma contagem de verdade, em consulta própria, sem teto.
  */
 export async function getSendsReport(): Promise<SendsReport> {
   const { accountId } = await getCurrentAccount()
@@ -2737,34 +2751,43 @@ export async function getSendsReport(): Promise<SendsReport> {
   const tz = settings.businessTimezone || 'America/Sao_Paulo'
   const s = normalizeSettings(settings.collections)
 
-  const linha = sql`
+  const vazio: SendsReport = {
+    today: { sent: 0, failed: 0, waiting: 0, expired: 0, replied: 0, delivered: 0, firstAt: null, lastAt: null, cap: null },
+    month: { sent: 0, expired: 0, replied: 0 },
+    rows: [],
+  }
+
+  // O dia e o mês no fuso da conta, como instantes — o banco compara em UTC.
+  const inicioDia = sql`(date_trunc('day', now() AT TIME ZONE ${tz}) AT TIME ZONE ${tz})`
+  const inicioMes = sql`(date_trunc('month', now() AT TIME ZONE ${tz}) AT TIME ZONE ${tz})`
+
+  const lista = sql`
     WITH pedido AS (
       SELECT r.id, r.contact_id, r.conversation_id, r.status, r.error,
-             coalesce(r.executed_at, r.created_at) AS at,
-             (coalesce(r.executed_at, r.created_at) AT TIME ZONE ${tz})::date AS dia
+             coalesce(r.executed_at, r.created_at) AS at
         FROM agent_action_requests r
        WHERE r.account_id = ${accountId}
          AND r.action_type = 'collect_charges'
-         AND coalesce(r.executed_at, r.created_at)
-             >= date_trunc('month', (now() AT TIME ZONE ${tz}))::timestamp AT TIME ZONE ${tz}
+         AND coalesce(r.executed_at, r.created_at) >= ${inicioDia}
     )
-    SELECT p.id, p.contact_id, p.conversation_id, p.status, p.error, p.at, p.dia,
+    SELECT p.id, p.contact_id, p.conversation_id, p.status, p.error, p.at,
            coalesce(ct.name, '(sem nome)') AS name,
            msg.canais AS canais,
-           EXISTS (
+           -- "Respondeu" só faz sentido pra quem RECEBEU. Num pedido que não
+           -- saiu, a resposta do cliente foi pra outra mensagem.
+           (p.status = 'sent' AND EXISTS (
              SELECT 1 FROM messages mr
               JOIN conversations cr ON cr.id = mr.conversation_id
               WHERE cr.contact_id = p.contact_id
                 AND mr.sender_type = 'customer'
                 AND mr.created_at > p.at
-           ) AS replied
+           )) AS replied
       FROM pedido p
       LEFT JOIN contacts ct ON ct.id = p.contact_id
       LEFT JOIN LATERAL (
         -- ⚠️ TODOS os canais, não o último. Quando o devedor tem e-mail E
         -- WhatsApp, a régua manda nos DOIS — e pegar só um (o e-mail, que é o
-        -- mais recente) escondia o tique do WhatsApp e fazia 28 dos 39 envios
-        -- de hoje parecerem "sem entrega" quando tinham chegado.
+        -- mais recente) escondia o tique do WhatsApp.
         SELECT json_agg(json_build_object(
                  'provider', x.provider, 'status', x.status, 'conversationId', x.conv
                ) ORDER BY x.provider) AS canais
@@ -2786,6 +2809,26 @@ export async function getSendsReport(): Promise<SendsReport> {
      LIMIT ${SENDS_ROWS_LIMIT}
   `
 
+  // O mês é CONTAGEM, em consulta própria — nunca derivado de uma lista com teto.
+  const mes = sql`
+    SELECT r.status,
+           count(*)::int AS qtd,
+           count(*) FILTER (
+             WHERE r.status = 'sent' AND EXISTS (
+               SELECT 1 FROM messages mr
+                JOIN conversations cr ON cr.id = mr.conversation_id
+                WHERE cr.contact_id = r.contact_id
+                  AND mr.sender_type = 'customer'
+                  AND mr.created_at > coalesce(r.executed_at, r.created_at)
+             )
+           )::int AS responderam
+      FROM agent_action_requests r
+     WHERE r.account_id = ${accountId}
+       AND r.action_type = 'collect_charges'
+       AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}
+     GROUP BY r.status
+  `
+
   type Raw = {
     id: string
     contact_id: string | null
@@ -2793,26 +2836,28 @@ export async function getSendsReport(): Promise<SendsReport> {
     status: string
     error: string | null
     at: string
-    dia: string
     name: string
     canais: { provider: string | null; status: string | null; conversationId: string | null }[] | null
     replied: boolean
   }
+  type MesRaw = { status: string; qtd: number; responderam: number }
 
-  const hojeKey = localDayKey(tz, new Date())
+  const linhasDe = <T,>(res: unknown): T[] =>
+    (Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])) as T[]
+
   let raw: Raw[] = []
+  let mesRaw: MesRaw[] = []
   try {
-    const res = (await db.execute(linha)) as unknown
-    raw = (Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])) as Raw[]
+    const [a, b] = await Promise.all([db.execute(lista), db.execute(mes)])
+    raw = linhasDe<Raw>(a as unknown)
+    mesRaw = linhasDe<MesRaw>(b as unknown)
   } catch (err) {
     // Painel de leitura nunca derruba a tela da carteira.
     console.error('[cobranças] relatório de envios falhou:', err instanceof Error ? err.message : err)
-    return {
-      today: { sent: 0, failed: 0, waiting: 0, expired: 0, replied: 0, delivered: 0, firstAt: null, lastAt: null, cap: null },
-      month: { sent: 0, expired: 0, replied: 0 },
-      rows: [],
-    }
+    return vazio
   }
+
+  const isEmail = (p: string | null) => (EMAIL_PROVIDERS as readonly string[]).includes(p ?? '')
 
   const rows: SendAuditRow[] = raw.map((r) => ({
     id: r.id,
@@ -2828,9 +2873,7 @@ export async function getSendsReport(): Promise<SendsReport> {
     channels: (r.canais ?? [])
       .filter((c) => c.provider)
       .map((c) => ({
-        channel: (EMAIL_PROVIDERS as readonly string[]).includes(c.provider ?? '')
-          ? ('email' as const)
-          : ('whatsapp' as const),
+        channel: isEmail(c.provider) ? ('email' as const) : ('whatsapp' as const),
         delivery: (['sent', 'delivered', 'read', 'failed'].includes(c.status ?? '')
           ? c.status
           : null) as SendDelivery,
@@ -2840,28 +2883,25 @@ export async function getSendsReport(): Promise<SendsReport> {
     error: r.error,
   }))
 
-  const doDia = raw.filter((r) => String(r.dia).slice(0, 10) === hojeKey)
-  const horas = doDia
+  const horas = rows
     .filter((r) => r.status === 'sent')
-    .map((r) => (typeof r.at === 'string' ? r.at : new Date(r.at).toISOString()))
+    .map((r) => r.at)
     .sort()
-
-  const conta = (list: Raw[], st: string) => list.filter((r) => r.status === st).length
+  const conta = (st: string) => raw.filter((r) => r.status === st).length
+  const doMes = (st: string) => mesRaw.find((m) => m.status === st)?.qtd ?? 0
 
   return {
     today: {
-      sent: conta(doDia, 'sent'),
-      failed: conta(doDia, 'failed'),
-      waiting: doDia.filter((r) => r.status === 'queued' || r.status === 'pending').length,
-      expired: conta(doDia, 'expired'),
-      replied: doDia.filter((r) => r.status === 'sent' && r.replied).length,
+      sent: conta('sent'),
+      failed: conta('failed'),
+      waiting: raw.filter((r) => r.status === 'queued' || r.status === 'pending').length,
+      expired: conta('expired'),
+      replied: raw.filter((r) => r.replied).length,
       // Só o WhatsApp sabe dizer se chegou. E-mail não tem tique — contar
       // e-mail aqui inflaria o número com uma entrega que ninguém confirmou.
-      delivered: doDia.filter((r) =>
+      delivered: raw.filter((r) =>
         (r.canais ?? []).some(
-          (c) =>
-            !(EMAIL_PROVIDERS as readonly string[]).includes(c.provider ?? '') &&
-            (c.status === 'delivered' || c.status === 'read'),
+          (c) => !isEmail(c.provider) && (c.status === 'delivered' || c.status === 'read'),
         ),
       ).length,
       firstAt: horas[0] ?? null,
@@ -2869,9 +2909,9 @@ export async function getSendsReport(): Promise<SendsReport> {
       cap: s.dailyCap > 0 ? s.dailyCap : null,
     },
     month: {
-      sent: conta(raw, 'sent'),
-      expired: conta(raw, 'expired'),
-      replied: raw.filter((r) => r.status === 'sent' && r.replied).length,
+      sent: doMes('sent'),
+      expired: doMes('expired'),
+      replied: mesRaw.reduce((acc, m) => acc + (m.responderam ?? 0), 0),
     },
     rows,
   }
