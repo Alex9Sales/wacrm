@@ -31,6 +31,7 @@ import { normalizeSettings as normalizeCollectionsSettings } from '@/lib/collect
 import {
   applyCloseActions,
   loadDealCloseContext,
+  listOtherFunnels,
   listAccountTagNames,
   applyTagsByName,
   createDealFromAi,
@@ -725,9 +726,14 @@ export async function dispatchInboundToAiReply(
     const has = (k: string) => tools.includes(k)
 
     // move_card: injeta as etapas do funil ligado pra a IA escolher uma.
-    const closeCtx = has('move_card')
+    const closeCtx = has('move_card') || has('move_funnel')
       ? await loadDealCloseContext(accountId, conversationId)
       : null
+    // move_funnel: os OUTROS funis da conta (só com card ligado).
+    const otherFunnels =
+      has('move_funnel') && closeCtx
+        ? await listOtherFunnels(accountId, closeCtx.pipelineId).catch(() => [])
+        : []
     // tag: etiquetas existentes da conta (pra IA qualificar).
     const accountTags = has('tag') ? await listAccountTagNames(accountId) : []
     // handoff: etiquetas de roteamento (atendentes etiquetados) pra transferir.
@@ -842,6 +848,7 @@ export async function dispatchInboundToAiReply(
       })(),
       tools,
       pipelineStages: closeCtx?.stageNames ?? [],
+      otherFunnels,
       availableTags: accountTags,
       routingTags,
       customFieldNames,
@@ -1209,7 +1216,11 @@ export async function dispatchInboundToAiReply(
     // Encerrar (ferramentas 'resolve' / 'move_card', gate individual).
     const runClose = async () => {
       const wantResolve = has('resolve') && dirs.resolve
-      const wantMove = has('move_card') && dirs.funnelStage
+      // "[[FUNIL:<funil> > <etapa>]]" = troca de funil (ferramenta move_funnel);
+      // sem ">" = etapa dentro do funil (move_card). Cada um no seu gate.
+      const crossMove = !!dirs.funnelStage && dirs.funnelStage.includes('>')
+      const wantMove =
+        !!dirs.funnelStage && (crossMove ? has('move_funnel') : has('move_card'))
       // Perder EM PÉ compartilha o gate de mutação do card ('move_card').
       const wantLose = has('move_card') && dirs.lose
       if (wantResolve || wantMove || wantLose) {
@@ -1220,6 +1231,7 @@ export async function dispatchInboundToAiReply(
           resolve: wantResolve,
           funnelStageName: wantMove ? dirs.funnelStage : null,
           loseReason: wantLose ? dirs.lose!.reason : null,
+          allowCrossFunnel: crossMove && has('move_funnel'),
         })
         console.log('[ai auto-reply] encerramento:', JSON.stringify(r))
         // Se a IA moveu o card, recalcula o "próximo follow-up" pela nova etapa
@@ -1412,7 +1424,8 @@ export async function dispatchInboundToAiReply(
       }
       if (
         (has('resolve') && dirs.resolve) ||
-        (has('move_card') && (dirs.funnelStage || dirs.lose))
+        (has('move_card') && (dirs.funnelStage || dirs.lose)) ||
+        (has('move_funnel') && !!dirs.funnelStage?.includes('>'))
       ) {
         await runClose()
         await applyTags()

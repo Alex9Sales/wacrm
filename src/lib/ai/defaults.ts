@@ -1,5 +1,6 @@
 import type { AiProvider } from './types'
 import { materialsInstruction } from './materials-shared'
+import { crossFunnelInstruction } from './funnel-target'
 
 // ============================================================
 // Tunables + prompt scaffold for the AI reply assistant.
@@ -454,6 +455,8 @@ export function buildSystemPrompt(args: {
   busySlots?: string[]
   /** Etapas do funil ligado (pra ferramenta move_card escolher pelo nome). */
   pipelineStages?: string[]
+  /** OUTROS funis da conta (ferramenta move_funnel): nome + etapas em ordem. */
+  otherFunnels?: { name: string; stages: string[] }[]
   /** Etiquetas EXISTENTES da conta (pra ferramenta tag escolher). */
   availableTags?: string[]
   /** Etiquetas de ROTEAMENTO (que têm atendente) — pra transferir por etiqueta. */
@@ -630,6 +633,11 @@ export function buildSystemPrompt(args: {
     const stages = args.pipelineStages ?? []
     if (has('move_card') && stages.length > 0) {
       parts.push(moveCardInstruction(stages))
+    }
+    // Trocar de funil (ferramenta move_funnel): só com card ligado e outros funis.
+    const otherFunnels = args.otherFunnels ?? []
+    if (has('move_funnel') && otherFunnels.length > 0) {
+      parts.push(crossFunnelInstruction(otherFunnels))
     }
     // Encerramento: resolver a conversa (o "mover pra Perdido no fim" já está
     // coberto pela moveCardInstruction acima, então aqui é só o resolve).

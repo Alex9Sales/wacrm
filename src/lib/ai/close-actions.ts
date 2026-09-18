@@ -27,6 +27,12 @@ import {
 import { firstOrNull } from '@/db/helpers'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 import { SAME_ORDER_WINDOW_MS } from './order-window'
+import {
+  resolveFunnelTarget,
+  splitCrossFunnel,
+  type FunnelOption,
+  type FunnelTarget,
+} from './funnel-target'
 
 /** Nota interna na conversa (só pra equipe, nunca vai pro cliente). */
 export async function postInternalNote(input: {
@@ -128,6 +134,30 @@ export interface DealCloseContext {
   currentStageId: string
   /** Nomes das etapas do funil do deal — a IA escolhe uma pelo nome. */
   stageNames: string[]
+}
+
+/**
+ * Os OUTROS funis da conta (nome + etapas em ordem) — pra ferramenta
+ * 'move_funnel' saber pra onde pode levar o card. Funil sem etapa fica fora.
+ */
+export async function listOtherFunnels(
+  accountId: string,
+  exceptPipelineId: string,
+): Promise<{ name: string; stages: string[] }[]> {
+  const rows = await db
+    .select({ id: pipelines.id, name: pipelines.name, stage: pipelineStages.name })
+    .from(pipelines)
+    .innerJoin(pipelineStages, eq(pipelineStages.pipelineId, pipelines.id))
+    .where(eq(pipelines.accountId, accountId))
+    .orderBy(asc(pipelines.name), asc(pipelineStages.position))
+  const out = new Map<string, { name: string; stages: string[] }>()
+  for (const r of rows) {
+    if (r.id === exceptPipelineId) continue
+    const f = out.get(r.id) ?? { name: r.name, stages: [] }
+    f.stages.push(r.stage)
+    out.set(r.id, f)
+  }
+  return [...out.values()]
 }
 
 /** Deal ABERTO ligado à conversa + as etapas do funil dele. Null se não há. */
@@ -557,8 +587,14 @@ export async function applyCloseActions(input: {
   funnelStageName: string | null
   /** Motivo da perda (marcador [[PERDER:]]) — perde EM PÉ, não move de etapa. */
   loseReason?: string | null
-}): Promise<{ resolved: boolean; movedTo: string | null; lost: boolean }> {
+  /**
+   * Ferramenta 'move_funnel': "[[FUNIL:<funil> > <etapa>]]" pode levar o card
+   * pra OUTRO funil da conta. Sem ela, o marcador só anda dentro do funil.
+   */
+  allowCrossFunnel?: boolean
+}): Promise<{ resolved: boolean; movedTo: string | null; movedToFunnel?: string | null; lost: boolean }> {
   const { accountId, userId, conversationId, resolve, funnelStageName, loseReason } = input
+  let movedToFunnel: string | null = null
   let resolved = false
   let movedTo: string | null = null
   let lost = false
@@ -597,7 +633,17 @@ export async function applyCloseActions(input: {
           .orderBy(desc(deals.createdAt))
           .limit(1),
       )
-      if (deal) {
+      const cross =
+        deal && input.allowCrossFunnel && splitCrossFunnel(funnelStageName)
+          ? await moveDealToOtherFunnel({ accountId, userId, deal, raw: funnelStageName })
+          : null
+      if (cross) {
+        movedTo = cross.stageName
+        movedToFunnel = cross.pipelineName
+      } else if (deal && !splitCrossFunnel(funnelStageName)) {
+        // Marcador de OUTRO funil sem a ferramenta (ou destino não achado) não
+        // cai aqui: o casamento aproximado de etapa acharia "Novo lead" no
+        // funil ATUAL e moveria pro lugar errado.
         const stages = await db
           .select({ id: pipelineStages.id, name: pipelineStages.name })
           .from(pipelineStages)
@@ -652,5 +698,66 @@ export async function applyCloseActions(input: {
     }
   }
 
-  return { resolved, movedTo, lost }
+  return { resolved, movedTo, movedToFunnel, lost }
+}
+
+/**
+ * Leva o card pra OUTRO funil da conta ([[FUNIL:<funil> > <etapa>]]), com
+ * histórico no card e as tarefas automáticas da etapa de destino. Destino
+ * ambíguo/inexistente ou igual ao atual → não move (null).
+ */
+async function moveDealToOtherFunnel(input: {
+  accountId: string
+  userId: string | null
+  deal: { id: string; pipelineId: string; stageId: string }
+  raw: string
+}): Promise<FunnelTarget | null> {
+  const { accountId, userId, deal, raw } = input
+  const rows = await db
+    .select({
+      pipelineId: pipelines.id,
+      pipelineName: pipelines.name,
+      stageId: pipelineStages.id,
+      stageName: pipelineStages.name,
+    })
+    .from(pipelines)
+    .innerJoin(pipelineStages, eq(pipelineStages.pipelineId, pipelines.id))
+    .where(eq(pipelines.accountId, accountId))
+    .orderBy(asc(pipelines.name), asc(pipelineStages.position))
+  const byFunnel = new Map<string, FunnelOption>()
+  for (const r of rows) {
+    const f = byFunnel.get(r.pipelineId) ?? { id: r.pipelineId, name: r.pipelineName, stages: [] }
+    f.stages.push({ id: r.stageId, name: r.stageName })
+    byFunnel.set(r.pipelineId, f)
+  }
+  const target = resolveFunnelTarget([...byFunnel.values()], raw)
+  if (!target || (target.pipelineId === deal.pipelineId && target.stageId === deal.stageId)) return null
+
+  const from = byFunnel.get(deal.pipelineId)
+  const fromStage = from?.stages.find((s) => s.id === deal.stageId)?.name ?? null
+  await db
+    .update(deals)
+    .set({ pipelineId: target.pipelineId, stageId: target.stageId, stageChangedAt: sql`now()` })
+    .where(and(eq(deals.id, deal.id), eq(deals.accountId, accountId)))
+  try {
+    await db.insert(dealEvents).values({
+      accountId,
+      actorUserId: userId || null,
+      dealId: deal.id,
+      type: 'stage_changed',
+      data: {
+        from: from ? `${from.name} › ${fromStage ?? '?'}` : fromStage,
+        to: `${target.pipelineName} › ${target.stageName}`,
+        by: 'ai',
+      },
+    })
+  } catch (err) {
+    console.error('[ai close] deal event (troca de funil) falhou:', err)
+  }
+  try {
+    await autoCreateStageTasks({ accountId, userId }, deal.id, target.stageId)
+  } catch (err) {
+    console.error('[ai close] tarefas da etapa (troca de funil) falharam:', err)
+  }
+  return target
 }

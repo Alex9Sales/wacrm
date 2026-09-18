@@ -14,6 +14,7 @@ export type AgentToolKey =
   | 'handoff'
   | 'resolve'
   | 'move_card'
+  | 'move_funnel'
   | 'schedule'
   | 'create_card'
   | 'private_note'
@@ -101,6 +102,15 @@ export const AGENT_TOOLS: AgentToolDef[] = [
     key: 'move_card',
     label: 'Mover card do funil',
     description: 'Move o card do negócio pra outra etapa (ex.: Perdido, Reativar).',
+    group: 'Funil',
+    defaultOn: false,
+    implemented: true,
+  },
+  {
+    key: 'move_funnel',
+    label: 'Trocar o card de funil',
+    description:
+      'Quando o assunto é de outro funil (ex.: quer contratar o serviço, procura emprego), move o card pro funil certo.',
     group: 'Funil',
     defaultOn: false,
     implemented: true,
