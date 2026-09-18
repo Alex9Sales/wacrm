@@ -111,11 +111,15 @@ export function SendsPanel({ timezone = 'America/Sao_Paulo' }: { timezone?: stri
         {nadaHoje && <span className="text-sm text-muted-foreground">Nada saiu hoje ainda.</span>}
 
         <span className="ml-auto text-xs text-muted-foreground">
-          No mês: <b className="tabular-nums text-foreground">{month.sent}</b> enviadas
-          {month.replied > 0 && (
+          No mês: <b className="tabular-nums text-foreground">{month.sent}</b>{' '}
+          {month.sent === 1 ? 'cobrança' : 'cobranças'} para{' '}
+          <b className="tabular-nums text-foreground">{month.clients}</b>{' '}
+          {month.clients === 1 ? 'cliente' : 'clientes'}
+          {month.repliedClients > 0 && (
             <>
               {' · '}
-              <b className="tabular-nums text-foreground">{month.replied}</b> com resposta
+              <b className="tabular-nums text-foreground">{month.repliedClients}</b>{' '}
+              {month.repliedClients === 1 ? 'respondeu' : 'responderam'}
             </>
           )}
           {/* Sem "não saíram" do mês de propósito (17/09, João): rascunho que
@@ -152,7 +156,7 @@ export function SendsPanel({ timezone = 'America/Sao_Paulo' }: { timezone?: stri
         <div className="max-h-96 overflow-y-auto border-t border-border">
           {rows.length === 0 ? (
             <p className="px-4 py-6 text-center text-sm text-muted-foreground">
-              Nenhum envio da régua neste mês.
+              Nenhuma cobrança saiu hoje ainda.
             </p>
           ) : (
             <ul className="divide-y divide-border">

@@ -2721,7 +2721,11 @@ export interface SendsReport {
     /** Teto do dia configurado na régua (null = sem teto). */
     cap: number | null
   }
-  month: { sent: number; expired: number; replied: number }
+  /**
+   * O mês em CLIENTES, não em envios. Quem foi cobrado 3× e respondeu 1×
+   * contava 3 "com resposta" — na GoLink (17/09) eram 68 envios × 51 clientes.
+   */
+  month: { sent: number; clients: number; repliedClients: number; expired: number }
   rows: SendAuditRow[]
 }
 
@@ -2753,7 +2757,7 @@ export async function getSendsReport(): Promise<SendsReport> {
 
   const vazio: SendsReport = {
     today: { sent: 0, failed: 0, waiting: 0, expired: 0, replied: 0, delivered: 0, firstAt: null, lastAt: null, cap: null },
-    month: { sent: 0, expired: 0, replied: 0 },
+    month: { sent: 0, clients: 0, repliedClients: 0, expired: 0 },
     rows: [],
   }
 
@@ -2809,24 +2813,28 @@ export async function getSendsReport(): Promise<SendsReport> {
      LIMIT ${SENDS_ROWS_LIMIT}
   `
 
-  // O mês é CONTAGEM, em consulta própria — nunca derivado de uma lista com teto.
+  // O mês é CONTAGEM, em consulta própria — nunca derivado de uma lista com
+  // teto. E conta CLIENTES: resposta é de pessoa, não de envio.
   const mes = sql`
-    SELECT r.status,
-           count(*)::int AS qtd,
-           count(*) FILTER (
-             WHERE r.status = 'sent' AND EXISTS (
+    WITH m AS (
+      SELECT r.contact_id, r.status,
+             (r.status = 'sent' AND EXISTS (
                SELECT 1 FROM messages mr
                 JOIN conversations cr ON cr.id = mr.conversation_id
                 WHERE cr.contact_id = r.contact_id
                   AND mr.sender_type = 'customer'
                   AND mr.created_at > coalesce(r.executed_at, r.created_at)
-             )
-           )::int AS responderam
-      FROM agent_action_requests r
-     WHERE r.account_id = ${accountId}
-       AND r.action_type = 'collect_charges'
-       AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}
-     GROUP BY r.status
+             )) AS respondeu
+        FROM agent_action_requests r
+       WHERE r.account_id = ${accountId}
+         AND r.action_type = 'collect_charges'
+         AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}
+    )
+    SELECT count(*) FILTER (WHERE status = 'sent')::int                       AS enviados,
+           count(DISTINCT contact_id) FILTER (WHERE status = 'sent')::int     AS clientes,
+           count(DISTINCT contact_id) FILTER (WHERE respondeu)::int           AS clientes_resp,
+           count(*) FILTER (WHERE status = 'expired')::int                    AS expirados
+      FROM m
   `
 
   type Raw = {
@@ -2840,7 +2848,7 @@ export async function getSendsReport(): Promise<SendsReport> {
     canais: { provider: string | null; status: string | null; conversationId: string | null }[] | null
     replied: boolean
   }
-  type MesRaw = { status: string; qtd: number; responderam: number }
+  type MesRaw = { enviados: number; clientes: number; clientes_resp: number; expirados: number }
 
   const linhasDe = <T,>(res: unknown): T[] =>
     (Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])) as T[]
@@ -2888,7 +2896,7 @@ export async function getSendsReport(): Promise<SendsReport> {
     .map((r) => r.at)
     .sort()
   const conta = (st: string) => raw.filter((r) => r.status === st).length
-  const doMes = (st: string) => mesRaw.find((m) => m.status === st)?.qtd ?? 0
+  const mesRow = mesRaw[0]
 
   return {
     today: {
@@ -2909,9 +2917,10 @@ export async function getSendsReport(): Promise<SendsReport> {
       cap: s.dailyCap > 0 ? s.dailyCap : null,
     },
     month: {
-      sent: doMes('sent'),
-      expired: doMes('expired'),
-      replied: mesRaw.reduce((acc, m) => acc + (m.responderam ?? 0), 0),
+      sent: mesRow?.enviados ?? 0,
+      clients: mesRow?.clientes ?? 0,
+      repliedClients: mesRow?.clientes_resp ?? 0,
+      expired: mesRow?.expirados ?? 0,
     },
     rows,
   }
