@@ -1,4 +1,4 @@
-import { and, asc, desc, eq, inArray, isNotNull, lte, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, isNotNull, lte, sql } from 'drizzle-orm'
 
 import {
   db,
@@ -23,7 +23,7 @@ import {
 } from '@/lib/queue/queues'
 import { contactTokenValues, renderMessageVars } from '@/lib/whatsapp/message-vars'
 import { getAccountSettings } from '@/lib/settings/account-settings'
-import { shiftOutOfQuietHours } from './schedule-rules'
+import { cadenceStopReason, shiftOutOfQuietHours } from './schedule-rules'
 
 // ============================================================
 // Cadências — motor. Uma CADÊNCIA (sequência de mensagens fixas) é INSCRITA
@@ -1054,8 +1054,9 @@ export async function onCadenceStepSent(
 /**
  * Antes de ENVIAR um degrau de cadência que ANDA O CARD pelas etapas (tem
  * "mover o card para" em algum toque — ex.: pré-vendas da Zelo): o card
- * fechou (o Renato ligou e fechou, a Zélia marcou reunião) ou foi pra outro
- * funil (alguém arrastou no RD)? Então cancela a inscrição e o toque NÃO sai.
+ * fechou (o Renato ligou e fechou, a Zélia marcou reunião), foi pra outro
+ * funil (alguém arrastou no RD) ou o time o levou ALÉM da etapa mais avançada
+ * da cadência? Então cancela a inscrição e o toque NÃO sai (`cadenceStopReason`).
  *
  * Cadência que não anda o card fica como sempre foi — inclusive a de
  * pós-venda/recuperação, que ENTRA com o card já ganho/perdido (gatilho de
@@ -1084,34 +1085,26 @@ export async function checkCadenceStepStillWanted(
     if (enr.status !== 'active') return { ok: false, reason: `inscrição ${enr.status}` }
     if (!enr.dealId) return { ok: true }
 
-    // Funil da cadência = o das etapas pra onde os toques movem o card.
-    const stageIds = (
-      await db
-        .select({ id: cadenceSteps.moveToStageId })
-        .from(cadenceSteps)
-        .where(and(eq(cadenceSteps.cadenceId, enr.cadenceId), isNotNull(cadenceSteps.moveToStageId)))
-    )
-      .map((r) => r.id)
-      .filter((id): id is string => !!id)
-    if (!stageIds.length) return { ok: true } // não anda o card: comportamento de sempre
+    // Etapas pra onde os toques movem o card (funil + posição).
+    const cadenceStages = await db
+      .select({ pipelineId: pipelineStages.pipelineId, position: pipelineStages.position })
+      .from(cadenceSteps)
+      .innerJoin(pipelineStages, eq(pipelineStages.id, cadenceSteps.moveToStageId))
+      .where(and(eq(cadenceSteps.cadenceId, enr.cadenceId), isNotNull(cadenceSteps.moveToStageId)))
+    if (!cadenceStages.length) return { ok: true } // não anda o card: comportamento de sempre
 
     const deal = firstOrNull(
       await db
-        .select({ status: deals.status, pipelineId: deals.pipelineId })
+        .select({ status: deals.status, pipelineId: deals.pipelineId, stagePosition: pipelineStages.position })
         .from(deals)
+        .innerJoin(pipelineStages, eq(pipelineStages.id, deals.stageId))
         .where(and(eq(deals.id, enr.dealId), eq(deals.accountId, accountId)))
         .limit(1),
     )
-    let reason: string | null = null
-    if (!deal) reason = 'card apagado'
-    else if (deal.status !== 'open') reason = `card ${deal.status === 'won' ? 'ganho' : 'perdido'}`
-    else {
-      const funnels = await db
-        .selectDistinct({ pipelineId: pipelineStages.pipelineId })
-        .from(pipelineStages)
-        .where(inArray(pipelineStages.id, stageIds))
-      if (funnels.length && !funnels.some((f) => f.pipelineId === deal.pipelineId)) reason = 'card mudou de funil'
-    }
+    const reason = cadenceStopReason({
+      deal: deal ? { status: deal.status ?? 'open', pipelineId: deal.pipelineId, stagePosition: deal.stagePosition } : null,
+      cadenceStages,
+    })
     if (!reason) return { ok: true }
     await endEnrollment(accountId, enr, 'cancelled', reason)
     return { ok: false, reason }

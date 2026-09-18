@@ -66,6 +66,30 @@ export function shiftOutOfQuietHours(
 }
 
 /**
+ * A cadência que ANDA O CARD ainda vale pra ele? Motivo pra parar, ou null.
+ *   • card fechado (ganho/perdido) ou apagado;
+ *   • card em outro funil (alguém arrastou no RD);
+ *   • card ALÉM da etapa mais avançada que a cadência move (o time adiantou:
+ *     ex.: lead parado em "Novo lead" que o vendedor levou pra "Reunião
+ *     agendada" pelo telefone — a nutrição tem que parar).
+ * `cadenceStages` = etapas pra onde os toques movem o card.
+ */
+export function cadenceStopReason(input: {
+  deal: { status: string; pipelineId: string; stagePosition: number } | null
+  cadenceStages: { pipelineId: string; position: number }[]
+}): string | null {
+  const { deal, cadenceStages } = input
+  if (!cadenceStages.length) return null // cadência que não anda o card: nada muda
+  if (!deal) return 'card apagado'
+  if (deal.status !== 'open') return `card ${deal.status === 'won' ? 'ganho' : 'perdido'}`
+  const inFunnel = cadenceStages.filter((s) => s.pipelineId === deal.pipelineId)
+  if (!inFunnel.length) return 'card mudou de funil'
+  const furthest = Math.max(...inFunnel.map((s) => s.position))
+  if (deal.stagePosition > furthest) return 'card avançou além da cadência'
+  return null
+}
+
+/**
  * Como o degrau sai: 'template' quando o canal exige modelo (Meta), a janela
  * de 24 h está FECHADA e o degrau tem modelo; senão 'text' (inclusive Meta sem
  * modelo — comportamento de sempre: a Meta recusa e o degrau fica "falhou").

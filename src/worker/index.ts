@@ -136,6 +136,14 @@ import('./cadence-loss-worker')
     console.error('[worker] cadence-loss failed to start:', err);
   });
 
+// 💧 Entrada gotejada de leads (lead_drip_queue) — tick de 2 min: cada lead
+// nasce (contato, card, conversa, abertura) só no dia/hora dele.
+import('./lead-drip-worker')
+  .then((m) => m.startLeadDripWorker())
+  .catch((err) => {
+    console.error('[worker] lead-drip failed to start:', err);
+  });
+
 // 📒 Agenda do celular — tick de 6 h: reconfere a agenda dos números que já
 // importaram e aplica a regra de nome (CRM > agenda > perfil do WhatsApp).
 import('./phonebook-sync-worker')

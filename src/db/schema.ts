@@ -849,6 +849,22 @@ export const crmSyncOutbox = pgTable("crm_sync_outbox", {
 	lastError: text("last_error"),
 });
 
+/** Migr 0186: entrada GOTEJADA de leads — cada linha é um ingestLead que só
+ *  roda em `run_after` (nada é criado antes da hora). Ver lib/leads/drip.ts. */
+export const leadDripQueue = pgTable("lead_drip_queue", {
+	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	label: text().notNull(),
+	input: jsonb().notNull(),
+	runAfter: timestamp("run_after", { withTimezone: true, mode: 'string' }).notNull(),
+	status: text().default('pending').notNull(),
+	attempts: integer().default(0).notNull(),
+	result: jsonb(),
+	lastError: text("last_error"),
+	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	processedAt: timestamp("processed_at", { withTimezone: true, mode: 'string' }),
+});
+
 export const conversations = pgTable("conversations", {
 	id: uuid().default(sql`uuid_generate_v4()`).primaryKey().notNull(),
 	userId: uuid("user_id").notNull(),

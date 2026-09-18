@@ -1,5 +1,36 @@
 import { describe, it, expect } from 'vitest'
-import { cadenceSendMode, shiftOutOfQuietHours } from './schedule-rules'
+import { cadenceSendMode, cadenceStopReason, shiftOutOfQuietHours } from './schedule-rules'
+
+describe('cadenceStopReason', () => {
+  const pre = [1, 2, 3, 4, 5, 6].map((position) => ({ pipelineId: 'pre', position })) // 1ª..Definição
+  const retomada = [{ pipelineId: 'franquia', position: 0 }] // só "Novo lead"
+
+  it('cadência que não anda o card nunca para por aqui (pós-venda entra com card ganho)', () => {
+    expect(cadenceStopReason({ deal: { status: 'won', pipelineId: 'x', stagePosition: 9 }, cadenceStages: [] })).toBeNull()
+  })
+
+  it('card aberto dentro das etapas da cadência segue', () => {
+    expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'pre', stagePosition: 3 }, cadenceStages: pre })).toBeNull()
+    expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'pre', stagePosition: 0 }, cadenceStages: pre })).toBeNull()
+    expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'franquia', stagePosition: 0 }, cadenceStages: retomada })).toBeNull()
+  })
+
+  it('fechado, apagado ou em outro funil para', () => {
+    expect(cadenceStopReason({ deal: { status: 'won', pipelineId: 'pre', stagePosition: 2 }, cadenceStages: pre })).toBe('card ganho')
+    expect(cadenceStopReason({ deal: { status: 'lost', pipelineId: 'pre', stagePosition: 2 }, cadenceStages: pre })).toBe('card perdido')
+    expect(cadenceStopReason({ deal: null, cadenceStages: pre })).toBe('card apagado')
+    expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'franquia', stagePosition: 2 }, cadenceStages: pre })).toBe(
+      'card mudou de funil',
+    )
+  })
+
+  it('o time adiantou o card além da cadência → para', () => {
+    // lead parado em "Novo lead" que o vendedor levou pra "Reunião agendada"
+    expect(cadenceStopReason({ deal: { status: 'open', pipelineId: 'franquia', stagePosition: 2 }, cadenceStages: retomada })).toBe(
+      'card avançou além da cadência',
+    )
+  })
+})
 
 const SP = 'America/Sao_Paulo' // UTC−3, sem horário de verão
 const iso = (ms: number) => new Date(ms).toISOString()
