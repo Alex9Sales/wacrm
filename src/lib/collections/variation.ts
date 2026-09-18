@@ -27,7 +27,12 @@ const OPENINGS = [
   'Comece direto pelo assunto, sem cumprimento.',
   'Comece com uma frase curta de contexto ("passando por aqui rapidinho", "dando um toque").',
   'Comece perguntando se está tudo bem, e só depois entre no assunto.',
-  'Comece agradecendo a atenção.',
+  // ⚠️ Era "Comece agradecendo a atenção." — e numa cobrança a IA só acha
+  // UMA coisa pra agradecer: que o cliente "conferiu" a parcela. 17/09,
+  // Marcelo Santos (GoLink) recebeu "Agradeço por conferir esta cobrança"
+  // sem nunca ter aberto nada; o João achou que o sistema tinha trocado a
+  // mensagem. Agradecer supõe uma interação que não houve.
+  'Comece de forma cordial, com uma frase curta e simpática antes do assunto.',
   'Comece mencionando o momento do envio (dia da semana ou período do dia), se ele foi informado.',
 ]
 const BODIES = [

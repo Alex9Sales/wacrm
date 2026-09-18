@@ -40,3 +40,16 @@ describe('seedFrom + variationPlan — sorteio determinístico', () => {
     expect(planos.size).toBeGreaterThanOrEqual(4)
   })
 })
+
+describe('aberturas — nenhuma pode supor que o cliente interagiu', () => {
+  // 17/09, Marcelo Santos (GoLink): a abertura "Comece agradecendo a atenção"
+  // fez a IA escrever "Agradeço por conferir esta cobrança" pra quem nunca
+  // abriu nada. Numa cobrança não existe atenção a agradecer.
+  it('nenhuma abertura sorteável manda agradecer', () => {
+    const vistas = new Set<string>()
+    for (let s = 0; s < 5000; s++) vistas.add(variationPlan(s).opening)
+    for (const o of vistas) expect(o.toLowerCase()).not.toMatch(/agradec/)
+    // e continua havendo variedade de verdade
+    expect(vistas.size).toBeGreaterThanOrEqual(5)
+  })
+})

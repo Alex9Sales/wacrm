@@ -592,6 +592,9 @@ async function draftCollectionMessage(args: {
             .join('\n')}`
         : '',
       `Situação: ${args.summary.lines.length} ${args.summary.lines.length === 1 ? 'parcela vencida' : 'parcelas vencidas'}${args.maxDaysLate != null ? `, a mais antiga há ${args.maxDaysLate} dias` : ''}.`,
+      // 17/09, Marcelo Santos (GoLink): "Agradeço por conferir esta cobrança"
+      // pra quem nunca abriu nada. Você só sabe o que ESTÁ nas linhas acima.
+      'NUNCA agradeça nem comente algo que o cliente não fez: ele NÃO conferiu, NÃO abriu o link, NÃO respondeu e NÃO pagou esta cobrança — não invente interação. Se usar um "obrigado", é só no fecho, como cortesia ("obrigado!"), nunca por uma ação dele.',
       'NUNCA ameace nem fale em protesto, negativação ou consequência jurídica. O "com juros e multa" que aparece nas linhas é FATO calculado pelo Asaas: copie como está, sem ameaçar nem explicar. Nunca ofereça desconto, parcelamento ou prazo — se o cliente pedir, quem decide é uma pessoa. Sobre continuidade do serviço/anúncio, fale APENAS se as instruções da empresa abaixo pedirem — como informação, nunca como ameaça.',
       args.offerDate
         ? 'Sempre deixe claro que o cliente pode responder ali mesmo se já pagou ou se quiser combinar uma data — a resposta dele é o que pausa a cobrança.'
