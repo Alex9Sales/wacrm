@@ -23,6 +23,7 @@ import { buildLeadNotes } from '@/lib/leads/providers/shared'
 import { ingestLead } from '@/lib/leads/ingest'
 import { resolveAuditUserId } from '@/lib/api/v1/contacts'
 import { firstNameForGreeting, greeting } from '@/lib/cdl/names'
+import { renderForContact } from '@/lib/whatsapp/message-vars'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -100,10 +101,22 @@ export async function POST(
           introTemplate: source.deliverToAi && introTemplate
             ? { ...introTemplate, params: [firstNameForGreeting(lead.name) || 'tudo bem'] }
             : null,
-          introText: source.deliverToAi ? introTextOf(lead.name) : null,
+          // Texto de abertura (canal sem template, ou template recusado):
+          // `introText` da fonte, com {{primeiro_nome}}, senão o genérico.
+          introText: source.deliverToAi
+            ? typeof source.providerMeta.introText === 'string' && source.providerMeta.introText.trim()
+              ? renderForContact(source.providerMeta.introText, { name: lead.name })
+              : introTextOf(lead.name)
+            : null,
           channelId:
             typeof source.providerMeta.introChannelId === 'string'
               ? source.providerMeta.introChannelId
+              : null,
+          // Agente dono da conversa de abertura — a IA atende o lead mesmo num
+          // número que não é dela (ver IngestLeadInput.aiAgentId).
+          aiAgentId:
+            source.deliverToAi && typeof source.providerMeta.introAgentId === 'string'
+              ? source.providerMeta.introAgentId
               : null,
         })
       } catch (err) {

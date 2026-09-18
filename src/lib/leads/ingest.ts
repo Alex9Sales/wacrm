@@ -17,7 +17,7 @@
 
 import { and, desc, eq, gt, ne, sql } from 'drizzle-orm'
 
-import { db, dealEvents, deals, messages, notifications, tasks } from '@/db'
+import { conversations, db, dealEvents, deals, messages, notifications, tasks } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { pickAssignee } from '@/lib/leads/distribution'
 import { normalizeInboundPhoneBR } from '@/lib/whatsapp/phone-utils'
@@ -68,6 +68,14 @@ export interface IngestLeadInput {
   introTemplate?: { name: string; language?: string | null; params?: string[] } | null
   /** Canal p/ o WhatsApp de abertura (null → resolve automaticamente). */
   channelId?: string | null
+  /**
+   * Agente de IA DONO da conversa de abertura (conversations.ai_agent_id): ele
+   * responde nessa conversa mesmo se o canal não estiver na lista dele. Serve
+   * pra abrir o lead por um número "emprestado" sem ligar a IA no número todo
+   * (Zelo 18/09: número oficial travado por pagamento na Meta → abertura pelo
+   * número de recados, Zélia atende só os leads).
+   */
+  aiAgentId?: string | null
   /** Origem estruturada do lead (Site/Instagram/Indicação/…) → deals.origin. */
   origin?: string | null
   /** Fonte/detalhe livre (ex.: nome da campanha) → deals.source. */
@@ -338,6 +346,14 @@ export async function ingestLead(
           `[ingestLead] abertura pulada: conversa ${resolved.conversationId} já teve envio nas últimas 12 h`,
         )
         return { contactId, contactCreated, dealId, taskId, tagsApplied, whatsappSent }
+      }
+      // Dono da conversa só quando a abertura vai sair de fato — conversa em
+      // que alguém da equipe falou nas últimas 12 h não é tomada pela IA.
+      if (input.aiAgentId) {
+        await db
+          .update(conversations)
+          .set({ aiAgentId: input.aiAgentId })
+          .where(eq(conversations.id, resolved.conversationId))
       }
       // Template primeiro quando houver: lead novo nunca falou com a gente, e
       // no canal oficial texto livre é RECUSADO pela Meta fora da janela de 24h
