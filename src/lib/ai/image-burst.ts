@@ -1,8 +1,8 @@
 // ============================================================
 // 📸 Rajada de fotos: a IA descreve só as primeiras.
 //
-// 14/09 (GoLink): "NOS Redes" mandou 86 fotos de fachada em 1 minuto e
-// "Rafael Montador" 37. A visão descreve cada imagem na hora em que chega,
+// 14/09 (GoLink): um cliente mandou 86 fotos de fachada em 1 minuto e
+// outro, 37. A visão descreve cada imagem na hora em que chega,
 // com a chave OpenAI da PRÓPRIA conta — 86 chamadas juntas estouraram o limite
 // por minuto da conta OpenAI deles (429) e 81 fotos ficaram sem descrição. No
 // mesmo minuto, tudo que usa a chave (ler comprovante da régua, IA) também

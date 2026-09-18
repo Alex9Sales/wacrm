@@ -23,19 +23,19 @@ describe('formatDebtSummary — juros, dois cadastros e "sem valores" (João 10/
 
   it('mesma pessoa com dois cadastros: cada parcela diz de qual empresa é', () => {
     const s = formatDebtSummary([
-      { ...base, value: 100, customerId: 'cus_1', customerName: 'ByOnGreen' },
-      { ...base, value: 200, dueDate: '2026-08-30', daysLate: 12, customerId: 'cus_2', customerName: 'Dra. Anne Cozendey' },
+      { ...base, value: 100, customerId: 'cus_1', customerName: 'Estúdio Modelo' },
+      { ...base, value: 200, dueDate: '2026-08-30', daysLate: 12, customerId: 'cus_2', customerName: 'Dra. Helena Teste' },
     ])
-    expect(s.lines[0]).toContain('· ByOnGreen')
-    expect(s.lines[1]).toContain('· Dra. Anne Cozendey')
+    expect(s.lines[0]).toContain('· Estúdio Modelo')
+    expect(s.lines[1]).toContain('· Dra. Helena Teste')
   })
 
   it('um cadastro só: o nome não aparece na linha', () => {
     const s = formatDebtSummary([
-      { ...base, value: 100, customerId: 'cus_1', customerName: 'ByOnGreen' },
-      { ...base, value: 200, customerId: 'cus_1', customerName: 'ByOnGreen' },
+      { ...base, value: 100, customerId: 'cus_1', customerName: 'Estúdio Modelo' },
+      { ...base, value: 200, customerId: 'cus_1', customerName: 'Estúdio Modelo' },
     ])
-    expect(s.lines.join('\n')).not.toContain('ByOnGreen')
+    expect(s.lines.join('\n')).not.toContain('Estúdio Modelo')
   })
 
   it('showValues=false: só vencimento, atraso e link — sem R$ e sem Total', () => {

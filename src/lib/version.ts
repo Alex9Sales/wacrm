@@ -9,7 +9,7 @@
 // ce51a1b, com 6 deploys entre eles). Como a comparação era sempre "igual",
 // NADA disso disparava: a aba antiga ficava batendo numa Server Action que não
 // existe mais (85 erros em 30 min no log, ~8/min, contínuos) e o cliente via a
-// tela travada — a dor recorrente do Dentai/Lorrayne/Felipe/GoLink.
+// tela travada — a dor recorrente do Dentai/CEMA/GoLink.
 //
 // `DEPLOYMENT_ID` é o SHA do commit, injetado no build (Dockerfile ARG/ENV) e
 // presente no runtime; é o MESMO id que assina os assets (`?dpl=…`) e o skew

@@ -47,8 +47,8 @@ describe('transcriptLines', () => {
   it('rotula quem falou e põe data e hora no fuso da conta', () => {
     const linhas = transcriptLines(
       [
-        row('customer', '2026-09-14T19:52:37Z', 'Sou Paulo da Oficina Modelo'),
-        row('agent', '2026-09-14T20:43:31Z', 'Vou transferir esse chat para o João.'),
+        row('customer', '2026-09-14T19:52:00Z', 'Sou Paulo da Oficina Modelo'),
+        row('agent', '2026-09-14T20:43:00Z', 'Vou transferir esse chat para o João.'),
       ],
       TZ,
     )
@@ -58,13 +58,13 @@ describe('transcriptLines', () => {
   it('mídia vira rótulo + descrição, sem o marcador cru', () => {
     const [audio, foto] = transcriptLines(
       [
-        row('customer', '2026-09-14T19:00:00Z', '[audio]', { contentType: 'audio', transcription: 'quero a tag no site' }),
-        row('customer', '2026-09-14T19:01:00Z', 'Moto preta', { contentType: 'image', transcription: 'Comprovante de R$ 936,13' }),
+        row('customer', '2026-09-14T19:00:00Z', '[audio]', { contentType: 'audio', transcription: 'quero saber do meu pedido' }),
+        row('customer', '2026-09-14T19:01:00Z', 'Foto do recibo', { contentType: 'image', transcription: 'Comprovante de R$ 100,00' }),
       ],
       TZ,
     )
-    expect(audio).toBe('[14/09 16:00] Cliente: [áudio] quero a tag no site')
-    expect(foto).toBe('[14/09 16:01] Cliente: [imagem] Moto preta Comprovante de R$ 936,13')
+    expect(audio).toBe('[14/09 16:00] Cliente: [áudio] quero saber do meu pedido')
+    expect(foto).toBe('[14/09 16:01] Cliente: [imagem] Foto do recibo Comprovante de R$ 100,00')
   })
 
   it('pula fala vazia, corta texto longo e fica só com as últimas', () => {

@@ -175,7 +175,7 @@ export function UpdateBanner({ initialBuildId }: { initialBuildId: string }) {
     window.addEventListener("error", onError);
     window.addEventListener("unhandledrejection", onRejection);
 
-    // 🕳️ O buraco que deixava aba presa PRA SEMPRE (caso Lorrayne/Dentai,
+    // 🕳️ O buraco que deixava aba presa PRA SEMPRE (caso Dentai,
     // 01/09): quase toda chamada de Server Action nossa tem `.catch(() => [])`
     // pra não quebrar a tela. Com bundle velho, a ação falha, o catch engole,
     // e NADA chega no window.onerror — a aba fica batendo numa ação que não

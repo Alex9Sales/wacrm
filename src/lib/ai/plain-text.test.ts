@@ -2,23 +2,23 @@ import { describe, expect, it } from 'vitest'
 
 import { plainAiText } from './plain-text'
 
-// 15/09 (Alex): o balão mostrava "- **Valor:** R$ 936,13" com os asteriscos crus.
+// 15/09 (Alex): o balão mostrava "- **Valor:** R$ 100,00" com os asteriscos crus.
 describe('plainAiText', () => {
   it('tira o negrito da descrição do comprovante', () => {
     const descricao = [
       'A imagem é um comprovante de pagamento com as seguintes informações:',
       '',
-      '- **Valor:** R$ 936,13',
-      '- **Pagador:** DANYELA GLEYCE LEITE DE SOUZA LTDA',
-      '- **Código de barras:** 23792372056001261551813023760005515690000093613',
+      '- **Valor:** R$ 100,00',
+      '- **Pagador:** EMPRESA EXEMPLO LTDA',
+      '- **Código de barras:** 23790.00009 12345.678901 23456.789012 1 00000000010000',
     ].join('\n')
     expect(plainAiText(descricao)).toBe(
       [
         'A imagem é um comprovante de pagamento com as seguintes informações:',
         '',
-        '- Valor: R$ 936,13',
-        '- Pagador: DANYELA GLEYCE LEITE DE SOUZA LTDA',
-        '- Código de barras: 23792372056001261551813023760005515690000093613',
+        '- Valor: R$ 100,00',
+        '- Pagador: EMPRESA EXEMPLO LTDA',
+        '- Código de barras: 23790.00009 12345.678901 23456.789012 1 00000000010000',
       ].join('\n'),
     )
   })

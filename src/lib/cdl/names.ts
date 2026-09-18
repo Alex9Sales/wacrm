@@ -28,14 +28,14 @@ const NOT_A_NAME = new Set([
 const TITLES: Record<string, string> = { dr: 'Dr.', dra: 'Dra.', sr: 'Sr.', sra: 'Sra.' }
 
 // Nome curto em maiúscula só é nome se tiver vogal logo no começo (ANA, BIA,
-// ZÉ, LÉO, RUI); sigla não tem (JMJ, JR, SBC, MCE).
+// ZÉ, LÉO, RUI); sigla não tem (XJZ, JR, BCD, PCE).
 const NAME_START = /^[^AEIOUÁÉÍÓÚÂÊÔÃÕÀÜ]?[AEIOUÁÉÍÓÚÂÊÔÃÕÀÜ]/
 
 function personWord(w: string | undefined, shoutedName: boolean): string {
   if (!w || w.length < 2 || w.length > 20) return ''
   if (NOT_A_NAME.has(w.toLowerCase())) return ''
   if (w === w.toUpperCase()) {
-    // Sigla na frente de nome de empresa ("JMJ Materiais", "RR Transportes"):
+    // Sigla na frente de nome de empresa ("XJZ Materiais", "ZZ Transportes"):
     // a palavra curta grita e o resto não.
     if (w.length <= 3 && (!shoutedName || !NAME_START.test(w))) return ''
     // Nome gritado ("FERNANDO", "ANA-CLARA") → "Fernando", "Ana-Clara".

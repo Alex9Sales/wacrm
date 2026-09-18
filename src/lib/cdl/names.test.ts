@@ -22,7 +22,7 @@ describe('firstNameForGreeting', () => {
     expect(firstNameForGreeting('Google Ads')).toBe('')
     expect(firstNameForGreeting('Sta Casa Taubaté')).toBe('')
     expect(firstNameForGreeting('Clínica Bem Estar')).toBe('')
-    expect(firstNameForGreeting('JMJ Materiais')).toBe('')
+    expect(firstNameForGreeting('XJZ Materiais')).toBe('')
     expect(firstNameForGreeting('JR')).toBe('')
   })
 
@@ -35,9 +35,9 @@ describe('firstNameForGreeting', () => {
     expect(firstNameForGreeting('Sra. ANA')).toBe('Sra. Ana')
     expect(firstNameForGreeting('ANA-CLARA LIMA')).toBe('Ana-Clara')
     // sigla continua fora: sem vogal no começo, ou gritando no meio de nome misto
-    expect(firstNameForGreeting('MCE Engenharia')).toBe('')
-    expect(firstNameForGreeting('RA Cosméticos')).toBe('')
-    expect(firstNameForGreeting('SBC')).toBe('')
+    expect(firstNameForGreeting('PCE Engenharia')).toBe('')
+    expect(firstNameForGreeting('TA Cosméticos')).toBe('')
+    expect(firstNameForGreeting('BCD')).toBe('')
   })
 
   it('keeps accents, hyphens and apostrophes', () => {

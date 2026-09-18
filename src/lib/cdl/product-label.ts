@@ -5,7 +5,7 @@
 // "1.00x P-13 UltraGaz  Ultragaz" (quantidade com decimais, nome que já
 // inclui a marca + a marca de novo, dois espaços); a planilha manda
 // "1x P-13 Copagaz Copagaz". Nada disso pode chegar ao cliente ("Vi que já
-// faz 77 dias do seu último 1.00x P-13 Copagaz Copagaz" — 07/09, Vania).
+// faz 77 dias do seu último 1.00x P-13 Copagaz Copagaz" — 07/09).
 // Aqui vira "P-13 Copagaz" / "2 P-13 Ultragaz" / "P-13 Ultragaz e Vasilhame".
 // Puro, client-safe, testado.
 // ============================================================

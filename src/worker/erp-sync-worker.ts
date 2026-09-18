@@ -2,9 +2,9 @@
 // Sync ERP → CRM (compras) — tick horário; roda 1x/dia por conta (05h no fuso
 // da conta) pra toda conta que tem a ferramenta `historico_compras` ligada.
 //
-// Por quê (01/09, caso Poleana): venda feita FORA do CRM (fone/ERP direto)
+// Por quê (01/09, caso de 01/09 da Família do Gás): venda feita FORA do CRM (fone/ERP direto)
 // não vira customer_transaction, então "Chamar de volta" e a memória
-// comercial ficam desatualizados — a Poleana comprou 31/08 e apareceu como
+// comercial ficam desatualizados — a cliente comprou 31/08 e apareceu como
 // "recompra atrasada" no dia seguinte. A IA já consulta o ERP pela mesma
 // ferramenta; aqui a gente usa a MESMA ferramenta (com as credenciais dela)
 // pra puxar as últimas compras de cada contato e gravar no CDL.

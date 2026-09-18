@@ -62,7 +62,7 @@ describe('renderForContact', () => {
     expect(renderForContact(msg, { name: '+55 12 99123-4567' })).toBe('Boa tarde!');
     expect(renderForContact(msg, { name: '💎 Carla Souza' })).toBe('Boa tarde, Carla!');
     expect(renderForContact(msg, { name: 'Google Ads Suporte' })).toBe('Boa tarde!');
-    expect(renderForContact(msg, { name: 'JMJ Materiais' })).toBe('Boa tarde!');
+    expect(renderForContact(msg, { name: 'XJZ Materiais' })).toBe('Boa tarde!');
     expect(renderForContact(msg, { name: 'FERNANDO LIMA' })).toBe('Boa tarde, Fernando!');
     expect(renderForContact('Olá {{primeiro_nome|cliente}}!', { name: 'Dr.' })).toBe('Olá cliente!');
   });

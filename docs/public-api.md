@@ -420,7 +420,7 @@ pass an existing `conversation_id` directly.
 curl -X POST https://<host>/api/v1/deals \
   -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
   -d '{
-    "title": "Diagnóstico site - Marcelo Ferraz",
+    "title": "Diagnóstico site - Carla Teste",
     "pipeline_id": "<SALESTEC_PIPELINE_ID>",
     "stage_id": "<SALESTEC_STAGE_NOVO_LEAD_SEM_CONTATO_ID>",
     "contact_id": "<contactJson.data.id>",

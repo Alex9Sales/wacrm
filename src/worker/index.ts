@@ -129,7 +129,7 @@ import('./phonebook-sync-worker')
   });
 
 // 🔄 Sync ERP → CRM — 1x/dia (05h locais) por conta com `historico_compras`:
-// compras feitas fora do CRM entram no CDL (caso Poleana, 01/09).
+// compras feitas fora do CRM entram no CDL (caso de 01/09).
 import('./erp-sync-worker')
   .then((m) => m.startErpSyncWorker())
   .catch((err) => {
