@@ -10,7 +10,7 @@
 // Sem 'server-only' — o worker alcança isso na Fase 2.
 // ============================================================
 
-import { isPlausibleDDD, normalizePhone, toBrE164IfNational } from '@/lib/whatsapp/phone-utils'
+import { isPlausibleBrNational, isPlausibleDDD, normalizePhone, toBrE164IfNational } from '@/lib/whatsapp/phone-utils'
 
 /** Como a cobrança encontrou o contato (guardado para auditoria). */
 export type MatchedBy = 'phone' | 'email' | 'code' | 'manual'
@@ -125,7 +125,8 @@ export function asaasPhoneForContact(raw: string | null | undefined): string | n
   // é a única pista de que o número já veio internacional — respeitamos.
   const d = text.startsWith('+') ? digits : toBrE164IfNational(digits)
   if (!/^55\d{10,11}$/.test(d)) return null
-  if (!isPlausibleDDD(d.slice(2, 4))) return null
+  // DDD, e celular com o 9 na frente — "55 55 1298…" não é número de ninguém.
+  if (!isPlausibleBrNational(d.slice(2))) return null
   return d
 }
 

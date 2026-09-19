@@ -135,10 +135,35 @@ export function normalizeInboundPhoneBR(raw: string): string {
  */
 export function toBrE164IfNational(digits: string): string {
   const d = (digits || '').replace(/\D/g, '')
-  if ((d.length === 10 || d.length === 11) && isPlausibleDDD(d.slice(0, 2))) {
-    return '55' + d
-  }
+  // Só completa o que É um número brasileiro possível (ver abaixo): "55 12
+  // 9888381" (DDI + DDD + 7 dígitos) passava como "DDD 55 + 129888381".
+  if (isPlausibleBrNational(d)) return '55' + d
   return d
+}
+
+/**
+ * Número NACIONAL brasileiro (DDD + local, sem o 55) que pode existir:
+ * 11 dígitos = celular (o local começa com 9); 10 dígitos = fixo ou celular
+ * antigo, sem o 9º dígito (o local começa de 2 a 9).
+ *
+ * 19/09 (GoLink): um cliente foi cadastrado no Asaas como "55129888381" — DDI
+ * + DDD 12 + só 7 dígitos. Com 11 dígitos e "DDD" 55 (Rio Grande do Sul), a
+ * regra antiga lia como nacional e gravava 5555129888381: o contato nasceu com
+ * um número que não existe e a cobrança ficou num tique pra sempre.
+ */
+export function isPlausibleBrNational(d: string): boolean {
+  if (!/^\d{10,11}$/.test(d) || !isPlausibleDDD(d.slice(0, 2))) return false
+  const first = d[2]
+  return d.length === 11 ? first === '9' : first >= '2'
+}
+
+/**
+ * Número que SE DIZ brasileiro completo (55 + 10/11 dígitos) mas não pode
+ * existir — ex.: 5555129888381. Número de outro país não é julgado aqui.
+ */
+export function isImpossibleBrE164(digits: string): boolean {
+  const d = (digits || '').replace(/\D/g, '')
+  return /^55\d{10,11}$/.test(d) && !isPlausibleBrNational(d.slice(2))
 }
 
 /**

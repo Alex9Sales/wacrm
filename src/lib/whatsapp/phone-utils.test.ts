@@ -7,6 +7,9 @@ import {
   phoneVariants,
   phonesMatch,
   sanitizePhoneForMeta,
+  isImpossibleBrE164,
+  isPlausibleBrNational,
+  toBrE164IfNational,
 } from "./phone-utils";
 
 describe("sanitizePhoneForMeta", () => {
@@ -231,5 +234,30 @@ describe("isRecipientNotAllowedError", () => {
       false,
     );
     expect(isRecipientNotAllowedError("")).toBe(false);
+  });
+});
+
+describe("número brasileiro possível (19/09, 55 dobrado)", () => {
+  it("celular com 9, fixo e celular antigo de 10 dígitos ganham o 55", () => {
+    expect(toBrE164IfNational("12999998888")).toBe("5512999998888");
+    expect(toBrE164IfNational("1233334444")).toBe("551233334444");
+    expect(toBrE164IfNational("6790001234")).toBe("556790001234");
+  });
+
+  it('"55 12 + 7 dígitos" não vira DDD 55: fica como veio', () => {
+    expect(toBrE164IfNational("55129888381")).toBe("55129888381");
+    expect(isPlausibleBrNational("55129888381")).toBe(false);
+  });
+
+  it("celular de DDD 55 digitado sem o país continua valendo", () => {
+    expect(toBrE164IfNational("55991234567")).toBe("5555991234567");
+  });
+
+  it("número brasileiro impossível é reconhecido; estrangeiro não é julgado", () => {
+    expect(isImpossibleBrE164("5555129888381")).toBe(true);
+    expect(isImpossibleBrE164("+55 12 99999-8888")).toBe(false);
+    expect(isImpossibleBrE164("551233334444")).toBe(false);
+    expect(isImpossibleBrE164("5555991234567")).toBe(false);
+    expect(isImpossibleBrE164("12025550181")).toBe(false);
   });
 });

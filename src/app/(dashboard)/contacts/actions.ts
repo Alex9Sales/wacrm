@@ -27,6 +27,7 @@ import { dispatchTagAddedToFlows } from '@/lib/flows/engine'
 import {
   sanitizePhoneForMeta,
   isValidE164,
+  isImpossibleBrE164,
   normalizeInboundPhoneBR,
   phonesMatch,
 } from '@/lib/whatsapp/phone-utils'
@@ -389,6 +390,17 @@ export async function saveContact(
       duplicate: false,
       error:
         'Telefone inválido. Use o formato internacional, ex.: +55 28 99999-9999.',
+    }
+  }
+  // "+55 55 1298-8381": tem cara de brasileiro, mas depois do 55 não vem um
+  // DDD + número possível (celular começa com 9). Contato assim nunca recebe
+  // nada — a mensagem fica num tique (19/09, GoLink).
+  if (isImpossibleBrE164(sanitizePhoneForMeta(phone))) {
+    return {
+      ok: false,
+      duplicate: false,
+      error:
+        'Telefone brasileiro incompleto: depois do 55 vêm o DDD e o número (celular com o 9 na frente), ex.: +55 12 99999-9999.',
     }
   }
 

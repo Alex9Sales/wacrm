@@ -181,6 +181,9 @@ describe('asaasPhoneForContact — telefone do Asaas vira contato', () => {
     expect(asaasPhoneForContact(null)).toBeNull()
     expect(asaasPhoneForContact('99000')).toBeNull()
     expect(asaasPhoneForContact('0190001631')).toBeNull()
+    // 19/09: DDI + DDD + 7 dígitos (faltou um) — antes virava 5555129888381.
+    expect(asaasPhoneForContact('55129888381')).toBeNull()
+    expect(asaasPhoneForContact('5555129888381')).toBeNull()
     expect(asaasPhoneForContact('+370 60001234')).toBeNull()
   })
 })
