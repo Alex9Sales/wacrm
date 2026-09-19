@@ -2,6 +2,7 @@ import { and, eq, inArray, sql } from "drizzle-orm";
 
 import { db, contacts } from "@/db";
 import { normalizePhone, phonesMatch } from "@/lib/whatsapp/phone-utils";
+import { asNameSource, decideContactName } from "./name-rule";
 
 /** Last-8 suffix — the fuzzy (9th-digit / trunk-tolerant) match key. */
 export function last8(phone: string): string {
@@ -132,20 +133,21 @@ export async function resolveOrCreateContactIdsByPhone(
   // One query: pull every account contact sharing a last-8 suffix with the
   // batch, then match with the shared fuzzy rule (keeps it 9th-digit tolerant).
   const suffixes = [...new Set(phones.map(last8).filter(Boolean))];
-  let existing: { id: string; phone: string }[] = [];
+  let existing: { id: string; phone: string; name?: string | null; nameSource?: string | null }[] = [];
   try {
     existing = (await db
-      .select({ id: contacts.id, phone: contacts.phone })
+      .select({ id: contacts.id, phone: contacts.phone, name: contacts.name, nameSource: contacts.nameSource })
       .from(contacts)
       .where(
         and(
           eq(contacts.accountId, accountId),
           inArray(sql`right(${contacts.phoneNormalized}, 8)`, suffixes),
         ),
-      )) as { id: string; phone: string }[];
+      )) as { id: string; phone: string; name?: string | null; nameSource?: string | null }[];
   } catch {
     existing = [];
   }
+  const preexisting = new Set(existing.map((c) => c.id));
   const resolve = (phone: string) =>
     existing.find((c) => c.phone && phonesMatch(c.phone, phone)) ?? null;
 
@@ -176,6 +178,34 @@ export async function resolveOrCreateContactIdsByPhone(
   for (const phone of phones) {
     const hit = resolve(phone);
     if (hit) byInputPhone.set(phone, hit.id);
+  }
+
+  // 19/09 (GoLink): o nome da planilha era JOGADO FORA quando o número já era
+  // contato — o disparo saía "Olá, DC Contábil" (nome de perfil do WhatsApp)
+  // em vez de "Denize", e a equipe corrigia contato por contato. Agora o nome
+  // da planilha passa pela mesma regra de prioridade da entrada de mensagens:
+  // troca nome de perfil do WhatsApp, vazio ou legado; nunca o que alguém
+  // digitou no CRM nem o que veio da agenda do celular.
+  const renames = new Map<string, string>();
+  for (const phone of phones) {
+    const sheetName = (nameByPhone.get(phone) ?? "").trim();
+    const hit = resolve(phone);
+    if (!sheetName || !hit || !preexisting.has(hit.id) || renames.has(hit.id)) continue;
+    const decision = decideContactName({
+      current: { name: hit.name, phone: hit.phone, source: asNameSource(hit.nameSource) },
+      incoming: { name: sheetName, source: null },
+    });
+    if (decision.apply) renames.set(hit.id, sheetName);
+  }
+  for (const [id, name] of renames) {
+    try {
+      await db
+        .update(contacts)
+        .set({ name, nameSource: null, updatedAt: new Date().toISOString() })
+        .where(and(eq(contacts.id, id), eq(contacts.accountId, accountId)));
+    } catch {
+      // best-effort: o disparo segue com o nome que o contato já tinha
+    }
   }
   return byInputPhone;
 }

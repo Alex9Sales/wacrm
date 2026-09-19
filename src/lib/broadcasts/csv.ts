@@ -104,8 +104,9 @@ export function parseCsv(text: string): CsvContact[] {
 // Planilha sem nome (15/09, GoLink): o Vitor colou só os telefones e 17
 // contatos novos nasceram sem nome — a busca por nome não achava ninguém.
 // Aqui só contamos; quem já é contato o servidor confere
-// (csv-name-check.ts), porque a importação NÃO troca o nome de contato
-// existente (resolveOrCreateContactIdsByPhone só cria os que faltam).
+// (csv-name-check.ts). Desde 19/09 a importação troca o nome de contato
+// existente quando o atual é mais fraco (perfil do WhatsApp, vazio, legado) —
+// nunca o digitado no CRM nem o da agenda (resolveOrCreateContactIdsByPhone).
 // ------------------------------------------------------------
 
 export interface CsvNameSummary {

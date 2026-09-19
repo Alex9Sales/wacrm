@@ -3,9 +3,10 @@ import { beforeEach, describe, expect, it, vi } from "vitest";
 // findExistingContact queries through the shared Drizzle client —
 // mock '@/db' with a fixed candidate set per test.
 const state = vi.hoisted(() => ({
-  rows: [] as Array<{ id: string; phone: string }>,
+  rows: [] as Array<{ id: string; phone: string; name?: string | null; nameSource?: string | null }>,
   queried: false,
   inserted: [] as Array<{ phone: string }>,
+  updated: [] as Array<{ name: string }>,
 }));
 
 vi.mock("@/db", async (importOriginal) => {
@@ -18,6 +19,13 @@ vi.mock("@/db", async (importOriginal) => {
           where: async () => {
             state.queried = true;
             return state.rows;
+          },
+        }),
+      }),
+      update: () => ({
+        set: (vals: { name: string }) => ({
+          where: async () => {
+            state.updated.push(vals);
           },
         }),
       }),
@@ -48,6 +56,7 @@ beforeEach(() => {
   state.rows = [];
   state.queried = false;
   state.inserted = [];
+  state.updated = [];
 });
 
 describe("resolveOrCreateContactIdsByPhone", () => {
@@ -70,6 +79,19 @@ describe("resolveOrCreateContactIdsByPhone", () => {
     // One insert, both input phones resolve to the same id.
     expect(state.inserted).toHaveLength(1);
     expect(out.get("556790001234")).toBe(out.get("+5567990001234"));
+  });
+
+  it("nome da planilha troca nome de perfil do WhatsApp do contato que já existia", async () => {
+    state.rows = [{ id: "c1", phone: "5512990001234", name: "Loja Exemplo", nameSource: "whatsapp" }];
+    await resolveOrCreateContactIdsByPhone("acct", "user", [{ phone: "5512990001234", name: "Maria" }]);
+    expect(state.updated.map((u) => u.name)).toEqual(["Maria"]);
+    expect(state.inserted).toHaveLength(0);
+  });
+
+  it("nome digitado no CRM fica — a planilha não passa por cima", async () => {
+    state.rows = [{ id: "c1", phone: "5512990001234", name: "Maria Souza", nameSource: "crm" }];
+    await resolveOrCreateContactIdsByPhone("acct", "user", [{ phone: "5512990001234", name: "Mari" }]);
+    expect(state.updated).toHaveLength(0);
   });
 
   it("creates genuinely-different numbers separately", async () => {

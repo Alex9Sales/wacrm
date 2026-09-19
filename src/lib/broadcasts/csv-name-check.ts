@@ -7,8 +7,8 @@
 // ficaram sem nome e a busca por nome não achava ninguém. Telefone sem nome
 // que já é contato com nome não é problema; o que nasce agora é. Mesma regra
 // de "mesmo número" da importação (resolveOrCreateContactIdsByPhone): 8
-// últimos dígitos no SQL + phonesMatch. A importação não troca nome de
-// contato existente, então quem já existe sem nome é contado à parte.
+// últimos dígitos no SQL + phonesMatch. Quem já existe sem nome é contado à
+// parte (a importação preenche o nome dele se a linha trouxer um).
 // ============================================================
 
 import { and, eq, inArray, sql } from 'drizzle-orm'
