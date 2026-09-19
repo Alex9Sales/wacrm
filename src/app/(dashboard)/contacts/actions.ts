@@ -451,15 +451,17 @@ export async function saveContact(
     return { ok: true, contactId }
   } catch (err) {
     if (isUniqueViolation(err)) {
-      // Only surface an existing record for new contacts.
+      // O número é de OUTRO contato — devolve qual, também na EDIÇÃO. 19/09
+      // (João/GoLink): corrigindo o telefone de um cliente, ouviu só "já existe
+      // um contato com este telefone" e jurou que só havia um; o número certo
+      // estava num contato com outro nome, que a busca pelo nome não mostrava.
       let existing: ExistingContact | null = null
-      if (!input.contactId) {
-        try {
-          existing = await findExistingContact(ctx.accountId, phone)
-        } catch {
-          existing = null
-        }
+      try {
+        existing = await findExistingContact(ctx.accountId, phone)
+      } catch {
+        existing = null
       }
+      if (existing && existing.id === input.contactId) existing = null
       return { ok: false, duplicate: true, existing }
     }
     return {

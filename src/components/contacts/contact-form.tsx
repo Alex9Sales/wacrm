@@ -24,6 +24,15 @@ import { Label } from '@/components/ui/label';
 import { Badge } from '@/components/ui/badge';
 import { Loader2, AlertTriangle } from 'lucide-react';
 
+/** "Já existe um contato com este telefone: Abner" — o nome é o que destrava
+ *  (o dono do número costuma ter outro nome, e a busca pelo nome não acha). */
+function duplicateMessage(owner: ExistingContact | null): string {
+  const who = owner ? owner.name || owner.phone : null;
+  return who
+    ? `Já existe um contato com este telefone: ${who}`
+    : 'Já existe um contato com este telefone';
+}
+
 interface ContactFormProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -138,7 +147,7 @@ export function ContactForm({
     // Hard-block an exact duplicate on create (the DB unique index is
     // the real backstop; this avoids a round-trip + a raw error toast).
     if (!isEdit && dupMatch?.exact) {
-      toast.error('Já existe um contato com este telefone');
+      toast.error(duplicateMessage(dupMatch.contact));
       return;
     }
 
@@ -172,8 +181,10 @@ export function ContactForm({
         // slipped past the on-blur check (race, or a format that normalizes
         // equal). Surface the friendly notice and point the user at the
         // existing record when we have it.
-        toast.error('Já existe um contato com este telefone');
-        if (!isEdit && result.existing) {
+        // Diz DE QUEM é o número (na edição também) e mostra o atalho pra
+        // abrir esse contato — senão a pessoa fica presa (19/09, João).
+        toast.error(duplicateMessage(result.existing ?? null));
+        if (result.existing) {
           setDupMatch({ contact: result.existing, exact: true });
         }
         return;
@@ -243,7 +254,7 @@ export function ContactForm({
                 <div className="space-y-1">
                   <p>
                     {dupMatch.exact
-                      ? 'Já existe um contato com este telefone.'
+                      ? `${duplicateMessage(dupMatch.contact)}.`
                       : 'Já existe um contato com um número muito parecido.'}
                   </p>
                   {onViewExisting && (
