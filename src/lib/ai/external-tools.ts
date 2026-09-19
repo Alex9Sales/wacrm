@@ -169,7 +169,10 @@ COMO USAR: quando precisar de uma ferramenta, responda SOMENTE com o marcador (s
 O sistema executa e te devolve o resultado; aí você continua o atendimento normalmente usando o dado real. Uma ferramenta por vez. NUNCA invente o resultado — se precisa do dado, chame a ferramenta. NUNCA mencione ferramentas, sistemas ou marcadores pro cliente.`
 }
 
-const TOOL_MARKER_RE = /\[\[\s*FERRAMENTA\s*:\s*([a-z0-9_-]+)\s*\|\s*(\{[\s\S]*?\})\s*\]\]/i
+// Parâmetros opcionais: ferramenta sem parâmetro (consultar_estoque) às vezes
+// vem como "[[FERRAMENTA: consultar_estoque]]", sem o "| {}". Sem casar, o
+// marcador virava "texto", era limpo e o turno saía MUDO (19/09, Viviane).
+const TOOL_MARKER_RE = /\[\[\s*FERRAMENTA\s*:\s*([a-z0-9_-]+)\s*(?:\|\s*(\{[\s\S]*?\})\s*)?\]\]/i
 
 /** Extrai a 1ª chamada de ferramenta do texto gerado (null = não pediu). */
 export function parseToolCall(
@@ -177,6 +180,7 @@ export function parseToolCall(
 ): { slug: string; args: Record<string, unknown>; marker: string } | null {
   const m = raw.match(TOOL_MARKER_RE)
   if (!m) return null
+  if (!m[2]) return { slug: m[1].toLowerCase(), args: {}, marker: m[0] }
   try {
     const args = JSON.parse(m[2]) as Record<string, unknown>
     return { slug: m[1].toLowerCase(), args, marker: m[0] }
@@ -441,6 +445,23 @@ export function visibleReplyText(text: string | null | undefined): string {
   return (text ?? '').replace(/\[\[[\s\S]*?\]\]/g, '').trim()
 }
 
+/** Marcadores que tornam o silêncio INTENCIONAL: não responder ou transferir. */
+const INTENTIONAL_SILENCE_RE = /\[\[\s*(?:ignorar|handoff|transferir|agente)\b/i
+
+/**
+ * A resposta final saiu sem nada pro cliente — vale uma nova tentativa?
+ *   • depois de uma ESCRITA bem-sucedida (pedido criado): sempre — o cliente
+ *     confirmou a compra e não pode ficar no vácuo;
+ *   • depois de só CONSULTAS: quando o silêncio não foi escolhido (sem
+ *     [[IGNORAR]]/transferência). 19/09 (Viviane): consultou o cadastro e a
+ *     última compra e não escreveu nada.
+ */
+export function needsReplyRetry(input: { text: string | null | undefined; writeSucceeded: boolean; toolsRan: number }): boolean {
+  if (visibleReplyText(input.text)) return false
+  if (input.writeSucceeded) return true
+  return input.toolsRan > 0 && !INTENTIONAL_SILENCE_RE.test(input.text ?? '')
+}
+
 /**
  * generateReply com o loop de ferramentas externas: injeta o cardápio no
  * prompt, executa marcadores [[FERRAMENTA:]] e re-gera com o resultado —
@@ -473,6 +494,8 @@ export async function generateWithExternalTools(
   let orderForCard: OrderForCard | null = null
   // Uma ESCRITA rodou com sucesso neste turno (pedido criado, cadastro salvo…).
   let writeSucceeded = false
+  // Quantas ferramentas rodaram neste turno (consulta ou escrita).
+  let toolsRan = 0
   // Chamadas que JÁ falharam nesta resposta (ferramenta + args): a segunda
   // tentativa não vai à rede — 06/09 a IA chamou buscar_cliente 4× seguidas
   // com o ERP fora do ar, 12s cada, e a resposta levou 40s.
@@ -497,7 +520,7 @@ export async function generateWithExternalTools(
       // auto-reply tira os marcadores, e o turno caía no "não gerou resposta"
       // (sem mensagem e sem o card do pedido). Conta o texto VISÍVEL; os
       // marcadores da resposta original ficam, pras ações ainda rodarem.
-      if (!visibleReplyText(text) && writeSucceeded) {
+      if (needsReplyRetry({ text, writeSucceeded, toolsRan })) {
         let confirmation = ''
         try {
           const retry = await generateReply({
@@ -507,16 +530,20 @@ export async function generateWithExternalTools(
               ...messages,
               {
                 role: 'user',
-                content:
-                  'A ação foi registrada com sucesso. Confirme isso ao cliente em UMA frase curta e natural, sem marcadores e sem mencionar ferramenta.',
+                content: writeSucceeded
+                  ? 'A ação foi registrada com sucesso. Confirme isso ao cliente em UMA frase curta e natural, sem marcadores e sem mencionar ferramenta.'
+                  : 'Você já consultou o que precisava. Agora responda ao cliente em UMA mensagem curta e natural, seguindo as suas instruções, sem marcadores e sem mencionar ferramenta.',
               },
             ],
           })
           confirmation = visibleReplyText((retry.text ?? '').replace(TOOL_MARKER_RE, ''))
         } catch (err) {
-          console.error('[external-tools] confirmação pós-escrita falhou:', err instanceof Error ? err.message : err)
+          console.error('[external-tools] nova tentativa de resposta falhou:', err instanceof Error ? err.message : err)
         }
-        text = [text, confirmation || 'Pronto, já registrei aqui! ✅'].filter(Boolean).join('\n')
+        // Depois de uma escrita, nunca fica mudo; depois de consulta, sem
+        // texto nenhum, o turno segue pro aviso de "não gerou resposta".
+        const fallback = writeSucceeded ? 'Pronto, já registrei aqui! ✅' : ''
+        text = [text, confirmation || fallback].filter(Boolean).join('\n')
       }
 
       return { ...res, text, orderForCard, wroteSomething: writeSucceeded }
@@ -550,6 +577,7 @@ export async function generateWithExternalTools(
       shownSummary = withFailureGuidance(tool.slug, outcome.summary) + (fallback ? `\n\n${fallback}` : '')
     }
 
+    if (tool) toolsRan++
     if (outcomeCreatesCard(tool, outcome)) {
       orderForCard = orderForCardFromArgs(call.args)
     }
