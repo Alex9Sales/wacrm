@@ -3,6 +3,7 @@ import {
   extractLeadFacts,
   factForFieldName,
   factForKey,
+  isSyntheticConversion,
   leadLinesForPrompt,
   parseNoteLines,
   prettyFormKey,
@@ -70,6 +71,22 @@ describe('extractLeadFacts', () => {
 
   it('never takes the RD technical score "interest: 0" as interest', () => {
     expect(extractLeadFacts([['interest', '0']]).interesse).toBeNull()
+  })
+})
+
+describe('isSyntheticConversion', () => {
+  it('any "Negociação … no RD Station CRM" is the RD itself, not a lead', () => {
+    expect(isSyntheticConversion('Negociação criada no RD Station CRM')).toBe(true)
+    expect(isSyntheticConversion('Negociação atualizada no RD Station CRM')).toBe(true)
+    expect(isSyntheticConversion('Negociação ganha no RD Station CRM')).toBe(true)
+    expect(isSyntheticConversion('negociacao perdida no rd station crm')).toBe(true)
+  })
+
+  it('real form conversions pass', () => {
+    expect(isSyntheticConversion('seja-um-franqueado-site-01-09-26')).toBe(false)
+    expect(isSyntheticConversion('11/09/26 | v1 | Instant Forms Lóg. Condicional')).toBe(false)
+    expect(isSyntheticConversion('Site | Form. Solicite um orçamento')).toBe(false)
+    expect(isSyntheticConversion(null)).toBe(false)
   })
 })
 

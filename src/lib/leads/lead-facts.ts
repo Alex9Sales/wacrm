@@ -106,13 +106,15 @@ export function parseNoteLines(notes: string | null | undefined): Array<[string,
 }
 
 /**
- * Conversão que o PRÓPRIO RD gera, não o lead: quando a integração cria o
- * negócio no RD CRM, o RD Marketing registra uma conversão "Negociação criada
- * no RD Station CRM" (Zelo 18/09: um lead chegou 3x em 2 min por causa disso).
- * Não é campanha nem diz que tipo de lead é.
+ * Conversão que o PRÓPRIO RD gera, não o lead: a cada mudança de negócio no RD
+ * CRM (criado, atualizado, ganho, perdido — inclusive pelo espelho do Fluxia)
+ * o RD Marketing registra "Negociação <algo> no RD Station CRM". Zelo 18/09:
+ * "criada" fez um lead chegar 3x em 2 min; "atualizada" RECRIOU o card de um
+ * lead logo depois de ele ser dado como perdido. Não é campanha nem lead novo.
  */
 export function isSyntheticConversion(label: string | null | undefined): boolean {
-  return /negocia[cç][aã]o\s+criada/i.test(label ?? '')
+  const s = label ?? ''
+  return /negocia[cç][aã]o\s+criada/i.test(s) || /negocia[cç][aã]o\b.*\brd\s*station\s*crm\b/i.test(s)
 }
 
 /** Primeiro valor não vazio de cada fato. `campanha` cai na conversão. */
