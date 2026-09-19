@@ -106,3 +106,18 @@ export function cadenceSendMode(input: {
   const windowOpen = Number.isFinite(last) && now - last < CUSTOMER_WINDOW_MS
   return windowOpen ? 'text' : 'template'
 }
+
+/** Piso de agendamento: o agendador exige horário futuro (o D0 sai em ~1 min). */
+export const MIN_STEP_DELAY_MS = 60_000
+
+/**
+ * RETOMAR DE ONDE PAROU: quando sai um toque restante. O ritmo volta ao normal
+ * contado da retomada — o toque espera o intervalo que ele tem em relação ao
+ * último toque ENVIADO (`lastSentDelayMs`; 0 se nenhum saiu). Ex.: D0, +2d,
+ * +4d; pausou depois do D0 → retomou → +2d e +4d a partir de agora.
+ * 19/09 (Rafael): a 1ª versão contava do PRÓXIMO toque, que saía 1 min depois
+ * de retomar, no meio da conversa com o lead.
+ */
+export function resumeSendAtMs(stepDelayMs: number, lastSentDelayMs: number, nowMs: number): number {
+  return nowMs + Math.max(stepDelayMs - lastSentDelayMs, MIN_STEP_DELAY_MS)
+}

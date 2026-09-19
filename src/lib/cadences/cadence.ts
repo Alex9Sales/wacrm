@@ -23,7 +23,7 @@ import {
 } from '@/lib/queue/queues'
 import { contactTokenValues, renderMessageVars } from '@/lib/whatsapp/message-vars'
 import { getAccountSettings } from '@/lib/settings/account-settings'
-import { cadenceStopReason, shiftOutOfQuietHours } from './schedule-rules'
+import { cadenceStopReason, resumeSendAtMs, shiftOutOfQuietHours } from './schedule-rules'
 
 // ============================================================
 // Cadências — motor. Uma CADÊNCIA (sequência de mensagens fixas) é INSCRITA
@@ -328,6 +328,8 @@ export interface EnrollResult {
   enrollmentId?: string
   scheduled?: number
   skipped?: number
+  /** Retomada: quando sai o próximo toque (ISO). */
+  nextAt?: string | null
   error?: string
 }
 
@@ -404,8 +406,10 @@ async function scheduleCadenceSteps(
   steps: CadenceStepRow[],
   sendAtMsFor: (step: CadenceStepRow) => number,
   opts: ScheduleOptions = {},
-): Promise<{ scheduled: number; skipped: number }> {
+): Promise<{ scheduled: number; skipped: number; firstAt: string | null }> {
   const assignTo = opts.assignTo === undefined ? ctx.userId : opts.assignTo
+  // Quando sai o 1º toque que REALMENTE ficou agendado (pro aviso na tela).
+  let firstAtMs: number | null = null
   // Inclui `primeiro_nome` (1ª palavra do nome). contactTokenValues é a fonte
   // única (mesmos tokens do disparo/agendamento).
   const vars = contactTokenValues({
@@ -524,6 +528,7 @@ async function scheduleCadenceSteps(
       insertedId = row.id
       await enqueueScheduledMessage(row.id, { delayMs: sendAt.getTime() - Date.now() })
       scheduled++
+      if (firstAtMs === null || sendAt.getTime() < firstAtMs) firstAtMs = sendAt.getTime()
       await recordCadenceEvent(ctx.accountId, enrollment, 'step_scheduled', {
         stepPosition: step.position,
         channel: step.channel,
@@ -538,7 +543,19 @@ async function scheduleCadenceSteps(
       skipped++
     }
   }
-  return { scheduled, skipped }
+  return { scheduled, skipped, firstAt: firstAtMs === null ? null : new Date(firstAtMs).toISOString() }
+}
+
+/** Inscrição AUTOMÁTICA: ninguém vira responsável (a IA segue na conversa) e
+ *  nada sai no horário de silêncio do fuso da conta. */
+async function automaticScheduleOptions(accountId: string): Promise<ScheduleOptions> {
+  let timezone = 'America/Sao_Paulo'
+  try {
+    timezone = (await getAccountSettings(accountId)).businessTimezone || timezone
+  } catch {
+    /* fuso padrão */
+  }
+  return { assignTo: null, timezone }
 }
 
 /**
@@ -656,16 +673,7 @@ export async function enrollContactInCadence(
     // editor (+2d/+4d/+7d) já era absoluto; era o motor que somava (d0→d2→d6→
     // d13…). Piso de 60s (o agendamento exige futuro; D0 sai em ~1 min).
     const enrolledAtMs = Date.now()
-    let scheduleOpts: ScheduleOptions = {}
-    if (opts.automatic) {
-      let timezone = 'America/Sao_Paulo'
-      try {
-        timezone = (await getAccountSettings(ctx.accountId)).businessTimezone || timezone
-      } catch {
-        /* fuso padrão */
-      }
-      scheduleOpts = { assignTo: null, timezone }
-    }
+    const scheduleOpts: ScheduleOptions = opts.automatic ? await automaticScheduleOptions(ctx.accountId) : {}
     const { scheduled, skipped } = await scheduleCadenceSteps(
       ctx,
       enrollment,
@@ -784,10 +792,12 @@ export async function cancelEnrollment(
 
 /**
  * RETOMA uma inscrição PAUSADA (o lead respondeu, a cadência parou): reativa e
- * reagenda SÓ os degraus ainda não enviados, a partir de AGORA, preservando o
- * espaçamento entre eles. Ex.: pausou após o degrau 2 (d2) → os degraus 3/4/5
- * (originais d4/d7/d10) saem agora, +3d, +6d. Não reenvia o que já foi.
- * Recomeçar do zero = re-inscrever no botão de cadência.
+ * reagenda SÓ os degraus ainda não enviados, no ritmo NORMAL contado da
+ * retomada — cada um espera o intervalo que tem em relação ao último enviado
+ * (`resumeSendAtMs`). Ex.: D0/+2d/+4d/+7d/+10d, pausou após o D0 → +2d, +4d,
+ * +7d, +10d a partir de agora. Não reenvia o que já foi. Inscrição automática
+ * segue automática (sem responsável, fora do silêncio). Recomeçar do zero =
+ * re-inscrever no botão de cadência.
  */
 export async function resumeEnrollment(
   accountId: string,
@@ -875,17 +885,33 @@ export async function resumeEnrollment(
     const routing = await loadRoutingContext(accountId, enr.contactId, enr.conversationId)
     const ctx: CadenceCtx = { accountId, userId: enr.enrolledBy ?? contact.userId }
 
-    // Re-anchor: o 1º degrau restante sai agora; os seguintes mantêm o
-    // espaçamento relativo (offset − offset do 1º restante).
-    const baseOffset = delayMsOf(remaining[0].delayValue, remaining[0].delayUnit)
+    // Retomar uma inscrição AUTOMÁTICA (lead que chegou sozinho) não pode
+    // atribuir a conversa a ninguém — tiraria a IA dela — nem mandar de
+    // madrugada. O jeito da inscrição fica no evento 'enrolled'.
+    const enrolledEvt = firstOrNull(
+      await db
+        .select({ data: cadenceEvents.data })
+        .from(cadenceEvents)
+        .where(and(eq(cadenceEvents.enrollmentId, enr.id), eq(cadenceEvents.type, 'enrolled')))
+        .limit(1),
+    )
+    const automatic = (enrolledEvt?.data as { automatic?: boolean } | null)?.automatic === true
+    const scheduleOpts: ScheduleOptions = automatic ? await automaticScheduleOptions(accountId) : {}
+
+    // Ritmo normal contado da retomada: cada toque espera o intervalo que tem
+    // em relação ao último ENVIADO (o anterior mais próximo, se a cadência foi
+    // editada). Nada enviado → conta do zero, como na inscrição.
+    const lastSentStep = steps.filter((s) => s.position <= lastSentPos).at(-1) ?? null
+    const lastSentDelayMs = lastSentStep ? delayMsOf(lastSentStep.delayValue, lastSentStep.delayUnit) : 0
     const nowMs = Date.now()
-    const { scheduled, skipped } = await scheduleCadenceSteps(
+    const { scheduled, skipped, firstAt } = await scheduleCadenceSteps(
       ctx,
       { id: enr.id, cadenceId: enr.cadenceId, contactId: enr.contactId, dealId: enr.dealId },
       contact,
       routing,
       remaining,
-      (step) => nowMs + Math.max(delayMsOf(step.delayValue, step.delayUnit) - baseOffset, 60_000),
+      (step) => resumeSendAtMs(delayMsOf(step.delayValue, step.delayUnit), lastSentDelayMs, nowMs),
+      scheduleOpts,
     )
 
     if (scheduled === 0) {
@@ -903,10 +929,10 @@ export async function resumeEnrollment(
       accountId,
       { id: enr.id, cadenceId: enr.cadenceId, contactId: enr.contactId, dealId: enr.dealId },
       'resumed',
-      { data: { scheduled, skipped, fromPosition: remaining[0].position } },
+      { data: { scheduled, skipped, fromPosition: remaining[0].position, nextAt: firstAt, automatic } },
     )
 
-    return { ok: true, enrollmentId: enr.id, scheduled, skipped }
+    return { ok: true, enrollmentId: enr.id, scheduled, skipped, nextAt: firstAt }
   } catch (err) {
     if (isUniqueViolation(err)) {
       return { ok: false, error: 'Esse lead acabou de entrar noutra cadência. Recarregue.' }

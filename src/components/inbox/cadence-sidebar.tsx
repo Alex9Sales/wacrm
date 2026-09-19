@@ -14,6 +14,7 @@ import {
 } from '@/app/(dashboard)/automations/cadencias/actions'
 import { CadenceButton } from './cadence-button'
 import { onCadenceChange } from './cadence-bus'
+import { resumedMessage } from './cadence-resume-message'
 
 const STATUS_LABEL: Record<string, string> = {
   active: 'em andamento',
@@ -28,6 +29,7 @@ const EVENT_LABEL: Record<string, string> = {
   step_sent: 'toque enviado',
   step_skipped: 'toque pulado',
   paused: 'pausada (respondeu)',
+  resumed: 'retomada',
   cancelled: 'encerrada',
   completed: 'concluída',
 }
@@ -53,7 +55,7 @@ export function CadenceSidebar({ conversationId }: { conversationId: string }) {
 
   // ▶️ Retomar de onde parou (pedido do Rafael, 01/09): a cadência pausa
   // quando o lead responde; se o atendente quer que ela siga, reagenda só os
-  // degraus que faltam, a partir de agora.
+  // degraus que faltam, no ritmo normal contado da retomada (nada sai na hora).
   async function resume() {
     if (!state || state.status !== 'paused') return
     setResuming(true)
@@ -63,11 +65,7 @@ export function CadenceSidebar({ conversationId }: { conversationId: string }) {
         toast.error(r.error ?? 'Não deu pra retomar a cadência.')
         return
       }
-      toast.success(
-        r.scheduled
-          ? `Cadência retomada — ${r.scheduled} toque(s) reagendado(s).`
-          : 'Cadência retomada.',
-      )
+      toast.success(resumedMessage(r.scheduled ?? 0, r.nextAt ?? null))
       await refresh()
     } finally {
       setResuming(false)

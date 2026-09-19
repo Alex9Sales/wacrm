@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { cadenceSendMode, cadenceStopReason, shiftOutOfQuietHours } from './schedule-rules'
+import { cadenceSendMode, cadenceStopReason, resumeSendAtMs, shiftOutOfQuietHours } from './schedule-rules'
 
 describe('cadenceStopReason', () => {
   const pre = [1, 2, 3, 4, 5, 6].map((position) => ({ pipelineId: 'pre', position })) // 1ª..Definição
@@ -84,5 +84,28 @@ describe('cadenceSendMode', () => {
     expect(cadenceSendMode({ channelTakesTemplates: true, templateName: null, lastInboundAt: null, now })).toBe('text')
     expect(cadenceSendMode({ channelTakesTemplates: true, templateName: '  ', lastInboundAt: null, now })).toBe('text')
     expect(cadenceSendMode({ channelTakesTemplates: false, templateName: 'x', lastInboundAt: null, now })).toBe('text')
+  })
+})
+
+describe('resumeSendAtMs', () => {
+  const DAY = 24 * 60 * 60 * 1000
+  const now = Date.UTC(2026, 8, 19, 15, 7)
+  const toques = [0, 2, 4, 7, 10].map((d) => d * DAY) // D0, +2d, +4d, +7d, +10d
+
+  it('pausou depois do D0 → o próximo espera os 2 dias normais, não sai agora', () => {
+    expect(toques.slice(1).map((ms) => (resumeSendAtMs(ms, toques[0], now) - now) / DAY)).toEqual([2, 4, 7, 10])
+  })
+
+  it('pausou depois do +4d → +7d e +10d viram +3d e +6d a partir da retomada', () => {
+    expect(resumeSendAtMs(toques[3], toques[2], now) - now).toBe(3 * DAY)
+    expect(resumeSendAtMs(toques[4], toques[2], now) - now).toBe(6 * DAY)
+  })
+
+  it('nada enviado ainda → o 1º sai em 1 min, como na inscrição', () => {
+    expect(resumeSendAtMs(0, 0, now) - now).toBe(60_000)
+  })
+
+  it('cadência editada com toque mais cedo que o último enviado → piso de 1 min', () => {
+    expect(resumeSendAtMs(DAY, 2 * DAY, now) - now).toBe(60_000)
   })
 })

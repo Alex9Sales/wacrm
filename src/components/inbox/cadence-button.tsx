@@ -27,6 +27,7 @@ import {
   type CadenceState,
 } from '@/app/(dashboard)/automations/cadencias/actions'
 import { onCadenceChange, emitCadenceChange } from './cadence-bus'
+import { resumedMessage } from './cadence-resume-message'
 
 function fmtDateTime(iso: string | null): string {
   if (!iso) return '—'
@@ -48,6 +49,7 @@ const EVENT_LABEL: Record<string, string> = {
   step_sent: 'toque enviado',
   step_skipped: 'toque pulado',
   paused: 'pausada (respondeu)',
+  resumed: 'retomada',
   cancelled: 'encerrada',
   completed: 'concluída',
 }
@@ -169,9 +171,7 @@ export function CadenceButton({
       toast.error(res.error ?? 'Falha ao retomar a cadência.')
       return
     }
-    toast.success(
-      `Cadência retomada — ${res.scheduled ?? 0} toque(s) restante(s) reagendado(s).`,
-    )
+    toast.success(resumedMessage(res.scheduled ?? 0, res.nextAt ?? null))
     void refresh()
     emitCadenceChange(busKey)
     onChanged?.()
@@ -265,7 +265,8 @@ export function CadenceButton({
               </p>
             )}
             {/* Pausada (o lead respondeu) → retomar de onde parou, sem
-                recomeçar do degrau 1. Só reagenda os toques que faltam. */}
+                recomeçar do degrau 1. Só reagenda os toques que faltam, no
+                ritmo normal contado da retomada (nada sai na hora). */}
             {state && state.status === 'paused' && (
               <button
                 onClick={() => void resume()}

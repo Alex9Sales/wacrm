@@ -490,14 +490,16 @@ export async function stopLeadCadence(enrollmentId: string): Promise<{ error: st
 }
 
 /** Retoma uma cadência PAUSADA de onde parou (reagenda só os degraus que
- *  faltam, a partir de agora). Ver resumeEnrollment. */
+ *  faltam, no ritmo normal contado da retomada). Ver resumeEnrollment. */
 export async function resumeLeadCadence(
   enrollmentId: string,
-): Promise<{ ok: boolean; scheduled?: number; error?: string }> {
+): Promise<{ ok: boolean; scheduled?: number; nextAt?: string | null; error?: string }> {
   try {
     const ctx = await getCurrentAccount()
     const res = await resumeEnrollment(ctx.accountId, enrollmentId)
-    return res.ok ? { ok: true, scheduled: res.scheduled } : { ok: false, error: res.error }
+    return res.ok
+      ? { ok: true, scheduled: res.scheduled, nextAt: res.nextAt ?? null }
+      : { ok: false, error: res.error }
   } catch (err) {
     console.error('[resumeLeadCadence]', err)
     return { ok: false, error: 'Falha ao retomar a cadência.' }
