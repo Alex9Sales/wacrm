@@ -7,7 +7,7 @@
 // is no RLS anymore.
 // ============================================================
 
-import { and, asc, desc, eq, ilike, inArray, isNull, lt, or, sql } from 'drizzle-orm'
+import { and, asc, desc, eq, gt, ilike, inArray, isNull, lt, or, sql } from 'drizzle-orm'
 import {
   db,
   contactNotes,
@@ -67,6 +67,7 @@ import {
 import { dispatchTagAddedToFlows } from '@/lib/flows/engine'
 import { getProvider } from '@/lib/channels/registry'
 import { groupJidDigits } from '@/lib/whatsapp/group'
+import { sendSeenForConversation } from '@/lib/whatsapp/send-seen'
 import type {
   ChannelProvider,
   Contact,
@@ -1191,15 +1192,20 @@ export async function markConversationRead(
   conversationId: string,
 ): Promise<void> {
   const ctx = await getCurrentAccount()
-  await db
+  const updated = await db
     .update(conversations)
     .set({ unreadCount: 0 })
     .where(
       and(
         eq(conversations.id, conversationId),
         eq(conversations.accountId, ctx.accountId),
+        gt(conversations.unreadCount, 0),
       ),
     )
+    .returning({ id: conversations.id })
+  // 👀 Tinha mensagem não lida → o cliente ganha o "visto" (tique azul), como
+  // no WhatsApp Web (19/09, GoLink). Em segundo plano: não segura a tela.
+  if (updated.length > 0) void sendSeenForConversation(ctx.accountId, conversationId)
 }
 
 /**

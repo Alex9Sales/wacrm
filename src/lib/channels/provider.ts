@@ -345,6 +345,14 @@ export interface WhatsAppProvider {
   sendTyping?(ch: ChannelCtx, toE164: string, on: boolean): Promise<void>;
 
   /**
+   * "Visto" (tique azul): marca como lidas as mensagens do contato nesse chat,
+   * como o WhatsApp Web faz ao abrir a conversa. Best-effort — engole erro.
+   * Opcional: só engines não oficiais (WAHA). Se o número desligou a
+   * confirmação de leitura nas configurações do WhatsApp, o cliente não vê.
+   */
+  sendSeen?(ch: ChannelCtx, toE164: string): Promise<void>;
+
+  /**
    * Edit the text of a message WE previously sent (WhatsApp "Editar"). Optional
    * — only engines whose API exposes edit implement it (gows/WAHA). WhatsApp
    * only allows editing within ~15 min and only own messages; the caller

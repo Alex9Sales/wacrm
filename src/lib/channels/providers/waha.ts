@@ -1243,6 +1243,27 @@ export const wahaProvider: WhatsAppProvider = {
     }
   },
 
+  async sendSeen(ch: ChannelCtx, toE164: string): Promise<void> {
+    // WAHA: POST /api/sendSeen { session, chatId } — marca o que o contato
+    // mandou como lido (tique azul pra ele). 19/09 (GoLink): respondendo pelo
+    // CRM o cliente nunca via o "visto"; pelo WhatsApp Web via.
+    try {
+      const base = baseUrlOf(ch);
+      const session = sessionOf(ch);
+      const chatId = await resolveChatId(ch, toE164);
+      const r = await httpJson(`${base}/api/sendSeen`, {
+        method: 'POST',
+        headers: headersOf(ch),
+        body: JSON.stringify({ session, chatId }),
+      });
+      if (!r.ok) {
+        console.warn('[waha] sendSeen not ok:', r.status, JSON.stringify(r.body).slice(0, 200));
+      }
+    } catch (err) {
+      console.error('[waha] sendSeen failed:', err instanceof Error ? err.message : err);
+    }
+  },
+
   /** Edit an own message's text. WAHA/gows:
    *  PUT /api/{session}/chats/{chatId}/messages/{messageId} { text }.
    *  gows keys messages by the SERIALIZED id (`true_<chatId>_<HASH>`) while we
