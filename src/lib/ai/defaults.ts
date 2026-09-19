@@ -580,8 +580,20 @@ export function buildSystemPrompt(args: {
     // resumo de conversa). Determinístico. Separado do PRIOR CONTEXT de propósito
     // — uma coisa é dado estruturado, outra é resumo do que ele falou.
     if (args.customerFacts) {
+      // 19/09 (Alex, Família do Gás): "Ultragaz R$120 como da última vez.
+      // Entrego na Rua X, 108 e você paga no débito como sempre?" acerta tudo e
+      // soa a cadastro lido em voz alta. O histórico ORIENTA; não é narrado.
       parts.push(
-        `CUSTOMER FACTS — histórico comercial REAL deste cliente (dados do sistema, não invente nada além disto). Use pra atender melhor: reconheça o cliente, use o produto/valor da última compra pra negociar, e considere se a recompra está na hora.\n${args.customerFacts}`,
+        [
+          'CUSTOMER FACTS — histórico comercial REAL deste cliente (dados do sistema, não invente nada além disto). É CONTEXTO INTERNO: orienta a conversa, NÃO é pra ser narrado. Conheça o cliente sem parecer que está lendo o cadastro dele:',
+          '- responda primeiro ao que ele perguntou; use o nome com naturalidade;',
+          '- o produto de sempre ajuda a entender o que ele quer ("o de sempre?");',
+          '- endereço: não recite — pergunte "mesmo endereço da última vez?"; escreva o endereço só se ele pedir ou houver dúvida;',
+          '- pagamento: não afirme a forma antiga como se fosse a de hoje ("você paga no débito, como sempre"); pergunte ("vai no débito de novo?");',
+          '- valor da última compra: só quando ajuda (ex.: objeção de preço — "continua o mesmo valor da sua última compra");',
+          '- dias desde a última compra, frequência, atraso, ticket médio e total comprado: NUNCA diga por conta própria (só se o cliente perguntar) — servem pra você decidir quando e como abordar.',
+          args.customerFacts,
+        ].join('\n'),
       )
     }
 

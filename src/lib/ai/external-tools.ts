@@ -434,6 +434,14 @@ export async function executeTool(
 }
 
 /**
+ * O que o CLIENTE veria desta resposta: sem nenhum marcador [[…]] (card,
+ * etiqueta, funil, nota…) — o auto-reply tira todos antes de enviar.
+ */
+export function visibleReplyText(text: string | null | undefined): string {
+  return (text ?? '').replace(/\[\[[\s\S]*?\]\]/g, '').trim()
+}
+
+/**
  * generateReply com o loop de ferramentas externas: injeta o cardápio no
  * prompt, executa marcadores [[FERRAMENTA:]] e re-gera com o resultado —
  * até MAX_TOOL_STEPS. Agente sem ferramentas = generateReply puro.
@@ -482,7 +490,15 @@ export async function generateWithExternalTools(
       // de uma escrita bem-sucedida, silêncio não é resposta aceitável: pede
       // uma confirmação curta; se ainda vier vazia, manda uma mínima. O que
       // NÃO pode acontecer é o cliente confirmar a compra e ficar no vácuo.
-      if (!text && writeSucceeded) {
+      //
+      // 18/09 (Família do Gás, 11 turnos mudos em 2 dias, todos logo depois do
+      // criar_pedido): a resposta final vinha SÓ com marcadores ([[CRIARCARD]],
+      // etiqueta…) — aqui não é vazia, mas fica vazia pro cliente quando o
+      // auto-reply tira os marcadores, e o turno caía no "não gerou resposta"
+      // (sem mensagem e sem o card do pedido). Conta o texto VISÍVEL; os
+      // marcadores da resposta original ficam, pras ações ainda rodarem.
+      if (!visibleReplyText(text) && writeSucceeded) {
+        let confirmation = ''
         try {
           const retry = await generateReply({
             ...args,
@@ -496,11 +512,11 @@ export async function generateWithExternalTools(
               },
             ],
           })
-          text = (retry.text ?? '').replace(TOOL_MARKER_RE, '').trim()
+          confirmation = visibleReplyText((retry.text ?? '').replace(TOOL_MARKER_RE, ''))
         } catch (err) {
           console.error('[external-tools] confirmação pós-escrita falhou:', err instanceof Error ? err.message : err)
         }
-        if (!text) text = 'Pronto, já registrei aqui! ✅'
+        text = [text, confirmation || 'Pronto, já registrei aqui! ✅'].filter(Boolean).join('\n')
       }
 
       return { ...res, text, orderForCard, wroteSomething: writeSucceeded }

@@ -31,20 +31,15 @@ import {
   type PendingRequestRow,
 } from "./actions";
 import { toast } from "sonner";
-import { greeting } from "@/lib/cdl/names";
-import { humanizeProduct, productNames } from "@/lib/cdl/product-label";
+import { humanizeProduct } from "@/lib/cdl/product-label";
+import { reactivationText } from "@/lib/cdl/reactivation-text";
 
-/** Rascunho de reativação sugerido (o humano edita/aprova antes de enviar). */
+/** Rascunho de reativação sugerido (o humano edita/aprova antes de enviar).
+ *  Mesmo texto da fila automática — os dias sem comprar ficam na lista, não
+ *  na mensagem (lib/cdl/reactivation-text.ts). */
 function draftFor(row: RepurchaseRow): string {
   const p = row.payload as Record<string, unknown>;
-  const oi = greeting(row.name);
-  // "1.00x P-13 UltraGaz  Ultragaz" (como o ERP grava) → "P-13 Ultragaz".
-  const prod = productNames(typeof p.product === "string" ? p.product : null);
-  if (row.signalType === "inactive")
-    return `${oi} Sumiu, hein 😄 Faz um tempo que não passa aqui. Tá precisando de ${prod}? Consigo te atender rapidinho.`;
-  if (row.signalType === "repurchase_overdue")
-    return `${oi} 😊 Vi que já faz ${p.days_since ?? "uns"} dias do seu último ${prod}. Quer que eu já separe pra você?`;
-  return `${oi} Passando pra ver se tá na hora de repor o ${prod}. Quer que eu já deixe separado? 😊`;
+  return reactivationText(row.name, row.signalType, typeof p.product === "string" ? p.product : null);
 }
 
 const CAN_REACTIVATE = new Set([
