@@ -383,13 +383,12 @@ interface SchedulableContact {
   company: string | null
 }
 
-/** Como agendar os degraus. Inscrição MANUAL (padrão): a pessoa que inscreveu
- *  vira responsável pela conversa e o horário é o exato. AUTOMÁTICA (lead que
- *  chegou sozinho): ninguém é atribuído — atribuir tiraria a conversa da IA — e
- *  nada sai de madrugada (`timezone` liga o horário de silêncio). */
+/** Como agendar os degraus. Inscrição MANUAL: horário exato. AUTOMÁTICA (lead
+ *  que chegou sozinho): nada sai de madrugada (`timezone` liga o silêncio).
+ *  Nas duas, a cadência NUNCA põe responsável na conversa: com responsável a IA
+ *  não responde, e quem responde ao lead que voltou é a IA (19/09, Rafael:
+ *  "deixa sem atribuir, porque eu queria que a IA continuasse"). */
 interface ScheduleOptions {
-  /** undefined = quem inscreveu (ctx.userId); null = ninguém. */
-  assignTo?: string | null
   /** Fuso da conta p/ empurrar o envio pra fora do silêncio (21h–8h → 9h). */
   timezone?: string | null
 }
@@ -407,7 +406,6 @@ async function scheduleCadenceSteps(
   sendAtMsFor: (step: CadenceStepRow) => number,
   opts: ScheduleOptions = {},
 ): Promise<{ scheduled: number; skipped: number; firstAt: string | null }> {
-  const assignTo = opts.assignTo === undefined ? ctx.userId : opts.assignTo
   // Quando sai o 1º toque que REALMENTE ficou agendado (pro aviso na tela).
   let firstAtMs: number | null = null
   // Inclui `primeiro_nome` (1ª palavra do nome). contactTokenValues é a fonte
@@ -518,8 +516,10 @@ async function scheduleCadenceSteps(
             scheduledAt: sendAt.toISOString(),
             status: 'pending',
             createdBy: ctx.userId,
-            assignedTo: assignTo,
-            assignedBy: assignTo ? ctx.userId : null,
+            // Sem responsável: o worker atribuiria a conversa no envio e a IA
+            // deixaria de atender a resposta do lead (ver ScheduleOptions).
+            assignedTo: null,
+            assignedBy: null,
             cadenceEnrollmentId: enrollment.id,
             cadenceStepPosition: step.position,
           })
@@ -546,8 +546,7 @@ async function scheduleCadenceSteps(
   return { scheduled, skipped, firstAt: firstAtMs === null ? null : new Date(firstAtMs).toISOString() }
 }
 
-/** Inscrição AUTOMÁTICA: ninguém vira responsável (a IA segue na conversa) e
- *  nada sai no horário de silêncio do fuso da conta. */
+/** Inscrição AUTOMÁTICA: nada sai no horário de silêncio do fuso da conta. */
 async function automaticScheduleOptions(accountId: string): Promise<ScheduleOptions> {
   let timezone = 'America/Sao_Paulo'
   try {
@@ -555,7 +554,7 @@ async function automaticScheduleOptions(accountId: string): Promise<ScheduleOpti
   } catch {
     /* fuso padrão */
   }
-  return { assignTo: null, timezone }
+  return { timezone }
 }
 
 /**
@@ -796,8 +795,8 @@ export async function cancelEnrollment(
  * retomada — cada um espera o intervalo que tem em relação ao último enviado
  * (`resumeSendAtMs`). Ex.: D0/+2d/+4d/+7d/+10d, pausou após o D0 → +2d, +4d,
  * +7d, +10d a partir de agora. Não reenvia o que já foi. Inscrição automática
- * segue automática (sem responsável, fora do silêncio). Recomeçar do zero =
- * re-inscrever no botão de cadência.
+ * segue automática (fora do silêncio). Recomeçar do zero = re-inscrever no
+ * botão de cadência.
  */
 export async function resumeEnrollment(
   accountId: string,
@@ -886,8 +885,7 @@ export async function resumeEnrollment(
     const ctx: CadenceCtx = { accountId, userId: enr.enrolledBy ?? contact.userId }
 
     // Retomar uma inscrição AUTOMÁTICA (lead que chegou sozinho) não pode
-    // atribuir a conversa a ninguém — tiraria a IA dela — nem mandar de
-    // madrugada. O jeito da inscrição fica no evento 'enrolled'.
+    // mandar de madrugada. O jeito da inscrição fica no evento 'enrolled'.
     const enrolledEvt = firstOrNull(
       await db
         .select({ data: cadenceEvents.data })

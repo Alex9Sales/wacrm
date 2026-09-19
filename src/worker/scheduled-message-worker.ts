@@ -258,7 +258,10 @@ async function processScheduledMessageJob(
     // cliente — em canal DEDICADO a outro, conversa sem dono é invisível para
     // ela (11/09, Leonardo/GoLink: "algumas não chegam pra ele"). Só atribui
     // quando ninguém pegou ainda: responder nunca rouba de um colega.
-    if (row.assignedTo) {
+    // Toque de CADÊNCIA nunca atribui (nem os agendados antes de 19/09, que
+    // ainda levam responsável): com responsável a IA não atende o lead que
+    // respondeu (Rafael: "deixa sem atribuir, pq eu queria que a IA continuasse").
+    if (row.assignedTo && !row.cadenceEnrollmentId) {
       try {
         await db
           .update(conversations)
