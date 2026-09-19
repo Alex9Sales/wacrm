@@ -16,9 +16,11 @@
 // ============================================================
 
 import { NextResponse, after } from 'next/server'
+import { and, eq } from 'drizzle-orm'
 
+import { db, messageTemplates } from '@/db'
 import { loadLeadSourceForWebhook } from '@/lib/leads/sources'
-import { parseRdWebhook, pickIntroForOrigin, rdOriginLabel } from '@/lib/leads/providers/rdstation'
+import { introDelivery, parseRdWebhook, pickIntroForOrigin, rdOriginLabel } from '@/lib/leads/providers/rdstation'
 import { buildLeadNotes } from '@/lib/leads/providers/shared'
 import { ingestLead } from '@/lib/leads/ingest'
 import { extractLeadFacts, isSyntheticConversion } from '@/lib/leads/lead-facts'
@@ -90,6 +92,15 @@ export async function POST(
         const origem = rdOriginLabel(lead)
         // Abertura certa pro TIPO de lead (franquia × orçamento × vaga).
         const intro = pickIntroForOrigin(source.providerMeta, origem)
+        // Modelo ainda em análise na Meta → o oficial não alcança lead novo:
+        // a abertura sai pelo número reserva da regra, em texto, até aprovar.
+        const approved = intro.templateName
+          ? await templateIsApproved(source.accountId, intro.templateName, templateLanguage)
+          : true
+        const delivery = introDelivery(intro, approved)
+        if (delivery.usedFallback) {
+          console.log(`[rd-station] modelo ${intro.templateName} ainda não aprovado — abertura pelo número reserva`)
+        }
         const result = await ingestLead(source.accountId, auditUserId, {
           rawPhone: lead.phone,
           name: lead.name,
@@ -105,9 +116,9 @@ export async function POST(
           source: origem,
           // Primeira mensagem: no canal oficial tem que ser template (contato
           // frio = janela fechada). O nome do lead vai como {{1}}.
-          introTemplate: source.deliverToAi && intro.templateName
+          introTemplate: source.deliverToAi && delivery.templateName
             ? {
-                name: intro.templateName,
+                name: delivery.templateName,
                 language: templateLanguage,
                 params: [firstNameForGreeting(lead.name) || 'tudo bem'],
               }
@@ -116,13 +127,14 @@ export async function POST(
           // da regra/fonte com {{primeiro_nome}}, senão o genérico. Linha
           // "---" separa em mensagens curtas.
           introText: source.deliverToAi
-            ? intro.text
-              ? renderForContact(intro.text, { name: lead.name })
+            ? delivery.text
+              ? renderForContact(delivery.text, { name: lead.name })
               : introTextOf(lead.name)
             : null,
-          // Número da abertura: o da REGRA desse tipo de lead, senão o da fonte.
+          // Número da abertura: o da REGRA desse tipo de lead (ou a reserva
+          // dela, enquanto o modelo não é aprovado), senão o da fonte.
           channelId:
-            intro.channelId ??
+            delivery.channelId ??
             (typeof source.providerMeta.introChannelId === 'string'
               ? source.providerMeta.introChannelId
               : null),
@@ -157,4 +169,27 @@ export async function POST(
 /** Texto de abertura pros canais sem template (WAHA). */
 function introTextOf(name: string | null): string {
   return `${greeting(name)} Recebemos o seu contato. Como posso te ajudar?`
+}
+
+/** O modelo está APROVADO na Meta pra esta conta (o webhook de status da Meta
+ *  mantém `message_templates.status` em dia)? Erro de leitura = "não". */
+async function templateIsApproved(accountId: string, name: string, language: string): Promise<boolean> {
+  try {
+    const rows = await db
+      .select({ id: messageTemplates.id })
+      .from(messageTemplates)
+      .where(
+        and(
+          eq(messageTemplates.accountId, accountId),
+          eq(messageTemplates.name, name),
+          eq(messageTemplates.language, language),
+          eq(messageTemplates.status, 'APPROVED'),
+        ),
+      )
+      .limit(1)
+    return rows.length > 0
+  } catch (err) {
+    console.error('[rd-station] não deu pra conferir o modelo:', err)
+    return false
+  }
 }

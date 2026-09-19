@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest'
 
-import { parseRdWebhook, mapRdLead, rdOriginLabel, pickIntroForOrigin } from './rdstation'
+import { parseRdWebhook, mapRdLead, rdOriginLabel, pickIntroForOrigin, introDelivery } from './rdstation'
 
 // Pacote no formato que o RD documenta hoje (o próprio RD avisa que vai mudar).
 const LEAD = {
@@ -139,6 +139,7 @@ describe('pickIntroForOrigin', () => {
       templateName: null,
       channelId: 'canal-recados',
       cadenceId: null,
+      fallbackChannelId: null,
     })
   })
 
@@ -148,6 +149,7 @@ describe('pickIntroForOrigin', () => {
       templateName: 'vaga_v1',
       channelId: null,
       cadenceId: 'cad-vaga',
+      fallbackChannelId: null,
     })
   })
 
@@ -157,11 +159,55 @@ describe('pickIntroForOrigin', () => {
       templateName: 'boas_vindas_v2',
       channelId: null,
       cadenceId: 'cad-franquia',
+      fallbackChannelId: null,
     })
     expect(pickIntroForOrigin(meta, '11/09/26 | v1 | Instant Forms Lóg. Condicional').text).toBe('FRANQUIA')
   })
 
   it('regex inválida na config é ignorada; sem regras e sem texto → nulos', () => {
-    expect(pickIntroForOrigin({}, 'qualquer')).toEqual({ text: null, templateName: null, channelId: null, cadenceId: null })
+    expect(pickIntroForOrigin({}, 'qualquer')).toEqual({
+      text: null,
+      templateName: null,
+      channelId: null,
+      cadenceId: null,
+      fallbackChannelId: null,
+    })
+  })
+})
+
+describe('introDelivery', () => {
+  const orcamento = {
+    text: 'SERVICO',
+    templateName: 'orcamento_recebido',
+    channelId: 'oficial',
+    cadenceId: null,
+    fallbackChannelId: 'recados',
+  }
+
+  it('modelo aprovado → oficial com o modelo', () => {
+    expect(introDelivery(orcamento, true)).toEqual({
+      channelId: 'oficial',
+      templateName: 'orcamento_recebido',
+      text: 'SERVICO',
+      usedFallback: false,
+    })
+  })
+
+  it('modelo ainda em análise → número reserva, em texto (o oficial não alcança lead novo sem modelo)', () => {
+    expect(introDelivery(orcamento, false)).toEqual({
+      channelId: 'recados',
+      templateName: null,
+      text: 'SERVICO',
+      usedFallback: true,
+    })
+  })
+
+  it('sem número reserva, segue o canal da regra (como antes)', () => {
+    expect(introDelivery({ ...orcamento, fallbackChannelId: null }, false)).toEqual({
+      channelId: 'oficial',
+      templateName: 'orcamento_recebido',
+      text: 'SERVICO',
+      usedFallback: false,
+    })
   })
 })

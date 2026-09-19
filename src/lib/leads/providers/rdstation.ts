@@ -179,6 +179,25 @@ export interface IntroChoice {
    * pessoa, não pra nutrição de franquia.
    */
   cadenceId: string | null
+  /**
+   * Número RESERVA, usado só enquanto o modelo desta abertura não está
+   * APROVADO na Meta (aí o oficial não alcança lead novo). Zelo 18/09: tudo
+   * pelo oficial; orçamento/vaga caem no número de recados só até a Meta
+   * aprovar `orcamento_recebido`/`vaga_recebida` — aprovou, vira oficial sozinho.
+   */
+  fallbackChannelId: string | null
+}
+
+/** Como a abertura sai de fato: pelo canal da regra com o modelo, ou — se o
+ *  modelo ainda não está aprovado e há número reserva — pela reserva, em texto. */
+export function introDelivery(
+  intro: IntroChoice,
+  templateApproved: boolean,
+): { channelId: string | null; templateName: string | null; text: string | null; usedFallback: boolean } {
+  if (intro.templateName && !templateApproved && intro.fallbackChannelId) {
+    return { channelId: intro.fallbackChannelId, templateName: null, text: intro.text, usedFallback: true }
+  }
+  return { channelId: intro.channelId, templateName: intro.templateName, text: intro.text, usedFallback: false }
 }
 
 /**
@@ -207,6 +226,8 @@ export function pickIntroForOrigin(meta: Record<string, unknown>, origin: string
         templateName: typeof r.templateName === 'string' && r.templateName.trim() ? r.templateName.trim() : null,
         channelId: typeof r.channelId === 'string' && r.channelId.trim() ? r.channelId.trim() : null,
         cadenceId: typeof r.cadenceId === 'string' && r.cadenceId.trim() ? r.cadenceId.trim() : null,
+        fallbackChannelId:
+          typeof r.fallbackChannelId === 'string' && r.fallbackChannelId.trim() ? r.fallbackChannelId.trim() : null,
       }
     }
   }
@@ -219,5 +240,9 @@ export function pickIntroForOrigin(meta: Record<string, unknown>, origin: string
     channelId: null,
     cadenceId:
       typeof meta.introCadenceId === 'string' && meta.introCadenceId.trim() ? meta.introCadenceId.trim() : null,
+    fallbackChannelId:
+      typeof meta.introFallbackChannelId === 'string' && meta.introFallbackChannelId.trim()
+        ? meta.introFallbackChannelId.trim()
+        : null,
   }
 }
