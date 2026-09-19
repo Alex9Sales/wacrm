@@ -1133,7 +1133,8 @@ export async function getLostReasonsSettings(): Promise<{
 }> {
   const ctx = await getCurrentAccount()
   const s = await getAccountSettings(ctx.accountId)
-  return { reasons: s.lostReasons, locked: s.lostReasonsLocked }
+  const { sortReasons } = await import('@/lib/deals/lost-reasons')
+  return { reasons: sortReasons(s.lostReasons), locked: s.lostReasonsLocked }
 }
 
 export async function setLostReasonsSettings(input: {
@@ -1141,10 +1142,12 @@ export async function setLostReasonsSettings(input: {
   locked: boolean
 }): Promise<{ error: string | null }> {
   const ctx = await requireRole('admin')
-  const { dedupeReasons } = await import('@/lib/deals/lost-reasons')
-  const reasons = dedupeReasons(input.reasons)
-    .map((r) => r.slice(0, 60))
-    .slice(0, 40)
+  const { dedupeReasons, sortReasons } = await import('@/lib/deals/lost-reasons')
+  const reasons = sortReasons(
+    dedupeReasons(input.reasons)
+      .map((r) => r.slice(0, 60))
+      .slice(0, 40),
+  )
   await updateAccountSettings(ctx.accountId, {
     lostReasons: reasons,
     lostReasonsLocked: !!input.locked,

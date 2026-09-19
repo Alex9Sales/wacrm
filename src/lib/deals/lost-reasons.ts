@@ -25,3 +25,23 @@ export function dedupeReasons(reasons: string[]): string[] {
   }
   return out
 }
+
+/** "outros"/"outro" (sem caixa e acento) — a gaveta de sobra vai pro fim. */
+function isCatchAll(r: string): boolean {
+  const c = canonReason(r)
+  return c === 'outros' || c === 'outro'
+}
+
+/**
+ * Ordem ALFABÉTICA (pt-BR, sem ligar pra caixa e acento), com "Outros" no fim.
+ * 19/09 (Rafael): com a lista crescendo, achar o motivo na hora de marcar a
+ * perda ficava difícil na ordem em que foram criados.
+ */
+export function sortReasons(reasons: string[]): string[] {
+  return [...reasons].sort((a, b) => {
+    const ca = isCatchAll(a)
+    const cb = isCatchAll(b)
+    if (ca !== cb) return ca ? 1 : -1
+    return a.localeCompare(b, 'pt-BR', { sensitivity: 'base' })
+  })
+}

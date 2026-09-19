@@ -40,7 +40,7 @@ import {
   getAccountSettings,
   updateAccountSettings,
 } from '@/lib/settings/account-settings'
-import { canonReason } from '@/lib/deals/lost-reasons'
+import { canonReason, sortReasons } from '@/lib/deals/lost-reasons'
 import { enrollContactInCadence } from '@/lib/cadences/cadence'
 import { runDealSuggestions } from '@/lib/ai/deal-suggest'
 import { planStageFollowUp } from '@/lib/ai/followup'
@@ -1749,7 +1749,7 @@ export async function getLostReasons(): Promise<string[]> {
   try {
     const ctx = await getCurrentAccount()
     const s = await getAccountSettings(ctx.accountId)
-    return s.lostReasons
+    return sortReasons(s.lostReasons)
   } catch {
     return []
   }
@@ -1764,7 +1764,7 @@ export async function getLostReasonsConfig(): Promise<{
   try {
     const ctx = await getCurrentAccount()
     const s = await getAccountSettings(ctx.accountId)
-    return { reasons: s.lostReasons, locked: s.lostReasonsLocked }
+    return { reasons: sortReasons(s.lostReasons), locked: s.lostReasonsLocked }
   } catch {
     return { reasons: [], locked: false }
   }
@@ -1788,7 +1788,7 @@ async function rememberLostReason(accountId: string, reason: string): Promise<vo
     if (s.lostReasons.some((x) => canonReason(x) === canonReason(r))) return
     if (s.lostReasons.length >= 40) return
     await updateAccountSettings(accountId, {
-      lostReasons: [...s.lostReasons, r],
+      lostReasons: sortReasons([...s.lostReasons, r]),
     })
   } catch {
     // best-effort

@@ -6,7 +6,7 @@ import { Loader2, XCircle, X, Plus, Lock } from "lucide-react";
 
 import { useAuth } from "@/hooks/use-auth";
 import { getLostReasonsSettings, setLostReasonsSettings } from "./actions";
-import { canonReason } from "@/lib/deals/lost-reasons";
+import { canonReason, sortReasons } from "@/lib/deals/lost-reasons";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -31,7 +31,7 @@ export function LostReasonsPanel() {
   useEffect(() => {
     getLostReasonsSettings()
       .then((res) => {
-        setReasons(res.reasons);
+        setReasons(sortReasons(res.reasons));
         setLocked(res.locked);
       })
       .catch(() => toast.error("Falha ao carregar os motivos de perda."))
@@ -45,7 +45,8 @@ export function LostReasonsPanel() {
       toast.error("Esse motivo já existe na lista.");
       return;
     }
-    setReasons((prev) => [...prev, t]);
+    // Entra já no lugar dela (ordem alfabética, "Outros" no fim).
+    setReasons((prev) => sortReasons([...prev, t]));
     setDraft("");
   }
 
