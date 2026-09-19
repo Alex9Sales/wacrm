@@ -48,6 +48,7 @@ import {
   type CadenceTemplateOption,
   type StagePickerOption,
 } from './actions'
+import { stepTimingIssues } from '@/lib/cadences/step-timing'
 
 type Draft = {
   id: string | null
@@ -95,6 +96,13 @@ function whenLabel(v: number, unit: string): string {
   if (v === 0) return 'na hora'
   const u = unit === 'minutes' ? 'min' : unit === 'hours' ? 'h' : 'd'
   return `+${v}${u}`
+}
+
+/** "toque 3" · "toques 3 e 4" · "toques 3, 4 e 5" (índices da lista → nº do toque). */
+function touchList(idx: number[]): string {
+  const n = idx.map((i) => i + 1)
+  if (n.length === 1) return `toque ${n[0]}`
+  return `toques ${n.slice(0, -1).join(', ')} e ${n[n.length - 1]}`
 }
 
 export default function CadenciasPage() {
@@ -456,12 +464,13 @@ export default function CadenciasPage() {
                 </span>
               </div>
               <p className="text-xs text-muted-foreground">
-                O tempo de cada degrau conta a partir da{' '}
-                <strong>1ª mensagem</strong> (d0, d2, d4…), não do degrau
-                anterior.
+                O tempo de cada toque conta a partir do{' '}
+                <strong>início da cadência</strong> (a 1ª mensagem): na hora,
+                +2 dias, +4 dias… — <strong>não</strong> do toque anterior.
               </p>
               {draft.steps.map((step, i) => {
                 const meta = CHANNEL_META[step.channel] ?? CHANNEL_META.whatsapp
+                const timing = stepTimingIssues(draft.steps)[i]
                 return (
                   <div
                     key={i}
@@ -508,9 +517,9 @@ export default function CadenciasPage() {
                         }
                         className="h-8 rounded-md border border-border bg-background px-2 text-sm text-foreground"
                       >
-                        <option value="minutes">min depois</option>
-                        <option value="hours">horas depois</option>
-                        <option value="days">dias depois</option>
+                        <option value="minutes">min após o início</option>
+                        <option value="hours">horas após o início</option>
+                        <option value="days">dias após o início</option>
                       </select>
                       <span className="text-xs text-muted-foreground">por</span>
                       <select
@@ -527,6 +536,30 @@ export default function CadenciasPage() {
                         <option value="instagram">Instagram</option>
                       </select>
                     </div>
+                    {/* 19/09 (Rafael): quem monta pensando "2 dias depois do
+                        anterior" põe +2d em vários toques — eles saem juntos. */}
+                    {(timing.sameTimeAs.length > 0 || timing.before !== null) && (
+                      <div className="mt-2 space-y-1 rounded-md border border-amber-500/40 bg-amber-500/10 px-2 py-1.5 text-xs text-amber-600 dark:text-amber-400">
+                        {timing.sameTimeAs.length > 0 && (
+                          <p>
+                            ⚠️ Sai junto com o {touchList(timing.sameTimeAs)}, no mesmo
+                            horário. O tempo conta do início da cadência, não do toque
+                            anterior — dê um tempo diferente pra cada toque.
+                          </p>
+                        )}
+                        {timing.before !== null && (
+                          <p>
+                            ⚠️ Sai antes do toque {timing.before + 1} (
+                            {whenLabel(
+                              draft.steps[timing.before].delayValue,
+                              draft.steps[timing.before].delayUnit,
+                            )}
+                            ): os toques saem pela ordem do tempo, não pela ordem da
+                            lista.
+                          </p>
+                        )}
+                      </div>
+                    )}
                     {step.channel === 'email' && (
                       <Input
                         value={step.subject ?? ''}

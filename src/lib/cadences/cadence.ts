@@ -24,6 +24,7 @@ import {
 import { contactTokenValues, renderMessageVars } from '@/lib/whatsapp/message-vars'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { cadenceStopReason, resumeSendAtMs, shiftOutOfQuietHours } from './schedule-rules'
+import { delayMsOf } from './step-timing'
 
 // ============================================================
 // Cadências — motor. Uma CADÊNCIA (sequência de mensagens fixas) é INSCRITA
@@ -42,13 +43,6 @@ function providersFor(channel: string): string[] {
   if (channel === 'email') return EMAIL_PROVIDERS
   if (channel === 'instagram') return INSTAGRAM_PROVIDERS
   return WHATSAPP_PROVIDERS
-}
-
-function delayMsOf(value: number, unit: string): number {
-  const v = Math.max(0, Number(value) || 0)
-  if (unit === 'minutes') return v * 60_000
-  if (unit === 'hours') return v * 3_600_000
-  return v * 86_400_000 // days
 }
 
 /**
