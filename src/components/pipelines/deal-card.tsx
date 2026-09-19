@@ -104,6 +104,13 @@ export function DealCard({
   const router = useRouter();
   const changed = () => (onChanged ? onChanged() : router.refresh());
   const contactLabel = deal.contact?.name || deal.contact?.phone || "No contact";
+  // Card de lead de integração nasce "Lead — <nome>" e o nome já vem na linha
+  // de baixo: o título repetia o contato e empurrava tudo. Quando o título é
+  // só isso, mostra o nome UMA vez (Zelo 18/09: "o nome tá ficando feio").
+  const titleWithoutPrefix = (deal.title ?? "").replace(/^Lead\s+[—–-]\s+/i, "").trim();
+  const titleIsContact =
+    !!deal.contact?.name &&
+    titleWithoutPrefix.toLocaleLowerCase("pt-BR") === deal.contact.name.trim().toLocaleLowerCase("pt-BR");
   const assigneeLabel = deal.assignee?.full_name || null;
   const openTasks = taskCount?.open ?? 0;
   const hasOverdue = (taskCount?.overdue ?? 0) > 0;
@@ -347,8 +354,11 @@ export function DealCard({
         style={{ backgroundColor: stage?.color ?? "#94a3b8" }}
       />
 
-      <div className="flex items-start justify-between gap-2">
-        <div className="flex min-w-0 flex-1 items-start gap-2">
+      {/* Título e selos quebram de LINHA (flex-wrap) em vez de espremer o
+          título: em coluna estreita os selos (tarefa, +, Won/Lost) deixavam
+          o nome com 2–3 letras por linha ("Paul / a / Nog / ueira"). */}
+      <div className="flex flex-wrap items-start justify-between gap-x-2 gap-y-1">
+        <div className="flex min-w-[9rem] flex-1 items-start gap-2">
           {/* Avatar do LEAD no topo — foto do contato se tiver, senão a inicial. */}
           <span className="mt-0.5 flex h-6 w-6 shrink-0 items-center justify-center overflow-hidden rounded-full bg-muted text-[10px] font-semibold text-foreground">
             <ContactAvatar
@@ -357,11 +367,14 @@ export function DealCard({
               className="h-6 w-6"
             />
           </span>
-          <h4 className="min-w-0 flex-1 text-sm font-semibold leading-snug text-foreground break-words">
-            {deal.title}
+          <h4
+            className="min-w-0 flex-1 text-sm font-semibold leading-snug text-foreground break-words"
+            title={deal.title}
+          >
+            {titleIsContact ? titleWithoutPrefix : deal.title}
           </h4>
         </div>
-        <div className="flex shrink-0 items-center gap-1.5">
+        <div className="ml-auto flex shrink-0 items-center gap-1.5">
           {/* Open-task indicator — count + red dot when any is overdue.
               Clicking it opens the same create-task dialog (a lightweight
               entry point to the deal's tasks). */}
@@ -451,10 +464,13 @@ export function DealCard({
         </div>
       </div>
 
-      {/* Nome do contato (o avatar do lead já está no topo). */}
-      <div className="mt-1.5 truncate text-xs text-muted-foreground">
-        {contactLabel}
-      </div>
+      {/* Nome do contato (o avatar do lead já está no topo) — some quando o
+          título já É o nome dele. */}
+      {!titleIsContact && (
+        <div className="mt-1.5 truncate text-xs text-muted-foreground">
+          {contactLabel}
+        </div>
+      )}
 
       {/* Empresa (entidade) — chip discreto quando o negócio tem empresa. */}
       {deal.company_name && (
