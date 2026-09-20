@@ -42,6 +42,18 @@ describe('buildConversationContext', () => {
     ])
   })
 
+  it('a ABERTURA por MODELO entra no histórico (20/09, Zelo: opções a/b/c)', async () => {
+    fakeDb([
+      { senderType: 'customer', contentText: 'B e c' },
+      { senderType: 'agent', contentType: 'template', contentText: 'O que te motivou? a) sair da CLT b) já empreendo c) crescer' },
+    ])
+    const out = await buildConversationContext('conv-1')
+    expect(out).toEqual([
+      { role: 'assistant', content: 'O que te motivou? a) sair da CLT b) já empreendo c) crescer' },
+      { role: 'user', content: 'B e c' },
+    ])
+  })
+
   it('treats bot messages as assistant', async () => {
     fakeDb([{ senderType: 'bot', contentText: 'auto reply' }])
     const out = await buildConversationContext('conv-1')

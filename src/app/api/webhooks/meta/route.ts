@@ -28,6 +28,7 @@ import { buildCallLog } from '@/lib/inbox/call-log'
 import { firstOrNull } from '@/db/helpers'
 import { decryptCredentials, loadMetaChannelByPhoneNumberId } from '@/lib/channels/channels'
 import { metaProvider } from '@/lib/channels/providers/meta'
+import { echoDisplayText, type MetaEchoMessage } from '@/lib/channels/meta-echo'
 import { dispatchInboundMessage } from '@/lib/channels/inbound'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { ingestMetaStateSync, type MetaStateSyncItem } from '@/lib/contacts/phonebook'
@@ -86,18 +87,6 @@ interface MetaRawCall {
   session?: { sdp?: string; sdp_type?: string }
 }
 
-// COEXISTÊNCIA: mensagem que o NEGÓCIO enviou (do app WhatsApp Business no
-// celular ou de um aparelho vinculado). `from` = número do negócio, `to` =
-// cliente. Vem no campo `smb_message_echoes` (array `message_echoes`).
-interface MetaEchoMessage {
-  from?: string
-  to?: string
-  id?: string
-  timestamp?: string
-  type?: string
-  text?: { body?: string }
-  [key: string]: unknown
-}
 
 interface MetaRawValue {
   metadata?: { phone_number_id?: string; display_phone_number?: string }
@@ -669,6 +658,10 @@ async function handleMessageEchoes(value: MetaRawValue) {
       if (!resolved) continue
 
       const text = echoDisplayText(echo)
+      // Eco que não é mensagem (apagar pra todos vem como type 'revoke'):
+      // virava um balão com o texto "[revoke]" na conversa — só ruído pra
+      // equipe (20/09, Zelo: o Renato apagou uma mensagem pelo celular).
+      if (text === null) continue
       await db.insert(messages).values({
         conversationId: resolved.conversationId,
         senderType: 'agent', // saída: o negócio enviou (pelo celular)
@@ -702,21 +695,3 @@ async function handleMessageEchoes(value: MetaRawValue) {
 
 /** Texto de exibição de um echo. Texto vira o corpo; mídia vira um rótulo
  *  (+ legenda se houver). V1 não baixa a mídia — o operador sabe o que enviou. */
-function echoDisplayText(echo: MetaEchoMessage): string {
-  const t = echo.type ?? 'text'
-  if (t === 'text') return echo.text?.body ?? ''
-  const media = echo[t] as { caption?: string; filename?: string } | undefined
-  const label: Record<string, string> = {
-    image: '📷 Imagem',
-    video: '🎬 Vídeo',
-    audio: '🎤 Áudio',
-    voice: '🎤 Áudio',
-    document: '📄 Documento',
-    sticker: 'Figurinha',
-    location: '📍 Localização',
-    contacts: '👤 Contato',
-  }
-  const base = label[t] ?? `[${t}]`
-  const extra = media?.caption || media?.filename
-  return extra ? `${base} — ${extra}` : base
-}

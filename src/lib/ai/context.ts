@@ -8,6 +8,11 @@ import { aiContextMessageLimit } from './defaults'
 const AUDIO_KINDS = ['audio', 'voice', 'ptt']
 const IMAGE_KINDS = ['image']
 const DOC_KINDS = ['document']
+// 20/09 (Zelo): a ABERTURA da Zélia é um MODELO aprovado — e modelo não entrava
+// no histórico. A lead respondeu "B e c" escolhendo as opções da abertura e a
+// IA, sem enxergar a pergunta, pediu pra ela reenviar as opções. Resposta de
+// botão ('interactive') tinha o mesmo buraco.
+const TEMPLATE_KINDS = ['template', 'interactive']
 
 /**
  * Carimbo "[DD/MM HH:mm] " da mensagem no fuso da conta — para a IA raciocinar
@@ -148,6 +153,7 @@ export async function buildConversationContext(
         eq(messages.conversationId, conversationId),
         inArray(messages.contentType, [
           'text',
+          ...TEMPLATE_KINDS,
           ...AUDIO_KINDS,
           ...IMAGE_KINDS,
           ...DOC_KINDS,
