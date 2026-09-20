@@ -176,7 +176,9 @@ describe('buildSystemPrompt — contato da conversa', () => {
     })
     expect(p).toContain('PRIOR CONTEXT')
     expect(p).toContain('vou ver e já te falo')
-    expect(p).toContain('PROACTIVELY offer the available discount')
+    // Pesquisar em dois canais nossos NÃO baixa o preço (Alex, 20/09).
+    expect(p).toContain('quote the SAME price and conditions')
+    expect(p).not.toContain('PROACTIVELY offer the available discount')
   })
 
   it('sem priorContactContext, nada de PRIOR CONTEXT no prompt', () => {

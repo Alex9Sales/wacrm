@@ -774,8 +774,9 @@ export async function dispatchInboundToAiReply(
 
     // 🔁 "Não perde venda": o MESMO contato pode ter falado em OUTRO número de
     // WhatsApp da loja. Puxa o que ele disse nas outras conversas pra a IA dar
-    // continuidade (ex.: recuou do preço num número → reconhece no outro e já
-    // oferece o desconto). Best-effort.
+    // continuidade — mantendo o MESMO preço que já passamos lá (pesquisar entre
+    // nossos canais não baixa o valor; ver PRIOR CONTEXT em defaults.ts).
+    // Best-effort.
     const priorContactContext = await loadContactHistoryDigest(
       accountId,
       contactId,

@@ -599,10 +599,15 @@ export function buildSystemPrompt(args: {
 
     // 🔁 "Não perde venda": este cliente já falou com a gente em OUTRA conversa
     // (talvez outro número de WhatsApp da loja). Background pra dar continuidade.
+    // 20/09 (Alex, Família do Gás): cliente pesquisando em dois canais NÃO ganha
+    // desconto por isso — antes a instrução mandava oferecer o desconto de cara,
+    // e o cliente que perguntava nos dois números ouvia preço menor no segundo.
+    // Coerência de preço entre canais; desconto só quando o cliente pedir e as
+    // regras do agente permitirem.
     if (args.priorContactContext) {
       parts.push(
         `PRIOR CONTEXT — this SAME customer already talked to us before, in a DIFFERENT conversation (possibly on another of our WhatsApp numbers). Earlier exchange (oldest first):\n${args.priorContactContext}\n` +
-          'Use this ONLY as background: these are NOT new messages to reply to — reply only to the CURRENT conversation\'s latest message. Do not make the customer repeat what they already told us (name, address, product, quantity). If they previously asked about the price and did NOT close, greet them and, on this new contact, PROACTIVELY offer the available discount to win the sale, instead of just repeating the full price. Never mention that you saw another conversation or another number — just continue naturally.',
+          'Use this ONLY as background: these are NOT new messages to reply to — reply only to the CURRENT conversation\'s latest message. Do not make the customer repeat what they already told us (name, address, product, quantity). If they previously asked about the price and did NOT close, quote the SAME price and conditions we already gave them there — shopping around across our channels does NOT earn a better price, so never open with a discount or a new condition on your own. Only if the customer explicitly asks for a discount do your own pricing rules apply. Never mention that you saw another conversation or another number — just continue naturally.',
       )
     }
 
