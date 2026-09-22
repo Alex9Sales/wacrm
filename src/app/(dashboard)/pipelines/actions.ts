@@ -9,6 +9,7 @@
 import { and, asc, count, desc, eq, inArray, sql } from 'drizzle-orm'
 import { db, channels, companies, contacts, conversations, customFields, dealAttachments, dealContacts, dealCustomValues, dealEmails, dealEvents, dealProducts, dealProposals, dealQuestions, deals, member, messages, notifications, pipelines, pipelineStages, stageTaskTemplates, user } from '@/db'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
+import { pipelineOfConversation } from '@/lib/pipelines/default-pipeline'
 import { normalizePaymentTerms, paymentTermsSummary } from '@/lib/pipelines/payment-terms'
 import { enqueueTextBroadcast } from '@/lib/broadcasts/text-broadcast'
 import { buildProposalData, loadDealProposalFields } from '@/lib/proposals/proposal'
@@ -138,6 +139,23 @@ export async function listPipelines(): Promise<Pipeline[]> {
 }
 
 /** Stages of one pipeline (account-scoped through the parent), by position. */
+/**
+ * Funil padrão do canal desta conversa (migr 0187) — null quando o canal não
+ * tem nenhum configurado. A tela usa para ABRIR o formulário já no funil certo
+ * (a pessoa ainda pode trocar): numa conta com um WhatsApp por operação, criar
+ * o negócio pela conversa mandava tudo para o funil mais antigo.
+ */
+export async function defaultPipelineForConversation(
+  conversationId: string,
+): Promise<string | null> {
+  const ctx = await getCurrentAccount()
+  try {
+    return await pipelineOfConversation(ctx.accountId, conversationId)
+  } catch {
+    return null
+  }
+}
+
 export async function listStages(pipelineId: string): Promise<PipelineStage[]> {
   const ctx = await getCurrentAccount()
   const rows = await db

@@ -714,6 +714,10 @@ export const channels = pgTable("channels", {
 	defaultSectorId: uuid("default_sector_id"),
 	// 📌 Canal dedicado a UM membro: só ele vê as conversas deste canal (migr 0153).
 	dedicatedUserId: uuid("dedicated_user_id"),
+	// 🔀 Funil padrão DESTE canal (migr 0187): negócio que nasce por aqui vai
+	// pra cá. Vale pro card da IA (depois do funil do agente), pro lead de
+	// formulário e como pré-seleção ao criar à mão. Null = usa o da conta.
+	defaultPipelineId: uuid("default_pipeline_id"),
 	// Per-channel token used to validate non-Meta webhook deliveries.
 	webhookSecret: text("webhook_secret").notNull(),
 	// 📒 Última sincronização da agenda do celular (migr 0166). null = nunca

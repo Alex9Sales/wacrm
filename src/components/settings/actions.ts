@@ -751,6 +751,8 @@ export interface ChannelRouting {
   defaultSectorId: string | null
   /** 📌 Membro dono exclusivo das conversas deste canal (null = regra normal). */
   dedicatedUserId: string | null
+  /** 🔀 Funil onde nasce o negócio deste canal (migr 0187). Null = o da conta. */
+  defaultPipelineId: string | null
 }
 
 /** List the account's channels with their default sector (admins). */
@@ -764,6 +766,7 @@ export async function listChannelsForRouting(): Promise<ChannelRouting[]> {
       phoneNumber: channels.phoneNumber,
       defaultSectorId: channels.defaultSectorId,
       dedicatedUserId: channels.dedicatedUserId,
+      defaultPipelineId: channels.defaultPipelineId,
     })
     .from(channels)
     .where(eq(channels.accountId, ctx.accountId))
@@ -817,6 +820,35 @@ export async function setChannelDefaultSector(
   await db
     .update(channels)
     .set({ defaultSectorId: sectorId, updatedAt: new Date().toISOString() })
+    .where(and(eq(channels.id, channelId), eq(channels.accountId, ctx.accountId)))
+}
+
+/**
+ * 🔀 Funil padrão do canal (admins) — o negócio que nasce por este número vai
+ * pra cá: card da IA (depois do funil do agente), lead de formulário e a
+ * pré-seleção ao criar à mão. Null = volta a usar o funil da conta.
+ *
+ * Alex, 22/09 (Dentai): a conta tem um WhatsApp por operação e tudo nascia no
+ * "Funil de vendas"; os funis das vendedoras ficaram um mês com zero negócios.
+ */
+export async function setChannelDefaultPipeline(
+  channelId: string,
+  pipelineId: string | null,
+): Promise<void> {
+  const ctx = await requireRole('admin')
+  if (pipelineId) {
+    const p = firstOrNull(
+      await db
+        .select({ id: pipelines.id })
+        .from(pipelines)
+        .where(and(eq(pipelines.id, pipelineId), eq(pipelines.accountId, ctx.accountId)))
+        .limit(1),
+    )
+    if (!p) throw new Error('Funil não encontrado.')
+  }
+  await db
+    .update(channels)
+    .set({ defaultPipelineId: pipelineId, updatedAt: new Date().toISOString() })
     .where(and(eq(channels.id, channelId), eq(channels.accountId, ctx.accountId)))
 }
 

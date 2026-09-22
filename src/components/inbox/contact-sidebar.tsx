@@ -23,6 +23,7 @@ import {
 import {
   listPipelines,
   listStages,
+  defaultPipelineForConversation,
   setDealStatus,
   getLostReasonsConfig,
 } from "@/app/(dashboard)/pipelines/actions";
@@ -520,8 +521,14 @@ export function ContactSidebar({
           toast.error("Crie um funil primeiro em Funis");
           return;
         }
-        // For an existing deal, use its pipeline; otherwise the first one.
-        const pid = deal?.pipeline_id ?? pl[0].id;
+        // Negócio existente: o funil dele. Novo: o funil padrão do CANAL desta
+        // conversa (migr 0187) e, sem isso, o primeiro da conta — antes todo
+        // negócio criado pelo chat caía no funil mais antigo.
+        let pid = deal?.pipeline_id ?? pl[0].id;
+        if (!deal && conversation?.id) {
+          const doCanal = await defaultPipelineForConversation(conversation.id).catch(() => null);
+          if (doCanal && pl.some((p) => p.id === doCanal)) pid = doCanal;
+        }
         setDealPipelineId(pid);
         if (!pipelineStages[pid]) {
           const stages = await listStages(pid);
@@ -534,7 +541,7 @@ export function ContactSidebar({
         toast.error("Falha ao abrir o negócio");
       }
     },
-    [pipelines, pipelineStages],
+    [pipelines, pipelineStages, conversation?.id],
   );
 
   const handleDealSaved = useCallback(() => {

@@ -35,6 +35,7 @@ import {
   deleteSector,
   listChannelsForRouting,
   setChannelDefaultSector,
+  setChannelDefaultPipeline,
   setChannelDedicatedUser,
   getTeamVisibility,
   setTeamVisibility,
@@ -42,6 +43,7 @@ import {
   type ChannelRouting,
 } from "./actions";
 import { listTeamMembers } from "@/app/(dashboard)/internal-chat/actions";
+import { listPipelines } from "@/app/(dashboard)/pipelines/actions";
 import type { TeamMemberOption } from "@/lib/internal-chat/types";
 
 const COLORS = ["#6d4bd8", "#0e8a5f", "#c0392b", "#9a6a00", "#2563eb", "#db2777", "#0891b2", "#4b5563"];
@@ -51,6 +53,8 @@ export function SectorsPanel() {
   const [sectors, setSectors] = useState<SectorWithMembers[]>([]);
   const [members, setMembers] = useState<TeamMemberOption[]>([]);
   const [channelsList, setChannelsList] = useState<ChannelRouting[]>([]);
+  // 🔀 Funis da conta — para escolher onde nasce o negócio de cada número.
+  const [funnels, setFunnels] = useState<{ id: string; name: string }[]>([]);
   const [loading, setLoading] = useState(true);
   const [editing, setEditing] = useState<SectorWithMembers | null>(null);
   const [creating, setCreating] = useState(false);
@@ -72,12 +76,14 @@ export function SectorsPanel() {
       listTeamMembers(),
       listChannelsForRouting(),
       getTeamVisibility().catch(() => null),
+      listPipelines().catch(() => []),
     ])
-      .then(([s, m, c, v]) => {
+      .then(([s, m, c, v, pl]) => {
         setSectors(s);
         setMembers(m);
         setChannelsList(c);
         if (v) setTeamSeesAll(v.teamSeesAll);
+        setFunnels(pl.map((p) => ({ id: p.id, name: p.name })));
       })
       .catch(() => {})
       .finally(() => setLoading(false));
@@ -243,14 +249,15 @@ export function SectorsPanel() {
         )}
       </div>
 
-      {!loading && sectors.length > 0 && channelsList.length > 0 && (
+      {!loading && channelsList.length > 0 && (sectors.length > 0 || funnels.length > 1) && (
         <div className="mt-8">
           <h3 className="text-sm font-semibold text-foreground">
             Roteamento por número
           </h3>
           <p className="mt-1 text-xs text-muted-foreground">
-            Escolha para qual setor cai cada número de WhatsApp por padrão.
-            Palavras-chave na 1ª mensagem ainda podem redirecionar.
+            {sectors.length > 0
+              ? "Escolha para qual setor cai cada número de WhatsApp por padrão (palavras-chave na 1ª mensagem ainda podem redirecionar) e em qual funil nasce o negócio dele."
+              : "Escolha em qual funil nasce o negócio de cada número de WhatsApp."}
           </p>
           <div className="mt-3 space-y-2">
             {channelsList.map((ch) => (
@@ -269,6 +276,7 @@ export function SectorsPanel() {
                     </p>
                   )}
                 </div>
+                {sectors.length > 0 && (
                 <Select
                   value={ch.defaultSectorId ?? "none"}
                   disabled={!canEditSettings}
@@ -305,6 +313,53 @@ export function SectorsPanel() {
                     ))}
                   </SelectContent>
                 </Select>
+                )}
+
+                {/* 🔀 Funil deste número: o negócio que nasce por aqui vai pra
+                    cá — card da IA, lead de formulário e a pré-seleção ao criar
+                    à mão. Só aparece com mais de um funil. */}
+                {funnels.length > 1 && (
+                  <Select
+                    value={ch.defaultPipelineId ?? "none"}
+                    disabled={!canEditSettings}
+                    onValueChange={async (v) => {
+                      const next = v === "none" ? null : v;
+                      setChannelsList((prev) =>
+                        prev.map((c) =>
+                          c.id === ch.id ? { ...c, defaultPipelineId: next } : c,
+                        ),
+                      );
+                      try {
+                        await setChannelDefaultPipeline(ch.id, next);
+                        toast.success(
+                          next
+                            ? `Negócio deste número nasce em ${funnels.find((f) => f.id === next)?.name ?? "outro funil"}.`
+                            : "Negócio deste número volta a nascer no funil padrão da conta.",
+                        );
+                      } catch {
+                        toast.error("Não foi possível salvar.");
+                        void reload();
+                      }
+                    }}
+                  >
+                    <SelectTrigger className="w-44 shrink-0">
+                      <SelectValue placeholder="Funil da conta">
+                        {ch.defaultPipelineId
+                          ? (funnels.find((f) => f.id === ch.defaultPipelineId)?.name ??
+                            "Funil da conta")
+                          : "Funil da conta"}
+                      </SelectValue>
+                    </SelectTrigger>
+                    <SelectContent>
+                      <SelectItem value="none">Funil da conta</SelectItem>
+                      {funnels.map((f) => (
+                        <SelectItem key={f.id} value={f.id}>
+                          {f.name}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
+                )}
                 {/* 📌 Canal dedicado a UM membro: só ele vê as conversas deste
                     canal (admin/owner e supervisor veem tudo). Pra mais de uma
                     pessoa, usa setor. */}

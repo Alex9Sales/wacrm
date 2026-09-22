@@ -30,6 +30,7 @@ import {
 } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
+import { resolveTargetPipeline } from '@/lib/pipelines/default-pipeline'
 import { SAME_ORDER_WINDOW_MS } from './order-window'
 import {
   resolveFunnelTarget,
@@ -319,28 +320,14 @@ export async function createDealFromAi(input: {
       .orderBy(desc(deals.createdAt))
       .limit(5)
 
-    // Funil do agente (quando configurado e da conta) — senão 1º funil da conta.
-    let pipeline: { id: string } | null = null
-    if (input.pipelineId) {
-      pipeline = firstOrNull(
-        await db
-          .select({ id: pipelines.id })
-          .from(pipelines)
-          .where(and(eq(pipelines.id, input.pipelineId), eq(pipelines.accountId, accountId)))
-          .limit(1),
-      )
-    }
-    if (!pipeline) {
-      pipeline = firstOrNull(
-        await db
-          .select({ id: pipelines.id })
-          .from(pipelines)
-          .where(eq(pipelines.accountId, accountId))
-          .orderBy(asc(pipelines.createdAt))
-          .limit(1),
-      )
-    }
-    if (!pipeline) return null
+    // Funil do agente → funil do CANAL desta conversa (migr 0187) → 1º da conta.
+    const pipelineId = await resolveTargetPipeline({
+      accountId,
+      preferred: input.pipelineId,
+      conversationId,
+    })
+    if (!pipelineId) return null
+    const pipeline = { id: pipelineId }
 
     const contactOpenDeals =
       contactId && !conversationDeals.some((d) => d.status === 'open')

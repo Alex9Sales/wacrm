@@ -27,6 +27,7 @@ import {
   loadTagsByContact,
 } from '@/lib/api/v1/contacts'
 import { firstPipelineOf, firstStageOf } from '@/lib/api/v1/deals'
+import { resolveTargetPipeline } from '@/lib/pipelines/default-pipeline'
 import { autoCreateStageTasks } from '@/lib/pipelines/stage-tasks'
 import { resolveConversationByPhone } from '@/lib/whatsapp/resolve-conversation'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
@@ -152,7 +153,14 @@ export async function ingestLead(
   // rodízio desligado / sem membros → cai sem dono, como antes.
   let assignee: string | null = null
   try {
-    const pipelineId = input.pipelineId || (await firstPipelineOf(accountId))
+    // Funil pedido → funil do CANAL que recebe esse lead (migr 0187) → o da
+    // conta. Sem isso, todo lead de formulário caía no funil mais antigo.
+    const pipelineId =
+      (await resolveTargetPipeline({
+        accountId,
+        preferred: input.pipelineId,
+        channelId: input.channelId,
+      })) || (await firstPipelineOf(accountId))
     const stageId = pipelineId
       ? input.stageId || (await firstStageOf(pipelineId))
       : null
