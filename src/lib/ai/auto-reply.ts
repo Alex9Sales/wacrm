@@ -49,6 +49,7 @@ import { listRoutingTags, applyTransfer } from './transfer-actions'
 import { latestUserMessage } from './query'
 import { extractMaterialDirectives, findMaterialByName, listMaterialsForAgent } from './materials'
 import { acquireReplyLock, bumpCounter, claimOnce, getCoveredUntil, kvDel, releaseReplyLock, setCoveredUntil } from './reply-marker'
+import { isNoCreditError, warnNoCredit } from './no-credit-alert'
 import { STALE_DROPS_TTL_SECONDS, staleDropsKey, staleReplyDecision, turnIsDroppable } from './stale-reply'
 import { alertContactName, buildClientTail } from '@/lib/alerts/alert-text'
 import { isNewEpisode } from './reply-episode'
@@ -1894,7 +1895,11 @@ export async function dispatchInboundToAiReply(
     const transferred = await runTransfer()
     if (!transferred) await runClose()
   } catch (err) {
-    console.error('[ai auto-reply] dispatch failed:', err)
+    // 💳 Chave do cliente sem saldo: o log genérico escondia DE QUEM era a
+    // falha (22/09, Família do Gás) — agora sai com o nome da conta e o
+    // operador da plataforma recebe um aviso.
+    if (isNoCreditError(err)) await warnNoCredit({ accountId, where: 'atendimento da IA', err })
+    else console.error('[ai auto-reply] dispatch failed:', err)
   } finally {
     if (replyLock) await releaseReplyLock(conversationId, replyLock)
   }

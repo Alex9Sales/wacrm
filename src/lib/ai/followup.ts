@@ -21,6 +21,7 @@ import { isWithinBusinessHours } from '@/lib/settings/business-hours'
 import { engineSendText } from '@/lib/flows/meta-send'
 import { zonedWallToUtc } from './schedule-actions'
 import { gmailSendBlockedReason } from '@/lib/channels/gmail-health-state'
+import { isNoCreditError, warnNoCredit } from './no-credit-alert'
 
 // ---- Trava de madrugada ----------------------------------------------------
 // Não manda follow-up de madrugada (antes das 7h no fuso da conta). Se o horário
@@ -917,7 +918,10 @@ export async function runFollowUpSweep(): Promise<{ sent: number; agents: number
         closeDirs = resolveOn || moveOn ? parseCloseDirectives(raw) : null
         text = stripLeadingTimestamp(closeDirs ? closeDirs.text : raw).trim()
       } catch (err) {
-        console.error('[followup] geração falhou:', err)
+        // 💳 Sem saldo na chave do cliente: diz de quem é e avisa a plataforma
+        // uma vez (o tick repete de minuto em minuto).
+        if (isNoCreditError(err)) await warnNoCredit({ accountId: agent.account_id, where: 'follow-up da IA', err })
+        else console.error('[followup] geração falhou:', err)
         continue // não avança o degrau — tenta no próximo tick
       }
 
@@ -1312,7 +1316,8 @@ export async function runStageFollowUpSweep(): Promise<{ sent: number }> {
         const r = await generateReply({ config, systemPrompt, messages })
         text = stripLeadingTimestamp(r.text || '').trim()
       } catch (err) {
-        console.error('[stage-followup] geração falhou:', err)
+        if (isNoCreditError(err)) await warnNoCredit({ accountId: agent.account_id, where: 'follow-up por etapa do funil', err })
+        else console.error('[stage-followup] geração falhou:', err)
         continue // não marca — tenta no próximo tick
       }
 

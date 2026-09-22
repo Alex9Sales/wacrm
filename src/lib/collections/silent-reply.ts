@@ -29,6 +29,7 @@ import { generateReply } from '@/lib/ai/generate'
 import { kvGetJson, kvSetJson } from '@/lib/ai/reply-marker'
 import type { AiConfig } from '@/lib/ai/types'
 import { notifyUsers } from '@/lib/orchestration/actions'
+import { isNoCreditError, warnNoCredit } from '@/lib/ai/no-credit-alert'
 
 import { applyCollectionReply, openDebtForPrompt, type CollectionReplyKind } from './reply'
 import { claimReplyNote, loadBurstRows, loadReplyGuardContext } from './reply-context'
@@ -312,6 +313,7 @@ export async function detectCollectionReplySilently(args: {
       }).catch(() => {})
     }
   } catch (err) {
-    console.error('[cobranca] detector silencioso falhou:', err instanceof Error ? err.message : err)
+    if (isNoCreditError(err)) await warnNoCredit({ accountId: args.accountId, where: 'detector de resposta da cobrança', err })
+    else console.error('[cobranca] detector silencioso falhou:', err instanceof Error ? err.message : err)
   }
 }
