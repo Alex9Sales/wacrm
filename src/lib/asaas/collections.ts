@@ -542,6 +542,27 @@ export async function countOpenPaymentsForCustomer(cred: AsaasCredential, custom
   }
 }
 
+/**
+ * Cobranças PENDING com vencimento ATÉ a data (inclusive) — as que já venceram
+ * mas o Asaas ainda não virou para OVERDUE (João/GoLink 21/09: 13 boletos do
+ * dia 20 seguiam PENDING no dia seguinte, invisíveis para o CRM inteiro).
+ * O sync passa "ontem" no fuso da conta.
+ */
+export async function listPendingDueUntil(cred: AsaasCredential, untilDate: string): Promise<AsaasPayment[]> {
+  const out: AsaasPayment[] = []
+  for (let page = 0; page < MAX_PAGES; page++) {
+    const res = await asaasGet<AsaasList<AsaasPayment>>(cred, '/payments', {
+      status: 'PENDING',
+      'dueDate[le]': untilDate,
+      offset: page * PAGE_SIZE,
+      limit: PAGE_SIZE,
+    })
+    out.push(...(res.data ?? []))
+    if (!res.hasMore || !res.data?.length) break
+  }
+  return out
+}
+
 /** Cobranças PENDING que vencem entre as datas (lembrete antes do vencimento). */
 export async function listPendingDueBetween(cred: AsaasCredential, fromDate: string, untilDate: string): Promise<AsaasPayment[]> {
   const out: AsaasPayment[] = []

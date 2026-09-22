@@ -208,6 +208,7 @@ export function WalletClient() {
           `${d.total} ${d.total === 1 ? 'cobrança vencida' : 'cobranças vencidas'} na carteira` +
             (d.pending ? ` · ${d.pending} sem contato` : '') +
             (d.closed ? ` · ${d.closed} saíram desde a última vez` : '') +
+            (d.pendingOverdue ? ` · ${d.pendingOverdue} vencida${d.pendingOverdue === 1 ? '' : 's'} que o Asaas ainda mostra como pendente` : '') +
             (!d.total && d.upcoming ? ` · ${d.upcoming} ainda a vencer` : ''),
         );
       }

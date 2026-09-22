@@ -24,7 +24,7 @@
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
-import { and, eq, gte, inArray, lt, notInArray, sql } from 'drizzle-orm'
+import { and, eq, gte, inArray, lt, notInArray, or, sql } from 'drizzle-orm'
 
 import {
   db,
@@ -352,6 +352,8 @@ export async function queueUpcomingReminders(args: {
   // quem tinha qualquer coisa aberta (GoLink 15/09: 32 devedores sem lembrete
   // da parcela seguinte, e a cobrança PENDING criada pelo CRM barrava o
   // lembrete dela mesma).
+  // Conta também a vencida que o Asaas ainda mostra como PENDING (sync lê à
+  // parte, ver asaas/overdue-pending.ts): vencimento antes de hoje é vencida.
   const overdue = await db
     .selectDistinct({ contactId: asaasCharges.contactId })
     .from(asaasCharges)
@@ -359,7 +361,10 @@ export async function queueUpcomingReminders(args: {
       and(
         eq(asaasCharges.accountId, args.accountId),
         eq(asaasCharges.open, true),
-        inArray(asaasCharges.status, s.overdueStatuses),
+        or(
+          inArray(asaasCharges.status, s.overdueStatuses),
+          and(eq(asaasCharges.status, 'PENDING'), lt(asaasCharges.dueDate, args.dayKey)),
+        ),
         inArray(asaasCharges.contactId, ids),
       ),
     )

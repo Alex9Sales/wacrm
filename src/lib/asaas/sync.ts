@@ -8,7 +8,7 @@
 // Sem 'server-only' — o worker precisa alcançar isso na Fase 2.
 // ============================================================
 
-import { and, eq, inArray, notInArray, sql } from 'drizzle-orm'
+import { and, eq, inArray, lte, notInArray, or, sql } from 'drizzle-orm'
 
 import { db, asaasCharges, asaasConnections, asaasCustomerLinks, contacts } from '@/db'
 import { decrypt } from '@/lib/whatsapp/encryption'
@@ -19,11 +19,14 @@ import {
   fetchCustomers,
   listAllCustomers,
   listCharges,
+  listPendingDueUntil,
   setCustomerNotifications,
   type AsaasCredential,
   type AsaasEnv,
 } from './collections'
 import { getAccountSettings } from '@/lib/settings/account-settings'
+import { localDayKey } from '@/lib/collections/stale'
+import { mergePayments, overduePendingCutoff } from './overdue-pending'
 import { listChargesAtSilencing, markAsaasNotificationsSwept, recordSilenced } from '@/lib/collections/asaas-silenced'
 import { fullSweepReason } from '@/lib/collections/new-charge-rules'
 import { normalizeSettings } from '@/lib/collections/rules'
@@ -60,10 +63,12 @@ export interface SyncResult {
   /** Cobranças que existem no Asaas mas AINDA NÃO venceram (só para a tela não
    *  dizer "zero" quando o cliente está olhando cobranças na conta dele). */
   upcoming: number
+  /** Vencidas que o Asaas ainda mostra como PENDING (entram na carteira como vencidas). */
+  pendingOverdue: number
   error?: string
 }
 
-const EMPTY: SyncResult = { ok: true, total: 0, matched: 0, pending: 0, closed: 0, upcoming: 0, notificationsOff: 0 }
+const EMPTY: SyncResult = { ok: true, total: 0, matched: 0, pending: 0, closed: 0, upcoming: 0, pendingOverdue: 0, notificationsOff: 0 }
 
 /**
  * Puxa a carteira de UMA conexão e espelha no CRM.
@@ -102,6 +107,27 @@ export async function syncConnection(
     return { ...EMPTY, ok: false, error: msg }
   }
 
+  // 🧾 Vencida que o Asaas ainda mostra como PENDING (João/GoLink 21/09: 13
+  // boletos do dia 20 seguiam PENDING no dia seguinte e ninguém via). Lê à
+  // parte, com vencimento até ONTEM no fuso da conta, e junta à carteira como o
+  // que é: vencida. `pendingCutoff` null = essa listagem não rodou, e o
+  // fechamento abaixo não pode fechar PENDING nenhuma (ver overdue-pending.ts).
+  const accountSettingsRow = await getAccountSettings(accountId)
+  let pendingCutoff: string | null = null
+  let pendingOverdue = 0
+  if (!statuses.includes('PENDING')) {
+    const cutoff = overduePendingCutoff(localDayKey(accountSettingsRow.businessTimezone || 'America/Sao_Paulo'))
+    try {
+      const vencidasPendentes = await listPendingDueUntil(cred, cutoff)
+      const antes = payments.length
+      payments = mergePayments(payments, vencidasPendentes)
+      pendingOverdue = payments.length - antes
+      pendingCutoff = cutoff
+    } catch (err) {
+      console.warn(`[asaas sync] ${conn.label}: não deu para listar as vencidas ainda PENDING — ${err instanceof Error ? err.message : err}`)
+    }
+  }
+
   const customers = await fetchCustomers(cred, payments.map((p) => p.customer)).catch(() => new Map())
 
   // Item 5 (05/09): o CRM assume os avisos. Opt-in na régua: desliga as
@@ -115,7 +141,7 @@ export async function syncConnection(
   let notificationsOff = 0
   let notificationsRefused = 0
   try {
-    const s = normalizeSettings((await getAccountSettings(accountId)).collections)
+    const s = normalizeSettings(accountSettingsRow.collections)
     if (s.asaasNotificationsOff) {
       // Revisão 17/09: além da rotina de 20 h, varre JÁ quando a opção foi ligada
       // depois da última varredura — antes, com a conexão varrida há pouco (selo
@@ -287,11 +313,18 @@ export async function syncConnection(
         eq(asaasCharges.accountId, accountId),
         eq(asaasCharges.connectionId, connectionId),
         eq(asaasCharges.open, true),
-        // Só o que ESTAVA nos status sincronizados pode "sumir" (pagou/apagou).
-        // Cobrança criada pela IA ou à mão nasce PENDING, não vem na lista de
-        // vencidas — e continuava aberta no Asaas: fechá-la aqui era mentira
-        // (achado de 05/09, ao construir a "Nova cobrança").
-        inArray(asaasCharges.status, [...statuses]),
+        // Só o que ESTAVA numa listagem desta rodada pode "sumir" (pagou/apagou):
+        // os status sincronizados e, quando a listagem rodou, a PENDING com
+        // vencimento até o corte. Cobrança criada pela IA ou à mão nasce PENDING
+        // com vencimento FUTURO, não vem em listagem nenhuma — e continuava
+        // aberta no Asaas: fechá-la aqui era mentira (achado de 05/09, ao
+        // construir a "Nova cobrança"). Regra pura: `mayCloseUnseen`.
+        pendingCutoff
+          ? or(
+              inArray(asaasCharges.status, [...statuses]),
+              and(eq(asaasCharges.status, 'PENDING'), lte(asaasCharges.dueDate, pendingCutoff)),
+            )
+          : inArray(asaasCharges.status, [...statuses]),
         seen.length ? notInArray(asaasCharges.asaasId, seen) : sql`true`,
       ),
     )
@@ -321,6 +354,7 @@ export async function syncConnection(
     pending: payments.length - matched,
     closed: closedRows.length,
     upcoming,
+    pendingOverdue,
     notificationsOff,
   }
 }
@@ -347,6 +381,7 @@ export async function syncAccount(accountId: string, statuses?: readonly string[
     totals.pending += r.pending
     totals.closed += r.closed
     totals.upcoming += r.upcoming
+    totals.pendingOverdue += r.pendingOverdue
     totals.notificationsOff += r.notificationsOff
   }
 
