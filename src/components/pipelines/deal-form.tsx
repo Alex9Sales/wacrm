@@ -10,6 +10,8 @@ import {
   getLostReasonsConfig,
   openDealConversation,
   openDealWhatsApp,
+  listPipelines,
+  listStages,
 } from "@/app/(dashboard)/pipelines/actions";
 import {
   listProducts,
@@ -104,6 +106,13 @@ export function DealForm({
   const [currency, setCurrency] = useState(defaultCurrency);
   const [contactId, setContactId] = useState("");
   const [stageId, setStageId] = useState("");
+  // 🔀 Funil do formulário: começa no funil do quadro e pode mudar (mover o
+  // negócio para outro funil). As etapas seguem o funil escolhido.
+  const [formPipelineId, setFormPipelineId] = useState(pipelineId);
+  const [funnels, setFunnels] = useState<{ id: string; name: string }[]>([]);
+  const [otherStages, setOtherStages] = useState<PipelineStage[] | null>(null);
+  const [loadingStages, setLoadingStages] = useState(false);
+  const formStages = formPipelineId === pipelineId ? stages : (otherStages ?? []);
   const [assignedTo, setAssignedTo] = useState("");
   const [expectedCloseDate, setExpectedCloseDate] = useState("");
   const [notes, setNotes] = useState("");
@@ -176,6 +185,46 @@ export function DealForm({
   // (just the client) instead of an empty "Selecione um contato". "Alterar"
   // flips this to the full picker.
 
+  // Funis da conta — só para oferecer a troca; com um funil só, o campo nem
+  // aparece. Carrega ao abrir, uma vez.
+  useEffect(() => {
+    if (!open || funnels.length) return;
+    let alive = true;
+    listPipelines()
+      .then((rows) => {
+        if (alive) setFunnels(rows.map((p) => ({ id: p.id, name: p.name })));
+      })
+      .catch(() => {
+        /* sem a lista, o formulário segue no funil atual */
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, funnels.length]);
+
+  // Trocou o funil: busca as etapas dele e seleciona a primeira (a etapa
+  // precisa ser do funil escolhido — o servidor recusa o par errado).
+  useEffect(() => {
+    if (!open || formPipelineId === pipelineId) return;
+    let alive = true;
+    setLoadingStages(true);
+    listStages(formPipelineId)
+      .then((rows) => {
+        if (!alive) return;
+        setOtherStages(rows);
+        setStageId(rows[0]?.id ?? "");
+      })
+      .catch(() => {
+        if (alive) toast.error("Não deu para carregar as etapas desse funil.");
+      })
+      .finally(() => {
+        if (alive) setLoadingStages(false);
+      });
+    return () => {
+      alive = false;
+    };
+  }, [open, formPipelineId, pipelineId]);
+
   // Reset the form fields every time the sheet opens or its input
   // props change. This is a legitimate prop-driven sync; the rule is
   // over-cautious here, hence the block-level disable.
@@ -185,6 +234,8 @@ export function DealForm({
     setConfirmDelete(false);
     setProdQuery("");
     setProdOpen(false);
+    setFormPipelineId(pipelineId);
+    setOtherStages(null);
     if (deal) {
       setTitle(deal.title);
       setValue(String(deal.value ?? ""));
@@ -225,7 +276,7 @@ export function DealForm({
       setPaymentMethod("");
       // Opened from a conversation → start with the contact locked-in.
     }
-  }, [open, deal, defaultStageId, defaultContactId, stages, defaultCurrency]);
+  }, [open, deal, defaultStageId, defaultContactId, stages, defaultCurrency, pipelineId]);
   /* eslint-enable react-hooks/set-state-in-effect */
 
   // Resolve nome/telefone do contato selecionado (edição ou vindo da conversa).
@@ -295,7 +346,7 @@ export function DealForm({
       value: parseFloat(value) || 0,
       currency,
       contact_id: contactId,
-      pipeline_id: pipelineId,
+      pipeline_id: formPipelineId,
       stage_id: stageId,
       assigned_to: assignedTo || null,
       notes: notes.trim() || null,
@@ -668,14 +719,41 @@ export function DealForm({
               />
             </div>
 
+            {/* 🔀 Funil (Rafael 22/09): a vendedora criava o negócio pela
+                conversa, ele caía no funil principal e não havia como mudar —
+                só arrastar dentro do mesmo quadro. Trocar aqui recarrega as
+                etapas, porque etapa é sempre DO funil escolhido. */}
+            {funnels.length > 1 && (
+              <div className="grid gap-2">
+                <Label className="text-muted-foreground">Funil</Label>
+                <select
+                  value={formPipelineId}
+                  onChange={(e) => setFormPipelineId(e.target.value)}
+                  className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary"
+                >
+                  {funnels.map((f) => (
+                    <option key={f.id} value={f.id}>
+                      {f.name}
+                    </option>
+                  ))}
+                </select>
+                {formPipelineId !== pipelineId && (
+                  <p className="text-xs text-amber-600 dark:text-amber-500">
+                    O negócio sai deste quadro e vai para o funil escolhido, na etapa abaixo.
+                  </p>
+                )}
+              </div>
+            )}
+
             <div className="grid gap-2">
               <Label className="text-muted-foreground">Etapa</Label>
               <select
                 value={stageId}
                 onChange={(e) => setStageId(e.target.value)}
-                className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary"
+                disabled={loadingStages}
+                className="h-9 w-full rounded-lg border border-border bg-muted px-2.5 text-sm text-foreground outline-none focus:border-primary disabled:opacity-60"
               >
-                {stages.map((s) => (
+                {formStages.map((s) => (
                   <option key={s.id} value={s.id}>
                     {s.name}
                   </option>

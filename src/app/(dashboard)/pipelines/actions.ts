@@ -1463,12 +1463,44 @@ export async function updateDeal(
     // Load current stage/status to detect meaningful changes for the timeline.
     const before = firstOrNull(
       await db
-        .select({ stageId: deals.stageId, status: deals.status, assignedTo: deals.assignedTo, contactId: deals.contactId })
+        .select({
+          stageId: deals.stageId,
+          pipelineId: deals.pipelineId,
+          status: deals.status,
+          assignedTo: deals.assignedTo,
+          contactId: deals.contactId,
+        })
         .from(deals)
         .where(and(eq(deals.id, id), eq(deals.accountId, ctx.accountId)))
         .limit(1),
     )
     if (!before) return { error: 'Deal not found' }
+
+    // 🔀 Mudou de FUNIL (Rafael 22/09: a vendedora criava o negócio e ele caía
+    // no funil principal, sem como mover). A etapa tem que ser DO funil
+    // escolhido, senão o card fica órfão — aparece num funil com etapa de
+    // outro e some do quadro.
+    const funnelChanged =
+      patch.pipeline_id !== undefined && patch.pipeline_id !== before.pipelineId
+    if (funnelChanged) {
+      const destino = firstOrNull(
+        await db
+          .select({ id: pipelines.id, name: pipelines.name })
+          .from(pipelines)
+          .where(and(eq(pipelines.id, patch.pipeline_id!), eq(pipelines.accountId, ctx.accountId)))
+          .limit(1),
+      )
+      if (!destino) return { error: 'Funil não encontrado.' }
+      const stageAlvo = patch.stage_id ?? before.stageId
+      const etapaOk = firstOrNull(
+        await db
+          .select({ id: pipelineStages.id })
+          .from(pipelineStages)
+          .where(and(eq(pipelineStages.id, stageAlvo), eq(pipelineStages.pipelineId, destino.id)))
+          .limit(1),
+      )
+      if (!etapaOk) return { error: `Escolha uma etapa do funil "${destino.name}".` }
+    }
     // Funil aberto: agente só mexe em deal SEM dono ou atribuído a ele.
     if (!dealReadable(ctx.role, ctx.userId, before.assignedTo)) {
       return { error: 'Este negócio está atribuído a outro atendente.' }
@@ -1525,11 +1557,30 @@ export async function updateDeal(
 
     if (stageChanged) {
       const toName = await stageName(patch.stage_id!)
+      const fromName = await stageName(before.stageId)
+      // Trocou de funil: o histórico diz "Funil A › Etapa → Funil B › Etapa",
+      // senão a linha fica "Negociação → Novo lead" sem dizer que mudou de
+      // quadro e ninguém entende por que o card sumiu de lá.
+      const funis = funnelChanged
+        ? await db
+            .select({ id: pipelines.id, name: pipelines.name })
+            .from(pipelines)
+            .where(
+              and(
+                eq(pipelines.accountId, ctx.accountId),
+                inArray(pipelines.id, [before.pipelineId, patch.pipeline_id!]),
+              ),
+            )
+        : []
+      const nomeFunil = (pid: string) => funis.find((f) => f.id === pid)?.name ?? null
       await recordDealEvent(ctx.accountId, ctx.userId, id, 'stage_changed', {
-        from: await stageName(before.stageId),
-        to: toName,
+        from: funnelChanged ? `${nomeFunil(before.pipelineId) ?? '?'} › ${fromName ?? '?'}` : fromName,
+        to: funnelChanged ? `${nomeFunil(patch.pipeline_id!) ?? '?'} › ${toName ?? '?'}` : toName,
         fromId: before.stageId,
         toId: patch.stage_id!,
+        ...(funnelChanged
+          ? { fromPipelineId: before.pipelineId, toPipelineId: patch.pipeline_id! }
+          : {}),
       })
       // Atividades automáticas da etapa — só p/ negócio que RESULTA aberto.
       // Considera o status EFETIVO (o do patch, senão o atual): não gera ao

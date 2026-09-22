@@ -10,12 +10,12 @@ import { toast } from "sonner";
 import {
   Calendar, Check, X, ListTodo, Plus, Lock, MessageCircle, AtSign,
   Pencil, Trash2, ArrowRightLeft, ChevronRight, Star, Copy, Pause, Play,
-  Building2, Clock3, Snowflake, Sparkles,
+  Building2, Clock3, Snowflake, Sparkles, GitBranch,
 } from "lucide-react";
 import { formatCurrency } from "@/lib/currency";
 import { paymentTermsChips } from "@/lib/pipelines/payment-terms";
 import { ContactAvatar } from "@/components/inbox/contact-avatar";
-import { deleteDeal, transferDeal, duplicateDeal, setDealPaused, setDealNextFollowUp, openDealConversation, openDealWhatsApp } from "@/app/(dashboard)/pipelines/actions";
+import { deleteDeal, transferDeal, duplicateDeal, setDealPaused, setDealNextFollowUp, openDealConversation, openDealWhatsApp, listPipelines, listStages, updateDeal } from "@/app/(dashboard)/pipelines/actions";
 import { dealChannelLabel, isInstagramProvider } from "@/lib/pipelines/channel-label";
 import { listProfiles } from "@/app/(dashboard)/inbox/actions";
 import { CallButton, loadConnectedChannels } from "@/components/calls/call-button";
@@ -146,6 +146,10 @@ export function DealCard({
   const [menuPos, setMenuPos] = useState<{ x: number; y: number } | null>(null);
   const [members, setMembers] = useState<Profile[] | null>(null);
   const [showTransfer, setShowTransfer] = useState(false);
+  // 🔀 Mover para outro funil (Rafael 22/09): o negócio criado pela conversa
+  // caía no funil principal e só dava para arrastar dentro do mesmo quadro.
+  const [showFunnels, setShowFunnels] = useState(false);
+  const [funnels, setFunnels] = useState<{ id: string; name: string }[] | null>(null);
   const [busy, setBusy] = useState(false);
   const [convPicker, setConvPicker] = useState<{
     channels: DialerChannel[];
@@ -185,6 +189,43 @@ export function DealCard({
         setMembers(ps.filter((p) => p.user_id && p.full_name)),
       )
       .catch(() => setMembers([]));
+  };
+
+  const loadFunnels = () => {
+    if (funnels !== null) return;
+    listPipelines()
+      .then((ps) => setFunnels(ps.map((p) => ({ id: p.id, name: p.name }))))
+      .catch(() => setFunnels([]));
+  };
+
+  /** Leva o negócio pro outro funil, na PRIMEIRA etapa dele. */
+  const doMoveFunnel = async (pipelineId: string, pipelineName: string) => {
+    if (busy) return;
+    setBusy(true);
+    try {
+      const stages = await listStages(pipelineId);
+      const first = stages[0];
+      if (!first) {
+        toast.error(`O funil "${pipelineName}" não tem etapas.`);
+        return;
+      }
+      const { error } = await updateDeal(deal.id, {
+        pipeline_id: pipelineId,
+        stage_id: first.id,
+      });
+      if (error) {
+        toast.error(error);
+        return;
+      }
+      toast.success(`Movido para ${pipelineName} › ${first.name}`);
+      changed();
+    } catch {
+      toast.error("Falha ao mover o negócio. Recarregue a página e tente de novo.");
+    } finally {
+      setBusy(false);
+      setMenuPos(null);
+      setShowFunnels(false);
+    }
   };
 
   const doDelete = async () => {
@@ -891,6 +932,51 @@ export function DealCard({
                     {m.full_name}
                   </button>
                 ))
+              )}
+            </div>
+          )}
+        </div>
+
+        <div
+          className="relative"
+          onMouseEnter={() => {
+            setShowFunnels(true);
+            loadFunnels();
+          }}
+          onMouseLeave={() => setShowFunnels(false)}
+        >
+          <button
+            type="button"
+            className="flex w-full items-center justify-between gap-2 px-3 py-1.5 text-left hover:bg-muted"
+          >
+            <span className="flex items-center gap-2">
+              <GitBranch className="h-3.5 w-3.5 text-muted-foreground" />
+              Mover para outro funil
+            </span>
+            <ChevronRight className="h-3.5 w-3.5 text-muted-foreground" />
+          </button>
+          {showFunnels && (
+            <div className="absolute left-full top-0 ml-0.5 max-h-64 min-w-[168px] overflow-y-auto rounded-lg border border-border bg-popover py-1 shadow-xl">
+              {funnels === null ? (
+                <div className="px-3 py-1.5 text-xs text-muted-foreground">Carregando…</div>
+              ) : funnels.filter((f) => f.id !== deal.pipeline_id).length === 0 ? (
+                <div className="px-3 py-1.5 text-xs text-muted-foreground">
+                  Só existe este funil
+                </div>
+              ) : (
+                funnels
+                  .filter((f) => f.id !== deal.pipeline_id)
+                  .map((f) => (
+                    <button
+                      key={f.id}
+                      type="button"
+                      disabled={busy}
+                      onClick={() => doMoveFunnel(f.id, f.name)}
+                      className="block w-full truncate px-3 py-1.5 text-left hover:bg-muted disabled:opacity-50"
+                    >
+                      {f.name}
+                    </button>
+                  ))
               )}
             </div>
           )}
