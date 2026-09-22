@@ -325,6 +325,9 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
     try {
       await writeUpcomingRows(args.accountId, c.id, persist, scanStartedAt, { from, until })
       if (plan.full) lastFullScanAt.set(c.id, Date.now())
+      // Carimbo que a tela mostra como "lido HH:MM" — sem ele, conta sem
+      // parcela a vencer dizia "ainda não li o Asaas" para sempre (revisão 22/09).
+      await db.update(asaasConnections).set({ upcomingScannedAt: scanStartedAt }).where(eq(asaasConnections.id, c.id))
     } catch (err) {
       console.error(`[lembrete] ${c.label}: não deu para gravar os próximos vencimentos — ${err instanceof Error ? err.message : err}`)
     }
@@ -548,6 +551,8 @@ export async function queueUpcomingReminders(args: {
   usedToday: number
   moment: string
   dayKey: string
+  /** Dia de HOJE no fuso da conta (localDayKey) — `dayKey` é o dia UTC, usado só na semente. */
+  todayKey: string
   /** A leitura feita antes do teto (scanUpcoming). */
   scan: UpcomingScan
 }): Promise<ReminderRunResult> {
@@ -577,7 +582,7 @@ export async function queueUpcomingReminders(args: {
         eq(asaasCharges.open, true),
         or(
           inArray(asaasCharges.status, s.overdueStatuses),
-          and(eq(asaasCharges.status, 'PENDING'), lt(asaasCharges.dueDate, args.dayKey)),
+          and(eq(asaasCharges.status, 'PENDING'), lt(asaasCharges.dueDate, args.todayKey)),
         ),
         inArray(asaasCharges.contactId, ids),
       ),

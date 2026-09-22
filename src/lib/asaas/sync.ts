@@ -23,6 +23,7 @@ import {
   setCustomerNotifications,
   type AsaasCredential,
   type AsaasEnv,
+  type AsaasPayment,
 } from './collections'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { localDayKey } from '@/lib/collections/stale'
@@ -98,6 +99,29 @@ export async function syncConnection(
     return { ...EMPTY, ok: false, error: 'A chave salva não pôde ser lida. Cadastre a chave de novo.' }
   }
 
+  // 🧾 Vencida que o Asaas ainda mostra como PENDING (João/GoLink 21/09: 13
+  // boletos do dia 20 seguiam PENDING no dia seguinte e ninguém via). Lê à
+  // parte, com vencimento até ONTEM no fuso da conta, e junta à carteira como o
+  // que é: vencida. `pendingCutoff` null = essa listagem não rodou, e o
+  // fechamento abaixo não pode fechar PENDING nenhuma (ver overdue-pending.ts).
+  //
+  // Esta listagem vem ANTES da listagem por status (revisão 22/09): o Asaas
+  // vira PENDING → OVERDUE por conta própria, e uma parcela que virasse entre
+  // as duas chamadas não apareceria em nenhuma — o fechamento abaixo a daria
+  // como paga. Lendo as PENDING primeiro, a que virar depois ainda foi vista.
+  const accountSettingsRow = await getAccountSettings(accountId)
+  let pendingCutoff: string | null = null
+  let vencidasPendentes: AsaasPayment[] = []
+  if (!statuses.includes('PENDING')) {
+    const cutoff = overduePendingCutoff(localDayKey(accountSettingsRow.businessTimezone || 'America/Sao_Paulo'))
+    try {
+      vencidasPendentes = await listPendingDueUntil(cred, cutoff)
+      pendingCutoff = cutoff
+    } catch (err) {
+      console.warn(`[asaas sync] ${conn.label}: não deu para listar as vencidas ainda PENDING — ${err instanceof Error ? err.message : err}`)
+    }
+  }
+
   let payments
   try {
     payments = await listCharges(cred, statuses)
@@ -106,27 +130,11 @@ export async function syncConnection(
     await markError(connectionId, msg)
     return { ...EMPTY, ok: false, error: msg }
   }
-
-  // 🧾 Vencida que o Asaas ainda mostra como PENDING (João/GoLink 21/09: 13
-  // boletos do dia 20 seguiam PENDING no dia seguinte e ninguém via). Lê à
-  // parte, com vencimento até ONTEM no fuso da conta, e junta à carteira como o
-  // que é: vencida. `pendingCutoff` null = essa listagem não rodou, e o
-  // fechamento abaixo não pode fechar PENDING nenhuma (ver overdue-pending.ts).
-  const accountSettingsRow = await getAccountSettings(accountId)
-  let pendingCutoff: string | null = null
-  let pendingOverdue = 0
-  if (!statuses.includes('PENDING')) {
-    const cutoff = overduePendingCutoff(localDayKey(accountSettingsRow.businessTimezone || 'America/Sao_Paulo'))
-    try {
-      const vencidasPendentes = await listPendingDueUntil(cred, cutoff)
-      const antes = payments.length
-      payments = mergePayments(payments, vencidasPendentes)
-      pendingOverdue = payments.length - antes
-      pendingCutoff = cutoff
-    } catch (err) {
-      console.warn(`[asaas sync] ${conn.label}: não deu para listar as vencidas ainda PENDING — ${err instanceof Error ? err.message : err}`)
-    }
-  }
+  // A listagem por status manda no empate (é a mais nova): a parcela que
+  // virou OVERDUE entre as chamadas entra com o status certo.
+  const antesDoMerge = payments.length
+  payments = mergePayments(payments, vencidasPendentes)
+  const pendingOverdue = payments.length - antesDoMerge
 
   const customers = await fetchCustomers(cred, payments.map((p) => p.customer)).catch(() => new Map())
 

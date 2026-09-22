@@ -102,6 +102,7 @@ export function UpcomingPanel({ timezone = 'America/Sao_Paulo', reloadKey = 0 }:
   if (!data) return null
 
   const { totals, cards } = data
+  const tz = data.timezone || timezone
   const q = busca.trim().toLowerCase()
   const digitos = busca.replace(/\D/g, '')
   const visiveis = cards.filter(
@@ -113,7 +114,7 @@ export function UpcomingPanel({ timezone = 'America/Sao_Paulo', reloadKey = 0 }:
         // 🐛 guarda: sem dígitos, `includes('')` casaria com todo mundo.
         (digitos.length >= 3 && (c.phone ?? '').replace(/\D/g, '').includes(digitos))),
   )
-  const lido = fmtHora(data.checkedAt, timezone)
+  const lido = fmtHora(data.checkedAt, tz)
 
   return (
     <section className="rounded-xl border border-border bg-card">
@@ -152,6 +153,13 @@ export function UpcomingPanel({ timezone = 'America/Sao_Paulo', reloadKey = 0 }:
           {lido ? ` · lido ${lido}` : ''}
         </span>
       </div>
+      {/* Recarga falhou com dados na tela: continua mostrando a última leitura,
+          mas diz — erro engolido vira "está tudo certo" (regra da casa). */}
+      {erro && (
+        <p className="flex items-center gap-1.5 border-t border-border px-4 py-1.5 text-xs text-red-600 dark:text-red-400">
+          <TriangleAlert className="h-3.5 w-3.5 shrink-0" /> {erro} Mostrando a última leitura.
+        </p>
+      )}
 
       <div className="flex flex-wrap items-center gap-2 border-t border-border px-4 py-2">
         <button

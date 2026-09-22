@@ -500,6 +500,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
           usedToday: usedToday + (stats.newCharges ?? 0) + stats.queued,
           moment,
           dayKey,
+          todayKey: hojeKey,
           scan: upcomingScan,
         })
         stats.reminders = r.queued

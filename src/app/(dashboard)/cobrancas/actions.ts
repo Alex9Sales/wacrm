@@ -3047,6 +3047,8 @@ export interface UpcomingCustomerCard {
 
 export interface UpcomingChargesView {
   todayKey: string
+  /** Fuso da conta — as horas da tela saem nele. */
+  timezone: string
   /** Início da última leitura que gravou a tela (null = nunca leu). */
   checkedAt: string | null
   horizonDays: number
@@ -3067,7 +3069,20 @@ export async function getUpcomingCharges(): Promise<ActionResult<UpcomingCharges
   try {
     const accountSettings = await getAccountSettings(accountId)
     const s = normalizeSettings(accountSettings.collections)
-    const todayKey = localDayKey(accountSettings.businessTimezone || 'America/Sao_Paulo')
+    const timezone = accountSettings.businessTimezone || 'America/Sao_Paulo'
+    const todayKey = localDayKey(timezone)
+
+    // "lido HH:MM" vem do carimbo da conexão, não das linhas: conta sem parcela
+    // a vencer tem zero linhas e mesmo assim foi lida.
+    const scanned = await db
+      .select({ at: asaasConnections.upcomingScannedAt })
+      .from(asaasConnections)
+      .where(and(eq(asaasConnections.accountId, accountId), eq(asaasConnections.enabled, true)))
+    const checkedAt =
+      scanned
+        .map((r) => (r.at ? new Date(r.at).getTime() : 0))
+        .filter((ms) => Number.isFinite(ms) && ms > 0)
+        .reduce((max, ms) => (ms > max ? ms : max), 0) || null
 
     const rows = await db
       .select({
@@ -3083,7 +3098,6 @@ export async function getUpcomingCharges(): Promise<ActionResult<UpcomingCharges
         dueDate: collectionsUpcoming.dueDate,
         invoiceUrl: collectionsUpcoming.invoiceUrl,
         description: collectionsUpcoming.description,
-        lastSeenAt: collectionsUpcoming.lastSeenAt,
         contactName: contacts.name,
         contactPhone: contacts.phone,
       })
@@ -3121,11 +3135,8 @@ export async function getUpcomingCharges(): Promise<ActionResult<UpcomingCharges
     for (const c of convRows) if (c.contactId && !convByContact.has(c.contactId)) convByContact.set(c.contactId, c.id)
     const holdByContact = new Map(holdRows.map((h) => [h.contactId, debtorHold(h, s) != null]))
 
-    let checkedAtMs = 0
     const byCustomer = new Map<string, UpcomingCustomerCard>()
     for (const r of rows) {
-      const seen = r.lastSeenAt ? new Date(r.lastSeenAt).getTime() : 0
-      if (Number.isFinite(seen) && seen > checkedAtMs) checkedAtMs = seen
       const key = `${r.connectionId}:${r.customerId}`
       let card = byCustomer.get(key)
       if (!card) {
@@ -3174,7 +3185,8 @@ export async function getUpcomingCharges(): Promise<ActionResult<UpcomingCharges
       ok: true,
       data: {
         todayKey,
-        checkedAt: checkedAtMs ? new Date(checkedAtMs).toISOString() : null,
+        timezone,
+        checkedAt: checkedAt ? new Date(checkedAt).toISOString() : null,
         horizonDays: UPCOMING_HORIZON_DAYS,
         dueTodayEnabled: s.remindOnDueDate,
         reminderDaysBefore: s.reminderDaysBefore,

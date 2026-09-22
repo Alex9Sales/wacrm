@@ -3249,6 +3249,8 @@ export const asaasConnections = pgTable("asaas_connections", {
 	/** 🧾 Item 5: clientes duplicados no Asaas (mesmo CPF/telefone/e-mail), da última verificação. */
 	duplicatesReport: jsonb("duplicates_report").$type<{ by: string; key: string; customers: { id: string; name: string | null }[] }[]>().default([]).notNull(),
 	duplicatesCheckedAt: timestamp("duplicates_checked_at", { withTimezone: true, mode: 'string' }),
+	/** Última leitura dos próximos vencimentos que gravou a tela (migr 0189). */
+	upcomingScannedAt: timestamp("upcoming_scanned_at", { withTimezone: true, mode: 'string' }),
 	/** Quando as notificações do Asaas foram desligadas em massa por aqui. */
 	notificationsOffAt: timestamp("notifications_off_at", { withTimezone: true, mode: 'string' }),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
