@@ -533,6 +533,17 @@ export function holdRefusal(
   return `A régua está parada neste cliente${ate}${motivo(st.snoozeReason)} — nada foi enviado.`
 }
 
+/**
+ * Que tipo de envio CONTA como toque de cobrança (ritmo da régua, contador que
+ * devolve o devedor para uma pessoa, "não repita isto" da IA). Lembrete antes
+ * do vencimento e aviso de cobrança nova não são cobrança — são entrega de
+ * link — e não contam. A cobrança da régua (sem `kind`) e a enviada à mão pela
+ * carteira (`'manual'`, 22/09) contam.
+ */
+export function countsAsCollectionTouch(kind: unknown): boolean {
+  return kind !== 'reminder' && kind !== 'new_charge'
+}
+
 export function eligibility(input: EligibleInput, s: CollectionsSettings, now = new Date()): SkipReason {
   if (!input.contactId) return 'no_contact'
   if (input.optedOut) return 'opted_out'

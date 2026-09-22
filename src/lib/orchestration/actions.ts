@@ -35,7 +35,7 @@ import { linksAlreadySent } from '@/lib/collections/links-sent'
 import { NEW_CHARGE_LINK_SENT_ERROR } from '@/lib/collections/new-charge-rules'
 import { resolveCollectionTargets } from '@/lib/collections/outreach'
 import { reminderStillPending } from '@/lib/collections/reminders'
-import { debtorHold, holdRefusal, normalizeSettings } from '@/lib/collections/rules'
+import { countsAsCollectionTouch, debtorHold, holdRefusal, normalizeSettings } from '@/lib/collections/rules'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { planStageFollowUp } from '@/lib/ai/followup'
@@ -752,7 +752,7 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
  * pessoa. Nenhum dos dois é cobrança — são entrega de link.
  */
 export async function recordCollectionTouch(accountId: string, contactId: string, text: string, kind: unknown): Promise<void> {
-  if (kind === 'reminder' || kind === 'new_charge') return
+  if (!countsAsCollectionTouch(kind)) return
   const nowIso = new Date().toISOString()
 
   await db
@@ -790,7 +790,7 @@ export async function recordCollectionTouch(accountId: string, contactId: string
  * Fail-open: qualquer erro aqui vira "manda texto", que é o comportamento
  * de antes — nunca trava a cobrança por causa desta checagem.
  */
-async function officialTemplateGate(
+export async function officialTemplateGate(
   accountId: string,
   conversationId: string,
 ): Promise<{ needsTemplate: boolean; templateName: string | null; templateLanguage: string | null; params: string[] }> {

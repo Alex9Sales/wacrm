@@ -24,6 +24,7 @@ import {
   Link2,
   Link2Off,
   Loader2,
+  MessageCircle,
   Phone,
   Pencil,
   Plus,
@@ -111,6 +112,7 @@ import {
 } from '@/app/(dashboard)/cobrancas/actions';
 import { UpcomingUnmatchedPanel } from '@/components/cobrancas/upcoming-unmatched-panel';
 import { SendsPanel } from '@/components/cobrancas/sends-panel';
+import { ManualCollectDialog } from '@/components/cobrancas/manual-collect-dialog';
 import { unlinkDebtorText } from '@/lib/collections/upcoming-unmatched';
 import { CHARGEABLE_STATUSES, WEEKDAY_SHORT, describeWeekdays, type CollectionsSettings } from '@/lib/collections/rules';
 import { pauseSourceLabel } from '@/lib/collections/pause-rules';
@@ -151,6 +153,8 @@ export function WalletClient() {
   // Filtro "Promessas": quem prometeu pagar (a régua dorme até a data).
   const [onlyPromises, setOnlyPromises] = useState(false);
   const [promiseFor, setPromiseFor] = useState<WalletDebtor | null>(null);
+  // 💬 "Cobrar pelo WhatsApp" (22/09): devedor com o diálogo de cobrança à mão aberto.
+  const [collectFor, setCollectFor] = useState<WalletDebtor | null>(null);
   const [rule, setRule] = useState<CollectionsSettings | null>(null);
   const [running, setRunning] = useState(false);
   const [upcoming, setUpcoming] = useState<number | null>(null);
@@ -514,6 +518,7 @@ export function WalletClient() {
                 onUnlink={load}
                 onPause={() => setPauseFor(d)}
                 onPromise={() => setPromiseFor(d)}
+                onCollect={() => setCollectFor(d)}
                 onChanged={load}
               />
             ))}
@@ -553,6 +558,7 @@ export function WalletClient() {
       {newChargeOpen && <NewChargeDialog conns={conns.filter((c) => c.enabled)} onClose={() => setNewChargeOpen(false)} onCreated={load} />}
       <PauseDebtorDialog debtor={pauseFor} onClose={() => setPauseFor(null)} onSaved={load} />
       <PromiseDialog debtor={promiseFor} onClose={() => setPromiseFor(null)} onSaved={load} />
+      <ManualCollectDialog debtor={collectFor} onClose={() => setCollectFor(null)} onSent={load} />
     </div>
   );
 
@@ -657,6 +663,7 @@ function DebtorCard({
   onUnlink,
   onPause,
   onPromise,
+  onCollect,
   onChanged,
 }: {
   debtor: WalletDebtor;
@@ -664,6 +671,7 @@ function DebtorCard({
   onUnlink: () => void;
   onPause: () => void;
   onPromise: () => void;
+  onCollect: () => void;
   onChanged: () => void;
 }) {
   const [open, setOpen] = useState(false);
@@ -787,6 +795,15 @@ function DebtorCard({
         )}
         {debtor.contactId ? (
           <div className="flex items-center gap-1.5">
+            {/* 💬 22/09 (João/GoLink): cobrar ESTE devedor agora, pelo número de
+                quem clica, com o texto da régua pronto pra revisar. Conta como
+                toque da régua (manual-collect-dialog.tsx / manual-send.ts). O
+                <span> leva o title porque botão desabilitado não mostra tooltip. */}
+            <span title={collectTitle(debtor)} className="inline-flex">
+              <Button size="sm" variant="outline" onClick={onCollect} disabled={!debtor.contactHasPhone}>
+                <MessageCircle className="mr-1.5 h-3.5 w-3.5" /> Cobrar pelo WhatsApp
+              </Button>
+            </span>
             {debtor.paused && (
               <span className="inline-flex items-center gap-1 rounded-full bg-muted px-2 py-0.5 text-[11px] font-medium text-muted-foreground">
                 <BellOff className="h-3 w-3" /> não cobrar
@@ -2529,6 +2546,12 @@ function samePhone(a: string | null | undefined, b: string | null | undefined): 
   const ta = (a ?? '').replace(/\D/g, '').slice(-8);
   const tb = (b ?? '').replace(/\D/g, '').slice(-8);
   return ta.length === 8 && ta === tb;
+}
+
+/** Tooltip do "Cobrar pelo WhatsApp": diz o que acontece — inclusive que entra no teto e reinicia a cadência. */
+function collectTitle(d: WalletDebtor): string {
+  if (!d.contactHasPhone) return 'Este contato não tem telefone na ficha — a cobrança não sai por WhatsApp. Edite a ficha ou use o telefone do Asaas.';
+  return 'Manda a cobrança agora, pelo seu número, com o texto da régua pronto pra revisar. Conta como toque da régua: entra no teto do dia, reinicia a cadência do envio automático e a régua só volta a cobrar este cliente depois do intervalo.';
 }
 
 function reguaStatus(d: WalletDebtor): string {
