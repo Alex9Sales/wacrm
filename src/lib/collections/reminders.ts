@@ -50,6 +50,7 @@ import {
   type AsaasEnv,
   type AsaasPayment,
 } from '@/lib/asaas/collections'
+import { dedupeById } from '@/lib/asaas/overdue-pending'
 import { findContact, loadCustomerLinks } from '@/lib/asaas/sync'
 import { buildUnmatchedRows, purgePlan, type UnmatchedEntry, type UnmatchedRow } from './upcoming-unmatched'
 import { upcomingScanPlan } from './upcoming-plan'
@@ -78,7 +79,7 @@ import {
   type CollectionsSettings,
   type UpcomingLine,
 } from './rules'
-import { localDayKey } from './stale'
+import { localDayKey, localDayStartIso } from './stale'
 import { seedFrom, tooSimilar } from './variation'
 
 export interface ReminderRunResult {
@@ -237,6 +238,10 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
       console.warn(`[lembrete] ${c.label}: não deu para listar a vencer — ${err instanceof Error ? err.message : err}`)
       continue
     }
+    // Paginação por offset repete item quando o conjunto muda entre páginas
+    // (revisão 22/09): repetida, a parcela entraria em dobro no texto do
+    // lembrete e derrubaria o upsert em lote da tela.
+    payments = dedupeById(payments)
     const withDays = payments.map((p) => ({ p, daysUntil: p.dueDate ? daysBetweenDayKeys(todayKey, p.dueDate.slice(0, 10)) : null }))
     const inWindow = (d: number | null) => d != null && d >= 0 && d <= reminderWindow
     out.found += withDays.filter((x) => inWindow(x.daysUntil)).length
@@ -400,6 +405,9 @@ export async function writeUpcomingRows(
   scanStartedAt: string,
   range: { from: string; until: string },
 ): Promise<void> {
+  // Cinto de segurança: a mesma parcela duas vezes no mesmo INSERT derruba o
+  // comando inteiro (ON CONFLICT não pode afetar a mesma linha duas vezes).
+  const unique = [...new Map(rows.map((r) => [r.asaasId, r])).values()]
   const setBase = {
     value: sql`excluded.value`,
     dueDate: sql`excluded.due_date`,
@@ -416,7 +424,7 @@ export async function writeUpcomingRows(
   }
   await db.transaction(async (tx) => {
     for (const known of [true, false]) {
-      const group = rows.filter((r) => r.known === known)
+      const group = unique.filter((r) => r.known === known)
       for (let i = 0; i < group.length; i += UPSERT_CHUNK) {
         const part = group.slice(i, i + UPSERT_CHUNK)
         await tx
@@ -553,6 +561,8 @@ export async function queueUpcomingReminders(args: {
   dayKey: string
   /** Dia de HOJE no fuso da conta (localDayKey) — `dayKey` é o dia UTC, usado só na semente. */
   todayKey: string
+  /** Fuso da conta (meia-noite de hoje para "link que já saiu hoje"). */
+  tz: string
   /** A leitura feita antes do teto (scanUpcoming). */
   scan: UpcomingScan
 }): Promise<ReminderRunResult> {
@@ -692,10 +702,25 @@ export async function queueUpcomingReminders(args: {
     let fresh: typeof items
     if (dueTodayItems.length) {
       kind = 'due_today'
-      fresh = freshReminderItems(dueTodayItems, warnedToday.get(cand.contactId) ?? nothingReminded, new Set<string>())
+      const warned = warnedToday.get(cand.contactId) ?? nothingReminded
+      fresh = freshReminderItems(dueTodayItems, warned, new Set<string>())
       if (!fresh.length) {
         bump('already')
         continue
+      }
+      // 🔗 Link que já saiu HOJE (cobrança criada hoje com "mandar o link",
+      // [[COBRAR:]] da IA, colado à mão do celular) cala o aviso do dia — o
+      // cliente já está com ele (incidentes de link em dobro de 15 e 17/09).
+      // O link do D-5, de dias atrás, NÃO cala: o "desde" é a meia-noite de
+      // hoje no fuso da conta, não os N+1 dias do lembrete.
+      const urls = [...new Set(fresh.map((x) => x.invoiceUrl).filter((u): u is string => !!u))]
+      if (urls.length) {
+        const sentHoje = await linksAlreadySent(args.accountId, cand.contactId, urls, localDayStartIso(args.todayKey, args.tz))
+        fresh = freshReminderItems(fresh, warned, sentHoje)
+        if (!fresh.length) {
+          bump('link_sent')
+          continue
+        }
       }
     } else {
       if (!reminderItems.length) continue

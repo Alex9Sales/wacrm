@@ -35,7 +35,8 @@ import { linksAlreadySent } from '@/lib/collections/links-sent'
 import { NEW_CHARGE_LINK_SENT_ERROR } from '@/lib/collections/new-charge-rules'
 import { resolveCollectionTargets } from '@/lib/collections/outreach'
 import { reminderStillPending } from '@/lib/collections/reminders'
-import { countsAsCollectionTouch, debtorHold, holdRefusal, normalizeSettings } from '@/lib/collections/rules'
+import { localDayKey, localDayStartIso } from '@/lib/collections/stale'
+import { countsAsCollectionTouch, debtorHold, DUE_TODAY_LINK_SENT_ERROR, holdRefusal, normalizeSettings } from '@/lib/collections/rules'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 import { planStageFollowUp } from '@/lib/ai/followup'
@@ -290,13 +291,23 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         // o pedido expira e a próxima varredura remonta só o que faltar — sem
         // isso, com 1 de 2 mandado à mão, os 2 saíam e um chegava em dobro.
         // Antes do Asaas: poupa a chamada.
-        if (kind === 'new_charge') {
+        // 🔔 O aviso do DIA (kind='due_today') faz a mesma conferência, mas só
+        // com o que saiu HOJE no fuso da conta: o link do lembrete de dias
+        // atrás não cala o aviso; o colado à mão hoje, sim (revisão 22/09).
+        if (kind === 'new_charge' || kind === 'due_today') {
           const urls = Array.isArray(input.payload.links)
             ? input.payload.links.filter((u): u is string => typeof u === 'string' && !!u)
             : []
           if (urls.length) {
-            const chegaram = await linksAlreadySent(input.accountId, input.contactId, urls, new Date(Date.now() - 4 * 86_400_000).toISOString())
-            if (chegaram.size > 0) return { ok: false, error: NEW_CHARGE_LINK_SENT_ERROR }
+            let since: string
+            if (kind === 'due_today') {
+              const tz = (await getAccountSettings(input.accountId)).businessTimezone || 'America/Sao_Paulo'
+              since = localDayStartIso(localDayKey(tz), tz)
+            } else {
+              since = new Date(Date.now() - 4 * 86_400_000).toISOString()
+            }
+            const chegaram = await linksAlreadySent(input.accountId, input.contactId, urls, since)
+            if (chegaram.size > 0) return { ok: false, error: kind === 'due_today' ? DUE_TODAY_LINK_SENT_ERROR : NEW_CHARGE_LINK_SENT_ERROR }
           }
         }
 

@@ -31,6 +31,7 @@ import { firstOrNull } from '@/db/helpers'
 import { channelOwnerLabel } from '@/lib/broadcasts/channel-choice'
 import { otherPersonNumberError } from '@/lib/broadcasts/channel-owner-guard'
 import { officialTemplateGate, recordCollectionTouch } from '@/lib/orchestration/actions'
+import { findDeliveredWhatsAppCopy } from './delivered-copy'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { ensureConversationForContact } from '@/lib/whatsapp/resolve-conversation'
 import { friendlySendError, sendMessageToConversation } from '@/lib/whatsapp/send-message'
@@ -113,6 +114,8 @@ export interface ManualCollectSent {
   sentAsTemplate: boolean
   /** false = a mensagem SAIU, mas o registro (toque/painel) falhou — a régua pode repetir. */
   recorded: boolean
+  /** O canal devolveu erro, mas a mensagem já estava na conversa: adotada, não reenviada. */
+  adoptedFromEcho?: boolean
 }
 
 // ------------------------------------------------------------- o devedor
@@ -400,6 +403,11 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
   // 📋 API oficial fora da janela de 24 h: texto livre não é entregue — vai o
   // template de Ajustar, ou recusa dizendo o que resolver (igual à régua).
   let sentAsTemplate = false
+  let adoptedFromEcho = false
+  const outgoingText = signManualCollectText(text, senderName, ctx.signatureEnabled)
+  // Instante do clique (com folga para relógio): a busca da cópia entregue
+  // começa daqui. Um clique anterior que "falhou" mas chegou também conta.
+  const clickedAtIso = new Date(Date.now() - 60_000).toISOString()
   try {
     const gate = await officialTemplateGate(accountId, conversationId)
     if (gate.needsTemplate) {
@@ -422,12 +430,22 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
       await sendMessageToConversation(accountId, {
         conversationId,
         messageType: 'text',
-        contentText: signManualCollectText(text, senderName, ctx.signatureEnabled),
+        contentText: outgoingText,
       })
     }
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err)
-    return { ok: false, error: friendlySendError(raw) ?? `Não foi possível enviar: ${raw}` }
+    // O WAHA às vezes devolve erro e ENTREGA (14/09, régua): dizer "tente de
+    // novo" aqui era cobrar em dobro. Antes de recusar, procura a mensagem na
+    // conversa do devedor desde o clique; achou → segue como enviada. O
+    // template não tem como ser reconhecido pelo texto — esse recusa direto.
+    const copy = sentAsTemplate
+      ? null
+      : await findDeliveredWhatsAppCopy(accountId, { contactId: ctx.contact.id, createdAt: clickedAtIso, suggestedText: text }).catch(() => null)
+    if (!copy) return { ok: false, error: friendlySendError(raw) ?? `Não foi possível enviar: ${raw}` }
+    adoptedFromEcho = true
+    conversationId = copy.conversationId
+    console.warn(`[cobranca] envio à mão: canal devolveu erro mas a mensagem já estava na conversa (${copy.id.slice(0, 8)}) — adotada, não reenviada`)
   }
 
   // A mensagem JÁ SAIU. Daqui pra baixo é registro — falha vira log e aviso,
@@ -475,5 +493,5 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
     console.error('[cobranca] envio à mão saiu, mas o registro falhou conta=%s contato=%s:', accountId, ctx.contact.id, err instanceof Error ? err.message : err)
   }
 
-  return { ok: true, data: { conversationId, channelLabel: manualCollectChannelLabel(channel, userId), touch, sentAsTemplate, recorded } }
+  return { ok: true, data: { conversationId, channelLabel: manualCollectChannelLabel(channel, userId), touch, sentAsTemplate, recorded, adoptedFromEcho } }
 }

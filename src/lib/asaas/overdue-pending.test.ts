@@ -59,3 +59,16 @@ describe('mayCloseUnseen — o que pode ser fechado quando some da listagem', ()
     expect(mayCloseUnseen({ status: 'RECEIVED', dueDate: '2026-09-01' }, statuses, '2026-09-20')).toBe(false)
   })
 })
+
+import { dedupeById } from './overdue-pending'
+
+describe('dedupeById — paginação por offset repete item quando o conjunto muda', () => {
+  it('fica a primeira ocorrência, na ordem', () => {
+    const r = dedupeById([{ id: 'a', v: 1 }, { id: 'b', v: 2 }, { id: 'a', v: 3 }, { id: 'c', v: 4 }])
+    expect(r.map((x) => `${x.id}${x.v}`)).toEqual(['a1', 'b2', 'c4'])
+  })
+  it('vazio e sem repetidos passam intactos', () => {
+    expect(dedupeById([])).toEqual([])
+    expect(dedupeById([{ id: 'a' }, { id: 'b' }])).toEqual([{ id: 'a' }, { id: 'b' }])
+  })
+})

@@ -963,6 +963,19 @@ export async function unlinkDebtor(debtorKey: string): Promise<ActionResult> {
         .update(asaasCharges)
         .set({ contactId: null, matchedBy: null, updatedAt: new Date().toISOString() })
         .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.open, true), debtorFilter(debtorKey)))
+      // 🔔 Próximos vencimentos: deixa de dizer "com contato" na hora; a
+      // próxima leitura refaz o casamento automático, se ele existir.
+      if (refs.length) {
+        await tx
+          .update(collectionsUpcoming)
+          .set({ contactId: null })
+          .where(
+            and(
+              eq(collectionsUpcoming.accountId, accountId),
+              or(...refs.map((r) => and(eq(collectionsUpcoming.connectionId, r.connectionId), eq(collectionsUpcoming.asaasCustomerId, r.customerId)))),
+            ),
+          )
+      }
     })
   } catch (err) {
     console.error('[cobranca] desligar contato falhou:', err instanceof Error ? err.message : err)
@@ -3090,7 +3103,9 @@ export async function getUpcomingCharges(): Promise<ActionResult<UpcomingCharges
         connectionLabel: asaasConnections.label,
         asaasId: collectionsUpcoming.asaasId,
         customerId: collectionsUpcoming.asaasCustomerId,
-        contactId: collectionsUpcoming.contactId,
+        // O vínculo manual vale na hora (ligar contato pela carteira ou pelo
+        // painel sem contato); o casamento gravado pela leitura cobre o resto.
+        contactId: sql<string | null>`COALESCE(${asaasCustomerLinks.contactId}, ${collectionsUpcoming.contactId})`,
         customerName: collectionsUpcoming.customerName,
         phone: collectionsUpcoming.phone,
         email: collectionsUpcoming.email,
@@ -3106,7 +3121,18 @@ export async function getUpcomingCharges(): Promise<ActionResult<UpcomingCharges
         asaasConnections,
         and(eq(asaasConnections.id, collectionsUpcoming.connectionId), eq(asaasConnections.accountId, accountId), eq(asaasConnections.enabled, true)),
       )
-      .leftJoin(contacts, and(eq(contacts.id, collectionsUpcoming.contactId), eq(contacts.accountId, accountId)))
+      .leftJoin(
+        asaasCustomerLinks,
+        and(
+          eq(asaasCustomerLinks.accountId, collectionsUpcoming.accountId),
+          eq(asaasCustomerLinks.connectionId, collectionsUpcoming.connectionId),
+          eq(asaasCustomerLinks.asaasCustomerId, collectionsUpcoming.asaasCustomerId),
+        ),
+      )
+      .leftJoin(
+        contacts,
+        and(eq(contacts.id, sql`COALESCE(${asaasCustomerLinks.contactId}, ${collectionsUpcoming.contactId})`), eq(contacts.accountId, accountId)),
+      )
       .where(and(eq(collectionsUpcoming.accountId, accountId), gte(collectionsUpcoming.dueDate, todayKey)))
       .orderBy(collectionsUpcoming.dueDate)
       .limit(2000)
@@ -3118,7 +3144,9 @@ export async function getUpcomingCharges(): Promise<ActionResult<UpcomingCharges
             .select({ contactId: conversations.contactId, id: conversations.id })
             .from(conversations)
             .where(and(eq(conversations.accountId, accountId), inArray(conversations.contactId, contactIds)))
-            .orderBy(desc(conversations.lastMessageAt)),
+            // DESC põe NULL primeiro: conversa aberta e nunca usada passaria na
+            // frente da conversa de verdade — mesmo COALESCE da carteira.
+            .orderBy(sql`COALESCE(${conversations.lastMessageAt}, ${conversations.createdAt}) DESC`),
           db
             .select({
               contactId: collectionsTouches.contactId,

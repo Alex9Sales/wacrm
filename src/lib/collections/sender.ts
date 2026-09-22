@@ -18,16 +18,17 @@
 // reconfere no Asaas se ainda há parcela aberta (executeOrchestrationAction) —
 // quem pagou ou foi parado entre a fila e o envio não recebe cobrança.
 // ============================================================
-import { and, asc, eq, gte, inArray, notInArray, or, sql } from 'drizzle-orm'
+import { and, asc, eq, gte, or, sql } from 'drizzle-orm'
 
-import { db, agentActionRequests, channels, conversations, messages } from '@/db'
+import { db, agentActionRequests } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { executeOrchestrationAction, recordCollectionTouch } from '@/lib/orchestration/actions'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 
+import { findDeliveredWhatsAppCopy } from './delivered-copy'
 import { localParts } from './engine'
 import { newChargeGraceCutoffIso } from './new-charge-rules'
-import { autoSendDue, dayBlockedReason, deliveredEchoSnippet, isFinalCollectionError, normalizeSettings, retryCutoffIso, withinWindow } from './rules'
+import { autoSendDue, dayBlockedReason, isFinalCollectionError, normalizeSettings, retryCutoffIso, withinWindow } from './rules'
 import { expireStaleCollectionDrafts, localDayKey } from './stale'
 
 /** Tentativas antes de marcar o pedido como falho (rede/canal fora do ar). */
@@ -212,36 +213,3 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
   return stats
 }
 
-/**
- * A cobrança deste pedido já está numa conversa de WhatsApp do devedor? Vale o
- * eco do celular ('agent') e a mensagem gravada pelo próprio CRM ('bot'),
- * criadas depois do pedido e contendo o começo do rascunho. E-mail fica de
- * fora: a cópia por e-mail não prova que o WhatsApp saiu.
- */
-async function findDeliveredWhatsAppCopy(
-  accountId: string,
-  row: { contactId: string; createdAt: string; suggestedText: string | null },
-): Promise<{ id: string; conversationId: string; createdAt: string | null } | null> {
-  const snippet = deliveredEchoSnippet(row.suggestedText)
-  if (!snippet) return null
-  return firstOrNull(
-    await db
-      .select({ id: messages.id, conversationId: messages.conversationId, createdAt: messages.createdAt })
-      .from(messages)
-      .innerJoin(conversations, eq(conversations.id, messages.conversationId))
-      .innerJoin(channels, eq(channels.id, conversations.channelId))
-      .where(
-        and(
-          eq(conversations.accountId, accountId),
-          eq(conversations.contactId, row.contactId),
-          notInArray(channels.provider, ['email', 'gmail']),
-          inArray(messages.senderType, ['agent', 'bot']),
-          eq(messages.isInternal, false),
-          gte(messages.createdAt, row.createdAt),
-          sql`position(${snippet} in regexp_replace(${messages.contentText}, ${'\\s+'}, ' ', 'g')) > 0`,
-        ),
-      )
-      .orderBy(asc(messages.createdAt))
-      .limit(1),
-  )
-}

@@ -54,3 +54,21 @@ export function mayCloseUnseen(
   if (!pendingCutoff || row.status !== 'PENDING' || !row.dueDate) return false
   return row.dueDate.slice(0, 10) <= pendingCutoff
 }
+
+/**
+ * Tira parcela repetida de uma listagem paginada por offset: quando o conjunto
+ * muda entre uma página e a outra (cobrança nova, pagamento), o último item de
+ * uma página volta como o primeiro da seguinte. Fica a primeira ocorrência.
+ * Um upsert em lote com a mesma chave duas vezes derruba o comando inteiro
+ * ("ON CONFLICT DO UPDATE command cannot affect row a second time").
+ */
+export function dedupeById<T extends { id: string }>(list: readonly T[]): T[] {
+  const seen = new Set<string>()
+  const out: T[] = []
+  for (const item of list) {
+    if (seen.has(item.id)) continue
+    seen.add(item.id)
+    out.push(item)
+  }
+  return out
+}

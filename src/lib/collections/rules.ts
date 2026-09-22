@@ -449,6 +449,9 @@ export function retryCutoffIso(nowMs: number): string {
  */
 export const COLLECTION_FINAL_ERROR_RE = /nada em aberto|já foi pag|não está mais|não foi enviada|régua está parada/i
 
+/** Aviso do dia recusado no envio: o link já saiu hoje. Casa com `COLLECTION_FINAL_ERROR_RE` (o sender expira, não retenta). */
+export const DUE_TODAY_LINK_SENT_ERROR = 'O link desta parcela já saiu hoje para o cliente — a mensagem não foi enviada de novo.'
+
 export function isFinalCollectionError(e: string): boolean {
   return COLLECTION_FINAL_ERROR_RE.test(e)
 }

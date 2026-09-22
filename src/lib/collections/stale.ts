@@ -32,6 +32,42 @@ export function localDayKey(tz: string, at: Date = new Date()): string {
 }
 
 /**
+ * Instante (ISO, UTC) da meia-noite de `dayKey` no fuso `tz` — "desde o começo
+ * de hoje" para quem compara com created_at. Duas passadas: a segunda corrige
+ * o chute quando o dia cai numa troca de horário de verão. Fuso inválido ou
+ * dia inválido → meia-noite UTC do dia (ou a época, se nem o dia serve).
+ */
+export function localDayStartIso(dayKey: string, tz: string): string {
+  const midnightUtc = Date.parse(`${dayKey.slice(0, 10)}T00:00:00Z`)
+  if (Number.isNaN(midnightUtc)) return new Date(0).toISOString()
+  let instant = midnightUtc - tzOffsetMs(tz, midnightUtc)
+  instant = midnightUtc - tzOffsetMs(tz, instant)
+  return new Date(instant).toISOString()
+}
+
+/** Deslocamento do fuso no instante dado (local − UTC, em ms); fuso inválido → 0. */
+function tzOffsetMs(tz: string, atMs: number): number {
+  try {
+    const parts = new Intl.DateTimeFormat('en-US', {
+      timeZone: tz,
+      hourCycle: 'h23',
+      year: 'numeric',
+      month: '2-digit',
+      day: '2-digit',
+      hour: '2-digit',
+      minute: '2-digit',
+      second: '2-digit',
+    }).formatToParts(new Date(atMs))
+    const n = (type: Intl.DateTimeFormatPartTypes) => Number(parts.find((p) => p.type === type)?.value ?? NaN)
+    const asUtc = Date.UTC(n('year'), n('month') - 1, n('day'), n('hour'), n('minute'), n('second'))
+    if (Number.isNaN(asUtc)) return 0
+    return asUtc - Math.floor(atMs / 1000) * 1000
+  } catch {
+    return 0
+  }
+}
+
+/**
  * Expira os pedidos de cobrança ainda na fila (pending/queued) que NÃO foram
  * montados hoje (dia local da conta). Devolve quantos expiraram. Nunca lança.
  */

@@ -136,6 +136,9 @@ function ManualCollectDialogInner({
           duration: 15_000,
         });
       }
+      if (d.adoptedFromEcho) {
+        toast.info('O número respondeu erro, mas a mensagem já estava na conversa — não foi reenviada.', { duration: 12_000 });
+      }
       onClose();
       onSent();
     } catch (err) {
@@ -150,8 +153,15 @@ function ManualCollectDialogInner({
   }
 
   return (
-    <Dialog open onOpenChange={(v) => !v && onClose()}>
-      <DialogContent className="sm:max-w-md">
+    // Enquanto envia, o diálogo não fecha (Esc / clique fora): fechar e
+    // reabrir zerava o `sending` e deixava mandar a mesma cobrança duas vezes.
+    <Dialog
+      open
+      onOpenChange={(v) => {
+        if (!v && !sending) onClose();
+      }}
+    >
+      <DialogContent className="sm:max-w-md" showCloseButton={!sending}>
         <DialogHeader>
           <DialogTitle>Cobrar pelo WhatsApp — {name}</DialogTitle>
           <DialogDescription>
