@@ -24,7 +24,7 @@
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
-import { and, desc, eq, gte, inArray, lt, notInArray, or, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, isNull, lt, lte, notInArray, or, sql } from 'drizzle-orm'
 
 import {
   db,
@@ -51,7 +51,8 @@ import {
   type AsaasPayment,
 } from '@/lib/asaas/collections'
 import { findContact, loadCustomerLinks } from '@/lib/asaas/sync'
-import { addDaysKey, buildUnmatchedRows, purgePlan, type UnmatchedEntry, type UnmatchedRow } from './upcoming-unmatched'
+import { buildUnmatchedRows, purgePlan, type UnmatchedEntry, type UnmatchedRow } from './upcoming-unmatched'
+import { upcomingScanPlan } from './upcoming-plan'
 import { remindedFilter } from './new-charge-rules'
 import { paymentRefsFrom, paymentRefsPayload, reconferPayments } from './payment-refs'
 import { linksAlreadySent } from './links-sent'
@@ -138,16 +139,20 @@ export interface UpcomingScan {
   customers: Map<string, Map<string, AsaasCustomer>>
 }
 
-/** Quantos dias à frente a varredura GUARDA (tela "Próximos vencimentos"). */
-export const UPCOMING_HORIZON_DAYS = 30
+export { UPCOMING_HORIZON_DAYS } from './upcoming-plan'
 /**
- * Cadastros do Asaas ainda desconhecidos que a varredura abre por rodada FORA
- * da janela do lembrete. `fetchCustomers` é um GET por cliente, em série: abrir
- * 30 dias de carteira a cada 10 min renderia 429. Os da janela abrem sempre
- * (como sempre abriram); os outros vêm do que já sabemos (`knownCustomerFacts`)
- * e o resto entra aos poucos — em 2 ou 3 rodadas a tela está completa.
+ * Cadastros do Asaas ainda desconhecidos que a leitura COMPLETA abre por
+ * rodada FORA da janela do lembrete. `fetchCustomers` é um GET por cliente, em
+ * série. Os da janela abrem sempre (como sempre abriram); os outros vêm do que
+ * já sabemos (`knownCustomerFacts`) e o resto entra aos poucos — em 2 ou 3
+ * leituras completas (uma por hora) a tela está inteira.
  */
 const UNKNOWN_CUSTOMER_OPENS_PER_ROUND = 20
+/**
+ * Última leitura COMPLETA por conexão (ms). Só em memória: o worker reiniciar
+ * custa uma completa a mais, e o botão Atualizar força a dele (upcoming-plan.ts).
+ */
+const lastFullScanAt = new Map<string, number>()
 
 interface UpcomingRow {
   connectionId: string
@@ -183,7 +188,7 @@ interface UpcomingRow {
  * dia de hoje com "Avisar no dia do vencimento"): `found`, `byContact`, os
  * contadores e o retrato sem contato são DA JANELA, como sempre foram.
  */
-export async function scanUpcoming(args: { accountId: string; settings: CollectionsSettings; tz: string }): Promise<UpcomingScan> {
+export async function scanUpcoming(args: { accountId: string; settings: CollectionsSettings; tz: string; full?: boolean }): Promise<UpcomingScan> {
   const out: UpcomingScan = { found: 0, byContact: new Map(), skipped: {}, customers: new Map() }
   const bump = (k: keyof ReminderRunResult['skipped']) => {
     out.skipped[k] = (out.skipped[k] ?? 0) + 1
@@ -200,11 +205,6 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
   // o dia UTC: depois das 21h em Brasília o "hoje" já era amanhã e a parcela
   // que vence hoje saía da listagem — justamente a do aviso do dia.
   const todayKey = localDayKey(args.tz || 'America/Sao_Paulo')
-  // Janela da FILA: 0..N dias com o lembrete ligado; só hoje com o aviso do
-  // dia; -1 = nada a enfileirar (a varredura ainda grava a tela).
-  const reminderWindow = s.reminderDaysBefore > 0 ? s.reminderDaysBefore : s.remindOnDueDate ? 0 : -1
-  const from = todayKey
-  const until = addDaysKey(todayKey, Math.max(UPCOMING_HORIZON_DAYS, reminderWindow))
   const byContact = out.byContact
 
   for (const c of conns) {
@@ -214,6 +214,18 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
     } catch {
       continue
     }
+    // Janela da FILA a cada tique; a leitura COMPLETA (30 dias) no máximo uma
+    // vez por hora por conexão — ver upcoming-plan.ts.
+    const plan = upcomingScanPlan({
+      todayKey,
+      reminderDaysBefore: s.reminderDaysBefore,
+      remindOnDueDate: s.remindOnDueDate,
+      lastFullScanAt: lastFullScanAt.get(c.id) ?? 0,
+      now: Date.now(),
+      force: args.full === true,
+    })
+    if (plan.until == null) continue
+    const { reminderWindow, from, until } = plan
     // Carimbo do INÍCIO da leitura: a limpeza apaga só o que é mais velho que
     // ele — uma leitura mais nova rodando junto não perde o que gravou.
     const scanStartedAt = new Date().toISOString()
@@ -311,7 +323,8 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
       console.error(`[lembrete] ${c.label}: não deu para gravar os a vencer sem contato — ${err instanceof Error ? err.message : err}`)
     }
     try {
-      await writeUpcomingRows(args.accountId, c.id, persist, scanStartedAt)
+      await writeUpcomingRows(args.accountId, c.id, persist, scanStartedAt, { from, until })
+      if (plan.full) lastFullScanAt.set(c.id, Date.now())
     } catch (err) {
       console.error(`[lembrete] ${c.label}: não deu para gravar os próximos vencimentos — ${err instanceof Error ? err.message : err}`)
     }
@@ -372,8 +385,18 @@ const UPSERT_CHUNK = 200
  * saiu do horizonte). Linha "magra" (cadastro ainda não lido) não sobrescreve
  * nome/contato que uma leitura anterior já tinha — por isso os dois grupos vão
  * em upserts separados, cada um com o seu `SET`.
+ *
+ * A limpeza só toca o INTERVALO que foi lido (`range`): a leitura da janela
+ * (5 dias) não pode apagar o que a completa (30 dias) gravou há 20 minutos.
+ * O que venceu antes de `from` sai sempre — já não é "a vencer".
  */
-export async function writeUpcomingRows(accountId: string, connectionId: string, rows: readonly UpcomingRow[], scanStartedAt: string): Promise<void> {
+export async function writeUpcomingRows(
+  accountId: string,
+  connectionId: string,
+  rows: readonly UpcomingRow[],
+  scanStartedAt: string,
+  range: { from: string; until: string },
+): Promise<void> {
   const setBase = {
     value: sql`excluded.value`,
     dueDate: sql`excluded.due_date`,
@@ -420,9 +443,16 @@ export async function writeUpcomingRows(accountId: string, connectionId: string,
           })
       }
     }
-    await tx
-      .delete(collectionsUpcoming)
-      .where(and(eq(collectionsUpcoming.accountId, accountId), eq(collectionsUpcoming.connectionId, connectionId), lt(collectionsUpcoming.lastSeenAt, scanStartedAt)))
+    await tx.delete(collectionsUpcoming).where(
+      and(
+        eq(collectionsUpcoming.accountId, accountId),
+        eq(collectionsUpcoming.connectionId, connectionId),
+        or(
+          lt(collectionsUpcoming.dueDate, range.from),
+          and(or(isNull(collectionsUpcoming.dueDate), lte(collectionsUpcoming.dueDate, range.until)), lt(collectionsUpcoming.lastSeenAt, scanStartedAt)),
+        ),
+      ),
+    )
   })
 }
 
@@ -434,7 +464,7 @@ export async function refreshUpcomingForAccount(accountId: string): Promise<void
   try {
     const acc = await getAccountSettings(accountId)
     const s = normalizeSettings(acc.collections)
-    await scanUpcoming({ accountId, settings: s, tz: acc.businessTimezone || 'America/Sao_Paulo' })
+    await scanUpcoming({ accountId, settings: s, tz: acc.businessTimezone || 'America/Sao_Paulo', full: true })
   } catch (err) {
     console.error('[lembrete] refresh dos próximos vencimentos falhou:', err instanceof Error ? err.message : err)
   }
