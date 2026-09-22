@@ -24,7 +24,7 @@
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
-import { and, eq, gte, inArray, lt, notInArray, or, sql } from 'drizzle-orm'
+import { and, desc, eq, gte, inArray, lt, notInArray, or, sql } from 'drizzle-orm'
 
 import {
   db,
@@ -33,6 +33,7 @@ import {
   asaasCharges,
   asaasConnections,
   collectionsTouches,
+  collectionsUpcoming,
   collectionsUpcomingUnmatched,
   contacts,
   conversations,
@@ -47,14 +48,15 @@ import {
   type AsaasCredential,
   type AsaasCustomer,
   type AsaasEnv,
+  type AsaasPayment,
 } from '@/lib/asaas/collections'
 import { findContact, loadCustomerLinks } from '@/lib/asaas/sync'
-import { buildUnmatchedRows, purgePlan, type UnmatchedEntry, type UnmatchedRow } from './upcoming-unmatched'
+import { addDaysKey, buildUnmatchedRows, purgePlan, type UnmatchedEntry, type UnmatchedRow } from './upcoming-unmatched'
 import { remindedFilter } from './new-charge-rules'
 import { paymentRefsFrom, paymentRefsPayload, reconferPayments } from './payment-refs'
 import { linksAlreadySent } from './links-sent'
 import { decide, type AutonomyPolicy } from '@/lib/orchestration/policy'
-import type { AccountSettings } from '@/lib/settings/account-settings'
+import { getAccountSettings, type AccountSettings } from '@/lib/settings/account-settings'
 import { decrypt } from '@/lib/whatsapp/encryption'
 
 import { resolveCollectionTargets } from './outreach'
@@ -62,8 +64,12 @@ import {
   byNearestDue,
   collectionEmail,
   debtorHold,
+  daysBetweenDayKeys,
+  fallbackDueTodayMessage,
   fallbackReminderMessage,
   formatUpcomingSummary,
+  normalizeSettings,
+  reminderKindFor,
   freshReminderItems,
   greetingName,
   linksInstruction,
@@ -76,6 +82,8 @@ import { seedFrom, tooSimilar } from './variation'
 
 export interface ReminderRunResult {
   queued: number
+  /** Dos enfileirados, quantos são aviso do DIA do vencimento (kind 'due_today'). */
+  queuedDueToday?: number
   /** Parcelas a vencer encontradas no Asaas na janela. */
   found: number
   /**
@@ -130,10 +138,36 @@ export interface UpcomingScan {
   customers: Map<string, Map<string, AsaasCustomer>>
 }
 
-const isoDay = (d: Date) => d.toISOString().slice(0, 10)
+/** Quantos dias à frente a varredura GUARDA (tela "Próximos vencimentos"). */
+export const UPCOMING_HORIZON_DAYS = 30
+/**
+ * Cadastros do Asaas ainda desconhecidos que a varredura abre por rodada FORA
+ * da janela do lembrete. `fetchCustomers` é um GET por cliente, em série: abrir
+ * 30 dias de carteira a cada 10 min renderia 429. Os da janela abrem sempre
+ * (como sempre abriram); os outros vêm do que já sabemos (`knownCustomerFacts`)
+ * e o resto entra aos poucos — em 2 ou 3 rodadas a tela está completa.
+ */
+const UNKNOWN_CUSTOMER_OPENS_PER_ROUND = 20
+
+interface UpcomingRow {
+  connectionId: string
+  asaasId: string
+  asaasCustomerId: string
+  contactId: string | null
+  customerName: string | null
+  phone: string | null
+  email: string | null
+  cpfCnpj: string | null
+  value: number
+  dueDate: string | null
+  invoiceUrl: string | null
+  description: string | null
+  /** false = o cadastro do Asaas ainda não foi lido: a linha entra "magra" e não apaga o que já sabíamos. */
+  known: boolean
+}
 
 /**
- * Lê no Asaas o que vence nos próximos N dias e casa com os contatos. NÃO
+ * Lê no Asaas o que vence nos próximos dias e casa com os contatos. NÃO
  * enfileira nada e NÃO depende do teto do dia.
  *
  * 🐛 16/09 (Veloz Gás e Água, GoLink): a leitura vivia dentro da fila e só
@@ -141,6 +175,13 @@ const isoDay = (d: Date) => d.toISOString().slice(0, 10)
  * cliente sem contato era um `bump('no_contact')` que só o log via. Agora ela
  * roda antes do teto e grava o retrato "a vencer sem contato"
  * (collections_upcoming_unmatched) que a tela /cobrancas mostra.
+ *
+ * 22/09 (João/GoLink, "não achei uma cliente que vence esta semana"): a leitura passou a ir até 30
+ * dias e a GRAVAR toda parcela (collections_upcoming, migr 0188) — antes só
+ * quem não casava era guardado, e não existia tela de próximos vencimentos.
+ * A fila do lembrete continua olhando só a janela (`reminderDaysBefore`, ou o
+ * dia de hoje com "Avisar no dia do vencimento"): `found`, `byContact`, os
+ * contadores e o retrato sem contato são DA JANELA, como sempre foram.
  */
 export async function scanUpcoming(args: { accountId: string; settings: CollectionsSettings; tz: string }): Promise<UpcomingScan> {
   const out: UpcomingScan = { found: 0, byContact: new Map(), skipped: {}, customers: new Map() }
@@ -148,7 +189,6 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
     out.skipped[k] = (out.skipped[k] ?? 0) + 1
   }
   const s = args.settings
-  if (s.reminderDaysBefore <= 0) return out
 
   const conns = await db
     .select({ id: asaasConnections.id, label: asaasConnections.label, apiKeyEnc: asaasConnections.apiKeyEnc, environment: asaasConnections.environment })
@@ -156,16 +196,15 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
     .where(and(eq(asaasConnections.accountId, args.accountId), eq(asaasConnections.enabled, true)))
   if (!conns.length) return out
 
-  const today = new Date()
-  const todayKey = localDayKey(args.tz || 'America/Sao_Paulo', today)
-  const daysUntilFrom = (ymd: string): number | null => {
-    const venc = Date.parse(`${ymd.slice(0, 10)}T00:00:00Z`)
-    const hoje = Date.parse(`${todayKey}T00:00:00Z`)
-    if (Number.isNaN(venc) || Number.isNaN(hoje)) return null
-    return Math.round((venc - hoje) / 86_400_000)
-  }
-  const from = isoDay(today)
-  const until = isoDay(new Date(today.getTime() + s.reminderDaysBefore * 86_400_000))
+  // Tudo pela DATA no fuso da conta (mesma conta da régua). 🐛 Antes `from` era
+  // o dia UTC: depois das 21h em Brasília o "hoje" já era amanhã e a parcela
+  // que vence hoje saía da listagem — justamente a do aviso do dia.
+  const todayKey = localDayKey(args.tz || 'America/Sao_Paulo')
+  // Janela da FILA: 0..N dias com o lembrete ligado; só hoje com o aviso do
+  // dia; -1 = nada a enfileirar (a varredura ainda grava a tela).
+  const reminderWindow = s.reminderDaysBefore > 0 ? s.reminderDaysBefore : s.remindOnDueDate ? 0 : -1
+  const from = todayKey
+  const until = addDaysKey(todayKey, Math.max(UPCOMING_HORIZON_DAYS, reminderWindow))
   const byContact = out.byContact
 
   for (const c of conns) {
@@ -186,30 +225,53 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
       console.warn(`[lembrete] ${c.label}: não deu para listar a vencer — ${err instanceof Error ? err.message : err}`)
       continue
     }
-    out.found += payments.length
+    const withDays = payments.map((p) => ({ p, daysUntil: p.dueDate ? daysBetweenDayKeys(todayKey, p.dueDate.slice(0, 10)) : null }))
+    const inWindow = (d: number | null) => d != null && d >= 0 && d <= reminderWindow
+    out.found += withDays.filter((x) => inWindow(x.daysUntil)).length
+
     const links = payments.length ? await loadCustomerLinks(args.accountId, c.id) : new Map<string, string>()
+    // Cadastros: os da janela abrem sempre; fora dela, só os que ainda não
+    // conhecemos, até o teto da rodada — o resto vem do banco.
+    const known = payments.length ? await knownCustomerFacts(args.accountId, c.id) : new Map<string, AsaasCustomer>()
+    const windowIds = [...new Set(withDays.filter((x) => inWindow(x.daysUntil)).map((x) => x.p.customer))]
+    const windowSet = new Set(windowIds)
+    const unknownOutside = [...new Set(withDays.filter((x) => !windowSet.has(x.p.customer) && !known.has(x.p.customer)).map((x) => x.p.customer))].slice(
+      0,
+      UNKNOWN_CUSTOMER_OPENS_PER_ROUND,
+    )
     let customersOk = true
-    const customers = payments.length
-      ? await fetchCustomers(cred, payments.map((p) => p.customer)).catch((err) => {
-          customersOk = false
-          console.warn(`[lembrete] ${c.label}: não deu para abrir os clientes — ${err instanceof Error ? err.message : err}`)
-          return new Map<string, AsaasCustomer>()
-        })
-      : new Map<string, AsaasCustomer>()
+    const customers =
+      windowIds.length || unknownOutside.length
+        ? await fetchCustomers(cred, [...windowIds, ...unknownOutside]).catch((err) => {
+            customersOk = false
+            console.warn(`[lembrete] ${c.label}: não deu para abrir os clientes — ${err instanceof Error ? err.message : err}`)
+            return new Map<string, AsaasCustomer>()
+          })
+        : new Map<string, AsaasCustomer>()
     if (customers.size) out.customers.set(c.id, customers)
+
     const unmatched: UnmatchedEntry[] = []
     const unknown = new Set<string>()
-    for (const p of payments) {
-      const cust = customers.get(p.customer)
+    const persist: UpcomingRow[] = []
+    for (const { p, daysUntil } of withDays) {
+      const cust = customers.get(p.customer) ?? known.get(p.customer)
       const linked = links.get(p.customer) ?? null
+      const emJanela = inWindow(daysUntil)
       if (!cust && !linked) {
         // Sem o cadastro não dá para casar nem para mostrar: antes virava
         // "no_contact" e, no retrato, um cartão sem nome nem telefone.
-        bump('customer_unavailable')
-        unknown.add(p.customer)
+        if (emJanela) {
+          bump('customer_unavailable')
+          unknown.add(p.customer)
+        }
+        // Na tela a parcela entra "magra" e ganha nome/contato quando o
+        // cadastro abrir numa próxima rodada.
+        persist.push(upcomingRowFrom(c.id, p, null, null))
         continue
       }
       const decision = await findContact(args.accountId, cust?.mobilePhone || cust?.phone || null, cust?.email ?? null, cust?.cpfCnpj ?? null, linked)
+      persist.push(upcomingRowFrom(c.id, p, cust ?? null, decision.contactId))
+      if (!emJanela) continue
       if (!decision.contactId) {
         const reason = decision.ambiguous ? 'ambiguous' : 'no_contact'
         bump(reason)
@@ -222,10 +284,6 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
         })
         continue
       }
-      // Dias até vencer pela DATA no fuso da conta (mesma conta da régua):
-      // o servidor roda em UTC e `Date.UTC(...componentes locais)` errava por
-      // um dia à noite.
-      const daysUntil = p.dueDate ? daysUntilFrom(p.dueDate) : null
       let cand = byContact.get(decision.contactId)
       if (!cand) {
         cand = {
@@ -245,15 +303,141 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
       cand.asaasIds.push(p.id)
       cand.connectionIds.push(c.id)
     }
-    // O retrato não pode parar o lembrete: falhou (migração fora de ordem,
+    // Os retratos não podem parar o lembrete: falhou (migração fora de ordem,
     // banco ocupado), fica no log e a fila segue.
     try {
       await writeUpcomingSnapshot(args.accountId, c.id, buildUnmatchedRows(unmatched), purgePlan({ customersOk, unknownCustomerIds: unknown }), scanStartedAt)
     } catch (err) {
       console.error(`[lembrete] ${c.label}: não deu para gravar os a vencer sem contato — ${err instanceof Error ? err.message : err}`)
     }
+    try {
+      await writeUpcomingRows(args.accountId, c.id, persist, scanStartedAt)
+    } catch (err) {
+      console.error(`[lembrete] ${c.label}: não deu para gravar os próximos vencimentos — ${err instanceof Error ? err.message : err}`)
+    }
   }
   return out
+}
+
+function upcomingRowFrom(connectionId: string, p: AsaasPayment, cust: AsaasCustomer | null, contactId: string | null): UpcomingRow {
+  return {
+    connectionId,
+    asaasId: p.id,
+    asaasCustomerId: p.customer,
+    contactId,
+    customerName: cust?.name ?? null,
+    phone: cust?.mobilePhone || cust?.phone || null,
+    email: cust?.email ?? null,
+    cpfCnpj: cust?.cpfCnpj ?? null,
+    value: Number(p.value ?? 0),
+    dueDate: p.dueDate ? p.dueDate.slice(0, 10) : null,
+    invoiceUrl: p.invoiceUrl ?? null,
+    description: p.description ?? null,
+    known: !!cust,
+  }
+}
+
+/**
+ * O que já sabemos dos clientes desta conexão sem perguntar ao Asaas: a linha
+ * anterior de próximos vencimentos e a carteira (asaas_charges). Serve para
+ * casar contato e mostrar nome fora da janela do lembrete sem abrir cadastro.
+ */
+async function knownCustomerFacts(accountId: string, connectionId: string): Promise<Map<string, AsaasCustomer>> {
+  const m = new Map<string, AsaasCustomer>()
+  const add = (r: { cus: string | null; name: string | null; phone: string | null; email: string | null; cpf: string | null }) => {
+    if (!r.cus || m.has(r.cus) || !(r.name || r.phone || r.email || r.cpf)) return
+    m.set(r.cus, { id: r.cus, name: r.name, mobilePhone: r.phone, email: r.email, cpfCnpj: r.cpf })
+  }
+  const prev = await db
+    .select({ cus: collectionsUpcoming.asaasCustomerId, name: collectionsUpcoming.customerName, phone: collectionsUpcoming.phone, email: collectionsUpcoming.email, cpf: collectionsUpcoming.cpfCnpj })
+    .from(collectionsUpcoming)
+    .where(and(eq(collectionsUpcoming.accountId, accountId), eq(collectionsUpcoming.connectionId, connectionId)))
+  for (const r of prev) add(r)
+  const wallet = await db
+    .select({ cus: asaasCharges.asaasCustomerId, name: asaasCharges.customerName, phone: asaasCharges.phone, email: asaasCharges.email, cpf: asaasCharges.cpfCnpj })
+    .from(asaasCharges)
+    .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.connectionId, connectionId)))
+    .orderBy(desc(asaasCharges.updatedAt))
+    .limit(1000)
+  for (const r of wallet) add(r)
+  return m
+}
+
+/** Linhas por INSERT no upsert dos próximos vencimentos (800 parcelas = 4 idas ao banco, não 800). */
+const UPSERT_CHUNK = 200
+
+/**
+ * Grava os próximos vencimentos de UMA conexão: atualiza o que apareceu nesta
+ * leitura e apaga o que não apareceu (pagou, venceu e foi para a carteira,
+ * saiu do horizonte). Linha "magra" (cadastro ainda não lido) não sobrescreve
+ * nome/contato que uma leitura anterior já tinha — por isso os dois grupos vão
+ * em upserts separados, cada um com o seu `SET`.
+ */
+export async function writeUpcomingRows(accountId: string, connectionId: string, rows: readonly UpcomingRow[], scanStartedAt: string): Promise<void> {
+  const setBase = {
+    value: sql`excluded.value`,
+    dueDate: sql`excluded.due_date`,
+    invoiceUrl: sql`excluded.invoice_url`,
+    description: sql`excluded.description`,
+    lastSeenAt: sql`excluded.last_seen_at`,
+  }
+  const setCustomer = {
+    contactId: sql`excluded.contact_id`,
+    customerName: sql`excluded.customer_name`,
+    phone: sql`excluded.phone`,
+    email: sql`excluded.email`,
+    cpfCnpj: sql`excluded.cpf_cnpj`,
+  }
+  await db.transaction(async (tx) => {
+    for (const known of [true, false]) {
+      const group = rows.filter((r) => r.known === known)
+      for (let i = 0; i < group.length; i += UPSERT_CHUNK) {
+        const part = group.slice(i, i + UPSERT_CHUNK)
+        await tx
+          .insert(collectionsUpcoming)
+          .values(
+            part.map((r) => ({
+              accountId,
+              connectionId,
+              asaasId: r.asaasId,
+              asaasCustomerId: r.asaasCustomerId,
+              contactId: r.contactId,
+              customerName: r.customerName,
+              phone: r.phone,
+              email: r.email,
+              cpfCnpj: r.cpfCnpj,
+              value: r.value.toFixed(2),
+              dueDate: r.dueDate,
+              invoiceUrl: r.invoiceUrl,
+              description: r.description,
+              firstSeenAt: scanStartedAt,
+              lastSeenAt: scanStartedAt,
+            })),
+          )
+          .onConflictDoUpdate({
+            target: [collectionsUpcoming.accountId, collectionsUpcoming.asaasId],
+            set: known ? { ...setBase, ...setCustomer } : setBase,
+          })
+      }
+    }
+    await tx
+      .delete(collectionsUpcoming)
+      .where(and(eq(collectionsUpcoming.accountId, accountId), eq(collectionsUpcoming.connectionId, connectionId), lt(collectionsUpcoming.lastSeenAt, scanStartedAt)))
+  })
+}
+
+/**
+ * Refaz a tela "Próximos vencimentos" da conta agora (botão Atualizar da
+ * carteira). Best-effort: nunca lança, nunca enfileira.
+ */
+export async function refreshUpcomingForAccount(accountId: string): Promise<void> {
+  try {
+    const acc = await getAccountSettings(accountId)
+    const s = normalizeSettings(acc.collections)
+    await scanUpcoming({ accountId, settings: s, tz: acc.businessTimezone || 'America/Sao_Paulo' })
+  } catch (err) {
+    console.error('[lembrete] refresh dos próximos vencimentos falhou:', err instanceof Error ? err.message : err)
+  }
 }
 
 /**
@@ -343,7 +527,7 @@ export async function queueUpcomingReminders(args: {
   }
   const s = args.settings
   const byContact = args.scan.byContact
-  if (s.reminderDaysBefore <= 0 || args.budget <= 0 || !byContact.size) return out
+  if ((s.reminderDaysBefore <= 0 && !s.remindOnDueDate) || args.budget <= 0 || !byContact.size) return out
 
   const ids = [...byContact.keys()]
   // Quem também tem parcela VENCIDA recebe o lembrete da parcela nova — a
@@ -405,6 +589,8 @@ export async function queueUpcomingReminders(args: {
   // `remindedFilter`): com o aviso na criação para o que vence em até 15 dias,
   // contar por 45 dias apagava o lembrete D-5 (Ômega Gás, criada 15/09, vence
   // 26/09 — o lembrete de 21/09 não sairia).
+  // 🔔 O aviso do DIA (kind 'due_today') tem o próprio "já avisado": o D-5 que
+  // saiu não cala o aviso de hoje, e o aviso de hoje não conta como lembrete.
   const since = new Date(Date.now() - 45 * 86_400_000).toISOString()
   const previous = await db
     .select({
@@ -420,11 +606,12 @@ export async function queueUpcomingReminders(args: {
         eq(agentActionRequests.actionType, 'collect_charges'),
         inArray(agentActionRequests.contactId, ids),
         gte(agentActionRequests.createdAt, since),
-        sql`${agentActionRequests.payload}->>'kind' IN ('reminder', 'new_charge')`,
+        sql`${agentActionRequests.payload}->>'kind' IN ('reminder', 'new_charge', 'due_today')`,
         sql`${agentActionRequests.status} NOT IN ('expired', 'failed')`,
       ),
     )
-  const remindedOf = remindedByContact(remindedFilter(previous, linksSince))
+  const remindedOf = remindedByContact(remindedFilter(previous.filter((r) => r.kind !== 'due_today'), linksSince))
+  const warnedToday = remindedByContact(previous.filter((r) => r.kind === 'due_today'))
   const nothingReminded: ReadonlySet<string> = new Set<string>()
 
   let budget = args.budget
@@ -459,20 +646,39 @@ export async function queueUpcomingReminders(args: {
       connectionId: cand.connectionIds[i],
       invoiceUrl: cand.lines[i].invoiceUrl,
       line: cand.lines[i],
+      kind: reminderKindFor(cand.lines[i].daysUntil, s),
     }))
-    const reminded = remindedOf.get(cand.contactId) ?? nothingReminded
-    let fresh = freshReminderItems(items, reminded, new Set<string>())
-    if (!fresh.length) {
-      bump('already')
-      continue
-    }
-    const urls = [...new Set(fresh.map((x) => x.invoiceUrl).filter((u): u is string => !!u))]
-    if (urls.length) {
-      const sentUrls = await linksAlreadySent(args.accountId, cand.contactId, urls, linksSince)
-      fresh = freshReminderItems(fresh, reminded, sentUrls)
+    // 🔔 Vence HOJE com o aviso do dia ligado → sai à parte, agora, só com as
+    // parcelas de hoje; o "já lembrado" do D-N e o "link já saiu" não valem
+    // (o link do D-5 SEMPRE já saiu). As outras parcelas esperam o próximo dia.
+    const dueTodayItems = items.filter((x) => x.kind === 'due_today')
+    const reminderItems = items.filter((x) => x.kind === 'reminder')
+    let kind: 'due_today' | 'reminder'
+    let fresh: typeof items
+    if (dueTodayItems.length) {
+      kind = 'due_today'
+      fresh = freshReminderItems(dueTodayItems, warnedToday.get(cand.contactId) ?? nothingReminded, new Set<string>())
       if (!fresh.length) {
-        bump('link_sent')
+        bump('already')
         continue
+      }
+    } else {
+      if (!reminderItems.length) continue
+      kind = 'reminder'
+      const reminded = remindedOf.get(cand.contactId) ?? nothingReminded
+      fresh = freshReminderItems(reminderItems, reminded, new Set<string>())
+      if (!fresh.length) {
+        bump('already')
+        continue
+      }
+      const urls = [...new Set(fresh.map((x) => x.invoiceUrl).filter((u): u is string => !!u))]
+      if (urls.length) {
+        const sentUrls = await linksAlreadySent(args.accountId, cand.contactId, urls, linksSince)
+        fresh = freshReminderItems(fresh, reminded, sentUrls)
+        if (!fresh.length) {
+          bump('link_sent')
+          continue
+        }
       }
     }
     const delivery = await resolveCollectionTargets(args.accountId, cand.contactId, null, { dryRun: true, fallbackEmail: cand.email })
@@ -499,6 +705,7 @@ export async function queueUpcomingReminders(args: {
       seed,
       moment: args.moment,
       offerDate: s.offerDateNegotiation,
+      dueToday: kind === 'due_today',
     })
 
     const conv = firstOrNull(
@@ -526,7 +733,12 @@ export async function queueUpcomingReminders(args: {
       continue
     }
 
-    const dueIn = summary.minDays ?? s.reminderDaysBefore
+    const dueIn = kind === 'due_today' ? 0 : (summary.minDays ?? s.reminderDaysBefore)
+    const quantas = fresh.length === 1 ? '1 parcela vence' : `${fresh.length} parcelas vencem`
+    const reason =
+      kind === 'due_today'
+        ? `${quantas} hoje — aviso do dia do vencimento, não é cobrança.`
+        : `${quantas}${dueIn <= 0 ? ' hoje' : dueIn === 1 ? ' amanhã' : ` em ${dueIn} dias`} — lembrete antes do vencimento, não é cobrança.`
     // Colisão com pedido pendente (índice único por contato) vira pulo, não
     // derruba o lote de lembretes da rodada.
     const inserted = await db
@@ -539,7 +751,7 @@ export async function queueUpcomingReminders(args: {
         conversationId: conv?.id ?? null,
         actionType: 'collect_charges',
         payload: {
-          kind: 'reminder',
+          kind,
           ...paymentRefsPayload(fresh.map((x) => ({ asaasId: x.id, connectionId: x.connectionId }))),
           total: summary.total,
           lines: summary.lines,
@@ -553,9 +765,7 @@ export async function queueUpcomingReminders(args: {
         },
         suggestedText: text,
         reason:
-          (fresh.length === 1 ? '1 parcela vence' : `${fresh.length} parcelas vencem`) +
-          (dueIn <= 0 ? ' hoje' : dueIn === 1 ? ' amanhã' : ` em ${dueIn} dias`) +
-          ' — lembrete antes do vencimento, não é cobrança.' +
+          reason +
           (withOverdue.has(cand.contactId) ? ' Ele também tem parcela vencida — essa a régua cobra à parte, em outro dia.' : '') +
           ` Vai por ${delivery.label}.`,
         decision: decision.decision === 'auto_execute' ? 'auto' : decision.decision === 'request_approval' ? 'approve' : 'suggest',
@@ -571,6 +781,7 @@ export async function queueUpcomingReminders(args: {
     args.contactedToday.add(cand.contactId)
     args.alreadyQueued.add(cand.contactId)
     out.queued += 1
+    if (kind === 'due_today') out.queuedDueToday = (out.queuedDueToday ?? 0) + 1
     budget -= 1
     usedToday += 1
   }
@@ -588,21 +799,29 @@ async function draftReminder(args: {
   seed: number
   moment: string
   offerDate: boolean
+  /** Aviso do DIA do vencimento: "vence hoje", ainda sem "atraso". */
+  dueToday?: boolean
 }): Promise<string> {
-  const fallback = fallbackReminderMessage(args.firstName, args.summary, args.seed, { offerDate: args.offerDate })
+  const fallback = args.dueToday
+    ? fallbackDueTodayMessage(args.firstName, args.summary, args.seed, { offerDate: args.offerDate })
+    : fallbackReminderMessage(args.firstName, args.summary, args.seed, { offerDate: args.offerDate })
   if (!args.agentId) return fallback
   try {
     const config = await loadAiConfigById(args.accountId, args.agentId, { requireActive: false })
     if (!config) return fallback
     const system = [
-      'Você escreve um LEMBRETE amigável no WhatsApp, em português do Brasil, sobre uma cobrança que AINDA NÃO VENCEU. UMA mensagem (até 400 caracteres), sem markdown, sem assinatura.',
+      args.dueToday
+        ? 'Você escreve um AVISO amigável no WhatsApp, em português do Brasil, sobre uma cobrança que VENCE HOJE. UMA mensagem (até 400 caracteres), sem markdown, sem assinatura.'
+        : 'Você escreve um LEMBRETE amigável no WhatsApp, em português do Brasil, sobre uma cobrança que AINDA NÃO VENCEU. UMA mensagem (até 400 caracteres), sem markdown, sem assinatura.',
       args.fullName
         ? `Cliente (nome como está no Asaas): ${args.fullName}. Se for pessoa, chame só pelo primeiro nome; se for empresa, use o nome da empresa como está (curto). Nunca invente apelido.`
         : 'Não sabemos o nome do cliente — não invente um.',
-      `O que vai vencer (copie exatamente, NUNCA recalcule):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`,
+      `O que ${args.dueToday ? 'vence hoje' : 'vai vencer'} (copie exatamente, NUNCA recalcule):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`,
       args.summary.showValues ? '' : 'A empresa NÃO quer valores na mensagem: não cite valor em reais — só a data de vencimento e o link. O valor o cliente vê no link.',
       linksInstruction(args.summary),
-      'Não é cobrança de inadimplente: nunca use "atraso", "pendente", "em aberto" nem tom de pressão. Diga que é só um lembrete e que, se já estiver programado, pode ignorar.',
+      args.dueToday
+        ? 'Diga com clareza e leveza que o vencimento é HOJE. Ainda não é atraso: nunca use "atraso", "pendente", "em aberto" nem tom de pressão. Se já pagou, pode ignorar.'
+        : 'Não é cobrança de inadimplente: nunca use "atraso", "pendente", "em aberto" nem tom de pressão. Diga que é só um lembrete e que, se já estiver programado, pode ignorar.',
       'NUNCA fale em juros, multa, protesto, negativação ou consequência. Nunca ofereça desconto ou prazo.',
       args.moment ? `Momento do envio: ${args.moment}.` : '',
       args.offerDate ? '' : 'NÃO ofereça outra data nem prazo — se já pagou, é só responder por aqui.',
@@ -613,7 +832,7 @@ async function draftReminder(args: {
     const r = await generateReply({
       config,
       systemPrompt: system,
-      messages: [{ role: 'user', content: 'Escreva o lembrete agora.' }] as unknown as Parameters<typeof generateReply>[0]['messages'],
+      messages: [{ role: 'user', content: args.dueToday ? 'Escreva o aviso agora.' : 'Escreva o lembrete agora.' }] as unknown as Parameters<typeof generateReply>[0]['messages'],
     })
     const text = (r?.text ?? '').trim()
     if (text.length < 20 || tooSimilar(text, [fallback])) return text.length >= 20 ? text : fallback

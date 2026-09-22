@@ -130,8 +130,11 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   // Gás e Água): ela refaz o painel "A vencer sem contato" e não enfileira
   // nada. Dentro do orçamento, no dia em que o teto acabava ninguém olhava —
   // e o cliente sem contato continuava invisível. Falhou: a régua segue.
+  // 22/09: a leitura roda SEMPRE (também sem lembrete ligado) — ela alimenta a
+  // tela "Próximos vencimentos" (collections_upcoming). Só a FILA depende de
+  // lembrete ou aviso do dia ligados.
   let upcomingScan: UpcomingScan | null = null
-  if (s.reminderDaysBefore > 0) {
+  {
     try {
       upcomingScan = await scanUpcoming({ accountId, settings: s, tz })
       stats.remindersFound = upcomingScan.found
@@ -482,7 +485,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   // 🔔 Lembrete antes de vencer (lacuna 2, 07/09): mesma fila, mesma política,
   // mesmo teto do dia — o que sobrou do orçamento depois das vencidas. A
   // leitura já foi feita lá em cima (scanUpcoming), antes do teto.
-  if (s.reminderDaysBefore > 0 && upcomingScan) {
+  if ((s.reminderDaysBefore > 0 || s.remindOnDueDate) && upcomingScan) {
     if (budget > 0) {
       try {
         const r = await queueUpcomingReminders({

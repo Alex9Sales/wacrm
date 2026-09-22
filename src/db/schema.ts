@@ -3368,6 +3368,38 @@ export const collectionsUpcomingUnmatched = pgTable("collections_upcoming_unmatc
 	check("collections_upcoming_unmatched_reason_check", sql`reason IN ('no_contact', 'ambiguous')`),
 ]);
 
+// 🔔 Próximos vencimentos (migração 0188): as parcelas A VENCER de todo mundo,
+// uma linha por parcela, horizonte de 30 dias, refeita a cada rodada. Tabela
+// própria porque asaas_charges `open=true` significa "vencida" para 14+
+// consumidores. contact_id = casamento da hora; null = sem contato no CRM.
+export const collectionsUpcoming = pgTable("collections_upcoming", {
+	id: uuid().default(sql`gen_random_uuid()`).primaryKey().notNull(),
+	accountId: uuid("account_id").notNull(),
+	connectionId: uuid("connection_id").notNull(),
+	/** pay_… do Asaas — uma linha por parcela. */
+	asaasId: text("asaas_id").notNull(),
+	asaasCustomerId: text("asaas_customer_id").notNull(),
+	contactId: uuid("contact_id"),
+	customerName: text("customer_name"),
+	phone: text(),
+	email: text(),
+	cpfCnpj: text("cpf_cnpj"),
+	value: numeric({ precision: 12, scale: 2 }).default('0').notNull(),
+	dueDate: date("due_date"),
+	invoiceUrl: text("invoice_url"),
+	description: text(),
+	firstSeenAt: timestamp("first_seen_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+	/** Início da leitura que viu esta parcela — a limpeza apaga o que é mais velho. */
+	lastSeenAt: timestamp("last_seen_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
+}, (table) => [
+	uniqueIndex("collections_upcoming_asaas_uidx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.asaasId.asc().nullsLast().op("text_ops")),
+	index("collections_upcoming_due_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.dueDate.asc().nullsLast()),
+	index("collections_upcoming_contact_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.contactId.asc().nullsLast().op("uuid_ops")),
+	foreignKey({ columns: [table.accountId], foreignColumns: [organization.id], name: "collections_upcoming_account_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.connectionId], foreignColumns: [asaasConnections.id], name: "collections_upcoming_connection_id_fkey" }).onDelete("cascade"),
+	foreignKey({ columns: [table.contactId], foreignColumns: [contacts.id], name: "collections_upcoming_contact_id_fkey" }).onDelete("set null"),
+]);
+
 // 📣 Rastro das ações em disparos (migração 0174). Sem FK para broadcasts:
 // o evento de exclusão sobrevive à linha apagada.
 export const broadcastEvents = pgTable("broadcast_events", {

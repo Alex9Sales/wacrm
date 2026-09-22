@@ -23,6 +23,7 @@ import {
   asaasCustomerLinks,
   channels,
   collectionsTouches,
+  collectionsUpcoming,
   collectionsUpcomingUnmatched,
   contacts,
   conversations,
@@ -34,8 +35,9 @@ import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { getAccountSettings, updateAccountSettings } from '@/lib/settings/account-settings'
 import { runCollectionsForAccount } from '@/lib/collections/engine'
+import { refreshUpcomingForAccount, UPCOMING_HORIZON_DAYS } from '@/lib/collections/reminders'
 import { listChargesAtSilencing, markAsaasNotificationsSwept, recordSilenced } from '@/lib/collections/asaas-silenced'
-import { countsAsOverdue, debtorHold, duplicateSuspects, greetingName, normalizeSettings, phoneSearchDigits, type CollectionsSettings } from '@/lib/collections/rules'
+import { countsAsOverdue, daysBetweenDayKeys, debtorHold, duplicateSuspects, greetingName, normalizeSettings, phoneSearchDigits, type CollectionsSettings } from '@/lib/collections/rules'
 import { evaluatePromotion, promotionHeadline, type PromotionVerdict } from '@/lib/collections/promotion'
 import { criteriaFor, readPromotionOverride, statsFromFeedback } from '@/lib/orchestration/validation'
 import { levelFor, readPolicy } from '@/lib/orchestration/policy'
@@ -329,6 +331,9 @@ export async function syncNow(connectionId?: string): Promise<ActionResult<SyncR
   // "verificar de novo" refazia. Atualizar agora reconta também (best-effort:
   // falha aqui não derruba a sincronização).
   await refreshDuplicateReports(accountId, connectionId).catch(() => {})
+  // 22/09 (João/GoLink): "Atualizar" também refaz os próximos vencimentos —
+  // senão a tela só mudava na rodada do worker. Best-effort, não enfileira.
+  await refreshUpcomingForAccount(accountId)
   revalidatePath('/cobrancas')
   return res.ok ? { ok: true, data: res } : { ok: false, error: res.error, data: res }
 }
@@ -2999,5 +3004,179 @@ export async function getSendsReport(): Promise<SendsReport> {
       expired: mesRow?.expirados ?? 0,
     },
     rows,
+  }
+}
+
+// ============================================================
+// 🔔 Próximos vencimentos (22/09, João/GoLink: "não achei uma cliente que vence esta semana")
+// ============================================================
+
+export interface UpcomingChargeLine {
+  asaasId: string
+  value: number
+  dueDate: string | null
+  /** Dias até vencer, pela data no fuso da conta: 0 = hoje. */
+  daysUntil: number | null
+  invoiceUrl: string | null
+  description: string | null
+}
+
+export interface UpcomingCustomerCard {
+  connectionId: string
+  connectionLabel: string
+  customerId: string
+  name: string
+  phone: string | null
+  email: string | null
+  contactId: string | null
+  conversationId: string | null
+  /** Contato ligado e a régua parada nele (pausa / promessa / limite). */
+  onHold: boolean
+  nextDueDate: string | null
+  nextDaysUntil: number | null
+  total: number
+  lines: UpcomingChargeLine[]
+}
+
+export interface UpcomingChargesView {
+  todayKey: string
+  /** Início da última leitura que gravou a tela (null = nunca leu). */
+  checkedAt: string | null
+  horizonDays: number
+  dueTodayEnabled: boolean
+  reminderDaysBefore: number
+  cards: UpcomingCustomerCard[]
+  totals: { customers: number; charges: number; value: number; today: number; week: number; noContact: number }
+}
+
+/**
+ * O que vence de hoje em diante, por cliente do Asaas, com o contato do CRM
+ * quando há. Lê o retrato gravado pela varredura (collections_upcoming) — não
+ * bate no Asaas. Parcela cujo vencimento já passou (a varredura ainda não
+ * rodou hoje) fica de fora: ela é assunto da carteira.
+ */
+export async function getUpcomingCharges(): Promise<ActionResult<UpcomingChargesView>> {
+  const { accountId } = await getCurrentAccount()
+  try {
+    const accountSettings = await getAccountSettings(accountId)
+    const s = normalizeSettings(accountSettings.collections)
+    const todayKey = localDayKey(accountSettings.businessTimezone || 'America/Sao_Paulo')
+
+    const rows = await db
+      .select({
+        connectionId: collectionsUpcoming.connectionId,
+        connectionLabel: asaasConnections.label,
+        asaasId: collectionsUpcoming.asaasId,
+        customerId: collectionsUpcoming.asaasCustomerId,
+        contactId: collectionsUpcoming.contactId,
+        customerName: collectionsUpcoming.customerName,
+        phone: collectionsUpcoming.phone,
+        email: collectionsUpcoming.email,
+        value: collectionsUpcoming.value,
+        dueDate: collectionsUpcoming.dueDate,
+        invoiceUrl: collectionsUpcoming.invoiceUrl,
+        description: collectionsUpcoming.description,
+        lastSeenAt: collectionsUpcoming.lastSeenAt,
+        contactName: contacts.name,
+        contactPhone: contacts.phone,
+      })
+      .from(collectionsUpcoming)
+      .innerJoin(
+        asaasConnections,
+        and(eq(asaasConnections.id, collectionsUpcoming.connectionId), eq(asaasConnections.accountId, accountId), eq(asaasConnections.enabled, true)),
+      )
+      .leftJoin(contacts, and(eq(contacts.id, collectionsUpcoming.contactId), eq(contacts.accountId, accountId)))
+      .where(and(eq(collectionsUpcoming.accountId, accountId), gte(collectionsUpcoming.dueDate, todayKey)))
+      .orderBy(collectionsUpcoming.dueDate)
+      .limit(2000)
+
+    const contactIds = [...new Set(rows.map((r) => r.contactId).filter((x): x is string => !!x))]
+    const [convRows, holdRows] = contactIds.length
+      ? await Promise.all([
+          db
+            .select({ contactId: conversations.contactId, id: conversations.id })
+            .from(conversations)
+            .where(and(eq(conversations.accountId, accountId), inArray(conversations.contactId, contactIds)))
+            .orderBy(desc(conversations.lastMessageAt)),
+          db
+            .select({
+              contactId: collectionsTouches.contactId,
+              paused: collectionsTouches.paused,
+              snoozeUntil: collectionsTouches.snoozeUntil,
+              touchCount: collectionsTouches.touchCount,
+              lastTouchAt: collectionsTouches.lastTouchAt,
+            })
+            .from(collectionsTouches)
+            .where(and(eq(collectionsTouches.accountId, accountId), inArray(collectionsTouches.contactId, contactIds))),
+        ])
+      : [[], []]
+    const convByContact = new Map<string, string>()
+    for (const c of convRows) if (c.contactId && !convByContact.has(c.contactId)) convByContact.set(c.contactId, c.id)
+    const holdByContact = new Map(holdRows.map((h) => [h.contactId, debtorHold(h, s) != null]))
+
+    let checkedAtMs = 0
+    const byCustomer = new Map<string, UpcomingCustomerCard>()
+    for (const r of rows) {
+      const seen = r.lastSeenAt ? new Date(r.lastSeenAt).getTime() : 0
+      if (Number.isFinite(seen) && seen > checkedAtMs) checkedAtMs = seen
+      const key = `${r.connectionId}:${r.customerId}`
+      let card = byCustomer.get(key)
+      if (!card) {
+        card = {
+          connectionId: r.connectionId,
+          connectionLabel: r.connectionLabel,
+          customerId: r.customerId,
+          // Nome como está no Asaas; o contato só cobre o vazio (cadastro ainda não lido).
+          name: (r.customerName ?? '').trim() || (r.contactName ?? '').trim() || 'Sem nome',
+          phone: r.phone ?? r.contactPhone ?? null,
+          email: r.email,
+          contactId: r.contactId,
+          conversationId: r.contactId ? (convByContact.get(r.contactId) ?? null) : null,
+          onHold: r.contactId ? (holdByContact.get(r.contactId) ?? false) : false,
+          nextDueDate: null,
+          nextDaysUntil: null,
+          total: 0,
+          lines: [],
+        }
+        byCustomer.set(key, card)
+      }
+      const dueDate = r.dueDate ? String(r.dueDate).slice(0, 10) : null
+      const daysUntil = daysBetweenDayKeys(todayKey, dueDate)
+      card.lines.push({ asaasId: r.asaasId, value: Number(r.value) || 0, dueDate, daysUntil, invoiceUrl: r.invoiceUrl, description: r.description })
+      card.total += Number(r.value) || 0
+      if (dueDate && (!card.nextDueDate || dueDate < card.nextDueDate)) {
+        card.nextDueDate = dueDate
+        card.nextDaysUntil = daysUntil
+      }
+    }
+    const cards = [...byCustomer.values()].sort(
+      (a, b) => (a.nextDueDate ?? '9999').localeCompare(b.nextDueDate ?? '9999') || a.name.localeCompare(b.name, 'pt-BR'),
+    )
+    const totals = {
+      customers: cards.length,
+      charges: rows.length,
+      value: cards.reduce((acc, c) => acc + c.total, 0),
+      today: rows.filter((r) => r.dueDate && String(r.dueDate).slice(0, 10) === todayKey).length,
+      week: rows.filter((r) => {
+        const d = daysBetweenDayKeys(todayKey, r.dueDate ? String(r.dueDate).slice(0, 10) : null)
+        return d != null && d >= 0 && d <= 7
+      }).length,
+      noContact: cards.filter((c) => !c.contactId).length,
+    }
+    return {
+      ok: true,
+      data: {
+        todayKey,
+        checkedAt: checkedAtMs ? new Date(checkedAtMs).toISOString() : null,
+        horizonDays: UPCOMING_HORIZON_DAYS,
+        dueTodayEnabled: s.remindOnDueDate,
+        reminderDaysBefore: s.reminderDaysBefore,
+        cards,
+        totals,
+      },
+    }
+  } catch (err) {
+    console.error('[cobranca] próximos vencimentos: leitura falhou:', err instanceof Error ? err.message : err)
+    return { ok: false, error: 'Não deu para carregar os próximos vencimentos.' }
   }
 }

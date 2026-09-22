@@ -305,8 +305,10 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
         // específica, então reconferem AO VIVO no Asaas, uma a uma. O aviso de
         // cobrança nova também vale VENCIDA — a do João nasceu vencida no mesmo
         // dia e o cliente nunca tinha recebido o link (11/09).
-        if (kind === 'reminder' || kind === 'new_charge') {
-          const aceitas = kind === 'new_charge' ? (['PENDING', 'OVERDUE'] as const) : (['PENDING'] as const)
+        // 🔔 Aviso do DIA (kind='due_today', 22/09): vale PENDING e OVERDUE —
+        // o Asaas pode virar a parcela de hoje para OVERDUE ao longo do dia.
+        if (kind === 'reminder' || kind === 'new_charge' || kind === 'due_today') {
+          const aceitas = kind === 'reminder' ? (['PENDING'] as const) : (['PENDING', 'OVERDUE'] as const)
           const check = await reminderStillPending(input.accountId, input.payload, aceitas)
           if (!check.ok) return { ok: false, error: check.error }
         } else {
@@ -752,7 +754,7 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
  * pessoa. Nenhum dos dois é cobrança — são entrega de link.
  */
 export async function recordCollectionTouch(accountId: string, contactId: string, text: string, kind: unknown): Promise<void> {
-  if (kind === 'reminder' || kind === 'new_charge') return
+  if (kind === 'reminder' || kind === 'new_charge' || kind === 'due_today') return
   const nowIso = new Date().toISOString()
 
   await db
@@ -840,6 +842,7 @@ function collectionEmailSubject(payload: Record<string, unknown>): string {
   // de receber a cobrança, e lembrete antes de vencer também não é atraso.
   if (payload.kind === 'new_charge') return 'Link para pagamento'
   if (payload.kind === 'reminder') return 'Sua cobrança vence em breve'
+  if (payload.kind === 'due_today') return 'Sua cobrança vence hoje'
   const touch = Number(payload.touch ?? 1)
   return touch > 1 ? `Lembrete de pagamento em aberto (${touch}º aviso)` : 'Lembrete de pagamento em aberto'
 }

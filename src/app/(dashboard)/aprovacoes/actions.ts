@@ -759,6 +759,14 @@ function describeEffect(args: {
           proposalUrl: null,
         }
       }
+      if (p.kind === 'due_today') {
+        return {
+          effect:
+            'Envia o AVISO abaixo: a parcela vence HOJE (não é cobrança de atraso). Antes de enviar, o CRM reconfere no Asaas se ela continua em aberto e se a cobrança deste cliente não foi parada (pausa, promessa ou comprovante); se foi, não sai.',
+          warnings,
+          proposalUrl: null,
+        }
+      }
       if (p.kind === 'new_charge') {
         // Aviso de cobrança nova: no envio só a PAUSA segura (promessa não).
         return {

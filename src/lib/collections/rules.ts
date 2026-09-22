@@ -167,6 +167,13 @@ export interface CollectionsSettings {
    * cliente; ele paga só a mais atrasada"). Padrão ligado.
    */
   showValues: boolean
+  /**
+   * 🔔 Avisar no DIA do vencimento (João/GoLink 22/09: "quem paga no dia não
+   * recebe nada"). É um toque à parte do lembrete D-N: não gasta toque da
+   * régua, não é barrado pelo lembrete que já saiu dias antes, e vale mesmo
+   * com `reminderDaysBefore` = 0. Nasce desligado, como tudo aqui.
+   */
+  remindOnDueDate: boolean
 }
 
 export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
@@ -200,6 +207,7 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   sectorId: null,
   offerDateNegotiation: true,
   showValues: true,
+  remindOnDueDate: false,
 }
 
 /**
@@ -268,7 +276,40 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     sectorId: typeof r.sectorId === 'string' && UUID_RE.test(r.sectorId) ? r.sectorId : null,
     offerDateNegotiation: r.offerDateNegotiation !== false,
     showValues: r.showValues !== false,
+    remindOnDueDate: r.remindOnDueDate === true,
   }
+}
+
+/**
+ * Dias entre duas chaves 'YYYY-MM-DD' (b − a), pela DATA — sem hora, sem fuso.
+ * É a conta que a régua e o lembrete fazem para "dias de atraso" e "dias até
+ * vencer": as duas chaves já vêm no dia da conta (localDayKey). Inválida → null.
+ */
+export function daysBetweenDayKeys(a: string | null | undefined, b: string | null | undefined): number | null {
+  if (!a || !b) return null
+  const ta = Date.parse(`${a.slice(0, 10)}T00:00:00Z`)
+  const tb = Date.parse(`${b.slice(0, 10)}T00:00:00Z`)
+  if (Number.isNaN(ta) || Number.isNaN(tb)) return null
+  return Math.round((tb - ta) / 86_400_000)
+}
+
+/**
+ * Qual toque cada parcela a vencer recebe, dado o que a conta ligou:
+ *   'due_today' — vence HOJE e "Avisar no dia do vencimento" está ligado;
+ *   'reminder'  — dentro da janela do lembrete (0..N dias) com N > 0;
+ *   null        — nenhum (fora da janela, ou tudo desligado).
+ * Com o aviso do dia ligado, a parcela de hoje é SEMPRE 'due_today' (o
+ * lembrete D-N não a pega mais) — é o que impede o "já lembrado" do D-5 de
+ * calar o aviso do dia.
+ */
+export function reminderKindFor(
+  daysUntil: number | null,
+  s: Pick<CollectionsSettings, 'reminderDaysBefore' | 'remindOnDueDate'>,
+): 'due_today' | 'reminder' | null {
+  if (daysUntil == null || daysUntil < 0) return null
+  if (daysUntil === 0 && s.remindOnDueDate) return 'due_today'
+  if (s.reminderDaysBefore > 0 && daysUntil <= s.reminderDaysBefore) return 'reminder'
+  return null
 }
 
 const NAME_STOPWORDS = new Set(['e', 'de', 'da', 'do', 'das', 'dos', '&', 'em', 'para', '-', '–', '—', '|', '/'])
@@ -862,6 +903,35 @@ export function fallbackReminderMessage(
   const s = seed >>> 0
   // 2+ parcelas: cada uma sai com o próprio link embaixo (antes, com mais de
   // um link a mensagem ia SEM link nenhum — João/GoLink, 09/09).
+  const corpo = formatDebtBody(summary)
+  const link = summary.links.length === 1 ? `\n\nPara pagar: ${summary.links[0]}` : ''
+  return `${aberturas[s % 4]}\n\n${corpo}${link}\n\n${fechos[(s >>> 2) % 4]}`
+}
+
+/**
+ * Texto de segurança do AVISO DO DIA (vence hoje, sem IA): direto e leve, sem
+ * "atraso" — hoje ainda não é atraso. Varia pela semente como o lembrete.
+ */
+export function fallbackDueTodayMessage(
+  firstName: string | null,
+  summary: ReturnType<typeof formatUpcomingSummary>,
+  seed = 0,
+  opts: { offerDate?: boolean } = {},
+): string {
+  const oi = firstName ? `Oi, ${firstName}!` : 'Oi!'
+  const aberturas = [
+    `${oi} Passando pra lembrar que vence HOJE:`,
+    `${oi} Tudo bem? Só um aviso: o vencimento é hoje:`,
+    `${oi} Lembrete rápido — vence hoje:`,
+    `${oi} Pra não passar do dia, fica o aviso: vence hoje:`,
+  ]
+  const fechos = [
+    'Se já pagou, pode ignorar esta mensagem 😉',
+    'Qualquer dúvida, é só responder por aqui.',
+    opts.offerDate === false ? 'Se já pagou, desconsidere.' : 'Se precisar de outra data, me avisa por aqui que a gente vê.',
+    'Se já está pago, desconsidere — e obrigado!',
+  ]
+  const s = seed >>> 0
   const corpo = formatDebtBody(summary)
   const link = summary.links.length === 1 ? `\n\nPara pagar: ${summary.links[0]}` : ''
   return `${aberturas[s % 4]}\n\n${corpo}${link}\n\n${fechos[(s >>> 2) % 4]}`

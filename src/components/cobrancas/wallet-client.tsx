@@ -111,6 +111,7 @@ import {
 } from '@/app/(dashboard)/cobrancas/actions';
 import { UpcomingUnmatchedPanel } from '@/components/cobrancas/upcoming-unmatched-panel';
 import { SendsPanel } from '@/components/cobrancas/sends-panel';
+import { UpcomingPanel } from '@/components/cobrancas/upcoming-panel';
 import { unlinkDebtorText } from '@/lib/collections/upcoming-unmatched';
 import { CHARGEABLE_STATUSES, WEEKDAY_SHORT, describeWeekdays, type CollectionsSettings } from '@/lib/collections/rules';
 import { pauseSourceLabel } from '@/lib/collections/pause-rules';
@@ -162,8 +163,12 @@ export function WalletClient() {
   // lembrete. Erro de carga fica marcado — nunca vira "ninguém sem contato".
   const [upcomingView, setUpcomingView] = useState<UpcomingUnmatchedView | null>(null);
   const [upcomingError, setUpcomingError] = useState(false);
+  // 🔔 22/09: o painel "Próximos vencimentos" carrega sozinho; este contador
+  // só manda ele recarregar junto com a carteira (Atualizar, ligar contato…).
+  const [reloadKey, setReloadKey] = useState(0);
 
   const load = useCallback(async () => {
+    setReloadKey((k) => k + 1);
     try {
       const [w, c, r, p, h, u] = await Promise.all([
         getWallet(),
@@ -487,6 +492,8 @@ export function WalletClient() {
           )}
 
           <SendsPanel />
+
+          <UpcomingPanel reloadKey={reloadKey} />
 
           <UpcomingUnmatchedPanel view={upcomingView} error={upcomingError} connFilter={connFilter} onChanged={load} />
 
@@ -1887,13 +1894,15 @@ function LinkContactDialog({
   const [q, setQ] = useState('');
   const [results, setResults] = useState<ContactOption[]>([]);
   const [busy, setBusy] = useState(false);
-
-  useEffect(() => {
-    if (!debtor) return;
-    // Já começa procurando pelo nome que veio do Asaas — na maioria das vezes
-    // o contato certo aparece sem ninguém digitar nada.
-    setQ(debtor.name === 'Sem nome' ? '' : debtor.name);
-  }, [debtor]);
+  // Já começa procurando pelo nome que veio do Asaas — na maioria das vezes
+  // o contato certo aparece sem ninguém digitar nada. Ajuste de estado na
+  // troca do devedor feito DURANTE o render (padrão do React), não num
+  // useEffect: evita o render extra com a busca antiga.
+  const [seededFor, setSeededFor] = useState<WalletDebtor | null>(null);
+  if (debtor !== seededFor) {
+    setSeededFor(debtor);
+    if (debtor) setQ(debtor.name === 'Sem nome' ? '' : debtor.name);
+  }
 
   useEffect(() => {
     if (!debtor) return;
@@ -2175,6 +2184,15 @@ function RulePanel({
             {num('maxTouches', 'Parar depois de', 'Toques sem resposta antes de devolver para uma pessoa.', 1, 50)}
             {num('emitMaxValue', 'IA pode cobrar até (R$)', 'Teto da ferramenta "Gerar cobrança no Asaas": acima disso a IA não cria sozinha — avisa uma pessoa.', 1, 100000)}
             {num('reminderDaysBefore', 'Lembrar antes de vencer (dias)', '0 = desligado. Com 3, quem tem parcela vencendo nos próximos 3 dias recebe um aviso leve — não é cobrança. Passa pela mesma fila e teto.', 0, 15)}
+            <label className="flex max-w-[16rem] items-start gap-2 text-sm">
+              <input type="checkbox" className="mt-1" checked={draft.remindOnDueDate} onChange={(e) => setDraft({ ...draft, remindOnDueDate: e.target.checked })} />
+              <span>
+                Avisar no dia do vencimento
+                <span className="block text-xs text-muted-foreground">
+                  Quem tem parcela vencendo HOJE recebe um aviso &quot;vence hoje&quot; — não é cobrança, não conta como toque da régua. Sai mesmo que o lembrete de dias antes já tenha ido. Mesma fila e teto.
+                </span>
+              </span>
+            </label>
             {num('sendEveryMinutes', 'Uma mensagem a cada (min)', 'Cadência do envio automático e do "Aprovar todas": espaçar as mensagens é o que evita o bloqueio do número.', 1, 120)}
           </div>
 
