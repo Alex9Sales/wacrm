@@ -212,6 +212,82 @@ export async function saveConnection(input: {
   return { ok: true, data: { id: row.id } }
 }
 
+/**
+ * Editar a conta já conectada — trocar a chave (o Asaas as rotaciona), o nome
+ * ou o ambiente, SEM apagar e reconectar.
+ *
+ * 22/09 (Alex): trocou o token no Asaas e a única saída na tela era remover a
+ * conexão e criar outra — o que levaria junto as cobranças espelhadas (CASCADE)
+ * e, pior, geraria uma URL de webhook nova, deixando o Asaas apontando para a
+ * antiga até alguém recolar. Aqui o `webhook_token` é preservado de propósito.
+ *
+ * `apiKey` vazia = manter a atual (dá para corrigir só o ambiente ou o nome).
+ */
+export async function updateConnection(input: {
+  id: string
+  label: string
+  apiKey?: string
+  environment: AsaasEnv
+}): Promise<ActionResult> {
+  const { accountId } = await requireRole('admin')
+
+  const label = input.label.trim()
+  const apiKey = (input.apiKey ?? '').trim()
+  if (!label) return { ok: false, error: 'Dê um nome para esta conta (ex.: "Minha conta", "Conta do pai").' }
+  if (input.environment !== 'sandbox' && input.environment !== 'production') {
+    return { ok: false, error: 'Ambiente inválido.' }
+  }
+
+  const [conn] = await db
+    .select({ id: asaasConnections.id, apiKeyEnc: asaasConnections.apiKeyEnc })
+    .from(asaasConnections)
+    .where(and(eq(asaasConnections.id, input.id), eq(asaasConnections.accountId, accountId)))
+    .limit(1)
+  if (!conn) return { ok: false, error: 'Conta não encontrada.' }
+
+  // Sem chave nova, revalida a que já está lá: trocar só o ambiente também
+  // precisa passar pelo teste (chave de produção não vale em sandbox).
+  let chaveParaTestar = apiKey
+  if (!chaveParaTestar) {
+    try {
+      chaveParaTestar = decrypt(conn.apiKeyEnc)
+    } catch {
+      return { ok: false, error: 'Não deu para ler a chave atual. Cole a chave de novo.' }
+    }
+  }
+  const test = await testCredential({ apiKey: chaveParaTestar, environment: input.environment })
+  if (!test.ok) return { ok: false, error: test.error }
+
+  const dup = await db
+    .select({ id: asaasConnections.id })
+    .from(asaasConnections)
+    .where(
+      and(
+        eq(asaasConnections.accountId, accountId),
+        sql`lower(${asaasConnections.label}) = ${label.toLowerCase()}`,
+        sql`${asaasConnections.id} <> ${input.id}`,
+      ),
+    )
+    .limit(1)
+  if (dup.length) return { ok: false, error: `Já existe uma conta chamada "${label}".` }
+
+  await db
+    .update(asaasConnections)
+    .set({
+      label,
+      environment: input.environment,
+      ...(apiKey ? { apiKeyEnc: encrypt(apiKey) } : {}),
+      // A chave passou no teste: o erro anterior ("Chave recusada pelo Asaas")
+      // não pode continuar na tela.
+      lastSyncError: null,
+      updatedAt: new Date().toISOString(),
+    })
+    .where(and(eq(asaasConnections.id, input.id), eq(asaasConnections.accountId, accountId)))
+
+  revalidatePath('/cobrancas')
+  return { ok: true }
+}
+
 export async function setConnectionEnabled(id: string, enabled: boolean): Promise<ActionResult> {
   const { accountId } = await requireRole('admin')
   await db

@@ -25,6 +25,7 @@ import {
   Link2Off,
   Loader2,
   Phone,
+  Pencil,
   Plus,
   Receipt,
   RefreshCw,
@@ -86,6 +87,7 @@ import {
   lookupCep,
   restoreContactPhone,
   saveConnection,
+  updateConnection,
   searchContactsForCharge,
   runCollectionsNow,
   saveCollectionsSettings,
@@ -141,6 +143,8 @@ export function WalletClient() {
   const [loading, setLoading] = useState(true);
   const [syncing, setSyncing] = useState(false);
   const [addOpen, setAddOpen] = useState(false);
+  /** Conexão aberta para edição no mesmo diálogo (null = conectar nova). */
+  const [editConn, setEditConn] = useState<ConnectionView | null>(null);
   const [linkFor, setLinkFor] = useState<WalletDebtor | null>(null);
   const [pauseFor, setPauseFor] = useState<WalletDebtor | null>(null);
   const [onlyPending, setOnlyPending] = useState(false);
@@ -284,7 +288,13 @@ export function WalletClient() {
               <Receipt className="mr-1.5 h-4 w-4" /> Nova cobrança
             </Button>
           )}
-          <Button variant="outline" onClick={() => setAddOpen(true)}>
+          <Button
+            variant="outline"
+            onClick={() => {
+              setEditConn(null);
+              setAddOpen(true);
+            }}
+          >
             <Plus className="mr-1.5 h-4 w-4" /> Conectar Asaas
           </Button>
           <Button onClick={handleSync} disabled={syncing || !conns.length}>
@@ -335,6 +345,10 @@ export function WalletClient() {
         conns={conns}
         onChanged={load}
         onSync={(id) => void handleSyncOne(id)}
+        onEdit={(c) => {
+          setEditConn(c);
+          setAddOpen(true);
+        }}
         filter={connFilter}
         onFilter={(id) => setConnFilter((cur) => (cur === id ? null : id))}
       />
@@ -366,7 +380,12 @@ export function WalletClient() {
       {!!conns.length && rule?.enabled && !rule.autoSend && promo && <PromotionPanel promo={promo} onChanged={load} />}
 
       {!conns.length ? (
-        <EmptyState onAdd={() => setAddOpen(true)} />
+        <EmptyState
+          onAdd={() => {
+            setEditConn(null);
+            setAddOpen(true);
+          }}
+        />
       ) : (
         <>
           {connFilterLabel && (
@@ -521,7 +540,15 @@ export function WalletClient() {
         </>
       )}
 
-      <AddConnectionDialog open={addOpen} onOpenChange={setAddOpen} onSaved={load} />
+      <AddConnectionDialog
+        open={addOpen}
+        onOpenChange={(v) => {
+          setAddOpen(v);
+          if (!v) setEditConn(null);
+        }}
+        onSaved={load}
+        editing={editConn}
+      />
       <LinkContactDialog debtor={linkFor} onClose={() => setLinkFor(null)} onLinked={load} />
       {newChargeOpen && <NewChargeDialog conns={conns.filter((c) => c.enabled)} onClose={() => setNewChargeOpen(false)} onCreated={load} />}
       <PauseDebtorDialog debtor={pauseFor} onClose={() => setPauseFor(null)} onSaved={load} />
@@ -914,12 +941,15 @@ function ConnectionsPanel({
   conns,
   onChanged,
   onSync,
+  onEdit,
   filter,
   onFilter,
 }: {
   conns: ConnectionView[];
   onChanged: () => void;
   onSync: (id: string) => void;
+  /** Abre o mesmo diálogo da conexão, já preenchido, para trocar chave/nome/ambiente. */
+  onEdit: (conn: ConnectionView) => void;
   /** Conta selecionada na carteira (null = todas). */
   filter: string | null;
   onFilter: (id: string) => void;
@@ -1121,6 +1151,14 @@ function ConnectionsPanel({
           <div className="ml-auto flex gap-1.5">
             <Button size="sm" variant="ghost" onClick={() => onSync(c.id)}>
               <RefreshCw className="h-3.5 w-3.5" />
+            </Button>
+            <Button
+              size="sm"
+              variant="ghost"
+              title="Trocar a chave, o nome ou o ambiente desta conta"
+              onClick={() => onEdit(c)}
+            >
+              <Pencil className="h-3.5 w-3.5 text-muted-foreground" />
             </Button>
             <Button
               size="sm"
@@ -1711,29 +1749,53 @@ function EmptyState({ onAdd }: { onAdd: () => void }) {
   );
 }
 
+/**
+ * Conectar uma conta do Asaas — e, com `editing`, editar a que já está ligada.
+ * 22/09 (Alex): o Asaas rotaciona a chave e a única saída era remover e
+ * reconectar, o que levava junto as cobranças espelhadas e trocava a URL do
+ * webhook. Editando, o webhook continua o mesmo.
+ */
 function AddConnectionDialog({
   open,
   onOpenChange,
   onSaved,
+  editing,
 }: {
   open: boolean;
   onOpenChange: (v: boolean) => void;
   onSaved: () => void;
+  /** Conexão a editar; null = conectar uma nova. */
+  editing?: ConnectionView | null;
 }) {
   const [label, setLabel] = useState('');
   const [apiKey, setApiKey] = useState('');
   const [environment, setEnvironment] = useState<'sandbox' | 'production'>('sandbox');
   const [saving, setSaving] = useState(false);
 
+  // Abriu (ou trocou de conta): recarrega os campos. A chave nunca volta do
+  // servidor, então o campo começa vazio e vazio significa "manter a atual".
+  useEffect(() => {
+    if (!open) return;
+    setLabel(editing?.label ?? '');
+    setEnvironment(editing?.environment ?? 'sandbox');
+    setApiKey('');
+  }, [open, editing]);
+
   async function save() {
     setSaving(true);
     try {
-      const res = await saveConnection({ label, apiKey, environment });
+      const res = editing
+        ? await updateConnection({ id: editing.id, label, apiKey, environment })
+        : await saveConnection({ label, apiKey, environment });
       if (!res.ok) {
         toast.error(res.error ?? 'Não foi possível salvar.');
         return;
       }
-      toast.success(`"${label}" conectada. Toque em Atualizar para trazer a carteira.`);
+      toast.success(
+        editing
+          ? `"${label}" atualizada. Toque em Atualizar para trazer a carteira.`
+          : `"${label}" conectada. Toque em Atualizar para trazer a carteira.`,
+      );
       setLabel('');
       setApiKey('');
       onOpenChange(false);
@@ -1747,9 +1809,11 @@ function AddConnectionDialog({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent className="sm:max-w-md">
         <DialogHeader>
-          <DialogTitle>Conectar uma conta do Asaas</DialogTitle>
+          <DialogTitle>{editing ? `Editar "${editing.label}"` : 'Conectar uma conta do Asaas'}</DialogTitle>
           <DialogDescription>
-            A chave é guardada criptografada e nunca mais aparece na tela. Conferimos o acesso antes de salvar.
+            {editing
+              ? 'Trocou a chave no Asaas? Cole a nova aqui. As cobranças já espelhadas e a URL do webhook continuam as mesmas.'
+              : 'A chave é guardada criptografada e nunca mais aparece na tela. Conferimos o acesso antes de salvar.'}
           </DialogDescription>
         </DialogHeader>
 
@@ -1794,13 +1858,15 @@ function AddConnectionDialog({
               autoComplete="off"
             />
             <p className="text-xs text-muted-foreground">
-              No Asaas: Configurações → Integrações → API. Copie a chave inteira, inclusive o começo com $.
+              {editing
+                ? 'Deixe em branco para manter a chave atual. Para trocar: no Asaas, Configurações → Integrações → API.'
+                : 'No Asaas: Configurações → Integrações → API. Copie a chave inteira, inclusive o começo com $.'}
             </p>
           </div>
 
-          <Button onClick={save} disabled={saving || !label.trim() || !apiKey.trim()}>
+          <Button onClick={save} disabled={saving || !label.trim() || (!editing && !apiKey.trim())}>
             {saving ? <Loader2 className="mr-1.5 h-4 w-4 animate-spin" /> : null}
-            {saving ? 'Conferindo o acesso…' : 'Conectar'}
+            {saving ? 'Conferindo o acesso…' : editing ? 'Salvar' : 'Conectar'}
           </Button>
         </div>
       </DialogContent>
