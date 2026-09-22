@@ -13,7 +13,7 @@
 // Sem 'server-only' — roda no worker.
 // ============================================================
 
-import { and, desc, eq, gte, sql } from 'drizzle-orm'
+import { and, desc, eq, sql } from 'drizzle-orm'
 
 import { db, agentActionRequests, aiConfigs, asaasCharges, asaasConnections, collectionsTouches, contacts, conversations } from '@/db'
 import { firstOrNull } from '@/db/helpers'
@@ -544,8 +544,11 @@ function logNewChargeRound(accountId: string, r: NewChargeRunResult): void {
  * A IA escreve o texto ao redor dos números — mas os números vêm prontos do
  * `formatDebtSummary`, e a instrução proíbe inventar valor, prazo ou desconto.
  * Somar é o tipo de coisa que um modelo erra sem ninguém perceber.
+ *
+ * Exportada (22/09) para o "Reescrever com IA" do botão Cobrar pelo WhatsApp
+ * da carteira — mesma redação da régua, uma chamada só quando a pessoa pede.
  */
-async function draftCollectionMessage(args: {
+export async function draftCollectionMessage(args: {
   accountId: string
   agentId: string | null
   firstName: string | null

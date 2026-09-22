@@ -58,6 +58,14 @@ import { changeChargeDueDateCore } from '@/lib/collections/due-date'
 import { manualPromiseReasonPrefix } from '@/lib/collections/reply-guard'
 import { localDayKey } from '@/lib/collections/stale'
 import {
+  draftManualCollectWithAiCore,
+  prepareManualCollectCore,
+  sendManualCollectCore,
+  type ManualCollectPrepared,
+  type ManualCollectSendInput,
+  type ManualCollectSent,
+} from '@/lib/collections/manual-send'
+import {
   canCreateFromAsaas,
   canRemoveCreatedContact,
   chargesChangedByLink,
@@ -3007,8 +3015,7 @@ export async function getSendsReport(): Promise<SendsReport> {
   }
 }
 
-// ============================================================
-// 🔔 Próximos vencimentos (22/09, João/GoLink: "não achei uma cliente que vence esta semana")
+// =====================================================// 🔔 Próximos vencimentos (22/09, João/GoLink: "não achei uma cliente que vence esta semana")
 // ============================================================
 
 export interface UpcomingChargeLine {
@@ -3178,5 +3185,47 @@ export async function getUpcomingCharges(): Promise<ActionResult<UpcomingCharges
   } catch (err) {
     console.error('[cobranca] próximos vencimentos: leitura falhou:', err instanceof Error ? err.message : err)
     return { ok: false, error: 'Não deu para carregar os próximos vencimentos.' }
+  }
+}
+
+// ------------------------------------------------ cobrar pelo WhatsApp (à mão)
+// 22/09 (João/GoLink): cobrar UM devedor agora, pelo número de quem clica, com
+// o texto da régua pronto e editável — e contando como toque da régua. A
+// lógica está em lib/collections/manual-send.ts; aqui só a sessão e o papel
+// mínimo ('agent': quem atende cobra). Erro inesperado vira { ok:false } com
+// log — `throw` chega ao navegador como "digest".
+
+/** O diálogo abre com isto: texto pronto, números da conta, freio e nº do toque. */
+export async function prepareManualCollect(contactId: string): Promise<ActionResult<ManualCollectPrepared>> {
+  const { accountId, userId } = await requireRole('agent')
+  try {
+    return await prepareManualCollectCore(accountId, userId, contactId)
+  } catch (err) {
+    console.error('[cobranças] montar a cobrança à mão falhou:', err instanceof Error ? err.message : err)
+    return { ok: false, error: 'Não foi possível montar a cobrança agora.' }
+  }
+}
+
+/** "✨ Reescrever com IA": uma chamada, só quando a pessoa pede. */
+export async function draftManualCollectWithAi(contactId: string): Promise<ActionResult<{ text: string }>> {
+  const { accountId } = await requireRole('agent')
+  try {
+    return await draftManualCollectWithAiCore(accountId, contactId)
+  } catch (err) {
+    console.error('[cobranças] reescrever a cobrança com IA falhou:', err instanceof Error ? err.message : err)
+    return { ok: false, error: 'A IA não conseguiu reescrever agora — o texto padrão continua valendo.' }
+  }
+}
+
+/** Envia pelo número escolhido, registra o toque e expira o pedido automático pendente. */
+export async function sendManualCollect(input: ManualCollectSendInput): Promise<ActionResult<ManualCollectSent>> {
+  const { accountId, userId } = await requireRole('agent')
+  try {
+    const res = await sendManualCollectCore(accountId, userId, input)
+    if (res.ok) revalidatePath('/cobrancas')
+    return res
+  } catch (err) {
+    console.error('[cobranças] cobrança à mão falhou:', err instanceof Error ? err.message : err)
+    return { ok: false, error: 'Não foi possível enviar a cobrança agora.' }
   }
 }
