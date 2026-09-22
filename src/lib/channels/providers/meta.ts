@@ -113,6 +113,19 @@ interface MetaWebhookMessage {
     address?: string;
   };
   reaction?: { message_id: string; emoji: string };
+  // ✏️ Mensagem EDITADA no WhatsApp (Zelo 22/09): a Meta manda type:'edit'
+  // com o id da original e o objeto novo. Não é mensagem nova — o webhook
+  // aplica na original, igual ao WAHA. Aqui o parse devolve null.
+  edit?: {
+    original_message_id?: string;
+    message?: {
+      type?: string;
+      text?: { body?: string };
+      image?: { caption?: string };
+      video?: { caption?: string };
+      document?: { caption?: string };
+    };
+  };
   // Resposta a um botão de RESPOSTA RÁPIDA de TEMPLATE (o cliente tocou nele).
   // A Meta manda type:'button' com { text: rótulo, payload }.
   button?: { text?: string; payload?: string };
@@ -447,6 +460,8 @@ function normalizeInboundMessage(
   // webhook short-circuits them. The unified pipeline has no reaction path,
   // so we drop them here rather than inserting a spurious message row.
   if (msg.type === 'reaction') return null;
+  // ✏️ Edição também não vira mensagem: a rota atualiza a original.
+  if (msg.type === 'edit') return null;
 
   const base = {
     externalMessageId: msg.id,

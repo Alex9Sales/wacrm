@@ -20,7 +20,7 @@
 // ============================================================
 
 import { NextResponse, after } from 'next/server'
-import { and, eq, sql } from 'drizzle-orm'
+import { and, eq, inArray, sql } from 'drizzle-orm'
 
 import { db, callLogs, channels, contacts, conversations, messageReactions, messages } from '@/db'
 import { normalizePhone } from '@/lib/whatsapp/phone-utils'
@@ -64,11 +64,23 @@ interface MetaRawReaction {
   emoji: string
 }
 
+interface MetaRawEdit {
+  original_message_id?: string
+  message?: {
+    type?: string
+    text?: { body?: string }
+    image?: { caption?: string }
+    video?: { caption?: string }
+    document?: { caption?: string }
+  }
+}
+
 interface MetaRawMessage {
   id: string
   from: string
   type: string
   reaction?: MetaRawReaction
+  edit?: MetaRawEdit
 }
 
 interface MetaRawContact {
@@ -437,6 +449,10 @@ async function processWebhook(body: MetaRawBody) {
         if (msg.type === 'reaction' && msg.reaction) {
           await handleMetaReaction(channel, msg)
         }
+        // ✏️ Edição: atualiza a mensagem original, não cria outra.
+        if (msg.type === 'edit') {
+          await handleMetaEdit(channel, msg)
+        }
       }
     }
   }
@@ -502,6 +518,77 @@ async function dispatchInboundForBody(body: MetaRawBody) {
         }
       }
     }
+  }
+}
+
+/** O texto novo de uma edição, qualquer que seja o tipo (texto ou legenda). */
+export function editedTextOf(edit: MetaRawEdit | undefined): string | null {
+  const m = edit?.message
+  if (!m) return null
+  const novo =
+    m.text?.body ?? m.image?.caption ?? m.video?.caption ?? m.document?.caption ?? null
+  const limpo = (novo ?? '').trim()
+  return limpo ? limpo : null
+}
+
+/**
+ * ✏️ O cliente EDITOU uma mensagem no WhatsApp (Zelo 22/09, conversa da
+ * Janice): a Meta manda type:'edit' com o id da original e o objeto novo.
+ * Antes isso virava uma mensagem nova escrita "[Tipo de mensagem não
+ * suportado: edit]" — a Zélia leu aquilo como se fosse o cliente falando e
+ * respondeu "não consegui visualizar a mensagem editada".
+ *
+ * Agora faz o que o WAHA já fazia: troca o texto da ORIGINAL e marca
+ * `edited_at` (a bolha mostra "Editada"). A mesma mensagem pode existir em
+ * mais de uma conversa da conta — atualiza todas as cópias. Sem mensagem
+ * nova, a IA não é acionada de novo pela edição.
+ */
+async function handleMetaEdit(channel: ChannelCtx, msg: MetaRawMessage) {
+  const alvoId = msg.edit?.original_message_id
+  const novoTexto = editedTextOf(msg.edit)
+  if (!alvoId || !novoTexto) {
+    console.warn(
+      `[webhooks/meta] edição sem alvo ou sem texto (wamid ${msg.id}) — campos: ${Object.keys(msg.edit ?? {}).join(',') || 'nenhum'}`,
+    )
+    return
+  }
+
+  const rows = await db
+    .select({ id: messages.id, conversationId: messages.conversationId })
+    .from(messages)
+    .innerJoin(conversations, eq(messages.conversationId, conversations.id))
+    .where(
+      and(
+        eq(messages.messageId, alvoId),
+        eq(conversations.accountId, channel.accountId),
+      ),
+    )
+  if (rows.length === 0) {
+    console.warn('[webhooks/meta] edição sem a mensagem original:', alvoId)
+    return
+  }
+
+  try {
+    await db
+      .update(messages)
+      .set({ contentText: novoTexto, editedAt: new Date().toISOString() })
+      .where(
+        inArray(
+          messages.id,
+          rows.map((r) => r.id),
+        ),
+      )
+  } catch (err) {
+    console.error('[webhooks/meta] edição não gravou:', err)
+    return
+  }
+
+  for (const convId of [...new Set(rows.map((r) => r.conversationId))]) {
+    await publishEvent(channel.accountId, {
+      type: 'message.received',
+      conversationId: convId,
+      fromMe: true,
+    })
   }
 }
 
