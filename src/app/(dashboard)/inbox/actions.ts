@@ -632,6 +632,10 @@ const contactColumns = {
   name: contacts.name,
   email: contacts.email,
   company: contacts.company,
+  // 🎂 23/09 (Vitor/GoLink: "coloco o aniversário e não grava"): gravava sim,
+  // mas a ficha do atendimento não trazia o campo, então ele nunca via o que
+  // tinha acabado de salvar.
+  birthday: contacts.birthday,
   customer_codes: contacts.customerCodes,
   avatar_url: contacts.avatarUrl,
   is_group: contacts.isGroup,

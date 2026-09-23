@@ -53,6 +53,7 @@ import {
   type ContactCollectionStatus,
 } from "@/app/(dashboard)/cobrancas/actions";
 import { pauseSourceLabel } from "@/lib/collections/pause-rules";
+import { birthdayAge, birthdayLabel, isBirthdayToday } from "@/lib/contacts/birthday-label";
 import { CustomFieldInput } from "@/components/contacts/custom-field-input";
 import { CallButton } from "@/components/calls/call-button";
 import type {
@@ -73,6 +74,7 @@ import {
   Phone,
   Mail,
   Building2,
+  Cake,
   Copy,
   Check,
   Tag as TagIcon,
@@ -812,6 +814,37 @@ export function ContactSidebar({
                 )}
               </span>
             </div>
+
+            {/* 🎂 23/09 (Vitor/GoLink): ele pedia a data ao cliente, salvava e
+                não via em lugar nenhum — parecia que não gravava. Agora a ficha
+                mostra, e diz quando é hoje. */}
+            {!contact.is_group && (
+              <div className="flex items-center gap-2 rounded-lg px-3 py-2 text-sm text-muted-foreground">
+                <Cake className="h-4 w-4 shrink-0 text-muted-foreground" />
+                {birthdayLabel(contact.birthday) ? (
+                  <span className="truncate">
+                    {birthdayLabel(contact.birthday)}
+                    {birthdayAge(contact.birthday) != null && (
+                      <span className="text-muted-foreground/60">
+                        {" "}· {birthdayAge(contact.birthday)} anos
+                      </span>
+                    )}
+                    {isBirthdayToday(contact.birthday) && (
+                      <span className="ml-1 font-medium text-primary">é hoje 🎉</span>
+                    )}
+                  </span>
+                ) : (
+                  <button
+                    type="button"
+                    onClick={() => setEditOpen(true)}
+                    className="truncate text-left text-muted-foreground/60 hover:text-foreground hover:underline"
+                    title="Anotar a data de aniversário deste contato"
+                  >
+                    Aniversário: anotar
+                  </button>
+                )}
+              </div>
+            )}
 
             {contact.is_group && conversationId && (
               <div className="mt-1">

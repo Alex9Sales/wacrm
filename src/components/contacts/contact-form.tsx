@@ -5,6 +5,7 @@ import { useAuth } from '@/hooks/use-auth';
 import { toast } from 'sonner';
 import type { Contact, Tag, ContactTag } from '@/types';
 import type { ExistingContact } from '@/lib/contacts/dedupe';
+import { birthdayLabel } from '@/lib/contacts/birthday-label';
 import {
   listTags,
   checkDuplicatePhone,
@@ -88,7 +89,9 @@ export function ContactForm({
       setPhone(contact?.phone ?? initialPhone ?? '');
       setEmail(contact?.email ?? '');
       setCompany(contact?.company ?? '');
-      setBirthday((contact?.birthday ?? '').slice(0, 10));
+      // Mostra como a pessoa escreveria: 28/02/1980, ou só 18/05 quando o
+      // ano é desconhecido (o cliente costuma dizer só o dia e o mês).
+      setBirthday(birthdayLabel(contact?.birthday) ?? '');
       setSelectedTagIds(contactTags.map((ct) => ct.tag_id));
       setDupMatch(null);
       fetchTags();
@@ -308,13 +311,17 @@ export function ContactForm({
             </Label>
             <Input
               id="cf-birthday"
-              type="date"
+              type="text"
+              inputMode="numeric"
+              maxLength={10}
+              placeholder="dd/mm/aaaa — ou só dd/mm"
               value={birthday}
               onChange={(e) => setBirthday(e.target.value)}
               className="bg-muted border-border text-foreground"
             />
             <p className="text-[11px] text-muted-foreground">
-              Com a data, o CRM pode mandar parabéns automático (Configurações → Atendimento).
+              Pode anotar só o dia e o mês, que é o que o cliente costuma dizer. Com a data, o CRM
+              manda parabéns automático (Configurações → Atendimento).
             </p>
           </div>
 
