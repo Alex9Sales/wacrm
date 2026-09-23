@@ -2139,6 +2139,8 @@ export const aiUsage = pgTable("ai_usage", {
 	completionTokens: integer("completion_tokens").default(0).notNull(),
 	cachedReadTokens: integer("cached_read_tokens").default(0).notNull(),
 	cacheCreationTokens: integer("cache_creation_tokens").default(0).notNull(),
+	/** Segundos de áudio transcritos (migr 0190): o Whisper cobra por minuto, não por token. */
+	audioSeconds: integer("audio_seconds").default(0).notNull(),
 	createdAt: timestamp("created_at", { withTimezone: true, mode: 'string' }).defaultNow().notNull(),
 }, (table) => [
 	index("ai_usage_account_created_idx").using("btree", table.accountId.asc().nullsLast().op("uuid_ops"), table.createdAt.desc().nullsLast()),

@@ -76,9 +76,13 @@ export function extractGeminiUsage(raw: unknown): TokenUsage {
   }
 }
 
-/** Uma captura sem tokens não vale gravar (chamada que não consumiu nada). */
-export function isEmptyUsage(u: TokenUsage): boolean {
-  return u.promptTokens === 0 && u.completionTokens === 0
+/**
+ * Uma captura sem consumo nenhum não vale gravar. Áudio conta: a transcrição
+ * não gasta token, gasta MINUTO (23/09) — sem esta condição a nota de voz
+ * ficaria de fora do medidor.
+ */
+export function isEmptyUsage(u: TokenUsage, audioSeconds = 0): boolean {
+  return u.promptTokens === 0 && u.completionTokens === 0 && audioSeconds <= 0
 }
 
 /**
@@ -90,10 +94,13 @@ export async function recordAiUsage(
   provider: string,
   model: string,
   usage: TokenUsage,
+  /** Segundos de áudio transcritos — só a transcrição usa (cobrança por minuto). */
+  audioSeconds = 0,
 ): Promise<void> {
-  if (isEmptyUsage(usage)) return
+  if (isEmptyUsage(usage, audioSeconds)) return
   try {
     await db.insert(aiUsage).values({
+      audioSeconds: Math.max(0, Math.round(audioSeconds)),
       accountId: meta.accountId,
       agentId: meta.agentId ?? null,
       conversationId: meta.conversationId ?? null,

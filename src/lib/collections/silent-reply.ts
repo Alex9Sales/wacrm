@@ -229,8 +229,9 @@ export async function detectCollectionReplySilently(args: {
           content: buildClassifierInput({ debt, lastCollection, ours: ctx.ourRecent, bubbles: burst.bubbles, timezone: args.timezone }),
         },
       ] as unknown as Parameters<typeof generateReply>[0]['messages'],
-      // Custo no medidor (antes o classificador não aparecia no ai_usage).
-      meta: { accountId: args.accountId, agentId: config.id ?? null, conversationId: args.conversationId, channelId: args.channelId, source: 'inbox' },
+      // Custo no medidor, na fonte "cobrança" (23/09): este classificador só
+      // existe por causa da régua, então a despesa é dela.
+      meta: { accountId: args.accountId, agentId: config.id ?? null, conversationId: args.conversationId, channelId: args.channelId, source: 'collections' },
     })
     // Só DEPOIS de o modelo responder: se ele falhar, a rajada volta a ser lida.
     await markSeen()

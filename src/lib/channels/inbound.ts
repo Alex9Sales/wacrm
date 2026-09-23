@@ -310,7 +310,10 @@ export async function dispatchInboundMessage(
         // descritas. Foto avulsa segue igual.
         const burst = await shouldDescribeImage(conversation.id);
         if (burst.describe) {
-          transcription = await describeImage(visionKey, mediaUrl);
+          transcription = await describeImage(visionKey, mediaUrl, {
+            accountId,
+            conversationId: conversation.id,
+          });
         } else if (burst.position === IMAGE_BURST_LIMIT + 1) {
           console.log(
             `[inbound] rajada de imagens na conversa ${conversation.id}: descrevendo só as ${IMAGE_BURST_LIMIT} primeiras do minuto`,

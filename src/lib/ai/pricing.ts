@@ -116,6 +116,39 @@ export function costUsd(model: string, u: UsageTokens): number {
   return (inputCost + outputCost) / 1_000_000
 }
 
+// ------------------------------------------------------------
+// 🎙️ Áudio: o Whisper cobra por MINUTO, não por token (23/09). Sem isto, a
+// transcrição — que roda em toda nota de voz que chega — ficava fora do custo.
+// ------------------------------------------------------------
+
+/** Preço por MINUTO de áudio, em dólar (tabela pública da OpenAI). */
+const AUDIO_PRICES: Record<string, number> = {
+  'whisper-1': 0.006,
+  'gpt-4o-mini-transcribe': 0.003,
+  'gpt-4o-transcribe': 0.006,
+}
+
+/** Modelo de áudio desconhecido: cobra como o Whisper (nunca zera a despesa). */
+const AUDIO_FALLBACK = 0.006
+
+/** Custo em US$ de transcrever `seconds` segundos de áudio. */
+export function audioCostUsd(model: string, seconds: number): number {
+  const s = Math.max(0, Number(seconds) || 0)
+  if (!s) return 0
+  const key = (model || '').trim().toLowerCase()
+  let best: string | null = null
+  for (const prefix of Object.keys(AUDIO_PRICES)) {
+    if (key.startsWith(prefix) && (best === null || prefix.length > best.length)) best = prefix
+  }
+  const porMinuto = best ? AUDIO_PRICES[best] : AUDIO_FALLBACK
+  return (s / 60) * porMinuto
+}
+
+/** Custo total de uma linha do medidor: tokens + áudio (uma delas é sempre zero). */
+export function lineCostUsd(model: string, u: UsageTokens & { audioSeconds?: number }): number {
+  return costUsd(model, u) + audioCostUsd(model, u.audioSeconds ?? 0)
+}
+
 /** Câmbio US$→R$ para o "medidor R$". Env `USD_BRL_RATE`, default 5.40. */
 export function usdToBrlRate(): number {
   const raw = Number(process.env.USD_BRL_RATE)

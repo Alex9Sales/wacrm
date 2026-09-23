@@ -5,6 +5,8 @@
 // atendente vê no card. Best-effort: quem chama trata a falha (null).
 // ============================================================
 
+import { extractOpenAiUsage, recordAiUsage } from './usage'
+
 const OPENAI_CHAT_URL = 'https://api.openai.com/v1/chat/completions'
 
 /** Modelo de visão. Override com AI_VISION_MODEL. Um modelo barato com visão
@@ -27,7 +29,8 @@ const SYSTEM_PROMPT =
 export async function describeImage(
   apiKey: string,
   imageUrl: string,
-  opts: { model?: string } = {},
+  /** `accountId` liga a chamada ao medidor de custo (fonte "imagem", 23/09). */
+  opts: { model?: string; accountId?: string; conversationId?: string | null } = {},
 ): Promise<string> {
   const res = await fetch(OPENAI_CHAT_URL, {
     method: 'POST',
@@ -56,6 +59,17 @@ export async function describeImage(
   }
   const data = (await res.json()) as {
     choices?: { message?: { content?: string } }[]
+    usage?: unknown
+  }
+  // Medidor: a imagem vira tokens de input no modelo de visão — até agora o
+  // `usage` da resposta era jogado fora e o custo sumia (23/09, Alex).
+  if (opts.accountId) {
+    void recordAiUsage(
+      { accountId: opts.accountId, conversationId: opts.conversationId ?? null, source: 'vision' },
+      'openai',
+      opts.model ?? visionModel(),
+      extractOpenAiUsage(data.usage),
+    )
   }
   const text = data.choices?.[0]?.message?.content?.trim()
   if (!text) throw new Error('vision: resposta vazia')

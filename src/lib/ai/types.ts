@@ -95,6 +95,8 @@ export interface TokenUsage {
 /** De onde partiu a chamada de IA (mantém teste separado do tráfego real). */
 export type UsageSource =
   | 'inbox'
+  /** Cobrança: o que a régua e o agente de cobrança gastam (23/09, Alex). */
+  | 'collections'
   | 'draft'
   | 'playground'
   | 'pipeline'

@@ -68,6 +68,14 @@ interface Dashboard {
     costUsd: number;
     conversations: number;
   }[];
+  bySource: {
+    source: string;
+    label: string;
+    calls: number;
+    costUsd: number;
+    costBrl: number;
+    audioMinutes: number;
+  }[];
   status: { open: number; pending: number; closed: number };
   quality: {
     toolCalls: number;
@@ -335,6 +343,9 @@ export function UsageDashboard() {
             </div>
           </div>
 
+          {/* 💸 Onde a IA gastou — por fonte (pedido do Alex, 23/09). */}
+          <SourceSpend rows={data.bySource ?? []} />
+
           {/* quebras */}
           <div className="grid grid-cols-1 gap-3 lg:grid-cols-3">
             <Breakdown
@@ -423,6 +434,72 @@ function Kpi({
       </div>
       <div className="text-xl font-bold tabular-nums text-foreground">{value}</div>
       <div className="mt-0.5 text-[11px] text-muted-foreground">{sub}</div>
+    </div>
+  );
+}
+
+/**
+ * 💸 Quanto foi para cada frente da IA, em REAL — o dono quer saber se o que
+ * pesa é a cobrança, o áudio que ele manda transcrever ou a foto que o cliente
+ * envia. Transcrição mostra os minutos, que é como ela é cobrada.
+ */
+function SourceSpend({
+  rows,
+}: {
+  rows: {
+    source: string;
+    label: string;
+    calls: number;
+    costUsd: number;
+    costBrl: number;
+    audioMinutes: number;
+  }[];
+}) {
+  const max = Math.max(...rows.map((r) => r.costBrl), 0.000001);
+  const total = rows.reduce((s, r) => s + r.costBrl, 0);
+  return (
+    <div className="rounded-xl border border-border bg-card p-4">
+      <div className="mb-1 flex items-baseline justify-between gap-2">
+        <span className="text-sm font-medium text-foreground">Onde a IA gastou</span>
+        <span className="text-xs text-muted-foreground">
+          {total > 0 ? `${brl(total)} no período` : 'sem gasto no período'}
+        </span>
+      </div>
+      <p className="mb-3 text-xs text-muted-foreground">
+        Atendimento, cobrança, transcrição de áudio e leitura de imagem, separados.
+      </p>
+      {rows.length === 0 ? (
+        <p className="py-4 text-center text-xs text-muted-foreground">Sem dados no período.</p>
+      ) : (
+        <div className="space-y-2.5">
+          {rows.map((r) => (
+            <div key={r.source}>
+              <div className="mb-1 flex items-baseline justify-between gap-2">
+                <span className="truncate text-xs text-foreground" title={r.label}>
+                  {r.label}
+                </span>
+                <span className="shrink-0 text-xs font-semibold tabular-nums text-foreground">
+                  {brl(r.costBrl)}
+                  <span className="ml-1 font-normal text-muted-foreground">{usd(r.costUsd)}</span>
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <div className="h-1.5 flex-1 overflow-hidden rounded-full bg-muted">
+                  <div
+                    className="h-full rounded-full bg-primary"
+                    style={{ width: `${Math.max(2, (r.costBrl / max) * 100)}%` }}
+                  />
+                </div>
+                <span className="shrink-0 text-[10px] text-muted-foreground">
+                  {r.audioMinutes > 0
+                    ? `${r.audioMinutes.toLocaleString('pt-BR')} min de áudio`
+                    : `${int(r.calls)} chamadas`}
+                </span>
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
     </div>
   );
 }

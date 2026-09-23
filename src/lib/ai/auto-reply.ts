@@ -889,12 +889,14 @@ export async function dispatchInboundToAiReply(
       contactId,
       timezone: settings.businessTimezone,
       // Medidor de custo (Fase B): atribui o uso ao agente/canal/conversa.
+      // 23/09: conversa com parcela em aberto entra como COBRANÇA — é o que
+      // responde "quanto a cobrança está me custando" no painel de custo.
       meta: {
         accountId,
         agentId: config.id ?? null,
         conversationId,
         channelId: conv.channelId,
-        source: 'inbox',
+        source: openDebt ? 'collections' : 'inbox',
       },
     })
 

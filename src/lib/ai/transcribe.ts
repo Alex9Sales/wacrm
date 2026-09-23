@@ -9,10 +9,14 @@
 // ============================================================
 
 import { loadAiConfig } from './config'
+import { recordAiUsage } from './usage'
 import type { AiConfig } from './types'
 import type { NormalizedInbound } from '@/lib/channels/provider'
 
 const OPENAI_TRANSCRIBE_URL = 'https://api.openai.com/v1/audio/transcriptions'
+
+/** Modelo de transcrição. Fica aqui porque o preço do medidor é por modelo. */
+const TRANSCRIBE_MODEL = 'whisper-1'
 // OpenAI caps the audio file at 25 MB.
 const MAX_TRANSCRIBE_BYTES = 25 * 1024 * 1024
 
@@ -98,8 +102,11 @@ export async function transcribeInboundAudio(
       new Blob([data.bytes as unknown as BlobPart], { type: data.mimetype }),
       data.filename,
     )
-    form.append('model', 'whisper-1')
+    form.append('model', TRANSCRIBE_MODEL)
     form.append('language', 'pt')
+    // verbose_json traz `duration` (segundos) — é o que o Whisper cobra, e sem
+    // isso a transcrição ficava fora do medidor de custo (23/09, Alex).
+    form.append('response_format', 'verbose_json')
 
     const res = await fetch(OPENAI_TRANSCRIBE_URL, {
       method: 'POST',
@@ -112,8 +119,16 @@ export async function transcribeInboundAudio(
       )
       return null
     }
-    const json = (await res.json()) as { text?: string }
+    const json = (await res.json()) as { text?: string; duration?: number }
     const text = json.text?.trim()
+    // Medidor: cobrança por minuto de áudio. Best-effort, nunca atrapalha.
+    void recordAiUsage(
+      { accountId, source: 'transcribe' },
+      'openai',
+      TRANSCRIBE_MODEL,
+      { promptTokens: 0, completionTokens: 0, cachedReadTokens: 0, cacheCreationTokens: 0 },
+      Number(json.duration) || 0,
+    )
     return text ? text : null
   } catch (err) {
     console.error('[transcribe] failed:', err)

@@ -15,7 +15,7 @@ import { eq, sql } from 'drizzle-orm'
 
 import { HANDOFF_FAREWELL } from './defaults'
 import { db, aiConfigs, channels } from '@/db'
-import { costUsd, priceForModel, toBrl, type UsageTokens } from './pricing'
+import { costUsd, lineCostUsd, priceForModel, toBrl, type UsageTokens } from './pricing'
 
 // ============================================================
 // Fase 4 — Funil de automação (quanto a IA resolve sozinha). Inspirado no
@@ -114,6 +114,8 @@ interface TokenRow {
   completion: unknown
   cached_read: unknown
   cache_creation: unknown
+  /** Segundos de áudio transcritos (migr 0190) — nem toda consulta soma isto. */
+  audio?: unknown
 }
 function tokensOf(r: TokenRow): UsageTokens {
   return {
@@ -126,6 +128,25 @@ function tokensOf(r: TokenRow): UsageTokens {
 
 // "Real" = tráfego real (inbox + rascunho + agentes), exclui só o playground de teste.
 export type UsageSource = 'real' | 'playground' | 'all'
+
+/**
+ * Como cada fonte aparece na tela. Fonte nova sem rótulo mostra a chave crua —
+ * feio, mas nunca some do total (o dono não pode perder despesa de vista).
+ */
+export const USAGE_SOURCE_LABELS: Record<string, string> = {
+  inbox: 'Atendimento',
+  collections: 'Cobrança',
+  transcribe: 'Transcrição de áudio',
+  vision: 'Leitura de imagem',
+  draft: 'Rascunho sugerido',
+  playground: 'Teste (playground)',
+  pipeline: 'Funil',
+  flow: 'Fluxos',
+  deal_suggest: 'Sugestão de negócio',
+  tts: 'Voz (áudio gerado)',
+  embeddings: 'Base de conhecimento',
+  local: 'Agenda',
+}
 function sourceCond(source: UsageSource) {
   if (source === 'playground') return sql`AND source = 'playground'`
   if (source === 'real') return sql`AND source <> 'playground'`
@@ -283,6 +304,22 @@ export interface UsageDashboard {
     costUsd: number
     conversations: number
   }[]
+  /**
+   * 💸 Onde a IA gastou, por FONTE (23/09, Alex: "medidor de custo por fonte —
+   * cobrança, transcrição, imagem — num bloquinho separado"). Ordenado do mais
+   * caro para o mais barato.
+   */
+  bySource: {
+    /** Chave crua de `ai_usage.source` ('collections', 'transcribe', …). */
+    source: string
+    /** Rótulo em português para a tela. */
+    label: string
+    calls: number
+    costUsd: number
+    costBrl: number
+    /** Só a transcrição usa: minutos de áudio no período. */
+    audioMinutes: number
+  }[]
   status: { open: number; pending: number; closed: number }
   /** Qualidade operacional (conta inteira, pra comparar modelos por QUALIDADE,
    *  não só custo). */
@@ -340,6 +377,7 @@ export async function getUsageDashboard(
            sum(completion_tokens)     AS completion,
            sum(cached_read_tokens)    AS cached_read,
            sum(cache_creation_tokens) AS cache_creation,
+           sum(audio_seconds)         AS audio,
            count(*)                   AS calls
     FROM ai_usage
     WHERE account_id = ${accountId} AND created_at >= ${rangeStart}::timestamptz ${src} ${agentFilter}
@@ -363,7 +401,8 @@ export async function getUsageDashboard(
   }
   for (const row of dayModelRes.rows as unknown as DayModelRow[]) {
     const t = tokensOf(row)
-    const c = costUsd(row.model, t)
+    // Transcrição não tem token: o custo dela vem dos SEGUNDOS de áudio.
+    const c = lineCostUsd(row.model, { ...t, audioSeconds: n(row.audio) })
     const calls = n(row.calls)
     const day = dayMap.get(row.day) ?? { costUsd: 0, calls: 0 }
     day.costUsd += c
@@ -455,6 +494,37 @@ export async function getUsageDashboard(
   totals.conversations = n(
     (totalConvRes.rows as unknown as { convs: unknown }[])[0]?.convs,
   )
+
+  // 4.5) 💸 por FONTE: quanto foi cobrança, transcrição de áudio, imagem…
+  const sourceRes = await db.execute(sql`
+    SELECT source, model,
+           sum(prompt_tokens) AS prompt, sum(completion_tokens) AS completion,
+           sum(cached_read_tokens) AS cached_read, sum(cache_creation_tokens) AS cache_creation,
+           sum(audio_seconds) AS audio, count(*) AS calls
+    FROM ai_usage
+    WHERE account_id = ${accountId} AND created_at >= ${rangeStart}::timestamptz ${src} ${agentFilter}
+    GROUP BY 1, 2
+  `)
+  const sourceMap = new Map<string, { calls: number; costUsd: number; audioSeconds: number }>()
+  for (const row of sourceRes.rows as unknown as (TokenRow & { source: string | null; model: string; calls: unknown })[]) {
+    const chave = (row.source ?? 'inbox').trim() || 'inbox'
+    const audioSeconds = n(row.audio)
+    const atual = sourceMap.get(chave) ?? { calls: 0, costUsd: 0, audioSeconds: 0 }
+    atual.calls += n(row.calls)
+    atual.costUsd += lineCostUsd(row.model, { ...tokensOf(row), audioSeconds })
+    atual.audioSeconds += audioSeconds
+    sourceMap.set(chave, atual)
+  }
+  const bySource = Array.from(sourceMap.entries())
+    .map(([source, v]) => ({
+      source,
+      label: USAGE_SOURCE_LABELS[source] ?? source,
+      calls: v.calls,
+      costUsd: v.costUsd,
+      costBrl: toBrl(v.costUsd),
+      audioMinutes: Math.round((v.audioSeconds / 60) * 10) / 10,
+    }))
+    .sort((a, b) => b.costUsd - a.costUsd)
 
   // 5) status das conversas que a IA tocou.
   const statusRes = await db.execute(sql`
@@ -579,6 +649,7 @@ export async function getUsageDashboard(
     byModel,
     byAgent,
     byChannel,
+    bySource,
     status,
     quality,
   }
