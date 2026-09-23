@@ -1213,12 +1213,63 @@ export function fillTemplateParams(params: readonly string[], vars: TemplateVars
   return params.map((p) => p.replace(TEMPLATE_VAR_RE, (_m, k: string) => templateVarMap(vars)[k.toLowerCase()] ?? ''))
 }
 
+/** Minúsculo, sem acento e sem pontuação — pra comparar nome de empresa. */
+function nameSlug(word: string): string {
+  return word
+    .normalize('NFD')
+    .replace(/[̀-ͯ]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]/g, '')
+}
+
+/**
+ * A PESSOA dentro do nome do contato, quando o Asaas traz a empresa.
+ *
+ * 🐛 23/09 (João/GoLink, "Marina - Casa da Massa"): o contato do CRM
+ * também se chamava "Casa da Massa" (veio da carteira do Asaas) e a regra
+ * de ontem tratava isso como "o CRM tem o nome da pessoa" — a saudação ia
+ * virar "Oi, Casa!". Nome de negócio não é gente.
+ *
+ * Três casos, nesta ordem:
+ *  1. O contato CONTÉM a empresa e sobra algo ("Marina - Casa da Massa")
+ *     → o que sobra é a pessoa que atende: "Marina".
+ *  2. O contato repete palavra da empresa mas não a contém inteira
+ *     ("Massa Express" para "Casa da Massa") → é o mesmo negócio escrito de
+ *     outro jeito: pessoa nenhuma.
+ *  3. Sem nada em comum → vale a regra de sempre (firstNameForGreeting), com
+ *     um freio: nome ligado por "da/de/do" ("Casa da Massa", "Casa do
+ *     Norte") é negócio, não "Fulano da Silva" — a saudação usa a empresa.
+ */
+export function personInContactName(crmName: string | null | undefined, asaasName: string | null | undefined): string {
+  const tokens = (crmName ?? '').trim().split(/\s+/).filter(Boolean)
+  if (!tokens.length) return ''
+  const empresa = new Set(
+    (asaasName ?? '')
+      .split(/\s+/)
+      .map(nameSlug)
+      .filter((w) => w.length > 2 && !NAME_LEGAL_SUFFIX.has(w) && !NAME_STOPWORDS.has(w)),
+  )
+  if (empresa.size) {
+    const emComum = tokens.filter((t) => empresa.has(nameSlug(t)))
+    if (emComum.length) {
+      // Só é "pessoa + empresa" quando a empresa INTEIRA está ali dentro.
+      if (emComum.length < empresa.size) return ''
+      const sobra = tokens.filter((t) => !empresa.has(nameSlug(t)) && !NAME_STOPWORDS.has(nameSlug(t) || t))
+      return firstNameForGreeting(sobra.join(' '))
+    }
+  }
+  // "Casa da Massa" sem nada a ver com o Asaas: o conectivo entrega o negócio.
+  if (tokens.length > 2 && NAME_STOPWORDS.has(nameSlug(tokens[1]))) return ''
+  return firstNameForGreeting(crmName)
+}
+
 /**
  * Nome da saudação da cobrança (23/09, João/GoLink: "Olá Clínica Jump… pra
  * ficar Olá Jessica preciso trocar tudo no CRM?"). Regra: nome de PESSOA no
- * Asaas manda; se o Asaas tem empresa e o contato do CRM parece pessoa, vale
- * o primeiro nome do contato; senão a empresa como está no Asaas (decisão de
- * 10/09 continua: o apelido do celular nunca substitui um nome de pessoa do Asaas).
+ * Asaas manda; se o Asaas tem empresa e o contato do CRM traz gente
+ * (`personInContactName`), vale o primeiro nome do contato; senão a empresa
+ * como está no Asaas (decisão de 10/09 continua: o apelido do celular nunca
+ * substitui um nome de pessoa do Asaas).
  */
 export function collectionGreetingName(
   asaasName: string | null | undefined,
@@ -1243,7 +1294,7 @@ export function collectionGreetingName(
   const digits = onlyDigits(asaasDoc)
   const empresa = digits.length === 14
   const crmTrusted = crmNameSource === undefined || crmNameSource === 'crm' || crmNameSource === 'phonebook'
-  const crm = crmTrusted ? firstNameForGreeting(crmName) : ''
+  const crm = crmTrusted ? personInContactName(crmName, asaas) : ''
   // CNPJ: a pessoa que atende (agenda/ficha) vem primeiro; sem ela, a empresa
   // como o Asaas escreve, sem Ltda/ME (greetingName corta o sufixo).
   if (empresa) return crm || (asaas ? greetingName(asaas) : null)

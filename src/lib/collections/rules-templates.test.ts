@@ -123,6 +123,22 @@ describe('collectionGreetingName — pessoa no Asaas manda; empresa no Asaas + p
     // Sem documento, nada muda em relação ao comportamento anterior.
     expect(collectionGreetingName('Andressa Amorelli', 'Loja 77', 'crm')).toBe('Andressa Amorelli')
   })
+  it('CRM com o MESMO nome de empresa não vira pessoa (caso "Casa da Massa", João 23/09)', () => {
+    const CNPJ = '11222333000181'
+    // O contato veio da carteira do Asaas, então o CRM repete a razão social:
+    // a saudação é a empresa inteira — nunca "Oi, Casa!".
+    expect(collectionGreetingName('Casa da Massa', 'Casa da Massa', 'crm', CNPJ)).toBe('Casa da Massa')
+    // Empresa escrita de outro jeito continua sendo empresa.
+    expect(collectionGreetingName('Casa da Massa', 'Massa Express', 'crm', CNPJ)).toBe('Casa da Massa')
+    // Com a pessoa na ficha (o que o João faz na agenda), fala com a pessoa.
+    expect(collectionGreetingName('Casa da Massa', 'Marina - Casa da Massa', 'crm', CNPJ)).toBe('Marina')
+    expect(collectionGreetingName('Casa da Massa', 'Casa da Massa - Marina', 'phonebook', CNPJ)).toBe('Marina')
+    expect(collectionGreetingName('Casa da Massa', 'Marina', 'crm', CNPJ)).toBe('Marina')
+    // Nome de negócio ligado por "da/do" sem relação com o Asaas: não é gente.
+    expect(collectionGreetingName('77 Alimentos', 'Casa da Massa', 'crm', CNPJ)).toBe('77 Alimentos')
+    // Setor não é pessoa.
+    expect(collectionGreetingName('Clínica Jump', 'Clinica Jump Recepção', 'crm', CNPJ)).toBe('Clínica Jump')
+  })
   it('sem Asaas → o CRM quando é pessoa; telefone/frase no CRM → nada ("Oi!")', () => {
     expect(collectionGreetingName(null, 'Carlos')).toBe('Carlos')
     expect(collectionGreetingName(null, '+55 12 99123-4567')).toBeNull()

@@ -21,7 +21,7 @@ import { sendMessageToConversation } from '@/lib/whatsapp/send-message'
 
 import { localParts } from './engine'
 import { resolveCollectionTargets } from './outreach'
-import { greetingName, normalizeSettings, thanksDayBlockedReason } from './rules'
+import { collectionGreetingName, normalizeSettings, thanksDayBlockedReason } from './rules'
 import { localDayKey } from './stale'
 import { seedFromId, thankYouMessage } from './thanks-text'
 
@@ -46,6 +46,8 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
         value: asaasCharges.value,
         origin: asaasCharges.origin,
         conversationId: asaasCharges.conversationId,
+        customerName: asaasCharges.customerName,
+        cpfCnpj: asaasCharges.cpfCnpj,
       })
       .from(asaasCharges)
       .where(and(eq(asaasCharges.id, args.chargeId), eq(asaasCharges.accountId, args.accountId)))
@@ -55,7 +57,7 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
 
   const contact = firstOrNull(
     await db
-      .select({ name: contacts.name, optedOut: contacts.optedOut })
+      .select({ name: contacts.name, nameSource: contacts.nameSource, optedOut: contacts.optedOut })
       .from(contacts)
       .where(and(eq(contacts.id, args.contactId), eq(contacts.accountId, args.accountId)))
       .limit(1),
@@ -90,7 +92,10 @@ export async function sendPaymentThanks(args: { accountId: string; chargeId: str
   )
   if (already) return { sent: false, why: 'já agradecido' }
 
-  const firstName = greetingName(contact.name)
+  // A mesma saudação da régua (23/09, João/GoLink): com CNPJ o nome do Asaas é
+  // razão social — "Tudo certo, Casa da Massa" vira "Tudo certo, Marina"
+  // quando a ficha do CRM traz a pessoa que atende.
+  const firstName = collectionGreetingName(charge.customerName, contact.name, contact.nameSource, charge.cpfCnpj)
   const text = thankYouMessage(firstName, Number(charge.value ?? 0), seedFromId(charge.id))
 
   // ⏰ 11/09 (Alex): "prende o agradecimento na janela também". O webhook do

@@ -15,6 +15,9 @@ const NOT_A_NAME = new Set([
   'the', 'a', 'o', 'os', 'as', 'de', 'da', 'do',
   // Agenda de empresa B2B (GoLink 18/09: "Google Ads", "Sta Casa", "Clínica…").
   'google', 'suporte', 'financeiro', 'comercial', 'atendimento', 'empresa',
+  // Setor, não gente (23/09): "Clinica Jump Recepção" não vira "Oi, Recepção!".
+  'recepcao', 'recepção', 'secretaria', 'diretoria', 'gerencia', 'gerência',
+  'contabilidade', 'cobranca', 'cobrança', 'marketing', 'matriz', 'filial', 'unidade', 'sede',
   'clinica', 'clínica', 'consultorio', 'consultório', 'laboratorio', 'laboratório',
   'studio', 'estudio', 'estúdio', 'escola', 'colegio', 'colégio', 'academia',
   'instituto', 'escritorio', 'escritório', 'farmacia', 'farmácia', 'restaurante',
