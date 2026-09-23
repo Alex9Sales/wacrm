@@ -45,6 +45,34 @@ const PHONE_HEADER = /(phone|telefone|celular|whats|fone|n[uú]mero|mobile|msisd
 const NAME_HEADER = /^(name|nome|full_?name|nome_completo|first_?name|primeiro_?nome|contato)$/i
 const FIELD_HINT = /(phone|telefone|celular|whats|fone|n[uú]mero|name|nome|email|e-mail)/i
 
+/**
+ * Telefone e nome na MESMA célula ("5512987032134, Francinete", "(12) 99999-8888
+ * Paulo"). 22/09, GoLink: o João montou a planilha com tudo na coluna A; ao
+ * copiar do Sheets a célula vem entre aspas, a vírgula deixa de separar e o
+ * nome sumia — o disparo saiu "Olá, Instituto Talentos!" (o nome antigo do
+ * contato) em vez de "Olá, Francinete".
+ *
+ * Tira o telefone (o maior bloco de dígitos da célula) e devolve o que sobrar
+ * como nome, sem pontuação de borda. Célula só com telefone → sem nome.
+ */
+export function splitPhoneAndName(cell: string): { phone: string; name?: string } {
+  const raw = (cell ?? '').trim()
+  if (!raw) return { phone: '' }
+  // Maior sequência de dígitos/pontuação de telefone: "+55 (12) 99999-8888".
+  const matches = [...raw.matchAll(/\+?\s?\(?\d[\d\s().-]{6,}\d/g)]
+  if (!matches.length) return { phone: raw }
+  const melhor = matches.reduce((a, b) => (digitCount(b[0]) > digitCount(a[0]) ? b : a))
+  const inicio = melhor.index ?? 0
+  const trecho = melhor[0]
+  const resto = (raw.slice(0, inicio) + ' ' + raw.slice(inicio + trecho.length))
+    .replace(/[,;|\t]+/g, ' ')
+    .replace(/\s{2,}/g, ' ')
+    .trim()
+    .replace(/^[-–—:.()]+|[-–—:.()]+$/g, '')
+    .trim()
+  return { phone: trecho.trim(), name: resto || undefined }
+}
+
 /** Count digits in a cell (for phone detection). */
 function digitCount(s: string): number {
   return s.replace(/\D/g, '').length
@@ -93,8 +121,9 @@ export function parseCsv(text: string): CsvContact[] {
     const phone = phoneCell.replace(/[^\d+]/g, '')
     if (digitCount(phone) < 8) continue // too short to be a phone
 
-    const nameCell =
-      nameIdx !== -1 ? parts[nameIdx] : hasHeader ? undefined : parts[1]
+    let nameCell = nameIdx !== -1 ? parts[nameIdx] : hasHeader ? undefined : parts[1]
+    // Sem coluna de nome: o nome pode estar colado no telefone, na mesma célula.
+    if (!nameCell?.trim()) nameCell = splitPhoneAndName(phoneCell).name
     out.push({ phone, name: nameCell?.trim() || undefined })
   }
   return out

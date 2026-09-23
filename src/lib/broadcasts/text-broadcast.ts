@@ -39,6 +39,7 @@ import {
   type DuplicateSkip,
 } from '@/lib/broadcasts/duplicate-sends'
 import { allDuplicatesError } from '@/lib/broadcasts/duplicate-notice'
+import { anyCustomBodyVars } from '@/lib/broadcasts/recipient-vars'
 import {
   computeDripSlots,
   normalizePacing,
@@ -197,8 +198,9 @@ export async function enqueueTextBroadcast(
     // Quem já recebeu esta mesma mensagem nas últimas 24 h fica de fora. Se a
     // checagem falhar, segue sem pular (melhor mandar do que travar o disparo).
     let skippedDuplicates: DuplicateSkip[] = []
-    const perRecipientBody =
-      !!input.recipientVars && Object.keys(input.recipientVars).length > 0
+    // Nome da planilha NÃO é mensagem própria: a trava de duplicidade continua
+    // valendo (recipient-vars.ts).
+    const perRecipientBody = anyCustomBodyVars(input.recipientVars)
     if (input.skipRecentDuplicates !== false && !perRecipientBody) {
       const effectiveMedia: { url: string; filename?: string | null }[] =
         mediaList.length > 0

@@ -20,6 +20,7 @@ import {
 } from '@/lib/whatsapp/broadcast-core';
 import type { SendTimeParams } from '@/lib/whatsapp/template-send-builder';
 import { contactTokenValues } from '@/lib/whatsapp/message-vars';
+import { hasCustomBodyVars } from '@/lib/broadcasts/recipient-vars';
 import { ALREADY_RECEIVED_ELSEWHERE_ERROR } from '@/lib/broadcasts/duplicate-sends';
 
 /** A broadcast row as the worker sees it. */
@@ -293,11 +294,9 @@ export async function loadRecipientJobContext(
           ...((row.extraVars && typeof row.extraVars === 'object' ? row.extraVars : {}) as Record<string, string>),
         },
         optedOut: row.optedOut === true,
-        hasOwnVars:
-          !!row.extraVars &&
-          typeof row.extraVars === 'object' &&
-          !Array.isArray(row.extraVars) &&
-          Object.keys(row.extraVars).length > 0,
+        // Só TEXTO próprio ({{mensagem}}) desliga a trava de duplicidade; o
+        // nome vindo da planilha não (recipient-vars.ts).
+        hasOwnVars: hasCustomBodyVars(row.extraVars),
       },
     },
   };

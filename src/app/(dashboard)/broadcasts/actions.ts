@@ -55,6 +55,7 @@ import {
 import { otherPersonNumberError } from '@/lib/broadcasts/channel-owner-guard'
 import { logBroadcastEvent, type BroadcastAuditAction } from '@/lib/broadcasts/audit'
 import { removePendingRecipient } from '@/lib/broadcasts/recipient-remove'
+import { csvNameVars } from '@/lib/broadcasts/recipient-vars'
 import { canManageBroadcast } from '@/lib/broadcasts/detail-text'
 import { broadcastDeleteOrArchive } from '@/lib/broadcasts/deletion-rule'
 import { ALREADY_RECEIVED_ELSEWHERE_ERROR } from '@/lib/broadcasts/duplicate-sends'
@@ -853,6 +854,8 @@ export interface ResolveAudienceInput {
  */
 export async function resolveAudienceContacts(
   input: ResolveAudienceInput,
+  /** Saída opcional: contactId → nome como veio na PLANILHA (o disparo usa na saudação). */
+  out?: { csvNames?: Map<string, string> },
 ): Promise<Contact[]> {
   const ctx = await getCurrentAccount()
 
@@ -910,7 +913,7 @@ export async function resolveAudienceContacts(
         )) as unknown as Contact[]
     }
   } else if (input.type === 'csv' && input.csvContacts) {
-    rows = await upsertCsvContacts(ctx.userId, ctx.accountId, input.csvContacts)
+    rows = await upsertCsvContacts(ctx.userId, ctx.accountId, input.csvContacts, out?.csvNames)
   } else if (
     input.type === 'contacts' &&
     input.contactIds &&
@@ -957,6 +960,8 @@ async function upsertCsvContacts(
   userId: string,
   accountId: string,
   csvRows: { phone: string; name?: string }[],
+  /** Preenchido com contactId → nome da planilha (a saudação do disparo usa). */
+  csvNames?: Map<string, string>,
 ): Promise<Contact[]> {
   if (csvRows.length === 0) return []
 
@@ -988,6 +993,9 @@ async function upsertCsvContacts(
     const id = r.phone ? idByPhone.get(r.phone.trim()) : undefined
     if (!id || seen.has(id)) continue
     seen.add(id)
+    // O nome que o cliente escreveu na planilha vale na saudação deste disparo,
+    // mesmo quando o cadastro mantém o nome antigo (22/09, GoLink).
+    if (csvNames && r.name?.trim()) csvNames.set(id, r.name.trim())
     const c = byId.get(id)
     if (c) out.push(c)
   }
@@ -1292,10 +1300,17 @@ export async function createTextBroadcast(
     if (ownerError) return { broadcastId: null, totalRecipients: 0, error: ownerError }
     // Resolve the audience (session-scoped) → account-owned contact ids, then
     // hand off to the shared core (validation / slots / persist / enqueue).
-    const contactsList = await resolveAudienceContacts(input.audience)
+    const csvNames = new Map<string, string>()
+    const contactsList = await resolveAudienceContacts(input.audience, { csvNames })
     const recipientContactIds = contactsList
       .map((c) => c.id)
       .filter((id): id is string => !!id)
+    // Saudação com o nome da planilha (não mexe no cadastro).
+    const recipientVars: Record<string, Record<string, string>> = {}
+    for (const [contactId, nome] of csvNames) {
+      const vars = csvNameVars(nome)
+      if (vars) recipientVars[contactId] = vars
+    }
     const result = await enqueueTextBroadcast(ctx.accountId, ctx.userId, {
       name: input.name,
       channelId: input.channelId,
@@ -1311,6 +1326,7 @@ export async function createTextBroadcast(
       sendNowIntervalMin: input.sendNowIntervalMin,
       skipRecentDuplicates: input.skipRecentDuplicates,
       recipientContactIds,
+      ...(Object.keys(recipientVars).length ? { recipientVars } : {}),
       audienceFilter: input.audience,
     })
     if (result.broadcastId) {
