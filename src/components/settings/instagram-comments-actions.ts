@@ -12,7 +12,11 @@ import { db, channels, instagramCommentAutomations, instagramStorySettings, flow
 import { firstOrNull } from '@/db/helpers'
 import { getCurrentAccount, requireRole } from '@/lib/auth/account'
 import { loadChannelByAccount } from '@/lib/channels/channels'
-import { fetchInstagramMedia } from '@/lib/channels/providers/instagram'
+import {
+  fetchInstagramMedia,
+  fetchInstagramSubscription,
+  subscribeInstagramWebhook,
+} from '@/lib/channels/providers/instagram'
 
 export interface CommentAutomation {
   id: string
@@ -415,4 +419,49 @@ export async function listInstagramChannels(): Promise<IgChannelLite[]> {
     )
     .orderBy(asc(channels.createdAt))
   return rows
+}
+
+// ------------------------------------------------------------
+// 🔔 Diagnóstico do webhook de comentários (23/09, caso Isabele/Zelo).
+// A automação pode estar perfeita e mesmo assim nada acontecer: se a conta do
+// Instagram não estiver inscrita no campo `comments`, o comentário nunca chega
+// até aqui. Antes isso era invisível — a pessoa só via "não funcionou".
+// ------------------------------------------------------------
+
+export interface CommentWebhookStatus {
+  /** O Instagram está entregando os comentários desta conta? */
+  ok: boolean
+  /** Campos que faltam ('comments', 'messages'). */
+  missing: string[]
+  /** Não deu para perguntar à Meta (token vencido, rede). */
+  error: string | null
+}
+
+export async function checkCommentWebhook(channelId: string): Promise<CommentWebhookStatus> {
+  const ctx = await getCurrentAccount()
+  const ch = await loadChannelByAccount(ctx.accountId, channelId)
+  if (!ch || ch.provider !== 'instagram') return { ok: false, missing: [], error: 'Canal não encontrado.' }
+  const sub = await fetchInstagramSubscription(ch)
+  if (sub.error) return { ok: false, missing: [], error: sub.error }
+  return { ok: sub.missing.length === 0, missing: sub.missing, error: null }
+}
+
+/** Liga a entrega de comentários nesta conta (o botão "Ativar agora"). */
+export async function fixCommentWebhook(channelId: string): Promise<{ ok: boolean; error?: string }> {
+  const ctx = await requireRole('admin')
+  const ch = await loadChannelByAccount(ctx.accountId, channelId)
+  if (!ch || ch.provider !== 'instagram') return { ok: false, error: 'Canal não encontrado.' }
+  const r = await subscribeInstagramWebhook(ch)
+  if (!r.ok) return r
+  // Confere o resultado em vez de confiar no 200: a Meta às vezes aceita o POST
+  // e não inscreve (permissão de comentários não aprovada no app).
+  const sub = await fetchInstagramSubscription(ch)
+  if (sub.missing.includes('comments')) {
+    return {
+      ok: false,
+      error:
+        'A Meta aceitou o pedido mas não ativou os comentários. Isso acontece quando a permissão de comentários do app ainda não foi aprovada, ou quando quem conectou a conta não autorizou essa permissão — reconecte o Instagram aceitando todas as permissões.',
+    }
+  }
+  return { ok: true }
 }

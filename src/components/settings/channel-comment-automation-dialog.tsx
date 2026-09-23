@@ -32,6 +32,8 @@ import {
 import type { ChannelSummary } from './channels-tab';
 import {
   listCommentAutomations,
+  checkCommentWebhook,
+  fixCommentWebhook,
   createCommentAutomation,
   updateCommentAutomation,
   toggleCommentAutomation,
@@ -41,6 +43,7 @@ import {
   getStorySettings,
   saveStorySettings,
   type CommentAutomation,
+  type CommentWebhookStatus,
   type CommentPost,
   type FlowLite,
   type StorySettings,
@@ -104,6 +107,10 @@ export function ChannelCommentAutomationDialog({
   const [postsLoaded, setPostsLoaded] = useState(!!initialPosts?.length);
   // Fluxos ATIVOS da conta pro seletor "iniciar fluxo depois do DM".
   const [flows, setFlows] = useState<FlowLite[]>([]);
+  // 🔔 O Instagram está mesmo entregando os comentários desta conta? Sem isso a
+  // regra fica perfeita e nada acontece (23/09, caso Isabele/Zelo).
+  const [webhook, setWebhook] = useState<CommentWebhookStatus | null>(null);
+  const [fixing, setFixing] = useState(false);
 
   const load = useCallback(async () => {
     setLoading(true);
@@ -127,6 +134,30 @@ export function ChannelCommentAutomationDialog({
       .then(setFlows)
       .catch(() => setFlows([]));
   }, []);
+
+  // Confere a entrega dos comentários ao abrir.
+  useEffect(() => {
+    checkCommentWebhook(channel.id)
+      .then(setWebhook)
+      .catch(() => setWebhook(null));
+  }, [channel.id]);
+
+  const ligarEntrega = async () => {
+    setFixing(true);
+    try {
+      const r = await fixCommentWebhook(channel.id);
+      if (r.ok) {
+        toast.success('Pronto: o Instagram já vai entregar os comentários desta conta.');
+        setWebhook(await checkCommentWebhook(channel.id));
+      } else {
+        toast.error(r.error ?? 'Não deu para ligar a entrega dos comentários.');
+      }
+    } catch {
+      toast.error('Não deu para ligar a entrega dos comentários.');
+    } finally {
+      setFixing(false);
+    }
+  };
 
   const loadPosts = useCallback(async () => {
     if (postsLoaded || postsLoading) return;
@@ -309,6 +340,21 @@ export function ChannelCommentAutomationDialog({
             na Meta e o post publicado pela conta profissional.
           </DialogDescription>
         </DialogHeader>
+
+        {webhook && !webhook.ok && !webhook.error ? (
+          <div className="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-xs">
+            <p className="font-medium text-amber-200">
+              O Instagram ainda não está entregando os comentários desta conta.
+            </p>
+            <p className="mt-1 text-muted-foreground">
+              Enquanto isso, a automação não roda: o comentário nem chega até aqui. Acontece com
+              contas conectadas antes de a gente passar a ligar isso sozinho.
+            </p>
+            <Button size="sm" className="mt-2" onClick={() => void ligarEntrega()} disabled={fixing}>
+              {fixing ? 'Ligando…' : 'Ligar agora'}
+            </Button>
+          </div>
+        ) : null}
 
         {inForm ? (
           <div className="flex flex-col gap-3 py-1">

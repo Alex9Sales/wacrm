@@ -714,3 +714,64 @@ export const instagramProvider: WhatsAppProvider = {
     return { messages, statuses }
   },
 }
+
+// ------------------------------------------------------------
+// 🔔 A conta está inscrita no webhook? (comentário → DM)
+//
+// 23/09 (Isabele/Zelo): ela criou a automação, comentou no próprio post e
+// "não aconteceu nada". O motivo não estava na regra: nenhum webhook de
+// comentário chegou — a conta do Instagram não estava inscrita no campo
+// `comments`. Conexões feitas antes de a inscrição virar automática ficaram
+// assim, e não havia como ninguém ver isso pela tela.
+// ------------------------------------------------------------
+
+/** Campos que a automação precisa receber do Instagram. */
+export const IG_WEBHOOK_FIELDS = ['messages', 'comments'] as const
+
+export interface InstagramSubscription {
+  /** Campos que o Instagram está entregando hoje. */
+  fields: string[]
+  /** Falta algum campo essencial? */
+  missing: string[]
+  /** Não deu para perguntar (token vencido, rede…) — não é o mesmo que "falta". */
+  error: string | null
+}
+
+/** O que o Instagram diz estar entregando para este canal. */
+export async function fetchInstagramSubscription(ch: ChannelCtx): Promise<InstagramSubscription> {
+  try {
+    const res = await fetch(`${graphBaseOf(ch)}/${igIdOf(ch)}/subscribed_apps`, {
+      headers: { Authorization: `Bearer ${accessTokenOf(ch)}` },
+    })
+    const body = (await res.json().catch(() => ({}))) as {
+      data?: { subscribed_fields?: string[] }[]
+      error?: { message?: string }
+    }
+    if (!res.ok) {
+      return { fields: [], missing: [], error: body.error?.message || `HTTP ${res.status}` }
+    }
+    const fields = [...new Set((body.data ?? []).flatMap((d) => d.subscribed_fields ?? []))]
+    return {
+      fields,
+      missing: IG_WEBHOOK_FIELDS.filter((f) => !fields.includes(f)),
+      error: null,
+    }
+  } catch (err) {
+    return { fields: [], missing: [], error: err instanceof Error ? err.message : 'falha na consulta' }
+  }
+}
+
+/** Inscreve (ou reinscreve) a conta nos campos que a automação precisa. */
+export async function subscribeInstagramWebhook(ch: ChannelCtx): Promise<{ ok: boolean; error?: string }> {
+  try {
+    const res = await fetch(
+      `${graphBaseOf(ch)}/${igIdOf(ch)}/subscribed_apps?subscribed_fields=${IG_WEBHOOK_FIELDS.join(',')}`,
+      { method: 'POST', headers: { Authorization: `Bearer ${accessTokenOf(ch)}` } },
+    )
+    if (res.ok) return { ok: true }
+    const body = (await res.json().catch(() => ({}))) as { error?: { message?: string } }
+    return { ok: false, error: body.error?.message || `HTTP ${res.status}` }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : 'falha ao inscrever' }
+  }
+}
