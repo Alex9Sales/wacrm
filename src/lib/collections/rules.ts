@@ -1240,7 +1240,20 @@ function nameSlug(word: string): string {
  *     um freio: nome ligado por "da/de/do" ("Casa da Massa", "Casa do
  *     Norte") é negócio, não "Fulano da Silva" — a saudação usa a empresa.
  */
-export function personInContactName(crmName: string | null | undefined, asaasName: string | null | undefined): string {
+export function personInContactName(
+  crmName: string | null | undefined,
+  asaasName: string | null | undefined,
+  /**
+   * O cadastro do Asaas é CNPJ? Só então o freio do conectivo vale.
+   *
+   * 🐛 23/09, achado na revisão: o freio nasceu sem esta condição e valia para
+   * TODA saudação — "Maria da Silva" na ficha virava "Oi!" (ou o nome de
+   * fantasia do Asaas), porque a segunda palavra é "da". Nome de gente com
+   * conectivo é comum; nome de negócio com conectivo só engana quando o outro
+   * lado é razão social.
+   */
+  asaasEhCnpj = false,
+): string {
   const tokens = (crmName ?? '').trim().split(/\s+/).filter(Boolean)
   if (!tokens.length) return ''
   const empresa = new Set(
@@ -1258,8 +1271,9 @@ export function personInContactName(crmName: string | null | undefined, asaasNam
       return firstNameForGreeting(sobra.join(' '))
     }
   }
-  // "Casa da Massa" sem nada a ver com o Asaas: o conectivo entrega o negócio.
-  if (tokens.length > 2 && NAME_STOPWORDS.has(nameSlug(tokens[1]))) return ''
+  // "Casa da Massa" sem nada a ver com a razão social: o conectivo entrega o
+  // negócio. Só com CNPJ do outro lado — ver o parâmetro `empresa`.
+  if (asaasEhCnpj && tokens.length > 2 && NAME_STOPWORDS.has(nameSlug(tokens[1]))) return ''
   return firstNameForGreeting(crmName)
 }
 
@@ -1294,7 +1308,7 @@ export function collectionGreetingName(
   const digits = onlyDigits(asaasDoc)
   const empresa = digits.length === 14
   const crmTrusted = crmNameSource === undefined || crmNameSource === 'crm' || crmNameSource === 'phonebook'
-  const crm = crmTrusted ? personInContactName(crmName, asaas) : ''
+  const crm = crmTrusted ? personInContactName(crmName, asaas, empresa) : ''
   // CNPJ: a pessoa que atende (agenda/ficha) vem primeiro; sem ela, a empresa
   // como o Asaas escreve, sem Ltda/ME (greetingName corta o sufixo).
   if (empresa) return crm || (asaas ? greetingName(asaas) : null)

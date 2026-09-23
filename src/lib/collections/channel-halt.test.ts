@@ -1,53 +1,36 @@
 import { describe, expect, it, vi } from 'vitest'
 
-// Só interessa a DECISÃO (a parte pura). Banco, provedores e Redis ficam de fora.
-vi.mock('@/db', () => ({ db: {}, channels: {} }))
+// O que importa aqui é o RECONHECIMENTO do erro de canal. Banco, provedores e
+// Redis ficam de fora.
+vi.mock('@/db', () => ({ db: {}, channels: {}, conversations: {} }))
+vi.mock('@/db/helpers', () => ({ firstOrNull: (r: unknown[]) => r[0] ?? null }))
 vi.mock('@/lib/channels/channels', () => ({ listChannels: vi.fn(), updateChannelStatus: vi.fn() }))
 vi.mock('@/lib/channels/registry', () => ({ getProvider: vi.fn() }))
 vi.mock('@/lib/ai/self-message', () => ({ markSelfMessage: vi.fn() }))
 vi.mock('@/lib/ai/reply-marker', () => ({ bumpCounter: vi.fn() }))
 vi.mock('@/lib/settings/account-settings', () => ({ getAccountSettings: vi.fn() }))
 
-import { collectionChannelHalt } from './channel-halt'
+import { channelHaltReason } from './channel-halt'
 
-const conectado = { id: 'a', name: 'Cobranças', status: 'connected' }
-const caido = { id: 'b', name: 'Cobranças', status: 'error' }
-
-describe('collectionChannelHalt — a régua não cobra por um número fora do ar (GoLink 22/09)', () => {
-  it('número escolhido conectado: pode cobrar', () => {
-    expect(collectionChannelHalt({ channel: 'whatsapp', chosen: conectado, whatsapp: [conectado] })).toEqual({ ok: true })
+describe('erro que é do NÚMERO, não do devedor (GoLink 22/09)', () => {
+  it('a sessão caída do dia 22 é reconhecida', () => {
+    // Mensagem como ela chegou nos 142 envios falhados daquele dia.
+    expect(channelHaltReason('Request failed with status code 422: Session status is not as expected')).toBe('session_down')
+    expect(channelHaltReason('session not found')).toBe('session_down')
+    expect(channelHaltReason('device removed')).toBe('session_down')
+    expect(channelHaltReason('you are logged out')).toBe('session_down')
+    expect(channelHaltReason('SCAN_QR')).toBe('session_down')
   })
 
-  it('número escolhido caído: para, dizendo qual número e o que fazer', () => {
-    const r = collectionChannelHalt({ channel: 'whatsapp', chosen: caido, whatsapp: [caido, conectado] })
-    expect(r.ok).toBe(false)
-    if (r.ok) throw new Error('era para ter parado')
-    expect(r.reason).toContain('Cobranças')
-    expect(r.reason).toContain('sessão caiu')
-    expect(r.reason).toContain('Canais')
+  it('reputação (463) é o sinal de que insistir queima o número', () => {
+    expect(channelHaltReason('server returned error 463')).toBe('reputation')
+    expect(channelHaltReason('error 462')).toBe('reputation')
   })
 
-  it('sem número escolhido: basta um conectado', () => {
-    expect(collectionChannelHalt({ channel: 'whatsapp', chosen: null, whatsapp: [caido, conectado] })).toEqual({ ok: true })
-    expect(collectionChannelHalt({ channel: 'whatsapp', chosen: null, whatsapp: [caido] }).ok).toBe(false)
-  })
-
-  it('conta sem nenhum número de WhatsApp: para quando o canal é WhatsApp…', () => {
-    expect(collectionChannelHalt({ channel: 'whatsapp', chosen: null, whatsapp: [] }).ok).toBe(false)
-  })
-
-  it('…mas no automático (padrão) quem só tem e-mail segue cobrando', () => {
-    expect(collectionChannelHalt({ channel: 'auto', chosen: null, whatsapp: [] })).toEqual({ ok: true })
-    // Com número cadastrado e caído, aí sim para.
-    expect(collectionChannelHalt({ channel: 'auto', chosen: null, whatsapp: [caido] }).ok).toBe(false)
-  })
-
-  it('conta que cobra por e-mail não depende de WhatsApp nenhum', () => {
-    expect(collectionChannelHalt({ channel: 'email', chosen: caido, whatsapp: [caido] })).toEqual({ ok: true })
-  })
-
-  it('"os dois" (WhatsApp + e-mail) segue a regra do WhatsApp', () => {
-    expect(collectionChannelHalt({ channel: 'both', chosen: caido, whatsapp: [caido] }).ok).toBe(false)
-    expect(collectionChannelHalt({ channel: 'both', chosen: conectado, whatsapp: [conectado] }).ok).toBe(true)
+  it('problema DO DEVEDOR não para nada: é falha daquele envio só', () => {
+    expect(channelHaltReason('número não tem WhatsApp')).toBeNull()
+    expect(channelHaltReason('Sem texto pra enviar.')).toBeNull()
+    expect(channelHaltReason('recipient not found')).toBeNull()
+    expect(channelHaltReason('')).toBeNull()
   })
 })

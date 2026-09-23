@@ -286,9 +286,9 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
 
       {asaasKit?.connected && asaasKit.installed < asaasKit.total ? (
         <p className="mt-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
-          O Asaas desta conta já está conectado. Em um clique o agente passa a consultar o cadastro,
-          as cobranças em aberto, o Pix copia e cola e a linha digitável do boleto. Você não precisa
-          colar chave nenhuma, e ele só consulta — nada é criado ou alterado no Asaas.
+          O Asaas desta conta já está conectado. Em um clique o agente passa a consultar as cobranças
+          do cliente com quem está falando, o Pix copia e cola e a linha digitável do boleto. Você não
+          precisa colar chave nenhuma. Ele só consulta, e só o cliente daquela conversa.
         </p>
       ) : null}
 

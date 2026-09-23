@@ -48,7 +48,6 @@ import {
   templateFactsFrom,
 } from './rules'
 import { withAutoSend } from './auto-send'
-import { collectionChannelBlocked } from './channel-halt'
 
 export interface CollectionsRunStats {
   /** Devedores com algo em aberto nesta rodada. */
@@ -110,12 +109,6 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   if (!withinWindow(hour, weekday, s, hojeKey)) {
     return { ...stats, haltedBecause: `Fora do horário de cobrança (${s.startHour}h–${s.endHour}h).` }
   }
-  // 🛑 22/09 (GoLink): o número caiu às 9h e a régua montou e tentou o dia
-  // inteiro — 142 falhas e 16 pedidos expirados. Número fora do ar, rodada não
-  // começa: nada é montado, nada falha, nada se perde (channel-halt.ts).
-  const canal = await collectionChannelBlocked(accountId, s)
-  if (!canal.ok) return { ...stats, haltedBecause: canal.reason }
-
   // 1) Reconsultar o Asaas. Sem isso a régua cobraria de uma lista velha, que é
   //    exatamente como se cobra quem já pagou.
   const stale = firstOrNull(

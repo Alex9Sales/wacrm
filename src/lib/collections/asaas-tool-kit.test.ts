@@ -9,8 +9,8 @@ describe('kit de ferramentas do Asaas', () => {
     const plano = planAsaasKit(PROD)
     expect(plano).toHaveLength(ASAAS_KIT.length)
     for (const t of plano) expect(t.url.startsWith(`${PROD}/`)).toBe(true)
-    expect(planAsaasKit('https://api-sandbox.asaas.com/v3/')[0].url).toContain('https://api-sandbox.asaas.com/v3/customers')
-    expect(planAsaasKit(PROD).some((t) => t.url.includes('//customers'))).toBe(false)
+    expect(planAsaasKit('https://api-sandbox.asaas.com/v3/')[0].url).toContain('https://api-sandbox.asaas.com/v3/payments')
+    expect(planAsaasKit(PROD).some((t) => t.url.includes('//payments'))).toBe(false)
   })
 
   it('todo {placeholder} da URL é um parâmetro declarado — senão a IA nunca preenche', () => {
@@ -32,11 +32,14 @@ describe('kit de ferramentas do Asaas', () => {
     expect(new Set(slugs).size).toBe(slugs.length)
     for (const s of slugs) expect(isAsaasKitSlug(s)).toBe(true)
     expect(isAsaasKitSlug('buscar_cliente')).toBe(false)
+    // 🔒 Busca livre por documento/nome não entra no kit (revisão 23/09).
+    expect(isAsaasKitSlug('asaas_cliente_por_documento')).toBe(false)
+    expect(ASAAS_KIT.every((k) => k.params.every((p) => /^id_/.test(p.name) || p.name === 'status'))).toBe(true)
   })
 
   it('conta o que já está instalado, ignorando as ferramentas do cliente', () => {
     expect(asaasKitInstalledCount([])).toBe(0)
-    expect(asaasKitInstalledCount(['consultar_estoque', 'asaas_cliente_por_documento'])).toBe(1)
+    expect(asaasKitInstalledCount(['consultar_estoque', 'asaas_pix_da_cobranca'])).toBe(1)
     expect(asaasKitInstalledCount(ASAAS_KIT.map((t) => t.slug))).toBe(ASAAS_KIT.length)
   })
 

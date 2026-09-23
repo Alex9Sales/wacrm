@@ -344,6 +344,12 @@ export async function syncConnection(
   // DELETED aqui; paga vira o status real. Nunca segura a varredura.
   // Junto vão as linhas JÁ fechadas em rodadas anteriores que ficaram com
   // status de dívida — é assim que o passado se conserta sozinho, sem script.
+  // Uma linha fechada cujo status no Asaas é o MESMO que já está aqui não muda
+  // nada — e voltaria a ser consultada em toda rodada, para sempre (achado na
+  // revisão de 23/09: vencimento empurrado para o futuro fecha a linha como
+  // PENDING e no Asaas ela segue PENDING). Por isso a conferência marca
+  // `updatedAt` mesmo sem mudança, e só reconfere quem não foi visto há um dia.
+  const ontem = new Date(Date.now() - 24 * 3_600_000).toISOString()
   const atrasadas = closedRows.length >= MAX_VANISHED_LOOKUPS
     ? []
     : await db
@@ -355,6 +361,7 @@ export async function syncConnection(
             eq(asaasCharges.connectionId, connectionId),
             eq(asaasCharges.open, false),
             inArray(asaasCharges.status, ['OVERDUE', 'PENDING']),
+            lte(asaasCharges.updatedAt, ontem),
             // As que ACABARAM de fechar já estão em closedRows: sem isto
             // entrariam de novo aqui (o update acima já as deixou open=false)
             // e cada uma gastaria duas consultas do teto.
@@ -365,15 +372,18 @@ export async function syncConnection(
   const sumidas = [...closedRows, ...atrasadas]
   if (sumidas.length) {
     try {
-      const reais = await resolveVanishedStatuses(cred, sumidas)
-      for (const r of reais) {
+      const reais = new Map((await resolveVanishedStatuses(cred, sumidas)).map((r) => [r.id, r.status]))
+      let corrigidas = 0
+      for (const c of sumidas) {
+        const novo = reais.get(c.id)
         await db
           .update(asaasCharges)
-          .set({ status: r.status, updatedAt: now })
-          .where(eq(asaasCharges.id, r.id))
+          .set({ ...(novo ? { status: novo } : {}), updatedAt: now })
+          .where(eq(asaasCharges.id, c.id))
+        if (novo) corrigidas++
       }
-      if (reais.length) {
-        console.log(`[asaas sync] ${reais.length} cobrança(s) que sumiram tiveram o status corrigido`)
+      if (corrigidas) {
+        console.log(`[asaas sync] ${corrigidas} cobrança(s) que sumiram tiveram o status corrigido`)
       }
     } catch (err) {
       console.error('[asaas sync] status do que sumiu falhou (segue):', err instanceof Error ? err.message : err)

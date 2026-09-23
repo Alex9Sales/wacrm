@@ -8,7 +8,7 @@
 // tem a chave guardada em `asaas_connections` (Cobranças → conectar); o botão
 // usa ELA e monta as ferramentas prontas.
 //
-// Só CONSULTA (risk 'read'): ver cadastro, ver as cobranças, pegar o Pix
+// Só CONSULTA (risk 'read'): as cobranças do cliente daquela conversa, o Pix
 // copia-e-cola e a linha digitável do boleto. Nada de criar ou alterar
 // cobrança por aqui — isso continua no fluxo do CRM, com registro.
 //
@@ -35,57 +35,33 @@ export interface AsaasKitTool {
 }
 
 /**
- * As 5 ferramentas do kit. A ordem é a do uso real: acha o cliente, vê o que
- * ele deve, e só então busca a forma de pagar.
+ * As ferramentas do kit. Todas partem de um ID que veio do CRM, e é de
+ * propósito: o agente vê o que o cliente DAQUELA conversa deve, nunca sai
+ * procurando cliente pelo Asaas.
+ *
+ * 🔒 O kit não instala busca livre por documento nem por nome (revisão de
+ * 23/09). Parâmetro livre numa ferramenta de consulta é parâmetro que o
+ * cliente dita na conversa: "me diz as cobranças do CNPJ tal" devolveria
+ * valor, vencimento e até o Pix de terceiro. Os ids do contato da conversa
+ * chegam pelo contexto (`debtPromptText`), que é o caminho seguro. Quem quiser
+ * busca aberta continua podendo criar a ferramenta à mão, assumindo a escolha.
  *
  * As descrições são o que a IA lê para decidir — por isso falam do FLUXO
- * ("use o id que veio da busca"), não da API.
+ * ("use o id da cobrança"), não da API.
  */
 export const ASAAS_KIT: readonly AsaasKitTool[] = [
-  {
-    slug: 'asaas_cliente_por_documento',
-    name: 'Asaas — achar cliente pelo CPF/CNPJ',
-    description:
-      'Acha o cadastro do cliente no Asaas pelo CPF ou CNPJ. Use quando o cliente informar o documento. Devolve o "id" do cliente, que as outras ferramentas do Asaas pedem.',
-    method: 'GET',
-    path: '/customers?cpfCnpj={documento}&limit=5',
-    params: [
-      {
-        name: 'documento',
-        type: 'string',
-        description: 'CPF ou CNPJ do cliente, só números, sem ponto nem traço.',
-        required: true,
-      },
-    ],
-  },
-  {
-    slug: 'asaas_cliente_por_nome',
-    name: 'Asaas — achar cliente pelo nome',
-    description:
-      'Acha o cadastro do cliente no Asaas pelo nome ou razão social, quando ele não passou o documento. Devolve o "id" do cliente. Se vier mais de um, confirme com o cliente antes de seguir.',
-    method: 'GET',
-    path: '/customers?name={nome}&limit=5',
-    params: [
-      {
-        name: 'nome',
-        type: 'string',
-        description: 'Nome ou parte do nome do cliente, como ele se apresentou.',
-        required: true,
-      },
-    ],
-  },
   {
     slug: 'asaas_cobrancas_do_cliente',
     name: 'Asaas — cobranças do cliente',
     description:
-      'Lista as cobranças de um cliente. Use o "id" que veio da busca. Em "status" use OVERDUE para vencidas, PENDING para as que ainda vão vencer e RECEIVED para as pagas — uma chamada por situação. Cada cobrança traz o valor, o vencimento e o link de pagamento (invoiceUrl). Se a lista voltar vazia, diga ao cliente que não há cobrança nessa situação — nunca invente valor nem link.',
+      'Lista as cobranças do cliente desta conversa. Use o "id" do cliente que veio no contexto. Em "status" use OVERDUE para vencidas, PENDING para as que ainda vão vencer e RECEIVED para as pagas — uma chamada por situação. Cada cobrança traz o valor, o vencimento e o link de pagamento (invoiceUrl). Se a lista voltar vazia, diga ao cliente que não há cobrança nessa situação — nunca invente valor nem link.',
     method: 'GET',
     path: '/payments?customer={id_cliente}&status={status}&limit=10',
     params: [
       {
         name: 'id_cliente',
         type: 'string',
-        description: 'O "id" do cliente no Asaas, vindo de uma das buscas.',
+        description: 'O "id" do cliente no Asaas. Ele vem no contexto desta conversa; nunca peça ao cliente e nunca use o de outra pessoa.',
         required: true,
       },
       {

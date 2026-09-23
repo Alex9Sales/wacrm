@@ -136,6 +136,13 @@ describe('collectionGreetingName — pessoa no Asaas manda; empresa no Asaas + p
     expect(collectionGreetingName('Casa da Massa', 'Marina', 'crm', CNPJ)).toBe('Marina')
     // Nome de negócio ligado por "da/do" sem relação com o Asaas: não é gente.
     expect(collectionGreetingName('77 Alimentos', 'Casa da Massa', 'crm', CNPJ)).toBe('77 Alimentos')
+    // 🐛 Revisão 23/09: o freio do conectivo só vale com CNPJ do outro lado —
+    // "Maria da Silva" é gente, e virava "Oi!" em toda cobrança.
+    expect(collectionGreetingName(null, 'Maria da Silva', 'crm')).toBe('Maria')
+    expect(collectionGreetingName('Loja 77', 'Maria da Silva', 'crm')).toBe('Maria')
+    expect(collectionGreetingName('Loja 77', 'João de Souza', 'phonebook')).toBe('João')
+    // Com CNPJ, o freio continua valendo: nome de negócio não vira gente.
+    expect(collectionGreetingName('77 Alimentos', 'Casa da Massa', 'crm', CNPJ)).toBe('77 Alimentos')
     // Setor não é pessoa.
     expect(collectionGreetingName('Clínica Jump', 'Clinica Jump Recepção', 'crm', CNPJ)).toBe('Clínica Jump')
   })
