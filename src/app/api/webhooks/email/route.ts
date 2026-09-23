@@ -6,6 +6,11 @@
 // Roteia pelo endereço de DESTINO (`to`) → acha o canal `email` → valida o token
 // → parseWebhook → dispatchInboundMessage (cria contato por e-mail + conversa).
 // Responde 200 rápido; a ingestão roda em `after`.
+//
+// 22/09: aceita também o webhook do PRÓPRIO Resend (`email.received`, sem
+// corpo): acha o canal pelo destinatário, busca o e-mail completo na API do
+// Resend com a chave do canal (isso é a prova de origem) e ingere igual.
+// Outros eventos do Resend (delivered, opened…) respondem 200 e são ignorados.
 // ============================================================
 
 import { NextResponse, after } from 'next/server'
@@ -18,6 +23,14 @@ import { parseDeliveryReport, type DeliveryReport } from '@/lib/channels/email-b
 import { applyEmailBounce } from '@/lib/channels/email-bounce-apply'
 import { shouldIgnoreAutomatedEmail } from '@/lib/channels/email-automated-filter'
 import type { EmailHeader } from '@/lib/channels/email-automated'
+import {
+  fetchResendReceivedEmail,
+  isResendReceivedEvent,
+  isResendWebhookEvent,
+  resendEmailDeliveredTo,
+  resendEmailToInboundJson,
+  resendRecipientCandidates,
+} from '@/lib/channels/providers/email-resend-inbound'
 
 export const runtime = 'nodejs'
 export const dynamic = 'force-dynamic'
@@ -66,6 +79,50 @@ export async function POST(request: Request) {
     body = JSON.parse(rawBody)
   } catch {
     return NextResponse.json({ error: 'Invalid JSON' }, { status: 400 })
+  }
+
+  // 📥 Webhook do Resend (o cliente apontou o Resend direto para cá).
+  if (isResendWebhookEvent(body)) {
+    if (!isResendReceivedEvent(body)) return NextResponse.json({ status: 'ignored', type: body.type }, { status: 200 })
+    const candidates = resendRecipientCandidates(body)
+    let channel = null
+    let address = ''
+    for (const addr of candidates) {
+      channel = await loadEmailChannelByAddress(addr)
+      if (channel) {
+        address = addr
+        break
+      }
+    }
+    if (!channel) {
+      console.warn('[webhooks/email] resend: sem canal para', candidates.join(', ') || '(sem destinatário)')
+      return NextResponse.json({ status: 'ignored' }, { status: 200 })
+    }
+    const apiKey = (typeof channel.credentials.resendApiKey === 'string' && channel.credentials.resendApiKey) || process.env.RESEND_API_KEY || ''
+    if (!apiKey) {
+      console.error('[webhooks/email] resend: canal sem chave do Resend', channel.id)
+      return NextResponse.json({ error: 'canal sem chave do Resend' }, { status: 400 })
+    }
+    const emailId = body.data.email_id
+    const ch = channel
+    after(async () => {
+      try {
+        const { email, attachments } = await fetchResendReceivedEmail(apiKey, emailId)
+        if (!resendEmailDeliveredTo(email, address)) {
+          console.warn(`[webhooks/email] resend: e-mail ${emailId} não foi entregue em ${address} — ignorado`)
+          return
+        }
+        const json = resendEmailToInboundJson(email, address, attachments)
+        if (json.from && (await shouldIgnoreAutomatedEmail(ch, { from: json.from }))) return
+        const parsed = getProvider('email').parseWebhook(json)
+        for (const ev of parsed.messages) {
+          await dispatchInboundMessage(ch, ev)
+        }
+      } catch (err) {
+        console.error(`[webhooks/email] resend: e-mail ${emailId} não entrou:`, err instanceof Error ? err.message : err)
+      }
+    })
+    return NextResponse.json({ status: 'received' }, { status: 200 })
   }
 
   // 📭 Aviso de devolução (DSN): só dá pra reconhecer no e-mail cru (precisa

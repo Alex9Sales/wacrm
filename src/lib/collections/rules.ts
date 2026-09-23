@@ -69,6 +69,12 @@ export interface CollectionsSettings {
    * com mais de um, a régua pede para escolher em vez de chutar.
    */
   channelId: string | null
+  /**
+   * Canal de E-MAIL que envia a cobrança (22/09, Rafael Odonto: "com mais de
+   * um e-mail configurado não aparece qual selecionar"). null = automático:
+   * o primeiro e-mail conectado da conta.
+   */
+  emailChannelId: string | null
   /** Status do Asaas que contam como vencido nesta conta. */
   overdueStatuses: string[]
   /**
@@ -191,6 +197,7 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   templateParams: [],
   channel: 'auto',
   channelId: null,
+  emailChannelId: null,
   overdueStatuses: ['OVERDUE'],
   maxTouches: 8,
   tone: '',
@@ -251,6 +258,7 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
       : [],
     channel: r.channel === 'whatsapp' || r.channel === 'email' || r.channel === 'both' ? r.channel : 'auto',
     channelId: typeof r.channelId === 'string' && UUID_RE.test(r.channelId) ? r.channelId : null,
+    emailChannelId: typeof r.emailChannelId === 'string' && UUID_RE.test(r.emailChannelId) ? r.emailChannelId : null,
     overdueStatuses: statuses.length ? statuses : [...COLLECTIONS_DEFAULTS.overdueStatuses],
     maxTouches: int(r.maxTouches, 8, 1, 50),
     tone: typeof r.tone === 'string' ? r.tone.slice(0, 600) : '',

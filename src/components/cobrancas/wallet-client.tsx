@@ -78,6 +78,7 @@ import {
   linkDebtorToContact,
   listCollectionAssignees,
   listCollectionChannels,
+  listCollectionEmailChannels,
   listCollectionSectors,
   type CollectionAssigneeOption,
   type CollectionChannelOption,
@@ -2060,6 +2061,7 @@ function RulePanel({
   const [draft, setDraft] = useState<CollectionsSettings>(rule);
   const [saving, setSaving] = useState(false);
   const [chans, setChans] = useState<CollectionChannelOption[] | null>(null);
+  const [emailChans, setEmailChans] = useState<CollectionChannelOption[] | null>(null);
   const [people, setPeople] = useState<CollectionAssigneeOption[] | null>(null);
   const [sectorsList, setSectorsList] = useState<CollectionSectorOption[] | null>(null);
   // Templates aprovados da conta (só existem em canal oficial da Meta).
@@ -2080,6 +2082,11 @@ function RulePanel({
         .then(setChans)
         .catch(() => setChans([]));
     }
+    if (open && emailChans === null) {
+      void listCollectionEmailChannels()
+        .then(setEmailChans)
+        .catch(() => setEmailChans([]));
+    }
     if (open && people === null) {
       void listCollectionAssignees()
         .then(setPeople)
@@ -2090,7 +2097,7 @@ function RulePanel({
         .then(setSectorsList)
         .catch(() => setSectorsList([]));
     }
-  }, [open, chans, people, sectorsList]);
+  }, [open, chans, emailChans, people, sectorsList]);
 
   async function persist(patch: Partial<CollectionsSettings>) {
     setSaving(true);
@@ -2425,6 +2432,31 @@ function RulePanel({
               conectado ela não chuta — escolha aqui.
             </p>
           </div>
+
+          {(emailChans?.length ?? 0) > 0 && (
+            <div className="flex flex-col gap-1.5">
+              <Label htmlFor="rule-email-channel">E-mail que envia as cobranças</Label>
+              <select
+                id="rule-email-channel"
+                className="h-9 w-full max-w-sm rounded-md border bg-background px-2 text-sm"
+                value={draft.emailChannelId ?? ''}
+                onChange={(e) => setDraft({ ...draft, emailChannelId: e.target.value || null })}
+              >
+                <option value="">Automático (o primeiro e-mail conectado)</option>
+                {(emailChans ?? []).map((c) => (
+                  <option key={c.id} value={c.id} disabled={!c.connected}>
+                    {c.name}
+                    {c.phone ? ` · ${c.phone}` : ''}
+                    {c.connected ? '' : ' (desconectado)'}
+                  </option>
+                ))}
+              </select>
+              <p className="text-xs text-muted-foreground">
+                Com mais de um e-mail conectado em Canais, a cobrança por e-mail sai sempre por este — mesmo que o devedor já tenha conversa
+                em outro.
+              </p>
+            </div>
+          )}
 
           <div className="flex flex-col gap-1.5">
             <Label htmlFor="rule-assignee">Quem cuida das respostas</Label>

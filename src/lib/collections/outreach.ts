@@ -70,12 +70,21 @@ function emailChannelBlocked(c: { provider: string; providerMeta: unknown }): st
  * recusado no Google (a régua manda a cada 5 min) e a falha só aparecia como
  * erro do e-mail depois do WhatsApp.
  */
-export async function pickEmailChannel(accountId: string): Promise<ChannelPick> {
+export async function pickEmailChannel(accountId: string, emailChannelId: string | null = null): Promise<ChannelPick> {
   const rows = await db
     .select({ id: channels.id, name: channels.name, status: channels.status, provider: channels.provider, providerMeta: channels.providerMeta })
     .from(channels)
     .where(and(eq(channels.accountId, accountId), inArray(channels.provider, [...EMAIL_PROVIDERS])))
     .orderBy(channels.createdAt)
+  // 22/09: e-mail ESCOLHIDO em Ajustar manda sempre (como o número escolhido).
+  if (emailChannelId) {
+    const chosen = rows.find((r) => r.id === emailChannelId)
+    if (!chosen) return { ok: false, error: 'o e-mail escolhido para cobrar não existe mais nesta conta — escolha outro em Cobranças → Ajustar' }
+    if (chosen.status !== 'connected') return { ok: false, error: `o e-mail "${chosen.name}" está desconectado — reconecte ou escolha outro em Cobranças → Ajustar` }
+    const blocked = emailChannelBlocked(chosen)
+    if (blocked) return { ok: false, error: blocked }
+    return { ok: true, id: chosen.id, name: chosen.name }
+  }
   const connected = rows.filter((r) => r.status === 'connected')
   const usable = connected.find((r) => !emailChannelBlocked(r))
   if (usable) return { ok: true, id: usable.id, name: usable.name }
@@ -194,11 +203,13 @@ export async function resolveCollectionTargets(
   const waConv =
     (hintConversationId ? convs.find((c) => c.id === hintConversationId && isWaOnFixed(c)) : undefined) ?? convs.find((c) => isWaOnFixed(c))
   // Conversa de e-mail num Gmail com a senha recusada não serve: vale o canal
-  // de e-mail que funciona (ou o motivo, na fila).
-  const emConv = convs.find((c) => isEmail(c.provider) && !emailChannelBlocked(c))
+  // de e-mail que funciona (ou o motivo, na fila). Com e-mail ESCOLHIDO em
+  // Ajustar (22/09), só a conversa nesse e-mail serve — como no número.
+  const fixedEmail = settings.emailChannelId
+  const emConv = convs.find((c) => isEmail(c.provider) && (!fixedEmail || c.channelId === fixedEmail) && !emailChannelBlocked(c))
 
   const waPick: ChannelPick = waConv ? { ok: true, id: waConv.channelId, name: '' } : await pickCollectionChannel(accountId, settings.channelId)
-  const emPick: ChannelPick = emConv ? { ok: true, id: emConv.channelId, name: '' } : await pickEmailChannel(accountId)
+  const emPick: ChannelPick = emConv ? { ok: true, id: emConv.channelId, name: '' } : await pickEmailChannel(accountId, fixedEmail)
 
   const plan = deliveryPlan({
     channel: settings.channel,

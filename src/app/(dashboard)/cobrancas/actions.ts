@@ -2301,6 +2301,21 @@ export async function listCollectionChannels(): Promise<CollectionChannelOption[
   return rows.map((r) => ({ id: r.id, name: r.name, phone: r.phone, connected: r.status === 'connected' }))
 }
 
+/** Canais de E-MAIL da conta, para escolher qual envia as cobranças (22/09). `phone` leva o endereço. */
+export async function listCollectionEmailChannels(): Promise<CollectionChannelOption[]> {
+  const { accountId } = await getCurrentAccount()
+  const rows = await db
+    .select({ id: channels.id, name: channels.name, status: channels.status, providerMeta: channels.providerMeta })
+    .from(channels)
+    .where(and(eq(channels.accountId, accountId), inArray(channels.provider, [...EMAIL_PROVIDERS])))
+    .orderBy(channels.name)
+  return rows.map((r) => {
+    const meta = (r.providerMeta ?? {}) as { address?: unknown; from?: unknown }
+    const address = typeof meta.address === 'string' ? meta.address : typeof meta.from === 'string' ? meta.from : null
+    return { id: r.id, name: r.name, phone: address, connected: r.status === 'connected' }
+  })
+}
+
 // ------------------------------------------------ nova cobrança à mão (item 4)
 // O operador gera a cobrança no Asaas pelo CRM (contato, valor, vencimento,
 // descrição, conta) e, se quiser, o link já vai na conversa. É o "cria uma

@@ -41,6 +41,12 @@ describe('normalizeSettings', () => {
     expect(normalizeSettings({ channelId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' }).channelId).toBe('3f2504e0-4f89-41d3-9a0c-0305e82c3301')
   })
 
+  it('e-mail que envia: só uuid válido, senão automático (null)', () => {
+    expect(normalizeSettings({}).emailChannelId).toBeNull()
+    expect(normalizeSettings({ emailChannelId: 'x' }).emailChannelId).toBeNull()
+    expect(normalizeSettings({ emailChannelId: '3f2504e0-4f89-41d3-9a0c-0305e82c3301' }).emailChannelId).toBe('3f2504e0-4f89-41d3-9a0c-0305e82c3301')
+  })
+
   it('nasce desligada — cobrar não é padrão, é decisão', () => {
     expect(normalizeSettings({}).enabled).toBe(false)
     expect(normalizeSettings({ enabled: 'sim' }).enabled).toBe(false)
