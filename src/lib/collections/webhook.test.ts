@@ -9,6 +9,8 @@ const state = {
   charge: null as null | { id: string; contactId: string | null; open: boolean; status?: string },
   aindaDeve: false,
   owners: [] as { contactId: string }[],
+  /** Donos vindos do vínculo MANUAL da carteira (asaas_customer_links). */
+  manualOwners: [] as { contactId: string }[],
   updates: [] as { table: string; set: Record<string, unknown> }[],
   cancelled: [] as { id: string }[],
 }
@@ -30,9 +32,15 @@ vi.mock('@/db', () => {
     db: {
       update: (t: { _: { name?: string } } | string) => chain(String((t as { tableName?: string }).tableName ?? t)),
       // dono do cadastro do Asaas (pagamento fora da carteira)
-      selectDistinct: () => ({ from: () => ({ where: () => ({ limit: async () => state.owners }) }) }),
+      selectDistinct: () => ({
+        from: (t: unknown) => {
+          const nome = String((t as { tableName?: string })?.tableName ?? '')
+          const linhas = nome === 'asaasCustomerLinks' ? state.manualOwners : state.owners
+          return { where: () => ({ limit: async () => linhas }) }
+        },
+      }),
       select: () => ({
-        from: (t: unknown) => ({
+        from: () => ({
           where: () => ({
             limit: async () => {
               selectCall += 1
@@ -51,6 +59,7 @@ vi.mock('@/db', () => {
     asaasCharges: { tableName: 'asaasCharges', id: {}, accountId: {}, contactId: {}, asaasId: {}, open: {} },
     asaasConnections: { tableName: 'asaasConnections', id: {}, webhookEvents: {}, webhookToken: {}, accountId: {}, label: {}, enabled: {}, environment: {}, apiKeyEnc: {} },
     collectionsTouches: { tableName: 'collectionsTouches', accountId: {}, contactId: {} },
+    asaasCustomerLinks: { tableName: 'asaasCustomerLinks', accountId: {}, connectionId: {}, asaasCustomerId: {}, contactId: {} },
   }
 })
 
@@ -64,6 +73,7 @@ beforeEach(async () => {
   state.charge = { id: 'ch1', contactId: 'c1', open: true }
   state.aindaDeve = false
   state.owners = []
+  state.manualOwners = []
   state.updates = []
   state.cancelled = []
   pauseMock.settle.mockClear()
@@ -125,6 +135,27 @@ describe('webhook do Asaas — parar de cobrar quem pagou', () => {
     const out = await applyAsaasEvent('conn1', 'acc1', { event: 'PAYMENT_RECEIVED', payment: { id: 'pay_p3', customer: 'cus_9' } })
     expect(out.action).toBe('unknown_charge')
     expect(pauseMock.settle).toHaveBeenCalledWith(expect.objectContaining({ accountId: 'acc1', contactId: 'c9', noteWhenKept: false }))
+  })
+
+  it('dono ligado À MÃO na carteira também vale (sem cobrança espelhada, 23/09)', async () => {
+    state.charge = null
+    state.owners = []
+    state.manualOwners = [{ contactId: 'c7' }]
+    const dbmod = (await import('@/db')) as unknown as { db: { __reset: () => void } }
+    dbmod.db.__reset()
+    const out = await applyAsaasEvent('conn1', 'acc1', { event: 'PAYMENT_RECEIVED', payment: { id: 'pay_p4', customer: 'cus_7' } })
+    expect(out.action).toBe('unknown_charge')
+    expect(pauseMock.settle).toHaveBeenCalledWith(expect.objectContaining({ contactId: 'c7' }))
+  })
+
+  it('cobrança e vínculo manual apontando para contatos DIFERENTES: ninguém é despausado', async () => {
+    state.charge = null
+    state.owners = [{ contactId: 'c1' }]
+    state.manualOwners = [{ contactId: 'c2' }]
+    const dbmod = (await import('@/db')) as unknown as { db: { __reset: () => void } }
+    dbmod.db.__reset()
+    await applyAsaasEvent('conn1', 'acc1', { event: 'PAYMENT_RECEIVED', payment: { id: 'pay_p5', customer: 'cus_x' } })
+    expect(pauseMock.settle).not.toHaveBeenCalled()
   })
 
   it('cadastro do Asaas de dois contatos, ou sem cadastro no evento: não mexe na pausa', async () => {

@@ -11,7 +11,7 @@
 
 import { and, eq, inArray, isNotNull, ne, sql } from 'drizzle-orm'
 
-import { db, agentActionRequests, asaasCharges, asaasConnections, collectionsTouches } from '@/db'
+import { db, agentActionRequests, asaasCharges, asaasConnections, asaasCustomerLinks, collectionsTouches } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { countOpenPaymentsForCustomer, type AsaasEnv } from '@/lib/asaas/collections'
 import { decrypt } from '@/lib/whatsapp/encryption'
@@ -205,8 +205,29 @@ async function settleUnmirroredPayment(accountId: string, connectionId: string, 
       ),
     )
     .limit(2)
-  if (owners.length !== 1 || !owners[0].contactId) return 'none'
-  const contactId = owners[0].contactId
+  // 🔗 23/09: o dono também pode ter sido ligado À MÃO na carteira ("vincular
+  // ao contato"), sem nenhuma cobrança espelhada ainda — aí `asaas_charges`
+  // não sabe de nada e a pausa da IA ficava para sempre.
+  const manuais = await db
+    .selectDistinct({ contactId: asaasCustomerLinks.contactId })
+    .from(asaasCustomerLinks)
+    .where(
+      and(
+        eq(asaasCustomerLinks.accountId, accountId),
+        eq(asaasCustomerLinks.connectionId, connectionId),
+        eq(asaasCustomerLinks.asaasCustomerId, customerId),
+      ),
+    )
+    .limit(2)
+  const donos = new Set(
+    [...owners.map((o) => o.contactId), ...manuais.map((m) => m.contactId)].filter(
+      (id): id is string => !!id,
+    ),
+  )
+  // Cadastro do Asaas dividido entre dois contatos: não dá para saber de quem
+  // é o pagamento, então ninguém é despausado.
+  if (donos.size !== 1) return 'none'
+  const contactId = [...donos][0]
   const aberta = firstOrNull(
     await db
       .select({ id: asaasCharges.id })
@@ -257,6 +278,14 @@ async function openPaymentsInAsaas(
       .from(asaasCharges)
       .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, contactId), isNotNull(asaasCharges.asaasCustomerId)))
     for (const k of known) add(k.connectionId, k.customerId)
+    // 🔗 23/09: cadastro ligado à mão na carteira conta igual. Sem isto, um
+    // contato vinculado sem cobrança espelhada parecia não dever nada no Asaas
+    // — e a régua era liberada com dívida em aberto do outro lado.
+    const vinculados = await db
+      .select({ connectionId: asaasCustomerLinks.connectionId, customerId: asaasCustomerLinks.asaasCustomerId })
+      .from(asaasCustomerLinks)
+      .where(and(eq(asaasCustomerLinks.accountId, accountId), eq(asaasCustomerLinks.contactId, contactId)))
+    for (const v of vinculados) add(v.connectionId, v.customerId)
     if (!pairs.size) return null
     const linked = await db
       .select({ id: asaasConnections.id, apiKeyEnc: asaasConnections.apiKeyEnc, environment: asaasConnections.environment })
