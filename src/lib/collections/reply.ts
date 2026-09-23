@@ -300,21 +300,46 @@ async function alertTeam(input: CollectionReplyInput, title: string, body: strin
   }
 }
 
+/** Parcelas que cabem no prompt — devedor com dezenas não vira parede de texto. */
+const DEBT_LINES_FOR_PROMPT = 10
+
 /**
  * Resumo da dívida para o prompt — só é chamado quando o contato tem algo em
  * aberto, e é o que permite a IA falar de valores sem inventar nenhum.
+ *
+ * 23/09 (Rafael): agora com o LINK e a descrição de cada parcela. O agente de
+ * cobrança dele precisa "só consultar e mandar o link quando o aluno pedir" —
+ * sem link no contexto, a IA não tinha o que mandar (e o prompt dela dizia que
+ * tinha). Com o link aqui, isso vira consulta pura: nada de ferramenta externa,
+ * token ou POST no Asaas.
  */
 export async function openDebtForPrompt(accountId: string, contactId: string): Promise<string | null> {
   const rows = await db
-    .select({ value: asaasCharges.value, dueDate: asaasCharges.dueDate })
+    .select({
+      value: asaasCharges.value,
+      dueDate: asaasCharges.dueDate,
+      description: asaasCharges.description,
+      invoiceUrl: asaasCharges.invoiceUrl,
+    })
     .from(asaasCharges)
     .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, contactId), eq(asaasCharges.open, true)))
+    .orderBy(asaasCharges.dueDate)
   if (!rows.length) return null
 
   const total = rows.reduce((sum, r) => sum + Number(r.value ?? 0), 0)
-  const lines = rows.map(
-    (r) => `- ${Number(r.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}, venceu em ${r.dueDate ? br(r.dueDate) : 'data não informada'}`,
-  )
+  const mostradas = rows.slice(0, DEBT_LINES_FOR_PROMPT)
+  const lines = mostradas.map((r) => {
+    const valor = Number(r.value ?? 0).toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })
+    const desc = (r.description ?? '').trim()
+    const link = (r.invoiceUrl ?? '').trim()
+    return (
+      `- ${valor}, venceu em ${r.dueDate ? br(r.dueDate) : 'data não informada'}` +
+      (desc ? ` (${desc.slice(0, 80)})` : '') +
+      (link ? ` — link de pagamento: ${link}` : ' — sem link de pagamento disponível')
+    )
+  })
+  const resto = rows.length - mostradas.length
+  if (resto > 0) lines.push(`- (e mais ${resto} parcela${resto === 1 ? '' : 's'} em aberto)`)
   const totalLine =
     rows.length > 1 ? `\nTotal: ${total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}` : ''
   return lines.join('\n') + totalLine

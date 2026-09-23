@@ -807,6 +807,7 @@ export function collectionInstruction(debt: string): string {
     '• Mandou comprovante, print, disse que acabou de pagar ou diz que já pagou esta cobrança ("já paguei isso") → "[[COBRANCA:comprovante]]". AGRADEÇA e diga que vai conferir. NUNCA diga que está pago, quitado, baixado ou confirmado: quem confirma pagamento é o sistema financeiro, não você.\n' +
     '• Discorda da cobrança ("não devo", "não reconheço", "cancelei") → "[[COBRANCA:contesta]]". Não discuta e não afirme que ele deve: diga que vai verificar e que alguém retorna.\n' +
     '• Pede desconto, parcelamento, dividir, pagar só uma parte ou tirar juros → "[[COBRANCA:acordo]]". NÃO negocie, não ofereça valor, não prometa condição: diga que vai passar para quem decide isso.\n\n' +
+    'LINK DE PAGAMENTO: se ele pedir o link, a 2ª via, o boleto ou o Pix desta cobrança, mande o link que está listado acima, copiado EXATAMENTE como está — um por parcela, sem encurtar e sem montar outro endereço. Se a parcela aparecer como "sem link de pagamento disponível", diga que vai verificar e que alguém retorna com o link; NUNCA invente link, chave Pix, QR code ou dados bancários.\n\n' +
     'NUNCA fale em juros, multa, protesto, negativação, SPC/Serasa, cobrança judicial ou corte de serviço. Nunca ameace. Nunca invente valor, data de vencimento ou desconto — use só os valores acima.'
   )
 }
