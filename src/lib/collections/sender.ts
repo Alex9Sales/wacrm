@@ -26,6 +26,7 @@ import { executeOrchestrationAction, recordCollectionTouch } from '@/lib/orchest
 import { getAccountSettings } from '@/lib/settings/account-settings'
 
 import { findDeliveredWhatsAppCopy } from './delivered-copy'
+import { channelHaltReason, collectionChannelBlocked, handleCollectionChannelFailure } from './channel-halt'
 import { localParts } from './engine'
 import { newChargeGraceCutoffIso } from './new-charge-rules'
 import { autoSendDue, dayBlockedReason, isFinalCollectionError, normalizeSettings, retryCutoffIso, withinWindow } from './rules'
@@ -65,6 +66,10 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
   const diaBloqueado = dayBlockedReason(weekday, s, hojeKey)
   if (diaBloqueado) return { ...stats, haltedBecause: diaBloqueado.toLowerCase() }
   if (!withinWindow(hour, weekday, s, hojeKey)) return { ...stats, haltedBecause: 'fora do horário da régua' }
+  // 🛑 Número fora do ar: não tenta (cada tentativa numa sessão caída é mais um
+  // sinal ruim para o WhatsApp). Os pedidos ficam na fila para quando voltar.
+  const canal = await collectionChannelBlocked(accountId, s)
+  if (!canal.ok) return { ...stats, haltedBecause: canal.reason }
 
   // A fila: aprovadas em lote ('queued') e as automáticas ainda não enviadas.
   // Mais antiga primeiro — a régua já ordenou do mais atrasado pro menos.
@@ -193,6 +198,18 @@ export async function sendDueAutoCollections(accountId: string, now = new Date()
   }
 
   const error = (exec.error ?? 'Não deu certo.').slice(0, 500)
+  // 🛑 A culpa é do CANAL, não deste devedor: marca o número como fora do ar,
+  // avisa o dono e devolve o pedido à fila SEM gastar tentativa — a rodada
+  // seguinte nem começa enquanto o número não voltar (channel-halt.ts).
+  const halt = channelHaltReason(error)
+  if (halt) {
+    await handleCollectionChannelFailure({ accountId, reason: halt, error, settings: s })
+    await db
+      .update(agentActionRequests)
+      .set({ error, payload: { ...payload, lastAttemptAt: nowIso } })
+      .where(eq(agentActionRequests.id, row.id))
+    return { ...stats, failed: 1, haltedBecause: 'número fora do ar — a régua parou até ele voltar' }
+  }
   const attempts = (row.attempts ?? 0) + 1
   // Pagou entre a fila e o envio (ou a parcela sumiu), ou o devedor foi parado
   // nesse meio-tempo (pausa, promessa, comprovante): não é falha, é o sistema
