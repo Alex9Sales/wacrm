@@ -355,6 +355,10 @@ export async function syncConnection(
             eq(asaasCharges.connectionId, connectionId),
             eq(asaasCharges.open, false),
             inArray(asaasCharges.status, ['OVERDUE', 'PENDING']),
+            // As que ACABARAM de fechar já estão em closedRows: sem isto
+            // entrariam de novo aqui (o update acima já as deixou open=false)
+            // e cada uma gastaria duas consultas do teto.
+            closedRows.length ? notInArray(asaasCharges.id, closedRows.map((r) => r.id)) : sql`true`,
           ),
         )
         .limit(MAX_VANISHED_LOOKUPS - closedRows.length)
