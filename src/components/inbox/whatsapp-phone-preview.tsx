@@ -24,12 +24,18 @@ export function substituteVars(text: string, values: string[]): string {
 
 // ------------------------------------------------------------
 // Formatação estilo WhatsApp para a PRÉVIA: *negrito*, _itálico_,
-// ~tachado~, ```mono``` e destaque das variáveis {{n}} ainda vazias.
+// ~tachado~, ```mono```, destaque das variáveis {{n}} ainda vazias e
+// LINK CLICÁVEL.
 // (Só visual — o texto real do template continua o cru.)
+//
+// 23/09 (Renato/Zelo): "os links do YouTube não estão abrindo nos templates".
+// O vídeo estava no ar e o template aprovado — quem não abria era a nossa
+// prévia, que mostrava a URL como texto puro. No WhatsApp de verdade o link
+// sempre foi clicável; aqui não era.
 // ------------------------------------------------------------
 export function formatWhatsApp(text: string): ReactNode[] {
   const nodes: ReactNode[] = [];
-  const regex = /(\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|```[^`]+```|\{\{\d+\}\})/g;
+  const regex = /(\*[^*\n]+\*|_[^_\n]+_|~[^~\n]+~|```[^`]+```|\{\{\d+\}\}|https?:\/\/[^\s<>"']+)/g;
   let last = 0;
   let key = 0;
   let m: RegExpExecArray | null;
@@ -48,6 +54,22 @@ export function formatWhatsApp(text: string): ReactNode[] {
       nodes.push(<em key={key++}>{tok.slice(1, -1)}</em>);
     } else if (tok.startsWith("~")) {
       nodes.push(<s key={key++}>{tok.slice(1, -1)}</s>);
+    } else if (tok.startsWith("http")) {
+      // Pontuação final ("… veja: https://x.com/v.") não faz parte do link.
+      const limpo = tok.replace(/[.,;:!?)\]]+$/, "");
+      const sobra = tok.slice(limpo.length);
+      nodes.push(
+        <a
+          key={key++}
+          href={limpo}
+          target="_blank"
+          rel="noopener noreferrer"
+          className="underline underline-offset-2 hover:opacity-80"
+        >
+          {limpo}
+        </a>,
+      );
+      if (sobra) nodes.push(sobra);
     } else {
       nodes.push(
         <span
