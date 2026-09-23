@@ -113,6 +113,7 @@ import {
 } from '@/app/(dashboard)/cobrancas/actions';
 import { UpcomingUnmatchedPanel } from '@/components/cobrancas/upcoming-unmatched-panel';
 import { SendsPanel } from '@/components/cobrancas/sends-panel';
+import type { SendsReport } from '@/app/(dashboard)/cobrancas/actions';
 import { UpcomingPanel } from '@/components/cobrancas/upcoming-panel';
 import { ManualCollectDialog } from '@/components/cobrancas/manual-collect-dialog';
 import { unlinkDebtorText } from '@/lib/collections/upcoming-unmatched';
@@ -175,6 +176,9 @@ export function WalletClient() {
   const [held, setHeld] = useState<HeldDebtor[]>([]);
   // 🔔 16/09 (Veloz Gás e Água): quem vence sem contato no CRM e não recebe o
   // lembrete. Erro de carga fica marcado — nunca vira "ninguém sem contato".
+  // 💰 Economia no Asaas: vem do painel de envios (uma consulta só) e aparece
+  // como CARTÃO na primeira dobra — 23/09, Alex: "tem que bater o olho e ver".
+  const [savings, setSavings] = useState<SendsReport['savings'] | null>(null);
   const [upcomingView, setUpcomingView] = useState<UpcomingUnmatchedView | null>(null);
   const [upcomingError, setUpcomingError] = useState(false);
   // 🔔 22/09: o painel "Próximos vencimentos" carrega sozinho; este contador
@@ -422,7 +426,7 @@ export function WalletClient() {
               <span className="text-xs text-muted-foreground">(clique no nome de outra conta para trocar; nenhuma selecionada = todas)</span>
             </div>
           )}
-          <div className="grid grid-cols-2 gap-3 sm:grid-cols-5">
+          <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-6">
             <Stat label="Clientes em atraso" value={String(totals.debtors)} hint="um por pessoa, com todas as parcelas dele" />
             <Stat
               label="Parcelas vencidas"
@@ -439,6 +443,17 @@ export function WalletClient() {
                   : 'pagas depois de uma mensagem da régua'
               }
               tone={wallet?.recovered.afterTouchTotal ? 'good' : undefined}
+              wide
+            />
+            <Stat
+              label="Economia no Asaas (mês)"
+              value={brl(savings?.month.brl ?? 0)}
+              hint={
+                savings && savings.month.count > 0
+                  ? `${savings.month.count} avisos de cobrança saíram pelo CRM · ${savings.month.whatsapp} no WhatsApp a ${brl(savings.fee)} · ${savings.month.email} por e-mail a ${brl(savings.emailFee)}${savings.today.count > 0 ? ` · hoje ${brl(savings.today.brl)}` : ''}`
+                  : 'o que o Asaas cobraria pelos avisos que o CRM mandou'
+              }
+              tone={savings && savings.month.brl > 0 ? 'good' : undefined}
               wide
             />
             <Stat
@@ -505,7 +520,7 @@ export function WalletClient() {
             </div>
           )}
 
-          <SendsPanel />
+          <SendsPanel onData={(d) => setSavings(d.savings)} />
 
           <UpcomingPanel reloadKey={reloadKey} />
 

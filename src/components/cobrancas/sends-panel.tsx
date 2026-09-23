@@ -42,7 +42,14 @@ const TOM: Record<'ok' | 'bom' | 'espera' | 'ruim', string> = {
   ruim: 'text-red-600 dark:text-red-400',
 }
 
-export function SendsPanel({ timezone = 'America/Sao_Paulo' }: { timezone?: string }) {
+export function SendsPanel({
+  timezone = 'America/Sao_Paulo',
+  onData,
+}: {
+  timezone?: string
+  /** Entrega o relatório ao pai — a carteira mostra a economia num cartão grande, sem consultar de novo. */
+  onData?: (d: SendsReport) => void
+}) {
   const router = useRouter()
   const [data, setData] = useState<SendsReport | null>(null)
   const [aberto, setAberto] = useState(false)
@@ -51,12 +58,17 @@ export function SendsPanel({ timezone = 'America/Sao_Paulo' }: { timezone?: stri
   const carregar = useCallback(async () => {
     setCarregando(true)
     try {
-      setData(await getSendsReport())
+      const r = await getSendsReport()
+      setData(r)
+      onData?.(r)
     } catch {
       /* painel de leitura: erro não derruba a carteira */
     } finally {
       setCarregando(false)
     }
+    // `onData` fora das dependências de propósito: função nova a cada render
+    // do pai reiniciaria a carga em laço.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   useEffect(() => {
