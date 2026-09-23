@@ -92,6 +92,19 @@ describe('collectionGreetingName — pessoa no Asaas manda; empresa no Asaas + p
     expect(collectionGreetingName('Clínica Jump Ltda', 'Jessica Almeida', 'phonebook')).toBe('Jessica')
     expect(collectionGreetingName('Clínica Jump Ltda', 'Jessica Almeida', 'whatsapp')).toBe('Clínica Jump')
   })
+  it('CNPJ no Asaas = razão social: cumprimenta a pessoa da agenda/ficha (caso João 23/09)', () => {
+    const CNPJ = '11222333000181'
+    const CPF = '39053344705'
+    expect(collectionGreetingName('GUINCHO RIBEIRO LTDA', 'Fernanda - Guincho Ribeiro', 'phonebook', CNPJ)).toBe('Fernanda')
+    expect(collectionGreetingName('Leva Entulho', 'Robson - Leva Entulho', 'phonebook', CNPJ)).toBe('Robson')
+    expect(collectionGreetingName('Taubaté Online', 'João Taubaté Taubaté Online', 'phonebook', CNPJ)).toBe('João')
+    // CNPJ sem pessoa no CRM → a empresa como está, sem Ltda/ME.
+    expect(collectionGreetingName('GUINCHO RIBEIRO LTDA', null, 'crm', CNPJ)).toBe('GUINCHO RIBEIRO')
+    // CPF = pessoa física: o nome do Asaas continua mandando (decisão 10/09).
+    expect(collectionGreetingName('Andressa Amorelli', 'Loja 77', 'crm', CPF)).toBe('Andressa Amorelli')
+    // Sem documento, nada muda em relação ao comportamento anterior.
+    expect(collectionGreetingName('Andressa Amorelli', 'Loja 77', 'crm')).toBe('Andressa Amorelli')
+  })
   it('sem Asaas → o CRM quando é pessoa; telefone/frase no CRM → nada ("Oi!")', () => {
     expect(collectionGreetingName(null, 'Carlos')).toBe('Carlos')
     expect(collectionGreetingName(null, '+55 12 99123-4567')).toBeNull()

@@ -397,7 +397,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     // saía errado na saudação.
     const customerName = d.asaasName ?? d.name
     // 23/09: empresa no Asaas + pessoa no CRM → cumprimenta a pessoa (collectionGreetingName).
-    const firstName = collectionGreetingName(d.asaasName, d.name, d.nameSource)
+    const firstName = collectionGreetingName(d.asaasName, d.name, d.nameSource, d.charges.find((c) => c.document)?.document ?? null)
     const text = await draftCollectionMessage({
       accountId,
       agentId: agent?.id ?? null,

@@ -118,6 +118,8 @@ export interface ReminderRunResult {
 export interface UpcomingCandidate {
   contactId: string
   name: string | null
+  /** CPF/CNPJ do cadastro no Asaas — CNPJ diz que o nome de lá é razão social. */
+  doc: string | null
   /** E-mail do cliente no Asaas (a parcela a vencer não está na carteira). */
   email: string | null
   optedOut: boolean
@@ -306,6 +308,7 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
         cand = {
           contactId: decision.contactId,
           name: cust?.name ?? null,
+          doc: cust?.cpfCnpj ?? null,
           email: collectionEmail(cust?.email),
           optedOut: false,
           lines: [],
@@ -315,6 +318,7 @@ export async function scanUpcoming(args: { accountId: string; settings: Collecti
         byContact.set(decision.contactId, cand)
       }
       if (!cand.name && cust?.name) cand.name = cust.name
+      if (!cand.doc && cust?.cpfCnpj) cand.doc = cust.cpfCnpj
       if (!cand.email && cust?.email) cand.email = collectionEmail(cust.email)
       cand.lines.push({ value: Number(p.value ?? 0), dueDate: p.dueDate ? p.dueDate.slice(0, 10) : null, daysUntil, connectionLabel: c.label, invoiceUrl: p.invoiceUrl ?? null })
       cand.asaasIds.push(p.id)
@@ -753,7 +757,7 @@ export async function queueUpcomingReminders(args: {
     )
     // Nome como está no Asaas prevalece (10/09); o contato só cobre o vazio.
     const fullName = (cand.name ?? '').trim() || contact.name || null
-    const firstName = collectionGreetingName(cand.name, contact.name, contact.nameSource)
+    const firstName = collectionGreetingName(cand.name, contact.name, contact.nameSource, cand.doc)
     const seed = seedFrom(cand.contactId, 0, args.dayKey)
     const text = await draftReminder({
       accountId: args.accountId,

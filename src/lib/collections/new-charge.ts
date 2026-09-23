@@ -541,7 +541,7 @@ export async function queueNewChargeNotices(args: {
 
     // Nome de pessoa no Asaas prevalece (10/09); empresa no Asaas + pessoa na
     // ficha → cumprimenta a pessoa (23/09, collectionGreetingName).
-    const saudacao = collectionGreetingName(cand.nomeAsaas, ficha.name, ficha.nameSource)
+    const saudacao = collectionGreetingName(cand.nomeAsaas, ficha.name, ficha.nameSource, linhas.find((l) => l.document)?.document ?? null)
     const texto = newChargesMessage(
       saudacao,
       linhas.map((l) => l.line),

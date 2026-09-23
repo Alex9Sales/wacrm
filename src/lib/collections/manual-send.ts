@@ -142,6 +142,8 @@ interface DebtorContext {
   openRows: { open: boolean; dueDate: string | null }[]
   /** Nome como está no Asaas — prevalece na saudação (João/Alex 10/09). */
   asaasName: string | null
+  /** CPF/CNPJ do cadastro no Asaas — CNPJ diz que o nome de lá é razão social. */
+  asaasDoc: string | null
   todayKey: string
 }
 
@@ -205,11 +207,13 @@ async function loadDebtor(accountId: string, contactId: string): Promise<ManualC
 
   const charges: ChargeLine[] = []
   let asaasName: string | null = null
+  let asaasDoc: string | null = null
   for (const r of rows) {
     const late = daysLateOn(r.dueDate, todayKey)
     // Só o que VENCEU entra na mensagem — parcela a vencer é assunto do lembrete.
     if (!countsAsOverdue(late)) continue
     if (asaasName == null) asaasName = (r.customerName ?? '').trim() || null
+    if (asaasDoc == null) asaasDoc = (r.cpfCnpj ?? '').trim() || null
     charges.push({
       asaasId: r.asaasId,
       customerId: r.customerId,
@@ -236,6 +240,7 @@ async function loadDebtor(accountId: string, contactId: string): Promise<ManualC
       charges,
       openRows: rows.map((r) => ({ open: r.open, dueDate: r.dueDate })),
       asaasName,
+      asaasDoc,
       todayKey,
     },
   }
@@ -276,7 +281,7 @@ export async function prepareManualCollectCore(accountId: string, userId: string
 
   const summary = formatDebtSummary(ctx.charges, { showValues: ctx.settings.showValues })
   const touchCount = ctx.touch?.touchCount ?? 0
-  const text = fallbackMessage(collectionGreetingName(ctx.asaasName, ctx.contact.name, ctx.contact.nameSource), summary, touchCount, seedFrom(contactId, touchCount, utcDayKey()), {
+  const text = fallbackMessage(collectionGreetingName(ctx.asaasName, ctx.contact.name, ctx.contact.nameSource, ctx.asaasDoc), summary, touchCount, seedFrom(contactId, touchCount, utcDayKey()), {
     offerDate: ctx.settings.offerDateNegotiation,
   })
   const hold = debtorHold(ctx.touch, null)
@@ -330,7 +335,7 @@ export async function draftManualCollectWithAiCore(accountId: string, contactId:
   const { hour, weekday } = localParts(ctx.tz)
   const maxLate = Math.max(...ctx.charges.map((c) => c.daysLate ?? -1))
   const customerName = ctx.asaasName ?? ctx.contact.name
-  const firstName = collectionGreetingName(ctx.asaasName, ctx.contact.name, ctx.contact.nameSource)
+  const firstName = collectionGreetingName(ctx.asaasName, ctx.contact.name, ctx.contact.nameSource, ctx.asaasDoc)
   // Semente nova a cada clique: "reescrever" de novo tem que dar outra variação.
   const seed = seedFrom(contactId, touch, utcDayKey(), MANUAL_COLLECT_KIND, Date.now())
   const args = { offerDate: ctx.settings.offerDateNegotiation }
@@ -421,7 +426,7 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
     const gate = await officialTemplateGate(accountId, conversationId, {
       kind: 'manual',
       vars: {
-        nome: collectionGreetingName(ctx.asaasName, ctx.contact.name, ctx.contact.nameSource) ?? '',
+        nome: collectionGreetingName(ctx.asaasName, ctx.contact.name, ctx.contact.nameSource, ctx.asaasDoc) ?? '',
         valor: ctx.settings.showValues ? summaryForTemplate.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '',
         link: summaryForTemplate.links[0] ?? '',
         dias: String(Math.max(0, ...ctx.charges.map((c) => c.daysLate ?? 0))),

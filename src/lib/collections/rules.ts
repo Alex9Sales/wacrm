@@ -13,6 +13,8 @@
 
 import { firstNameForGreeting } from '@/lib/cdl/names'
 
+import { onlyDigits } from './document'
+
 import { holidayName } from './holidays'
 
 export type DeliveryChannel = 'auto' | 'whatsapp' | 'email' | 'both'
@@ -1214,11 +1216,25 @@ export function collectionGreetingName(
    * origem, aceita (chamador antigo).
    */
   crmNameSource?: string | null,
+  /**
+   * CPF/CNPJ do cadastro no Asaas. **CNPJ = razão social**, e razão social
+   * não é gente: "Guincho Ribeiro Ltda", "Leva Entulho", "Taubaté Online"
+   * passavam por nome de pessoa na lista de palavras e viravam "Oi, Guincho!".
+   * Com o documento a decisão é determinística (23/09, João/GoLink
+   * renomeando a agenda para "Nome - Empresa").
+   */
+  asaasDoc?: string | null,
 ): string | null {
   const asaas = (asaasName ?? '').trim()
-  if (asaas && firstNameForGreeting(asaas)) return greetingName(asaas)
+  const digits = onlyDigits(asaasDoc)
+  const empresa = digits.length === 14
   const crmTrusted = crmNameSource === undefined || crmNameSource === 'crm' || crmNameSource === 'phonebook'
   const crm = crmTrusted ? firstNameForGreeting(crmName) : ''
+  // CNPJ: a pessoa que atende (agenda/ficha) vem primeiro; sem ela, a empresa
+  // como o Asaas escreve, sem Ltda/ME (greetingName corta o sufixo).
+  if (empresa) return crm || (asaas ? greetingName(asaas) : null)
+  // CPF ou sem documento: nome de pessoa no Asaas manda (decisão 10/09).
+  if (asaas && firstNameForGreeting(asaas)) return greetingName(asaas)
   if (crm) return crm
   // Sem nome de pessoa em lugar nenhum: a empresa do Asaas; sem Asaas, nada
   // ("Oi!") — o nome do CRM já foi julgado "não é pessoa" (telefone, frase).
