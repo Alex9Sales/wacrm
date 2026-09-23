@@ -146,6 +146,18 @@ describe('collectionGreetingName — pessoa no Asaas manda; empresa no Asaas + p
     // Setor não é pessoa.
     expect(collectionGreetingName('Clínica Jump', 'Clinica Jump Recepção', 'crm', CNPJ)).toBe('Clínica Jump')
   })
+  it('nome de RAMO no CRM cumprimenta a empresa inteira, nunca a primeira palavra (23/09)', () => {
+    // Caso real: saiu "Bom dia, Drogaria!" para um contato sem cobrança espelhada.
+    expect(collectionGreetingName(null, 'Drogaria Essência', 'phonebook')).toBe('Drogaria Essência')
+    expect(collectionGreetingName('', 'Marcenaria São José', 'crm')).toBe('Marcenaria São José')
+    expect(collectionGreetingName(null, 'Auto Peças Brasil', 'crm')).toBe('Auto Peças Brasil')
+    // Frase/apelido de agenda continua sem virar saudação.
+    expect(collectionGreetingName('', 'Meus Netinhos Queridos', 'crm')).toBeNull()
+    // Pessoa continua ganhando o primeiro nome.
+    expect(collectionGreetingName(null, 'Luciene Martins', 'crm')).toBe('Luciene')
+    // Apelido do WhatsApp não vira saudação nem sendo nome de ramo.
+    expect(collectionGreetingName('', 'Drogaria Essência', 'whatsapp')).toBeNull()
+  })
   it('sem Asaas → o CRM quando é pessoa; telefone/frase no CRM → nada ("Oi!")', () => {
     expect(collectionGreetingName(null, 'Carlos')).toBe('Carlos')
     expect(collectionGreetingName(null, '+55 12 99123-4567')).toBeNull()

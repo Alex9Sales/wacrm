@@ -1213,6 +1213,39 @@ export function fillTemplateParams(params: readonly string[], vars: TemplateVars
   return params.map((p) => p.replace(TEMPLATE_VAR_RE, (_m, k: string) => templateVarMap(vars)[k.toLowerCase()] ?? ''))
 }
 
+/**
+ * Primeira palavra que entrega RAMO de negócio. Nome que começa assim é da
+ * empresa inteira, não de uma pessoa: "Drogaria Essência" cumprimenta
+ * "Drogaria Essência", nunca "Oi, Drogaria!" (caso real do João, 23/09, e a
+ * razão de existir esta lista separada da de `cdl/names.ts` — lá a lista
+ * decide se é gente; aqui decide se dá para chamar pelo nome inteiro).
+ */
+const BUSINESS_FIRST_WORDS = new Set([
+  'drogaria', 'farmacia', 'mercado', 'supermercado', 'minimercado', 'mercearia', 'padaria',
+  'panificadora', 'acougue', 'oficina', 'auto', 'autopecas', 'borracharia', 'madeireira',
+  'marcenaria', 'serralheria', 'vidracaria', 'metalurgica', 'grafica', 'papelaria', 'livraria',
+  'lavanderia', 'otica', 'joalheria', 'relojoaria', 'floricultura', 'petshop', 'pet', 'barbearia',
+  'salao', 'estetica', 'lanchonete', 'pizzaria', 'churrascaria', 'hamburgueria', 'sorveteria',
+  'cafeteria', 'confeitaria', 'doceria', 'buffet', 'restaurante', 'bar', 'adega', 'tabacaria',
+  'conveniencia', 'deposito', 'distribuidora', 'transportadora', 'transporte', 'transportes',
+  'logistica', 'construtora', 'imobiliaria', 'corretora', 'seguradora', 'agencia', 'escritorio',
+  'contabilidade', 'advocacia', 'clinica', 'consultorio', 'laboratorio', 'hospital', 'academia',
+  'escola', 'colegio', 'creche', 'autoescola', 'despachante', 'instituto', 'studio', 'estudio',
+  'hotel', 'pousada', 'posto', 'igreja', 'condominio', 'associacao', 'cooperativa', 'sindicato',
+  'fundacao', 'casa', 'loja', 'sitio', 'chacara', 'materiais', 'ferragem', 'ferragens', 'gesso',
+  'guincho', 'entulho', 'grupo', 'comercial', 'industria', 'servicos', 'solucoes',
+])
+
+/** O nome do contato é de um NEGÓCIO conhecido pelo ramo? (primeira palavra) */
+function looksLikeBusinessName(name: string | null | undefined): boolean {
+  const first = (name ?? '')
+    .trim()
+    .split(/\s+/)
+    .map((w) => nameSlug(w))
+    .find((w) => w.length > 1)
+  return !!first && BUSINESS_FIRST_WORDS.has(first)
+}
+
 /** Minúsculo, sem acento e sem pontuação — pra comparar nome de empresa. */
 function nameSlug(word: string): string {
   return word
@@ -1274,6 +1307,9 @@ export function personInContactName(
   // "Casa da Massa" sem nada a ver com a razão social: o conectivo entrega o
   // negócio. Só com CNPJ do outro lado — ver o parâmetro `empresa`.
   if (asaasEhCnpj && tokens.length > 2 && NAME_STOPWORDS.has(nameSlug(tokens[1]))) return ''
+  // Nome que começa pelo RAMO é da empresa. Chegar aqui significa que não
+  // houve pessoa a extrair de dentro dele — "Empresa - Fulana" já saiu acima.
+  if (looksLikeBusinessName(crmName)) return ''
   return firstNameForGreeting(crmName)
 }
 
@@ -1309,15 +1345,23 @@ export function collectionGreetingName(
   const empresa = digits.length === 14
   const crmTrusted = crmNameSource === undefined || crmNameSource === 'crm' || crmNameSource === 'phonebook'
   const crm = crmTrusted ? personInContactName(crmName, asaas, empresa) : ''
-  // CNPJ: a pessoa que atende (agenda/ficha) vem primeiro; sem ela, a empresa
-  // como o Asaas escreve, sem Ltda/ME (greetingName corta o sufixo).
-  if (empresa) return crm || (asaas ? greetingName(asaas) : null)
+  // A empresa, na ordem: como o Asaas escreve; senão o nome do CRM quando ele
+  // começa pelo RAMO ("Drogaria Essência", "Marcenaria São José"). Sem isso a
+  // saudação cortava na primeira palavra e saía "Bom dia, Drogaria!" (caso
+  // real do João, 23/09). `greetingName` tira Ltda/ME e limita o tamanho.
+  const empresaLabel = asaas
+    ? greetingName(asaas)
+    : crmTrusted && looksLikeBusinessName(crmName)
+      ? greetingName(crmName)
+      : null
+  // CNPJ: a pessoa que atende (agenda/ficha) vem primeiro; sem ela, a empresa.
+  if (empresa) return crm || empresaLabel
   // CPF ou sem documento: nome de pessoa no Asaas manda (decisão 10/09).
   if (asaas && firstNameForGreeting(asaas)) return greetingName(asaas)
   if (crm) return crm
-  // Sem nome de pessoa em lugar nenhum: a empresa do Asaas; sem Asaas, nada
-  // ("Oi!") — o nome do CRM já foi julgado "não é pessoa" (telefone, frase).
-  return asaas ? greetingName(asaas) : null
+  // Sem pessoa em lugar nenhum: a empresa; sem empresa, nada ("Oi!") — o nome
+  // do CRM já foi julgado "não é pessoa nem negócio" (telefone, frase, apelido).
+  return empresaLabel
 }
 
 const TEMPLATE_VAR_RE = /\{(nome|valor|link|vencimento|descricao|dias|parcelas)\}/gi
