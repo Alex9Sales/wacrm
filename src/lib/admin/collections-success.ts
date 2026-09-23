@@ -8,9 +8,10 @@
 // preço) e para o CS saber onde a régua está parada.
 //
 // Duas regras de honestidade, as duas aprendidas doendo:
-//  1. RECUPERADO só conta `status IN ('RECEIVED','CONFIRMED')` — `open=false`
-//     também é cobrança APAGADA no Asaas (11/09: R$ 610 de diferença em dois
-//     dias). E separa o que foi pago DEPOIS de um toque nosso ("com a régua")
+//  1. RECUPERADO só conta status de PAGO (`RECEIVED`, `CONFIRMED` e, desde
+//     23/09, `RECEIVED_IN_CASH`, a baixa manual de quem recebeu por fora) —
+//     `open=false` sozinho também é cobrança APAGADA no Asaas (11/09: R$ 610
+//     de diferença em dois dias). E separa o que foi pago DEPOIS de um toque nosso ("com a régua")
 //     do que o cliente pagou sozinho ("sem toque") — a soma dos dois nunca é
 //     apresentada como mérito da ferramenta.
 //  2. ECONOMIA conta PARCELAS avisadas (o Asaas cobra por cobrança, não por
@@ -116,7 +117,10 @@ export async function getCollectionsSuccess(): Promise<CollectionsSuccessDashboa
        AND rr.executed_at < coalesce(ch.closed_at, ch.updated_at)
        AND rr.executed_at > coalesce(ch.closed_at, ch.updated_at) - interval '45 days'
   )`
-  const pagas = sql`ch.status IN ('RECEIVED','CONFIRMED')`
+  // 23/09 (João): quem recebe o Pix na própria conta dá baixa manual no Asaas,
+  // e isso vira RECEIVED_IN_CASH. É pagamento de verdade, só que fora do Asaas
+  // — sem ele aqui, o cliente que mais recupera aparecia com zero recuperado.
+  const pagas = sql`ch.status IN ('RECEIVED','CONFIRMED','RECEIVED_IN_CASH')`
   // Conta do Asaas do pedido: a gravada (a partir de 23/09) ou, nos antigos, a
   // que tem mais cobranças daquele devedor.
   const contaDoPedido = sql`coalesce(
