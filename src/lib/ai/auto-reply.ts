@@ -812,7 +812,7 @@ export async function dispatchInboundToAiReply(
     // obedeceria pior — e falaria de dívida com quem não deve nada.
     let openDebt: string | null = null
     try {
-      openDebt = await openDebtForPrompt(accountId, contactId)
+      openDebt = await openDebtForPrompt(accountId, contactId, config.id ?? null)
     } catch (err) {
       console.error('[ai auto-reply] dívida em aberto falhou:', err instanceof Error ? err.message : err)
     }

@@ -20,12 +20,15 @@ import {
 } from 'lucide-react';
 
 import {
+  asaasToolKitStatus,
   deleteAgentTool,
+  installAsaasToolKit,
   listAgentExternalTools,
   listAgentToolRuns,
   saveAgentTool,
   testAgentTool,
   type AgentToolRow,
+  type AsaasKitStatus,
   type ToolRunRow,
 } from '@/app/(dashboard)/agents/tools-actions';
 import type { ToolParamDef } from '@/lib/ai/external-tools';
@@ -92,6 +95,11 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
   const [testArgs, setTestArgs] = useState<Record<string, string>>({});
   const [testResult, setTestResult] = useState<string | null>(null);
   const [testBusy, setTestBusy] = useState(false);
+  // 🧰 Kit do Asaas: só aparece quando a conta já conectou o Asaas em Cobranças.
+  const [asaasKit, setAsaasKit] = useState<AsaasKitStatus | null>(null);
+  const [kitBusy, setKitBusy] = useState(false);
+  /** Conta Asaas escolhida — só aparece para quem tem mais de uma ligada. */
+  const [kitConnId, setKitConnId] = useState('');
 
   const load = useCallback(async () => {
     try {
@@ -101,7 +109,36 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
     } finally {
       setLoading(false);
     }
+    try {
+      setAsaasKit(await asaasToolKitStatus(agentId));
+    } catch {
+      // Sem o kit a tela segue igual — nunca é motivo de erro na cara do cliente.
+      setAsaasKit(null);
+    }
   }, [agentId]);
+
+  const installKit = async () => {
+    setKitBusy(true);
+    try {
+      const r = await installAsaasToolKit(agentId, kitConnId || null);
+      if (r.error) {
+        toast.error(r.error);
+        return;
+      }
+      const novas = r.installed ?? 0;
+      const onde = r.label ? ` (${r.label})` : '';
+      toast.success(
+        novas > 0
+          ? `${novas} ferramenta${novas > 1 ? 's' : ''} do Asaas instalada${novas > 1 ? 's' : ''}${onde} — o agente já consulta as cobranças.`
+          : `Ferramentas do Asaas atualizadas${onde}.`,
+      );
+      await load();
+    } catch {
+      toast.error('Não foi possível instalar as ferramentas do Asaas.');
+    } finally {
+      setKitBusy(false);
+    }
+  };
 
   useEffect(() => {
     void load();
@@ -207,10 +244,53 @@ export function AgentExternalTools({ agentId }: { agentId: string }) {
             pedidos) — ele consulta e age com dados reais, sem intermediários.
           </p>
         </div>
-        <Button size="sm" variant="outline" onClick={() => openEdit()}>
-          <Plus className="mr-1 h-3.5 w-3.5" /> Adicionar
-        </Button>
+        <div className="flex shrink-0 items-center gap-2">
+          {asaasKit?.connected && asaasKit.connections.length > 1 ? (
+            <select
+              className="h-8 rounded-md border border-border bg-background px-2 text-xs text-foreground"
+              value={kitConnId || asaasKit.connections[0].id}
+              onChange={(e) => setKitConnId(e.target.value)}
+              aria-label="Conta do Asaas"
+            >
+              {asaasKit.connections.map((c) => (
+                <option key={c.id} value={c.id}>
+                  {c.label}
+                  {c.sandbox ? ' (teste)' : ''}
+                </option>
+              ))}
+            </select>
+          ) : null}
+          {asaasKit?.connected ? (
+            <Button
+              size="sm"
+              variant="outline"
+              onClick={() => void installKit()}
+              disabled={kitBusy}
+              title="Usa a chave do Asaas que já está conectada em Cobranças"
+            >
+              {kitBusy ? (
+                <Loader2 className="mr-1 h-3.5 w-3.5 animate-spin" />
+              ) : (
+                <Wrench className="mr-1 h-3.5 w-3.5" />
+              )}
+              {asaasKit.installed >= asaasKit.total
+                ? 'Atualizar ferramentas do Asaas'
+                : 'Instalar ferramentas do Asaas'}
+            </Button>
+          ) : null}
+          <Button size="sm" variant="outline" onClick={() => openEdit()}>
+            <Plus className="mr-1 h-3.5 w-3.5" /> Adicionar
+          </Button>
+        </div>
       </div>
+
+      {asaasKit?.connected && asaasKit.installed < asaasKit.total ? (
+        <p className="mt-2 rounded-md bg-muted/50 px-3 py-2 text-xs text-muted-foreground">
+          O Asaas desta conta já está conectado. Em um clique o agente passa a consultar o cadastro,
+          as cobranças em aberto, o Pix copia e cola e a linha digitável do boleto. Você não precisa
+          colar chave nenhuma, e ele só consulta — nada é criado ou alterado no Asaas.
+        </p>
+      ) : null}
 
       {loading ? (
         <div className="flex justify-center py-3">

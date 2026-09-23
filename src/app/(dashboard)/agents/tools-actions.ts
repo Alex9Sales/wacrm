@@ -10,7 +10,7 @@
 import { and, desc, eq } from 'drizzle-orm'
 import { classifyUrl } from '@/lib/net/safe-url'
 
-import { db, agentTools, agentToolRuns, aiConfigs } from '@/db'
+import { db, agentTools, agentToolRuns, aiConfigs, asaasConnections } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { requireRole } from '@/lib/auth/account'
 import {
@@ -20,6 +20,13 @@ import {
   type ToolParamDef,
 } from '@/lib/ai/external-tools'
 import { decrypt } from '@/lib/whatsapp/encryption'
+import { asaasBaseUrl } from '@/lib/asaas/collections'
+import {
+  ASAAS_AUTH_HEADER,
+  ASAAS_KIT,
+  asaasKitInstalledCount,
+  planAsaasKit,
+} from '@/lib/collections/asaas-tool-kit'
 
 export interface AgentToolRow {
   id: string
@@ -311,4 +318,149 @@ export async function listAgentToolRuns(agentId: string): Promise<ToolRunRow[]> 
     durationMs: r.durationMs,
     createdAt: r.createdAt,
   }))
+}
+
+// ------------------------------------------------------------
+// 🧰 Kit do Asaas — instalar as ferramentas de consulta com um clique.
+//
+// 23/09 (Alex): a conta já conectou o Asaas em Cobranças, então a chave já
+// está guardada aqui dentro. O botão usa ELA: o cliente não cola chave
+// nenhuma, e a chave continua sem nunca voltar para a tela.
+// ------------------------------------------------------------
+
+export interface AsaasKitConnection {
+  id: string
+  /** Nome que o cliente deu ("Minha conta", "Conta do pai"). */
+  label: string
+  /** Conta de teste do Asaas — o kit aponta para o mesmo ambiente. */
+  sandbox: boolean
+}
+
+export interface AsaasKitStatus {
+  /** A conta tem Asaas conectado? Sem isso o botão nem aparece. */
+  connected: boolean
+  /** As contas Asaas ligadas. Com mais de uma, o cliente escolhe (o João tem duas). */
+  connections: AsaasKitConnection[]
+  /** Quantas das ferramentas do kit já estão neste agente. */
+  installed: number
+  total: number
+}
+
+/** As contas Asaas ligadas, a mais antiga primeiro (a primeira é o padrão). */
+async function asaasConnectionsForKit(accountId: string) {
+  return db
+    .select({
+      id: asaasConnections.id,
+      label: asaasConnections.label,
+      apiKeyEnc: asaasConnections.apiKeyEnc,
+      environment: asaasConnections.environment,
+    })
+    .from(asaasConnections)
+    .where(and(eq(asaasConnections.accountId, accountId), eq(asaasConnections.enabled, true)))
+    .orderBy(asaasConnections.createdAt)
+}
+
+export async function asaasToolKitStatus(agentId: string): Promise<AsaasKitStatus> {
+  const vazio: AsaasKitStatus = { connected: false, connections: [], installed: 0, total: ASAAS_KIT.length }
+  try {
+    const ctx = await requireRole('admin')
+    await assertAgentInAccount(ctx.accountId, agentId)
+    const conns = await asaasConnectionsForKit(ctx.accountId)
+    if (!conns.length) return vazio
+    const slugs = await db
+      .select({ slug: agentTools.slug })
+      .from(agentTools)
+      .where(eq(agentTools.agentId, agentId))
+    return {
+      connected: true,
+      connections: conns.map((c) => ({ id: c.id, label: c.label, sandbox: c.environment === 'sandbox' })),
+      installed: asaasKitInstalledCount(slugs.map((s) => s.slug)),
+      total: ASAAS_KIT.length,
+    }
+  } catch {
+    return vazio
+  }
+}
+
+/**
+ * Cria (ou atualiza) as ferramentas do kit neste agente, com a chave do Asaas
+ * já conectada. Reinstalar é seguro: casa pelo slug fixo, então atualiza em
+ * vez de duplicar, e mantém ligada/desligada como o cliente deixou.
+ */
+export async function installAsaasToolKit(
+  agentId: string,
+  /** Qual conta Asaas usar. Sem escolha, a mais antiga (conta única = sempre ela). */
+  connectionId?: string | null,
+): Promise<{ error: string | null; installed?: number; updated?: number; label?: string }> {
+  try {
+    const ctx = await requireRole('admin')
+    await assertAgentInAccount(ctx.accountId, agentId)
+    const conns = await asaasConnectionsForKit(ctx.accountId)
+    const conn = connectionId ? conns.find((c) => c.id === connectionId) : conns[0]
+    if (!conn) return { error: 'Conecte o Asaas em Cobranças primeiro — o kit usa a chave que já está lá.' }
+
+    let headers: Record<string, string>
+    try {
+      const apiKey = decrypt(conn.apiKeyEnc)
+      if (!apiKey) throw new Error('vazia')
+      // Asaas autentica no header `access_token`; `Authorization` devolve 401.
+      headers = { [ASAAS_AUTH_HEADER]: apiKey }
+    } catch {
+      return { error: 'Não consegui ler a chave do Asaas dessa conexão. Reconecte em Cobranças.' }
+    }
+
+    const plano = planAsaasKit(asaasBaseUrl(conn.environment === 'sandbox' ? 'sandbox' : 'production'))
+    const existentes = new Map(
+      (
+        await db
+          .select({ id: agentTools.id, slug: agentTools.slug })
+          .from(agentTools)
+          .where(eq(agentTools.agentId, agentId))
+      ).map((r) => [r.slug, r.id]),
+    )
+
+    let installed = 0
+    let updated = 0
+    const agora = new Date().toISOString()
+    for (const t of plano) {
+      const jaTem = existentes.get(t.slug)
+      if (jaTem) {
+        await db
+          .update(agentTools)
+          .set({
+            name: t.name,
+            description: t.description,
+            method: t.method,
+            url: t.url,
+            params: t.params,
+            risk: 'read',
+            headersEnc: encryptToolHeaders(headers),
+            updatedAt: agora,
+          })
+          .where(eq(agentTools.id, jaTem))
+        updated++
+        continue
+      }
+      await db.insert(agentTools).values({
+        accountId: ctx.accountId,
+        agentId,
+        name: t.name,
+        slug: t.slug,
+        description: t.description,
+        method: t.method,
+        url: t.url,
+        headersEnc: encryptToolHeaders(headers),
+        params: t.params,
+        risk: 'read',
+        // Consulta nunca deduplica: o cliente pode perguntar duas vezes.
+        dedupScope: 'off',
+        enabled: true,
+      })
+      installed++
+    }
+    return { error: null, installed, updated, label: conn.label }
+  } catch (err) {
+    console.error('[tools-actions] kit asaas:', err)
+    return { error: 'Não foi possível instalar as ferramentas do Asaas.' }
+  }
 }

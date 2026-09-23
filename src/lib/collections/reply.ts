@@ -14,11 +14,12 @@
 
 import { and, eq, sql } from 'drizzle-orm'
 
-import { db, asaasCharges, collectionsTouches, contacts, member } from '@/db'
+import { db, agentTools, asaasCharges, collectionsTouches, contacts, member } from '@/db'
 import { firstOrNull } from '@/db/helpers'
 import { notifyUsers } from '@/lib/orchestration/actions'
 import { getAccountSettings } from '@/lib/settings/account-settings'
 
+import { isAsaasKitSlug } from './asaas-tool-kit'
 import { changeChargeDueDateCore } from './due-date'
 import { pauseByAi } from './pause'
 import { claimPauseOutcome, loadOpenChargesWithSiblings, markReceiptApplied } from './reply-context'
@@ -313,19 +314,54 @@ const DEBT_LINES_FOR_PROMPT = 10
  * tinha). Com o link aqui, isso vira consulta pura: nada de ferramenta externa,
  * token ou POST no Asaas.
  */
-export async function openDebtForPrompt(accountId: string, contactId: string): Promise<string | null> {
+export async function openDebtForPrompt(
+  accountId: string,
+  contactId: string,
+  /**
+   * Agente desta conversa. Quando ele tem as ferramentas do Asaas instaladas
+   * (kit de 23/09), o resumo leva junto os CÓDIGOS que elas pedem — sem isso a
+   * IA teria que pedir o CPF a quem já está identificado. Sem agente, ou sem o
+   * kit, nada muda: código no prompt é ruído e risco de vazar na fala.
+   */
+  agentId?: string | null,
+): Promise<string | null> {
   const rows = await db
     .select({
       value: asaasCharges.value,
       dueDate: asaasCharges.dueDate,
       description: asaasCharges.description,
       invoiceUrl: asaasCharges.invoiceUrl,
+      asaasId: asaasCharges.asaasId,
+      asaasCustomerId: asaasCharges.asaasCustomerId,
     })
     .from(asaasCharges)
     .where(and(eq(asaasCharges.accountId, accountId), eq(asaasCharges.contactId, contactId), eq(asaasCharges.open, true)))
     .orderBy(asaasCharges.dueDate)
   if (!rows.length) return null
 
+  const comCodigos = await agentHasAsaasKit(accountId, agentId)
+  return debtPromptText(rows, comCodigos)
+}
+
+export interface DebtPromptRow {
+  value: string | number | null
+  dueDate: string | null
+  description: string | null
+  invoiceUrl: string | null
+  asaasId?: string | null
+  asaasCustomerId?: string | null
+}
+
+/**
+ * O texto da dívida que vai para o prompt. PURA — é o que a IA lê para falar
+ * de valor, vencimento e link sem inventar nada.
+ *
+ * `comCodigos` só é ligado quando o agente tem as ferramentas do Asaas: aí os
+ * ids entram para ele consultar Pix/boleto ao vivo, com a ordem explícita de
+ * nunca repetir código nenhum para o cliente.
+ */
+export function debtPromptText(rows: readonly DebtPromptRow[], comCodigos: boolean): string | null {
+  if (!rows.length) return null
   const total = rows.reduce((sum, r) => sum + Number(r.value ?? 0), 0)
   const mostradas = rows.slice(0, DEBT_LINES_FOR_PROMPT)
   const lines = mostradas.map((r) => {
@@ -335,12 +371,31 @@ export async function openDebtForPrompt(accountId: string, contactId: string): P
     return (
       `- ${valor}, venceu em ${r.dueDate ? br(r.dueDate) : 'data não informada'}` +
       (desc ? ` (${desc.slice(0, 80)})` : '') +
-      (link ? ` — link de pagamento: ${link}` : ' — sem link de pagamento disponível')
+      (link ? ` — link de pagamento: ${link}` : ' — sem link de pagamento disponível') +
+      (comCodigos && r.asaasId ? ` [id da cobrança: ${r.asaasId}]` : '')
     )
   })
   const resto = rows.length - mostradas.length
   if (resto > 0) lines.push(`- (e mais ${resto} parcela${resto === 1 ? '' : 's'} em aberto)`)
   const totalLine =
     rows.length > 1 ? `\nTotal: ${total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' })}` : ''
-  return lines.join('\n') + totalLine
+  const idCliente = comCodigos ? (rows.find((r) => r.asaasCustomerId)?.asaasCustomerId ?? '') : ''
+  const codigosLine = idCliente
+    ? `\nId do cliente no Asaas: ${idCliente}. Esses códigos servem SÓ para as ferramentas do Asaas — nunca diga nenhum deles ao cliente.`
+    : ''
+  return lines.join('\n') + totalLine + codigosLine
+}
+
+/** Este agente tem alguma ferramenta do kit do Asaas ligada? (uma consulta curta, só quando há dívida) */
+async function agentHasAsaasKit(accountId: string, agentId?: string | null): Promise<boolean> {
+  if (!agentId) return false
+  try {
+    const rows = await db
+      .select({ slug: agentTools.slug })
+      .from(agentTools)
+      .where(and(eq(agentTools.accountId, accountId), eq(agentTools.agentId, agentId), eq(agentTools.enabled, true)))
+    return rows.some((r) => isAsaasKitSlug(r.slug))
+  } catch {
+    return false
+  }
 }
