@@ -405,11 +405,20 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
   let sentAsTemplate = false
   let adoptedFromEcho = false
   const outgoingText = signManualCollectText(text, senderName, ctx.signatureEnabled)
-  // Instante do clique (com folga para relógio): a busca da cópia entregue
-  // começa daqui. Um clique anterior que "falhou" mas chegou também conta.
-  const clickedAtIso = new Date(Date.now() - 60_000).toISOString()
+  // 📬 O WAHA às vezes devolve erro e ENTREGA (14/09, régua). Um clique que
+  // "falhou" há instantes pode já estar na conversa: o mesmo texto para o
+  // mesmo devedor, pelo mesmo número, dentro de 2 min, nunca é reenvio
+  // legítimo — é o mesmo envio. Confere ANTES de mandar (o 2º clique costuma
+  // dar certo, e aí o catch nunca rodaria) e de novo no catch, com uma espera
+  // curta para o eco chegar pelo webhook.
+  const lookbackIso = new Date(Date.now() - 2 * 60_000).toISOString()
+  const copyOf = () =>
+    findDeliveredWhatsAppCopy(accountId, { contactId: ctx.contact.id, createdAt: lookbackIso, suggestedText: text }, { conversationId }).catch(() => null)
   try {
     const gate = await officialTemplateGate(accountId, conversationId)
+    // A flag vem ANTES do await: se o template lançar, o catch precisa saber
+    // que foi template — o texto do rascunho nunca reconhece um template.
+    sentAsTemplate = gate.needsTemplate
     if (gate.needsTemplate) {
       if (!gate.templateName) {
         return {
@@ -425,26 +434,32 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
         templateLanguage: gate.templateLanguage,
         templateParams: gate.params,
       })
-      sentAsTemplate = true
     } else {
-      await sendMessageToConversation(accountId, {
-        conversationId,
-        messageType: 'text',
-        contentText: outgoingText,
-      })
+      const already = await copyOf()
+      if (already) {
+        adoptedFromEcho = true
+        console.warn(`[cobranca] envio à mão: a mesma cobrança já saiu há instantes nesta conversa (${already.id.slice(0, 8)}) — adotada, não reenviada`)
+      } else {
+        await sendMessageToConversation(accountId, {
+          conversationId,
+          messageType: 'text',
+          contentText: outgoingText,
+        })
+      }
     }
   } catch (err) {
     const raw = err instanceof Error ? err.message : String(err)
-    // O WAHA às vezes devolve erro e ENTREGA (14/09, régua): dizer "tente de
-    // novo" aqui era cobrar em dobro. Antes de recusar, procura a mensagem na
-    // conversa do devedor desde o clique; achou → segue como enviada. O
-    // template não tem como ser reconhecido pelo texto — esse recusa direto.
-    const copy = sentAsTemplate
-      ? null
-      : await findDeliveredWhatsAppCopy(accountId, { contactId: ctx.contact.id, createdAt: clickedAtIso, suggestedText: text }).catch(() => null)
+    // Antes de recusar, procura a mensagem na conversa (3 tentativas, 1,5 s
+    // entre elas — o eco do WAHA chega pelo webhook alguns segundos depois).
+    let copy: Awaited<ReturnType<typeof copyOf>> = null
+    if (!sentAsTemplate) {
+      for (let i = 0; i < 3 && !copy; i++) {
+        if (i > 0) await new Promise((r) => setTimeout(r, 1500))
+        copy = await copyOf()
+      }
+    }
     if (!copy) return { ok: false, error: friendlySendError(raw) ?? `Não foi possível enviar: ${raw}` }
     adoptedFromEcho = true
-    conversationId = copy.conversationId
     console.warn(`[cobranca] envio à mão: canal devolveu erro mas a mensagem já estava na conversa (${copy.id.slice(0, 8)}) — adotada, não reenviada`)
   }
 

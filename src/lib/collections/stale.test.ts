@@ -32,6 +32,10 @@ describe('localDayStartIso — meia-noite local em UTC', () => {
     expect(localDayStartIso('2026-03-08', 'America/New_York')).toBe('2026-03-08T05:00:00.000Z')
     expect(localDayStartIso('2026-03-09', 'America/New_York')).toBe('2026-03-09T04:00:00.000Z')
   })
+  it('virada de horário de verão à meia-noite (Chile: 6/9 pula de 00:00 para 01:00; 5/4 volta)', () => {
+    expect(localDayStartIso('2026-09-06', 'America/Santiago')).toBe('2026-09-06T04:00:00.000Z')
+    expect(localDayStartIso('2026-04-05', 'America/Santiago')).toBe('2026-04-05T04:00:00.000Z')
+  })
   it('fuso inválido → meia-noite UTC; dia inválido → época', () => {
     expect(localDayStartIso('2026-09-22', 'Marte/Cratera')).toBe('2026-09-22T00:00:00.000Z')
     expect(localDayStartIso('x', 'America/Sao_Paulo')).toBe('1970-01-01T00:00:00.000Z')

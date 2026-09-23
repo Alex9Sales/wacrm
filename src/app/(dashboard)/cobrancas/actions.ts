@@ -2213,6 +2213,13 @@ async function undoUpcomingLink(
       if (current && !keepLink) {
         await tx.delete(asaasCustomerLinks).where(and(eq(asaasCustomerLinks.accountId, accountId), linkRefsWhere([ref])))
       }
+      // 🔔 Próximos vencimentos: a leitura anterior já pode ter gravado o
+      // contato do vínculo na linha — desligar/desfazer vale na hora (como no
+      // unlinkDebtor da carteira); com vínculo anterior mantido, volta a ele.
+      await tx
+        .update(collectionsUpcoming)
+        .set({ contactId: keepLink ? (undo.previousContactId ?? null) : null })
+        .where(and(eq(collectionsUpcoming.accountId, accountId), eq(collectionsUpcoming.connectionId, connectionId), eq(collectionsUpcoming.asaasCustomerId, customerId)))
       const now = new Date().toISOString()
       for (const item of restore) {
         const target = restoreTarget(item, stillThere)

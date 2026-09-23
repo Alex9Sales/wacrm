@@ -40,8 +40,12 @@ export function localDayKey(tz: string, at: Date = new Date()): string {
 export function localDayStartIso(dayKey: string, tz: string): string {
   const midnightUtc = Date.parse(`${dayKey.slice(0, 10)}T00:00:00Z`)
   if (Number.isNaN(midnightUtc)) return new Date(0).toISOString()
-  let instant = midnightUtc - tzOffsetMs(tz, midnightUtc)
-  instant = midnightUtc - tzOffsetMs(tz, instant)
+  const first = midnightUtc - tzOffsetMs(tz, midnightUtc)
+  const second = midnightUtc - tzOffsetMs(tz, first)
+  // Virada de horário de verão À MEIA-NOITE (Chile, Cuba): a 2ª passada cai
+  // uma hora antes do dia começar. Se o instante ainda é "ontem" no fuso, o
+  // primeiro instante do dia é o da 1ª passada (a meia-noite pulada vira 01:00).
+  const instant = localDayKey(tz, new Date(second)) < dayKey.slice(0, 10) ? first : second
   return new Date(instant).toISOString()
 }
 

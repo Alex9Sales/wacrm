@@ -24,6 +24,8 @@ import { deliveredEchoSnippet } from './rules'
 export async function findDeliveredWhatsAppCopy(
   accountId: string,
   row: { contactId: string; createdAt: string; suggestedText: string | null },
+  /** Só nesta conversa (envio à mão: a conversa do número escolhido já é conhecida — o eco de outro número/da régua não é o nosso). */
+  opts: { conversationId?: string } = {},
 ): Promise<{ id: string; conversationId: string; createdAt: string | null } | null> {
   const snippet = deliveredEchoSnippet(row.suggestedText)
   if (!snippet) return null
@@ -37,6 +39,7 @@ export async function findDeliveredWhatsAppCopy(
         and(
           eq(conversations.accountId, accountId),
           eq(conversations.contactId, row.contactId),
+          ...(opts.conversationId ? [eq(messages.conversationId, opts.conversationId)] : []),
           notInArray(channels.provider, ['email', 'gmail']),
           inArray(messages.senderType, ['agent', 'bot']),
           eq(messages.isInternal, false),
