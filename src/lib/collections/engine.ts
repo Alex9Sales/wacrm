@@ -459,6 +459,10 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
         touch: d.touchCount + 1,
         maxDaysLate: maxLate,
         delivery: delivery.label,
+        // 23/09: a conta do Asaas de cada parcela — a faixa "Economia no Asaas"
+        // quebra por conta (`connectionId` só quando todas são da mesma).
+        connectionIds: [...new Set(d.charges.map((c) => c.connectionId).filter((x): x is string => !!x))],
+        ...(new Set(d.charges.map((c) => c.connectionId)).size === 1 && d.charges[0]?.connectionId ? { connectionId: d.charges[0].connectionId } : {}),
       },
       suggestedText: text,
       reason:

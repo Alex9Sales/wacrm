@@ -2992,8 +2992,16 @@ export async function getSendsReport(): Promise<SendsReport> {
   // 💰 Avisos de WhatsApp que saíram pelo CRM (hoje e no mês), por conta do
   // Asaas. `result.sentVia` é o que de fato saiu; `payload.connectionId` só
   // existe quando as parcelas do pedido são de UMA conta.
+  // Pedido sem `connectionId` (régua até 23/09, ou parcelas de duas contas):
+  // vale a conta com mais cobranças desse devedor na carteira.
   const economia = sql`
-    SELECT coalesce(ac.label, CASE WHEN r.payload->>'connectionId' IS NULL THEN '(várias contas)' ELSE '(conta removida)' END) AS conta,
+    SELECT coalesce(
+             ac.label,
+             (SELECT ac2.label FROM asaas_charges ch JOIN asaas_connections ac2 ON ac2.id = ch.connection_id
+               WHERE ch.account_id = r.account_id AND ch.contact_id = r.contact_id
+               GROUP BY ac2.label ORDER BY count(*) DESC LIMIT 1),
+             '(sem conta)'
+           ) AS conta,
            count(*) FILTER (WHERE coalesce(r.executed_at, r.created_at) >= ${inicioDia})::int AS hoje,
            count(*)::int AS mes
       FROM agent_action_requests r
