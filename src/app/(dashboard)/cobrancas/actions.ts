@@ -57,6 +57,7 @@ import {
 import { changeChargeDueDateCore } from '@/lib/collections/due-date'
 import { manualPromiseReasonPrefix } from '@/lib/collections/reply-guard'
 import { localDayKey } from '@/lib/collections/stale'
+import { CAPABILITIES } from '@/lib/channels/provider'
 import {
   draftManualCollectWithAiCore,
   prepareManualCollectCore,
@@ -2860,10 +2861,13 @@ export interface SendsReport {
   savings: {
     fee: number
     notificationsOff: boolean
+    /** Avisos = PARCELAS avisadas (o Asaas cobra por cobrança, não por mensagem). Só canal NÃO oficial. */
     today: { count: number; brl: number }
     month: { count: number; brl: number }
-    /** Por conta do Asaas, no mês (pedido com parcelas de mais de uma conta entra em "várias contas"). */
-    byConnection: { label: string; count: number; brl: number }[]
+    /** Por conta do Asaas: mês e hoje. */
+    byConnection: { label: string; count: number; brl: number; today: { count: number; brl: number } }[]
+    /** Parcelas avisadas pela API OFICIAL no mês — a Meta cobra a conversa, então não entram na economia. */
+    officialMonth: number
   }
 }
 
@@ -2897,7 +2901,7 @@ export async function getSendsReport(): Promise<SendsReport> {
     today: { sent: 0, failed: 0, waiting: 0, expired: 0, replied: 0, delivered: 0, firstAt: null, lastAt: null, cap: null },
     month: { sent: 0, clients: 0, repliedClients: 0, expired: 0 },
     rows: [],
-    savings: { fee: s.asaasWhatsAppFee, notificationsOff: s.asaasNotificationsOff, today: { count: 0, brl: 0 }, month: { count: 0, brl: 0 }, byConnection: [] },
+    savings: { fee: s.asaasWhatsAppFee, notificationsOff: s.asaasNotificationsOff, today: { count: 0, brl: 0 }, month: { count: 0, brl: 0 }, byConnection: [], officialMonth: 0 },
   }
 
   // O dia e o mês no fuso da conta, como instantes — o banco compara em UTC.
@@ -2994,6 +2998,13 @@ export async function getSendsReport(): Promise<SendsReport> {
   // existe quando as parcelas do pedido são de UMA conta.
   // Pedido sem `connectionId` (régua até 23/09, ou parcelas de duas contas):
   // vale a conta com mais cobranças desse devedor na carteira.
+  // Conta por PARCELA (`payload.charges`, senão o nº de linhas): o Asaas cobra
+  // um aviso por cobrança, e uma mensagem da régua junta várias.
+  // Canal OFICIAL (Meta) sai à parte: a Meta cobra a conversa — não é economia.
+  const oficiais = Object.entries(CAPABILITIES)
+    .filter(([, c]) => c.templates === true)
+    .map(([p]) => p)
+  const parcelas = sql`coalesce((r.payload->>'charges')::int, CASE WHEN jsonb_typeof(r.payload->'lines') = 'array' THEN jsonb_array_length(r.payload->'lines') END, 1)`
   const economia = sql`
     SELECT coalesce(
              ac.label,
@@ -3002,19 +3013,22 @@ export async function getSendsReport(): Promise<SendsReport> {
                GROUP BY ac2.label ORDER BY count(*) DESC LIMIT 1),
              '(sem conta)'
            ) AS conta,
-           count(*) FILTER (WHERE coalesce(r.executed_at, r.created_at) >= ${inicioDia})::int AS hoje,
-           count(*)::int AS mes
+           (chn.provider IN (${sql.join(oficiais.map((p) => sql`${p}`), sql`, `)})) AS oficial,
+           sum(${parcelas}) FILTER (WHERE coalesce(r.executed_at, r.created_at) >= ${inicioDia})::int AS hoje,
+           sum(${parcelas})::int AS mes
       FROM agent_action_requests r
       LEFT JOIN asaas_connections ac ON ac.id::text = r.payload->>'connectionId'
+      LEFT JOIN conversations cv ON cv.id = coalesce((r.result->>'conversationId')::uuid, r.conversation_id)
+      LEFT JOIN channels chn ON chn.id = cv.channel_id
      WHERE r.account_id = ${accountId}
        AND r.action_type = 'collect_charges'
        AND r.status = 'sent'
        AND r.result->'sentVia' ? 'whatsapp'
        AND coalesce(r.executed_at, r.created_at) >= ${inicioMes}
-     GROUP BY 1
-     ORDER BY 3 DESC
+     GROUP BY 1, 2
+     ORDER BY 4 DESC
   `
-  type EconomiaRaw = { conta: string; hoje: number; mes: number }
+  type EconomiaRaw = { conta: string; oficial: boolean | null; hoje: number; mes: number }
 
   const linhasDe = <T,>(res: unknown): T[] =>
     (Array.isArray(res) ? res : ((res as { rows?: unknown[] }).rows ?? [])) as T[]
@@ -3094,14 +3108,23 @@ export async function getSendsReport(): Promise<SendsReport> {
     savings: (() => {
       const fee = s.asaasWhatsAppFee
       const brl = (n: number) => Math.round(n * fee * 100) / 100
-      const hoje = economiaRaw.reduce((acc, r) => acc + (Number(r.hoje) || 0), 0)
-      const mesN = economiaRaw.reduce((acc, r) => acc + (Number(r.mes) || 0), 0)
+      const gratis = economiaRaw.filter((r) => r.oficial !== true)
+      const hoje = gratis.reduce((acc, r) => acc + (Number(r.hoje) || 0), 0)
+      const mesN = gratis.reduce((acc, r) => acc + (Number(r.mes) || 0), 0)
+      const porConta = new Map<string, { mes: number; hoje: number }>()
+      for (const r of gratis) {
+        const cur = porConta.get(r.conta) ?? { mes: 0, hoje: 0 }
+        porConta.set(r.conta, { mes: cur.mes + (Number(r.mes) || 0), hoje: cur.hoje + (Number(r.hoje) || 0) })
+      }
       return {
         fee,
         notificationsOff: s.asaasNotificationsOff,
         today: { count: hoje, brl: brl(hoje) },
         month: { count: mesN, brl: brl(mesN) },
-        byConnection: economiaRaw.map((r) => ({ label: r.conta, count: Number(r.mes) || 0, brl: brl(Number(r.mes) || 0) })),
+        byConnection: [...porConta.entries()]
+          .sort((a, b) => b[1].mes - a[1].mes)
+          .map(([label, v]) => ({ label, count: v.mes, brl: brl(v.mes), today: { count: v.hoje, brl: brl(v.hoje) } })),
+        officialMonth: economiaRaw.filter((r) => r.oficial === true).reduce((acc, r) => acc + (Number(r.mes) || 0), 0),
       }
     })(),
   }

@@ -405,7 +405,7 @@ export async function queueNewChargeNotices(args: {
 
   const ids = [...porContato.keys()]
   const fichas = await db
-    .select({ id: contacts.id, name: contacts.name, optedOut: contacts.optedOut })
+    .select({ id: contacts.id, name: contacts.name, nameSource: contacts.nameSource, optedOut: contacts.optedOut })
     .from(contacts)
     .where(and(eq(contacts.accountId, args.accountId), inArray(contacts.id, ids)))
   const fichaPor = new Map(fichas.map((r) => [r.id, r]))
@@ -541,8 +541,9 @@ export async function queueNewChargeNotices(args: {
 
     // Nome de pessoa no Asaas prevalece (10/09); empresa no Asaas + pessoa na
     // ficha → cumprimenta a pessoa (23/09, collectionGreetingName).
+    const saudacao = collectionGreetingName(cand.nomeAsaas, ficha.name, ficha.nameSource)
     const texto = newChargesMessage(
-      collectionGreetingName(cand.nomeAsaas, ficha.name),
+      saudacao,
       linhas.map((l) => l.line),
       { showValues: s.showValues },
     )
@@ -596,6 +597,7 @@ export async function queueNewChargeNotices(args: {
           // O executor confere estes links de novo na hora do envio (actions.ts).
           links: linhas.map((l) => l.line.url),
           charges: linhas.length,
+          greetingName: saudacao,
           total: linhas.reduce((acc, l) => acc + l.line.value, 0),
           touch: 0,
           delivery: delivery.label,

@@ -301,7 +301,8 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
     overdueStatuses: statuses.length ? statuses : [...COLLECTIONS_DEFAULTS.overdueStatuses],
     asaasWhatsAppFee: (() => {
       const n = typeof r.asaasWhatsAppFee === 'number' ? r.asaasWhatsAppFee : Number.NaN
-      return Number.isFinite(n) ? Math.min(20, Math.max(0, Math.round(n * 100) / 100)) : ASAAS_WHATSAPP_FEE_DEFAULT
+      // 0 ou vazio (campo apagado na tela) não é "grátis": volta ao padrão.
+      return Number.isFinite(n) && n > 0 ? Math.min(20, Math.round(n * 100) / 100) : ASAAS_WHATSAPP_FEE_DEFAULT
     })(),
     maxTouches: int(r.maxTouches, 8, 1, 50),
     tone: typeof r.tone === 'string' ? r.tone.slice(0, 600) : '',
@@ -727,6 +728,8 @@ export function describeWeekdays(dias: number[]): string {
 // ------------------------------------------------------------ texto da dívida
 
 export interface ChargeLine {
+  /** pay_… do Asaas (o envio à mão grava a parcela no pedido — economia por conta). */
+  asaasId?: string | null
   /** Cadastro do Asaas de onde veio (para o detector de duplicata). */
   customerId?: string | null
   /** Conta do Asaas — duplicata só conta dentro da mesma (16/09). */
@@ -1201,12 +1204,36 @@ export function fillTemplateParams(params: readonly string[], vars: TemplateVars
  * o primeiro nome do contato; senão a empresa como está no Asaas (decisão de
  * 10/09 continua: o apelido do celular nunca substitui um nome de pessoa do Asaas).
  */
-export function collectionGreetingName(asaasName: string | null | undefined, crmName: string | null | undefined): string | null {
+export function collectionGreetingName(
+  asaasName: string | null | undefined,
+  crmName: string | null | undefined,
+  /**
+   * `contacts.name_source`: o nome do CRM só entra quando alguém o digitou
+   * ('crm') ou veio da agenda ('phonebook'). Apelido do WhatsApp ("Jump
+   * Odonto 🦷", "Tudo passa 🙏") não vira saudação. `undefined` = não sei a
+   * origem, aceita (chamador antigo).
+   */
+  crmNameSource?: string | null,
+): string | null {
   const asaas = (asaasName ?? '').trim()
   if (asaas && firstNameForGreeting(asaas)) return greetingName(asaas)
-  const crm = firstNameForGreeting(crmName)
+  const crmTrusted = crmNameSource === undefined || crmNameSource === 'crm' || crmNameSource === 'phonebook'
+  const crm = crmTrusted ? firstNameForGreeting(crmName) : ''
   if (crm) return crm
-  return greetingName(asaas || crmName)
+  // Sem nome de pessoa em lugar nenhum: a empresa do Asaas; sem Asaas, nada
+  // ("Oi!") — o nome do CRM já foi julgado "não é pessoa" (telefone, frase).
+  return asaas ? greetingName(asaas) : null
+}
+
+/** Variáveis do template que ficaram VAZIAS depois da troca — a Meta recusa parâmetro vazio ("missing text value"). */
+export function missingTemplateVars(params: readonly string[], vars: TemplateVars): string[] {
+  const map: Record<string, string> = { nome: vars.nome, valor: vars.valor ?? '', link: vars.link ?? '', dias: vars.dias ?? '', parcelas: vars.parcelas ?? '' }
+  // Chave sem dado dentro do parâmetro ("Vence em {dias} dias" → "Vence em  dias")
+  // também conta: a Meta aceita, mas o cliente lê um buraco na frase.
+  return params.filter((p) => {
+    const keys = [...p.matchAll(/\{(nome|valor|link|dias|parcelas)\}/gi)].map((m) => m[1].toLowerCase())
+    return keys.some((k) => (map[k] ?? '').trim() === '')
+  })
 }
 
 /** Variáveis do template a partir do payload do pedido (régua, lembrete, aviso do dia, cobrança nova). */

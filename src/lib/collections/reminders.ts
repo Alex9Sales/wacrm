@@ -615,7 +615,7 @@ export async function queueUpcomingReminders(args: {
   const touchByContact = new Map(touchRows.map((r) => [r.contactId, r]))
 
   const contactRows = await db
-    .select({ id: contacts.id, name: contacts.name, optedOut: contacts.optedOut })
+    .select({ id: contacts.id, name: contacts.name, nameSource: contacts.nameSource, optedOut: contacts.optedOut })
     .from(contacts)
     .where(and(eq(contacts.accountId, args.accountId), inArray(contacts.id, ids)))
   const contactById = new Map(contactRows.map((r) => [r.id, r]))
@@ -753,7 +753,7 @@ export async function queueUpcomingReminders(args: {
     )
     // Nome como está no Asaas prevalece (10/09); o contato só cobre o vazio.
     const fullName = (cand.name ?? '').trim() || contact.name || null
-    const firstName = collectionGreetingName(cand.name, contact.name)
+    const firstName = collectionGreetingName(cand.name, contact.name, contact.nameSource)
     const seed = seedFrom(cand.contactId, 0, args.dayKey)
     const text = await draftReminder({
       accountId: args.accountId,
@@ -820,6 +820,7 @@ export async function queueUpcomingReminders(args: {
           dueIn,
           touch: 0,
           delivery: delivery.label,
+          greetingName: firstName,
           // O executor usa se o contato continuar sem e-mail na hora do envio.
           ...(cand.email ? { asaasEmail: cand.email } : {}),
         },
@@ -874,7 +875,7 @@ async function draftReminder(args: {
         ? 'Você escreve um AVISO amigável no WhatsApp, em português do Brasil, sobre uma cobrança que VENCE HOJE. UMA mensagem (até 400 caracteres), sem markdown, sem assinatura.'
         : 'Você escreve um LEMBRETE amigável no WhatsApp, em português do Brasil, sobre uma cobrança que AINDA NÃO VENCEU. UMA mensagem (até 400 caracteres), sem markdown, sem assinatura.',
       args.fullName
-        ? `Cliente (nome como está no Asaas): ${args.fullName}. Se for pessoa, chame só pelo primeiro nome; se for empresa, use o nome da empresa como está (curto). Nunca invente apelido.`
+        ? `Cliente (nome como está no Asaas): ${args.fullName}.${args.firstName ? ` Cumprimente como "${args.firstName}" — é assim que a pessoa deve ser chamada; não use outro nome nem só a primeira palavra da empresa.` : ' Se for pessoa, chame só pelo primeiro nome; se for empresa, use o nome da empresa como está (curto). Nunca invente apelido.'}`
         : 'Não sabemos o nome do cliente — não invente um.',
       `O que ${args.dueToday ? 'vence hoje' : 'vai vencer'} (copie exatamente, NUNCA recalcule):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`,
       args.summary.showValues ? '' : 'A empresa NÃO quer valores na mensagem: não cite valor em reais — só a data de vencimento e o link. O valor o cliente vê no link.',

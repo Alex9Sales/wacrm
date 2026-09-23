@@ -4,6 +4,7 @@ import {
   ASAAS_WHATSAPP_FEE_DEFAULT,
   collectionGreetingName,
   fillTemplateParams,
+  missingTemplateVars,
   normalizeSettings,
   templateForKind,
   templateKindOf,
@@ -52,6 +53,12 @@ describe('templates por tipo de mensagem (23/09)', () => {
     ])
   })
 
+  it('missingTemplateVars: aponta a variável que ficou vazia (a Meta recusa parâmetro vazio)', () => {
+    expect(missingTemplateVars(['{nome}', '{valor}', 'fixo', '{link}'], { nome: 'Ana', valor: '', link: 'https://x' })).toEqual(['{valor}'])
+    expect(missingTemplateVars(['{nome}'], { nome: 'Ana' })).toEqual([])
+    expect(missingTemplateVars(['Vence em {dias} dias'], { nome: 'Ana' })).toEqual(['Vence em {dias} dias'])
+  })
+
   it('templateVarsFromPayload: régua (maxDaysLate), lembrete (dueIn), aviso do dia ("hoje")', () => {
     expect(templateVarsFromPayload({ total: 1234.5, links: ['https://a', 'https://b'], charges: 2, maxDaysLate: 7 })).toEqual({
       // Intl usa espaço inflexível entre "R$" e o número.
@@ -78,8 +85,17 @@ describe('collectionGreetingName — pessoa no Asaas manda; empresa no Asaas + p
   it('empresa nos dois → a empresa como está no Asaas', () => {
     expect(collectionGreetingName('Clínica Jump', 'Clinica Jump Recepção')).toBe('Clínica Jump')
   })
-  it('sem Asaas → o CRM; sem nada → null', () => {
+  it('apelido do WhatsApp (name_source whatsapp) não vira saudação; nome digitado (crm/phonebook) vira', () => {
+    expect(collectionGreetingName('Clínica Jump Ltda', 'Jump Odonto 🦷', 'whatsapp')).toBe('Clínica Jump')
+    expect(collectionGreetingName('Clínica Jump Ltda', 'Tudo passa 🙏', 'whatsapp')).toBe('Clínica Jump')
+    expect(collectionGreetingName('Clínica Jump Ltda', 'Jessica Almeida', 'crm')).toBe('Jessica')
+    expect(collectionGreetingName('Clínica Jump Ltda', 'Jessica Almeida', 'phonebook')).toBe('Jessica')
+    expect(collectionGreetingName('Clínica Jump Ltda', 'Jessica Almeida', 'whatsapp')).toBe('Clínica Jump')
+  })
+  it('sem Asaas → o CRM quando é pessoa; telefone/frase no CRM → nada ("Oi!")', () => {
     expect(collectionGreetingName(null, 'Carlos')).toBe('Carlos')
+    expect(collectionGreetingName(null, '+55 12 99123-4567')).toBeNull()
+    expect(collectionGreetingName('', 'Meus Netinhos Queridos')).toBeNull()
     expect(collectionGreetingName('', '')).toBeNull()
   })
 })
@@ -88,7 +104,8 @@ describe('asaasWhatsAppFee', () => {
   it('padrão da tabela pública; aceita ajuste; recusa lixo e negativo', () => {
     expect(normalizeSettings({}).asaasWhatsAppFee).toBe(ASAAS_WHATSAPP_FEE_DEFAULT)
     expect(normalizeSettings({ asaasWhatsAppFee: 0.7 }).asaasWhatsAppFee).toBe(0.7)
-    expect(normalizeSettings({ asaasWhatsAppFee: -1 }).asaasWhatsAppFee).toBe(0)
+    expect(normalizeSettings({ asaasWhatsAppFee: -1 }).asaasWhatsAppFee).toBe(ASAAS_WHATSAPP_FEE_DEFAULT)
+    expect(normalizeSettings({ asaasWhatsAppFee: 0 }).asaasWhatsAppFee).toBe(ASAAS_WHATSAPP_FEE_DEFAULT)
     expect(normalizeSettings({ asaasWhatsAppFee: 'x' }).asaasWhatsAppFee).toBe(ASAAS_WHATSAPP_FEE_DEFAULT)
   })
   it('ajuste pontual nunca zera o padrão de quem não mexeu', () => {

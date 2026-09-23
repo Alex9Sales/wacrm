@@ -36,12 +36,14 @@ import { NEW_CHARGE_LINK_SENT_ERROR } from '@/lib/collections/new-charge-rules'
 import { resolveCollectionTargets } from '@/lib/collections/outreach'
 import { reminderStillPending } from '@/lib/collections/reminders'
 import { localDayKey, localDayStartIso } from '@/lib/collections/stale'
+import { firstNameForGreeting } from '@/lib/cdl/names'
 import {
   countsAsCollectionTouch,
   debtorHold,
   DUE_TODAY_LINK_SENT_ERROR,
   fillTemplateParams,
   holdRefusal,
+  missingTemplateVars,
   normalizeSettings,
   templateForKind,
   templateKindOf,
@@ -368,13 +370,14 @@ export async function executeOrchestrationAction(input: ExecInput): Promise<Exec
           // mensagem que a Meta descarta em silêncio.
           const gate = await officialTemplateGate(input.accountId, targets.whatsapp.conversationId, {
             kind: templateKindOf(kind),
-            vars: templateVarsFromPayload(input.payload),
+            vars: { ...templateVarsFromPayload(input.payload), nome: typeof input.payload.greetingName === 'string' ? input.payload.greetingName : '' },
           })
           if (gate.needsTemplate) {
             if (!gate.templateName) {
               return {
                 ok: false,
                 error:
+                  gate.error ??
                   'Este número é a API oficial do WhatsApp e o cliente não escreveu nas últimas 24 h, então só um template aprovado é entregue. Escolha o template em Cobranças → Ajustar.',
               }
             }
@@ -821,9 +824,9 @@ export async function recordCollectionTouch(accountId: string, contactId: string
 export async function officialTemplateGate(
   accountId: string,
   conversationId: string,
-  /** Tipo da mensagem (template por tipo, 23/09) e os dados para as variáveis. */
-  opts: { kind?: CollectionTemplateKind; vars?: Omit<TemplateVars, 'nome'> } = {},
-): Promise<{ needsTemplate: boolean; templateName: string | null; templateLanguage: string | null; params: string[] }> {
+  /** Tipo da mensagem (template por tipo, 23/09) e os dados para as variáveis (`nome` = saudação já decidida; sem ele, o primeiro nome do contato). */
+  opts: { kind?: CollectionTemplateKind; vars?: Partial<TemplateVars> } = {},
+): Promise<{ needsTemplate: boolean; templateName: string | null; templateLanguage: string | null; params: string[]; error?: string }> {
   const vazio = { needsTemplate: false, templateName: null, templateLanguage: null, params: [] as string[] }
   try {
     const { CAPABILITIES } = await import('@/lib/channels/provider')
@@ -851,14 +854,38 @@ export async function officialTemplateGate(
     if (aberta) return vazio
 
     const s = normalizeSettings((await getAccountSettings(accountId)).collections)
-    const nome = (row.contactName ?? '').trim().split(/\s+/)[0] || 'cliente'
+    // O nome vem decidido de quem montou a mensagem (collectionGreetingName);
+    // sem ele, o primeiro nome do contato — nunca a 1ª palavra crua ("Olá Clínica").
+    const nome = (opts.vars?.nome ?? '').trim() || firstNameForGreeting(row.contactName) || 'cliente'
     const tpl = templateForKind(s, opts.kind ?? 'collection')
-    if (!tpl) return { needsTemplate: true, templateName: null, templateLanguage: null, params: [] }
+    if (!tpl) {
+      return {
+        needsTemplate: true,
+        templateName: null,
+        templateLanguage: null,
+        params: [],
+        error:
+          'Este número é a API oficial do WhatsApp e o cliente não escreveu nas últimas 24 h, então só um template aprovado é entregue. Escolha o template em Cobranças → Ajustar.',
+      }
+    }
+    const vars: TemplateVars = { ...(opts.vars ?? {}), nome }
+    // A Meta recusa variável vazia ("Parameter of type text is missing text
+    // value"): recusa ANTES, dizendo qual — em vez de um erro genérico na fila.
+    const faltando = missingTemplateVars(tpl.params, vars)
+    if (faltando.length) {
+      return {
+        needsTemplate: true,
+        templateName: null,
+        templateLanguage: null,
+        params: [],
+        error: `A variável ${faltando.map((v) => `"${v}"`).join(', ')} do template "${tpl.name}" ficou sem valor nesta cobrança (ex.: valores escondidos em Ajustar, parcela sem link). Troque por texto fixo ou ajuste em Cobranças → Ajustar.`,
+      }
+    }
     return {
       needsTemplate: true,
       templateName: tpl.name,
       templateLanguage: tpl.language,
-      params: fillTemplateParams(tpl.params, { nome, ...(opts.vars ?? {}) }),
+      params: fillTemplateParams(tpl.params, vars),
     }
   } catch (err) {
     console.error('[cobranca] checagem de template oficial falhou:', err instanceof Error ? err.message : err)

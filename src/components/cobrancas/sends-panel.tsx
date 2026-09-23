@@ -132,20 +132,27 @@ export function SendsPanel({ timezone = 'America/Sao_Paulo' }: { timezone?: stri
 
       {/* 💰 Economia no Asaas (23/09, ideia do Rafael): bem na cara — o cliente
           vê quanto deixou de pagar ao Asaas antes de reclamar do CRM. */}
-      {savings.month.count > 0 && (
+      {(savings.month.count > 0 || savings.officialMonth > 0) && (
         <div className="flex flex-wrap items-baseline gap-x-4 gap-y-1 border-t border-border px-4 py-2 text-sm">
           <span className="font-medium text-emerald-700 dark:text-emerald-400">
             Economia no Asaas: {brl(savings.month.brl)} no mês
           </span>
           <span className="text-xs text-muted-foreground">
-            {savings.month.count} {savings.month.count === 1 ? 'aviso de WhatsApp saiu' : 'avisos de WhatsApp saíram'} pelo CRM
+            {savings.month.count} {savings.month.count === 1 ? 'aviso de cobrança saiu' : 'avisos de cobrança saíram'} pelo CRM
             {savings.today.count > 0 ? ` · hoje ${savings.today.count} (${brl(savings.today.brl)})` : ''}
             {' · '}
-            {brl(savings.fee)} cada no Asaas
+            {brl(savings.fee)} cada no Asaas (estimativa)
           </span>
           {savings.byConnection.length > 1 && (
             <span className="text-xs text-muted-foreground">
-              {savings.byConnection.map((c) => `${c.label}: ${brl(c.brl)}`).join(' · ')}
+              {savings.byConnection
+                .map((c) => `${c.label}: ${brl(c.brl)} no mês${c.today.count > 0 ? ` · hoje ${brl(c.today.brl)}` : ''}`)
+                .join(' · ')}
+            </span>
+          )}
+          {savings.officialMonth > 0 && (
+            <span className="text-xs text-muted-foreground">
+              + {savings.officialMonth} pela API oficial (a Meta cobra a conversa — fora da conta)
             </span>
           )}
           {!savings.notificationsOff && (

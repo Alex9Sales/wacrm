@@ -151,6 +151,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       connectionId: asaasCharges.connectionId,
       cpfCnpj: asaasCharges.cpfCnpj,
       contactName: contacts.name,
+      contactNameSource: contacts.nameSource,
       customerName: asaasCharges.customerName,
       optedOut: contacts.optedOut,
       value: asaasCharges.value,
@@ -187,6 +188,8 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
   interface Debtor {
     contactId: string
     name: string | null
+    /** `contacts.name_source` — apelido do WhatsApp não vira saudação (collectionGreetingName). */
+    nameSource: string | null
     /** Nome do cliente como está no Asaas (prevalece na saudação). */
     asaasName: string | null
     optedOut: boolean
@@ -226,6 +229,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
       d = {
         contactId: r.contactId,
         name: r.contactName,
+        nameSource: r.contactNameSource ?? null,
         asaasName: (r.customerName ?? '').trim() || null,
         optedOut: r.optedOut,
         charges: [],
@@ -393,7 +397,7 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     // saía errado na saudação.
     const customerName = d.asaasName ?? d.name
     // 23/09: empresa no Asaas + pessoa no CRM → cumprimenta a pessoa (collectionGreetingName).
-    const firstName = collectionGreetingName(d.asaasName, d.name)
+    const firstName = collectionGreetingName(d.asaasName, d.name, d.nameSource)
     const text = await draftCollectionMessage({
       accountId,
       agentId: agent?.id ?? null,
@@ -459,6 +463,8 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
         touch: d.touchCount + 1,
         maxDaysLate: maxLate,
         delivery: delivery.label,
+        // Saudação já decidida (pessoa × empresa): o template da API oficial usa em {nome}.
+        greetingName: firstName,
         // 23/09: a conta do Asaas de cada parcela — a faixa "Economia no Asaas"
         // quebra por conta (`connectionId` só quando todas são da mesma).
         connectionIds: [...new Set(d.charges.map((c) => c.connectionId).filter((x): x is string => !!x))],
@@ -583,8 +589,10 @@ export async function draftCollectionMessage(args: {
     const previous = args.previousTexts.filter((t) => t.trim().length > 0).slice(-4)
     const base = [
       'Você escreve uma cobrança educada no WhatsApp, em português do Brasil. UMA mensagem (até 500 caracteres), sem markdown, sem assinatura.',
+      // 23/09: a decisão pessoa × empresa vem pronta (collectionGreetingName) —
+      // antes a IA olhava só o nome do Asaas e escrevia "Olá, Clínica Jump".
       args.fullName
-        ? `Cliente (nome como está no Asaas): ${args.fullName}. Se for pessoa, chame só pelo primeiro nome; se for empresa, use o nome da empresa como está (curto, sem Ltda/ME). Nunca invente apelido nem use só a primeira palavra de um nome de empresa.`
+        ? `Cliente (nome como está no Asaas): ${args.fullName}.${args.firstName ? ` Cumprimente como "${args.firstName}" — é assim que a pessoa deve ser chamada; não use outro nome nem só a primeira palavra da empresa.` : ' Se for pessoa, chame só pelo primeiro nome; se for empresa, use o nome da empresa como está (curto, sem Ltda/ME). Nunca invente apelido nem use só a primeira palavra de um nome de empresa.'}`
         : 'Não sabemos o nome do cliente — não invente um.',
       args.summary.showValues
         ? `Valores em aberto (copie exatamente, NUNCA recalcule nem arredonde):\n${args.summary.lines.map((l) => `- ${l}`).join('\n')}`

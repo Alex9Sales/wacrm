@@ -131,7 +131,7 @@ interface TouchRow {
 }
 
 interface DebtorContext {
-  contact: { id: string; name: string | null; phone: string | null; optedOut: boolean }
+  contact: { id: string; name: string | null; nameSource: string | null; phone: string | null; optedOut: boolean }
   settings: CollectionsSettings
   tz: string
   signatureEnabled: boolean
@@ -149,7 +149,7 @@ async function loadDebtor(accountId: string, contactId: string): Promise<ManualC
   if (!UUID_RE.test(contactId)) return { ok: false, error: 'Contato inválido.' }
   const contact = firstOrNull(
     await db
-      .select({ id: contacts.id, name: contacts.name, phone: contacts.phone, optedOut: contacts.optedOut })
+      .select({ id: contacts.id, name: contacts.name, nameSource: contacts.nameSource, phone: contacts.phone, optedOut: contacts.optedOut })
       .from(contacts)
       .where(and(eq(contacts.id, contactId), eq(contacts.accountId, accountId)))
       .limit(1),
@@ -186,6 +186,7 @@ async function loadDebtor(accountId: string, contactId: string): Promise<ManualC
 
   const rows = await db
     .select({
+      asaasId: asaasCharges.asaasId,
       customerId: asaasCharges.asaasCustomerId,
       connectionId: asaasCharges.connectionId,
       cpfCnpj: asaasCharges.cpfCnpj,
@@ -210,6 +211,7 @@ async function loadDebtor(accountId: string, contactId: string): Promise<ManualC
     if (!countsAsOverdue(late)) continue
     if (asaasName == null) asaasName = (r.customerName ?? '').trim() || null
     charges.push({
+      asaasId: r.asaasId,
       customerId: r.customerId,
       connectionId: r.connectionId,
       document: r.cpfCnpj,
@@ -226,7 +228,7 @@ async function loadDebtor(accountId: string, contactId: string): Promise<ManualC
   return {
     ok: true,
     data: {
-      contact: { id: contact.id, name: contact.name, phone: contact.phone, optedOut: contact.optedOut === true },
+      contact: { id: contact.id, name: contact.name, nameSource: contact.nameSource ?? null, phone: contact.phone, optedOut: contact.optedOut === true },
       settings,
       tz,
       signatureEnabled: all.agentSignatureEnabled === true,
@@ -274,7 +276,7 @@ export async function prepareManualCollectCore(accountId: string, userId: string
 
   const summary = formatDebtSummary(ctx.charges, { showValues: ctx.settings.showValues })
   const touchCount = ctx.touch?.touchCount ?? 0
-  const text = fallbackMessage(collectionGreetingName(ctx.asaasName, ctx.contact.name), summary, touchCount, seedFrom(contactId, touchCount, utcDayKey()), {
+  const text = fallbackMessage(collectionGreetingName(ctx.asaasName, ctx.contact.name, ctx.contact.nameSource), summary, touchCount, seedFrom(contactId, touchCount, utcDayKey()), {
     offerDate: ctx.settings.offerDateNegotiation,
   })
   const hold = debtorHold(ctx.touch, null)
@@ -328,7 +330,7 @@ export async function draftManualCollectWithAiCore(accountId: string, contactId:
   const { hour, weekday } = localParts(ctx.tz)
   const maxLate = Math.max(...ctx.charges.map((c) => c.daysLate ?? -1))
   const customerName = ctx.asaasName ?? ctx.contact.name
-  const firstName = collectionGreetingName(ctx.asaasName, ctx.contact.name)
+  const firstName = collectionGreetingName(ctx.asaasName, ctx.contact.name, ctx.contact.nameSource)
   // Semente nova a cada clique: "reescrever" de novo tem que dar outra variação.
   const seed = seedFrom(contactId, touch, utcDayKey(), MANUAL_COLLECT_KIND, Date.now())
   const args = { offerDate: ctx.settings.offerDateNegotiation }
@@ -419,6 +421,7 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
     const gate = await officialTemplateGate(accountId, conversationId, {
       kind: 'manual',
       vars: {
+        nome: collectionGreetingName(ctx.asaasName, ctx.contact.name, ctx.contact.nameSource) ?? '',
         valor: ctx.settings.showValues ? summaryForTemplate.total.toLocaleString('pt-BR', { style: 'currency', currency: 'BRL' }) : '',
         link: summaryForTemplate.links[0] ?? '',
         dias: String(Math.max(0, ...ctx.charges.map((c) => c.daysLate ?? 0))),
@@ -433,6 +436,7 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
         return {
           ok: false,
           error:
+            gate.error ??
             'Este número é a API oficial do WhatsApp e o cliente não escreveu nas últimas 24 h, então só um template aprovado é entregue. Escolha o template em Cobranças → Ajustar.',
         }
       }
@@ -494,6 +498,7 @@ export async function sendManualCollectCore(accountId: string, userId: string, i
         lines: summary.lines,
         links: summary.links,
         now: nowIso,
+        refs: ctx.charges.map((c) => ({ asaasId: c.asaasId ?? '', connectionId: c.connectionId ?? '' })).filter((r) => r.asaasId && r.connectionId),
       }),
     )
     // 3) Pedido automático deste contato ainda na fila: sem isto o sender

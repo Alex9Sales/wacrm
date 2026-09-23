@@ -2217,7 +2217,7 @@ function RulePanel({
             {num('dailyCap', 'Máximo por dia', 'Teto de devedores cobrados por dia.', 1, 500)}
             {num('maxTouches', 'Parar depois de', 'Toques sem resposta antes de devolver para uma pessoa.', 1, 50)}
             {num('emitMaxValue', 'IA pode cobrar até (R$)', 'Teto da ferramenta "Gerar cobrança no Asaas": acima disso a IA não cria sozinha — avisa uma pessoa.', 1, 100000)}
-            {num('asaasWhatsAppFee', 'O Asaas cobra por aviso (R$)', 'Quanto o Asaas cobra por aviso de WhatsApp que ELE manda (tabela pública: R$ 0,55). É a base da faixa "Economia no Asaas" em Envios da régua.', 0, 20, 0.01)}
+            {num('asaasWhatsAppFee', 'O Asaas cobra por aviso (R$)', 'Quanto o Asaas cobra por aviso de WhatsApp que ELE manda (tabela pública: R$ 0,55). É a base da faixa "Economia no Asaas" em Envios da régua.', 0.01, 20, 0.01)}
             {num('reminderDaysBefore', 'Lembrar antes de vencer (dias)', '0 = desligado. Com 3, quem tem parcela vencendo nos próximos 3 dias recebe um aviso leve — não é cobrança. Passa pela mesma fila e teto.', 0, 15)}
             <label className="flex max-w-[16rem] items-start gap-2 text-sm">
               <input type="checkbox" className="mt-1" checked={draft.remindOnDueDate} onChange={(e) => setDraft({ ...draft, remindOnDueDate: e.target.checked })} />
@@ -2941,20 +2941,31 @@ function PromotionPanel({ promo, onChanged }: { promo: PromotionView; onChanged:
  * pelos dados da cobrança na hora do envio.
  */
 function TemplateParamsInput({ id, value, onChange }: { id: string; value: string[]; onChange: (params: string[]) => void }) {
+  // Texto cru enquanto digita (senão o "|" e o espaço somem a cada tecla);
+  // o parse só sai no blur. Troca de template por fora re-semeia o campo.
+  const joined = value.join(' | ');
+  const [raw, setRaw] = useState(joined);
+  const [seed, setSeed] = useState(joined);
+  if (joined !== seed) {
+    setSeed(joined);
+    setRaw(joined);
+  }
+  const parse = (s: string) =>
+    s
+      .split('|')
+      .map((x) => x.trim())
+      .filter(Boolean)
+      .slice(0, 10);
   return (
     <div className="flex flex-col gap-1">
       <Input
         id={id}
-        value={value.join(' | ')}
-        onChange={(e) =>
-          onChange(
-            e.target.value
-              .split('|')
-              .map((s) => s.trim())
-              .filter(Boolean)
-              .slice(0, 10),
-          )
-        }
+        value={raw}
+        onChange={(e) => setRaw(e.target.value)}
+        onBlur={() => {
+          const next = parse(raw);
+          if (next.join(' | ') !== joined) onChange(next);
+        }}
         placeholder="Variáveis na ordem do template, separadas por | — ex.: {nome} | {valor} | {link}"
         className="h-8 text-sm"
       />

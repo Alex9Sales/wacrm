@@ -15,6 +15,7 @@ import { channelOwnerLabel, defaultBroadcastChannelId, type BroadcastChannelOwne
 import { looksLikeBareCode } from '@/lib/whatsapp/bare-code'
 
 import type { DebtorHold } from './rules'
+import { paymentRefsPayload } from './payment-refs'
 import { NOTICE_KINDS } from './rules'
 
 /** `payload.kind` do pedido gravado — conta como toque (countsAsCollectionTouch). */
@@ -140,6 +141,8 @@ export interface ManualCollectRequestArgs {
   links: string[]
   /** ISO de agora. */
   now: string
+  /** Parcelas (asaasId + conta) — a faixa "Economia no Asaas" quebra por conta. */
+  refs?: { asaasId: string; connectionId: string }[]
 }
 
 export interface ManualCollectRequestValues {
@@ -183,6 +186,7 @@ export function manualCollectRequestValues(a: ManualCollectRequestArgs): ManualC
     actionType: 'collect_charges',
     payload: {
       kind: MANUAL_COLLECT_KIND,
+      ...(a.refs?.length ? paymentRefsPayload(a.refs) : {}),
       sentBy: 'wallet',
       channelId: a.channelId,
       byUserId: a.byUserId,
