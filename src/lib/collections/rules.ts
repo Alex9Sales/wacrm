@@ -43,6 +43,18 @@ export const ASAAS_EMAIL_FEE_DEFAULT = 0.99
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
+/** Um degrau da cadência própria (ver `CollectionsSettings.steps`). */
+export interface CollectionStep {
+  /** A partir de quantos dias de ATRASO este degrau pode sair. */
+  daysLate: number
+  /**
+   * Texto deste toque. Vazio = o texto padrão da régua (que já varia sozinho
+   * para não repetir). Aceita as mesmas chaves dos templates: {nome}, {valor},
+   * {link}, {vencimento}, {descricao}, {dias}, {parcelas}.
+   */
+  text?: string
+}
+
 export interface CollectionsSettings {
   /** Nasce DESLIGADA: cobrar alguém nunca é um padrão, é uma decisão. */
   enabled: boolean
@@ -127,8 +139,23 @@ export interface CollectionsSettings {
    * Depois de N toques sem o devedor responder, a régua PARA nele e avisa o
    * time. Cobrar para sempre a cada 3 dias é o caminho mais curto para o
    * número ser denunciado — e para o cliente perder o cliente dele.
+   *
+   * Com `steps` preenchido, quem manda é o tamanho da escada.
    */
   maxTouches: number
+  /**
+   * 🪜 Cadência própria: um degrau por toque, cada um com o atraso a partir do
+   * qual ele vale e, se quiser, o texto daquele toque.
+   *
+   * 23/09 (Rafael Odonto): "dá para personalizar a cadência? aviso 2 dias
+   * antes, no vencimento, 3 a 5 dias depois, 7, 10, 15, e 30 com aviso de
+   * negativação". Com o intervalo fixo isso não existia: era sempre de N em N
+   * dias, com o mesmo texto do começo ao fim.
+   *
+   * Vazio = a régua de sempre (`intervalDays` + `maxTouches`). Ninguém é
+   * migrado sem pedir.
+   */
+  steps: CollectionStep[]
   /** Instrução de tom, no vocabulário do negócio (vai para a IA). */
   tone: string
   /**
@@ -249,6 +276,7 @@ export const COLLECTIONS_DEFAULTS: CollectionsSettings = {
   asaasWhatsAppFee: ASAAS_WHATSAPP_FEE_DEFAULT,
   asaasEmailFee: ASAAS_EMAIL_FEE_DEFAULT,
   maxTouches: 8,
+  steps: [],
   tone: '',
   emitMaxValue: 500,
   asaasNotificationsOff: false,
@@ -320,6 +348,7 @@ export function normalizeSettings(raw: unknown): CollectionsSettings {
       return Number.isFinite(n) && n > 0 ? Math.min(20, Math.round(n * 100) / 100) : ASAAS_EMAIL_FEE_DEFAULT
     })(),
     maxTouches: int(r.maxTouches, 8, 1, 50),
+    steps: normalizeSteps(r.steps),
     tone: typeof r.tone === 'string' ? r.tone.slice(0, 600) : '',
     emitMaxValue: (() => {
       const n = typeof r.emitMaxValue === 'number' ? r.emitMaxValue : Number.NaN
@@ -613,12 +642,14 @@ export type DebtorHold = 'paused' | 'snoozed' | 'max_touches'
  */
 export function debtorHold(
   st: TouchState | null | undefined,
-  s: Pick<CollectionsSettings, 'maxTouches'> | null,
+  s: Pick<CollectionsSettings, 'maxTouches' | 'steps'> | null,
   now = new Date(),
 ): DebtorHold | null {
   if (!st) return null
   if (st.paused) return 'paused'
-  if (s && st.touchCount >= s.maxTouches) return 'max_touches'
+  // Com cadência própria quem diz onde termina é a escada: ela TEM um fim, e
+  // um teto de toques diferente dela só confundiria quem desenhou (23/09).
+  if (s && st.touchCount >= (s.steps?.length ? s.steps.length : s.maxTouches)) return 'max_touches'
   if (st.snoozeUntil && Date.parse(st.snoozeUntil) > now.getTime()) return 'snoozed'
   return null
 }
@@ -659,6 +690,60 @@ export function countsAsCollectionTouch(kind: unknown): boolean {
 /** Os `payload.kind` que são AVISO (entrega de link), não cobrança. */
 export const NOTICE_KINDS: ReadonlySet<unknown> = new Set(['reminder', 'new_charge', 'due_today'])
 
+/** Teto de degraus: cadência é régua de cobrança, não novela. */
+export const MAX_COLLECTION_STEPS = 12
+/** Tamanho do texto de um degrau (o WhatsApp corta bem antes disso). */
+const STEP_TEXT_MAX = 900
+
+/**
+ * Arruma a escada vinda do banco/tela: só números possíveis, em ordem, sem
+ * repetir o mesmo dia e sem passar do teto. Lista inválida vira vazia — e
+ * vazia significa "régua de sempre", nunca "nunca cobre".
+ */
+export function normalizeSteps(raw: unknown): CollectionStep[] {
+  if (!Array.isArray(raw)) return []
+  const vistos = new Set<number>()
+  const out: CollectionStep[] = []
+  for (const item of raw) {
+    if (!item || typeof item !== 'object') continue
+    const r = item as { daysLate?: unknown; text?: unknown }
+    const n = typeof r.daysLate === 'number' ? r.daysLate : Number(r.daysLate)
+    if (!Number.isFinite(n)) continue
+    const daysLate = Math.min(365, Math.max(0, Math.round(n)))
+    if (vistos.has(daysLate)) continue
+    vistos.add(daysLate)
+    const text = typeof r.text === 'string' ? r.text.trim().slice(0, STEP_TEXT_MAX) : ''
+    out.push(text ? { daysLate, text } : { daysLate })
+  }
+  return out.sort((a, b) => a.daysLate - b.daysLate).slice(0, MAX_COLLECTION_STEPS)
+}
+
+/** Dias corridos desde um instante ISO (null quando a data não presta). */
+function diasDesde(iso: string, now: Date): number | null {
+  const ms = Date.parse(iso)
+  if (Number.isNaN(ms)) return null
+  return (now.getTime() - ms) / 86_400_000
+}
+
+/** O degrau da vez (o toque nº `touchCount + 1`), ou null quando a escada acabou. */
+export function stepForTouch(steps: readonly CollectionStep[], touchCount: number): CollectionStep | null {
+  if (!steps.length) return null
+  const i = Math.max(0, Math.floor(touchCount))
+  return steps[i] ?? null
+}
+
+/**
+ * Quantos dias precisam ter passado desde o último toque para o degrau `i`
+ * sair. É a DISTÂNCIA entre os degraus desenhados: quem entra na régua já com
+ * 30 dias de atraso não recebe a escada inteira de uma vez — recebe o primeiro
+ * toque e, depois, o mesmo ritmo que o cliente desenhou.
+ */
+export function stepGapDays(steps: readonly CollectionStep[], touchCount: number): number {
+  const i = Math.max(0, Math.floor(touchCount))
+  if (i <= 0 || i >= steps.length) return 1
+  return Math.max(1, steps[i].daysLate - steps[i - 1].daysLate)
+}
+
 export function eligibility(input: EligibleInput, s: CollectionsSettings, now = new Date()): SkipReason {
   if (!input.contactId) return 'no_contact'
   if (input.optedOut) return 'opted_out'
@@ -669,13 +754,18 @@ export function eligibility(input: EligibleInput, s: CollectionsSettings, now = 
 
   if (input.maxDaysLate == null || input.maxDaysLate < s.minDaysOverdue) return 'not_due'
 
-  if (st?.lastTouchAt) {
-    const last = new Date(st.lastTouchAt)
-    if (!Number.isNaN(last.getTime())) {
-      const days = (now.getTime() - last.getTime()) / 86_400_000
-      if (days < s.intervalDays) return 'too_soon'
-    }
+  const desdeUltimo = st?.lastTouchAt ? diasDesde(st.lastTouchAt, now) : null
+
+  // 🪜 Cadência própria: quem manda é o degrau da vez.
+  if (s.steps.length) {
+    const degrau = stepForTouch(s.steps, st?.touchCount ?? 0)
+    if (!degrau) return 'max_touches'
+    if (input.maxDaysLate < degrau.daysLate) return 'too_soon'
+    if (desdeUltimo != null && desdeUltimo < stepGapDays(s.steps, st?.touchCount ?? 0)) return 'too_soon'
+    return 'ok'
   }
+
+  if (desdeUltimo != null && desdeUltimo < s.intervalDays) return 'too_soon'
 
   return 'ok'
 }
@@ -1362,6 +1452,16 @@ export function collectionGreetingName(
   // Sem pessoa em lugar nenhum: a empresa; sem empresa, nada ("Oi!") — o nome
   // do CRM já foi julgado "não é pessoa nem negócio" (telefone, frase, apelido).
   return empresaLabel
+}
+
+/**
+ * Texto de um degrau da cadência própria, com as chaves preenchidas. Vem do
+ * cliente, então sai como ele escreveu — a IA não reescreve o que o dono da
+ * empresa decidiu dizer (é aqui que mora o aviso de negativação, por exemplo).
+ * Chave sem dado vira vazio, nunca `{valor}` literal na cara do devedor.
+ */
+export function renderStepText(text: string, vars: TemplateVars): string {
+  return fillTemplateParams([text], vars)[0] ?? ''
 }
 
 const TEMPLATE_VAR_RE = /\{(nome|valor|link|vencimento|descricao|dias|parcelas)\}/gi

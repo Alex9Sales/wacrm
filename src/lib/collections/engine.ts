@@ -46,6 +46,9 @@ import {
   type SkipReason,
   collectionGreetingName,
   templateFactsFrom,
+  templateVarsFromPayload,
+  renderStepText,
+  stepForTouch,
 } from './rules'
 import { withAutoSend } from './auto-send'
 
@@ -400,7 +403,23 @@ export async function runCollectionsForAccount(accountId: string): Promise<Colle
     const customerName = d.asaasName ?? d.name
     // 23/09: empresa no Asaas + pessoa no CRM → cumprimenta a pessoa (collectionGreetingName).
     const firstName = collectionGreetingName(d.asaasName, d.name, d.nameSource, d.charges.find((c) => c.document)?.document ?? null)
-    const text = await draftCollectionMessage({
+    // 🪜 Cadência própria (23/09, Rafael): quando o degrau da vez tem texto, é
+    // ele que vai — do jeito que o cliente escreveu, só com as chaves
+    // preenchidas. A IA não reescreve o que o dono da empresa decidiu dizer.
+    const degrau = s.steps.length ? stepForTouch(s.steps, d.touchCount) : null
+    const textoDoDegrau = degrau?.text
+      ? renderStepText(degrau.text, {
+          nome: firstName ?? '',
+          ...templateVarsFromPayload({
+            total: summary.total,
+            links: summary.links,
+            charges: d.charges.length,
+            maxDaysLate: maxLate,
+            ...templateFactsFrom(d.charges),
+          }),
+        })
+      : null
+    const text = textoDoDegrau ?? await draftCollectionMessage({
       accountId,
       agentId: agent?.id ?? null,
       firstName,

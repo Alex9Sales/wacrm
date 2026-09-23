@@ -2179,7 +2179,15 @@ function RulePanel({
           </p>
           <p className="text-xs text-muted-foreground">
             {rule.enabled
-              ? `A cada ${rule.intervalDays} ${rule.intervalDays === 1 ? 'dia' : 'dias'}, das ${rule.startHour}h às ${rule.endHour}h, ${describeWeekdays(rule.sendWeekdays)}${rule.skipHolidays ? ' (feriado nacional não)' : ''}, no máximo ${rule.dailyCap} por dia. Para depois de ${rule.maxTouches} toques sem resposta.` +
+              ? `${
+                  rule.steps.length
+                    ? `Toques com ${rule.steps.map((s) => s.daysLate).join(', ')} dias de atraso`
+                    : `A cada ${rule.intervalDays} ${rule.intervalDays === 1 ? 'dia' : 'dias'}`
+                }, das ${rule.startHour}h às ${rule.endHour}h, ${describeWeekdays(rule.sendWeekdays)}${rule.skipHolidays ? ' (feriado nacional não)' : ''}, no máximo ${rule.dailyCap} por dia. ${
+                  rule.steps.length
+                    ? 'Para quando o último degrau passa.'
+                    : `Para depois de ${rule.maxTouches} toques sem resposta.`
+                }` +
                 (rule.autoSend
                   ? ` Envia sozinha, uma a cada ${rule.sendEveryMinutes} min.`
                   : ' Cada cobrança espera sua aprovação em "Precisa de você".')
@@ -2245,6 +2253,103 @@ function RulePanel({
               </span>
             </label>
             {num('sendEveryMinutes', 'Uma mensagem a cada (min)', 'Cadência do envio automático e do "Aprovar todas": espaçar as mensagens é o que evita o bloqueio do número.', 1, 120)}
+          </div>
+
+          {/* 🪜 Cadência própria (23/09, Rafael): a régua de intervalo fixo
+              cobra sempre de N em N dias, com o mesmo texto. Aqui cada toque
+              tem o seu dia de atraso e, se o cliente quiser, o seu texto. */}
+          <div className="rounded-md border bg-muted/30 p-3">
+            <label className="flex items-start gap-2 text-sm">
+              <input
+                type="checkbox"
+                className="mt-1"
+                checked={draft.steps.length > 0}
+                onChange={(e) =>
+                  setDraft({
+                    ...draft,
+                    steps: e.target.checked ? [{ daysLate: 3 }, { daysLate: 7 }, { daysLate: 15 }] : [],
+                  })
+                }
+              />
+              <span>
+                Cadência própria
+                <span className="block text-xs text-muted-foreground">
+                  Em vez de cobrar de N em N dias, você escolhe em quais dias de atraso cada toque
+                  sai. A régua para sozinha quando o último degrau passa.
+                </span>
+              </span>
+            </label>
+
+            {draft.steps.length > 0 && (
+              <div className="mt-3 space-y-2">
+                {draft.steps.map((s, i) => (
+                  <div key={i} className="flex flex-wrap items-start gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="w-14 shrink-0 text-xs text-muted-foreground">{i + 1}º toque</span>
+                      <Input
+                        type="number"
+                        min={0}
+                        max={365}
+                        value={String(s.daysLate)}
+                        onChange={(e) => {
+                          const steps = [...draft.steps];
+                          steps[i] = { ...steps[i], daysLate: Number(e.target.value) };
+                          setDraft({ ...draft, steps });
+                        }}
+                        className="w-20"
+                      />
+                      <span className="shrink-0 text-xs text-muted-foreground">dias de atraso</span>
+                    </div>
+                    <Input
+                      placeholder="Mensagem deste toque (opcional)"
+                      value={s.text ?? ''}
+                      onChange={(e) => {
+                        const steps = [...draft.steps];
+                        steps[i] = { ...steps[i], text: e.target.value };
+                        setDraft({ ...draft, steps });
+                      }}
+                      className="min-w-[16rem] flex-1"
+                    />
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setDraft({ ...draft, steps: draft.steps.filter((_, j) => j !== i) })}
+                      title="Tirar este degrau"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                    </Button>
+                  </div>
+                ))}
+                <div className="flex flex-wrap items-center gap-2">
+                  <Button
+                    variant="outline"
+                    size="sm"
+                    disabled={draft.steps.length >= 12}
+                    onClick={() =>
+                      setDraft({
+                        ...draft,
+                        steps: [
+                          ...draft.steps,
+                          { daysLate: (draft.steps[draft.steps.length - 1]?.daysLate ?? 0) + 7 },
+                        ],
+                      })
+                    }
+                  >
+                    <Plus className="mr-1 h-3.5 w-3.5" /> Adicionar degrau
+                  </Button>
+                  <span className="text-xs text-muted-foreground">
+                    Sem mensagem, o toque usa o texto de sempre. Na mensagem dá para usar{' '}
+                    <code>{'{nome}'}</code>, <code>{'{valor}'}</code>, <code>{'{link}'}</code>,{' '}
+                    <code>{'{vencimento}'}</code> e <code>{'{dias}'}</code>.
+                  </span>
+                </div>
+                <p className="text-xs text-muted-foreground">
+                  Com a cadência própria, &quot;Cobrar a cada&quot; e &quot;Parar depois de&quot; não
+                  valem: quem manda é a lista acima. Quem já está atrasado além do último degrau
+                  recebe um toque por vez, respeitando a distância que você desenhou.
+                </p>
+              </div>
+            )}
           </div>
 
           <label className="flex items-start gap-2 text-sm">
