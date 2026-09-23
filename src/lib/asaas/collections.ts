@@ -130,6 +130,8 @@ export interface AsaasPayment {
   paymentLink?: string | null
   /** Checkout do Asaas de onde o cliente gerou a cobrança. */
   checkoutSession?: string | null
+  /** Apagada no Asaas — some das listagens e não é dívida de ninguém. */
+  deleted?: boolean | null
 }
 
 interface AsaasList<T> {

@@ -28,6 +28,7 @@ import {
 import { getAccountSettings } from '@/lib/settings/account-settings'
 import { localDayKey } from '@/lib/collections/stale'
 import { mergePayments, overduePendingCutoff } from './overdue-pending'
+import { MAX_VANISHED_LOOKUPS, resolveVanishedStatuses } from './vanished'
 import { listChargesAtSilencing, markAsaasNotificationsSwept, recordSilenced } from '@/lib/collections/asaas-silenced'
 import { fullSweepReason } from '@/lib/collections/new-charge-rules'
 import { normalizeSettings } from '@/lib/collections/rules'
@@ -336,7 +337,44 @@ export async function syncConnection(
         seen.length ? notInArray(asaasCharges.asaasId, seen) : sql`true`,
       ),
     )
-    .returning({ id: asaasCharges.id })
+    .returning({ id: asaasCharges.id, asaasId: asaasCharges.asaasId, status: asaasCharges.status })
+
+  // 🕳️ O que sumiu virou o quê? Pergunta ao Asaas em vez de deixar a linha
+  // fechada escrita "OVERDUE" (23/09: 8 linhas assim no banco). Apagada lá vira
+  // DELETED aqui; paga vira o status real. Nunca segura a varredura.
+  // Junto vão as linhas JÁ fechadas em rodadas anteriores que ficaram com
+  // status de dívida — é assim que o passado se conserta sozinho, sem script.
+  const atrasadas = closedRows.length >= MAX_VANISHED_LOOKUPS
+    ? []
+    : await db
+        .select({ id: asaasCharges.id, asaasId: asaasCharges.asaasId, status: asaasCharges.status })
+        .from(asaasCharges)
+        .where(
+          and(
+            eq(asaasCharges.accountId, accountId),
+            eq(asaasCharges.connectionId, connectionId),
+            eq(asaasCharges.open, false),
+            inArray(asaasCharges.status, ['OVERDUE', 'PENDING']),
+          ),
+        )
+        .limit(MAX_VANISHED_LOOKUPS - closedRows.length)
+  const sumidas = [...closedRows, ...atrasadas]
+  if (sumidas.length) {
+    try {
+      const reais = await resolveVanishedStatuses(cred, sumidas)
+      for (const r of reais) {
+        await db
+          .update(asaasCharges)
+          .set({ status: r.status, updatedAt: now })
+          .where(eq(asaasCharges.id, r.id))
+      }
+      if (reais.length) {
+        console.log(`[asaas sync] ${reais.length} cobrança(s) que sumiram tiveram o status corrigido`)
+      }
+    } catch (err) {
+      console.error('[asaas sync] status do que sumiu falhou (segue):', err instanceof Error ? err.message : err)
+    }
+  }
 
   await db
     .update(asaasConnections)
