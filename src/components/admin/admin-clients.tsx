@@ -253,6 +253,12 @@ export function AdminClients() {
           >
             📈 Sucesso do Cliente
           </a>
+          <a
+            href="/admin/cobranca"
+            className="rounded-lg border border-border px-3 py-1.5 text-sm text-foreground transition hover:bg-muted"
+          >
+            💰 Sucesso de Cobrança
+          </a>
           {/* Meus / Todos — both admins see everything; this focuses the list. */}
           <div className="flex overflow-hidden rounded-lg border border-border">
             <button

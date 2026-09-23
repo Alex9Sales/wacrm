@@ -5,12 +5,13 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { Users, LifeBuoy } from "lucide-react";
+import { Users, LifeBuoy, PiggyBank } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
 const TABS = [
   { href: "/admin", label: "Clientes", icon: Users, exact: true },
+  { href: "/admin/cobranca", label: "Cobrança", icon: PiggyBank, exact: false },
   { href: "/admin/suporte", label: "Suporte", icon: LifeBuoy, exact: false },
 ];
 
